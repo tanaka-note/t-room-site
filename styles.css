@@ -1381,18 +1381,25 @@ h1 {
 .app-card::after {
   content: "";
   position: absolute;
-  right: 22px;
-  bottom: 22px;
-  width: 72px;
-  height: 72px;
+  right: 18px;
+  bottom: 16px;
+  width: 96px;
+  height: 96px;
   border-radius: 8px;
-  opacity: 0.84;
-  background:
-    linear-gradient(#d8efe7 0 0) 0 0 / 30px 30px,
-    linear-gradient(#fff0c7 0 0) 32px 0 / 30px 30px,
-    linear-gradient(#e8edf6 0 0) 0 32px / 30px 30px,
-    linear-gradient(#f5dfe6 0 0) 32px 32px / 30px 30px;
+  opacity: 0.5;
+  background: var(--app-card-art);
   background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  pointer-events: none;
+}
+
+.app-card-calculator {
+  --app-card-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect x='24' y='14' width='72' height='92' rx='12' fill='%23d8efe7' stroke='%238dbfac' stroke-width='5'/%3E%3Crect x='34' y='25' width='52' height='20' rx='5' fill='%23fff8df'/%3E%3Cg fill='%23f5dfe6'%3E%3Crect x='34' y='56' width='13' height='13' rx='4'/%3E%3Crect x='54' y='56' width='13' height='13' rx='4'/%3E%3Crect x='74' y='56' width='13' height='13' rx='4'/%3E%3C/g%3E%3Cg fill='%23e8edf6'%3E%3Crect x='34' y='76' width='13' height='13' rx='4'/%3E%3Crect x='54' y='76' width='13' height='13' rx='4'/%3E%3Crect x='74' y='76' width='13' height='13' rx='4'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.app-card-omikuji {
+  --app-card-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Cpath d='M42 16h36l16 16v56l-16 16H42L26 88V32L42 16Z' fill='%23fff0c7' stroke='%23d8b77a' stroke-width='5'/%3E%3Cpath d='M42 29h36l7 7v45l-7 7H42l-7-7V36l7-7Z' fill='%23edd09a'/%3E%3Cpath d='M51 88h18c4 0 7 3 7 7s-3 7-7 7H51c-4 0-7-3-7-7s3-7 7-7Z' fill='%23b98c58'/%3E%3Crect x='48' y='61' width='24' height='50' rx='6' fill='%23f5dfe6' transform='rotate(8 60 86)'/%3E%3Cpath d='M58 70h8v24h-8z' fill='%238dbfac' opacity='.78'/%3E%3C/svg%3E");
 }
 
 .app-card[href]:hover {

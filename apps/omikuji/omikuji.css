@@ -1,0 +1,450 @@
+:root {
+  color-scheme: light;
+  --ink: #302d29;
+  --soft-ink: #716653;
+  --paper: #fffaf0;
+  --cream: #fff4d8;
+  --leaf: #7ba889;
+  --leaf-dark: #3f7558;
+  --pink: #f3a7b6;
+  --gold: #e7ad43;
+  --wood: #d7a45f;
+  --wood-dark: #9c6630;
+  --shadow: rgba(79, 52, 24, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 20% 12%, rgba(243, 167, 182, 0.3), transparent 26rem),
+    radial-gradient(circle at 85% 6%, rgba(123, 168, 137, 0.24), transparent 24rem),
+    linear-gradient(160deg, #fff9ec 0%, #f7f1dc 48%, #edf8ef 100%);
+  color: var(--ink);
+  font-family: "Noto Sans JP", system-ui, sans-serif;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+.omikuji-app {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom));
+  position: relative;
+  overflow: hidden;
+}
+
+.omikuji-app::before,
+.omikuji-app::after {
+  content: "";
+  position: fixed;
+  width: 13rem;
+  height: 13rem;
+  border-radius: 999px;
+  pointer-events: none;
+  opacity: 0.28;
+}
+
+.omikuji-app::before {
+  left: -5rem;
+  bottom: 6rem;
+  background: repeating-linear-gradient(45deg, #f7cdb5 0 10px, transparent 10px 22px);
+}
+
+.omikuji-app::after {
+  right: -5rem;
+  top: 8rem;
+  background: repeating-linear-gradient(-45deg, #b6d7c0 0 9px, transparent 9px 20px);
+}
+
+.app-shortcuts {
+  position: fixed;
+  top: max(14px, env(safe-area-inset-top));
+  left: 14px;
+  z-index: 10;
+}
+
+.app-shortcuts a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(63, 117, 88, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 250, 240, 0.82);
+  color: var(--leaf-dark);
+  text-decoration: none;
+  font-weight: 800;
+  box-shadow: 0 12px 24px rgba(55, 42, 25, 0.1);
+  backdrop-filter: blur(12px);
+}
+
+.omikuji-stage {
+  width: min(100%, 430px);
+  display: grid;
+  justify-items: center;
+  gap: 20px;
+  padding-top: 42px;
+}
+
+.title-block {
+  text-align: center;
+  display: grid;
+  gap: 8px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--leaf-dark);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 9vw, 3rem);
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+
+.title-block p:last-child {
+  margin: 0 auto;
+  max-width: 21rem;
+  color: var(--soft-ink);
+  line-height: 1.8;
+  font-size: 0.95rem;
+}
+
+.fortune-scene {
+  width: 100%;
+  min-height: 360px;
+  display: grid;
+  grid-template-rows: 260px auto;
+  justify-items: center;
+  align-items: end;
+  position: relative;
+}
+
+.box-wrap {
+  width: 218px;
+  height: 250px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  transform-origin: center;
+}
+
+.omikuji-box {
+  width: 154px;
+  height: 214px;
+  position: relative;
+  transform-origin: 50% 56%;
+  filter: drop-shadow(0 22px 18px rgba(83, 50, 18, 0.16));
+}
+
+.omikuji-box::before,
+.omikuji-box::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  height: 34px;
+  background: linear-gradient(90deg, #b46f3e, #e5a864 48%, #9f6031);
+  clip-path: polygon(18% 0, 82% 0, 100% 50%, 82% 100%, 18% 100%, 0 50%);
+  z-index: 3;
+}
+
+.omikuji-box::before {
+  top: 0;
+}
+
+.omikuji-box::after {
+  bottom: 0;
+}
+
+.box-face.front {
+  position: absolute;
+  inset: 17px 18px;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.13), transparent 18% 78%, rgba(80, 42, 12, 0.18)),
+    repeating-linear-gradient(0deg, rgba(96, 52, 19, 0.1) 0 2px, transparent 2px 16px),
+    linear-gradient(180deg, #eeb777, #c98542);
+  color: #fff7df;
+  font-size: 4.2rem;
+  font-weight: 900;
+  border-left: 4px solid #8f552d;
+  border-right: 4px solid #8f552d;
+  text-shadow: 0 3px 0 rgba(89, 49, 18, 0.28);
+  z-index: 2;
+}
+
+.box-face.side {
+  position: absolute;
+  top: 17px;
+  width: 24px;
+  height: 180px;
+  background: linear-gradient(180deg, #c7793f, #a45f31);
+  z-index: 1;
+}
+
+.side-left {
+  left: 2px;
+  clip-path: polygon(100% 0, 100% 100%, 0 82%, 0 18%);
+}
+
+.side-right {
+  right: 2px;
+  clip-path: polygon(0 0, 100% 18%, 100% 82%, 0 100%);
+}
+
+.box-mouth {
+  position: absolute;
+  left: 50%;
+  bottom: 13px;
+  width: 42px;
+  height: 10px;
+  border-radius: 999px;
+  background: #392315;
+  transform: translateX(-50%);
+  z-index: 4;
+}
+
+.box-shadow {
+  position: absolute;
+  bottom: 4px;
+  width: 154px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--shadow);
+  filter: blur(3px);
+}
+
+.omikuji-box.is-shaking {
+  animation: flipShake 1.85s cubic-bezier(0.28, 0.72, 0.32, 1) both;
+}
+
+.fortune-stick {
+  position: absolute;
+  top: 206px;
+  width: 82px;
+  height: 192px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 14px 10px;
+  border-radius: 10px 10px 18px 18px;
+  background:
+    linear-gradient(90deg, rgba(96, 56, 22, 0.12), transparent 18% 82%, rgba(96, 56, 22, 0.14)),
+    repeating-linear-gradient(6deg, rgba(119, 76, 31, 0.12) 0 1px, transparent 1px 13px),
+    linear-gradient(180deg, #f3ce91, #d99f58);
+  border: 2px solid rgba(136, 82, 32, 0.35);
+  color: #2f251d;
+  box-shadow: 0 20px 28px rgba(82, 52, 23, 0.18);
+  transform: translateY(-44px) scaleY(0.08);
+  transform-origin: top center;
+  opacity: 0;
+  z-index: 4;
+}
+
+.fortune-stick.is-out {
+  animation: stickOut 0.78s cubic-bezier(0.16, 0.9, 0.3, 1.12) forwards;
+}
+
+.fortune-stick span {
+  writing-mode: vertical-rl;
+  font-family: "Kaisei Tokumin", "Noto Sans JP", serif;
+  font-size: 2.35rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.08em;
+}
+
+.fortune-stick small {
+  writing-mode: vertical-rl;
+  color: rgba(47, 37, 29, 0.72);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.fortune-stick.is-daikichi {
+  background:
+    radial-gradient(circle at 24% 18%, rgba(255, 255, 255, 0.55), transparent 22px),
+    repeating-linear-gradient(6deg, rgba(119, 76, 31, 0.12) 0 1px, transparent 1px 13px),
+    linear-gradient(180deg, #ffe0a2, #e7ad43);
+  box-shadow: 0 22px 38px rgba(231, 173, 67, 0.38);
+}
+
+.fortune-stick.is-daikyo {
+  background:
+    repeating-linear-gradient(6deg, rgba(70, 53, 40, 0.12) 0 1px, transparent 1px 13px),
+    linear-gradient(180deg, #d9c5a3, #b99069);
+}
+
+.status-text {
+  min-height: 2.8em;
+  margin: 0;
+  color: var(--soft-ink);
+  text-align: center;
+  line-height: 1.6;
+  font-weight: 700;
+}
+
+.result-panel {
+  width: 100%;
+  min-height: 126px;
+  padding: 18px 20px;
+  border: 1px solid rgba(123, 168, 137, 0.24);
+  border-radius: 24px;
+  background: rgba(255, 250, 240, 0.72);
+  box-shadow: 0 18px 34px rgba(61, 50, 32, 0.12);
+  text-align: center;
+  backdrop-filter: blur(14px);
+}
+
+.result-panel.is-showing {
+  animation: resultPop 0.42s cubic-bezier(0.2, 1.2, 0.36, 1) both;
+}
+
+.result-rank {
+  margin: 0;
+  font-family: "Kaisei Tokumin", "Noto Sans JP", serif;
+  font-size: 2.35rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.result-message {
+  margin: 8px 0 0;
+  color: var(--soft-ink);
+  line-height: 1.7;
+  font-weight: 700;
+}
+
+.result-panel.is-daikichi {
+  border-color: rgba(231, 173, 67, 0.5);
+  background: linear-gradient(135deg, rgba(255, 246, 202, 0.88), rgba(255, 250, 240, 0.72));
+}
+
+.result-panel.is-daikyo {
+  border-color: rgba(129, 98, 73, 0.34);
+  background: linear-gradient(135deg, rgba(236, 226, 211, 0.88), rgba(255, 250, 240, 0.74));
+}
+
+.action-area {
+  min-height: 72px;
+  display: grid;
+  place-items: center;
+  width: 100%;
+}
+
+.draw-button {
+  width: min(100%, 320px);
+  min-height: 62px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--leaf), var(--leaf-dark));
+  color: #fffef8;
+  font-size: 1.2rem;
+  font-weight: 900;
+  box-shadow: 0 18px 34px rgba(63, 117, 88, 0.28);
+  cursor: pointer;
+}
+
+.draw-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.draw-button:not(:disabled):active {
+  transform: translateY(2px);
+}
+
+@keyframes flipShake {
+  0% {
+    transform: rotate(0deg) translateX(0);
+  }
+  22% {
+    transform: rotate(180deg) translateX(0);
+  }
+  33% {
+    transform: rotate(180deg) translateX(-18px);
+  }
+  44% {
+    transform: rotate(180deg) translateX(18px);
+  }
+  55% {
+    transform: rotate(180deg) translateX(-16px);
+  }
+  66% {
+    transform: rotate(180deg) translateX(16px);
+  }
+  78% {
+    transform: rotate(180deg) translateX(-8px);
+  }
+  100% {
+    transform: rotate(0deg) translateX(0);
+  }
+}
+
+@keyframes stickOut {
+  0% {
+    opacity: 0;
+    transform: translateY(-44px) scaleY(0.08);
+  }
+  44% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+@keyframes resultPop {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 360px) {
+  .omikuji-stage {
+    gap: 16px;
+    padding-top: 54px;
+  }
+
+  .fortune-scene {
+    min-height: 328px;
+    grid-template-rows: 238px auto;
+  }
+
+  .box-wrap {
+    transform: scale(0.9);
+  }
+
+  .fortune-stick {
+    top: 194px;
+  }
+}

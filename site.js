@@ -8,12 +8,20 @@
       description: "実務で使いやすい卓上電卓風のWebアプリ。四則演算、桁区切り、モード設定に対応します。",
       url: "./apps/calculator/index.html?v=20260621-remake10",
       status: "Calculator",
+      cardClass: "app-card-calculator",
+    },
+    {
+      name: "おみくじ",
+      description: "六角みくじ箱を振ると木札が出てくる、明るく遊べる小さな運勢アプリです。",
+      url: "./apps/omikuji/index.html?v=20260621-omikuji1",
+      status: "Fortune",
+      cardClass: "app-card-omikuji",
     },
   ];
 
   function createAppCard(app) {
     const card = document.createElement(app.url ? "a" : "article");
-    card.className = `app-card ${app.url ? "" : "is-disabled"}`;
+    card.className = `app-card ${app.cardClass || ""} ${app.url ? "" : "is-disabled"}`;
 
     if (app.url) {
       card.href = app.url;

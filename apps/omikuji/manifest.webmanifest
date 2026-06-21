@@ -1,0 +1,32 @@
+{
+  "name": "T-ROOM おみくじ",
+  "short_name": "おみくじ",
+  "description": "六角みくじ箱を振って運勢を楽しむT-ROOMのWebアプリ",
+  "start_url": "./index.html?v=20260621-omikuji1",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#fff4d8",
+  "theme_color": "#fff4d8",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
