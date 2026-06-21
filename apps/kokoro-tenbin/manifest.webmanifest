@@ -1,0 +1,20 @@
+{
+  "name": "T-ROOM 心の天秤",
+  "short_name": "心の天秤",
+  "description": "A案とB案を心の天秤にのせて、50%ずつのランダム判定で迷いをそっと後押しするWebアプリ",
+  "start_url": "./index.html?v=20260622-tenbin2",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#f4f7e8",
+  "theme_color": "#f4f7e8",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

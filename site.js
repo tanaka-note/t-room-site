@@ -17,6 +17,13 @@
       status: "Fortune",
       cardClass: "app-card-omikuji",
     },
+    {
+      name: "心の天秤",
+      description: "A案とB案を天秤にのせて、ゆらゆら迷ったあとに50%ずつでそっと選ぶアプリです。",
+      url: "./apps/kokoro-tenbin/index.html?v=20260622-tenbin2",
+      status: "Balance",
+      cardClass: "app-card-tenbin",
+    },
   ];
 
   function createAppCard(app) {
