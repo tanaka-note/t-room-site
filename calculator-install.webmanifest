@@ -1,0 +1,32 @@
+{
+  "name": "T-ROOM 電卓",
+  "short_name": "電卓",
+  "description": "T-ROOMのスマホ向け実務電卓アプリ",
+  "start_url": "./apps/calculator/index.html?v=20260621-remake10",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#eef6f1",
+  "theme_color": "#eef6f1",
+  "icons": [
+    {
+      "src": "./apps/calculator/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./apps/calculator/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./apps/calculator/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

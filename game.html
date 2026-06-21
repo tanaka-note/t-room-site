@@ -1,0 +1,68 @@
+﻿<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ゲーム | T-ROOM | 知の庭</title>
+  <meta name="description" content="T-ROOMのゲーム一覧ページ。ブラウザでそのまま遊べる小さなゲームを選べます。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260620-garden-hop-fix">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./index.html" aria-label="T-ROOM ホームへ">
+      <span class="brand-mark">T</span>
+      <span>T-ROOM</span>
+    </a>
+    <nav class="site-nav" aria-label="メインナビゲーション">
+      <a href="./index.html#posts">記事</a>
+      <a href="./index.html#topics">テーマ</a>
+      <a href="./apps.html">アプリ</a>
+      <a href="./index.html#about">プロフィール</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="sub-hero game-hero" aria-labelledby="game-title">
+      <div class="sub-hero-content">
+        <p class="eyebrow">Game library</p>
+        <h1 id="game-title">ゲーム</h1>
+        <p>ブラウザでそのまま遊べる小さなゲームを集めていく場所です。ゲームごとにページを分けて、少しずつ増やしていきます。</p>
+      </div>
+    </section>
+
+    <section class="section game-library" aria-labelledby="game-library-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">Choose</p>
+          <h2 id="game-library-title">遊ぶゲームを選ぶ</h2>
+        </div>
+      </div>
+
+      <div class="game-library-grid">
+        <a class="game-library-card hop" href="./hop-game.html">
+          <span class="game-card-label">Jump</span>
+          <h3>Garden Hop</h3>
+          <p>知の庭をぴょんぴょん進む、やわらかい横スクロールジャンプアクション。</p>
+          <span class="game-card-meta">Jump / Hearts / Combo</span>
+        </a>
+
+        <a class="game-library-card blocks" href="./blocks-game.html">
+          <span class="game-card-label">Puzzle</span>
+          <h3>BLOCK GAME</h3>
+          <p>落ちてくるブロックを積んでラインをそろえる、やわらかい落下ブロックパズル。</p>
+          <span class="game-card-meta">Score / Lines / Level</span>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 T-ROOM</p>
+    <a href="./index.html">トップへ戻る</a>
+  </footer>
+  <script src="./site.js?v=20260620-garden-hop-fix" defer></script>
+</body>
+</html>

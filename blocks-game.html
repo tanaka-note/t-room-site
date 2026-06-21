@@ -1,0 +1,115 @@
+﻿<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BLOCK GAME | T-ROOM | 知の庭</title>
+  <meta name="description" content="T-ROOMのBLOCK GAME。落ちてくるブロックを積んでラインをそろえる落下ブロックパズルです。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260617-block-tap-start">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./index.html" aria-label="T-ROOM ホームへ">
+      <span class="brand-mark">T</span>
+      <span>T-ROOM</span>
+    </a>
+    <nav class="site-nav" aria-label="メインナビゲーション">
+      <a href="./index.html#posts">記事</a>
+      <a href="./index.html#topics">テーマ</a>
+      <a href="./apps.html">アプリ</a>
+      <a href="./index.html#about">プロフィール</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="sub-hero game-hero" aria-labelledby="blocks-title">
+      <div class="sub-hero-content">
+        <p class="eyebrow">Block puzzle</p>
+        <h1 id="blocks-title">BLOCK GAME</h1>
+        <p>落ちてくるブロックを積んでラインをそろえる、T-ROOMの落下ブロックパズルです。</p>
+      </div>
+    </section>
+
+    <section class="section game-layout" aria-label="BLOCK GAME">
+      <div class="room-main">
+        <article class="game-panel">
+          <div class="game-heading">
+            <div>
+              <p class="section-kicker">Now playing</p>
+              <h2>T-ROOM BLOCKS</h2>
+            </div>
+          </div>
+
+          <div class="game-hud" aria-label="ブロックゲームスコア">
+            <div>
+              <span>Score</span>
+              <strong id="blockScore">0</strong>
+            </div>
+            <div>
+              <span>Best</span>
+              <strong id="blockBest">0</strong>
+            </div>
+            <div>
+              <span>Lines</span>
+              <strong id="blockLines">0</strong>
+            </div>
+            <div>
+              <span>Level</span>
+              <strong id="blockLevel">1</strong>
+            </div>
+          </div>
+
+          <div class="game-frame block-frame">
+            <canvas id="blocksGame" class="game-canvas blocks-game-canvas" width="300" height="660" aria-label="BLOCK GAME ゲーム画面"></canvas>
+            <div class="game-message" id="blockMessage">
+              <strong>T-ROOM BLOCKS</strong>
+              <span>画面をタップして開始 / タップで回転 / スワイプで移動・落下</span>
+            </div>
+          </div>
+
+          <div class="gesture-guide" aria-label="スマートフォン用操作説明">
+            <p class="gesture-guide-title">盤面の操作</p>
+            <ul>
+              <li>タップ: ブロックを回転</li>
+              <li>左右スワイプ: ブロックを左右へ移動</li>
+              <li>下スワイプ: スワイプした距離ぶん下へ進む</li>
+              <li>長押し: 落下しません</li>
+            </ul>
+          </div>
+
+          <div class="sound-toggle" aria-label="効果音設定">
+            <span>効果音</span>
+            <div class="sound-toggle-buttons" role="group" aria-label="効果音の切り替え">
+              <button class="sound-toggle-button active" id="blockSoundOff" type="button" aria-pressed="true">OFF</button>
+              <button class="sound-toggle-button" id="blockSoundOn" type="button" aria-pressed="false">ON</button>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <aside class="room-side" aria-label="ブロックゲームの説明">
+        <div class="room-panel">
+          <p class="section-kicker">How to play</p>
+          <h2>遊び方</h2>
+          <ul>
+            <li>横一列をそろえるとラインが消えてポイントが入ります</li>
+            <li>スコアが上がるほどレベルが上がり、落下テンポが少しずつ速くなります</li>
+            <li>序盤はそろえやすく、進むほどブロックの出方がランダムに近づきます</li>
+            <li>ラインが消える瞬間は、光と破片がはじけます</li>
+          </ul>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 T-ROOM</p>
+    <a href="./game.html">ゲーム一覧へ戻る</a>
+  </footer>
+  <script src="./site.js?v=20260618-bitcoin-article" defer></script>
+  <script src="./blocks-game.js?v=20260617-block-difficulty" defer></script>
+</body>
+</html>

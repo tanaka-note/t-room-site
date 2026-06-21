@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="theme-color" content="#eef6f1">
+  <meta name="description" content="T-ROOMのスマホ向け実務電卓。大きな表示欄と押しやすいキー配列のWeb電卓アプリです。">
+  <title>電卓 | アプリ | T-ROOM | 知の庭</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./calculator.css?v=20260621-remake10">
+</head>
+<body>
+  <main class="calculator-app" aria-labelledby="calculator-title">
+    <section class="calculator-body" aria-label="T-ROOM 電卓">
+      <div class="app-shortcuts" aria-label="アプリ操作">
+        <a href="../../apps.html" aria-label="アプリ一覧へ戻る">戻る</a>
+        <button id="modeOpen" type="button" aria-controls="modePanel" aria-expanded="false">MODE</button>
+      </div>
+
+      <section class="display-panel" role="status" aria-live="polite">
+        <p class="display-brand">T-ROOM</p>
+        <div id="modeStatus" class="mode-status">F / 5/4 / ADD2 OFF / VIB ON</div>
+        <div id="calcExpression" class="expression-line"></div>
+        <output id="calcDisplay" class="display-value">0</output>
+      </section>
+
+      <section class="keypad" aria-label="電卓キー">
+        <button class="calc-key function key-hms" type="button" data-action="hms">H/M/S</button>
+        <button class="calc-key function key-percent" type="button" data-action="percent">%</button>
+        <button class="calc-key function key-shift" type="button" data-action="backspace">▶</button>
+        <button class="calc-key function key-root" type="button" data-action="tax-excluded">Tax-</button>
+        <button class="calc-key function key-gt" type="button" data-action="tax-included">Tax+</button>
+
+        <button class="calc-key memory key-mc" type="button" data-action="memory-clear">MC</button>
+        <button class="calc-key memory key-mr" type="button" data-action="memory-recall">MR</button>
+        <button class="calc-key memory key-mminus" type="button" data-action="memory-minus">M−</button>
+        <button class="calc-key memory key-mplus" type="button" data-action="memory-plus">M+</button>
+        <button class="calc-key operator key-divide" type="button" data-operator="/">÷</button>
+
+        <button class="calc-key utility key-sign" type="button" data-action="sign">±</button>
+        <button class="calc-key number key-7" type="button" data-number="7">7</button>
+        <button class="calc-key number key-8" type="button" data-number="8">8</button>
+        <button class="calc-key number key-9" type="button" data-number="9">9</button>
+        <button class="calc-key operator key-multiply" type="button" data-operator="*">×</button>
+
+        <button class="calc-key danger key-ac" type="button" data-action="clear-all">AC</button>
+        <button class="calc-key number key-4" type="button" data-number="4">4</button>
+        <button class="calc-key number key-5" type="button" data-number="5">5</button>
+        <button class="calc-key number key-6" type="button" data-number="6">6</button>
+        <button class="calc-key operator key-minus" type="button" data-operator="-">−</button>
+
+        <button class="calc-key danger soft key-c" type="button" data-action="clear-entry">C</button>
+        <button class="calc-key number key-1" type="button" data-number="1">1</button>
+        <button class="calc-key number key-2" type="button" data-number="2">2</button>
+        <button class="calc-key number key-3" type="button" data-number="3">3</button>
+        <button class="calc-key operator key-plus" type="button" data-operator="+">+</button>
+
+        <button class="calc-key number key-0" type="button" data-number="0">0</button>
+        <button class="calc-key number key-00" type="button" data-number="00">00</button>
+        <button class="calc-key number key-dot" type="button" data-action="decimal">.</button>
+        <button class="calc-key equals key-equals" type="button" data-action="equals">=</button>
+      </section>
+
+    </section>
+  </main>
+
+  <div id="modeBackdrop" class="mode-backdrop" hidden></div>
+  <aside id="modePanel" class="mode-panel" aria-hidden="true" aria-labelledby="modePanelTitle">
+    <div class="mode-head">
+      <div>
+        <p>Hidden mode</p>
+        <h2 id="modePanelTitle">電卓の設定</h2>
+      </div>
+      <button id="modeClose" class="mode-close" type="button" aria-label="設定を閉じる">×</button>
+    </div>
+
+    <section class="mode-section" aria-labelledby="decimalModeTitle">
+      <h3 id="decimalModeTitle">小数点以下の表示桁数</h3>
+      <div class="mode-segment" data-setting="decimalMode">
+        <button type="button" data-value="F">F</button>
+        <button type="button" data-value="0">0</button>
+        <button type="button" data-value="1">1</button>
+        <button type="button" data-value="2">2</button>
+        <button type="button" data-value="3">3</button>
+        <button type="button" data-value="4">4</button>
+      </div>
+    </section>
+
+    <section class="mode-section" aria-labelledby="roundingModeTitle">
+      <h3 id="roundingModeTitle">丸め処理</h3>
+      <div class="mode-segment" data-setting="rounding">
+        <button type="button" data-value="CUT">CUT</button>
+        <button type="button" data-value="5/4">5/4</button>
+        <button type="button" data-value="UP">UP</button>
+      </div>
+    </section>
+
+    <section class="mode-section mode-row" aria-labelledby="add2ModeTitle">
+      <div>
+        <h3 id="add2ModeTitle">ADD2</h3>
+        <p>数字入力を自動で小数2桁として扱います。例：1234 → 12.34</p>
+      </div>
+      <button id="add2Toggle" class="mode-toggle" type="button" data-setting="add2" aria-pressed="false">OFF</button>
+    </section>
+
+    <section class="mode-section mode-row" aria-labelledby="taxRateTitle">
+      <div>
+        <h3 id="taxRateTitle">Tax rate</h3>
+        <p>Tax+ / Tax- で使う税率です。初期値は10%です。</p>
+      </div>
+      <label class="tax-rate-control">
+        <input id="taxRateInput" type="number" min="0" max="99.99" step="0.1" inputmode="decimal" value="10">
+        <span>%</span>
+      </label>
+    </section>
+
+    <section class="mode-section mode-row" aria-labelledby="vibrationModeTitle">
+      <div>
+        <h3 id="vibrationModeTitle">バイブ</h3>
+        <p>対応端末でキー入力時に軽く反応します。</p>
+      </div>
+      <button id="vibrationToggle" class="mode-toggle" type="button" aria-pressed="true">ON</button>
+    </section>
+  </aside>
+
+  <script src="./calculator.js?v=20260621-remake10" defer></script>
+</body>
+</html>

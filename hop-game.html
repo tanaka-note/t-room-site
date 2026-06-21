@@ -1,0 +1,121 @@
+﻿<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T-ROOM Garden Hop | T-ROOM | 知の庭</title>
+  <meta name="description" content="T-ROOM Garden Hop。知の庭を進みながら、知の芽や星のしずくを集める横スクロールジャンプアクションです。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260620-garden-hop-fix">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./index.html" aria-label="T-ROOM ホームへ">
+      <span class="brand-mark">T</span>
+      <span>T-ROOM</span>
+    </a>
+    <nav class="site-nav" aria-label="メインナビゲーション">
+      <a href="./index.html#posts">記事</a>
+      <a href="./index.html#topics">テーマ</a>
+      <a href="./apps.html">アプリ</a>
+      <a href="./index.html#about">プロフィール</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="sub-hero game-hero" aria-labelledby="game-title">
+      <div class="sub-hero-content">
+        <p class="eyebrow">Garden jump</p>
+        <h1 id="game-title">T-ROOM Garden Hop</h1>
+        <p>知の庭をぴょんぴょん進みながら、知の芽と星のしずくを集めるジャンプアクションです。</p>
+      </div>
+    </section>
+
+    <section class="section game-layout" aria-label="T-ROOM Garden Hop">
+      <div class="room-main">
+        <article class="game-panel garden-hop-panel">
+          <div class="game-heading garden-hop-heading">
+            <div>
+              <p class="section-kicker">Now playing</p>
+              <h2>T-ROOM Garden Hop</h2>
+            </div>
+            <button class="game-start-button garden-start-button" id="gameStartButton" type="button">PLAY</button>
+          </div>
+
+          <div class="game-hud garden-hop-hud" aria-label="Garden Hop スコア">
+            <div>
+              <span>Score</span>
+              <strong id="gameScore">0</strong>
+            </div>
+            <div>
+              <span>Best</span>
+              <strong id="gameBest">0</strong>
+            </div>
+            <div>
+              <span>Hearts</span>
+              <strong id="gameLives">♥♥♥</strong>
+            </div>
+            <div>
+              <span>Combo</span>
+              <strong id="gameLevel">1</strong>
+            </div>
+          </div>
+
+          <div class="game-frame garden-hop-frame">
+            <canvas id="defenderGame" class="game-canvas garden-hop-canvas" width="960" height="540" aria-label="T-ROOM Garden Hop ゲーム画面"></canvas>
+            <div class="game-message garden-hop-message" id="gameMessage">
+              <strong>T-ROOM Garden Hop</strong>
+              <span>クリック・タップ・Spaceで2回までジャンプ。知の芽と星のしずくを集めよう。</span>
+              <button class="game-message-button" id="gameMessageButton" type="button">PLAY</button>
+            </div>
+          </div>
+
+          <div class="gesture-guide garden-hop-guide" aria-label="操作方法">
+            <p class="gesture-guide-title">操作方法</p>
+            <ul>
+              <li>クリック / タップ / Space: 2回までジャンプ</li>
+              <li>知の芽・星のしずく: スコアアップ</li>
+              <li>連続取得: コンボでポイントアップ</li>
+              <li>ハートがなくなるとゲームオーバー</li>
+            </ul>
+          </div>
+
+          <div class="game-controls garden-hop-controls" aria-label="スマートフォン用操作">
+            <button class="game-control-button jump" data-control="jump" type="button" aria-label="ジャンプ" title="ジャンプ">JUMP</button>
+          </div>
+        </article>
+      </div>
+      <aside class="room-side" aria-label="Garden Hopの説明">
+        <div class="room-panel">
+          <p class="section-kicker">How to play</p>
+          <h2>遊び方</h2>
+          <ul>
+            <li>最初の10秒はゆっくり進みます</li>
+            <li>当たり判定は見た目より少しやさしめです</li>
+            <li>ハートは3つ。ダメージ後は少しだけ無敵になります</li>
+            <li>スコアが伸びるほど、少しずつテンポが上がります</li>
+          </ul>
+        </div>
+        <div class="room-panel">
+          <p class="section-kicker">World</p>
+          <h2>知の庭</h2>
+          <ul>
+            <li>芽、葉、星、ノートをモチーフにした庭のステージ</li>
+            <li>怖くない障害物と、やわらかい色の背景</li>
+            <li>子どもでも直感的に、大人でも続けたくなる軽さ</li>
+          </ul>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 T-ROOM</p>
+    <a href="./game.html">ゲーム一覧へ戻る</a>
+  </footer>
+  <script src="./site.js?v=20260620-garden-hop-fix" defer></script>
+  <script src="./hop-game.js?v=20260620-garden-hop-fix" defer></script>
+</body>
+</html>

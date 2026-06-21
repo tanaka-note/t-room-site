@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>アプリ | T-ROOM | 知の庭</title>
+  <meta name="description" content="T-ROOMのアプリ一覧ページ。仕事や暮らしに役立つ小さなWebアプリをまとめる場所です。">
+  <link rel="manifest" href="./calculator-install.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260621-remake12">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./index.html" aria-label="T-ROOM ホームへ">
+      <span class="brand-mark">T</span>
+      <span>T-ROOM</span>
+    </a>
+    <nav class="site-nav" aria-label="メインナビゲーション">
+      <a href="./index.html#posts">記事</a>
+      <a href="./index.html#topics">テーマ</a>
+      <a href="./apps.html">アプリ</a>
+      <a href="./index.html#about">プロフィール</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="sub-hero app-hero" aria-labelledby="apps-title">
+      <div class="sub-hero-content">
+        <p class="eyebrow">App library</p>
+        <h1 id="apps-title">アプリ</h1>
+        <p>仕事や暮らしに役立つ小さなWebアプリをまとめる場所です。必要になったものから、少しずつ追加していきます。</p>
+      </div>
+    </section>
+
+    <section class="section app-library" aria-labelledby="app-library-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">Choose</p>
+          <h2 id="app-library-title">使うアプリを選ぶ</h2>
+        </div>
+      </div>
+
+      <p class="app-install-note">ホーム画面へインストールできます。対応ブラウザでは、電卓アプリをスマホのホーム画面から直接開けます。</p>
+      <div id="app-card-grid" class="app-card-grid" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 T-ROOM</p>
+    <a href="./index.html">トップへ戻る</a>
+  </footer>
+  <script src="./site.js?v=20260621-remake12" defer></script>
+</body>
+</html>

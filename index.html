@@ -1,0 +1,172 @@
+﻿<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T-ROOM | 知の庭</title>
+  <meta name="description" content="日々の中で考えたこと、試したこと、迷ったことを自分の言葉で残す個人ブログ。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260617-menu5">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#home" aria-label="T-ROOM ホームへ">
+      <span class="brand-mark">T</span>
+      <span>T-ROOM</span>
+    </a>
+    <nav class="site-nav" aria-label="メインナビゲーション">
+      <a href="#posts">記事</a>
+      <a href="#topics">テーマ</a>
+      <a href="./apps.html">アプリ</a>
+      <a href="#about">プロフィール</a>
+    </nav>
+  </header>
+
+  <main id="home">
+    <section class="hero" aria-labelledby="hero-title">
+      <img class="hero-image" src="./hero-workspace.png" alt="ノートとPCが置かれた落ち着いた作業机">
+      <div class="hero-overlay"></div>
+      <div class="hero-content">
+        <p class="eyebrow">Personal archive</p>
+        <h1 id="hero-title">知が芽吹き、暮らしとともに育つ庭。</h1>
+        <p class="hero-copy">T-ROOMは、日々の中で考えたこと、試したこと、迷ったことを、残していくための場所</p>
+        <div class="hero-actions" aria-label="主要アクション">
+          <a class="button primary" href="#posts">記事を読む</a>
+          <a class="button secondary" href="#what-i-write">この場所について</a>
+        </div>
+      </div>
+    </section>
+
+    <section id="what-i-write" class="section intro-grid intro-single" aria-label="サイト概要">
+      <div class="intro-copy">
+        <p class="section-kicker">What I write</p>
+        <h2>ここに、過ごしてきた時間の跡を残す。</h2>
+        <p>このサイトは、私自身の経験や日々の気づきを、庭に種をまくように残していく場所です。</p>
+        <p>誰もが違う道を歩き、違う景色を見ています。ここに残した言葉が、どこかで誰かの暮らしや選択に、ほんの少しでも芽を出すきっかけになればうれしいです。</p>
+        <p>2026年6月13日</p>
+      </div>
+    </section>
+
+    <section id="topics" class="section topics" aria-label="Rooms">
+      <div class="section-heading">
+        <p class="section-kicker">Rooms</p>
+      </div>
+      <div class="topic-grid">
+        <a class="topic-card topic-card-link" href="./work.html">
+          <span class="topic-icon">01</span>
+          <h3>仕事</h3>
+          <p>働く中で考えたこと、試した工夫、見えた課題。</p>
+        </a>
+        <a class="topic-card topic-card-link investment-topic" href="./investment.html">
+          <span class="topic-icon">02</span>
+          <h3>投資</h3>
+          <p>相場、銘柄、経済についての分析。</p>
+          <span class="investment-card-note">※相場を見るための個人的な記録です<br>※判断の前にはご自身でもご確認ください</span>
+        </a>
+        <a class="topic-card topic-card-link" href="./life.html">
+          <span class="topic-icon">03</span>
+          <h3>生活</h3>
+          <p>暮らし、習慣、体調、部屋のこと。</p>
+        </a>
+        <a class="topic-card topic-card-link" href="./thought.html">
+          <span class="topic-icon">04</span>
+          <h3>思考</h3>
+          <p>答えのない問いを、考え続ける。</p>
+        </a>
+        <a class="topic-card topic-card-link" href="./game.html">
+          <span class="topic-icon">05</span>
+          <h3>ゲーム</h3>
+          <p>ブラウザでそのまま遊べる小さなゲームを公開中。少しずつ増やしていきます。</p>
+        </a>
+        <a class="topic-card topic-card-link" href="./apps.html">
+          <span class="topic-icon">06</span>
+          <h3>アプリ</h3>
+          <p>仕事や暮らしに役立つ小さなWebアプリをまとめる場所。</p>
+        </a>
+      </div>
+    </section>
+
+    <section id="posts" class="section recent-section" aria-labelledby="posts-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">Blog</p>
+          <h2 id="posts-title">最近の記録</h2>
+        </div>
+        <a class="text-link" href="#topics">テーマを見る</a>
+      </div>
+      <div id="recent-post-list" class="post-list recent-list" data-initial-count="3" data-max-count="10" aria-live="polite"></div>
+      <p id="recent-empty" class="recent-empty">まだ最近の記録はありません。</p>
+      <div class="recent-actions">
+        <button id="recent-toggle" class="button secondary recent-toggle" type="button" aria-controls="recent-post-list" aria-expanded="false" hidden>もっと見る</button>
+      </div>
+    </section>
+
+    <section id="about" class="section profile-section" aria-labelledby="profile-title">
+      <div class="profile-panel profile-wide">
+        <p class="section-kicker">About</p>
+        <div class="profile-mascot" aria-label="プロフィールの案内役">
+          <pre>　　　∧ーーーー∧
+／ﾟ（　๑６ω６๑　）ﾟ＼
+　 （　〇　　　〇　）
+　　　〇　　　〇</pre>
+          <span id="profile-title" class="profile-mascot-bubble">プロフィール</span>
+        </div>
+        <dl class="profile-form" aria-label="匿名の自己紹介">
+          <div class="profile-field">
+            <dt>NAME</dt>
+            <dd>T-ROOM OWNER</dd>
+          </div>
+          <div class="profile-field">
+            <dt>WRITING</dt>
+            <dd>仕事、投資、生活、思考、ゲーム、アプリ。</dd>
+          </div>
+          <div class="profile-field profile-log-field">
+            <dt>MY LOG</dt>
+            <dd>
+              <p class="profile-log-heading">これまでのこと</p>
+              <div class="profile-log">
+                <section>
+                  <time>1996</time>
+                  <div>
+                    <h3>誕生</h3>
+                  </div>
+                </section>
+                <section>
+                  <time>2019</time>
+                  <div>
+                    <h3>葬祭関連の仕事へ</h3>
+                    <p>大学卒業後、人の大切な節目に関わる仕事に就く。営業として、話を聞き、整え、届ける日々が始まる。</p>
+                  </div>
+                </section>
+                <section>
+                  <time>2023</time>
+                  <div>
+                    <h3>身体と向き合う出来事</h3>
+                    <p>心房細動を患い、手術を経験。健康のことや、これからの過ごし方を考えるきっかけになる。</p>
+                  </div>
+                </section>
+                <section>
+                  <time>2026</time>
+                  <div>
+                    <h3>新しい環境へ</h3>
+                    <p>転職をきっかけに、営業職を離れる。</p>
+                  </div>
+                </section>
+              </div>
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 T-ROOM</p>
+    <a href="#home">ページ上部へ</a>
+  </footer>
+
+  <script src="./site.js?v=20260618-bitcoin-article" defer></script>
+</body>
+</html>
