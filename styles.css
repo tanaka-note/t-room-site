@@ -658,6 +658,28 @@ h1 {
   overflow-wrap: anywhere;
 }
 
+.profile-contact-field a {
+  display: inline-flex;
+  margin-top: 8px;
+  color: var(--teal-dark);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.profile-contact-field a:hover {
+  text-decoration: underline;
+}
+
+.profile-contact-lead,
+.profile-contact-note {
+  margin: 0;
+}
+
+.profile-contact-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .profile-log-field {
   grid-column: 1 / -1;
 }
