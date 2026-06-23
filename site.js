@@ -24,6 +24,13 @@
       status: "Balance",
       cardClass: "app-card-tenbin",
     },
+    {
+      name: "今を撮る",
+      description: "今を残すためのデジタルインスタントカメラです。",
+      url: "./apps/ima-camera/index.html?v=20260623-ima8",
+      status: "Camera",
+      cardClass: "app-card-ima-camera",
+    },
   ];
 
   function createAppCard(app) {
@@ -45,6 +52,13 @@
     description.textContent = app.description;
 
     card.append(label, title, description);
+
+    if (app.note) {
+      const note = document.createElement("p");
+      note.className = "app-card-note";
+      note.textContent = app.note;
+      card.append(note);
+    }
 
     if (app.url) {
       const arrow = document.createElement("span");

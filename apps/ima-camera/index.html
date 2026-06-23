@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111111">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="今を撮る">
+  <meta name="description" content="今を静かに残す、白黒基調のWebカメラアプリです。">
+  <title>今を撮る</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="stylesheet" href="./ima-camera.css?v=20260623-ima8">
+</head>
+<body>
+  <main class="ima-app" aria-label="今を撮る">
+    <div class="app-shortcuts" aria-label="アプリ操作">
+      <a href="../../apps.html" aria-label="アプリ一覧へ戻る">戻る</a>
+    </div>
+
+    <section class="ima-shell">
+      <section class="camera-stage" aria-label="カメラ">
+        <div id="cameraFrame" class="camera-frame">
+          <video id="cameraVideo" autoplay playsinline muted></video>
+          <img id="photoPreview" alt="撮影した写真" hidden>
+          <div id="flashOverlay" class="flash-overlay" aria-hidden="true"></div>
+          <div id="emptyState" class="empty-state">
+            <span class="camera-symbol" aria-hidden="true"></span>
+            <p>カメラを起動しています</p>
+          </div>
+          <button id="shutterButton" class="frame-shutter" type="button" aria-label="撮影" disabled>
+            <span aria-hidden="true"></span>
+          </button>
+        </div>
+        <p id="statusText" class="status-text" aria-live="polite">カメラの許可を確認しています。</p>
+      </section>
+
+      <details class="option-drawer">
+        <summary>
+          <span>オプション</span>
+          <small id="optionSummary">印なし / 日時なし</small>
+        </summary>
+
+        <section class="mark-panel" aria-label="印の選択">
+          <div class="section-head">
+            <h2>気分模様</h2>
+            <p>写真右下に小さく入れる印です。</p>
+          </div>
+          <div class="mark-grid">
+            <button class="mark-button is-selected" type="button" data-mark="none" aria-pressed="true">
+              <span class="mark-none" aria-hidden="true">—</span>
+              <span>なし</span>
+            </button>
+            <button class="mark-button" type="button" data-mark="sunny" aria-pressed="false">
+              <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="12"/><path d="M32 9v7M32 48v7M9 32h7M48 32h7M16 16l5 5M43 43l5 5M48 16l-5 5M21 43l-5 5"/><circle class="mark-fill" cx="27" cy="30" r="2"/><circle class="mark-fill" cx="37" cy="30" r="2"/><path d="M25 36c4 5 10 5 14 0"/></svg>
+              <span>Happy</span>
+            </button>
+            <button class="mark-button" type="button" data-mark="fair" aria-pressed="false">
+              <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="mark-fill" cx="42" cy="22" r="3"/><path d="M15 38c11-14 23-14 34 0"/><path d="M21 47h22"/></svg>
+              <span>Good</span>
+            </button>
+            <button class="mark-button" type="button" data-mark="cloudy" aria-pressed="false">
+              <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="27" cy="27" r="10"/><circle cx="40" cy="32" r="12"/><circle cx="31" cy="43" r="8"/><circle class="mark-fill" cx="20" cy="51" r="2.5"/><circle class="mark-fill" cx="29" cy="55" r="2"/></svg>
+              <span>Think</span>
+            </button>
+            <button class="mark-button" type="button" data-mark="rainy" aria-pressed="false">
+              <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 10c11 14 17 24 17 34a17 17 0 0 1-34 0c0-10 6-20 17-34Z"/><path d="M25 43c4 4 10 4 14 0"/></svg>
+              <span>Blue</span>
+            </button>
+            <button class="mark-button" type="button" data-mark="quiet" aria-pressed="false">
+              <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M42 36A16 16 0 0 1 34 8a18 18 0 1 0 8 28Z"/><path d="M15 45c6-5 12-5 18 0s12 5 18 0"/></svg>
+              <span>Calm</span>
+            </button>
+            <button class="mark-button" type="button" data-mark="growing" aria-pressed="false">
+              <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 52V30"/><path d="M31 32c-13-1-18-9-18-20 13 1 19 8 18 20Z"/><path d="M34 36c13-2 18-10 17-21-13 2-18 10-17 21Z"/></svg>
+              <span>Grow</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="option-panel" aria-label="保存オプション">
+          <label class="time-option">
+            <input id="timeToggle" type="checkbox">
+            <span>日時を入れる</span>
+            <small>右下に印、その下に日時を薄く入れます。</small>
+          </label>
+        </section>
+      </details>
+
+      <section class="action-panel" aria-label="撮影操作">
+        <button id="switchButton" class="secondary-button" type="button" disabled>カメラ切替</button>
+        <button id="saveButton" class="secondary-button" type="button" hidden>保存</button>
+        <button id="shareButton" class="secondary-button" type="button" hidden>共有</button>
+        <button id="retakeButton" class="text-button" type="button" hidden>撮り直す</button>
+      </section>
+    </section>
+
+    <canvas id="captureCanvas" hidden></canvas>
+  </main>
+
+  <script src="./ima-camera.js?v=20260623-ima8" defer></script>
+</body>
+</html>

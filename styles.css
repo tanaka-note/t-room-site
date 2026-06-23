@@ -1428,6 +1428,10 @@ h1 {
   --app-card-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Cpath d='M60 28v54' stroke='%238dbfac' stroke-width='8' stroke-linecap='round'/%3E%3Cpath d='M29 49h62' stroke='%23d8b77a' stroke-width='9' stroke-linecap='round'/%3E%3Cpath d='M60 80L43 106h34L60 80Z' fill='%23d8efe7'/%3E%3Cpath d='M29 49L14 78h30L29 49Z' fill='%23fff0c7' stroke='%23e4c98e' stroke-width='5' stroke-linejoin='round'/%3E%3Cpath d='M91 49L76 78h30L91 49Z' fill='%23f5dfe6' stroke='%23e2a8b7' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='29' cy='82' r='7' fill='%238dbfac'/%3E%3Ccircle cx='91' cy='82' r='7' fill='%23e2a8b7'/%3E%3C/svg%3E");
 }
 
+.app-card-ima-camera {
+  --app-card-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect x='20' y='36' width='80' height='58' rx='13' fill='%23eeeeeb' stroke='%23909090' stroke-width='5'/%3E%3Crect x='37' y='25' width='31' height='18' rx='7' fill='%23d8d8d4' stroke='%23909090' stroke-width='5'/%3E%3Ccircle cx='60' cy='65' r='19' fill='%23f7f7f4' stroke='%23909090' stroke-width='5'/%3E%3Ccircle cx='60' cy='65' r='9' fill='%23b9b9b4'/%3E%3Crect x='78' y='42' width='12' height='7' rx='3.5' fill='%23b9b9b4'/%3E%3C/svg%3E");
+}
+
 .app-card[href]:hover {
   transform: translateY(-2px);
   border-color: rgba(15, 118, 110, 0.36);
@@ -1459,6 +1463,15 @@ h1 {
   max-width: 24rem;
   margin: 0;
   color: var(--muted);
+}
+
+.app-card .app-card-note {
+  max-width: 20rem;
+  margin-top: 10px;
+  color: #7b858f;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.6;
 }
 
 .app-card-arrow {

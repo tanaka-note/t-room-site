@@ -1,8 +1,8 @@
-const CACHE_NAME = "t-room-calculator-install-v5";
+const CACHE_NAME = "t-room-calculator-install-v15";
 const APP_SHELL = [
   "./apps.html",
-  "./styles.css?v=20260622-tenbin1",
-  "./site.js?v=20260622-tenbin1",
+  "./styles.css?v=20260623-ima6",
+  "./site.js?v=20260623-ima9",
   "./calculator-install.webmanifest",
   "./apps/calculator/index.html?v=20260621-remake10",
   "./apps/calculator/calculator.css?v=20260621-remake10",
@@ -22,7 +22,14 @@ const APP_SHELL = [
   "./apps/kokoro-tenbin/kokoro-tenbin.css?v=20260622-tenbin2",
   "./apps/kokoro-tenbin/kokoro-tenbin.js?v=20260622-tenbin2",
   "./apps/kokoro-tenbin/manifest.webmanifest",
-  "./apps/kokoro-tenbin/icon.svg"
+  "./apps/kokoro-tenbin/icon.svg",
+  "./apps/ima-camera/index.html?v=20260623-ima8",
+  "./apps/ima-camera/ima-camera.css?v=20260623-ima8",
+  "./apps/ima-camera/ima-camera.js?v=20260623-ima8",
+  "./apps/ima-camera/manifest.webmanifest",
+  "./apps/ima-camera/icon-192.png",
+  "./apps/ima-camera/icon-512.png",
+  "./apps/ima-camera/icon.svg"
 ];
 
 self.addEventListener("install", (event) => {
@@ -55,12 +62,13 @@ self.addEventListener("fetch", (event) => {
   const isCalculatorAsset = url.pathname.includes("/apps/calculator/");
   const isOmikujiAsset = url.pathname.includes("/apps/omikuji/");
   const isTenbinAsset = url.pathname.includes("/apps/kokoro-tenbin/");
+  const isImaCameraAsset = url.pathname.includes("/apps/ima-camera/");
   const isInstallAsset = url.pathname.endsWith("/calculator-install.webmanifest")
     || url.pathname.endsWith("/calculator-install-sw.js")
     || url.pathname.endsWith("/site.js")
     || url.pathname.endsWith("/styles.css");
 
-  if (!isAppEntry && !isCalculatorAsset && !isOmikujiAsset && !isTenbinAsset && !isInstallAsset) return;
+  if (!isAppEntry && !isCalculatorAsset && !isOmikujiAsset && !isTenbinAsset && !isImaCameraAsset && !isInstallAsset) return;
 
   event.respondWith(
     fetch(event.request)
