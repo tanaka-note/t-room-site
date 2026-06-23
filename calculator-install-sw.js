@@ -1,8 +1,8 @@
-const CACHE_NAME = "t-room-calculator-install-v15";
+const CACHE_NAME = "t-room-calculator-install-v16";
 const APP_SHELL = [
   "./apps.html",
   "./styles.css?v=20260623-ima6",
-  "./site.js?v=20260623-ima9",
+  "./site.js?v=20260623-ima10",
   "./calculator-install.webmanifest",
   "./apps/calculator/index.html?v=20260621-remake10",
   "./apps/calculator/calculator.css?v=20260621-remake10",
@@ -23,9 +23,9 @@ const APP_SHELL = [
   "./apps/kokoro-tenbin/kokoro-tenbin.js?v=20260622-tenbin2",
   "./apps/kokoro-tenbin/manifest.webmanifest",
   "./apps/kokoro-tenbin/icon.svg",
-  "./apps/ima-camera/index.html?v=20260623-ima8",
-  "./apps/ima-camera/ima-camera.css?v=20260623-ima8",
-  "./apps/ima-camera/ima-camera.js?v=20260623-ima8",
+  "./apps/ima-camera/index.html?v=20260623-ima9",
+  "./apps/ima-camera/ima-camera.css?v=20260623-ima9",
+  "./apps/ima-camera/ima-camera.js?v=20260623-ima9",
   "./apps/ima-camera/manifest.webmanifest",
   "./apps/ima-camera/icon-192.png",
   "./apps/ima-camera/icon-512.png",

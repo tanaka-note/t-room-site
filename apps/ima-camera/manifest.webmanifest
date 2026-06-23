@@ -3,7 +3,7 @@
   "short_name": "今を撮る",
   "description": "今を静かに残す、白黒基調のWebカメラアプリ",
   "id": "./",
-  "start_url": "./index.html?v=20260623-ima8",
+  "start_url": "./index.html?v=20260623-ima9",
   "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "fullscreen"],

@@ -27,7 +27,7 @@
     {
       name: "今を撮る",
       description: "今を残すためのデジタルインスタントカメラです。",
-      url: "./apps/ima-camera/index.html?v=20260623-ima8",
+      url: "./apps/ima-camera/index.html?v=20260623-ima9",
       status: "Camera",
       cardClass: "app-card-ima-camera",
     },
