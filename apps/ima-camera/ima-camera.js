@@ -32,6 +32,7 @@
     rainy: { label: "Blue", slug: "blue" },
     quiet: { label: "Calm", slug: "calm" },
     growing: { label: "Grow", slug: "grow" },
+    anger: { label: "anger", slug: "anger" },
   };
 
   let stream = null;
@@ -179,11 +180,12 @@
   }
 
   function formatStampDate(date) {
+    const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
     const day = String(date.getDate()).padStart(2, "0");
     const hour = String(date.getHours()).padStart(2, "0");
     const minute = String(date.getMinutes()).padStart(2, "0");
-    return `${month}.${day} ${hour}:${minute}`;
+    return `${year}.${month}.${day} ${hour}:${minute}`;
   }
 
   function formatFileDate(date) {
@@ -310,6 +312,24 @@
       ctx.beginPath();
       ctx.ellipse(size * 0.64, size * 0.38, size * 0.16, size * 0.28, 0.7, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    if (mark === "anger") {
+      ctx.beginPath();
+      ctx.moveTo(size * 0.52, size * 0.08);
+      ctx.lineTo(size * 0.26, size * 0.46);
+      ctx.lineTo(size * 0.48, size * 0.46);
+      ctx.lineTo(size * 0.36, size * 0.9);
+      ctx.lineTo(size * 0.76, size * 0.38);
+      ctx.lineTo(size * 0.52, size * 0.38);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(size * 0.18, size * 0.22);
+      ctx.lineTo(size * 0.32, size * 0.32);
+      ctx.moveTo(size * 0.82, size * 0.22);
+      ctx.lineTo(size * 0.68, size * 0.32);
+      ctx.stroke();
     }
 
     ctx.restore();
