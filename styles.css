@@ -2077,3 +2077,395 @@ body.blocks-game-playing .blocks-game-canvas {
     flex-direction: column;
   }
 }
+
+.thought-page {
+  color-scheme: dark;
+  --thought-bg: #0f1117;
+  --thought-panel: rgba(255, 255, 255, 0.04);
+  --thought-panel-strong: rgba(255, 255, 255, 0.07);
+  --thought-line: rgba(255, 255, 255, 0.1);
+  --thought-ink: #e8e0d0;
+  --thought-muted: #9ca3af;
+  --thought-gold: #c2a56b;
+  --thought-gold-soft: rgba(194, 165, 107, 0.18);
+  background:
+    linear-gradient(180deg, #0f1117 0%, #151720 46%, #101218 100%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0, rgba(255, 255, 255, 0.018) 1px, transparent 1px, transparent 8px);
+  color: var(--thought-ink);
+}
+
+.thought-page .thought-site-header {
+  border-bottom-color: var(--thought-line);
+  background: rgba(15, 17, 23, 0.9);
+  color: var(--thought-ink);
+}
+
+.thought-page .brand-mark {
+  background: var(--thought-gold);
+  color: #141217;
+}
+
+.thought-page .site-nav {
+  color: #d1cabd;
+}
+
+.thought-main {
+  overflow: hidden;
+}
+
+.thought-shell {
+  width: min(900px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+.thought-reading-shell {
+  width: min(760px, calc(100% - 40px));
+}
+
+.thought-hero {
+  min-height: 520px;
+  display: grid;
+  align-items: end;
+  padding: clamp(94px, 16vw, 150px) 0 clamp(64px, 9vw, 92px);
+  border-bottom: 1px solid var(--thought-line);
+  background:
+    linear-gradient(180deg, rgba(15, 17, 23, 0.18), rgba(15, 17, 23, 0.96)),
+    linear-gradient(135deg, rgba(194, 165, 107, 0.12), rgba(255, 255, 255, 0.02) 46%, rgba(23, 25, 35, 0.72));
+}
+
+.thought-kicker {
+  margin: 0 0 12px;
+  color: var(--thought-gold);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.thought-hero h1 {
+  margin: 0;
+  color: var(--thought-ink);
+  font-size: 6rem;
+  line-height: 0.95;
+}
+
+.thought-hero p:not(.thought-kicker) {
+  max-width: 34rem;
+  margin: 24px 0 0;
+  color: #d8d0c0;
+  font-size: 1.08rem;
+}
+
+.thought-hero-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 34px;
+}
+
+.thought-hero-links a,
+.thought-button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  border: 1px solid rgba(194, 165, 107, 0.42);
+  border-radius: 8px;
+  padding: 9px 15px;
+  background: rgba(194, 165, 107, 0.08);
+  color: var(--thought-ink);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.thought-section {
+  padding: clamp(54px, 9vw, 92px) 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.thought-section-head {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.thought-section h2,
+.thought-detail-header h2,
+.thought-reading h2 {
+  margin: 0;
+  color: var(--thought-ink);
+  font-size: 2.3rem;
+  line-height: 1.25;
+}
+
+.thought-article-list {
+  display: grid;
+  gap: 14px;
+}
+
+.thought-article-card,
+.thought-series-card,
+.thought-reading {
+  border: 1px solid var(--thought-line);
+  border-radius: 8px;
+  background: var(--thought-panel);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
+}
+
+.thought-article-card {
+  display: grid;
+  gap: 12px;
+  padding: clamp(20px, 4vw, 28px);
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.thought-article-card:hover,
+.thought-series-card:hover,
+.thought-index-list a:hover,
+.thought-episode-list a:hover {
+  border-color: rgba(194, 165, 107, 0.38);
+  background: var(--thought-panel-strong);
+}
+
+.thought-card-meta,
+.thought-reading-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--thought-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.thought-article-card h3,
+.thought-series-card h3 {
+  margin: 0;
+  color: var(--thought-ink);
+  font-size: 1.32rem;
+  line-height: 1.35;
+}
+
+.thought-article-card p,
+.thought-detail-header p,
+.thought-body p {
+  margin: 0;
+  color: #cfc6b7;
+}
+
+.thought-text-link {
+  width: fit-content;
+  color: var(--thought-gold);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.thought-text-link::after {
+  content: "";
+  display: block;
+  height: 1px;
+  margin-top: 2px;
+  background: currentColor;
+  opacity: 0.42;
+}
+
+.thought-series-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.thought-series-card {
+  display: grid;
+  gap: 16px;
+  padding: clamp(20px, 4vw, 28px);
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.thought-series-label {
+  margin: 0;
+  color: var(--thought-gold);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.thought-series-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.thought-series-card dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 8px;
+}
+
+.thought-series-card dt,
+.thought-series-card dd {
+  margin: 0;
+  color: var(--thought-muted);
+  font-size: 0.9rem;
+}
+
+.thought-series-card dd {
+  color: #d6cdbc;
+  font-weight: 700;
+}
+
+.thought-series-detail {
+  background: rgba(23, 25, 35, 0.42);
+}
+
+.thought-detail-header {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.thought-detail-header .thought-button-link {
+  width: fit-content;
+  margin-top: 4px;
+}
+
+.thought-episode-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thought-episode-list a,
+.thought-index-list a {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--thought-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--thought-ink);
+  text-decoration: none;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.thought-episode-list a {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 15px 16px;
+}
+
+.thought-episode-list span {
+  color: var(--thought-gold);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.thought-episode-list strong,
+.thought-index-list strong {
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.thought-episode-list time,
+.thought-index-list time,
+.thought-index-list span {
+  color: var(--thought-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.thought-index-list {
+  display: grid;
+  gap: 10px;
+}
+
+.thought-index-list a {
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  padding: 14px 16px;
+}
+
+.thought-reading {
+  padding: clamp(24px, 5vw, 46px);
+}
+
+.thought-reading-meta {
+  margin-bottom: 16px;
+}
+
+.thought-body {
+  margin-top: 24px;
+  font-size: 1.05rem;
+  line-height: 2.05;
+}
+
+.thought-article-nav {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 36px;
+}
+
+.thought-article-nav a {
+  display: grid;
+  place-items: center;
+  min-height: 48px;
+  border: 1px solid var(--thought-line);
+  border-radius: 8px;
+  padding: 10px;
+  color: #d8d0c0;
+  font-size: 0.9rem;
+  font-weight: 800;
+  text-align: center;
+  text-decoration: none;
+}
+
+.thought-article-nav a:hover {
+  border-color: rgba(194, 165, 107, 0.38);
+  color: var(--thought-ink);
+}
+
+.thought-page .thought-site-footer {
+  border-top-color: var(--thought-line);
+  background: #101218;
+  color: var(--thought-muted);
+}
+
+.thought-page .thought-site-footer a {
+  color: var(--thought-gold);
+}
+
+@media (max-width: 720px) {
+  .thought-shell,
+  .thought-reading-shell {
+    width: min(100% - 28px, 900px);
+  }
+
+  .thought-hero {
+    min-height: 430px;
+  }
+
+  .thought-hero h1 {
+    font-size: 3.6rem;
+  }
+
+  .thought-section h2,
+  .thought-detail-header h2,
+  .thought-reading h2 {
+    font-size: 1.8rem;
+  }
+
+  .thought-series-grid,
+  .thought-article-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .thought-episode-list a,
+  .thought-index-list a {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
