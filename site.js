@@ -122,6 +122,13 @@
   const recentPosts = [
     {
       theme: "投資",
+      date: "2026.06.25",
+      title: "BTCの長らく続く下落と4年サイクル",
+      excerpt: "長い低迷期の中で、BTCを持つ理由と4年サイクルについて考えます。",
+      url: "./investment-btc-four-year-cycle.html",
+    },
+    {
+      theme: "投資",
       date: "2026.06.18",
       title: "ビットコイン下落と今後",
       excerpt: "トランプラリー後の調整と、暗号資産市場に残る可能性を整理します。",
