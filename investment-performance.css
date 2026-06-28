@@ -308,6 +308,8 @@ a {
   color: var(--perf-ink);
   font-size: clamp(1.1rem, 2.2vw, 1.65rem);
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
 }
 
