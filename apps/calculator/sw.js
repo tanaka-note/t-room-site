@@ -1,9 +1,9 @@
-const CACHE_NAME = "t-room-calculator-v15";
+const CACHE_NAME = "t-room-calculator-v16";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=20260621-remake10",
-  "./calculator.css?v=20260621-remake10",
+  "./index.html?v=20260703-ac-c-swap1",
+  "./calculator.css?v=20260703-ac-c-swap1",
   "./calculator.js?v=20260621-remake10",
   "./manifest.webmanifest",
   "./icon-192.png",

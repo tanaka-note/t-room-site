@@ -202,8 +202,8 @@ a {
     "hms percent shift root gt"
     "mc mr mminus mplus divide"
     "sign n7 n8 n9 multiply"
-    "ac n4 n5 n6 minus"
-    "c n1 n2 n3 plus"
+    "c n4 n5 n6 minus"
+    "ac n1 n2 n3 plus"
     "n0 n00 dot equals plus";
   gap: clamp(8px, 2.3vw, 13px);
 }
