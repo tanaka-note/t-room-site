@@ -1,0 +1,1541 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stone Game | T-ROOM Stone</title>
+  <meta name="description" content="T-ROOM Stone。落ちてくる石を静かに積み上げる、スマホで遊びやすいミニゲームです。">
+  <meta property="og:image" content="https://tanaka-note.com/assets/t-room-share.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="T-ROOM 知の庭">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="./assets/favicon.ico" sizes="any">
+  <link rel="icon" href="./assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="./assets/site-icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f5efe3;
+      --paper-deep: #e9dfcf;
+      --ink: #2f332f;
+      --muted: #74736b;
+      --line: rgba(73, 67, 56, 0.16);
+      --stone: #9d9a91;
+      --shadow: 0 18px 48px rgba(67, 59, 43, 0.18);
+      --soft-shadow: 0 8px 24px rgba(67, 59, 43, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.72), transparent 36rem),
+        linear-gradient(180deg, #fbf6ed 0%, var(--paper) 48%, #ebe1d2 100%);
+      color: var(--ink);
+      font-family: "Noto Sans JP", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    body.is-playing {
+      overscroll-behavior: none;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .stone-page {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      padding: 16px;
+    }
+
+    .stone-header {
+      width: min(980px, 100%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 0 auto 12px;
+      color: rgba(47, 51, 47, 0.82);
+      font-weight: 800;
+    }
+
+    .stone-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+
+    .stone-brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #d7cfbf;
+      color: #4c4a43;
+      box-shadow: inset 0 -2px 0 rgba(72, 64, 50, 0.08);
+    }
+
+    .stone-back {
+      color: var(--muted);
+      font-size: 0.88rem;
+      text-decoration: none;
+    }
+
+    .stone-shell {
+      width: min(980px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);
+      align-items: center;
+      gap: 28px;
+      margin: 0 auto;
+    }
+
+    .stone-copy {
+      max-width: 390px;
+      padding: 18px 4px 22px;
+    }
+
+    .stone-kicker {
+      margin: 0 0 14px;
+      color: #7d725f;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .stone-copy h1 {
+      margin: 0;
+      color: #34362f;
+      font-size: clamp(2.5rem, 8vw, 5.2rem);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    .stone-copy h1 span {
+      display: block;
+      color: #7a7160;
+      font-size: 0.46em;
+      font-weight: 700;
+      line-height: 1.4;
+    }
+
+    .stone-subcopy {
+      margin: 20px 0 0;
+      color: #5e5a50;
+      font-size: 1.08rem;
+      line-height: 1.9;
+    }
+
+    .stone-note {
+      margin: 28px 0 0;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.34);
+      color: #777064;
+      font-size: 0.88rem;
+      line-height: 1.8;
+    }
+
+    .game-panel {
+      position: relative;
+      width: min(100%, 430px);
+      margin: 0 auto;
+      border: 1px solid rgba(78, 70, 58, 0.18);
+      border-radius: 20px;
+      padding: 14px;
+      background: rgba(255, 252, 246, 0.68);
+      box-shadow: var(--shadow);
+    }
+
+    .hud {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .hud-item {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 9px;
+      background: rgba(255, 255, 255, 0.52);
+    }
+
+    .hud-item span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.67rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .hud-item strong {
+      display: block;
+      margin-top: 2px;
+      color: #3e4039;
+      font-size: 1.08rem;
+      line-height: 1.1;
+    }
+
+    .stage {
+      position: relative;
+      width: 100%;
+      height: min(68vh, 640px);
+      min-height: 490px;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+      border: 1px solid rgba(74, 65, 50, 0.18);
+      border-radius: 18px;
+      background:
+        linear-gradient(rgba(79, 70, 55, 0.05) 1px, transparent 1px) 0 0 / 100% 56px,
+        radial-gradient(circle at 50% 95%, rgba(167, 154, 129, 0.28), transparent 18rem),
+        linear-gradient(180deg, #f7f0e5 0%, #efe5d5 100%);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+      cursor: grab;
+    }
+
+    .stage:active {
+      cursor: grabbing;
+    }
+
+    .world {
+      position: absolute;
+      inset: 0;
+      transform: translateY(0);
+      transition: transform 480ms cubic-bezier(0.2, 0.75, 0.18, 1);
+      will-change: transform;
+    }
+
+    .tower {
+      position: absolute;
+      inset: 0;
+      transform-origin: 50% 100%;
+    }
+
+    .tower.is-shaking {
+      animation: towerShake 430ms ease;
+    }
+
+    .base-stone,
+    .stone {
+      position: absolute;
+      display: grid;
+      place-items: center;
+      color: rgba(63, 58, 50, 0.42);
+      font-size: 0.7rem;
+      font-weight: 800;
+      box-shadow:
+        inset 8px 8px 18px rgba(255, 255, 255, 0.24),
+        inset -8px -8px 16px rgba(55, 49, 41, 0.1),
+        0 8px 16px rgba(65, 57, 43, 0.12);
+    }
+
+    .base-stone {
+      height: 30px;
+      border-radius: 46% 54% 40% 44% / 55% 48% 52% 45%;
+      background: linear-gradient(145deg, #9d9585, #7f796e);
+    }
+
+    .stone {
+      border: 1px solid rgba(62, 57, 48, 0.1);
+      background: linear-gradient(145deg, #b9b3a8, #918d85);
+      transition: filter 180ms ease;
+      will-change: left, top, bottom, transform;
+    }
+
+    .stone::before {
+      content: "";
+      position: absolute;
+      inset: 10% 13%;
+      border-radius: inherit;
+      background:
+        radial-gradient(circle at 28% 34%, rgba(255, 255, 255, 0.28), transparent 16%),
+        radial-gradient(circle at 68% 62%, rgba(61, 55, 45, 0.11), transparent 18%);
+      opacity: 0.72;
+      pointer-events: none;
+    }
+
+      .stone.active {
+      z-index: 5;
+      box-shadow:
+        inset 8px 8px 18px rgba(255, 255, 255, 0.26),
+        inset -8px -8px 16px rgba(55, 49, 41, 0.11),
+        0 14px 24px rgba(65, 57, 43, 0.17);
+    }
+
+    .stone.active.is-danger {
+      filter: saturate(0.92) sepia(0.12);
+      box-shadow:
+        inset 8px 8px 18px rgba(255, 255, 255, 0.24),
+        inset -8px -8px 16px rgba(55, 49, 41, 0.12),
+        0 16px 28px rgba(150, 82, 58, 0.2);
+    }
+
+    .stone.normal {
+      border-radius: 44% 56% 47% 53% / 54% 43% 57% 46%;
+    }
+
+    .stone.flat {
+      border-radius: 42% 58% 46% 54% / 58% 48% 52% 42%;
+      background: linear-gradient(145deg, #c5baa7, #9b927f);
+    }
+
+    .stone.round {
+      border-radius: 50%;
+      background: linear-gradient(145deg, #aaa9a2, #85847e);
+    }
+
+    .stone.heavy {
+      border-radius: 38% 52% 46% 56% / 52% 43% 58% 48%;
+      background: linear-gradient(145deg, #89857d, #67635d);
+      color: rgba(255, 255, 255, 0.36);
+    }
+
+    .stone.light {
+      border-radius: 50% 45% 42% 54% / 47% 52% 48% 53%;
+      background: linear-gradient(145deg, #d0c6b7, #aaa092);
+    }
+
+    .stone.chipped {
+      border-radius: 48% 42% 50% 40% / 42% 54% 44% 56%;
+      clip-path: polygon(0 18%, 18% 0, 100% 8%, 88% 100%, 10% 92%);
+      background: linear-gradient(145deg, #afa494, #8e8375);
+    }
+
+    .stone.is-settling {
+      animation: settle 260ms ease;
+    }
+
+    .stone.is-falling-away {
+      animation: fallAway 620ms ease forwards;
+    }
+
+    .prediction-line {
+      position: absolute;
+      top: 98px;
+      bottom: 48px;
+      z-index: 4;
+      display: none;
+      width: 1px;
+      border-left: 1px dashed rgba(78, 70, 58, 0.26);
+      pointer-events: none;
+    }
+
+    .prediction-line.is-visible {
+      display: block;
+    }
+
+    .danger-cue {
+      position: absolute;
+      z-index: 3;
+      display: none;
+      height: 12px;
+      border-radius: 50%;
+      background: radial-gradient(ellipse at center, rgba(170, 82, 62, 0.22), rgba(170, 82, 62, 0));
+      pointer-events: none;
+    }
+
+    .danger-cue.is-visible {
+      display: block;
+    }
+
+    .height-marker {
+      position: absolute;
+      right: 14px;
+      z-index: 3;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      color: rgba(83, 76, 64, 0.48);
+      font-size: 0.7rem;
+      font-weight: 800;
+      pointer-events: none;
+    }
+
+    .height-marker::before {
+      content: "";
+      width: 42px;
+      height: 1px;
+      background: rgba(83, 76, 64, 0.22);
+    }
+
+    .height-marker.is-visible {
+      display: flex;
+    }
+
+    .wobble-box {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 2px 0;
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 800;
+    }
+
+    .wobble-track {
+      height: 7px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: rgba(71, 64, 52, 0.1);
+    }
+
+    .wobble-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #b7ad96, #9f8066);
+      transition: width 220ms ease;
+    }
+
+    .float-text {
+      position: absolute;
+      left: 50%;
+      top: 45%;
+      z-index: 8;
+      padding: 7px 12px;
+      border: 1px solid rgba(78, 70, 58, 0.12);
+      border-radius: 999px;
+      background: rgba(255, 252, 246, 0.78);
+      color: #6a6254;
+      font-size: 0.85rem;
+      font-weight: 800;
+      opacity: 0;
+      transform: translate(-50%, 8px);
+      pointer-events: none;
+    }
+
+    .float-text.is-showing {
+      animation: floatWord 980ms ease;
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(246, 238, 224, 0.78);
+      backdrop-filter: blur(7px);
+    }
+
+    .overlay[hidden] {
+      display: none;
+    }
+
+    .overlay-card {
+      width: min(100%, 300px);
+      border: 1px solid rgba(78, 70, 58, 0.15);
+      border-radius: 18px;
+      padding: 22px;
+      background: rgba(255, 252, 246, 0.86);
+      box-shadow: var(--soft-shadow);
+      text-align: center;
+    }
+
+    .overlay-card h2 {
+      margin: 0;
+      color: #393a34;
+      font-size: 1.55rem;
+      line-height: 1.25;
+    }
+
+    .overlay-card p {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.75;
+    }
+
+    .result-score {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0 0;
+    }
+
+    .result-score div {
+      border: 1px solid rgba(78, 70, 58, 0.12);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(232, 223, 207, 0.44);
+    }
+
+    .result-score span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .result-score strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 1.35rem;
+    }
+
+    .stone-button {
+      width: 100%;
+      min-height: 48px;
+      margin-top: 18px;
+      border: 0;
+      border-radius: 999px;
+      background: #5f5a4f;
+      color: #fffaf1;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 10px 22px rgba(76, 68, 53, 0.18);
+    }
+
+    .stone-button:active {
+      transform: translateY(1px);
+    }
+
+    .stone-link-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      width: 100%;
+      margin-top: 10px;
+      border: 1px solid rgba(78, 70, 58, 0.16);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.4);
+      color: #5f5a4f;
+      font-size: 0.88rem;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    @keyframes settle {
+      0% { transform: translateY(-4px) scaleY(1.02); }
+      58% { transform: translateY(3px) scaleY(0.96); }
+      100% { transform: translateY(0) scaleY(1); }
+    }
+
+    @keyframes fallAway {
+      0% { opacity: 1; transform: translateY(0) rotate(0deg); }
+      100% { opacity: 0; transform: translateY(160px) rotate(28deg); }
+    }
+
+    @keyframes towerShake {
+      0%, 100% { transform: rotate(0deg); }
+      22% { transform: rotate(-1.4deg); }
+      48% { transform: rotate(1.2deg); }
+      72% { transform: rotate(-0.7deg); }
+    }
+
+    @keyframes floatWord {
+      0% { opacity: 0; transform: translate(-50%, 10px); }
+      18% { opacity: 1; transform: translate(-50%, 0); }
+      78% { opacity: 1; transform: translate(-50%, -6px); }
+      100% { opacity: 0; transform: translate(-50%, -16px); }
+    }
+
+    @media (max-width: 780px) {
+      .stone-page {
+        padding: 10px;
+      }
+
+      .stone-header {
+        margin-bottom: 8px;
+      }
+
+      .stone-shell {
+        display: block;
+      }
+
+      .stone-copy {
+        max-width: none;
+        padding: 4px 2px 10px;
+        text-align: center;
+      }
+
+      .stone-copy h1 {
+        font-size: clamp(2rem, 11vw, 3.25rem);
+      }
+
+      .stone-subcopy {
+        margin-top: 10px;
+        font-size: 0.92rem;
+        line-height: 1.55;
+      }
+
+      .stone-note {
+        display: none;
+      }
+
+      .game-panel {
+        padding: 10px;
+        border-radius: 18px;
+      }
+
+      .stage {
+        height: min(72vh, 620px);
+        min-height: 470px;
+      }
+    }
+
+    @media (max-width: 390px) {
+      .stone-header {
+        font-size: 0.9rem;
+      }
+
+      .hud-item {
+        padding: 7px;
+      }
+
+      .hud-item strong {
+        font-size: 0.96rem;
+      }
+
+      .stage {
+        min-height: 430px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="stone-page">
+    <header class="stone-header">
+      <a class="stone-brand" href="./index.html" aria-label="T-ROOM ホームへ">
+        <span class="stone-brand-mark">T</span>
+        <span>T-ROOM</span>
+      </a>
+      <a class="stone-back" href="./game.html">ゲーム一覧へ</a>
+    </header>
+
+    <main class="stone-shell">
+      <section class="stone-copy" aria-labelledby="stone-title">
+        <p class="stone-kicker">Stone Game</p>
+        <h1 id="stone-title">T-ROOM Stone <span>石を積むだけ</span></h1>
+        <p class="stone-subcopy">崩れても、また積めばいい。</p>
+        <p class="stone-note">スワイプで位置を整えて、タップで落とす。長押しすると落下予測ラインが少しだけ見えます。</p>
+      </section>
+
+      <section class="game-panel" aria-label="Stone Game">
+        <div class="hud" aria-label="スコア">
+          <div class="hud-item">
+            <span>Score</span>
+            <strong id="scoreText">0</strong>
+          </div>
+          <div class="hud-item">
+            <span>Best</span>
+            <strong id="bestText">0</strong>
+          </div>
+          <div class="hud-item">
+            <span>Fallen</span>
+            <strong id="missText">0 / 3</strong>
+          </div>
+        </div>
+
+        <div class="stage" id="stage" aria-label="石を積むゲームエリア">
+          <div class="world" id="world">
+            <div class="tower" id="tower"></div>
+          </div>
+          <div class="prediction-line" id="predictionLine"></div>
+          <div class="danger-cue" id="dangerCue"></div>
+          <div class="height-marker" id="heightMarker">最高点</div>
+          <div class="float-text" id="floatText">ことん</div>
+
+          <div class="overlay" id="startOverlay">
+            <div class="overlay-card">
+              <h2>Stone Game</h2>
+              <p>石を左右に動かして、静かに積み上げます。タップ、クリック、下スワイプで落下。</p>
+              <button class="stone-button" id="startButton" type="button">スタート</button>
+            </div>
+          </div>
+
+          <div class="overlay" id="gameOverOverlay" hidden>
+            <div class="overlay-card">
+              <h2>積み終わり</h2>
+              <p id="gameOverMessage">まだ石と話せていない。</p>
+              <div class="result-score">
+                <div>
+                  <span>Score</span>
+                  <strong id="finalScore">0</strong>
+                </div>
+                <div>
+                  <span>Best</span>
+                  <strong id="finalBest">0</strong>
+                </div>
+              </div>
+              <button class="stone-button" id="retryButton" type="button">リトライ</button>
+              <a class="stone-link-button" href="./index.html">T-ROOMトップへ戻る</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="wobble-box" aria-label="塔の揺れ">
+          <span>揺れ</span>
+          <div class="wobble-track">
+            <div class="wobble-fill" id="wobbleFill"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const CONFIG = {
+      fallSpeed: 780,
+      spawnOffset: {
+        base: 54,
+        score6: 76,
+        score11: 92,
+        score16: 108,
+        minDifference: 26
+      },
+      sway: {
+        baseAmplitude: 4,
+        score11Amplitude: 8,
+        score21Amplitude: 12,
+        speedMin: 0.0018,
+        speedMax: 0.0032
+      },
+      dropDrift: {
+        base: 5,
+        score11: 8,
+        score21: 12
+      },
+      stability: {
+        perfectSeverity: 0.52,
+        stableSeverity: 0.94,
+        dangerSeverity: 1.22,
+        minOverlap: 0.34,
+        minOverlapEarly: 0.25,
+        centerAllowance: 0.5,
+        centerAllowanceEarly: 0.62,
+        supportMargin: 0.08,
+        repeatPenaltyDistance: 16,
+        repeatPenalty: 0.12
+      },
+      spawnRates: {
+        normal: 44,
+        flat: 18,
+        round: 12,
+        heavy: 10,
+        light: 10,
+        chipped: 6
+      },
+      stoneStability: {
+        normal: 0.42,
+        flat: 0.58,
+        round: 0.31,
+        heavy: 0.38,
+        light: 0.47,
+        chipped: 0.35
+      },
+      difficulty: {
+        allowedShrinkPerScore: 0.009,
+        minAllowedScale: 0.68,
+        irregularGrowth: 0.012,
+        wobbleRetentionAfter20: 0.72,
+        tiltGrowth: 0.7
+      },
+      wobble: {
+        max: 100,
+        topFallAt: 76,
+        stableDecrease: 7,
+        recoveryDecrease: 12,
+        unstableIncrease: 18,
+        fallIncrease: 22,
+        heavyMissPenalty: 8
+      },
+      missesAllowed: 3,
+      baseSize: {
+        width: 360,
+        height: 600
+      },
+      combo: {
+        label: "静かな連鎖",
+        milestone: 5,
+        messages: ["石たちが少し黙った", "塔が息を整えた", "いい積み方"]
+      },
+      messages: {
+        settled: "ことん",
+        unstable: "ぐらり",
+        danger: "あぶない",
+        recovery: "持ち直した",
+        fallen: "からん",
+        gameOver: [
+          { min: 0, text: "まだ石と話せていない。" },
+          { min: 4, text: "少しだけ塔の気配がした。" },
+          { min: 9, text: "いい積み方だった。" },
+          { min: 16, text: "これはもう、小さな遺跡。" },
+          { min: 26, text: "石たちは、しばらく黙っていた。" }
+        ]
+      }
+    };
+
+    const STONE_TYPES = {
+      normal: { label: "普通", minW: 68, maxW: 108, minH: 38, maxH: 58, bonus: 0, centerDrift: 0.04, sway: 1, drift: 1 },
+      flat: { label: "平", minW: 108, maxW: 152, minH: 28, maxH: 42, bonus: 0, centerDrift: 0.025, sway: 0.7, drift: 0.7 },
+      round: { label: "丸", minW: 58, maxW: 82, minH: 58, maxH: 82, bonus: 1, centerDrift: 0.1, sway: 1.35, drift: 1.25 },
+      heavy: { label: "重", minW: 88, maxW: 126, minH: 52, maxH: 74, bonus: 1, centerDrift: 0.05, sway: 0.8, drift: 1.15 },
+      light: { label: "軽", minW: 48, maxW: 72, minH: 34, maxH: 50, bonus: 0, centerDrift: 0.04, sway: 1.15, drift: 1.35 },
+      chipped: { label: "欠", minW: 68, maxW: 112, minH: 38, maxH: 62, bonus: 1, centerDrift: 0.14, sway: 1.2, drift: 1.2 }
+    };
+
+    const els = {
+      stage: document.querySelector("#stage"),
+      world: document.querySelector("#world"),
+      tower: document.querySelector("#tower"),
+      predictionLine: document.querySelector("#predictionLine"),
+      dangerCue: document.querySelector("#dangerCue"),
+      heightMarker: document.querySelector("#heightMarker"),
+      floatText: document.querySelector("#floatText"),
+      startOverlay: document.querySelector("#startOverlay"),
+      gameOverOverlay: document.querySelector("#gameOverOverlay"),
+      startButton: document.querySelector("#startButton"),
+      retryButton: document.querySelector("#retryButton"),
+      scoreText: document.querySelector("#scoreText"),
+      bestText: document.querySelector("#bestText"),
+      missText: document.querySelector("#missText"),
+      wobbleFill: document.querySelector("#wobbleFill"),
+      finalScore: document.querySelector("#finalScore"),
+      finalBest: document.querySelector("#finalBest"),
+      gameOverMessage: document.querySelector("#gameOverMessage")
+    };
+
+    const STORAGE_KEY = "t-room-stone-best";
+    const state = {
+      isPlaying: false,
+      isDropping: false,
+      active: null,
+      activeEl: null,
+      stones: [],
+      base: null,
+      score: 0,
+      combo: 0,
+      misses: 0,
+      wobble: 0,
+      best: Number(localStorage.getItem(STORAGE_KEY) || 0),
+      cameraOffset: 0,
+      tilt: 0,
+      lastSpawnX: null,
+      lastPlacedX: null,
+      input: null,
+      holdTimer: null,
+      swayFrame: null
+    };
+
+    function init() {
+      els.bestText.textContent = state.best;
+      els.startButton.addEventListener("click", startGame);
+      els.retryButton.addEventListener("click", startGame);
+      window.addEventListener("resize", () => {
+        if (state.isPlaying) {
+          layoutBase();
+          updateCamera();
+          renderActive();
+        }
+      });
+      bindInput();
+      updateHud();
+    }
+
+    function bindInput() {
+      els.stage.addEventListener("touchstart", onTouchStart, { passive: false });
+      els.stage.addEventListener("touchmove", onTouchMove, { passive: false });
+      els.stage.addEventListener("touchend", onTouchEnd, { passive: false });
+      els.stage.addEventListener("touchcancel", clearInput, { passive: false });
+      els.stage.addEventListener("mousedown", onMouseDown);
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("keydown", onKeyDown);
+    }
+
+    function startGame() {
+      document.body.classList.add("is-playing");
+      state.isPlaying = true;
+      state.isDropping = false;
+      state.score = 0;
+      state.combo = 0;
+      state.misses = 0;
+      state.wobble = 0;
+      state.cameraOffset = 0;
+      state.tilt = 0;
+      state.lastSpawnX = null;
+      state.lastPlacedX = null;
+      state.stones = [];
+      state.active = null;
+      state.activeEl = null;
+      cancelAnimationFrame(state.swayFrame);
+      els.tower.innerHTML = "";
+      els.tower.style.transform = "rotate(0deg)";
+      els.world.style.transform = "translateY(0)";
+      els.startOverlay.hidden = true;
+      els.gameOverOverlay.hidden = true;
+      els.heightMarker.classList.remove("is-visible");
+      layoutBase();
+      spawnStone();
+      updateHud();
+    }
+
+    function layoutBase() {
+      const stageWidth = els.stage.clientWidth;
+      const baseWidth = Math.min(210, stageWidth * 0.62);
+      state.base = {
+        type: "base",
+        x: (stageWidth - baseWidth) / 2,
+        w: baseWidth,
+        h: 30,
+        bottom: 24,
+        centerShift: 0
+      };
+      let baseEl = els.tower.querySelector(".base-stone");
+      if (!baseEl) {
+        baseEl = document.createElement("div");
+        baseEl.className = "base-stone";
+        els.tower.append(baseEl);
+      }
+      baseEl.style.left = `${state.base.x}px`;
+      baseEl.style.bottom = `${state.base.bottom}px`;
+      baseEl.style.width = `${state.base.w}px`;
+    }
+
+    function spawnStone() {
+      if (!state.isPlaying) return;
+      const stone = createStone();
+      const stageWidth = els.stage.clientWidth;
+      const centerX = (stageWidth - stone.w) / 2;
+      const spawnRange = getSpawnRange();
+      let nextX = centerX + random(-spawnRange, spawnRange);
+      if (state.lastSpawnX !== null && Math.abs(nextX - state.lastSpawnX) < CONFIG.spawnOffset.minDifference) {
+        const direction = nextX >= centerX ? 1 : -1;
+        nextX += direction * CONFIG.spawnOffset.minDifference;
+      }
+      stone.baseX = clamp(nextX, 12, stageWidth - stone.w - 12);
+      stone.x = stone.baseX;
+      stone.y = 64;
+      stone.swayPhase = random(0, Math.PI * 2);
+      stone.swayStartedAt = performance.now();
+      stone.swayAmplitude = getSwayAmplitude() * STONE_TYPES[stone.type].sway;
+      stone.swaySpeed = random(CONFIG.sway.speedMin, CONFIG.sway.speedMax);
+      stone.displayX = stone.x;
+      state.lastSpawnX = stone.x;
+      state.active = stone;
+      state.activeEl = createStoneElement(stone, true);
+      els.stage.append(state.activeEl);
+      renderActive();
+      startSway();
+    }
+
+    function createStone() {
+      const type = chooseType();
+      const spec = STONE_TYPES[type];
+      const irregular = 1 + Math.min(0.28, state.score * CONFIG.difficulty.irregularGrowth);
+      const w = random(spec.minW, spec.maxW) * random(1 / irregular, irregular);
+      const h = random(spec.minH, spec.maxH) * random(1 / (irregular * 0.9), irregular);
+      const shiftDirection = Math.random() > 0.5 ? 1 : -1;
+      const centerShift = shiftDirection * w * random(spec.centerDrift * 0.45, spec.centerDrift);
+      return {
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+        type,
+        label: spec.label,
+        w: Math.round(w),
+        h: Math.round(h),
+        x: 0,
+        baseX: 0,
+        displayX: 0,
+        y: 0,
+        bottom: 0,
+        centerShift,
+        swayPhase: 0,
+        swayStartedAt: 0,
+        swayAmplitude: 0,
+        swaySpeed: 0,
+        dropDrift: 0
+      };
+    }
+
+    function chooseType() {
+      const rates = { ...CONFIG.spawnRates };
+      if (state.score >= 10) rates.chipped += 5;
+      if (state.score >= 16) {
+        rates.chipped += 12;
+        rates.round += 10;
+      }
+      const total = Object.values(rates).reduce((sum, value) => sum + value, 0);
+      let pick = Math.random() * total;
+      for (const [type, weight] of Object.entries(rates)) {
+        pick -= weight;
+        if (pick <= 0) return type;
+      }
+      return "normal";
+    }
+
+    function getSpawnRange() {
+      if (state.score >= 16) return CONFIG.spawnOffset.score16;
+      if (state.score >= 11) return CONFIG.spawnOffset.score11;
+      if (state.score >= 6) return CONFIG.spawnOffset.score6;
+      return CONFIG.spawnOffset.base;
+    }
+
+    function getSwayAmplitude() {
+      if (state.score >= 21) return CONFIG.sway.score21Amplitude;
+      if (state.score >= 11) return CONFIG.sway.score11Amplitude;
+      return CONFIG.sway.baseAmplitude;
+    }
+
+    function getDropDrift() {
+      if (state.score >= 21) return CONFIG.dropDrift.score21;
+      if (state.score >= 11) return CONFIG.dropDrift.score11;
+      return CONFIG.dropDrift.base;
+    }
+
+    function createStoneElement(stone, active = false) {
+      const el = document.createElement("div");
+      el.className = `stone ${stone.type}${active ? " active" : ""}`;
+      el.textContent = stone.label;
+      el.style.width = `${stone.w}px`;
+      el.style.height = `${stone.h}px`;
+      return el;
+    }
+
+    function renderActive() {
+      if (!state.active || !state.activeEl) return;
+      state.active.displayX = getActiveDisplayX();
+      state.activeEl.style.left = `${state.active.displayX}px`;
+      state.activeEl.style.top = `${state.active.y}px`;
+      state.activeEl.style.width = `${state.active.w}px`;
+      state.activeEl.style.height = `${state.active.h}px`;
+      updatePredictionLine();
+      updateDangerCue();
+    }
+
+    function moveActive(deltaX) {
+      if (!state.active || state.isDropping) return;
+      const stageWidth = els.stage.clientWidth;
+      const adjustment = Math.max(0.68, 1 - state.score * 0.006);
+      const easing = state.input ? 0.86 : 0.72;
+      state.active.baseX = clamp(state.active.baseX + deltaX * adjustment * easing, 10, stageWidth - state.active.w - 10);
+      state.active.x = state.active.baseX;
+      renderActive();
+    }
+
+    function startSway() {
+      cancelAnimationFrame(state.swayFrame);
+      function tick() {
+        if (!state.active || state.isDropping || !state.isPlaying) return;
+        renderActive();
+        state.swayFrame = requestAnimationFrame(tick);
+      }
+      state.swayFrame = requestAnimationFrame(tick);
+    }
+
+    function getActiveDisplayX() {
+      if (!state.active) return 0;
+      if (state.isDropping) return state.active.x;
+      const elapsed = performance.now() - state.active.swayStartedAt;
+      const sway = Math.sin(state.active.swayPhase + elapsed * state.active.swaySpeed) * state.active.swayAmplitude;
+      const stageWidth = els.stage.clientWidth;
+      return clamp(state.active.baseX + sway, 10, stageWidth - state.active.w - 10);
+    }
+
+    function dropActive() {
+      if (!state.isPlaying || state.isDropping || !state.active) return;
+      state.active.x = getActiveDisplayX();
+      state.active.baseX = state.active.x;
+      const driftBase = getDropDrift() * STONE_TYPES[state.active.type].drift;
+      state.active.dropDrift = random(-driftBase, driftBase);
+      state.isDropping = true;
+      cancelAnimationFrame(state.swayFrame);
+      hidePrediction();
+      hideDangerCue();
+      const support = state.stones[state.stones.length - 1] || state.base;
+      const targetBottom = support.bottom + support.h - 2;
+      const targetTop = getScreenTop(targetBottom, state.active.h);
+      animateDrop(targetTop, () => resolveDrop(support, targetBottom));
+    }
+
+    function animateDrop(targetTop, done) {
+      const stone = state.active;
+      const startTop = stone.y;
+      const distance = Math.max(80, Math.abs(targetTop - startTop));
+      const duration = Math.min(900, Math.max(360, distance / CONFIG.fallSpeed * 1000));
+      const startTime = performance.now();
+
+      function frame(now) {
+        const progress = clamp((now - startTime) / duration, 0, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        stone.y = startTop + (targetTop - startTop) * eased;
+        stone.x = clamp(
+          stone.baseX + stone.dropDrift * Math.sin(progress * Math.PI * 0.85),
+          10,
+          els.stage.clientWidth - stone.w - 10
+        );
+        renderActive();
+        if (progress < 1) {
+          requestAnimationFrame(frame);
+        } else {
+          done();
+        }
+      }
+
+      requestAnimationFrame(frame);
+    }
+
+    function resolveDrop(support, targetBottom) {
+      const result = judgeStability(state.active, support);
+      if (result.falls) {
+        failStone(result.severity);
+        return;
+      }
+
+      placeStone(targetBottom, result);
+    }
+
+    function judgeStability(stone, support) {
+      const supportLeft = support.x;
+      const supportRight = support.x + support.w;
+      const stoneLeft = stone.x;
+      const stoneRight = stone.x + stone.w;
+      const overlap = Math.max(0, Math.min(stoneRight, supportRight) - Math.max(stoneLeft, supportLeft));
+      const overlapRatio = overlap / Math.min(stone.w, support.w);
+      const supportCenter = getStoneCenter(support);
+      const stoneCenter = getStoneCenter(stone);
+      const signedOffset = stoneCenter - supportCenter;
+      const offsetRatio = Math.abs(signedOffset) / Math.min(stone.w, support.w);
+      const stageCenter = els.stage.clientWidth / 2;
+      const towerBias = (stoneCenter - stageCenter) / stageCenter;
+      const supportMargin = support.w * CONFIG.stability.supportMargin;
+      const gravityOutside = stoneCenter < supportLeft + supportMargin || stoneCenter > supportRight - supportMargin;
+      const difficultyScale = Math.max(
+        CONFIG.difficulty.minAllowedScale,
+        1 - state.score * CONFIG.difficulty.allowedShrinkPerScore
+      );
+      const requiredOverlap = (state.score <= 5 ? CONFIG.stability.minOverlapEarly : CONFIG.stability.minOverlap) * difficultyScale;
+      const centerAllowance = (state.score <= 5 ? CONFIG.stability.centerAllowanceEarly : CONFIG.stability.centerAllowance) * CONFIG.stoneStability[stone.type];
+      const overlapSeverity = Math.max(0, (requiredOverlap - overlapRatio) / Math.max(requiredOverlap, 0.01));
+      const centerSeverity = offsetRatio / Math.max(centerAllowance, 0.01);
+      const tiltSeverity = Math.abs(state.tilt) * 0.42;
+      const edgePenalty = isNearStageEdge(stone) ? 0.16 : 0;
+      const repeatPenalty = state.lastPlacedX !== null && Math.abs(stoneCenter - state.lastPlacedX) < CONFIG.stability.repeatPenaltyDistance
+        ? CONFIG.stability.repeatPenalty
+        : 0;
+      const gravityPenalty = gravityOutside ? 0.32 : 0;
+      const severity = centerSeverity * 0.55
+        + overlapSeverity * 0.72
+        + tiltSeverity
+        + edgePenalty
+        + repeatPenalty
+        + gravityPenalty;
+      const recovery = state.tilt !== 0
+        && Math.sign(towerBias) !== Math.sign(state.tilt)
+        && overlapRatio >= requiredOverlap
+        && severity <= CONFIG.stability.stableSeverity;
+      return {
+        perfect: severity <= CONFIG.stability.perfectSeverity && overlapRatio > requiredOverlap + 0.18,
+        stable: severity <= CONFIG.stability.stableSeverity,
+        danger: severity > CONFIG.stability.stableSeverity && severity <= CONFIG.stability.dangerSeverity,
+        falls: overlap <= 0 || severity > CONFIG.stability.dangerSeverity,
+        severity,
+        overlapRatio,
+        signedOffset,
+        towerBias,
+        recovery,
+        comboEligible: severity <= CONFIG.stability.perfectSeverity && !repeatPenalty
+      };
+    }
+
+    function getStoneCenter(stone) {
+      return stone.x + stone.w / 2 + (stone.centerShift || 0);
+    }
+
+    function isNearStageEdge(stone) {
+      const stageWidth = els.stage.clientWidth;
+      return stone.x < 18 || stone.x + stone.w > stageWidth - 18;
+    }
+
+    function placeStone(bottom, result) {
+      const stone = state.active;
+      stone.bottom = bottom;
+      const el = createStoneElement(stone);
+      el.style.left = `${stone.x}px`;
+      el.style.bottom = `${stone.bottom}px`;
+      el.style.width = `${stone.w}px`;
+      el.style.height = `${stone.h}px`;
+      els.tower.append(el);
+      state.activeEl.remove();
+      state.activeEl = null;
+      state.active = null;
+      state.stones.push(stone);
+      state.lastPlacedX = getStoneCenter(stone);
+      requestAnimationFrame(() => {
+        el.classList.add("is-settling");
+        setTimeout(() => el.classList.remove("is-settling"), 280);
+      });
+
+      updateTilt(result);
+
+      if (result.perfect) {
+        addScore(stone);
+        state.combo += result.comboEligible ? 1 : 0;
+        decreaseWobble(result.recovery ? CONFIG.wobble.recoveryDecrease : CONFIG.wobble.stableDecrease);
+        showFeedback(getStableMessage());
+      } else if (result.stable) {
+        addScore(stone);
+        state.combo = 0;
+        decreaseWobble(result.recovery ? CONFIG.wobble.recoveryDecrease : CONFIG.wobble.stableDecrease * 0.55);
+        showFeedback(result.recovery ? CONFIG.messages.recovery : CONFIG.messages.unstable);
+      } else {
+        state.combo = 0;
+        state.score += 1;
+        state.wobble += CONFIG.wobble.unstableIncrease * Math.min(result.severity, 1.55);
+        showFeedback(result.danger ? CONFIG.messages.danger : CONFIG.messages.unstable);
+        shakeTower();
+      }
+
+      if (stone.type === "heavy") {
+        state.wobble += result.stable ? 2 : CONFIG.wobble.heavyMissPenalty;
+      }
+
+      updateBest();
+      updateCamera();
+      updateHud();
+
+      if (state.wobble >= CONFIG.wobble.max) {
+        endGame();
+        return;
+      }
+
+      if (state.wobble >= CONFIG.wobble.topFallAt && state.stones.length > 1) {
+        dropTopStone();
+        if (state.misses >= CONFIG.missesAllowed) {
+          setTimeout(endGame, 520);
+          return;
+        }
+      }
+
+      state.isDropping = false;
+      setTimeout(spawnStone, 280);
+    }
+
+    function decreaseWobble(amount) {
+      const adjusted = state.score >= 21
+        ? amount * (1 - CONFIG.difficulty.wobbleRetentionAfter20)
+        : amount;
+      state.wobble = Math.max(0, state.wobble - adjusted);
+    }
+
+    function updateTilt(result) {
+      const addedTilt = result.towerBias * CONFIG.difficulty.tiltGrowth;
+      const recoveryPull = result.recovery ? -Math.sign(state.tilt) * 0.16 : 0;
+      state.tilt = clamp(state.tilt * 0.86 + addedTilt + recoveryPull, -1.25, 1.25);
+      els.tower.style.transform = `rotate(${state.tilt * 1.6}deg)`;
+    }
+
+    function addScore(stone) {
+      const bonus = STONE_TYPES[stone.type].bonus || 0;
+      state.score += 1 + bonus;
+    }
+
+    function getStableMessage() {
+      if (state.combo > 0 && (state.combo + 1) % CONFIG.combo.milestone === 0) {
+        const messages = CONFIG.combo.messages;
+        return messages[Math.floor(Math.random() * messages.length)];
+      }
+      if (state.combo >= 2) {
+        return `${CONFIG.combo.label} x${state.combo + 1}`;
+      }
+      return CONFIG.messages.settled;
+    }
+
+    function failStone(severity = 1) {
+      state.combo = 0;
+      state.misses += 1;
+      state.wobble += CONFIG.wobble.fallIncrease * Math.min(severity, 1.6);
+      showFeedback(CONFIG.messages.fallen);
+      shakeTower();
+      hideDangerCue();
+      if (state.activeEl) {
+        state.activeEl.classList.add("is-falling-away");
+        setTimeout(() => state.activeEl && state.activeEl.remove(), 620);
+      }
+      state.activeEl = null;
+      state.active = null;
+      updateHud();
+
+      if (state.misses >= CONFIG.missesAllowed || state.wobble >= CONFIG.wobble.max) {
+        setTimeout(endGame, 520);
+        return;
+      }
+
+      state.isDropping = false;
+      setTimeout(spawnStone, 620);
+    }
+
+    function dropTopStone() {
+      const top = state.stones.pop();
+      if (!top) return;
+      const stoneEls = els.tower.querySelectorAll(".stone");
+      const topEl = stoneEls[stoneEls.length - 1];
+      if (topEl) {
+        topEl.classList.add("is-falling-away");
+        setTimeout(() => topEl.remove(), 620);
+      }
+      state.combo = 0;
+      state.misses += 1;
+      state.wobble = Math.max(28, state.wobble - 34);
+      state.tilt *= 0.72;
+      state.lastPlacedX = state.stones.length ? getStoneCenter(state.stones[state.stones.length - 1]) : null;
+      els.tower.style.transform = `rotate(${state.tilt * 1.6}deg)`;
+      showFeedback(CONFIG.messages.fallen);
+      shakeTower();
+      updateCamera();
+      updateHud();
+    }
+
+    function updateCamera() {
+      const highest = getTowerTop();
+      const stageHeight = els.stage.clientHeight;
+      state.cameraOffset = Math.max(0, highest - stageHeight * 0.54);
+      els.world.style.transform = `translateY(${state.cameraOffset}px)`;
+      if (state.score > 0) {
+        const markerTop = Math.max(22, getScreenTop(highest, 0));
+        els.heightMarker.style.top = `${markerTop}px`;
+        els.heightMarker.classList.add("is-visible");
+      }
+    }
+
+    function getTowerTop() {
+      return state.stones.reduce((top, stone) => Math.max(top, stone.bottom + stone.h), state.base.bottom + state.base.h);
+    }
+
+    function getScreenTop(bottom, height) {
+      return els.stage.clientHeight - (bottom + height) + state.cameraOffset;
+    }
+
+    function updatePredictionLine() {
+      if (!state.active || !els.predictionLine.classList.contains("is-visible")) return;
+      const x = state.active.displayX + state.active.w / 2 + state.active.centerShift;
+      els.predictionLine.style.left = `${x}px`;
+    }
+
+    function updateDangerCue() {
+      if (!state.active || state.isDropping || !state.base) {
+        hideDangerCue();
+        return;
+      }
+      const support = state.stones[state.stones.length - 1] || state.base;
+      const previewStone = { ...state.active, x: state.active.displayX };
+      const result = judgeStability(previewStone, support);
+      if (result.severity < CONFIG.stability.stableSeverity * 0.88) {
+        hideDangerCue();
+        state.activeEl.classList.remove("is-danger");
+        return;
+      }
+      const targetBottom = support.bottom + support.h - 2;
+      const top = getScreenTop(targetBottom, 0) - 8;
+      els.dangerCue.style.left = `${previewStone.x + previewStone.w * 0.16}px`;
+      els.dangerCue.style.top = `${top}px`;
+      els.dangerCue.style.width = `${previewStone.w * 0.68}px`;
+      els.dangerCue.classList.add("is-visible");
+      state.activeEl.classList.toggle("is-danger", result.severity >= CONFIG.stability.stableSeverity);
+    }
+
+    function hideDangerCue() {
+      els.dangerCue.classList.remove("is-visible");
+      if (state.activeEl) {
+        state.activeEl.classList.remove("is-danger");
+      }
+    }
+
+    function showPrediction() {
+      if (!state.active || state.isDropping) return;
+      els.predictionLine.classList.add("is-visible");
+      updatePredictionLine();
+    }
+
+    function hidePrediction() {
+      els.predictionLine.classList.remove("is-visible");
+    }
+
+    function showFeedback(text) {
+      els.floatText.textContent = text;
+      els.floatText.classList.remove("is-showing");
+      void els.floatText.offsetWidth;
+      els.floatText.classList.add("is-showing");
+    }
+
+    function shakeTower() {
+      els.tower.classList.remove("is-shaking");
+      void els.tower.offsetWidth;
+      els.tower.classList.add("is-shaking");
+    }
+
+    function updateHud() {
+      els.scoreText.textContent = state.score;
+      els.bestText.textContent = state.best;
+      els.missText.textContent = `${state.misses} / ${CONFIG.missesAllowed}`;
+      els.wobbleFill.style.width = `${clamp(state.wobble, 0, CONFIG.wobble.max)}%`;
+    }
+
+    function updateBest() {
+      if (state.score <= state.best) return;
+      state.best = state.score;
+      localStorage.setItem(STORAGE_KEY, String(state.best));
+    }
+
+    function endGame() {
+      state.isPlaying = false;
+      state.isDropping = false;
+      document.body.classList.remove("is-playing");
+      updateBest();
+      updateHud();
+      els.finalScore.textContent = state.score;
+      els.finalBest.textContent = state.best;
+      els.gameOverMessage.textContent = getGameOverMessage();
+      els.gameOverOverlay.hidden = false;
+    }
+
+    function getGameOverMessage() {
+      return CONFIG.messages.gameOver.reduce((message, item) => {
+        return state.score >= item.min ? item.text : message;
+      }, CONFIG.messages.gameOver[0].text);
+    }
+
+    function onTouchStart(event) {
+      if (!canControl()) return;
+      event.preventDefault();
+      const touch = event.touches[0];
+      beginInput(touch.clientX, touch.clientY, "touch");
+    }
+
+    function onTouchMove(event) {
+      if (!state.input) return;
+      event.preventDefault();
+      const touch = event.touches[0];
+      updateInput(touch.clientX, touch.clientY);
+    }
+
+    function onTouchEnd(event) {
+      if (!state.input) return;
+      event.preventDefault();
+      finishInput();
+    }
+
+    function onMouseDown(event) {
+      if (!canControl() || event.button !== 0) return;
+      beginInput(event.clientX, event.clientY, "mouse");
+    }
+
+    function onMouseMove(event) {
+      if (!state.input || state.input.kind !== "mouse") return;
+      updateInput(event.clientX, event.clientY);
+    }
+
+    function onMouseUp() {
+      if (!state.input || state.input.kind !== "mouse") return;
+      finishInput();
+    }
+
+    function onKeyDown(event) {
+      if (!canControl()) return;
+      if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        moveActive(-18);
+      }
+      if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        moveActive(18);
+      }
+      if (event.code === "Space" || event.key === "ArrowDown") {
+        event.preventDefault();
+        dropActive();
+      }
+    }
+
+    function beginInput(x, y, kind) {
+      state.input = {
+        kind,
+        startX: x,
+        startY: y,
+        lastX: x,
+        lastY: y,
+        startTime: performance.now(),
+        moved: false,
+        dropped: false
+      };
+      clearTimeout(state.holdTimer);
+      state.holdTimer = setTimeout(showPrediction, 360);
+    }
+
+    function updateInput(x, y) {
+      const input = state.input;
+      const dx = x - input.lastX;
+      const totalX = x - input.startX;
+      const totalY = y - input.startY;
+      if (Math.abs(totalX) > 5) {
+        input.moved = true;
+        clearTimeout(state.holdTimer);
+        moveActive(dx);
+      }
+      if (!input.dropped && totalY > 42 && Math.abs(totalY) > Math.abs(totalX) * 1.12) {
+        input.dropped = true;
+        clearTimeout(state.holdTimer);
+        dropActive();
+      }
+      input.lastX = x;
+      input.lastY = y;
+    }
+
+    function finishInput() {
+      const input = state.input;
+      const elapsed = performance.now() - input.startTime;
+      clearInput();
+      if (!input.dropped && !input.moved && elapsed < 280) {
+        dropActive();
+      }
+    }
+
+    function clearInput() {
+      clearTimeout(state.holdTimer);
+      hidePrediction();
+      state.input = null;
+    }
+
+    function canControl() {
+      return state.isPlaying && !state.isDropping && state.active;
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function random(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    init();
+  </script>
+</body>
+</html>

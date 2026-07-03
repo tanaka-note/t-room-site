@@ -1,0 +1,890 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f0e7">
+  <title>Swich | T-ROOM Swich</title>
+  <meta name="description" content="T-ROOM Swich。押すたびに、やる気が出ない人へ短い一言を投げるミニコンテンツです。">
+  <meta property="og:image" content="https://tanaka-note.com/assets/t-room-share.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="T-ROOM 知の庭">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../assets/favicon.ico" sizes="any">
+  <link rel="icon" href="../../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="icon" href="../../assets/site-icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="../../assets/apple-touch-icon.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f6f0e7;
+      --paper-deep: #e9dfd0;
+      --ink: #2f302b;
+      --muted: #79766d;
+      --line: rgba(68, 61, 49, 0.15);
+      --surface: rgba(255, 252, 246, 0.72);
+      --button: #4f5149;
+      --button-ink: #fffaf1;
+      --shadow: 0 18px 54px rgba(74, 65, 50, 0.16);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at 50% 2%, rgba(255, 255, 255, 0.84), transparent 30rem),
+        linear-gradient(180deg, #fbf6ef 0%, var(--paper) 50%, #e8dece 100%);
+      color: var(--ink);
+      font-family: "Noto Sans JP", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    body.is-sharp {
+      animation: sharpFlash 460ms ease;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .switch-page {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      padding: 16px;
+    }
+
+    .switch-header {
+      width: min(880px, 100%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin: 0 auto 12px;
+      color: rgba(47, 48, 43, 0.82);
+      font-weight: 800;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #d9d0c0;
+      color: #4c493f;
+      box-shadow: inset 0 -2px 0 rgba(72, 64, 50, 0.08);
+    }
+
+    .back-link {
+      color: var(--muted);
+      font-size: 0.88rem;
+      text-decoration: none;
+    }
+
+    .switch-shell {
+      width: min(880px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);
+      align-items: center;
+      gap: 28px;
+      margin: 0 auto;
+    }
+
+    .copy {
+      max-width: 380px;
+      padding: 20px 4px;
+    }
+
+    .kicker {
+      margin: 0 0 14px;
+      color: #7c725f;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      color: #33342f;
+      font-size: clamp(2.4rem, 8vw, 5rem);
+      line-height: 0.98;
+      letter-spacing: 0;
+    }
+
+    h1 span {
+      display: block;
+      color: #7a7161;
+      font-size: 0.46em;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+
+    .subcopy {
+      margin: 20px 0 0;
+      color: #5f5b51;
+      font-size: 1.08rem;
+      line-height: 1.8;
+    }
+
+    .tiny-note {
+      margin: 28px 0 0;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.36);
+      color: #777064;
+      font-size: 0.88rem;
+      line-height: 1.8;
+    }
+
+    .panel {
+      width: min(100%, 430px);
+      margin: 0 auto;
+      border: 1px solid rgba(78, 70, 58, 0.18);
+      border-radius: 22px;
+      padding: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .main-button {
+      width: 100%;
+      min-height: 112px;
+      border: 0;
+      border-radius: 24px;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.26), transparent 38%),
+        linear-gradient(180deg, #62645b 0%, var(--button) 100%);
+      color: var(--button-ink);
+      font: inherit;
+      font-size: clamp(2rem, 11vw, 3.25rem);
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow:
+        inset 0 -8px 0 rgba(32, 31, 27, 0.16),
+        0 16px 30px rgba(66, 58, 45, 0.2);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .main-button:active {
+      transform: translateY(4px) scale(0.985);
+      box-shadow:
+        inset 0 -3px 0 rgba(32, 31, 27, 0.18),
+        0 8px 18px rgba(66, 58, 45, 0.16);
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .toggle {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 8px 10px 8px 12px;
+      background: rgba(255, 255, 255, 0.42);
+      color: #5d5a51;
+      font-size: 0.86rem;
+      font-weight: 800;
+    }
+
+    .toggle input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .toggle-mark {
+      width: 42px;
+      height: 24px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: rgba(76, 72, 64, 0.16);
+      transition: background 160ms ease;
+    }
+
+    .toggle-mark::after {
+      content: "";
+      display: block;
+      width: 18px;
+      height: 18px;
+      margin: 3px;
+      border-radius: 50%;
+      background: #fffaf1;
+      box-shadow: 0 2px 6px rgba(65, 57, 43, 0.18);
+      transition: transform 160ms ease;
+    }
+
+    .toggle input:checked + .toggle-mark {
+      background: #6d6a60;
+    }
+
+    .toggle input:checked + .toggle-mark::after {
+      transform: translateX(18px);
+    }
+
+    .message-card {
+      min-height: 228px;
+      display: grid;
+      align-content: center;
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 22px;
+      background: rgba(255, 252, 246, 0.66);
+      transition: border-color 180ms ease, background 180ms ease;
+    }
+
+    .message-card.is-visible {
+      animation: messageIn 420ms ease;
+    }
+
+    .message-card[data-type="やさしい"] {
+      background: rgba(255, 252, 246, 0.78);
+      border-color: rgba(143, 130, 103, 0.2);
+    }
+
+    .message-card[data-type="厳しい"] {
+      background: rgba(239, 235, 225, 0.78);
+      border-color: rgba(77, 74, 66, 0.22);
+    }
+
+    .message-card[data-type="辛口"] {
+      background: rgba(249, 237, 230, 0.82);
+      border-color: rgba(164, 94, 78, 0.24);
+    }
+
+    .message-card[data-type="現実"] {
+      background: rgba(239, 238, 232, 0.82);
+      border-color: rgba(98, 96, 89, 0.22);
+    }
+
+    .message-card[data-type="ネタ"] {
+      background: rgba(248, 243, 232, 0.82);
+      border-color: rgba(151, 130, 82, 0.2);
+    }
+
+    .message {
+      margin: 0;
+      color: #30312d;
+      font-size: clamp(1.22rem, 5vw, 1.72rem);
+      font-weight: 800;
+      line-height: 1.55;
+    }
+
+    .note {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 0.94rem;
+      font-weight: 700;
+      line-height: 1.7;
+    }
+
+    .timer-button {
+      display: none;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 999px;
+      background: #7a7163;
+      color: #fffaf1;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .timer-button.is-visible {
+      display: block;
+    }
+
+    .timer-box {
+      display: none;
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.38);
+      text-align: center;
+    }
+
+    .timer-box.is-visible {
+      display: block;
+    }
+
+    .timer-time {
+      display: block;
+      color: #3d3d37;
+      font-size: 2rem;
+      font-weight: 800;
+      line-height: 1.1;
+    }
+
+    .timer-text {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 0.86rem;
+      font-weight: 800;
+      line-height: 1.6;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .stat,
+    .daily-hit {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.36);
+    }
+
+    .stat span,
+    .daily-hit span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .stat strong {
+      display: block;
+      margin-top: 2px;
+      color: #34342f;
+      font-size: 1.35rem;
+      line-height: 1.1;
+    }
+
+    .daily-hit {
+      margin-top: 12px;
+    }
+
+    .daily-hit p {
+      margin: 8px 0 0;
+      color: #4d4a43;
+      font-size: 0.95rem;
+      font-weight: 800;
+      line-height: 1.7;
+    }
+
+    .home-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 44px;
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.34);
+      color: #625d51;
+      font-size: 0.88rem;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    @keyframes messageIn {
+      0% { opacity: 0; transform: translateY(10px) scale(0.985); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes sharpFlash {
+      0% { background-color: rgba(165, 78, 67, 0); }
+      35% { background-color: rgba(165, 78, 67, 0.08); }
+      100% { background-color: rgba(165, 78, 67, 0); }
+    }
+
+    @media (max-width: 780px) {
+      .switch-page {
+        padding: 10px;
+      }
+
+      .switch-shell {
+        display: block;
+      }
+
+      .copy {
+        max-width: none;
+        padding: 6px 2px 12px;
+        text-align: center;
+      }
+
+      h1 {
+        font-size: clamp(2.2rem, 12vw, 3.5rem);
+      }
+
+      .subcopy {
+        margin-top: 10px;
+        font-size: 0.95rem;
+        line-height: 1.55;
+      }
+
+      .tiny-note {
+        display: none;
+      }
+
+      .panel {
+        padding: 12px;
+        border-radius: 18px;
+      }
+
+      .main-button {
+        min-height: 104px;
+        border-radius: 20px;
+      }
+
+      .message-card {
+        min-height: 210px;
+        padding: 20px;
+      }
+    }
+
+    @media (max-width: 390px) {
+      .switch-header {
+        font-size: 0.9rem;
+      }
+
+      .controls {
+        grid-template-columns: 1fr;
+      }
+
+      .message {
+        font-size: 1.18rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="switch-page">
+    <header class="switch-header">
+      <a class="brand" href="../../index.html" aria-label="T-ROOM ホームへ">
+        <span class="brand-mark">T</span>
+        <span>T-ROOM</span>
+      </a>
+      <a class="back-link" href="../../apps.html">アプリ一覧へ</a>
+    </header>
+
+    <main class="switch-shell">
+      <section class="copy" aria-labelledby="switch-title">
+        <p class="kicker">Swich / T-ROOM Swich</p>
+        <h1 id="switch-title">やる気スイッチ <span>押したら、何か言われる。</span></h1>
+        <p class="subcopy">やる気スイッチ</p>
+        <p class="tiny-note">やさしく言われたい日も、強めに言われたい日もある。最終目標は、まず5分だけ動くこと。</p>
+      </section>
+
+      <section class="panel" aria-label="やる気スイッチ">
+        <button class="main-button" id="pushButton" type="button">押す</button>
+
+        <div class="controls" aria-label="トーン切替">
+          <label class="toggle">
+            <span>今日はやさしめ</span>
+            <input id="gentleToggle" type="checkbox">
+            <span class="toggle-mark" aria-hidden="true"></span>
+          </label>
+          <label class="toggle">
+            <span>もっと強く言って</span>
+            <input id="strongToggle" type="checkbox">
+            <span class="toggle-mark" aria-hidden="true"></span>
+          </label>
+        </div>
+
+        <article class="message-card" id="messageCard" data-type="やさしい" aria-live="polite">
+          <p class="message" id="messageText">押すと、今のあなたに雑に効く一言が出ます。</p>
+          <p class="note" id="noteText">まずは押すところから。</p>
+        </article>
+
+        <button class="timer-button" id="timerButton" type="button">5分だけ始める</button>
+        <div class="timer-box" id="timerBox" aria-live="polite">
+          <span class="timer-time" id="timerTime">05:00</span>
+          <span class="timer-text" id="timerText">今は考えなくていい。手を動かす時間。</span>
+        </div>
+
+        <div class="stats" aria-label="押した回数">
+          <div class="stat">
+            <span>Today</span>
+            <strong id="todayCount">0</strong>
+          </div>
+          <div class="stat">
+            <span>Total</span>
+            <strong id="totalCount">0</strong>
+          </div>
+        </div>
+
+        <div class="daily-hit">
+          <span>今日の一撃</span>
+          <p id="dailyHitText">まだ押されていません。</p>
+        </div>
+
+        <a class="home-link" href="../../index.html">T-ROOMトップへ戻る</a>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const CONFIG = {
+      timerSeconds: 300,
+      storagePrefix: "t-room-motivation-switch",
+      weights: {
+        normal: { "やさしい": 1, "厳しい": 1, "辛口": 1, "現実": 1, "ネタ": 1 },
+        gentle: { "やさしい": 5, "厳しい": 0.45, "辛口": 0.18, "現実": 0.6, "ネタ": 3 },
+        strong: { "やさしい": 0.35, "厳しい": 3, "辛口": 3, "現実": 2.6, "ネタ": 0.7 }
+      }
+    };
+
+    const PHRASES = [
+      { text: "今日は1ミリ動けば勝ちでいい。", type: "やさしい", note: "小さく始める。" },
+      { text: "完璧に始めなくていい。雑に始めろ。", type: "やさしい", note: "まず形にする。" },
+      { text: "まず机の上だけ整えよう。世界征服はそのあとでいい。", type: "やさしい", note: "場所を作る。" },
+      { text: "疲れてるなら、小さいタスクに切ってから行こう。", type: "やさしい", note: "一口サイズにする。" },
+      { text: "5分だけやって、嫌なら戻ってこい。", type: "やさしい", note: "逃げ道つきで始める。" },
+      { text: "今日は勢いより、再起動のほうが大事。", type: "やさしい", note: "ゆっくり戻る。" },
+      { text: "全部やらなくていい。最初の1個だけでいい。", type: "やさしい", note: "1個に絞る。" },
+      { text: "やる気が薄い日は、薄いまま進めばいい。", type: "やさしい", note: "濃さを求めない。" },
+      { text: "今のあなたに必要なのは根性より入口。", type: "やさしい", note: "入口を小さくする。" },
+      { text: "休んだ分、ゆっくり戻ればいい。遅刻じゃない。", type: "やさしい", note: "戻ることを選ぶ。" },
+      { text: "まずファイルを開くだけ。それも立派な開始。", type: "やさしい", note: "開くところまで。" },
+      { text: "気分が乗らないままでも、手は少し動く。", type: "やさしい", note: "気分待ちをやめる。" },
+      { text: "今日は低空飛行でいい。墜落しなければ十分。", type: "やさしい", note: "低く進む。" },
+      { text: "できる量まで削っていい。ゼロより強い。", type: "やさしい", note: "量を減らす。" },
+      { text: "しんどいなら、まず水を飲んでから1個だけ。", type: "やさしい", note: "体から整える。" },
+      { text: "途中で止まっても、始めた事実は残る。", type: "やさしい", note: "開始を記録する。" },
+      { text: "今はすごい人にならなくていい。動く人になろう。", type: "やさしい", note: "動作を優先する。" },
+      { text: "やさしく始めて、静かに勝とう。", type: "やさしい", note: "音量を下げる。" },
+      { text: "今日の自分にできる形まで、タスクを折りたたむ。", type: "やさしい", note: "小さく畳む。" },
+      { text: "大丈夫。最初の5分は、だいたい不格好でいい。", type: "やさしい", note: "不格好を許す。" },
+
+      { text: "やる気が出るのを待ってたら、日が暮れる。", type: "厳しい", note: "待機を終了する。" },
+      { text: "未来の自分に丸投げするな。あいつも忙しい。", type: "厳しい", note: "今の自分で少し持つ。" },
+      { text: "その言い訳、昨日も聞いた。", type: "厳しい", note: "別の行動を選ぶ。" },
+      { text: "何もしない時間にも、ちゃんと請求書は届く。", type: "厳しい", note: "現実を1つ進める。" },
+      { text: "迷ってる時間で、もう半分終わってたかもしれない。", type: "厳しい", note: "迷いを切る。" },
+      { text: "やらない理由は増える。成果は増えない。", type: "厳しい", note: "成果側に1票入れる。" },
+      { text: "気分の許可を待つな。先に手を出せ。", type: "厳しい", note: "手から入る。" },
+      { text: "今やらないなら、いつやるのかを紙に書け。", type: "厳しい", note: "曖昧さを消す。" },
+      { text: "先延ばしは休憩じゃない。負債の移動です。", type: "厳しい", note: "負債を少し返す。" },
+      { text: "やる気がないのは分かった。で、次の一手は？", type: "厳しい", note: "次だけ決める。" },
+      { text: "時間は味方にも敵にもなる。今は敵にしすぎ。", type: "厳しい", note: "5分だけ味方にする。" },
+      { text: "見ないふりでタスクは消えない。むしろ育つ。", type: "厳しい", note: "小さいうちに触る。" },
+      { text: "今日は無理、を毎日使うと本当に無理になる。", type: "厳しい", note: "例外を作る。" },
+      { text: "自分を動かす係は、結局自分です。", type: "厳しい", note: "号令を出す。" },
+      { text: "準備の準備をしている場合ではない。", type: "厳しい", note: "本体に触る。" },
+      { text: "集中できないなら、集中しなくてもできる作業から。", type: "厳しい", note: "簡単な場所から入る。" },
+      { text: "今日の放置は、明日の面倒に育ちます。", type: "厳しい", note: "芽のうちに摘む。" },
+      { text: "やるべきことは、あなたが忘れても覚えている。", type: "厳しい", note: "先に片付ける。" },
+      { text: "何者かになる前に、まず1件処理する人になれ。", type: "厳しい", note: "1件だけ進める。" },
+      { text: "気合いはいらない。着手だけしろ。", type: "厳しい", note: "着手をゴールにする。" },
+
+      { text: "また先延ばしか。先延ばしの職人か。", type: "辛口", note: "職人芸を今日は休む。" },
+      { text: "そのスマホ、今だけ敵です。", type: "辛口", note: "遠くへ置く。" },
+      { text: "言い訳の切れ味だけ名刀級。", type: "辛口", note: "切るならタスクを切る。" },
+      { text: "情けない顔してる暇があったら、1個片付けろ。", type: "辛口", note: "顔より手を動かす。" },
+      { text: "やる気待ちの置物になるな。", type: "辛口", note: "置物から人間へ戻る。" },
+      { text: "その休憩、何回目の第1話ですか。", type: "辛口", note: "本編に戻る。" },
+      { text: "脳内では大作、現実では未着手。惜しいな。", type: "辛口", note: "現実に1行置く。" },
+      { text: "また作戦会議か。議長、手を動かしてください。", type: "辛口", note: "会議を閉じる。" },
+      { text: "やらない理由のプレゼン、妙にうまい。", type: "辛口", note: "次は実行で見せる。" },
+      { text: "だらだらの才能を、5分だけ封印しろ。", type: "辛口", note: "封印時間を作る。" },
+      { text: "逃げ足だけ早い。戻る足も使え。", type: "辛口", note: "戻って1個触る。" },
+      { text: "やる気が来ない？招待状出してないからな。", type: "辛口", note: "先に席を用意する。" },
+      { text: "今日もタスクに見つからない遊びをしていますね。", type: "辛口", note: "そろそろ見つかる。" },
+      { text: "その後でやる、は信用が薄い通貨です。", type: "辛口", note: "今すぐ少額決済。" },
+      { text: "口だけ準備運動が長い。", type: "辛口", note: "本番を始める。" },
+      { text: "やれば終わるのに、眺めて育ててる。", type: "辛口", note: "育成をやめる。" },
+      { text: "集中できない自慢はもう十分です。", type: "辛口", note: "自慢より作業。" },
+      { text: "布団と交渉するな。だいたい負ける。", type: "辛口", note: "立つか座る。" },
+      { text: "そのタスク、あなたを待ちすぎて老けたぞ。", type: "辛口", note: "少し若返らせる。" },
+      { text: "面倒くさい顔でいいから始めろ。", type: "辛口", note: "表情は後で整える。" },
+
+      { text: "今日やらなかった分は、明日の自分に利息付きで届く。", type: "現実", note: "利息を止める。" },
+      { text: "何もしない選択も、ちゃんと結果になる。", type: "現実", note: "選択を自覚する。" },
+      { text: "時間は減る。タスクは減らない。不思議だね。", type: "現実", note: "不思議を終わらせる。" },
+      { text: "今の5分を捨てると、夜の自分が少し困る。", type: "現実", note: "夜の自分を助ける。" },
+      { text: "未来の自分は、今のあなたの尻拭い係じゃない。", type: "現実", note: "少しだけ今やる。" },
+      { text: "やらなかった理由より、やった量だけが残る。", type: "現実", note: "残るものを作る。" },
+      { text: "締切は感情を待ってくれない。", type: "現実", note: "感情抜きで触る。" },
+      { text: "今の先延ばしは、未来の選択肢を狭くする。", type: "現実", note: "選択肢を守る。" },
+      { text: "不安を減らす一番早い方法は、少し進めること。", type: "現実", note: "不安を削る。" },
+      { text: "見積もりが怖いなら、まず3分測れ。", type: "現実", note: "測って現実にする。" },
+      { text: "タスクは消えない。小さくなるだけでも勝ち。", type: "現実", note: "サイズを削る。" },
+      { text: "放置したものほど、心の場所を取る。", type: "現実", note: "場所を空ける。" },
+      { text: "今日の自分が逃げた分、明日の自分は重くなる。", type: "現実", note: "重さを減らす。" },
+      { text: "やるか悩む時間は、やった実績にはならない。", type: "現実", note: "実績を作る。" },
+      { text: "焦りは進捗の代わりにならない。", type: "現実", note: "進捗を1つ置く。" },
+      { text: "終わらせたいなら、始める以外の入口はない。", type: "現実", note: "入口に立つ。" },
+      { text: "今やる理由が弱くても、後で困る理由は強い。", type: "現実", note: "困る前に触る。" },
+      { text: "面倒は、先送りしても面倒のままです。", type: "現実", note: "面倒を小分けにする。" },
+      { text: "やらない日が続くと、再開の坂が急になる。", type: "現実", note: "坂を低くする。" },
+      { text: "小さく始めない限り、大きく終わることもない。", type: "現実", note: "開始線を越える。" },
+
+      { text: "脳内会議は閉会。手を動かせ。", type: "ネタ", note: "議事録はいらない。" },
+      { text: "やる気は野生動物です。待つな、捕まえろ。", type: "ネタ", note: "そっと網を出す。" },
+      { text: "今日の敵はタスクではない。布団だ。", type: "ネタ", note: "距離を取る。" },
+      { text: "まず1個倒せ。雑魚敵からでいい。", type: "ネタ", note: "小さい敵を選ぶ。" },
+      { text: "やる気スイッチを押したな。では働け、指。", type: "ネタ", note: "指から始める。" },
+      { text: "タスクの前で素振りだけしている。そろそろ打席へ。", type: "ネタ", note: "1球だけ打つ。" },
+      { text: "あなたのやる気、今たぶん迷子センターにいる。", type: "ネタ", note: "迎えに行く。" },
+      { text: "やる気がない？では無のまま発進します。", type: "ネタ", note: "無音で進む。" },
+      { text: "タスクを見つめても、タスクは照れません。", type: "ネタ", note: "見つめず触る。" },
+      { text: "今日はエンジンじゃなくて、手回しハンドルです。", type: "ネタ", note: "ぐるっと回す。" },
+      { text: "心の中の編集長が締切を鳴らしています。", type: "ネタ", note: "原稿を1行出す。" },
+      { text: "やる気は欠席です。作業だけ出席させます。", type: "ネタ", note: "代理出席で進む。" },
+      { text: "今のあなたに必要なのは壮大な計画より、クリック1回。", type: "ネタ", note: "クリックする。" },
+      { text: "タスクがこちらを見ている。逃げますか？いいえ。", type: "ネタ", note: "いいえを選ぶ。" },
+      { text: "脳内BGMだけ勇ましい。手元も少し合わせろ。", type: "ネタ", note: "リズムに乗る。" },
+      { text: "やる気の配送は遅延中です。先に作業してください。", type: "ネタ", note: "不在票を無視する。" },
+      { text: "今日は小さな歯車で十分。巨大ロボは呼ばなくていい。", type: "ネタ", note: "歯車を回す。" },
+      { text: "タスクのラスボス感、だいたい近づくと弱まる。", type: "ネタ", note: "近づいてみる。" },
+      { text: "やる気が床に落ちてるかもしれない。拾うついでに始めろ。", type: "ネタ", note: "拾って着手。" },
+      { text: "作業開始の儀を執り行います。まず座れ。", type: "ネタ", note: "儀式を短くする。" }
+    ];
+
+    const keys = {
+      total: `${CONFIG.storagePrefix}:total`,
+      today: `${CONFIG.storagePrefix}:today`,
+      todayDate: `${CONFIG.storagePrefix}:today-date`,
+      dailyHit: `${CONFIG.storagePrefix}:daily-hit`,
+      dailyHitDate: `${CONFIG.storagePrefix}:daily-hit-date`,
+      gentle: `${CONFIG.storagePrefix}:gentle`,
+      strong: `${CONFIG.storagePrefix}:strong`,
+      lastIndex: `${CONFIG.storagePrefix}:last-index`
+    };
+
+    const els = {
+      pushButton: document.querySelector("#pushButton"),
+      gentleToggle: document.querySelector("#gentleToggle"),
+      strongToggle: document.querySelector("#strongToggle"),
+      messageCard: document.querySelector("#messageCard"),
+      messageText: document.querySelector("#messageText"),
+      noteText: document.querySelector("#noteText"),
+      timerButton: document.querySelector("#timerButton"),
+      timerBox: document.querySelector("#timerBox"),
+      timerTime: document.querySelector("#timerTime"),
+      timerText: document.querySelector("#timerText"),
+      todayCount: document.querySelector("#todayCount"),
+      totalCount: document.querySelector("#totalCount"),
+      dailyHitText: document.querySelector("#dailyHitText")
+    };
+
+    const state = {
+      total: 0,
+      today: 0,
+      dailyHit: null,
+      lastIndex: -1,
+      timerId: null,
+      timerLeft: CONFIG.timerSeconds
+    };
+
+    function init() {
+      resetDailyIfNeeded();
+      state.total = Number(localStorage.getItem(keys.total) || 0);
+      state.today = Number(localStorage.getItem(keys.today) || 0);
+      state.lastIndex = Number(localStorage.getItem(keys.lastIndex) || -1);
+      state.dailyHit = readDailyHit();
+      els.gentleToggle.checked = localStorage.getItem(keys.gentle) === "true";
+      els.strongToggle.checked = localStorage.getItem(keys.strong) === "true";
+      els.pushButton.addEventListener("click", handlePush);
+      els.gentleToggle.addEventListener("change", handleToneChange);
+      els.strongToggle.addEventListener("change", handleToneChange);
+      els.timerButton.addEventListener("click", startTimer);
+      updateCounts();
+      updateDailyHit();
+      registerServiceWorker();
+    }
+
+    function handlePush() {
+      const index = pickPhraseIndex();
+      const phrase = PHRASES[index];
+      state.lastIndex = index;
+      localStorage.setItem(keys.lastIndex, String(index));
+      countPush();
+      ensureDailyHit(phrase);
+      renderPhrase(phrase);
+      els.timerButton.classList.add("is-visible");
+      stopTimer(false);
+    }
+
+    function pickPhraseIndex() {
+      const weights = getActiveWeights();
+      const candidates = PHRASES
+        .map((phrase, index) => ({ phrase, index, weight: weights[phrase.type] || 0 }))
+        .filter((item) => item.weight > 0 && item.index !== state.lastIndex);
+      const totalWeight = candidates.reduce((sum, item) => sum + item.weight, 0);
+      let pick = Math.random() * totalWeight;
+      for (const item of candidates) {
+        pick -= item.weight;
+        if (pick <= 0) return item.index;
+      }
+      return candidates[0]?.index || 0;
+    }
+
+    function getActiveWeights() {
+      if (els.gentleToggle.checked) return CONFIG.weights.gentle;
+      if (els.strongToggle.checked) return CONFIG.weights.strong;
+      return CONFIG.weights.normal;
+    }
+
+    function handleToneChange(event) {
+      if (event.target === els.gentleToggle && els.gentleToggle.checked) {
+        els.strongToggle.checked = false;
+      }
+      if (event.target === els.strongToggle && els.strongToggle.checked) {
+        els.gentleToggle.checked = false;
+      }
+      localStorage.setItem(keys.gentle, String(els.gentleToggle.checked));
+      localStorage.setItem(keys.strong, String(els.strongToggle.checked));
+    }
+
+    function countPush() {
+      state.total += 1;
+      state.today += 1;
+      localStorage.setItem(keys.total, String(state.total));
+      localStorage.setItem(keys.today, String(state.today));
+      localStorage.setItem(keys.todayDate, todayKey());
+      updateCounts();
+    }
+
+    function ensureDailyHit(phrase) {
+      if (state.dailyHit) return;
+      state.dailyHit = phrase;
+      localStorage.setItem(keys.dailyHit, JSON.stringify(phrase));
+      localStorage.setItem(keys.dailyHitDate, todayKey());
+      updateDailyHit();
+    }
+
+    function readDailyHit() {
+      if (localStorage.getItem(keys.dailyHitDate) !== todayKey()) return null;
+      try {
+        return JSON.parse(localStorage.getItem(keys.dailyHit) || "null");
+      } catch {
+        return null;
+      }
+    }
+
+    function resetDailyIfNeeded() {
+      if (localStorage.getItem(keys.todayDate) !== todayKey()) {
+        localStorage.setItem(keys.today, "0");
+        localStorage.setItem(keys.todayDate, todayKey());
+      }
+      if (localStorage.getItem(keys.dailyHitDate) !== todayKey()) {
+        localStorage.removeItem(keys.dailyHit);
+        localStorage.setItem(keys.dailyHitDate, todayKey());
+      }
+    }
+
+    function renderPhrase(phrase) {
+      els.messageCard.dataset.type = phrase.type;
+      els.messageText.textContent = phrase.text;
+      els.noteText.textContent = phrase.note;
+      els.messageCard.classList.remove("is-visible");
+      void els.messageCard.offsetWidth;
+      els.messageCard.classList.add("is-visible");
+      document.body.classList.toggle("is-sharp", phrase.type === "辛口");
+      if (phrase.type === "辛口") {
+        setTimeout(() => document.body.classList.remove("is-sharp"), 480);
+      }
+    }
+
+    function startTimer() {
+      stopTimer(false);
+      state.timerLeft = CONFIG.timerSeconds;
+      els.timerBox.classList.add("is-visible");
+      els.timerButton.textContent = "5分タイマー中";
+      els.timerButton.disabled = true;
+      els.timerText.textContent = "今は考えなくていい。手を動かす時間。";
+      updateTimerText();
+      state.timerId = window.setInterval(() => {
+        state.timerLeft -= 1;
+        updateTimerText();
+        if (state.timerLeft <= 0) {
+          stopTimer(true);
+        }
+      }, 1000);
+    }
+
+    function stopTimer(finished) {
+      if (state.timerId) {
+        clearInterval(state.timerId);
+        state.timerId = null;
+      }
+      els.timerButton.disabled = false;
+      els.timerButton.textContent = "5分だけ始める";
+      if (finished) {
+        els.timerText.textContent = "5分やった。えらい。次はどうする？";
+        els.timerTime.textContent = "00:00";
+      }
+    }
+
+    function updateTimerText() {
+      const minutes = Math.floor(state.timerLeft / 60);
+      const seconds = state.timerLeft % 60;
+      els.timerTime.textContent = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+
+    function updateCounts() {
+      els.todayCount.textContent = state.today;
+      els.totalCount.textContent = state.total;
+    }
+
+    function updateDailyHit() {
+      els.dailyHitText.textContent = state.dailyHit
+        ? `${state.dailyHit.text} / ${state.dailyHit.note}`
+        : "まだ押されていません。";
+    }
+
+    function todayKey() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+
+    function registerServiceWorker() {
+      if (!("serviceWorker" in navigator)) return;
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {
+          // The app still works if PWA registration is unavailable.
+        });
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>

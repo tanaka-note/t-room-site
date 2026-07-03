@@ -1,0 +1,26 @@
+{
+  "name": "T-ROOM Swich",
+  "short_name": "Swich",
+  "description": "押すたびに、今の自分へ短い一言が返ってくるT-ROOMのやる気スイッチ",
+  "start_url": "./index.html?v=20260704-switch2",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#f6f0e7",
+  "theme_color": "#f6f0e7",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "../../assets/site-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

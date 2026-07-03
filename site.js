@@ -31,6 +31,13 @@
       status: "Camera",
       cardClass: "app-card-ima-camera",
     },
+    {
+      name: "やる気スイッチ",
+      description: "押すたびに、今の自分へ短い一言が返ってくるミニアプリです。",
+      url: "./apps/motivation-switch/index.html?v=20260704-switch2",
+      status: "Swich",
+      cardClass: "app-card-motivation-switch",
+    },
   ];
 
   function createAppCard(app) {

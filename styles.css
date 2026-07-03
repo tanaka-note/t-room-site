@@ -1441,6 +1441,16 @@ h1 {
   background-repeat: no-repeat;
 }
 
+.game-library-card.stone::after {
+  background:
+    radial-gradient(ellipse at 50% 50%, #8f8b82 0 34px, transparent 35px) 24px 48px / 56px 28px,
+    radial-gradient(ellipse at 50% 50%, #a8a094 0 27px, transparent 28px) 6px 26px / 54px 28px,
+    radial-gradient(ellipse at 50% 50%, #b8b0a2 0 25px, transparent 26px) 39px 20px / 50px 26px,
+    radial-gradient(ellipse at 50% 50%, #948e83 0 22px, transparent 23px) 28px 0 / 44px 24px;
+  background-repeat: no-repeat;
+  opacity: 0.58;
+}
+
 .game-card-label,
 .game-card-meta {
   color: var(--teal-dark);
@@ -1517,6 +1527,10 @@ h1 {
 
 .app-card-ima-camera {
   --app-card-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect x='20' y='36' width='80' height='58' rx='13' fill='%23eeeeeb' stroke='%23909090' stroke-width='5'/%3E%3Crect x='37' y='25' width='31' height='18' rx='7' fill='%23d8d8d4' stroke='%23909090' stroke-width='5'/%3E%3Ccircle cx='60' cy='65' r='19' fill='%23f7f7f4' stroke='%23909090' stroke-width='5'/%3E%3Ccircle cx='60' cy='65' r='9' fill='%23b9b9b4'/%3E%3Crect x='78' y='42' width='12' height='7' rx='3.5' fill='%23b9b9b4'/%3E%3C/svg%3E");
+}
+
+.app-card-motivation-switch {
+  --app-card-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect x='18' y='34' width='84' height='52' rx='26' fill='%23eee5d6' stroke='%23b8aa94' stroke-width='6'/%3E%3Ccircle cx='76' cy='60' r='21' fill='%23fff8ed' stroke='%238c877c' stroke-width='6'/%3E%3Ccircle cx='76' cy='60' r='9' fill='%23c9b99f'/%3E%3Cpath d='M38 52h18' stroke='%23cfc3b0' stroke-width='7' stroke-linecap='round'/%3E%3Cpath d='M38 68h12' stroke='%23cfc3b0' stroke-width='7' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E");
 }
 
 .app-card[href]:hover {
