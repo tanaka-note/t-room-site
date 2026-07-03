@@ -121,6 +121,13 @@
 (() => {
   const recentPosts = [
     {
+      theme: "思考",
+      date: "2026.07.04",
+      title: "見えすぎる男女、育ちにくい未来",
+      excerpt: "SNSで可視化される男女対立が、恋愛や結婚への想像力をどう変えているのかを考えます。",
+      url: "./thought.html#sns-gender-division-low-birthrate",
+    },
+    {
       theme: "投資",
       date: "2026.06.25",
       title: "BTCの長らく続く下落と4年サイクル",
