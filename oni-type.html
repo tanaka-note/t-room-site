@@ -2150,19 +2150,19 @@
       return ((state.hits / state.totalKeys) * 100).toFixed(1);
     }
 
-    function charactersPerMinute() {
-      const playedSeconds = Math.max(1, currentGameSeconds() - state.timeLeft);
-      return Math.round((state.hits / playedSeconds) * 60);
+    function keysPerMinuteForRank() {
+      const levelSeconds = Math.max(1, currentGameSeconds());
+      return Math.round((state.totalKeys / levelSeconds) * 60);
     }
 
     function rankName() {
-      const cpm = charactersPerMinute();
-      if (cpm >= 180) return "鬼神の指先";
-      if (cpm >= 150) return "百鬼斬り";
-      if (cpm >= 120) return "鬼打ちの手練れ";
-      if (cpm >= 90) return "夜道の守り人";
-      if (cpm >= 60) return "町外れの退治人";
-      if (cpm >= 30) return "駆け出し退治人";
+      const kpm = keysPerMinuteForRank();
+      if (kpm >= 560) return "鬼神の指先";
+      if (kpm >= 450) return "百鬼斬り";
+      if (kpm >= 360) return "鬼打ちの手練れ";
+      if (kpm >= 280) return "夜道の守り人";
+      if (kpm >= 200) return "町外れの退治人";
+      if (kpm >= 120) return "駆け出し退治人";
       return "木刀を握った";
     }
 
