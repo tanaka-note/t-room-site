@@ -2150,13 +2150,19 @@
       return ((state.hits / state.totalKeys) * 100).toFixed(1);
     }
 
+    function charactersPerMinute() {
+      const playedSeconds = Math.max(1, currentGameSeconds() - state.timeLeft);
+      return Math.round((state.hits / playedSeconds) * 60);
+    }
+
     function rankName() {
-      const d = state.defeat;
-      if (d >= 100) return "指先の祓い屋";
-      if (d >= 75) return "百鬼の入口";
-      if (d >= 50) return "鬼打ちの手練れ";
-      if (d >= 30) return "夜道の守り人";
-      if (d >= 12) return "見習い退治人";
+      const cpm = charactersPerMinute();
+      if (cpm >= 180) return "鬼神の指先";
+      if (cpm >= 150) return "百鬼斬り";
+      if (cpm >= 120) return "鬼打ちの手練れ";
+      if (cpm >= 90) return "夜道の守り人";
+      if (cpm >= 60) return "町外れの退治人";
+      if (cpm >= 30) return "駆け出し退治人";
       return "木刀を握った";
     }
 
