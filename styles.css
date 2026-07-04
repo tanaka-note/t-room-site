@@ -1411,6 +1411,16 @@ h1 {
   box-shadow: var(--shadow);
 }
 
+.game-library-card.is-coming-soon {
+  cursor: default;
+}
+
+.game-library-card.is-coming-soon:hover {
+  transform: none;
+  border-color: var(--line);
+  box-shadow: 0 1px 0 rgba(31, 41, 51, 0.04);
+}
+
 .game-library-card::after {
   content: "";
   position: absolute;
@@ -1449,6 +1459,18 @@ h1 {
     radial-gradient(ellipse at 50% 50%, #948e83 0 22px, transparent 23px) 28px 0 / 44px 24px;
   background-repeat: no-repeat;
   opacity: 0.58;
+}
+
+.game-library-card.oni::after {
+  background:
+    radial-gradient(circle at 38% 38%, #f8efe1 0 4px, transparent 5px),
+    radial-gradient(circle at 61% 38%, #f8efe1 0 4px, transparent 5px),
+    radial-gradient(circle at 50% 57%, #f1c8b8 0 28px, transparent 29px),
+    linear-gradient(135deg, transparent 0 42%, #d8b77a 43% 58%, transparent 59%) 24px 3px / 26px 38px,
+    linear-gradient(45deg, transparent 0 42%, #d8b77a 43% 58%, transparent 59%) 69px 3px / 26px 38px,
+    radial-gradient(circle at 50% 58%, #9b6b5c 0 38px, transparent 39px);
+  background-repeat: no-repeat;
+  opacity: 0.48;
 }
 
 .game-card-label,

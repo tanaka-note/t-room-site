@@ -1,0 +1,2132 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T-ROOM OniTaiji | 鬼を斬るタイピングゲーム</title>
+  <meta name="description" content="T-ROOM OniTaiji。キーボードで言葉を打ち、迫る鬼を斬るPC向けタイピングゲームです。">
+  <meta property="og:image" content="https://tanaka-note.com/assets/t-room-share.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="T-ROOM OniTaiji">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="./assets/favicon.ico" sizes="any">
+  <link rel="icon" href="./assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="./assets/site-icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --night: #151923;
+      --night-deep: #0f121a;
+      --ink: #f7eedf;
+      --muted: #aeb2bd;
+      --line: rgba(255, 255, 255, 0.14);
+      --gold: #d3b36f;
+      --red: #d26b5f;
+      --blue: #6f95c8;
+      --green: #8cbf9c;
+      --panel: rgba(255, 255, 255, 0.07);
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 14%, rgba(211, 179, 111, 0.14), transparent 22rem),
+        linear-gradient(180deg, #1c2230 0%, var(--night) 48%, var(--night-deep) 100%);
+      color: var(--ink);
+      font-family: "Noto Sans JP", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .oni-app {
+      position: relative;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      padding: 14px 18px 18px;
+    }
+
+    .oni-header {
+      position: relative;
+      z-index: 4;
+      width: min(1180px, 100%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 0 auto 10px;
+      color: rgba(247, 238, 223, 0.86);
+      font-weight: 900;
+    }
+
+    .oni-brand,
+    .oni-back {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .oni-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .oni-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--gold);
+    }
+
+    .oni-back {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .game {
+      position: relative;
+      width: min(1180px, calc((100vh - 76px) * 1.72), 100%);
+      height: min(684px, calc(100vh - 76px));
+      min-height: 560px;
+      aspect-ratio: 16 / 9;
+      display: grid;
+      grid-template-rows: 72px minmax(0, 1fr) 146px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / 100% 42px,
+        radial-gradient(circle at 50% 6%, rgba(247, 224, 167, 0.2), transparent 14rem),
+        linear-gradient(180deg, rgba(28, 34, 48, 0.9), rgba(15, 18, 26, 0.96));
+      box-shadow: var(--shadow);
+    }
+
+    .game::before {
+      content: "鬼";
+      position: absolute;
+      left: -18px;
+      bottom: -92px;
+      z-index: 0;
+      color: rgba(210, 107, 95, 0.08);
+      font-size: min(42vw, 460px);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+      text-shadow: 0 0 52px rgba(210, 107, 95, 0.12);
+    }
+
+    .game::after {
+      content: "鬼";
+      position: absolute;
+      right: -10px;
+      top: 42px;
+      z-index: 0;
+      color: rgba(211, 179, 111, 0.07);
+      font-size: min(24vw, 240px);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+    }
+
+    .hud {
+      position: relative;
+      z-index: 3;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 7px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.18);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hud div {
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 7px 10px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .hud span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .hud strong {
+      display: block;
+      margin-top: 2px;
+      color: var(--ink);
+      font-size: 1.14rem;
+      line-height: 1.1;
+    }
+
+    .stage {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .stage::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(124deg, transparent 0 43%, rgba(210, 107, 95, 0.2) 44%, rgba(210, 107, 95, 0.06) 46%, transparent 48%),
+        radial-gradient(circle at 50% 78%, rgba(210, 107, 95, 0.16), transparent 26rem);
+      opacity: 0.8;
+    }
+
+    .stage::after {
+      content: "鬼";
+      position: absolute;
+      right: 8%;
+      bottom: 7%;
+      z-index: 0;
+      color: rgba(210, 107, 95, 0.11);
+      font-size: clamp(7rem, 16vw, 13rem);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+      transform: rotate(-8deg);
+    }
+
+    .moon {
+      position: absolute;
+      top: 24px;
+      left: 50%;
+      z-index: 1;
+      width: 62px;
+      height: 62px;
+      border-radius: 50%;
+      transform: translateX(-50%);
+      background: #f3dfaa;
+      box-shadow: 0 0 42px rgba(243, 223, 170, 0.26);
+      opacity: 0.9;
+    }
+
+    .torii {
+      position: absolute;
+      top: 84px;
+      left: 50%;
+      z-index: 1;
+      width: 218px;
+      height: 112px;
+      transform: translateX(-50%);
+      opacity: 0.68;
+    }
+
+    .torii::before,
+    .torii::after {
+      content: "";
+      position: absolute;
+      background: #7d3f3b;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+    }
+
+    .torii::before {
+      left: 12px;
+      top: 14px;
+      width: 194px;
+      height: 14px;
+      border-radius: 4px;
+    }
+
+    .torii::after {
+      left: 34px;
+      top: 48px;
+      width: 150px;
+      height: 10px;
+      border-radius: 3px;
+    }
+
+    .torii span {
+      position: absolute;
+      top: 30px;
+      width: 14px;
+      height: 82px;
+      background: #683734;
+      border-radius: 3px;
+    }
+
+    .torii span:first-child {
+      left: 53px;
+    }
+
+    .torii span:last-child {
+      right: 53px;
+    }
+
+    .stage-stamp {
+      position: absolute;
+      top: 16px;
+      right: 22px;
+      z-index: 2;
+      border: 1px solid rgba(211, 179, 111, 0.42);
+      border-radius: 999px;
+      padding: 5px 12px 6px;
+      background: rgba(68, 29, 32, 0.72);
+      color: #f6dfab;
+      font-size: 0.82rem;
+      font-weight: 900;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    }
+
+    .road {
+      position: absolute;
+      inset: 170px 6% 0;
+      z-index: 1;
+      background:
+        linear-gradient(90deg, transparent, rgba(247, 238, 223, 0.16), transparent) 50% 0 / 2px 100% no-repeat,
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0));
+      clip-path: polygon(42% 0, 58% 0, 98% 100%, 2% 100%);
+      opacity: 0.88;
+    }
+
+    .danger-edge {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      opacity: 0;
+      pointer-events: none;
+      background: radial-gradient(circle at 50% 84%, rgba(210, 107, 95, 0.35), transparent 34rem);
+      transition: opacity 160ms ease;
+    }
+
+    .danger-edge.is-hot {
+      opacity: 1;
+    }
+
+    .player-swing,
+    .slash-arc {
+      position: absolute;
+      left: 50%;
+      bottom: 52px;
+      z-index: 5;
+      pointer-events: none;
+      opacity: 0;
+    }
+
+    .player-swing {
+      width: 120px;
+      height: 120px;
+      transform: translateX(-50%);
+      transform-origin: 50% 100%;
+    }
+
+    .player-swing::before {
+      content: "";
+      position: absolute;
+      left: 46px;
+      bottom: 12px;
+      width: 30px;
+      height: 28px;
+      border: 4px solid rgba(23, 25, 35, 0.82);
+      background: #d0b06f;
+      image-rendering: pixelated;
+      box-shadow:
+        0 -10px 0 #b94838,
+        0 -18px 0 #171923,
+        -10px -12px 0 #f2d99b,
+        10px -12px 0 #f2d99b;
+    }
+
+    .sword {
+      position: absolute;
+      left: 55px;
+      bottom: 34px;
+      width: 10px;
+      height: 74px;
+      background:
+        linear-gradient(90deg, #8a94a1 0 2px, #fff4d6 2px 5px, #c8d1d9 5px 8px, #6b7280 8px 10px);
+      box-shadow:
+        0 -10px 0 #f8efe1,
+        -14px 54px 0 #7d3f3b,
+        14px 54px 0 #7d3f3b,
+        0 62px 0 #3a2630;
+      transform: rotate(-44deg);
+      transform-origin: 50% 92%;
+      image-rendering: pixelated;
+    }
+
+    .slash-arc {
+      width: 190px;
+      height: 126px;
+      transform: translateX(-50%);
+      border-top: 9px solid rgba(255, 242, 208, 0.92);
+      border-right: 5px solid rgba(211, 179, 111, 0.72);
+      border-radius: 50%;
+      filter: drop-shadow(0 0 12px rgba(247, 238, 223, 0.5));
+    }
+
+    .stage.is-swing .player-swing {
+      animation: playerSwing 260ms steps(5, end) both;
+    }
+
+    .stage.is-swing .sword {
+      animation: swordCut 260ms steps(5, end) both;
+    }
+
+    .stage.is-swing .slash-arc {
+      animation: slashArc 260ms ease-out both;
+    }
+
+    .oni {
+      position: absolute;
+      left: 50%;
+      bottom: 112px;
+      z-index: 2;
+      width: 176px;
+      height: 176px;
+      --skin: #b94838;
+      --skin-mid: #d7604f;
+      --skin-light: #ee8867;
+      --skin-dark: #662125;
+      --hair: #252b35;
+      --horn: #efd38f;
+      --horn-shadow: #aa7a43;
+      --cloth: #d0b06f;
+      transform: translateX(-50%) scale(0.62);
+      transform-origin: 50% 100%;
+      transition: transform 120ms linear, bottom 120ms linear, filter 120ms ease;
+    }
+
+    .oni.blue {
+      --skin: #486f9f;
+      --skin-mid: #6f95c8;
+      --skin-light: #9bb8de;
+      --skin-dark: #253a58;
+      --cloth: #c8b27a;
+    }
+
+    .oni.gold {
+      --skin: #ba8540;
+      --skin-mid: #d3b36f;
+      --skin-light: #f2d99b;
+      --skin-dark: #6c4726;
+      --cloth: #7f3d35;
+    }
+
+    .oni.rock {
+      --skin: #6f6b63;
+      --skin-mid: #85817a;
+      --skin-light: #aaa49a;
+      --skin-dark: #383832;
+      --cloth: #b48b5d;
+    }
+
+    .oni.is-boss {
+      width: 202px;
+      height: 202px;
+      --boss-skin: #b94838;
+      --boss-mid: #d7604f;
+      --boss-dark: #521c22;
+      --boss-hair: #1c222d;
+      --boss-horn: #f2d99b;
+      --boss-armor: #2e3541;
+      --boss-accent: #d3b36f;
+    }
+
+    .oni.is-boss.boss-lv4 {
+      width: 226px;
+      height: 226px;
+    }
+
+    .oni .boss-sprite {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    .oni.is-hit {
+      filter: brightness(1.28) contrast(1.08);
+      animation: oniHitShake 130ms steps(2, end);
+    }
+
+    .oni.is-slash {
+      animation: oniVanish 360ms ease forwards;
+    }
+
+    .oni-pixel {
+      display: block;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+      shape-rendering: crispEdges;
+      overflow: visible;
+      filter: drop-shadow(0 14px 0 rgba(0, 0, 0, 0.16)) drop-shadow(0 22px 28px rgba(0, 0, 0, 0.34));
+    }
+
+    .px-outline { fill: #171923; }
+    .px-skin { fill: var(--skin); }
+    .px-skin-mid { fill: var(--skin-mid); }
+    .px-skin-light { fill: var(--skin-light); }
+    .px-skin-dark { fill: var(--skin-dark); }
+    .px-hair { fill: var(--hair); }
+    .px-horn { fill: var(--horn); }
+    .px-horn-shadow { fill: var(--horn-shadow); }
+    .px-eye { fill: #fff6df; }
+    .px-pupil { fill: #11131a; }
+    .px-mouth { fill: #25131a; }
+    .px-fang { fill: #fff1cf; }
+    .px-cloth { fill: var(--cloth); }
+    .px-club { fill: #5b3c2d; }
+    .px-club-light { fill: #8b6243; }
+    .px-shadow { fill: rgba(0, 0, 0, 0.24); }
+    .px-wound { fill: #f2d99b; opacity: 0; }
+    .px-wound-dark { fill: #7d1f28; opacity: 0; }
+
+    .oni.damage-1 .wound-one,
+    .oni.damage-1 .wound-one-dark,
+    .oni.damage-2 .wound-one,
+    .oni.damage-2 .wound-one-dark,
+    .oni.damage-3 .wound-one,
+    .oni.damage-3 .wound-one-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-2 .wound-two,
+    .oni.damage-2 .wound-two-dark,
+    .oni.damage-3 .wound-two,
+    .oni.damage-3 .wound-two-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-3 .wound-three,
+    .oni.damage-3 .wound-three-dark {
+      opacity: 1;
+    }
+
+    .hit-spark {
+      opacity: 0;
+      fill: #fff2d0;
+    }
+
+    .oni.is-hit .hit-spark {
+      animation: hitSpark 130ms steps(2, end);
+    }
+
+    .word-panel {
+      position: relative;
+      z-index: 3;
+      display: grid;
+      justify-items: center;
+      align-content: center;
+      gap: 7px;
+      padding: 10px 28px 16px;
+      text-align: center;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.14);
+    }
+
+    .display-word {
+      min-height: 40px;
+      color: #fff6e7;
+      font-size: clamp(1.45rem, 3vw, 2.85rem);
+      font-weight: 900;
+      line-height: 1.25;
+      text-shadow: 0 3px 18px rgba(0, 0, 0, 0.34);
+    }
+
+    .romaji {
+      min-height: 30px;
+      max-width: min(980px, 100%);
+      color: rgba(247, 238, 223, 0.5);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: clamp(1rem, 1.7vw, 1.42rem);
+      font-weight: 800;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .romaji .done {
+      color: var(--gold);
+    }
+
+    .romaji .next {
+      color: #fff8df;
+      border-bottom: 2px solid var(--gold);
+    }
+
+    .typed {
+      min-height: 24px;
+      color: var(--muted);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 1rem;
+      overflow-wrap: anywhere;
+    }
+
+    .battle-text {
+      min-height: 28px;
+      color: var(--gold);
+      font-size: 1.1rem;
+      font-weight: 900;
+    }
+
+    .menu,
+    .result,
+    .pause,
+    .mobile-lock {
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(15, 18, 26, 0.82);
+      backdrop-filter: blur(8px);
+    }
+
+    .menu {
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 20%, rgba(210, 107, 95, 0.28), transparent 20rem),
+        linear-gradient(180deg, rgba(25, 14, 18, 0.84), rgba(8, 10, 16, 0.86));
+    }
+
+    .menu::before {
+      content: "鬼";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      z-index: 0;
+      color: rgba(210, 107, 95, 0.14);
+      font-size: clamp(13rem, 36vw, 31rem);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+      transform: translate(-50%, -55%) rotate(-7deg);
+      text-shadow: 0 0 72px rgba(210, 107, 95, 0.18);
+    }
+
+    .menu::after {
+      content: "";
+      position: absolute;
+      inset: 10% -8%;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(118deg, transparent 0 45%, rgba(247, 238, 223, 0.18) 46%, rgba(210, 107, 95, 0.36) 47%, transparent 49%),
+        linear-gradient(64deg, transparent 0 54%, rgba(211, 179, 111, 0.16) 55%, transparent 57%);
+      opacity: 0.7;
+    }
+
+    .menu[hidden],
+    .result[hidden],
+    .pause[hidden],
+    .mobile-lock[hidden] {
+      display: none;
+    }
+
+    .menu-card {
+      position: relative;
+      z-index: 1;
+      width: min(720px, 100%);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 28px;
+      background: rgba(20, 24, 35, 0.92);
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+
+    .title-card {
+      isolation: isolate;
+      width: min(860px, 100%);
+      padding: 22px 26px 20px;
+      border-color: rgba(211, 179, 111, 0.48);
+      background:
+        linear-gradient(90deg, rgba(210, 107, 95, 0.18), transparent 18%, transparent 82%, rgba(210, 107, 95, 0.18)),
+        radial-gradient(circle at 50% -8%, rgba(210, 107, 95, 0.36), transparent 17rem),
+        linear-gradient(180deg, rgba(45, 22, 27, 0.98), rgba(14, 16, 24, 0.96));
+      box-shadow:
+        0 24px 70px rgba(0, 0, 0, 0.42),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .title-card::before,
+    .title-card::after {
+      content: "";
+      position: absolute;
+      top: 18px;
+      width: 80px;
+      height: 116px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(211, 179, 111, 0.88), rgba(210, 107, 95, 0));
+      opacity: 0.46;
+      pointer-events: none;
+    }
+
+    .title-card::before {
+      left: 18px;
+      transform: skewX(-18deg) rotate(-8deg);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+
+    .title-card::after {
+      right: 18px;
+      transform: skewX(18deg) rotate(8deg);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+
+    .title-kanji {
+      position: relative;
+      z-index: 1;
+      width: 122px;
+      height: 122px;
+      display: grid;
+      place-items: center;
+      margin: 6px auto 14px;
+      border: 1px solid rgba(211, 179, 111, 0.34);
+      border-radius: 34% 42% 38% 46%;
+      background:
+        radial-gradient(circle at 50% 35%, rgba(255, 246, 223, 0.18), transparent 44%),
+        linear-gradient(145deg, #7f3535, #3b2027);
+      color: #f5dfad;
+      font-size: 4.8rem;
+      font-weight: 900;
+      line-height: 1;
+      box-shadow:
+        inset 0 -10px 0 rgba(0, 0, 0, 0.14),
+        0 18px 40px rgba(0, 0, 0, 0.26);
+    }
+
+    .title-kanji::before,
+    .title-kanji::after {
+      content: "";
+      position: absolute;
+      top: -26px;
+      width: 34px;
+      height: 52px;
+      z-index: -1;
+      background: linear-gradient(180deg, #f4dfaa, #a9534f);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      filter: drop-shadow(0 6px 0 rgba(0, 0, 0, 0.18));
+    }
+
+    .title-kanji::before {
+      left: 19px;
+      transform: rotate(-16deg);
+    }
+
+    .title-kanji::after {
+      right: 19px;
+      transform: rotate(16deg);
+    }
+
+    .title-stamp {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      border: 1px solid rgba(211, 179, 111, 0.5);
+      border-radius: 999px;
+      padding: 4px 13px 5px;
+      background: rgba(210, 107, 95, 0.24);
+      color: #f5dfad;
+      font-size: 0.82rem;
+      font-weight: 900;
+    }
+
+    .menu-card h1,
+    .menu-card h2 {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      font-size: clamp(2.2rem, 6vw, 5rem);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .title-card h1 {
+      color: #fff2dc;
+      font-size: clamp(2.6rem, 5vw, 4.25rem);
+      text-shadow:
+        0 4px 0 rgba(0, 0, 0, 0.28),
+        0 0 34px rgba(210, 107, 95, 0.24);
+    }
+
+    .menu-card h1 span {
+      display: block;
+      margin-top: 12px;
+      color: var(--gold);
+      font-size: 0.28em;
+      font-weight: 900;
+    }
+
+    .menu-card p {
+      position: relative;
+      z-index: 1;
+      margin: 16px auto 0;
+      max-width: 38rem;
+      color: var(--muted);
+      line-height: 1.8;
+    }
+
+    .level-list {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      width: min(430px, 100%);
+      margin: 16px auto 0;
+    }
+
+    .level-button {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 7px 6px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--ink);
+      text-align: center;
+      cursor: pointer;
+    }
+
+    .level-button.is-active {
+      border-color: rgba(211, 179, 111, 0.8);
+      background: rgba(211, 179, 111, 0.14);
+    }
+
+    .level-button strong,
+    .level-button span {
+      display: block;
+    }
+
+    .level-button strong {
+      font-size: 0.82rem;
+      line-height: 1.25;
+    }
+
+    .key-help {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px 14px;
+      margin-top: 18px;
+      color: #c8cbd2;
+      font-size: 0.86rem;
+      font-weight: 800;
+    }
+
+    .key-help kbd {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 2px 7px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--gold);
+      font: inherit;
+    }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .result-grid div {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .result-grid span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .result-grid strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 1.35rem;
+    }
+
+    .boss-preview {
+      position: absolute;
+      inset: 0;
+      z-index: 11;
+      display: grid;
+      place-items: center;
+      padding: 26px;
+      overflow: auto;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(210, 107, 95, 0.2), transparent 24rem),
+        linear-gradient(180deg, rgba(14, 16, 24, 0.97), rgba(9, 11, 17, 0.98));
+    }
+
+    .boss-preview[hidden] {
+      display: none;
+    }
+
+    .boss-board {
+      width: min(1040px, 100%);
+      border: 1px solid rgba(211, 179, 111, 0.26);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(20, 24, 35, 0.9);
+      box-shadow: var(--shadow);
+    }
+
+    .boss-board h2 {
+      margin: 0;
+      color: #fff2dc;
+      font-size: clamp(1.55rem, 2.6vw, 2.35rem);
+      line-height: 1;
+    }
+
+    .boss-board p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .boss-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .boss-card {
+      --boss-skin: #b94838;
+      --boss-mid: #d7604f;
+      --boss-dark: #521c22;
+      --boss-hair: #1c222d;
+      --boss-horn: #f2d99b;
+      --boss-armor: #2e3541;
+      --boss-accent: #d3b36f;
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      padding: 10px 8px 12px;
+      background:
+        radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.08), transparent 7rem),
+        rgba(255, 255, 255, 0.045);
+      text-align: center;
+    }
+
+    .boss-card.is-kurogane,
+    .oni.is-kurogane {
+      --boss-skin: #343946;
+      --boss-mid: #586071;
+      --boss-dark: #11141b;
+      --boss-hair: #07090d;
+      --boss-horn: #d8b77a;
+      --boss-armor: #171b24;
+      --boss-accent: #d4484b;
+    }
+
+    .boss-card.is-hakumen,
+    .oni.is-hakumen {
+      --boss-skin: #d8d1c0;
+      --boss-mid: #f1e7cf;
+      --boss-dark: #7a6f64;
+      --boss-hair: #2b2631;
+      --boss-horn: #d3b36f;
+      --boss-armor: #34243d;
+      --boss-accent: #b96a72;
+    }
+
+    .boss-card.is-enkaku,
+    .oni.is-enkaku {
+      --boss-skin: #a93127;
+      --boss-mid: #e25739;
+      --boss-dark: #4a1719;
+      --boss-hair: #f08a2e;
+      --boss-horn: #f4cf79;
+      --boss-armor: #3a1821;
+      --boss-accent: #f0b14e;
+    }
+
+    .boss-card h3 {
+      margin: 8px 0 3px;
+      color: #fff2dc;
+      font-size: 0.94rem;
+    }
+
+    .boss-card span {
+      display: block;
+      color: var(--gold);
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+
+    .boss-card p {
+      min-height: 0;
+      margin: 7px auto 0;
+      color: #aeb2bd;
+      font-size: 0.7rem;
+      line-height: 1.48;
+      font-weight: 800;
+    }
+
+    .boss-sprite {
+      display: block;
+      width: min(124px, 100%);
+      height: auto;
+      margin: 0 auto;
+      image-rendering: pixelated;
+      shape-rendering: crispEdges;
+      filter: drop-shadow(0 14px 0 rgba(0, 0, 0, 0.2)) drop-shadow(0 20px 22px rgba(0, 0, 0, 0.32));
+    }
+
+    .boss-px-outline { fill: #12141c; }
+    .boss-px-skin { fill: var(--boss-skin); }
+    .boss-px-mid { fill: var(--boss-mid); }
+    .boss-px-dark { fill: var(--boss-dark); }
+    .boss-px-hair { fill: var(--boss-hair); }
+    .boss-px-horn { fill: var(--boss-horn); }
+    .boss-px-armor { fill: var(--boss-armor); }
+    .boss-px-accent { fill: var(--boss-accent); }
+    .boss-px-eye { fill: #fff4d6; }
+    .boss-px-pupil { fill: #0c0e14; }
+    .is-kurogane .boss-px-eye,
+    .is-enkaku .boss-px-eye { fill: #ffdad6; }
+    .is-kurogane .boss-px-pupil,
+    .is-enkaku .boss-px-pupil { fill: #df3438; }
+    .boss-px-fang { fill: #fff1cf; }
+    .boss-px-shadow { fill: rgba(0, 0, 0, 0.26); }
+    .boss-px-wound { fill: #f2d99b; opacity: 0; }
+    .boss-px-wound-dark { fill: #7d1f28; opacity: 0; }
+
+    .oni.damage-1 .boss-wound-one,
+    .oni.damage-1 .boss-wound-one-dark,
+    .oni.damage-2 .boss-wound-one,
+    .oni.damage-2 .boss-wound-one-dark,
+    .oni.damage-3 .boss-wound-one,
+    .oni.damage-3 .boss-wound-one-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-2 .boss-wound-two,
+    .oni.damage-2 .boss-wound-two-dark,
+    .oni.damage-3 .boss-wound-two,
+    .oni.damage-3 .boss-wound-two-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-3 .boss-wound-three,
+    .oni.damage-3 .boss-wound-three-dark {
+      opacity: 1;
+    }
+
+    @keyframes playerSwing {
+      0% { opacity: 0; transform: translateX(-50%) translateY(22px) scale(0.92); }
+      20% { opacity: 1; transform: translateX(-50%) translateY(10px) scale(1); }
+      68% { opacity: 1; transform: translateX(-50%) translateY(-12px) scale(1.04); }
+      100% { opacity: 0; transform: translateX(-50%) translateY(-18px) scale(1.02); }
+    }
+
+    @keyframes swordCut {
+      0% { transform: rotate(-58deg); }
+      42% { transform: rotate(28deg); }
+      100% { transform: rotate(54deg); }
+    }
+
+    @keyframes slashArc {
+      0% { opacity: 0; transform: translateX(-50%) translate(36px, 20px) rotate(-34deg) scale(0.55); }
+      35% { opacity: 1; }
+      100% { opacity: 0; transform: translateX(-50%) translate(8px, -44px) rotate(18deg) scale(1.1); }
+    }
+
+    @keyframes oniHitShake {
+      0% { translate: 0 0; }
+      30% { translate: -5px 0; }
+      60% { translate: 5px -2px; }
+      100% { translate: 0 0; }
+    }
+
+    @keyframes hitSpark {
+      0% { opacity: 0; }
+      35% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    @keyframes oniVanish {
+      0% { opacity: 1; transform: translateX(-50%) scale(var(--oni-scale, 1)); }
+      60% { opacity: 1; transform: translateX(-50%) scale(calc(var(--oni-scale, 1) * 1.08)); }
+      100% { opacity: 0; transform: translateX(-50%) scale(calc(var(--oni-scale, 1) * 0.72)) rotate(8deg); }
+    }
+
+    @media (max-width: 760px) {
+      .menu {
+        padding: 16px;
+      }
+
+      .title-card {
+        padding: 18px 18px 16px;
+      }
+
+      .title-kanji {
+        width: 96px;
+        height: 96px;
+        margin: 0 auto 8px;
+        font-size: 3.75rem;
+      }
+
+      .title-kanji::before,
+      .title-kanji::after {
+        top: -21px;
+        width: 27px;
+        height: 42px;
+      }
+
+      .title-kanji::before {
+        left: 15px;
+      }
+
+      .title-kanji::after {
+        right: 15px;
+      }
+
+      .title-stamp {
+        margin-bottom: 8px;
+        padding: 3px 10px 4px;
+        font-size: 0.72rem;
+      }
+
+      .menu-card h1,
+      .menu-card h2 {
+        font-size: clamp(2rem, 10vw, 3.1rem);
+      }
+
+      .menu-card h1 span {
+        margin-top: 8px;
+        font-size: 0.24em;
+      }
+
+      .menu-card p {
+        margin-top: 12px;
+        font-size: 0.92rem;
+        line-height: 1.62;
+      }
+
+      .level-list {
+        margin-top: 12px;
+      }
+
+      .level-button {
+        min-height: 38px;
+        padding: 6px 4px;
+      }
+
+      .level-button strong {
+        font-size: 0.72rem;
+      }
+
+      .key-help {
+        gap: 6px 9px;
+        margin-top: 12px;
+        font-size: 0.72rem;
+      }
+
+      .hud {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .hud div {
+        padding: 7px 6px;
+      }
+
+      .hud span {
+        font-size: 0.58rem;
+      }
+
+      .hud strong {
+        font-size: 0.96rem;
+      }
+    }
+
+    @media (max-width: 820px), (pointer: coarse) {
+      body {
+        overflow: auto;
+      }
+
+      .oni-app {
+        min-height: 100vh;
+      }
+
+      .mobile-lock {
+        display: grid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="oni-app">
+    <header class="oni-header">
+      <a class="oni-brand" href="./index.html" aria-label="T-ROOM ホームへ">
+        <span class="oni-mark">T</span>
+        <span>T-ROOM</span>
+      </a>
+      <a class="oni-back" href="./game.html">ゲーム一覧へ</a>
+    </header>
+
+    <main class="game" id="gameRoot">
+      <section class="hud" aria-label="ゲーム情報">
+        <div><span>Score</span><strong id="scoreText">0</strong></div>
+        <div><span>Time</span><strong id="timeText">60.0</strong></div>
+        <div><span>Life</span><strong id="lifeText">3</strong></div>
+        <div><span>Combo</span><strong id="comboText">0</strong></div>
+        <div><span>Taiji</span><strong id="defeatText">0</strong></div>
+        <div><span>Accuracy</span><strong id="accuracyText">100%</strong></div>
+      </section>
+
+      <section class="stage" aria-label="鬼退治エリア">
+        <div class="stage-stamp" aria-hidden="true">鬼退治</div>
+        <div class="moon"></div>
+        <div class="torii" aria-hidden="true"><span></span><span></span></div>
+        <div class="road"></div>
+        <div class="danger-edge" id="dangerEdge"></div>
+        <div class="player-swing" id="playerSwing" aria-hidden="true"><div class="sword"></div></div>
+        <div class="slash-arc" aria-hidden="true"></div>
+        <div class="oni red" id="oniSprite" aria-hidden="true">
+          <svg class="oni-pixel" viewBox="0 0 160 160" role="img" aria-label="鬼">
+            <rect class="px-shadow" x="34" y="142" width="92" height="10"></rect>
+            <g class="oni-club">
+              <rect class="px-outline" x="115" y="66" width="11" height="66"></rect>
+              <rect class="px-club" x="118" y="70" width="6" height="58"></rect>
+              <rect class="px-outline" x="109" y="48" width="30" height="18"></rect>
+              <rect class="px-club-light" x="113" y="52" width="22" height="10"></rect>
+              <rect class="px-outline" x="113" y="42" width="6" height="8"></rect>
+              <rect class="px-outline" x="128" y="42" width="6" height="8"></rect>
+              <rect class="px-outline" x="139" y="52" width="7" height="8"></rect>
+            </g>
+            <g class="oni-left-arm">
+              <rect class="px-outline" x="18" y="88" width="26" height="14"></rect>
+              <rect class="px-skin-dark" x="22" y="92" width="18" height="6"></rect>
+              <rect class="px-outline" x="14" y="102" width="18" height="22"></rect>
+              <rect class="px-skin" x="18" y="106" width="10" height="14"></rect>
+              <rect class="px-fang" x="10" y="120" width="6" height="6"></rect>
+              <rect class="px-fang" x="20" y="124" width="6" height="6"></rect>
+            </g>
+            <g class="oni-right-arm">
+              <rect class="px-outline" x="116" y="88" width="26" height="14"></rect>
+              <rect class="px-skin-dark" x="120" y="92" width="18" height="6"></rect>
+              <rect class="px-outline" x="132" y="102" width="18" height="22"></rect>
+              <rect class="px-skin" x="136" y="106" width="10" height="14"></rect>
+              <rect class="px-fang" x="144" y="120" width="6" height="6"></rect>
+              <rect class="px-fang" x="134" y="124" width="6" height="6"></rect>
+            </g>
+            <g class="oni-body-pixel">
+              <rect class="px-outline" x="42" y="92" width="76" height="48"></rect>
+              <rect class="px-skin-dark" x="48" y="98" width="64" height="36"></rect>
+              <rect class="px-skin" x="56" y="100" width="48" height="26"></rect>
+              <rect class="px-skin-light" x="62" y="103" width="14" height="8"></rect>
+              <rect class="px-outline" x="48" y="134" width="64" height="10"></rect>
+              <rect class="px-cloth" x="54" y="132" width="16" height="16"></rect>
+              <rect class="px-cloth" x="72" y="132" width="16" height="20"></rect>
+              <rect class="px-cloth" x="90" y="132" width="16" height="16"></rect>
+              <rect class="px-outline" x="48" y="146" width="22" height="8"></rect>
+              <rect class="px-outline" x="90" y="146" width="22" height="8"></rect>
+            </g>
+            <g class="oni-horns">
+              <rect class="px-outline" x="39" y="12" width="20" height="10"></rect>
+              <rect class="px-horn-shadow" x="43" y="16" width="12" height="8"></rect>
+              <rect class="px-outline" x="35" y="22" width="30" height="14"></rect>
+              <rect class="px-horn" x="41" y="24" width="20" height="8"></rect>
+              <rect class="px-outline" x="101" y="12" width="20" height="10"></rect>
+              <rect class="px-horn-shadow" x="105" y="16" width="12" height="8"></rect>
+              <rect class="px-outline" x="95" y="22" width="30" height="14"></rect>
+              <rect class="px-horn" x="99" y="24" width="20" height="8"></rect>
+            </g>
+            <g class="oni-head">
+              <rect class="px-outline" x="50" y="24" width="60" height="12"></rect>
+              <rect class="px-hair" x="54" y="28" width="52" height="8"></rect>
+              <rect class="px-outline" x="42" y="34" width="76" height="12"></rect>
+              <rect class="px-hair" x="46" y="36" width="68" height="8"></rect>
+              <rect class="px-outline" x="34" y="44" width="92" height="58"></rect>
+              <rect class="px-skin-dark" x="40" y="50" width="80" height="46"></rect>
+              <rect class="px-skin" x="48" y="52" width="64" height="38"></rect>
+              <rect class="px-skin-mid" x="38" y="62" width="14" height="22"></rect>
+              <rect class="px-skin-mid" x="108" y="62" width="14" height="22"></rect>
+              <rect class="px-skin-light" x="56" y="54" width="18" height="10"></rect>
+              <rect class="px-outline" x="44" y="58" width="28" height="8"></rect>
+              <rect class="px-outline" x="88" y="58" width="28" height="8"></rect>
+              <rect class="px-eye" x="52" y="66" width="16" height="10"></rect>
+              <rect class="px-pupil" x="60" y="68" width="6" height="8"></rect>
+              <rect class="px-eye" x="92" y="66" width="16" height="10"></rect>
+              <rect class="px-pupil" x="94" y="68" width="6" height="8"></rect>
+              <rect class="px-skin-dark" x="72" y="72" width="16" height="12"></rect>
+              <rect class="px-outline" x="60" y="86" width="40" height="12"></rect>
+              <rect class="px-mouth" x="66" y="88" width="28" height="6"></rect>
+              <rect class="px-fang" x="68" y="96" width="8" height="10"></rect>
+              <rect class="px-fang" x="84" y="96" width="8" height="10"></rect>
+            </g>
+            <g class="oni-damage">
+              <rect class="px-wound-dark wound-one-dark" x="48" y="71" width="28" height="6"></rect>
+              <rect class="px-wound wound-one" x="52" y="69" width="24" height="3"></rect>
+              <rect class="px-wound-dark wound-two-dark" x="86" y="104" width="26" height="6"></rect>
+              <rect class="px-wound wound-two" x="88" y="102" width="22" height="3"></rect>
+              <rect class="px-wound-dark wound-three-dark" x="61" y="116" width="34" height="6"></rect>
+              <rect class="px-wound wound-three" x="64" y="114" width="28" height="3"></rect>
+              <rect class="hit-spark" x="39" y="65" width="8" height="8"></rect>
+              <rect class="hit-spark" x="112" y="78" width="7" height="7"></rect>
+              <rect class="hit-spark" x="79" y="108" width="6" height="6"></rect>
+            </g>
+          </svg>
+        </div>
+      </section>
+
+      <section class="word-panel" aria-live="polite">
+        <div class="display-word" id="displayWord">T-ROOM OniTaiji</div>
+        <div class="romaji" id="romajiGuide">Press Enter</div>
+        <div class="typed" id="typedText">英数入力で遊んでください</div>
+        <div class="battle-text" id="battleText">鬼を斬るタイピングゲーム</div>
+      </section>
+
+      <section class="menu" id="titleScreen">
+        <div class="menu-card title-card">
+          <div class="title-kanji" aria-hidden="true">鬼</div>
+          <div class="title-stamp" aria-hidden="true">鬼退治</div>
+          <h1>T-ROOM OniTaiji <span>鬼を斬るタイピングゲーム</span></h1>
+          <p>言葉を打つ。鬼が迫る。60秒、斬れるだけ斬る。</p>
+          <div class="level-list" id="levelList"></div>
+          <div class="key-help">
+            <span><kbd>Enter</kbd> Start</span>
+            <span><kbd>↑↓</kbd> Level</span>
+            <span><kbd>Esc</kbd> Title</span>
+            <span><kbd>F2</kbd> Sound</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="pause" id="pauseScreen" hidden>
+        <div class="menu-card">
+          <h2>PAUSE</h2>
+          <p>Enterで続ける。Escでもう一度タイトルへ戻ります。</p>
+        </div>
+      </section>
+
+      <section class="result" id="resultScreen" hidden>
+        <div class="menu-card">
+          <h2 id="rankText">RESULT</h2>
+          <p id="resultMessage">また鬼が来ます。</p>
+          <div class="result-grid">
+            <div><span>討伐数</span><strong id="resultDefeat">0体</strong></div>
+            <div><span>Score</span><strong id="resultScore">0</strong></div>
+            <div><span>Accuracy</span><strong id="resultAccuracy">100%</strong></div>
+            <div><span>Max Combo</span><strong id="resultCombo">0</strong></div>
+            <div><span>Keys</span><strong id="resultKeys">0</strong></div>
+            <div><span>Best</span><strong id="resultBest">0体</strong></div>
+          </div>
+          <div class="key-help">
+            <span><kbd>Enter</kbd> Retry</span>
+            <span><kbd>Esc</kbd> Title</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="mobile-lock" hidden>
+        <div class="menu-card">
+          <h2>PC専用です</h2>
+          <p>このゲームはPCキーボード向けです。キーボードのある環境で遊んでください。</p>
+        </div>
+      </section>
+
+      <section class="boss-preview" id="bossPreview" hidden>
+        <div class="boss-board">
+          <h2>Lv.3 / Lv.4 Boss Candidate</h2>
+          <p>修羅・地獄で登場するボス鬼です。Lv.3 / Lv.4ではこの4体からランダムに出現します。</p>
+          <div class="boss-grid" id="bossGrid"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const CONFIG = {
+      gameSeconds: 60,
+      enemySeconds: 6.5,
+      life: 3,
+      historySize: 30,
+      storageKey: "t-room-onitaiji-records",
+      levels: [
+        { id: 1, name: "Lv.1 入門", detail: "短い単語や一言をたくさん斬る", multiplier: 1, guideOpacity: 1 },
+        { id: 2, name: "Lv.2 通常", detail: "日常フレーズを安定して打つ", multiplier: 1.45, guideOpacity: 0.92 },
+        { id: 3, name: "Lv.3 修羅", detail: "丁寧文や長めの言葉を速く打つ", multiplier: 2, guideOpacity: 0.82 },
+        { id: 4, name: "Lv.4 地獄", detail: "日常文を読み取って斬る", multiplier: 2.8, guideOpacity: 0.72 }
+      ],
+      enemyTypes: [
+        { name: "red", speed: 1.05, score: 1 },
+        { name: "blue", speed: 0.95, score: 1.05 },
+        { name: "gold", speed: 1.16, score: 1.4 },
+        { name: "rock", speed: 0.8, score: 1.25 }
+      ],
+      distance: {
+        start: 100,
+        correctPush: 1.7,
+        missPenalty: 12,
+        lifeLossRetreat: 82
+      }
+    };
+
+    const BOSS_CANDIDATES = [
+      {
+        id: "musha",
+        className: "is-musha",
+        title: "武者鬼",
+        level: "Lv.3候補",
+        note: "兜と肩当て。強敵感はあるが、まだ倒せそうな中ボス。"
+      },
+      {
+        id: "kurogane",
+        className: "is-kurogane",
+        title: "黒鉄鬼王",
+        level: "Lv.4候補",
+        note: "黒い鎧と赤い目。地獄のラスボス感を一番出せる。"
+      },
+      {
+        id: "hakumen",
+        className: "is-hakumen",
+        title: "白面鬼",
+        level: "Lv.4候補",
+        note: "白い面と金角。静かに怖いタイプの強敵。"
+      },
+      {
+        id: "enkaku",
+        className: "is-enkaku",
+        title: "炎角鬼",
+        level: "Lv.3-4候補",
+        note: "炎の髪と赤黒い体。分かりやすく攻撃的。"
+      }
+    ];
+
+    function bossCandidateSvg(type) {
+      const extra = {
+        musha: `
+          <rect class="boss-px-outline" x="42" y="20" width="76" height="14"></rect>
+          <rect class="boss-px-armor" x="48" y="24" width="64" height="8"></rect>
+          <rect class="boss-px-accent" x="74" y="10" width="12" height="28"></rect>
+          <rect class="boss-px-horn" x="66" y="18" width="28" height="8"></rect>
+          <rect class="boss-px-outline" x="24" y="84" width="30" height="22"></rect>
+          <rect class="boss-px-armor" x="28" y="88" width="22" height="14"></rect>
+          <rect class="boss-px-outline" x="106" y="84" width="30" height="22"></rect>
+          <rect class="boss-px-armor" x="110" y="88" width="22" height="14"></rect>
+          <rect class="boss-px-outline" x="125" y="34" width="8" height="100"></rect>
+          <rect class="boss-px-accent" x="127" y="38" width="4" height="92"></rect>
+          <rect class="boss-px-horn" x="120" y="26" width="18" height="12"></rect>
+        `,
+        kurogane: `
+          <rect class="boss-px-outline" x="35" y="16" width="18" height="28"></rect>
+          <rect class="boss-px-horn" x="39" y="18" width="10" height="22"></rect>
+          <rect class="boss-px-outline" x="107" y="16" width="18" height="28"></rect>
+          <rect class="boss-px-horn" x="111" y="18" width="10" height="22"></rect>
+          <rect class="boss-px-outline" x="51" y="24" width="58" height="14"></rect>
+          <rect class="boss-px-armor" x="57" y="28" width="46" height="8"></rect>
+          <rect class="boss-px-accent" x="74" y="10" width="12" height="16"></rect>
+          <rect class="boss-px-outline" x="38" y="90" width="84" height="42"></rect>
+          <rect class="boss-px-armor" x="44" y="96" width="72" height="30"></rect>
+          <rect class="boss-px-accent" x="58" y="104" width="44" height="6"></rect>
+        `,
+        hakumen: `
+          <rect class="boss-px-outline" x="42" y="25" width="76" height="12"></rect>
+          <rect class="boss-px-horn" x="48" y="28" width="64" height="6"></rect>
+          <rect class="boss-px-outline" x="50" y="42" width="60" height="62"></rect>
+          <rect class="boss-px-mid" x="56" y="48" width="48" height="50"></rect>
+          <rect class="boss-px-outline" x="62" y="64" width="12" height="5"></rect>
+          <rect class="boss-px-outline" x="86" y="64" width="12" height="5"></rect>
+          <rect class="boss-px-accent" x="74" y="76" width="12" height="5"></rect>
+          <rect class="boss-px-outline" x="50" y="108" width="60" height="34"></rect>
+          <rect class="boss-px-armor" x="56" y="114" width="48" height="22"></rect>
+        `,
+        enkaku: `
+          <rect class="boss-px-outline" x="48" y="14" width="16" height="28"></rect>
+          <rect class="boss-px-hair" x="52" y="18" width="8" height="22"></rect>
+          <rect class="boss-px-outline" x="68" y="8" width="16" height="34"></rect>
+          <rect class="boss-px-hair" x="72" y="12" width="8" height="28"></rect>
+          <rect class="boss-px-outline" x="92" y="14" width="16" height="28"></rect>
+          <rect class="boss-px-hair" x="96" y="18" width="8" height="22"></rect>
+          <rect class="boss-px-outline" x="28" y="88" width="28" height="26"></rect>
+          <rect class="boss-px-accent" x="32" y="92" width="20" height="18"></rect>
+          <rect class="boss-px-outline" x="104" y="88" width="28" height="26"></rect>
+          <rect class="boss-px-accent" x="108" y="92" width="20" height="18"></rect>
+          <rect class="boss-px-accent" x="58" y="126" width="44" height="8"></rect>
+        `
+      }[type] || "";
+
+      return `
+        <svg class="boss-sprite" viewBox="0 0 160 160" aria-hidden="true">
+          <rect class="boss-px-shadow" x="30" y="146" width="100" height="10"></rect>
+          <rect class="boss-px-outline" x="18" y="88" width="24" height="44"></rect>
+          <rect class="boss-px-dark" x="22" y="94" width="16" height="30"></rect>
+          <rect class="boss-px-outline" x="118" y="88" width="24" height="44"></rect>
+          <rect class="boss-px-dark" x="122" y="94" width="16" height="30"></rect>
+          <rect class="boss-px-outline" x="38" y="86" width="84" height="56"></rect>
+          <rect class="boss-px-dark" x="44" y="92" width="72" height="44"></rect>
+          <rect class="boss-px-armor" x="52" y="96" width="56" height="30"></rect>
+          <rect class="boss-px-accent" x="62" y="132" width="12" height="18"></rect>
+          <rect class="boss-px-accent" x="86" y="132" width="12" height="18"></rect>
+          <rect class="boss-px-outline" x="36" y="22" width="24" height="18"></rect>
+          <rect class="boss-px-horn" x="42" y="24" width="14" height="12"></rect>
+          <rect class="boss-px-outline" x="100" y="22" width="24" height="18"></rect>
+          <rect class="boss-px-horn" x="104" y="24" width="14" height="12"></rect>
+          ${extra}
+          <rect class="boss-px-outline" x="36" y="38" width="88" height="58"></rect>
+          <rect class="boss-px-dark" x="42" y="44" width="76" height="46"></rect>
+          <rect class="boss-px-skin" x="50" y="48" width="60" height="36"></rect>
+          <rect class="boss-px-mid" x="58" y="50" width="20" height="10"></rect>
+          <rect class="boss-px-outline" x="48" y="58" width="26" height="8"></rect>
+          <rect class="boss-px-outline" x="86" y="58" width="26" height="8"></rect>
+          <rect class="boss-px-eye" x="56" y="66" width="15" height="10"></rect>
+          <rect class="boss-px-pupil" x="62" y="68" width="6" height="8"></rect>
+          <rect class="boss-px-eye" x="90" y="66" width="15" height="10"></rect>
+          <rect class="boss-px-pupil" x="92" y="68" width="6" height="8"></rect>
+          <rect class="boss-px-dark" x="72" y="73" width="16" height="10"></rect>
+          <rect class="boss-px-outline" x="62" y="86" width="36" height="10"></rect>
+          <rect class="boss-px-fang" x="66" y="94" width="8" height="12"></rect>
+          <rect class="boss-px-fang" x="86" y="94" width="8" height="12"></rect>
+          <rect class="boss-px-wound-dark boss-wound-one-dark" x="48" y="72" width="30" height="6"></rect>
+          <rect class="boss-px-wound boss-wound-one" x="52" y="70" width="25" height="3"></rect>
+          <rect class="boss-px-wound-dark boss-wound-two-dark" x="84" y="108" width="32" height="6"></rect>
+          <rect class="boss-px-wound boss-wound-two" x="88" y="106" width="26" height="3"></rect>
+          <rect class="boss-px-wound-dark boss-wound-three-dark" x="57" y="121" width="42" height="6"></rect>
+          <rect class="boss-px-wound boss-wound-three" x="61" y="119" width="35" height="3"></rect>
+          <rect class="hit-spark" x="37" y="66" width="8" height="8"></rect>
+          <rect class="hit-spark" x="112" y="78" width="7" height="7"></rect>
+          <rect class="hit-spark" x="80" y="112" width="6" height="6"></rect>
+        </svg>
+      `;
+    }
+
+    const KANA_ROMAN = {
+      "あ": ["a"], "い": ["i"], "う": ["u"], "え": ["e"], "お": ["o"],
+      "か": ["ka"], "き": ["ki"], "く": ["ku"], "け": ["ke"], "こ": ["ko"],
+      "さ": ["sa"], "し": ["shi", "si"], "す": ["su"], "せ": ["se"], "そ": ["so"],
+      "た": ["ta"], "ち": ["chi", "ti"], "つ": ["tsu", "tu"], "て": ["te"], "と": ["to"],
+      "な": ["na"], "に": ["ni"], "ぬ": ["nu"], "ね": ["ne"], "の": ["no"],
+      "は": ["ha"], "ひ": ["hi"], "ふ": ["fu", "hu"], "へ": ["he"], "ほ": ["ho"],
+      "ま": ["ma"], "み": ["mi"], "む": ["mu"], "め": ["me"], "も": ["mo"],
+      "や": ["ya"], "ゆ": ["yu"], "よ": ["yo"],
+      "ら": ["ra"], "り": ["ri"], "る": ["ru"], "れ": ["re"], "ろ": ["ro"],
+      "わ": ["wa"], "を": ["wo", "o"], "ん": ["n", "nn"],
+      "が": ["ga"], "ぎ": ["gi"], "ぐ": ["gu"], "げ": ["ge"], "ご": ["go"],
+      "ざ": ["za"], "じ": ["ji", "zi"], "ず": ["zu"], "ぜ": ["ze"], "ぞ": ["zo"],
+      "だ": ["da"], "ぢ": ["ji", "di"], "づ": ["zu", "du"], "で": ["de"], "ど": ["do"],
+      "ば": ["ba"], "び": ["bi"], "ぶ": ["bu"], "べ": ["be"], "ぼ": ["bo"],
+      "ぱ": ["pa"], "ぴ": ["pi"], "ぷ": ["pu"], "ぺ": ["pe"], "ぽ": ["po"],
+      "ぁ": ["la", "xa"], "ぃ": ["li", "xi"], "ぅ": ["lu", "xu"], "ぇ": ["le", "xe"], "ぉ": ["lo", "xo"],
+      "ゃ": ["lya", "xya"], "ゅ": ["lyu", "xyu"], "ょ": ["lyo", "xyo"], "ー": ["-"]
+    };
+
+    const DIGRAPHS = {
+      "きゃ": ["kya"], "きゅ": ["kyu"], "きょ": ["kyo"],
+      "しゃ": ["sha", "sya"], "しゅ": ["shu", "syu"], "しょ": ["sho", "syo"],
+      "ちゃ": ["cha", "tya", "cya"], "ちゅ": ["chu", "tyu", "cyu"], "ちょ": ["cho", "tyo", "cyo"],
+      "にゃ": ["nya"], "にゅ": ["nyu"], "にょ": ["nyo"],
+      "ひゃ": ["hya"], "ひゅ": ["hyu"], "ひょ": ["hyo"],
+      "みゃ": ["mya"], "みゅ": ["myu"], "みょ": ["myo"],
+      "りゃ": ["rya"], "りゅ": ["ryu"], "りょ": ["ryo"],
+      "ぎゃ": ["gya"], "ぎゅ": ["gyu"], "ぎょ": ["gyo"],
+      "じゃ": ["ja", "jya", "zya"], "じゅ": ["ju", "jyu", "zyu"], "じょ": ["jo", "jyo", "zyo"],
+      "びゃ": ["bya"], "びゅ": ["byu"], "びょ": ["byo"],
+      "ぴゃ": ["pya"], "ぴゅ": ["pyu"], "ぴょ": ["pyo"]
+    };
+
+    const levelThreeSeed = `
+よろしくお願いします|よろしくおねがいします,返事をお願いします|へんじをおねがいします,確認をお願いします|かくにんをおねがいします,明日また連絡します|あしたまたれんらくします,本日はお休みします|ほんじつはおやすみします,少し遅れて行きます|すこしおくれていきます,先に始めてください|さきにはじめてください,後ほど確認します|のちほどかくにんします,資料を読み返します|しりょうをよみかえします,予定を変更します|よていをへんこうします,時間を確認します|じかんをかくにんします,今日は早めに帰ります|きょうははやめにかえります,朝の支度を始めます|あさのしたくをはじめます,靴をそろえます|くつをそろえます,窓を少し開けます|まどをすこしあけます,温かいお茶を飲みます|あたたかいおちゃをのみます,机の上を片付けます|つくえのうえをかたづけます,本棚を整理します|ほんだなをせいりします,近くの店へ行きます|ちかくのみせへいきます,帰り道に寄ります|かえりみちによります,雨なので傘を持ちます|あめなのでかさをもちます,風が強くなりました|かぜがつよくなりました,空が少し晴れました|そらがすこしはれました,花に水をやります|はなにみずをやります,朝顔が咲きました|あさがおがさきました,猫が窓辺で眠ります|ねこがまどべでねむります,犬と公園へ行きます|いぬとこうえんへいきます,夕焼けを見ました|ゆうやけをみました,月がきれいでした|つきがきれいでした,星がよく見えます|ほしがよくみえます,静かな夜になりました|しずかなよるになりました,明日の準備をします|あしたのじゅんびをします,忘れ物を確認します|わすれものをかくにんします,鍵を閉めました|かぎをしめました,電車に乗ります|でんしゃにのります,駅で待ち合わせます|えきでまちあわせます,友人に連絡します|ゆうじんにれんらくします,家族に電話します|かぞくにでんわします,夕飯を作ります|ゆうはんをつくります,ご飯を炊きます|ごはんをたきます,野菜を洗います|やさいをあらいます,魚を焼きます|さかなをやきます,味噌汁を温めます|みそしるをあたためます,皿を並べます|さらをならべます,食後に片付けます|しょくごにかたづけます,少し散歩します|すこしさんぽします,体を休めます|からだをやすめます,早めに眠ります|はやめにねむります,朝まで待ちます|あさまでまちます,少し考えます|すこしかんがえます,今から始めます|いまからはじめます,まず一つ進めます|まずひとつすすめます,ゆっくり続けます|ゆっくりつづけます,焦らず進めます|あせらずすすめます,必要なら休みます|ひつようならやすみます,無理せず向かいます|むりせずむかいます,大切に使います|たいせつにつかいます,丁寧に書きます|ていねいにかきます,声に出して読みます|こえにだしてよみます,もう一度試します|もういちどためします,結果を見直します|けっかをみなおします,次に活かします|つぎにいかします,自分で決めます|じぶんできめます,ここから変えます|ここからかえます,少しだけ前へ進みます|すこしだけまえへすすみます,手順を確かめます|てじゅんをたしかめます,メモを残します|めもをのこします,予定表に書きます|よていひょうにかきます,買い物へ行きます|かいものへいきます,牛乳を買います|ぎゅうにゅうをかいます,パンを買います|ぱんをかいます,支払いを済ませます|しはらいをすませます,荷物を受け取ります|にもつをうけとります,郵便を出します|ゆうびんをだします,自転車で向かいます|じてんしゃでむかいます,信号で止まります|しんごうでとまります,横断歩道を渡ります|おうだんほどうをわたります,角を右に曲がります|かどをみぎにまがります,少し左へ寄ります|すこしひだりへよります,坂道を上ります|さかみちをのぼります,橋を渡ります|はしをわたります,海辺を歩きます|うみべをあるきます,山道を登ります|やまみちをのぼります,森の中を進みます|もりのなかをすすみます,図書館で借ります|としょかんでかります,ノートを開きます|のーとをひらきます,最初の一行を書きます|さいしょのいちぎょうをかきます,名前を記入します|なまえをきにゅうします,日付を入れます|ひづけをいれます,返事を待ちます|へんじをまちます,相手の話を聞きます|あいてのはなしをききます,自分の考えを話します|じぶんのかんがえをはなします,ありがとうと伝えます|ありがとうとつたえます,ごめんねと言います|ごめんねといいます,また会いましょう|またあいましょう,気持ちを整えます|きもちをととのえます,深く息を吸います|ふかくいきをすいます,肩の力を抜きます|かたのちからをぬきます,目を閉じて休みます|めをとじてやすみます,水を一口飲みます|みずをひとくちのみます,画面から離れます|がめんからはなれます,部屋の明かりを消します|へやのあかりをけします,カーテンを開けます|かーてんをあけます,洗濯物を干します|せんたくものをほします,服をたたみます|ふくをたたみます,靴下を探します|くつしたをさがします,時計を見ます|とけいをみます,予定より早く着きます|よていよりはやくつきます,今日はよく歩きました|きょうはよくあるきました,明日は晴れそうです|あしたははれそうです,少し肌寒い朝です|すこしはだざむいあさです,夕方から雨です|ゆうがたからあめです,新しい道を通ります|あたらしいみちをとおります,古い店を見つけます|ふるいみせをみつけます,小さな声で話します|ちいさなこえではなします,大きな音に驚きます|おおきなおとにおどろきます,ゆっくり返事します|ゆっくりへんじします,きちんと保存します|きちんとほぞんします,使い方を覚えます|つかいかたをおぼえます,最後まで読みます|さいごまでよみます
+`;
+
+    const levelFourSeed = `
+これからよろしくお願いいたします|これからよろしくおねがいいたします,本日はお時間をいただきありがとうございます|ほんじつはおじかんをいただきありがとうございます,明日の予定をもう一度確認します|あしたのよていをもういちどかくにんします,朝顔に毎日水をやるのが楽しみです|あさがおにまいにちみずをやるのがたのしみです,帰り道に見た夕焼けがとてもきれいでした|かえりみちにみたゆうやけがとてもきれいでした,机の上を片付けると気持ちが軽くなります|つくえのうえをかたづけるときもちがかるくなります,雨の日は温かいお茶を飲みたくなります|あめのひはあたたかいおちゃをのみたくなります,窓を開けると静かな風が部屋に入ってきました|まどをあけるとしずかなかぜがへやにはいってきました,新しいノートに最初の一行を書きました|あたらしいのーとにさいしょのいちぎょうをかきました,朝の空気が少し冷たく感じました|あさのくうきがすこしつめたくかんじました,近所の花が少しずつ咲き始めました|きんじょのはながすこしずつさきはじめました,今日はいつもより早く家を出ました|きょうはいつもよりはやくいえをでました,夜になったら明日の準備をします|よるになったらあしたのじゅんびをします,大切なことを忘れないようにメモします|たいせつなことをわすれないようにめもします,無理をしすぎないように今日は早めに休みます|むりをしすぎないようにきょうははやめにやすみます,確認してから落ち着いて返信します|かくにんしてからおちついてへんしんします,少し休んでからもう一度始めます|すこしやすんでからもういちどはじめます,駅に着いたらすぐに連絡します|えきについたらすぐにれんらくします,時間があれば本屋に寄ります|じかんがあればほんやによります,手を洗ってから夕飯を作ります|てをあらってからゆうはんをつくります,風が強いので洗濯物を早めに取り込みます|かぜがつよいのでせんたくものをはやめにとりこみます,雨が降りそうなので傘を持って出ます|あめがふりそうなのでかさをもってでます,夕方の空を見ながら少し歩きました|ゆうがたのそらをみながらすこしあるきました,今日は静かな音楽を聞きながら作業します|きょうはしずかなおんがくをききながらさぎょうします,昨日より少しだけ前に進めました|きのうよりすこしだけまえにすすめました,うまくいかない日も記録だけは残します|うまくいかないひもきろくだけはのこします,迷ったときは一度深呼吸します|まよったときはいちどしんこきゅうします,先に小さな用事から片付けます|さきにちいさなようじからかたづけます,返事が遅くなってしまい申し訳ありません|へんじがおそくなってしまいもうしわけありません,詳細を確認してからあらためて連絡します|しょうさいをかくにんしてからあらためてれんらくします,必要なものを一覧にしてから買い物へ行きます|ひつようなものをいちらんにしてからかいものへいきます,鍵を閉めたか不安になりもう一度確認しました|かぎをしめたかふあんになりもういちどかくにんしました,早く着きすぎたので駅前で少し待ちます|はやくつきすぎたのでえきまえですこしまちます,予定が変わったので集合時間を調整します|よていがかわったのでしゅうごうじかんをちょうせいします,今日は体調を見ながら無理せず進めます|きょうはたいちょうをみながらむりせずすすめます,机に向かう前に部屋の空気を入れ替えます|つくえにむかうまえにへやのくうきをいれかえます,読みかけの本を夜に少しだけ読みます|よみかけのほんをよるにすこしだけよみます,台所を片付けてからお茶を入れます|だいどころをかたづけてからおちゃをいれます,玄関の靴をそろえると気分が整います|げんかんのくつをそろえるときぶんがととのいます,古い写真を見返して少し懐かしくなりました|ふるいしゃしんをみかえしてすこしなつかしくなりました,友人からの連絡を待ちながら夕飯を作ります|ゆうじんからのれんらくをまちながらゆうはんをつくります,仕事の前に今日やることを三つだけ決めます|しごとのまえにきょうやることをみっつだけきめます,予定表を見ながら午後の時間を調整します|よていひょうをみながらごごのじかんをちょうせいします,眠る前に明日の持ち物を確認します|ねむるまえにあしたのもちものをかくにんします,朝起きたらまずカーテンを開けます|あさおきたらまずかーてんをあけます,寒い日は温かい服を選んで出かけます|さむいひはあたたかいふくをえらんででかけます,暑い日は水分を多めに取るようにします|あついひはすいぶんをおおめにとるようにします,電車が遅れているので少し早めに出ます|でんしゃがおくれているのですこしはやめにでます,道に迷ったので地図を見ながら戻ります|みちにまよったのでちずをみながらもどります,近くの公園で季節の花を見つけました|ちかくのこうえんできせつのはなをみつけました,小さな変化に気づける日でありたいです|ちいさなへんかにきづけるひでありたいです,忙しい日ほど一度手を止めて確認します|いそがしいひほどいちどてをとめてかくにんします,失敗したところを次に直せば大丈夫です|しっぱいしたところをつぎになおせばだいじょうぶです,完璧ではなくてもまず終わらせます|かんぺきではなくてもまずおわらせます,気になっていた用事を今日ひとつ片付けます|きになっていたようじをきょうひとつかたづけます,しばらく考えてから自分で決めました|しばらくかんがえてからじぶんできめました,必要な言葉だけを選んで短く伝えます|ひつようなことばだけをえらんでみじかくつたえます,相手の話を最後まで聞いてから答えます|あいてのはなしをさいごまできいてからこたえます,慌てて送る前に文章を読み返します|あわてておくるまえにぶんしょうをよみかえします,今できる範囲で少しずつ整えていきます|いまできるはんいですこしずつととのえていきます,予定通りにいかなくても落ち着いて直します|よていどおりにいかなくてもおちついてなおします,夕飯のあとで明日の資料を確認します|ゆうはんのあとであしたのしりょうをかくにんします,朝のうちに洗濯物を干しておきます|あさのうちにせんたくものをほしておきます,帰る前に忘れ物がないか確かめます|かえるまえにわすれものがないかたしかめます,いつもの道でも空の色は少し違います|いつものみちでもそらのいろはすこしちがいます,久しぶりに会う人へ丁寧に挨拶します|ひさしぶりにあうひとへていねいにあいさつします,新しい場所へ行くときは早めに出ます|あたらしいばしょへいくときははやめにでます,余裕があるうちに必要な準備を済ませます|よゆうがあるうちにひつようなじゅんびをすませます,その場で決めずに一度持ち帰って考えます|そのばできめずにいちどもちかえってかんがえます,疲れたときは短い休憩を入れます|つかれたときはみじかいきゅうけいをいれます,大事な連絡は落ち着いてから返します|だいじなれんらくはおちついてからかえします,少し遠回りして静かな道を選びました|すこしとおまわりしてしずかなみちをえらびました,いつもより早く眠れたので朝が楽でした|いつもよりはやくねむれたのであさがらくでした,昨日の反省を今日の行動に変えていきます|きのうのはんせいをきょうのこうどうにかえていきます,知らない言葉を見つけたらあとで調べます|しらないことばをみつけたらあとでしらべます,読み終えた本を本棚の元の場所へ戻します|よみおえたほんをほんだなのもとのばしょへもどします,コップに水を入れて机の横に置きます|こっぷにみずをいれてつくえのよこにおきます,気持ちが重いときは窓の外を眺めます|きもちがおもいときはまどのそとをながめます,何も進まない日でも生活は続いていきます|なにもすすまないひでもせいかつはつづいていきます,小さな約束を守ることから始めます|ちいさなやくそくをまもることからはじめます,人に頼ることも大切な選択のひとつです|ひとにたよることもたいせつなせんたくのひとつです,伝え方を変えるだけで空気が柔らかくなります|つたえかたをかえるだけでくうきがやわらかくなります,早く答えを出すより納得して決めたいです|はやくこたえをだすよりなっとくしてきめたいです,まだ途中でも形になったところまで残します|まだとちゅうでもかたちになったところまでのこします,今日の自分にできる量だけ進めます|きょうのじぶんにできるりょうだけすすめます,間違いに気づいたので静かに直しました|まちがいにきづいたのでしずかになおしました,先延ばしにしていた用事を朝のうちに済ませます|さきのばしにしていたようじをあさのうちにすませます,夜のうちに鞄の中を整理しておきます|よるのうちにかばんのなかをせいりしておきます,好きなものを少しだけ大事にする時間です|すきなものをすこしだけだいじにするじかんです,いつもの席で温かい飲み物を頼みました|いつものせきであたたかいのみものをたのみました,道端の花が咲いていることに気づきました|みちばたのはながさいていることにきづきました,何気ない一日にも残しておきたい場面があります|なにげないいちにちにものこしておきたいばめんがあります,急がなくても続けていれば少しずつ進みます|いそがなくてもつづけていればすこしずつすすみます,できなかった理由より次にできる形を探します|できなかったりゆうよりつぎにできるかたちをさがします,自分の言葉で説明できるまで考えます|じぶんのことばでせつめいできるまでかんがえます,予定を詰めすぎないように余白を残します|よていをつめすぎないようによはくをのこします,返事をする前に相手の意図を考えます|へんじをするまえにあいてのいとをかんがえます,画面を閉じて目を休める時間を作ります|がめんをとじてめをやすめるじかんをつくります,お礼の言葉は早めに伝えるようにします|おれいのことばははやめにつたえるようにします,今日の出来事を短くノートに残します|きょうのできごとをみじかくのーとにのこします,朝の散歩で冷たい空気を吸いました|あさのさんぽでつめたいくうきをすいました,夕方の風が少しだけ秋らしくなりました|ゆうがたのかぜがすこしだけあきらしくなりました,必要以上に急がず安全に帰ります|ひつよういじょうにいそがずあんぜんにかえります,大切な予定なので前の日に確認します|たいせつなよていなのでまえのひにかくにんします,気になることはそのままにせず聞いてみます|きになることはそのままにせずきいてみます,手元の作業を終えてから次へ進みます|てもとのさぎょうをおえてからつぎへすすみます,深く考えすぎたので一度休憩します|ふかくかんがえすぎたのでいちどきゅうけいします,早めに出たおかげで落ち着いて着きました|はやめにでたおかげでおちついてつきました,小さな失敗を笑って次へ進みます|ちいさなしっぱいをわらってつぎへすすみます,荷物を軽くしてから出かけることにしました|にもつをかるくしてからでかけることにしました,いつも使う道具をきれいに拭きました|いつもつかうどうぐをきれいにふきました,昼休みに外へ出て空を見上げました|ひるやすみにそとへでてそらをみあげました,予定より遅れても最後まで丁寧に進めます|よていよりおくれてもさいごまでていねいにすすめます,忙しい朝でも花に水をやる時間は残します|いそがしいあさでもはなにみずをやるじかんはのこします,迷ったら今いちばん大切なことから選びます|まよったらいまいちばんたいせつなことからえらびます,今日はできるところまでで十分だと思います|きょうはできるところまででじゅうぶんだとおもいます,うまく言えない気持ちも少しずつ言葉にします|うまくいえないきもちもすこしずつことばにします,一度立ち止まることで見えるものもあります|いちどたちどまることでみえるものもあります,明日の自分が困らないように準備します|あしたのじぶんがこまらないようにじゅんびします,静かな夜に今日のことを少し振り返ります|しずかなよるにきょうのことをすこしふりかえります
+`;
+
+    const levelOneSeed = `
+朝|あさ,昼|ひる,夜|よる,今日|きょう,明日|あした,昨日|きのう,空|そら,雨|あめ,風|かぜ,雪|ゆき,雲|くも,月|つき,星|ほし,海|うみ,山|やま,川|かわ,森|もり,道|みち,駅|えき,町|まち,家|いえ,庭|にわ,部屋|へや,窓|まど,机|つくえ,椅子|いす,本|ほん,紙|かみ,ペン|ぺん,鍵|かぎ,靴|くつ,傘|かさ,服|ふく,時計|とけい,鞄|かばん,財布|さいふ,水|みず,お茶|おちゃ,ご飯|ごはん,パン|ぱん,卵|たまご,魚|さかな,肉|にく,野菜|やさい,果物|くだもの,花|はな,朝顔|あさがお,桜|さくら,草|くさ,木|き,石|いし,砂|すな,猫|ねこ,犬|いぬ,鳥|とり,虫|むし,カエル|かえる,音|おと,声|こえ,手|て,足|あし,目|め,耳|みみ,心|こころ,夢|ゆめ,時間|じかん,予定|よてい,返事|へんじ,電話|でんわ,手紙|てがみ,写真|しゃしん,地図|ちず,荷物|にもつ,電車|でんしゃ,自転車|じてんしゃ,信号|しんごう,橋|はし,坂道|さかみち,公園|こうえん,図書館|としょかん,学校|がっこう,店|みせ,台所|だいどころ,玄関|げんかん,洗濯|せんたく,掃除|そうじ,散歩|さんぽ,休憩|きゅうけい,眠る|ねむる,起きる|おきる,読む|よむ,書く|かく,見る|みる,聞く|きく,話す|はなす,歩く|あるく,走る|はしる,帰る|かえる,行く|いく,待つ|まつ,急ぐ|いそぐ,休む|やすむ,笑う|わらう,育つ|そだつ,咲く|さく,晴れる|はれる,降る|ふる,開ける|あける,閉める|しめる,探す|さがす,選ぶ|えらぶ,戻る|もどる,進む|すすむ,止まる|とまる,小さい|ちいさい,大きい|おおきい,近い|ちかい,遠い|とおい,早い|はやい,遅い|おそい,温かい|あたたかい,冷たい|つめたい,静か|しずか,元気|げんき,大切|たいせつ,大丈夫|だいじょうぶ,ありがとう|ありがとう,よろしく|よろしく,またね|またね
+`;
+
+    const levelTwoSeed = `
+おはようございます|おはようございます,こんにちは|こんにちは,こんばんは|こんばんは,おやすみなさい|おやすみなさい,ありがとうございます|ありがとうございます,よろしくお願いします|よろしくおねがいします,いってきます|いってきます,いってらっしゃい|いってらっしゃい,ただいま帰りました|ただいまかえりました,おかえりなさい|おかえりなさい,また明日会いましょう|またあしたあいましょう,少し待ってください|すこしまってください,もう一度お願いします|もういちどおねがいします,気をつけて帰ってね|きをつけてかえってね,水を一杯飲みます|みずをいっぱいのみます,本を少し読みます|ほんをすこしよみます,外の空を見ます|そとのそらをみます,駅まで歩きます|えきまであるきます,傘を持って出ます|かさをもってでます,手を洗ってきます|てをあらってきます,早めに寝ます|はやめにねます,朝ごはんを食べます|あさごはんをたべます,昼休みに歩きます|ひるやすみにあるきます,帰る時間です|かえるじかんです,花がきれいに咲きます|はながきれいにさきます,風が少し吹いています|かぜがすこしふいています,雨が静かに降ります|あめがしずかにふります,空が明るくなりました|そらがあかるくなりました,猫が窓辺で眠ります|ねこがまどべでねむります,犬が庭を走ります|いぬがにわをはしります,机をきれいに拭きます|つくえをきれいにふきます,部屋の窓を開けます|へやのまどをあけます,玄関の鍵を閉めます|げんかんのかぎをしめます,新しい靴を履きます|あたらしいくつをはきます,温かいお茶を入れます|あたたかいおちゃをいれます,少しだけ休みます|すこしだけやすみます,あとで連絡します|あとでれんらくします,またあとで話します|またあとではなします,今日は助かりました|きょうはたすかりました,元気に過ごしています|げんきにすごしています,落ち着いて始めます|おちついてはじめます,ゆっくり続けます|ゆっくりつづけます,無理せず休みます|むりせずやすみます,前を向いて歩きます|まえをむいてあるきます,右の道へ進みます|みぎのみちへすすみます,左の角を曲がります|ひだりのかどをまがります,声に出して読みます|こえにだしてよみます,紙に名前を書きます|かみになまえをかきます,音をよく聞きます|おとをよくききます,庭に水をまきます|にわにみずをまきます,春の風を感じます|はるのかぜをかんじます,夏の朝が好きです|なつのあさがすきです,秋の空を見上げます|あきのそらをみあげます,冬の夜は静かです|ふゆのよるはしずかです,月が丸く見えます|つきがまるくみえます,星が遠く光ります|ほしがとおくひかります,海まで歩きます|うみまであるきます,山の道を進みます|やまのみちをすすみます,町の店へ入ります|まちのみせへはいります,ご飯をよそいます|ごはんをよそいます,いただきます|いただきます,ごちそうさまでした|ごちそうさまでした,また会いましょう|またあいましょう,すぐに確認します|すぐにかくにんします,準備を始めます|じゅんびをはじめます,部屋を片付けます|へやをかたづけます,大切に使います|たいせつにつかいます,楽しい一日でした|たのしいいちにちでした,静かな朝です|しずかなあさです,明るい声です|あかるいこえです,小さな花です|ちいさなはなです,冷たい水です|つめたいみずです,温かい部屋です|あたたかいへやです,新しい本です|あたらしいほんです,古い道です|ふるいみちです,白い雲です|しろいくもです,黒い靴です|くろいくつです,赤い花です|あかいはなです,青い空です|あおいそらです,丸い石です|まるいいしです,軽い荷物です|かるいにもつです,重い箱です|おもいはこです,短い文です|みじかいぶんです,長い道です|ながいみちです,広い部屋です|ひろいへやです,狭い道です|せまいみちです,近い駅です|ちかいえきです,遠い町です|とおいまちです,急いで向かいます|いそいでむかいます,ここで待っています|ここでまっています,少し見ていてね|すこしみていてね,読んでおきます|よんでおきます,書いておきます|かいておきます,一緒に歩こう|いっしょにあるこう,そろそろ帰ろう|そろそろかえろう,今日も始まりました|きょうもはじまりました,仕事が終わりました|しごとがおわりました,まだ続けられます|まだつづけられます,まず五分だけやります|まずごふんだけやります,朝顔に水をやります|あさがおにみずをやります,夕焼けを見に行きます|ゆうやけをみにいきます,明日の予定を見ます|あしたのよていをみます,忘れ物を確認します|わすれものをかくにんします,鍵をもう一度見ます|かぎをもういちどみます,電車を待っています|でんしゃをまっています,友人へ返事します|ゆうじんへへんじします,家族に電話します|かぞくにでんわします,夕飯を作ります|ゆうはんをつくります,机に向かいます|つくえにむかいます,ノートを開きます|のーとをひらきます,日記を少し書きます|にっきをすこしかきます,写真を整理します|しゃしんをせいりします,荷物を軽くします|にもつをかるくします,公園を散歩します|こうえんをさんぽします,図書館で借ります|としょかんでかります,メールを読みます|めーるをよみます,買い物に行きます|かいものにいきます,牛乳を買います|ぎゅうにゅうをかいます,パンを選びます|ぱんをえらびます,早めに出かけます|はやめにでかけます,安全に帰ります|あんぜんにかえります,今日はここまで|きょうはここまで
+`;
+
+    function parseWords(seed) {
+      return seed.trim().split(",").map((entry) => {
+        const [display, kana] = entry.trim().split("|");
+        return { display, kana };
+      }).filter((word) => word.display && word.kana);
+    }
+
+    const LEVEL_WORDS = {
+      1: parseWords(levelOneSeed),
+      2: parseWords(levelTwoSeed),
+      3: parseWords(levelThreeSeed),
+      4: parseWords(levelFourSeed)
+    };
+
+    const els = {
+      score: document.querySelector("#scoreText"),
+      time: document.querySelector("#timeText"),
+      life: document.querySelector("#lifeText"),
+      combo: document.querySelector("#comboText"),
+      defeat: document.querySelector("#defeatText"),
+      accuracy: document.querySelector("#accuracyText"),
+      displayWord: document.querySelector("#displayWord"),
+      romaji: document.querySelector("#romajiGuide"),
+      typed: document.querySelector("#typedText"),
+      battle: document.querySelector("#battleText"),
+      stage: document.querySelector(".stage"),
+      oni: document.querySelector("#oniSprite"),
+      danger: document.querySelector("#dangerEdge"),
+      title: document.querySelector("#titleScreen"),
+      pause: document.querySelector("#pauseScreen"),
+      result: document.querySelector("#resultScreen"),
+      levelList: document.querySelector("#levelList"),
+      rank: document.querySelector("#rankText"),
+      resultMessage: document.querySelector("#resultMessage"),
+      resultDefeat: document.querySelector("#resultDefeat"),
+      resultScore: document.querySelector("#resultScore"),
+      resultAccuracy: document.querySelector("#resultAccuracy"),
+      resultCombo: document.querySelector("#resultCombo"),
+      resultKeys: document.querySelector("#resultKeys"),
+      resultBest: document.querySelector("#resultBest"),
+      bossPreview: document.querySelector("#bossPreview"),
+      bossGrid: document.querySelector("#bossGrid")
+    };
+
+    const NORMAL_ONI_MARKUP = els.oni.innerHTML;
+
+    const state = {
+      screen: "title",
+      levelIndex: 0,
+      score: 0,
+      timeLeft: CONFIG.gameSeconds,
+      life: CONFIG.life,
+      combo: 0,
+      maxCombo: 0,
+      defeat: 0,
+      hits: 0,
+      misses: 0,
+      totalKeys: 0,
+      distance: CONFIG.distance.start,
+      current: null,
+      enemyType: CONFIG.enemyTypes[0],
+      candidates: [],
+      typed: "",
+      wordMissed: false,
+      used: [],
+      records: readRecords(),
+      sound: localStorage.getItem("t-room-onitaiji-muted") !== "true",
+      audio: null,
+      lastTime: 0,
+      raf: null,
+      swingTimer: null,
+      pausedOnce: false
+    };
+
+    function init() {
+      renderLevels();
+      renderBossCandidates();
+      validateWords();
+      updateHud();
+      window.addEventListener("keydown", handleKey);
+      state.raf = requestAnimationFrame(loop);
+    }
+
+    function renderBossCandidates() {
+      if (!new URLSearchParams(window.location.search).has("bossCandidates")) return;
+      els.bossGrid.innerHTML = BOSS_CANDIDATES.map((candidate) => `
+        <article class="boss-card ${candidate.className}">
+          ${bossCandidateSvg(candidate.id)}
+          <h3>${candidate.title}</h3>
+          <span>${candidate.level}</span>
+          <p>${candidate.note}</p>
+        </article>
+      `).join("");
+      state.screen = "boss";
+      els.title.hidden = true;
+      els.bossPreview.hidden = false;
+    }
+
+    function renderLevels() {
+      els.levelList.replaceChildren(...CONFIG.levels.map((level, index) => {
+        const button = document.createElement("button");
+        button.className = `level-button${index === state.levelIndex ? " is-active" : ""}`;
+        button.type = "button";
+        button.innerHTML = `<strong>${level.name}</strong>`;
+        button.addEventListener("click", () => {
+          state.levelIndex = index;
+          renderLevels();
+        });
+        return button;
+      }));
+    }
+
+    function startGame() {
+      initAudio();
+      Object.assign(state, {
+        screen: "playing",
+        score: 0,
+        timeLeft: CONFIG.gameSeconds,
+        life: CONFIG.life,
+        combo: 0,
+        maxCombo: 0,
+        defeat: 0,
+        hits: 0,
+        misses: 0,
+        totalKeys: 0,
+        distance: CONFIG.distance.start,
+        typed: "",
+        wordMissed: false,
+        used: [],
+        pausedOnce: false,
+        lastTime: 0
+      });
+      els.title.hidden = true;
+      els.result.hidden = true;
+      els.pause.hidden = true;
+      els.bossPreview.hidden = true;
+      spawnEnemy();
+      updateHud();
+    }
+
+    function spawnEnemy() {
+      const level = currentLevel();
+      const pool = LEVEL_WORDS[level.id].filter((word) => !state.used.includes(word.display));
+      if (pool.length === 0) state.used = [];
+      const nextPool = LEVEL_WORDS[level.id].filter((word) => !state.used.includes(word.display));
+      const word = nextPool[Math.floor(Math.random() * nextPool.length)];
+      state.used.push(word.display);
+      if (state.used.length > CONFIG.historySize) state.used.shift();
+      state.current = word;
+      state.candidates = kanaToCandidates(word.kana);
+      state.typed = "";
+      state.wordMissed = false;
+      state.distance = CONFIG.distance.start;
+      const type = chooseEnemyType();
+      state.enemyType = type;
+      renderEnemySprite(type);
+      els.oni.classList.remove("is-slash", "is-hit", "damage-1", "damage-2", "damage-3");
+      renderWord();
+      setBattleText("構え");
+    }
+
+    function chooseEnemyType() {
+      const level = currentLevel();
+      if (level.id >= 3) {
+        const boss = BOSS_CANDIDATES[Math.floor(Math.random() * BOSS_CANDIDATES.length)];
+        return {
+          name: boss.className,
+          boss,
+          speed: level.id === 4 ? 1.2 : 1.08,
+          score: level.id === 4 ? 1.55 : 1.32
+        };
+      }
+      const list = CONFIG.enemyTypes.filter((type) => level.id > 1 || type.name !== "rock");
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    function renderEnemySprite(type) {
+      const level = currentLevel();
+      if (type.boss) {
+        els.oni.innerHTML = bossCandidateSvg(type.boss.id);
+        els.oni.className = `oni is-boss ${type.boss.className} ${level.id === 4 ? "boss-lv4" : "boss-lv3"}`;
+        return;
+      }
+      if (!els.oni.querySelector(".oni-pixel")) {
+        els.oni.innerHTML = NORMAL_ONI_MARKUP;
+      }
+      els.oni.className = `oni ${type.name}`;
+    }
+
+    function currentLevel() {
+      return CONFIG.levels[state.levelIndex];
+    }
+
+    function loop(now) {
+      const delta = state.lastTime ? (now - state.lastTime) / 1000 : 0;
+      state.lastTime = now;
+      if (state.screen === "playing") {
+        state.timeLeft = Math.max(0, state.timeLeft - delta);
+        const enemyType = state.enemyType || CONFIG.enemyTypes[0];
+        state.distance -= (100 / CONFIG.enemySeconds) * enemyType.speed * delta;
+        if (state.distance <= 0) loseLife();
+        if (state.timeLeft <= 0 || state.life <= 0) endGame();
+        updateHud();
+        updateOniPosition();
+      }
+      state.raf = requestAnimationFrame(loop);
+    }
+
+    function handleKey(event) {
+      if (event.key === "Tab") return;
+      if (event.key === "F2") {
+        toggleSound();
+        return;
+      }
+      if (state.screen === "title") {
+        if (event.key === "Enter") startGame();
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") changeLevel(1);
+        if (event.key === "ArrowUp" || event.key === "ArrowLeft") changeLevel(-1);
+        return;
+      }
+      if (state.screen === "result") {
+        if (event.key === "Enter") startGame();
+        if (event.key === "Escape") showTitle();
+        return;
+      }
+      if (state.screen === "paused") {
+        if (event.key === "Enter") resumeGame();
+        if (event.key === "Escape") showTitle();
+        return;
+      }
+      if (state.screen === "boss") {
+        if (event.key === "Escape") showTitle();
+        return;
+      }
+      if (state.screen !== "playing") return;
+      if (event.key === "Escape") {
+        pauseGame();
+        return;
+      }
+      if (event.key === "Backspace") {
+        state.typed = state.typed.slice(0, -1);
+        renderWord();
+        return;
+      }
+      if (!/^[a-z-]$/i.test(event.key)) return;
+      event.preventDefault();
+      inputKey(event.key.toLowerCase());
+    }
+
+    function inputKey(key) {
+      initAudio();
+      const next = state.typed + key;
+      const possible = state.candidates.filter((candidate) => candidate.startsWith(next));
+      state.totalKeys += 1;
+      if (possible.length === 0) {
+        state.misses += 1;
+        state.combo = 0;
+        state.wordMissed = true;
+        state.distance -= CONFIG.distance.missPenalty;
+        setBattleText("ぐらり");
+        playSound("miss");
+        updateHud();
+        updateOniPosition();
+        return;
+      }
+      state.typed = next;
+      state.hits += 1;
+      state.combo += 1;
+      state.maxCombo = Math.max(state.maxCombo, state.combo);
+      state.distance = Math.min(100, state.distance + CONFIG.distance.correctPush);
+      triggerSwordSwing();
+      updateEnemyDamage();
+      els.oni.classList.add("is-hit");
+      setTimeout(() => els.oni.classList.remove("is-hit"), 90);
+      playSound("hit");
+      const exact = possible.find((candidate) => candidate === state.typed);
+      if (exact) defeatEnemy(exact);
+      renderWord();
+      updateHud();
+    }
+
+    function triggerSwordSwing() {
+      els.stage.classList.remove("is-swing");
+      void els.stage.offsetWidth;
+      els.stage.classList.add("is-swing");
+      clearTimeout(state.swingTimer);
+      state.swingTimer = setTimeout(() => els.stage.classList.remove("is-swing"), 300);
+    }
+
+    function updateEnemyDamage() {
+      const shortest = Math.min(...state.candidates.map((candidate) => candidate.length));
+      const progress = shortest > 0 ? state.typed.length / shortest : 0;
+      const damage = clamp(Math.ceil(progress * 3), 1, 3);
+      els.oni.classList.remove("damage-1", "damage-2", "damage-3");
+      els.oni.classList.add(`damage-${damage}`);
+    }
+
+    function defeatEnemy(exact) {
+      const level = currentLevel();
+      const enemyType = state.enemyType || CONFIG.enemyTypes[0];
+      const perfect = !state.wordMissed;
+      state.defeat += 1;
+      state.score += Math.round(exact.length * 120 * level.multiplier * enemyType.score * (perfect ? 1.2 : 1));
+      if (perfect) {
+        setBattleText("一閃");
+        playSound("slash");
+      } else {
+        setBattleText("討伐");
+        playSound("slash");
+      }
+      els.oni.classList.add("is-slash");
+      setTimeout(spawnEnemy, 260);
+    }
+
+    function loseLife() {
+      state.life -= 1;
+      state.combo = 0;
+      state.distance = CONFIG.distance.lifeLossRetreat;
+      state.wordMissed = true;
+      setBattleText("近い");
+      playSound("miss");
+      if (state.life > 0) setTimeout(spawnEnemy, 220);
+    }
+
+    function endGame() {
+      if (state.screen !== "playing") return;
+      state.screen = "result";
+      updateRecord();
+      els.result.hidden = false;
+      els.resultDefeat.textContent = `${state.defeat}体`;
+      els.resultScore.textContent = String(state.score);
+      els.resultAccuracy.textContent = `${accuracy()}%`;
+      els.resultCombo.textContent = String(state.maxCombo);
+      els.resultKeys.textContent = String(state.totalKeys);
+      els.resultBest.textContent = `${bestRecord().defeat || 0}体`;
+      els.rank.textContent = rankName();
+      els.resultMessage.textContent = `${currentLevel().name} / ${state.defeat}体を退治しました。`;
+    }
+
+    function pauseGame() {
+      state.screen = "paused";
+      els.pause.hidden = false;
+      state.pausedOnce = true;
+    }
+
+    function resumeGame() {
+      state.screen = "playing";
+      els.pause.hidden = true;
+      state.lastTime = 0;
+    }
+
+    function showTitle() {
+      state.screen = "title";
+      els.title.hidden = false;
+      els.pause.hidden = true;
+      els.result.hidden = true;
+      els.bossPreview.hidden = true;
+      els.displayWord.textContent = "T-ROOM OniTaiji";
+      els.romaji.textContent = "Press Enter";
+      els.typed.textContent = "英数入力で遊んでください";
+      setBattleText("鬼を斬るタイピングゲーム");
+    }
+
+    function changeLevel(direction) {
+      state.levelIndex = (state.levelIndex + direction + CONFIG.levels.length) % CONFIG.levels.length;
+      renderLevels();
+    }
+
+    function renderWord() {
+      if (!state.current) return;
+      const guide = bestGuide();
+      els.displayWord.textContent = state.current.display;
+      els.romaji.style.opacity = currentLevel().guideOpacity;
+      els.romaji.innerHTML = guide.split("").map((char, index) => {
+        if (index < state.typed.length) return `<span class="done">${char}</span>`;
+        if (index === state.typed.length) return `<span class="next">${char}</span>`;
+        return char;
+      }).join("");
+      els.typed.textContent = state.typed || "type...";
+    }
+
+    function bestGuide() {
+      const matching = state.candidates.filter((candidate) => candidate.startsWith(state.typed));
+      return (matching[0] || state.candidates[0] || "").toLowerCase();
+    }
+
+    function updateHud() {
+      els.score.textContent = String(state.score);
+      els.time.textContent = state.timeLeft.toFixed(1);
+      els.life.textContent = "♥".repeat(Math.max(0, state.life));
+      els.combo.textContent = String(state.combo);
+      els.defeat.textContent = String(state.defeat);
+      els.accuracy.textContent = `${accuracy()}%`;
+    }
+
+    function updateOniPosition() {
+      const danger = state.distance < 28;
+      const progress = 1 - clamp(state.distance / 100, 0, 1);
+      const scale = 0.58 + progress * 1.08;
+      const bottom = 116 - progress * 40;
+      els.oni.style.setProperty("--oni-scale", scale);
+      els.oni.style.transform = `translateX(-50%) scale(${scale})`;
+      els.oni.style.bottom = `${bottom}px`;
+      els.danger.classList.toggle("is-hot", danger);
+    }
+
+    function setBattleText(text) {
+      els.battle.textContent = `${text} ${state.sound ? "" : "/ Sound Off"}`.trim();
+    }
+
+    function accuracy() {
+      if (state.totalKeys === 0) return "100.0";
+      return ((state.hits / state.totalKeys) * 100).toFixed(1);
+    }
+
+    function rankName() {
+      const d = state.defeat;
+      if (d >= 100) return "指先の祓い屋";
+      if (d >= 75) return "百鬼の入口";
+      if (d >= 50) return "鬼打ちの手練れ";
+      if (d >= 30) return "夜道の守り人";
+      if (d >= 12) return "見習い退治人";
+      return "木刀を握った";
+    }
+
+    function updateRecord() {
+      const level = String(currentLevel().id);
+      const current = state.records[level] || {};
+      state.records[level] = {
+        defeat: Math.max(current.defeat || 0, state.defeat),
+        score: Math.max(current.score || 0, state.score),
+        combo: Math.max(current.combo || 0, state.maxCombo),
+        accuracy: Math.max(current.accuracy || 0, Number(accuracy())),
+        updatedAt: new Date().toISOString()
+      };
+      localStorage.setItem(CONFIG.storageKey, JSON.stringify(state.records));
+    }
+
+    function bestRecord() {
+      return state.records[String(currentLevel().id)] || {};
+    }
+
+    function readRecords() {
+      try {
+        return JSON.parse(localStorage.getItem(CONFIG.storageKey) || "{}");
+      } catch {
+        return {};
+      }
+    }
+
+    function kanaToCandidates(kana) {
+      const chars = [...kana.replace(/\s/g, "")];
+      let candidates = [""];
+      for (let i = 0; i < chars.length; i += 1) {
+        const char = chars[i];
+        let romans = null;
+        const pair = chars[i + 1] ? char + chars[i + 1] : "";
+        if (DIGRAPHS[pair]) {
+          romans = DIGRAPHS[pair];
+          i += 1;
+        } else if (char === "っ") {
+          const nextPair = chars[i + 2] ? chars[i + 1] + chars[i + 2] : "";
+          const nextRomans = DIGRAPHS[nextPair] || KANA_ROMAN[chars[i + 1]] || ["t"];
+          romans = ["ltu", "xtu", "ltsu", "xtsu", ...nextRomans.map((r) => consonantOf(r)).filter(Boolean)];
+          i += 0;
+        } else {
+          romans = KANA_ROMAN[char] || [char];
+        }
+        candidates = expandCandidates(candidates, romans);
+      }
+      return [...new Set(candidates)].slice(0, 260);
+    }
+
+    function expandCandidates(base, romans) {
+      const next = [];
+      for (const prefix of base) {
+        for (const roman of romans) {
+          next.push(prefix + roman);
+        }
+      }
+      return next.slice(0, 520);
+    }
+
+    function consonantOf(roman) {
+      const first = roman[0];
+      return "aiueon-".includes(first) ? "" : first;
+    }
+
+    function initAudio() {
+      if (state.audio) return;
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      state.audio = new AudioContext();
+    }
+
+    function toggleSound() {
+      state.sound = !state.sound;
+      localStorage.setItem("t-room-onitaiji-muted", String(!state.sound));
+      setBattleText(state.sound ? "Sound On" : "Sound Off");
+    }
+
+    function playSound(kind) {
+      if (!state.sound || !state.audio) return;
+      const ctx = state.audio;
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      const osc = ctx.createOscillator();
+      gain.connect(ctx.destination);
+      osc.connect(gain);
+      if (kind === "hit") {
+        osc.type = "square";
+        osc.frequency.setValueAtTime(420 + Math.min(state.combo, 18) * 12, now);
+        gain.gain.setValueAtTime(0.035, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+        osc.start(now);
+        osc.stop(now + 0.055);
+      } else if (kind === "miss") {
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(130, now);
+        gain.gain.setValueAtTime(0.055, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.start(now);
+        osc.stop(now + 0.13);
+      } else {
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(780, now);
+        osc.frequency.exponentialRampToValueAtTime(1320, now + 0.08);
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+        osc.start(now);
+        osc.stop(now + 0.18);
+      }
+    }
+
+    function validateWords() {
+      Object.entries(LEVEL_WORDS).forEach(([level, words]) => {
+        if (words.length < 100) {
+          console.warn(`Lv.${level} has only ${words.length} words`);
+        }
+      });
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    window.ONI_DEBUG = {
+      CONFIG,
+      LEVEL_WORDS,
+      kanaToCandidates,
+      validateWords
+    };
+
+    init();
+  </script>
+</body>
+</html>
