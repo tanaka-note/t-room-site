@@ -558,30 +558,30 @@
       display: grid;
       justify-items: center;
       align-content: center;
-      gap: 7px;
-      padding: 10px 28px 16px;
+      gap: 9px;
+      padding: 8px 28px 14px;
       text-align: center;
       border-top: 1px solid rgba(255, 255, 255, 0.1);
       background: rgba(0, 0, 0, 0.14);
     }
 
     .display-word {
-      min-height: 40px;
+      min-height: 46px;
       color: #fff6e7;
-      font-size: clamp(1.45rem, 3vw, 2.85rem);
+      font-size: clamp(1.72rem, 3.55vw, 3.35rem);
       font-weight: 900;
-      line-height: 1.25;
+      line-height: 1.18;
       text-shadow: 0 3px 18px rgba(0, 0, 0, 0.34);
     }
 
     .romaji {
-      min-height: 30px;
+      min-height: 34px;
       max-width: min(980px, 100%);
       color: rgba(247, 238, 223, 0.5);
       font-family: Consolas, "SFMono-Regular", monospace;
-      font-size: clamp(1rem, 1.7vw, 1.42rem);
+      font-size: clamp(1.12rem, 2vw, 1.65rem);
       font-weight: 800;
-      line-height: 1.5;
+      line-height: 1.42;
       overflow-wrap: anywhere;
     }
 
@@ -598,15 +598,12 @@
       min-height: 24px;
       color: var(--muted);
       font-family: Consolas, "SFMono-Regular", monospace;
-      font-size: 1rem;
+      font-size: 1.08rem;
       overflow-wrap: anywhere;
     }
 
     .battle-text {
-      min-height: 28px;
-      color: var(--gold);
-      font-size: 1.1rem;
-      font-weight: 900;
+      display: none;
     }
 
     .menu,
@@ -2155,14 +2152,23 @@
       return Math.round((state.totalKeys / levelSeconds) * 60);
     }
 
+    function rankThresholds() {
+      const byLevel = {
+        1: [420, 340, 260, 200, 140, 80],
+        2: [500, 400, 320, 240, 170, 100]
+      };
+      return byLevel[currentLevel().id] || [560, 450, 360, 280, 200, 120];
+    }
+
     function rankName() {
       const kpm = keysPerMinuteForRank();
-      if (kpm >= 560) return "鬼神の指先";
-      if (kpm >= 450) return "百鬼斬り";
-      if (kpm >= 360) return "鬼打ちの手練れ";
-      if (kpm >= 280) return "夜道の守り人";
-      if (kpm >= 200) return "町外れの退治人";
-      if (kpm >= 120) return "駆け出し退治人";
+      const [god, hundred, skilled, guardian, town, rookie] = rankThresholds();
+      if (kpm >= god) return "鬼神の指先";
+      if (kpm >= hundred) return "百鬼斬り";
+      if (kpm >= skilled) return "鬼打ちの手練れ";
+      if (kpm >= guardian) return "夜道の守り人";
+      if (kpm >= town) return "町外れの退治人";
+      if (kpm >= rookie) return "駆け出し退治人";
       return "木刀を握った";
     }
 
