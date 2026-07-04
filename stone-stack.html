@@ -672,6 +672,13 @@
             </div>
           </div>
 
+          <div class="overlay" id="pauseOverlay" hidden>
+            <div class="overlay-card">
+              <h2>PAUSE</h2>
+              <p>Enterで続ける。Escでもう一度タイトルへ戻ります。</p>
+            </div>
+          </div>
+
           <div class="overlay" id="gameOverOverlay" hidden>
             <div class="overlay-card">
               <h2>積み終わり</h2>
@@ -812,6 +819,7 @@
       heightMarker: document.querySelector("#heightMarker"),
       floatText: document.querySelector("#floatText"),
       startOverlay: document.querySelector("#startOverlay"),
+      pauseOverlay: document.querySelector("#pauseOverlay"),
       gameOverOverlay: document.querySelector("#gameOverOverlay"),
       startButton: document.querySelector("#startButton"),
       retryButton: document.querySelector("#retryButton"),
@@ -827,7 +835,9 @@
     const STORAGE_KEY = "t-room-stone-best";
     const state = {
       isPlaying: false,
+      isPaused: false,
       isDropping: false,
+      pendingEnd: false,
       active: null,
       activeEl: null,
       stones: [],
@@ -843,7 +853,9 @@
       lastPlacedX: null,
       input: null,
       holdTimer: null,
-      swayFrame: null
+      swayFrame: null,
+      pauseStartedAt: null,
+      pauseDuration: 0
     };
 
     function init() {
@@ -875,7 +887,9 @@
     function startGame() {
       document.body.classList.add("is-playing");
       state.isPlaying = true;
+      state.isPaused = false;
       state.isDropping = false;
+      state.pendingEnd = false;
       state.score = 0;
       state.combo = 0;
       state.misses = 0;
@@ -887,11 +901,14 @@
       state.stones = [];
       state.active = null;
       state.activeEl = null;
+      state.pauseStartedAt = null;
+      state.pauseDuration = 0;
       cancelAnimationFrame(state.swayFrame);
       els.tower.innerHTML = "";
       els.tower.style.transform = "rotate(0deg)";
       els.world.style.transform = "translateY(0)";
       els.startOverlay.hidden = true;
+      els.pauseOverlay.hidden = true;
       els.gameOverOverlay.hidden = true;
       els.heightMarker.classList.remove("is-visible");
       layoutBase();
@@ -922,7 +939,7 @@
     }
 
     function spawnStone() {
-      if (!state.isPlaying) return;
+      if (!state.isPlaying || state.isPaused) return;
       const stone = createStone();
       const stageWidth = els.stage.clientWidth;
       const centerX = (stageWidth - stone.w) / 2;
@@ -1044,7 +1061,7 @@
     function startSway() {
       cancelAnimationFrame(state.swayFrame);
       function tick() {
-        if (!state.active || state.isDropping || !state.isPlaying) return;
+        if (!state.active || state.isDropping || !state.isPlaying || state.isPaused) return;
         renderActive();
         state.swayFrame = requestAnimationFrame(tick);
       }
@@ -1061,7 +1078,7 @@
     }
 
     function dropActive() {
-      if (!state.isPlaying || state.isDropping || !state.active) return;
+      if (!state.isPlaying || state.isPaused || state.isDropping || !state.active) return;
       state.active.x = getActiveDisplayX();
       state.active.baseX = state.active.x;
       const driftBase = getDropDrift() * STONE_TYPES[state.active.type].drift;
@@ -1082,9 +1099,15 @@
       const distance = Math.max(80, Math.abs(targetTop - startTop));
       const duration = Math.min(900, Math.max(360, distance / CONFIG.fallSpeed * 1000));
       const startTime = performance.now();
+      const pauseOffsetStart = state.pauseDuration;
 
       function frame(now) {
-        const progress = clamp((now - startTime) / duration, 0, 1);
+        if (state.isPaused) {
+          requestAnimationFrame(frame);
+          return;
+        }
+        const pausedTotal = state.pauseDuration - pauseOffsetStart;
+        const progress = clamp((now - pausedTotal - startTime) / duration, 0, 1);
         const eased = 1 - Math.pow(1 - progress, 3);
         stone.y = startTop + (targetTop - startTop) * eased;
         stone.x = clamp(
@@ -1230,7 +1253,10 @@
       if (state.wobble >= CONFIG.wobble.topFallAt && state.stones.length > 1) {
         dropTopStone();
         if (state.misses >= CONFIG.missesAllowed) {
-          setTimeout(endGame, 520);
+          setTimeout(() => {
+            if (state.isPaused) state.pendingEnd = true;
+            else endGame();
+          }, 520);
           return;
         }
       }
@@ -1285,7 +1311,10 @@
       updateHud();
 
       if (state.misses >= CONFIG.missesAllowed || state.wobble >= CONFIG.wobble.max) {
-        setTimeout(endGame, 520);
+        setTimeout(() => {
+          if (state.isPaused) state.pendingEnd = true;
+          else endGame();
+        }, 520);
         return;
       }
 
@@ -1405,10 +1434,56 @@
       localStorage.setItem(STORAGE_KEY, String(state.best));
     }
 
+    function pauseGame() {
+      if (!state.isPlaying || state.isPaused || !isDesktopInput()) return;
+      state.isPaused = true;
+      state.pauseStartedAt = performance.now();
+      clearInput();
+      cancelAnimationFrame(state.swayFrame);
+      els.pauseOverlay.hidden = false;
+    }
+
+    function resumeGame() {
+      if (!state.isPaused) return;
+      const pausedFor = state.pauseStartedAt ? performance.now() - state.pauseStartedAt : 0;
+      state.pauseDuration += pausedFor;
+      if (state.active) state.active.swayStartedAt += pausedFor;
+      state.pauseStartedAt = null;
+      state.isPaused = false;
+      els.pauseOverlay.hidden = true;
+      if (state.pendingEnd) {
+        state.pendingEnd = false;
+        endGame();
+        return;
+      }
+      if (!state.active && !state.isDropping) {
+        spawnStone();
+        return;
+      }
+      if (state.active && !state.isDropping) startSway();
+    }
+
+    function showTitle() {
+      state.isPlaying = false;
+      state.isPaused = false;
+      state.isDropping = false;
+      state.pendingEnd = false;
+      state.pauseStartedAt = null;
+      clearInput();
+      cancelAnimationFrame(state.swayFrame);
+      document.body.classList.remove("is-playing");
+      els.pauseOverlay.hidden = true;
+      els.gameOverOverlay.hidden = true;
+      els.startOverlay.hidden = false;
+    }
+
     function endGame() {
       state.isPlaying = false;
+      state.isPaused = false;
       state.isDropping = false;
+      state.pendingEnd = false;
       document.body.classList.remove("is-playing");
+      els.pauseOverlay.hidden = true;
       updateBest();
       updateHud();
       els.finalScore.textContent = state.score;
@@ -1459,6 +1534,19 @@
     }
 
     function onKeyDown(event) {
+      if (isDesktopInput() && event.key === "Escape") {
+        event.preventDefault();
+        if (state.isPaused) showTitle();
+        else if (state.isPlaying) pauseGame();
+        return;
+      }
+      if (state.isPaused) {
+        if (isDesktopInput() && event.key === "Enter") {
+          event.preventDefault();
+          resumeGame();
+        }
+        return;
+      }
       if (!canControl()) return;
       if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") {
         event.preventDefault();
@@ -1524,7 +1612,11 @@
     }
 
     function canControl() {
-      return state.isPlaying && !state.isDropping && state.active;
+      return state.isPlaying && !state.isPaused && !state.isDropping && state.active;
+    }
+
+    function isDesktopInput() {
+      return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
     }
 
     function clamp(value, min, max) {

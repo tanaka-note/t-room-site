@@ -41,6 +41,7 @@
   const hardPiecePool = ["I", "O", "T", "S", "Z", "J", "L"];
   const gentleScoreLimit = 1000;
   const fullRandomScore = 2600;
+  const desktopInputQuery = window.matchMedia("(hover: hover) and (pointer: fine)");
 
   let board = createBoard();
   let current = null;
@@ -360,6 +361,41 @@
     updateHud();
     draw();
     showMessage("GAME OVER", "画面をタップして再挑戦できます。");
+  }
+
+  function pauseGame() {
+    if (state !== "running" || !isDesktopInput()) return;
+    state = "paused";
+    setPlayingMode(false);
+    showMessage("PAUSE", "Enterで続ける。Escでもう一度タイトルへ戻ります。");
+  }
+
+  function resumeGame() {
+    if (state !== "paused") return;
+    state = "running";
+    setPlayingMode(true);
+    lastTime = 0;
+    hideMessage();
+    requestAnimationFrame(loop);
+  }
+
+  function showTitle() {
+    state = "idle";
+    setPlayingMode(false);
+    board = createBoard();
+    current = null;
+    score = 0;
+    lines = 0;
+    level = 1;
+    dropCounter = 0;
+    lastTime = 0;
+    clearing = null;
+    particles = [];
+    bursts = [];
+    touchInput = null;
+    updateHud();
+    draw();
+    showMessage("T-ROOM BLOCKS", "画面をタップして開始 / タップで回転 / スワイプで移動・落下");
   }
 
   function collides(matrix, row, col) {
@@ -703,7 +739,7 @@
   soundOnButton?.addEventListener("click", () => setSoundEnabled(true));
 
   canvas.addEventListener("click", (event) => {
-    if (state === "running") return;
+    if (state === "running" || state === "paused") return;
     event.preventDefault();
     startGame();
   });
@@ -777,6 +813,19 @@
   });
 
   window.addEventListener("keydown", (event) => {
+    if (isDesktopInput() && event.code === "Escape") {
+      event.preventDefault();
+      if (state === "running") pauseGame();
+      else if (state === "paused") showTitle();
+      return;
+    }
+    if (state === "paused") {
+      if (isDesktopInput() && event.code === "Enter") {
+        event.preventDefault();
+        resumeGame();
+      }
+      return;
+    }
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "Enter"].includes(event.code)) return;
     if (state !== "running") {
       if (event.code === "Enter") {
@@ -801,5 +850,9 @@
 
   function pick(items) {
     return items[Math.floor(Math.random() * items.length)];
+  }
+
+  function isDesktopInput() {
+    return desktopInputQuery.matches;
   }
 })();

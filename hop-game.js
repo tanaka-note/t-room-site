@@ -21,6 +21,7 @@
   const storageKey = "tRoomGardenHopBest";
   const introSafeTime = 10;
   const invincibleTime = 1.5;
+  const desktopInputQuery = window.matchMedia("(hover: hover) and (pointer: fine)");
 
   const colors = {
     ink: "#2f3b35",
@@ -408,6 +409,32 @@
       "もう一度遊ぶ"
     );
     startButton.textContent = "PLAY AGAIN";
+  }
+
+  function pauseGame() {
+    if (state !== "running" || !isDesktopInput()) return;
+    state = "paused";
+    showMessage("PAUSE", "Enterで続ける。Escでもう一度タイトルへ戻ります。", "Enterで再開");
+  }
+
+  function resumeGame() {
+    if (state !== "paused") return;
+    state = "running";
+    lastTime = 0;
+    hideMessage();
+    requestAnimationFrame(loop);
+  }
+
+  function showTitle() {
+    state = "idle";
+    lastTime = 0;
+    startButton.textContent = "PLAY";
+    showMessage(
+      "T-ROOM Garden Hop",
+      "クリック・タップ・Spaceで2回までジャンプ。知の芽と星のしずくを集めよう。",
+      "PLAY"
+    );
+    draw();
   }
 
   function updateHud() {
@@ -848,8 +875,20 @@
     return items[Math.floor(Math.random() * items.length)];
   }
 
+  function isDesktopInput() {
+    return desktopInputQuery.matches;
+  }
+
+  function handleMessageAction() {
+    if (state === "paused") {
+      resumeGame();
+      return;
+    }
+    startGame();
+  }
+
   startButton?.addEventListener("click", startGame);
-  messageButton?.addEventListener("click", startGame);
+  messageButton?.addEventListener("click", handleMessageAction);
   jumpButton?.addEventListener("click", jump);
 
   canvas.addEventListener("pointerdown", (event) => {
@@ -859,6 +898,19 @@
   });
 
   window.addEventListener("keydown", (event) => {
+    if (isDesktopInput() && event.code === "Escape") {
+      event.preventDefault();
+      if (state === "running") pauseGame();
+      else if (state === "paused") showTitle();
+      return;
+    }
+    if (state === "paused") {
+      if (isDesktopInput() && event.code === "Enter") {
+        event.preventDefault();
+        resumeGame();
+      }
+      return;
+    }
     if (event.code !== "Space") return;
     event.preventDefault();
     jump();

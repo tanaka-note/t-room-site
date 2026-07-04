@@ -186,6 +186,25 @@
       line-height: 1.1;
     }
 
+    .life-cell {
+      position: relative;
+    }
+
+    .life-cell strong {
+      color: #f7e4b5;
+      font-size: 1.02rem;
+    }
+
+    .life-stock {
+      display: block;
+      margin-top: 2px;
+      color: rgba(247, 238, 223, 0.64);
+      font-size: 0.58rem;
+      font-weight: 900;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
     .stage {
       position: relative;
       min-height: 0;
@@ -1200,7 +1219,11 @@
       <section class="hud" aria-label="ゲーム情報">
         <div><span>Score</span><strong id="scoreText">0</strong></div>
         <div><span>Time</span><strong id="timeText">60.0</strong></div>
-        <div><span>Life</span><strong id="lifeText">3</strong></div>
+        <div class="life-cell">
+          <span>Life</span>
+          <strong id="lifeText">HP 100</strong>
+          <small class="life-stock" id="lifeStockText">Life x3</small>
+        </div>
         <div><span>Combo</span><strong id="comboText">0</strong></div>
         <div><span>Taiji</span><strong id="defeatText">0</strong></div>
         <div><span>Accuracy</span><strong id="accuracyText">100%</strong></div>
@@ -1314,7 +1337,7 @@
           <div class="title-kanji" aria-hidden="true">鬼</div>
           <div class="title-stamp" aria-hidden="true">鬼退治</div>
           <h1>T-ROOM OniTaiji <span>鬼を斬るタイピングゲーム</span></h1>
-          <p>言葉を打つ。鬼が迫る。60秒、斬れるだけ斬る。</p>
+          <p>言葉を打つ。鬼が迫る。制限時間内に、斬れるだけ斬る。</p>
           <div class="level-list" id="levelList"></div>
           <div class="key-help">
             <span><kbd>Enter</kbd> Start</span>
@@ -1375,11 +1398,19 @@
       life: 3,
       historySize: 30,
       storageKey: "t-room-onitaiji-records",
+      wordTypeRecentLimit: 5,
+      wordTypeRepeatPenalty: 0.34,
+      wordTypeWeights: {
+        1: { topic: 1, polite: 0, other: 0 },
+        2: { topic: 0.62, polite: 0.3, other: 0.08 },
+        3: { topic: 0.62, polite: 0.3, other: 0.08 },
+        4: { topic: 0.65, polite: 0.28, other: 0.07 }
+      },
       levels: [
-        { id: 1, name: "Lv.1 入門", detail: "短い単語や一言をたくさん斬る", multiplier: 1, guideOpacity: 1 },
-        { id: 2, name: "Lv.2 通常", detail: "日常フレーズを安定して打つ", multiplier: 1.45, guideOpacity: 0.92 },
-        { id: 3, name: "Lv.3 修羅", detail: "丁寧文や長めの言葉を速く打つ", multiplier: 2, guideOpacity: 0.82 },
-        { id: 4, name: "Lv.4 地獄", detail: "日常文を読み取って斬る", multiplier: 2.8, guideOpacity: 0.72 }
+        { id: 1, name: "Lv.1 入門", detail: "短い単語や一言をたくさん斬る", seconds: 60, multiplier: 1, guideOpacity: 1 },
+        { id: 2, name: "Lv.2 通常", detail: "日常フレーズを安定して打つ", seconds: 60, multiplier: 1.45, guideOpacity: 0.92 },
+        { id: 3, name: "Lv.3 修羅", detail: "丁寧文や長めの言葉を速く打つ", seconds: 90, multiplier: 2, guideOpacity: 0.82 },
+        { id: 4, name: "Lv.4 地獄", detail: "日常文を読み取って斬る", seconds: 90, multiplier: 2.8, guideOpacity: 0.72 }
       ],
       enemyTypes: [
         { name: "red", speed: 1.05, score: 1 },
@@ -1573,24 +1604,73 @@
 おはようございます|おはようございます,こんにちは|こんにちは,こんばんは|こんばんは,おやすみなさい|おやすみなさい,ありがとうございます|ありがとうございます,よろしくお願いします|よろしくおねがいします,いってきます|いってきます,いってらっしゃい|いってらっしゃい,ただいま帰りました|ただいまかえりました,おかえりなさい|おかえりなさい,また明日会いましょう|またあしたあいましょう,少し待ってください|すこしまってください,もう一度お願いします|もういちどおねがいします,気をつけて帰ってね|きをつけてかえってね,水を一杯飲みます|みずをいっぱいのみます,本を少し読みます|ほんをすこしよみます,外の空を見ます|そとのそらをみます,駅まで歩きます|えきまであるきます,傘を持って出ます|かさをもってでます,手を洗ってきます|てをあらってきます,早めに寝ます|はやめにねます,朝ごはんを食べます|あさごはんをたべます,昼休みに歩きます|ひるやすみにあるきます,帰る時間です|かえるじかんです,花がきれいに咲きます|はながきれいにさきます,風が少し吹いています|かぜがすこしふいています,雨が静かに降ります|あめがしずかにふります,空が明るくなりました|そらがあかるくなりました,猫が窓辺で眠ります|ねこがまどべでねむります,犬が庭を走ります|いぬがにわをはしります,机をきれいに拭きます|つくえをきれいにふきます,部屋の窓を開けます|へやのまどをあけます,玄関の鍵を閉めます|げんかんのかぎをしめます,新しい靴を履きます|あたらしいくつをはきます,温かいお茶を入れます|あたたかいおちゃをいれます,少しだけ休みます|すこしだけやすみます,あとで連絡します|あとでれんらくします,またあとで話します|またあとではなします,今日は助かりました|きょうはたすかりました,元気に過ごしています|げんきにすごしています,落ち着いて始めます|おちついてはじめます,ゆっくり続けます|ゆっくりつづけます,無理せず休みます|むりせずやすみます,前を向いて歩きます|まえをむいてあるきます,右の道へ進みます|みぎのみちへすすみます,左の角を曲がります|ひだりのかどをまがります,声に出して読みます|こえにだしてよみます,紙に名前を書きます|かみになまえをかきます,音をよく聞きます|おとをよくききます,庭に水をまきます|にわにみずをまきます,春の風を感じます|はるのかぜをかんじます,夏の朝が好きです|なつのあさがすきです,秋の空を見上げます|あきのそらをみあげます,冬の夜は静かです|ふゆのよるはしずかです,月が丸く見えます|つきがまるくみえます,星が遠く光ります|ほしがとおくひかります,海まで歩きます|うみまであるきます,山の道を進みます|やまのみちをすすみます,町の店へ入ります|まちのみせへはいります,ご飯をよそいます|ごはんをよそいます,いただきます|いただきます,ごちそうさまでした|ごちそうさまでした,また会いましょう|またあいましょう,すぐに確認します|すぐにかくにんします,準備を始めます|じゅんびをはじめます,部屋を片付けます|へやをかたづけます,大切に使います|たいせつにつかいます,楽しい一日でした|たのしいいちにちでした,静かな朝です|しずかなあさです,明るい声です|あかるいこえです,小さな花です|ちいさなはなです,冷たい水です|つめたいみずです,温かい部屋です|あたたかいへやです,新しい本です|あたらしいほんです,古い道です|ふるいみちです,白い雲です|しろいくもです,黒い靴です|くろいくつです,赤い花です|あかいはなです,青い空です|あおいそらです,丸い石です|まるいいしです,軽い荷物です|かるいにもつです,重い箱です|おもいはこです,短い文です|みじかいぶんです,長い道です|ながいみちです,広い部屋です|ひろいへやです,狭い道です|せまいみちです,近い駅です|ちかいえきです,遠い町です|とおいまちです,急いで向かいます|いそいでむかいます,ここで待っています|ここでまっています,少し見ていてね|すこしみていてね,読んでおきます|よんでおきます,書いておきます|かいておきます,一緒に歩こう|いっしょにあるこう,そろそろ帰ろう|そろそろかえろう,今日も始まりました|きょうもはじまりました,仕事が終わりました|しごとがおわりました,まだ続けられます|まだつづけられます,まず五分だけやります|まずごふんだけやります,朝顔に水をやります|あさがおにみずをやります,夕焼けを見に行きます|ゆうやけをみにいきます,明日の予定を見ます|あしたのよていをみます,忘れ物を確認します|わすれものをかくにんします,鍵をもう一度見ます|かぎをもういちどみます,電車を待っています|でんしゃをまっています,友人へ返事します|ゆうじんへへんじします,家族に電話します|かぞくにでんわします,夕飯を作ります|ゆうはんをつくります,机に向かいます|つくえにむかいます,ノートを開きます|のーとをひらきます,日記を少し書きます|にっきをすこしかきます,写真を整理します|しゃしんをせいりします,荷物を軽くします|にもつをかるくします,公園を散歩します|こうえんをさんぽします,図書館で借ります|としょかんでかります,メールを読みます|めーるをよみます,買い物に行きます|かいものにいきます,牛乳を買います|ぎゅうにゅうをかいます,パンを選びます|ぱんをえらびます,早めに出かけます|はやめにでかけます,安全に帰ります|あんぜんにかえります,今日はここまで|きょうはここまで
 `;
 
+    const levelTwoVarietySeed = `
+東京タワー|とうきょうたわー,東京駅|とうきょうえき,京都駅|きょうとえき,北海道|ほっかいどう,沖縄の海|おきなわのうみ,富士山|ふじさん,日本海|にほんかい,太平洋|たいへいよう,夏祭り|なつまつり,体育館|たいいくかん,文化祭|ぶんかさい,運動会|うんどうかい,給食時間|きゅうしょくじかん,社会科見学|しゃかいかけんがく,自由研究|じゆうけんきゅう,音楽室|おんがくしつ,理科室|りかしつ,世界地図|せかいちず,地球儀|ちきゅうぎ,火山灰|かざんばい,台風の目|たいふうのめ,雨雲レーダー|あまぐもれーだー,星座早見盤|せいざはやみばん,流れ星|ながれぼし,新幹線|しんかんせん,交通安全|こうつうあんぜん,博物館|はくぶつかん,美術館|びじゅつかん,動物園|どうぶつえん,水族館|すいぞくかん
+`;
+
+    const levelThreeVarietySeed = `
+エルニーニョ現象|えるにーにょげんしょう,ラニーニャ現象|らにーにゃげんしょう,熱帯雨林|ねったいうりん,東京ゲームショー|とうきょうげーむしょー,地球温暖化|ちきゅうおんだんか,国際宇宙ステーション|こくさいうちゅうすてーしょん,東海道新幹線|とうかいどうしんかんせん,北海道新幹線|ほっかいどうしんかんせん,関東平野|かんとうへいや,日本列島|にほんれっとう,瀬戸内海|せとないかい,黒潮の流れ|くろしおのながれ,偏西風|へんせいふう,梅雨前線|ばいうぜんせん,冬型の気圧配置|ふゆがたのきあつはいち,古代エジプト文明|こだいえじぷとぶんめい,縄文時代|じょうもんじだい,平安京|へいあんきょう,関ヶ原の戦い|せきがはらのたたかい,日本国憲法|にほんこくけんぽう,衆議院議員選挙|しゅうぎいんぎいんせんきょ,地方自治体|ちほうじちたい,経済成長率|けいざいせいちょうりつ,外国為替市場|がいこくかわせしじょう,人工知能|じんこうちのう,半導体工場|はんどうたいこうじょう,量子コンピュータ|りょうしこんぴゅーた,自動運転技術|じどううんてんぎじゅつ,再生可能エネルギー|さいせいかのうえねるぎー,海洋プラスチック問題|かいようぷらすちっくもんだい
+`;
+
+    const levelFourVarietySeed = `
+気候変動に関する政府間パネル|きこうへんどうにかんするせいふかんぱねる,持続可能な開発目標|じぞくかのうなかいはつもくひょう,生物多様性の保全|せいぶつたようせいのほぜん,アマゾン川流域の熱帯雨林|あまぞんがわりゅういきのねったいうりん,太平洋高気圧と偏西風|たいへいようこうきあつとへんせいふう,南海トラフ巨大地震|なんかいとらふきょだいじしん,東京ゲームショー会場|とうきょうげーむしょーかいじょう,国立科学博物館の展示|こくりつかがくはくぶつかんのてんじ,国際宇宙ステーション補給船|こくさいうちゅうすてーしょんほきゅうせん,富士山頂の気象観測|ふじさんちょうのきしょうかんそく,日本海側の大雪情報|にほんかいがわのおおゆきじょうほう,東海道新幹線の運行情報|とうかいどうしんかんせんのうんこうじょうほう,古代エジプト文明の壁画|こだいえじぷとぶんめいのへきが,平安京と貴族文化|へいあんきょうときぞくぶんか,戦国時代の城下町|せんごくじだいのじょうかまち,明治維新と近代化|めいじいしんときんだいか,経済成長率と物価指数|けいざいせいちょうりつとぶっかしすう,外国為替市場の値動き|がいこくかわせしじょうのねうごき,半導体不足と供給網|はんどうたいぶそくときょうきゅうもう,人工知能と画像認識|じんこうちのうとがぞうにんしき,自動運転技術の安全性|じどううんてんぎじゅつのあんぜんせい,再生可能エネルギー比率|さいせいかのうえねるぎーひりつ,海洋プラスチック問題対策|かいようぷらすちっくもんだいたいさく,世界自然遺産の登録地域|せかいしぜんいさんのとうろくちいき,文化財保護と地域観光|ぶんかざいほごとちいきかんこう,全国高校野球選手権|ぜんこくこうこうやきゅうせんしゅけん,東京国際映画祭|とうきょうこくさいえいがさい,国連安全保障理事会|こくれんあんぜんほしょうりじかい,主要七カ国首脳会議|しゅようななかこくしゅのうかいぎ,世界陸上競技選手権|せかいりくじょうきょうぎせんしゅけん
+`;
+
+    const levelTwoTopicSeed = `
+青空|あおぞら,夕焼け|ゆうやけ,通学路|つうがくろ,朝ごはん|あさごはん,給食当番|きゅうしょくとうばん,学級新聞|がっきゅうしんぶん,図書委員|としょいいん,保健室|ほけんしつ,音読カード|おんどくかーど,漢字ドリル|かんじどりる,計算ノート|けいさんのーと,自由帳|じゆうちょう,遠足の日|えんそくのひ,授業参観|じゅぎょうさんかん,防災訓練|ぼうさいくんれん,避難場所|ひなんばしょ,町内会|ちょうないかい,交番前|こうばんまえ,市役所|しやくしょ,郵便局|ゆうびんきょく,図書館|としょかん,映画館|えいがかん,商店街|しょうてんがい,駅前広場|えきまえひろば,公園の池|こうえんのいけ,桜並木|さくらなみき,雨上がり|あめあがり,雪だるま|ゆきだるま,冬休み|ふゆやすみ,春休み|はるやすみ,夏休み|なつやすみ,朝顔の鉢|あさがおのはち,金魚すくい|きんぎょすくい,花火大会|はなびたいかい,盆踊り|ぼんおどり,こいのぼり|こいのぼり,ひな祭り|ひなまつり,七夕飾り|たなばたかざり,十五夜|じゅうごや,紅葉狩り|もみじがり,虫取り網|むしとりあみ,水筒|すいとう,弁当箱|べんとうばこ,上履き|うわばき,黒板消し|こくばんけし,時間割|じかんわり,給食袋|きゅうしょくぶくろ,交通標識|こうつうひょうしき,横断歩道|おうだんほどう,路線バス|ろせんばす,地下鉄|ちかてつ,空港|くうこう,港町|みなとまち,田んぼ道|たんぼみち,里山|さとやま,雑木林|ぞうきばやし,用水路|ようすいろ,天気図|てんきず,高気圧|こうきあつ,低気圧|ていきあつ,気温差|きおんさ,朝の会|あさのかい,帰り道|かえりみち,習字セット|しゅうじせっと,彫刻刀|ちょうこくとう,理科実験|りかじっけん,観察日記|かんさつにっき,体力測定|たいりょくそくてい,運動靴|うんどうぐつ,応援団|おうえんだん,優勝旗|ゆうしょうき
+`;
+
+    const levelThreeTopicSeed = `
+太陽系の惑星|たいようけいのわくせい,月の満ち欠け|つきのみちかけ,皆既月食|かいきげっしょく,流星群の夜|りゅうせいぐんのよる,火山活動|かざんかつどう,地震速報|じしんそくほう,津波避難|つなみひなん,干ばつと豪雨|かんばつとごうう,森林火災|しんりんかさい,砂漠化問題|さばくかもんだい,赤道直下の国|せきどうちょっかのくに,北極圏の氷|ほっきょくけんのこおり,海流と気候|かいりゅうときこう,台風進路予想|たいふうしんろよそう,降水確率|こうすいかくりつ,冬至と夏至|とうじとげし,旧暦の行事|きゅうれきのぎょうじ,地域の伝統芸能|ちいきのでんとうげいのう,世界文化遺産|せかいぶんかいさん,国立公園|こくりつこうえん,白神山地|しらかみさんち,屋久島の森|やくしまのもり,琵琶湖の水質|びわこのすいしつ,瀬戸大橋|せとおおはし,青函トンネル|せいかんとんねる,首都高速道路|しゅとこうそくどうろ,物流センター|ぶつりゅうせんたー,工業地帯|こうぎょうちたい,農業用水|のうぎょうようすい,米の品種改良|こめのひんしゅかいりょう,食品ロス削減|しょくひんろすさくげん,学校給食の献立|がっこうきゅうしょくのこんだて,図書館の利用者|としょかんのりようしゃ,新聞記事の見出し|しんぶんきじのみだし,選挙管理委員会|せんきょかんりいいんかい,裁判員制度|さいばんいんせいど,消費税の仕組み|しょうひぜいのしくみ,社会保障制度|しゃかいほしょうせいど,年金制度|ねんきんせいど,地方交付税|ちほうこうふぜい,市場経済|しじょうけいざい,需要と供給|じゅようときょうきゅう,円高と円安|えんだかとえんやす,株価指数|かぶかしすう,予算委員会|よさんいいんかい,内閣総理大臣|ないかくそうりだいじん,国会議事堂|こっかいぎじどう,都道府県知事|とどうふけんちじ,市町村合併|しちょうそんがっぺい,基本的人権|きほんてきじんけん,三権分立|さんけんぶんりつ,日本銀行券|にほんぎんこうけん,関税|かんぜい,貿易摩擦|ぼうえきまさつ,輸入小麦|ゆにゅうこむぎ,半導体製造装置|はんどうたいせいぞうそうち,情報安全対策|じょうほうあんぜんたいさく,個人情報保護|こじんじょうほうほご,クラウドサービス|くらうどさーびす,電子決済|でんしけっさい,生成AI|せいせいえーあい,音声認識|おんせいにんしき,画像編集ソフト|がぞうへんしゅうそふと,動画配信サービス|どうがはいしんさーびす,通信衛星|つうしんえいせい,深海探査船|しんかいたんさせん,有人宇宙飛行|ゆうじんうちゅうひこう,火星探査機|かせいたんさき,南極観測隊|なんきょくかんそくたい,太陽光発電|たいようこうはつでん,風力発電|ふうりょくはつでん,地熱発電|ちねつはつでん,水素エネルギー|すいそえねるぎー,カーボンニュートラル|かーぼんにゅーとらる
+`;
+
+    const levelFourTopicSeed = `
+エルニーニョ現象と漁業への影響|えるにーにょげんしょうとぎょぎょうへのえいきょう,熱帯雨林の減少と気候変動|ねったいうりんのげんしょうときこうへんどう,東京ゲームショーの新作発表|とうきょうげーむしょーのしんさくはっぴょう,国際宇宙ステーションでの実験|こくさいうちゅうすてーしょんでのじっけん,南海トラフ巨大地震への備え|なんかいとらふきょだいじしんへのそなえ,少子高齢化と社会保障制度|しょうしこうれいかとしゃかいほしょうせいど,人口減少地域の公共交通|じんこうげんしょうちいきのこうきょうこうつう,再生可能エネルギーの導入計画|さいせいかのうえねるぎーのどうにゅうけいかく,半導体工場と地域経済|はんどうたいこうじょうとちいきけいざい,生成AI時代の情報リテラシー|せいせいえーあいじだいのじょうほうりてらしー,海洋プラスチックごみ削減対策|かいようぷらすちっくごみさくげんたいさく,森林資源と土砂災害の関係|しんりんしげんとどしゃさいがいのかんけい,世界文化遺産と観光公害|せかいぶんかいさんとかんこうこうがい,農業用水と地域の水管理|のうぎょうようすいとちいきのみずかんり,食品ロス削減に向けた取り組み|しょくひんろすさくげんにむけたとりくみ,地方自治体の防災計画|ちほうじちたいのぼうさいけいかく,国会審議と予算編成|こっかいしんぎとよさんへんせい,円安局面の輸入価格|えんやすきょくめんのゆにゅうかかく,外国為替市場の変動要因|がいこくかわせしじょうのへんどうよういん,株価指数と投資家心理|かぶかしすうととうしかしんり,学校現場の情報活用|がっこうげんばのじょうほうかつよう,子どもの読書習慣と図書館|こどものどくしょしゅうかんととしょかん,朝顔の観察日記と夏休み|あさがおのかんさつにっきとなつやすみ,文化祭実行委員会の準備|ぶんかさいじっこういいんかいのじゅんび,部活動と地域クラブの連携|ぶかつどうとちいきくらぶのれんけい,修学旅行の班別行動計画|しゅうがくりょこうのはんべつこうどうけいかく,気象衛星による台風観測|きしょうえいせいによるたいふうかんそく,火山灰による交通への影響|かざんばいによるこうつうへのえいきょう,津波避難ビルの場所確認|つなみひなんびるのばしょかくにん,電力需給と節電要請|でんりょくじゅきゅうとせつでんようせい,水道インフラの老朽化対策|すいどういんふらのろうきゅうかたいさく,都市公園とヒートアイランド|としこうえんとひーとあいらんど,物流網の混乱と生活用品|ぶつりゅうもうのこんらんとせいかつようひん,キャッシュレス決済と家計管理|きゃっしゅれすけっさいとかけいかんり,個人情報保護と学校連絡網|こじんじょうほうほごとがっこうれんらくもう,オンライン授業と家庭学習|おんらいんじゅぎょうとかていがくしゅう,深海探査で見つかる新種|しんかいたんさでみつかるしんしゅ,月面探査計画と国際協力|げつめんたんさけいかくとこくさいきょうりょく,太陽フレアと通信障害|たいようふれあとつうしんしょうがい,量子コンピュータと暗号技術|りょうしこんぴゅーたとあんごうぎじゅつ,自動運転バスの実証実験|じどううんてんばすのじっしょうじっけん,高齢者見守りサービス|こうれいしゃみまもりさーびす,インド洋の海水温変化|いんどようのかいすいおんへんか,赤道付近の積乱雲|せきどうふきんのせきらんうん,偏西風の蛇行と寒波|へんせいふうのだこうとかんぱ,線状降水帯による大雨|せんじょうこうすいたいによるおおあめ,干ばつ地域への食料支援|かんばつちいきへのしょくりょうしえん,世界陸上競技選手権の決勝|せかいりくじょうきょうぎせんしゅけんのけっしょう,全国高校野球選手権の開会式|ぜんこくこうこうやきゅうせんしゅけんのかいかいしき,東京国際映画祭の受賞作品|とうきょうこくさいえいがさいのじゅしょうさくひん,国連安全保障理事会の決議|こくれんあんぜんほしょうりじかいのけつぎ,主要七カ国首脳会議の共同声明|しゅようななかこくしゅのうかいぎのきょうどうせいめい,憲法改正に関する国民投票|けんぽうかいせいにかんするこくみんとうひょう,裁判員制度の評議|さいばんいんせいどのひょうぎ,消費者契約法と返品トラブル|しょうひしゃけいやくほうとへんぴんとらぶる,労働時間と生活の余白|ろうどうじかんとせいかつのよはく
+`;
+
+    const READING_VARIANTS = [
+      { display: "明日", from: "あした", to: "あす" }
+    ];
+
     function parseWords(seed) {
       return seed.trim().split(",").map((entry) => {
         const [display, kana] = entry.trim().split("|");
-        return { display, kana };
+        return {
+          display,
+          kana,
+          kanas: readingVariants(display, kana),
+          type: classifyWord(display)
+        };
       }).filter((word) => word.display && word.kana);
+    }
+
+    function classifyWord(display) {
+      if (/(ます|ました|です|でした)$/.test(display)) return "polite";
+      if (/[。！？]$/.test(display)) return "other";
+      return "topic";
+    }
+
+    function readingVariants(display, kana) {
+      const variants = [kana];
+      for (const variant of READING_VARIANTS) {
+        if (!display.includes(variant.display) || !kana.includes(variant.from)) continue;
+        variants.push(kana.replaceAll(variant.from, variant.to));
+      }
+      return [...new Set(variants)];
     }
 
     const LEVEL_WORDS = {
       1: parseWords(levelOneSeed),
-      2: parseWords(levelTwoSeed),
-      3: parseWords(levelThreeSeed),
-      4: parseWords(levelFourSeed)
+      2: [...parseWords(levelTwoSeed), ...parseWords(levelTwoVarietySeed), ...parseWords(levelTwoTopicSeed)],
+      3: [...parseWords(levelThreeSeed), ...parseWords(levelThreeVarietySeed), ...parseWords(levelThreeTopicSeed)],
+      4: [...parseWords(levelFourSeed), ...parseWords(levelFourVarietySeed), ...parseWords(levelFourTopicSeed)]
     };
 
     const els = {
       score: document.querySelector("#scoreText"),
       time: document.querySelector("#timeText"),
       life: document.querySelector("#lifeText"),
+      lifeStock: document.querySelector("#lifeStockText"),
       combo: document.querySelector("#comboText"),
       defeat: document.querySelector("#defeatText"),
       accuracy: document.querySelector("#accuracyText"),
@@ -1638,6 +1718,10 @@
       typed: "",
       wordMissed: false,
       used: [],
+      wordTypeHistory: [],
+      awaitingNext: false,
+      spawnTimer: null,
+      spawnToken: 0,
       records: readRecords(),
       sound: localStorage.getItem("t-room-onitaiji-muted") !== "true",
       audio: null,
@@ -1690,7 +1774,7 @@
       Object.assign(state, {
         screen: "playing",
         score: 0,
-        timeLeft: CONFIG.gameSeconds,
+        timeLeft: currentGameSeconds(),
         life: CONFIG.life,
         combo: 0,
         maxCombo: 0,
@@ -1702,9 +1786,12 @@
         typed: "",
         wordMissed: false,
         used: [],
+        wordTypeHistory: [],
+        awaitingNext: false,
         pausedOnce: false,
         lastTime: 0
       });
+      clearNextEnemy();
       els.title.hidden = true;
       els.result.hidden = true;
       els.pause.hidden = true;
@@ -1715,14 +1802,21 @@
 
     function spawnEnemy() {
       const level = currentLevel();
-      const pool = LEVEL_WORDS[level.id].filter((word) => !state.used.includes(word.display));
-      if (pool.length === 0) state.used = [];
-      const nextPool = LEVEL_WORDS[level.id].filter((word) => !state.used.includes(word.display));
-      const word = nextPool[Math.floor(Math.random() * nextPool.length)];
+      let nextPool = LEVEL_WORDS[level.id].filter((word) => !state.used.includes(word.display));
+      if (nextPool.length === 0) {
+        state.used = [];
+        nextPool = LEVEL_WORDS[level.id];
+      }
+      const word = chooseWord(level, nextPool);
+      state.awaitingNext = false;
+      state.spawnTimer = null;
       state.used.push(word.display);
       if (state.used.length > CONFIG.historySize) state.used.shift();
+      state.wordTypeHistory.push(word.type);
+      if (state.wordTypeHistory.length > CONFIG.wordTypeRecentLimit) state.wordTypeHistory.shift();
       state.current = word;
-      state.candidates = kanaToCandidates(word.kana);
+      state.candidates = word.kanas.flatMap((kana) => kanaToCandidates(kana));
+      state.candidates = [...new Set(state.candidates)].slice(0, 520);
       state.typed = "";
       state.wordMissed = false;
       state.distance = CONFIG.distance.start;
@@ -1766,14 +1860,59 @@
       return CONFIG.levels[state.levelIndex];
     }
 
+    function currentGameSeconds() {
+      return currentLevel().seconds || CONFIG.gameSeconds;
+    }
+
+    function scheduleNextEnemy(delay) {
+      clearNextEnemy();
+      const token = ++state.spawnToken;
+      state.spawnTimer = setTimeout(() => {
+        if (state.screen !== "playing" || token !== state.spawnToken) return;
+        spawnEnemy();
+      }, delay);
+    }
+
+    function clearNextEnemy() {
+      if (state.spawnTimer) clearTimeout(state.spawnTimer);
+      state.spawnTimer = null;
+      state.spawnToken += 1;
+    }
+
+    function chooseWord(level, words) {
+      const groups = words.reduce((acc, word) => {
+        (acc[word.type] ||= []).push(word);
+        return acc;
+      }, {});
+      const weights = CONFIG.wordTypeWeights[level.id] || CONFIG.wordTypeWeights[2];
+      const candidates = Object.entries(groups).map(([type, group]) => {
+        const recentCount = state.wordTypeHistory.filter((recentType) => recentType === type).length;
+        return {
+          type,
+          group,
+          weight: (weights[type] ?? 0.08) * Math.pow(CONFIG.wordTypeRepeatPenalty, recentCount)
+        };
+      }).filter((entry) => entry.group.length && entry.weight > 0);
+      const total = candidates.reduce((sum, entry) => sum + entry.weight, 0);
+      if (!total) return words[Math.floor(Math.random() * words.length)];
+      let pick = Math.random() * total;
+      for (const entry of candidates) {
+        pick -= entry.weight;
+        if (pick <= 0) return entry.group[Math.floor(Math.random() * entry.group.length)];
+      }
+      return candidates[candidates.length - 1].group[0];
+    }
+
     function loop(now) {
       const delta = state.lastTime ? (now - state.lastTime) / 1000 : 0;
       state.lastTime = now;
       if (state.screen === "playing") {
         state.timeLeft = Math.max(0, state.timeLeft - delta);
-        const enemyType = state.enemyType || CONFIG.enemyTypes[0];
-        state.distance -= (100 / CONFIG.enemySeconds) * enemyType.speed * delta;
-        if (state.distance <= 0) loseLife();
+        if (!state.awaitingNext && state.current) {
+          const enemyType = state.enemyType || CONFIG.enemyTypes[0];
+          state.distance -= (100 / CONFIG.enemySeconds) * enemyType.speed * delta;
+          if (state.distance <= 0) loseLife();
+        }
         if (state.timeLeft <= 0 || state.life <= 0) endGame();
         updateHud();
         updateOniPosition();
@@ -1794,8 +1933,11 @@
         return;
       }
       if (state.screen === "result") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
         if (event.key === "Enter") startGame();
-        if (event.key === "Escape") showTitle();
+        else if (event.key === "Escape") showTitle();
         return;
       }
       if (state.screen === "paused") {
@@ -1812,6 +1954,7 @@
         pauseGame();
         return;
       }
+      if (state.awaitingNext || !state.current) return;
       if (event.key === "Backspace") {
         state.typed = state.typed.slice(0, -1);
         renderWord();
@@ -1849,7 +1992,12 @@
       setTimeout(() => els.oni.classList.remove("is-hit"), 90);
       playSound("hit");
       const exact = possible.find((candidate) => candidate === state.typed);
-      if (exact) defeatEnemy(exact);
+      if (exact) {
+        renderWord();
+        defeatEnemy(exact);
+        updateHud();
+        return;
+      }
       renderWord();
       updateHud();
     }
@@ -1884,7 +2032,8 @@
         playSound("slash");
       }
       els.oni.classList.add("is-slash");
-      setTimeout(spawnEnemy, 260);
+      state.awaitingNext = true;
+      scheduleNextEnemy(260);
     }
 
     function loseLife() {
@@ -1892,14 +2041,19 @@
       state.combo = 0;
       state.distance = CONFIG.distance.lifeLossRetreat;
       state.wordMissed = true;
+      state.awaitingNext = true;
       setBattleText("近い");
       playSound("miss");
-      if (state.life > 0) setTimeout(spawnEnemy, 220);
+      if (state.life > 0) scheduleNextEnemy(220);
     }
 
     function endGame() {
       if (state.screen !== "playing") return;
       state.screen = "result";
+      clearNextEnemy();
+      state.awaitingNext = false;
+      state.current = null;
+      state.candidates = [];
       updateRecord();
       els.result.hidden = false;
       els.resultDefeat.textContent = `${state.defeat}体`;
@@ -1922,10 +2076,12 @@
       state.screen = "playing";
       els.pause.hidden = true;
       state.lastTime = 0;
+      if (state.awaitingNext) scheduleNextEnemy(80);
     }
 
     function showTitle() {
       state.screen = "title";
+      clearNextEnemy();
       els.title.hidden = false;
       els.pause.hidden = true;
       els.result.hidden = true;
@@ -1962,10 +2118,16 @@
     function updateHud() {
       els.score.textContent = String(state.score);
       els.time.textContent = state.timeLeft.toFixed(1);
-      els.life.textContent = "♥".repeat(Math.max(0, state.life));
+      updateHpMeter();
       els.combo.textContent = String(state.combo);
       els.defeat.textContent = String(state.defeat);
       els.accuracy.textContent = `${accuracy()}%`;
+    }
+
+    function updateHpMeter() {
+      const hp = clamp(state.distance, 0, 100);
+      els.life.textContent = `HP ${Math.round(hp)}`;
+      els.lifeStock.textContent = `Life x${Math.max(0, state.life)}`;
     }
 
     function updateOniPosition() {
