@@ -1362,6 +1362,7 @@
             <div><span>Accuracy</span><strong id="resultAccuracy">100%</strong></div>
             <div><span>Max Combo</span><strong id="resultCombo">0</strong></div>
             <div><span>Keys</span><strong id="resultKeys">0</strong></div>
+            <div><span>JP Chars</span><strong id="resultJapaneseChars">0</strong></div>
             <div><span>Best</span><strong id="resultBest">0体</strong></div>
           </div>
           <div class="key-help">
@@ -1689,6 +1690,7 @@
       resultAccuracy: document.querySelector("#resultAccuracy"),
       resultCombo: document.querySelector("#resultCombo"),
       resultKeys: document.querySelector("#resultKeys"),
+      resultJapaneseChars: document.querySelector("#resultJapaneseChars"),
       resultBest: document.querySelector("#resultBest"),
       bossPreview: document.querySelector("#bossPreview"),
       bossGrid: document.querySelector("#bossGrid")
@@ -1708,6 +1710,7 @@
       hits: 0,
       misses: 0,
       totalKeys: 0,
+      japaneseChars: 0,
       distance: CONFIG.distance.start,
       current: null,
       enemyType: CONFIG.enemyTypes[0],
@@ -1779,6 +1782,7 @@
         hits: 0,
         misses: 0,
         totalKeys: 0,
+        japaneseChars: 0,
         distance: CONFIG.distance.start,
         typed: "",
         wordMissed: false,
@@ -2020,6 +2024,7 @@
       const enemyType = state.enemyType || CONFIG.enemyTypes[0];
       const perfect = !state.wordMissed;
       state.defeat += 1;
+      state.japaneseChars += countJapaneseCharacters(state.current.display);
       state.score += Math.round(exact.length * 120 * level.multiplier * enemyType.score * (perfect ? 1.2 : 1));
       if (perfect) {
         setBattleText("一閃");
@@ -2058,6 +2063,7 @@
       els.resultAccuracy.textContent = `${accuracy()}%`;
       els.resultCombo.textContent = String(state.maxCombo);
       els.resultKeys.textContent = String(state.totalKeys);
+      els.resultJapaneseChars.textContent = String(state.japaneseChars);
       els.resultBest.textContent = `${bestRecord().defeat || 0}体`;
       els.rank.textContent = rankName();
       els.resultMessage.textContent = `${currentLevel().name} / ${state.defeat}体を退治しました。`;
@@ -2145,6 +2151,10 @@
     function accuracy() {
       if (state.totalKeys === 0) return "100.0";
       return ((state.hits / state.totalKeys) * 100).toFixed(1);
+    }
+
+    function countJapaneseCharacters(text) {
+      return Array.from(text).filter((char) => /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}ー々ヶヵ]/u.test(char)).length;
     }
 
     function keysPerMinuteForRank() {
