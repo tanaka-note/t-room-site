@@ -1,0 +1,2782 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T-ROOM OniTaiji English | Demon-slicing Typing Game</title>
+  <meta name="description" content="T-ROOM OniTaiji English. Type natural English words and sentences to cut down approaching pixel demons in this PC keyboard typing game.">
+  <meta property="og:image" content="https://tanaka-note.com/assets/t-room-share.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="T-ROOM OniTaiji English">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="./assets/favicon.ico" sizes="any">
+  <link rel="icon" href="./assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="./assets/site-icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --night: #151923;
+      --night-deep: #0f121a;
+      --ink: #f7eedf;
+      --muted: #aeb2bd;
+      --line: rgba(255, 255, 255, 0.14);
+      --gold: #d3b36f;
+      --red: #d26b5f;
+      --blue: #6f95c8;
+      --green: #8cbf9c;
+      --panel: rgba(255, 255, 255, 0.07);
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 14%, rgba(211, 179, 111, 0.14), transparent 22rem),
+        linear-gradient(180deg, #1c2230 0%, var(--night) 48%, var(--night-deep) 100%);
+      color: var(--ink);
+      font-family: "Noto Sans JP", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .oni-app {
+      position: relative;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      padding: 14px 18px 18px;
+    }
+
+    .oni-header {
+      position: relative;
+      z-index: 4;
+      width: min(1180px, 100%);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 0 auto 10px;
+      color: rgba(247, 238, 223, 0.86);
+      font-weight: 900;
+    }
+
+    .oni-brand,
+    .oni-back {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .oni-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .oni-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--gold);
+    }
+
+    .oni-back {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .game {
+      position: relative;
+      width: min(1180px, calc((100vh - 76px) * 1.72), 100%);
+      height: min(684px, calc(100vh - 76px));
+      min-height: 560px;
+      aspect-ratio: 16 / 9;
+      display: grid;
+      grid-template-rows: 72px minmax(0, 1fr) 146px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / 100% 42px,
+        radial-gradient(circle at 50% 6%, rgba(247, 224, 167, 0.2), transparent 14rem),
+        linear-gradient(180deg, rgba(28, 34, 48, 0.9), rgba(15, 18, 26, 0.96));
+      box-shadow: var(--shadow);
+    }
+
+    .game::before {
+      content: "鬼";
+      position: absolute;
+      left: -18px;
+      bottom: -92px;
+      z-index: 0;
+      color: rgba(210, 107, 95, 0.08);
+      font-size: min(42vw, 460px);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+      text-shadow: 0 0 52px rgba(210, 107, 95, 0.12);
+    }
+
+    .game::after {
+      content: "鬼";
+      position: absolute;
+      right: -10px;
+      top: 42px;
+      z-index: 0;
+      color: rgba(211, 179, 111, 0.07);
+      font-size: min(24vw, 240px);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+    }
+
+    .hud {
+      position: relative;
+      z-index: 3;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 7px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.18);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hud div {
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 7px 10px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .hud span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .hud strong {
+      display: block;
+      margin-top: 2px;
+      color: var(--ink);
+      font-size: 1.14rem;
+      line-height: 1.1;
+    }
+
+    .life-cell {
+      position: relative;
+    }
+
+    .life-cell strong {
+      color: #f7e4b5;
+      font-size: 1.02rem;
+    }
+
+    .life-stock {
+      display: block;
+      margin-top: 2px;
+      color: rgba(247, 238, 223, 0.64);
+      font-size: 0.58rem;
+      font-weight: 900;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .stage {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .stage::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(124deg, transparent 0 43%, rgba(210, 107, 95, 0.2) 44%, rgba(210, 107, 95, 0.06) 46%, transparent 48%),
+        radial-gradient(circle at 50% 78%, rgba(210, 107, 95, 0.16), transparent 26rem);
+      opacity: 0.8;
+    }
+
+    .stage::after {
+      content: "鬼";
+      position: absolute;
+      right: 8%;
+      bottom: 7%;
+      z-index: 0;
+      color: rgba(210, 107, 95, 0.11);
+      font-size: clamp(7rem, 16vw, 13rem);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+      transform: rotate(-8deg);
+    }
+
+    .moon {
+      position: absolute;
+      top: 24px;
+      left: 50%;
+      z-index: 1;
+      width: 62px;
+      height: 62px;
+      border-radius: 50%;
+      transform: translateX(-50%);
+      background: #f3dfaa;
+      box-shadow: 0 0 42px rgba(243, 223, 170, 0.26);
+      opacity: 0.9;
+    }
+
+    .torii {
+      position: absolute;
+      top: 84px;
+      left: 50%;
+      z-index: 1;
+      width: 218px;
+      height: 112px;
+      transform: translateX(-50%);
+      opacity: 0.68;
+    }
+
+    .torii::before,
+    .torii::after {
+      content: "";
+      position: absolute;
+      background: #7d3f3b;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+    }
+
+    .torii::before {
+      left: 12px;
+      top: 14px;
+      width: 194px;
+      height: 14px;
+      border-radius: 4px;
+    }
+
+    .torii::after {
+      left: 34px;
+      top: 48px;
+      width: 150px;
+      height: 10px;
+      border-radius: 3px;
+    }
+
+    .torii span {
+      position: absolute;
+      top: 30px;
+      width: 14px;
+      height: 82px;
+      background: #683734;
+      border-radius: 3px;
+    }
+
+    .torii span:first-child {
+      left: 53px;
+    }
+
+    .torii span:last-child {
+      right: 53px;
+    }
+
+    .stage-stamp {
+      position: absolute;
+      top: 16px;
+      right: 22px;
+      z-index: 2;
+      border: 1px solid rgba(211, 179, 111, 0.42);
+      border-radius: 999px;
+      padding: 5px 12px 6px;
+      background: rgba(68, 29, 32, 0.72);
+      color: #f6dfab;
+      font-size: 0.82rem;
+      font-weight: 900;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    }
+
+    .road {
+      position: absolute;
+      inset: 170px 6% 0;
+      z-index: 1;
+      background:
+        linear-gradient(90deg, transparent, rgba(247, 238, 223, 0.16), transparent) 50% 0 / 2px 100% no-repeat,
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0));
+      clip-path: polygon(42% 0, 58% 0, 98% 100%, 2% 100%);
+      opacity: 0.88;
+    }
+
+    .danger-edge {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      opacity: 0;
+      pointer-events: none;
+      background: radial-gradient(circle at 50% 84%, rgba(210, 107, 95, 0.35), transparent 34rem);
+      transition: opacity 160ms ease;
+    }
+
+    .danger-edge.is-hot {
+      opacity: 1;
+    }
+
+    .player-swing,
+    .slash-arc {
+      position: absolute;
+      left: 50%;
+      bottom: 52px;
+      z-index: 5;
+      pointer-events: none;
+      opacity: 0;
+    }
+
+    .player-swing {
+      width: 120px;
+      height: 120px;
+      transform: translateX(-50%);
+      transform-origin: 50% 100%;
+    }
+
+    .player-swing::before {
+      content: "";
+      position: absolute;
+      left: 46px;
+      bottom: 12px;
+      width: 30px;
+      height: 28px;
+      border: 4px solid rgba(23, 25, 35, 0.82);
+      background: #d0b06f;
+      image-rendering: pixelated;
+      box-shadow:
+        0 -10px 0 #b94838,
+        0 -18px 0 #171923,
+        -10px -12px 0 #f2d99b,
+        10px -12px 0 #f2d99b;
+    }
+
+    .sword {
+      position: absolute;
+      left: 55px;
+      bottom: 34px;
+      width: 10px;
+      height: 74px;
+      background:
+        linear-gradient(90deg, #8a94a1 0 2px, #fff4d6 2px 5px, #c8d1d9 5px 8px, #6b7280 8px 10px);
+      box-shadow:
+        0 -10px 0 #f8efe1,
+        -14px 54px 0 #7d3f3b,
+        14px 54px 0 #7d3f3b,
+        0 62px 0 #3a2630;
+      transform: rotate(-44deg);
+      transform-origin: 50% 92%;
+      image-rendering: pixelated;
+    }
+
+    .slash-arc {
+      width: 190px;
+      height: 126px;
+      transform: translateX(-50%);
+      border-top: 9px solid rgba(255, 242, 208, 0.92);
+      border-right: 5px solid rgba(211, 179, 111, 0.72);
+      border-radius: 50%;
+      filter: drop-shadow(0 0 12px rgba(247, 238, 223, 0.5));
+    }
+
+    .stage.is-swing .player-swing {
+      animation: playerSwing 260ms steps(5, end) both;
+    }
+
+    .stage.is-swing .sword {
+      animation: swordCut 260ms steps(5, end) both;
+    }
+
+    .stage.is-swing .slash-arc {
+      animation: slashArc 260ms ease-out both;
+    }
+
+    .oni {
+      position: absolute;
+      left: 50%;
+      bottom: 112px;
+      z-index: 2;
+      width: 176px;
+      height: 176px;
+      --skin: #b94838;
+      --skin-mid: #d7604f;
+      --skin-light: #ee8867;
+      --skin-dark: #662125;
+      --hair: #252b35;
+      --horn: #efd38f;
+      --horn-shadow: #aa7a43;
+      --cloth: #d0b06f;
+      transform: translateX(-50%) scale(0.62);
+      transform-origin: 50% 100%;
+      transition: transform 120ms linear, bottom 120ms linear, filter 120ms ease;
+    }
+
+    .oni.blue {
+      --skin: #486f9f;
+      --skin-mid: #6f95c8;
+      --skin-light: #9bb8de;
+      --skin-dark: #253a58;
+      --cloth: #c8b27a;
+    }
+
+    .oni.gold {
+      --skin: #ba8540;
+      --skin-mid: #d3b36f;
+      --skin-light: #f2d99b;
+      --skin-dark: #6c4726;
+      --cloth: #7f3d35;
+    }
+
+    .oni.rock {
+      --skin: #6f6b63;
+      --skin-mid: #85817a;
+      --skin-light: #aaa49a;
+      --skin-dark: #383832;
+      --cloth: #b48b5d;
+    }
+
+    .oni.is-boss {
+      width: 202px;
+      height: 202px;
+      --boss-skin: #b94838;
+      --boss-mid: #d7604f;
+      --boss-dark: #521c22;
+      --boss-hair: #1c222d;
+      --boss-horn: #f2d99b;
+      --boss-armor: #2e3541;
+      --boss-accent: #d3b36f;
+    }
+
+    .oni.is-boss.boss-lv4 {
+      width: 226px;
+      height: 226px;
+    }
+
+    .oni .boss-sprite {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    .oni.is-hit {
+      filter: brightness(1.28) contrast(1.08);
+      animation: oniHitShake 130ms steps(2, end);
+    }
+
+    .oni.is-slash {
+      animation: oniVanish 360ms ease forwards;
+    }
+
+    .oni-pixel {
+      display: block;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+      shape-rendering: crispEdges;
+      overflow: visible;
+      filter: drop-shadow(0 14px 0 rgba(0, 0, 0, 0.16)) drop-shadow(0 22px 28px rgba(0, 0, 0, 0.34));
+    }
+
+    .px-outline { fill: #171923; }
+    .px-skin { fill: var(--skin); }
+    .px-skin-mid { fill: var(--skin-mid); }
+    .px-skin-light { fill: var(--skin-light); }
+    .px-skin-dark { fill: var(--skin-dark); }
+    .px-hair { fill: var(--hair); }
+    .px-horn { fill: var(--horn); }
+    .px-horn-shadow { fill: var(--horn-shadow); }
+    .px-eye { fill: #fff6df; }
+    .px-pupil { fill: #11131a; }
+    .px-mouth { fill: #25131a; }
+    .px-fang { fill: #fff1cf; }
+    .px-cloth { fill: var(--cloth); }
+    .px-club { fill: #5b3c2d; }
+    .px-club-light { fill: #8b6243; }
+    .px-shadow { fill: rgba(0, 0, 0, 0.24); }
+    .px-wound { fill: #f2d99b; opacity: 0; }
+    .px-wound-dark { fill: #7d1f28; opacity: 0; }
+
+    .oni.damage-1 .wound-one,
+    .oni.damage-1 .wound-one-dark,
+    .oni.damage-2 .wound-one,
+    .oni.damage-2 .wound-one-dark,
+    .oni.damage-3 .wound-one,
+    .oni.damage-3 .wound-one-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-2 .wound-two,
+    .oni.damage-2 .wound-two-dark,
+    .oni.damage-3 .wound-two,
+    .oni.damage-3 .wound-two-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-3 .wound-three,
+    .oni.damage-3 .wound-three-dark {
+      opacity: 1;
+    }
+
+    .hit-spark {
+      opacity: 0;
+      fill: #fff2d0;
+    }
+
+    .oni.is-hit .hit-spark {
+      animation: hitSpark 130ms steps(2, end);
+    }
+
+    .word-panel {
+      position: relative;
+      z-index: 3;
+      display: grid;
+      justify-items: center;
+      align-content: center;
+      gap: 9px;
+      padding: 8px 28px 14px;
+      text-align: center;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.14);
+    }
+
+    .display-word {
+      min-height: 46px;
+      color: #fff6e7;
+      font-size: clamp(1.72rem, 3.55vw, 3.35rem);
+      font-weight: 900;
+      line-height: 1.18;
+      text-shadow: 0 3px 18px rgba(0, 0, 0, 0.34);
+    }
+
+    .romaji {
+      min-height: 34px;
+      max-width: min(980px, 100%);
+      color: rgba(247, 238, 223, 0.5);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: clamp(1.12rem, 2vw, 1.65rem);
+      font-weight: 800;
+      line-height: 1.42;
+      overflow-wrap: anywhere;
+    }
+
+    .romaji .done {
+      color: var(--gold);
+    }
+
+    .romaji .next {
+      color: #fff8df;
+      border-bottom: 2px solid var(--gold);
+    }
+
+    .typed {
+      min-height: 24px;
+      color: var(--muted);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 1.08rem;
+      overflow-wrap: anywhere;
+    }
+
+    .battle-text {
+      display: none;
+    }
+
+    .menu,
+    .result,
+    .pause,
+    .mobile-lock {
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(15, 18, 26, 0.82);
+      backdrop-filter: blur(8px);
+    }
+
+    .menu {
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 20%, rgba(210, 107, 95, 0.28), transparent 20rem),
+        linear-gradient(180deg, rgba(25, 14, 18, 0.84), rgba(8, 10, 16, 0.86));
+    }
+
+    .menu::before {
+      content: "鬼";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      z-index: 0;
+      color: rgba(210, 107, 95, 0.14);
+      font-size: clamp(13rem, 36vw, 31rem);
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
+      transform: translate(-50%, -55%) rotate(-7deg);
+      text-shadow: 0 0 72px rgba(210, 107, 95, 0.18);
+    }
+
+    .menu::after {
+      content: "";
+      position: absolute;
+      inset: 10% -8%;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(118deg, transparent 0 45%, rgba(247, 238, 223, 0.18) 46%, rgba(210, 107, 95, 0.36) 47%, transparent 49%),
+        linear-gradient(64deg, transparent 0 54%, rgba(211, 179, 111, 0.16) 55%, transparent 57%);
+      opacity: 0.7;
+    }
+
+    .menu[hidden],
+    .result[hidden],
+    .pause[hidden],
+    .mobile-lock[hidden] {
+      display: none;
+    }
+
+    .menu-card {
+      position: relative;
+      z-index: 1;
+      width: min(720px, 100%);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 28px;
+      background: rgba(20, 24, 35, 0.92);
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+
+    .title-card {
+      isolation: isolate;
+      width: min(860px, 100%);
+      padding: 22px 26px 20px;
+      border-color: rgba(211, 179, 111, 0.48);
+      background:
+        linear-gradient(90deg, rgba(210, 107, 95, 0.18), transparent 18%, transparent 82%, rgba(210, 107, 95, 0.18)),
+        radial-gradient(circle at 50% -8%, rgba(210, 107, 95, 0.36), transparent 17rem),
+        linear-gradient(180deg, rgba(45, 22, 27, 0.98), rgba(14, 16, 24, 0.96));
+      box-shadow:
+        0 24px 70px rgba(0, 0, 0, 0.42),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .title-card::before,
+    .title-card::after {
+      content: "";
+      position: absolute;
+      top: 18px;
+      width: 80px;
+      height: 116px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(211, 179, 111, 0.88), rgba(210, 107, 95, 0));
+      opacity: 0.46;
+      pointer-events: none;
+    }
+
+    .title-card::before {
+      left: 18px;
+      transform: skewX(-18deg) rotate(-8deg);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+
+    .title-card::after {
+      right: 18px;
+      transform: skewX(18deg) rotate(8deg);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+
+    .title-kanji {
+      position: relative;
+      z-index: 1;
+      width: 122px;
+      height: 122px;
+      display: grid;
+      place-items: center;
+      margin: 6px auto 14px;
+      border: 1px solid rgba(211, 179, 111, 0.34);
+      border-radius: 34% 42% 38% 46%;
+      background:
+        radial-gradient(circle at 50% 35%, rgba(255, 246, 223, 0.18), transparent 44%),
+        linear-gradient(145deg, #7f3535, #3b2027);
+      color: #f5dfad;
+      font-size: 4.8rem;
+      font-weight: 900;
+      line-height: 1;
+      box-shadow:
+        inset 0 -10px 0 rgba(0, 0, 0, 0.14),
+        0 18px 40px rgba(0, 0, 0, 0.26);
+    }
+
+    .title-kanji::before,
+    .title-kanji::after {
+      content: "";
+      position: absolute;
+      top: -26px;
+      width: 34px;
+      height: 52px;
+      z-index: -1;
+      background: linear-gradient(180deg, #f4dfaa, #a9534f);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      filter: drop-shadow(0 6px 0 rgba(0, 0, 0, 0.18));
+    }
+
+    .title-kanji::before {
+      left: 19px;
+      transform: rotate(-16deg);
+    }
+
+    .title-kanji::after {
+      right: 19px;
+      transform: rotate(16deg);
+    }
+
+    .title-stamp {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      border: 1px solid rgba(211, 179, 111, 0.5);
+      border-radius: 999px;
+      padding: 4px 13px 5px;
+      background: rgba(210, 107, 95, 0.24);
+      color: #f5dfad;
+      font-size: 0.82rem;
+      font-weight: 900;
+    }
+
+    .menu-card h1,
+    .menu-card h2 {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      font-size: clamp(2.2rem, 6vw, 5rem);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .title-card h1 {
+      color: #fff2dc;
+      font-size: clamp(2.6rem, 5vw, 4.25rem);
+      text-shadow:
+        0 4px 0 rgba(0, 0, 0, 0.28),
+        0 0 34px rgba(210, 107, 95, 0.24);
+    }
+
+    .menu-card h1 span {
+      display: block;
+      margin-top: 12px;
+      color: var(--gold);
+      font-size: 0.28em;
+      font-weight: 900;
+    }
+
+    .menu-card p {
+      position: relative;
+      z-index: 1;
+      margin: 16px auto 0;
+      max-width: 38rem;
+      color: var(--muted);
+      line-height: 1.8;
+    }
+
+    .level-list {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      width: min(430px, 100%);
+      margin: 16px auto 0;
+    }
+
+    .level-button {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 7px 6px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--ink);
+      text-align: center;
+      cursor: pointer;
+    }
+
+    .level-button.is-active {
+      border-color: rgba(211, 179, 111, 0.8);
+      background: rgba(211, 179, 111, 0.14);
+    }
+
+    .level-button strong,
+    .level-button span {
+      display: block;
+    }
+
+    .level-button strong {
+      font-size: 0.82rem;
+      line-height: 1.25;
+    }
+
+    .key-help {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px 14px;
+      margin-top: 18px;
+      color: #c8cbd2;
+      font-size: 0.86rem;
+      font-weight: 800;
+    }
+
+    .key-help kbd {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 2px 7px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--gold);
+      font: inherit;
+    }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .result-grid div {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .result-grid span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .result-grid strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 1.35rem;
+    }
+
+    .boss-preview {
+      position: absolute;
+      inset: 0;
+      z-index: 11;
+      display: grid;
+      place-items: center;
+      padding: 26px;
+      overflow: auto;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(210, 107, 95, 0.2), transparent 24rem),
+        linear-gradient(180deg, rgba(14, 16, 24, 0.97), rgba(9, 11, 17, 0.98));
+    }
+
+    .boss-preview[hidden] {
+      display: none;
+    }
+
+    .boss-board {
+      width: min(1040px, 100%);
+      border: 1px solid rgba(211, 179, 111, 0.26);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(20, 24, 35, 0.9);
+      box-shadow: var(--shadow);
+    }
+
+    .boss-board h2 {
+      margin: 0;
+      color: #fff2dc;
+      font-size: clamp(1.55rem, 2.6vw, 2.35rem);
+      line-height: 1;
+    }
+
+    .boss-board p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .boss-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .boss-card {
+      --boss-skin: #b94838;
+      --boss-mid: #d7604f;
+      --boss-dark: #521c22;
+      --boss-hair: #1c222d;
+      --boss-horn: #f2d99b;
+      --boss-armor: #2e3541;
+      --boss-accent: #d3b36f;
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      padding: 10px 8px 12px;
+      background:
+        radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.08), transparent 7rem),
+        rgba(255, 255, 255, 0.045);
+      text-align: center;
+    }
+
+    .boss-card.is-kurogane,
+    .oni.is-kurogane {
+      --boss-skin: #343946;
+      --boss-mid: #586071;
+      --boss-dark: #11141b;
+      --boss-hair: #07090d;
+      --boss-horn: #d8b77a;
+      --boss-armor: #171b24;
+      --boss-accent: #d4484b;
+    }
+
+    .boss-card.is-hakumen,
+    .oni.is-hakumen {
+      --boss-skin: #d8d1c0;
+      --boss-mid: #f1e7cf;
+      --boss-dark: #7a6f64;
+      --boss-hair: #2b2631;
+      --boss-horn: #d3b36f;
+      --boss-armor: #34243d;
+      --boss-accent: #b96a72;
+    }
+
+    .boss-card.is-enkaku,
+    .oni.is-enkaku {
+      --boss-skin: #a93127;
+      --boss-mid: #e25739;
+      --boss-dark: #4a1719;
+      --boss-hair: #f08a2e;
+      --boss-horn: #f4cf79;
+      --boss-armor: #3a1821;
+      --boss-accent: #f0b14e;
+    }
+
+    .boss-card h3 {
+      margin: 8px 0 3px;
+      color: #fff2dc;
+      font-size: 0.94rem;
+    }
+
+    .boss-card span {
+      display: block;
+      color: var(--gold);
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+
+    .boss-card p {
+      min-height: 0;
+      margin: 7px auto 0;
+      color: #aeb2bd;
+      font-size: 0.7rem;
+      line-height: 1.48;
+      font-weight: 800;
+    }
+
+    .boss-sprite {
+      display: block;
+      width: min(124px, 100%);
+      height: auto;
+      margin: 0 auto;
+      image-rendering: pixelated;
+      shape-rendering: crispEdges;
+      filter: drop-shadow(0 14px 0 rgba(0, 0, 0, 0.2)) drop-shadow(0 20px 22px rgba(0, 0, 0, 0.32));
+    }
+
+    .boss-px-outline { fill: #12141c; }
+    .boss-px-skin { fill: var(--boss-skin); }
+    .boss-px-mid { fill: var(--boss-mid); }
+    .boss-px-dark { fill: var(--boss-dark); }
+    .boss-px-hair { fill: var(--boss-hair); }
+    .boss-px-horn { fill: var(--boss-horn); }
+    .boss-px-armor { fill: var(--boss-armor); }
+    .boss-px-accent { fill: var(--boss-accent); }
+    .boss-px-eye { fill: #fff4d6; }
+    .boss-px-pupil { fill: #0c0e14; }
+    .is-kurogane .boss-px-eye,
+    .is-enkaku .boss-px-eye { fill: #ffdad6; }
+    .is-kurogane .boss-px-pupil,
+    .is-enkaku .boss-px-pupil { fill: #df3438; }
+    .boss-px-fang { fill: #fff1cf; }
+    .boss-px-shadow { fill: rgba(0, 0, 0, 0.26); }
+    .boss-px-wound { fill: #f2d99b; opacity: 0; }
+    .boss-px-wound-dark { fill: #7d1f28; opacity: 0; }
+
+    .oni.damage-1 .boss-wound-one,
+    .oni.damage-1 .boss-wound-one-dark,
+    .oni.damage-2 .boss-wound-one,
+    .oni.damage-2 .boss-wound-one-dark,
+    .oni.damage-3 .boss-wound-one,
+    .oni.damage-3 .boss-wound-one-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-2 .boss-wound-two,
+    .oni.damage-2 .boss-wound-two-dark,
+    .oni.damage-3 .boss-wound-two,
+    .oni.damage-3 .boss-wound-two-dark {
+      opacity: 1;
+    }
+
+    .oni.damage-3 .boss-wound-three,
+    .oni.damage-3 .boss-wound-three-dark {
+      opacity: 1;
+    }
+
+    @keyframes playerSwing {
+      0% { opacity: 0; transform: translateX(-50%) translateY(22px) scale(0.92); }
+      20% { opacity: 1; transform: translateX(-50%) translateY(10px) scale(1); }
+      68% { opacity: 1; transform: translateX(-50%) translateY(-12px) scale(1.04); }
+      100% { opacity: 0; transform: translateX(-50%) translateY(-18px) scale(1.02); }
+    }
+
+    @keyframes swordCut {
+      0% { transform: rotate(-58deg); }
+      42% { transform: rotate(28deg); }
+      100% { transform: rotate(54deg); }
+    }
+
+    @keyframes slashArc {
+      0% { opacity: 0; transform: translateX(-50%) translate(36px, 20px) rotate(-34deg) scale(0.55); }
+      35% { opacity: 1; }
+      100% { opacity: 0; transform: translateX(-50%) translate(8px, -44px) rotate(18deg) scale(1.1); }
+    }
+
+    @keyframes oniHitShake {
+      0% { translate: 0 0; }
+      30% { translate: -5px 0; }
+      60% { translate: 5px -2px; }
+      100% { translate: 0 0; }
+    }
+
+    @keyframes hitSpark {
+      0% { opacity: 0; }
+      35% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    @keyframes oniVanish {
+      0% { opacity: 1; transform: translateX(-50%) scale(var(--oni-scale, 1)); }
+      60% { opacity: 1; transform: translateX(-50%) scale(calc(var(--oni-scale, 1) * 1.08)); }
+      100% { opacity: 0; transform: translateX(-50%) scale(calc(var(--oni-scale, 1) * 0.72)) rotate(8deg); }
+    }
+
+    @media (max-width: 760px) {
+      .menu {
+        padding: 16px;
+      }
+
+      .title-card {
+        padding: 18px 18px 16px;
+      }
+
+      .title-kanji {
+        width: 96px;
+        height: 96px;
+        margin: 0 auto 8px;
+        font-size: 3.75rem;
+      }
+
+      .title-kanji::before,
+      .title-kanji::after {
+        top: -21px;
+        width: 27px;
+        height: 42px;
+      }
+
+      .title-kanji::before {
+        left: 15px;
+      }
+
+      .title-kanji::after {
+        right: 15px;
+      }
+
+      .title-stamp {
+        margin-bottom: 8px;
+        padding: 3px 10px 4px;
+        font-size: 0.72rem;
+      }
+
+      .menu-card h1,
+      .menu-card h2 {
+        font-size: clamp(2rem, 10vw, 3.1rem);
+      }
+
+      .menu-card h1 span {
+        margin-top: 8px;
+        font-size: 0.24em;
+      }
+
+      .menu-card p {
+        margin-top: 12px;
+        font-size: 0.92rem;
+        line-height: 1.62;
+      }
+
+      .level-list {
+        margin-top: 12px;
+      }
+
+      .level-button {
+        min-height: 38px;
+        padding: 6px 4px;
+      }
+
+      .level-button strong {
+        font-size: 0.72rem;
+      }
+
+      .key-help {
+        gap: 6px 9px;
+        margin-top: 12px;
+        font-size: 0.72rem;
+      }
+
+      .hud {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .hud div {
+        padding: 7px 6px;
+      }
+
+      .hud span {
+        font-size: 0.58rem;
+      }
+
+      .hud strong {
+        font-size: 0.96rem;
+      }
+    }
+
+    @media (max-width: 820px), (pointer: coarse) {
+      body {
+        overflow: auto;
+      }
+
+      .oni-app {
+        min-height: 100vh;
+      }
+
+      .mobile-lock {
+        display: grid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="oni-app">
+    <header class="oni-header">
+      <a class="oni-brand" href="./index.html" aria-label="T-ROOM home">
+        <span class="oni-mark">T</span>
+        <span>T-ROOM</span>
+      </a>
+      <a class="oni-back" href="./game.html">Games</a>
+    </header>
+
+    <main class="game" id="gameRoot">
+      <section class="hud" aria-label="Game status">
+        <div><span>Score</span><strong id="scoreText">0</strong></div>
+        <div><span>Time</span><strong id="timeText">60.0</strong></div>
+        <div class="life-cell">
+          <span>Life</span>
+          <strong id="lifeText">HP 100</strong>
+          <small class="life-stock" id="lifeStockText">Life x3</small>
+        </div>
+        <div><span>Combo</span><strong id="comboText">0</strong></div>
+        <div><span>Taiji</span><strong id="defeatText">0</strong></div>
+        <div><span>Accuracy</span><strong id="accuracyText">100%</strong></div>
+      </section>
+
+      <section class="stage" aria-label="Demon battle area">
+        <div class="stage-stamp" aria-hidden="true">ONI TAIJI</div>
+        <div class="moon"></div>
+        <div class="torii" aria-hidden="true"><span></span><span></span></div>
+        <div class="road"></div>
+        <div class="danger-edge" id="dangerEdge"></div>
+        <div class="player-swing" id="playerSwing" aria-hidden="true"><div class="sword"></div></div>
+        <div class="slash-arc" aria-hidden="true"></div>
+        <div class="oni red" id="oniSprite" aria-hidden="true">
+          <svg class="oni-pixel" viewBox="0 0 160 160" role="img" aria-label="鬼">
+            <rect class="px-shadow" x="34" y="142" width="92" height="10"></rect>
+            <g class="oni-club">
+              <rect class="px-outline" x="115" y="66" width="11" height="66"></rect>
+              <rect class="px-club" x="118" y="70" width="6" height="58"></rect>
+              <rect class="px-outline" x="109" y="48" width="30" height="18"></rect>
+              <rect class="px-club-light" x="113" y="52" width="22" height="10"></rect>
+              <rect class="px-outline" x="113" y="42" width="6" height="8"></rect>
+              <rect class="px-outline" x="128" y="42" width="6" height="8"></rect>
+              <rect class="px-outline" x="139" y="52" width="7" height="8"></rect>
+            </g>
+            <g class="oni-left-arm">
+              <rect class="px-outline" x="18" y="88" width="26" height="14"></rect>
+              <rect class="px-skin-dark" x="22" y="92" width="18" height="6"></rect>
+              <rect class="px-outline" x="14" y="102" width="18" height="22"></rect>
+              <rect class="px-skin" x="18" y="106" width="10" height="14"></rect>
+              <rect class="px-fang" x="10" y="120" width="6" height="6"></rect>
+              <rect class="px-fang" x="20" y="124" width="6" height="6"></rect>
+            </g>
+            <g class="oni-right-arm">
+              <rect class="px-outline" x="116" y="88" width="26" height="14"></rect>
+              <rect class="px-skin-dark" x="120" y="92" width="18" height="6"></rect>
+              <rect class="px-outline" x="132" y="102" width="18" height="22"></rect>
+              <rect class="px-skin" x="136" y="106" width="10" height="14"></rect>
+              <rect class="px-fang" x="144" y="120" width="6" height="6"></rect>
+              <rect class="px-fang" x="134" y="124" width="6" height="6"></rect>
+            </g>
+            <g class="oni-body-pixel">
+              <rect class="px-outline" x="42" y="92" width="76" height="48"></rect>
+              <rect class="px-skin-dark" x="48" y="98" width="64" height="36"></rect>
+              <rect class="px-skin" x="56" y="100" width="48" height="26"></rect>
+              <rect class="px-skin-light" x="62" y="103" width="14" height="8"></rect>
+              <rect class="px-outline" x="48" y="134" width="64" height="10"></rect>
+              <rect class="px-cloth" x="54" y="132" width="16" height="16"></rect>
+              <rect class="px-cloth" x="72" y="132" width="16" height="20"></rect>
+              <rect class="px-cloth" x="90" y="132" width="16" height="16"></rect>
+              <rect class="px-outline" x="48" y="146" width="22" height="8"></rect>
+              <rect class="px-outline" x="90" y="146" width="22" height="8"></rect>
+            </g>
+            <g class="oni-horns">
+              <rect class="px-outline" x="39" y="12" width="20" height="10"></rect>
+              <rect class="px-horn-shadow" x="43" y="16" width="12" height="8"></rect>
+              <rect class="px-outline" x="35" y="22" width="30" height="14"></rect>
+              <rect class="px-horn" x="41" y="24" width="20" height="8"></rect>
+              <rect class="px-outline" x="101" y="12" width="20" height="10"></rect>
+              <rect class="px-horn-shadow" x="105" y="16" width="12" height="8"></rect>
+              <rect class="px-outline" x="95" y="22" width="30" height="14"></rect>
+              <rect class="px-horn" x="99" y="24" width="20" height="8"></rect>
+            </g>
+            <g class="oni-head">
+              <rect class="px-outline" x="50" y="24" width="60" height="12"></rect>
+              <rect class="px-hair" x="54" y="28" width="52" height="8"></rect>
+              <rect class="px-outline" x="42" y="34" width="76" height="12"></rect>
+              <rect class="px-hair" x="46" y="36" width="68" height="8"></rect>
+              <rect class="px-outline" x="34" y="44" width="92" height="58"></rect>
+              <rect class="px-skin-dark" x="40" y="50" width="80" height="46"></rect>
+              <rect class="px-skin" x="48" y="52" width="64" height="38"></rect>
+              <rect class="px-skin-mid" x="38" y="62" width="14" height="22"></rect>
+              <rect class="px-skin-mid" x="108" y="62" width="14" height="22"></rect>
+              <rect class="px-skin-light" x="56" y="54" width="18" height="10"></rect>
+              <rect class="px-outline" x="44" y="58" width="28" height="8"></rect>
+              <rect class="px-outline" x="88" y="58" width="28" height="8"></rect>
+              <rect class="px-eye" x="52" y="66" width="16" height="10"></rect>
+              <rect class="px-pupil" x="60" y="68" width="6" height="8"></rect>
+              <rect class="px-eye" x="92" y="66" width="16" height="10"></rect>
+              <rect class="px-pupil" x="94" y="68" width="6" height="8"></rect>
+              <rect class="px-skin-dark" x="72" y="72" width="16" height="12"></rect>
+              <rect class="px-outline" x="60" y="86" width="40" height="12"></rect>
+              <rect class="px-mouth" x="66" y="88" width="28" height="6"></rect>
+              <rect class="px-fang" x="68" y="96" width="8" height="10"></rect>
+              <rect class="px-fang" x="84" y="96" width="8" height="10"></rect>
+            </g>
+            <g class="oni-damage">
+              <rect class="px-wound-dark wound-one-dark" x="48" y="71" width="28" height="6"></rect>
+              <rect class="px-wound wound-one" x="52" y="69" width="24" height="3"></rect>
+              <rect class="px-wound-dark wound-two-dark" x="86" y="104" width="26" height="6"></rect>
+              <rect class="px-wound wound-two" x="88" y="102" width="22" height="3"></rect>
+              <rect class="px-wound-dark wound-three-dark" x="61" y="116" width="34" height="6"></rect>
+              <rect class="px-wound wound-three" x="64" y="114" width="28" height="3"></rect>
+              <rect class="hit-spark" x="39" y="65" width="8" height="8"></rect>
+              <rect class="hit-spark" x="112" y="78" width="7" height="7"></rect>
+              <rect class="hit-spark" x="79" y="108" width="6" height="6"></rect>
+            </g>
+          </svg>
+        </div>
+      </section>
+
+      <section class="word-panel" aria-live="polite">
+        <div class="display-word" id="displayWord">T-ROOM OniTaiji English</div>
+        <div class="romaji" id="romajiGuide">Press Enter</div>
+        <div class="typed" id="typedText">Use your keyboard to play</div>
+        <div class="battle-text" id="battleText">Demon-slicing typing game</div>
+      </section>
+
+      <section class="menu" id="titleScreen">
+        <div class="menu-card title-card">
+          <div class="title-kanji" aria-hidden="true">鬼</div>
+          <div class="title-stamp" aria-hidden="true">鬼退治</div>
+          <h1>T-ROOM OniTaiji English <span>Demon-slicing typing game</span></h1>
+          <p>Type the words. Keep the demons back. Cut down as many as you can before time runs out.</p>
+          <div class="level-list" id="levelList"></div>
+          <div class="key-help">
+            <span><kbd>Enter</kbd> Start</span>
+            <span><kbd>↑↓</kbd> Level</span>
+            <span><kbd>Esc</kbd> Title</span>
+            <span><kbd>F2</kbd> Sound</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="pause" id="pauseScreen" hidden>
+        <div class="menu-card">
+          <h2>PAUSE</h2>
+          <p>Press Enter to continue. Press Esc to return to the title.</p>
+        </div>
+      </section>
+
+      <section class="result" id="resultScreen" hidden>
+        <div class="menu-card">
+          <h2 id="rankText">RESULT</h2>
+          <p id="resultMessage">The demons will return.</p>
+          <div class="result-grid">
+            <div><span>Defeated</span><strong id="resultDefeat">0</strong></div>
+            <div><span>Score</span><strong id="resultScore">0</strong></div>
+            <div><span>Accuracy</span><strong id="resultAccuracy">100%</strong></div>
+            <div><span>Max Combo</span><strong id="resultCombo">0</strong></div>
+            <div><span>Keys</span><strong id="resultKeys">0</strong></div>
+            <div><span>Best</span><strong id="resultBest">0</strong></div>
+          </div>
+          <div class="key-help">
+            <span><kbd>Enter</kbd> Retry</span>
+            <span><kbd>Esc</kbd> Title</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="mobile-lock" hidden>
+        <div class="menu-card">
+          <h2>PC keyboard only</h2>
+          <p>This game is designed for a PC keyboard. Please play in an environment with a keyboard.</p>
+        </div>
+      </section>
+
+      <section class="boss-preview" id="bossPreview" hidden>
+        <div class="boss-board">
+          <h2>Lv.3 / Lv.4 Boss Candidates</h2>
+          <p>These boss demons appear in Lv.3 and Lv.4. One of the four is chosen at random.</p>
+          <div class="boss-grid" id="bossGrid"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const CONFIG = {
+      gameSeconds: 60,
+      enemySeconds: 6.5,
+      life: 3,
+      historySize: 30,
+      storageKey: "t-room-onitaiji-en-records",
+      wordTypeRecentLimit: 5,
+      wordTypeRepeatPenalty: 0.34,
+      wordTypeWeights: {
+        1: { topic: 1, polite: 0, other: 0 },
+        2: { topic: 0.62, polite: 0.3, other: 0.08 },
+        3: { topic: 0.62, polite: 0.3, other: 0.08 },
+        4: { topic: 0.65, polite: 0.28, other: 0.07 }
+      },
+      levels: [
+        { id: 1, name: "Lv.1 Scout", detail: "Short words", seconds: 60, multiplier: 1, guideOpacity: 1 },
+        { id: 2, name: "Lv.2 Hunter", detail: "Short phrases", seconds: 60, multiplier: 1.45, guideOpacity: 0.92 },
+        { id: 3, name: "Lv.3 Slayer", detail: "Medium phrases", seconds: 90, multiplier: 2, guideOpacity: 0.82 },
+        { id: 4, name: "Lv.4 Inferno", detail: "Long sentences", seconds: 90, multiplier: 2.8, guideOpacity: 0.72 }
+      ],
+      enemyTypes: [
+        { name: "red", speed: 1.05, score: 1 },
+        { name: "blue", speed: 0.95, score: 1.05 },
+        { name: "gold", speed: 1.16, score: 1.4 },
+        { name: "rock", speed: 0.8, score: 1.25 }
+      ],
+      distance: {
+        start: 100,
+        correctPush: 1.7,
+        missPenalty: 12,
+        lifeLossRetreat: 82
+      }
+    };
+
+    const BOSS_CANDIDATES = [
+      {
+        id: "musha",
+        className: "is-musha",
+        title: "Armored Oni",
+        level: "Lv.3 candidate",
+        note: "A mid-boss with armor and a heavy stance."
+      },
+      {
+        id: "kurogane",
+        className: "is-kurogane",
+        title: "Iron Oni King",
+        level: "Lv.4 candidate",
+        note: "Black armor and red eyes. The most final-boss of the group."
+      },
+      {
+        id: "hakumen",
+        className: "is-hakumen",
+        title: "White Mask Oni",
+        level: "Lv.4 candidate",
+        note: "A pale mask and gold horns. Quiet but dangerous."
+      },
+      {
+        id: "enkaku",
+        className: "is-enkaku",
+        title: "Flame Horn Oni",
+        level: "Lv.3-4 candidate",
+        note: "Flaming hair and a red-black body. Direct and aggressive."
+      }
+    ];
+
+    function bossCandidateSvg(type) {
+      const extra = {
+        musha: `
+          <rect class="boss-px-outline" x="42" y="20" width="76" height="14"></rect>
+          <rect class="boss-px-armor" x="48" y="24" width="64" height="8"></rect>
+          <rect class="boss-px-accent" x="74" y="10" width="12" height="28"></rect>
+          <rect class="boss-px-horn" x="66" y="18" width="28" height="8"></rect>
+          <rect class="boss-px-outline" x="24" y="84" width="30" height="22"></rect>
+          <rect class="boss-px-armor" x="28" y="88" width="22" height="14"></rect>
+          <rect class="boss-px-outline" x="106" y="84" width="30" height="22"></rect>
+          <rect class="boss-px-armor" x="110" y="88" width="22" height="14"></rect>
+          <rect class="boss-px-outline" x="125" y="34" width="8" height="100"></rect>
+          <rect class="boss-px-accent" x="127" y="38" width="4" height="92"></rect>
+          <rect class="boss-px-horn" x="120" y="26" width="18" height="12"></rect>
+        `,
+        kurogane: `
+          <rect class="boss-px-outline" x="35" y="16" width="18" height="28"></rect>
+          <rect class="boss-px-horn" x="39" y="18" width="10" height="22"></rect>
+          <rect class="boss-px-outline" x="107" y="16" width="18" height="28"></rect>
+          <rect class="boss-px-horn" x="111" y="18" width="10" height="22"></rect>
+          <rect class="boss-px-outline" x="51" y="24" width="58" height="14"></rect>
+          <rect class="boss-px-armor" x="57" y="28" width="46" height="8"></rect>
+          <rect class="boss-px-accent" x="74" y="10" width="12" height="16"></rect>
+          <rect class="boss-px-outline" x="38" y="90" width="84" height="42"></rect>
+          <rect class="boss-px-armor" x="44" y="96" width="72" height="30"></rect>
+          <rect class="boss-px-accent" x="58" y="104" width="44" height="6"></rect>
+        `,
+        hakumen: `
+          <rect class="boss-px-outline" x="42" y="25" width="76" height="12"></rect>
+          <rect class="boss-px-horn" x="48" y="28" width="64" height="6"></rect>
+          <rect class="boss-px-outline" x="50" y="42" width="60" height="62"></rect>
+          <rect class="boss-px-mid" x="56" y="48" width="48" height="50"></rect>
+          <rect class="boss-px-outline" x="62" y="64" width="12" height="5"></rect>
+          <rect class="boss-px-outline" x="86" y="64" width="12" height="5"></rect>
+          <rect class="boss-px-accent" x="74" y="76" width="12" height="5"></rect>
+          <rect class="boss-px-outline" x="50" y="108" width="60" height="34"></rect>
+          <rect class="boss-px-armor" x="56" y="114" width="48" height="22"></rect>
+        `,
+        enkaku: `
+          <rect class="boss-px-outline" x="48" y="14" width="16" height="28"></rect>
+          <rect class="boss-px-hair" x="52" y="18" width="8" height="22"></rect>
+          <rect class="boss-px-outline" x="68" y="8" width="16" height="34"></rect>
+          <rect class="boss-px-hair" x="72" y="12" width="8" height="28"></rect>
+          <rect class="boss-px-outline" x="92" y="14" width="16" height="28"></rect>
+          <rect class="boss-px-hair" x="96" y="18" width="8" height="22"></rect>
+          <rect class="boss-px-outline" x="28" y="88" width="28" height="26"></rect>
+          <rect class="boss-px-accent" x="32" y="92" width="20" height="18"></rect>
+          <rect class="boss-px-outline" x="104" y="88" width="28" height="26"></rect>
+          <rect class="boss-px-accent" x="108" y="92" width="20" height="18"></rect>
+          <rect class="boss-px-accent" x="58" y="126" width="44" height="8"></rect>
+        `
+      }[type] || "";
+
+      return `
+        <svg class="boss-sprite" viewBox="0 0 160 160" aria-hidden="true">
+          <rect class="boss-px-shadow" x="30" y="146" width="100" height="10"></rect>
+          <rect class="boss-px-outline" x="18" y="88" width="24" height="44"></rect>
+          <rect class="boss-px-dark" x="22" y="94" width="16" height="30"></rect>
+          <rect class="boss-px-outline" x="118" y="88" width="24" height="44"></rect>
+          <rect class="boss-px-dark" x="122" y="94" width="16" height="30"></rect>
+          <rect class="boss-px-outline" x="38" y="86" width="84" height="56"></rect>
+          <rect class="boss-px-dark" x="44" y="92" width="72" height="44"></rect>
+          <rect class="boss-px-armor" x="52" y="96" width="56" height="30"></rect>
+          <rect class="boss-px-accent" x="62" y="132" width="12" height="18"></rect>
+          <rect class="boss-px-accent" x="86" y="132" width="12" height="18"></rect>
+          <rect class="boss-px-outline" x="36" y="22" width="24" height="18"></rect>
+          <rect class="boss-px-horn" x="42" y="24" width="14" height="12"></rect>
+          <rect class="boss-px-outline" x="100" y="22" width="24" height="18"></rect>
+          <rect class="boss-px-horn" x="104" y="24" width="14" height="12"></rect>
+          ${extra}
+          <rect class="boss-px-outline" x="36" y="38" width="88" height="58"></rect>
+          <rect class="boss-px-dark" x="42" y="44" width="76" height="46"></rect>
+          <rect class="boss-px-skin" x="50" y="48" width="60" height="36"></rect>
+          <rect class="boss-px-mid" x="58" y="50" width="20" height="10"></rect>
+          <rect class="boss-px-outline" x="48" y="58" width="26" height="8"></rect>
+          <rect class="boss-px-outline" x="86" y="58" width="26" height="8"></rect>
+          <rect class="boss-px-eye" x="56" y="66" width="15" height="10"></rect>
+          <rect class="boss-px-pupil" x="62" y="68" width="6" height="8"></rect>
+          <rect class="boss-px-eye" x="90" y="66" width="15" height="10"></rect>
+          <rect class="boss-px-pupil" x="92" y="68" width="6" height="8"></rect>
+          <rect class="boss-px-dark" x="72" y="73" width="16" height="10"></rect>
+          <rect class="boss-px-outline" x="62" y="86" width="36" height="10"></rect>
+          <rect class="boss-px-fang" x="66" y="94" width="8" height="12"></rect>
+          <rect class="boss-px-fang" x="86" y="94" width="8" height="12"></rect>
+          <rect class="boss-px-wound-dark boss-wound-one-dark" x="48" y="72" width="30" height="6"></rect>
+          <rect class="boss-px-wound boss-wound-one" x="52" y="70" width="25" height="3"></rect>
+          <rect class="boss-px-wound-dark boss-wound-two-dark" x="84" y="108" width="32" height="6"></rect>
+          <rect class="boss-px-wound boss-wound-two" x="88" y="106" width="26" height="3"></rect>
+          <rect class="boss-px-wound-dark boss-wound-three-dark" x="57" y="121" width="42" height="6"></rect>
+          <rect class="boss-px-wound boss-wound-three" x="61" y="119" width="35" height="3"></rect>
+          <rect class="hit-spark" x="37" y="66" width="8" height="8"></rect>
+          <rect class="hit-spark" x="112" y="78" width="7" height="7"></rect>
+          <rect class="hit-spark" x="80" y="112" width="6" height="6"></rect>
+        </svg>
+      `;
+    }
+
+    const KANA_ROMAN = {
+      "あ": ["a"], "い": ["i"], "う": ["u"], "え": ["e"], "お": ["o"],
+      "か": ["ka"], "き": ["ki"], "く": ["ku"], "け": ["ke"], "こ": ["ko"],
+      "さ": ["sa"], "し": ["shi", "si"], "す": ["su"], "せ": ["se"], "そ": ["so"],
+      "た": ["ta"], "ち": ["chi", "ti"], "つ": ["tsu", "tu"], "て": ["te"], "と": ["to"],
+      "な": ["na"], "に": ["ni"], "ぬ": ["nu"], "ね": ["ne"], "の": ["no"],
+      "は": ["ha"], "ひ": ["hi"], "ふ": ["fu", "hu"], "へ": ["he"], "ほ": ["ho"],
+      "ま": ["ma"], "み": ["mi"], "む": ["mu"], "め": ["me"], "も": ["mo"],
+      "や": ["ya"], "ゆ": ["yu"], "よ": ["yo"],
+      "ら": ["ra"], "り": ["ri"], "る": ["ru"], "れ": ["re"], "ろ": ["ro"],
+      "わ": ["wa"], "を": ["wo", "o"], "ん": ["n", "nn"],
+      "が": ["ga"], "ぎ": ["gi"], "ぐ": ["gu"], "げ": ["ge"], "ご": ["go"],
+      "ざ": ["za"], "じ": ["ji", "zi"], "ず": ["zu"], "ぜ": ["ze"], "ぞ": ["zo"],
+      "だ": ["da"], "ぢ": ["ji", "di"], "づ": ["zu", "du"], "で": ["de"], "ど": ["do"],
+      "ば": ["ba"], "び": ["bi"], "ぶ": ["bu"], "べ": ["be"], "ぼ": ["bo"],
+      "ぱ": ["pa"], "ぴ": ["pi"], "ぷ": ["pu"], "ぺ": ["pe"], "ぽ": ["po"],
+      "ぁ": ["la", "xa"], "ぃ": ["li", "xi"], "ぅ": ["lu", "xu"], "ぇ": ["le", "xe"], "ぉ": ["lo", "xo"],
+      "ゃ": ["lya", "xya"], "ゅ": ["lyu", "xyu"], "ょ": ["lyo", "xyo"], "ー": ["-"]
+    };
+
+    const DIGRAPHS = {
+      "きゃ": ["kya"], "きゅ": ["kyu"], "きょ": ["kyo"],
+      "しゃ": ["sha", "sya"], "しゅ": ["shu", "syu"], "しょ": ["sho", "syo"],
+      "ちゃ": ["cha", "tya", "cya"], "ちゅ": ["chu", "tyu", "cyu"], "ちょ": ["cho", "tyo", "cyo"],
+      "にゃ": ["nya"], "にゅ": ["nyu"], "にょ": ["nyo"],
+      "ひゃ": ["hya"], "ひゅ": ["hyu"], "ひょ": ["hyo"],
+      "みゃ": ["mya"], "みゅ": ["myu"], "みょ": ["myo"],
+      "りゃ": ["rya"], "りゅ": ["ryu"], "りょ": ["ryo"],
+      "ぎゃ": ["gya"], "ぎゅ": ["gyu"], "ぎょ": ["gyo"],
+      "じゃ": ["ja", "jya", "zya"], "じゅ": ["ju", "jyu", "zyu"], "じょ": ["jo", "jyo", "zyo"],
+      "びゃ": ["bya"], "びゅ": ["byu"], "びょ": ["byo"],
+      "ぴゃ": ["pya"], "ぴゅ": ["pyu"], "ぴょ": ["pyo"]
+    };
+
+    const ENGLISH_WORD_SETS = {
+      "1": [
+            "ash",
+            "blade",
+            "brave",
+            "calm",
+            "charm",
+            "cliff",
+            "cloud",
+            "crown",
+            "dawn",
+            "drift",
+            "ember",
+            "field",
+            "flame",
+            "focus",
+            "frost",
+            "grain",
+            "grove",
+            "guard",
+            "haste",
+            "honor",
+            "light",
+            "march",
+            "mist",
+            "night",
+            "north",
+            "ocean",
+            "orbit",
+            "peace",
+            "plain",
+            "quest",
+            "quiet",
+            "river",
+            "route",
+            "scale",
+            "shade",
+            "sharp",
+            "shift",
+            "spark",
+            "stone",
+            "storm",
+            "sword",
+            "thick",
+            "thorn",
+            "trace",
+            "trust",
+            "valley",
+            "watch",
+            "water",
+            "wind",
+            "young",
+            "after",
+            "again",
+            "alarm",
+            "apple",
+            "beach",
+            "bread",
+            "chair",
+            "clean",
+            "clock",
+            "color",
+            "daily",
+            "dream",
+            "early",
+            "earth",
+            "fresh",
+            "glass",
+            "grace",
+            "green",
+            "heart",
+            "house",
+            "learn",
+            "lunch",
+            "maple",
+            "music",
+            "paper",
+            "plant",
+            "power",
+            "proud",
+            "quick",
+            "ready",
+            "rough",
+            "round",
+            "safer",
+            "sound",
+            "space",
+            "stead",
+            "sweet",
+            "table",
+            "timer",
+            "voice",
+            "wider",
+            "world",
+            "write",
+            "angle",
+            "bloom",
+            "carry",
+            "clear",
+            "count",
+            "drive",
+            "enjoy",
+            "honest",
+            "invite",
+            "jacket",
+            "keeper",
+            "little",
+            "market",
+            "notice",
+            "orange",
+            "pencil",
+            "rescue",
+            "silver",
+            "ticket",
+            "useful",
+            "window",
+            "yellow",
+            "garden",
+            "matter",
+            "memory",
+            "school",
+            "season",
+            "circle",
+            "future",
+            "gentle",
+            "hammer",
+            "island",
+            "junior",
+            "kitten",
+            "leader",
+            "method",
+            "nature",
+            "office",
+            "planet",
+            "reason",
+            "simple",
+            "travel",
+            "winter"
+      ],
+      "2": [
+            "good morning",
+            "fresh coffee",
+            "quiet room",
+            "daily notes",
+            "open window",
+            "green garden",
+            "small river",
+            "city lights",
+            "warm bread",
+            "paper book",
+            "music class",
+            "school desk",
+            "rainy street",
+            "summer night",
+            "winter coat",
+            "orange sunset",
+            "silver moon",
+            "steady hand",
+            "quick break",
+            "clear water",
+            "gentle wind",
+            "morning walk",
+            "evening train",
+            "family dinner",
+            "library card",
+            "office chair",
+            "coffee shop",
+            "garden path",
+            "market street",
+            "station clock",
+            "weather map",
+            "school lunch",
+            "wooden table",
+            "pencil case",
+            "travel bag",
+            "clean towel",
+            "happy voice",
+            "honest answer",
+            "bright idea",
+            "second chance",
+            "simple plan",
+            "steady rhythm",
+            "silent road",
+            "public park",
+            "yellow flower",
+            "blue jacket",
+            "warm blanket",
+            "quiet lesson",
+            "friendly smile",
+            "careful step",
+            "fresh towel",
+            "soft thunder",
+            "long weekend",
+            "short message",
+            "daily practice",
+            "small promise",
+            "early meeting",
+            "smooth typing",
+            "little garden",
+            "healthy lunch",
+            "movie ticket",
+            "winter morning",
+            "summer garden",
+            "autumn leaves",
+            "spring rain",
+            "city library",
+            "open notebook",
+            "common sense",
+            "helpful note",
+            "patient answer",
+            "simple choice",
+            "fresh start",
+            "quiet focus",
+            "safe return",
+            "gentle reply",
+            "clean kitchen",
+            "lucky timing",
+            "normal day",
+            "steady progress",
+            "careful reader",
+            "bright hallway",
+            "cold water",
+            "warm sunlight",
+            "school hallway",
+            "train window",
+            "garden chair",
+            "street corner",
+            "public library",
+            "market basket",
+            "paper lantern",
+            "evening walk",
+            "morning light",
+            "small notebook",
+            "quick message",
+            "orange juice",
+            "dinner table",
+            "silent minute",
+            "steady breath",
+            "fresh air",
+            "short walk",
+            "old station",
+            "new lesson",
+            "good answer",
+            "calm voice",
+            "quick repair",
+            "basic rule",
+            "clear sign",
+            "shared table",
+            "simple story",
+            "little answer",
+            "work rhythm",
+            "quiet effort",
+            "safe crossing",
+            "honest mistake",
+            "gentle warning",
+            "daily weather",
+            "soft sweater",
+            "clean shoes",
+            "new pencil",
+            "bright screen",
+            "steady pace",
+            "local market",
+            "reading time",
+            "normal morning",
+            "kind message",
+            "garden water",
+            "healthy habit",
+            "late train",
+            "early start",
+            "small victory",
+            "fresh memory",
+            "quiet courage"
+      ],
+      "3": [
+            "take a short break",
+            "keep your hands steady",
+            "finish the first task",
+            "read the message again",
+            "bring the blue jacket",
+            "watch the morning sky",
+            "open the old notebook",
+            "check the train schedule",
+            "walk through the park",
+            "save the file first",
+            "close the kitchen door",
+            "carry a bottle of water",
+            "listen before you answer",
+            "send a clear reply",
+            "choose the safer route",
+            "clean the desk tonight",
+            "water the small plants",
+            "meet at the station",
+            "follow the quiet road",
+            "wait near the entrance",
+            "write the final line",
+            "sort the paper notes",
+            "review the lesson notes",
+            "keep the window open",
+            "share the extra blanket",
+            "make a simple plan",
+            "start with one page",
+            "take the next train",
+            "pack the travel bag",
+            "look at the weather map",
+            "stand near the crosswalk",
+            "prepare a light lunch",
+            "leave the room tidy",
+            "learn the basic rule",
+            "notice the small change",
+            "trust the steady rhythm",
+            "keep a calm voice",
+            "build a better habit",
+            "choose your words well",
+            "practice for ten minutes",
+            "protect the quiet time",
+            "bring the library card",
+            "return the borrowed book",
+            "read under warm light",
+            "wait for the green signal",
+            "walk across the bridge",
+            "follow the river path",
+            "take notes after class",
+            "check the meeting time",
+            "carry the heavy box",
+            "wash the coffee cup",
+            "open the garden gate",
+            "clean the rain boots",
+            "find the missing key",
+            "write a short message",
+            "start the laundry early",
+            "fold the clean shirts",
+            "take care of the plant",
+            "watch the clouds move",
+            "keep the plan simple",
+            "make room for rest",
+            "turn off the bright screen",
+            "drink a glass of water",
+            "keep your focus steady",
+            "answer with plain words",
+            "leave earlier than usual",
+            "walk beside the river",
+            "listen to the soft rain",
+            "make a fresh start",
+            "keep a small promise",
+            "set the table neatly",
+            "choose a quiet seat",
+            "write the address clearly",
+            "save the best photo",
+            "bring an extra pen",
+            "read the whole article",
+            "find a better example",
+            "check the final number",
+            "ask a simple question",
+            "practice the hard part",
+            "carry the book home",
+            "close the notebook slowly",
+            "watch the evening lights",
+            "keep the garden watered",
+            "leave the station calmly",
+            "make the bed again",
+            "study the map carefully",
+            "open the curtains wide",
+            "take the stairs today",
+            "try a different path",
+            "send the file later",
+            "repair the loose button",
+            "count the remaining pages",
+            "write the date first",
+            "listen for the answer",
+            "find the right shelf",
+            "pick up fresh bread",
+            "choose the small table",
+            "walk home before sunset",
+            "check the door twice",
+            "keep your pace even",
+            "enjoy the quiet morning",
+            "watch the moon rise",
+            "learn from the mistake",
+            "carry the umbrella today",
+            "make the room warmer",
+            "leave a kind note",
+            "read the sign carefully",
+            "pack before bedtime",
+            "give a careful answer",
+            "follow the class schedule",
+            "visit the old museum",
+            "watch a science program",
+            "study the weather pattern",
+            "read about ocean currents",
+            "learn about ancient history",
+            "check the election results",
+            "follow the market news",
+            "review the safety plan",
+            "practice clear pronunciation",
+            "remember the main idea",
+            "compare two examples"
+      ],
+      "4": [
+            "The morning train was crowded but everyone stayed calm",
+            "I water the small garden before breakfast every day",
+            "Please check the schedule again before you leave home",
+            "The old notebook still has room for one more idea",
+            "A quiet walk after dinner helps me clear my head",
+            "The rain stopped just before we reached the station",
+            "I want to finish the first draft before Sunday night",
+            "The library near the park is warmer than I expected",
+            "A careful answer is better than a fast guess",
+            "We packed the bags early so the morning felt easy",
+            "The street lights looked soft after the summer rain",
+            "I saved the file twice before closing the computer",
+            "The new lesson made more sense after a short break",
+            "Please bring an extra bottle of water for the walk",
+            "The small promise mattered more than the big speech",
+            "I checked the map and chose the safer road home",
+            "The garden plants looked brighter after the rain",
+            "A simple plan can make a difficult day easier",
+            "The quiet room helped everyone focus on the work",
+            "I wrote the address clearly on the paper label",
+            "The sunset over the river made us slow down",
+            "Please wait near the entrance until I arrive",
+            "The report was long but the main point was clear",
+            "We cleaned the kitchen before making evening tea",
+            "The old station clock was still running on time",
+            "I read the message again before sending my reply",
+            "A good habit begins with one small action",
+            "The cold morning air made the coffee taste better",
+            "The blue notebook belongs on the second shelf",
+            "We walked through the park instead of taking the bus",
+            "The class started late because the train was delayed",
+            "I folded the clean shirts and put them away",
+            "The museum guide explained the old map carefully",
+            "Please leave the window open for a few minutes",
+            "The children counted clouds during the long ride",
+            "A steady rhythm is more useful than sudden effort",
+            "The quiet road behind the school was full of leaves",
+            "I wrote down the idea before it disappeared",
+            "The bread from the market was still warm",
+            "We should choose words that leave room for kindness",
+            "The weather map showed rain moving toward the city",
+            "I want to keep learning even on slow days",
+            "The meeting ended early so I walked home slowly",
+            "The light in the hallway flickered once and settled",
+            "Please check the door before you go to sleep",
+            "The first page was hard but the second was easier",
+            "A small mistake can still teach a useful lesson",
+            "The garden chair was wet from last nights rain",
+            "I listened carefully before giving my honest answer",
+            "The train window reflected the orange evening sky",
+            "We returned the borrowed book before the library closed",
+            "The plan changed but the goal stayed the same",
+            "I packed the umbrella because the clouds looked heavy",
+            "The old bridge over the river felt calm at dusk",
+            "Please write the final number in the top corner",
+            "The morning sun reached the desk before I did",
+            "A clear question often saves a lot of time",
+            "The room felt lighter after I opened the curtains",
+            "We shared a quiet lunch near the station plaza",
+            "The lesson was easier after I drew a small diagram",
+            "I kept the phone away until the task was finished",
+            "The local market was busy but everyone moved slowly",
+            "A warm towel can make a cold morning kinder",
+            "The team checked the safety plan before the event",
+            "I carried the heavy box with both hands",
+            "The science program explained ocean currents clearly",
+            "The winter coat was too warm for the afternoon",
+            "Please send the document after one final check",
+            "The small cafe near the station had empty seats",
+            "I marked the important page with a paper clip",
+            "The sound of rain made the room feel peaceful",
+            "We watched the moon rise above the quiet rooftops",
+            "The final answer came after a long pause",
+            "I chose the longer route because it felt safer",
+            "The schedule looked crowded until we removed one task",
+            "A patient reply can change the whole conversation",
+            "The town library keeps old newspapers in the back room",
+            "I want to remember the kindness in ordinary days",
+            "The public park was quiet before the morning rush",
+            "We found the missing key under the folded towel",
+            "The teacher asked everyone to read the question twice",
+            "The fresh air after the storm felt surprisingly clean",
+            "Please keep the receipt until the package arrives",
+            "The history lesson connected old roads with modern cities",
+            "A careful reader notices what the headline leaves out",
+            "The small plant on the windowsill grew new leaves",
+            "I took the stairs because the elevator was full",
+            "The evening train arrived exactly when the rain began",
+            "We saved the best photo in a separate folder",
+            "The school hallway smelled faintly of chalk and rain",
+            "Please make room on the table for the new map",
+            "The market basket was heavier than it looked",
+            "I read the article again and changed my opinion",
+            "The quiet effort of one week finally showed results",
+            "The coast road was closed after the heavy storm",
+            "A good explanation uses simple words without hiding detail",
+            "The old museum opened a new room for local history",
+            "I checked the final score before leaving the page",
+            "The group decided to meet earlier next time",
+            "The first snow made the usual street feel new",
+            "Please keep your hands steady and breathe slowly",
+            "The long sentence becomes easier when you find its rhythm",
+            "The city lights reflected on the wet pavement",
+            "We planned the trip around weather and train schedules",
+            "The library card was hiding inside the blue notebook",
+            "A clear morning can still turn into rainy evening",
+            "The answer was simple but it took time to see",
+            "I wrote a kind note and left it on the desk",
+            "The garden needed water before the sun grew strong",
+            "The new road shortened the walk to the station",
+            "Please review the lesson notes before the next class",
+            "The quiet village had a small museum by the river",
+            "I finished the last page just before midnight",
+            "The team practiced the hard part until it felt natural",
+            "The weather report mentioned strong winds after lunch",
+            "A calm voice helped the room settle down",
+            "The old photograph made the whole story easier to understand",
+            "We watched the stars from the school playground",
+            "The travel bag was ready beside the front door",
+            "Please remember to save your work before closing the window"
+      ]
+};
+
+    function normalizeEnglishInput(text) {
+      return text
+        .toLowerCase()
+        .replace(/[^a-z0-9 -]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function buildWords(entries) {
+      return entries.map((display) => ({
+        display,
+        inputs: [normalizeEnglishInput(display)],
+        type: classifyWord(display)
+      })).filter((word) => word.display && word.inputs[0]);
+    }
+
+    function classifyWord(display) {
+      const words = display.trim().split(/\s+/).length;
+      if (words >= 8) return "polite";
+      if (words >= 4) return "other";
+      return "topic";
+    }
+
+    const LEVEL_WORDS = {
+      1: buildWords(ENGLISH_WORD_SETS[1]),
+      2: buildWords(ENGLISH_WORD_SETS[2]),
+      3: buildWords(ENGLISH_WORD_SETS[3]),
+      4: buildWords(ENGLISH_WORD_SETS[4])
+    };
+
+    const els = {
+      score: document.querySelector("#scoreText"),
+      time: document.querySelector("#timeText"),
+      life: document.querySelector("#lifeText"),
+      lifeStock: document.querySelector("#lifeStockText"),
+      combo: document.querySelector("#comboText"),
+      defeat: document.querySelector("#defeatText"),
+      accuracy: document.querySelector("#accuracyText"),
+      displayWord: document.querySelector("#displayWord"),
+      romaji: document.querySelector("#romajiGuide"),
+      typed: document.querySelector("#typedText"),
+      battle: document.querySelector("#battleText"),
+      stage: document.querySelector(".stage"),
+      oni: document.querySelector("#oniSprite"),
+      danger: document.querySelector("#dangerEdge"),
+      title: document.querySelector("#titleScreen"),
+      pause: document.querySelector("#pauseScreen"),
+      result: document.querySelector("#resultScreen"),
+      levelList: document.querySelector("#levelList"),
+      rank: document.querySelector("#rankText"),
+      resultMessage: document.querySelector("#resultMessage"),
+      resultDefeat: document.querySelector("#resultDefeat"),
+      resultScore: document.querySelector("#resultScore"),
+      resultAccuracy: document.querySelector("#resultAccuracy"),
+      resultCombo: document.querySelector("#resultCombo"),
+      resultKeys: document.querySelector("#resultKeys"),
+      resultBest: document.querySelector("#resultBest"),
+      bossPreview: document.querySelector("#bossPreview"),
+      bossGrid: document.querySelector("#bossGrid")
+    };
+
+    const NORMAL_ONI_MARKUP = els.oni.innerHTML;
+
+    const state = {
+      screen: "title",
+      levelIndex: 0,
+      score: 0,
+      timeLeft: CONFIG.gameSeconds,
+      life: CONFIG.life,
+      combo: 0,
+      maxCombo: 0,
+      defeat: 0,
+      hits: 0,
+      misses: 0,
+      totalKeys: 0,
+      distance: CONFIG.distance.start,
+      current: null,
+      enemyType: CONFIG.enemyTypes[0],
+      candidates: [],
+      typed: "",
+      wordMissed: false,
+      used: [],
+      wordTypeHistory: [],
+      awaitingNext: false,
+      spawnTimer: null,
+      spawnToken: 0,
+      records: readRecords(),
+      sound: localStorage.getItem("t-room-onitaiji-en-muted") !== "true",
+      audio: null,
+      lastTime: 0,
+      raf: null,
+      swingTimer: null,
+      pausedOnce: false
+    };
+
+    function init() {
+      renderLevels();
+      renderBossCandidates();
+      validateWords();
+      updateHud();
+      window.addEventListener("keydown", handleKey);
+      state.raf = requestAnimationFrame(loop);
+    }
+
+    function renderBossCandidates() {
+      if (!new URLSearchParams(window.location.search).has("bossCandidates")) return;
+      els.bossGrid.innerHTML = BOSS_CANDIDATES.map((candidate) => `
+        <article class="boss-card ${candidate.className}">
+          ${bossCandidateSvg(candidate.id)}
+          <h3>${candidate.title}</h3>
+          <span>${candidate.level}</span>
+          <p>${candidate.note}</p>
+        </article>
+      `).join("");
+      state.screen = "boss";
+      els.title.hidden = true;
+      els.bossPreview.hidden = false;
+    }
+
+    function renderLevels() {
+      els.levelList.replaceChildren(...CONFIG.levels.map((level, index) => {
+        const button = document.createElement("button");
+        button.className = `level-button${index === state.levelIndex ? " is-active" : ""}`;
+        button.type = "button";
+        button.innerHTML = `<strong>${level.name}</strong>`;
+        button.addEventListener("click", () => {
+          state.levelIndex = index;
+          renderLevels();
+        });
+        return button;
+      }));
+    }
+
+    function startGame() {
+      initAudio();
+      Object.assign(state, {
+        screen: "playing",
+        score: 0,
+        timeLeft: currentGameSeconds(),
+        life: CONFIG.life,
+        combo: 0,
+        maxCombo: 0,
+        defeat: 0,
+        hits: 0,
+        misses: 0,
+        totalKeys: 0,
+          distance: CONFIG.distance.start,
+        typed: "",
+        wordMissed: false,
+        used: [],
+        wordTypeHistory: [],
+        awaitingNext: false,
+        pausedOnce: false,
+        lastTime: 0
+      });
+      clearNextEnemy();
+      els.title.hidden = true;
+      els.result.hidden = true;
+      els.pause.hidden = true;
+      els.bossPreview.hidden = true;
+      spawnEnemy();
+      updateHud();
+    }
+
+    function spawnEnemy() {
+      const level = currentLevel();
+      let nextPool = LEVEL_WORDS[level.id].filter((word) => !state.used.includes(word.display));
+      if (nextPool.length === 0) {
+        state.used = [];
+        nextPool = LEVEL_WORDS[level.id];
+      }
+      const word = chooseWord(level, nextPool);
+      state.awaitingNext = false;
+      state.spawnTimer = null;
+      state.used.push(word.display);
+      if (state.used.length > CONFIG.historySize) state.used.shift();
+      state.wordTypeHistory.push(word.type);
+      if (state.wordTypeHistory.length > CONFIG.wordTypeRecentLimit) state.wordTypeHistory.shift();
+      state.current = word;
+      state.candidates = [...new Set(word.inputs)].slice(0, 520);
+      state.typed = "";
+      state.wordMissed = false;
+      state.distance = CONFIG.distance.start;
+      const type = chooseEnemyType();
+      state.enemyType = type;
+      renderEnemySprite(type);
+      els.oni.classList.remove("is-slash", "is-hit", "damage-1", "damage-2", "damage-3");
+      renderWord();
+      setBattleText("Ready");
+    }
+
+    function chooseEnemyType() {
+      const level = currentLevel();
+      if (level.id >= 3) {
+        const boss = BOSS_CANDIDATES[Math.floor(Math.random() * BOSS_CANDIDATES.length)];
+        return {
+          name: boss.className,
+          boss,
+          speed: level.id === 4 ? 1.2 : 1.08,
+          score: level.id === 4 ? 1.55 : 1.32
+        };
+      }
+      const list = CONFIG.enemyTypes.filter((type) => level.id > 1 || type.name !== "rock");
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    function renderEnemySprite(type) {
+      const level = currentLevel();
+      if (type.boss) {
+        els.oni.innerHTML = bossCandidateSvg(type.boss.id);
+        els.oni.className = `oni is-boss ${type.boss.className} ${level.id === 4 ? "boss-lv4" : "boss-lv3"}`;
+        return;
+      }
+      if (!els.oni.querySelector(".oni-pixel")) {
+        els.oni.innerHTML = NORMAL_ONI_MARKUP;
+      }
+      els.oni.className = `oni ${type.name}`;
+    }
+
+    function currentLevel() {
+      return CONFIG.levels[state.levelIndex];
+    }
+
+    function currentGameSeconds() {
+      return currentLevel().seconds || CONFIG.gameSeconds;
+    }
+
+    function scheduleNextEnemy(delay) {
+      clearNextEnemy();
+      const token = ++state.spawnToken;
+      state.spawnTimer = setTimeout(() => {
+        if (state.screen !== "playing" || token !== state.spawnToken) return;
+        spawnEnemy();
+      }, delay);
+    }
+
+    function clearNextEnemy() {
+      if (state.spawnTimer) clearTimeout(state.spawnTimer);
+      state.spawnTimer = null;
+      state.spawnToken += 1;
+    }
+
+    function chooseWord(level, words) {
+      const groups = words.reduce((acc, word) => {
+        (acc[word.type] ||= []).push(word);
+        return acc;
+      }, {});
+      const weights = CONFIG.wordTypeWeights[level.id] || CONFIG.wordTypeWeights[2];
+      const candidates = Object.entries(groups).map(([type, group]) => {
+        const recentCount = state.wordTypeHistory.filter((recentType) => recentType === type).length;
+        return {
+          type,
+          group,
+          weight: (weights[type] ?? 0.08) * Math.pow(CONFIG.wordTypeRepeatPenalty, recentCount)
+        };
+      }).filter((entry) => entry.group.length && entry.weight > 0);
+      const total = candidates.reduce((sum, entry) => sum + entry.weight, 0);
+      if (!total) return words[Math.floor(Math.random() * words.length)];
+      let pick = Math.random() * total;
+      for (const entry of candidates) {
+        pick -= entry.weight;
+        if (pick <= 0) return entry.group[Math.floor(Math.random() * entry.group.length)];
+      }
+      return candidates[candidates.length - 1].group[0];
+    }
+
+    function loop(now) {
+      const delta = state.lastTime ? (now - state.lastTime) / 1000 : 0;
+      state.lastTime = now;
+      if (state.screen === "playing") {
+        state.timeLeft = Math.max(0, state.timeLeft - delta);
+        if (!state.awaitingNext && state.current) {
+          const enemyType = state.enemyType || CONFIG.enemyTypes[0];
+          state.distance -= (100 / CONFIG.enemySeconds) * enemyType.speed * delta;
+          if (state.distance <= 0) loseLife();
+        }
+        if (state.timeLeft <= 0 || state.life <= 0) endGame();
+        updateHud();
+        updateOniPosition();
+      }
+      state.raf = requestAnimationFrame(loop);
+    }
+
+    function handleKey(event) {
+      if (event.key === "Tab") return;
+      if (event.key === "F2") {
+        toggleSound();
+        return;
+      }
+      if (state.screen === "title") {
+        if (event.key === "Enter") startGame();
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") changeLevel(1);
+        if (event.key === "ArrowUp" || event.key === "ArrowLeft") changeLevel(-1);
+        return;
+      }
+      if (state.screen === "result") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        if (event.key === "Enter") startGame();
+        else if (event.key === "Escape") showTitle();
+        return;
+      }
+      if (state.screen === "paused") {
+        if (event.key === "Enter") resumeGame();
+        if (event.key === "Escape") showTitle();
+        return;
+      }
+      if (state.screen === "boss") {
+        if (event.key === "Escape") showTitle();
+        return;
+      }
+      if (state.screen !== "playing") return;
+      if (event.key === "Escape") {
+        pauseGame();
+        return;
+      }
+      if (state.awaitingNext || !state.current) return;
+      if (event.key === "Backspace") {
+        state.typed = state.typed.slice(0, -1);
+        renderWord();
+        return;
+      }
+      if (!/^[a-z0-9 -]$/i.test(event.key)) return;
+      event.preventDefault();
+      inputKey(event.key.toLowerCase());
+    }
+
+    function inputKey(key) {
+      initAudio();
+      const next = state.typed + key;
+      const possible = state.candidates.filter((candidate) => candidate.startsWith(next));
+      state.totalKeys += 1;
+      if (possible.length === 0) {
+        state.misses += 1;
+        state.combo = 0;
+        state.wordMissed = true;
+        state.distance -= CONFIG.distance.missPenalty;
+        setBattleText("Miss");
+        playSound("miss");
+        updateHud();
+        updateOniPosition();
+        return;
+      }
+      state.typed = next;
+      state.hits += 1;
+      state.combo += 1;
+      state.maxCombo = Math.max(state.maxCombo, state.combo);
+      state.distance = Math.min(100, state.distance + CONFIG.distance.correctPush);
+      triggerSwordSwing();
+      updateEnemyDamage();
+      els.oni.classList.add("is-hit");
+      setTimeout(() => els.oni.classList.remove("is-hit"), 90);
+      playSound("hit");
+      const exact = possible.find((candidate) => candidate === state.typed);
+      if (exact) {
+        renderWord();
+        defeatEnemy(exact);
+        updateHud();
+        return;
+      }
+      renderWord();
+      updateHud();
+    }
+
+    function triggerSwordSwing() {
+      els.stage.classList.remove("is-swing");
+      void els.stage.offsetWidth;
+      els.stage.classList.add("is-swing");
+      clearTimeout(state.swingTimer);
+      state.swingTimer = setTimeout(() => els.stage.classList.remove("is-swing"), 300);
+    }
+
+    function updateEnemyDamage() {
+      const shortest = Math.min(...state.candidates.map((candidate) => candidate.length));
+      const progress = shortest > 0 ? state.typed.length / shortest : 0;
+      const damage = clamp(Math.ceil(progress * 3), 1, 3);
+      els.oni.classList.remove("damage-1", "damage-2", "damage-3");
+      els.oni.classList.add(`damage-${damage}`);
+    }
+
+    function defeatEnemy(exact) {
+      const level = currentLevel();
+      const enemyType = state.enemyType || CONFIG.enemyTypes[0];
+      const perfect = !state.wordMissed;
+      state.defeat += 1;
+      state.score += Math.round(exact.length * 120 * level.multiplier * enemyType.score * (perfect ? 1.2 : 1));
+      if (perfect) {
+        setBattleText("Clean cut");
+        playSound("slash");
+      } else {
+        setBattleText("Defeated");
+        playSound("slash");
+      }
+      els.oni.classList.add("is-slash");
+      state.awaitingNext = true;
+      scheduleNextEnemy(260);
+    }
+
+    function loseLife() {
+      state.life -= 1;
+      state.combo = 0;
+      state.distance = CONFIG.distance.lifeLossRetreat;
+      state.wordMissed = true;
+      state.awaitingNext = true;
+      setBattleText("Too close");
+      playSound("miss");
+      if (state.life > 0) scheduleNextEnemy(220);
+    }
+
+    function endGame() {
+      if (state.screen !== "playing") return;
+      state.screen = "result";
+      clearNextEnemy();
+      state.awaitingNext = false;
+      state.current = null;
+      state.candidates = [];
+      updateRecord();
+      els.result.hidden = false;
+      els.resultDefeat.textContent = String(state.defeat);
+      els.resultScore.textContent = String(state.score);
+      els.resultAccuracy.textContent = `${accuracy()}%`;
+      els.resultCombo.textContent = String(state.maxCombo);
+      els.resultKeys.textContent = String(state.totalKeys);
+      els.resultBest.textContent = String(bestRecord().defeat || 0);
+      els.rank.textContent = rankName();
+      els.resultMessage.textContent = `${currentLevel().name} / ${state.defeat} demons defeated.`;
+    }
+
+    function pauseGame() {
+      state.screen = "paused";
+      els.pause.hidden = false;
+      state.pausedOnce = true;
+    }
+
+    function resumeGame() {
+      state.screen = "playing";
+      els.pause.hidden = true;
+      state.lastTime = 0;
+      if (state.awaitingNext) scheduleNextEnemy(80);
+    }
+
+    function showTitle() {
+      state.screen = "title";
+      clearNextEnemy();
+      els.title.hidden = false;
+      els.pause.hidden = true;
+      els.result.hidden = true;
+      els.bossPreview.hidden = true;
+      els.displayWord.textContent = "T-ROOM OniTaiji English";
+      els.romaji.textContent = "Press Enter";
+      els.typed.textContent = "Use your keyboard to play";
+      setBattleText("Demon-slicing typing game");
+    }
+
+    function changeLevel(direction) {
+      state.levelIndex = (state.levelIndex + direction + CONFIG.levels.length) % CONFIG.levels.length;
+      renderLevels();
+    }
+
+    function renderWord() {
+      if (!state.current) return;
+      const guide = bestGuide();
+      els.displayWord.textContent = state.current.display;
+      els.romaji.style.opacity = currentLevel().guideOpacity;
+      els.romaji.innerHTML = guide.split("").map((char, index) => {
+        if (index < state.typed.length) return `<span class="done">${char}</span>`;
+        if (index === state.typed.length) return `<span class="next">${char}</span>`;
+        return char;
+      }).join("");
+      els.typed.textContent = state.typed || "type...";
+    }
+
+    function bestGuide() {
+      const matching = state.candidates.filter((candidate) => candidate.startsWith(state.typed));
+      return (matching[0] || state.candidates[0] || "").toLowerCase();
+    }
+
+    function updateHud() {
+      els.score.textContent = String(state.score);
+      els.time.textContent = state.timeLeft.toFixed(1);
+      updateHpMeter();
+      els.combo.textContent = String(state.combo);
+      els.defeat.textContent = String(state.defeat);
+      els.accuracy.textContent = `${accuracy()}%`;
+    }
+
+    function updateHpMeter() {
+      const hp = clamp(state.distance, 0, 100);
+      els.life.textContent = `HP ${Math.round(hp)}`;
+      els.lifeStock.textContent = `Life x${Math.max(0, state.life)}`;
+    }
+
+    function updateOniPosition() {
+      const danger = state.distance < 28;
+      const progress = 1 - clamp(state.distance / 100, 0, 1);
+      const scale = 0.58 + progress * 1.08;
+      const bottom = 116 - progress * 40;
+      els.oni.style.setProperty("--oni-scale", scale);
+      els.oni.style.transform = `translateX(-50%) scale(${scale})`;
+      els.oni.style.bottom = `${bottom}px`;
+      els.danger.classList.toggle("is-hot", danger);
+    }
+
+    function setBattleText(text) {
+      els.battle.textContent = `${text} ${state.sound ? "" : "/ Sound Off"}`.trim();
+    }
+
+    function accuracy() {
+      if (state.totalKeys === 0) return "100.0";
+      return ((state.hits / state.totalKeys) * 100).toFixed(1);
+    }
+
+    function countJapaneseCharacters(text) {
+      return Array.from(text).filter((char) => /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}ー々ヶヵ]/u.test(char)).length;
+    }
+
+    function keysPerMinuteForRank() {
+      const levelSeconds = Math.max(1, currentGameSeconds());
+      return Math.round((state.totalKeys / levelSeconds) * 60);
+    }
+
+    function rankThresholds() {
+      const byLevel = {
+        1: [420, 340, 260, 200, 140, 80],
+        2: [500, 400, 320, 240, 170, 100]
+      };
+      return byLevel[currentLevel().id] || [560, 450, 360, 280, 200, 120];
+    }
+
+    function rankName() {
+      const kpm = keysPerMinuteForRank();
+      const [god, hundred, skilled, guardian, town, rookie] = rankThresholds();
+      if (kpm >= god) return "Demon God Typist";
+      if (kpm >= hundred) return "Hundred Oni Cutter";
+      if (kpm >= skilled) return "Bladehand Typist";
+      if (kpm >= guardian) return "Night Road Guardian";
+      if (kpm >= town) return "Village Edge Slayer";
+      if (kpm >= rookie) return "Rookie Demon Hunter";
+      return "Wooden Sword Trainee";
+    }
+
+    function updateRecord() {
+      const level = String(currentLevel().id);
+      const current = state.records[level] || {};
+      state.records[level] = {
+        defeat: Math.max(current.defeat || 0, state.defeat),
+        score: Math.max(current.score || 0, state.score),
+        combo: Math.max(current.combo || 0, state.maxCombo),
+        accuracy: Math.max(current.accuracy || 0, Number(accuracy())),
+        updatedAt: new Date().toISOString()
+      };
+      localStorage.setItem(CONFIG.storageKey, JSON.stringify(state.records));
+    }
+
+    function bestRecord() {
+      return state.records[String(currentLevel().id)] || {};
+    }
+
+    function readRecords() {
+      try {
+        return JSON.parse(localStorage.getItem(CONFIG.storageKey) || "{}");
+      } catch {
+        return {};
+      }
+    }
+
+    function kanaToCandidates(kana) {
+      const chars = [...kana.replace(/\s/g, "")];
+      let candidates = [""];
+      for (let i = 0; i < chars.length; i += 1) {
+        const char = chars[i];
+        let romans = null;
+        const pair = chars[i + 1] ? char + chars[i + 1] : "";
+        if (DIGRAPHS[pair]) {
+          romans = DIGRAPHS[pair];
+          i += 1;
+        } else if (char === "っ") {
+          const nextPair = chars[i + 2] ? chars[i + 1] + chars[i + 2] : "";
+          const nextRomans = DIGRAPHS[nextPair] || KANA_ROMAN[chars[i + 1]] || ["t"];
+          romans = ["ltu", "xtu", "ltsu", "xtsu", ...nextRomans.map((r) => consonantOf(r)).filter(Boolean)];
+          i += 0;
+        } else {
+          romans = KANA_ROMAN[char] || [char];
+        }
+        candidates = expandCandidates(candidates, romans);
+      }
+      return [...new Set(candidates)].slice(0, 260);
+    }
+
+    function expandCandidates(base, romans) {
+      const next = [];
+      for (const prefix of base) {
+        for (const roman of romans) {
+          next.push(prefix + roman);
+        }
+      }
+      return next.slice(0, 520);
+    }
+
+    function consonantOf(roman) {
+      const first = roman[0];
+      return "aiueon-".includes(first) ? "" : first;
+    }
+
+    function initAudio() {
+      if (state.audio) return;
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      state.audio = new AudioContext();
+    }
+
+    function toggleSound() {
+      state.sound = !state.sound;
+      localStorage.setItem("t-room-onitaiji-en-muted", String(!state.sound));
+      setBattleText(state.sound ? "Sound On" : "Sound Off");
+    }
+
+    function playSound(kind) {
+      if (!state.sound || !state.audio) return;
+      const ctx = state.audio;
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      const osc = ctx.createOscillator();
+      gain.connect(ctx.destination);
+      osc.connect(gain);
+      if (kind === "hit") {
+        osc.type = "square";
+        osc.frequency.setValueAtTime(420 + Math.min(state.combo, 18) * 12, now);
+        gain.gain.setValueAtTime(0.035, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+        osc.start(now);
+        osc.stop(now + 0.055);
+      } else if (kind === "miss") {
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(130, now);
+        gain.gain.setValueAtTime(0.055, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.start(now);
+        osc.stop(now + 0.13);
+      } else {
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(780, now);
+        osc.frequency.exponentialRampToValueAtTime(1320, now + 0.08);
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+        osc.start(now);
+        osc.stop(now + 0.18);
+      }
+    }
+
+    function validateWords() {
+      Object.entries(LEVEL_WORDS).forEach(([level, words]) => {
+        if (words.length < 100) {
+          console.warn(`Lv.${level} has only ${words.length} words`);
+        }
+      });
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    window.ONI_DEBUG = {
+      CONFIG,
+      LEVEL_WORDS,
+      kanaToCandidates,
+      validateWords
+    };
+
+    init();
+  </script>
+</body>
+</html>
