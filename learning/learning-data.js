@@ -2,16 +2,29 @@ window.TRoomLearningData = {
   learningLogs: [
     {
       id: "sharoushi-001",
-      title: "社労士学習ログ #001：労働基準法の学習を始めた",
+      title: "社労士学習ログ #001：継続事業の概算保険料の延納",
       date: "2026-07-08",
       category: "社労士",
-      subject: "労働基準法",
+      subject: "労働保険徴収法",
       type: "学習ログ",
       status: "確認中",
-      tags: ["社労士", "労働基準法", "学習ログ", "要確認"],
+      tags: ["社労士", "労働保険徴収法", "概算保険料", "延納", "継続事業", "要確認"],
       needsReview: true,
-      summary: "労働基準法の学習を始め、全体像をつかむ段階の記録。",
+      summary: "継続事業の概算保険料の延納について、40万円要件、事務組合委託、10月1日以降成立、納期限を整理。",
       url: "/learning/sharoushi/logs/001.html"
+    },
+    {
+      id: "sharoushi-002",
+      title: "社労士学習ログ #002：有期事業の増加概算保険料の延納",
+      date: "2026-07-08",
+      category: "社労士",
+      subject: "労働保険徴収法",
+      type: "学習ログ",
+      status: "確認中",
+      tags: ["社労士", "労働保険徴収法", "増加概算保険料", "延納", "有期事業", "要確認"],
+      needsReview: true,
+      summary: "有期事業と増加概算保険料の延納について、6ヶ月超、75万円以上、期間区分と納期限を整理。",
+      url: "/learning/sharoushi/logs/002.html"
     }
   ],
 
@@ -20,11 +33,11 @@ window.TRoomLearningData = {
       id: "rouki",
       name: "労働基準法",
       group: "労働科目",
-      status: "学習中",
-      articleCount: 1,
-      lastUpdated: "2026-07-08",
-      reviewCount: 1,
-      memo: "最初に学習を始めた科目。まずは全体像とつまずきを記録する。"
+      status: "未学習",
+      articleCount: 0,
+      lastUpdated: "",
+      reviewCount: 0,
+      memo: "未学習。最初の学習ログを追加した段階で詳細化する。"
     },
     {
       id: "anei",
@@ -60,11 +73,11 @@ window.TRoomLearningData = {
       id: "choushu",
       name: "労働保険徴収法",
       group: "労働科目",
-      status: "未学習",
-      articleCount: 0,
-      lastUpdated: "",
-      reviewCount: 0,
-      memo: "未学習。労災保険法・雇用保険法との関連を後で整理する。"
+      status: "学習中",
+      articleCount: 2,
+      lastUpdated: "2026-07-08",
+      reviewCount: 2,
+      memo: "概算保険料の延納から学習中。継続事業と有期事業の違いを混同しないように整理する。"
     },
     {
       id: "kenpo",

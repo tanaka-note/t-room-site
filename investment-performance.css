@@ -354,6 +354,13 @@ a {
   margin-top: 18px;
 }
 
+.performance-plan-copy .performance-report-date {
+  margin-top: 28px;
+  color: var(--perf-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .performance-outlook-content ol {
   margin: 0;
   padding: 0;
