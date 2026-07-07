@@ -7,7 +7,6 @@ window.TRoomLearningData = {
       category: "社労士",
       subject: "労働保険徴収法",
       type: "学習ログ",
-      status: "確認中",
       tags: ["社労士", "労働保険徴収法", "概算保険料", "延納", "継続事業", "要確認"],
       needsReview: true,
       summary: "継続事業の概算保険料の延納について、40万円要件、事務組合委託、10月1日以降成立、納期限を整理。",
@@ -20,7 +19,6 @@ window.TRoomLearningData = {
       category: "社労士",
       subject: "労働保険徴収法",
       type: "学習ログ",
-      status: "確認中",
       tags: ["社労士", "労働保険徴収法", "増加概算保険料", "延納", "有期事業", "要確認"],
       needsReview: true,
       summary: "有期事業と増加概算保険料の延納について、6ヶ月超、75万円以上、期間区分と納期限を整理。",
@@ -148,7 +146,7 @@ window.TRoomLearningData = {
       id: "needs-check",
       title: "要確認ポイント",
       status: "準備中",
-      memo: "未確認・確認中のメモを集めて、復習の入口にする。"
+      memo: "要確認のメモを集めて、復習の入口にする。"
     }
   ]
 };

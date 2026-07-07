@@ -39,7 +39,6 @@
       <div class="learning-card-meta">
         <span>${log.date}</span>
         <span>${log.subject}</span>
-        <span>${log.status}</span>
       </div>
       <h3>${log.title}</h3>
       <p>${log.summary}</p>
@@ -101,8 +100,8 @@
         article.className = "learning-sticky-note";
         article.href = log.url;
         article.innerHTML = `
-          <span>${log.status}</span>
-          <strong>${log.subject}</strong>
+          <span>${log.subject}</span>
+          <strong>${log.title}</strong>
           <p>${log.summary}</p>
         `;
         return article;
