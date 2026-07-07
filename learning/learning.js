@@ -70,7 +70,6 @@
       <dl class="learning-mini-stats">
         <div><dt>記事数</dt><dd>${subject.articleCount}</dd></div>
         <div><dt>最終更新</dt><dd>${formatDate(subject.lastUpdated)}</dd></div>
-        <div><dt>要確認</dt><dd>${subject.reviewCount}</dd></div>
       </dl>
       <p>${subject.memo}</p>
     `;
@@ -92,27 +91,8 @@
     });
   }
 
-  function renderReviewNotes() {
-    document.querySelectorAll("[data-learning-review]").forEach((container) => {
-      const items = logs.filter((log) => log.needsReview);
-      container.replaceChildren(...items.map((log) => {
-        const article = document.createElement("a");
-        article.className = "learning-sticky-note";
-        article.href = log.url;
-        article.innerHTML = `
-          <span>${log.subject}</span>
-          <strong>${log.title}</strong>
-          <p>${log.summary}</p>
-        `;
-        return article;
-      }));
-      if (!items.length) container.innerHTML = '<p class="learning-empty">要確認のログはありません。</p>';
-    });
-  }
-
   renderRecentLogs();
   renderAllLogs();
   renderSubjects();
   renderTopics();
-  renderReviewNotes();
 }());

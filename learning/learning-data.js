@@ -7,8 +7,7 @@ window.TRoomLearningData = {
       category: "社労士",
       subject: "労働保険徴収法",
       type: "学習ログ",
-      tags: ["社労士", "労働保険徴収法", "概算保険料", "延納", "継続事業", "要確認"],
-      needsReview: true,
+      tags: ["社労士", "労働保険徴収法", "概算保険料", "延納", "継続事業"],
       summary: "継続事業の概算保険料の延納について、40万円要件、事務組合委託、10月1日以降成立、納期限を整理。",
       url: "/learning/sharoushi/logs/001.html"
     },
@@ -19,8 +18,7 @@ window.TRoomLearningData = {
       category: "社労士",
       subject: "労働保険徴収法",
       type: "学習ログ",
-      tags: ["社労士", "労働保険徴収法", "増加概算保険料", "延納", "有期事業", "要確認"],
-      needsReview: true,
+      tags: ["社労士", "労働保険徴収法", "増加概算保険料", "延納", "有期事業"],
       summary: "有期事業と増加概算保険料の延納について、6ヶ月超、75万円以上、期間区分と納期限を整理。",
       url: "/learning/sharoushi/logs/002.html"
     }
@@ -34,7 +32,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。最初の学習ログを追加した段階で詳細化する。"
     },
     {
@@ -44,7 +41,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。学習ログ追加後に詳細化する。"
     },
     {
@@ -54,7 +50,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。給付や要件を混同しないように後で整理する。"
     },
     {
@@ -64,7 +59,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。労災・徴収法との違いを後で整理する。"
     },
     {
@@ -74,7 +68,6 @@ window.TRoomLearningData = {
       status: "学習中",
       articleCount: 2,
       lastUpdated: "2026-07-08",
-      reviewCount: 2,
       memo: "概算保険料の延納から学習中。継続事業と有期事業の違いを混同しないように整理する。"
     },
     {
@@ -84,7 +77,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。社会保険科目の入口として後で整理する。"
     },
     {
@@ -94,7 +86,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。厚生年金保険法との違いを後で整理する。"
     },
     {
@@ -104,7 +95,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。国民年金法との横断整理を後で作る。"
     },
     {
@@ -114,7 +104,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。範囲が広いため、深入りしすぎない記録方法にする。"
     },
     {
@@ -124,7 +113,6 @@ window.TRoomLearningData = {
       status: "未学習",
       articleCount: 0,
       lastUpdated: "",
-      reviewCount: 0,
       memo: "未学習。主要法令と白書系を分けて後で整理する。"
     }
   ],
@@ -143,10 +131,10 @@ window.TRoomLearningData = {
       memo: "科目をまたいで似ている制度・言葉を後から並べて見返す。"
     },
     {
-      id: "needs-check",
-      title: "要確認ポイント",
+      id: "review-points",
+      title: "復習ポイント",
       status: "準備中",
-      memo: "要確認のメモを集めて、復習の入口にする。"
+      memo: "あとで見返したいメモを集めて、復習の入口にする。"
     }
   ]
 };
