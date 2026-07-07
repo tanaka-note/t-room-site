@@ -128,6 +128,13 @@
 (() => {
   const recentPosts = [
     {
+      theme: "学習",
+      date: "2026.07.08",
+      title: "社労士学習ログ #001：労働基準法の学習を始めた",
+      excerpt: "労働基準法の学習を始め、全体像をつかむ段階の記録を残します。",
+      url: "./learning/sharoushi/logs/001.html",
+    },
+    {
       theme: "思考",
       date: "2026.07.04",
       title: "見えすぎる男女、育ちにくい未来",
@@ -156,7 +163,7 @@
       url: "./investment-boj-rate-hike.html",
     },
   ];
-  const visibleThemes = new Set(["仕事", "投資", "生活", "思考"]);
+  const visibleThemes = new Set(["仕事", "投資", "学習", "生活", "思考"]);
   const list = document.querySelector("#recent-post-list");
   if (!list) return;
 

@@ -1383,6 +1383,373 @@ h1 {
   background: rgba(255, 255, 255, 0.65);
 }
 
+.learning-hero {
+  background:
+    radial-gradient(circle at 18% 24%, rgba(15, 118, 110, 0.1), transparent 18rem),
+    linear-gradient(135deg, #f8faf8 0%, #f1f5f2 52%, #faf7ef 100%);
+}
+
+.learning-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 28px;
+  align-items: start;
+}
+
+.learning-main,
+.learning-side {
+  display: grid;
+  gap: 16px;
+}
+
+.learning-side {
+  position: sticky;
+  top: 96px;
+}
+
+.learning-panel,
+.learning-log-card,
+.learning-subject-card,
+.learning-topic-card,
+.learning-nav-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 1px 0 rgba(31, 41, 51, 0.04);
+}
+
+.learning-panel {
+  padding: clamp(22px, 4vw, 30px);
+}
+
+.learning-panel h2,
+.learning-section-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(1.34rem, 2.3vw, 1.94rem);
+  line-height: 1.3;
+}
+
+.learning-panel p,
+.learning-note,
+.learning-log-card p,
+.learning-subject-card p,
+.learning-topic-card p,
+.learning-nav-card p,
+.learning-empty {
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.learning-feature {
+  background:
+    linear-gradient(90deg, rgba(15, 118, 110, 0.08), transparent 42%),
+    var(--surface);
+}
+
+.learning-feature-link,
+.learning-nav-card,
+.learning-log-card,
+.learning-sticky-note {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.learning-feature-link {
+  margin-top: 18px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  padding: 20px;
+  background: #f7fbfa;
+}
+
+.learning-feature-link span,
+.learning-nav-card span,
+.learning-card-meta,
+.learning-status,
+.learning-article-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.learning-feature-link strong,
+.learning-nav-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 1.16rem;
+  line-height: 1.35;
+}
+
+.learning-section-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.learning-log-list,
+.learning-subject-grid,
+.learning-topic-grid,
+.learning-sticky-list,
+.learning-status-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.learning-log-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.learning-log-list.compact {
+  grid-template-columns: 1fr;
+}
+
+.learning-log-card,
+.learning-subject-card,
+.learning-topic-card,
+.learning-nav-card {
+  padding: 20px;
+}
+
+.learning-log-card h3,
+.learning-subject-card h3,
+.learning-topic-card h3 {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: 1.08rem;
+  line-height: 1.45;
+}
+
+.learning-log-card p,
+.learning-subject-card p,
+.learning-topic-card p {
+  margin: 12px 0 0;
+  font-size: 0.94rem;
+}
+
+.learning-card-meta,
+.learning-article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.learning-card-meta span,
+.learning-article-meta span,
+.learning-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: #f3f8f6;
+}
+
+.learning-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.learning-tag {
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #eef2f6;
+  color: #5d6673;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.learning-status-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.learning-status-grid div,
+.learning-mini-stats div {
+  border: 1px solid rgba(31, 41, 51, 0.08);
+  border-radius: 8px;
+  background: #fbfcfc;
+  padding: 14px;
+}
+
+.learning-status-grid span,
+.learning-mini-stats dt {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.learning-status-grid strong,
+.learning-mini-stats dd {
+  display: block;
+  margin: 5px 0 0;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.learning-mini-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0 0;
+}
+
+.learning-mini-stats dt,
+.learning-mini-stats dd {
+  margin-left: 0;
+}
+
+.learning-subject-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.learning-subject-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.learning-subject-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 6px;
+  background: #9fb8ad;
+}
+
+.learning-subject-card.is-idle {
+  background: #fbfbf8;
+}
+
+.learning-subject-card.is-idle::before {
+  background: #d7d2c5;
+}
+
+.learning-topic-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.learning-topic-card {
+  background:
+    linear-gradient(180deg, rgba(194, 165, 107, 0.1), transparent 42%),
+    var(--surface);
+}
+
+.learning-nav-card {
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.learning-nav-card:not(.is-muted):hover,
+.learning-log-card:hover,
+.learning-feature-link:hover {
+  transform: translateY(-2px);
+  border-color: rgba(15, 118, 110, 0.32);
+  box-shadow: var(--shadow);
+}
+
+.learning-nav-card.is-muted {
+  background: #f8f8f5;
+}
+
+.learning-sticky-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.learning-sticky-note {
+  border: 1px solid rgba(194, 165, 107, 0.34);
+  border-radius: 8px;
+  padding: 18px;
+  background: #fff9e7;
+}
+
+.learning-sticky-note span {
+  color: #8d6b1f;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.learning-sticky-note strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink);
+}
+
+.learning-sticky-note p {
+  margin: 8px 0 0;
+  color: #73624b;
+  line-height: 1.65;
+}
+
+.learning-article {
+  width: min(900px, calc(100% - 36px));
+  margin: 0 auto;
+  padding: clamp(96px, 16vw, 138px) 0 72px;
+}
+
+.learning-article-header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 24px;
+}
+
+.learning-article-header h1 {
+  max-width: 760px;
+  margin: 10px 0 18px;
+  color: var(--ink);
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1.25;
+}
+
+.learning-article-body {
+  max-width: 760px;
+  margin-top: 30px;
+}
+
+.learning-article-body h2 {
+  margin: 34px 0 12px;
+  color: var(--ink);
+  font-size: 1.35rem;
+  line-height: 1.4;
+}
+
+.learning-article-body p,
+.learning-article-body li {
+  color: #4f5b66;
+  font-size: 1rem;
+  line-height: 1.9;
+}
+
+.learning-log-summary,
+.learning-ai-note {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.learning-log-summary {
+  background: #f7fbfa;
+}
+
+.learning-ai-note {
+  background: #fffaf0;
+}
+
+.learning-article-footer {
+  display: grid;
+  gap: 20px;
+  margin-top: 42px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+
 .game-library-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1981,6 +2348,7 @@ body.blocks-game-playing .blocks-game-canvas {
   .article-shell,
   .investment-layout,
   .room-layout,
+  .learning-layout,
   .game-layout {
     grid-template-columns: 1fr;
   }
@@ -2019,6 +2387,22 @@ body.blocks-game-playing .blocks-game-canvas {
     position: static;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .learning-side {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .learning-log-list,
+  .learning-subject-grid,
+  .learning-sticky-list {
+    grid-template-columns: 1fr;
+  }
+
+  .learning-topic-grid,
+  .learning-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
@@ -2050,9 +2434,18 @@ body.blocks-game-playing .blocks-game-canvas {
   .sidebar,
   .investment-side,
   .room-side,
+  .learning-side,
+  .learning-topic-grid,
+  .learning-status-grid,
+  .learning-mini-stats,
   .market-card-grid,
   .profile-wide .profile-form {
     grid-template-columns: 1fr;
+  }
+
+  .learning-section-head {
+    align-items: start;
+    flex-direction: column;
   }
 
   .market-heading {

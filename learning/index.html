@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>学習 | T-ROOM | 知の庭</title>
+  <meta name="description" content="T-ROOMの学習ページ。社労士の学習の記録を中心に、学んだことを後から見返せる形で残します。">
+  <meta property="og:image" content="https://tanaka-note.com/assets/t-room-share.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="T-ROOM 知の庭">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../assets/favicon.ico" sizes="any">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="../assets/site-icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../styles.css?v=20260708-learning1">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../index.html" aria-label="T-ROOM ホームへ">
+      <span class="brand-mark">T</span>
+      <span>T-ROOM</span>
+    </a>
+    <nav class="site-nav" aria-label="メインナビゲーション">
+      <a href="../index.html#posts">記事</a>
+      <a href="../index.html#topics">テーマ</a>
+      <a href="../apps.html">アプリ</a>
+      <a href="../index.html#about">プロフィール</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="sub-hero learning-hero" aria-labelledby="learning-title">
+      <div class="sub-hero-content">
+        <p class="eyebrow">Learning</p>
+        <h1 id="learning-title">学習の記録</h1>
+        <p>学んだこと、つまずいたこと、あとで確認したいことを残す場所です。</p>
+      </div>
+    </section>
+
+    <section class="section learning-layout" aria-label="学習テーマ">
+      <div class="learning-main">
+        <article class="learning-panel learning-feature">
+          <p class="section-kicker">Current</p>
+          <h2>現在取り組んでいる学習テーマ</h2>
+          <a class="learning-feature-link" href="./sharoushi/">
+            <span>社労士</span>
+            <strong>社労士学習ログ</strong>
+            <p>法律解説ではなく、現時点の自分の理解・つまずき・復習ポイントを残していきます。</p>
+          </a>
+        </article>
+
+        <article class="learning-panel">
+          <div class="learning-section-head">
+            <div>
+              <p class="section-kicker">Recent</p>
+              <h2>最近の更新</h2>
+            </div>
+            <a class="text-link" href="./sharoushi/logs/">学習ログを見る</a>
+          </div>
+          <div class="learning-log-list compact" data-learning-recent="3"></div>
+        </article>
+      </div>
+
+      <aside class="learning-side" aria-label="学習ページメモ">
+        <div class="learning-panel">
+          <p class="section-kicker">Note</p>
+          <h2>このページの使い方</h2>
+          <p>ここは学習全体の入口です。細かい進捗や要確認メモは、テーマごとのページに分けて管理します。</p>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 T-ROOM</p>
+    <a href="../index.html">トップへ戻る</a>
+  </footer>
+  <script src="./learning-data.js"></script>
+  <script src="./learning.js"></script>
+</body>
+</html>
