@@ -1340,7 +1340,7 @@
             <span><kbd>Enter</kbd> Start</span>
             <span><kbd>↑↓</kbd> Level</span>
             <span><kbd>Esc</kbd> Title</span>
-            <span><kbd>F2</kbd> Sound</span>
+            <span><kbd>F2</kbd> <span id="soundHelpText">Sound(ON)</span></span>
           </div>
         </div>
       </section>
@@ -1677,6 +1677,7 @@
       combo: document.querySelector("#comboText"),
       defeat: document.querySelector("#defeatText"),
       accuracy: document.querySelector("#accuracyText"),
+      soundHelp: document.querySelector("#soundHelpText"),
       displayWord: document.querySelector("#displayWord"),
       romaji: document.querySelector("#romajiGuide"),
       typed: document.querySelector("#typedText"),
@@ -1740,6 +1741,7 @@
       renderLevels();
       renderBossCandidates();
       validateWords();
+      updateSoundHelp();
       updateHud();
       window.addEventListener("keydown", handleKey);
       state.raf = requestAnimationFrame(loop);
@@ -2153,6 +2155,10 @@
       els.battle.textContent = `${text} ${state.sound ? "" : "/ Sound Off"}`.trim();
     }
 
+    function updateSoundHelp() {
+      els.soundHelp.textContent = `Sound(${state.sound ? "ON" : "OFF"})`;
+    }
+
     function accuracy() {
       if (state.totalKeys === 0) return "100.0";
       return ((state.hits / state.totalKeys) * 100).toFixed(1);
@@ -2260,6 +2266,7 @@
     function toggleSound() {
       state.sound = !state.sound;
       localStorage.setItem("t-room-onitaiji-muted", String(!state.sound));
+      updateSoundHelp();
       setBattleText(state.sound ? "Sound On" : "Sound Off");
     }
 
