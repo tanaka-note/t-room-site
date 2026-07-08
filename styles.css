@@ -1484,6 +1484,258 @@ h1 {
   line-height: 1.35;
 }
 
+.learning-map-panel {
+  background:
+    linear-gradient(180deg, rgba(194, 165, 107, 0.08), transparent 34%),
+    var(--surface);
+}
+
+.learning-map-intro {
+  max-width: 820px;
+  margin: 0 0 22px;
+}
+
+.learning-map-groups {
+  display: grid;
+  gap: 24px;
+}
+
+.learning-law-group h3 {
+  margin: 0 0 12px;
+  color: var(--ink);
+  font-size: 1.08rem;
+  line-height: 1.4;
+}
+
+.learning-law-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.learning-law-card {
+  display: block;
+  border: 1px solid rgba(31, 41, 51, 0.08);
+  border-radius: 8px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  color: inherit;
+  text-decoration: none;
+}
+
+.learning-law-card.is-active {
+  border-color: rgba(15, 118, 110, 0.28);
+  background: #f3faf7;
+}
+
+.learning-law-card h4 {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.learning-law-card p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+.learning-law-card small {
+  display: inline-flex;
+  margin-top: 12px;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.learning-law-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: #eef2f6;
+  color: #5d6673;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.learning-law-card.is-active .learning-law-status {
+  background: #dff4ee;
+  color: #0f766e;
+}
+
+.troom-visual-note {
+  margin: 30px 0 36px;
+  padding: clamp(18px, 4vw, 26px);
+  border: 1px solid rgba(91, 112, 93, 0.22);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0)),
+    #fbfaf3;
+}
+
+.troom-visual-note__header {
+  margin-bottom: 16px;
+}
+
+.troom-visual-note__label,
+.troom-visual-note__small {
+  margin: 0 0 6px;
+  color: #7b6a47;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.troom-visual-note h3,
+.troom-visual-note h4 {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.troom-visual-note__answer {
+  padding: 18px;
+  border: 1px solid rgba(91, 112, 93, 0.2);
+  border-left: 5px solid #9aa879;
+  border-radius: 8px;
+  background: #fffdf7;
+}
+
+.troom-visual-note__answer p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.troom-judgement-flow {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.troom-judgement-flow__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 0.48fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.troom-judgement-flow__row--final {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.85fr);
+}
+
+.troom-judgement-flow__question,
+.troom-judgement-flow__result {
+  border: 1px solid rgba(91, 112, 93, 0.18);
+  border-radius: 8px;
+  background: #fffdf7;
+}
+
+.troom-judgement-flow__question {
+  padding: 16px;
+}
+
+.troom-judgement-flow__question span,
+.troom-judgement-flow__result span {
+  display: block;
+  margin-bottom: 6px;
+  color: #7b6a47;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.troom-judgement-flow__question strong,
+.troom-judgement-flow__result strong {
+  display: block;
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+.troom-judgement-flow__result {
+  padding: 14px;
+}
+
+.troom-judgement-flow__result--yes {
+  background: #f1f6ee;
+}
+
+.troom-judgement-flow__result--no {
+  background: #fbf3e5;
+}
+
+.troom-judgement-flow__results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.troom-judgement-flow__next {
+  position: relative;
+  min-height: 34px;
+  margin-left: 28px;
+}
+
+.troom-judgement-flow__next::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(91, 112, 93, 0.28);
+}
+
+.troom-judgement-flow__next::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  bottom: 0;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid rgba(91, 112, 93, 0.4);
+  border-bottom: 1px solid rgba(91, 112, 93, 0.4);
+  transform: rotate(45deg);
+}
+
+.troom-judgement-flow__next span {
+  display: inline-block;
+  margin-left: 30px;
+  padding: 4px 9px;
+  border: 1px solid rgba(91, 112, 93, 0.18);
+  border-radius: 999px;
+  background: #fffdf7;
+  color: #7b6a47;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.troom-visual-note__supplements {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.troom-visual-note__supplement {
+  padding: 14px;
+  border: 1px solid rgba(138, 107, 53, 0.22);
+  border-radius: 8px;
+  background: #fff8e8;
+}
+
+.troom-visual-note__supplement strong {
+  display: block;
+  color: var(--ink);
+}
+
+.troom-visual-note__supplement p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
 .learning-section-head {
   display: flex;
   align-items: end;
@@ -2426,8 +2678,17 @@ body.blocks-game-playing .blocks-game-canvas {
 
   .learning-log-list,
   .learning-subject-grid,
+  .learning-law-grid,
+  .troom-judgement-flow__row,
+  .troom-judgement-flow__row--final,
+  .troom-judgement-flow__results,
+  .troom-visual-note__supplements,
   .learning-sticky-list {
     grid-template-columns: 1fr;
+  }
+
+  .troom-judgement-flow__next {
+    margin-left: 12px;
   }
 
   .learning-topic-grid,
