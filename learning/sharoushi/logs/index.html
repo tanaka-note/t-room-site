@@ -51,6 +51,22 @@
     </section>
 
     <section class="section">
+      <article class="learning-search-card" data-learning-search>
+        <div class="learning-section-head">
+          <div>
+            <p class="section-kicker">Search</p>
+            <h2>学習ログを探す</h2>
+          </div>
+        </div>
+        <label class="learning-search-label" for="learning-log-search">キーワード検索</label>
+        <div class="learning-search-box">
+          <input id="learning-log-search" type="search" autocomplete="off" placeholder="例：概算保険料、継続事業、判例" data-learning-search-input>
+          <button class="learning-search-clear" type="button" aria-label="検索キーワードをクリア" data-learning-search-clear>×</button>
+        </div>
+        <p class="learning-search-status" data-learning-search-status>キーワードを入力すると、学習ログ記事の本文から探します。</p>
+        <div class="learning-search-results" data-learning-search-results></div>
+      </article>
+
       <div class="learning-section-head">
         <div>
           <p class="section-kicker">Logs</p>
@@ -68,5 +84,6 @@
   </footer>
   <script src="../../learning-data.js"></script>
   <script src="../../learning.js"></script>
+  <script src="../../learning-search.js"></script>
 </body>
 </html>

@@ -4,6 +4,19 @@
   const subjects = data.learningSubjects || [];
   const topics = data.learningTopics || [];
 
+  function getLogNumber(log) {
+    const match = String(log.id || "").match(/(\d+)$/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  function compareLogsByNewest(a, b) {
+    const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
+    if (dateCompare !== 0) return dateCompare;
+    return getLogNumber(b) - getLogNumber(a);
+  }
+
+  const sortedLogs = logs.slice().sort(compareLogsByNewest);
+
   function formatDate(value) {
     return value || "なし";
   }
@@ -18,7 +31,7 @@
   function renderRecentLogs() {
     document.querySelectorAll("[data-learning-recent]").forEach((container) => {
       const limit = Number(container.dataset.learningRecent) || 3;
-      const items = logs.slice(0, limit);
+      const items = sortedLogs.slice(0, limit);
       container.replaceChildren(...items.map(createLogCard));
       if (!items.length) container.innerHTML = '<p class="learning-empty">まだ学習ログはありません。</p>';
     });
@@ -27,7 +40,7 @@
   function renderAllLogs() {
     const container = document.querySelector("[data-learning-logs]");
     if (!container) return;
-    container.replaceChildren(...logs.map(createLogCard));
+    container.replaceChildren(...sortedLogs.map(createLogCard));
     if (!logs.length) container.innerHTML = '<p class="learning-empty">まだ学習ログはありません。</p>';
   }
 
