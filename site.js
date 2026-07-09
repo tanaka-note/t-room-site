@@ -178,8 +178,29 @@
   const toggle = document.querySelector("#recent-toggle");
   const initialCount = Number(list.dataset.initialCount) || 3;
   const maxCount = Number(list.dataset.maxCount) || 10;
+
+  function getDateRank(post) {
+    return Number(String(post.date || "").replace(/\D/g, "")) || 0;
+  }
+
+  function getPostSequence(post) {
+    const source = `${post.title || ""} ${post.url || ""}`;
+    const match = source.match(/#(\d+)|logs\/(\d+)\.html/);
+    return match ? Number(match[1] || match[2]) : 0;
+  }
+
+  function compareRecentPosts(a, b) {
+    const dateDiff = getDateRank(b) - getDateRank(a);
+    if (dateDiff !== 0) return dateDiff;
+    const sequenceDiff = getPostSequence(b) - getPostSequence(a);
+    if (sequenceDiff !== 0) return sequenceDiff;
+    return a.index - b.index;
+  }
+
   const posts = recentPosts
+    .map((post, index) => ({ ...post, index }))
     .filter((post) => visibleThemes.has(post.theme))
+    .sort(compareRecentPosts)
     .slice(0, maxCount);
   let expanded = false;
 
