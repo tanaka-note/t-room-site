@@ -2,6 +2,7 @@ window.TRoomLearningData = {
   learningLogs: [
     {
       id: "sharoushi-001",
+      order: 1,
       title: "社労士学習ログ #001：継続事業の概算保険料の延納",
       date: "2026-07-08",
       category: "社労士",
@@ -13,6 +14,7 @@ window.TRoomLearningData = {
     },
     {
       id: "sharoushi-002",
+      order: 2,
       title: "社労士学習ログ #002：有期事業の概算保険料の延納",
       date: "2026-07-08",
       category: "社労士",

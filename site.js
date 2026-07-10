@@ -129,6 +129,7 @@
   const recentPosts = [
     {
       theme: "学習",
+      order: 1,
       date: "2026.07.08",
       title: "社労士学習ログ #001：継続事業の概算保険料の延納",
       excerpt: "継続事業の概算保険料の延納について、40万円要件、事務組合委託、納期限を整理します。",
@@ -136,6 +137,7 @@
     },
     {
       theme: "学習",
+      order: 2,
       date: "2026.07.08",
       title: "社労士学習ログ #002：有期事業の概算保険料の延納",
       excerpt: "有期事業の概算保険料の延納について、6ヶ月超、75万円以上、期間区分を整理します。",
@@ -184,6 +186,7 @@
   }
 
   function getPostSequence(post) {
+    if (Number.isFinite(Number(post.order))) return Number(post.order);
     const source = `${post.title || ""} ${post.url || ""}`;
     const match = source.match(/#(\d+)|logs\/(\d+)\.html/);
     return match ? Number(match[1] || match[2]) : 0;

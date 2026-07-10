@@ -5,6 +5,7 @@
   const topics = data.learningTopics || [];
 
   function getLogNumber(log) {
+    if (Number.isFinite(Number(log.order))) return Number(log.order);
     const match = String(log.id || "").match(/(\d+)$/);
     return match ? Number(match[1]) : 0;
   }
