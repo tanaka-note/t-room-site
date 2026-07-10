@@ -25,7 +25,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../styles.css?v=20260708-learning1">
+  <link rel="stylesheet" href="../styles.css?v=20260710-search-clear1">
 </head>
 <body>
   <header class="site-header">
@@ -52,13 +52,18 @@
 
     <section class="section learning-layout" aria-label="学習テーマ">
       <div class="learning-main">
-        <article class="learning-panel learning-feature">
-          <p class="section-kicker">Current</p>
-          <h2>現在学習中</h2>
-          <a class="learning-feature-link" href="./sharoushi/">
-            <strong>社労士(労働保険徴収法)</strong>
-            <p>法律解説ではなく、現時点の自分の理解・つまずき・復習ポイントを残していきます。</p>
-          </a>
+        <article class="learning-panel">
+          <div class="learning-section-head">
+            <div>
+              <p class="section-kicker">Recent</p>
+              <h2>最近の更新</h2>
+            </div>
+            <a class="text-link" href="./sharoushi/logs/">学習ログを見る</a>
+          </div>
+          <div class="learning-log-list compact" data-learning-recent="3" data-learning-recent-initial="3" data-learning-recent-max="10"></div>
+          <div class="recent-actions">
+            <button class="button secondary recent-toggle" type="button" data-learning-recent-toggle aria-expanded="false" hidden>開く</button>
+          </div>
         </article>
 
         <article class="learning-panel learning-map-panel">
@@ -69,7 +74,21 @@
             </div>
             <a class="text-link" href="./sharoushi/subjects/">科目一覧へ</a>
           </div>
-          <p class="learning-map-intro">社労士試験は、たくさんの法律を横断して学ぶ試験です。最初から細かい論点だけを追うと迷いやすいので、T-ROOMではまず全体の地図を置き、その中に日々の学習ログを積み重ねていきます。</p>
+          <div class="learning-search-card" data-learning-search data-learning-search-idle="キーワードを入力すると、社労士の学習ログ全体から探します。">
+            <div class="learning-section-head">
+              <div>
+                <p class="section-kicker">Search</p>
+                <h3>学習ログを横断検索</h3>
+              </div>
+            </div>
+            <label class="learning-search-label" for="learning-global-search">キーワード検索</label>
+            <div class="learning-search-box">
+              <input id="learning-global-search" type="search" autocomplete="off" placeholder="例：増加概算保険料、継続事業、判例" data-learning-search-input>
+              <button class="learning-search-clear" type="button" aria-label="検索キーワードをクリア" data-learning-search-clear>×</button>
+            </div>
+            <p class="learning-search-status" data-learning-search-status>キーワードを入力すると、社労士の学習ログ全体から探します。</p>
+            <div class="learning-search-results" data-learning-search-results></div>
+          </div>
 
           <div class="learning-map-groups">
             <section class="learning-law-group" aria-labelledby="labor-law-title">
@@ -137,16 +156,6 @@
           </div>
         </article>
 
-        <article class="learning-panel">
-          <div class="learning-section-head">
-            <div>
-              <p class="section-kicker">Recent</p>
-              <h2>最近の更新</h2>
-            </div>
-            <a class="text-link" href="./sharoushi/logs/">学習ログを見る</a>
-          </div>
-          <div class="learning-log-list compact" data-learning-recent="3"></div>
-        </article>
       </div>
     </section>
   </main>
@@ -156,6 +165,7 @@
     <a href="../index.html">トップへ戻る</a>
   </footer>
   <script src="./learning-data.js?v=20260710-learning-order2"></script>
-  <script src="./learning.js?v=20260710-learning-order2"></script>
+  <script src="./learning.js?v=20260710-learning-recent1"></script>
+  <script src="./learning-search.js?v=20260710-learning-scope1"></script>
 </body>
 </html>

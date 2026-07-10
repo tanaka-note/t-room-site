@@ -31,10 +31,32 @@
 
   function renderRecentLogs() {
     document.querySelectorAll("[data-learning-recent]").forEach((container) => {
-      const limit = Number(container.dataset.learningRecent) || 3;
-      const items = sortedLogs.slice(0, limit);
-      container.replaceChildren(...items.map(createLogCard));
-      if (!items.length) container.innerHTML = '<p class="learning-empty">まだ学習ログはありません。</p>';
+      const initialCount = Number(container.dataset.learningRecentInitial || container.dataset.learningRecent) || 3;
+      const maxCount = Number(container.dataset.learningRecentMax || container.dataset.learningRecent) || initialCount;
+      const toggle = container.closest(".learning-panel")?.querySelector("[data-learning-recent-toggle]");
+      let expanded = false;
+
+      function render() {
+        const limit = expanded ? maxCount : initialCount;
+        const items = sortedLogs.slice(0, limit);
+        container.replaceChildren(...items.map(createLogCard));
+        if (!items.length) container.innerHTML = '<p class="learning-empty">まだ学習ログはありません。</p>';
+
+        if (toggle) {
+          toggle.hidden = sortedLogs.length <= initialCount;
+          toggle.setAttribute("aria-expanded", String(expanded));
+          toggle.textContent = expanded ? "閉じる" : "開く";
+        }
+      }
+
+      if (toggle) {
+        toggle.addEventListener("click", () => {
+          expanded = !expanded;
+          render();
+        });
+      }
+
+      render();
     });
   }
 

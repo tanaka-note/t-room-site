@@ -3,7 +3,8 @@ window.TRoomLearningData = {
     {
       id: "sharoushi-001",
       order: 1,
-      title: "社労士学習ログ #001：継続事業の概算保険料の延納",
+      subjectCode: 5,
+      title: "社労士学習ログ #5-001：継続事業の概算保険料の延納",
       date: "2026-07-08",
       category: "社労士",
       subject: "労働保険徴収法",
@@ -15,7 +16,8 @@ window.TRoomLearningData = {
     {
       id: "sharoushi-002",
       order: 2,
-      title: "社労士学習ログ #002：有期事業の概算保険料の延納",
+      subjectCode: 5,
+      title: "社労士学習ログ #5-002：有期事業の概算保険料の延納",
       date: "2026-07-08",
       category: "社労士",
       subject: "労働保険徴収法",
@@ -29,6 +31,7 @@ window.TRoomLearningData = {
   learningSubjects: [
     {
       id: "rouki",
+      code: 1,
       name: "労働基準法",
       group: "労働科目",
       status: "未学習",
@@ -38,6 +41,7 @@ window.TRoomLearningData = {
     },
     {
       id: "anei",
+      code: 2,
       name: "労働安全衛生法",
       group: "労働科目",
       status: "未学習",
@@ -47,7 +51,8 @@ window.TRoomLearningData = {
     },
     {
       id: "rousai",
-      name: "労災保険法",
+      code: 3,
+      name: "労働者災害補償保険法",
       group: "労働科目",
       status: "未学習",
       articleCount: 0,
@@ -56,6 +61,7 @@ window.TRoomLearningData = {
     },
     {
       id: "koyou",
+      code: 4,
       name: "雇用保険法",
       group: "労働科目",
       status: "未学習",
@@ -65,6 +71,7 @@ window.TRoomLearningData = {
     },
     {
       id: "choushu",
+      code: 5,
       name: "労働保険徴収法",
       group: "労働科目",
       status: "学習中",
@@ -74,6 +81,7 @@ window.TRoomLearningData = {
     },
     {
       id: "kenpo",
+      code: 7,
       name: "健康保険法",
       group: "社会保険科目",
       status: "未学習",
@@ -83,6 +91,7 @@ window.TRoomLearningData = {
     },
     {
       id: "kokunen",
+      code: 8,
       name: "国民年金法",
       group: "社会保険科目",
       status: "未学習",
@@ -92,6 +101,7 @@ window.TRoomLearningData = {
     },
     {
       id: "kounen",
+      code: 9,
       name: "厚生年金保険法",
       group: "社会保険科目",
       status: "未学習",
@@ -101,7 +111,8 @@ window.TRoomLearningData = {
     },
     {
       id: "rouichi",
-      name: "労働一般常識",
+      code: 6,
+      name: "労務管理その他の労働に関する一般常識",
       group: "一般常識",
       status: "未学習",
       articleCount: 0,
@@ -110,7 +121,8 @@ window.TRoomLearningData = {
     },
     {
       id: "shaichi",
-      name: "社会一般常識",
+      code: 10,
+      name: "社会保険に関する一般常識",
       group: "一般常識",
       status: "未学習",
       articleCount: 0,
