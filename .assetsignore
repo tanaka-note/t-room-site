@@ -1,0 +1,7 @@
+node_modules/
+package.json
+pnpm-lock.yaml
+wrangler.jsonc
+README.md
+.gitignore
+.assetsignore
