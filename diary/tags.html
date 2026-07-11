@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>#別の日記 | T-ROOM</title>
+  <meta name="description" content="T-ROOMの日記を#ごとにたどるページです。">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="#別の日記 | T-ROOM">
+  <meta property="og:description" content="T-ROOMの日記を#ごとにたどるページです。">
+  <meta property="og:url" content="https://tanaka-note.com/diary/tags.html">
+  <meta property="og:site_name" content="T-ROOM">
+  <meta property="og:image" content="https://tanaka-note.com/images/ogp-default.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="#別の日記 | T-ROOM">
+  <meta name="twitter:description" content="T-ROOMの日記を#ごとにたどるページです。">
+  <meta name="twitter:image" content="https://tanaka-note.com/images/ogp-default.png">
+  <link rel="icon" href="../assets/favicon.ico" sizes="any">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../styles.css?v=20260711-diary1">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../index.html" aria-label="T-ROOM ホームへ"><span class="brand-mark">T</span><span>T-ROOM</span></a>
+    <nav class="site-nav" aria-label="メインナビゲーション">
+      <a href="../index.html#posts">記事</a>
+      <a href="../index.html#topics">テーマ</a>
+      <a href="../apps.html">アプリ</a>
+      <a href="../index.html#about">プロフィール</a>
+    </nav>
+  </header>
+  <main>
+    <section class="sub-hero diary-hero" aria-labelledby="tags-title">
+      <div class="sub-hero-content">
+        <p class="eyebrow">Diary Tags</p>
+        <h1 id="tags-title">#から見る</h1>
+        <p>同じ話題の日記を、ひと続きにたどります。</p>
+      </div>
+    </section>
+    <section class="section diary-tag-layout">
+      <section class="diary-panel">
+        <p class="section-kicker">Tags</p>
+        <h2>#一覧</h2>
+        <div class="diary-tag-cloud diary-tag-cloud-large" data-diary-tags></div>
+      </section>
+      <section class="diary-panel">
+        <div class="diary-section-head"><div><p class="section-kicker">Entries</p><h2 data-diary-tag-title>#を選ぶ</h2></div></div>
+        <div class="diary-entry-list" data-diary-tag-results></div>
+      </section>
+    </section>
+  </main>
+  <footer class="site-footer"><p>&copy; 2026 T-ROOM</p><a href="../diary.html">日記へ戻る</a></footer>
+  <script src="./diary-data.js?v=20260711-diary1"></script>
+  <script src="./diary.js?v=20260711-diary1"></script>
+  <script src="../site.js?v=20260710-recent-order2" defer></script>
+</body>
+</html>

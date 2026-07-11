@@ -1,13 +1,13 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>日記 | T-ROOM | 知の庭</title>
-  <meta name="description" content="T-ROOMの日記ページ。日々の出来事や気分を短い言葉で残す場所です。">
+  <meta name="description" content="T-ROOMの日記。日々の出来事を、年月やタグからあとでたどれる形で残します。">
   <meta property="og:type" content="website">
   <meta property="og:title" content="日記 | T-ROOM | 知の庭">
-  <meta property="og:description" content="T-ROOMの日記ページ。日々の出来事や気分を短い言葉で残す場所です。">
+  <meta property="og:description" content="T-ROOMの日記。日々の出来事を、年月やタグからあとでたどれる形で残します。">
   <meta property="og:url" content="https://tanaka-note.com/diary.html">
   <meta property="og:site_name" content="T-ROOM">
   <meta property="og:image" content="https://tanaka-note.com/images/ogp-default.png">
@@ -16,7 +16,7 @@
   <meta property="og:image:alt" content="T-ROOM">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="日記 | T-ROOM | 知の庭">
-  <meta name="twitter:description" content="T-ROOMの日記ページ。日々の出来事や気分を短い言葉で残す場所です。">
+  <meta name="twitter:description" content="T-ROOMの日記。日々の出来事を、年月やタグからあとでたどれる形で残します。">
   <meta name="twitter:image" content="https://tanaka-note.com/images/ogp-default.png">
   <link rel="icon" href="./assets/favicon.ico" sizes="any">
   <link rel="icon" href="./assets/favicon-32.png" type="image/png" sizes="32x32">
@@ -25,7 +25,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260617-menu5">
+  <link rel="stylesheet" href="./styles.css?v=20260711-diary1">
 </head>
 <body>
   <header class="site-header">
@@ -42,32 +42,60 @@
   </header>
 
   <main>
-    <section class="sub-hero" aria-labelledby="diary-title">
+    <section class="sub-hero diary-hero" aria-labelledby="diary-title">
       <div class="sub-hero-content">
         <p class="eyebrow">Diary</p>
         <h1 id="diary-title">日記</h1>
-        <p>その日の出来事や気分を、短い言葉で残す場所です。</p>
+        <p>意思と存在 あとはただのデータ</p>
       </div>
     </section>
 
-    <section class="section room-layout" aria-label="日記の部屋">
-      <div class="room-main">
-        <article class="room-panel">
-          <p class="section-kicker">Archive</p>
-          <h2>日記一覧</h2>
-          <div class="empty-room">まだ記事はありません。あとで日付ごとの記録を追加します。</div>
-        </article>
+    <section class="section diary-layout" aria-label="日記">
+      <div class="diary-main">
+        <section class="diary-panel" aria-labelledby="diary-recent-title">
+          <div class="diary-section-head">
+            <div>
+              <p class="section-kicker">Recent</p>
+              <h2 id="diary-recent-title">最近の更新</h2>
+            </div>
+            <a class="text-link" href="./diary/archive.html">年月から見る</a>
+          </div>
+          <div class="diary-entry-list" data-diary-recent></div>
+        </section>
+
+        <section class="diary-panel" aria-labelledby="diary-search-title">
+          <div class="diary-section-head">
+            <div>
+              <p class="section-kicker">Search</p>
+              <h2 id="diary-search-title">日記を検索</h2>
+            </div>
+          </div>
+          <div class="diary-search-card" data-diary-search>
+            <label class="diary-search-label" for="diary-search-input">キーワード検索</label>
+            <div class="diary-search-box">
+              <input id="diary-search-input" type="search" autocomplete="off" placeholder="例：仕事、旅行、サイトづくり" data-diary-search-input>
+              <button class="diary-search-clear" type="button" aria-label="検索キーワードをクリア" data-diary-search-clear hidden>×</button>
+            </div>
+            <p class="diary-search-status" data-diary-search-status>日記のタイトルと本文から探します。</p>
+            <div class="diary-search-results" data-diary-search-results></div>
+          </div>
+        </section>
       </div>
-      <aside class="room-side" aria-label="日記メモ">
-        <div class="room-panel">
-          <p class="section-kicker">Format</p>
-          <h2>書き方</h2>
-          <ul>
-            <li>今日あったこと</li>
-            <li>そのとき感じたこと</li>
-            <li>あとで覚えておきたいこと</li>
-          </ul>
-        </div>
+
+      <aside class="diary-side" aria-label="日記をたどる">
+        <section class="diary-panel">
+          <p class="section-kicker">Archive</p>
+          <h2>年月から見る</h2>
+          <nav class="diary-archive-nav" data-diary-archive-nav aria-label="年月別の日記"></nav>
+          <a class="text-link diary-side-link" href="./diary/archive.html">すべての年月を見る</a>
+        </section>
+
+        <section class="diary-panel">
+          <p class="section-kicker">Tags</p>
+          <h2>#から見る</h2>
+          <div class="diary-tag-cloud" data-diary-tags></div>
+          <a class="text-link diary-side-link" href="./diary/tags.html">すべての#を見る</a>
+        </section>
       </aside>
     </section>
   </main>
@@ -76,6 +104,9 @@
     <p>&copy; 2026 T-ROOM</p>
     <a href="./index.html">トップへ戻る</a>
   </footer>
-  <script src="./site.js?v=20260618-bitcoin-article" defer></script>
+  <script src="./diary/diary-data.js?v=20260711-diary1"></script>
+  <script src="./diary/diary.js?v=20260711-diary1"></script>
+  <script src="./diary/diary-search.js?v=20260711-diary1"></script>
+  <script src="./site.js?v=20260710-recent-order2" defer></script>
 </body>
 </html>

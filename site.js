@@ -129,6 +129,14 @@
   const recentPosts = [
     {
       theme: "学習",
+      order: 4,
+      date: "2026.07.11",
+      title: "社労士学習ログ #5-004：概算保険料の追加徴収",
+      excerpt: "政府による保険料率の引上げ、通知、納期限、増加概算保険料との違いを整理します。",
+      url: "./learning/sharoushi/logs/004.html",
+    },
+    {
+      theme: "学習",
       order: 3,
       date: "2026.07.10",
       title: "社労士学習ログ #5-003：増加概算保険料",

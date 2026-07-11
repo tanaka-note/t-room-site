@@ -12,4 +12,9 @@ pnpm run build
 
 Cloudflare Pages で自動生成する場合は、ビルドコマンドを `pnpm run build`、公開ディレクトリを `.` にします。
 
-検索対象は `learning/sharoushi/logs/[0-9]*.html` の学習ログ記事です。テンプレートや一覧ページは検索対象に含めません。
+検索対象は次の本文ページです。テンプレートや一覧ページは検索対象に含めません。
+
+- `learning/sharoushi/logs/[0-9]*.html`：社労士学習ログ
+- `diary/entries/[0-9]*.html`：日記
+
+日記を追加するときは、本文を `diary/entries/` に追加し、一覧表示用の情報を `diary/diary-data.js` に追記します。日付の新しい順で自動表示され、`pnpm run build` で日記検索にも反映されます。

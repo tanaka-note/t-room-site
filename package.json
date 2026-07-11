@@ -1,7 +1,7 @@
 {
   "scripts": {
     "build": "pnpm run search:index",
-    "search:index": "pagefind --site . --glob \"learning/sharoushi/logs/[0-9]*.html\" --force-language ja"
+    "search:index": "pagefind --site . --glob \"{learning/sharoushi/logs,diary/entries}/[0-9]*.html\" --force-language ja"
   },
   "devDependencies": {
     "pagefind": "^1.5.2"

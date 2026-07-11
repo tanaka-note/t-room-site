@@ -38,6 +38,19 @@ window.TRoomLearningData = {
       tags: ["社労士", "労働保険徴収法", "増加概算保険料", "概算保険料", "賃金総額", "保険料算定基礎額", "延納"],
       summary: "増加概算保険料について、200%超、13万円以上、30日以内、減少時との違い、延納を整理。",
       url: "/learning/sharoushi/logs/003.html"
+    },
+    {
+      id: "sharoushi-004",
+      order: 4,
+      subjectCode: 5,
+      title: "社労士学習ログ #5-004：概算保険料の追加徴収",
+      date: "2026-07-11",
+      category: "社労士",
+      subject: "労働保険徴収法",
+      type: "学習ログ",
+      tags: ["社労士", "労働保険徴収法", "概算保険料", "追加徴収", "増加概算保険料", "保険料率", "延納"],
+      summary: "概算保険料の追加徴収について、政府による保険料率の引上げ、通知、納期限、増加概算保険料との違い、延納を整理。",
+      url: "/learning/sharoushi/logs/004.html"
     }
   ],
 
@@ -88,9 +101,9 @@ window.TRoomLearningData = {
       name: "労働保険徴収法",
       group: "労働科目",
       status: "学習中",
-      articleCount: 3,
-      lastUpdated: "2026-07-10",
-      memo: "概算保険料の延納と増加概算保険料を学習中。継続事業と有期事業の違いを混同しないように整理する。"
+      articleCount: 4,
+      lastUpdated: "2026-07-11",
+      memo: "概算保険料の延納、増加概算保険料、概算保険料の追加徴収を学習中。発生原因と手続の主体を混同しないように整理する。"
     },
     {
       id: "kenpo",
