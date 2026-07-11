@@ -60,7 +60,7 @@
       const limit = Number(root.dataset.diaryRecent) || 5;
       const items = entries.slice(0, limit);
       root.replaceChildren(...items.map(createEntryCard));
-      if (!items.length) root.innerHTML = '<p class="diary-empty">まだ日記はありません。</p>';
+      if (!items.length) root.innerHTML = '<p class="diary-empty">なし</p>';
     });
   }
 

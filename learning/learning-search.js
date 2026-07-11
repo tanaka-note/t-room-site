@@ -31,6 +31,7 @@
     const maxResults = Number(root.dataset.learningSearchLimit) || 12;
     const fetchLimit = Number(root.dataset.learningSearchFetchLimit) || Math.max(maxResults * 4, 24);
     let timerId;
+    let searchRunId = 0;
 
     if (!input || !status || !results) return;
 
@@ -89,6 +90,7 @@
     }
 
     async function runSearch() {
+      const runId = ++searchRunId;
       const query = input.value.trim();
       updateClearButton();
       updateUrl(query);
@@ -99,15 +101,18 @@
 
       status.textContent = "検索しています...";
       const pagefind = await loadPagefind();
+      if (runId !== searchRunId) return;
       if (!pagefind) {
         setMessage("検索インデックスはビルド後に有効になります。");
         return;
       }
 
       const search = await pagefind.debouncedSearch(query, {}, 220);
+      if (runId !== searchRunId) return;
       if (!search) return;
 
       const items = await Promise.all(search.results.slice(0, fetchLimit).map((result) => result.data()));
+      if (runId !== searchRunId) return;
       renderResults(items.filter(isTargetItem).slice(0, maxResults));
     }
 
@@ -123,6 +128,7 @@
     if (clearButton) {
       clearButton.addEventListener("click", () => {
         window.clearTimeout(timerId);
+        searchRunId += 1;
         input.value = "";
         updateClearButton();
         updateUrl("");

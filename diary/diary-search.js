@@ -1,13 +1,8 @@
 (function () {
-  const roots = document.querySelectorAll("[data-diary-search]");
+  const roots = Array.from(document.querySelectorAll("[data-diary-search]"));
   if (!roots.length) return;
 
   let pagefindPromise;
-
-  function loadPagefind() {
-    if (!pagefindPromise) pagefindPromise = import("/pagefind/pagefind.js").catch(() => null);
-    return pagefindPromise;
-  }
 
   function escapeHtml(value) {
     return String(value || "")
@@ -18,56 +13,54 @@
       .replaceAll("'", "&#39;");
   }
 
-  roots.forEach((root) => {
+  async function loadPagefind() {
+    if (!pagefindPromise) {
+      pagefindPromise = import("/pagefind/pagefind.js").catch(() => null);
+    }
+    return pagefindPromise;
+  }
+
+  function setupSearch(root) {
     const input = root.querySelector("[data-diary-search-input]");
-    const clear = root.querySelector("[data-diary-search-clear]");
+    const clearButton = root.querySelector("[data-diary-search-clear]");
     const status = root.querySelector("[data-diary-search-status]");
     const results = root.querySelector("[data-diary-search-results]");
+    const basePath = root.dataset.diarySearchPath || "/diary/entries/";
+    const idleMessage = root.dataset.diarySearchIdle || "日記のタイトルと本文から探します。";
+    const maxResults = Number(root.dataset.diarySearchLimit) || 12;
+    const fetchLimit = Number(root.dataset.diarySearchFetchLimit) || Math.max(maxResults * 4, 24);
     let timerId;
+    let searchRunId = 0;
 
     if (!input || !status || !results) return;
 
-    function updateUrl(query) {
-      const url = new URL(window.location.href);
-      if (query) url.searchParams.set("q", query);
-      else url.searchParams.delete("q");
-      window.history.replaceState({}, "", url);
-    }
-
-    function setIdle() {
-      status.textContent = "日記のタイトルと本文から探します。";
+    function setMessage(message) {
+      status.textContent = message;
       results.replaceChildren();
     }
 
-    function updateClear() {
-      if (clear) clear.hidden = !input.value.trim();
+    function updateUrl(query) {
+      const url = new URL(window.location.href);
+      if (query) {
+        url.searchParams.set("q", query);
+      } else {
+        url.searchParams.delete("q");
+      }
+      window.history.replaceState({}, "", url);
     }
 
-    async function searchDiary() {
-      const query = input.value.trim();
-      updateClear();
-      updateUrl(query);
-      if (!query) {
-        setIdle();
-        return;
-      }
+    function updateClearButton() {
+      if (!clearButton) return;
+      clearButton.hidden = !input.value.trim();
+    }
 
-      status.textContent = "検索しています...";
-      const pagefind = await loadPagefind();
-      if (!pagefind) {
-        status.textContent = "検索は公開用のビルド後に利用できます。";
-        results.replaceChildren();
-        return;
-      }
+    function isTargetItem(item) {
+      return Boolean(item.url && item.url.startsWith(basePath));
+    }
 
-      const search = await pagefind.debouncedSearch(query, {}, 200);
-      if (!search) return;
-      const data = await Promise.all(search.results.slice(0, 40).map((result) => result.data()));
-      const items = data.filter((item) => item.url?.startsWith("/diary/entries/")).slice(0, 20);
-
+    function renderResults(items) {
       if (!items.length) {
-        status.textContent = "該当する日記はまだありません";
-        results.replaceChildren();
+        setMessage("該当する日記はまだありません");
         return;
       }
 
@@ -86,27 +79,62 @@
       }));
     }
 
-    input.addEventListener("focus", loadPagefind);
-    input.addEventListener("input", () => {
-      window.clearTimeout(timerId);
-      timerId = window.setTimeout(searchDiary, 180);
+    async function runSearch() {
+      const runId = ++searchRunId;
+      const query = input.value.trim();
+      updateClearButton();
+      updateUrl(query);
+      if (!query) {
+        setMessage(idleMessage);
+        return;
+      }
+
+      status.textContent = "検索しています...";
+      const pagefind = await loadPagefind();
+      if (runId !== searchRunId) return;
+      if (!pagefind) {
+        setMessage("検索は公開用のビルド後に利用できます。");
+        return;
+      }
+
+      const search = await pagefind.debouncedSearch(query, {}, 200);
+      if (runId !== searchRunId) return;
+      if (!search) return;
+      const data = await Promise.all(search.results.slice(0, fetchLimit).map((result) => result.data()));
+      if (runId !== searchRunId) return;
+      renderResults(data.filter(isTargetItem).slice(0, maxResults));
+    }
+
+    input.addEventListener("focus", () => {
+      loadPagefind();
     });
 
-    clear?.addEventListener("click", () => {
+    input.addEventListener("input", () => {
       window.clearTimeout(timerId);
-      input.value = "";
-      updateClear();
-      updateUrl("");
-      setIdle();
-      input.focus();
+      timerId = window.setTimeout(runSearch, 180);
     });
+
+    if (clearButton) {
+      clearButton.addEventListener("click", () => {
+        window.clearTimeout(timerId);
+        searchRunId += 1;
+        input.value = "";
+        updateClearButton();
+        updateUrl("");
+        setMessage(idleMessage);
+        input.focus();
+      });
+    }
 
     const initialQuery = new URLSearchParams(window.location.search).get("q");
     if (initialQuery) {
       input.value = initialQuery;
-      searchDiary();
+      updateClearButton();
+      runSearch();
     } else {
-      updateClear();
+      updateClearButton();
     }
-  });
+  }
+
+  roots.forEach(setupSearch);
 }());
