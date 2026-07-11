@@ -129,6 +129,14 @@
   const recentPosts = [
     {
       theme: "学習",
+      order: 3,
+      date: "2026.07.10",
+      title: "社労士学習ログ #5-003：増加概算保険料",
+      excerpt: "増加概算保険料について、200%超、13万円以上、30日以内、減少時との違いを整理します。",
+      url: "./learning/sharoushi/logs/003.html",
+    },
+    {
+      theme: "学習",
       order: 1,
       date: "2026.07.08",
       title: "社労士学習ログ #5-001：継続事業の概算保険料の延納",

@@ -25,6 +25,19 @@ window.TRoomLearningData = {
       tags: ["社労士", "労働保険徴収法", "概算保険料", "延納", "有期事業"],
       summary: "有期事業の概算保険料の延納について、6ヶ月超、75万円以上、期間区分と納期限を整理。",
       url: "/learning/sharoushi/logs/002.html"
+    },
+    {
+      id: "sharoushi-003",
+      order: 3,
+      subjectCode: 5,
+      title: "社労士学習ログ #5-003：増加概算保険料",
+      date: "2026-07-10",
+      category: "社労士",
+      subject: "労働保険徴収法",
+      type: "学習ログ",
+      tags: ["社労士", "労働保険徴収法", "増加概算保険料", "概算保険料", "賃金総額", "保険料算定基礎額", "延納"],
+      summary: "増加概算保険料について、200%超、13万円以上、30日以内、減少時との違い、延納を整理。",
+      url: "/learning/sharoushi/logs/003.html"
     }
   ],
 
@@ -75,9 +88,9 @@ window.TRoomLearningData = {
       name: "労働保険徴収法",
       group: "労働科目",
       status: "学習中",
-      articleCount: 2,
-      lastUpdated: "2026-07-08",
-      memo: "概算保険料の延納から学習中。継続事業と有期事業の違いを混同しないように整理する。"
+      articleCount: 3,
+      lastUpdated: "2026-07-10",
+      memo: "概算保険料の延納と増加概算保険料を学習中。継続事業と有期事業の違いを混同しないように整理する。"
     },
     {
       id: "kenpo",
