@@ -129,6 +129,14 @@
   const recentPosts = [
     {
       theme: "学習",
+      order: 5,
+      date: "2026.07.13",
+      title: "社労士学習ログ #5-005：概算保険料の認定決定",
+      excerpt: "概算保険料の認定決定について、15日以内の納付、追徴金、延納との関係を整理します。",
+      url: "./learning/sharoushi/logs/005.html",
+    },
+    {
+      theme: "学習",
       order: 4,
       date: "2026.07.11",
       title: "社労士学習ログ #5-004：概算保険料の追加徴収",

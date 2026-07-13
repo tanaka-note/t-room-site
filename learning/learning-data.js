@@ -51,6 +51,19 @@ window.TRoomLearningData = {
       tags: ["社労士", "労働保険徴収法", "概算保険料", "追加徴収", "増加概算保険料", "保険料率", "延納"],
       summary: "概算保険料の追加徴収について、政府による保険料率の引上げ、通知、納期限、増加概算保険料との違い、延納を整理。",
       url: "/learning/sharoushi/logs/004.html"
+    },
+    {
+      id: "sharoushi-005",
+      order: 5,
+      subjectCode: 5,
+      title: "社労士学習ログ #5-005：概算保険料の認定決定",
+      date: "2026-07-13",
+      category: "社労士",
+      subject: "労働保険徴収法",
+      type: "学習ログ",
+      tags: ["社労士", "労働保険徴収法", "概算保険料", "認定決定", "追徴金", "延納"],
+      summary: "概算保険料の認定決定について、未申告・記載誤り、15日以内の納付、追徴金、延納との関係を整理。",
+      url: "/learning/sharoushi/logs/005.html"
     }
   ],
 
@@ -101,9 +114,9 @@ window.TRoomLearningData = {
       name: "労働保険徴収法",
       group: "労働科目",
       status: "学習中",
-      articleCount: 4,
-      lastUpdated: "2026-07-11",
-      memo: "概算保険料の延納、増加概算保険料、概算保険料の追加徴収を学習中。発生原因と手続の主体を混同しないように整理する。"
+      articleCount: 5,
+      lastUpdated: "2026-07-13",
+      memo: "概算保険料の延納、増加概算保険料、追加徴収、認定決定を学習中。発生原因と手続の主体を混同しないように整理する。"
     },
     {
       id: "kenpo",
