@@ -126,55 +126,16 @@
 })();
 
 (() => {
+  const learningPosts = (window.TRoomLearningData?.learningLogs || []).map((log) => ({
+    theme: "学習",
+    order: log.order,
+    date: String(log.date || "").replaceAll("-", "."),
+    title: log.title,
+    excerpt: log.summary,
+    url: `.${log.url}`,
+  }));
   const recentPosts = [
-    {
-      theme: "学習",
-      order: 6,
-      date: "2026.07.15",
-      title: "社労士学習ログ #5-006：継続事業の確定保険料",
-      excerpt: "継続事業の確定保険料について、年度更新、差額精算、還付・充当、一括有期事業を整理します。",
-      url: "./learning/sharoushi/logs/006.html",
-    },
-    {
-      theme: "学習",
-      order: 5,
-      date: "2026.07.13",
-      title: "社労士学習ログ #5-005：概算保険料の認定決定",
-      excerpt: "概算保険料の認定決定について、15日以内の納付、追徴金、延納との関係を整理します。",
-      url: "./learning/sharoushi/logs/005.html",
-    },
-    {
-      theme: "学習",
-      order: 4,
-      date: "2026.07.11",
-      title: "社労士学習ログ #5-004：概算保険料の追加徴収",
-      excerpt: "政府による保険料率の引上げ、通知、納期限、増加概算保険料との違いを整理します。",
-      url: "./learning/sharoushi/logs/004.html",
-    },
-    {
-      theme: "学習",
-      order: 3,
-      date: "2026.07.10",
-      title: "社労士学習ログ #5-003：増加概算保険料",
-      excerpt: "増加概算保険料について、200%超、13万円以上、30日以内、減少時との違いを整理します。",
-      url: "./learning/sharoushi/logs/003.html",
-    },
-    {
-      theme: "学習",
-      order: 1,
-      date: "2026.07.08",
-      title: "社労士学習ログ #5-001：継続事業の概算保険料の延納",
-      excerpt: "継続事業の概算保険料の延納について、40万円要件、事務組合委託、納期限を整理します。",
-      url: "./learning/sharoushi/logs/001.html",
-    },
-    {
-      theme: "学習",
-      order: 2,
-      date: "2026.07.08",
-      title: "社労士学習ログ #5-002：有期事業の概算保険料の延納",
-      excerpt: "有期事業の概算保険料の延納について、6ヶ月超、75万円以上、期間区分を整理します。",
-      url: "./learning/sharoushi/logs/002.html",
-    },
+    ...learningPosts,
     {
       theme: "思考",
       date: "2026.07.04",
@@ -206,12 +167,14 @@
   ];
   const visibleThemes = new Set(["仕事", "投資", "学習", "生活", "思考"]);
   const list = document.querySelector("#recent-post-list");
-  if (!list) return;
+  const archiveList = document.querySelector("#article-archive-list");
+  if (!list && !archiveList) return;
 
   const empty = document.querySelector("#recent-empty");
   const toggle = document.querySelector("#recent-toggle");
-  const initialCount = Number(list.dataset.initialCount) || 3;
-  const maxCount = Number(list.dataset.maxCount) || 10;
+  const archiveLink = document.querySelector("#recent-archive-link");
+  const initialCount = Number(list?.dataset.initialCount) || 3;
+  const maxCount = Number(list?.dataset.maxCount) || 9;
 
   function getDateRank(post) {
     return Number(String(post.date || "").replace(/\D/g, "")) || 0;
@@ -235,8 +198,7 @@
   const posts = recentPosts
     .map((post, index) => ({ ...post, index }))
     .filter((post) => visibleThemes.has(post.theme))
-    .sort(compareRecentPosts)
-    .slice(0, maxCount);
+    .sort(compareRecentPosts);
   let expanded = false;
 
   function createPostCard(post) {
@@ -273,6 +235,7 @@
   }
 
   function renderRecentPosts() {
+    if (!list) return;
     const visibleCount = expanded ? maxCount : initialCount;
     const visiblePosts = posts.slice(0, visibleCount);
 
@@ -284,9 +247,12 @@
     }
 
     if (toggle) {
-      toggle.hidden = posts.length <= initialCount;
+      toggle.hidden = expanded || posts.length <= initialCount;
       toggle.setAttribute("aria-expanded", String(expanded));
-      toggle.textContent = expanded ? "閉じる" : "もっと見る";
+    }
+
+    if (archiveLink) {
+      archiveLink.hidden = !expanded || posts.length <= maxCount;
     }
   }
 
@@ -295,6 +261,16 @@
       expanded = !expanded;
       renderRecentPosts();
     });
+  }
+
+  if (archiveList) {
+    const archiveMax = Number(archiveList.dataset.maxCount) || 100;
+    const archivePosts = posts.slice(0, archiveMax);
+    archiveList.replaceChildren(...archivePosts.map(createPostCard));
+    archiveList.hidden = archivePosts.length === 0;
+
+    const archiveEmpty = document.querySelector("#article-archive-empty");
+    if (archiveEmpty) archiveEmpty.hidden = archivePosts.length > 0;
   }
 
   renderRecentPosts();
