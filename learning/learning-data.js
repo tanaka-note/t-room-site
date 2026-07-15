@@ -77,6 +77,19 @@ window.TRoomLearningData = {
       tags: ["社労士", "労働保険徴収法", "確定保険料", "年度更新", "概算保険料", "還付", "充当", "一括有期事業"],
       summary: "継続事業の確定保険料について、年度更新、概算保険料との差額、還付・充当、事業廃止、一括有期事業を整理。",
       url: "/learning/sharoushi/logs/006.html"
+    },
+    {
+      id: "sharoushi-007",
+      order: 7,
+      subjectCode: 5,
+      title: "社労士学習ログ #5-007：有期事業の確定保険料",
+      date: "2026-07-16",
+      category: "社労士",
+      subject: "労働保険徴収法",
+      type: "学習ログ",
+      tags: ["社労士", "労働保険徴収法", "有期事業", "確定保険料", "概算保険料", "単独有期事業", "一括有期事業", "労務費率"],
+      summary: "有期事業の確定保険料について、開始時と終了時の期限、差額精算、建設事業の特例、単独有期事業と一括有期事業の違いを確認。",
+      url: "/learning/sharoushi/logs/007.html"
     }
   ],
 
@@ -127,8 +140,8 @@ window.TRoomLearningData = {
       name: "労働保険徴収法",
       group: "労働科目",
       status: "学習中",
-      articleCount: 6,
-      lastUpdated: "2026-07-15",
+      articleCount: 7,
+      lastUpdated: "2026-07-16",
       memo: "概算保険料の延納、増加概算保険料、追加徴収、認定決定、確定保険料を学習中。発生原因と手続の主体を混同しないように整理する。"
     },
     {
