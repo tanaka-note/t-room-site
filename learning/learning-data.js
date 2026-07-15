@@ -64,6 +64,19 @@ window.TRoomLearningData = {
       tags: ["社労士", "労働保険徴収法", "概算保険料", "認定決定", "追徴金", "延納"],
       summary: "概算保険料の認定決定について、未申告・記載誤り、15日以内の納付、追徴金、延納との関係を整理。",
       url: "/learning/sharoushi/logs/005.html"
+    },
+    {
+      id: "sharoushi-006",
+      order: 6,
+      subjectCode: 5,
+      title: "社労士学習ログ #5-006：継続事業の確定保険料",
+      date: "2026-07-15",
+      category: "社労士",
+      subject: "労働保険徴収法",
+      type: "学習ログ",
+      tags: ["社労士", "労働保険徴収法", "確定保険料", "年度更新", "概算保険料", "還付", "充当", "一括有期事業"],
+      summary: "継続事業の確定保険料について、年度更新、概算保険料との差額、還付・充当、事業廃止、一括有期事業を整理。",
+      url: "/learning/sharoushi/logs/006.html"
     }
   ],
 
@@ -114,9 +127,9 @@ window.TRoomLearningData = {
       name: "労働保険徴収法",
       group: "労働科目",
       status: "学習中",
-      articleCount: 5,
-      lastUpdated: "2026-07-13",
-      memo: "概算保険料の延納、増加概算保険料、追加徴収、認定決定を学習中。発生原因と手続の主体を混同しないように整理する。"
+      articleCount: 6,
+      lastUpdated: "2026-07-15",
+      memo: "概算保険料の延納、増加概算保険料、追加徴収、認定決定、確定保険料を学習中。発生原因と手続の主体を混同しないように整理する。"
     },
     {
       id: "kenpo",

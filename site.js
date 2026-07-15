@@ -129,6 +129,14 @@
   const recentPosts = [
     {
       theme: "学習",
+      order: 6,
+      date: "2026.07.15",
+      title: "社労士学習ログ #5-006：継続事業の確定保険料",
+      excerpt: "継続事業の確定保険料について、年度更新、差額精算、還付・充当、一括有期事業を整理します。",
+      url: "./learning/sharoushi/logs/006.html",
+    },
+    {
+      theme: "学習",
       order: 5,
       date: "2026.07.13",
       title: "社労士学習ログ #5-005：概算保険料の認定決定",
