@@ -130,16 +130,19 @@
     theme: "学習",
     order: log.order,
     date: String(log.date || "").replaceAll("-", "."),
+    publishedAt: log.publishedAt,
     title: log.title,
     excerpt: log.summary,
     url: `.${log.url}`,
   }));
+  // Published columns belong here so the home page and article archive stay in sync.
   const recentPosts = [
     ...learningPosts,
     {
       theme: "コラム",
       genre: "音楽",
       date: "2026.07.19",
+      publishedAt: "2026-07-19T22:21:00+09:00",
       title: "「可愛い」だけでは終わらない。z²が歌で自分を守る理由",
       excerpt: "かわいさと儚さの奥にある、z²の言葉と音楽の強さについて考えます。",
       url: "./columns/music/002.html",
@@ -148,6 +151,7 @@
       theme: "コラム",
       genre: "音楽",
       date: "2026.07.18",
+      publishedAt: "2026-07-19T22:20:00+09:00",
       title: "きれいにハマらない音が、Chilli Beans.を特別にする",
       excerpt: "独特なリリックと三人の異なる感性から、繰り返し聴きたくなる理由を考えます。",
       url: "./columns/music/001.html",
@@ -197,6 +201,12 @@
     return Number(String(post.date || "").replace(/\D/g, "")) || 0;
   }
 
+  function getPublishedRank(post) {
+    const date = String(post.date || "").replaceAll(".", "-");
+    const timestamp = Date.parse(post.publishedAt || `${date}T00:00:00+09:00`);
+    return Number.isNaN(timestamp) ? 0 : timestamp;
+  }
+
   function getPostSequence(post) {
     if (Number.isFinite(Number(post.order))) return Number(post.order);
     const source = `${post.title || ""} ${post.url || ""}`;
@@ -205,8 +215,8 @@
   }
 
   function compareRecentPosts(a, b) {
-    const dateDiff = getDateRank(b) - getDateRank(a);
-    if (dateDiff !== 0) return dateDiff;
+    const publishedDiff = getPublishedRank(b) - getPublishedRank(a);
+    if (publishedDiff !== 0) return publishedDiff;
     const sequenceDiff = getPostSequence(b) - getPostSequence(a);
     if (sequenceDiff !== 0) return sequenceDiff;
     return a.index - b.index;
