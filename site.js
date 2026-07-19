@@ -137,11 +137,28 @@
   const recentPosts = [
     ...learningPosts,
     {
-      theme: "思考",
+      theme: "コラム",
+      genre: "音楽",
+      date: "2026.07.19",
+      title: "「可愛い」だけでは終わらない。z²が歌で自分を守る理由",
+      excerpt: "かわいさと儚さの奥にある、z²の言葉と音楽の強さについて考えます。",
+      url: "./columns/music/002.html",
+    },
+    {
+      theme: "コラム",
+      genre: "音楽",
+      date: "2026.07.18",
+      title: "きれいにハマらない音が、Chilli Beans.を特別にする",
+      excerpt: "独特なリリックと三人の異なる感性から、繰り返し聴きたくなる理由を考えます。",
+      url: "./columns/music/001.html",
+    },
+    {
+      theme: "コラム",
+      genre: "時事",
       date: "2026.07.04",
       title: "見えすぎる男女、育ちにくい未来",
       excerpt: "SNSで可視化される男女対立が、恋愛や結婚への想像力をどう変えているのかを考えます。",
-      url: "./thought.html#sns-gender-division-low-birthrate",
+      url: "./columns/current-affairs/001.html",
     },
     {
       theme: "投資",
@@ -165,7 +182,7 @@
       url: "./investment-boj-rate-hike.html",
     },
   ];
-  const visibleThemes = new Set(["仕事", "投資", "学習", "生活", "思考"]);
+  const visibleThemes = new Set(["仕事", "投資", "学習", "生活", "コラム"]);
   const list = document.querySelector("#recent-post-list");
   const archiveList = document.querySelector("#article-archive-list");
   if (!list && !archiveList) return;
@@ -212,7 +229,7 @@
 
     const tag = document.createElement("span");
     tag.className = "post-tag";
-    tag.textContent = post.theme;
+    tag.textContent = post.genre ? `${post.theme}・${post.genre}` : post.theme;
 
     const date = document.createElement("span");
     date.textContent = post.date;
