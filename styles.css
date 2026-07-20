@@ -166,10 +166,18 @@ h1 {
   color: #344054;
   font-size: clamp(1rem, 2vw, 1.18rem);
   font-weight: 500;
-  text-shadow:
-    0 0 2px rgba(255, 255, 255, 1),
-    0 0 5px rgba(255, 255, 255, 0.94),
-    0 1px 1px rgba(255, 255, 255, 0.84);
+}
+
+.hero-statement {
+  color: #1f2933;
+  font-size: clamp(1.55rem, 3.5vw, 2.35rem);
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: -0.02em;
+}
+
+.hero-statement span {
+  display: block;
 }
 
 .hero-actions {
