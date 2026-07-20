@@ -3834,6 +3834,49 @@ body.blocks-game-playing .blocks-game-canvas {
   line-height: 1.6;
 }
 
+.thought-history {
+  margin-top: 3rem;
+  border: 1px solid var(--thought-line);
+  border-radius: 10px;
+  padding: clamp(20px, 4vw, 30px);
+  background: #fbfaf7;
+}
+
+.thought-body .thought-history h3 {
+  margin-top: 0;
+}
+
+.thought-history ol {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thought-history li {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(0, 1fr);
+  gap: 18px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--thought-line);
+}
+
+.thought-history li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.thought-history time {
+  color: var(--thought-blue);
+  font-weight: 800;
+  line-height: 1.7;
+}
+
+.thought-history p {
+  margin: 0;
+}
+
 .thought-sources {
   margin-top: 3rem;
   border-top: 1px solid var(--thought-line);
@@ -3925,6 +3968,11 @@ body.blocks-game-playing .blocks-game-canvas {
   .thought-music-embed-grid,
   .thought-article-nav {
     grid-template-columns: 1fr;
+  }
+
+  .thought-history li {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 
   .thought-episode-list a,
