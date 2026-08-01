@@ -89,6 +89,10 @@ table {
   letter-spacing: -0.055em;
 }
 
+.report-header h1 span {
+  white-space: nowrap;
+}
+
 .report-period {
   display: grid;
   min-width: 150px;
@@ -347,13 +351,38 @@ td {
   color: var(--muted);
 }
 
-.monthly-comment {
+.monthly-report {
   max-width: 820px;
   margin: 42px 0 0;
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid var(--line);
+  background: linear-gradient(145deg, rgba(82, 230, 170, 0.055), rgba(255, 255, 255, 0.018));
+}
+
+.report-month {
+  display: block;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.monthly-comment {
+  margin: 22px 0 0;
   color: var(--neutral);
   font-size: clamp(0.95rem, 1.5vw, 1.08rem);
   line-height: 2;
   white-space: pre-line;
+}
+
+.report-updated {
+  margin: 26px 0 0;
+  padding-top: 17px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: right;
 }
 
 .chart-frame-history {
@@ -392,7 +421,13 @@ td {
   }
 
   .report-header h1 {
-    font-size: clamp(2.3rem, 13vw, 4.1rem);
+    font-size: clamp(2rem, 10.8vw, 2.8rem);
+    line-height: 1.08;
+    letter-spacing: -0.04em;
+  }
+
+  .report-header h1 span {
+    display: block;
   }
 
   .report-period {

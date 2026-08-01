@@ -8,14 +8,14 @@
   <meta name="color-scheme" content="dark">
   <title>資産運用報告ページ</title>
   <meta name="description" content="月次の資産運用状況を記録する報告ページです。">
-  <link rel="stylesheet" href="./report.css?v=20260802-4">
+  <link rel="stylesheet" href="./report.css?v=20260802-6">
 </head>
 <body>
   <main class="report-shell">
     <header class="report-header">
       <div>
         <p class="eyebrow">MONTHLY PORTFOLIO REPORT</p>
-        <h1>資産運用報告ページ</h1>
+        <h1><span>資産運用</span><span>報告ページ</span></h1>
       </div>
       <div class="report-period" aria-label="集計時点">
         <span>AS OF</span>
@@ -118,13 +118,17 @@
       <div class="section-heading">
         <div>
           <p class="section-number" id="comment-number">03</p>
-          <h2 id="comment-title">月次コメント</h2>
+          <h2 id="comment-title">月次レポート</h2>
         </div>
       </div>
-      <p id="monthly-comment" class="monthly-comment"></p>
+      <article class="monthly-report">
+        <time id="report-month" class="report-month" datetime="2026-07">2026年7月</time>
+        <p id="monthly-comment" class="monthly-comment"></p>
+        <p class="report-updated">更新日：<time id="report-updated" datetime="2026-08-02">2026年8月2日</time></p>
+      </article>
     </section>
   </main>
 
-  <script src="./report.js?v=20260802-4"></script>
+  <script src="./report.js?v=20260802-5"></script>
 </body>
 </html>

@@ -3,7 +3,13 @@
 const reportData = {
   period: "2026-07",
   principal: 6000000,
-  monthlyComment: "",
+  monthlyReport: {
+    period: "2026-07",
+    periodLabel: "2026年7月",
+    text: "インド株式の低迷とBTC価格下落に伴い、損益が悪化。バランス改善のため国内株式および全世界株式への分散投資の比率を引き上げました。インド株式への投資については追加の売却を行う予定はありません。",
+    updated: "2026-08-02",
+    updatedLabel: "2026年8月2日"
+  },
   history: [
     { period: "2026-07", principal: 6000000, marketValue: 6221192 }
   ],
@@ -234,9 +240,19 @@ function drawHistoryChart() {
 
 function renderComment() {
   const section = document.querySelector("#comment-section");
-  const comment = reportData.monthlyComment.trim();
+  const report = reportData.monthlyReport;
+  const comment = report.text.trim();
   section.hidden = comment.length === 0;
-  if (comment) document.querySelector("#monthly-comment").textContent = comment;
+  if (!comment) return;
+
+  const month = document.querySelector("#report-month");
+  month.dateTime = report.period;
+  month.textContent = report.periodLabel;
+  document.querySelector("#monthly-comment").textContent = comment;
+
+  const updated = document.querySelector("#report-updated");
+  updated.dateTime = report.updated;
+  updated.textContent = report.updatedLabel;
 }
 
 function renderReport() {
