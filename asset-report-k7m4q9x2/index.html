@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>資産運用報告ページ</title>
+  <meta name="description" content="月次の資産運用状況を記録する報告ページです。">
+  <link rel="stylesheet" href="./report.css?v=20260802-4">
+</head>
+<body>
+  <main class="report-shell">
+    <header class="report-header">
+      <div>
+        <p class="eyebrow">MONTHLY PORTFOLIO REPORT</p>
+        <h1>資産運用報告ページ</h1>
+      </div>
+      <div class="report-period" aria-label="集計時点">
+        <span>AS OF</span>
+        <time datetime="2026-07-31">2026.07</time>
+        <small>7月末時点</small>
+      </div>
+    </header>
+
+    <section class="summary-section" aria-labelledby="summary-title">
+      <h2 id="summary-title" class="visually-hidden">資産運用状況の概要</h2>
+      <div class="summary-grid">
+        <article class="summary-card">
+          <span>元本</span>
+          <strong id="principal-value">—</strong>
+          <small>固定元本</small>
+        </article>
+        <article class="summary-card summary-card-primary">
+          <span>時価総額</span>
+          <strong id="market-value">—</strong>
+          <small>全保有資産の合計</small>
+        </article>
+        <article class="summary-card">
+          <span>損益</span>
+          <strong id="profit-value">—</strong>
+          <small>時価総額 − 元本</small>
+        </article>
+        <article class="summary-card">
+          <span>損益率</span>
+          <strong id="return-value">—</strong>
+          <small>元本に対する損益</small>
+        </article>
+      </div>
+    </section>
+
+    <section id="history-section" class="report-panel history-panel" aria-labelledby="history-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-number">01</p>
+          <h2 id="history-title">資産推移</h2>
+        </div>
+        <p>元本と時価総額の月次推移</p>
+      </div>
+      <div class="chart-frame chart-frame-history">
+        <canvas id="history-chart" role="img" aria-label="元本と時価総額の月次推移"></canvas>
+      </div>
+    </section>
+
+    <section class="report-panel allocation-panel" aria-labelledby="allocation-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-number" id="allocation-number">01</p>
+          <h2 id="allocation-title">資産構成</h2>
+        </div>
+        <p>時価総額に占める割合</p>
+      </div>
+
+      <div class="allocation-layout">
+        <div class="donut-wrap">
+          <canvas id="allocation-chart" role="img" aria-label="銘柄ごとの資産構成比"></canvas>
+          <div class="donut-center" aria-hidden="true">
+            <span>MARKET VALUE</span>
+            <strong id="donut-total">—</strong>
+          </div>
+        </div>
+        <ol id="allocation-legend" class="allocation-legend" aria-label="資産構成比の内訳"></ol>
+      </div>
+    </section>
+
+    <section class="report-panel holdings-panel" aria-labelledby="holdings-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-number" id="holdings-number">02</p>
+          <h2 id="holdings-title">保有資産</h2>
+        </div>
+        <p>2026年7月末時点</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col class="column-name">
+            <col class="column-market-value">
+            <col class="column-profit">
+            <col class="column-return">
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col">銘柄名</th>
+              <th scope="col">時価総額</th>
+              <th scope="col">損益</th>
+              <th scope="col">損益率</th>
+            </tr>
+          </thead>
+          <tbody id="holdings-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="comment-section" class="report-panel comment-panel" aria-labelledby="comment-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-number" id="comment-number">03</p>
+          <h2 id="comment-title">月次コメント</h2>
+        </div>
+      </div>
+      <p id="monthly-comment" class="monthly-comment"></p>
+    </section>
+  </main>
+
+  <script src="./report.js?v=20260802-4"></script>
+</body>
+</html>
