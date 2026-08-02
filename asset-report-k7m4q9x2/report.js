@@ -38,14 +38,14 @@ const reportData = {
     {
       name: "ビットコイン",
       category: "暗号資産",
-      principal: 2000000,
+      principal: 2500000,
       marketValue: 1611913,
       color: "#a98cff"
     },
     {
       name: "投資信託",
       category: "投資信託",
-      principal: 2941100,
+      principal: 2441100,
       marketValue: 3499979,
       color: "#ff8a61"
     }
