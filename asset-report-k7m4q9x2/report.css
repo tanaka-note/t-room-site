@@ -73,12 +73,17 @@ table {
 }
 
 .eyebrow,
-.section-number {
+.section-number,
+.section-kicker {
   margin: 0 0 12px;
   color: var(--accent);
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.16em;
+}
+
+.section-kicker {
+  letter-spacing: 0.12em;
 }
 
 .report-header h1 {
@@ -351,6 +356,36 @@ td {
   color: var(--muted);
 }
 
+.realized-profit-row td {
+  border-top: 2px solid rgba(82, 230, 170, 0.4);
+  background: rgba(82, 230, 170, 0.035);
+}
+
+.history-legend {
+  display: flex;
+  justify-content: flex-end;
+  gap: 22px;
+  margin-top: 32px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.history-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.history-dot-market { background: var(--accent); }
+.history-dot-principal { background: var(--muted); }
+
 .monthly-report {
   max-width: 820px;
   margin: 42px 0 0;
@@ -365,6 +400,16 @@ td {
   font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: 0.06em;
+}
+
+.monthly-report-entries {
+  display: grid;
+}
+
+.monthly-report-entry + .monthly-report-entry {
+  margin-top: 28px;
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
 }
 
 .monthly-comment {
@@ -553,6 +598,14 @@ td {
 
   tbody td:nth-child(2)::before {
     text-align: right;
+  }
+
+  .realized-profit-row td {
+    background: transparent;
+  }
+
+  .history-legend {
+    justify-content: flex-start;
   }
 }
 

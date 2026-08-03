@@ -8,7 +8,7 @@
   <meta name="color-scheme" content="dark">
   <title>資産運用報告ページ</title>
   <meta name="description" content="月次の資産運用状況を記録する報告ページです。">
-  <link rel="stylesheet" href="./report.css?v=20260802-6">
+  <link rel="stylesheet" href="./report.css?v=20260803-3">
 </head>
 <body>
   <main class="report-shell">
@@ -19,8 +19,8 @@
       </div>
       <div class="report-period" aria-label="集計時点">
         <span>AS OF</span>
-        <time datetime="2026-07-31">2026.07</time>
-        <small>7月末時点</small>
+        <time datetime="2026-08-03">2026.08.03</time>
+        <small>8月3日時点</small>
       </div>
     </header>
 
@@ -53,10 +53,14 @@
     <section id="history-section" class="report-panel history-panel" aria-labelledby="history-title" hidden>
       <div class="section-heading">
         <div>
-          <p class="section-number">01</p>
+          <p class="section-kicker">PORTFOLIO TREND</p>
           <h2 id="history-title">資産推移</h2>
         </div>
-        <p>元本と時価総額の月次推移</p>
+        <p>集計日ごとの元本と時価総額</p>
+      </div>
+      <div class="history-legend" aria-label="チャートの凡例">
+        <span><i class="history-dot history-dot-market" aria-hidden="true"></i>時価総額</span>
+        <span><i class="history-dot history-dot-principal" aria-hidden="true"></i>元本</span>
       </div>
       <div class="chart-frame chart-frame-history">
         <canvas id="history-chart" role="img" aria-label="元本と時価総額の月次推移"></canvas>
@@ -90,7 +94,7 @@
           <p class="section-number" id="holdings-number">02</p>
           <h2 id="holdings-title">保有資産</h2>
         </div>
-        <p>2026年7月末時点</p>
+        <p>2026年8月3日時点</p>
       </div>
 
       <div class="table-wrap">
@@ -122,13 +126,12 @@
         </div>
       </div>
       <article class="monthly-report">
-        <time id="report-month" class="report-month" datetime="2026-07">2026年7月</time>
-        <p id="monthly-comment" class="monthly-comment"></p>
+        <div id="monthly-report-entries" class="monthly-report-entries"></div>
         <p class="report-updated">更新日：<time id="report-updated" datetime="2026-08-02">2026年8月2日</time></p>
       </article>
     </section>
   </main>
 
-  <script src="./report.js?v=20260803-1"></script>
+  <script src="./report.js?v=20260803-3"></script>
 </body>
 </html>

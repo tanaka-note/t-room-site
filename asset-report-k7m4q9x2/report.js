@@ -1,53 +1,109 @@
 "use strict";
 
 const reportData = {
-  period: "2026-07",
+  period: "2026-08-03",
   principal: 6000000,
+  realizedProfit: {
+    name: "投資信託売却益",
+    value: 1058649
+  },
   monthlyReport: {
-    period: "2026-07",
-    periodLabel: "2026年7月",
-    text: "インド株式の低迷とBTC価格下落に伴い、損益が悪化。バランス改善のため国内株式および全世界株式への分散投資の比率を引き上げました。インド株式への投資については追加の売却を行う予定はありません。",
-    updated: "2026-08-02",
-    updatedLabel: "2026年8月2日"
+    entries: [
+      {
+        date: "2026-08-03",
+        dateLabel: "2026年8月3日",
+        text: "追加で日本株式と米国株式の上場投信を購入。個別銘柄については、長期で成長が期待できる銘柄を選定。"
+      },
+      {
+        date: "2026-07",
+        dateLabel: "2026年7月",
+        text: "インド株式の低迷とBTC価格下落に伴い、損益が悪化。バランス改善のため国内株式および全世界株式への分散投資の比率を引き上げました。インド株式への投資については追加の売却を行う予定はありません。"
+      }
+    ],
+    updated: "2026-08-03",
+    updatedLabel: "2026年8月3日"
   },
   history: [
-    { period: "2026-07", principal: 6000000, marketValue: 6221192 }
+    { period: "2026-07-31", principal: 6000000, marketValue: 6221192 },
+    { period: "2026-08-03", principal: 6000000, marketValue: 6167574 }
   ],
   assets: [
+    {
+      name: "iFナス100H無",
+      category: "ETF",
+      principal: 2002329,
+      marketValue: 1999998,
+      color: "#ff8a61"
+    },
+    {
+      name: "iS NIFTY50",
+      category: "ETF",
+      principal: 866320,
+      marketValue: 873936,
+      color: "#f4ca64"
+    },
     {
       name: "三菱電機",
       category: "日本株",
       principal: 553200,
-      marketValue: 591200,
+      marketValue: 558800,
       color: "#52e6aa"
     },
     {
       name: "三菱HCキャピタル",
       category: "日本株",
       principal: 430200,
-      marketValue: 441900,
+      marketValue: 429450,
       color: "#68a7ff"
+    },
+    {
+      name: "伊藤忠",
+      category: "日本株",
+      principal: 198100,
+      marketValue: 197600,
+      color: "#ffb454"
+    },
+    {
+      name: "アコム",
+      category: "日本株",
+      principal: 142500,
+      marketValue: 142770,
+      color: "#50d3c2"
+    },
+    {
+      name: "イオン",
+      category: "日本株",
+      principal: 135100,
+      marketValue: 135850,
+      color: "#f06fa9"
+    },
+    {
+      name: "ソフトバンク",
+      category: "日本株",
+      principal: 111500,
+      marketValue: 111400,
+      color: "#96a7ff"
     },
     {
       name: "NTT",
       category: "日本株",
       principal: 75500,
-      marketValue: 76200,
-      color: "#f4ca64"
+      marketValue: 75800,
+      color: "#c6dc70"
+    },
+    {
+      name: "ムニノバHD",
+      category: "日本株",
+      principal: 43900,
+      marketValue: 44100,
+      color: "#7e8da1"
     },
     {
       name: "ビットコイン",
       category: "暗号資産",
       principal: 2500000,
-      marketValue: 1611913,
+      marketValue: 1597870,
       color: "#a98cff"
-    },
-    {
-      name: "投資信託",
-      category: "投資信託",
-      principal: 2441100,
-      marketValue: 3499979,
-      color: "#ff8a61"
     }
   ]
 };
@@ -146,6 +202,16 @@ function renderHoldings() {
     fragment.appendChild(row);
   });
 
+  const realizedRow = document.createElement("tr");
+  realizedRow.className = "realized-profit-row";
+  realizedRow.innerHTML = `
+    <td><span class="asset-name"><strong>${reportData.realizedProfit.name}</strong><small>実現損益</small></span></td>
+    <td data-label="時価総額" class="unknown-value">—</td>
+    <td data-label="売却益" class="is-positive">${formatYen(reportData.realizedProfit.value, true)}</td>
+    <td data-label="損益率" class="unknown-value">—</td>
+  `;
+  fragment.appendChild(realizedRow);
+
   body.replaceChildren(fragment);
 }
 
@@ -190,9 +256,6 @@ function drawHistoryChart() {
   }
 
   section.hidden = false;
-  document.querySelector("#allocation-number").textContent = "02";
-  document.querySelector("#holdings-number").textContent = "03";
-  document.querySelector("#comment-number").textContent = "04";
 
   const canvas = document.querySelector("#history-chart");
   const { context, width, height } = setupCanvas(canvas);
@@ -232,23 +295,59 @@ function drawHistoryChart() {
     context.strokeStyle = color;
     context.lineWidth = 3;
     context.stroke();
+
+    reportData.history.forEach((entry, index) => {
+      const x = padding.left + xStep * index;
+      const y = yFor(entry[key]);
+      context.beginPath();
+      context.arc(x, y, 4, 0, Math.PI * 2);
+      context.fillStyle = color;
+      context.fill();
+    });
   };
 
   drawSeries("principal", "#8996a8");
   drawSeries("marketValue", "#52e6aa");
+
+  context.fillStyle = "#8996a8";
+  context.font = '600 11px "Yu Gothic UI", sans-serif';
+  context.textAlign = "center";
+  reportData.history.forEach((entry, index) => {
+    const [, month, day] = entry.period.split("-");
+    const x = padding.left + xStep * index;
+    context.fillText(`${Number(month)}/${Number(day)}`, x, height - 14);
+  });
+  context.textAlign = "start";
 }
 
 function renderComment() {
   const section = document.querySelector("#comment-section");
   const report = reportData.monthlyReport;
-  const comment = report.text.trim();
-  section.hidden = comment.length === 0;
-  if (!comment) return;
+  const entries = [...report.entries]
+    .filter((entry) => entry.text.trim().length > 0)
+    .sort((entryA, entryB) => entryB.date.localeCompare(entryA.date));
+  section.hidden = entries.length === 0;
+  if (entries.length === 0) return;
 
-  const month = document.querySelector("#report-month");
-  month.dateTime = report.period;
-  month.textContent = report.periodLabel;
-  document.querySelector("#monthly-comment").textContent = comment;
+  const container = document.querySelector("#monthly-report-entries");
+  const fragment = document.createDocumentFragment();
+  entries.forEach((entry) => {
+    const article = document.createElement("section");
+    article.className = "monthly-report-entry";
+
+    const date = document.createElement("time");
+    date.className = "report-month";
+    date.dateTime = entry.date;
+    date.textContent = entry.dateLabel;
+
+    const text = document.createElement("p");
+    text.className = "monthly-comment";
+    text.textContent = entry.text;
+
+    article.append(date, text);
+    fragment.appendChild(article);
+  });
+  container.replaceChildren(fragment);
 
   const updated = document.querySelector("#report-updated");
   updated.dateTime = report.updated;
