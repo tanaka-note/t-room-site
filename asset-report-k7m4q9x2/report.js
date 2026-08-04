@@ -1,7 +1,7 @@
 "use strict";
 
 const reportData = {
-  period: "2026-08-03",
+  period: "2026-08-04",
   principal: 6000000,
   realizedProfit: {
     name: "投資信託売却益",
@@ -25,84 +25,85 @@ const reportData = {
   },
   history: [
     { period: "2026-07-31", principal: 6000000, marketValue: 6221192 },
-    { period: "2026-08-03", principal: 6000000, marketValue: 6167574 }
+    { period: "2026-08-03", principal: 6000000, marketValue: 6167574 },
+    { period: "2026-08-04", principal: 6000000, marketValue: 6237083 }
   ],
   assets: [
     {
       name: "iFナス100H無",
       category: "ETF",
       principal: 2002329,
-      marketValue: 1999998,
+      marketValue: 2047395,
       color: "#ff8a61"
     },
     {
-      name: "iS NIFTY50",
+      name: "iSNIFTY50",
       category: "ETF",
       principal: 866320,
-      marketValue: 873936,
+      marketValue: 871556,
       color: "#f4ca64"
     },
     {
-      name: "三菱電機",
+      name: "三菱電",
       category: "日本株",
       principal: 553200,
-      marketValue: 558800,
+      marketValue: 564900,
       color: "#52e6aa"
     },
     {
       name: "三菱HCキャピタル",
       category: "日本株",
       principal: 430200,
-      marketValue: 429450,
+      marketValue: 422850,
       color: "#68a7ff"
     },
     {
       name: "伊藤忠",
       category: "日本株",
       principal: 198100,
-      marketValue: 197600,
+      marketValue: 198000,
       color: "#ffb454"
     },
     {
       name: "アコム",
       category: "日本株",
       principal: 142500,
-      marketValue: 142770,
+      marketValue: 140940,
       color: "#50d3c2"
     },
     {
       name: "イオン",
       category: "日本株",
       principal: 135100,
-      marketValue: 135850,
+      marketValue: 133400,
       color: "#f06fa9"
     },
     {
       name: "ソフトバンク",
       category: "日本株",
       principal: 111500,
-      marketValue: 111400,
+      marketValue: 110200,
       color: "#96a7ff"
     },
     {
       name: "NTT",
       category: "日本株",
       principal: 75500,
-      marketValue: 75800,
+      marketValue: 75200,
       color: "#c6dc70"
     },
     {
       name: "ムニノバHD",
       category: "日本株",
       principal: 43900,
-      marketValue: 44100,
+      marketValue: 43500,
       color: "#7e8da1"
     },
     {
       name: "ビットコイン",
       category: "暗号資産",
       principal: 2500000,
-      marketValue: 1597870,
+      marketValue: 1629142,
       color: "#a98cff"
     }
   ]
@@ -260,9 +261,10 @@ function drawHistoryChart() {
   const canvas = document.querySelector("#history-chart");
   const { context, width, height } = setupCanvas(canvas);
   const padding = { top: 24, right: 24, bottom: 44, left: 76 };
-  const values = reportData.history.flatMap((entry) => [entry.principal, entry.marketValue]);
-  const minValue = Math.min(...values) * 0.96;
-  const maxValue = Math.max(...values) * 1.04;
+  const minValue = 5800000;
+  const maxValue = 6300000;
+  const tickInterval = 100000;
+  const tickCount = (maxValue - minValue) / tickInterval;
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
   const xStep = chartWidth / (reportData.history.length - 1);
@@ -274,9 +276,9 @@ function drawHistoryChart() {
   context.strokeStyle = "rgba(178, 201, 218, 0.15)";
   context.lineWidth = 1;
 
-  for (let index = 0; index <= 3; index += 1) {
-    const y = padding.top + (chartHeight / 3) * index;
-    const value = maxValue - ((maxValue - minValue) / 3) * index;
+  for (let index = 0; index <= tickCount; index += 1) {
+    const y = padding.top + (chartHeight / tickCount) * index;
+    const value = maxValue - tickInterval * index;
     context.beginPath();
     context.moveTo(padding.left, y);
     context.lineTo(width - padding.right, y);
