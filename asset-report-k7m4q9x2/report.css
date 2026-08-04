@@ -135,7 +135,8 @@ table {
 
 .summary-card {
   display: grid;
-  align-content: space-between;
+  align-content: center;
+  gap: 16px;
   min-height: 164px;
   padding: 24px;
   border-right: 1px solid var(--line);
@@ -155,7 +156,7 @@ table {
 }
 
 .summary-card strong {
-  margin: 16px 0 8px;
+  margin: 0;
   font-size: clamp(1.35rem, 2.7vw, 2.2rem);
   line-height: 1;
   font-variant-numeric: tabular-nums;
