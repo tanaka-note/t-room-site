@@ -1,0 +1,13 @@
+{
+  "name": "t-room-diary-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "node --check src/index.js && node --check public/diary.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.34.0"
+  }
+}

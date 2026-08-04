@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-diary",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-04",
+  "routes": [
+    {
+      "pattern": "tanaka-note.com/diary*",
+      "zone_name": "tanaka-note.com"
+    }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "diary-db",
+      "database_id": "e4677259-db4b-4562-ad82-fe542a1edb75",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "SESSION_TTL_SECONDS": "2592000"
+  }
+}

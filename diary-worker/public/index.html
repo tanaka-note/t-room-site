@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="referrer" content="no-referrer">
+  <title>日記</title>
+  <link rel="stylesheet" href="/diary/diary.css">
+</head>
+<body>
+  <main id="login-view" class="login-shell" aria-labelledby="login-title">
+    <section class="login-card">
+      <p class="eyebrow">Private diary</p>
+      <h1 id="login-title">日記を開く</h1>
+      <p class="login-description">パスワードを入力してください。</p>
+      <form id="login-form" class="login-form">
+        <label for="password">パスワード</label>
+        <div class="password-field">
+          <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+          <button id="password-toggle" class="quiet-button" type="button" aria-controls="password" aria-pressed="false">表示</button>
+        </div>
+        <button class="primary-button full-button" type="submit">開く</button>
+        <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  <div id="app-view" hidden>
+    <header class="site-header">
+      <div class="brand" aria-label="日記">
+        <span class="brand-mark">T</span>
+        <span>日記</span>
+      </div>
+      <div class="header-actions">
+        <span id="role-label" class="role-label"></span>
+        <button id="trash-button" class="quiet-button" type="button" hidden>ゴミ箱</button>
+        <button id="new-entry-button" class="primary-button" type="button" hidden>新しい日記</button>
+        <button id="logout-button" class="quiet-button" type="button">ログアウト</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="sub-hero diary-hero" aria-labelledby="diary-title">
+        <div class="sub-hero-content">
+          <p class="eyebrow">Diary</p>
+          <h1 id="diary-title">日記</h1>
+        </div>
+      </section>
+
+      <section class="section diary-layout" aria-label="日記">
+        <div class="diary-main">
+          <section class="diary-panel" aria-labelledby="diary-search-title">
+            <div class="diary-section-head">
+              <div>
+                <p class="section-kicker">Search</p>
+                <h2 id="diary-search-title">日記を検索</h2>
+              </div>
+              <button id="clear-filters-button" class="text-button" type="button" hidden>条件をクリア</button>
+            </div>
+            <div class="diary-search-card">
+              <label class="diary-search-label" for="diary-search-input">キーワード検索</label>
+              <div class="diary-search-box">
+                <input id="diary-search-input" type="search" autocomplete="off" maxlength="100" placeholder="例：仕事、旅行、サイトづくり">
+                <button id="diary-search-clear" class="diary-search-clear" type="button" aria-label="検索キーワードをクリア" hidden>×</button>
+              </div>
+              <p id="diary-search-status" class="diary-search-status" aria-live="polite">日記のタイトルと本文から探します。</p>
+            </div>
+          </section>
+
+          <section class="diary-panel" aria-labelledby="diary-recent-title">
+            <div class="diary-section-head">
+              <div>
+                <p id="list-kicker" class="section-kicker">Recent</p>
+                <h2 id="diary-recent-title">最近の更新</h2>
+              </div>
+            </div>
+            <div id="entry-list" class="diary-entry-list"></div>
+            <button id="load-more-button" class="secondary-button load-more-button" type="button" hidden>さらに表示</button>
+          </section>
+        </div>
+
+        <aside class="diary-side" aria-label="日記をたどる">
+          <section class="diary-panel">
+            <p class="section-kicker">Archive</p>
+            <h2>年月から見る</h2>
+            <nav id="archive-list" class="diary-archive-nav" aria-label="年月別の日記"></nav>
+          </section>
+
+          <section class="diary-panel">
+            <p class="section-kicker">Tags</p>
+            <h2>#から見る</h2>
+            <div id="tag-list" class="diary-tag-cloud"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="entry-dialog" class="entry-dialog">
+    <article class="entry-detail">
+      <div class="dialog-head">
+        <p id="detail-date" class="entry-date"></p>
+        <button class="icon-button" type="button" data-close-dialog="entry-dialog" aria-label="閉じる">×</button>
+      </div>
+      <h2 id="detail-title"></h2>
+      <div id="detail-tags" class="diary-tags"></div>
+      <div id="detail-content" class="entry-content"></div>
+      <div id="detail-actions" class="dialog-actions" hidden>
+        <button id="edit-entry-button" class="secondary-button" type="button">編集</button>
+        <button id="delete-entry-button" class="danger-button" type="button">ゴミ箱へ移動</button>
+      </div>
+      <div id="restore-actions" class="dialog-actions" hidden>
+        <button id="restore-entry-button" class="primary-button" type="button">日記を復元</button>
+      </div>
+    </article>
+  </dialog>
+
+  <dialog id="editor-dialog" class="entry-dialog editor-dialog">
+    <form id="entry-form" class="entry-form">
+      <div class="dialog-head">
+        <div>
+          <p class="section-kicker">Write</p>
+          <h2 id="editor-title">新しい日記</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog="editor-dialog" aria-label="閉じる">×</button>
+      </div>
+
+      <input id="entry-id" type="hidden">
+      <input id="entry-revision" type="hidden">
+
+      <label for="entry-date">日付</label>
+      <input id="entry-date" name="entryDate" type="date" required>
+
+      <label for="entry-title">タイトル</label>
+      <input id="entry-title" name="title" type="text" maxlength="200" required>
+
+      <label for="entry-content">本文</label>
+      <textarea id="entry-content" name="content" rows="14" maxlength="200000" required></textarea>
+
+      <label for="entry-tags">タグ</label>
+      <input id="entry-tags" name="tags" type="text" maxlength="320" placeholder="家族、仕事、旅行">
+      <p class="field-help">読点またはカンマで区切って10個まで入力できます。</p>
+
+      <p id="editor-message" class="form-message" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button class="quiet-button" type="button" data-close-dialog="editor-dialog">キャンセル</button>
+        <button id="save-entry-button" class="primary-button" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="/diary/diary.js" defer></script>
+</body>
+</html>

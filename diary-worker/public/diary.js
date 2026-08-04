@@ -1,0 +1,610 @@
+(() => {
+  const BASE_PATH = "/diary";
+  const state = {
+    role: null,
+    entries: [],
+    entryMap: new Map(),
+    offset: 0,
+    hasMore: false,
+    query: "",
+    month: "",
+    tag: "",
+    trash: false,
+    activeEntry: null,
+    editorDirty: false,
+    searchTimer: null,
+    requestId: 0
+  };
+
+  const elements = {
+    loginView: document.querySelector("#login-view"),
+    appView: document.querySelector("#app-view"),
+    loginForm: document.querySelector("#login-form"),
+    password: document.querySelector("#password"),
+    passwordToggle: document.querySelector("#password-toggle"),
+    loginMessage: document.querySelector("#login-message"),
+    roleLabel: document.querySelector("#role-label"),
+    newEntryButton: document.querySelector("#new-entry-button"),
+    trashButton: document.querySelector("#trash-button"),
+    logoutButton: document.querySelector("#logout-button"),
+    searchInput: document.querySelector("#diary-search-input"),
+    searchClear: document.querySelector("#diary-search-clear"),
+    searchStatus: document.querySelector("#diary-search-status"),
+    clearFilters: document.querySelector("#clear-filters-button"),
+    listKicker: document.querySelector("#list-kicker"),
+    listTitle: document.querySelector("#diary-recent-title"),
+    entryList: document.querySelector("#entry-list"),
+    loadMore: document.querySelector("#load-more-button"),
+    archiveList: document.querySelector("#archive-list"),
+    tagList: document.querySelector("#tag-list"),
+    entryDialog: document.querySelector("#entry-dialog"),
+    detailDate: document.querySelector("#detail-date"),
+    detailTitle: document.querySelector("#detail-title"),
+    detailTags: document.querySelector("#detail-tags"),
+    detailContent: document.querySelector("#detail-content"),
+    detailActions: document.querySelector("#detail-actions"),
+    restoreActions: document.querySelector("#restore-actions"),
+    editEntryButton: document.querySelector("#edit-entry-button"),
+    deleteEntryButton: document.querySelector("#delete-entry-button"),
+    restoreEntryButton: document.querySelector("#restore-entry-button"),
+    editorDialog: document.querySelector("#editor-dialog"),
+    entryForm: document.querySelector("#entry-form"),
+    editorTitle: document.querySelector("#editor-title"),
+    entryId: document.querySelector("#entry-id"),
+    entryRevision: document.querySelector("#entry-revision"),
+    entryDate: document.querySelector("#entry-date"),
+    entryTitle: document.querySelector("#entry-title"),
+    entryContent: document.querySelector("#entry-content"),
+    entryTags: document.querySelector("#entry-tags"),
+    editorMessage: document.querySelector("#editor-message"),
+    saveEntryButton: document.querySelector("#save-entry-button"),
+    toast: document.querySelector("#toast")
+  };
+
+  boot();
+
+  async function boot() {
+    bindEvents();
+    try {
+      const session = await api("/session");
+      if (session.authenticated) {
+        await enterDiary(session.role);
+      } else {
+        showLogin();
+      }
+    } catch (error) {
+      showLogin(error.message);
+    }
+  }
+
+  function bindEvents() {
+    elements.loginForm.addEventListener("submit", handleLogin);
+    elements.passwordToggle.addEventListener("click", togglePassword);
+    elements.logoutButton.addEventListener("click", handleLogout);
+    elements.newEntryButton.addEventListener("click", () => openEditor());
+    elements.trashButton.addEventListener("click", toggleTrash);
+    elements.loadMore.addEventListener("click", () => loadEntries(false));
+    elements.clearFilters.addEventListener("click", clearFilters);
+    elements.searchClear.addEventListener("click", () => {
+      elements.searchInput.value = "";
+      state.query = "";
+      updateFilterControls();
+      loadEntries(true);
+      elements.searchInput.focus();
+    });
+    elements.searchInput.addEventListener("input", () => {
+      window.clearTimeout(state.searchTimer);
+      state.query = elements.searchInput.value.trim();
+      updateFilterControls();
+      state.searchTimer = window.setTimeout(() => loadEntries(true), 300);
+    });
+    elements.entryList.addEventListener("click", handleEntryListClick);
+    elements.archiveList.addEventListener("click", handleArchiveClick);
+    elements.tagList.addEventListener("click", handleTagClick);
+    elements.editEntryButton.addEventListener("click", () => {
+      if (state.activeEntry) {
+        elements.entryDialog.close();
+        openEditor(state.activeEntry);
+      }
+    });
+    elements.deleteEntryButton.addEventListener("click", moveActiveEntryToTrash);
+    elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
+    elements.entryForm.addEventListener("submit", saveEntry);
+    elements.entryForm.addEventListener("input", () => {
+      state.editorDirty = true;
+    });
+
+    document.querySelectorAll("[data-close-dialog]").forEach((button) => {
+      button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
+    });
+    elements.editorDialog.addEventListener("cancel", (event) => {
+      if (state.editorDirty && !window.confirm("入力中の内容を破棄しますか？")) event.preventDefault();
+      else state.editorDirty = false;
+    });
+    window.addEventListener("beforeunload", (event) => {
+      if (!state.editorDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    const submit = elements.loginForm.querySelector('button[type="submit"]');
+    setBusy(submit, true, "確認中...");
+    elements.loginMessage.textContent = "";
+    try {
+      const result = await api("/login", {
+        method: "POST",
+        body: { password: elements.password.value }
+      });
+      elements.password.value = "";
+      await enterDiary(result.role);
+    } catch (error) {
+      elements.loginMessage.textContent = error.message;
+      elements.password.select();
+    } finally {
+      setBusy(submit, false, "開く");
+    }
+  }
+
+  async function handleLogout() {
+    setBusy(elements.logoutButton, true, "処理中...");
+    try {
+      await api("/logout", { method: "POST" });
+    } catch {
+      // Cookie is cleared by the server when available. The local view is closed either way.
+    }
+    resetState();
+    showLogin();
+    setBusy(elements.logoutButton, false, "ログアウト");
+  }
+
+  function togglePassword() {
+    const show = elements.password.type === "password";
+    elements.password.type = show ? "text" : "password";
+    elements.passwordToggle.textContent = show ? "隠す" : "表示";
+    elements.passwordToggle.setAttribute("aria-pressed", String(show));
+  }
+
+  async function enterDiary(role) {
+    state.role = role;
+    elements.loginView.hidden = true;
+    elements.appView.hidden = false;
+    elements.roleLabel.textContent = role === "admin" ? "管理用" : "閲覧用";
+    elements.newEntryButton.hidden = role !== "admin";
+    elements.trashButton.hidden = role !== "admin";
+    await Promise.all([loadMeta(), loadEntries(true)]);
+  }
+
+  function showLogin(message = "") {
+    elements.loginView.hidden = false;
+    elements.appView.hidden = true;
+    elements.loginMessage.textContent = message;
+    window.setTimeout(() => elements.password.focus(), 0);
+  }
+
+  async function loadEntries(reset) {
+    const requestId = ++state.requestId;
+    if (reset) {
+      state.offset = 0;
+      state.entries = [];
+      state.entryMap.clear();
+      elements.entryList.replaceChildren(createEmpty("読み込んでいます..."));
+    }
+    setBusy(elements.loadMore, true, "読み込んでいます...");
+    updateListHeading();
+
+    const parameters = new URLSearchParams({
+      limit: "20",
+      offset: String(state.offset)
+    });
+    if (state.query) parameters.set("q", state.query);
+    if (state.month) parameters.set("month", state.month);
+    if (state.tag) parameters.set("tag", state.tag);
+    if (state.trash) parameters.set("trash", "1");
+
+    try {
+      const result = await api(`/entries?${parameters}`);
+      if (requestId !== state.requestId) return;
+      for (const entry of result.entries) {
+        state.entries.push(entry);
+        state.entryMap.set(entry.id, entry);
+      }
+      state.offset = state.entries.length;
+      state.hasMore = result.hasMore;
+      renderEntries();
+      updateSearchStatus();
+    } catch (error) {
+      if (requestId !== state.requestId) return;
+      elements.entryList.replaceChildren(createEmpty(error.message));
+      elements.searchStatus.textContent = error.message;
+    } finally {
+      if (requestId === state.requestId) {
+        elements.loadMore.hidden = !state.hasMore;
+        setBusy(elements.loadMore, false, "さらに表示");
+      }
+    }
+  }
+
+  async function loadMeta() {
+    try {
+      const result = await api("/meta");
+      renderArchive(result.months || []);
+      renderTags(result.tags || []);
+    } catch (error) {
+      elements.archiveList.replaceChildren(createEmpty(error.message));
+      elements.tagList.replaceChildren(createEmpty(error.message));
+    }
+  }
+
+  function renderEntries() {
+    if (!state.entries.length) {
+      const message = state.trash
+        ? "ゴミ箱は空です。"
+        : state.query || state.month || state.tag
+          ? "条件に合う日記はありません。"
+          : "まだ日記はありません。";
+      elements.entryList.replaceChildren(createEmpty(message));
+      return;
+    }
+
+    elements.entryList.replaceChildren(...state.entries.map((entry) => {
+      const article = document.createElement("article");
+      article.className = "diary-entry-card";
+
+      const button = document.createElement("button");
+      button.className = "diary-entry-button";
+      button.type = "button";
+      button.dataset.entryId = String(entry.id);
+
+      const time = document.createElement("time");
+      time.dateTime = entry.entryDate;
+      time.textContent = formatDate(entry.entryDate);
+      const title = document.createElement("h3");
+      title.textContent = entry.title;
+      const summary = document.createElement("p");
+      summary.textContent = excerpt(entry.content, 130);
+      button.append(time, title, summary);
+      article.append(button, createTagGroup(entry.tags));
+      return article;
+    }));
+  }
+
+  function renderArchive(months) {
+    if (!months.length) {
+      elements.archiveList.replaceChildren(createEmpty("年月別の記録はまだありません。"));
+      return;
+    }
+    elements.archiveList.replaceChildren(...months.map((item) => {
+      const button = document.createElement("button");
+      button.className = "archive-button";
+      button.type = "button";
+      button.dataset.month = item.value;
+      button.setAttribute("aria-pressed", String(state.month === item.value));
+      const label = document.createElement("span");
+      label.textContent = formatMonth(item.value);
+      const count = document.createElement("small");
+      count.textContent = `${item.count}件`;
+      button.append(label, count);
+      return button;
+    }));
+  }
+
+  function renderTags(tags) {
+    if (!tags.length) {
+      elements.tagList.replaceChildren(createEmpty("#はまだありません。"));
+      return;
+    }
+    elements.tagList.replaceChildren(...tags.map((item) => {
+      const button = document.createElement("button");
+      button.className = "diary-tag";
+      button.type = "button";
+      button.dataset.tag = item.value;
+      button.setAttribute("aria-pressed", String(state.tag === item.value));
+      button.textContent = `#${item.value} ${item.count}`;
+      return button;
+    }));
+  }
+
+  function handleEntryListClick(event) {
+    const button = event.target.closest("[data-entry-id]");
+    if (!button) return;
+    openEntry(Number(button.dataset.entryId));
+  }
+
+  function handleArchiveClick(event) {
+    const button = event.target.closest("[data-month]");
+    if (!button) return;
+    state.month = state.month === button.dataset.month ? "" : button.dataset.month;
+    state.trash = false;
+    updateFilterControls();
+    loadEntries(true);
+  }
+
+  function handleTagClick(event) {
+    const button = event.target.closest("[data-tag]");
+    if (!button) return;
+    state.tag = state.tag === button.dataset.tag ? "" : button.dataset.tag;
+    state.trash = false;
+    updateFilterControls();
+    loadEntries(true);
+  }
+
+  async function openEntry(id) {
+    try {
+      const result = await api(`/entries/${id}`);
+      state.activeEntry = result.entry;
+      renderEntryDetail(result.entry);
+      elements.entryDialog.showModal();
+    } catch (error) {
+      showToast(error.message);
+    }
+  }
+
+  function renderEntryDetail(entry) {
+    elements.detailDate.textContent = formatDate(entry.entryDate);
+    elements.detailTitle.textContent = entry.title;
+    elements.detailContent.textContent = entry.content;
+    elements.detailTags.replaceChildren(...createTagElements(entry.tags));
+    const isDeleted = Boolean(entry.deletedAt);
+    elements.detailActions.hidden = state.role !== "admin" || isDeleted;
+    elements.restoreActions.hidden = state.role !== "admin" || !isDeleted;
+  }
+
+  function openEditor(entry = null) {
+    if (state.role !== "admin") return;
+    elements.editorMessage.textContent = "";
+    elements.editorTitle.textContent = entry ? "日記を編集" : "新しい日記";
+    elements.entryId.value = entry ? String(entry.id) : "";
+    elements.entryRevision.value = entry ? String(entry.revision) : "";
+    elements.entryDate.value = entry?.entryDate || localDateString();
+    elements.entryTitle.value = entry?.title || "";
+    elements.entryContent.value = entry?.content || "";
+    elements.entryTags.value = entry?.tags?.join("、") || "";
+    state.editorDirty = false;
+    elements.editorDialog.showModal();
+    window.setTimeout(() => (entry ? elements.entryTitle : elements.entryTitle).focus(), 0);
+  }
+
+  async function saveEntry(event) {
+    event.preventDefault();
+    const id = Number(elements.entryId.value || 0);
+    const body = {
+      entryDate: elements.entryDate.value,
+      title: elements.entryTitle.value,
+      content: elements.entryContent.value,
+      tags: parseTags(elements.entryTags.value)
+    };
+    if (id) body.revision = Number(elements.entryRevision.value);
+
+    elements.editorMessage.textContent = "";
+    setBusy(elements.saveEntryButton, true, "保存中...");
+    try {
+      await api(id ? `/entries/${id}` : "/entries", {
+        method: id ? "PUT" : "POST",
+        body
+      });
+      state.editorDirty = false;
+      elements.editorDialog.close();
+      showToast(id ? "日記を更新しました。" : "日記を保存しました。");
+      state.trash = false;
+      await Promise.all([loadMeta(), loadEntries(true)]);
+    } catch (error) {
+      elements.editorMessage.textContent = error.message;
+    } finally {
+      setBusy(elements.saveEntryButton, false, "保存");
+    }
+  }
+
+  async function moveActiveEntryToTrash() {
+    const entry = state.activeEntry;
+    if (!entry || !window.confirm(`「${entry.title}」をゴミ箱へ移動しますか？`)) return;
+    setBusy(elements.deleteEntryButton, true, "移動中...");
+    try {
+      await api(`/entries/${entry.id}`, {
+        method: "DELETE",
+        body: { revision: entry.revision }
+      });
+      elements.entryDialog.close();
+      state.activeEntry = null;
+      showToast("日記をゴミ箱へ移動しました。");
+      await Promise.all([loadMeta(), loadEntries(true)]);
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setBusy(elements.deleteEntryButton, false, "ゴミ箱へ移動");
+    }
+  }
+
+  async function restoreActiveEntry() {
+    const entry = state.activeEntry;
+    if (!entry) return;
+    setBusy(elements.restoreEntryButton, true, "復元中...");
+    try {
+      await api(`/entries/${entry.id}/restore`, { method: "POST" });
+      elements.entryDialog.close();
+      state.activeEntry = null;
+      showToast("日記を復元しました。");
+      await Promise.all([loadMeta(), loadEntries(true)]);
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setBusy(elements.restoreEntryButton, false, "日記を復元");
+    }
+  }
+
+  function toggleTrash() {
+    state.trash = !state.trash;
+    state.query = "";
+    state.month = "";
+    state.tag = "";
+    elements.searchInput.value = "";
+    updateFilterControls();
+    loadEntries(true);
+  }
+
+  function clearFilters() {
+    state.query = "";
+    state.month = "";
+    state.tag = "";
+    state.trash = false;
+    elements.searchInput.value = "";
+    updateFilterControls();
+    loadEntries(true);
+  }
+
+  function updateFilterControls() {
+    const active = Boolean(state.query || state.month || state.tag || state.trash);
+    elements.searchClear.hidden = !state.query;
+    elements.clearFilters.hidden = !active;
+    elements.trashButton.textContent = state.trash ? "日記一覧" : "ゴミ箱";
+    document.querySelectorAll("[data-month]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.month === state.month));
+    });
+    document.querySelectorAll("[data-tag]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.tag === state.tag));
+    });
+  }
+
+  function updateListHeading() {
+    if (state.trash) {
+      elements.listKicker.textContent = "Trash";
+      elements.listTitle.textContent = "ゴミ箱";
+    } else if (state.query || state.month || state.tag) {
+      elements.listKicker.textContent = "Results";
+      elements.listTitle.textContent = "検索結果";
+    } else {
+      elements.listKicker.textContent = "Recent";
+      elements.listTitle.textContent = "最近の更新";
+    }
+  }
+
+  function updateSearchStatus() {
+    const conditions = [];
+    if (state.query) conditions.push(`「${state.query}」`);
+    if (state.month) conditions.push(formatMonth(state.month));
+    if (state.tag) conditions.push(`#${state.tag}`);
+    if (state.trash) {
+      elements.searchStatus.textContent = `${state.entries.length}件を表示しています。`;
+    } else if (conditions.length) {
+      elements.searchStatus.textContent = `${conditions.join("・")}：${state.entries.length}件を表示しています。`;
+    } else {
+      elements.searchStatus.textContent = `${state.entries.length}件の日記を表示しています。`;
+    }
+  }
+
+  function closeDialog(id) {
+    const dialog = document.getElementById(id);
+    if (!dialog?.open) return;
+    if (id === "editor-dialog" && state.editorDirty && !window.confirm("入力中の内容を破棄しますか？")) return;
+    if (id === "editor-dialog") state.editorDirty = false;
+    dialog.close();
+  }
+
+  async function api(path, options = {}) {
+    const headers = new Headers(options.headers);
+    const init = {
+      method: options.method || "GET",
+      headers,
+      credentials: "same-origin"
+    };
+    if (options.body !== undefined) {
+      headers.set("Content-Type", "application/json");
+      init.body = JSON.stringify(options.body);
+    }
+    if (init.method !== "GET") headers.set("X-Diary-Request", "1");
+
+    const response = await fetch(`${BASE_PATH}/api${path}`, init);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401 && path !== "/login") {
+        resetState();
+        showLogin("ログインの有効期限が切れました。");
+      }
+      throw new Error(result.error || "処理を完了できませんでした。");
+    }
+    return result;
+  }
+
+  function createTagGroup(tags) {
+    const group = document.createElement("div");
+    group.className = "diary-tags";
+    group.append(...createTagElements(tags));
+    return group;
+  }
+
+  function createTagElements(tags) {
+    return (tags || []).map((tag) => {
+      const span = document.createElement("span");
+      span.className = "diary-tag";
+      span.textContent = `#${tag}`;
+      return span;
+    });
+  }
+
+  function createEmpty(message) {
+    const paragraph = document.createElement("p");
+    paragraph.className = "diary-empty";
+    paragraph.textContent = message;
+    return paragraph;
+  }
+
+  function parseTags(value) {
+    return [...new Set(String(value || "").split(/[、,，]/).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean))].slice(0, 10);
+  }
+
+  function formatDate(value) {
+    const [year, month, day] = String(value || "").split("-").map(Number);
+    return year && month && day ? `${year}年${month}月${day}日` : value;
+  }
+
+  function formatMonth(value) {
+    const [year, month] = String(value || "").split("-").map(Number);
+    return year && month ? `${year}年${month}月` : value;
+  }
+
+  function excerpt(value, length) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    return text.length > length ? `${text.slice(0, length)}…` : text;
+  }
+
+  function localDateString() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function setBusy(button, busy, label) {
+    button.disabled = busy;
+    button.textContent = label;
+  }
+
+  function showToast(message) {
+    elements.toast.textContent = message;
+    elements.toast.hidden = false;
+    window.clearTimeout(showToast.timer);
+    showToast.timer = window.setTimeout(() => {
+      elements.toast.hidden = true;
+    }, 3500);
+  }
+
+  function resetState() {
+    state.role = null;
+    state.entries = [];
+    state.entryMap.clear();
+    state.offset = 0;
+    state.hasMore = false;
+    state.query = "";
+    state.month = "";
+    state.tag = "";
+    state.trash = false;
+    state.activeEntry = null;
+    state.editorDirty = false;
+    state.requestId += 1;
+    if (elements.entryDialog.open) elements.entryDialog.close();
+    if (elements.editorDialog.open) elements.editorDialog.close();
+  }
+})();
