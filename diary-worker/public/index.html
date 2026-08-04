@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <title>日記</title>
-  <link rel="stylesheet" href="/diary/diary.css">
+  <link rel="stylesheet" href="/diary/diary.css?v=4">
 </head>
 <body>
   <main id="login-view" class="login-shell" aria-labelledby="login-title">
@@ -18,7 +18,16 @@
         <label for="password">パスワード</label>
         <div class="password-field">
           <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
-          <button id="password-toggle" class="quiet-button" type="button" aria-controls="password" aria-pressed="false">表示</button>
+          <button id="password-toggle" class="password-toggle" type="button" aria-controls="password" aria-pressed="false" aria-label="パスワードを表示" title="パスワードを表示">
+            <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path>
+              <circle cx="12" cy="12" r="2.5"></circle>
+            </svg>
+            <svg class="password-eye password-eye-closed" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path>
+              <path d="M4 4l16 16"></path>
+            </svg>
+          </button>
         </div>
         <button class="primary-button full-button" type="submit">開く</button>
         <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
@@ -104,6 +113,7 @@
         <button class="icon-button" type="button" data-close-dialog="entry-dialog" aria-label="閉じる">×</button>
       </div>
       <h2 id="detail-title"></h2>
+      <p id="detail-author" class="entry-author"></p>
       <div id="detail-tags" class="diary-tags"></div>
       <div id="detail-content" class="entry-content"></div>
       <div id="detail-actions" class="dialog-actions" hidden>
@@ -129,7 +139,10 @@
       <input id="entry-id" type="hidden">
       <input id="entry-revision" type="hidden">
 
-      <label for="entry-date">日付</label>
+      <div class="date-field-head">
+        <label for="entry-date">日付</label>
+        <button id="today-button" class="today-button" type="button">本日</button>
+      </div>
       <input id="entry-date" name="entryDate" type="date" required>
 
       <label for="entry-title">タイトル</label>
@@ -150,7 +163,35 @@
     </form>
   </dialog>
 
+  <dialog id="date-wheel-dialog" class="date-wheel-dialog" aria-labelledby="date-wheel-title">
+    <section class="date-wheel-sheet">
+      <header class="date-wheel-head">
+        <button id="date-wheel-cancel" class="text-button" type="button">キャンセル</button>
+        <div>
+          <p id="date-wheel-title">日付を選択</p>
+          <strong id="date-wheel-value"></strong>
+        </div>
+        <button id="date-wheel-done" class="text-button" type="button">完了</button>
+      </header>
+      <div class="date-wheel-window">
+        <div class="date-wheel-highlight" aria-hidden="true"></div>
+        <div class="date-wheel-group">
+          <span>年</span>
+          <div id="date-wheel-year" class="date-wheel-column" role="listbox" aria-label="年"></div>
+        </div>
+        <div class="date-wheel-group">
+          <span>月</span>
+          <div id="date-wheel-month" class="date-wheel-column" role="listbox" aria-label="月"></div>
+        </div>
+        <div class="date-wheel-group">
+          <span>日</span>
+          <div id="date-wheel-day" class="date-wheel-column" role="listbox" aria-label="日"></div>
+        </div>
+      </div>
+    </section>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js" defer></script>
+  <script src="/diary/diary.js?v=4" defer></script>
 </body>
 </html>

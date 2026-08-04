@@ -2,6 +2,7 @@
   const BASE_PATH = "/diary";
   const state = {
     role: null,
+    accountName: null,
     entries: [],
     entryMap: new Map(),
     offset: 0,
@@ -12,6 +13,8 @@
     trash: false,
     activeEntry: null,
     editorDirty: false,
+    dateDraft: null,
+    dateWheelTimers: {},
     searchTimer: null,
     requestId: 0
   };
@@ -40,6 +43,7 @@
     entryDialog: document.querySelector("#entry-dialog"),
     detailDate: document.querySelector("#detail-date"),
     detailTitle: document.querySelector("#detail-title"),
+    detailAuthor: document.querySelector("#detail-author"),
     detailTags: document.querySelector("#detail-tags"),
     detailContent: document.querySelector("#detail-content"),
     detailActions: document.querySelector("#detail-actions"),
@@ -53,11 +57,19 @@
     entryId: document.querySelector("#entry-id"),
     entryRevision: document.querySelector("#entry-revision"),
     entryDate: document.querySelector("#entry-date"),
+    todayButton: document.querySelector("#today-button"),
     entryTitle: document.querySelector("#entry-title"),
     entryContent: document.querySelector("#entry-content"),
     entryTags: document.querySelector("#entry-tags"),
     editorMessage: document.querySelector("#editor-message"),
     saveEntryButton: document.querySelector("#save-entry-button"),
+    dateWheelDialog: document.querySelector("#date-wheel-dialog"),
+    dateWheelCancel: document.querySelector("#date-wheel-cancel"),
+    dateWheelDone: document.querySelector("#date-wheel-done"),
+    dateWheelValue: document.querySelector("#date-wheel-value"),
+    dateWheelYear: document.querySelector("#date-wheel-year"),
+    dateWheelMonth: document.querySelector("#date-wheel-month"),
+    dateWheelDay: document.querySelector("#date-wheel-day"),
     toast: document.querySelector("#toast")
   };
 
@@ -68,7 +80,7 @@
     try {
       const session = await api("/session");
       if (session.authenticated) {
-        await enterDiary(session.role);
+        await enterDiary(session);
       } else {
         showLogin();
       }
@@ -110,6 +122,18 @@
     elements.deleteEntryButton.addEventListener("click", moveActiveEntryToTrash);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
     elements.entryForm.addEventListener("submit", saveEntry);
+    elements.todayButton.addEventListener("click", setEntryDateToToday);
+    elements.entryDate.addEventListener("pointerdown", handleDatePointerDown);
+    elements.entryDate.addEventListener("keydown", handleDateKeydown);
+    elements.dateWheelCancel.addEventListener("click", closeDateWheel);
+    elements.dateWheelDone.addEventListener("click", applyDateWheel);
+    elements.dateWheelDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeDateWheel();
+    });
+    bindDateWheel(elements.dateWheelYear, "year");
+    bindDateWheel(elements.dateWheelMonth, "month");
+    bindDateWheel(elements.dateWheelDay, "day");
     elements.entryForm.addEventListener("input", () => {
       state.editorDirty = true;
     });
@@ -139,7 +163,7 @@
         body: { password: elements.password.value }
       });
       elements.password.value = "";
-      await enterDiary(result.role);
+      await enterDiary(result);
     } catch (error) {
       elements.loginMessage.textContent = error.message;
       elements.password.select();
@@ -163,17 +187,22 @@
   function togglePassword() {
     const show = elements.password.type === "password";
     elements.password.type = show ? "text" : "password";
-    elements.passwordToggle.textContent = show ? "隠す" : "表示";
+    const label = show ? "パスワードを隠す" : "パスワードを表示";
+    elements.passwordToggle.setAttribute("aria-label", label);
+    elements.passwordToggle.title = label;
     elements.passwordToggle.setAttribute("aria-pressed", String(show));
   }
 
-  async function enterDiary(role) {
-    state.role = role;
+  async function enterDiary(session) {
+    state.role = session.role;
+    state.accountName = session.accountName;
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
-    elements.roleLabel.textContent = role === "admin" ? "管理用" : "閲覧用";
-    elements.newEntryButton.hidden = role !== "admin";
-    elements.trashButton.hidden = role !== "admin";
+    elements.roleLabel.textContent = session.role === "admin"
+      ? `${session.accountName}（管理者）`
+      : "閲覧者";
+    elements.newEntryButton.hidden = session.role !== "admin";
+    elements.trashButton.hidden = session.role !== "admin";
     await Promise.all([loadMeta(), loadEntries(true)]);
   }
 
@@ -261,11 +290,17 @@
       const time = document.createElement("time");
       time.dateTime = entry.entryDate;
       time.textContent = formatDate(entry.entryDate);
+      const author = document.createElement("span");
+      author.className = "entry-author";
+      author.textContent = `投稿者：${entry.authorName}`;
+      const meta = document.createElement("div");
+      meta.className = "entry-meta";
+      meta.append(time, author);
       const title = document.createElement("h3");
       title.textContent = entry.title;
       const summary = document.createElement("p");
       summary.textContent = excerpt(entry.content, 130);
-      button.append(time, title, summary);
+      button.append(meta, title, summary);
       article.append(button, createTagGroup(entry.tags));
       return article;
     }));
@@ -345,6 +380,7 @@
   function renderEntryDetail(entry) {
     elements.detailDate.textContent = formatDate(entry.entryDate);
     elements.detailTitle.textContent = entry.title;
+    elements.detailAuthor.textContent = `投稿者：${entry.authorName}`;
     elements.detailContent.textContent = entry.content;
     elements.detailTags.replaceChildren(...createTagElements(entry.tags));
     const isDeleted = Boolean(entry.deletedAt);
@@ -358,7 +394,7 @@
     elements.editorTitle.textContent = entry ? "日記を編集" : "新しい日記";
     elements.entryId.value = entry ? String(entry.id) : "";
     elements.entryRevision.value = entry ? String(entry.revision) : "";
-    elements.entryDate.value = entry?.entryDate || localDateString();
+    elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
     elements.entryContent.value = entry?.content || "";
     elements.entryTags.value = entry?.tags?.join("、") || "";
@@ -395,6 +431,153 @@
     } finally {
       setBusy(elements.saveEntryButton, false, "保存");
     }
+  }
+
+  function handleDatePointerDown(event) {
+    if (useMobileDateWheel()) {
+      event.preventDefault();
+      openDateWheel();
+      return;
+    }
+    if (typeof elements.entryDate.showPicker === "function") {
+      try {
+        event.preventDefault();
+        elements.entryDate.showPicker();
+      } catch {
+        // If the browser blocks showPicker, keep its standard date interaction available.
+      }
+    }
+  }
+
+  function handleDateKeydown(event) {
+    if (!useMobileDateWheel() || !["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    openDateWheel();
+  }
+
+  function useMobileDateWheel() {
+    return window.matchMedia("(max-width: 760px)").matches;
+  }
+
+  function setEntryDateToToday() {
+    const today = japanDateString();
+    if (elements.entryDate.value !== today) {
+      elements.entryDate.value = today;
+      elements.entryDate.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    if (elements.dateWheelDialog.open) {
+      setDateDraft(today);
+      renderDateWheel();
+    }
+  }
+
+  function openDateWheel() {
+    if (elements.dateWheelDialog.open) return;
+    setDateDraft(elements.entryDate.value || japanDateString());
+    renderDateWheel();
+    elements.dateWheelDialog.showModal();
+  }
+
+  function closeDateWheel() {
+    if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();
+  }
+
+  function applyDateWheel() {
+    if (!state.dateDraft) return closeDateWheel();
+    const nextValue = datePartsToString(state.dateDraft);
+    if (elements.entryDate.value !== nextValue) {
+      elements.entryDate.value = nextValue;
+      elements.entryDate.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    closeDateWheel();
+  }
+
+  function setDateDraft(value) {
+    const [year, month, day] = String(value).split("-").map(Number);
+    state.dateDraft = {
+      year: clamp(year || Number(japanDateString().slice(0, 4)), 1900, 2100),
+      month: clamp(month || 1, 1, 12),
+      day: day || 1
+    };
+    state.dateDraft.day = clamp(state.dateDraft.day, 1, daysInMonth(state.dateDraft.year, state.dateDraft.month));
+  }
+
+  function renderDateWheel() {
+    if (!state.dateDraft) return;
+    fillDateWheel(elements.dateWheelYear, range(1900, 2100), state.dateDraft.year, "年");
+    fillDateWheel(elements.dateWheelMonth, range(1, 12), state.dateDraft.month, "月");
+    renderDayWheel();
+    updateDateWheelValue();
+  }
+
+  function renderDayWheel() {
+    const maximum = daysInMonth(state.dateDraft.year, state.dateDraft.month);
+    state.dateDraft.day = clamp(state.dateDraft.day, 1, maximum);
+    fillDateWheel(elements.dateWheelDay, range(1, maximum), state.dateDraft.day, "日");
+  }
+
+  function fillDateWheel(column, values, selected, suffix) {
+    column.replaceChildren(...values.map((value, index) => {
+      const button = document.createElement("button");
+      button.className = "date-wheel-option";
+      button.type = "button";
+      button.dataset.value = String(value);
+      button.dataset.index = String(index);
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(value === selected));
+      button.textContent = `${value}${suffix}`;
+      return button;
+    }));
+    const selectedIndex = Math.max(0, values.indexOf(selected));
+    window.requestAnimationFrame(() => {
+      column.scrollTop = selectedIndex * 44;
+    });
+  }
+
+  function bindDateWheel(column, key) {
+    column.addEventListener("click", (event) => {
+      const option = event.target.closest(".date-wheel-option");
+      if (!option) return;
+      column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "smooth" });
+    });
+    column.addEventListener("scroll", () => {
+      window.clearTimeout(state.dateWheelTimers[key]);
+      state.dateWheelTimers[key] = window.setTimeout(() => updateDateWheelFromScroll(column, key), 80);
+    }, { passive: true });
+  }
+
+  function updateDateWheelFromScroll(column, key) {
+    const options = [...column.querySelectorAll(".date-wheel-option")];
+    const index = clamp(Math.round(column.scrollTop / 44), 0, options.length - 1);
+    const option = options[index];
+    if (!option || !state.dateDraft) return;
+    const value = Number(option.dataset.value);
+    if (state.dateDraft[key] === value) return;
+    state.dateDraft[key] = value;
+    options.forEach((item, itemIndex) => item.setAttribute("aria-selected", String(itemIndex === index)));
+    if (key === "year" || key === "month") renderDayWheel();
+    updateDateWheelValue();
+  }
+
+  function updateDateWheelValue() {
+    const { year, month, day } = state.dateDraft;
+    elements.dateWheelValue.textContent = `${year}年${month}月${day}日`;
+  }
+
+  function datePartsToString({ year, month, day }) {
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  function daysInMonth(year, month) {
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+
+  function range(start, end) {
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+  }
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(maximum, Math.max(minimum, value));
   }
 
   async function moveActiveEntryToTrash() {
@@ -569,12 +752,15 @@
     return text.length > length ? `${text.slice(0, length)}…` : text;
   }
 
-  function localDateString() {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+  function japanDateString() {
+    const parts = new Intl.DateTimeFormat("en", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
   }
 
   function setBusy(button, busy, label) {
@@ -593,6 +779,7 @@
 
   function resetState() {
     state.role = null;
+    state.accountName = null;
     state.entries = [];
     state.entryMap.clear();
     state.offset = 0;
@@ -603,6 +790,8 @@
     state.trash = false;
     state.activeEntry = null;
     state.editorDirty = false;
+    state.dateDraft = null;
+    if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();
     state.requestId += 1;
     if (elements.entryDialog.open) elements.entryDialog.close();
     if (elements.editorDialog.open) elements.editorDialog.close();

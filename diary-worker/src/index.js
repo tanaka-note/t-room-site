@@ -2,6 +2,11 @@ const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const DIARY_ACCOUNTS = [
+  { id: "main-admin", name: "田中宏知", role: "admin", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
+  { id: "wife-admin", name: "田中暢美", role: "admin", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" },
+  { id: "viewer", name: "閲覧者", role: "viewer", secretKey: "DIARY_VIEW_PASSWORD_HASH" }
+];
 
 export default {
   async fetch(request, env) {
@@ -40,12 +45,16 @@ export default {
 async function handleApi(request, env, url, path) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
-    return json({ authenticated: Boolean(session), role: session?.role || null });
+    return json({
+      authenticated: Boolean(session),
+      role: session?.role || null,
+      accountName: session?.accountName || null
+    });
   }
 
   if (path === "/api/login" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (!env.DIARY_ADMIN_PASSWORD_HASH || !env.DIARY_VIEW_PASSWORD_HASH || !env.SESSION_SECRET) {
+    if (!DIARY_ACCOUNTS.every((account) => env[account.secretKey]) || !env.SESSION_SECRET) {
       return json({ error: "日記の認証設定が完了していません。" }, 503);
     }
 
@@ -55,18 +64,17 @@ async function handleApi(request, env, url, path) {
       return json({ error: "パスワードを確認してください。" }, 400);
     }
 
-    const [isAdmin, isViewer] = await Promise.all([
-      verifyPassword(password, env.DIARY_ADMIN_PASSWORD_HASH),
-      verifyPassword(password, env.DIARY_VIEW_PASSWORD_HASH)
-    ]);
-    const role = isAdmin ? "admin" : isViewer ? "viewer" : null;
-    if (!role) return json({ error: "パスワードが違います。" }, 401);
+    const matches = await Promise.all(DIARY_ACCOUNTS.map((account) => (
+      verifyPassword(password, env[account.secretKey])
+    )));
+    const account = DIARY_ACCOUNTS[matches.findIndex(Boolean)];
+    if (!account) return json({ error: "パスワードが違います。" }, 401);
 
     const maxAge = clampNumber(env.SESSION_TTL_SECONDS, 3600, 2592000, 2592000);
-    const token = await createSessionToken(role, maxAge, env);
+    const token = await createSessionToken(account, maxAge, env);
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    return json({ authenticated: true, role }, 200, headers);
+    return json({ authenticated: true, role: account.role, accountName: account.name }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -89,7 +97,7 @@ async function handleApi(request, env, url, path) {
 
   if (path === "/api/entries" && request.method === "POST") {
     requireAdmin(session);
-    return createEntry(request, env);
+    return createEntry(request, env, session);
   }
 
   if (path === "/api/meta" && request.method === "GET") {
@@ -165,7 +173,7 @@ async function listEntries(url, env, session) {
 
   const statement = `
     SELECT
-      e.id, e.entry_date, e.title, e.content, e.created_at, e.updated_at,
+      e.id, e.entry_date, e.title, e.content, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
@@ -184,7 +192,7 @@ async function getEntry(id, env, session) {
   const deletedClause = session.role === "admin" ? "" : "AND e.deleted_at IS NULL";
   const row = await env.DB.prepare(`
     SELECT
-      e.id, e.entry_date, e.title, e.content, e.created_at, e.updated_at,
+      e.id, e.entry_date, e.title, e.content, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
@@ -214,12 +222,12 @@ async function listMeta(env) {
   return json({ months: months.results || [], tags: tags.results || [] });
 }
 
-async function createEntry(request, env) {
+async function createEntry(request, env, session) {
   const input = validateEntryInput(await readJson(request, 500000));
   const result = await env.DB.prepare(`
-    INSERT INTO diary_entries (entry_date, title, content)
-    VALUES (?, ?, ?)
-  `).bind(input.entryDate, input.title, input.content).run();
+    INSERT INTO diary_entries (entry_date, title, content, author_id, author_name)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(input.entryDate, input.title, input.content, session.accountId, session.accountName).run();
   const id = Number(result.meta?.last_row_id);
   await replaceTags(env, id, input.tags);
   return getEntry(id, env, { role: "admin" });
@@ -305,6 +313,8 @@ function serializeEntry(row) {
     entryDate: row.entry_date,
     title: row.title,
     content: row.content,
+    authorId: row.author_id,
+    authorName: row.author_name,
     tags,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -325,17 +335,19 @@ async function readSession(request, env) {
   try {
     const payload = JSON.parse(decoder.decode(base64UrlToBytes(encodedPayload)));
     if (!payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
-    if (!["admin", "viewer"].includes(payload.role)) return null;
+    const account = DIARY_ACCOUNTS.find((candidate) => candidate.id === payload.accountId);
+    if (!account || account.role !== payload.role) return null;
     if (String(payload.version || "1") !== String(env.SESSION_VERSION || "1")) return null;
-    return payload;
+    return { ...payload, accountName: account.name };
   } catch {
     return null;
   }
 }
 
-async function createSessionToken(role, maxAge, env) {
+async function createSessionToken(account, maxAge, env) {
   const payload = {
-    role,
+    role: account.role,
+    accountId: account.id,
     exp: Math.floor(Date.now() / 1000) + maxAge,
     version: String(env.SESSION_VERSION || "1")
   };
