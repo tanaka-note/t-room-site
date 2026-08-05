@@ -3,9 +3,9 @@ const SESSION_COOKIE = "troom_diary_session";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DIARY_ACCOUNTS = [
-  { id: "main-admin", name: "田中宏知", role: "admin", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
-  { id: "wife-admin", name: "田中暢美", role: "admin", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" },
-  { id: "viewer", name: "閲覧者", role: "viewer", secretKey: "DIARY_VIEW_PASSWORD_HASH" }
+  { id: "main-admin", name: "田中宏知", role: "admin", canViewTrash: true, secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
+  { id: "wife-admin", name: "田中暢美", role: "admin", canViewTrash: false, secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" },
+  { id: "viewer", name: "閲覧者", role: "viewer", canViewTrash: false, secretKey: "DIARY_VIEW_PASSWORD_HASH" }
 ];
 
 export default {
@@ -48,7 +48,8 @@ async function handleApi(request, env, url, path) {
     return json({
       authenticated: Boolean(session),
       role: session?.role || null,
-      accountName: session?.accountName || null
+      accountName: session?.accountName || null,
+      canViewTrash: Boolean(session?.canViewTrash)
     });
   }
 
@@ -74,7 +75,12 @@ async function handleApi(request, env, url, path) {
     const token = await createSessionToken(account, maxAge, env);
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    return json({ authenticated: true, role: account.role, accountName: account.name }, 200, headers);
+    return json({
+      authenticated: true,
+      role: account.role,
+      accountName: account.name,
+      canViewTrash: account.canViewTrash
+    }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -119,7 +125,7 @@ async function handleApi(request, env, url, path) {
 
   const restoreMatch = path.match(/^\/api\/entries\/(\d+)\/restore$/);
   if (restoreMatch && request.method === "POST") {
-    requireAdmin(session);
+    requireTrashAccess(session);
     return restoreEntry(Number(restoreMatch[1]), env);
   }
 
@@ -154,7 +160,11 @@ async function listEntries(url, env, session) {
     ? url.searchParams.get("month")
     : "";
   const tag = normalizeTag(url.searchParams.get("tag") || "");
-  const trash = session.role === "admin" && url.searchParams.get("trash") === "1";
+  const trashRequested = url.searchParams.get("trash") === "1";
+  if (trashRequested && !session.canViewTrash) {
+    throw new HttpError(403, "ゴミ箱を閲覧する権限がありません。");
+  }
+  const trash = trashRequested;
 
   const conditions = [trash ? "e.deleted_at IS NOT NULL" : "e.deleted_at IS NULL"];
   const bindings = [];
@@ -189,7 +199,7 @@ async function listEntries(url, env, session) {
 }
 
 async function getEntry(id, env, session) {
-  const deletedClause = session.role === "admin" ? "" : "AND e.deleted_at IS NULL";
+  const deletedClause = session.canViewTrash ? "" : "AND e.deleted_at IS NULL";
   const row = await env.DB.prepare(`
     SELECT
       e.id, e.entry_date, e.title, e.content, e.author_id, e.author_name, e.created_at, e.updated_at,
@@ -338,7 +348,7 @@ async function readSession(request, env) {
     const account = DIARY_ACCOUNTS.find((candidate) => candidate.id === payload.accountId);
     if (!account || account.role !== payload.role) return null;
     if (String(payload.version || "1") !== String(env.SESSION_VERSION || "1")) return null;
-    return { ...payload, accountName: account.name };
+    return { ...payload, accountName: account.name, canViewTrash: account.canViewTrash };
   } catch {
     return null;
   }
@@ -423,6 +433,10 @@ async function readJson(request, maxBytes) {
 
 function requireAdmin(session) {
   if (session.role !== "admin") throw new HttpError(403, "この操作を行う権限がありません。");
+}
+
+function requireTrashAccess(session) {
+  if (!session.canViewTrash) throw new HttpError(403, "ゴミ箱を操作する権限がありません。");
 }
 
 function normalizeSearch(value, maxLength) {

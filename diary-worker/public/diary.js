@@ -3,6 +3,7 @@
   const state = {
     role: null,
     accountName: null,
+    canViewTrash: false,
     entries: [],
     entryMap: new Map(),
     offset: 0,
@@ -196,13 +197,14 @@
   async function enterDiary(session) {
     state.role = session.role;
     state.accountName = session.accountName;
+    state.canViewTrash = Boolean(session.canViewTrash);
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     elements.roleLabel.textContent = session.role === "admin"
       ? `${session.accountName}（管理者）`
       : "閲覧者";
     elements.newEntryButton.hidden = session.role !== "admin";
-    elements.trashButton.hidden = session.role !== "admin";
+    elements.trashButton.hidden = !state.canViewTrash;
     await Promise.all([loadMeta(), loadEntries(true)]);
   }
 
@@ -618,6 +620,7 @@
   }
 
   function toggleTrash() {
+    if (!state.canViewTrash) return;
     state.trash = !state.trash;
     state.query = "";
     state.month = "";
@@ -780,6 +783,7 @@
   function resetState() {
     state.role = null;
     state.accountName = null;
+    state.canViewTrash = false;
     state.entries = [];
     state.entryMap.clear();
     state.offset = 0;
