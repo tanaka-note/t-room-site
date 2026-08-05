@@ -742,7 +742,10 @@
 
   function formatDate(value) {
     const [year, month, day] = String(value || "").split("-").map(Number);
-    return year && month && day ? `${year}年${month}月${day}日` : value;
+    if (!year || !month || !day) return value;
+    const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
+    const weekday = weekdays[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+    return `${year}年${month}月${day}日（${weekday}）`;
   }
 
   function formatMonth(value) {
