@@ -128,14 +128,12 @@
     if (!summary) return;
     const documentType = el["document-filter"].value;
     const visibleEntries = summary.entries.filter((entry) => entry.documentType === documentType);
-    const documentTotal = documentType === "invoice"
-      ? summary.closingBalanceYen
-      : visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
+    const documentTotal = visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
     el["report-month"].textContent = formatMonthJp(summary.month);
     el["document-title"].textContent = documentLabels[documentType];
     el["report-account"].textContent = `${summary.account.displayName} 様`;
     el["print-button"].textContent = `${documentLabels[documentType]}をPDF保存`;
-    el["document-total-label"].textContent = documentType === "invoice" ? "請求金額" : "支払金額";
+    el["document-total-label"].textContent = documentType === "invoice" ? "請求合計" : "支払金額";
     renderYen(el["opening-balance"], summary.openingBalanceYen);
     renderYen(el["closing-balance"], summary.closingBalanceYen);
     renderYen(el["document-total"], documentTotal);
