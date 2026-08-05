@@ -128,7 +128,9 @@
     if (!summary) return;
     const documentType = el["document-filter"].value;
     const visibleEntries = summary.entries.filter((entry) => entry.documentType === documentType);
-    const documentTotal = visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
+    const documentTotal = documentType === "invoice"
+      ? summary.closingBalanceYen
+      : visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
     el["report-month"].textContent = formatMonthJp(summary.month);
     el["document-title"].textContent = documentLabels[documentType];
     el["report-account"].textContent = `${summary.account.displayName} 様`;
