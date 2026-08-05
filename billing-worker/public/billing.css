@@ -85,6 +85,7 @@ dialog::backdrop { background: rgba(24,31,26,.48); backdrop-filter: blur(3px); }
 .form-section-title { margin: 0; padding-bottom: 8px; border-bottom: 1px solid var(--line); color: var(--accent-dark); font-size: 14px; font-weight: 800; }
 .form-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .logs-dialog { width: min(calc(100% - 32px), 760px); }
+.logs-filter { display: grid; grid-template-columns: auto minmax(180px, 260px); align-items: center; justify-content: start; gap: 12px; }
 .logs-wrap { max-height: 55vh; overflow: auto; }
 
 .date-field { display: grid; gap: 8px; }
@@ -110,6 +111,7 @@ dialog::backdrop { background: rgba(24,31,26,.48); backdrop-filter: blur(3px); }
 .date-wheel-option[aria-selected="true"] { color: var(--ink); font-size: 18px; font-weight: 800; }
 
 @media (max-width: 700px) {
+  .logs-filter { grid-template-columns: 1fr; gap: 6px; }
   .app-header { align-items: flex-start; padding-top: 22px; }
   .account-actions { align-items: flex-end; flex-direction: column; gap: 5px; text-align: right; }
   .toolbar { padding-inline: 14px; }

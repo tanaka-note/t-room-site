@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260806-carryover1">
-  <script src="./billing.js?v=20260806-carryover1" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260806-account-filter1">
+  <script src="./billing.js?v=20260806-account-filter1" defer></script>
 </head>
 <body>
   <main>
@@ -145,7 +145,10 @@
     <div class="dialog-form">
       <div class="dialog-heading"><h2>アカウント管理</h2><button class="close-button" type="button" data-close-dialog="logs-dialog" aria-label="閉じる">×</button></div>
       <p class="form-note">アカウントのログイン・操作履歴です。管理者だけが閲覧できます。</p>
-      <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>利用者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
+      <label class="logs-filter">表示対象
+        <select id="logs-account-filter"><option value="">全体</option></select>
+      </label>
+      <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
 </body>

@@ -33,6 +33,7 @@
     el["print-button"].addEventListener("click", () => window.print());
     el["new-entry-button"].addEventListener("click", () => openEntryDialog());
     el["logs-button"].addEventListener("click", openLogs);
+    el["logs-account-filter"].addEventListener("change", loadLogs);
     el["entry-document-type"].addEventListener("change", () => updateCategoryOptions());
     el["entry-category"].addEventListener("change", updateOtherDirectionVisibility);
     el["entry-amount"].addEventListener("input", () => formatYenInput(el["entry-amount"], false));
@@ -102,6 +103,7 @@
   function fillAccountSelects() {
     const options = state.accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.displayName)}</option>`).join("");
     [el["account-select"], el["entry-account"]].forEach((select) => { select.innerHTML = options; });
+    el["logs-account-filter"].innerHTML = `<option value="">全体</option>${options}`;
     if (state.session.role === "owner") {
       el["account-select-label"].hidden = false;
     } else {
@@ -214,18 +216,34 @@
   }
 
   async function openLogs() {
-    el["logs-body"].innerHTML = `<tr><td colspan="3">読み込み中…</td></tr>`;
     el["logs-dialog"].showModal();
+    await loadLogs();
+  }
+
+  async function loadLogs() {
+    el["logs-body"].innerHTML = `<tr><td colspan="4">読み込み中…</td></tr>`;
+    const accountId = el["logs-account-filter"].value;
     try {
-      const result = await api("/audit-logs?limit=100");
+      const query = new URLSearchParams({ limit: "100" });
+      if (accountId) query.set("accountId", accountId);
+      const result = await api(`/audit-logs?${query}`);
       el["logs-body"].innerHTML = result.logs.map((log) => `<tr>
         <td>${escapeHtml(formatTimestampJp(log.occurredAt))}</td>
         <td>${escapeHtml(eventLabel(log.eventType))}</td>
         <td>${escapeHtml(log.actorName || log.attemptedLoginId || "不明")}</td>
-      </tr>`).join("") || `<tr><td colspan="3">履歴はありません。</td></tr>`;
+        <td>${escapeHtml(auditTargetLabel(log))}</td>
+      </tr>`).join("") || `<tr><td colspan="4">履歴はありません。</td></tr>`;
     } catch (error) {
-      el["logs-body"].innerHTML = `<tr><td colspan="3">${escapeHtml(error.message)}</td></tr>`;
+      el["logs-body"].innerHTML = `<tr><td colspan="4">${escapeHtml(error.message)}</td></tr>`;
     }
+  }
+
+  function auditTargetLabel(log) {
+    if (log.targetName) return log.targetName;
+    if (log.eventType === "logout" || log.eventType.startsWith("login_")) {
+      return log.actorName || log.attemptedLoginId || "不明";
+    }
+    return "—";
   }
 
   function togglePassword() {

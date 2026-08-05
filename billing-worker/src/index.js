@@ -295,6 +295,11 @@ async function parseEntryInput(request, env) {
 
 async function listAuditLogs(url, env) {
   const limit = clampNumber(url.searchParams.get("limit"), 1, 200, 100);
+  const accountId = normalizeAccountId(url.searchParams.get("accountId"));
+  if (accountId) await assertTargetAccountExists(accountId, env);
+  const filterSql = accountId
+    ? "WHERE l.target_account_id = ? OR (l.target_account_id IS NULL AND l.actor_account_id = ?)"
+    : "";
   const result = await env.DB.prepare(`
     SELECT l.id, l.event_type, l.actor_account_id, l.target_account_id, l.entry_id,
       l.attempted_login_id, l.details_json, l.occurred_at,
@@ -302,8 +307,9 @@ async function listAuditLogs(url, env) {
     FROM billing_audit_logs l
     LEFT JOIN billing_accounts actor ON actor.id = l.actor_account_id
     LEFT JOIN billing_accounts target ON target.id = l.target_account_id
+    ${filterSql}
     ORDER BY l.occurred_at DESC, l.id DESC LIMIT ?
-  `).bind(limit).all();
+  `).bind(...(accountId ? [accountId, accountId] : []), limit).all();
   return json({ logs: (result.results || []).map((row) => ({
     id: row.id,
     eventType: row.event_type,
