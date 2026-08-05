@@ -1,0 +1,13 @@
+{
+  "name": "t-room-billing-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "node --check src/index.js && node --check src/finance.js && node --check src/login-limit.js && node --check public/billing.js",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.34.0"
+  }
+}

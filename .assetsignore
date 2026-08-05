@@ -1,4 +1,9 @@
 node_modules/
+billing-worker/
+diary-worker/
+.git/
+.agents/
+.codex/
 package.json
 pnpm-lock.yaml
 wrangler.jsonc

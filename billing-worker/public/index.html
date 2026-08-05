@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <title>請求書管理システム</title>
+  <link rel="stylesheet" href="./billing.css?v=20260805-monthly1">
+  <script src="./billing.js?v=20260805-monthly1" defer></script>
+</head>
+<body>
+  <main>
+    <section id="login-view" class="login-view" aria-labelledby="login-title">
+      <div class="login-card">
+        <p class="eyebrow">T-ROOM PRIVATE</p>
+        <h1 id="login-title">請求書管理システム</h1>
+        <p class="login-copy">IDとパスワードを入力してください。</p>
+        <form id="login-form" class="form-stack">
+          <label>ID<input id="login-id" name="loginId" type="text" autocomplete="username" required></label>
+          <label>パスワード
+            <span class="password-field">
+              <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+              <button id="password-toggle" class="icon-button" type="button" aria-label="パスワードを表示" aria-pressed="false">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Zm10 3.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/></svg>
+              </button>
+            </span>
+          </label>
+          <p id="login-error" class="error-message" role="alert"></p>
+          <button class="button primary full" type="submit">ログイン</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="app-view" class="app-view" hidden>
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">BILLING LEDGER</p>
+          <h1>請求書管理システム</h1>
+        </div>
+        <div class="account-actions">
+          <span id="account-label"></span>
+          <button id="logout-button" class="text-button" type="button">ログアウト</button>
+        </div>
+      </header>
+
+      <div class="toolbar no-print">
+        <label id="account-select-label" hidden>発行先
+          <select id="account-select"></select>
+        </label>
+        <label>表示月<input id="month-input" type="month"></label>
+        <label>書類種別
+          <select id="document-filter">
+            <option value="invoice">請求書</option>
+            <option value="payment_notice">支払通知書</option>
+          </select>
+        </label>
+        <button id="print-button" class="button secondary" type="button">この月をPDF保存</button>
+        <button id="new-entry-button" class="button primary owner-only" type="button" hidden>明細を追加</button>
+        <button id="logs-button" class="button ghost owner-only" type="button" hidden>アカウント管理</button>
+      </div>
+
+      <section class="report" aria-live="polite">
+        <div class="report-heading">
+          <div>
+            <p id="report-month" class="report-month"></p>
+            <h2 id="document-title">請求書</h2>
+            <p id="report-account" class="report-recipient"></p>
+          </div>
+          <div class="issuer-block">
+            <p>発行人：田中宏知</p>
+            <p class="print-date">出力日：<span id="print-date"></span></p>
+          </div>
+        </div>
+
+        <div id="balance-grid" class="balance-grid">
+          <article id="opening-card"><span id="opening-label">前月分預かり金</span><strong id="opening-balance">—</strong></article>
+          <article><span>月末残高</span><strong id="closing-balance">—</strong></article>
+          <article><span>現在残高</span><strong id="current-balance">—</strong></article>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>日付</th><th>区分</th><th>内容</th><th>備考</th><th class="amount">金額</th><th class="owner-only no-print"></th></tr></thead>
+            <tbody id="entries-body"></tbody>
+          </table>
+          <p id="empty-message" class="empty-message">この月の明細はありません。</p>
+        </div>
+        <div class="document-total-row"><span id="document-total-label">請求金額</span><strong id="document-total">—</strong></div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="entry-dialog">
+    <form id="entry-form" class="dialog-form">
+      <div class="dialog-heading"><h2 id="entry-dialog-title">明細を追加</h2><button class="close-button" type="button" data-close-dialog="entry-dialog" aria-label="閉じる">×</button></div>
+      <input id="entry-id" type="hidden">
+      <p class="form-section-title">発行先</p>
+      <label>名前<select id="entry-account" required></select></label>
+      <label>書類種別<select id="entry-document-type" required><option value="invoice">請求書</option><option value="payment_notice">支払通知書</option></select></label>
+      <div class="date-field">
+        <div class="date-field-head">
+          <label for="entry-date">日付</label>
+          <button id="today-button" class="today-button" type="button">本日</button>
+        </div>
+        <input id="entry-date" type="date" required>
+      </div>
+      <label>区分<select id="entry-category" required></select></label>
+      <label>内容<input id="entry-description" type="text" maxlength="100" required></label>
+      <label id="other-direction-label" hidden>増減<select id="other-direction"><option value="plus">プラス</option><option value="minus">マイナス</option></select></label>
+      <label>金額（1円単位）<input id="entry-amount" type="text" inputmode="numeric" maxlength="16" autocomplete="off" required></label>
+      <label>備考<textarea id="entry-note" rows="3" maxlength="500"></textarea></label>
+      <p id="entry-error" class="error-message" role="alert"></p>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog="entry-dialog">キャンセル</button><button class="button primary" type="submit">保存</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="date-wheel-dialog" class="date-wheel-dialog" aria-labelledby="date-wheel-title">
+    <section class="date-wheel-sheet">
+      <header class="date-wheel-head">
+        <button id="date-wheel-cancel" class="text-button" type="button">キャンセル</button>
+        <div>
+          <p id="date-wheel-title">日付を選択</p>
+          <strong id="date-wheel-value"></strong>
+        </div>
+        <button id="date-wheel-done" class="text-button" type="button">完了</button>
+      </header>
+      <div class="date-wheel-window">
+        <div class="date-wheel-highlight" aria-hidden="true"></div>
+        <div class="date-wheel-group">
+          <span>年</span>
+          <div id="date-wheel-year" class="date-wheel-column" role="listbox" aria-label="年"></div>
+        </div>
+        <div class="date-wheel-group">
+          <span>月</span>
+          <div id="date-wheel-month" class="date-wheel-column" role="listbox" aria-label="月"></div>
+        </div>
+        <div class="date-wheel-group">
+          <span>日</span>
+          <div id="date-wheel-day" class="date-wheel-column" role="listbox" aria-label="日"></div>
+        </div>
+      </div>
+    </section>
+  </dialog>
+
+  <dialog id="logs-dialog" class="logs-dialog">
+    <div class="dialog-form">
+      <div class="dialog-heading"><h2>アカウント管理</h2><button class="close-button" type="button" data-close-dialog="logs-dialog" aria-label="閉じる">×</button></div>
+      <p class="form-note">アカウントのログイン・操作履歴です。管理者だけが閲覧できます。</p>
+      <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>利用者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
+    </div>
+  </dialog>
+</body>
+</html>
