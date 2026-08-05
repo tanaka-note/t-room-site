@@ -194,17 +194,11 @@ async function getSummary(url, env, session) {
     FROM billing_entries
     WHERE account_id = ? AND deleted_at IS NULL AND entry_date < ?
   `).bind(accountId, bounds.next).first();
-  const all = await env.DB.prepare(`
-    SELECT COALESCE(SUM(CASE document_type WHEN 'invoice' THEN amount_yen ELSE -amount_yen END), 0) AS total
-    FROM billing_entries
-    WHERE account_id = ? AND deleted_at IS NULL
-  `).bind(accountId).first();
   return json({
     account: { id: account.id, displayName: account.display_name },
     month,
     openingBalanceYen: Number(before?.total || 0),
     closingBalanceYen: Number(throughMonth?.total || 0),
-    currentBalanceYen: Number(all?.total || 0),
     entries
   });
 }

@@ -132,18 +132,8 @@
     el["report-account"].textContent = `${summary.account.displayName} 様`;
     el["print-button"].textContent = `${documentLabels[documentType]}をPDF保存`;
     el["document-total-label"].textContent = documentType === "invoice" ? "請求金額" : "支払金額";
-    const hasPreviousBalance = summary.openingBalanceYen !== 0;
-    el["opening-card"].hidden = !hasPreviousBalance;
-    el["balance-grid"].classList.toggle("without-opening", !hasPreviousBalance);
-    if (hasPreviousBalance) {
-      el["opening-label"].textContent = summary.openingBalanceYen > 0 ? "前月請求分" : "前月分預かり金";
-      renderYen(el["opening-balance"], summary.openingBalanceYen);
-    } else {
-      el["opening-balance"].textContent = "—";
-      el["opening-balance"].classList.remove("negative");
-    }
+    renderYen(el["opening-balance"], summary.openingBalanceYen);
     renderYen(el["closing-balance"], summary.closingBalanceYen);
-    renderYen(el["current-balance"], summary.currentBalanceYen);
     renderYen(el["document-total"], documentTotal);
     el["empty-message"].hidden = visibleEntries.length > 0;
     el["entries-body"].innerHTML = visibleEntries.map((entry) => {
