@@ -151,8 +151,6 @@
     renderYen(el["closing-balance"], summary.closingBalanceYen);
     el["incoming-total"].textContent = formatYen(summary.settlementTotals.incomingYen);
     el["outgoing-total"].textContent = formatYen(summary.settlementTotals.outgoingYen);
-    el["offset-total"].textContent = formatYen(summary.settlementTotals.offsetYen);
-    el["offset-total-row"].hidden = summary.settlementTotals.offsetYen === 0;
     el["settlements-card"].setAttribute(
       "aria-label",
       `当月入出金。入金${formatYen(summary.settlementTotals.incomingYen)}、着金${formatYen(summary.settlementTotals.outgoingYen)}。履歴を見る`

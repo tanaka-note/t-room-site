@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260806-settlements1">
-  <script src="./billing.js?v=20260806-settlements1" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260806-settlements2">
+  <script src="./billing.js?v=20260806-settlements2" defer></script>
 </head>
 <body>
   <main>
@@ -78,7 +78,6 @@
             <span>当月入出金</span>
             <span class="settlement-card-row"><small>入金</small><strong id="incoming-total">—</strong></span>
             <span class="settlement-card-row"><small>着金</small><strong id="outgoing-total">—</strong></span>
-            <span id="offset-total-row" class="settlement-card-row settlement-card-offset"><small>相殺</small><strong id="offset-total">—</strong></span>
             <span class="settlement-card-link">履歴を見る</span>
           </button>
           <article><span>月末残高</span><strong id="closing-balance">—</strong></article>
@@ -125,7 +124,6 @@
         <select id="settlement-method">
           <option value="bank_transfer">振込</option>
           <option value="cash">現金</option>
-          <option value="offset">相殺</option>
           <option value="other">その他</option>
         </select>
       </label>
