@@ -1,7 +1,7 @@
 "use strict";
 
 const reportData = {
-  period: "2026-08-05",
+  period: "2026-08-06",
   principal: 6000000,
   realizedProfit: {
     name: "投資信託売却益",
@@ -27,84 +27,85 @@ const reportData = {
     { period: "2026-07-31", principal: 6000000, marketValue: 6221192 },
     { period: "2026-08-03", principal: 6000000, marketValue: 6167574 },
     { period: "2026-08-04", principal: 6000000, marketValue: 6237083 },
-    { period: "2026-08-05", principal: 6000000, marketValue: 6345218 }
+    { period: "2026-08-05", principal: 6000000, marketValue: 6345218 },
+    { period: "2026-08-06", principal: 6000000, marketValue: 6343667 }
   ],
   assets: [
     {
       name: "iFナス100H無",
       category: "ETF",
       principal: 2002329,
-      marketValue: 2107224,
+      marketValue: 2082360,
       color: "#ff8a61"
     },
     {
       name: "iSNIFTY50",
       category: "ETF",
       principal: 866320,
-      marketValue: 880600,
+      marketValue: 874412,
       color: "#f4ca64"
     },
     {
       name: "三菱電",
       category: "日本株",
       principal: 553200,
-      marketValue: 584800,
+      marketValue: 587000,
       color: "#52e6aa"
     },
     {
       name: "三菱HCキャピタル",
       category: "日本株",
       principal: 430200,
-      marketValue: 424950,
+      marketValue: 428250,
       color: "#68a7ff"
     },
     {
       name: "伊藤忠",
       category: "日本株",
       principal: 198100,
-      marketValue: 197850,
+      marketValue: 203400,
       color: "#ffb454"
     },
     {
       name: "アコム",
       category: "日本株",
       principal: 142500,
-      marketValue: 142350,
+      marketValue: 144180,
       color: "#50d3c2"
     },
     {
       name: "イオン",
       category: "日本株",
       principal: 135100,
-      marketValue: 132500,
+      marketValue: 134800,
       color: "#f06fa9"
     },
     {
       name: "ソフトバンク",
       category: "日本株",
       principal: 111500,
-      marketValue: 115400,
+      marketValue: 114300,
       color: "#96a7ff"
     },
     {
       name: "NTT",
       category: "日本株",
       principal: 75500,
-      marketValue: 75500,
+      marketValue: 77250,
       color: "#c6dc70"
     },
     {
       name: "ムニノバHD",
       category: "日本株",
       principal: 43900,
-      marketValue: 44900,
+      marketValue: 45800,
       color: "#7e8da1"
     },
     {
       name: "ビットコイン",
       category: "暗号資産",
       principal: 2500000,
-      marketValue: 1639144,
+      marketValue: 1651915,
       color: "#a98cff"
     }
   ]
