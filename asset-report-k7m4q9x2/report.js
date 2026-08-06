@@ -263,8 +263,8 @@ function drawHistoryChart() {
   const canvas = document.querySelector("#history-chart");
   const { context, width, height } = setupCanvas(canvas);
   const padding = { top: 24, right: 24, bottom: 44, left: 76 };
-  const minValue = 5800000;
-  const maxValue = 6300000;
+  const minValue = 5900000;
+  const maxValue = 6400000;
   const tickInterval = 100000;
   const tickCount = (maxValue - minValue) / tickInterval;
   const chartWidth = width - padding.left - padding.right;
