@@ -8,6 +8,10 @@
     invoice: ["purchase", "discount", "income", "offset", "other"],
     payment_notice: ["purchase", "offset", "income", "other"]
   };
+  const settlementDirectionLabels = { incoming: "入金", outgoing: "着金" };
+  const settlementMethodLabels = {
+    bank_transfer: "振込", cash: "現金", offset: "相殺", other: "その他", unspecified: "未設定"
+  };
 
   document.addEventListener("DOMContentLoaded", initialize);
 
@@ -35,7 +39,7 @@
     el["logs-button"].addEventListener("click", openLogs);
     el["logs-account-filter"].addEventListener("change", loadLogs);
     el["entry-document-type"].addEventListener("change", () => updateCategoryOptions());
-    el["entry-category"].addEventListener("change", updateOtherDirectionVisibility);
+    el["entry-category"].addEventListener("change", updateEntryMode);
     el["entry-amount"].addEventListener("input", (event) => {
       if (!event.isComposing) formatYenInput(el["entry-amount"], false);
     });
@@ -57,6 +61,8 @@
       document.getElementById(button.dataset.closeDialog).close();
     }));
     el["entries-body"].addEventListener("click", handleEntryAction);
+    el["settlements-card"].addEventListener("click", openSettlements);
+    el["settlements-body"].addEventListener("click", handleSettlementAction);
   }
 
   async function login(event) {
@@ -139,17 +145,18 @@
     el["report-account"].textContent = `${summary.account.displayName} 様`;
     el["print-button"].textContent = `${documentLabels[documentType]}をPDF保存`;
     el["document-total-label"].textContent = documentType === "invoice" ? "請求合計" : "支払合計";
-    el["document-net-label"].textContent = documentType === "invoice" ? "差引請求額" : "差引支払額";
-    const incomeEntries = visibleEntries.filter(isIncomeEntry);
-    const subtotal = visibleEntries
-      .filter((entry) => !isIncomeEntry(entry))
-      .reduce((total, entry) => total + entry.amountYen, 0);
-    const incomeTotal = incomeEntries.reduce((total, entry) => total + Math.abs(entry.amountYen), 0);
-    renderYen(el["document-total"], subtotal);
-    renderYen(el["document-income-total"], -incomeTotal);
-    renderYen(el["document-net-total"], subtotal - incomeTotal);
+    const documentTotal = visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
+    renderYen(el["document-total"], documentTotal);
     renderYen(el["opening-balance"], summary.openingBalanceYen);
     renderYen(el["closing-balance"], summary.closingBalanceYen);
+    el["incoming-total"].textContent = formatYen(summary.settlementTotals.incomingYen);
+    el["outgoing-total"].textContent = formatYen(summary.settlementTotals.outgoingYen);
+    el["offset-total"].textContent = formatYen(summary.settlementTotals.offsetYen);
+    el["offset-total-row"].hidden = summary.settlementTotals.offsetYen === 0;
+    el["settlements-card"].setAttribute(
+      "aria-label",
+      `当月入出金。入金${formatYen(summary.settlementTotals.incomingYen)}、着金${formatYen(summary.settlementTotals.outgoingYen)}。履歴を見る`
+    );
     el["empty-message"].hidden = visibleEntries.length > 0;
     el["entries-body"].innerHTML = visibleEntries.map((entry) => {
       const signClass = entry.amountYen >= 0 ? "positive" : "negative";
@@ -167,34 +174,62 @@
     }).join("");
   }
 
-  function isIncomeEntry(entry) {
-    return entry.category === "income" || (entry.category === "other" && entry.amountYen < 0);
-  }
-
-  function openEntryDialog(entry = null) {
+  function openEntryDialog(entry = null, settlement = null) {
     el["entry-form"].reset();
     el["entry-error"].textContent = "";
-    el["entry-id"].value = entry?.id || "";
-    el["entry-dialog-title"].textContent = entry ? "明細を編集" : "明細を追加";
+    el["entry-id"].value = entry?.id || settlement?.id || "";
+    el["entry-record-type"].value = settlement ? "settlement" : (entry ? "entry" : "");
+    el["entry-dialog-title"].textContent = entry || settlement ? "明細を編集" : "明細を追加";
     el["entry-account"].value = state.summary.account.id;
     el["entry-document-type"].value = entry?.documentType || el["document-filter"].value;
-    el["entry-date"].value = entry?.entryDate || japanToday();
-    updateCategoryOptions(entry?.category || "purchase");
-    el["entry-amount"].value = entry ? formatInteger(Math.abs(entry.amountYen)) : "";
+    el["entry-date"].value = entry?.entryDate || settlement?.settlementDate || japanToday();
+    el["entry-category"].disabled = false;
+    updateCategoryOptions(settlement ? "income" : (entry?.category || "purchase"));
+    if (settlement) {
+      el["entry-category"].replaceChildren(new Option("入金", "income"));
+      el["entry-category"].disabled = true;
+    }
+    el["entry-amount"].value = entry || settlement ? formatInteger(Math.abs((entry || settlement).amountYen)) : "";
     el["entry-description"].value = entry?.description || "";
-    el["entry-note"].value = entry?.note || "";
+    el["entry-note"].value = entry?.note || settlement?.note || "";
     el["other-direction"].value = entry?.category === "other" && entry.amountYen < 0 ? "minus" : "plus";
-    updateOtherDirectionVisibility();
+    el["settlement-direction"].value = settlement?.direction || "incoming";
+    el["settlement-method"].value = settlement?.method === "unspecified" ? "other" : (settlement?.method || "bank_transfer");
+    updateEntryMode();
     el["entry-dialog"].showModal();
   }
 
   async function saveEntry(event) {
     event.preventDefault();
     const id = el["entry-id"].value;
+    const isSettlement = el["entry-category"].value === "income" || el["entry-record-type"].value === "settlement";
+    const accountId = el["entry-account"].value;
+    const entryDate = el["entry-date"].value;
+    if (isSettlement) {
+      const payload = {
+        accountId,
+        settlementDate: entryDate,
+        direction: el["settlement-direction"].value,
+        method: el["settlement-method"].value,
+        amountYen: parseYenInput(el["entry-amount"].value),
+        note: el["entry-note"].value
+      };
+      try {
+        await api(id ? `/settlements/${id}` : "/settlements", { method: id ? "PUT" : "POST", body: payload });
+        el["entry-dialog"].close();
+        el["account-select"].value = payload.accountId;
+        el["month-input"].value = payload.settlementDate.slice(0, 7);
+        await loadSummary();
+        if (el["settlements-dialog"].open) renderSettlements();
+      } catch (error) {
+        el["entry-error"].textContent = error.message;
+      }
+      return;
+    }
     const payload = {
-      accountId: el["entry-account"].value,
+      accountId,
       documentType: el["entry-document-type"].value,
-      entryDate: el["entry-date"].value,
+      entryDate,
       category: el["entry-category"].value,
       otherDirection: el["other-direction"].value,
       amountYen: parseYenInput(el["entry-amount"].value),
@@ -227,6 +262,49 @@
     try {
       await api(`/entries/${entry.id}`, { method: "DELETE", body: {} });
       await loadSummary();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  function openSettlements() {
+    renderSettlements();
+    el["settlements-dialog"].showModal();
+  }
+
+  function renderSettlements() {
+    const summary = state.summary;
+    if (!summary) return;
+    el["settlements-dialog-context"].textContent = `${summary.account.displayName}・${formatMonthJp(summary.month)}`;
+    el["settlements-body"].innerHTML = summary.settlements.map((settlement) => `<tr>
+      <td data-label="日付">${escapeHtml(formatDateShort(settlement.settlementDate))}</td>
+      <td data-label="種別"><strong>${escapeHtml(settlementDirectionLabels[settlement.direction] || "入出金")}</strong></td>
+      <td data-label="支払い方法">${escapeHtml(settlementMethodLabels[settlement.method] || "その他")}</td>
+      <td data-label="金額" class="amount">${formatYen(settlement.amountYen)}</td>
+      <td data-label="備考">${settlement.note ? escapeHtml(settlement.note) : "—"}</td>
+      <td class="row-actions owner-only" ${state.session.role !== "owner" ? "hidden" : ""}>
+        <button type="button" data-settlement-action="edit" data-id="${settlement.id}">編集</button>
+        <button type="button" data-settlement-action="delete" data-id="${settlement.id}">削除</button>
+      </td>
+    </tr>`).join("") || `<tr><td colspan="6">この月の入出金履歴はありません。</td></tr>`;
+  }
+
+  function handleSettlementAction(event) {
+    const button = event.target.closest("button[data-settlement-action]");
+    if (!button) return;
+    const settlement = state.summary.settlements.find((item) => item.id === Number(button.dataset.id));
+    if (!settlement) return;
+    if (button.dataset.settlementAction === "edit") openEntryDialog(null, settlement);
+    if (button.dataset.settlementAction === "delete") deleteSettlement(settlement);
+  }
+
+  async function deleteSettlement(settlement) {
+    const label = settlementDirectionLabels[settlement.direction] || "入出金";
+    if (!confirm(`${formatDateShort(settlement.settlementDate)}の${label}を削除しますか？`)) return;
+    try {
+      await api(`/settlements/${settlement.id}`, { method: "DELETE", body: {} });
+      await loadSummary();
+      renderSettlements();
     } catch (error) {
       alert(error.message);
     }
@@ -272,7 +350,10 @@
 
   function updateCategoryOptions(selected = "") {
     const documentType = el["entry-document-type"].value;
-    const options = categoryOptions[documentType] || categoryOptions.invoice;
+    const baseOptions = categoryOptions[documentType] || categoryOptions.invoice;
+    const options = el["entry-record-type"].value === "entry"
+      ? baseOptions.filter((value) => value !== "income")
+      : baseOptions;
     el["entry-category"].replaceChildren(...options.map((value) => {
       const option = document.createElement("option");
       option.value = value;
@@ -280,11 +361,20 @@
       return option;
     }));
     el["entry-category"].value = options.includes(selected) ? selected : options[0];
-    updateOtherDirectionVisibility();
+    updateEntryMode();
   }
 
-  function updateOtherDirectionVisibility() {
-    el["other-direction-label"].hidden = el["entry-category"].value !== "other";
+  function updateEntryMode() {
+    const isSettlement = el["entry-category"].value === "income" || el["entry-record-type"].value === "settlement";
+    el["entry-document-type-label"].hidden = isSettlement;
+    el["entry-document-type"].required = !isSettlement;
+    el["entry-description-label"].hidden = isSettlement;
+    el["entry-description"].required = !isSettlement;
+    el["settlement-direction-label"].hidden = !isSettlement;
+    el["settlement-direction"].required = isSettlement;
+    el["settlement-method-label"].hidden = !isSettlement;
+    el["settlement-method"].required = isSettlement;
+    el["other-direction-label"].hidden = isSettlement || el["entry-category"].value !== "other";
     const plusOption = el["other-direction"].querySelector('option[value="plus"]');
     plusOption.textContent = el["entry-document-type"].value === "invoice" ? "請求" : "支払";
   }
@@ -517,7 +607,8 @@
     return {
       login_success: "ログイン成功", login_failure: "ログイン失敗", login_locked: "ログインを一時停止",
       login_blocked: "停止中のログイン試行", logout: "ログアウト",
-      entry_created: "明細を追加", entry_updated: "明細を編集", entry_deleted: "明細を削除"
+      entry_created: "明細を追加", entry_updated: "明細を編集", entry_deleted: "明細を削除",
+      settlement_created: "入出金を追加", settlement_updated: "入出金を編集", settlement_deleted: "入出金を削除"
     }[type] || type;
   }
 

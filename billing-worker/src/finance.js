@@ -26,6 +26,23 @@ export function balanceEffect(documentType, amountYen) {
   throw new Error("Invalid document type");
 }
 
+export function settlementEffect(direction, method, amountYen) {
+  const amount = Number(amountYen);
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error("Invalid amount");
+  if (!["incoming", "outgoing"].includes(direction)) throw new Error("Invalid direction");
+  if (method === "offset") return 0;
+  return direction === "incoming" ? -amount : amount;
+}
+
+export function summarizeSettlements(settlements) {
+  return settlements.reduce((totals, settlement) => {
+    if (settlement.method === "offset") totals.offsetYen += settlement.amountYen;
+    else if (settlement.direction === "incoming") totals.incomingYen += settlement.amountYen;
+    else totals.outgoingYen += settlement.amountYen;
+    return totals;
+  }, { incomingYen: 0, outgoingYen: 0, offsetYen: 0 });
+}
+
 export function formatMonthJp(month) {
   const [year, monthNumber] = month.split("-").map(Number);
   return `${year}年${monthNumber}月`;

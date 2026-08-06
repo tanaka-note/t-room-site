@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260806-actor-payment-summary1">
-  <script src="./billing.js?v=20260806-actor-payment-summary1" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260806-settlements1">
+  <script src="./billing.js?v=20260806-settlements1" defer></script>
 </head>
 <body>
   <main>
@@ -74,6 +74,13 @@
 
         <div id="balance-grid" class="balance-grid">
           <article><span>前月繰越</span><strong id="opening-balance">—</strong></article>
+          <button id="settlements-card" class="balance-card settlements-card no-print" type="button" aria-haspopup="dialog">
+            <span>当月入出金</span>
+            <span class="settlement-card-row"><small>入金</small><strong id="incoming-total">—</strong></span>
+            <span class="settlement-card-row"><small>着金</small><strong id="outgoing-total">—</strong></span>
+            <span id="offset-total-row" class="settlement-card-row settlement-card-offset"><small>相殺</small><strong id="offset-total">—</strong></span>
+            <span class="settlement-card-link">履歴を見る</span>
+          </button>
           <article><span>月末残高</span><strong id="closing-balance">—</strong></article>
         </div>
 
@@ -85,9 +92,7 @@
           <p id="empty-message" class="empty-message">この月の明細はありません。</p>
         </div>
         <div id="document-summary" class="document-summary">
-          <div class="document-summary-row"><span id="document-total-label">請求合計</span><strong id="document-total">—</strong></div>
-          <div class="document-summary-row"><span>入金</span><strong id="document-income-total">—</strong></div>
-          <div class="document-summary-row document-summary-net"><span id="document-net-label">差引請求額</span><strong id="document-net-total">—</strong></div>
+          <div class="document-summary-row document-summary-net"><span id="document-total-label">請求合計</span><strong id="document-total">—</strong></div>
         </div>
       </section>
     </section>
@@ -97,9 +102,10 @@
     <form id="entry-form" class="dialog-form">
       <div class="dialog-heading"><h2 id="entry-dialog-title">明細を追加</h2><button class="close-button" type="button" data-close-dialog="entry-dialog" aria-label="閉じる">×</button></div>
       <input id="entry-id" type="hidden">
+      <input id="entry-record-type" type="hidden">
       <p class="form-section-title">発行先</p>
       <label>名前<select id="entry-account" required></select></label>
-      <label>書類種別<select id="entry-document-type" required><option value="invoice">請求書</option><option value="payment_notice">支払通知書</option></select></label>
+      <label id="entry-document-type-label">書類種別<select id="entry-document-type" required><option value="invoice">請求書</option><option value="payment_notice">支払通知書</option></select></label>
       <div class="date-field">
         <div class="date-field-head">
           <label for="entry-date">日付</label>
@@ -108,13 +114,35 @@
         <input id="entry-date" type="date" required>
       </div>
       <label>区分<select id="entry-category" required></select></label>
-      <label>内容<input id="entry-description" type="text" maxlength="100" required></label>
-      <label id="other-direction-label" hidden>その他の扱い<select id="other-direction"><option value="plus">請求</option><option value="minus">入金</option></select></label>
+      <label id="entry-description-label">内容<input id="entry-description" type="text" maxlength="100" required></label>
+      <label id="settlement-direction-label" hidden>入金者
+        <select id="settlement-direction">
+          <option value="incoming">相手（発行先の本人）</option>
+          <option value="outgoing">自分（田中宏知）</option>
+        </select>
+      </label>
+      <label id="settlement-method-label" hidden>支払い方法
+        <select id="settlement-method">
+          <option value="bank_transfer">振込</option>
+          <option value="cash">現金</option>
+          <option value="offset">相殺</option>
+          <option value="other">その他</option>
+        </select>
+      </label>
+      <label id="other-direction-label" hidden>その他の扱い<select id="other-direction"><option value="plus">請求</option><option value="minus">減額</option></select></label>
       <label>金額（1円単位）<input id="entry-amount" type="text" inputmode="numeric" maxlength="16" autocomplete="off" required></label>
       <label>備考<textarea id="entry-note" rows="3" maxlength="500"></textarea></label>
       <p id="entry-error" class="error-message" role="alert"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog="entry-dialog">キャンセル</button><button class="button primary" type="submit">保存</button></div>
     </form>
+  </dialog>
+
+  <dialog id="settlements-dialog" class="settlements-dialog">
+    <div class="dialog-form">
+      <div class="dialog-heading"><h2>入出金履歴</h2><button class="close-button" type="button" data-close-dialog="settlements-dialog" aria-label="閉じる">×</button></div>
+      <p id="settlements-dialog-context" class="form-note"></p>
+      <div class="logs-wrap"><table><thead><tr><th>日付</th><th>種別</th><th>支払い方法</th><th class="amount">金額</th><th>備考</th><th class="owner-only"></th></tr></thead><tbody id="settlements-body"></tbody></table></div>
+    </div>
   </dialog>
 
   <dialog id="date-wheel-dialog" class="date-wheel-dialog" aria-labelledby="date-wheel-title">

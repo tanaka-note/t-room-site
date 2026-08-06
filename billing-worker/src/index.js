@@ -1,4 +1,4 @@
-import { monthBounds, signedDocumentAmount } from "./finance.js";
+import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
 import { LOGIN_LOCK_MINUTES, MAX_FAILED_LOGIN_ATTEMPTS, isLoginLocked } from "./login-limit.js";
 
 const BASE_PATH = "/billing";
@@ -138,6 +138,10 @@ async function handleApi(request, env, url, path) {
     requireOwner(session);
     return createEntry(request, env, session);
   }
+  if (path === "/api/settlements" && request.method === "POST") {
+    requireOwner(session);
+    return createSettlement(request, env, session);
+  }
   if (path === "/api/audit-logs" && request.method === "GET") {
     requireOwner(session);
     return listAuditLogs(url, env);
@@ -151,6 +155,16 @@ async function handleApi(request, env, url, path) {
   if (entryMatch && request.method === "DELETE") {
     requireOwner(session);
     return deleteEntry(Number(entryMatch[1]), env, session);
+  }
+
+  const settlementMatch = path.match(/^\/api\/settlements\/(\d+)$/);
+  if (settlementMatch && request.method === "PUT") {
+    requireOwner(session);
+    return updateSettlement(Number(settlementMatch[1]), request, env, session);
+  }
+  if (settlementMatch && request.method === "DELETE") {
+    requireOwner(session);
+    return deleteSettlement(Number(settlementMatch[1]), env, session);
   }
 
   throw new HttpError(404, "Not found");
@@ -179,28 +193,57 @@ async function getSummary(url, env, session) {
   const entriesResult = await env.DB.prepare(`
     SELECT id, document_type, entry_date, category, amount_yen, description, note, created_at, updated_at
     FROM billing_entries
-    WHERE account_id = ? AND deleted_at IS NULL AND entry_date >= ? AND entry_date < ?
+    WHERE account_id = ? AND deleted_at IS NULL AND category != 'income'
+      AND entry_date >= ? AND entry_date < ?
     ORDER BY entry_date, id
   `).bind(accountId, bounds.start, bounds.next).all();
   const entries = (entriesResult.results || []).map(serializeEntry);
 
-  const before = await env.DB.prepare(`
+  const settlementsResult = await env.DB.prepare(`
+    SELECT id, settlement_date, direction, method, amount_yen, note, created_at, updated_at
+    FROM billing_settlements
+    WHERE account_id = ? AND deleted_at IS NULL AND settlement_date >= ? AND settlement_date < ?
+    ORDER BY settlement_date, id
+  `).bind(accountId, bounds.start, bounds.next).all();
+  const settlements = (settlementsResult.results || []).map(serializeSettlement);
+
+  const beforeDocuments = await env.DB.prepare(`
     SELECT COALESCE(SUM(CASE document_type WHEN 'invoice' THEN amount_yen ELSE -amount_yen END), 0) AS total
     FROM billing_entries
-    WHERE account_id = ? AND deleted_at IS NULL AND entry_date < ?
+    WHERE account_id = ? AND deleted_at IS NULL AND category != 'income' AND entry_date < ?
   `).bind(accountId, bounds.start).first();
-  const throughMonth = await env.DB.prepare(`
+  const throughMonthDocuments = await env.DB.prepare(`
     SELECT COALESCE(SUM(CASE document_type WHEN 'invoice' THEN amount_yen ELSE -amount_yen END), 0) AS total
     FROM billing_entries
-    WHERE account_id = ? AND deleted_at IS NULL AND entry_date < ?
+    WHERE account_id = ? AND deleted_at IS NULL AND category != 'income' AND entry_date < ?
   `).bind(accountId, bounds.next).first();
+  const beforeSettlements = await settlementBalanceBefore(env, accountId, bounds.start);
+  const throughMonthSettlements = await settlementBalanceBefore(env, accountId, bounds.next);
+  const settlementTotals = summarizeSettlements(settlements);
   return json({
     account: { id: account.id, displayName: account.display_name },
     month,
-    openingBalanceYen: Number(before?.total || 0),
-    closingBalanceYen: Number(throughMonth?.total || 0),
-    entries
+    openingBalanceYen: Number(beforeDocuments?.total || 0) + beforeSettlements,
+    closingBalanceYen: Number(throughMonthDocuments?.total || 0) + throughMonthSettlements,
+    entries,
+    settlements,
+    settlementTotals
   });
+}
+
+async function settlementBalanceBefore(env, accountId, beforeDate) {
+  const result = await env.DB.prepare(`
+    SELECT COALESCE(SUM(
+      CASE
+        WHEN method = 'offset' THEN 0
+        WHEN direction = 'incoming' THEN -amount_yen
+        ELSE amount_yen
+      END
+    ), 0) AS total
+    FROM billing_settlements
+    WHERE account_id = ? AND deleted_at IS NULL AND settlement_date < ?
+  `).bind(accountId, beforeDate).first();
+  return Number(result?.total || 0);
 }
 
 async function createEntry(request, env, session) {
@@ -271,8 +314,8 @@ async function parseEntryInput(request, env) {
   const documentType = ["invoice", "payment_notice"].includes(body.documentType) ? body.documentType : "";
   const entryDate = normalizeDate(body.entryDate);
   const allowedCategories = documentType === "invoice"
-    ? ["purchase", "discount", "income", "offset", "other"]
-    : ["purchase", "income", "offset", "other"];
+    ? ["purchase", "discount", "offset", "other"]
+    : ["purchase", "offset", "other"];
   const category = allowedCategories.includes(body.category) ? body.category : "";
   const amount = normalizeInteger(body.amountYen, 1, 999999999999);
   const otherDirection = body.otherDirection === "minus" ? "minus" : "plus";
@@ -291,6 +334,84 @@ async function parseEntryInput(request, env) {
     description,
     note
   };
+}
+
+async function createSettlement(request, env, session) {
+  const input = await parseSettlementInput(request, env);
+  const result = await env.DB.prepare(`
+    INSERT INTO billing_settlements
+      (account_id, settlement_date, direction, method, amount_yen, note, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    input.accountId, input.settlementDate, input.direction, input.method,
+    input.amountYen, input.note, session.accountId
+  ).run();
+  const id = Number(result.meta?.last_row_id);
+  await writeAudit(env, {
+    eventType: "settlement_created",
+    actorAccountId: session.accountId,
+    targetAccountId: input.accountId,
+    details: { id, ...input }
+  });
+  return json({ ok: true, id }, 201);
+}
+
+async function updateSettlement(id, request, env, session) {
+  const existing = await env.DB.prepare(`
+    SELECT id, account_id, settlement_date, direction, method, amount_yen, note
+    FROM billing_settlements WHERE id = ? AND deleted_at IS NULL
+  `).bind(id).first();
+  if (!existing) throw new HttpError(404, "入出金履歴が見つかりません。");
+  const input = await parseSettlementInput(request, env);
+  await env.DB.prepare(`
+    UPDATE billing_settlements SET account_id = ?, settlement_date = ?, direction = ?,
+      method = ?, amount_yen = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(
+    input.accountId, input.settlementDate, input.direction, input.method,
+    input.amountYen, input.note, id
+  ).run();
+  await writeAudit(env, {
+    eventType: "settlement_updated",
+    actorAccountId: session.accountId,
+    targetAccountId: input.accountId,
+    details: { id, previous: existing, next: input }
+  });
+  return json({ ok: true });
+}
+
+async function deleteSettlement(id, env, session) {
+  const existing = await env.DB.prepare(`
+    SELECT id, account_id, settlement_date, direction, method, amount_yen, note
+    FROM billing_settlements WHERE id = ? AND deleted_at IS NULL
+  `).bind(id).first();
+  if (!existing) throw new HttpError(404, "入出金履歴が見つかりません。");
+  await env.DB.prepare(`
+    UPDATE billing_settlements SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(id).run();
+  await writeAudit(env, {
+    eventType: "settlement_deleted",
+    actorAccountId: session.accountId,
+    targetAccountId: existing.account_id,
+    details: existing
+  });
+  return json({ ok: true });
+}
+
+async function parseSettlementInput(request, env) {
+  const body = await readJson(request, 16384);
+  const accountId = normalizeAccountId(body.accountId);
+  const settlementDate = normalizeDate(body.settlementDate);
+  const direction = ["incoming", "outgoing"].includes(body.direction) ? body.direction : "";
+  const method = ["bank_transfer", "cash", "offset", "other"].includes(body.method) ? body.method : "";
+  const amountYen = normalizeInteger(body.amountYen, 1, 999999999999);
+  const note = normalizeText(body.note, 500, true);
+  if (!accountId || !settlementDate || !direction || !method || amountYen === null) {
+    throw new HttpError(400, "入出金の入力内容を確認してください。");
+  }
+  await assertTargetAccountExists(accountId, env);
+  return { accountId, settlementDate, direction, method, amountYen, note };
 }
 
 async function listAuditLogs(url, env) {
@@ -440,6 +561,19 @@ function serializeEntry(row) {
     category: row.category,
     amountYen: Number(row.amount_yen),
     description: row.description,
+    note: row.note || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function serializeSettlement(row) {
+  return {
+    id: Number(row.id),
+    settlementDate: row.settlement_date,
+    direction: row.direction,
+    method: row.method,
+    amountYen: Number(row.amount_yen),
     note: row.note || "",
     createdAt: row.created_at,
     updatedAt: row.updated_at
