@@ -36,7 +36,10 @@
     el["logs-account-filter"].addEventListener("change", loadLogs);
     el["entry-document-type"].addEventListener("change", () => updateCategoryOptions());
     el["entry-category"].addEventListener("change", updateOtherDirectionVisibility);
-    el["entry-amount"].addEventListener("input", () => formatYenInput(el["entry-amount"], false));
+    el["entry-amount"].addEventListener("input", (event) => {
+      if (!event.isComposing) formatYenInput(el["entry-amount"], false);
+    });
+    el["entry-amount"].addEventListener("compositionend", () => formatYenInput(el["entry-amount"], false));
     el["today-button"].addEventListener("click", setEntryDateToToday);
     el["entry-date"].addEventListener("pointerdown", handleDatePointerDown);
     el["entry-date"].addEventListener("keydown", handleDateKeydown);
@@ -271,16 +274,23 @@
   }
 
   function formatYenInput(input, allowNegative) {
-    const negative = allowNegative && /^\s*-/.test(input.value);
-    const digits = input.value.replace(/\D/g, "").replace(/^0+(?=\d)/, "").slice(0, 12);
+    const normalized = normalizeNumericText(input.value);
+    const negative = allowNegative && /^\s*-/.test(normalized);
+    const digits = normalized.replace(/\D/g, "").replace(/^0+(?=\d)/, "").slice(0, 12);
     input.value = digits ? `${negative ? "-" : ""}${formatInteger(Number(digits))}` : (negative ? "-" : "");
   }
 
   function parseYenInput(value, allowNegative = false) {
-    const normalized = String(value).replace(/,/g, "").trim();
+    const normalized = normalizeNumericText(value).replace(/,/g, "").trim();
     if (!new RegExp(allowNegative ? "^-?\\d+$" : "^\\d+$").test(normalized)) return Number.NaN;
     const amount = Number(normalized);
     return Number.isSafeInteger(amount) ? amount : Number.NaN;
+  }
+
+  function normalizeNumericText(value) {
+    return String(value)
+      .replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
+      .replace(/，/g, ",");
   }
 
   function formatInteger(value) {
