@@ -296,9 +296,18 @@ async function parseEntryInput(request, env) {
 async function listAuditLogs(url, env) {
   const limit = clampNumber(url.searchParams.get("limit"), 1, 200, 100);
   const accountId = normalizeAccountId(url.searchParams.get("accountId"));
-  if (accountId) await assertTargetAccountExists(accountId, env);
+  if (accountId) {
+    const account = await env.DB.prepare(`
+      SELECT id FROM billing_accounts WHERE id = ? AND is_active = 1
+    `).bind(accountId).first();
+    if (!account) throw new HttpError(404, "アカウントが見つかりません。");
+  }
   const filterSql = accountId
-    ? "WHERE l.target_account_id = ? OR (l.target_account_id IS NULL AND l.actor_account_id = ?)"
+    ? `WHERE l.actor_account_id = ? OR (
+        l.actor_account_id IS NULL
+        AND l.target_account_id = ?
+        AND l.event_type IN ('login_failure', 'login_locked', 'login_blocked')
+      )`
     : "";
   const result = await env.DB.prepare(`
     SELECT l.id, l.event_type, l.actor_account_id, l.target_account_id, l.entry_id,

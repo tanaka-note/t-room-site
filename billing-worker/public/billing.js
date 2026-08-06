@@ -106,7 +106,10 @@
   function fillAccountSelects() {
     const options = state.accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.displayName)}</option>`).join("");
     [el["account-select"], el["entry-account"]].forEach((select) => { select.innerHTML = options; });
-    el["logs-account-filter"].innerHTML = `<option value="">全体</option>${options}`;
+    const ownerOption = state.session.role === "owner"
+      ? `<option value="${escapeHtml(state.session.accountId)}">${escapeHtml(state.session.accountName)}</option>`
+      : "";
+    el["logs-account-filter"].innerHTML = `<option value="">全体</option>${ownerOption}${options}`;
     if (state.session.role === "owner") {
       el["account-select-label"].hidden = false;
     } else {
@@ -131,15 +134,22 @@
     if (!summary) return;
     const documentType = el["document-filter"].value;
     const visibleEntries = summary.entries.filter((entry) => entry.documentType === documentType);
-    const documentTotal = visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
     el["report-month"].textContent = formatMonthJp(summary.month);
     el["document-title"].textContent = documentLabels[documentType];
     el["report-account"].textContent = `${summary.account.displayName} 様`;
     el["print-button"].textContent = `${documentLabels[documentType]}をPDF保存`;
-    el["document-total-label"].textContent = documentType === "invoice" ? "請求合計" : "支払金額";
+    el["document-total-label"].textContent = documentType === "invoice" ? "請求合計" : "支払合計";
+    el["document-net-label"].textContent = documentType === "invoice" ? "差引請求額" : "差引支払額";
+    const incomeEntries = visibleEntries.filter(isIncomeEntry);
+    const subtotal = visibleEntries
+      .filter((entry) => !isIncomeEntry(entry))
+      .reduce((total, entry) => total + entry.amountYen, 0);
+    const incomeTotal = incomeEntries.reduce((total, entry) => total + Math.abs(entry.amountYen), 0);
+    renderYen(el["document-total"], subtotal);
+    renderYen(el["document-income-total"], -incomeTotal);
+    renderYen(el["document-net-total"], subtotal - incomeTotal);
     renderYen(el["opening-balance"], summary.openingBalanceYen);
     renderYen(el["closing-balance"], summary.closingBalanceYen);
-    renderYen(el["document-total"], documentTotal);
     el["empty-message"].hidden = visibleEntries.length > 0;
     el["entries-body"].innerHTML = visibleEntries.map((entry) => {
       const signClass = entry.amountYen >= 0 ? "positive" : "negative";
@@ -155,6 +165,10 @@
         </td>
       </tr>`;
     }).join("");
+  }
+
+  function isIncomeEntry(entry) {
+    return entry.category === "income" || (entry.category === "other" && entry.amountYen < 0);
   }
 
   function openEntryDialog(entry = null) {
@@ -271,6 +285,8 @@
 
   function updateOtherDirectionVisibility() {
     el["other-direction-label"].hidden = el["entry-category"].value !== "other";
+    const plusOption = el["other-direction"].querySelector('option[value="plus"]');
+    plusOption.textContent = el["entry-document-type"].value === "invoice" ? "請求" : "支払";
   }
 
   function formatYenInput(input, allowNegative) {

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260806-fullwidth-amount1">
-  <script src="./billing.js?v=20260806-fullwidth-amount1" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260806-actor-payment-summary1">
+  <script src="./billing.js?v=20260806-actor-payment-summary1" defer></script>
 </head>
 <body>
   <main>
@@ -84,7 +84,11 @@
           </table>
           <p id="empty-message" class="empty-message">この月の明細はありません。</p>
         </div>
-        <div class="document-total-row"><span id="document-total-label">請求合計</span><strong id="document-total">—</strong></div>
+        <div id="document-summary" class="document-summary">
+          <div class="document-summary-row"><span id="document-total-label">請求合計</span><strong id="document-total">—</strong></div>
+          <div class="document-summary-row"><span>入金</span><strong id="document-income-total">—</strong></div>
+          <div class="document-summary-row document-summary-net"><span id="document-net-label">差引請求額</span><strong id="document-net-total">—</strong></div>
+        </div>
       </section>
     </section>
   </main>
@@ -105,7 +109,7 @@
       </div>
       <label>区分<select id="entry-category" required></select></label>
       <label>内容<input id="entry-description" type="text" maxlength="100" required></label>
-      <label id="other-direction-label" hidden>増減<select id="other-direction"><option value="plus">プラス</option><option value="minus">マイナス</option></select></label>
+      <label id="other-direction-label" hidden>その他の扱い<select id="other-direction"><option value="plus">請求</option><option value="minus">入金</option></select></label>
       <label>金額（1円単位）<input id="entry-amount" type="text" inputmode="numeric" maxlength="16" autocomplete="off" required></label>
       <label>備考<textarea id="entry-note" rows="3" maxlength="500"></textarea></label>
       <p id="entry-error" class="error-message" role="alert"></p>
