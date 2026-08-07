@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "node --check src/index.js && node --check public/diary.js"
+    "check": "node --check src/index.js && node --check public/diary.js && node --check public/investment.js",
+    "import:investment": "node scripts/import-investment-data.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.34.0"

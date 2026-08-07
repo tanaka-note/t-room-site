@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="referrer" content="no-referrer">
+  <title>My Investment Performance</title>
+  <link rel="stylesheet" href="/diary/investment.css?v=1">
+</head>
+<body>
+  <header class="investment-header">
+    <a class="back-link" href="/diary/" aria-label="日記へ戻る">← <span>日記へ戻る</span></a>
+    <p id="header-as-of" class="header-as-of">読み込み中</p>
+  </header>
+
+  <main class="investment-shell">
+    <section class="investment-hero" aria-labelledby="investment-title">
+      <div>
+        <p class="eyebrow">Private portfolio</p>
+        <h1 id="investment-title">My Investment<br>Performance</h1>
+      </div>
+    </section>
+
+    <div id="loading-message" class="loading-message" role="status">資産データを読み込んでいます。</div>
+
+    <div id="dashboard" hidden>
+      <section class="kpi-grid" aria-label="資産状況">
+        <article class="kpi-card kpi-primary">
+          <p>資産総額</p>
+          <strong id="current-total">—</strong>
+        </article>
+        <article class="kpi-card">
+          <p id="change-label">期間中の増減</p>
+          <strong id="period-change">—</strong>
+        </article>
+        <article class="kpi-card">
+          <p id="rate-label">期間中の増減率</p>
+          <strong id="period-rate">—</strong>
+        </article>
+        <article class="kpi-card">
+          <p>過去最高</p>
+          <strong id="all-time-high">—</strong>
+          <span id="all-time-high-date" class="kpi-note"></span>
+        </article>
+      </section>
+
+      <section class="dashboard-card chart-card" aria-labelledby="chart-title">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Asset history</p>
+            <h2 id="chart-title">資産推移</h2>
+          </div>
+          <p id="chart-period" class="chart-period"></p>
+        </div>
+
+        <div id="range-controls" class="range-controls" aria-label="表示期間">
+          <button type="button" data-range="1m">1ヶ月</button>
+          <button type="button" data-range="3m">3ヶ月</button>
+          <button type="button" data-range="6m">6ヶ月</button>
+          <button type="button" data-range="1y">1年</button>
+          <button type="button" data-range="2y">2年</button>
+          <button type="button" data-range="3y">3年</button>
+          <button type="button" data-range="5y">5年</button>
+          <button type="button" data-range="7y">7年</button>
+          <button type="button" data-range="10y">10年</button>
+          <button type="button" data-range="max" class="is-active" aria-pressed="true">最長</button>
+        </div>
+
+        <div class="chart-wrap">
+          <canvas id="asset-chart" role="img" aria-label="資産総額の推移"></canvas>
+          <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+        </div>
+        <p id="chart-summary" class="sr-only"></p>
+        <div class="chart-legend"><span aria-hidden="true"></span>資産総額</div>
+      </section>
+
+      <section class="dashboard-card composition-card" aria-labelledby="composition-title">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Current allocation</p>
+            <h2 id="composition-title">資産構成</h2>
+          </div>
+          <p id="composition-as-of" class="chart-period"></p>
+        </div>
+        <div class="composition-layout">
+          <div class="donut-wrap">
+            <canvas id="composition-chart" role="img" aria-label="最新の資産構成"></canvas>
+            <div class="donut-center">
+              <span>合計</span>
+              <strong id="donut-total">—</strong>
+            </div>
+          </div>
+          <div id="composition-list" class="composition-list"></div>
+        </div>
+      </section>
+
+      <p class="data-note">表示金額は資産管理データをもとに集計しています。</p>
+    </div>
+  </main>
+
+  <script src="/diary/investment.js?v=2" defer></script>
+</body>
+</html>

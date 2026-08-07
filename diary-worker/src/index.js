@@ -31,6 +31,16 @@ export default {
         return secureResponse(json({ error: "Method not allowed" }, 405));
       }
 
+      if (isInvestmentAssetPath(path)) {
+        const session = await readSession(request, env);
+        if (!session) {
+          const isPageRequest = path === "/investment" || path === "/investment/";
+          return secureResponse(isPageRequest
+            ? Response.redirect(`${url.origin}${BASE_PATH}/`, 302)
+            : new Response("Unauthorized", { status: 401 }));
+        }
+      }
+
       return secureResponse(await serveAsset(request, env, url, path));
     } catch (error) {
       if (error instanceof HttpError) {
@@ -110,6 +120,10 @@ async function handleApi(request, env, url, path) {
     return listMeta(env);
   }
 
+  if (path === "/api/investment-history" && request.method === "GET") {
+    return listInvestmentHistory(env);
+  }
+
   const entryMatch = path.match(/^\/api\/entries\/(\d+)$/);
   if (entryMatch && request.method === "GET") {
     return getEntry(Number(entryMatch[1]), env, session);
@@ -137,19 +151,69 @@ async function serveAsset(request, env, url, path) {
 
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
-    ["/diary.js", "/diary.js"]
+    ["/diary.js", "/diary.js"],
+    ["/investment.css", "/investment.css"],
+    ["/investment.js", "/investment.js"]
   ]);
-  const isAppRoute = path === "/" || path.startsWith("/entry/") || path === "/trash";
-  const assetPath = assetPaths.get(path) || (isAppRoute ? "/" : null);
+  const isDiaryRoute = path === "/" || path.startsWith("/entry/") || path === "/trash";
+  const isInvestmentRoute = path === "/investment" || path === "/investment/";
+  const assetPath = assetPaths.get(path) || (isDiaryRoute ? "/" : (isInvestmentRoute ? "/investment.html" : null));
   if (!assetPath) return new Response("Not found", { status: 404 });
 
   const assetUrl = new URL(assetPath, url.origin);
   const assetRequest = new Request(assetUrl, request);
-  const response = await env.ASSETS.fetch(assetRequest);
+  let response = await env.ASSETS.fetch(assetRequest);
+  if (isInvestmentRoute && response.status >= 300 && response.status < 400 && response.headers.get("Location")) {
+    const redirectedAssetUrl = new URL(response.headers.get("Location"), url.origin);
+    response = await env.ASSETS.fetch(new Request(redirectedAssetUrl, request));
+  }
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   headers.set("Cache-Control", assetPath === "/" ? "no-store" : "public, max-age=3600");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function isInvestmentAssetPath(path) {
+  return path === "/investment"
+    || path === "/investment/"
+    || path === "/investment.css"
+    || path === "/investment.js";
+}
+
+async function listInvestmentHistory(env) {
+  const result = await env.DB.prepare(`
+    SELECT
+      recorded_at,
+      total,
+      cash,
+      stocks,
+      funds,
+      bonds,
+      crypto,
+      futures,
+      points,
+      other
+    FROM investment_history
+    ORDER BY recorded_at ASC
+  `).all();
+
+  const records = (result.results || []).map((row) => ({
+    date: row.recorded_at,
+    total: Number(row.total),
+    cash: Number(row.cash),
+    stocks: Number(row.stocks),
+    funds: Number(row.funds),
+    bonds: Number(row.bonds),
+    crypto: Number(row.crypto),
+    futures: Number(row.futures),
+    points: Number(row.points),
+    other: Number(row.other)
+  }));
+
+  return json({
+    asOf: records.at(-1)?.date || null,
+    records
+  });
 }
 
 async function listEntries(url, env, session) {
