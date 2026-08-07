@@ -35,7 +35,7 @@
     el["logout-button"].addEventListener("click", logout);
     el["password-toggle"].addEventListener("click", togglePassword);
     el["month-input"].addEventListener("change", loadSummary);
-    el["account-select"].addEventListener("change", loadSummary);
+    el["account-select"].addEventListener("change", changeAccount);
     el["document-filter"].addEventListener("change", renderSummary);
     el["print-button"].addEventListener("click", () => window.print());
     el["new-entry-button"].addEventListener("click", () => openEntryDialog());
@@ -106,6 +106,7 @@
     const result = await api("/accounts");
     state.accounts = result.accounts;
     fillAccountSelects();
+    applyPreferredDocumentType();
     await loadSummary();
   }
 
@@ -160,6 +161,16 @@
       el["account-select"].value = state.session.accountId;
       el["account-select-label"].hidden = true;
     }
+  }
+
+  async function changeAccount() {
+    applyPreferredDocumentType();
+    await loadSummary();
+  }
+
+  function applyPreferredDocumentType() {
+    const accountId = state.session.role === "owner" ? el["account-select"].value : state.session.accountId;
+    el["document-filter"].value = accountId === "masami" ? "payment_notice" : "invoice";
   }
 
   async function loadSummary() {
