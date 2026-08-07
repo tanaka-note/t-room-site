@@ -113,7 +113,7 @@ async function handleApi(request, env, url, path) {
     const maxAge = clampNumber(env.SESSION_TTL_SECONDS, 3600, MAX_SESSION_SECONDS, MAX_SESSION_SECONDS);
     const token = await createSessionToken(account, maxAge, env);
     const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+    headers.set("Set-Cookie", sessionCookie(token, url.protocol === "https:"));
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name }, 200, headers);
   }
 
@@ -625,8 +625,8 @@ function sameOrigin(request, url) {
   return request.headers.get("Origin") === url.origin;
 }
 
-function sessionCookie(token, maxAge, secure) {
-  return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+function sessionCookie(token, secure) {
+  return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
 }
 
 function clearSessionCookie(secure) {

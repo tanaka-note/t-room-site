@@ -29,6 +29,8 @@ input, select, textarea { width: 100%; border: 1px solid #cfd3c8; border-radius:
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(87,114,99,.13); }
 .password-field { position: relative; display: block; }
 .password-field input { padding-right: 48px; }
+.remember-login { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.remember-login input { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: var(--accent); }
 .icon-button { position: absolute; top: 50%; right: 8px; width: 36px; height: 36px; transform: translateY(-50%); border: 0; border-radius: 8px; color: #73776f; background: transparent; }
 .icon-button:hover { background: var(--soft); }
 .icon-button svg { width: 21px; fill: currentColor; }

@@ -12,11 +12,14 @@
   const settlementMethodLabels = {
     bank_transfer: "振込", cash: "現金", offset: "相殺", other: "その他", unspecified: "未設定"
   };
+  const REMEMBER_LOGIN_KEY = "troom-billing-remember-login";
+  const SAVED_LOGIN_ID_KEY = "troom-billing-login-id";
 
   document.addEventListener("DOMContentLoaded", initialize);
 
   async function initialize() {
     bindEvents();
+    restoreLoginPreference();
     el["month-input"].value = japanToday().slice(0, 7);
     el["print-date"].textContent = formatDateJp(japanToday());
     try {
@@ -69,12 +72,15 @@
     event.preventDefault();
     el["login-error"].textContent = "";
     const submit = event.submitter;
+    const loginId = el["login-id"].value;
+    const password = el["login-password"].value;
     submit.disabled = true;
     try {
       const session = await api("/login", {
         method: "POST",
-        body: { loginId: el["login-id"].value, password: el["login-password"].value }
+        body: { loginId, password }
       });
+      await saveLoginPreference(loginId, password);
       el["login-password"].value = "";
       await enterApp(session);
     } catch (error) {
@@ -106,7 +112,39 @@
   function showLogin() {
     el["app-view"].hidden = true;
     el["login-view"].hidden = false;
-    el["login-id"].focus();
+    (el["login-id"].value ? el["login-password"] : el["login-id"]).focus();
+  }
+
+  function restoreLoginPreference() {
+    try {
+      const remember = localStorage.getItem(REMEMBER_LOGIN_KEY) !== "false";
+      el["remember-login"].checked = remember;
+      if (remember) el["login-id"].value = localStorage.getItem(SAVED_LOGIN_ID_KEY) || "";
+    } catch {
+      el["remember-login"].checked = true;
+    }
+  }
+
+  async function saveLoginPreference(loginId, password) {
+    const remember = el["remember-login"].checked;
+    try {
+      localStorage.setItem(REMEMBER_LOGIN_KEY, String(remember));
+      if (remember) localStorage.setItem(SAVED_LOGIN_ID_KEY, loginId);
+      else localStorage.removeItem(SAVED_LOGIN_ID_KEY);
+    } catch {
+      // 端末側で保存が禁止されていても、通常のログインは続行します。
+    }
+    if (!remember) {
+      if (navigator.credentials?.preventSilentAccess) await navigator.credentials.preventSilentAccess().catch(() => {});
+      return;
+    }
+
+    if (!navigator.credentials?.store || typeof window.PasswordCredential !== "function") return;
+    try {
+      await navigator.credentials.store(new PasswordCredential({ id: loginId, password }));
+    } catch {
+      // 保存の可否と確認画面はブラウザのパスワード管理機能に任せます。
+    }
   }
 
   function fillAccountSelects() {
