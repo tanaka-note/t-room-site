@@ -415,15 +415,6 @@
     if (useMobileDateWheel()) {
       event.preventDefault();
       openDateWheel();
-      return;
-    }
-    if (typeof el["entry-date"].showPicker === "function") {
-      try {
-        event.preventDefault();
-        el["entry-date"].showPicker();
-      } catch {
-        // 標準の日付入力が使える場合は、その操作を維持します。
-      }
     }
   }
 
