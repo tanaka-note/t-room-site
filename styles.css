@@ -363,6 +363,21 @@ h1 {
   color: #2457a6;
 }
 
+.topic-card:nth-child(7) .topic-icon {
+  background: #e3f2ef;
+  color: #0f6b63;
+}
+
+.topic-card:nth-child(8) .topic-icon {
+  background: #eee9f8;
+  color: #665191;
+}
+
+.topic-card:nth-child(9) .topic-icon {
+  background: #f8ece3;
+  color: #985a24;
+}
+
 .topic-link {
   display: inline-flex;
   margin-top: 14px;
