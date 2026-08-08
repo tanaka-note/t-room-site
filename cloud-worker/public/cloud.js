@@ -8,6 +8,7 @@ const state = {
   query: "",
   files: [],
   folders: [],
+  folderSummary: null,
   history: [],
   requests: [],
   shares: [],
@@ -16,13 +17,27 @@ const state = {
   shareTarget: null,
   listMode: false,
   selectedFiles: new Map(),
+  selectedFolders: new Map(),
+  moveDestinations: new Map(),
   selecting: false,
+  dragDepth: 0,
+  uploading: false,
+  uploadAbort: null,
   downloadAbort: null,
   wakeLock: null,
   downloadActive: false,
   previewUrl: "",
   previewMediaToken: "",
   previewPlayer: null,
+  previewFileId: null,
+  previewHistoryActive: false,
+  previewTouchStart: null,
+  folderUploadSelection: null,
+  thumbnailAttempts: new Set(),
+  thumbnailBackfillRunning: false,
+  handlingPopState: false,
+  historyReady: false,
+  folderNamesMigrated: false,
   crypto: { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false }
 };
 
@@ -55,7 +70,14 @@ function bindEvents() {
   $("#upload-button").addEventListener("click", openAddAction);
   $("#mobile-add-button").addEventListener("click", openAddAction);
   $("#file-input").addEventListener("change", (event) => uploadFiles([...event.target.files]));
+  $("#folder-input").addEventListener("change", handleFolderInput);
+  document.addEventListener("dragenter", handleFileDragEnter);
+  document.addEventListener("dragover", handleFileDragOver);
+  document.addEventListener("dragleave", handleFileDragLeave);
+  document.addEventListener("drop", handleFileDrop);
+  window.addEventListener("blur", resetDropOverlay);
   $("#new-folder-button").addEventListener("click", openFolderDialog);
+  $("#download-folder-button").addEventListener("click", downloadCurrentFolder);
   $("#mobile-upload-action").addEventListener("click", () => {
     $("#add-dialog").close();
     $("#file-input").click();
@@ -64,7 +86,12 @@ function bindEvents() {
     $("#add-dialog").close();
     openFolderDialog();
   });
+  $("#desktop-folder-upload-action").addEventListener("click", () => {
+    $("#add-dialog").close();
+    $("#folder-input").click();
+  });
   $("#folder-form").addEventListener("submit", createFolder);
+  $("#folder-upload-form").addEventListener("submit", uploadSelectedFolder);
   $("#unlock-form").addEventListener("submit", unlockFolder);
   $("#folder-settings-form").addEventListener("submit", saveFolderSettings);
   $("#folder-password-action").addEventListener("change", toggleFolderPasswordInput);
@@ -85,18 +112,33 @@ function bindEvents() {
   $("#share-result-dialog").addEventListener("close", clearShareResultSecrets);
   $("#restore-file-button").addEventListener("click", restoreSelectedFile);
   $("#permanent-delete-button").addEventListener("click", permanentlyDeleteSelectedFile);
+  $("#empty-trash-button").addEventListener("click", emptyTrash);
   $("#download-link").addEventListener("click", (event) => {
     if (Number(state.selected?.cryptoVersion) !== 1) return;
     event.preventDefault();
     state.selectedFiles = new Map([[state.selected.id, state.selected]]);
     startSelectedDownloads();
   });
-  $("#preview-dialog").addEventListener("close", clearPreviewUrl);
+  $("#preview-dialog").addEventListener("close", handlePreviewClosed);
+  $("#preview-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    $("#preview-dialog").close();
+  });
+  $("#preview-prev").addEventListener("click", () => navigatePreview(-1));
+  $("#preview-next").addEventListener("click", () => navigatePreview(1));
+  $("#preview-stage-wrap").addEventListener("touchstart", handlePreviewTouchStart, { passive: true });
+  $("#preview-stage-wrap").addEventListener("touchend", handlePreviewTouchEnd, { passive: true });
+  document.addEventListener("keydown", handlePreviewKeydown);
+  window.addEventListener("popstate", handleHistoryNavigation);
   $("#search-input").addEventListener("input", debounce((event) => { state.query = event.target.value.trim(); loadItems(); }, 250));
   $("#sort-select").addEventListener("change", (event) => { state.sort = event.target.value; loadItems(); });
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
   $("#selection-clear").addEventListener("click", clearFileSelection);
   $("#selection-download").addEventListener("click", startSelectedDownloads);
+  $("#selection-move").addEventListener("click", openMoveDialog);
+  $("#selection-delete").addEventListener("click", deleteSelectedItems);
+  $("#move-form").addEventListener("submit", moveSelectedItems);
+  $("#upload-cancel").addEventListener("click", cancelUploads);
   $("#download-cancel").addEventListener("click", cancelDownloads);
   $("#download-close").addEventListener("click", closeDownloadDialog);
   $("#download-retry-wake").addEventListener("click", requestDownloadWakeLock);
@@ -117,11 +159,161 @@ function bindEvents() {
 }
 
 function openAddAction() {
-  if (matchMedia("(max-width: 900px)").matches) {
-    $("#add-dialog").showModal();
-  } else {
-    $("#file-input").click();
+  $("#add-dialog").showModal();
+}
+
+function isFileDrag(event) {
+  return [...(event.dataTransfer?.types || [])].includes("Files");
+}
+
+function canAcceptDroppedFiles() {
+  return matchMedia("(min-width: 901px)").matches
+    && Boolean(state.session?.canUpload)
+    && state.crypto.fileEncryptionReady
+    && !state.uploading
+    && !["trash", "history", "requests", "shares"].includes(state.view);
+}
+
+function handleFileDragEnter(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  if (!canAcceptDroppedFiles()) return;
+  state.dragDepth += 1;
+  $("#drop-overlay").hidden = false;
+}
+
+function handleFileDragOver(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = canAcceptDroppedFiles() ? "copy" : "none";
+}
+
+function handleFileDragLeave(event) {
+  if (!state.dragDepth) return;
+  state.dragDepth = Math.max(0, state.dragDepth - 1);
+  if (!state.dragDepth) resetDropOverlay();
+}
+
+function resetDropOverlay() {
+  state.dragDepth = 0;
+  $("#drop-overlay").hidden = true;
+}
+
+function droppedDirectoryExists(dataTransfer) {
+  return [...(dataTransfer?.items || [])].some((item) => {
+    if (item.kind !== "file" || typeof item.webkitGetAsEntry !== "function") return false;
+    return Boolean(item.webkitGetAsEntry()?.isDirectory);
+  });
+}
+
+async function handleFileDrop(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  resetDropOverlay();
+  if (!canAcceptDroppedFiles()) {
+    const message = state.uploading
+      ? "アップロードが完了してから、次のファイルを追加してください。"
+      : "保存先のフォルダを開いてから、ファイルをドロップしてください。";
+    setNotice(message, true);
+    return;
   }
+  if (droppedDirectoryExists(event.dataTransfer)) {
+    try {
+      const selection = await folderSelectionFromDrop(event.dataTransfer);
+      openFolderUploadDialog(selection);
+    } catch (error) {
+      setNotice(error.message, true);
+    }
+    return;
+  }
+  if (!state.folderId) {
+    setNotice("ファイルだけを追加する場合は、保存先のフォルダを開いてください。", true);
+    return;
+  }
+  const files = [...(event.dataTransfer?.files || [])];
+  if (!files.length) {
+    setNotice("アップロードするファイルを確認してください。", true);
+    return;
+  }
+  uploadFiles(files);
+}
+
+function handleFolderInput(event) {
+  const files = [...(event.target.files || [])];
+  event.target.value = "";
+  try {
+    const selection = normalizeFolderSelection(files.map((file) => ({ file, relativePath: file.webkitRelativePath || file.name })));
+    openFolderUploadDialog(selection);
+  } catch (error) {
+    setNotice(error.message, true);
+  }
+}
+
+async function folderSelectionFromDrop(dataTransfer) {
+  const records = [];
+  const directories = new Set();
+  for (const item of [...(dataTransfer?.items || [])]) {
+    if (item.kind !== "file" || typeof item.webkitGetAsEntry !== "function") continue;
+    const entry = item.webkitGetAsEntry();
+    if (entry) await collectDroppedEntry(entry, "", records, directories);
+  }
+  return normalizeFolderSelection(records, directories);
+}
+
+async function collectDroppedEntry(entry, parentPath, records, directories) {
+  const relativePath = [parentPath, entry.name].filter(Boolean).join("/");
+  if (entry.isFile) {
+    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+    records.push({ file, relativePath });
+    return;
+  }
+  if (!entry.isDirectory) return;
+  directories.add(relativePath);
+  const reader = entry.createReader();
+  while (true) {
+    const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+    if (!batch.length) break;
+    for (const child of batch) await collectDroppedEntry(child, relativePath, records, directories);
+  }
+}
+
+function normalizeFolderSelection(records, explicitDirectories = new Set()) {
+  const directories = new Set([...explicitDirectories].map(normalizeRelativePath).filter(Boolean));
+  const files = [];
+  for (const record of records) {
+    const relativePath = normalizeRelativePath(record.relativePath || record.file?.name);
+    if (!record.file || !relativePath) continue;
+    const parts = relativePath.split("/");
+    if (parts.length < 2) continue;
+    files.push({ file: record.file, relativePath });
+    for (let depth = 1; depth < parts.length; depth++) directories.add(parts.slice(0, depth).join("/"));
+  }
+  const roots = [...directories].filter((path) => !path.includes("/")).sort((a, b) => a.localeCompare(b, "ja"));
+  if (!roots.length) throw new Error("アップロードするフォルダを確認してください。");
+  return { files, directories: [...directories].sort(compareFolderPaths), roots };
+}
+
+function normalizeRelativePath(value) {
+  return String(value || "").replace(/\\/g, "/").split("/").filter((part) => part && part !== ".").join("/");
+}
+
+function compareFolderPaths(left, right) {
+  const depth = left.split("/").length - right.split("/").length;
+  return depth || left.localeCompare(right, "ja");
+}
+
+function openFolderUploadDialog(selection) {
+  if (!selection?.roots?.length || state.uploading) return;
+  state.folderUploadSelection = selection;
+  const atStorageRoot = !state.folderId;
+  $("#folder-upload-summary").textContent = `${selection.roots.join("、")}（${selection.files.length.toLocaleString("ja-JP")}ファイル）を、フォルダ構成を保って保存します。`;
+  $("#folder-upload-password-row").hidden = !atStorageRoot;
+  $("#folder-upload-password-note").hidden = !atStorageRoot;
+  $("#folder-upload-inherit-note").hidden = atStorageRoot;
+  $("#folder-upload-password").required = atStorageRoot;
+  $("#folder-upload-password").value = "";
+  $("#folder-upload-error").textContent = "";
+  $("#folder-upload-dialog").showModal();
 }
 
 function openFolderDialog() {
@@ -180,7 +372,9 @@ async function enterApp(session, password = "", accountKey = null) {
   syncAvailableActions();
   loadUsage();
   if (session.canReviewDeletion) loadDeletionRequestCount();
+  initializeNavigationHistory();
   await prepareCryptoSession(password, accountKey);
+  await migrateLegacyFolderNames();
   await loadItems();
 }
 
@@ -188,6 +382,44 @@ async function logout() {
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
   await api("/logout", { method: "POST", body: "{}" });
   location.reload();
+}
+
+function initializeNavigationHistory() {
+  if (state.historyReady) return;
+  history.replaceState({ tcloud: true, folderId: null, folderName: "フォルダ", previewId: null }, "", location.href);
+  state.historyReady = true;
+}
+
+async function navigateToFolder(folderId, folderName, options = {}) {
+  const { pushHistory = true, load = true } = options;
+  state.folderId = folderId ? Number(folderId) : null;
+  state.kind = "";
+  state.view = "all";
+  clearSearch();
+  $("#view-title").textContent = folderName || (state.folderId ? "ファイル" : "フォルダ");
+  if (pushHistory && state.historyReady) {
+    history.pushState({ tcloud: true, folderId: state.folderId, folderName: $("#view-title").textContent, previewId: null }, "", location.href);
+  }
+  syncNavigationActiveState();
+  syncAvailableActions();
+  if (load) await loadItems();
+}
+
+async function handleHistoryNavigation(event) {
+  const target = event.state;
+  if (!target?.tcloud) return;
+  state.handlingPopState = true;
+  try {
+    state.previewHistoryActive = false;
+    if ($("#preview-dialog").open) $("#preview-dialog").close();
+    await navigateToFolder(target.folderId, target.folderName, { pushHistory: false });
+    if (target.previewId) {
+      const file = state.files.find((item) => Number(item.id) === Number(target.previewId));
+      if (file) await openPreview(file, { pushHistory: false });
+    }
+  } finally {
+    state.handlingPopState = false;
+  }
 }
 
 async function prepareCryptoSession(password = "", accountKey = null) {
@@ -272,6 +504,7 @@ async function handleVaultForm(event) {
       showRecoveryCode(vault.recoveryCode);
       setCryptoStatus("暗号化鍵：解除済み", true);
       setNotice("端末側暗号化の初期設定が完了しました。復旧鍵を安全に保管してください。");
+      await migrateLegacyFolderNames();
       await loadItems();
     } else {
       const privateKey = await TRoomCrypto.unlockAdminPrivateKey(accountKey, state.crypto.config);
@@ -280,6 +513,7 @@ async function handleVaultForm(event) {
       $("#vault-dialog").close();
       setCryptoStatus("暗号化鍵：解除済み", true);
       setNotice("暗号化鍵を解除しました。");
+      await migrateLegacyFolderNames();
       await loadItems();
     }
   } catch (error) {
@@ -289,6 +523,44 @@ async function handleVaultForm(event) {
     $("#vault-password").disabled = false;
     submit.disabled = false;
     submit.textContent = mode === "setup" ? "暗号化を設定する" : "暗号化鍵を解除";
+  }
+}
+
+function isLegacyFolderName(name) {
+  return !String(name || "").trim() || name === "[encrypted]";
+}
+
+async function migrateLegacyFolderNames() {
+  if (state.folderNamesMigrated || state.session?.role !== "admin" || !state.crypto.adminPrivateKey) return;
+  try {
+    await migrateLegacyFolderBranch(null);
+    state.folderNamesMigrated = true;
+  } catch (error) {
+    console.warn("Folder name migration was deferred.", error);
+  }
+}
+
+async function migrateLegacyFolderBranch(parentId) {
+  const params = new URLSearchParams();
+  if (parentId) params.set("folderId", parentId);
+  const data = await api(`/items?${params}`);
+  for (const folder of data.folders || []) {
+    const key = await ensureAdminFolderKey(folder);
+    if (isLegacyFolderName(folder.name)) {
+      const plaintextName = await TRoomCrypto.decryptFolderName(folder, key);
+      await api(`/folders/${folder.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          cryptoVersion: 1,
+          name: plaintextName,
+          encryptedName: folder.encryptedName,
+          nameIv: folder.nameIv,
+          passwordAction: "keep"
+        })
+      });
+      folder.name = plaintextName;
+    }
+    await migrateLegacyFolderBranch(folder.id);
   }
 }
 
@@ -329,9 +601,8 @@ function selectSection(button) {
     return;
   }
   if (button.dataset.view === "all") {
-    state.folderId = null;
-    state.kind = "";
-    clearSearch();
+    navigateToFolder(null, "フォルダ");
+    return;
   } else if (["trash", "history", "requests", "shares"].includes(button.dataset.view)) {
     state.folderId = null;
     state.kind = "";
@@ -342,9 +613,19 @@ function selectSection(button) {
   state.view = button.dataset.view || "all";
   const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", requests: "削除申請", shares: "共有管理", image: "写真", video: "動画", audio: "音声", document: "書類" };
   $("#view-title").textContent = labels[state.view] || labels[state.kind] || "ファイル";
-  $$("[data-view], [data-kind]").forEach((item) => item.classList.toggle("active", item === button || (item.dataset.view && item.dataset.view === state.view && state.view !== "all")));
+  syncNavigationActiveState();
   syncAvailableActions();
   loadItems();
+}
+
+function syncNavigationActiveState() {
+  $$("[data-view], [data-kind]").forEach((item) => {
+    const active = item.dataset.kind
+      ? state.view === "all" && state.kind === item.dataset.kind
+      : state.view === item.dataset.view && !state.kind;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-current", active ? "page" : "false");
+  });
 }
 
 function clearSearch() {
@@ -360,11 +641,15 @@ function syncAvailableActions() {
   const insideFolder = Boolean(state.folderId);
   $("#new-folder-button").hidden = inTrash || inHistory || inRequests || inShares;
   $("#new-folder-button").disabled = !state.crypto.publicKey;
-  $("#upload-button").hidden = inTrash || inHistory || inRequests || inShares || !insideFolder || !state.session?.canUpload;
-  $("#upload-button").disabled = !state.crypto.fileEncryptionReady;
+  $("#upload-button").hidden = inTrash || inHistory || inRequests || inShares || !state.session?.canUpload;
+  $("#upload-button").disabled = !state.crypto.fileEncryptionReady || state.uploading;
+  $("#desktop-folder-upload-action").hidden = !state.session?.canUpload;
+  $("#desktop-folder-upload-action").disabled = !state.crypto.fileEncryptionReady || state.uploading;
+  $("#download-folder-button").hidden = !insideFolder || inTrash || inHistory || inRequests || inShares || !("showDirectoryPicker" in window);
+  $("#download-folder-button").disabled = state.downloadActive;
   $("#mobile-add-button").hidden = inTrash || inHistory || inRequests || inShares;
   $("#mobile-upload-action").hidden = !insideFolder || !state.session?.canUpload;
-  $("#mobile-upload-action").disabled = !state.crypto.fileEncryptionReady;
+  $("#mobile-upload-action").disabled = !state.crypto.fileEncryptionReady || state.uploading;
   $("#toolbar").hidden = inHistory || inRequests || inShares;
   $("#search-input").placeholder = insideFolder ? "ファイル名を検索" : "フォルダ名を検索";
   $$('[data-kind]').forEach((button) => { button.disabled = !insideFolder || inTrash || inHistory || inRequests || inShares; });
@@ -373,6 +658,7 @@ function syncAvailableActions() {
 async function loadItems() {
   clearFileSelection(false);
   setNotice("");
+  state.folderSummary = null;
   try {
     if (state.view === "trash") {
       const data = await api("/trash");
@@ -413,6 +699,10 @@ async function loadItems() {
       if (state.kind) params.set("kind", state.kind);
       if (state.query) params.set("q", state.query);
       const data = await api(`/items?${params}`);
+      state.folderSummary = state.folderId ? {
+        fileCount: Number(data.folder?.fileCount || 0),
+        folderCount: Number(data.folder?.folderCount || 0)
+      } : null;
       state.folders = await hydrateFolderRecords(data.folders || []);
       state.files = await hydrateFileRecords(data.files || []);
       state.history = [];
@@ -427,6 +717,7 @@ async function loadItems() {
 }
 
 function renderItems() {
+  renderFolderSummary();
   const grid = $("#content-grid");
   grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "requests" || state.view === "shares");
   grid.innerHTML = "";
@@ -454,19 +745,52 @@ function renderItems() {
     : state.folderId
       ? "このフォルダには、まだファイルがありません。"
       : "フォルダを作成すると、ここに表示されます。";
-  $("#display-toggle").textContent = state.listMode ? "▤" : "▦";
+  $("#display-toggle").textContent = state.listMode ? "▦" : "▤";
+  $("#display-toggle").setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
+  $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
+  $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length === 0;
+  scheduleMissingVideoThumbnails();
+}
+
+function renderFolderSummary() {
+  const summary = $("#view-summary");
+  const visible = state.view === "all" && Boolean(state.folderId) && Boolean(state.folderSummary);
+  summary.hidden = !visible;
+  summary.textContent = visible ? formatFolderCount(state.folderSummary) : "";
+}
+
+function formatFolderCount(folder) {
+  return `${Number(folder.fileCount || 0)}ファイル・${Number(folder.folderCount || 0)}フォルダ`;
 }
 
 function folderCard(folder) {
   const card = document.createElement("article");
   card.className = "folder-card";
+  card.dataset.folderId = String(folder.id);
   const button = document.createElement("button");
   button.className = "folder-open-button";
   button.type = "button";
   const inheritsProtection = Boolean(folder.parentId && !folder.isProtected);
-  const lock = folder.adminAccess ? " · 管理者アクセス" : inheritsProtection ? " · 親の保護を継承" : folder.isProtected ? (folder.isUnlocked ? " · 解除済み" : " · ロック") : "";
-  button.innerHTML = `<span class="folder-icon">${folder.isProtected || inheritsProtection ? "▣" : "▰"}</span><span><strong>${escapeHtml(folder.name)}</strong><small>${lock}</small></span>`;
-  button.addEventListener("click", () => openFolder(folder));
+  const lock = folder.adminAccess ? " · 管理者アクセス" : inheritsProtection ? " · ロック解除済み" : folder.isProtected ? (folder.isUnlocked ? " · 解除済み" : " · ロック") : "";
+  button.innerHTML = `<span class="folder-icon">${folder.isProtected || inheritsProtection ? "▣" : "▰"}</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}</small>${lock ? `<small class="folder-lock">${escapeHtml(lock.slice(3))}</small>` : ""}</span>`;
+  button.addEventListener("click", () => {
+    if (card.dataset.longPressed === "true") {
+      card.dataset.longPressed = "false";
+      return;
+    }
+    if (state.selectedFiles.size || state.selectedFolders.size) {
+      toggleFolderSelection(folder, card);
+      return;
+    }
+    openFolder(folder);
+  });
+  if (state.session.canDelete) {
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      selectFolder(folder, card);
+    });
+    installFolderLongPressSelection(card, folder);
+  }
   card.append(button);
   if (state.session.canEditFolders) {
     const settings = document.createElement("button");
@@ -474,9 +798,10 @@ function folderCard(folder) {
     settings.type = "button";
     settings.setAttribute("aria-label", `${folder.name}の設定`);
     settings.textContent = "⋯";
-    settings.addEventListener("click", () => openFolderSettings(folder));
+    settings.addEventListener("click", (event) => { event.stopPropagation(); openFolderSettings(folder); });
     card.append(settings);
   }
+  if (state.selectedFolders.has(folder.id)) card.classList.add("selected", "selection-pass");
   return card;
 }
 
@@ -498,18 +823,11 @@ async function hydrateFolderRecords(records) {
       if (!key && state.session?.role === "admin" && state.crypto.adminPrivateKey) {
         try { key = await ensureAdminFolderKey(folder); } catch {}
       }
-      if (key) {
-        try {
-          folder.name = await TRoomCrypto.decryptFolderName(folder, key);
-          folder.isUnlocked = true;
-        } catch {
-          folder.name = "復号できないフォルダ";
-          folder.isUnlocked = false;
-        }
-      } else {
-        folder.name = "保護フォルダ";
-        folder.isUnlocked = false;
+      if (key && isLegacyFolderName(folder.name)) {
+        try { folder.name = await TRoomCrypto.decryptFolderName(folder, key); }
+        catch { folder.name = "名称を移行できないフォルダ"; }
       }
+      folder.isUnlocked = Boolean(key);
     }
     hydrated.push(folder);
   }
@@ -774,19 +1092,18 @@ async function saveFolderSettings(event) {
   $("#folder-settings-error").textContent = "";
   try {
     const folder = state.selectedFolder;
-    const folderKey = state.crypto.folderKeys.get(id) || (state.session.role === "admin" ? await ensureAdminFolderKey(folder) : null);
-    if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
-    const namePackage = await TRoomCrypto.encryptFolderName($("#folder-settings-name").value, folderKey);
-    const passwordPackage = passwordAction === "replace"
-      ? await TRoomCrypto.rewrapFolderPassword(folderKey, $("#folder-new-password").value)
-      : {};
+    const name = cleanEditableName($("#folder-settings-name").value);
+    let passwordPackage = {};
+    if (passwordAction === "replace") {
+      const folderKey = state.crypto.folderKeys.get(id) || (state.session.role === "admin" ? await ensureAdminFolderKey(folder) : null);
+      if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
+      passwordPackage = await TRoomCrypto.rewrapFolderPassword(folderKey, $("#folder-new-password").value);
+    }
     await api(`/folders/${id}`, {
       method: "PATCH",
-      body: JSON.stringify({ cryptoVersion: 1, encryptedName: namePackage.encryptedName, nameIv: namePackage.nameIv, passwordAction, ...passwordPackage })
+      body: JSON.stringify({ name, passwordAction, ...passwordPackage })
     });
-    folder.name = namePackage.name;
-    folder.encryptedName = namePackage.encryptedName;
-    folder.nameIv = namePackage.nameIv;
+    folder.name = name;
     $("#folder-settings-dialog").close();
     setNotice("フォルダ設定を更新しました。");
     await loadItems();
@@ -808,7 +1125,6 @@ async function openFolder(folder) {
   if (Number(folder.cryptoVersion) === 1 && state.session.role === "admin" && !state.crypto.folderKeys.has(folder.id)) {
     try {
       const key = await ensureAdminFolderKey(folder);
-      folder.name = await TRoomCrypto.decryptFolderName(folder, key);
       folder.isUnlocked = true;
     } catch (error) {
       setNotice(error.message, true);
@@ -824,13 +1140,7 @@ async function openFolder(folder) {
     setTimeout(() => $("#unlock-password").focus(), 50);
     return;
   }
-  state.folderId = folder.id;
-  state.kind = "";
-  state.view = "all";
-  clearSearch();
-  $("#view-title").textContent = folder.name;
-  syncAvailableActions();
-  loadItems();
+  await navigateToFolder(folder.id, folder.name);
 }
 
 function fileCard(file) {
@@ -841,7 +1151,7 @@ function fileCard(file) {
   button.type = "button";
   const thumbnail = file.hasThumbnail && Number(file.cryptoVersion) !== 1
     ? `<img src="${API}/files/${file.id}/thumbnail" alt="" loading="lazy">`
-    : `<span class="media-symbol">${kindSymbol(file.mediaKind)}</span>`;
+    : `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
   button.innerHTML = `
     <div class="thumb">${thumbnail}${file.deletionPending ? '<span class="pending-label">削除申請中</span>' : ""}</div>
     <div class="file-copy"><strong>${escapeHtml(file.name)}</strong><span class="file-meta"><span>${formatBytes(file.sizeBytes)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
@@ -850,7 +1160,7 @@ function fileCard(file) {
       card.dataset.longPressed = "false";
       return;
     }
-    if (state.selectedFiles.size || event.ctrlKey || event.metaKey || event.shiftKey) {
+    if (state.selectedFiles.size || state.selectedFolders.size || event.ctrlKey || event.metaKey || event.shiftKey) {
       toggleFileSelection(file, card);
       return;
     }
@@ -863,6 +1173,19 @@ function fileCard(file) {
   });
   installLongPressSelection(card, file);
   card.append(button);
+  if (!file.trashed && ["image", "video"].includes(file.mediaKind)) {
+    const selectButton = document.createElement("button");
+    selectButton.className = "file-select-button";
+    selectButton.type = "button";
+    selectButton.setAttribute("aria-label", `${file.name}を選択`);
+    selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
+    selectButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleFileSelection(file, card);
+    });
+    card.append(selectButton);
+  }
+  if (state.selectedFiles.has(file.id)) card.classList.add("selected", "selection-pass");
   if (file.hasThumbnail && Number(file.cryptoVersion) === 1 && file.fileKey) loadEncryptedThumbnail(file, card.querySelector(".thumb"));
   return card;
 }
@@ -924,20 +1247,7 @@ async function hydrateDeletionRequestRecords(records) {
       const [file] = await hydrateFileRecords([{ ...item, id: item.fileId, createdAt: item.requestedAt }]);
       item.name = file?.name || "復号できないファイル";
       item.mediaKind = file?.mediaKind || "other";
-      const folderKey = state.crypto.folderKeys.get(Number(item.folderId));
-      if (folderKey && item.folderEncryptedName) {
-        try {
-          item.folderName = await TRoomCrypto.decryptFolderName({
-            cryptoVersion: item.folderCryptoVersion,
-            encryptedName: item.folderEncryptedName,
-            nameIv: item.folderNameIv
-          }, folderKey);
-        } catch {
-          item.folderName = "復号できないフォルダ";
-        }
-      } else {
-        item.folderName = "保護フォルダ";
-      }
+      item.folderName = item.folderName || "フォルダ";
     }
     hydrated.push(item);
   }
@@ -989,7 +1299,7 @@ function installLongPressSelection(card, file) {
       card.dataset.longPressed = "true";
       selectFile(file, card);
       if (navigator.vibrate) navigator.vibrate(18);
-    }, state.selectedFiles.size ? 80 : 380);
+    }, state.selectedFiles.size || state.selectedFolders.size ? 80 : 380);
   });
   card.addEventListener("pointermove", (event) => {
     if (event.pointerId !== pointerId) return;
@@ -1016,6 +1326,32 @@ function installLongPressSelection(card, file) {
   card.addEventListener("pointercancel", end);
 }
 
+function installFolderLongPressSelection(card, folder) {
+  let timer = null;
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  const stop = () => { if (timer) clearTimeout(timer); timer = null; };
+  card.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".folder-settings-button")) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    timer = setTimeout(() => {
+      card.dataset.longPressed = "true";
+      selectFolder(folder, card);
+      if (navigator.vibrate) navigator.vibrate(18);
+    }, state.selectedFiles.size || state.selectedFolders.size ? 80 : 380);
+  });
+  card.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== pointerId) return;
+    if (Math.abs(event.clientX - startX) > 8 || Math.abs(event.clientY - startY) > 8) stop();
+  });
+  card.addEventListener("pointerup", stop);
+  card.addEventListener("pointercancel", stop);
+}
+
 function selectFile(file, card) {
   if (file.trashed || state.selectedFiles.has(file.id)) return;
   state.selectedFiles.set(file.id, file);
@@ -1034,8 +1370,27 @@ function toggleFileSelection(file, card) {
   syncSelectionBar();
 }
 
+function selectFolder(folder, card) {
+  if (!state.session?.canDelete || state.selectedFolders.has(folder.id)) return;
+  state.selectedFolders.set(folder.id, folder);
+  card.classList.add("selected", "selection-pass");
+  syncSelectionBar();
+}
+
+function toggleFolderSelection(folder, card) {
+  if (!state.session?.canDelete) return;
+  if (state.selectedFolders.has(folder.id)) {
+    state.selectedFolders.delete(folder.id);
+    card.classList.remove("selected", "selection-pass");
+  } else {
+    selectFolder(folder, card);
+  }
+  syncSelectionBar();
+}
+
 function clearFileSelection(update = true) {
   state.selectedFiles.clear();
+  state.selectedFolders.clear();
   state.selecting = false;
   $$(".file-card.selected, .file-card.selection-pass").forEach((card) => card.classList.remove("selected", "selection-pass"));
   if (update) syncSelectionBar();
@@ -1043,10 +1398,17 @@ function clearFileSelection(update = true) {
 }
 
 function syncSelectionBar() {
-  const count = state.selectedFiles.size;
+  const fileCount = state.selectedFiles.size;
+  const folderCount = state.selectedFolders.size;
+  const count = fileCount + folderCount;
   $("#selection-count").textContent = `${count.toLocaleString("ja-JP")}件を選択中`;
   $("#selection-bar").hidden = count === 0;
-  $("#selection-download").disabled = count === 0;
+  $("#selection-download").disabled = fileCount === 0;
+  $("#selection-move").hidden = !state.session?.canEditFiles || !state.session?.canEditFolders;
+  $("#selection-move").disabled = count === 0;
+  $("#selection-delete").hidden = !state.session?.canDelete && !state.session?.canRequestDelete;
+  $("#selection-delete").disabled = count === 0;
+  $("#selection-delete").textContent = state.session?.canDelete ? "削除" : "削除申請";
 }
 
 async function startSelectedDownloads() {
@@ -1059,8 +1421,222 @@ async function startSelectedDownloads() {
     if (error.name !== "AbortError") setNotice(error.message, true);
     return;
   }
+  await executeDownloads(files, targets);
+}
+
+async function deleteSelectedItems() {
+  const files = [...state.selectedFiles.values()];
+  const folders = [...state.selectedFolders.values()];
+  const count = files.length + folders.length;
+  if (!count) return;
+  const requesting = !state.session?.canDelete && state.session?.canRequestDelete;
+  const folderNote = folders.length ? "\nフォルダは空の場合だけ削除できます。" : "";
+  const message = requesting
+    ? `${files.length}件の削除を管理者へ申請しますか？`
+    : `${count}件を削除しますか？ファイルはゴミ箱へ移動します。${folderNote}`;
+  if (!confirm(message)) return;
+  const button = $("#selection-delete");
+  button.disabled = true;
+  button.textContent = requesting ? "申請中…" : "削除中…";
+  let completed = 0;
+  let failed = 0;
+  try {
+    for (const file of files) {
+      try {
+        if (requesting) await api(`/files/${file.id}/deletion-request`, { method: "POST", body: "{}" });
+        else await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
+        completed += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    if (!requesting) {
+      for (const folder of folders) {
+        try {
+          await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
+          completed += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+    }
+    clearFileSelection();
+    setNotice(failed
+      ? `${completed}件を処理しました。${failed}件は削除できませんでした。中身のあるフォルダなどをご確認ください。`
+      : requesting ? `${completed}件の削除申請を送りました。` : `${completed}件を削除しました。`, Boolean(failed));
+    await Promise.all([loadItems(), loadUsage(), loadDeletionRequestCount()]);
+  } finally {
+    button.disabled = false;
+    syncSelectionBar();
+  }
+}
+
+async function openMoveDialog() {
+  const files = [...state.selectedFiles.values()];
+  const folders = [...state.selectedFolders.values()];
+  if (!files.length && !folders.length) return;
+  if (!state.session?.canEditFiles || !state.session?.canEditFolders) return;
+  const select = $("#move-destination");
+  const submit = $("#move-submit");
+  $("#move-error").textContent = "";
+  $("#move-copy").textContent = `${files.length + folders.length}件の移動先を選択してください。`;
+  select.innerHTML = '<option value="">読み込み中…</option>';
+  select.disabled = true;
+  submit.disabled = true;
+  $("#move-dialog").showModal();
+  try {
+    const destinations = await collectMoveDestinations();
+    const selectedFolderIds = new Set(folders.map((folder) => Number(folder.id)));
+    state.moveDestinations.clear();
+    select.innerHTML = "";
+    if (!files.length) select.append(new Option("Cloud Storage（最上位）", "root"));
+    for (const destination of destinations) {
+      if (selectedFolderIds.has(destination.folder.id) || destination.ancestorIds.some((id) => selectedFolderIds.has(id))) continue;
+      state.moveDestinations.set(Number(destination.folder.id), destination.folder);
+      select.append(new Option(destination.label, String(destination.folder.id)));
+    }
+    if (!select.options.length) throw new Error("選択できる移動先がありません。");
+    select.disabled = false;
+    submit.disabled = false;
+  } catch (error) {
+    $("#move-error").textContent = error.message;
+  }
+}
+
+async function collectMoveDestinations(parentId = null, path = [], ancestorIds = [], output = []) {
+  const params = new URLSearchParams({ sort: "name" });
+  if (parentId) params.set("folderId", String(parentId));
+  const data = await api(`/items?${params}`);
+  const folders = [...(data.folders || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), "ja"));
+  for (const folder of folders) {
+    const nextPath = [...path, folder.name];
+    output.push({ folder, label: nextPath.join(" / "), ancestorIds: [...ancestorIds] });
+    await collectMoveDestinations(Number(folder.id), nextPath, [...ancestorIds, Number(folder.id)], output);
+  }
+  return output;
+}
+
+async function moveSelectedItems(event) {
+  event.preventDefault();
+  const files = [...state.selectedFiles.values()];
+  const folders = [...state.selectedFolders.values()];
+  const value = $("#move-destination").value;
+  const destinationId = value === "root" ? null : Number(value);
+  if (files.length && !destinationId) {
+    $("#move-error").textContent = "ファイルはフォルダ内へ移動してください。";
+    return;
+  }
+  const destination = destinationId ? state.moveDestinations.get(destinationId) : null;
+  const submit = $("#move-submit");
+  submit.disabled = true;
+  submit.textContent = "移動中…";
+  let completed = 0;
+  let failed = 0;
+  try {
+    const destinationKey = destination ? await ensureAdminFolderKey(destination) : null;
+    for (const file of files) {
+      try {
+        if (!file.fileKey || !destinationKey) throw new Error("ファイル鍵を確認できません。");
+        const wrapped = await TRoomCrypto.rewrapFileForFolder(file.fileKey, destinationKey);
+        await api(`/files/${file.id}`, { method: "PATCH", body: JSON.stringify({ folderId: destinationId, ...wrapped }) });
+        completed += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    for (const folder of folders) {
+      try {
+        if (!destinationId && !folder.isProtected) throw new Error("PWを持たないフォルダは最上位へ移動できません。");
+        const folderKey = await ensureAdminFolderKey(folder);
+        const parentPackage = destinationKey ? await TRoomCrypto.rewrapFolderForParent(folderKey, destinationKey) : {};
+        await api(`/folders/${folder.id}`, { method: "PATCH", body: JSON.stringify({ name: folder.name, passwordAction: "keep", parentId: destinationId, ...parentPackage }) });
+        completed += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    $("#move-dialog").close();
+    clearFileSelection();
+    setNotice(failed ? `${completed}件を移動しました。${failed}件は移動できませんでした。` : `${completed}件を移動しました。`, Boolean(failed));
+    await loadItems();
+  } catch (error) {
+    $("#move-error").textContent = error.message;
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "移動する";
+  }
+}
+
+async function downloadCurrentFolder() {
+  if (!state.folderId || state.downloadActive || !("showDirectoryPicker" in window)) return;
+  let destination;
+  try {
+    destination = await TCloudMedia.chooseDownloadDirectory();
+  } catch (error) {
+    if (error.name !== "AbortError") setNotice(error.message, true);
+    return;
+  }
+  try {
+    const folderKey = state.crypto.folderKeys.get(Number(state.folderId));
+    if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
+    setNotice("フォルダ内のデータを確認しています。");
+    const files = await collectFolderDownloads(Number(state.folderId), folderKey);
+    if (!files.length) {
+      setNotice("このフォルダにダウンロードできるファイルはありません。");
+      return;
+    }
+    const rootHandle = await createUniqueDirectoryHandle(destination, $("#view-title").textContent);
+    const targets = new Map();
+    for (const file of files) {
+      let directory = rootHandle;
+      for (const name of file.downloadDirectories || []) {
+        directory = await directory.getDirectoryHandle(TCloudMedia.safeFilename(name), { create: true });
+      }
+      targets.set(file.id, await directory.getFileHandle(TCloudMedia.safeFilename(file.name), { create: true }));
+    }
+    setNotice("");
+    await executeDownloads(files, targets);
+  } catch (error) {
+    setNotice(error.message, true);
+  }
+}
+
+async function collectFolderDownloads(folderId, folderKey, downloadDirectories = [], output = []) {
+  state.crypto.folderKeys.set(Number(folderId), folderKey);
+  const params = new URLSearchParams({ folderId: String(folderId), sort: "oldest" });
+  const data = await api(`/items?${params}`);
+  const folders = await hydrateFolderRecords(data.folders || []);
+  const files = await hydrateFileRecords(data.files || []);
+  for (const file of files) {
+    output.push({ ...file, downloadDirectories, downloadDisplayName: [...downloadDirectories, file.name].join("/") });
+  }
+  for (const folder of folders) {
+    const childKey = state.crypto.folderKeys.get(Number(folder.id));
+    if (!childKey) throw new Error(`「${folder.name}」のロックを解除してから、もう一度お試しください。`);
+    await collectFolderDownloads(Number(folder.id), childKey, [...downloadDirectories, folder.name], output);
+  }
+  return output;
+}
+
+async function createUniqueDirectoryHandle(parentHandle, requestedName) {
+  const safeName = TCloudMedia.safeFilename(requestedName || "T-Cloud Download");
+  for (let suffix = 0; suffix < 1000; suffix++) {
+    const name = suffix ? `${safeName} (${suffix})` : safeName;
+    try {
+      await parentHandle.getDirectoryHandle(name);
+    } catch (error) {
+      if (error.name === "NotFoundError") return parentHandle.getDirectoryHandle(name, { create: true });
+      if (error.name === "TypeMismatchError") continue;
+      throw error;
+    }
+  }
+  throw new Error("保存先フォルダを作成できませんでした。");
+}
+
+async function executeDownloads(files, targets) {
   state.downloadActive = true;
   state.downloadAbort = new AbortController();
+  syncAvailableActions();
   renderDownloadQueue(files);
   $("#download-dialog").showModal();
   $("#download-cancel").hidden = false;
@@ -1072,7 +1648,7 @@ async function startSelectedDownloads() {
     for (const file of files) {
       activeFile = file;
       if (state.downloadAbort.signal.aborted) throw new DOMException("中止しました", "AbortError");
-      $("#download-current").textContent = file.name;
+      $("#download-current").textContent = file.downloadDisplayName || file.name;
       updateDownloadQueueItem(file.id, "処理中", "");
       await recordDownloadEvent(file.id, "download_started");
       await downloadFile(file, state.downloadAbort.signal, targets.get(file.id) || null);
@@ -1095,6 +1671,7 @@ async function startSelectedDownloads() {
   } finally {
     state.downloadActive = false;
     state.downloadAbort = null;
+    syncAvailableActions();
     await releaseDownloadWakeLock();
     $("#download-cancel").hidden = true;
     $("#download-close").disabled = false;
@@ -1193,7 +1770,7 @@ function saveBlob(blob, name) {
 }
 
 function renderDownloadQueue(files) {
-  $("#download-queue").innerHTML = files.map((file) => `<li data-download-id="${file.id}"><span>${escapeHtml(file.name)}</span><span>待機中</span></li>`).join("");
+  $("#download-queue").innerHTML = files.map((file) => `<li data-download-id="${file.id}"><span>${escapeHtml(file.downloadDisplayName || file.name)}</span><span>待機中</span></li>`).join("");
   $("#download-summary").textContent = `${files.length}件を準備しています`;
   $("#download-current").textContent = "";
   updateDownloadProgress(0, files.length);
@@ -1274,95 +1851,249 @@ function renderBreadcrumbs(items) {
   const home = document.createElement("button");
   home.type = "button";
   home.textContent = "Cloud Storage";
-  home.addEventListener("click", () => {
-    state.folderId = null;
-    state.kind = "";
-    state.view = "all";
-    clearSearch();
-    $("#view-title").textContent = "フォルダ";
-    syncAvailableActions();
-    loadItems();
-  });
+  home.addEventListener("click", () => navigateToFolder(null, "フォルダ"));
   nav.append(home);
   for (const item of items) {
     const span = document.createElement("span");
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = item.name;
-    button.addEventListener("click", () => {
-      state.folderId = item.id;
-      state.kind = "";
-      state.view = "all";
-      clearSearch();
-      $("#view-title").textContent = item.name;
-      syncAvailableActions();
-      loadItems();
-    });
+    button.addEventListener("click", () => navigateToFolder(item.id, item.name));
     span.append(button);
     nav.append(span);
   }
 }
 
-async function uploadFiles(files) {
+async function uploadSelectedFolder(event) {
+  event.preventDefault();
+  const selection = state.folderUploadSelection;
+  if (!selection || state.uploading) return;
+  const submitButton = event.currentTarget.querySelector('button[type="submit"]');
+  $("#folder-upload-error").textContent = "";
+  try {
+    if (!state.crypto.publicKey || !state.crypto.fileEncryptionReady) throw new Error("暗号化の初期設定を完了してください。");
+    const baseParentId = state.folderId ? Number(state.folderId) : null;
+    const baseParentKey = baseParentId ? state.crypto.folderKeys.get(baseParentId) : null;
+    if (baseParentId && !baseParentKey) throw new Error("保存先フォルダの暗号化鍵を解除してください。");
+    const rootPassword = baseParentId ? "" : $("#folder-upload-password").value;
+    if (!baseParentId && rootPassword.length < 4) throw new Error("フォルダパスワードは4文字以上で設定してください。");
+
+    state.uploading = true;
+    submitButton.disabled = true;
+    syncAvailableActions();
+    const panel = $("#upload-panel");
+    panel.hidden = false;
+    panel.classList.remove("upload-complete", "upload-error");
+    $("#upload-heading").textContent = "フォルダ構成を作成中";
+    $("#upload-file-name").textContent = selection.roots.join("、");
+    $("#upload-file-progress").textContent = "準備中…";
+    $("#upload-progress").style.width = "0%";
+
+    const foldersByPath = new Map();
+    for (let index = 0; index < selection.directories.length; index++) {
+      const path = selection.directories[index];
+      const parts = path.split("/");
+      const parentPath = parts.slice(0, -1).join("/");
+      const inheritedParent = parentPath ? foldersByPath.get(parentPath) : { id: baseParentId, key: baseParentKey };
+      if (!inheritedParent) throw new Error(`${path} の親フォルダを作成できませんでした。`);
+      const password = !inheritedParent.id ? rootPassword : "";
+      const created = await createEncryptedFolder(parts.at(-1), inheritedParent.id, inheritedParent.key, password);
+      foldersByPath.set(path, created);
+      const completed = index + 1;
+      const percent = Math.round(completed / selection.directories.length * 100);
+      $("#upload-status").textContent = `${completed} / ${selection.directories.length}フォルダ作成`;
+      $("#upload-file-progress").textContent = `${percent}%`;
+      $("#upload-progress").style.width = `${percent}%`;
+    }
+
+    const destinations = new Map();
+    for (const record of selection.files) {
+      const folderPath = record.relativePath.split("/").slice(0, -1).join("/");
+      const destination = foldersByPath.get(folderPath);
+      if (!destination) throw new Error(`${record.relativePath} の保存先を作成できませんでした。`);
+      destinations.set(record.file, { folderId: destination.id, folderKey: destination.key });
+    }
+
+    state.folderUploadSelection = null;
+    $("#folder-upload-password").value = "";
+    $("#folder-upload-dialog").close();
+    state.uploading = false;
+    submitButton.disabled = false;
+    syncAvailableActions();
+    if (selection.files.length) await uploadFiles(selection.files.map((record) => record.file), destinations);
+    else {
+      panel.classList.add("upload-complete");
+      $("#upload-heading").textContent = "フォルダ作成完了";
+      $("#upload-file-progress").textContent = "保存完了";
+      await Promise.all([loadItems(), loadUsage()]);
+    }
+  } catch (error) {
+    state.uploading = false;
+    submitButton.disabled = false;
+    syncAvailableActions();
+    $("#upload-panel").classList.add("upload-error");
+    $("#folder-upload-error").textContent = error.message;
+  }
+}
+
+async function createEncryptedFolder(name, parentId, parentKey, password = "") {
+  const encrypted = await TRoomCrypto.createFolderPackage(name, password, state.crypto.publicKey, parentKey);
+  const result = await api("/folders", {
+    method: "POST",
+    body: JSON.stringify({ ...encrypted.payload, name: encrypted.name, parentId })
+  });
+  const created = { id: Number(result.id), key: encrypted.folderKey };
+  state.crypto.folderKeys.set(created.id, created.key);
+  return created;
+}
+
+async function uploadFiles(files, destinations = null) {
   if (!files.length || !state.session.canUpload) return;
+  if (state.uploading) {
+    setNotice("アップロードが完了してから、次のファイルを追加してください。", true);
+    return;
+  }
   if (!state.crypto.fileEncryptionReady) {
     setNotice("暗号化の初期設定を完了してください。", true);
     return;
   }
   $("#file-input").value = "";
-  for (const file of files) {
-    try {
-      await uploadOne(file);
-    } catch (error) {
-      setNotice(`${file.name}: ${error.message}`, true);
-      break;
+  state.uploading = true;
+  state.uploadAbort = new AbortController();
+  syncAvailableActions();
+  const panel = $("#upload-panel");
+  const total = files.length;
+  const fixedFolderId = state.folderId ? Number(state.folderId) : null;
+  const fixedFolderKey = fixedFolderId ? state.crypto.folderKeys.get(fixedFolderId) : null;
+  let completed = 0;
+  let failed = false;
+  panel.hidden = false;
+  panel.classList.remove("upload-complete", "upload-error");
+  $("#upload-heading").textContent = "アップロード中";
+  $("#upload-status").textContent = `0 / ${total}件完了`;
+  $("#upload-progress").style.width = "0%";
+  $("#upload-cancel").hidden = false;
+  $("#upload-cancel").disabled = false;
+  try {
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
+      try {
+        throwIfUploadCancelled(state.uploadAbort.signal);
+        const destination = destinations?.get(file);
+        const destinationFolderId = destination?.folderId ?? fixedFolderId;
+        const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
+        await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal);
+        completed = index + 1;
+        $("#upload-status").textContent = `${completed} / ${total}件完了`;
+      } catch (error) {
+        failed = true;
+        const cancelled = error.name === "AbortError";
+        if (!cancelled) panel.classList.add("upload-error");
+        $("#upload-heading").textContent = cancelled ? "アップロードを停止しました" : "アップロード停止";
+        $("#upload-status").textContent = `${completed} / ${total}件完了`;
+        $("#upload-file-progress").textContent = cancelled ? "未完了分は保存されていません" : `${index + 1}件目で停止`;
+        setNotice(cancelled ? `アップロードを停止しました。完了済みの${completed}件は保存されています。` : `${file.name}: ${error.message}`, !cancelled);
+        break;
+      }
     }
+    if (!failed) {
+      panel.classList.add("upload-complete");
+      $("#upload-heading").textContent = "アップロード完了";
+      $("#upload-file-progress").textContent = "保存完了";
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      panel.hidden = true;
+    }
+  } finally {
+    state.uploading = false;
+    state.uploadAbort = null;
+    $("#upload-cancel").hidden = true;
+    $("#upload-cancel").disabled = false;
+    syncAvailableActions();
   }
-  $("#upload-panel").hidden = true;
   await Promise.all([loadItems(), loadUsage()]);
 }
 
-async function uploadOne(file) {
+async function uploadOne(file, index, total, destinationFolderId, destinationFolderKey, signal) {
+  throwIfUploadCancelled(signal);
   if (isBlockedClientFile(file)) throw new Error("安全上、このファイル形式は保存できません。");
   if (!globalThis.TCloudSafety) throw new Error("安全性確認機能を読み込めません。ページを再読み込みしてください。");
   await TCloudSafety.inspect(file);
-  const folderKey = state.crypto.folderKeys.get(Number(state.folderId));
+  throwIfUploadCancelled(signal);
+  const folderId = Number(destinationFolderId);
+  const folderKey = destinationFolderKey || state.crypto.folderKeys.get(folderId);
   if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
   const mediaKind = detectClientKind(file.type || "application/octet-stream", file.name);
   const encrypted = await TRoomCrypto.createFilePackage(file, folderKey, mediaKind);
-  const init = await api("/uploads", {
-    method: "POST",
-    body: JSON.stringify({ ...encrypted.payload, folderId: state.folderId })
-  });
-  const panel = $("#upload-panel");
-  panel.hidden = false;
-  $("#upload-file-name").textContent = file.name;
-  const parts = [];
+  throwIfUploadCancelled(signal);
+  let init = null;
+  let uploadCompleted = false;
+  $("#upload-file-name").textContent = `${index} / ${total}件目：${file.name}`;
+  $("#upload-file-progress").textContent = "準備中…";
+  $("#upload-progress").style.width = "0%";
   try {
-    for (let offset = 0, partNumber = 1; offset < file.size; offset += init.chunkSize, partNumber++) {
-      const chunk = new Uint8Array(await file.slice(offset, Math.min(offset + init.chunkSize, file.size)).arrayBuffer());
-      const encryptedChunk = await TRoomCrypto.encryptFileChunk(encrypted.fileKey, chunk, partNumber - 1);
-      chunk.fill(0);
-      const part = await api(`/uploads/${init.id}/parts/${partNumber}`, { method: "PUT", body: encryptedChunk, rawBody: true });
-      parts.push(part);
-      const progress = Math.min(100, Math.round(((offset + Math.min(init.chunkSize, file.size - offset)) / file.size) * 100));
-      $("#upload-progress").style.width = `${progress}%`;
-      $("#upload-status").textContent = `${progress}%`;
-    }
-    await api(`/uploads/${init.id}/complete`, { method: "POST", body: JSON.stringify({ parts }) });
+    init = await api("/uploads", {
+      method: "POST",
+      body: JSON.stringify({ ...encrypted.payload, folderId }),
+      signal
+    });
+    const chunkCount = Math.ceil(file.size / init.chunkSize);
+    const parts = new Array(chunkCount);
+    let nextPartNumber = 1;
+    let uploadedBytes = 0;
+    const uploadWorker = async () => {
+      while (true) {
+        throwIfUploadCancelled(signal);
+        const partNumber = nextPartNumber++;
+        if (partNumber > chunkCount) return;
+        const offset = (partNumber - 1) * init.chunkSize;
+        const end = Math.min(offset + init.chunkSize, file.size);
+        const chunk = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+        const encryptedChunk = await TRoomCrypto.encryptFileChunk(encrypted.fileKey, chunk, partNumber - 1);
+        chunk.fill(0);
+        throwIfUploadCancelled(signal);
+        parts[partNumber - 1] = await api(`/uploads/${init.id}/parts/${partNumber}`, { method: "PUT", body: encryptedChunk, rawBody: true, signal });
+        uploadedBytes += end - offset;
+        const progress = Math.min(100, Math.round((uploadedBytes / file.size) * 100));
+        $("#upload-progress").style.width = `${progress}%`;
+        $("#upload-file-progress").textContent = `${progress}%`;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, chunkCount) }, uploadWorker));
+    throwIfUploadCancelled(signal);
+    $("#upload-file-progress").textContent = "保存処理中…";
+    await api(`/uploads/${init.id}/complete`, { method: "POST", body: JSON.stringify({ parts }), signal });
+    uploadCompleted = true;
+    if (signal?.aborted) return;
     const thumbnail = await makeThumbnail(file);
-    if (thumbnail) {
+    if (thumbnail && !signal?.aborted) {
       const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, encrypted.fileKey);
-      await api(`/files/${init.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true });
+      if (!signal?.aborted) await api(`/files/${init.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
     }
+    $("#upload-file-progress").textContent = "完了";
   } catch (error) {
-    try { await api(`/uploads/${init.id}`, { method: "DELETE", body: "{}" }); } catch {}
+    if (error.name === "AbortError" && uploadCompleted) return;
+    if (init?.id && !uploadCompleted) {
+      try { await api(`/uploads/${init.id}`, { method: "DELETE", body: "{}" }); } catch {}
+    }
     throw error;
   }
 }
 
+function cancelUploads() {
+  if (!state.uploadAbort || state.uploadAbort.signal.aborted) return;
+  $("#upload-cancel").disabled = true;
+  $("#upload-file-progress").textContent = "停止処理中…";
+  state.uploadAbort.abort();
+}
+
+function throwIfUploadCancelled(signal) {
+  if (signal?.aborted) throw new DOMException("アップロードを停止しました", "AbortError");
+}
+
 async function makeThumbnail(file) {
-  if (!file.type.startsWith("image/")) return null;
+  const kind = detectClientKind(file.type || "application/octet-stream", file.name);
+  if (kind === "video") return makeVideoThumbnail(file);
+  if (kind !== "image") return null;
   try {
     const image = await createImageBitmap(file);
     const max = 640;
@@ -1376,6 +2107,164 @@ async function makeThumbnail(file) {
   } catch { return null; }
 }
 
+async function makeVideoThumbnail(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    return await captureVideoThumbnail(url, file);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function captureVideoThumbnail(url, file = {}) {
+  const mpegType = mpegContainerType(file.name);
+  if (mpegType && globalThis.mpegts?.isSupported()) return captureMpegVideoThumbnail(url, file, mpegType);
+  return captureNativeVideoThumbnail(url);
+}
+
+async function captureNativeVideoThumbnail(url) {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "metadata";
+  video.src = url;
+  try {
+    video.load();
+    await waitForVideoEvent(video, "loadedmetadata");
+    if (Number.isFinite(video.duration) && video.duration > 0.2) {
+      const seeked = waitForVideoEvent(video, "seeked");
+      video.currentTime = Math.min(1, video.duration * 0.1);
+      await seeked;
+    } else if (video.readyState < 2) {
+      await waitForVideoEvent(video, "loadeddata");
+    }
+    return videoFrameToThumbnail(video);
+  } catch {
+    return null;
+  } finally {
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
+async function captureMpegVideoThumbnail(url, file, type) {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  const player = mpegts.createPlayer({ type, isLive: false, url, filesize: Number(file.size || file.sizeBytes || 0) || undefined }, {
+    enableWorker: false,
+    lazyLoad: true,
+    lazyLoadMaxDuration: 30,
+    seekType: "range"
+  });
+  try {
+    player.attachMediaElement(video);
+    player.load();
+    await waitForVideoEvent(video, "loadeddata", 20000);
+    if (Number.isFinite(video.duration) && video.duration > 0.5) {
+      try {
+        const seeked = waitForVideoEvent(video, "seeked", 8000);
+        video.currentTime = Math.min(1, video.duration * 0.1);
+        await seeked;
+      } catch {
+        // 最初に復号できた映像フレームを使用する。
+      }
+    }
+    return await videoFrameToThumbnail(video);
+  } catch {
+    return null;
+  } finally {
+    try { player.unload(); } catch {}
+    try { player.detachMediaElement(); } catch {}
+    try { player.destroy(); } catch {}
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
+function waitForVideoEvent(video, eventName, timeout = 12000) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener(eventName, done);
+      video.removeEventListener("error", failed);
+    };
+    const done = () => { cleanup(); resolve(); };
+    const failed = () => { cleanup(); reject(new Error("動画を読み込めませんでした。")); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error("動画の読み込みがタイムアウトしました。")); }, timeout);
+    video.addEventListener(eventName, done, { once: true });
+    video.addEventListener("error", failed, { once: true });
+  });
+}
+
+async function videoFrameToThumbnail(video) {
+  if (!video.videoWidth || !video.videoHeight || video.readyState < 2) return null;
+  const max = 640;
+  const scale = Math.min(1, max / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.getContext("2d", { alpha: false }).drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/webp", .78));
+}
+
+function mpegContainerType(name) {
+  const extension = String(name || "").split(".").pop().toLowerCase();
+  if (extension === "flv") return "flv";
+  if (["ts", "m2ts", "mts"].includes(extension)) return "m2ts";
+  return "";
+}
+
+function scheduleMissingVideoThumbnails() {
+  if (state.session?.role !== "admin" || state.view !== "all" || state.thumbnailBackfillRunning) return;
+  void backfillMissingVideoThumbnails();
+}
+
+async function backfillMissingVideoThumbnails() {
+  state.thumbnailBackfillRunning = true;
+  try {
+    for (const file of state.files) {
+      if (file.mediaKind !== "video" || file.hasThumbnail || !file.fileKey || state.thumbnailAttempts.has(Number(file.id))) continue;
+      state.thumbnailAttempts.add(Number(file.id));
+      await backfillVideoThumbnail(file);
+    }
+  } finally {
+    state.thumbnailBackfillRunning = false;
+  }
+}
+
+async function backfillVideoThumbnail(file) {
+  let mediaToken = "";
+  try {
+    const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
+    mediaToken = media.token;
+    const thumbnail = await captureVideoThumbnail(media.url, file);
+    if (!thumbnail) return;
+    const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
+    await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true });
+    file.hasThumbnail = true;
+    showGeneratedThumbnail(file, thumbnail);
+  } catch {
+    // 再生できない形式では、明確な動画アイコンを残す。
+  } finally {
+    if (mediaToken) TCloudMedia.releaseMedia(mediaToken);
+  }
+}
+
+function showGeneratedThumbnail(file, thumbnail) {
+  const stage = document.querySelector(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
+  if (!stage) return;
+  const url = URL.createObjectURL(thumbnail);
+  const image = new Image();
+  image.alt = "";
+  image.loading = "lazy";
+  image.onload = () => URL.revokeObjectURL(url);
+  image.onerror = () => URL.revokeObjectURL(url);
+  image.src = url;
+  stage.replaceChildren(image);
+}
+
 async function createFolder(event) {
   event.preventDefault();
   try {
@@ -1384,7 +2273,7 @@ async function createFolder(event) {
     if (state.folderId && !parentKey) throw new Error("親フォルダの暗号化鍵を解除してください。");
     const password = state.folderId ? "" : $("#folder-password").value;
     const encrypted = await TRoomCrypto.createFolderPackage($("#folder-name").value, password, state.crypto.publicKey, parentKey);
-    const result = await api("/folders", { method: "POST", body: JSON.stringify({ ...encrypted.payload, parentId: state.folderId }) });
+    const result = await api("/folders", { method: "POST", body: JSON.stringify({ ...encrypted.payload, name: encrypted.name, parentId: state.folderId }) });
     state.crypto.folderKeys.set(result.id, encrypted.folderKey);
     $("#folder-name").value = "";
     $("#folder-password").value = "";
@@ -1403,22 +2292,35 @@ async function unlockFolder(event) {
     const unlocked = await TRoomCrypto.unlockFolderWithPassword(folder, $("#unlock-password").value);
     await api(`/folders/${id}/unlock`, { method: "POST", body: JSON.stringify({ authProof: unlocked.authProof }) });
     state.crypto.folderKeys.set(id, unlocked.folderKey);
-    folder.name = await TRoomCrypto.decryptFolderName(folder, unlocked.folderKey);
     folder.isUnlocked = true;
     $("#unlock-dialog").close();
-    state.folderId = id;
-    state.kind = "";
-    state.view = "all";
-    clearSearch();
-    $("#view-title").textContent = folder.name;
-    syncAvailableActions();
-    await loadItems();
+    await navigateToFolder(id, folder.name);
   } catch (error) {
     $("#unlock-error").textContent = error.message;
   }
 }
 
-async function openPreview(file) {
+async function openPreview(file, options = {}) {
+  const { pushHistory = true } = options;
+  const dialog = $("#preview-dialog");
+  if (pushHistory && !dialog.open && state.historyReady) {
+    history.pushState({
+      tcloud: true,
+      folderId: state.folderId,
+      folderName: $("#view-title").textContent,
+      previewId: file.id
+    }, "", location.href);
+    state.previewHistoryActive = true;
+  } else if (!pushHistory && state.previewHistoryActive && state.historyReady) {
+    history.replaceState({
+      tcloud: true,
+      folderId: state.folderId,
+      folderName: $("#view-title").textContent,
+      previewId: file.id
+    }, "", location.href);
+  }
+  clearPreviewUrl();
+  state.previewFileId = Number(file.id);
   state.selected = file;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
@@ -1432,17 +2334,17 @@ async function openPreview(file) {
   $("#delete-file-button").hidden = !state.session.canDelete;
   const stage = $("#preview-stage");
   stage.innerHTML = "";
+  syncPreviewNavigation(file);
   let url = `${API}/files/${file.id}/view`;
   if (Number(file.cryptoVersion) === 1) {
     if (!file.fileKey) {
       stage.innerHTML = `<div class="preview-fallback"><p>暗号化鍵を解除できないため表示できません。</p></div>`;
-      $("#preview-dialog").showModal();
+      if (!dialog.open) dialog.showModal();
       return;
     }
     stage.innerHTML = `<div class="preview-fallback"><p>専用プレイヤーを準備しています…</p></div>`;
-    $("#preview-dialog").showModal();
+    if (!dialog.open) dialog.showModal();
     try {
-      clearPreviewUrl();
       const streaming = file.mediaKind === "video" || file.mediaKind === "audio" || Number(file.sizeBytes) > 128 * 1024 * 1024;
       if (streaming) {
         const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
@@ -1469,7 +2371,69 @@ async function openPreview(file) {
   } else {
     stage.innerHTML = `<div class="preview-fallback"><p>この形式はブラウザ内プレビューに対応していません。</p><p>ダウンロードしてご確認ください。</p></div>`;
   }
-  if (!$("#preview-dialog").open) $("#preview-dialog").showModal();
+  if (!dialog.open) dialog.showModal();
+}
+
+function previewImages() {
+  return state.files.filter((file) => !file.trashed && file.mediaKind === "image");
+}
+
+function syncPreviewNavigation(file) {
+  const images = previewImages();
+  const index = images.findIndex((item) => Number(item.id) === Number(file.id));
+  const show = file.mediaKind === "image" && index >= 0 && images.length > 1;
+  $("#preview-prev").hidden = !show;
+  $("#preview-next").hidden = !show;
+  $("#preview-counter").hidden = file.mediaKind !== "image" || index < 0;
+  $("#preview-counter").textContent = index >= 0 ? `${index + 1} / ${images.length}` : "";
+  $("#preview-prev").disabled = index <= 0;
+  $("#preview-next").disabled = index < 0 || index >= images.length - 1;
+}
+
+async function navigatePreview(direction) {
+  if (!$("#preview-dialog").open) return;
+  const images = previewImages();
+  const index = images.findIndex((file) => Number(file.id) === Number(state.previewFileId));
+  const next = images[index + direction];
+  if (!next) return;
+  await openPreview(next, { pushHistory: false });
+}
+
+function handlePreviewKeydown(event) {
+  if (!$("#preview-dialog").open) return;
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    navigatePreview(-1);
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    navigatePreview(1);
+  }
+}
+
+function handlePreviewTouchStart(event) {
+  const touch = event.changedTouches?.[0];
+  state.previewTouchStart = touch ? { x: touch.clientX, y: touch.clientY } : null;
+}
+
+function handlePreviewTouchEnd(event) {
+  const start = state.previewTouchStart;
+  const touch = event.changedTouches?.[0];
+  state.previewTouchStart = null;
+  if (!start || !touch) return;
+  const dx = touch.clientX - start.x;
+  const dy = touch.clientY - start.y;
+  if (Math.abs(dx) < 45 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
+  navigatePreview(dx < 0 ? 1 : -1);
+}
+
+function handlePreviewClosed() {
+  clearPreviewUrl();
+  state.previewFileId = null;
+  state.previewTouchStart = null;
+  if (state.previewHistoryActive && !state.handlingPopState) {
+    state.previewHistoryActive = false;
+    history.back();
+  }
 }
 
 function clearPreviewUrl() {
@@ -1526,29 +2490,47 @@ function openEditDialog() {
   if (!file) return;
   $("#edit-file-id").value = file.id;
   $("#edit-name").value = file.name;
-  $("#preview-dialog").close();
+  $("#edit-error").textContent = "";
+  closePreviewForAction();
   $("#edit-dialog").showModal();
+}
+
+function closePreviewForAction() {
+  state.previewHistoryActive = false;
+  if (state.historyReady) {
+    history.replaceState({
+      tcloud: true,
+      folderId: state.folderId,
+      folderName: $("#view-title").textContent,
+      previewId: null
+    }, "", location.href);
+  }
+  if ($("#preview-dialog").open) $("#preview-dialog").close();
 }
 
 async function saveFile(event) {
   event.preventDefault();
   const id = Number($("#edit-file-id").value);
+  $("#edit-error").textContent = "";
   try {
     const file = state.selected;
+    if (!file || Number(file.id) !== id) throw new Error("変更するファイルをもう一度開いてください。");
+    const name = cleanEditableName($("#edit-name").value);
     if (Number(file.cryptoVersion) === 1) {
-      const metadata = { name: $("#edit-name").value.trim(), mimeType: file.mimeType, mediaKind: file.mediaKind };
+      if (!file.fileKey) throw new Error("ファイルの暗号化鍵を解除してください。");
+      const metadata = { name, mimeType: file.mimeType, mediaKind: file.mediaKind };
       const encryptedMetadata = await TRoomCrypto.encryptFileMetadata(metadata, file.fileKey);
       await api(`/files/${id}`, { method: "PATCH", body: JSON.stringify(encryptedMetadata) });
       file.name = metadata.name;
       file.encryptedMetadata = encryptedMetadata.encryptedMetadata;
       file.metadataIv = encryptedMetadata.metadataIv;
     } else {
-      await api(`/files/${id}`, { method: "PATCH", body: JSON.stringify({ name: $("#edit-name").value }) });
+      await api(`/files/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
     }
     $("#edit-dialog").close();
     setNotice("ファイル情報を更新しました。");
     await loadItems();
-  } catch (error) { setNotice(error.message, true); }
+  } catch (error) { $("#edit-error").textContent = error.message; }
 }
 
 async function deleteSelectedFile() {
@@ -1613,6 +2595,28 @@ async function permanentlyDeleteSelectedFile() {
   } catch (error) { setNotice(error.message, true); }
 }
 
+async function emptyTrash() {
+  const count = state.files.length;
+  if (!count || !state.session?.canDelete) return;
+  if (!confirm(`ゴミ箱内の${count}件をすべて完全に削除します。元に戻せません。続けますか？`)) return;
+  const button = $("#empty-trash-button");
+  button.disabled = true;
+  button.textContent = "削除中…";
+  try {
+    const result = await api("/trash", { method: "DELETE", body: "{}" });
+    const failed = Number(result.failed || 0);
+    setNotice(failed
+      ? `${result.deleted}件を完全に削除しました。${failed}件は削除できなかったため、ゴミ箱に残しています。`
+      : `${result.deleted}件を完全に削除しました。` , Boolean(failed));
+    await Promise.all([loadItems(), loadUsage()]);
+  } catch (error) {
+    setNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "一括削除";
+  }
+}
+
 async function loadUsage() {
   try {
     const usage = await api("/usage");
@@ -1654,7 +2658,7 @@ function kindSymbol(kind) { return ({ image: "▧", video: "▶", audio: "♪", 
 function kindLabel(kind) { return ({ image: "写真", video: "動画", audio: "音声", document: "書類", other: "ファイル" })[kind] || "ファイル"; }
 function detectClientKind(mime, name) {
   if (mime.startsWith("image/")) return "image";
-  if (mime.startsWith("video/") || /\.(flv|mkv|mov|avi|webm|mpg|mpeg|mxf|gxf|lxf|3gp)$/i.test(name)) return "video";
+  if (mime.startsWith("video/") || /\.(mp4|m4v|flv|mkv|mov|avi|webm|mpg|mpeg|mxf|gxf|lxf|3gp|ts|m2ts|mts)$/i.test(name)) return "video";
   if (mime.startsWith("audio/") || /\.(m4a|mp3|wav|aac|flac|ogg)$/i.test(name)) return "audio";
   if (/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/i.test(name)) return "document";
   return "other";
@@ -1662,6 +2666,11 @@ function detectClientKind(mime, name) {
 function isBlockedClientFile(file) {
   return /\.(exe|msi|bat|cmd|com|scr|ps1|vbs|vbe|js|jse|wsf|wsh|reg|apk|app|dmg|pkg)$/i.test(file.name)
     || ["application/x-msdownload", "application/x-sh", "application/x-executable"].includes(file.type);
+}
+function cleanEditableName(value) {
+  const name = String(value || "").trim().replace(/[\u0000-\u001f\u007f]/g, "");
+  if (!name || name.length > 240 || name === "." || name === "..") throw new Error("名前を確認してください。");
+  return name;
 }
 function formatBytes(bytes) { const value = Number(bytes || 0); if (value < 1024) return `${value} B`; const units = ["KB", "MB", "GB", "TB"]; let size = value / 1024; let i = 0; while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; } return `${size >= 100 ? size.toFixed(0) : size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${units[i]}`; }
 function formatDate(value) { if (!value) return "—"; const date = new Date(String(value).replace(" ", "T") + (String(value).includes("Z") ? "" : "Z")); return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric" }).format(date); }

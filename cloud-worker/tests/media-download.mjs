@@ -24,17 +24,26 @@ for (let index = 0, offset = 0; index < chunks.length; offset += chunks[index].b
 const originalFetch = globalThis.fetch;
 let requestCount = 0;
 let retried = false;
+let activeRequests = 0;
+let maxConcurrentRequests = 0;
 globalThis.fetch = async (_url, options) => {
   requestCount += 1;
+  activeRequests += 1;
+  maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests);
   const match = /^bytes=(\d+)-(\d+)$/.exec(options.headers.Range);
   assert.ok(match, "Range header must be present");
   const start = Number(match[1]);
   const end = Number(match[2]);
-  if (!retried && start > 0) {
-    retried = true;
-    throw new TypeError("simulated transient network failure");
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    if (!retried && start > 0) {
+      retried = true;
+      throw new TypeError("simulated transient network failure");
+    }
+    return new Response(encryptedFile.slice(start, end + 1), { status: 206 });
+  } finally {
+    activeRequests -= 1;
   }
-  return new Response(encryptedFile.slice(start, end + 1), { status: 206 });
 };
 
 const writes = [];
@@ -74,6 +83,7 @@ assert.deepEqual(output, source, "decrypted output must match the original file"
 assert.equal(createWritableCalls, 2, "unsupported exclusive mode must retry with compatible options");
 assert.equal(retried, true, "a transient range failure must be retried");
 assert.equal(requestCount, chunks.length + 1);
+assert.equal(maxConcurrentRequests, 2, "two encrypted chunks should be fetched in parallel");
 assert.equal(closed, true);
 assert.equal(aborted, false);
 assert.deepEqual(progress.at(-1), [source.byteLength, source.byteLength]);

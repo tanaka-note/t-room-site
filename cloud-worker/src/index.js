@@ -82,6 +82,7 @@ async function handleApi(request, env, url, path) {
   if (path === "/api/folders" && request.method === "POST") return createFolder(request, env, session);
   if (path === "/api/uploads" && request.method === "POST") return createUpload(request, env, session);
   if (path === "/api/trash" && request.method === "GET") return listTrash(env, session);
+  if (path === "/api/trash" && request.method === "DELETE") return emptyTrash(env, session);
   if (path === "/api/usage" && request.method === "GET") return getUsage(env, session);
   if (path === "/api/upload-history" && request.method === "GET") return listUploadHistory(env, session);
   if (path === "/api/download-events" && request.method === "POST") return recordDownloadEvent(request, env, session);
@@ -282,7 +283,7 @@ async function listShares(env, session) {
       ff.name_iv AS fileFolderNameIv, ff.password_salt AS fileFolderPasswordSalt,
       ff.password_wrapped_key AS fileFolderPasswordWrappedKey, ff.password_wrap_iv AS fileFolderPasswordWrapIv,
       ff.admin_wrapped_key AS fileFolderAdminWrappedKey,
-      fo.id AS folderId, fo.parent_id AS folderParentId, fo.crypto_version AS folderCryptoVersion,
+      fo.id AS folderId, fo.parent_id AS folderParentId, fo.name AS folderName, fo.crypto_version AS folderCryptoVersion,
       fo.encrypted_name AS folderEncryptedName, fo.name_iv AS folderNameIv,
       fo.password_salt AS folderPasswordSalt, fo.password_wrapped_key AS folderPasswordWrappedKey,
       fo.password_wrap_iv AS folderPasswordWrapIv, fo.admin_wrapped_key AS folderAdminWrappedKey,
@@ -325,7 +326,7 @@ async function listShares(env, session) {
         folderAdminWrappedKey: row.fileFolderAdminWrappedKey
       } : null,
       folder: row.folderId ? {
-        id: row.folderId, parentId: row.folderParentId, cryptoVersion: row.folderCryptoVersion,
+        id: row.folderId, parentId: row.folderParentId, name: row.folderName, cryptoVersion: row.folderCryptoVersion,
         encryptedName: row.folderEncryptedName, nameIv: row.folderNameIv,
         passwordSalt: row.folderPasswordSalt, passwordWrappedKey: row.folderPasswordWrappedKey,
         passwordWrapIv: row.folderPasswordWrapIv, adminWrappedKey: row.folderAdminWrappedKey,
@@ -389,7 +390,7 @@ async function listPublicShareItems(token, request, env, url) {
   const requestedFolderId = optionalId(url.searchParams.get("folderId")) || Number(share.target_id);
   if (!(await folderWithinShare(env, requestedFolderId, Number(share.target_id)))) throw new HttpError(403, "共有範囲外のフォルダです。");
   const folder = await requireFolder(env, requestedFolderId);
-  const folders = await env.DB.prepare(`SELECT id, parent_id AS parentId, crypto_version AS cryptoVersion,
+  const folders = await env.DB.prepare(`SELECT id, parent_id AS parentId, name, crypto_version AS cryptoVersion,
     encrypted_name AS encryptedName, name_iv AS nameIv, parent_wrapped_key AS parentWrappedKey,
     parent_wrap_iv AS parentWrapIv, created_at AS createdAt
     FROM cloud_folders WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC`).bind(requestedFolderId).all();
@@ -484,19 +485,21 @@ async function listItems(url, env, session) {
   const query = normalizeText(url.searchParams.get("q"), 100).toLowerCase();
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
   const sort = ["name", "oldest", "size"].includes(url.searchParams.get("sort")) ? url.searchParams.get("sort") : "newest";
-  const folder = folderId ? await env.DB.prepare(`SELECT id, parent_id, name,
-    crypto_version AS cryptoVersion, encrypted_name AS encryptedName, name_iv AS nameIv,
-    password_salt AS passwordSalt, password_wrapped_key AS passwordWrappedKey,
-    password_wrap_iv AS passwordWrapIv, admin_wrapped_key AS adminWrappedKey,
-    parent_wrapped_key AS parentWrappedKey, parent_wrap_iv AS parentWrapIv,
-    password_hash IS NOT NULL AS is_protected
-    FROM cloud_folders WHERE id = ? AND deleted_at IS NULL`).bind(folderId).first() : null;
+  const folder = folderId ? await env.DB.prepare(`SELECT f.id, f.parent_id, f.name,
+    f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
+    f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
+    f.password_wrap_iv AS passwordWrapIv, f.admin_wrapped_key AS adminWrappedKey,
+    f.parent_wrapped_key AS parentWrappedKey, f.parent_wrap_iv AS parentWrapIv,
+    f.password_hash IS NOT NULL AS is_protected,
+    (SELECT COUNT(*) FROM cloud_files cf WHERE cf.folder_id = f.id AND cf.deleted_at IS NULL AND cf.status = 'ready') AS fileCount,
+    (SELECT COUNT(*) FROM cloud_folders sf WHERE sf.parent_id = f.id AND sf.deleted_at IS NULL) AS folderCount
+    FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first() : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
   if (folderId) await requireFolderAccess(env, folderId, session);
 
   const folderClauses = [folderId ? "f.parent_id = ?" : "f.parent_id IS NULL", "f.deleted_at IS NULL"];
   const folderValues = [session.sessionId, Math.floor(Date.now() / 1000), ...(folderId ? [folderId] : [])];
-  if (query) { folderClauses.push("(f.crypto_version = 1 OR LOWER(f.name) LIKE ?)"); folderValues.push(`%${query}%`); }
+  if (query) { folderClauses.push("LOWER(f.name) LIKE ?"); folderValues.push(`%${query}%`); }
   const folders = await env.DB.prepare(`
     SELECT f.id, f.parent_id AS parentId, f.name, f.created_at AS createdAt,
       f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
@@ -504,6 +507,8 @@ async function listItems(url, env, session) {
       f.password_wrap_iv AS passwordWrapIv, f.admin_wrapped_key AS adminWrappedKey,
       f.parent_wrapped_key AS parentWrappedKey, f.parent_wrap_iv AS parentWrapIv,
       f.password_hash IS NOT NULL AS isProtected,
+      (SELECT COUNT(*) FROM cloud_files cf WHERE cf.folder_id = f.id AND cf.deleted_at IS NULL AND cf.status = 'ready') AS fileCount,
+      (SELECT COUNT(*) FROM cloud_folders sf WHERE sf.parent_id = f.id AND sf.deleted_at IS NULL) AS folderCount,
       EXISTS(SELECT 1 FROM cloud_folder_unlocks u WHERE u.folder_id = f.id AND u.session_id = ? AND u.expires_at > ?) AS isUnlocked
     FROM cloud_folders f
     WHERE ${folderClauses.join(" AND ")}
@@ -541,6 +546,7 @@ async function listItems(url, env, session) {
 async function createFolder(request, env, session) {
   requireUpload(session);
   const body = await readJson(request, 8192);
+  const name = validName(body.name);
   const parentId = optionalId(body.parentId);
   if (parentId) {
     await requireFolder(env, parentId);
@@ -554,13 +560,13 @@ async function createFolder(request, env, session) {
     (parent_id, name, password_hash, created_by, crypto_version, encrypted_name, name_iv,
       password_salt, password_wrapped_key, password_wrap_iv, admin_wrapped_key,
       parent_wrapped_key, parent_wrap_iv)
-    VALUES (?, '[encrypted]', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(parentId, passwordHash, session.role, encrypted.encryptedName, encrypted.nameIv,
+    VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(parentId, name, passwordHash, session.role, encrypted.encryptedName, encrypted.nameIv,
       encrypted.passwordSalt, encrypted.passwordWrappedKey, encrypted.passwordWrapIv, encrypted.adminWrappedKey,
       parent.parentWrappedKey, parent.parentWrapIv).run();
   const id = Number(result.meta.last_row_id);
   await rememberFolderUnlock(env, session, id);
-  await audit(env, "folder_created", session, "folder", id, { encrypted: true, protected: Boolean(passwordHash), inheritedProtection: Boolean(parentId && !passwordHash) });
+  await audit(env, "folder_created", session, "folder", id, { encrypted: true, folderNameEncrypted: false, protected: Boolean(passwordHash), inheritedProtection: Boolean(parentId && !passwordHash) });
   return json({ ok: true, id }, 201);
 }
 
@@ -569,25 +575,42 @@ async function updateFolder(id, request, env, session) {
   const folder = await requireFolder(env, id);
   await requireFolderAccess(env, id, session);
   const body = await readJson(request, 8192);
-  if (Number(body.cryptoVersion) !== 1) throw new HttpError(400, "暗号化されたフォルダ情報が必要です。");
-  const encryptedName = validCryptoText(body.encryptedName, 2048, "フォルダ名");
-  const nameIv = validCryptoText(body.nameIv, 64, "フォルダ名IV");
-  if (body.passwordAction === "replace") {
+  const name = validName(body.name);
+  const moving = Object.prototype.hasOwnProperty.call(body, "parentId");
+  const parentId = moving ? optionalId(body.parentId) : folder.parent_id;
+  let parentPackage = null;
+  if (moving) {
+    if (parentId) {
+      await requireFolder(env, parentId);
+      await requireFolderAccess(env, parentId, session);
+      await ensureValidFolderMove(env, id, parentId);
+      parentPackage = normalizeParentWrappedFolder(body, true);
+    } else {
+      if (!folder.password_hash) throw new HttpError(400, "親フォルダの保護を引き継ぐフォルダは、PWを設定してから最上位へ移動してください。");
+      parentPackage = normalizeParentWrappedFolder(body, false);
+    }
+  }
+  const passwordAction = body.passwordAction === "replace" ? "replace" : "keep";
+  if (passwordAction === "replace") {
     if (folder.parent_id && !folder.password_hash) throw new HttpError(400, "親フォルダの保護を引き継ぐフォルダには個別PWを設定できません。");
     const authProof = validCryptoText(body.authProof, 256, "フォルダ認証");
     const passwordSalt = validCryptoText(body.passwordSalt, 128, "フォルダSalt");
     const passwordWrappedKey = validCryptoText(body.passwordWrappedKey, 512, "フォルダ鍵");
     const passwordWrapIv = validCryptoText(body.passwordWrapIv, 64, "フォルダ鍵IV");
     const passwordHash = await hashPassword(authProof);
-    await env.DB.prepare(`UPDATE cloud_folders SET encrypted_name = ?, name_iv = ?, password_hash = ?,
+    await env.DB.prepare(`UPDATE cloud_folders SET name = ?, password_hash = ?,
       password_salt = ?, password_wrapped_key = ?, password_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-      .bind(encryptedName, nameIv, passwordHash, passwordSalt, passwordWrappedKey, passwordWrapIv, id).run();
+      .bind(name, passwordHash, passwordSalt, passwordWrappedKey, passwordWrapIv, id).run();
     await rememberFolderUnlock(env, session, id);
   } else {
-    await env.DB.prepare("UPDATE cloud_folders SET encrypted_name = ?, name_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(encryptedName, nameIv, id).run();
+    await env.DB.prepare("UPDATE cloud_folders SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(name, id).run();
   }
-  await audit(env, "folder_updated", session, "folder", id, { encrypted: true, passwordChanged: body.passwordAction === "replace" });
+  if (moving) {
+    await env.DB.prepare(`UPDATE cloud_folders SET parent_id = ?, parent_wrapped_key = ?, parent_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id).run();
+  }
+  await audit(env, "folder_updated", session, "folder", id, { folderNameEncrypted: false, passwordChanged: passwordAction === "replace", moved: moving, parentId });
   return json({ ok: true });
 }
 
@@ -694,11 +717,20 @@ async function updateFile(id, request, env, session) {
   if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
   const body = await readJson(request, 16384);
   if (Number(file.crypto_version) === 1) {
-    const encryptedMetadata = validCryptoText(body.encryptedMetadata, 4096, "ファイル情報");
-    const metadataIv = validCryptoText(body.metadataIv, 64, "ファイル情報IV");
-    await env.DB.prepare("UPDATE cloud_files SET encrypted_metadata = ?, metadata_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(encryptedMetadata, metadataIv, id).run();
-    await audit(env, "file_updated", session, "file", id, { encrypted: true });
+    const encryptedMetadata = body.encryptedMetadata === undefined ? file.encrypted_metadata : validCryptoText(body.encryptedMetadata, 4096, "ファイル情報");
+    const metadataIv = body.metadataIv === undefined ? file.metadata_iv : validCryptoText(body.metadataIv, 64, "ファイル情報IV");
+    const moving = Object.prototype.hasOwnProperty.call(body, "folderId");
+    const folderId = moving ? optionalId(body.folderId) : file.folder_id;
+    if (!folderId) throw new HttpError(400, "ファイルはPW付きフォルダ内に保存してください。");
+    if (moving) {
+      await requireFolder(env, folderId);
+      await requireFolderAccess(env, folderId, session);
+    }
+    const wrappedFileKey = moving ? validCryptoText(body.wrappedFileKey, 512, "ファイル鍵") : file.wrapped_file_key;
+    const fileKeyIv = moving ? validCryptoText(body.fileKeyIv, 64, "ファイル鍵IV") : file.file_key_iv;
+    await env.DB.prepare("UPDATE cloud_files SET encrypted_metadata = ?, metadata_iv = ?, folder_id = ?, wrapped_file_key = ?, file_key_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(encryptedMetadata, metadataIv, folderId, wrappedFileKey, fileKeyIv, id).run();
+    await audit(env, "file_updated", session, "file", id, { encrypted: true, moved: moving, folderId });
     return json({ ok: true });
   }
   const name = body.name === undefined ? file.original_name : validName(body.name);
@@ -745,6 +777,26 @@ async function permanentlyDeleteFile(id, env, session) {
   await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(id).run();
   await audit(env, "file_deleted", session, "file", id);
   return json({ ok: true });
+}
+
+async function emptyTrash(env, session) {
+  requireDelete(session);
+  const rows = await env.DB.prepare("SELECT id, object_key, thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL ORDER BY id").all();
+  let deleted = 0;
+  let failed = 0;
+  for (const file of rows.results || []) {
+    try {
+      await env.FILES.delete(file.object_key);
+      if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
+      if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
+      await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(file.id).run();
+      await audit(env, "file_deleted", session, "file", file.id, { bulk: true });
+      deleted += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return json({ ok: failed === 0, deleted, failed });
 }
 
 async function putThumbnail(id, request, env, session) {
@@ -1077,6 +1129,7 @@ function publicFolderRecord(folder) {
   return {
     id: Number(folder.id),
     parentId: folder.parentId ?? folder.parent_id ?? null,
+    name: folder.name,
     cryptoVersion: folder.cryptoVersion ?? folder.crypto_version,
     encryptedName: folder.encryptedName ?? folder.encrypted_name,
     nameIv: folder.nameIv ?? folder.name_iv,
@@ -1135,6 +1188,18 @@ async function requireFolder(env, id) {
     parent_wrap_iv AS parentWrapIv, password_hash FROM cloud_folders WHERE id = ? AND deleted_at IS NULL`).bind(id).first();
   if (!folder) throw new HttpError(404, "フォルダが見つかりません。");
   return folder;
+}
+
+async function ensureValidFolderMove(env, folderId, parentId) {
+  let current = parentId;
+  let guard = 0;
+  while (current && guard++ < 100) {
+    if (Number(current) === Number(folderId)) throw new HttpError(400, "フォルダを自分自身または配下へ移動できません。");
+    const folder = await env.DB.prepare("SELECT parent_id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(current).first();
+    if (!folder) throw new HttpError(404, "移動先フォルダが見つかりません。");
+    current = folder.parent_id;
+  }
+  if (guard >= 100) throw new HttpError(400, "フォルダ階層を確認してください。");
 }
 
 async function requireFolderAccess(env, folderId, session) {
@@ -1300,7 +1365,7 @@ async function audit(env, eventType, session, targetType, targetId, details = nu
 
 function detectKind(mime, name) {
   if (mime.startsWith("image/")) return "image";
-  if (mime.startsWith("video/") || /\.(flv|mkv|mov|avi|webm|mpg|mpeg|mxf|gxf|lxf|3gp)$/i.test(name)) return "video";
+  if (mime.startsWith("video/") || /\.(mp4|m4v|flv|mkv|mov|avi|webm|mpg|mpeg|mxf|gxf|lxf|3gp|ts|m2ts|mts)$/i.test(name)) return "video";
   if (mime.startsWith("audio/") || /\.(m4a|mp3|wav|aac|flac|ogg)$/i.test(name)) return "audio";
   if (/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/i.test(name)) return "document";
   return "other";

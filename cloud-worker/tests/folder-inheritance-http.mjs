@@ -28,15 +28,15 @@ async function api(path, role, options = {}) {
 
 const keyPair = await webcrypto.subtle.generateKey({ name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, false, ["encrypt", "decrypt"]);
 const root = await TRoomCrypto.createFolderPackage("HTTPルート", "temporary-root-password", keyPair.publicKey);
-const rootResponse = await api("/folders", "admin", { method: "POST", body: JSON.stringify(root.payload) });
+const rootResponse = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...root.payload, name: root.name }) });
 if (rootResponse.status !== 201) throw new Error(`最上位フォルダ作成: ${rootResponse.status}`);
 const rootId = (await rootResponse.json()).id;
 
 const child = await TRoomCrypto.createFolderPackage("HTTP配下", "", keyPair.publicKey, root.folderKey);
-const missingRootPassword = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...child.payload, parentId: null }) });
+const missingRootPassword = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...child.payload, name: child.name, parentId: null }) });
 if (missingRootPassword.status !== 400) throw new Error(`最上位PWなし拒否: ${missingRootPassword.status}`);
 
-const childResponse = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...child.payload, parentId: rootId }) });
+const childResponse = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...child.payload, name: child.name, parentId: rootId }) });
 if (childResponse.status !== 201) throw new Error(`配下PWなし作成: ${childResponse.status}`);
 const childId = (await childResponse.json()).id;
 
@@ -44,11 +44,60 @@ const itemsResponse = await api(`/items?folderId=${rootId}`, "admin", { method: 
 const items = await itemsResponse.json();
 const childRecord = (items.folders || []).find((folder) => Number(folder.id) === Number(childId));
 if (!childRecord || childRecord.isProtected || childRecord.passwordSalt || !childRecord.parentWrappedKey) throw new Error("配下フォルダの継承状態が正しくありません。");
+if (childRecord.name !== child.name) throw new Error("フォルダ名が平文表示用として保存されていません。");
+if (Number(childRecord.fileCount) !== 0 || Number(childRecord.folderCount) !== 0) throw new Error("フォルダ件数の初期値が正しくありません。");
+if (Number(items.folder?.folderCount) < 1) throw new Error("開いているフォルダの件数集計が正しくありません。");
 
-const patchBody = JSON.stringify({ cryptoVersion: 1, encryptedName: child.payload.encryptedName, nameIv: child.payload.nameIv, passwordAction: "replace" });
-const subadminPatch = await api(`/folders/${childId}`, "subadmin", { method: "PATCH", body: patchBody });
-if (subadminPatch.status !== 403) throw new Error(`副管理者PW変更拒否: ${subadminPatch.status}`);
-const adminPatch = await api(`/folders/${childId}`, "admin", { method: "PATCH", body: patchBody });
-if (adminPatch.status !== 400) throw new Error(`継承フォルダ個別PW拒否: ${adminPatch.status}`);
+const renamedChild = "HTTP配下・名称変更済み";
+const renameBody = JSON.stringify({ name: renamedChild, passwordAction: "keep" });
+const subadminPatch = await api(`/folders/${childId}`, "subadmin", { method: "PATCH", body: renameBody });
+if (subadminPatch.status !== 403) throw new Error(`副管理者の名称変更拒否: ${subadminPatch.status}`);
+const adminRename = await api(`/folders/${childId}`, "admin", { method: "PATCH", body: renameBody });
+if (adminRename.status !== 200) throw new Error(`管理者の名称変更: ${adminRename.status}`);
+const renamedItems = await (await api(`/items?folderId=${rootId}`, "admin", { method: "GET", headers: {} })).json();
+if (!(renamedItems.folders || []).some((folder) => Number(folder.id) === Number(childId) && folder.name === renamedChild)) {
+  throw new Error("変更後のフォルダ名が一覧へ反映されていません。");
+}
+
+const inheritedPassword = await TRoomCrypto.rewrapFolderPassword(child.folderKey, "temporary-child-password");
+const inheritedPasswordPatch = await api(`/folders/${childId}`, "admin", {
+  method: "PATCH",
+  body: JSON.stringify({ name: renamedChild, passwordAction: "replace", ...inheritedPassword })
+});
+if (inheritedPasswordPatch.status !== 400) throw new Error(`継承フォルダ個別PW拒否: ${inheritedPasswordPatch.status}`);
+
+const fileBytes = new TextEncoder().encode("rename-http-test-body");
+const fileSource = { name: "変更前の写真.jpg", type: "image/jpeg", size: fileBytes.byteLength, lastModified: 1 };
+const filePackage = await TRoomCrypto.createFilePackage(fileSource, child.folderKey, "image");
+const uploadResponse = await api("/uploads", "admin", {
+  method: "POST",
+  body: JSON.stringify({ ...filePackage.payload, folderId: childId })
+});
+if (uploadResponse.status !== 201) throw new Error(`名称変更用ファイル作成: ${uploadResponse.status}`);
+const upload = await uploadResponse.json();
+const encryptedChunk = await TRoomCrypto.encryptFileChunk(filePackage.fileKey, fileBytes, 0);
+const partResponse = await api(`/uploads/${upload.id}/parts/1`, "admin", {
+  method: "PUT",
+  headers: { "Content-Type": "application/octet-stream" },
+  body: encryptedChunk
+});
+if (partResponse.status !== 200) throw new Error(`名称変更用ファイル転送: ${partResponse.status}`);
+const part = await partResponse.json();
+const completeResponse = await api(`/uploads/${upload.id}/complete`, "admin", {
+  method: "POST",
+  body: JSON.stringify({ parts: [part] })
+});
+if (completeResponse.status !== 200) throw new Error(`名称変更用ファイル保存: ${completeResponse.status}`);
+
+const changedFileName = "日本語・記号 OK（変更後）.jpg";
+const renamedFileMetadata = await TRoomCrypto.encryptFileMetadata({ name: changedFileName, mimeType: "image/jpeg", mediaKind: "image" }, filePackage.fileKey);
+const renameFileResponse = await api(`/files/${upload.id}`, "admin", {
+  method: "PATCH",
+  body: JSON.stringify(renamedFileMetadata)
+});
+if (renameFileResponse.status !== 200) throw new Error(`ファイル名変更: ${renameFileResponse.status}`);
+const updatedFile = (await (await api(`/files/${upload.id}`, "admin", { method: "GET", headers: {} })).json()).file;
+const updatedMetadata = await TRoomCrypto.decryptFileMetadata(updatedFile, filePackage.fileKey);
+if (updatedMetadata.name !== changedFileName) throw new Error("変更後のファイル名が暗号化メタデータへ保存されていません。");
 
 console.log("folder inheritance HTTP routes: ok");

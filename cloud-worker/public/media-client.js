@@ -3,6 +3,7 @@
 
   const registrations = new Map();
   const RETRY_DELAYS = [0, 400, 1200, 3000];
+  const TRANSFER_CONCURRENCY = 2;
   let workerReady = null;
 
   async function registerMedia(file, fileKey, endpoint) {
@@ -69,9 +70,20 @@
     let completed = false;
     try {
       const chunkCount = Number(file.chunkCount || Math.ceil(Number(file.sizeBytes) / Number(file.chunkSizeBytes)));
+      let nextIndex = 0;
+      const pending = new Map();
+      const fillWindow = () => {
+        while (nextIndex < chunkCount && pending.size < TRANSFER_CONCURRENCY) {
+          const index = nextIndex++;
+          pending.set(index, fetchAndDecryptChunk(file, fileKey, endpoint, index, options.signal));
+        }
+      };
+      fillWindow();
       for (let index = 0; index < chunkCount; index++) {
         if (options.signal?.aborted) throw new DOMException("中止しました", "AbortError");
-        const plain = await fetchAndDecryptChunk(file, fileKey, endpoint, index, options.signal);
+        const plain = await pending.get(index);
+        pending.delete(index);
+        fillWindow();
         await writable.write(plain);
         plain.fill(0);
         options.onProgress?.(Math.min(Number(file.sizeBytes), (index + 1) * Number(file.chunkSizeBytes)), Number(file.sizeBytes));
@@ -86,14 +98,22 @@
   }
 
   async function decryptToBlob(file, fileKey, endpoint, options = {}) {
-    const chunks = [];
     const chunkCount = Number(file.chunkCount || Math.ceil(Number(file.sizeBytes) / Number(file.chunkSizeBytes)));
-    for (let index = 0; index < chunkCount; index++) {
-      if (options.signal?.aborted) throw new DOMException("中止しました", "AbortError");
-      const plain = await fetchAndDecryptChunk(file, fileKey, endpoint, index, options.signal);
-      chunks.push(plain);
-      options.onProgress?.(Math.min(Number(file.sizeBytes), (index + 1) * Number(file.chunkSizeBytes)), Number(file.sizeBytes));
-    }
+    const chunks = new Array(chunkCount);
+    let nextIndex = 0;
+    let completedBytes = 0;
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= chunkCount) return;
+        if (options.signal?.aborted) throw new DOMException("中止しました", "AbortError");
+        const plain = await fetchAndDecryptChunk(file, fileKey, endpoint, index, options.signal);
+        chunks[index] = plain;
+        completedBytes += plain.byteLength;
+        options.onProgress?.(Math.min(Number(file.sizeBytes), completedBytes), Number(file.sizeBytes));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(TRANSFER_CONCURRENCY, chunkCount) }, worker));
     return new Blob(chunks, { type: file.mimeType || "application/octet-stream" });
   }
 

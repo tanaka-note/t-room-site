@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Storage</title>
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260808-4">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260809-12">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -61,16 +61,27 @@
     </aside>
 
     <section class="workspace">
+      <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true">
+        <div class="drop-overlay-copy">
+          <span aria-hidden="true">↑</span>
+          <strong>ここにファイルまたはフォルダをドロップ</strong>
+          <small>フォルダ構成を保ったまま暗号化して保存できます</small>
+        </div>
+      </div>
       <header class="topbar">
         <div>
           <p class="mobile-service">T-Cloud Storage</p>
           <h1 id="view-title">フォルダ</h1>
+          <p id="view-summary" class="view-summary" hidden></p>
         </div>
         <div class="top-actions">
+          <button id="empty-trash-button" class="danger-button" type="button" hidden>一括削除</button>
           <button id="new-folder-button" class="secondary-button" type="button">新しいフォルダ</button>
+          <button id="download-folder-button" class="secondary-button desktop-only" type="button">フォルダを一括DL</button>
           <button id="upload-button" class="primary-button" type="button">アップロード</button>
           <button id="mobile-add-button" class="primary-button mobile-add-button" type="button" aria-label="追加する">＋</button>
           <input id="file-input" type="file" multiple hidden>
+          <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
         </div>
       </header>
 
@@ -89,18 +100,23 @@
       </div>
 
       <div id="selection-bar" class="selection-bar" hidden>
-        <div><strong id="selection-count">0件を選択中</strong><small>ファイルのみ選択できます</small></div>
+        <div><strong id="selection-count">0件を選択中</strong><small>保存・移動・削除する項目を選択</small></div>
         <div class="selection-actions">
           <button id="selection-clear" class="secondary-button" type="button">選択解除</button>
-          <button id="selection-download" class="primary-button" type="button">ダウンロード</button>
+          <button id="selection-download" class="primary-button" type="button">保存</button>
+          <button id="selection-move" class="secondary-button" type="button">移動</button>
+          <button id="selection-delete" class="danger-button" type="button">削除</button>
         </div>
       </div>
 
       <nav id="breadcrumbs" class="breadcrumbs" aria-label="現在のフォルダ"></nav>
       <div id="upload-panel" class="upload-panel" hidden>
-        <div class="upload-panel-head"><strong>アップロード中</strong><span id="upload-status"></span></div>
+        <div class="upload-panel-head">
+          <div class="transfer-progress-title"><strong id="upload-heading">アップロード中</strong><span id="upload-status"></span></div>
+          <button id="upload-cancel" class="danger-button transfer-stop-button" type="button" hidden>停止</button>
+        </div>
         <div class="upload-track"><span id="upload-progress"></span></div>
-        <p id="upload-file-name"></p>
+        <p class="upload-file-row"><span id="upload-file-name"></span><span id="upload-file-progress"></span></p>
       </div>
       <p id="notice" class="notice" role="status"></p>
       <div id="content-grid" class="content-grid" aria-live="polite"></div>
@@ -126,9 +142,14 @@
   <dialog id="preview-dialog" class="preview-dialog">
     <div class="dialog-head">
       <div><span id="preview-kind" class="file-badge"></span><h2 id="preview-title"></h2></div>
-      <button class="dialog-close icon-button" type="button" aria-label="閉じる">×</button>
+      <button id="preview-close" class="dialog-close icon-button" type="button" aria-label="閉じる">×</button>
     </div>
-    <div id="preview-stage" class="preview-stage"></div>
+    <div id="preview-stage-wrap" class="preview-stage-wrap">
+      <button id="preview-prev" class="preview-nav preview-prev" type="button" aria-label="前の写真" hidden>‹</button>
+      <div id="preview-stage" class="preview-stage"></div>
+      <button id="preview-next" class="preview-nav preview-next" type="button" aria-label="次の写真" hidden>›</button>
+      <span id="preview-counter" class="preview-counter" hidden></span>
+    </div>
     <dl class="file-details">
       <div><dt>容量</dt><dd id="preview-size"></dd></div>
       <div><dt>保存日</dt><dd id="preview-date"></dd></div>
@@ -147,6 +168,7 @@
       <div class="dialog-head"><h2>ファイル情報</h2><button class="dialog-close icon-button" type="button">×</button></div>
       <input id="edit-file-id" type="hidden">
       <label><span>ファイル名</span><input id="edit-name" required maxlength="240"></label>
+      <p id="edit-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions"><button class="primary-button" type="submit">保存する</button></div>
     </form>
   </dialog>
@@ -159,6 +181,18 @@
       <p id="folder-password-note" class="dialog-note">このフォルダと配下を開く際に必要です。解除後はログアウトまで有効です。</p>
       <p id="folder-inherit-note" class="dialog-note" hidden>親フォルダの保護を引き継ぐため、新しいパスワードは必要ありません。</p>
       <div class="dialog-actions"><button class="primary-button" type="submit">作成する</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="folder-upload-dialog" class="form-dialog">
+    <form id="folder-upload-form" method="dialog">
+      <div class="dialog-head"><div><span class="file-badge">FOLDER UPLOAD</span><h2>フォルダをアップロード</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+      <p id="folder-upload-summary" class="dialog-note standalone-note"></p>
+      <label id="folder-upload-password-row"><span>フォルダパスワード</span><input id="folder-upload-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"></label>
+      <p id="folder-upload-password-note" class="dialog-note">アップロードするフォルダと配下を開く際に必要です。</p>
+      <p id="folder-upload-inherit-note" class="dialog-note" hidden>現在開いているフォルダの保護を引き継ぐため、新しいパスワードは必要ありません。</p>
+      <p id="folder-upload-error" class="form-error dialog-error" role="alert"></p>
+      <div class="dialog-actions"><button class="primary-button" type="submit">フォルダごと保存する</button></div>
     </form>
   </dialog>
 
@@ -232,6 +266,7 @@
     <div class="dialog-head"><h2>追加する</h2><button class="dialog-close icon-button" type="button">×</button></div>
     <div class="action-list">
       <button id="mobile-upload-action" class="action-row" type="button"><span class="action-icon">↑</span><span><strong>ファイルをアップロード</strong><small>写真、動画、音声、書類を追加（1ファイル最大10GB）</small></span></button>
+      <button id="desktop-folder-upload-action" class="action-row desktop-only" type="button"><span class="action-icon">▰</span><span><strong>フォルダをアップロード</strong><small>フォルダ構成を保ったまま一括で追加</small></span></button>
       <button id="mobile-folder-action" class="action-row" type="button"><span class="action-icon">＋</span><span><strong>新しいフォルダ</strong><small>パスワード付きフォルダも作成できます</small></span></button>
     </div>
   </dialog>
@@ -243,6 +278,16 @@
       <button id="restore-file-button" class="primary-button" type="button">元に戻す</button>
       <button id="permanent-delete-button" class="danger-button" type="button">完全に削除</button>
     </div>
+  </dialog>
+
+  <dialog id="move-dialog" class="form-dialog compact-dialog">
+    <form id="move-form">
+      <div class="dialog-head"><div><span class="file-badge">MOVE</span><h2>移動先を選択</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+      <p id="move-copy" class="dialog-note standalone-note"></p>
+      <label><span>移動先フォルダ</span><select id="move-destination" required></select></label>
+      <p id="move-error" class="form-error dialog-error" role="alert"></p>
+      <div class="dialog-actions"><button class="secondary-button dialog-close" type="button">キャンセル</button><button id="move-submit" class="primary-button" type="submit">移動する</button></div>
+    </form>
   </dialog>
 
   <dialog id="account-dialog" class="form-dialog compact-dialog">
@@ -283,7 +328,10 @@
         <button id="download-close" class="icon-button" type="button" aria-label="閉じる">×</button>
       </div>
       <div class="download-body">
-        <div class="download-summary"><strong id="download-summary">準備中</strong><span id="download-percent">0%</span></div>
+        <div class="download-summary">
+          <strong id="download-summary">準備中</strong>
+          <div class="download-progress-actions"><span id="download-percent">0%</span><button id="download-cancel" class="danger-button transfer-stop-button" type="button">停止</button></div>
+        </div>
         <div class="upload-track download-track"><span id="download-progress"></span></div>
         <p id="download-current" class="download-current"></p>
         <label class="wake-lock-setting">
@@ -295,17 +343,16 @@
       </div>
       <div class="dialog-actions download-actions">
         <button id="download-retry-wake" class="secondary-button" type="button" hidden>消灯防止を再試行</button>
-        <button id="download-cancel" class="danger-button" type="button">中止する</button>
       </div>
     </div>
   </dialog>
 
   <script src="/cloud/vendor/argon2.umd.min.js?v=4.12.0" defer></script>
   <script src="/cloud/vendor/mpegts-1.8.0.js?v=1.8.0" defer></script>
-  <script src="/cloud/crypto-vault.js?v=20260808-8" defer></script>
+  <script src="/cloud/crypto-vault.js?v=20260808-9" defer></script>
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
-  <script src="/cloud/media-client.js?v=20260808-2" defer></script>
-  <script src="/cloud/cloud.js?v=20260808-31" defer></script>
+  <script src="/cloud/media-client.js?v=20260808-3" defer></script>
+  <script src="/cloud/cloud.js?v=20260809-46" defer></script>
 </body>
 </html>

@@ -34,6 +34,8 @@ const fileShareUnlocked = await TRoomCrypto.unlockShareKey(fileSharePackage, fil
 const sharedFileMetadata = await TRoomCrypto.decryptFileMetadata(fileRecord, fileShareUnlocked.targetKey);
 const unlockedFileKey = await TRoomCrypto.unlockFileKey(fileRecord, recoveredFolderKey);
 const fileMetadata = await TRoomCrypto.decryptFileMetadata(fileRecord, unlockedFileKey);
+const renamedMetadataPackage = await TRoomCrypto.encryptFileMetadata({ ...fileMetadata, name: "家族写真・変更後.jpg" }, unlockedFileKey);
+const renamedMetadata = await TRoomCrypto.decryptFileMetadata({ ...fileRecord, ...renamedMetadataPackage }, unlockedFileKey);
 const chunkSource = new TextEncoder().encode("encrypted file body");
 const encryptedChunk = await TRoomCrypto.encryptFileChunk(unlockedFileKey, chunkSource, 0);
 const decryptedChunk = await TRoomCrypto.decryptFileChunk(unlockedFileKey, encryptedChunk, 0);
@@ -45,6 +47,13 @@ const childFolder = await TRoomCrypto.createFolderPackage("共有対象の子フ
 const childRecord = { cryptoVersion: 1, ...childFolder.payload };
 const sharedChildKey = await TRoomCrypto.unlockFolderFromParent(childRecord, adminKey);
 const sharedChildName = await TRoomCrypto.decryptFolderName(childRecord, sharedChildKey);
+const destinationFolder = await TRoomCrypto.createFolderPackage("移動先", "destination-test-8842", publicKey);
+const movedFileWrap = await TRoomCrypto.rewrapFileForFolder(unlockedFileKey, destinationFolder.folderKey);
+const movedFileKey = await TRoomCrypto.unlockFileKey({ ...fileRecord, ...movedFileWrap }, destinationFolder.folderKey);
+const movedFileMetadata = await TRoomCrypto.decryptFileMetadata(fileRecord, movedFileKey);
+const movedFolderWrap = await TRoomCrypto.rewrapFolderForParent(sharedChildKey, destinationFolder.folderKey);
+const movedChildKey = await TRoomCrypto.unlockFolderFromParent({ ...childRecord, ...movedFolderWrap }, destinationFolder.folderKey);
+const movedChildName = await TRoomCrypto.decryptFolderName(childRecord, movedChildKey);
 
 const sharePassword = "local-share-test-9341-strong";
 const sharePackage = await TRoomCrypto.createSharePackage(adminKey, sharePassword);
@@ -67,10 +76,10 @@ if (!vault.recoveryCode.startsWith("TRC1-") || subadmin.authProof.length < 40) {
 if (credentials.authProof !== repeatedCredentials.authProof || credentials.authProof.length < 40) {
   throw new Error("アカウント認証値の導出テストに失敗しました。");
 }
-if (fileMetadata.name !== fileSource.name || new TextDecoder().decode(decryptedChunk) !== "encrypted file body" || decryptedThumbnail.join(",") !== "1,2,3,4") {
+if (fileMetadata.name !== fileSource.name || renamedMetadata.name !== "家族写真・変更後.jpg" || new TextDecoder().decode(decryptedChunk) !== "encrypted file body" || decryptedThumbnail.join(",") !== "1,2,3,4") {
   throw new Error("ファイル暗号化の往復テストに失敗しました。");
 }
-if (childFolder.payload.passwordWrappedKey || childFolder.payload.authProof || !childFolder.payload.inheritsProtection || sharedChildName !== "共有対象の子フォルダ" || shareFolderName !== adminName || decryptedShareToken !== shareToken || derivedShareProof !== sharePackage.authProof || sharedFileMetadata.name !== "家族写真.jpg" || !wrongSharePasswordRejected) {
+if (childFolder.payload.passwordWrappedKey || childFolder.payload.authProof || !childFolder.payload.inheritsProtection || sharedChildName !== "共有対象の子フォルダ" || movedChildName !== sharedChildName || movedFileMetadata.name !== fileSource.name || shareFolderName !== adminName || decryptedShareToken !== shareToken || derivedShareProof !== sharePackage.authProof || sharedFileMetadata.name !== "家族写真.jpg" || !wrongSharePasswordRejected) {
   throw new Error("共有暗号化の往復テストに失敗しました。");
 }
 

@@ -205,6 +205,24 @@
     finally { raw.fill(0); }
   }
 
+  async function rewrapFolderForParent(folderKey, parentFolderKey) {
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", folderKey));
+    try {
+      return await wrapRawKey(raw, parentFolderKey, PARENT_FOLDER_WRAP_CONTEXT, "parentWrappedKey", "parentWrapIv");
+    } finally {
+      raw.fill(0);
+    }
+  }
+
+  async function rewrapFileForFolder(fileKey, folderKey) {
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", fileKey));
+    try {
+      return await wrapRawKey(raw, folderKey, FILE_KEY_CONTEXT, "wrappedFileKey", "fileKeyIv");
+    } finally {
+      raw.fill(0);
+    }
+  }
+
   async function createSharePackage(targetKey, password) {
     validateSharePassword(password);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", targetKey));
@@ -517,6 +535,7 @@
     decryptFolderName,
     encryptFolderName,
     rewrapFolderPassword,
+    rewrapFolderForParent,
     createSharePackage,
     deriveShareAuthProof,
     unlockShareKey,
@@ -524,6 +543,7 @@
     decryptShareToken,
     createFilePackage,
     unlockFileKey,
+    rewrapFileForFolder,
     decryptFileMetadata,
     encryptFileMetadata,
     encryptFileChunk,

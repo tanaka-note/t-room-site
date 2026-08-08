@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], files: [], selected: null, previewUrl: "", previewMediaToken: "", previewPlayer: null, downloadActive: false, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], files: [], selected: null, selectedFiles: new Map(), previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -28,15 +28,19 @@ function bindEvents() {
     $("#toggle-password").setAttribute("aria-label", input.type === "password" ? "パスワードを表示" : "パスワードを隠す");
   });
   $("#download-button").addEventListener("click", downloadSelected);
+  $("#share-selection-clear").addEventListener("click", clearFileSelection);
+  $("#share-selection-download").addEventListener("click", downloadFileSelection);
+  $("#share-selection-cancel").addEventListener("click", cancelSharedDownloads);
   $("#share-download-retry-wake").addEventListener("click", requestDownloadWakeLock);
   $("#share-keep-screen-awake").addEventListener("change", async (event) => {
     if (event.target.checked && state.downloadActive) await requestDownloadWakeLock();
     else await releaseDownloadWakeLock();
   });
   document.addEventListener("visibilitychange", handleDownloadVisibility);
+  window.addEventListener("popstate", handleShareHistoryNavigation);
   $("#history-button").addEventListener("click", openHistory);
   document.querySelectorAll(".close").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
-  $("#preview-dialog").addEventListener("close", clearPreview);
+  $("#preview-dialog").addEventListener("close", handlePreviewClosed);
 }
 
 async function unlockShare(event) {
@@ -53,14 +57,15 @@ async function unlockShare(event) {
     $("#share-password").value = "";
     $("#unlock-view").hidden = true;
     $("#browser-view").hidden = false;
-    await loadItems();
+    await loadItems(null, null, { historyMode: "replace" });
   } catch (error) {
     failUnlock(error.message.includes("復号") || error.message.includes("暗号化") ? "共有パスワードが違います。" : error.message);
   } finally { button.disabled = false; }
 }
 
-async function loadItems(folderId = null, pathIndex = null) {
+async function loadItems(folderId = null, pathIndex = null, options = {}) {
   setNotice("");
+  clearFileSelection();
   try {
     const query = folderId ? `?folderId=${folderId}` : "";
     const data = await api(`/items${query}`);
@@ -88,15 +93,16 @@ async function loadItems(folderId = null, pathIndex = null) {
           state.folderKeys.set(Number(folder.id), folderKey);
         }
       }
-      const folderName = await TRoomCrypto.decryptFolderName(folder, folderKey);
-      if (pathIndex !== null) state.path = state.path.slice(0, pathIndex + 1);
+      const folderName = folder.name;
+      if (Array.isArray(options.historyPath)) state.path = options.historyPath.map((item) => ({ id: Number(item.id), name: String(item.name) }));
+      else if (pathIndex !== null) state.path = state.path.slice(0, pathIndex + 1);
       if (!state.path.some((item) => Number(item.id) === Number(folder.id))) state.path.push({ id: Number(folder.id), name: folderName });
       state.folderId = Number(folder.id);
       const folders = [];
       for (const child of data.folders || []) {
         const childKey = await TRoomCrypto.unlockFolderFromParent(child, folderKey);
         state.folderKeys.set(Number(child.id), childKey);
-        folders.push({ ...child, name: await TRoomCrypto.decryptFolderName(child, childKey) });
+        folders.push({ ...child, name: child.name });
       }
       const files = [];
       for (const record of data.files || []) files.push(await hydrateSharedFile(record, folderKey));
@@ -106,6 +112,7 @@ async function loadItems(folderId = null, pathIndex = null) {
       renderItems(folders, files);
     }
     $("#browser-expiry").textContent = `有効期限：${formatEpoch(data.expiresAt)}`;
+    if (options.historyMode !== "none") updateShareHistory(options.historyMode === "replace", null);
   } catch (error) { setNotice(error.message, true); }
 }
 
@@ -135,8 +142,42 @@ function fileCard(file) {
   button.innerHTML = `<div class="thumb"><span class="symbol">${kindSymbol(file.mediaKind)}</span></div><div class="file-copy"><strong>${escapeHtml(file.name)}</strong><small>${formatBytes(file.sizeBytes)}</small></div>`;
   button.addEventListener("click", () => openPreview(file));
   article.append(button);
+  if (state.targetType === "folder") {
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "file-select-button";
+    selectButton.setAttribute("aria-label", `${file.name}を選択`);
+    selectButton.setAttribute("aria-pressed", "false");
+    selectButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleFileSelection(file, article, selectButton);
+    });
+    article.append(selectButton);
+  }
   if (file.hasThumbnail) loadThumbnail(file, article.querySelector(".thumb"));
   return article;
+}
+
+function toggleFileSelection(file, article, button) {
+  const selected = state.selectedFiles.has(Number(file.id));
+  if (selected) state.selectedFiles.delete(Number(file.id));
+  else state.selectedFiles.set(Number(file.id), file);
+  article.classList.toggle("selected", !selected);
+  button.setAttribute("aria-pressed", String(!selected));
+  syncFileSelection();
+}
+
+function clearFileSelection() {
+  state.selectedFiles.clear();
+  document.querySelectorAll(".file.selected").forEach((node) => node.classList.remove("selected"));
+  document.querySelectorAll(".file-select-button").forEach((button) => button.setAttribute("aria-pressed", "false"));
+  syncFileSelection();
+}
+
+function syncFileSelection() {
+  const count = state.selectedFiles.size;
+  $("#share-selection-bar").hidden = count === 0;
+  $("#share-selection-count").textContent = `${count}件を選択中`;
 }
 
 async function loadThumbnail(file, stage) {
@@ -159,12 +200,16 @@ function renderBreadcrumbs() {
   }
 }
 
-async function openPreview(file) {
+async function openPreview(file, options = {}) {
   state.selected = file;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
   const stage = $("#preview-stage"); stage.innerHTML = "<p>専用プレイヤーを準備しています…</p>";
-  $("#preview-dialog").showModal();
+  if (!$("#preview-dialog").open) $("#preview-dialog").showModal();
+  if (options.pushHistory !== false) {
+    updateShareHistory(false, Number(file.id));
+    state.previewHistoryActive = true;
+  }
   try {
     clearPreview();
     const streaming = file.mediaKind === "video" || file.mediaKind === "audio" || Number(file.sizeBytes) > 128 * 1024 * 1024;
@@ -189,37 +234,105 @@ async function openPreview(file) {
 async function downloadSelected() {
   const file = state.selected;
   if (!file) return;
-  let targetHandle = null;
+  await downloadFiles([file], $("#download-button"), false);
+}
+
+async function downloadFileSelection() {
+  const files = [...state.selectedFiles.values()];
+  if (!files.length) return;
+  await downloadFiles(files, $("#share-selection-download"), true);
+}
+
+async function downloadFiles(files, button, bulk) {
+  const targets = new Map();
   try {
-    if ("showSaveFilePicker" in window) targetHandle = await TCloudMedia.chooseDownloadTarget(file);
-    else if (Number(file.sizeBytes) > 512 * 1024 * 1024) throw new Error("このブラウザでは大容量ファイルの直接保存に対応していません。最新版のChromeまたはEdgeをご利用ください。");
+    if (files.length > 1 && "showDirectoryPicker" in window) {
+      const directory = await TCloudMedia.chooseDownloadDirectory();
+      const usedNames = new Set();
+      for (const file of files) {
+        const name = uniqueDownloadName(file.name, usedNames);
+        targets.set(Number(file.id), await directory.getFileHandle(name, { create: true }));
+      }
+    } else if (files.length === 1 && "showSaveFilePicker" in window) {
+      targets.set(Number(files[0].id), await TCloudMedia.chooseDownloadTarget(files[0]));
+    } else if (files.some((file) => Number(file.sizeBytes) > 512 * 1024 * 1024)) {
+      throw new Error("このブラウザでは大容量ファイルの直接保存に対応していません。最新版のChromeまたはEdgeをご利用ください。");
+    }
   } catch (error) {
     if (error.name !== "AbortError") setNotice(error.message, true);
     return;
   }
-  const button = $("#download-button"); button.disabled = true; button.textContent = "復号しています…";
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  state.downloadAbort = new AbortController();
   state.downloadActive = true;
+  $("#share-selection-cancel").hidden = !bulk;
   if ($("#share-keep-screen-awake").checked) await requestDownloadWakeLock();
+  let completed = 0;
   try {
-    if (targetHandle) {
-      await TCloudMedia.streamDownload(file, file.fileKey, `${API}/files/${file.id}/download`, targetHandle, {
-        onProgress: (done, total) => { button.textContent = `保存中 ${total ? Math.round(done / total * 100) : 100}%`; }
-      });
-    } else {
-      const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/download`);
-      const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = file.name; document.body.append(link); link.click(); link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    for (const file of files) {
+      if (state.downloadAbort.signal.aborted) throw new DOMException("ダウンロードを停止しました", "AbortError");
+      const prefix = files.length > 1 ? `${completed + 1} / ${files.length}件目 ` : "";
+      const targetHandle = targets.get(Number(file.id)) || null;
+      try {
+        if (targetHandle) {
+          await TCloudMedia.streamDownload(file, file.fileKey, `${API}/files/${file.id}/download`, targetHandle, {
+            signal: state.downloadAbort.signal,
+            onProgress: (done, total) => { button.textContent = `${prefix}保存中 ${total ? Math.round(done / total * 100) : 100}%`; }
+          });
+        } else {
+          const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/download`, {
+            signal: state.downloadAbort.signal,
+            onProgress: (done, total) => { button.textContent = `${prefix}準備中 ${total ? Math.round(done / total * 100) : 100}%`; }
+          });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = TCloudMedia.safeFilename(file.name);
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        }
+        completed++;
+        await recordEvent(file.id, "download_completed");
+      } catch (error) {
+        await recordEvent(file.id, "download_failed", error.name === "AbortError" ? "cancelled" : String(error.message).slice(0, 80));
+        throw error;
+      }
     }
-    await recordEvent(file.id, "download_completed");
+    if (bulk) {
+      setNotice(`${completed}件をZIP化せず、個別ファイルとして保存しました。`);
+      clearFileSelection();
+    }
   } catch (error) {
-    await recordEvent(file.id, "download_failed", String(error.message).slice(0, 80));
-    setNotice(error.message, true);
+    setNotice(error.name === "AbortError" ? `ダウンロードを停止しました。完了済みは${completed}件です。` : error.message, error.name !== "AbortError");
   } finally {
     state.downloadActive = false;
+    state.downloadAbort = null;
     await releaseDownloadWakeLock();
     button.disabled = false;
-    button.textContent = "ダウンロード";
+    button.textContent = originalLabel;
+    $("#share-selection-cancel").hidden = true;
   }
+}
+
+function cancelSharedDownloads() {
+  state.downloadAbort?.abort();
+  $("#share-selection-cancel").disabled = true;
+  setTimeout(() => { $("#share-selection-cancel").disabled = false; }, 500);
+}
+
+function uniqueDownloadName(value, usedNames) {
+  const safe = TCloudMedia.safeFilename(value);
+  const dot = safe.lastIndexOf(".");
+  const stem = dot > 0 ? safe.slice(0, dot) : safe;
+  const extension = dot > 0 ? safe.slice(dot) : "";
+  let name = safe;
+  let suffix = 2;
+  while (usedNames.has(name.toLowerCase())) name = `${stem} (${suffix++})${extension}`;
+  usedNames.add(name.toLowerCase());
+  return name;
 }
 
 async function requestDownloadWakeLock() {
@@ -290,6 +403,54 @@ function clearPreview() {
   state.previewUrl = "";
   if (state.previewMediaToken) TCloudMedia.releaseMedia(state.previewMediaToken);
   state.previewMediaToken = "";
+}
+
+function handlePreviewClosed() {
+  clearPreview();
+  if (state.previewHistoryActive && !state.handlingPopState) {
+    state.previewHistoryActive = false;
+    history.back();
+  }
+}
+
+function updateShareHistory(replace, previewId) {
+  const entry = {
+    tcloudShare: true,
+    folderId: state.targetType === "folder" ? state.folderId : null,
+    path: state.path.map((item) => ({ id: Number(item.id), name: String(item.name) })),
+    previewId: previewId ? Number(previewId) : null
+  };
+  if (replace || !state.historyReady) {
+    history.replaceState(entry, "", location.href);
+    state.historyReady = true;
+  } else {
+    history.pushState(entry, "", location.href);
+  }
+}
+
+async function handleShareHistoryNavigation(event) {
+  const entry = event.state;
+  if (!entry?.tcloudShare || $("#browser-view").hidden) return;
+  state.handlingPopState = true;
+  try {
+    if ($("#preview-dialog").open) {
+      state.previewHistoryActive = false;
+      $("#preview-dialog").close();
+    }
+    const folderChanged = state.targetType === "folder" && Number(entry.folderId) !== Number(state.folderId);
+    if (folderChanged) {
+      await loadItems(entry.folderId, null, { historyMode: "none", historyPath: entry.path || [] });
+    }
+    if (entry.previewId) {
+      const file = state.files.find((item) => Number(item.id) === Number(entry.previewId));
+      if (file) {
+        state.previewHistoryActive = true;
+        await openPreview(file, { pushHistory: false });
+      }
+    }
+  } finally {
+    state.handlingPopState = false;
+  }
 }
 
 function renderVideoPlayer(stage, file, url) {
