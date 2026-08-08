@@ -14,9 +14,14 @@ assert.match(client, /uploadAbort: null/);
 assert.match(client, /const fixedFolderId = state\.folderId \? Number\(state\.folderId\) : null/);
 assert.match(client, /const fixedFolderKey = fixedFolderId \? state\.crypto\.folderKeys\.get\(fixedFolderId\) : null/);
 assert.doesNotMatch(client, /destinationFolderId = state\.folderId/);
-assert.match(client, /async function uploadOne\(file, index, total, destinationFolderId, destinationFolderKey, signal\)/);
+assert.match(client, /async function uploadOne\(file, index, total, destinationFolderId, destinationFolderKey, signal, partLimiter, tracker\)/);
 assert.match(client, /rawBody: true, signal/);
 assert.match(client, /function cancelUploads\(\)/);
 assert.match(client, /state\.uploadAbort\.abort\(\)/);
+assert.match(client, /function getUploadConnectionLimit\(\)/);
+assert.match(client, /function createUploadLimiter\(limit\)/);
+assert.match(client, /async function uploadPartWithRetry\(path, body, signal\)/);
+assert.match(client, /const maxAttempts = 4/);
+assert.match(html, /id="upload-speed"/);
 
 console.log("upload/download stop and fixed upload destination: ok");

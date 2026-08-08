@@ -102,6 +102,7 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .upload-file-row { display: flex; justify-content: space-between; gap: 16px; }
 #upload-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #upload-file-progress { flex: 0 0 auto; font-weight: 700; }
+#upload-speed { margin-right: 10px; color: var(--teal); font-variant-numeric: tabular-nums; }
 .upload-panel.upload-complete { border-color: #9acbc5; background: #edf9f7; }
 .upload-panel.upload-error { border-color: #e2aeb2; background: #fff5f5; }
 .upload-panel.upload-error #upload-heading, .upload-panel.upload-error #upload-file-progress { color: var(--danger); }

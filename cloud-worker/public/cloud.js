@@ -1968,6 +1968,11 @@ async function uploadFiles(files, destinations = null) {
   syncAvailableActions();
   const panel = $("#upload-panel");
   const total = files.length;
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  const connectionLimit = getUploadConnectionLimit();
+  const fileLimit = Math.min(getUploadFileLimit(), total);
+  const partLimiter = createUploadLimiter(connectionLimit);
+  const tracker = createUploadTracker(files, totalBytes);
   const fixedFolderId = state.folderId ? Number(state.folderId) : null;
   const fixedFolderKey = fixedFolderId ? state.crypto.folderKeys.get(fixedFolderId) : null;
   let completed = 0;
@@ -1977,29 +1982,48 @@ async function uploadFiles(files, destinations = null) {
   $("#upload-heading").textContent = "アップロード中";
   $("#upload-status").textContent = `0 / ${total}件完了`;
   $("#upload-progress").style.width = "0%";
+  $("#upload-speed").textContent = "";
   $("#upload-cancel").hidden = false;
   $("#upload-cancel").disabled = false;
   try {
-    for (let index = 0; index < files.length; index++) {
-      const file = files[index];
-      try {
-        throwIfUploadCancelled(state.uploadAbort.signal);
-        const destination = destinations?.get(file);
-        const destinationFolderId = destination?.folderId ?? fixedFolderId;
-        const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
-        await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal);
-        completed = index + 1;
-        $("#upload-status").textContent = `${completed} / ${total}件完了`;
-      } catch (error) {
-        failed = true;
-        const cancelled = error.name === "AbortError";
-        if (!cancelled) panel.classList.add("upload-error");
-        $("#upload-heading").textContent = cancelled ? "アップロードを停止しました" : "アップロード停止";
-        $("#upload-status").textContent = `${completed} / ${total}件完了`;
-        $("#upload-file-progress").textContent = cancelled ? "未完了分は保存されていません" : `${index + 1}件目で停止`;
-        setNotice(cancelled ? `アップロードを停止しました。完了済みの${completed}件は保存されています。` : `${file.name}: ${error.message}`, !cancelled);
-        break;
+    let nextFileIndex = 0;
+    let firstError = null;
+    const fileWorker = async () => {
+      while (!firstError) {
+        if (state.uploadAbort.signal.aborted) {
+          firstError ||= {
+            error: new DOMException("アップロードを停止しました", "AbortError"),
+            file: files[Math.min(nextFileIndex, files.length - 1)],
+            index: Math.min(nextFileIndex, files.length - 1)
+          };
+          return;
+        }
+        const index = nextFileIndex++;
+        if (index >= files.length) return;
+        const file = files[index];
+        try {
+          const destination = destinations?.get(file);
+          const destinationFolderId = destination?.folderId ?? fixedFolderId;
+          const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
+          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker);
+          completed++;
+          tracker.finish(file, completed);
+        } catch (error) {
+          firstError ||= { error, file, index };
+          if (!state.uploadAbort.signal.aborted) state.uploadAbort.abort();
+        }
       }
+    };
+    await Promise.allSettled(Array.from({ length: fileLimit }, fileWorker));
+    if (firstError) {
+      failed = true;
+      const { error, file, index } = firstError;
+      const cancelled = error.name === "AbortError";
+      if (!cancelled) panel.classList.add("upload-error");
+      $("#upload-heading").textContent = cancelled ? "アップロードを停止しました" : "アップロード停止";
+      $("#upload-status").textContent = `${completed} / ${total}件完了`;
+      $("#upload-file-progress").textContent = cancelled ? "未完了分は保存されていません" : `${index + 1}件目で停止`;
+      setNotice(cancelled ? `アップロードを停止しました。完了済みの${completed}件は保存されています。` : `${file.name}: ${error.message}`, !cancelled);
     }
     if (!failed) {
       panel.classList.add("upload-complete");
@@ -2018,7 +2042,7 @@ async function uploadFiles(files, destinations = null) {
   await Promise.all([loadItems(), loadUsage()]);
 }
 
-async function uploadOne(file, index, total, destinationFolderId, destinationFolderKey, signal) {
+async function uploadOne(file, index, total, destinationFolderId, destinationFolderKey, signal, partLimiter, tracker) {
   throwIfUploadCancelled(signal);
   if (isBlockedClientFile(file)) throw new Error("安全上、このファイル形式は保存できません。");
   if (!globalThis.TCloudSafety) throw new Error("安全性確認機能を読み込めません。ページを再読み込みしてください。");
@@ -2028,13 +2052,12 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
   const folderKey = destinationFolderKey || state.crypto.folderKeys.get(folderId);
   if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
   const mediaKind = detectClientKind(file.type || "application/octet-stream", file.name);
+  const thumbnailPromise = makeThumbnail(file);
   const encrypted = await TRoomCrypto.createFilePackage(file, folderKey, mediaKind);
   throwIfUploadCancelled(signal);
   let init = null;
   let uploadCompleted = false;
-  $("#upload-file-name").textContent = `${index} / ${total}件目：${file.name}`;
-  $("#upload-file-progress").textContent = "準備中…";
-  $("#upload-progress").style.width = "0%";
+  tracker.start(file, index, total);
   try {
     init = await api("/uploads", {
       method: "POST",
@@ -2052,29 +2075,31 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
         if (partNumber > chunkCount) return;
         const offset = (partNumber - 1) * init.chunkSize;
         const end = Math.min(offset + init.chunkSize, file.size);
-        const chunk = new Uint8Array(await file.slice(offset, end).arrayBuffer());
-        const encryptedChunk = await TRoomCrypto.encryptFileChunk(encrypted.fileKey, chunk, partNumber - 1);
-        chunk.fill(0);
-        throwIfUploadCancelled(signal);
-        parts[partNumber - 1] = await api(`/uploads/${init.id}/parts/${partNumber}`, { method: "PUT", body: encryptedChunk, rawBody: true, signal });
+        parts[partNumber - 1] = await partLimiter(async () => {
+          throwIfUploadCancelled(signal);
+          const chunk = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+          const encryptedChunk = await TRoomCrypto.encryptFileChunk(encrypted.fileKey, chunk, partNumber - 1);
+          chunk.fill(0);
+          throwIfUploadCancelled(signal);
+          return uploadPartWithRetry(`/uploads/${init.id}/parts/${partNumber}`, encryptedChunk, signal);
+        });
         uploadedBytes += end - offset;
-        const progress = Math.min(100, Math.round((uploadedBytes / file.size) * 100));
-        $("#upload-progress").style.width = `${progress}%`;
-        $("#upload-file-progress").textContent = `${progress}%`;
+        tracker.progress(file, end - offset, uploadedBytes);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(2, chunkCount) }, uploadWorker));
+    await Promise.all(Array.from({ length: Math.min(connectionLimitForFile(partLimiter.limit, total), chunkCount) }, uploadWorker));
     throwIfUploadCancelled(signal);
-    $("#upload-file-progress").textContent = "保存処理中…";
+    tracker.phase(file, "保存処理中…");
     await api(`/uploads/${init.id}/complete`, { method: "POST", body: JSON.stringify({ parts }), signal });
     uploadCompleted = true;
     if (signal?.aborted) return;
-    const thumbnail = await makeThumbnail(file);
+    tracker.phase(file, "サムネイル処理中…");
+    const thumbnail = await thumbnailPromise;
     if (thumbnail && !signal?.aborted) {
       const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, encrypted.fileKey);
       if (!signal?.aborted) await api(`/files/${init.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
     }
-    $("#upload-file-progress").textContent = "完了";
+    tracker.phase(file, "完了");
   } catch (error) {
     if (error.name === "AbortError" && uploadCompleted) return;
     if (init?.id && !uploadCompleted) {
@@ -2082,6 +2107,98 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
     }
     throw error;
   }
+}
+
+function getUploadConnectionLimit() {
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const mobile = matchMedia("(max-width: 760px)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if (connection?.saveData || ["slow-2g", "2g"].includes(connection?.effectiveType)) return 1;
+  if (connection?.effectiveType === "3g") return 2;
+  const cpu = Number(navigator.hardwareConcurrency) || 4;
+  const memory = Number(navigator.deviceMemory) || 4;
+  if (mobile) return cpu >= 6 && memory >= 4 ? 3 : 2;
+  if (cpu >= 8 && memory >= 8) return 6;
+  if (cpu >= 4 && memory >= 4) return 4;
+  return 2;
+}
+
+function getUploadFileLimit() {
+  const mobile = matchMedia("(max-width: 760px)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return mobile ? 1 : 2;
+}
+
+function connectionLimitForFile(limit, totalFiles) {
+  return totalFiles > 1 ? Math.max(1, Math.ceil(limit / 2)) : limit;
+}
+
+function createUploadLimiter(limit) {
+  let active = 0;
+  const queue = [];
+  const runNext = () => {
+    if (active >= limit || !queue.length) return;
+    active++;
+    const { task, resolve, reject } = queue.shift();
+    Promise.resolve().then(task).then(resolve, reject).finally(() => {
+      active--;
+      runNext();
+    });
+  };
+  const limiter = (task) => new Promise((resolve, reject) => {
+    queue.push({ task, resolve, reject });
+    runNext();
+  });
+  limiter.limit = limit;
+  return limiter;
+}
+
+function createUploadTracker(files, totalBytes) {
+  const startedAt = performance.now();
+  const active = new Map();
+  let uploadedBytes = 0;
+  const refresh = () => {
+    const elapsedSeconds = Math.max(.25, (performance.now() - startedAt) / 1000);
+    const percent = totalBytes ? Math.min(100, Math.round((uploadedBytes / totalBytes) * 100)) : 100;
+    const mbps = (uploadedBytes * 8) / elapsedSeconds / 1_000_000;
+    $("#upload-progress").style.width = `${percent}%`;
+    $("#upload-file-progress").textContent = `${percent}%`;
+    $("#upload-speed").textContent = uploadedBytes ? `${mbps.toFixed(mbps >= 10 ? 1 : 2)} Mbps` : "";
+    const names = [...active.keys()].map((file) => file.name);
+    $("#upload-file-name").textContent = names.length > 1 ? `${names[0]} ほか${names.length - 1}件` : (names[0] || "");
+  };
+  return {
+    start(file) { active.set(file, 0); refresh(); },
+    progress(file, delta, fileBytes) { uploadedBytes += delta; active.set(file, fileBytes); refresh(); },
+    phase(file, label) { if (active.has(file)) $("#upload-file-progress").textContent = label; },
+    finish(file, completed) {
+      active.delete(file);
+      $("#upload-status").textContent = `${completed} / ${files.length}件完了`;
+      refresh();
+    }
+  };
+}
+
+async function uploadPartWithRetry(path, body, signal) {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await api(path, { method: "PUT", body, rawBody: true, signal });
+    } catch (error) {
+      if (signal?.aborted || error.name === "AbortError") throw error;
+      const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
+      if (!retryable || attempt === maxAttempts) throw error;
+      await uploadRetryDelay(400 * (2 ** (attempt - 1)) + Math.random() * 250, signal);
+    }
+  }
+}
+
+function uploadRetryDelay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("アップロードを停止しました", "AbortError"));
+    }, { once: true });
+  });
 }
 
 function cancelUploads() {
@@ -2651,7 +2768,9 @@ async function api(path, options = {}) {
   const data = type.includes("application/json") ? await response.json() : null;
   if (!response.ok) {
     if (response.status === 401 && state.session) location.reload();
-    throw new Error(data?.error || `通信に失敗しました（${response.status}）`);
+    const error = new Error(data?.error || `通信に失敗しました（${response.status}）`);
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
