@@ -416,12 +416,26 @@ async function openPreview(file, options = {}) {
       state.previewUrl = URL.createObjectURL(blob);
       url = state.previewUrl;
     }
-    if (file.mediaKind === "image") { const image = new Image(); image.alt = file.name; image.src = url; stage.replaceChildren(image); }
+    if (file.mediaKind === "image") { renderSharedPreviewImage(stage, file, url); }
     else if (file.mediaKind === "video") { renderVideoPlayer(stage, file, url); }
     else if (file.mediaKind === "audio") { const audio = document.createElement("audio"); audio.controls = true; audio.src = url; stage.replaceChildren(audio); }
     else if (file.mimeType === "application/pdf") { const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.replaceChildren(frame); }
     else stage.innerHTML = "<p>この形式はブラウザ内表示に対応していません。ダウンロードしてご確認ください。</p>";
   } catch (error) { stage.innerHTML = `<p>${escapeHtml(error.message)}</p>`; }
+}
+
+function renderSharedPreviewImage(stage, file, url) {
+  const image = new Image();
+  image.alt = file.name;
+  image.addEventListener("load", () => {
+    if (Number(state.selected?.id) === Number(file.id) && $("#preview-dialog").open) stage.replaceChildren(image);
+  }, { once: true });
+  image.addEventListener("error", () => {
+    if (Number(state.selected?.id) === Number(file.id) && $("#preview-dialog").open) {
+      stage.innerHTML = "<p>写真を表示できませんでした。ダウンロードしてご確認ください。</p>";
+    }
+  }, { once: true });
+  image.src = url;
 }
 
 async function toggleSharedPreviewFullscreen() {

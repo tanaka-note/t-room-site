@@ -2504,17 +2504,31 @@ async function openPreview(file, options = {}) {
     }
   }
   if (file.mediaKind === "image") {
-    const image = new Image(); image.alt = file.name; image.src = url; stage.append(image);
+    renderPreviewImage(stage, file, url);
   } else if (file.mediaKind === "video") {
     renderVideoPlayer(stage, file, url);
   } else if (file.mediaKind === "audio") {
-    const audio = document.createElement("audio"); audio.controls = true; audio.preload = "metadata"; audio.src = url; stage.append(audio);
+    const audio = document.createElement("audio"); audio.controls = true; audio.preload = "metadata"; audio.src = url; stage.replaceChildren(audio);
   } else if (file.mimeType === "application/pdf") {
-    const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.append(frame);
+    const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.replaceChildren(frame);
   } else {
     stage.innerHTML = `<div class="preview-fallback"><p>この形式はブラウザ内プレビューに対応していません。</p><p>ダウンロードしてご確認ください。</p></div>`;
   }
   if (!dialog.open) dialog.showModal();
+}
+
+function renderPreviewImage(stage, file, url) {
+  const image = new Image();
+  image.alt = file.name;
+  image.addEventListener("load", () => {
+    if (Number(state.previewFileId) === Number(file.id) && $("#preview-dialog").open) stage.replaceChildren(image);
+  }, { once: true });
+  image.addEventListener("error", () => {
+    if (Number(state.previewFileId) === Number(file.id) && $("#preview-dialog").open) {
+      stage.innerHTML = '<div class="preview-fallback"><p>写真を表示できませんでした。</p><p>ダウンロードしてご確認ください。</p></div>';
+    }
+  }, { once: true });
+  image.src = url;
 }
 
 function previewImages() {

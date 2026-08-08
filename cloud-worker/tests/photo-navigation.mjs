@@ -18,5 +18,8 @@ for (const marker of ["pushState", "popstate", "navigateToFolder", "handlePrevie
 if (!css.includes(".preview-nav") || !css.includes("touch-action: pan-y")) {
   throw new Error("写真移動UIのスタイルがありません。");
 }
+if (!script.includes("function renderPreviewImage(stage, file, url)") || !script.includes("stage.replaceChildren(image)") || script.includes("stage.append(image)")) {
+  throw new Error("写真の復号案内を写真表示へ置き換える処理がありません。");
+}
 
 console.log("photo navigation and browser history: ok");
