@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], files: [], selected: null, selectedFiles: new Map(), previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], files: [], selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -37,6 +37,7 @@ function bindEvents() {
     else await releaseDownloadWakeLock();
   });
   document.addEventListener("visibilitychange", handleDownloadVisibility);
+  document.addEventListener("keydown", handleSelectionKeydown);
   window.addEventListener("popstate", handleShareHistoryNavigation);
   $("#history-button").addEventListener("click", openHistory);
   document.querySelectorAll(".close").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
@@ -66,6 +67,7 @@ async function unlockShare(event) {
 async function loadItems(folderId = null, pathIndex = null, options = {}) {
   setNotice("");
   clearFileSelection();
+  let directFile = null;
   try {
     const query = folderId ? `?folderId=${folderId}` : "";
     const data = await api(`/items${query}`);
@@ -77,6 +79,7 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
       $("#target-title").textContent = file.name;
       renderBreadcrumbs();
       renderItems([], [file]);
+      directFile = file;
     } else {
       state.rootId = Number(data.rootFolderId);
       const folder = data.folder;
@@ -113,6 +116,7 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
     }
     $("#browser-expiry").textContent = `有効期限：${formatEpoch(data.expiresAt)}`;
     if (options.historyMode !== "none") updateShareHistory(options.historyMode === "replace", null);
+    if (directFile) await openPreview(directFile, { pushHistory: false });
   } catch (error) { setNotice(error.message, true); }
 }
 
@@ -138,19 +142,38 @@ function renderItems(folders, files) {
 
 function fileCard(file) {
   const article = document.createElement("article"); article.className = "file";
+  article.dataset.fileId = String(file.id);
   const button = document.createElement("button"); button.type = "button";
   button.innerHTML = `<div class="thumb"><span class="symbol">${kindSymbol(file.mediaKind)}</span></div><div class="file-copy"><strong>${escapeHtml(file.name)}</strong><small>${formatBytes(file.sizeBytes)}</small></div>`;
-  button.addEventListener("click", () => openPreview(file));
+  button.addEventListener("click", (event) => {
+    if (article.dataset.longPressed === "true") {
+      article.dataset.longPressed = "false";
+      return;
+    }
+    if (state.targetType === "folder" && (state.selectedFiles.size || event.ctrlKey || event.metaKey || event.shiftKey)) {
+      if (event.shiftKey && state.selectionAnchorId) selectSharedRange(file.id);
+      else toggleFileSelection(file, article);
+      return;
+    }
+    openPreview(file);
+  });
   article.append(button);
   if (state.targetType === "folder") {
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      selectSharedFile(file, article, true);
+    });
+    installSharedLongPressSelection(article, file);
     const selectButton = document.createElement("button");
     selectButton.type = "button";
     selectButton.className = "file-select-button";
     selectButton.setAttribute("aria-label", `${file.name}を選択`);
     selectButton.setAttribute("aria-pressed", "false");
+    selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
     selectButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      toggleFileSelection(file, article, selectButton);
+      if (event.shiftKey && state.selectionAnchorId) selectSharedRange(file.id);
+      else toggleFileSelection(file, article);
     });
     article.append(selectButton);
   }
@@ -158,17 +181,132 @@ function fileCard(file) {
   return article;
 }
 
-function toggleFileSelection(file, article, button) {
+function toggleFileSelection(file, article) {
   const selected = state.selectedFiles.has(Number(file.id));
   if (selected) state.selectedFiles.delete(Number(file.id));
-  else state.selectedFiles.set(Number(file.id), file);
+  else {
+    state.selectedFiles.set(Number(file.id), file);
+    state.selectionAnchorId = Number(file.id);
+    state.selectionCursorId = Number(file.id);
+  }
   article.classList.toggle("selected", !selected);
-  button.setAttribute("aria-pressed", String(!selected));
+  article.querySelector(".file-select-button")?.setAttribute("aria-pressed", String(!selected));
+  if (!state.selectedFiles.size) {
+    state.selectionAnchorId = null;
+    state.selectionCursorId = null;
+  }
   syncFileSelection();
+}
+
+function selectSharedFile(file, article, setAnchor = false) {
+  const id = Number(file.id);
+  if (!state.selectedFiles.has(id)) state.selectedFiles.set(id, file);
+  article.classList.add("selected");
+  article.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
+  if (setAnchor || !state.selectionAnchorId) state.selectionAnchorId = id;
+  state.selectionCursorId = id;
+  syncFileSelection();
+}
+
+function sharedFileCards() {
+  return [...document.querySelectorAll("#items .file[data-file-id]")];
+}
+
+function selectSharedRange(targetId) {
+  const cards = sharedFileCards();
+  const anchorIndex = cards.findIndex((card) => Number(card.dataset.fileId) === Number(state.selectionAnchorId));
+  const targetIndex = cards.findIndex((card) => Number(card.dataset.fileId) === Number(targetId));
+  if (anchorIndex < 0 || targetIndex < 0) return;
+  state.selectedFiles.clear();
+  const first = Math.min(anchorIndex, targetIndex);
+  const last = Math.max(anchorIndex, targetIndex);
+  for (let index = first; index <= last; index++) {
+    const card = cards[index];
+    const file = state.files.find((item) => Number(item.id) === Number(card.dataset.fileId));
+    if (file) state.selectedFiles.set(Number(file.id), file);
+  }
+  state.selectionCursorId = Number(targetId);
+  syncSharedCardSelection();
+  syncFileSelection();
+}
+
+function syncSharedCardSelection() {
+  for (const card of sharedFileCards()) {
+    const selected = state.selectedFiles.has(Number(card.dataset.fileId));
+    card.classList.toggle("selected", selected);
+    card.querySelector(".file-select-button")?.setAttribute("aria-pressed", String(selected));
+  }
+}
+
+function handleSelectionKeydown(event) {
+  if (!event.shiftKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+  if ($("#browser-view").hidden || $("#preview-dialog").open || $("#history-dialog").open || !state.selectedFiles.size) return;
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+  const cards = sharedFileCards();
+  if (!cards.length) return;
+  const currentId = state.selectionCursorId || state.selectionAnchorId;
+  const currentIndex = Math.max(0, cards.findIndex((card) => Number(card.dataset.fileId) === Number(currentId)));
+  const columns = Math.max(1, getComputedStyle($("#items")).gridTemplateColumns.split(" ").filter(Boolean).length);
+  const delta = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" ? -columns : columns;
+  const nextIndex = Math.max(0, Math.min(cards.length - 1, currentIndex + delta));
+  if (nextIndex === currentIndex) return;
+  event.preventDefault();
+  selectSharedRange(Number(cards[nextIndex].dataset.fileId));
+  cards[nextIndex].scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function installSharedLongPressSelection(card, file) {
+  let timer = null;
+  let started = false;
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  const stopTimer = () => { if (timer) clearTimeout(timer); timer = null; };
+  card.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".file-select-button")) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    started = false;
+    timer = setTimeout(() => {
+      started = true;
+      state.selecting = true;
+      card.dataset.longPressed = "true";
+      selectSharedFile(file, card, true);
+      if (navigator.vibrate) navigator.vibrate(18);
+    }, state.selectedFiles.size ? 80 : 380);
+  });
+  card.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== pointerId) return;
+    if (!started && (Math.abs(event.clientX - startX) > 8 || Math.abs(event.clientY - startY) > 8)) stopTimer();
+    if (!state.selecting) return;
+    event.preventDefault();
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".file[data-file-id]");
+    if (target) {
+      const passedFile = state.files.find((item) => Number(item.id) === Number(target.dataset.fileId));
+      if (passedFile) selectSharedFile(passedFile, target);
+    }
+    const edge = 72;
+    if (event.clientY > innerHeight - edge) scrollBy({ top: 18, behavior: "auto" });
+    else if (event.clientY < edge) scrollBy({ top: -18, behavior: "auto" });
+  }, { passive: false });
+  const end = (event) => {
+    if (event.pointerId !== pointerId) return;
+    stopTimer();
+    if (started) event.preventDefault();
+    state.selecting = false;
+    pointerId = null;
+  };
+  card.addEventListener("pointerup", end);
+  card.addEventListener("pointercancel", end);
 }
 
 function clearFileSelection() {
   state.selectedFiles.clear();
+  state.selectionAnchorId = null;
+  state.selectionCursorId = null;
+  state.selecting = false;
   document.querySelectorAll(".file.selected").forEach((node) => node.classList.remove("selected"));
   document.querySelectorAll(".file-select-button").forEach((button) => button.setAttribute("aria-pressed", "false"));
   syncFileSelection();

@@ -41,7 +41,7 @@ form>.primary { margin-top:18px; }
 .selection-bar small { color:var(--muted); font-size:.72rem; }
 .selection-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
 .items { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:13px; }
-.folder,.file { position:relative; min-width:0; border:1px solid var(--line); border-radius:14px; background:white; overflow:hidden; }
+.folder,.file { position:relative; min-width:0; border:1px solid var(--line); border-radius:14px; background:white; overflow:hidden; -webkit-user-select:none; user-select:none; }
 .file.selected { border-color:var(--teal); box-shadow:0 0 0 3px rgba(32,123,115,.18); }
 .folder button,.file button { width:100%; border:0; color:var(--ink); background:white; text-align:left; }
 .file .file-select-button { position:absolute; z-index:4; top:9px; right:9px; display:grid; width:31px; height:31px; padding:0; place-items:center; border:2px solid rgba(255,255,255,.96); border-radius:50%; background:rgba(255,255,255,.92); box-shadow:0 2px 10px rgba(23,33,42,.2); }

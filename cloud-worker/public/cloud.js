@@ -135,6 +135,10 @@ function bindEvents() {
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
   $("#selection-clear").addEventListener("click", clearFileSelection);
   $("#selection-download").addEventListener("click", startSelectedDownloads);
+  $("#selection-share").addEventListener("click", () => {
+    const files = [...state.selectedFiles.values()];
+    if (files.length === 1 && state.selectedFolders.size === 0) openShareDialog("file", files[0]);
+  });
   $("#selection-move").addEventListener("click", openMoveDialog);
   $("#selection-delete").addEventListener("click", deleteSelectedItems);
   $("#move-form").addEventListener("submit", moveSelectedItems);
@@ -1404,6 +1408,7 @@ function syncSelectionBar() {
   $("#selection-count").textContent = `${count.toLocaleString("ja-JP")}件を選択中`;
   $("#selection-bar").hidden = count === 0;
   $("#selection-download").disabled = fileCount === 0;
+  $("#selection-share").hidden = state.session?.role !== "admin" || fileCount !== 1 || folderCount !== 0;
   $("#selection-move").hidden = !state.session?.canEditFiles || !state.session?.canEditFolders;
   $("#selection-move").disabled = count === 0;
   $("#selection-delete").hidden = !state.session?.canDelete && !state.session?.canRequestDelete;
