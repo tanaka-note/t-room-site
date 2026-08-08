@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>T-Cloud Secure Share</title>
+  <link rel="stylesheet" href="/cloud/share.css?v=20260808-3">
+</head>
+<body>
+  <main class="share-shell">
+    <section id="unlock-view" class="unlock-card">
+      <div class="brand"><span>T</span> T-Cloud Storage</div>
+      <p class="eyebrow">SECURE SHARE</p>
+      <h1>共有データを開く</h1>
+      <p id="unlock-copy" class="lead">発行者から受け取った共有パスワードを入力してください。</p>
+      <form id="unlock-form">
+        <label><span>共有パスワード</span><span class="password-wrap"><input id="share-password" type="password" required minlength="12" maxlength="128" autocomplete="current-password"><button id="toggle-password" type="button" aria-label="パスワードを表示">◉</button></span></label>
+        <p id="unlock-error" class="error" role="alert"></p>
+        <button class="primary" type="submit">共有データを開く</button>
+      </form>
+      <p id="share-expiry" class="expiry"></p>
+    </section>
+
+    <section id="browser-view" class="browser" hidden>
+      <header>
+        <div><div class="brand compact"><span>T</span> T-Cloud Storage</div><p>Secure Share</p></div>
+        <button id="history-button" class="secondary" type="button">利用履歴</button>
+      </header>
+      <nav id="breadcrumbs" class="breadcrumbs"></nav>
+      <div class="heading"><div><p class="eyebrow">SHARED DATA</p><h1 id="target-title">共有データ</h1></div><p id="browser-expiry"></p></div>
+      <p id="notice" class="notice" role="status"></p>
+      <div id="items" class="items"></div>
+      <div id="empty" class="empty" hidden><span>◇</span><strong>共有データはありません</strong></div>
+    </section>
+  </main>
+
+  <dialog id="preview-dialog">
+    <div class="dialog-head"><div><span id="preview-kind" class="badge"></span><h2 id="preview-title"></h2></div><button class="close" type="button" aria-label="閉じる">×</button></div>
+    <div id="preview-stage" class="preview-stage"></div>
+    <div class="wake-lock-row">
+      <label class="wake-lock-setting">
+        <input id="share-keep-screen-awake" type="checkbox" checked>
+        <span><strong>ダウンロード中は画面を消灯しない</strong><small id="share-wake-lock-status">端末が対応している場合に有効になります。</small></span>
+      </label>
+      <button id="share-download-retry-wake" class="secondary" type="button" hidden>消灯防止を再試行</button>
+    </div>
+    <div class="dialog-actions"><button id="download-button" class="primary" type="button">ダウンロード</button></div>
+  </dialog>
+
+  <dialog id="history-dialog" class="history-dialog">
+    <div class="dialog-head"><h2>この共有URLの利用履歴</h2><button class="close" type="button" aria-label="閉じる">×</button></div>
+    <div id="history-list" class="history-list"></div>
+  </dialog>
+
+  <script src="/cloud/vendor/argon2.umd.min.js?v=4.12.0" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=1.8.0" defer></script>
+  <script src="/cloud/crypto-vault.js?v=20260808-8" defer></script>
+  <script src="/cloud/media-range.js?v=20260808-1" defer></script>
+  <script src="/cloud/media-client.js?v=20260808-2" defer></script>
+  <script src="/cloud/share.js?v=20260808-7" defer></script>
+</body>
+</html>

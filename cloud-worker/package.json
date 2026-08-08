@@ -1,0 +1,18 @@
+{
+  "name": "t-room-cloud-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --port 8792",
+    "check": "node --check src/index.js && node --check public/crypto-vault.js && node --check public/file-safety.js && node --check public/media-range.js && node --check public/media-client.js && node --check public/media-worker.js && node --check public/cloud.js && node --check public/share.js",
+    "test:crypto": "node tests/crypto-roundtrip.mjs",
+    "test:media": "node tests/media-range.mjs && node tests/media-download.mjs && node tests/file-safety.mjs",
+    "test:security": "node tests/permission-guards.mjs && node tests/permission-http.mjs && node tests/share-isolation.mjs && node tests/folder-inheritance.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.34.0"
+  },
+  "dependencies": {
+    "hash-wasm": "4.12.0"
+  }
+}
