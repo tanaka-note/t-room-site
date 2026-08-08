@@ -126,8 +126,11 @@ function bindEvents() {
   });
   $("#preview-prev").addEventListener("click", () => navigatePreview(-1));
   $("#preview-next").addEventListener("click", () => navigatePreview(1));
+  $("#preview-fullscreen").addEventListener("click", togglePreviewFullscreen);
+  $("#preview-stage-wrap").addEventListener("dblclick", handlePreviewDoubleClick);
   $("#preview-stage-wrap").addEventListener("touchstart", handlePreviewTouchStart, { passive: true });
   $("#preview-stage-wrap").addEventListener("touchend", handlePreviewTouchEnd, { passive: true });
+  document.addEventListener("fullscreenchange", syncPreviewFullscreenButton);
   document.addEventListener("keydown", handlePreviewKeydown);
   window.addEventListener("popstate", handleHistoryNavigation);
   $("#search-input").addEventListener("input", debounce((event) => { state.query = event.target.value.trim(); loadItems(); }, 250));
@@ -137,7 +140,9 @@ function bindEvents() {
   $("#selection-download").addEventListener("click", startSelectedDownloads);
   $("#selection-share").addEventListener("click", () => {
     const files = [...state.selectedFiles.values()];
-    if (files.length === 1 && state.selectedFolders.size === 0) openShareDialog("file", files[0]);
+    if (state.selectedFolders.size) return;
+    if (files.length === 1) openShareDialog("file", files[0]);
+    else if (files.length > 1) openShareDialog("selection", files);
   });
   $("#selection-move").addEventListener("click", openMoveDialog);
   $("#selection-delete").addEventListener("click", deleteSelectedItems);
@@ -167,12 +172,15 @@ function openAddAction() {
 }
 
 function isFileDrag(event) {
-  return [...(event.dataTransfer?.types || [])].includes("Files");
+  const transfer = event.dataTransfer;
+  if (!transfer) return false;
+  return [...(transfer.types || [])].includes("Files")
+    || [...(transfer.items || [])].some((item) => item.kind === "file")
+    || Boolean(transfer.files?.length);
 }
 
 function canAcceptDroppedFiles() {
-  return matchMedia("(min-width: 901px)").matches
-    && Boolean(state.session?.canUpload)
+  return Boolean(state.session?.canUpload)
     && state.crypto.fileEncryptionReady
     && !state.uploading
     && !["trash", "history", "requests", "shares"].includes(state.view);
@@ -874,10 +882,10 @@ async function hydrateShareRecords(records) {
         share.folder = folder;
         share.targetName = folder.name;
         share.targetKey = state.crypto.folderKeys.get(Number(folder.id)) || await ensureAdminFolderKey(folder);
-      } else if (share.targetType === "file" && share.file) {
+      } else if (["file", "selection"].includes(share.targetType) && share.file) {
         const [file] = await hydrateFileRecords([share.file]);
         share.file = file;
-        share.targetName = file.name;
+        share.targetName = share.targetType === "selection" ? `${Number(share.fileCount || 0)}件のファイル` : file.name;
         share.targetKey = file.fileKey || null;
       }
       if (share.targetKey) {
@@ -896,9 +904,9 @@ function shareCard(share) {
   const card = document.createElement("article");
   card.className = "share-card";
   const status = ({ active: "有効", expired: "期限終了", stopped: "停止済み", unavailable: "対象なし" })[share.status] || "確認中";
-  const type = share.targetType === "folder" ? "フォルダ" : "ファイル";
+  const type = share.targetType === "folder" ? "フォルダ" : share.targetType === "selection" ? "選択したファイル" : "ファイル";
   card.innerHTML = `
-    <span class="share-kind">${share.targetType === "folder" ? "▰" : kindSymbol(share.file?.mediaKind)}</span>
+    <span class="share-kind">${share.targetType === "folder" ? "▰" : share.targetType === "selection" ? "▦" : kindSymbol(share.file?.mediaKind)}</span>
     <span class="share-main"><strong>${escapeHtml(share.targetName)}</strong><small>${type} · ${formatDateTime(share.createdAt)}に発行</small></span>
     <span class="share-meta"><strong class="share-status ${share.status}">${status}</strong><small>期限 ${formatEpoch(share.expiresAt)}</small><small>DL ${share.downloadCount}件 / エラー ${share.errorCount}件</small></span>`;
   const actions = document.createElement("div");
@@ -926,10 +934,14 @@ async function openShareDialog(type, target) {
   try {
     let targetKey = null;
     if (type === "folder") targetKey = state.crypto.folderKeys.get(Number(target.id)) || await ensureAdminFolderKey(target);
+    else if (type === "selection") targetKey = target[0]?.fileKey;
     else targetKey = target.fileKey;
     if (!targetKey) throw new Error("共有対象の暗号化鍵を解除できません。");
-    state.shareTarget = { type, id: Number(target.id), name: target.name, targetKey };
-    $("#share-target").textContent = `共有対象：${target.name}（${type === "folder" ? "フォルダ" : "ファイル"}）`;
+    const files = type === "selection" ? target : null;
+    const id = type === "selection" ? Number(files[0].id) : Number(target.id);
+    const name = type === "selection" ? `${files.length}件のファイル` : target.name;
+    state.shareTarget = { type, id, name, targetKey, files };
+    $("#share-target").textContent = `共有対象：${name}（${type === "folder" ? "フォルダ" : type === "selection" ? "選択したファイル" : "ファイル"}）`;
     $("#share-expires").value = localDateTimeValue(Date.now() + 7 * 24 * 60 * 60 * 1000);
     $("#share-password").value = "";
     $("#share-password").type = "password";
@@ -976,12 +988,20 @@ async function createShare(event) {
     const token = TRoomCrypto.toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
     const passwordPackage = await TRoomCrypto.createSharePackage(target.targetKey, password);
     const tokenPackage = await TRoomCrypto.encryptShareToken(token, target.targetKey);
+    const selectedFiles = target.type === "selection"
+      ? await Promise.all(target.files.map(async (file, index) => ({
+          id: Number(file.id),
+          position: index,
+          ...(index === 0 ? {} : await TRoomCrypto.wrapFileForShare(file.fileKey, target.targetKey))
+        })))
+      : undefined;
     const result = await api("/shares", {
       method: "POST",
       body: JSON.stringify({
         token,
         targetType: target.type,
         targetId: target.id,
+        selectedFiles,
         expiresAt: Math.floor(expiresMs / 1000),
         ...passwordPackage,
         ...tokenPackage
@@ -1408,7 +1428,7 @@ function syncSelectionBar() {
   $("#selection-count").textContent = `${count.toLocaleString("ja-JP")}件を選択中`;
   $("#selection-bar").hidden = count === 0;
   $("#selection-download").disabled = fileCount === 0;
-  $("#selection-share").hidden = state.session?.role !== "admin" || fileCount !== 1 || folderCount !== 0;
+  $("#selection-share").hidden = state.session?.role !== "admin" || fileCount < 1 || folderCount !== 0;
   $("#selection-move").hidden = !state.session?.canEditFiles || !state.session?.canEditFolders;
   $("#selection-move").disabled = count === 0;
   $("#selection-delete").hidden = !state.session?.canDelete && !state.session?.canRequestDelete;
@@ -2444,6 +2464,7 @@ async function openPreview(file, options = {}) {
   clearPreviewUrl();
   state.previewFileId = Number(file.id);
   state.selected = file;
+  $("#preview-more").open = false;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
   $("#preview-size").textContent = formatBytes(file.sizeBytes);
@@ -2464,7 +2485,7 @@ async function openPreview(file, options = {}) {
       if (!dialog.open) dialog.showModal();
       return;
     }
-    stage.innerHTML = `<div class="preview-fallback"><p>専用プレイヤーを準備しています…</p></div>`;
+    stage.innerHTML = `<div class="preview-loading"><p>暗号を復号して再生準備をしています…</p></div>`;
     if (!dialog.open) dialog.showModal();
     try {
       const streaming = file.mediaKind === "video" || file.mediaKind === "audio" || Number(file.sizeBytes) > 128 * 1024 * 1024;
@@ -2523,13 +2544,50 @@ async function navigatePreview(direction) {
 
 function handlePreviewKeydown(event) {
   if (!$("#preview-dialog").open) return;
-  if (event.key === "ArrowLeft") {
+  if (event.target.closest?.("input, textarea, select, button, a")) return;
+  const video = $("#preview-stage video");
+  if (video && event.code === "Space") {
+    event.preventDefault();
+    video.paused ? video.play().catch(() => {}) : video.pause();
+  } else if (video && event.key === "ArrowLeft") {
+    event.preventDefault();
+    video.currentTime = Math.max(0, video.currentTime - 10);
+  } else if (video && event.key === "ArrowRight") {
+    event.preventDefault();
+    video.currentTime = Math.min(Number.isFinite(video.duration) ? video.duration : video.currentTime + 10, video.currentTime + 10);
+  } else if (event.key === "ArrowLeft") {
     event.preventDefault();
     navigatePreview(-1);
   } else if (event.key === "ArrowRight") {
     event.preventDefault();
     navigatePreview(1);
   }
+}
+
+async function togglePreviewFullscreen() {
+  const stage = $("#preview-stage-wrap");
+  const video = stage.querySelector("video");
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else if (stage.requestFullscreen) await stage.requestFullscreen();
+    else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
+  } catch (error) { setNotice(`全画面表示を開始できませんでした：${error.message}`, true); }
+}
+
+function syncPreviewFullscreenButton() {
+  const button = $("#preview-fullscreen");
+  const active = Boolean(document.fullscreenElement);
+  button.setAttribute("aria-label", active ? "全画面表示を終了" : "全画面で表示");
+  const label = button.querySelector("span");
+  if (label) label.textContent = active ? "戻す" : "全画面";
+}
+
+function handlePreviewDoubleClick(event) {
+  const video = $("#preview-stage video");
+  if (!video) return;
+  const bounds = $("#preview-stage").getBoundingClientRect();
+  const forward = event.clientX >= bounds.left + bounds.width / 2;
+  video.currentTime = Math.max(0, video.currentTime + (forward ? 10 : -10));
 }
 
 function handlePreviewTouchStart(event) {
@@ -2574,7 +2632,11 @@ function renderVideoPlayer(stage, file, url) {
   video.controls = true;
   video.playsInline = true;
   video.preload = "metadata";
-  stage.replaceChildren(video);
+  const buffering = document.createElement("div");
+  buffering.className = "player-buffering";
+  buffering.textContent = "再生準備中…";
+  stage.replaceChildren(video, buffering);
+  video.addEventListener("canplay", () => buffering.remove(), { once: true });
   const extension = String(file.name || "").split(".").pop().toLowerCase();
   const mpegType = extension === "flv" ? "flv" : ["ts", "m2ts", "mts"].includes(extension) ? "m2ts" : "";
   if (mpegType && globalThis.mpegts?.isSupported()) {
@@ -2586,6 +2648,7 @@ function renderVideoPlayer(stage, file, url) {
     });
     player.on(mpegts.Events.ERROR, () => {
       if (stage.querySelector(".player-error")) return;
+      buffering.remove();
       const message = document.createElement("p");
       message.className = "player-error";
       message.textContent = "このFLV・MPEG-TS動画の映像または音声方式には対応していません。元の画質のままダウンロードしてご確認ください。";
@@ -2600,6 +2663,7 @@ function renderVideoPlayer(stage, file, url) {
   video.src = url;
   video.addEventListener("error", () => {
     if (!video.error) return;
+    buffering.remove();
     const message = document.createElement("p");
     message.className = "player-error";
     message.textContent = "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。";

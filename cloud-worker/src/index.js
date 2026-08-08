@@ -230,9 +230,9 @@ async function setupCrypto(request, env, session) {
 
 async function createShare(request, env, session) {
   requireAdmin(session);
-  const body = await readJson(request, 16384);
+  const body = await readJson(request, 65536);
   const token = normalizeShareToken(body.token);
-  const targetType = body.targetType === "folder" || body.targetType === "file" ? body.targetType : "";
+  const targetType = ["folder", "file", "selection"].includes(body.targetType) ? body.targetType : "";
   const targetId = optionalId(body.targetId);
   if (!targetType || !targetId) throw new HttpError(400, "共有対象を確認してください。");
   const expiresAt = Number(body.expiresAt);
@@ -240,11 +240,36 @@ async function createShare(request, env, session) {
   if (!Number.isInteger(expiresAt) || expiresAt < now + 5 * 60 || expiresAt > now + 10 * 365 * 24 * 60 * 60) {
     throw new HttpError(400, "共有期限は5分後から10年以内で設定してください。");
   }
-  const target = targetType === "folder"
+  const storedTargetType = targetType === "selection" ? "file" : targetType;
+  const target = storedTargetType === "folder"
     ? await env.DB.prepare("SELECT id, crypto_version AS cryptoVersion FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(targetId).first()
     : await env.DB.prepare("SELECT id, crypto_version AS cryptoVersion FROM cloud_files WHERE id = ? AND deleted_at IS NULL AND status = 'ready'").bind(targetId).first();
   if (!target) throw new HttpError(404, "共有対象が見つかりません。");
   if (Number(target.cryptoVersion) !== 1) throw new HttpError(400, "暗号化済みの対象だけ共有できます。");
+  let selectedFiles = [];
+  if (targetType === "selection") {
+    if (!Array.isArray(body.selectedFiles) || body.selectedFiles.length < 2 || body.selectedFiles.length > 100) {
+      throw new HttpError(400, "共有するファイルは2件以上100件以内で選択してください。");
+    }
+    const ids = new Set();
+    for (let index = 0; index < body.selectedFiles.length; index++) {
+      const record = body.selectedFiles[index];
+      const id = optionalId(record?.id);
+      if (!id || ids.has(id)) throw new HttpError(400, "共有するファイルを確認してください。");
+      ids.add(id);
+      selectedFiles.push({
+        id,
+        position: index,
+        shareWrappedFileKey: index === 0 ? null : validCryptoText(record.shareWrappedFileKey, 512, "共有ファイル鍵"),
+        shareFileKeyIv: index === 0 ? null : validCryptoText(record.shareFileKeyIv, 64, "共有ファイル鍵IV")
+      });
+    }
+    const placeholders = selectedFiles.map(() => "?").join(",");
+    const available = await env.DB.prepare(`SELECT id FROM cloud_files WHERE id IN (${placeholders})
+      AND crypto_version = 1 AND deleted_at IS NULL AND status = 'ready'`).bind(...selectedFiles.map((file) => file.id)).all();
+    if ((available.results || []).length !== selectedFiles.length) throw new HttpError(404, "共有するファイルが見つかりません。");
+    if (selectedFiles[0].id !== targetId) throw new HttpError(400, "共有の基準ファイルを確認してください。");
+  }
   const authProof = validCryptoText(body.authProof, 256, "共有認証");
   const tokenHash = await sha256Base64Url(token);
   const encryptedToken = validCryptoText(body.encryptedToken, 256, "共有URL");
@@ -258,10 +283,20 @@ async function createShare(request, env, session) {
       (token_hash, encrypted_token, token_iv, target_type, target_id, password_hash,
         password_salt, password_wrapped_key, password_wrap_iv, expires_at, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admin')`)
-      .bind(tokenHash, encryptedToken, tokenIv, targetType, targetId, passwordHash,
+      .bind(tokenHash, encryptedToken, tokenIv, storedTargetType, targetId, passwordHash,
         passwordSalt, passwordWrappedKey, passwordWrapIv, expiresAt).run();
     const id = Number(result.meta.last_row_id);
-    await audit(env, "share_created", session, targetType, targetId, { shareId: id, expiresAt });
+    if (selectedFiles.length) {
+      try {
+        await env.DB.batch(selectedFiles.map((file) => env.DB.prepare(`INSERT INTO cloud_share_files
+          (share_id, file_id, share_wrapped_file_key, share_file_key_iv, position) VALUES (?, ?, ?, ?, ?)`)
+          .bind(id, file.id, file.shareWrappedFileKey, file.shareFileKeyIv, file.position)));
+      } catch (error) {
+        await env.DB.prepare("DELETE FROM cloud_shares WHERE id = ?").bind(id).run();
+        throw error;
+      }
+    }
+    await audit(env, "share_created", session, targetType, targetId, { shareId: id, expiresAt, fileCount: selectedFiles.length || undefined });
     return json({ id, targetType, targetId, expiresAt, sharePath: `${BASE_PATH}/share/${token}` }, 201);
   } catch (error) {
     if (String(error?.message || error).includes("UNIQUE")) throw new HttpError(409, "共有URLが重複しました。もう一度生成してください。");
@@ -290,7 +325,10 @@ async function listShares(env, session) {
       fo.parent_wrapped_key AS folderParentWrappedKey, fo.parent_wrap_iv AS folderParentWrapIv,
       fo.deleted_at AS folderDeletedAt,
       (SELECT COUNT(*) FROM cloud_share_events e WHERE e.share_id = s.id AND e.event_type = 'download_completed') AS downloadCount,
-      (SELECT COUNT(*) FROM cloud_share_events e WHERE e.share_id = s.id AND e.event_type = 'download_failed') AS errorCount
+      (SELECT COUNT(*) FROM cloud_share_events e WHERE e.share_id = s.id AND e.event_type = 'download_failed') AS errorCount,
+      (SELECT COUNT(*) FROM cloud_share_files sf WHERE sf.share_id = s.id) AS fileSetCount,
+      (SELECT COUNT(*) FROM cloud_share_files sf JOIN cloud_files mf ON mf.id = sf.file_id
+        WHERE sf.share_id = s.id AND mf.deleted_at IS NULL AND mf.status = 'ready') AS readyFileSetCount
     FROM cloud_shares s
     LEFT JOIN cloud_files f ON s.target_type = 'file' AND f.id = s.target_id
     LEFT JOIN cloud_folders ff ON ff.id = f.folder_id
@@ -300,7 +338,8 @@ async function listShares(env, session) {
   `).all();
   const now = Math.floor(Date.now() / 1000);
   const shares = (result.results || []).map((row) => {
-    const unavailable = row.targetType === "file"
+    const isSelection = Number(row.fileSetCount || 0) > 0;
+    const unavailable = isSelection ? Number(row.readyFileSetCount || 0) === 0 : row.targetType === "file"
       ? !row.fileId || Boolean(row.fileDeletedAt) || row.fileStatus !== "ready"
       : !row.folderId || Boolean(row.folderDeletedAt);
     const status = row.stoppedAt ? "stopped" : Number(row.expiresAt) <= now ? "expired" : unavailable ? "unavailable" : "active";
@@ -308,8 +347,9 @@ async function listShares(env, session) {
       id: row.id,
       encryptedToken: row.encryptedToken,
       tokenIv: row.tokenIv,
-      targetType: row.targetType,
+      targetType: isSelection ? "selection" : row.targetType,
       targetId: row.targetId,
+      fileCount: Number(row.fileSetCount || 0),
       expiresAt: Number(row.expiresAt),
       createdAt: row.createdAt,
       stoppedAt: row.stoppedAt,
@@ -348,8 +388,9 @@ async function stopShare(id, env, session) {
 
 async function getPublicShareInfo(token, env) {
   const share = await requireShareByToken(token, env, true);
+  const fileSetCount = await shareSelectionCount(env, share.id);
   return json({
-    targetType: share.target_type,
+    targetType: fileSetCount ? "selection" : share.target_type,
     expiresAt: Number(share.expires_at),
     cryptoVersion: 1,
     passwordSalt: share.password_salt,
@@ -378,11 +419,25 @@ async function unlockPublicShare(token, request, env, url) {
   const sessionToken = await createShareSessionToken(share, sessionId, maxAge, env);
   const headers = new Headers({ "Set-Cookie": shareSessionCookie(sessionToken, maxAge, url.protocol === "https:") });
   await env.DB.prepare("INSERT INTO cloud_share_events (share_id, event_type, session_id) VALUES (?, 'unlock_success', ?)").bind(share.id, sessionId).run();
-  return json({ authenticated: true, targetType: share.target_type, expiresAt: Number(share.expires_at) }, 200, headers);
+  return json({ authenticated: true, targetType: (await shareSelectionCount(env, share.id)) ? "selection" : share.target_type, expiresAt: Number(share.expires_at) }, 200, headers);
 }
 
 async function listPublicShareItems(token, request, env, url) {
   const share = await requireAuthorizedShare(token, request, env);
+  const fileSetCount = await shareSelectionCount(env, share.id);
+  if (fileSetCount) {
+    const selected = await env.DB.prepare(`SELECT f.*, sf.share_wrapped_file_key AS shareWrappedFileKey,
+      sf.share_file_key_iv AS shareFileKeyIv, sf.position
+      FROM cloud_share_files sf JOIN cloud_files f ON f.id = sf.file_id
+      WHERE sf.share_id = ? AND f.deleted_at IS NULL AND f.status = 'ready'
+      ORDER BY sf.position ASC`).bind(share.id).all();
+    return json({
+      targetType: "selection",
+      rootFileId: Number(share.target_id),
+      files: (selected.results || []).map((file) => ({ ...mapFile(file), shareWrappedFileKey: file.shareWrappedFileKey, shareFileKeyIv: file.shareFileKeyIv })),
+      expiresAt: Number(share.expires_at)
+    });
+  }
   if (share.target_type === "file") {
     const file = await requireReadyFile(env, Number(share.target_id), false);
     return json({ targetType: "file", file: mapFile(file), expiresAt: Number(share.expires_at) });
@@ -1047,7 +1102,11 @@ async function requireShareByToken(token, env, requireActive) {
     const now = Math.floor(Date.now() / 1000);
     if (share.stopped_at) throw new HttpError(410, "この共有URLは停止されています。");
     if (Number(share.expires_at) <= now) throw new HttpError(410, "この共有URLの期限は終了しました。");
-    const target = share.target_type === "folder"
+    const fileSetCount = await shareSelectionCount(env, share.id);
+    const target = fileSetCount
+      ? await env.DB.prepare(`SELECT 1 AS ok FROM cloud_share_files sf JOIN cloud_files f ON f.id = sf.file_id
+        WHERE sf.share_id = ? AND f.deleted_at IS NULL AND f.status = 'ready' LIMIT 1`).bind(share.id).first()
+      : share.target_type === "folder"
       ? await env.DB.prepare("SELECT 1 AS ok FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(share.target_id).first()
       : await env.DB.prepare("SELECT 1 AS ok FROM cloud_files WHERE id = ? AND deleted_at IS NULL AND status = 'ready'").bind(share.target_id).first();
     if (!target) throw new HttpError(410, "共有対象は利用できません。");
@@ -1115,6 +1174,12 @@ async function folderWithinShare(env, folderId, rootFolderId) {
 
 async function requireSharedFile(env, share, fileId) {
   const file = await requireReadyFile(env, fileId, false);
+  const fileSetCount = await shareSelectionCount(env, share.id);
+  if (fileSetCount) {
+    const selected = await env.DB.prepare("SELECT 1 AS ok FROM cloud_share_files WHERE share_id = ? AND file_id = ?").bind(share.id, fileId).first();
+    if (!selected) throw new HttpError(403, "共有範囲外のファイルです。");
+    return file;
+  }
   if (share.target_type === "file") {
     if (Number(file.id) !== Number(share.target_id)) throw new HttpError(403, "共有範囲外のファイルです。");
     return file;
@@ -1123,6 +1188,11 @@ async function requireSharedFile(env, share, fileId) {
     throw new HttpError(403, "共有範囲外のファイルです。");
   }
   return file;
+}
+
+async function shareSelectionCount(env, shareId) {
+  const row = await env.DB.prepare("SELECT COUNT(*) AS count FROM cloud_share_files WHERE share_id = ?").bind(shareId).first();
+  return Number(row?.count || 0);
 }
 
 function publicFolderRecord(folder) {

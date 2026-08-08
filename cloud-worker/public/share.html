@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Secure Share</title>
-  <link rel="stylesheet" href="/cloud/share.css?v=20260809-5">
+  <link rel="stylesheet" href="/cloud/share.css?v=20260809-6">
 </head>
 <body>
   <main class="share-shell">
@@ -29,6 +29,15 @@
       </header>
       <nav id="breadcrumbs" class="breadcrumbs"></nav>
       <div class="heading"><div><p class="eyebrow">SHARED DATA</p><h1 id="target-title">共有データ</h1></div><p id="browser-expiry"></p></div>
+      <div id="share-toolbar" class="share-toolbar" hidden>
+        <label for="share-sort">並び順</label>
+        <select id="share-sort">
+          <option value="newest">新しい順</option>
+          <option value="oldest">古い順</option>
+          <option value="name">名前順</option>
+          <option value="size">容量順</option>
+        </select>
+      </div>
       <div id="share-selection-bar" class="selection-bar" hidden>
         <div><strong id="share-selection-count">0件を選択中</strong><small>ZIPにまとめず、元のファイル形式のまま保存します</small></div>
         <div class="selection-actions">
@@ -44,8 +53,9 @@
   </main>
 
   <dialog id="preview-dialog">
-    <div class="dialog-head"><div><span id="preview-kind" class="badge"></span><h2 id="preview-title"></h2></div><button class="close" type="button" aria-label="閉じる">×</button></div>
+    <div class="dialog-head"><div><span id="preview-kind" class="badge"></span><h2 id="preview-title"></h2></div><div class="preview-head-actions"><button id="share-preview-fullscreen" class="secondary preview-fullscreen-button" type="button" aria-label="全画面で表示">⛶ <span>全画面</span></button><button class="close" type="button" aria-label="閉じる">×</button></div></div>
     <div id="preview-stage" class="preview-stage"></div>
+    <dl class="preview-details"><div><dt>容量</dt><dd id="share-preview-size"></dd></div><div><dt>保存日</dt><dd id="share-preview-date"></dd></div></dl>
     <div class="wake-lock-row">
       <label class="wake-lock-setting">
         <input id="share-keep-screen-awake" type="checkbox" checked>
@@ -63,9 +73,9 @@
 
   <script src="/cloud/vendor/argon2.umd.min.js?v=4.12.0" defer></script>
   <script src="/cloud/vendor/mpegts-1.8.0.js?v=1.8.0" defer></script>
-  <script src="/cloud/crypto-vault.js?v=20260808-8" defer></script>
+  <script src="/cloud/crypto-vault.js?v=20260809-10" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-2" defer></script>
-  <script src="/cloud/share.js?v=20260809-12" defer></script>
+  <script src="/cloud/share.js?v=20260809-14" defer></script>
 </body>
 </html>

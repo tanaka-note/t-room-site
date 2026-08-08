@@ -9,8 +9,12 @@ const [mainHtml, mainClient, shareClient] = await Promise.all([
 
 assert.match(mainHtml, /id="selection-share"[^>]*>共有</);
 assert.match(mainClient, /openShareDialog\("file", files\[0\]\)/);
-assert.match(mainClient, /fileCount !== 1 \|\| folderCount !== 0/);
+assert.match(mainClient, /openShareDialog\("selection", files\)/);
+assert.match(mainClient, /fileCount < 1 \|\| folderCount !== 0/);
+assert.match(mainClient, /TRoomCrypto\.wrapFileForShare/);
 assert.match(shareClient, /directFile = file/);
 assert.match(shareClient, /if \(directFile\) await openPreview\(directFile, \{ pushHistory: false \}\)/);
+assert.match(shareClient, /data\.targetType === "selection"/);
+assert.match(shareClient, /TRoomCrypto\.unlockFileFromShare/);
 
-console.log("single-file share creation and immediate preview: ok");
+console.log("single and selected multi-file share flows: ok");

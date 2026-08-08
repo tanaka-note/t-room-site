@@ -21,6 +21,12 @@ if (!script.includes("event.preventDefault()") || !script.includes("uploadFiles(
 if (!script.includes("state.uploading") || !script.includes("アップロードが完了してから")) {
   throw new Error("重複アップロード防止がありません。");
 }
+if (script.includes('matchMedia("(min-width: 901px)").matches')) {
+  throw new Error("PCのウィンドウ幅によってドラッグ＆ドロップが無効になります。");
+}
+if (!script.includes('item.kind === "file"') || !script.includes("transfer.files?.length")) {
+  throw new Error("Windowsブラウザごとのドラッグ情報の差を吸収できません。");
+}
 if (!html.includes('id="upload-file-progress"') || !script.includes("件完了") || !script.includes("保存処理中")) {
   throw new Error("複数ファイルの件数進捗がありません。");
 }
