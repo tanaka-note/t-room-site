@@ -629,14 +629,21 @@ async function handleHistoryNavigation(event) {
   if (!target?.tcloud) return;
   state.handlingPopState = true;
   try {
+    const sameFolder = Number(target.folderId || 0) === Number(state.folderId || 0);
+    const previewOriginId = $("#preview-dialog").open && sameFolder && !target.previewId
+      ? Number(state.previewFileId)
+      : null;
     if (state.selectedFiles.size || state.selectedFolders.size) {
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
-      const sameFolder = Number(target.folderId || 0) === Number(state.folderId || 0);
       if (sameFolder && !target.previewId) return;
     }
     state.previewHistoryActive = false;
     if ($("#preview-dialog").open) $("#preview-dialog").close();
+    if (previewOriginId) {
+      restorePreviewOrigin(previewOriginId);
+      return;
+    }
     await navigateToFolder(target.folderId, target.folderName, { pushHistory: false });
     if (target.previewId) {
       const file = state.files.find((item) => Number(item.id) === Number(target.previewId));
@@ -645,6 +652,13 @@ async function handleHistoryNavigation(event) {
   } finally {
     state.handlingPopState = false;
   }
+}
+
+function restorePreviewOrigin(fileId) {
+  requestAnimationFrame(() => {
+    const card = $(`.file-card[data-file-id="${Number(fileId)}"]`);
+    card?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 }
 
 async function prepareCryptoSession(password = "", accountKey = null) {
