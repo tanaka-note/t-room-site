@@ -107,6 +107,7 @@ function bindEvents() {
     $("#folder-input").click();
   });
   $("#folder-form").addEventListener("submit", createFolder);
+  $("#folder-password-enabled").addEventListener("change", toggleNewFolderPasswordInput);
   $("#folder-upload-form").addEventListener("submit", uploadSelectedFolder);
   $("#unlock-form").addEventListener("submit", unlockFolder);
   $("#folder-settings-form").addEventListener("submit", saveFolderSettings);
@@ -393,25 +394,24 @@ function compareFolderPaths(left, right) {
 function openFolderUploadDialog(selection) {
   if (!selection?.roots?.length || state.uploading) return;
   state.folderUploadSelection = selection;
-  const atStorageRoot = !state.folderId;
   $("#folder-upload-summary").textContent = `${selection.roots.join("、")}（${selection.files.length.toLocaleString("ja-JP")}ファイル）を、フォルダ構成を保って保存します。`;
-  $("#folder-upload-password-row").hidden = !atStorageRoot;
-  $("#folder-upload-password-note").hidden = !atStorageRoot;
-  $("#folder-upload-inherit-note").hidden = atStorageRoot;
-  $("#folder-upload-password").required = atStorageRoot;
-  $("#folder-upload-password").value = "";
   $("#folder-upload-error").textContent = "";
   $("#folder-upload-dialog").showModal();
 }
 
 function openFolderDialog() {
-  const inheritsProtection = Boolean(state.folderId);
-  $("#folder-password-row").hidden = inheritsProtection;
-  $("#folder-password-note").hidden = inheritsProtection;
-  $("#folder-inherit-note").hidden = !inheritsProtection;
-  $("#folder-password").required = !inheritsProtection;
+  $("#folder-password-enabled").checked = false;
   $("#folder-password").value = "";
+  toggleNewFolderPasswordInput();
   $("#folder-dialog").showModal();
+}
+
+function toggleNewFolderPasswordInput() {
+  const enabled = $("#folder-password-enabled").checked;
+  $("#folder-password-row").hidden = !enabled;
+  $("#folder-password-note").hidden = !enabled;
+  $("#folder-password").required = enabled;
+  if (!enabled) $("#folder-password").value = "";
 }
 
 async function login(event) {
@@ -2245,9 +2245,6 @@ async function uploadSelectedFolder(event) {
     const baseParentId = state.folderId ? Number(state.folderId) : null;
     const baseParentKey = baseParentId ? state.crypto.folderKeys.get(baseParentId) : null;
     if (baseParentId && !baseParentKey) throw new Error("保存先フォルダの暗号化鍵を解除してください。");
-    const rootPassword = baseParentId ? "" : $("#folder-upload-password").value;
-    if (!baseParentId && rootPassword.length < 4) throw new Error("フォルダパスワードは4文字以上で設定してください。");
-
     state.uploading = true;
     submitButton.disabled = true;
     syncAvailableActions();
@@ -2259,7 +2256,6 @@ async function uploadSelectedFolder(event) {
     $("#upload-file-progress").textContent = "準備中…";
     $("#upload-progress").style.width = "0%";
     state.folderUploadSelection = null;
-    $("#folder-upload-password").value = "";
     $("#folder-upload-dialog").close();
     dialogClosed = true;
 
@@ -2270,8 +2266,7 @@ async function uploadSelectedFolder(event) {
       const parentPath = parts.slice(0, -1).join("/");
       const inheritedParent = parentPath ? foldersByPath.get(parentPath) : { id: baseParentId, key: baseParentKey };
       if (!inheritedParent) throw new Error(`${path} の親フォルダを作成できませんでした。`);
-      const password = !inheritedParent.id ? rootPassword : "";
-      const created = await createEncryptedFolder(parts.at(-1), inheritedParent.id, inheritedParent.key, password);
+      const created = await createEncryptedFolder(parts.at(-1), inheritedParent.id, inheritedParent.key, "");
       foldersByPath.set(path, created);
       const completed = index + 1;
       const percent = Math.round(completed / selection.directories.length * 100);
@@ -2819,12 +2814,14 @@ async function createFolder(event) {
     if (!state.crypto.publicKey) throw new Error("暗号化の初期設定を完了してください。");
     const parentKey = state.folderId ? state.crypto.folderKeys.get(Number(state.folderId)) : null;
     if (state.folderId && !parentKey) throw new Error("親フォルダの暗号化鍵を解除してください。");
-    const password = state.folderId ? "" : $("#folder-password").value;
+    const password = $("#folder-password-enabled").checked ? $("#folder-password").value : "";
     const encrypted = await TRoomCrypto.createFolderPackage($("#folder-name").value, password, state.crypto.publicKey, parentKey);
     const result = await api("/folders", { method: "POST", body: JSON.stringify({ ...encrypted.payload, name: encrypted.name, parentId: state.folderId }) });
     state.crypto.folderKeys.set(result.id, encrypted.folderKey);
     $("#folder-name").value = "";
+    $("#folder-password-enabled").checked = false;
     $("#folder-password").value = "";
+    toggleNewFolderPasswordInput();
     $("#folder-dialog").close();
     await loadItems();
   } catch (error) { setNotice(error.message, true); }

@@ -119,12 +119,13 @@
 
   async function createFolderPackage(name, password, publicKey, parentFolderKey = null) {
     const cleanName = validateFolderName(name);
-    const inheritsProtection = Boolean(parentFolderKey && !password);
-    if (!inheritsProtection) validateFolderPassword(password);
+    const hasPassword = Boolean(password);
+    const inheritsProtection = Boolean(parentFolderKey && !hasPassword);
+    if (hasPassword) validateFolderPassword(password);
     const rawFolderKey = crypto.getRandomValues(new Uint8Array(32));
     const folderKey = await importFolderKey(rawFolderKey);
     const nameEncrypted = await encryptBytes(folderKey, textEncoder.encode(cleanName), textEncoder.encode(FOLDER_NAME_CONTEXT));
-    const passwordPackage = inheritsProtection ? {} : await wrapFolderKeyWithPassword(rawFolderKey, password);
+    const passwordPackage = hasPassword ? await wrapFolderKeyWithPassword(rawFolderKey, password) : {};
     const adminWrapped = new Uint8Array(await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, rawFolderKey));
     const parentPackage = parentFolderKey
       ? await wrapRawKey(rawFolderKey, parentFolderKey, PARENT_FOLDER_WRAP_CONTEXT, "parentWrappedKey", "parentWrapIv")

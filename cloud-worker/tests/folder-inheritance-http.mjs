@@ -33,12 +33,17 @@ if (rootResponse.status !== 201) throw new Error(`最上位フォルダ作成: $
 const rootId = (await rootResponse.json()).id;
 
 const child = await TRoomCrypto.createFolderPackage("HTTP配下", "", keyPair.publicKey, root.folderKey);
-const missingRootPassword = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...child.payload, name: child.name, parentId: null }) });
-if (missingRootPassword.status !== 400) throw new Error(`最上位PWなし拒否: ${missingRootPassword.status}`);
+const unprotectedRoot = await TRoomCrypto.createFolderPackage("HTTP最上位PWなし", "", keyPair.publicKey);
+const unprotectedRootResponse = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...unprotectedRoot.payload, name: unprotectedRoot.name, parentId: null }) });
+if (unprotectedRootResponse.status !== 201) throw new Error(`最上位PWなし作成: ${unprotectedRootResponse.status}`);
 
 const childResponse = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...child.payload, name: child.name, parentId: rootId }) });
 if (childResponse.status !== 201) throw new Error(`配下PWなし作成: ${childResponse.status}`);
 const childId = (await childResponse.json()).id;
+
+const protectedChild = await TRoomCrypto.createFolderPackage("HTTP配下PWあり", "temporary-child-password", keyPair.publicKey, root.folderKey);
+const protectedChildResponse = await api("/folders", "admin", { method: "POST", body: JSON.stringify({ ...protectedChild.payload, name: protectedChild.name, parentId: rootId }) });
+if (protectedChildResponse.status !== 201) throw new Error(`配下PWあり作成: ${protectedChildResponse.status}`);
 
 const itemsResponse = await api(`/items?folderId=${rootId}`, "admin", { method: "GET", headers: {} });
 const items = await itemsResponse.json();

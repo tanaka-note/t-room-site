@@ -52,6 +52,14 @@ const childFolder = await TRoomCrypto.createFolderPackage("共有対象の子フ
 const childRecord = { cryptoVersion: 1, ...childFolder.payload };
 const sharedChildKey = await TRoomCrypto.unlockFolderFromParent(childRecord, adminKey);
 const sharedChildName = await TRoomCrypto.decryptFolderName(childRecord, sharedChildKey);
+const unprotectedRootFolder = await TRoomCrypto.createFolderPackage("PWなし最上位", "", publicKey);
+const unprotectedRootRecord = { cryptoVersion: 1, ...unprotectedRootFolder.payload };
+const unprotectedRootKey = await TRoomCrypto.unlockFolderAsAdmin(unprotectedRootRecord, vault.privateKey);
+const unprotectedRootName = await TRoomCrypto.decryptFolderName(unprotectedRootRecord, unprotectedRootKey);
+const protectedChildFolder = await TRoomCrypto.createFolderPackage("個別PW付き子フォルダ", "child-folder-password-2026", publicKey, adminKey);
+const protectedChildRecord = { cryptoVersion: 1, ...protectedChildFolder.payload };
+const protectedChildUnlocked = await TRoomCrypto.unlockFolderWithPassword(protectedChildRecord, "child-folder-password-2026");
+const protectedChildName = await TRoomCrypto.decryptFolderName(protectedChildRecord, protectedChildUnlocked.folderKey);
 const destinationFolder = await TRoomCrypto.createFolderPackage("移動先", "destination-test-8842", publicKey);
 const movedFileWrap = await TRoomCrypto.rewrapFileForFolder(unlockedFileKey, destinationFolder.folderKey);
 const movedFileKey = await TRoomCrypto.unlockFileKey({ ...fileRecord, ...movedFileWrap }, destinationFolder.folderKey);
@@ -84,7 +92,7 @@ if (credentials.authProof !== repeatedCredentials.authProof || credentials.authP
 if (fileMetadata.name !== fileSource.name || renamedMetadata.name !== "家族写真・変更後.jpg" || new TextDecoder().decode(decryptedChunk) !== "encrypted file body" || decryptedThumbnail.join(",") !== "1,2,3,4") {
   throw new Error("ファイル暗号化の往復テストに失敗しました。");
 }
-if (childFolder.payload.passwordWrappedKey || childFolder.payload.authProof || !childFolder.payload.inheritsProtection || sharedChildName !== "共有対象の子フォルダ" || movedChildName !== sharedChildName || movedFileMetadata.name !== fileSource.name || shareFolderName !== adminName || decryptedShareToken !== shareToken || derivedShareProof !== sharePackage.authProof || sharedFileMetadata.name !== "家族写真.jpg" || selectedFileRaw.join(",") !== selectedFileUnlockedRaw.join(",") || !wrongSharePasswordRejected) {
+if (childFolder.payload.passwordWrappedKey || childFolder.payload.authProof || !childFolder.payload.inheritsProtection || sharedChildName !== "共有対象の子フォルダ" || unprotectedRootFolder.payload.passwordWrappedKey || unprotectedRootFolder.payload.authProof || unprotectedRootName !== "PWなし最上位" || !protectedChildFolder.payload.passwordWrappedKey || protectedChildFolder.payload.inheritsProtection || protectedChildName !== "個別PW付き子フォルダ" || movedChildName !== sharedChildName || movedFileMetadata.name !== fileSource.name || shareFolderName !== adminName || decryptedShareToken !== shareToken || derivedShareProof !== sharePackage.authProof || sharedFileMetadata.name !== "家族写真.jpg" || selectedFileRaw.join(",") !== selectedFileUnlockedRaw.join(",") || !wrongSharePasswordRejected) {
   throw new Error("共有暗号化の往復テストに失敗しました。");
 }
 

@@ -194,9 +194,9 @@
     <form id="folder-form" method="dialog">
       <div class="dialog-head"><h2>新しいフォルダ</h2><button class="dialog-close icon-button" type="button">×</button></div>
       <label><span>フォルダ名</span><input id="folder-name" required maxlength="240"></label>
-      <label id="folder-password-row"><span>フォルダパスワード</span><input id="folder-password" type="password" required minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"></label>
-      <p id="folder-password-note" class="dialog-note">このフォルダと配下を開く際に必要です。解除後はログアウトまで有効です。</p>
-      <p id="folder-inherit-note" class="dialog-note" hidden>親フォルダの保護を引き継ぐため、新しいパスワードは必要ありません。</p>
+      <label class="check-row"><input id="folder-password-enabled" type="checkbox"><span>このフォルダにパスワードを設定する</span></label>
+      <label id="folder-password-row" hidden><span>フォルダパスワード</span><input id="folder-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"></label>
+      <p id="folder-password-note" class="dialog-note" hidden>このフォルダと配下を開く際に必要です。解除後はログアウトまで有効です。</p>
       <div class="dialog-actions"><button class="primary-button" type="submit">作成する</button></div>
     </form>
   </dialog>
@@ -205,9 +205,6 @@
     <form id="folder-upload-form" method="dialog">
       <div class="dialog-head"><div><span class="file-badge">FOLDER UPLOAD</span><h2>フォルダをアップロード</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
       <p id="folder-upload-summary" class="dialog-note standalone-note"></p>
-      <label id="folder-upload-password-row"><span>フォルダパスワード</span><input id="folder-upload-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"></label>
-      <p id="folder-upload-password-note" class="dialog-note">アップロードするフォルダと配下を開く際に必要です。</p>
-      <p id="folder-upload-inherit-note" class="dialog-note" hidden>現在開いているフォルダの保護を引き継ぐため、新しいパスワードは必要ありません。</p>
       <p id="folder-upload-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions"><button class="primary-button" type="submit">フォルダごと保存する</button></div>
     </form>
@@ -230,7 +227,7 @@
       <label><span>フォルダ名</span><input id="folder-settings-name" required maxlength="240"></label>
       <label id="folder-password-settings-row"><span>パスワード</span><select id="folder-password-action"><option value="keep">現在の設定を維持</option><option value="replace">新しいパスワードに変更</option></select></label>
       <label id="folder-new-password-row" hidden><span>新しいフォルダパスワード</span><input id="folder-new-password" type="password" minlength="4" maxlength="128" autocomplete="new-password"></label>
-      <p id="folder-inherited-settings-note" class="dialog-note" hidden>このフォルダは親フォルダの保護を引き継いでいます。個別のパスワード設定はありません。</p>
+      <p id="folder-inherited-settings-note" class="dialog-note" hidden>このフォルダには個別のパスワードが設定されていません。</p>
       <p id="folder-settings-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions">
         <button id="delete-folder-button" class="danger-button" type="button">フォルダを削除</button>
@@ -284,7 +281,7 @@
     <div class="action-list">
       <button id="mobile-upload-action" class="action-row" type="button"><span class="action-icon">↑</span><span><strong>ファイルをアップロード</strong><small>写真、動画、音声、書類を追加</small></span></button>
       <button id="desktop-folder-upload-action" class="action-row desktop-only" type="button"><span class="action-icon">▰</span><span><strong>フォルダをアップロード</strong><small>フォルダ構成を保ったまま一括で追加</small></span></button>
-      <button id="mobile-folder-action" class="action-row" type="button"><span class="action-icon">＋</span><span><strong>新しいフォルダ</strong><small>パスワード付きフォルダも作成できます</small></span></button>
+      <button id="mobile-folder-action" class="action-row" type="button"><span class="action-icon">＋</span><span><strong>新しいフォルダ</strong><small>必要な場合だけパスワードを設定できます</small></span></button>
     </div>
   </dialog>
 
@@ -384,10 +381,10 @@
 
   <script src="/cloud/vendor/argon2.umd.min.js?v=4.12.0" defer></script>
   <script src="/cloud/vendor/mpegts-1.8.0.js?v=1.8.0" defer></script>
-  <script src="/cloud/crypto-vault.js?v=20260809-12" defer></script>
+  <script src="/cloud/crypto-vault.js?v=20260809-13" defer></script>
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-3" defer></script>
-  <script src="/cloud/cloud.js?v=20260809-62" defer></script>
+  <script src="/cloud/cloud.js?v=20260809-63" defer></script>
 </body>
 </html>

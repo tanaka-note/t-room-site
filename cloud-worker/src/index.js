@@ -638,7 +638,7 @@ async function createFolder(request, env, session) {
     await requireFolderAccess(env, parentId, session);
   }
   if (Number(body.cryptoVersion) !== 1) throw new HttpError(400, "暗号化されたフォルダ情報が必要です。");
-  const encrypted = normalizeEncryptedFolder(body, !parentId);
+  const encrypted = normalizeEncryptedFolder(body, false);
   const parent = normalizeParentWrappedFolder(body, Boolean(parentId));
   const passwordHash = encrypted.authProof ? await hashPassword(encrypted.authProof) : null;
   const result = await env.DB.prepare(`INSERT INTO cloud_folders
@@ -677,12 +677,12 @@ async function updateFolder(id, request, env, session) {
       await ensureValidFolderMove(env, id, parentId);
       parentPackage = normalizeParentWrappedFolder(body, true);
     } else {
-      if (!folder.password_hash) throw new HttpError(400, "親フォルダの保護を引き継ぐフォルダは、PWを設定してから最上位へ移動してください。");
+      if (!folder.password_hash) throw new HttpError(400, "個別PWがない配下フォルダは、PWを設定してから最上位へ移動してください。");
       parentPackage = normalizeParentWrappedFolder(body, false);
     }
   }
   if (passwordAction === "replace") {
-    if (folder.parent_id && !folder.password_hash) throw new HttpError(400, "親フォルダの保護を引き継ぐフォルダには個別PWを設定できません。");
+    if (folder.parent_id && !folder.password_hash) throw new HttpError(400, "個別PWがない配下フォルダでは、作成後にPWを追加できません。");
     const authProof = validCryptoText(body.authProof, 256, "フォルダ認証");
     const passwordSalt = validCryptoText(body.passwordSalt, 128, "フォルダSalt");
     const passwordWrappedKey = validCryptoText(body.passwordWrappedKey, 512, "フォルダ鍵");
