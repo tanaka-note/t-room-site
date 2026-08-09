@@ -447,7 +447,7 @@ async function listPublicShareItems(token, request, env, url) {
   const folder = await requireFolder(env, requestedFolderId);
   const folders = await env.DB.prepare(`SELECT id, parent_id AS parentId, name, crypto_version AS cryptoVersion,
     encrypted_name AS encryptedName, name_iv AS nameIv, parent_wrapped_key AS parentWrappedKey,
-    parent_wrap_iv AS parentWrapIv, created_at AS createdAt
+    parent_wrap_iv AS parentWrapIv, created_at AS createdAt, updated_at AS updatedAt
     FROM cloud_folders WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC`).bind(requestedFolderId).all();
   const files = await env.DB.prepare(`SELECT * FROM cloud_files WHERE folder_id = ? AND deleted_at IS NULL
     AND status = 'ready' ORDER BY created_at DESC, id DESC LIMIT 500`).bind(requestedFolderId).all();
@@ -539,7 +539,8 @@ async function listItems(url, env, session) {
   const folderId = optionalId(url.searchParams.get("folderId"));
   const query = normalizeText(url.searchParams.get("q"), 100).toLowerCase();
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
-  const sort = ["name", "oldest", "size"].includes(url.searchParams.get("sort")) ? url.searchParams.get("sort") : "newest";
+  const requestedSort = url.searchParams.get("sort") || "updated-desc";
+  const sort = ["updated-desc", "updated-asc", "name-asc", "name-desc", "size-desc", "size-asc", "newest", "oldest", "name", "size"].includes(requestedSort) ? requestedSort : "updated-desc";
   const folder = folderId ? await env.DB.prepare(`SELECT f.id, f.parent_id, f.name,
     f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
     f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
@@ -556,7 +557,7 @@ async function listItems(url, env, session) {
   const folderValues = [session.sessionId, Math.floor(Date.now() / 1000), ...(folderId ? [folderId] : [])];
   if (query) { folderClauses.push("LOWER(f.name) LIKE ?"); folderValues.push(`%${query}%`); }
   const folders = await env.DB.prepare(`
-    SELECT f.id, f.parent_id AS parentId, f.name, f.created_at AS createdAt,
+    SELECT f.id, f.parent_id AS parentId, f.name, f.created_at AS createdAt, f.updated_at AS updatedAt,
       f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
       f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
       f.password_wrap_iv AS passwordWrapIv, f.admin_wrapped_key AS adminWrappedKey,
@@ -570,7 +571,13 @@ async function listItems(url, env, session) {
     ORDER BY f.name COLLATE NOCASE ASC
   `).bind(...folderValues).all();
 
-  const order = sort === "name" ? "original_name COLLATE NOCASE ASC" : sort === "oldest" ? "created_at ASC" : sort === "size" ? "size_bytes DESC" : "created_at DESC";
+  const orderBySort = {
+    "updated-desc": "updated_at DESC", "updated-asc": "updated_at ASC",
+    "name-asc": "original_name COLLATE NOCASE ASC", "name-desc": "original_name COLLATE NOCASE DESC",
+    "size-desc": "size_bytes DESC", "size-asc": "size_bytes ASC",
+    newest: "created_at DESC", oldest: "created_at ASC", name: "original_name COLLATE NOCASE ASC", size: "size_bytes DESC"
+  };
+  const order = orderBySort[sort];
   let files = { results: [] };
   if (folderId) {
     const clauses = ["folder_id = ?", "deleted_at IS NULL", "status = 'ready'"];
@@ -1209,7 +1216,8 @@ function publicFolderRecord(folder) {
     nameIv: folder.nameIv ?? folder.name_iv,
     parentWrappedKey: folder.parentWrappedKey ?? folder.parent_wrapped_key ?? null,
     parentWrapIv: folder.parentWrapIv ?? folder.parent_wrap_iv ?? null,
-    createdAt: folder.createdAt ?? folder.created_at
+    createdAt: folder.createdAt ?? folder.created_at,
+    updatedAt: folder.updatedAt ?? folder.updated_at
   };
 }
 

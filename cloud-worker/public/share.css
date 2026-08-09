@@ -33,8 +33,13 @@ form>.primary { margin-top:18px; }
 .heading>p { color:var(--muted); font-size:.75rem; }
 .share-toolbar { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin:16px 0 4px; }
 .share-toolbar[hidden] { display:none; }
-.share-toolbar label { margin:0; color:var(--muted); font-size:.75rem; }
-.share-toolbar select { min-height:42px; padding:8px 36px 8px 12px; border:1px solid var(--line); border-radius:10px; color:var(--ink); background:white; }
+.sort-label { margin:0; color:var(--muted); font-size:.75rem; }
+.sort-controls { display:inline-flex; align-items:stretch; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:white; }
+.sort-button { min-height:40px; padding:7px 10px; border:0; border-right:1px solid var(--line); color:var(--muted); background:white; font-size:.74rem; font-weight:800; white-space:nowrap; }
+.sort-button:last-child { border-right:0; }
+.sort-button:hover { background:var(--soft); }
+.sort-button.active { color:var(--teal-dark); background:#edf7f5; }
+.sort-button span { display:inline-block; min-width:.8em; }
 .breadcrumbs { display:flex; flex-wrap:wrap; gap:7px; margin-top:28px; }
 .breadcrumbs button { border:0; padding:5px 7px; color:var(--teal-dark); background:transparent; font-weight:800; }
 .breadcrumbs button+button::before { content:"/"; padding-right:12px; color:#96a4a8; }
@@ -96,4 +101,4 @@ dialog::backdrop { background:rgba(10,20,24,.7); backdrop-filter:blur(4px); }
 .history-list { display:grid; gap:1px; max-height:65svh; overflow:auto; padding:16px; background:var(--soft); }
 .history-list article { display:grid; grid-template-columns:minmax(125px,.8fr) minmax(150px,1.4fr) auto; gap:10px; padding:12px; border-radius:8px; background:white; }
 .history-list small { color:var(--muted); text-align:right; }
-@media(max-width:620px){ .unlock-card{width:100%;min-height:100svh;margin:0;padding:30px 22px;border:0;border-radius:0;box-shadow:none}.browser{padding:20px 15px 60px}.heading{align-items:flex-start;flex-direction:column}.share-toolbar{justify-content:space-between}.share-toolbar select{flex:1;max-width:220px}.selection-bar{align-items:stretch;flex-direction:column}.selection-actions>*{flex:1}.items{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}#preview-dialog{width:100%;height:100svh;max-height:100svh;border-radius:0}.dialog-head{padding:12px 14px}.dialog-head h2{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:.92rem}.preview-fullscreen-button span{display:none}.preview-fullscreen-button{width:40px;min-height:40px;padding:0}.preview-stage{min-height:62svh}.preview-details{padding:12px 15px}.dialog-actions{position:sticky;bottom:0;padding:12px 15px calc(12px + env(safe-area-inset-bottom));background:rgba(255,255,255,.96);backdrop-filter:blur(16px)}.wake-lock-row{align-items:stretch;flex-direction:column}.history-list article{grid-template-columns:1fr;gap:4px}.history-list small{text-align:left} }
+@media(max-width:620px){ .unlock-card{width:100%;min-height:100svh;margin:0;padding:30px 22px;border:0;border-radius:0;box-shadow:none}.browser{padding:20px 15px 60px}.heading{align-items:flex-start;flex-direction:column}.share-toolbar{align-items:stretch;flex-direction:column}.share-toolbar .sort-controls{display:grid;grid-template-columns:repeat(3,1fr)}.selection-bar{align-items:stretch;flex-direction:column}.selection-actions>*{flex:1}.items{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}#preview-dialog{width:100%;height:100svh;max-height:100svh;border-radius:0}.dialog-head{padding:12px 14px}.dialog-head h2{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:.92rem}.preview-fullscreen-button span{display:none}.preview-fullscreen-button{width:40px;min-height:40px;padding:0}.preview-stage{min-height:62svh}.preview-details{padding:12px 15px}.dialog-actions{position:sticky;bottom:0;padding:12px 15px calc(12px + env(safe-area-inset-bottom));background:rgba(255,255,255,.96);backdrop-filter:blur(16px)}.wake-lock-row{align-items:stretch;flex-direction:column}.history-list article{grid-template-columns:1fr;gap:4px}.history-list small{text-align:left} }

@@ -10,12 +10,16 @@ const [mainHtml, mainCss, mainJs, shareHtml, shareCss, shareJs] = await Promise.
   readFile(new URL("../public/share.js", import.meta.url), "utf8")
 ]);
 
-for (const option of ["newest", "oldest", "name", "size"]) {
-  assert.match(shareHtml, new RegExp(`value="${option}"`));
+for (const key of ["updated", "name", "size"]) {
+  assert.match(mainHtml, new RegExp(`data-sort-key="${key}"`));
+  assert.match(shareHtml, new RegExp(`data-sort-key="${key}"`));
 }
-assert.match(shareHtml, /id="share-sort"/);
+assert.match(shareHtml, /id="share-sort-controls"/);
 assert.match(shareJs, /function renderSortedItems\(\)/);
 assert.match(shareJs, /state\.sort === "size"/);
+assert.match(shareJs, /function changeSharedSort\(key\)/);
+assert.match(mainJs, /function changeSort\(key\)/);
+assert.match(mainJs, /state\.sortDirection/);
 
 assert.match(mainHtml, /id="preview-fullscreen"/);
 assert.match(shareHtml, /id="share-preview-fullscreen"/);

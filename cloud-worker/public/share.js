@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "newest", selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -32,11 +32,7 @@ function bindEvents() {
   $("#share-selection-all").addEventListener("click", selectAllSharedFiles);
   $("#share-selection-download").addEventListener("click", downloadFileSelection);
   $("#share-selection-cancel").addEventListener("click", cancelSharedDownloads);
-  $("#share-sort").addEventListener("change", (event) => {
-    state.sort = event.target.value;
-    clearFileSelection();
-    renderSortedItems();
-  });
+  document.querySelectorAll("#share-sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSharedSort(button.dataset.sortKey)));
   $("#share-preview-fullscreen").addEventListener("click", toggleSharedPreviewFullscreen);
   $("#preview-stage").addEventListener("dblclick", handleSharedPreviewDoubleClick);
   $("#share-download-retry-wake").addEventListener("click", requestDownloadWakeLock);
@@ -178,22 +174,37 @@ function renderSortedItems() {
   const folders = [...state.folders];
   const files = [...state.files];
   const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ja", { numeric: true, sensitivity: "base" });
-  const byOldest = (a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
-  const byNewest = (a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  const direction = state.sortDirection === "asc" ? 1 : -1;
+  const byUpdated = (a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || ""));
   if (state.sort === "name") {
-    folders.sort(byName);
-    files.sort(byName);
-  } else if (state.sort === "oldest") {
-    folders.sort(byOldest);
-    files.sort(byOldest);
+    folders.sort((a, b) => direction * byName(a, b));
+    files.sort((a, b) => direction * byName(a, b));
   } else if (state.sort === "size") {
     folders.sort(byName);
-    files.sort((a, b) => Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0) || byName(a, b));
+    files.sort((a, b) => direction * (Number(a.sizeBytes || 0) - Number(b.sizeBytes || 0)) || byName(a, b));
   } else {
-    folders.sort(byNewest);
-    files.sort(byNewest);
+    folders.sort(byUpdated);
+    files.sort(byUpdated);
   }
   renderItems(folders, files);
+}
+
+function changeSharedSort(key) {
+  if (!["updated", "name", "size"].includes(key)) return;
+  if (state.sort === key) state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+  else {
+    state.sort = key;
+    state.sortDirection = key === "name" ? "asc" : "desc";
+  }
+  document.querySelectorAll("#share-sort-controls [data-sort-key]").forEach((button) => {
+    const active = button.dataset.sortKey === state.sort;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    const direction = active ? state.sortDirection : button.dataset.sortKey === "name" ? "asc" : "desc";
+    button.querySelector("span").textContent = direction === "asc" ? "↑" : "↓";
+  });
+  clearFileSelection();
+  renderSortedItems();
 }
 
 function fileCard(file) {

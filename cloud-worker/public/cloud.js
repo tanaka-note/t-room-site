@@ -6,7 +6,8 @@ const state = {
   folderId: null,
   kind: "",
   view: "all",
-  sort: "newest",
+  sort: "updated",
+  sortDirection: "desc",
   query: "",
   files: [],
   folders: [],
@@ -137,7 +138,7 @@ function bindEvents() {
   document.addEventListener("keydown", handlePreviewKeydown);
   window.addEventListener("popstate", handleHistoryNavigation);
   $("#search-input").addEventListener("input", debounce((event) => { state.query = event.target.value.trim(); loadItems(); }, 250));
-  $("#sort-select").addEventListener("change", (event) => { state.sort = event.target.value; loadItems(); });
+  $$("#sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSort(button.dataset.sortKey)));
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
   $("#selection-clear").addEventListener("click", () => clearFileSelection());
   $("#selection-all").addEventListener("click", selectAllVisibleItems);
@@ -175,6 +176,27 @@ function syncLoginAutocomplete() {
   const remember = $("#remember-login").checked;
   $("#login-id").setAttribute("autocomplete", remember ? "username" : "off");
   $("#login-password").setAttribute("autocomplete", remember ? "current-password" : "off");
+}
+
+function changeSort(key) {
+  if (!["updated", "name", "size"].includes(key)) return;
+  if (state.sort === key) state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+  else {
+    state.sort = key;
+    state.sortDirection = key === "name" ? "asc" : "desc";
+  }
+  syncSortControls();
+  loadItems();
+}
+
+function syncSortControls() {
+  $$("#sort-controls [data-sort-key]").forEach((button) => {
+    const active = button.dataset.sortKey === state.sort;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    const direction = active ? state.sortDirection : button.dataset.sortKey === "name" ? "asc" : "desc";
+    button.querySelector("span").textContent = direction === "asc" ? "↑" : "↓";
+  });
 }
 
 async function restoreRememberedLogin() {
@@ -764,7 +786,7 @@ async function loadItems() {
       state.shares = await hydrateShareRecords(data.shares || []);
       renderBreadcrumbs([]);
     } else {
-      const params = new URLSearchParams({ sort: state.sort });
+      const params = new URLSearchParams({ sort: `${state.sort}-${state.sortDirection}` });
       if (state.folderId) params.set("folderId", state.folderId);
       if (state.kind) params.set("kind", state.kind);
       if (state.query) params.set("q", state.query);
@@ -903,9 +925,10 @@ async function hydrateFolderRecords(records) {
   }
   let result = hydrated;
   if (state.query) result = result.filter((folder) => folder.name.toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja")));
-  if (state.sort === "name") result.sort((a, b) => a.name.localeCompare(b.name, "ja"));
-  else if (state.sort === "oldest") result.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  else result.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const direction = state.sortDirection === "asc" ? 1 : -1;
+  if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
+  else if (state.sort === "updated") result.sort((a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || "")));
+  else result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   return result;
 }
 
@@ -1314,10 +1337,10 @@ async function hydrateFileRecords(records) {
   let result = hydrated;
   if (state.query) result = result.filter((file) => file.name.toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja")));
   if (state.kind) result = result.filter((file) => file.mediaKind === state.kind);
-  if (state.sort === "name") result.sort((a, b) => a.name.localeCompare(b.name, "ja"));
-  else if (state.sort === "oldest") result.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  else if (state.sort === "size") result.sort((a, b) => Number(b.sizeBytes || 0) - Number(a.sizeBytes || 0));
-  else result.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const direction = state.sortDirection === "asc" ? 1 : -1;
+  if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
+  else if (state.sort === "size") result.sort((a, b) => direction * (Number(a.sizeBytes || 0) - Number(b.sizeBytes || 0)) || a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
+  else result.sort((a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || "")));
   return result;
 }
 
