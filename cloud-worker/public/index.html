@@ -210,8 +210,12 @@
     <form id="folder-upload-form" method="dialog">
       <div class="dialog-head"><div><span class="file-badge">FOLDER UPLOAD</span><h2>フォルダをアップロード</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
       <p id="folder-upload-summary" class="dialog-note standalone-note"></p>
+      <p class="dialog-note">複数のフォルダは、画面へまとめてドロップするか、下のボタンから続けて追加できます。</p>
       <p id="folder-upload-error" class="form-error dialog-error" role="alert"></p>
-      <div class="dialog-actions"><button class="primary-button" type="submit">フォルダごと保存する</button></div>
+      <div class="dialog-actions">
+        <button id="folder-upload-more" class="secondary-button" type="button">別のフォルダも追加</button>
+        <button class="primary-button" type="submit">まとめて保存する</button>
+      </div>
     </form>
   </dialog>
 
@@ -397,6 +401,6 @@
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-3" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-66" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-67" defer></script>
 </body>
 </html>

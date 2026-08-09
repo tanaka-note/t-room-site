@@ -111,6 +111,7 @@ function bindEvents() {
   });
   $("#folder-form").addEventListener("submit", createFolder);
   $("#folder-password-enabled").addEventListener("change", toggleNewFolderPasswordInput);
+  $("#folder-upload-more").addEventListener("click", () => $("#folder-input").click());
   $("#folder-upload-form").addEventListener("submit", uploadSelectedFolder);
   $("#unlock-form").addEventListener("submit", unlockFolder);
   $("#folder-settings-form").addEventListener("submit", saveFolderSettings);
@@ -312,7 +313,7 @@ async function handleFileDrop(event) {
   if (droppedDirectoryExists(event.dataTransfer)) {
     try {
       const selection = await folderSelectionFromDrop(event.dataTransfer);
-      openFolderUploadDialog(selection);
+      openFolderUploadDialog(selection, { append: $("#folder-upload-dialog").open });
     } catch (error) {
       setNotice(error.message, true);
     }
@@ -333,9 +334,10 @@ async function handleFileDrop(event) {
 function handleFolderInput(event) {
   const files = [...(event.target.files || [])];
   event.target.value = "";
+  if (!files.length) return;
   try {
     const selection = normalizeFolderSelection(files.map((file) => ({ file, relativePath: file.webkitRelativePath || file.name })));
-    openFolderUploadDialog(selection);
+    openFolderUploadDialog(selection, { append: $("#folder-upload-dialog").open });
   } catch (error) {
     setNotice(error.message, true);
   }
@@ -394,12 +396,26 @@ function compareFolderPaths(left, right) {
   return depth || left.localeCompare(right, "ja");
 }
 
-function openFolderUploadDialog(selection) {
+function mergeFolderSelections(current, incoming) {
+  if (!current) return incoming;
+  const directories = new Set([...current.directories, ...incoming.directories]);
+  const files = new Map();
+  for (const record of [...current.files, ...incoming.files]) {
+    const file = record.file;
+    const identity = [record.relativePath, Number(file?.size || 0), Number(file?.lastModified || 0)].join("\u0000");
+    if (!files.has(identity)) files.set(identity, record);
+  }
+  return normalizeFolderSelection([...files.values()], directories);
+}
+
+function openFolderUploadDialog(selection, { append = false } = {}) {
   if (!selection?.roots?.length || state.uploading) return;
-  state.folderUploadSelection = selection;
-  $("#folder-upload-summary").textContent = `${selection.roots.join("、")}（${selection.files.length.toLocaleString("ja-JP")}ファイル）を、フォルダ構成を保って保存します。`;
+  const dialog = $("#folder-upload-dialog");
+  state.folderUploadSelection = append ? mergeFolderSelections(state.folderUploadSelection, selection) : selection;
+  const queued = state.folderUploadSelection;
+  $("#folder-upload-summary").textContent = `${queued.roots.length.toLocaleString("ja-JP")}フォルダ・${queued.files.length.toLocaleString("ja-JP")}ファイルを、フォルダ構成を保ってまとめて保存します。（${queued.roots.join("、")}）`;
   $("#folder-upload-error").textContent = "";
-  $("#folder-upload-dialog").showModal();
+  if (!dialog.open) dialog.showModal();
 }
 
 function openFolderDialog() {
