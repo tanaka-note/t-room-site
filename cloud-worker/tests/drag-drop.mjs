@@ -27,7 +27,7 @@ if (script.includes('matchMedia("(min-width: 901px)").matches')) {
 if (!script.includes('item.kind === "file"') || !script.includes("transfer.files?.length")) {
   throw new Error("Windowsブラウザごとのドラッグ情報の差を吸収できません。");
 }
-if (!html.includes('id="upload-file-progress"') || !script.includes("件完了") || !script.includes("保存処理中")) {
+if (!html.includes('id="upload-file-progress"') || !script.includes("件完了") || !script.includes("Cloudflareで保存を確定中")) {
   throw new Error("複数ファイルの件数進捗がありません。");
 }
 

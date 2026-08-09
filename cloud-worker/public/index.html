@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Storage</title>
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-19">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-20">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -124,6 +124,11 @@
         </div>
         <div class="upload-track"><span id="upload-progress"></span></div>
         <p class="upload-file-row"><span id="upload-file-name"></span><span><span id="upload-speed"></span><span id="upload-file-progress"></span></span></p>
+        <div class="upload-live-metrics" aria-live="polite">
+          <span id="upload-bytes">0 B / 0 B</span>
+          <span id="upload-eta">残り時間：計算中</span>
+          <span id="upload-activity">送信準備中</span>
+        </div>
         <div id="upload-failure-summary" class="transfer-error-summary" hidden>
           <strong>アップロードできなかったデータ</strong>
           <ul id="upload-failed-list"></ul>
@@ -392,6 +397,6 @@
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-3" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-65" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-66" defer></script>
 </body>
 </html>

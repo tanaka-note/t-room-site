@@ -20,7 +20,7 @@ assert.match(client, /function cancelUploads\(\)/);
 assert.match(client, /state\.uploadAbort\.abort\(\)/);
 assert.match(client, /function getUploadConnectionLimit\(\)/);
 assert.match(client, /function createUploadLimiter\(limit\)/);
-assert.match(client, /async function uploadPartWithRetry\(path, body, signal\)/);
+assert.match(client, /async function uploadPartWithRetry\(path, body, signal, callbacks = \{\}\)/);
 assert.match(client, /const maxAttempts = 4/);
 assert.match(html, /id="upload-speed"/);
 

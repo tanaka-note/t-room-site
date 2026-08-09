@@ -2494,6 +2494,10 @@ async function uploadFiles(files, destinations = null) {
   $("#upload-status").textContent = `0 / ${total}件完了`;
   $("#upload-progress").style.width = "0%";
   $("#upload-speed").textContent = "";
+  $("#upload-bytes").textContent = `0 B / ${formatBytes(totalBytes)}`;
+  $("#upload-eta").textContent = "残り時間：計算中";
+  $("#upload-activity").textContent = "送信準備中";
+  $("#upload-activity").classList.remove("waiting");
   renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
   $("#upload-cancel").hidden = false;
   $("#upload-cancel").disabled = false;
@@ -2581,11 +2585,12 @@ async function uploadFiles(files, destinations = null) {
     } else {
       panel.classList.add("upload-complete");
       $("#upload-heading").textContent = "アップロード完了";
-      $("#upload-file-progress").textContent = "保存完了";
+      $("#upload-file-progress").textContent = "Cloudflareへの保存確認済み";
       await new Promise((resolve) => setTimeout(resolve, 900));
       panel.hidden = true;
     }
   } finally {
+    tracker.stop();
     state.uploading = false;
     state.uploadAbort = null;
     $("#upload-cancel").hidden = true;
@@ -2597,6 +2602,8 @@ async function uploadFiles(files, destinations = null) {
 
 async function uploadOne(file, index, total, destinationFolderId, destinationFolderKey, signal, partLimiter, tracker) {
   throwIfUploadCancelled(signal);
+  tracker.start(file, index, total);
+  tracker.phase(file, "安全性確認中…");
   if (isBlockedClientFile(file)) throw new Error("安全上、このファイル形式は保存できません。");
   if (!globalThis.TCloudSafety) throw new Error("安全性確認機能を読み込めません。ページを再読み込みしてください。");
   await TCloudSafety.inspect(file);
@@ -2606,12 +2613,13 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
   if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
   const mediaKind = detectClientKind(file.type || "application/octet-stream", file.name);
   const thumbnailPromise = makeThumbnail(file);
+  tracker.phase(file, "暗号化準備中…");
   const encrypted = await TRoomCrypto.createFilePackage(file, folderKey, mediaKind);
   throwIfUploadCancelled(signal);
   let init = null;
   let uploadCompleted = false;
-  tracker.start(file, index, total);
   try {
+    tracker.phase(file, "Cloudflareへ送信準備中…");
     init = await api("/uploads", {
       method: "POST",
       body: JSON.stringify({ ...encrypted.payload, folderId }),
@@ -2620,7 +2628,6 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
     const chunkCount = Math.ceil(file.size / init.chunkSize);
     const parts = new Array(chunkCount);
     let nextPartNumber = 1;
-    let uploadedBytes = 0;
     const uploadWorker = async () => {
       while (true) {
         throwIfUploadCancelled(signal);
@@ -2634,17 +2641,25 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
           const encryptedChunk = await TRoomCrypto.encryptFileChunk(encrypted.fileKey, chunk, partNumber - 1);
           chunk.fill(0);
           throwIfUploadCancelled(signal);
-          return uploadPartWithRetry(`/uploads/${init.id}/parts/${partNumber}`, encryptedChunk, signal);
+          const plainBytes = end - offset;
+          return uploadPartWithRetry(`/uploads/${init.id}/parts/${partNumber}`, encryptedChunk, signal, {
+            onProgress: (loaded, transmittedTotal, attempt) => {
+              const ratio = transmittedTotal > 0 ? Math.min(1, loaded / transmittedTotal) : 0;
+              tracker.partProgress(file, partNumber, attempt, Math.round(plainBytes * ratio), plainBytes);
+            },
+            onRetry: (nextAttempt, maxAttempts) => tracker.retry(file, partNumber, nextAttempt, maxAttempts)
+          });
         });
-        uploadedBytes += end - offset;
-        tracker.progress(file, end - offset, uploadedBytes);
+        tracker.partProgress(file, partNumber, 0, end - offset, end - offset, true);
       }
     };
     await Promise.all(Array.from({ length: Math.min(connectionLimitForFile(partLimiter.limit, total), chunkCount) }, uploadWorker));
     throwIfUploadCancelled(signal);
-    tracker.phase(file, "保存処理中…");
-    await api(`/uploads/${init.id}/complete`, { method: "POST", body: JSON.stringify({ parts }), signal });
+    tracker.phase(file, "Cloudflareで保存を確定中…");
+    const confirmation = await api(`/uploads/${init.id}/complete`, { method: "POST", body: JSON.stringify({ parts }), signal });
+    if (!confirmation?.verified) throw new Error("Cloudflare上の保存確認を完了できませんでした。");
     uploadCompleted = true;
+    tracker.phase(file, "Cloudflareへの保存確認済み");
     if (signal?.aborted) return;
     tracker.phase(file, "サムネイル処理中…");
     try {
@@ -2712,48 +2727,164 @@ function createUploadLimiter(limit) {
 function createUploadTracker(files, totalBytes) {
   const startedAt = performance.now();
   const active = new Map();
-  const uploadedByFile = new Map(files.map((file) => [file, 0]));
+  const partsByFile = new Map(files.map((file) => [file, new Map()]));
+  const networkAttemptsByFile = new Map(files.map((file) => [file, new Map()]));
+  const completedFiles = new Set();
+  const samples = [];
+  let networkBytes = 0;
+  let lastActivityAt = 0;
+  let phaseStartedAt = startedAt;
+  let currentPhase = "送信準備中";
+  let stopped = false;
+  const uploadedFor = (file) => {
+    if (completedFiles.has(file)) return Number(file.size || 0);
+    return [...(partsByFile.get(file)?.values() || [])].reduce((sum, part) => sum + Math.min(Number(part.size || 0), Number(part.loaded || 0)), 0);
+  };
   const refresh = () => {
-    const uploadedBytes = [...uploadedByFile.values()].reduce((sum, value) => sum + value, 0);
-    const elapsedSeconds = Math.max(.25, (performance.now() - startedAt) / 1000);
-    const percent = totalBytes ? Math.min(100, Math.round((uploadedBytes / totalBytes) * 100)) : 100;
-    const mbps = (uploadedBytes * 8) / elapsedSeconds / 1_000_000;
+    if (stopped) return;
+    const now = performance.now();
+    const uploadedBytes = files.reduce((sum, file) => sum + uploadedFor(file), 0);
+    const percent = totalBytes ? Math.min(100, (uploadedBytes / totalBytes) * 100) : 100;
+    while (samples.length > 2 && samples[0].time < now - 8000) samples.shift();
+    const firstSample = samples[0];
+    const lastSample = samples.at(-1);
+    const sampleSeconds = firstSample && lastSample ? Math.max(.25, (lastSample.time - firstSample.time) / 1000) : 0;
+    const bytesPerSecond = sampleSeconds > 0 ? Math.max(0, (lastSample.bytes - firstSample.bytes) / sampleSeconds) : 0;
+    const remainingSeconds = bytesPerSecond > 0 ? Math.max(0, totalBytes - uploadedBytes) / bytesPerSecond : 0;
     $("#upload-progress").style.width = `${percent}%`;
-    $("#upload-file-progress").textContent = `${percent}%`;
-    $("#upload-speed").textContent = uploadedBytes ? `${mbps.toFixed(mbps >= 10 ? 1 : 2)} Mbps` : "";
+    $("#upload-file-progress").textContent = `${percent.toFixed(percent >= 10 ? 1 : 2)}%`;
+    $("#upload-speed").textContent = bytesPerSecond > 0 ? formatTransferRate(bytesPerSecond) : "速度計測中";
+    $("#upload-bytes").textContent = `${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)}`;
+    $("#upload-eta").textContent = bytesPerSecond > 0 && uploadedBytes < totalBytes ? `残り約${formatTransferDuration(remainingSeconds)}` : (uploadedBytes >= totalBytes ? "送信完了" : "残り時間：計算中");
+    const secondsSinceActivity = lastActivityAt ? Math.max(0, Math.floor((now - lastActivityAt) / 1000)) : 0;
+    const communicating = currentPhase === "Cloudflareへ送信中";
+    const waiting = communicating && lastActivityAt && secondsSinceActivity >= 15;
+    const phaseElapsed = Math.max(0, Math.floor((now - phaseStartedAt) / 1000));
+    const activity = waiting
+      ? `通信応答待ち・最終通信${secondsSinceActivity}秒前`
+      : communicating
+      ? (lastActivityAt ? `通信中・最終通信${secondsSinceActivity}秒前` : "通信開始待ち")
+      : phaseElapsed >= 2 ? `${currentPhase}（${phaseElapsed}秒経過）` : currentPhase;
+    $("#upload-activity").textContent = activity;
+    $("#upload-activity").classList.toggle("waiting", Boolean(waiting || currentPhase.startsWith("通信再試行中")));
     const names = [...active.keys()].map((file) => file.name);
     $("#upload-file-name").textContent = names.length > 1 ? `${names[0]} ほか${names.length - 1}件` : (names[0] || "");
   };
+  const timer = setInterval(refresh, 1000);
   return {
-    start(file) { active.set(file, 0); refresh(); },
-    progress(file, _delta, fileBytes) { uploadedByFile.set(file, fileBytes); active.set(file, fileBytes); refresh(); },
-    phase(file, label) { if (active.has(file)) $("#upload-file-progress").textContent = label; },
+    start(file) { active.set(file, true); refresh(); },
+    partProgress(file, partNumber, attempt, loaded, size, completed = false) {
+      const parts = partsByFile.get(file);
+      if (!parts) return;
+      const attemptKey = `${partNumber}:${attempt}`;
+      const attempts = networkAttemptsByFile.get(file);
+      if (!(completed && attempt === 0)) {
+        const previousNetworkLoaded = Number(attempts.get(attemptKey) || 0);
+        const currentNetworkLoaded = Math.max(previousNetworkLoaded, Number(loaded || 0));
+        attempts.set(attemptKey, currentNetworkLoaded);
+        networkBytes += Math.max(0, currentNetworkLoaded - previousNetworkLoaded);
+      }
+      if (completed) parts.set(partNumber, { attempt, loaded: size, size, completed: true });
+      else if (!parts.get(partNumber)?.completed) parts.set(partNumber, { attempt, loaded, size, completed: false });
+      lastActivityAt = performance.now();
+      currentPhase = "Cloudflareへ送信中";
+      phaseStartedAt = lastActivityAt;
+      samples.push({ time: lastActivityAt, bytes: networkBytes });
+      refresh();
+    },
+    retry(file, partNumber, nextAttempt, maxAttempts) {
+      const parts = partsByFile.get(file);
+      const current = parts?.get(partNumber);
+      if (parts && !current?.completed) parts.set(partNumber, { attempt: nextAttempt, loaded: 0, size: Number(current?.size || 0), completed: false });
+      currentPhase = `通信再試行中 ${nextAttempt}/${maxAttempts}回`;
+      phaseStartedAt = performance.now();
+      refresh();
+    },
+    phase(file, label) {
+      if (!active.has(file)) return;
+      currentPhase = label.replace(/…$/, "");
+      phaseStartedAt = performance.now();
+      refresh();
+    },
     finish(file, completed) {
-      uploadedByFile.set(file, file.size);
+      completedFiles.add(file);
       active.delete(file);
       $("#upload-status").textContent = `${completed} / ${files.length}件完了`;
       refresh();
     },
     defer(file) {
-      uploadedByFile.set(file, 0);
+      partsByFile.set(file, new Map());
+      completedFiles.delete(file);
       active.delete(file);
       refresh();
+    },
+    stop() {
+      stopped = true;
+      clearInterval(timer);
     }
   };
 }
 
-async function uploadPartWithRetry(path, body, signal) {
+async function uploadPartWithRetry(path, body, signal, callbacks = {}) {
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await api(path, { method: "PUT", body, rawBody: true, signal });
+      return await uploadPartRequest(path, body, signal, (loaded, total) => callbacks.onProgress?.(loaded, total, attempt));
     } catch (error) {
       if (signal?.aborted || error.name === "AbortError") throw error;
       const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
       if (!retryable || attempt === maxAttempts) throw error;
+      callbacks.onRetry?.(attempt + 1, maxAttempts);
       await uploadRetryDelay(400 * (2 ** (attempt - 1)) + Math.random() * 250, signal);
     }
   }
+}
+
+function uploadPartRequest(path, body, signal, onProgress) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("中止しました", "AbortError"));
+      return;
+    }
+    const request = new XMLHttpRequest();
+    const abort = () => request.abort();
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    request.open("PUT", `${API}${path}`, true);
+    request.withCredentials = true;
+    request.responseType = "json";
+    request.setRequestHeader("Content-Type", "application/octet-stream");
+    request.upload.onprogress = (event) => onProgress?.(Number(event.loaded || 0), Number(event.total || body.byteLength || 0));
+    request.onload = () => {
+      cleanup();
+      const data = request.response && typeof request.response === "object" ? request.response : null;
+      if (request.status >= 200 && request.status < 300) {
+        resolve(data);
+        return;
+      }
+      if (request.status === 401 && state.session) location.reload();
+      const error = new Error(data?.error || `通信に失敗しました（${request.status}）`);
+      error.status = request.status;
+      reject(error);
+    };
+    request.onerror = () => { cleanup(); reject(new Error("通信が切断されました。")); };
+    request.onabort = () => { cleanup(); reject(new DOMException("中止しました", "AbortError")); };
+    signal?.addEventListener("abort", abort, { once: true });
+    request.send(body);
+  });
+}
+
+function formatTransferRate(bytesPerSecond) {
+  const mbps = (Number(bytesPerSecond || 0) * 8) / 1_000_000;
+  return `${mbps.toFixed(mbps >= 10 ? 1 : 2)} Mbps（${formatBytes(bytesPerSecond)}/秒）`;
+}
+
+function formatTransferDuration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds || 0)));
+  if (value < 60) return `${Math.max(1, value)}秒`;
+  if (value < 3600) return `${Math.ceil(value / 60)}分`;
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.ceil((value % 3600) / 60);
+  return minutes ? `${hours}時間${minutes}分` : `${hours}時間`;
 }
 
 function uploadRetryDelay(milliseconds, signal) {

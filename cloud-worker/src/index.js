@@ -888,9 +888,17 @@ async function completeUpload(id, request, env, session) {
   requireUploadOwnership(session, file);
   const upload = env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id);
   await upload.complete(parts);
+  const stored = await env.FILES.head(file.object_key);
+  const expectedBytes = Number(file.encrypted_size_bytes || 0);
+  const storedBytes = Number(stored?.size || 0);
+  if (!stored || storedBytes !== expectedBytes) {
+    await env.FILES.delete(file.object_key).catch(() => {});
+    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).run();
+    throw new HttpError(502, "Cloudflare上の保存容量を確認できませんでした。最初から再試行します。");
+  }
   await env.DB.prepare("UPDATE cloud_files SET status = 'ready', multipart_upload_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
   await audit(env, "upload_completed", session, "file", id, { encrypted: Number(file.crypto_version) === 1, sizeBytes: file.size_bytes });
-  return json({ ok: true, id });
+  return json({ ok: true, id, verified: true, storedBytes });
 }
 
 async function cancelUpload(id, env, session) {
