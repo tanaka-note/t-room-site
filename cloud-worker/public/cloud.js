@@ -176,6 +176,7 @@ function bindEvents() {
   $("#selection-delete").addEventListener("click", deleteSelectedItems);
   $("#move-form").addEventListener("submit", moveSelectedItems);
   $("#upload-cancel").addEventListener("click", cancelUploads);
+  $("#upload-dismiss").addEventListener("click", dismissUploadMessage);
   $("#download-cancel").addEventListener("click", cancelDownloads);
   $("#download-close").addEventListener("click", closeDownloadDialog);
   $("#download-retry-wake").addEventListener("click", requestDownloadWakeLock);
@@ -2593,6 +2594,7 @@ async function uploadFiles(files, destinations = null) {
   $("#upload-activity").textContent = "送信準備中";
   $("#upload-activity").classList.remove("waiting");
   renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
+  $("#upload-dismiss").hidden = true;
   $("#upload-cancel").hidden = false;
   $("#upload-cancel").disabled = false;
   try {
@@ -2689,6 +2691,7 @@ async function uploadFiles(files, destinations = null) {
     state.uploadAbort = null;
     $("#upload-cancel").hidden = true;
     $("#upload-cancel").disabled = false;
+    $("#upload-dismiss").hidden = $("#upload-failure-summary").hidden;
     syncAvailableActions();
   }
   await Promise.all([loadItems(), loadUsage()]);
@@ -2996,6 +2999,16 @@ function cancelUploads() {
   $("#upload-cancel").disabled = true;
   $("#upload-file-progress").textContent = "停止処理中…";
   state.uploadAbort.abort();
+}
+
+function dismissUploadMessage() {
+  if (state.uploading) return;
+  const panel = $("#upload-panel");
+  renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
+  panel.classList.remove("upload-complete", "upload-error");
+  panel.hidden = true;
+  $("#upload-dismiss").hidden = true;
+  setNotice("");
 }
 
 function throwIfUploadCancelled(signal) {

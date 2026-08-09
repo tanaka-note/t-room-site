@@ -9,6 +9,7 @@ const [indexHtml, shareHtml, client, shareClient] = await Promise.all([
 ]);
 
 assert.match(indexHtml, /id="upload-failure-summary"/);
+assert.match(indexHtml, /id="upload-dismiss"[^>]*>閉じる</);
 assert.match(indexHtml, /id="download-failure-summary"/);
 assert.match(shareHtml, /id="share-download-failure-summary"/);
 
@@ -18,6 +19,7 @@ assert.match(client, /エラー分を再試行中/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "後で再試行"/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "再試行中"/);
 assert.match(client, /renderTransferFailures\("#upload-failure-summary"/);
+assert.match(client, /function dismissUploadMessage\(\)[\s\S]*?renderTransferFailures\("#upload-failure-summary"[\s\S]*?panel\.hidden = true/);
 assert.match(client, /renderTransferFailures\("#download-failure-summary"/);
 assert.match(client, /recordDownloadEvent\(activeFile\.id, "download_failed", "cancelled"\)/);
 assert.doesNotMatch(client, /if \(!state\.uploadAbort\.signal\.aborted\) state\.uploadAbort\.abort\(\)/);
