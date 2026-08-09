@@ -19,6 +19,6 @@ assert.match(client, /while \(remaining > 0 && failed === 0\)/);
 assert.match(client, /trashFolderCard/);
 assert.match(client, /closeOnSuccess[\s\S]*?download-dialog/);
 assert.match(html, /id="trash-action-note"/);
-assert.match(html, /id="delete-folder-button"[^>]*>フォルダを削除</);
+assert.match(html, /id="delete-folder-button"[^>]*>削除</);
 
 console.log("recursive folder trash and visible delete progress: ok");
