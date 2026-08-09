@@ -362,25 +362,28 @@ async function handleFileDrop(event) {
     return;
   }
   try {
-    const selection = await folderSelectionFromDrop(event.dataTransfer);
-    if (selection) {
-      openFolderUploadDialog(selection, { append: $("#folder-upload-dialog").open });
+    const dropped = await collectDroppedContent(event.dataTransfer);
+    if (dropped.folderSelection) {
+      if (dropped.looseFiles.length && !state.folderId) {
+        setNotice("フォルダとファイルをまとめて追加する場合は、ファイルの保存先フォルダを開いてからドロップしてください。", true);
+        return;
+      }
+      dropped.folderSelection.looseFiles = dropped.looseFiles;
+      openFolderUploadDialog(dropped.folderSelection, { append: $("#folder-upload-dialog").open });
       return;
     }
+    if (!dropped.looseFiles.length) {
+      setNotice("ドロップしたファイルまたはフォルダを読み取れませんでした。もう一度ドロップしてください。", true);
+      return;
+    }
+    if (!state.folderId) {
+      setNotice("ファイルを追加する場合は、保存先のフォルダを開いてからドロップしてください。", true);
+      return;
+    }
+    uploadFiles(dropped.looseFiles);
   } catch (error) {
-    setNotice(`フォルダの読み取りに失敗しました：${error.message}`, true);
-    return;
+    setNotice(`ドロップしたデータの読み取りに失敗しました：${error.message}`, true);
   }
-  if (!state.folderId) {
-    setNotice("ファイルだけを追加する場合は、保存先のフォルダを開いてください。", true);
-    return;
-  }
-  const files = [...(event.dataTransfer?.files || [])];
-  if (!files.length) {
-    setNotice("アップロードするファイルを確認してください。", true);
-    return;
-  }
-  uploadFiles(files);
 }
 
 function handleFolderInput(event) {
@@ -395,10 +398,9 @@ function handleFolderInput(event) {
   }
 }
 
-async function folderSelectionFromDrop(dataTransfer) {
+async function collectDroppedContent(dataTransfer) {
   const records = [];
   const directories = new Set();
-  let hasDirectory = false;
   const candidates = [...(dataTransfer?.items || [])]
     .filter((item) => item.kind === "file")
     .map((item) => {
@@ -416,25 +418,34 @@ async function folderSelectionFromDrop(dataTransfer) {
     let handle = null;
     if (candidate.handlePromise) try { handle = await candidate.handlePromise; } catch {}
     if (handle) {
-      if (handle.kind === "directory") hasDirectory = true;
       await collectDroppedHandle(handle, "", records, directories);
       continue;
     }
     const entry = candidate.entry;
     if (!entry) continue;
-    if (entry.isDirectory) hasDirectory = true;
     await collectDroppedEntry(entry, "", records, directories);
   }
-  if (!hasDirectory) {
-    for (const file of [...(dataTransfer?.files || [])]) {
-      const relativePath = normalizeRelativePath(file.webkitRelativePath || "");
-      if (!relativePath.includes("/")) continue;
-      hasDirectory = true;
-      records.push({ file, relativePath });
-    }
+  for (const file of [...(dataTransfer?.files || [])]) {
+    const relativePath = normalizeRelativePath(file.webkitRelativePath || file.name);
+    if (relativePath) records.push({ file, relativePath });
   }
-  if (!hasDirectory) return null;
-  return normalizeFolderSelection(records, directories);
+  const uniqueRecords = new Map();
+  for (const record of records) {
+    const relativePath = normalizeRelativePath(record.relativePath || record.file?.name);
+    if (!record.file || !relativePath) continue;
+    const identity = [relativePath, Number(record.file.size || 0), Number(record.file.lastModified || 0)].join("\u0000");
+    if (!uniqueRecords.has(identity)) uniqueRecords.set(identity, { file: record.file, relativePath });
+  }
+  const folderRecords = [];
+  const looseFiles = [];
+  for (const record of uniqueRecords.values()) {
+    if (record.relativePath.includes("/")) folderRecords.push(record);
+    else looseFiles.push(record.file);
+  }
+  const folderSelection = directories.size || folderRecords.length
+    ? normalizeFolderSelection(folderRecords, directories)
+    : null;
+  return { folderSelection, looseFiles };
 }
 
 async function collectDroppedHandle(handle, parentPath, records, directories) {
@@ -500,7 +511,14 @@ function mergeFolderSelections(current, incoming) {
     const identity = [record.relativePath, Number(file?.size || 0), Number(file?.lastModified || 0)].join("\u0000");
     if (!files.has(identity)) files.set(identity, record);
   }
-  return normalizeFolderSelection([...files.values()], directories);
+  const merged = normalizeFolderSelection([...files.values()], directories);
+  const looseFiles = new Map();
+  for (const file of [...(current.looseFiles || []), ...(incoming.looseFiles || [])]) {
+    const identity = [file.name, Number(file.size || 0), Number(file.lastModified || 0)].join("\u0000");
+    if (!looseFiles.has(identity)) looseFiles.set(identity, file);
+  }
+  merged.looseFiles = [...looseFiles.values()];
+  return merged;
 }
 
 function openFolderUploadDialog(selection, { append = false } = {}) {
@@ -512,7 +530,8 @@ function openFolderUploadDialog(selection, { append = false } = {}) {
   const dialog = $("#folder-upload-dialog");
   state.folderUploadSelection = append ? mergeFolderSelections(state.folderUploadSelection, selection) : selection;
   const queued = state.folderUploadSelection;
-  $("#folder-upload-summary").textContent = `${queued.roots.length.toLocaleString("ja-JP")}フォルダ・${queued.files.length.toLocaleString("ja-JP")}ファイルを、フォルダ構成を保ってまとめて保存します。（${queued.roots.join("、")}）`;
+  const fileCount = queued.files.length + (queued.looseFiles?.length || 0);
+  $("#folder-upload-summary").textContent = `${queued.roots.length.toLocaleString("ja-JP")}フォルダ・${fileCount.toLocaleString("ja-JP")}ファイルを、フォルダ構成を保ってまとめて保存します。（${queued.roots.join("、")}）`;
   $("#folder-upload-error").textContent = "";
   if (!dialog.open) dialog.showModal();
 }
@@ -2580,14 +2599,22 @@ async function uploadSelectedFolder(event) {
       if (!destination) throw new Error(`${record.relativePath} の保存先を作成できませんでした。`);
       destinations.set(record.file, { folderId: destination.id, folderKey: destination.key });
     }
+    for (const file of selection.looseFiles || []) {
+      if (!baseParentId || !baseParentKey) throw new Error("単独ファイルの保存先フォルダを開いてから、もう一度ドロップしてください。");
+      destinations.set(file, { folderId: baseParentId, folderKey: baseParentKey });
+    }
+    const uploadTargets = [
+      ...selection.files.map((record) => record.file),
+      ...(selection.looseFiles || [])
+    ];
 
-    if (selection.files.length) {
+    if (uploadTargets.length) {
       state.activeFolderUploadOperationId = null;
       state.uploading = false;
       submitButton.disabled = false;
       submitButton.textContent = "まとめて保存する";
       syncAvailableActions();
-      await uploadFiles(selection.files.map((record) => record.file), destinations);
+      await uploadFiles(uploadTargets, destinations);
     } else {
       panel.classList.add("upload-complete");
       $("#upload-heading").textContent = "フォルダ作成完了";

@@ -56,9 +56,10 @@ const secondRoot = mockDirectoryEntry("動画", [mockFileEntry("b.mp4")]);
 context.multiFolderDrop = {
   items: [firstRoot, secondRoot].map((entry) => ({ kind: "file", webkitGetAsEntry() { return entry; } }))
 };
-const dropped = await vm.runInContext("folderSelectionFromDrop(multiFolderDrop)", context);
-assert.deepEqual([...dropped.roots], ["写真", "動画"]);
-assert.equal(dropped.files.length, 2);
+const dropped = await vm.runInContext("collectDroppedContent(multiFolderDrop)", context);
+assert.deepEqual([...dropped.folderSelection.roots], ["写真", "動画"]);
+assert.equal(dropped.folderSelection.files.length, 2);
+assert.equal(dropped.looseFiles.length, 0);
 
 const firstHandle = {
   kind: "directory",
@@ -73,9 +74,9 @@ const secondHandle = {
 context.modernMultiFolderDrop = {
   items: [firstHandle, secondHandle].map((handle) => ({ kind: "file", async getAsFileSystemHandle() { return handle; } }))
 };
-const modernDropped = await vm.runInContext("folderSelectionFromDrop(modernMultiFolderDrop)", context);
-assert.deepEqual([...modernDropped.roots], ["音声", "書籍"]);
-assert.equal(modernDropped.files.length, 2);
+const modernDropped = await vm.runInContext("collectDroppedContent(modernMultiFolderDrop)", context);
+assert.deepEqual([...modernDropped.folderSelection.roots], ["音声", "書籍"]);
+assert.equal(modernDropped.folderSelection.files.length, 2);
 
 let dragPermissionActive = true;
 const shiftSelectedHandles = ["資料", "映像", "音楽"].map((name, index) => ({
@@ -94,11 +95,33 @@ context.shiftSelectedFolderDrop = {
     }
   }))
 };
-const shiftSelectionPromise = vm.runInContext("folderSelectionFromDrop(shiftSelectedFolderDrop)", context);
+const shiftSelectionPromise = vm.runInContext("collectDroppedContent(shiftSelectedFolderDrop)", context);
 dragPermissionActive = false;
 const shiftSelection = await shiftSelectionPromise;
-assert.deepEqual([...shiftSelection.roots], ["映像", "音楽", "資料"]);
-assert.equal(shiftSelection.files.length, 3);
+assert.deepEqual([...shiftSelection.folderSelection.roots], ["映像", "音楽", "資料"]);
+assert.equal(shiftSelection.folderSelection.files.length, 3);
+
+context.shiftSelectedVideoDrop = {
+  items: ["a.mp4", "b.mp4", "c.mov"].map((name, index) => ({
+    kind: "file",
+    getAsFileSystemHandle() {
+      return Promise.resolve({ kind: "file", name, async getFile() { return { name, size: index + 10, lastModified: 20 + index }; } });
+    }
+  })),
+  files: []
+};
+const videoDrop = await vm.runInContext("collectDroppedContent(shiftSelectedVideoDrop)", context);
+assert.equal(videoDrop.folderSelection, null);
+assert.deepEqual([...videoDrop.looseFiles].map((file) => file.name), ["a.mp4", "b.mp4", "c.mov"]);
+
+context.mixedDrop = {
+  items: [firstHandle, { kind: "file", name: "cover.jpg", async getFile() { return { name: "cover.jpg", size: 8, lastModified: 30 }; } }]
+    .map((handle) => ({ kind: "file", getAsFileSystemHandle() { return Promise.resolve(handle); } })),
+  files: []
+};
+const mixedDrop = await vm.runInContext("collectDroppedContent(mixedDrop)", context);
+assert.deepEqual([...mixedDrop.folderSelection.roots], ["音声"]);
+assert.deepEqual([...mixedDrop.looseFiles].map((file) => file.name), ["cover.jpg"]);
 
 const existing = new Set(["旅行"]);
 context.mockDirectory = {

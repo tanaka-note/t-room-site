@@ -12,10 +12,10 @@ if (!html.includes('id="drop-overlay"') || !css.includes(".drop-overlay")) {
 for (const eventName of ["dragenter", "dragover", "dragleave", "drop"]) {
   if (!script.includes(`addEventListener("${eventName}"`)) throw new Error(`${eventName} の処理がありません。`);
 }
-if (!script.includes("getAsFileSystemHandle") || !script.includes("webkitGetAsEntry") || !script.includes("collectDroppedHandle")) {
+if (!script.includes("getAsFileSystemHandle") || !script.includes("webkitGetAsEntry") || !script.includes("collectDroppedHandle") || !script.includes("collectDroppedContent")) {
   throw new Error("新旧ブラウザ両方のフォルダ読み取り処理がありません。");
 }
-if (!script.includes("event.preventDefault()") || !script.includes("uploadFiles(files)")) {
+if (!script.includes("event.preventDefault()") || !script.includes("uploadFiles(dropped.looseFiles)")) {
   throw new Error("ブラウザ既定動作の防止または既存アップロード処理への接続がありません。");
 }
 if (!script.includes("state.uploading") || !script.includes("アップロードが完了してから")) {
