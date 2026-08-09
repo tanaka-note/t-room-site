@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Storage</title>
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260809-18">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-19">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -51,7 +51,7 @@
       <div id="storage-meter" class="storage-meter" hidden>
         <div class="storage-usage-row">
           <div class="meter-copy"><span>クラウド上</span><strong id="usage-text">—</strong></div>
-          <small id="file-count">—</small>
+          <div class="storage-usage-foot"><small id="file-count">—</small><button id="usage-details-button" class="text-button" type="button">詳細</button></div>
         </div>
         <div class="storage-usage-row trash-usage-row">
           <div class="meter-copy"><span>ゴミ箱</span><strong id="trash-usage-text">—</strong></div>
@@ -317,11 +317,18 @@
 
   <dialog id="account-dialog" class="form-dialog compact-dialog">
     <div class="dialog-head"><h2>アカウント</h2><button class="dialog-close icon-button" type="button">×</button></div>
-    <div class="mobile-account-copy"><strong id="mobile-account-name">—</strong><span id="mobile-account-permission">—</span></div>
+      <div class="mobile-account-copy"><strong id="mobile-account-name">—</strong><span id="mobile-account-permission">—</span></div>
     <dl id="mobile-storage-summary" class="mobile-storage-summary" hidden>
       <div><dt>クラウド上</dt><dd id="mobile-active-usage">—</dd></div>
       <div><dt>ゴミ箱</dt><dd id="mobile-trash-usage">—</dd></div>
-    </dl>
+      </dl>
+      <div id="mobile-usage-details-action" class="dialog-actions compact-actions" hidden><button id="mobile-usage-details-button" class="secondary-button" type="button">フォルダ別の詳細</button></div>
+  </dialog>
+
+  <dialog id="usage-details-dialog" class="form-dialog usage-details-dialog">
+    <div class="dialog-head"><div><span class="file-badge">STORAGE DETAILS</span><h2>フォルダ別の使用状況</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <p class="dialog-note standalone-note">最上位フォルダごとに、配下を含むファイル数と容量を集計しています。</p>
+    <div id="usage-details-list" class="usage-details-list" aria-live="polite"></div>
   </dialog>
 
   <dialog id="vault-dialog" class="form-dialog vault-dialog">
@@ -385,6 +392,6 @@
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-3" defer></script>
-  <script src="/cloud/cloud.js?v=20260809-64" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-65" defer></script>
 </body>
 </html>

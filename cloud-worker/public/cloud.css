@@ -66,11 +66,15 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .meter-copy { display: flex; justify-content: space-between; font-size: .75rem; }
 .meter-copy strong { color: var(--teal-dark); }
 .storage-meter small { display: block; margin-top: 9px; color: var(--muted); }
+.storage-usage-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.storage-usage-foot small { flex: 1; }
+.text-button { border: 0; padding: 4px 0; color: var(--teal-dark); background: transparent; font-size: .74rem; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
 .trash-usage-row .meter-copy strong { color: #8b5b5b; }
 .mobile-storage-summary { display: grid; gap: 8px; margin: 18px 0 0; }
 .mobile-storage-summary div { display: flex; justify-content: space-between; gap: 16px; padding: 10px 12px; border-radius: 10px; background: var(--soft); }
 .mobile-storage-summary dt { color: var(--muted); }
 .mobile-storage-summary dd { margin: 0; font-weight: 700; }
+.compact-actions { padding-top: 10px; }
 .account-block { display: grid; padding: 16px 12px 0; border-top: 1px solid var(--line); }
 .account-block span { font-weight: 700; }
 .account-block small { margin-top: 3px; color: var(--muted); }
@@ -222,6 +226,13 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
 .preview-more-menu { position: absolute; z-index: 8; right: 0; bottom: calc(100% + 8px); display: grid; gap: 7px; width: 220px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 16px 45px rgba(17,39,43,.2); }
 .preview-more-menu button { width: 100%; }
 .form-dialog { width: min(480px, calc(100% - 28px)); border-radius: 16px; }
+.usage-details-dialog { width: min(680px, calc(100% - 28px)); max-height: min(720px, calc(100svh - 28px)); overflow: auto; }
+.usage-details-list { display: grid; gap: 9px; padding: 8px 20px 22px; }
+.usage-details-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 20px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.usage-details-row strong { overflow-wrap: anywhere; }
+.usage-details-row span { color: var(--teal-dark); font-weight: 800; text-align: right; }
+.usage-details-row small { grid-column: 1 / -1; color: var(--muted); }
+.usage-details-empty { padding: 28px 20px; color: var(--muted); text-align: center; }
 .form-dialog form > label { margin: 20px; }
 .dialog-note { margin: -4px 20px 10px; color: var(--muted); font-size: .76rem; line-height: 1.7; }
 .dialog-error { margin: -4px 20px 0; }
@@ -355,6 +366,8 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
   .topbar h1 { font-size: 1.55rem; }
   .content-grid.list-mode .file-card button { grid-template-columns: 76px minmax(0,1fr); }
   .dialog-actions > * { flex: 1; }
+  .usage-details-row { grid-template-columns: 1fr; gap: 5px; }
+  .usage-details-row span { text-align: left; }
   .preview-dialog { width: 100%; height: 100svh; max-height: 100svh; border-radius: 0; }
   .preview-dialog .dialog-head { padding: 12px 14px; }
   .preview-dialog .dialog-head h2 { font-size: .92rem; }

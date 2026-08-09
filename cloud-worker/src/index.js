@@ -88,6 +88,7 @@ async function handleApi(request, env, url, path) {
   if (path === "/api/trash" && request.method === "GET") return listTrash(env, session);
   if (path === "/api/trash" && request.method === "DELETE") return emptyTrash(env, session);
   if (path === "/api/usage" && request.method === "GET") return getUsage(env, session);
+  if (path === "/api/usage-details" && request.method === "GET") return getUsageDetails(env, session);
   if (path === "/api/upload-history" && request.method === "GET") return listUploadHistory(env, session);
   if (path === "/api/download-events" && request.method === "POST") return recordDownloadEvent(request, env, session);
   if (path === "/api/deletion-requests" && request.method === "GET") return listDeletionRequests(env, session);
@@ -559,6 +560,21 @@ async function listItems(url, env, session) {
     FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first() : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
   if (folderId) await requireFolderAccess(env, folderId, session);
+  if (folderId && session.role === "subadmin") {
+    const total = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+      UNION ALL
+      SELECT child.id FROM cloud_folders child
+      JOIN folder_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at IS NULL
+    )
+    SELECT COUNT(cf.id) AS totalFileCount, COALESCE(SUM(cf.size_bytes), 0) AS totalSizeBytes
+    FROM folder_tree ft
+    LEFT JOIN cloud_files cf ON cf.folder_id = ft.id AND cf.deleted_at IS NULL AND cf.status = 'ready'`)
+      .bind(folderId).first();
+    folder.totalFileCount = Number(total?.totalFileCount || 0);
+    folder.totalSizeBytes = Number(total?.totalSizeBytes || 0);
+  }
 
   const folderClauses = [folderId ? "f.parent_id = ?" : "f.parent_id IS NULL", "f.deleted_at IS NULL"];
   const folderValues = [session.sessionId, Math.floor(Date.now() / 1000), ...(folderId ? [folderId] : [])];
@@ -1125,6 +1141,32 @@ async function getUsage(env, session) {
     trashFileCount: Number(row?.trashFileCount || 0),
     trashBytes: Number(row?.trashBytes || 0)
   });
+}
+
+async function getUsageDetails(env, session) {
+  requireAdmin(session);
+  const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(root_id, id) AS (
+    SELECT id, id FROM cloud_folders WHERE parent_id IS NULL AND deleted_at IS NULL
+    UNION ALL
+    SELECT parent.root_id, child.id FROM cloud_folders child
+    JOIN folder_tree parent ON child.parent_id = parent.id
+    WHERE child.deleted_at IS NULL
+  )
+  SELECT root.id, root.name,
+    COUNT(file.id) AS fileCount,
+    COALESCE(SUM(file.size_bytes), 0) AS sizeBytes
+  FROM cloud_folders root
+  LEFT JOIN folder_tree tree ON tree.root_id = root.id
+  LEFT JOIN cloud_files file ON file.folder_id = tree.id AND file.deleted_at IS NULL AND file.status = 'ready'
+  WHERE root.parent_id IS NULL AND root.deleted_at IS NULL
+  GROUP BY root.id, root.name
+  ORDER BY sizeBytes DESC, root.name COLLATE NOCASE ASC`).all();
+  return json({ folders: (result.results || []).map((folder) => ({
+    id: Number(folder.id),
+    name: folder.name,
+    fileCount: Number(folder.fileCount || 0),
+    sizeBytes: Number(folder.sizeBytes || 0)
+  })) });
 }
 
 async function listUploadHistory(env, session) {

@@ -84,6 +84,8 @@ function bindEvents() {
   $("#logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
   $("#mobile-account-button").addEventListener("click", () => $("#account-dialog").showModal());
+  $("#usage-details-button").addEventListener("click", openUsageDetails);
+  $("#mobile-usage-details-button").addEventListener("click", openUsageDetails);
   $("#upload-button").addEventListener("click", openAddAction);
   $("#mobile-add-button").addEventListener("click", openAddAction);
   $("#file-input").addEventListener("change", (event) => uploadFiles([...event.target.files]));
@@ -462,6 +464,7 @@ async function enterApp(session, password = "", accountKey = null) {
   syncAvailableActions();
   $("#storage-meter").hidden = session.role !== "admin";
   $("#mobile-storage-summary").hidden = session.role !== "admin";
+  $("#mobile-usage-details-action").hidden = session.role !== "admin";
   if (session.role === "admin") loadUsage();
   const restoredNavigation = initializeNavigationHistory();
   await prepareCryptoSession(password, accountKey);
@@ -987,7 +990,9 @@ async function loadItems() {
       const data = await api(`/items?${params}`);
       state.folderSummary = state.folderId ? {
         fileCount: Number(data.folder?.fileCount || 0),
-        folderCount: Number(data.folder?.folderCount || 0)
+        folderCount: Number(data.folder?.folderCount || 0),
+        totalFileCount: Number(data.folder?.totalFileCount || 0),
+        totalSizeBytes: Number(data.folder?.totalSizeBytes || 0)
       } : null;
       state.folders = await hydrateFolderRecords(data.folders || []);
       state.files = await hydrateFileRecords(data.files || []);
@@ -1044,7 +1049,14 @@ function renderFolderSummary() {
   const summary = $("#view-summary");
   const visible = state.view === "all" && Boolean(state.folderId) && Boolean(state.folderSummary);
   summary.hidden = !visible;
-  summary.textContent = visible ? formatFolderCount(state.folderSummary) : "";
+  if (!visible) {
+    summary.textContent = "";
+    return;
+  }
+  const showUnlockedTotals = state.session?.role === "subadmin" && state.crypto.folderKeys.has(Number(state.folderId));
+  summary.textContent = showUnlockedTotals
+    ? `総ファイル数：${state.folderSummary.totalFileCount.toLocaleString("ja-JP")}ファイル・総容量：${formatBytes(state.folderSummary.totalSizeBytes)}`
+    : formatFolderCount(state.folderSummary);
 }
 
 function formatFolderCount(folder) {
@@ -3396,6 +3408,32 @@ async function loadUsage() {
     $("#mobile-active-usage").textContent = `${usage.activeFileCount.toLocaleString("ja-JP")}ファイル・${formatBytes(usage.activeBytes)}`;
     $("#mobile-trash-usage").textContent = `${usage.trashFileCount.toLocaleString("ja-JP")}ファイル・${formatBytes(usage.trashBytes)}`;
   } catch {}
+}
+
+async function openUsageDetails() {
+  if (state.session?.role !== "admin") return;
+  if ($("#account-dialog").open) $("#account-dialog").close();
+  const dialog = $("#usage-details-dialog");
+  const list = $("#usage-details-list");
+  list.innerHTML = '<p class="usage-details-empty">集計しています…</p>';
+  if (!dialog.open) dialog.showModal();
+  try {
+    const data = await api("/usage-details");
+    const folders = data.folders || [];
+    list.innerHTML = "";
+    if (!folders.length) {
+      list.innerHTML = '<p class="usage-details-empty">最上位フォルダがありません。</p>';
+      return;
+    }
+    for (const folder of folders) {
+      const row = document.createElement("article");
+      row.className = "usage-details-row";
+      row.innerHTML = `<strong>${escapeHtml(folder.name || "名称なし")}</strong><span>${formatBytes(folder.sizeBytes)}</span><small>${Number(folder.fileCount || 0).toLocaleString("ja-JP")}ファイル</small>`;
+      list.append(row);
+    }
+  } catch (error) {
+    list.innerHTML = `<p class="usage-details-empty">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 async function loadDeletionRequestCount() {
