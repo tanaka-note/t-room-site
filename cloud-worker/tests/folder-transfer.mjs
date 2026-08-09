@@ -60,6 +60,23 @@ const dropped = await vm.runInContext("folderSelectionFromDrop(multiFolderDrop)"
 assert.deepEqual([...dropped.roots], ["写真", "動画"]);
 assert.equal(dropped.files.length, 2);
 
+const firstHandle = {
+  kind: "directory",
+  name: "音声",
+  async *values() { yield { kind: "file", name: "a.flac", async getFile() { return { name: "a.flac", size: 2, lastModified: 2 }; } }; }
+};
+const secondHandle = {
+  kind: "directory",
+  name: "書籍",
+  async *values() { yield { kind: "file", name: "b.pdf", async getFile() { return { name: "b.pdf", size: 3, lastModified: 3 }; } }; }
+};
+context.modernMultiFolderDrop = {
+  items: [firstHandle, secondHandle].map((handle) => ({ kind: "file", async getAsFileSystemHandle() { return handle; } }))
+};
+const modernDropped = await vm.runInContext("folderSelectionFromDrop(modernMultiFolderDrop)", context);
+assert.deepEqual([...modernDropped.roots], ["音声", "書籍"]);
+assert.equal(modernDropped.files.length, 2);
+
 const existing = new Set(["旅行"]);
 context.mockDirectory = {
   async getDirectoryHandle(name, options = {}) {

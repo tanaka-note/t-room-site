@@ -6,7 +6,7 @@ const [client, worker] = await Promise.all([
   readFile(new URL("../src/index.js", import.meta.url), "utf8")
 ]);
 
-const enterApp = client.match(/async function enterApp[\s\S]*?\n}\n\nasync function logout/)?.[0] || "";
+const enterApp = client.match(/async function enterApp[\s\S]*?\r?\n}\r?\n\r?\nasync function logout/)?.[0] || "";
 assert.match(enterApp, /await prepareCryptoSession\(password, accountKey\);\s*const loaded = await loadItems\(\);[\s\S]*?scheduleLegacyFolderMigration\(\);/);
 assert.doesNotMatch(enterApp, /await migrateLegacyFolderNames/);
 assert.doesNotMatch(client, /migrateLegacyFolderBranch/);

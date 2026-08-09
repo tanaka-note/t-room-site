@@ -12,8 +12,8 @@ if (!html.includes('id="drop-overlay"') || !css.includes(".drop-overlay")) {
 for (const eventName of ["dragenter", "dragover", "dragleave", "drop"]) {
   if (!script.includes(`addEventListener("${eventName}"`)) throw new Error(`${eventName} の処理がありません。`);
 }
-if (!script.includes("droppedDirectoryExists") || !script.includes("webkitGetAsEntry")) {
-  throw new Error("フォルダのドロップを拒否する処理がありません。");
+if (!script.includes("getAsFileSystemHandle") || !script.includes("webkitGetAsEntry") || !script.includes("collectDroppedHandle")) {
+  throw new Error("新旧ブラウザ両方のフォルダ読み取り処理がありません。");
 }
 if (!script.includes("event.preventDefault()") || !script.includes("uploadFiles(files)")) {
   throw new Error("ブラウザ既定動作の防止または既存アップロード処理への接続がありません。");

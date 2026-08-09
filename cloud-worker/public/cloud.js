@@ -292,13 +292,6 @@ function resetDropOverlay() {
   $("#drop-overlay").hidden = true;
 }
 
-function droppedDirectoryExists(dataTransfer) {
-  return [...(dataTransfer?.items || [])].some((item) => {
-    if (item.kind !== "file" || typeof item.webkitGetAsEntry !== "function") return false;
-    return Boolean(item.webkitGetAsEntry()?.isDirectory);
-  });
-}
-
 async function handleFileDrop(event) {
   if (!isFileDrag(event)) return;
   event.preventDefault();
@@ -310,13 +303,14 @@ async function handleFileDrop(event) {
     setNotice(message, true);
     return;
   }
-  if (droppedDirectoryExists(event.dataTransfer)) {
-    try {
-      const selection = await folderSelectionFromDrop(event.dataTransfer);
+  try {
+    const selection = await folderSelectionFromDrop(event.dataTransfer);
+    if (selection) {
       openFolderUploadDialog(selection, { append: $("#folder-upload-dialog").open });
-    } catch (error) {
-      setNotice(error.message, true);
+      return;
     }
+  } catch (error) {
+    setNotice(`フォルダの読み取りに失敗しました：${error.message}`, true);
     return;
   }
   if (!state.folderId) {
@@ -346,12 +340,46 @@ function handleFolderInput(event) {
 async function folderSelectionFromDrop(dataTransfer) {
   const records = [];
   const directories = new Set();
+  let hasDirectory = false;
   for (const item of [...(dataTransfer?.items || [])]) {
-    if (item.kind !== "file" || typeof item.webkitGetAsEntry !== "function") continue;
+    if (item.kind !== "file") continue;
+    let handle = null;
+    if (typeof item.getAsFileSystemHandle === "function") {
+      try { handle = await item.getAsFileSystemHandle(); } catch {}
+    }
+    if (handle) {
+      if (handle.kind === "directory") hasDirectory = true;
+      await collectDroppedHandle(handle, "", records, directories);
+      continue;
+    }
+    if (typeof item.webkitGetAsEntry !== "function") continue;
     const entry = item.webkitGetAsEntry();
-    if (entry) await collectDroppedEntry(entry, "", records, directories);
+    if (!entry) continue;
+    if (entry.isDirectory) hasDirectory = true;
+    await collectDroppedEntry(entry, "", records, directories);
   }
+  if (!hasDirectory) {
+    for (const file of [...(dataTransfer?.files || [])]) {
+      const relativePath = normalizeRelativePath(file.webkitRelativePath || "");
+      if (!relativePath.includes("/")) continue;
+      hasDirectory = true;
+      records.push({ file, relativePath });
+    }
+  }
+  if (!hasDirectory) return null;
   return normalizeFolderSelection(records, directories);
+}
+
+async function collectDroppedHandle(handle, parentPath, records, directories) {
+  const relativePath = [parentPath, handle.name].filter(Boolean).join("/");
+  if (handle.kind === "file") {
+    records.push({ file: await handle.getFile(), relativePath });
+    return;
+  }
+  if (handle.kind !== "directory") return;
+  directories.add(relativePath);
+  if (typeof handle.values !== "function") throw new Error(`${relativePath} の中身を読み取れませんでした。`);
+  for await (const child of handle.values()) await collectDroppedHandle(child, relativePath, records, directories);
 }
 
 async function collectDroppedEntry(entry, parentPath, records, directories) {
