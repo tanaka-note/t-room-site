@@ -8,6 +8,8 @@ const [client, css] = await Promise.all([
 
 assert.match(client, /addEventListener\("contextmenu"/);
 assert.match(client, /function installSharedLongPressSelection/);
+assert.doesNotMatch(client, /state\.selectedFiles\.size \? 80 : 380/);
+assert.match(client, /function installSharedLongPressSelection[\s\S]*?\}, 380\);[\s\S]*?setTimeout\(\(\) => \{ card\.dataset\.longPressed = "false"; \}, 0\)/);
 assert.match(client, /document\.elementFromPoint\(event\.clientX, event\.clientY\)/);
 assert.match(client, /state\.selecting = true/);
 assert.match(client, /function handleSelectionKeydown/);

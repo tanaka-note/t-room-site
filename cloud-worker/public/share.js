@@ -348,7 +348,7 @@ function installSharedLongPressSelection(card, file) {
       card.dataset.longPressed = "true";
       selectSharedFile(file, card, true);
       if (navigator.vibrate) navigator.vibrate(18);
-    }, state.selectedFiles.size ? 80 : 380);
+    }, 380);
   });
   card.addEventListener("pointermove", (event) => {
     if (event.pointerId !== pointerId) return;
@@ -367,7 +367,10 @@ function installSharedLongPressSelection(card, file) {
   const end = (event) => {
     if (event.pointerId !== pointerId) return;
     stopTimer();
-    if (started) event.preventDefault();
+    if (started) {
+      event.preventDefault();
+      setTimeout(() => { card.dataset.longPressed = "false"; }, 0);
+    }
     state.selecting = false;
     pointerId = null;
   };

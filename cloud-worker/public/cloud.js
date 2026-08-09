@@ -1794,7 +1794,7 @@ function installLongPressSelection(card, file) {
       card.dataset.longPressed = "true";
       selectFile(file, card);
       if (navigator.vibrate) navigator.vibrate(18);
-    }, state.selectedFiles.size || state.selectedFolders.size ? 80 : 380);
+    }, 380);
   });
   card.addEventListener("pointermove", (event) => {
     if (event.pointerId !== pointerId) return;
@@ -1813,7 +1813,10 @@ function installLongPressSelection(card, file) {
   const end = (event) => {
     if (event.pointerId !== pointerId) return;
     stopTimer();
-    if (started) event.preventDefault();
+    if (started) {
+      event.preventDefault();
+      setTimeout(() => { card.dataset.longPressed = "false"; }, 0);
+    }
     state.selecting = false;
     pointerId = null;
   };
@@ -1823,6 +1826,7 @@ function installLongPressSelection(card, file) {
 
 function installFolderLongPressSelection(card, folder) {
   let timer = null;
+  let started = false;
   let pointerId = null;
   let startX = 0;
   let startY = 0;
@@ -1831,20 +1835,31 @@ function installFolderLongPressSelection(card, folder) {
     if (event.target.closest(".folder-settings-button")) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     pointerId = event.pointerId;
+    started = false;
     startX = event.clientX;
     startY = event.clientY;
     timer = setTimeout(() => {
+      started = true;
       card.dataset.longPressed = "true";
       selectFolder(folder, card);
       if (navigator.vibrate) navigator.vibrate(18);
-    }, state.selectedFiles.size || state.selectedFolders.size ? 80 : 380);
+    }, 380);
   });
   card.addEventListener("pointermove", (event) => {
     if (event.pointerId !== pointerId) return;
     if (Math.abs(event.clientX - startX) > 8 || Math.abs(event.clientY - startY) > 8) stop();
   });
-  card.addEventListener("pointerup", stop);
-  card.addEventListener("pointercancel", stop);
+  const end = (event) => {
+    if (event.pointerId !== pointerId) return;
+    stop();
+    if (started) {
+      event.preventDefault();
+      setTimeout(() => { card.dataset.longPressed = "false"; }, 0);
+    }
+    pointerId = null;
+  };
+  card.addEventListener("pointerup", end);
+  card.addEventListener("pointercancel", end);
 }
 
 function selectFile(file, card) {
