@@ -386,19 +386,28 @@ async function folderSelectionFromDrop(dataTransfer) {
   const records = [];
   const directories = new Set();
   let hasDirectory = false;
-  for (const item of [...(dataTransfer?.items || [])]) {
-    if (item.kind !== "file") continue;
+  const candidates = [...(dataTransfer?.items || [])]
+    .filter((item) => item.kind === "file")
+    .map((item) => {
+      let handlePromise = null;
+      let entry = null;
+      if (typeof item.getAsFileSystemHandle === "function") {
+        try { handlePromise = Promise.resolve(item.getAsFileSystemHandle()); } catch {}
+      }
+      if (typeof item.webkitGetAsEntry === "function") {
+        try { entry = item.webkitGetAsEntry(); } catch {}
+      }
+      return { handlePromise, entry };
+    });
+  for (const candidate of candidates) {
     let handle = null;
-    if (typeof item.getAsFileSystemHandle === "function") {
-      try { handle = await item.getAsFileSystemHandle(); } catch {}
-    }
+    if (candidate.handlePromise) try { handle = await candidate.handlePromise; } catch {}
     if (handle) {
       if (handle.kind === "directory") hasDirectory = true;
       await collectDroppedHandle(handle, "", records, directories);
       continue;
     }
-    if (typeof item.webkitGetAsEntry !== "function") continue;
-    const entry = item.webkitGetAsEntry();
+    const entry = candidate.entry;
     if (!entry) continue;
     if (entry.isDirectory) hasDirectory = true;
     await collectDroppedEntry(entry, "", records, directories);

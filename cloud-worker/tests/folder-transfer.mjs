@@ -77,6 +77,29 @@ const modernDropped = await vm.runInContext("folderSelectionFromDrop(modernMulti
 assert.deepEqual([...modernDropped.roots], ["音声", "書籍"]);
 assert.equal(modernDropped.files.length, 2);
 
+let dragPermissionActive = true;
+const shiftSelectedHandles = ["資料", "映像", "音楽"].map((name, index) => ({
+  kind: "directory",
+  name,
+  async *values() {
+    yield { kind: "file", name: `${index}.dat`, async getFile() { return { name: `${index}.dat`, size: index + 1, lastModified: 10 + index }; } };
+  }
+}));
+context.shiftSelectedFolderDrop = {
+  items: shiftSelectedHandles.map((handle) => ({
+    kind: "file",
+    getAsFileSystemHandle() {
+      if (!dragPermissionActive) throw new Error("drag permission expired");
+      return Promise.resolve(handle);
+    }
+  }))
+};
+const shiftSelectionPromise = vm.runInContext("folderSelectionFromDrop(shiftSelectedFolderDrop)", context);
+dragPermissionActive = false;
+const shiftSelection = await shiftSelectionPromise;
+assert.deepEqual([...shiftSelection.roots], ["映像", "音楽", "資料"]);
+assert.equal(shiftSelection.files.length, 3);
+
 const existing = new Set(["旅行"]);
 context.mockDirectory = {
   async getDirectoryHandle(name, options = {}) {
