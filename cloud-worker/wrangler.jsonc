@@ -30,6 +30,7 @@
   ],
   "vars": {
     "SESSION_TTL_SECONDS": "2592000",
+    "SUBADMIN_SESSION_TTL_SECONDS": "34560000",
     "SESSION_VERSION": "3"
   },
   "triggers": {

@@ -8,7 +8,10 @@ const [client, worker, config] = await Promise.all([
 ]);
 
 assert.match(config, /"SESSION_TTL_SECONDS"\s*:\s*"2592000"/, "ログイン期限が30日ではありません。");
+assert.match(config, /"SUBADMIN_SESSION_TTL_SECONDS"\s*:\s*"34560000"/, "副管理者のローリング期限が400日ではありません。");
 assert.match(worker, /Max-Age=\$\{maxAge\}/, "永続セッションCookieのMax-Ageがありません。");
+assert.match(worker, /session\.role !== "subadmin"[\s\S]*?createSessionToken\(session, maxAge, env\)[\s\S]*?sessionCookie\(token, maxAge/, "副管理者セッションの期限更新がありません。");
+assert.match(worker, /role === "subadmin"[\s\S]*?SUBADMIN_SESSION_TTL_SECONDS[\s\S]*?34560000/, "副管理者専用の長期期限がありません。");
 assert.match(worker, /sessionCacheId:\s*session\.sessionId/, "解除済み鍵をログインセッションへ関連付けていません。");
 assert.match(client, /history\.state\?\.tcloud/, "再読み込み時のフォルダ履歴を復元していません。");
 assert.doesNotMatch(client, /function initializeNavigationHistory\(\)\s*\{[\s\S]*?history\.replaceState\(\{ tcloud: true, folderId: null/, "再読み込み時に最上位を強制しています。");

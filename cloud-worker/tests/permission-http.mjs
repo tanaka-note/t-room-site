@@ -33,8 +33,10 @@ async function expectStatus(label, response, expected) {
 }
 
 await expectStatus("未認証の一覧", await request("/items", null), 401);
-await expectStatus("管理者セッション", await request("/session", "admin"), 200);
-await expectStatus("副管理者セッション", await request("/session", "subadmin"), 200);
+const adminSessionResponse = await expectStatus("管理者セッション", await request("/session", "admin"), 200);
+if (adminSessionResponse.headers.get("Set-Cookie")) throw new Error("管理者セッションが長期ローリング更新されています。");
+const subadminSessionResponse = await expectStatus("副管理者セッション", await request("/session", "subadmin"), 200);
+if (!/Max-Age=34560000/.test(subadminSessionResponse.headers.get("Set-Cookie") || "")) throw new Error("副管理者セッションが400日へ更新されていません。");
 await expectStatus("副管理者のゴミ箱拒否", await request("/trash", "subadmin"), 403);
 await expectStatus("副管理者の共有管理拒否", await request("/shares", "subadmin"), 403);
 await expectStatus("副管理者の削除承認一覧拒否", await request("/deletion-requests", "subadmin"), 403);

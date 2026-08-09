@@ -39,7 +39,12 @@ export default {
 async function handleApi(request, env, url, path) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
-    return json(session ? { authenticated: true, ...publicSession(session, env) } : { authenticated: false });
+    if (!session) return json({ authenticated: false });
+    if (session.role !== "subadmin") return json({ authenticated: true, ...publicSession(session, env) });
+    const maxAge = sessionMaxAge(env, session.role);
+    const token = await createSessionToken(session, maxAge, env);
+    const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
+    return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
   }
 
   if (path === "/api/auth-mode" && request.method === "GET") {
@@ -171,7 +176,7 @@ async function login(request, env, url) {
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
   await env.DB.prepare("DELETE FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
-  const maxAge = clampNumber(env.SESSION_TTL_SECONDS, 3600, 2592000, 2592000);
+  const maxAge = sessionMaxAge(env, account.role);
   const session = {
     role: account.role,
     label: account.label,
@@ -1773,6 +1778,11 @@ function validateRsaPublicJwk(value) {
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
 function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), sessionCacheId: session.sessionId, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function sessionMaxAge(env, role) {
+  return role === "subadmin"
+    ? clampNumber(env.SUBADMIN_SESSION_TTL_SECONDS, 2592000, 34560000, 34560000)
+    : clampNumber(env.SESSION_TTL_SECONDS, 3600, 2592000, 2592000);
+}
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }
 function requireUploadOwnership(session, file) { if (session.role !== "admin" && file.created_by !== session.role) throw new HttpError(403, "別アカウントの処理途中アップロードは操作できません。"); }
