@@ -210,7 +210,7 @@ function handleAppInstalled() {
 
 function updateInstallButtons() {
   const standalone = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
-  const available = Boolean(state.installPrompt) && !standalone;
+  const available = !standalone;
   for (const button of [$("#install-app-button"), $("#install-app-button-top")]) {
     if (button) button.hidden = !available;
   }
@@ -218,11 +218,21 @@ function updateInstallButtons() {
 
 async function installApp() {
   const prompt = state.installPrompt;
-  if (!prompt) return;
-  await prompt.prompt();
-  await prompt.userChoice.catch(() => null);
-  state.installPrompt = null;
-  updateInstallButtons();
+  if (prompt) {
+    await prompt.prompt();
+    await prompt.userChoice.catch(() => null);
+    state.installPrompt = null;
+    updateInstallButtons();
+    return;
+  }
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const android = /Android/i.test(navigator.userAgent);
+  $("#install-guide-copy").textContent = ios
+    ? "Safariの共有ボタンを押し、「ホーム画面に追加」→「追加」の順に選んでください。"
+    : android
+      ? "ブラウザ右上のメニューを開き、「ホーム画面に追加」または「アプリをインストール」を選んでください。"
+      : "ブラウザのメニューまたはアドレスバーにある「アプリをインストール」「ホーム画面に追加」を選んでください。";
+  $("#install-guide-dialog").showModal();
 }
 
 async function registerPwaWorker() {

@@ -13,7 +13,7 @@
   <link rel="manifest" href="/cloud/manifest.webmanifest?v=20260810-1">
   <link rel="icon" href="/cloud/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-22">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-23">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -94,7 +94,7 @@
           <button id="download-folder-button" class="secondary-button desktop-only" type="button">フォルダを一括DL</button>
           <button id="upload-button" class="primary-button" type="button">アップロード</button>
           <button id="mobile-add-button" class="primary-button mobile-add-button" type="button" aria-label="追加する">＋</button>
-          <button id="install-app-button-top" class="secondary-button install-app-top" type="button" hidden>アプリに追加</button>
+          <button id="install-app-button-top" class="secondary-button install-app-top" type="button" aria-label="ホームへ追加" hidden><span aria-hidden="true">⌂</span><span class="install-app-label">ホームへ追加</span></button>
           <button id="logout-button" class="top-logout-button" type="button" aria-label="ログアウト"><span aria-hidden="true">↪</span><span>ログアウト</span></button>
           <input id="file-input" type="file" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
@@ -335,6 +335,12 @@
     </form>
   </dialog>
 
+  <dialog id="install-guide-dialog" class="form-dialog compact-dialog">
+    <div class="dialog-head"><div><span class="file-badge">INSTALL</span><h2>ホームへ追加</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <p id="install-guide-copy" class="dialog-note standalone-note"></p>
+    <div class="dialog-actions"><button class="primary-button dialog-close" type="button">閉じる</button></div>
+  </dialog>
+
   <dialog id="account-dialog" class="form-dialog compact-dialog">
     <div class="dialog-head"><h2>アカウント</h2><button class="dialog-close icon-button" type="button">×</button></div>
       <div class="mobile-account-copy"><strong id="mobile-account-name">—</strong><span id="mobile-account-permission">—</span></div>
@@ -412,6 +418,6 @@
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260810-5" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-76" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-77" defer></script>
 </body>
 </html>
