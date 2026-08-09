@@ -126,6 +126,25 @@ async function handleApi(request, env, url, path) {
     return listInvestmentHistory(env);
   }
 
+  if (path === "/api/photos" && request.method === "GET") {
+    return listPhotos(url, env);
+  }
+
+  if (path === "/api/photos/meta" && request.method === "GET") {
+    return listPhotoMeta(env);
+  }
+
+  const photoAssetMatch = path.match(/^\/api\/photos\/([0-9a-f-]{36})\/(thumbnail|display|original)$/i);
+  if (photoAssetMatch && request.method === "GET") {
+    return servePhoto(photoAssetMatch[1], photoAssetMatch[2], request, env, session, url);
+  }
+
+  const entryPhotoMatch = path.match(/^\/api\/entries\/(\d+)\/photos$/);
+  if (entryPhotoMatch && request.method === "POST") {
+    requireAdmin(session);
+    return uploadEntryPhoto(Number(entryPhotoMatch[1]), request, env, session);
+  }
+
   const entryMatch = path.match(/^\/api\/entries\/(\d+)$/);
   if (entryMatch && request.method === "GET") {
     return getEntry(Number(entryMatch[1]), env, session);
@@ -280,7 +299,179 @@ async function getEntry(id, env, session) {
     FROM diary_entries e
     WHERE e.id = ? ${deletedClause}
   `).bind(id).first();
-  return row ? json({ entry: serializeEntry(row) }) : json({ error: "日記が見つかりません。" }, 404);
+  if (!row) return json({ error: "日記が見つかりません。" }, 404);
+  const photos = await listEntryPhotos(id, env);
+  return json({ entry: { ...serializeEntry(row), photos } });
+}
+
+async function listEntryPhotos(entryId, env) {
+  const result = await env.DB.prepare(`
+    SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size, p.width, p.height,
+           p.created_by_name, p.created_at, e.entry_date, e.title AS entry_title,
+           e.author_id, e.author_name
+    FROM diary_photos p
+    JOIN diary_entries e ON e.id = p.entry_id
+    WHERE p.entry_id = ?
+    ORDER BY p.created_at ASC, p.id ASC
+  `).bind(entryId).all();
+  return (result.results || []).map(serializePhoto);
+}
+
+async function listPhotos(url, env) {
+  const limit = clampNumber(url.searchParams.get("limit"), 1, 100, 48);
+  const offset = clampNumber(url.searchParams.get("offset"), 0, 1000000, 0);
+  const query = normalizeSearch(url.searchParams.get("q") || "", 100);
+  const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("month") || "")
+    ? url.searchParams.get("month")
+    : "";
+  const author = normalizeSearch(url.searchParams.get("author") || "", 100);
+  const conditions = ["e.deleted_at IS NULL"];
+  const bindings = [];
+  if (query) {
+    conditions.push("(instr(p.file_name, ?) > 0 OR instr(e.title, ?) > 0 OR instr(e.content, ?) > 0)");
+    bindings.push(query, query, query);
+  }
+  if (month) {
+    conditions.push("substr(e.entry_date, 1, 7) = ?");
+    bindings.push(month);
+  }
+  if (author) {
+    conditions.push("e.author_id = ?");
+    bindings.push(author);
+  }
+  bindings.push(limit + 1, offset);
+  const result = await env.DB.prepare(`
+    SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size, p.width, p.height,
+           p.created_by_name, p.created_at, e.entry_date, e.title AS entry_title,
+           e.author_id, e.author_name
+    FROM diary_photos p
+    JOIN diary_entries e ON e.id = p.entry_id
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY e.entry_date DESC, p.created_at DESC, p.id DESC
+    LIMIT ? OFFSET ?
+  `).bind(...bindings).all();
+  const rows = result.results || [];
+  return json({
+    photos: rows.slice(0, limit).map(serializePhoto),
+    hasMore: rows.length > limit,
+    offset,
+    limit
+  });
+}
+
+async function listPhotoMeta(env) {
+  const [months, authors] = await Promise.all([
+    env.DB.prepare(`
+      SELECT substr(e.entry_date, 1, 7) AS value, COUNT(*) AS count
+      FROM diary_photos p
+      JOIN diary_entries e ON e.id = p.entry_id
+      WHERE e.deleted_at IS NULL
+      GROUP BY value
+      ORDER BY value DESC
+    `).all(),
+    env.DB.prepare(`
+      SELECT e.author_id AS value, e.author_name AS label, COUNT(*) AS count
+      FROM diary_photos p
+      JOIN diary_entries e ON e.id = p.entry_id
+      WHERE e.deleted_at IS NULL
+      GROUP BY e.author_id, e.author_name
+      ORDER BY e.author_name ASC
+    `).all()
+  ]);
+  return json({ months: months.results || [], authors: authors.results || [] });
+}
+
+async function uploadEntryPhoto(entryId, request, env, session) {
+  if (!env.MEDIA) throw new HttpError(503, "画像の保存先が設定されていません。");
+  const contentLength = Number(request.headers.get("Content-Length") || 0);
+  if (contentLength > 80 * 1024 * 1024) throw new HttpError(413, "画像の容量が大きすぎます。");
+  const entry = await env.DB.prepare("SELECT id FROM diary_entries WHERE id = ? AND deleted_at IS NULL").bind(entryId).first();
+  if (!entry) throw new HttpError(404, "画像を追加する日記が見つかりません。");
+
+  let form;
+  try {
+    form = await request.formData();
+  } catch {
+    throw new HttpError(400, "画像を読み取れませんでした。");
+  }
+  const id = String(form.get("id") || "").toLowerCase();
+  const original = form.get("original");
+  const display = form.get("display");
+  const thumbnail = form.get("thumbnail");
+  if (!isUuid(id)) throw new HttpError(400, "画像IDを確認できませんでした。");
+  if (!(original instanceof File) || !(display instanceof File) || !(thumbnail instanceof File)) {
+    throw new HttpError(400, "画像データが不足しています。");
+  }
+  if (!String(original.type).startsWith("image/") || !String(display.type).startsWith("image/") || !String(thumbnail.type).startsWith("image/")) {
+    throw new HttpError(400, "画像ファイルのみ追加できます。");
+  }
+  if (!original.size || original.size > 60 * 1024 * 1024 || display.size > 3 * 1024 * 1024 || thumbnail.size > 700 * 1024) {
+    throw new HttpError(413, "画像の容量を確認してください。");
+  }
+  const existing = await env.DB.prepare("SELECT id FROM diary_photos WHERE id = ?").bind(id).first();
+  if (existing) throw new HttpError(409, "同じ画像が既に保存されています。");
+
+  const safeName = normalizeFileName(original.name || "photo");
+  const width = clampNumber(form.get("width"), 1, 100000, null);
+  const height = clampNumber(form.get("height"), 1, 100000, null);
+  const baseKey = `diary/${entryId}/${id}`;
+  const originalKey = `${baseKey}/original`;
+  const displayKey = `${baseKey}/display`;
+  const thumbnailKey = `${baseKey}/thumbnail`;
+  const keys = [originalKey, displayKey, thumbnailKey];
+  try {
+    await Promise.all([
+      env.MEDIA.put(originalKey, original.stream(), { httpMetadata: { contentType: original.type || "application/octet-stream" } }),
+      env.MEDIA.put(displayKey, display.stream(), { httpMetadata: { contentType: display.type || "image/webp" } }),
+      env.MEDIA.put(thumbnailKey, thumbnail.stream(), { httpMetadata: { contentType: thumbnail.type || "image/webp" } })
+    ]);
+    await env.DB.prepare(`
+      INSERT INTO diary_photos (
+        id, entry_id, file_name, content_type, original_size,
+        original_key, display_key, thumbnail_key, width, height,
+        created_by_id, created_by_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id, entryId, safeName, original.type || "application/octet-stream", original.size,
+      originalKey, displayKey, thumbnailKey, width, height,
+      session.accountId, session.accountName
+    ).run();
+  } catch (error) {
+    await Promise.allSettled(keys.map((key) => env.MEDIA.delete(key)));
+    console.error("Diary photo upload failed", error instanceof Error ? error.message : "unknown error");
+    throw new HttpError(500, "画像を保存できませんでした。");
+  }
+  const row = await env.DB.prepare(`
+    SELECT id, entry_id, file_name, content_type, original_size, width, height,
+           created_by_name, created_at
+    FROM diary_photos WHERE id = ?
+  `).bind(id).first();
+  return json({ photo: serializePhoto(row) });
+}
+
+async function servePhoto(id, variant, request, env, session, url) {
+  if (!env.MEDIA) return new Response("Media storage unavailable", { status: 503 });
+  const row = await env.DB.prepare(`
+    SELECT p.file_name, p.content_type, p.original_key, p.display_key, p.thumbnail_key, e.deleted_at
+    FROM diary_photos p
+    JOIN diary_entries e ON e.id = p.entry_id
+    WHERE p.id = ?
+  `).bind(id.toLowerCase()).first();
+  if (!row || (row.deleted_at && !session.canViewTrash)) return new Response("Not found", { status: 404 });
+  const key = variant === "original" ? row.original_key : (variant === "display" ? row.display_key : row.thumbnail_key);
+  const object = await env.MEDIA.get(key);
+  if (!object) return new Response("Not found", { status: 404 });
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("ETag", object.httpEtag);
+  headers.set("Cache-Control", "private, max-age=3600");
+  headers.set("Content-Type", headers.get("Content-Type") || (variant === "original" ? row.content_type : "image/webp"));
+  if (url.searchParams.get("download") === "1") {
+    const name = variant === "original" ? row.file_name : `${stripExtension(row.file_name)}-low.webp`;
+    headers.set("Content-Disposition", contentDisposition(name));
+  }
+  if (request.method === "HEAD") return new Response(null, { status: 200, headers });
+  return new Response(object.body, { status: 200, headers });
 }
 
 async function listMeta(env) {
@@ -369,6 +560,23 @@ async function permanentlyDeleteEntry(id, request, env) {
     return json({ error: "削除情報を確認できませんでした。再読み込みしてください。" }, 400);
   }
 
+  const photoResult = await env.DB.prepare(`
+    SELECT original_key, display_key, thumbnail_key
+    FROM diary_photos
+    WHERE entry_id = ?
+  `).bind(id).all();
+  if ((photoResult.results || []).length && !env.MEDIA) {
+    throw new HttpError(503, "画像の保存先を確認できないため、完全削除を中止しました。");
+  }
+  if (env.MEDIA) {
+    const keys = (photoResult.results || []).flatMap((photo) => [
+      photo.original_key,
+      photo.display_key,
+      photo.thumbnail_key
+    ]);
+    if (keys.length) await env.MEDIA.delete(keys);
+  }
+
   const result = await env.DB.prepare(`
     DELETE FROM diary_entries
     WHERE id = ? AND revision = ? AND deleted_at IS NOT NULL
@@ -400,6 +608,27 @@ function validateEntryInput(body) {
     throw new HttpError(400, "タグは10個まで、1個30文字以内で入力してください。");
   }
   return { entryDate, title, content, tags };
+}
+
+function serializePhoto(row) {
+  return {
+    id: row.id,
+    entryId: Number(row.entry_id),
+    entryDate: row.entry_date || null,
+    entryTitle: row.entry_title || null,
+    authorId: row.author_id || null,
+    authorName: row.author_name || null,
+    fileName: row.file_name,
+    contentType: row.content_type,
+    originalSize: Number(row.original_size || 0),
+    width: row.width == null ? null : Number(row.width),
+    height: row.height == null ? null : Number(row.height),
+    createdByName: row.created_by_name,
+    createdAt: row.created_at,
+    thumbnailUrl: `${BASE_PATH}/api/photos/${row.id}/thumbnail`,
+    displayUrl: `${BASE_PATH}/api/photos/${row.id}/display`,
+    originalUrl: `${BASE_PATH}/api/photos/${row.id}/original`
+  };
 }
 
 function serializeEntry(row) {
@@ -547,6 +776,24 @@ function normalizeSearch(value, maxLength) {
 
 function normalizeTag(value) {
   return String(value || "").trim().replace(/^#+/, "").replace(/\s+/g, " ");
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function normalizeFileName(value) {
+  const normalized = String(value || "photo").normalize("NFC").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return (normalized || "photo").slice(0, 240);
+}
+
+function stripExtension(value) {
+  return String(value || "photo").replace(/\.[^.]+$/, "") || "photo";
+}
+
+function contentDisposition(fileName) {
+  const fallback = normalizeFileName(fileName).replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(normalizeFileName(fileName))}`;
 }
 
 function isValidDate(value) {

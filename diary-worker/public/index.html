@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <title>日記</title>
-  <link rel="stylesheet" href="/diary/diary.css?v=5">
+  <link rel="stylesheet" href="/diary/diary.css?v=6">
 </head>
 <body>
   <main id="login-view" class="login-shell" aria-labelledby="login-title">
@@ -43,6 +43,7 @@
       </div>
       <div class="header-actions">
         <span id="role-label" class="role-label"></span>
+        <button id="camera-roll-button" class="quiet-button" type="button">カメラロール</button>
         <button id="trash-button" class="quiet-button" type="button" hidden>ゴミ箱</button>
         <button id="new-entry-button" class="primary-button" type="button" hidden>新しい日記</button>
         <button id="logout-button" class="quiet-button" type="button">ログアウト</button>
@@ -179,6 +180,19 @@
       <label for="entry-content">本文</label>
       <textarea id="entry-content" name="content" rows="14" maxlength="200000" required></textarea>
 
+      <section class="editor-photo-section" aria-labelledby="editor-photo-title">
+        <div class="editor-photo-head">
+          <div>
+            <span id="editor-photo-title" class="form-label">写真</span>
+            <p class="field-help">本文内の入れたい位置をタップしてから写真を追加してください。</p>
+          </div>
+          <button id="add-photo-button" class="secondary-button" type="button">写真を追加</button>
+        </div>
+        <input id="photo-input" type="file" accept="image/*" multiple hidden>
+        <div id="editor-photo-list" class="editor-photo-list"></div>
+        <p id="photo-preparation-status" class="form-message" role="status" aria-live="polite"></p>
+      </section>
+
       <label for="entry-tags">タグ</label>
       <input id="entry-tags" name="tags" type="text" maxlength="320" placeholder="家族、仕事、旅行">
       <p class="field-help">読点またはカンマで区切って10個まで入力できます。</p>
@@ -189,6 +203,64 @@
         <button id="save-entry-button" class="primary-button" type="submit">保存</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="camera-roll-dialog" class="camera-roll-dialog">
+    <section class="camera-roll-shell">
+      <header class="camera-roll-head">
+        <div>
+          <p class="section-kicker">Camera roll</p>
+          <h2>カメラロール</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog="camera-roll-dialog" aria-label="閉じる">×</button>
+      </header>
+      <div class="camera-roll-filters">
+        <label>
+          <span>写真を検索</span>
+          <input id="photo-search" type="search" maxlength="100" placeholder="日記名・ファイル名">
+        </label>
+        <label>
+          <span>年月</span>
+          <select id="photo-month-filter">
+            <option value="">すべて</option>
+          </select>
+        </label>
+        <label>
+          <span>投稿者</span>
+          <select id="photo-author-filter">
+            <option value="">すべて</option>
+          </select>
+        </label>
+      </div>
+      <p id="camera-roll-status" class="diary-search-status" aria-live="polite"></p>
+      <div id="camera-roll-grid" class="camera-roll-grid"></div>
+      <button id="camera-roll-more" class="secondary-button load-more-button" type="button" hidden>さらに表示</button>
+    </section>
+  </dialog>
+
+  <dialog id="photo-viewer-dialog" class="photo-viewer-dialog">
+    <section class="photo-viewer-shell">
+      <header class="photo-viewer-head">
+        <div>
+          <p id="photo-viewer-date" class="entry-date"></p>
+          <h2 id="photo-viewer-title"></h2>
+        </div>
+        <button class="icon-button photo-viewer-close" type="button" data-close-dialog="photo-viewer-dialog" aria-label="閉じる">×</button>
+      </header>
+      <div class="photo-stage">
+        <button id="photo-previous" class="photo-nav photo-nav-previous" type="button" aria-label="前の写真">‹</button>
+        <img id="photo-viewer-image" alt="">
+        <button id="photo-next" class="photo-nav photo-nav-next" type="button" aria-label="次の写真">›</button>
+      </div>
+      <div class="photo-viewer-meta">
+        <p id="photo-viewer-file"></p>
+        <div class="photo-viewer-actions">
+          <button id="photo-open-entry" class="quiet-button" type="button">この日記を開く</button>
+          <a id="photo-download-low" class="secondary-button" href="#" download>低画質で保存</a>
+          <a id="photo-download-original" class="primary-button" href="#" download>元画質で保存</a>
+        </div>
+      </div>
+    </section>
   </dialog>
 
   <dialog id="date-wheel-dialog" class="date-wheel-dialog" aria-labelledby="date-wheel-title">
@@ -220,6 +292,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=7" defer></script>
+  <script src="/diary/diary.js?v=8" defer></script>
 </body>
 </html>

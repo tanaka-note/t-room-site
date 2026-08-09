@@ -7,6 +7,7 @@
     "deploy": "wrangler deploy",
     "check": "node --check src/index.js && node --check public/diary.js && node --check public/investment.js",
     "test:permissions": "node tests/permissions.e2e.mjs",
+    "test:photos": "node tests/photos.e2e.mjs && node tests/photos-ui.mjs",
     "import:investment": "node scripts/import-investment-data.mjs"
   },
   "devDependencies": {

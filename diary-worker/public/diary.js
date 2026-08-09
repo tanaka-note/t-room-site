@@ -19,7 +19,18 @@
     dateWheelTimers: {},
     searchTimer: null,
     requestId: 0,
-    deleteMode: null
+    deleteMode: null,
+    editorPhotos: [],
+    photoOffset: 0,
+    photos: [],
+    photoHasMore: false,
+    photoQuery: "",
+    photoMonth: "",
+    photoAuthor: "",
+    photoRequestId: 0,
+    photoSearchTimer: null,
+    viewerPhotos: [],
+    viewerIndex: -1
   };
 
   const elements = {
@@ -30,6 +41,7 @@
     passwordToggle: document.querySelector("#password-toggle"),
     loginMessage: document.querySelector("#login-message"),
     roleLabel: document.querySelector("#role-label"),
+    cameraRollButton: document.querySelector("#camera-roll-button"),
     newEntryButton: document.querySelector("#new-entry-button"),
     trashButton: document.querySelector("#trash-button"),
     logoutButton: document.querySelector("#logout-button"),
@@ -70,6 +82,10 @@
     todayButton: document.querySelector("#today-button"),
     entryTitle: document.querySelector("#entry-title"),
     entryContent: document.querySelector("#entry-content"),
+    addPhotoButton: document.querySelector("#add-photo-button"),
+    photoInput: document.querySelector("#photo-input"),
+    editorPhotoList: document.querySelector("#editor-photo-list"),
+    photoPreparationStatus: document.querySelector("#photo-preparation-status"),
     entryTags: document.querySelector("#entry-tags"),
     editorMessage: document.querySelector("#editor-message"),
     saveEntryButton: document.querySelector("#save-entry-button"),
@@ -80,6 +96,23 @@
     dateWheelYear: document.querySelector("#date-wheel-year"),
     dateWheelMonth: document.querySelector("#date-wheel-month"),
     dateWheelDay: document.querySelector("#date-wheel-day"),
+    cameraRollDialog: document.querySelector("#camera-roll-dialog"),
+    photoSearch: document.querySelector("#photo-search"),
+    photoMonthFilter: document.querySelector("#photo-month-filter"),
+    photoAuthorFilter: document.querySelector("#photo-author-filter"),
+    cameraRollStatus: document.querySelector("#camera-roll-status"),
+    cameraRollGrid: document.querySelector("#camera-roll-grid"),
+    cameraRollMore: document.querySelector("#camera-roll-more"),
+    photoViewerDialog: document.querySelector("#photo-viewer-dialog"),
+    photoViewerDate: document.querySelector("#photo-viewer-date"),
+    photoViewerTitle: document.querySelector("#photo-viewer-title"),
+    photoViewerImage: document.querySelector("#photo-viewer-image"),
+    photoViewerFile: document.querySelector("#photo-viewer-file"),
+    photoPrevious: document.querySelector("#photo-previous"),
+    photoNext: document.querySelector("#photo-next"),
+    photoOpenEntry: document.querySelector("#photo-open-entry"),
+    photoDownloadLow: document.querySelector("#photo-download-low"),
+    photoDownloadOriginal: document.querySelector("#photo-download-original"),
     toast: document.querySelector("#toast")
   };
 
@@ -103,6 +136,7 @@
     elements.loginForm.addEventListener("submit", handleLogin);
     elements.passwordToggle.addEventListener("click", togglePassword);
     elements.logoutButton.addEventListener("click", handleLogout);
+    elements.cameraRollButton.addEventListener("click", openCameraRoll);
     elements.newEntryButton.addEventListener("click", () => openEditor());
     elements.trashButton.addEventListener("click", toggleTrash);
     elements.loadMore.addEventListener("click", () => loadEntries(false));
@@ -139,6 +173,9 @@
       closeDeleteConfirmation();
     });
     elements.entryForm.addEventListener("submit", saveEntry);
+    elements.addPhotoButton.addEventListener("click", () => elements.photoInput.click());
+    elements.photoInput.addEventListener("change", handlePhotoSelection);
+    elements.editorPhotoList.addEventListener("click", handleEditorPhotoAction);
     elements.todayButton.addEventListener("click", setEntryDateToToday);
     elements.entryDate.addEventListener("pointerdown", handleDatePointerDown);
     elements.entryDate.addEventListener("keydown", handleDateKeydown);
@@ -154,13 +191,38 @@
     elements.entryForm.addEventListener("input", () => {
       state.editorDirty = true;
     });
+    elements.cameraRollMore.addEventListener("click", () => loadPhotos(false));
+    elements.cameraRollGrid.addEventListener("click", handleCameraRollClick);
+    elements.photoMonthFilter.addEventListener("change", () => {
+      state.photoMonth = elements.photoMonthFilter.value;
+      loadPhotos(true);
+    });
+    elements.photoAuthorFilter.addEventListener("change", () => {
+      state.photoAuthor = elements.photoAuthorFilter.value;
+      loadPhotos(true);
+    });
+    elements.photoSearch.addEventListener("input", () => {
+      window.clearTimeout(state.photoSearchTimer);
+      state.photoQuery = elements.photoSearch.value.trim();
+      state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
+    });
+    elements.photoPrevious.addEventListener("click", () => movePhotoViewer(-1));
+    elements.photoNext.addEventListener("click", () => movePhotoViewer(1));
+    elements.photoOpenEntry.addEventListener("click", openViewerEntry);
+    elements.photoViewerDialog.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft") movePhotoViewer(-1);
+      if (event.key === "ArrowRight") movePhotoViewer(1);
+    });
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
     });
     elements.editorDialog.addEventListener("cancel", (event) => {
       if (state.editorDirty && !window.confirm("入力中の内容を破棄しますか？")) event.preventDefault();
-      else state.editorDirty = false;
+      else {
+        state.editorDirty = false;
+        clearEditorPhotos();
+      }
     });
     window.addEventListener("beforeunload", (event) => {
       if (!state.editorDirty) return;
@@ -408,13 +470,242 @@
     elements.detailAuthor.textContent = `投稿者：${entry.authorName}`;
     elements.detailDeletion.hidden = !entry.deletedAt || !entry.deletedByName;
     elements.detailDeletion.textContent = entry.deletedByName ? `削除者：${entry.deletedByName}` : "";
-    elements.detailContent.textContent = entry.content;
+    renderEntryContent(entry);
     elements.detailTags.replaceChildren(...createTagElements(entry.tags));
     const isDeleted = Boolean(entry.deletedAt);
     elements.detailActions.hidden = state.role !== "admin" || isDeleted;
     elements.restoreActions.hidden = !state.canViewTrash || !isDeleted;
     elements.deleteEntryButton.textContent = state.canViewTrash ? "ゴミ箱へ移動" : "削除";
     elements.permanentlyDeleteEntryButton.hidden = !state.canPermanentlyDelete || !isDeleted;
+  }
+
+  function renderEntryContent(entry) {
+    const photos = new Map((entry.photos || []).map((photo) => [photo.id, photo]));
+    const rendered = new Set();
+    const fragment = document.createDocumentFragment();
+    const markerPattern = /\[\[写真:([0-9a-f-]{36})\]\]/gi;
+    let cursor = 0;
+    let match;
+    while ((match = markerPattern.exec(entry.content)) !== null) {
+      appendEntryText(fragment, entry.content.slice(cursor, match.index));
+      const photo = photos.get(match[1].toLowerCase());
+      if (photo) {
+        fragment.append(createEntryPhoto(photo, entry.photos));
+        rendered.add(photo.id);
+      }
+      cursor = match.index + match[0].length;
+    }
+    appendEntryText(fragment, entry.content.slice(cursor));
+    for (const photo of entry.photos || []) {
+      if (!rendered.has(photo.id)) fragment.append(createEntryPhoto(photo, entry.photos));
+    }
+    elements.detailContent.replaceChildren(fragment);
+  }
+
+  function appendEntryText(fragment, text) {
+    if (!text) return;
+    const span = document.createElement("span");
+    span.className = "entry-content-text";
+    span.textContent = text;
+    fragment.append(span);
+  }
+
+  function createEntryPhoto(photo, photos) {
+    const image = document.createElement("img");
+    image.className = "entry-photo";
+    image.src = photo.displayUrl;
+    image.alt = photo.fileName || "日記の写真";
+    image.loading = "lazy";
+    image.addEventListener("click", () => openPhotoViewer(photos, photos.findIndex((candidate) => candidate.id === photo.id)));
+    return image;
+  }
+
+  async function handlePhotoSelection() {
+    const files = [...(elements.photoInput.files || [])];
+    elements.photoInput.value = "";
+    if (!files.length) return;
+    setBusy(elements.addPhotoButton, true, "準備中...");
+    elements.photoPreparationStatus.textContent = `${files.length}件の写真を準備しています。`;
+    const failures = [];
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        elements.photoPreparationStatus.textContent = `写真を準備中 ${index + 1}/${files.length}`;
+        try {
+          const photo = await preparePhoto(file);
+          state.editorPhotos.push(photo);
+          insertPhotoMarker(photo.id);
+        } catch (error) {
+          failures.push(`${file.name}：${error.message}`);
+        }
+      }
+      state.editorDirty = true;
+      renderEditorPhotos();
+      elements.photoPreparationStatus.textContent = failures.length
+        ? `準備できなかった写真があります。${failures.join(" / ")}`
+        : `${files.length}件の写真を本文へ追加しました。`;
+    } finally {
+      setBusy(elements.addPhotoButton, false, "写真を追加");
+    }
+  }
+
+  async function preparePhoto(file) {
+    if (!(file instanceof File) || !String(file.type).startsWith("image/")) {
+      throw new Error("画像ファイルではありません。");
+    }
+    if (!file.size || file.size > 60 * 1024 * 1024) throw new Error("60MB以内の画像を選択してください。");
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch {
+      throw new Error("この画像形式をブラウザで読み取れませんでした。");
+    }
+    try {
+      const [displayBlob, thumbnailBlob] = await Promise.all([
+        resizePhoto(bitmap, 1800, 320 * 1024, 0.88),
+        resizePhoto(bitmap, 480, 100 * 1024, 0.82)
+      ]);
+      const id = crypto.randomUUID().toLowerCase();
+      return {
+        id,
+        fileName: file.name || "photo",
+        originalFile: file,
+        displayBlob,
+        thumbnailBlob,
+        width: bitmap.width,
+        height: bitmap.height,
+        previewUrl: URL.createObjectURL(thumbnailBlob),
+        existing: false
+      };
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  async function resizePhoto(bitmap, maxDimension, targetBytes, initialQuality) {
+    const ratio = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * ratio));
+    const height = Math.max(1, Math.round(bitmap.height * ratio));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(bitmap, 0, 0, width, height);
+    let quality = initialQuality;
+    let blob = await canvasToBlob(canvas, quality);
+    while (blob.size > targetBytes && quality > 0.5) {
+      quality -= 0.08;
+      blob = await canvasToBlob(canvas, quality);
+    }
+    return blob;
+  }
+
+  function canvasToBlob(canvas, quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("画像を変換できませんでした。")), "image/webp", quality);
+    });
+  }
+
+  function insertPhotoMarker(id) {
+    const marker = photoMarker(id);
+    const textarea = elements.entryContent;
+    const start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
+    const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start;
+    const prefix = start > 0 && textarea.value[start - 1] !== "\n" ? "\n" : "";
+    const suffix = end < textarea.value.length && textarea.value[end] !== "\n" ? "\n" : "";
+    textarea.setRangeText(`${prefix}${marker}${suffix}`, start, end, "end");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.focus();
+  }
+
+  function photoMarker(id) {
+    return `[[写真:${id}]]`;
+  }
+
+  function renderEditorPhotos() {
+    elements.editorPhotoList.replaceChildren(...state.editorPhotos.map((photo) => {
+      const card = document.createElement("article");
+      card.className = "editor-photo-card";
+      const image = document.createElement("img");
+      image.src = photo.thumbnailUrl || photo.previewUrl;
+      image.alt = photo.fileName;
+      const body = document.createElement("div");
+      body.className = "editor-photo-card-body";
+      const name = document.createElement("p");
+      name.className = "editor-photo-card-name";
+      name.textContent = photo.fileName;
+      const actions = document.createElement("div");
+      actions.className = "editor-photo-card-actions";
+      const markerPresent = elements.entryContent.value.includes(photoMarker(photo.id));
+      const insert = document.createElement("button");
+      insert.className = "quiet-button";
+      insert.type = "button";
+      insert.dataset.photoAction = "insert";
+      insert.dataset.photoId = photo.id;
+      insert.textContent = markerPresent ? "挿入済み" : "本文へ挿入";
+      insert.disabled = markerPresent;
+      actions.append(insert);
+      if (!photo.existing) {
+        const remove = document.createElement("button");
+        remove.className = "danger-button";
+        remove.type = "button";
+        remove.dataset.photoAction = "remove";
+        remove.dataset.photoId = photo.id;
+        remove.textContent = "取り除く";
+        actions.append(remove);
+      }
+      body.append(name, actions);
+      card.append(image, body);
+      return card;
+    }));
+  }
+
+  function handleEditorPhotoAction(event) {
+    const button = event.target.closest("[data-photo-action]");
+    if (!button) return;
+    const photo = state.editorPhotos.find((candidate) => candidate.id === button.dataset.photoId);
+    if (!photo) return;
+    if (button.dataset.photoAction === "insert") {
+      insertPhotoMarker(photo.id);
+      renderEditorPhotos();
+      return;
+    }
+    if (button.dataset.photoAction === "remove" && !photo.existing) {
+      elements.entryContent.value = elements.entryContent.value.replaceAll(photoMarker(photo.id), "").replace(/\n{3,}/g, "\n\n");
+      if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
+      state.editorPhotos = state.editorPhotos.filter((candidate) => candidate.id !== photo.id);
+      state.editorDirty = true;
+      renderEditorPhotos();
+    }
+  }
+
+  function clearEditorPhotos() {
+    for (const photo of state.editorPhotos) {
+      if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
+    }
+    state.editorPhotos = [];
+    elements.editorPhotoList?.replaceChildren();
+  }
+
+  async function uploadPhoto(entryId, photo) {
+    const form = new FormData();
+    form.set("id", photo.id);
+    form.set("width", String(photo.width || ""));
+    form.set("height", String(photo.height || ""));
+    form.set("original", photo.originalFile, photo.fileName);
+    form.set("display", photo.displayBlob, "display.webp");
+    form.set("thumbnail", photo.thumbnailBlob, "thumbnail.webp");
+    const response = await fetch(`${BASE_PATH}/api/entries/${entryId}/photos`, {
+      method: "POST",
+      headers: { "X-Diary-Request": "1" },
+      credentials: "same-origin",
+      body: form
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "画像を保存できませんでした。");
+    return result;
   }
 
   function openEditor(entry = null) {
@@ -427,6 +718,10 @@
     elements.entryTitle.value = entry?.title || "";
     elements.entryContent.value = entry?.content || "";
     elements.entryTags.value = entry?.tags?.join("、") || "";
+    clearEditorPhotos();
+    state.editorPhotos = (entry?.photos || []).map((photo) => ({ ...photo, existing: true }));
+    elements.photoPreparationStatus.textContent = "";
+    renderEditorPhotos();
     state.editorDirty = false;
     elements.editorDialog.showModal();
     window.setTimeout(() => (entry ? elements.entryTitle : elements.entryTitle).focus(), 0);
@@ -446,11 +741,32 @@
     elements.editorMessage.textContent = "";
     setBusy(elements.saveEntryButton, true, "保存中...");
     try {
-      await api(id ? `/entries/${id}` : "/entries", {
+      const saved = await api(id ? `/entries/${id}` : "/entries", {
         method: id ? "PUT" : "POST",
         body
       });
+      const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
+      const failures = [];
+      for (let index = 0; index < pendingPhotos.length; index += 1) {
+        const photo = pendingPhotos[index];
+        setBusy(elements.saveEntryButton, true, `写真を保存中 ${index + 1}/${pendingPhotos.length}`);
+        try {
+          const result = await uploadPhoto(saved.entry.id, photo);
+          photo.existing = true;
+          Object.assign(photo, result.photo);
+        } catch (error) {
+          failures.push(`${photo.fileName}：${error.message}`);
+        }
+      }
+      if (failures.length) {
+        elements.entryId.value = String(saved.entry.id);
+        elements.entryRevision.value = String(saved.entry.revision);
+        elements.editorMessage.textContent = `日記本文は保存しました。写真を保存できませんでした。${failures.join(" / ")}`;
+        renderEditorPhotos();
+        return;
+      }
       state.editorDirty = false;
+      clearEditorPhotos();
       elements.editorDialog.close();
       showToast(id ? "日記を更新しました。" : "日記を保存しました。");
       state.trash = false;
@@ -460,6 +776,137 @@
     } finally {
       setBusy(elements.saveEntryButton, false, "保存");
     }
+  }
+
+  async function openCameraRoll() {
+    elements.cameraRollDialog.showModal();
+    elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
+    try {
+      await Promise.all([loadPhotoMeta(), loadPhotos(true)]);
+    } catch (error) {
+      elements.cameraRollStatus.textContent = error.message;
+    }
+  }
+
+  async function loadPhotoMeta() {
+    const result = await api("/photos/meta");
+    const monthValue = state.photoMonth;
+    const authorValue = state.photoAuthor;
+    elements.photoMonthFilter.replaceChildren(createOption("", "すべて"), ...(result.months || []).map((item) => (
+      createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
+    )));
+    elements.photoAuthorFilter.replaceChildren(createOption("", "すべて"), ...(result.authors || []).map((item) => (
+      createOption(item.value, `${item.label}（${item.count}）`)
+    )));
+    elements.photoMonthFilter.value = monthValue;
+    elements.photoAuthorFilter.value = authorValue;
+  }
+
+  function createOption(value, label) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    return option;
+  }
+
+  async function loadPhotos(reset) {
+    const requestId = ++state.photoRequestId;
+    if (reset) {
+      state.photoOffset = 0;
+      state.photos = [];
+      elements.cameraRollGrid.replaceChildren();
+      elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
+    }
+    const parameters = new URLSearchParams({ limit: "48", offset: String(state.photoOffset) });
+    if (state.photoQuery) parameters.set("q", state.photoQuery);
+    if (state.photoMonth) parameters.set("month", state.photoMonth);
+    if (state.photoAuthor) parameters.set("author", state.photoAuthor);
+    const result = await api(`/photos?${parameters}`);
+    if (requestId !== state.photoRequestId) return;
+    state.photos.push(...result.photos);
+    state.photoOffset += result.photos.length;
+    state.photoHasMore = Boolean(result.hasMore);
+    renderCameraRoll();
+  }
+
+  function renderCameraRoll() {
+    if (!state.photos.length) {
+      elements.cameraRollGrid.replaceChildren(createEmpty("該当する写真はありません。"));
+    } else {
+      elements.cameraRollGrid.replaceChildren(...state.photos.map((photo, index) => {
+        const button = document.createElement("button");
+        button.className = "camera-roll-item";
+        button.type = "button";
+        button.dataset.photoIndex = String(index);
+        const image = document.createElement("img");
+        image.src = photo.thumbnailUrl;
+        image.alt = photo.fileName;
+        image.loading = "lazy";
+        const caption = document.createElement("span");
+        caption.className = "camera-roll-caption";
+        caption.textContent = `${formatShortDate(photo.entryDate)} ${photo.entryTitle || ""}`.trim();
+        button.append(image, caption);
+        return button;
+      }));
+    }
+    elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`;
+    elements.cameraRollMore.hidden = !state.photoHasMore;
+  }
+
+  function handleCameraRollClick(event) {
+    const button = event.target.closest("[data-photo-index]");
+    if (!button) return;
+    openPhotoViewer(state.photos, Number(button.dataset.photoIndex));
+  }
+
+  function openPhotoViewer(photos, index) {
+    if (!photos?.length || index < 0 || index >= photos.length) return;
+    state.viewerPhotos = photos;
+    state.viewerIndex = index;
+    renderPhotoViewer();
+    elements.photoViewerDialog.showModal();
+  }
+
+  function renderPhotoViewer() {
+    const photo = state.viewerPhotos[state.viewerIndex];
+    if (!photo) return;
+    elements.photoViewerDate.textContent = formatDate(photo.entryDate);
+    elements.photoViewerTitle.textContent = photo.entryTitle || "日記の写真";
+    elements.photoViewerImage.src = photo.displayUrl;
+    elements.photoViewerImage.alt = photo.fileName;
+    const dimensions = photo.width && photo.height ? ` / ${photo.width}×${photo.height}` : "";
+    elements.photoViewerFile.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
+    elements.photoDownloadLow.href = `${photo.displayUrl}?download=1`;
+    elements.photoDownloadOriginal.href = `${photo.originalUrl}?download=1`;
+    elements.photoPrevious.disabled = state.viewerIndex <= 0;
+    elements.photoNext.disabled = state.viewerIndex >= state.viewerPhotos.length - 1;
+  }
+
+  function movePhotoViewer(direction) {
+    const next = state.viewerIndex + direction;
+    if (next < 0 || next >= state.viewerPhotos.length) return;
+    state.viewerIndex = next;
+    renderPhotoViewer();
+  }
+
+  function openViewerEntry() {
+    const photo = state.viewerPhotos[state.viewerIndex];
+    if (!photo) return;
+    elements.photoViewerDialog.close();
+    if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
+    openEntry(photo.entryId);
+  }
+
+  function formatShortDate(value) {
+    const [year, month, day] = String(value || "").split("-").map(Number);
+    return year && month && day ? `${year}.${month}.${day}` : "";
+  }
+
+  function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
 
   function handleDatePointerDown(event) {
@@ -764,7 +1211,10 @@
     const dialog = document.getElementById(id);
     if (!dialog?.open) return;
     if (id === "editor-dialog" && state.editorDirty && !window.confirm("入力中の内容を破棄しますか？")) return;
-    if (id === "editor-dialog") state.editorDirty = false;
+    if (id === "editor-dialog") {
+      state.editorDirty = false;
+      clearEditorPhotos();
+    }
     dialog.close();
   }
 
@@ -834,7 +1284,7 @@
   }
 
   function excerpt(value, length) {
-    const text = String(value || "").replace(/\s+/g, " ").trim();
+    const text = String(value || "").replace(/\[\[写真:[0-9a-f-]{36}\]\]/gi, "").replace(/\s+/g, " ").trim();
     return text.length > length ? `${text.slice(0, length)}…` : text;
   }
 
@@ -878,11 +1328,22 @@
     state.trash = false;
     state.activeEntry = null;
     state.deleteMode = null;
+    clearEditorPhotos();
+    state.photoOffset = 0;
+    state.photos = [];
+    state.photoHasMore = false;
+    state.photoQuery = "";
+    state.photoMonth = "";
+    state.photoAuthor = "";
+    state.viewerPhotos = [];
+    state.viewerIndex = -1;
     state.editorDirty = false;
     state.dateDraft = null;
     if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();
     state.requestId += 1;
     if (elements.entryDialog.open) elements.entryDialog.close();
     if (elements.editorDialog.open) elements.editorDialog.close();
+    if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
+    if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
   }
 })();

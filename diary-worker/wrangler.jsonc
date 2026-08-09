@@ -22,6 +22,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "t-room-diary-media"
+    }
+  ],
   "vars": {
     "SESSION_TTL_SECONDS": "2592000",
     "SESSION_VERSION": "2"
