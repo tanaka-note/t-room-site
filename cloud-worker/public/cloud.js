@@ -1987,33 +1987,29 @@ async function deleteSelectedItems() {
   let processed = 0;
   const failures = [];
   try {
-    let nextFileIndex = 0;
-    const fileWorker = async () => {
-      while (nextFileIndex < files.length) {
-        const file = files[nextFileIndex++];
+    const deletionQueue = [
+      ...folders.map((folder) => ({ type: "folder", item: folder })),
+      ...files.map((file) => ({ type: "file", item: file }))
+    ];
+    let nextDeletionIndex = 0;
+    const deletionWorker = async () => {
+      while (nextDeletionIndex < deletionQueue.length) {
+        const task = deletionQueue[nextDeletionIndex++];
         try {
-          await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
+          const result = await api(`/${task.type === "folder" ? "folders" : "files"}/${task.item.id}`, {
+            method: "DELETE",
+            body: "{}"
+          });
           completed += 1;
-          movedEntries += 1;
+          movedEntries += task.type === "folder" ? Number(result.deleted || 1) : 1;
         } catch (error) {
-          failures.push({ name: file.name, error });
+          failures.push({ name: task.item.name, error });
         }
         processed += 1;
         button.textContent = `削除中 ${processed} / ${count}`;
       }
     };
-    await Promise.all(Array.from({ length: Math.min(4, files.length) }, () => fileWorker()));
-    for (const folder of folders) {
-      try {
-        const result = await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
-        completed += 1;
-        movedEntries += Number(result.deleted || 1);
-      } catch (error) {
-        failures.push({ name: folder.name, error });
-      }
-      processed += 1;
-      button.textContent = `削除中 ${processed} / ${count}`;
-    }
+    await Promise.all(Array.from({ length: Math.min(4, deletionQueue.length) }, () => deletionWorker()));
     clearFileSelection();
     const failedNames = failures.slice(0, 3).map((item) => item.name).join("、");
     const successMessage = state.session?.canDelete
