@@ -125,7 +125,7 @@
         <div class="upload-track"><span id="upload-progress"></span></div>
         <p class="upload-file-row"><span id="upload-file-name"></span><span><span id="upload-speed"></span><span id="upload-file-progress"></span></span></p>
         <div id="upload-failure-summary" class="transfer-error-summary" hidden>
-          <strong>アップロードエラーになったデータ</strong>
+          <strong>アップロードできなかったデータ</strong>
           <ul id="upload-failed-list"></ul>
         </div>
       </div>
@@ -282,7 +282,7 @@
   <dialog id="add-dialog" class="form-dialog compact-dialog">
     <div class="dialog-head"><h2>追加する</h2><button class="dialog-close icon-button" type="button">×</button></div>
     <div class="action-list">
-      <button id="mobile-upload-action" class="action-row" type="button"><span class="action-icon">↑</span><span><strong>ファイルをアップロード</strong><small>写真、動画、音声、書類を追加（1ファイル最大10GB）</small></span></button>
+      <button id="mobile-upload-action" class="action-row" type="button"><span class="action-icon">↑</span><span><strong>ファイルをアップロード</strong><small>写真、動画、音声、書類を追加</small></span></button>
       <button id="desktop-folder-upload-action" class="action-row desktop-only" type="button"><span class="action-icon">▰</span><span><strong>フォルダをアップロード</strong><small>フォルダ構成を保ったまま一括で追加</small></span></button>
       <button id="mobile-folder-action" class="action-row" type="button"><span class="action-icon">＋</span><span><strong>新しいフォルダ</strong><small>パスワード付きフォルダも作成できます</small></span></button>
     </div>
@@ -384,10 +384,10 @@
 
   <script src="/cloud/vendor/argon2.umd.min.js?v=4.12.0" defer></script>
   <script src="/cloud/vendor/mpegts-1.8.0.js?v=1.8.0" defer></script>
-  <script src="/cloud/crypto-vault.js?v=20260809-11" defer></script>
+  <script src="/cloud/crypto-vault.js?v=20260809-12" defer></script>
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-3" defer></script>
-  <script src="/cloud/cloud.js?v=20260809-61" defer></script>
+  <script src="/cloud/cloud.js?v=20260809-62" defer></script>
 </body>
 </html>

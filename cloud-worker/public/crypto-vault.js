@@ -20,7 +20,9 @@
   const FILE_METADATA_CONTEXT = "T-ROOM Cloud Storage file metadata v1";
   const FILE_CHUNK_CONTEXT = "T-ROOM Cloud Storage file chunk v1";
   const THUMBNAIL_CONTEXT = "T-ROOM Cloud Storage thumbnail v1";
-  const FILE_CHUNK_SIZE = 8 * 1024 * 1024;
+  const MIN_FILE_CHUNK_SIZE = 8 * 1024 * 1024;
+  const MAX_FILE_CHUNK_SIZE = 64 * 1024 * 1024;
+  const MAX_MULTIPART_PARTS = 10000;
 
   async function deriveAccountCredentials(password, loginId) {
     ensureCryptoSupport();
@@ -332,7 +334,11 @@
     const encryptedMetadata = await encryptBytes(fileKey, metadata, textEncoder.encode(FILE_METADATA_CONTEXT));
     const wrappedFileKey = await encryptBytes(folderKey, rawFileKey, textEncoder.encode(FILE_KEY_CONTEXT));
     rawFileKey.fill(0);
-    const chunkCount = Math.ceil(file.size / FILE_CHUNK_SIZE);
+    const chunkSize = chooseFileChunkSize(file.size);
+    const chunkCount = Math.ceil(file.size / chunkSize);
+    if (chunkCount > MAX_MULTIPART_PARTS) {
+      throw new Error("現在のアップロード方式では1ファイル最大約640GBです。");
+    }
     return {
       fileKey,
       payload: {
@@ -342,11 +348,17 @@
         metadataIv: toBase64Url(encryptedMetadata.iv),
         wrappedFileKey: toBase64Url(wrappedFileKey.ciphertext),
         fileKeyIv: toBase64Url(wrappedFileKey.iv),
-        chunkSizeBytes: FILE_CHUNK_SIZE,
+        chunkSizeBytes: chunkSize,
         chunkCount,
         encryptedSizeBytes: file.size + chunkCount * 32
       }
     };
+  }
+
+  function chooseFileChunkSize(sizeBytes) {
+    const required = Math.ceil(Number(sizeBytes || 0) / MAX_MULTIPART_PARTS);
+    const rounded = Math.ceil(required / MIN_FILE_CHUNK_SIZE) * MIN_FILE_CHUNK_SIZE;
+    return Math.min(MAX_FILE_CHUNK_SIZE, Math.max(MIN_FILE_CHUNK_SIZE, rounded || MIN_FILE_CHUNK_SIZE));
   }
 
   async function unlockFileKey(file, folderKey) {
@@ -575,7 +587,7 @@
     decryptFileChunk,
     encryptThumbnail,
     decryptThumbnail,
-    fileChunkSize: FILE_CHUNK_SIZE,
+    fileChunkSize: MIN_FILE_CHUNK_SIZE,
     toBase64Url,
     fromBase64Url,
     textEncoder,

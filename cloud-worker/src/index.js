@@ -5,6 +5,10 @@ const SESSION_ALGORITHM = "HMAC";
 const LOGIN_LIMIT = 5;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const encoder = new TextEncoder();
+const MIN_MULTIPART_CHUNK_BYTES = 8 * 1024 * 1024;
+const MAX_MULTIPART_CHUNK_BYTES = 64 * 1024 * 1024;
+const MAX_MULTIPART_PARTS = 10000;
+const MAX_FILE_BYTES = MAX_MULTIPART_CHUNK_BYTES * MAX_MULTIPART_PARTS - MAX_MULTIPART_PARTS * 32;
 
 const ACCOUNTS = [
   { role: "admin", label: "管理者", secretKey: "ADMIN_PASSWORD_HASH", proofSecretKey: "ADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: true, canTrashUnlockedFiles: true, canEditFiles: true, canEditFolders: true, canRenameUnlockedItems: true, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false },
@@ -78,6 +82,7 @@ async function handleApi(request, env, url, path) {
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
   if (path === "/api/items" && request.method === "GET") return listItems(url, env, session);
+  if (path === "/api/legacy-folders" && request.method === "GET") return listLegacyFolders(env, session);
   if (path === "/api/folders" && request.method === "POST") return createFolder(request, env, session);
   if (path === "/api/uploads" && request.method === "POST") return createUpload(request, env, session);
   if (path === "/api/trash" && request.method === "GET") return listTrash(env, session);
@@ -607,6 +612,22 @@ async function listItems(url, env, session) {
   return json({ folder, breadcrumbs: await breadcrumbs(env, folderId), folders: visibleFolders, files: files.results || [] });
 }
 
+async function listLegacyFolders(env, session) {
+  requireAdmin(session);
+  const result = await env.DB.prepare(`
+    SELECT id, parent_id AS parentId, name,
+      crypto_version AS cryptoVersion, encrypted_name AS encryptedName, name_iv AS nameIv,
+      admin_wrapped_key AS adminWrappedKey
+    FROM cloud_folders
+    WHERE deleted_at IS NULL
+      AND crypto_version = 1
+      AND (name IS NULL OR TRIM(name) = '' OR name = '[encrypted]')
+    ORDER BY id ASC
+    LIMIT 5000
+  `).all();
+  return json({ folders: result.results || [] });
+}
+
 async function createFolder(request, env, session) {
   requireUpload(session);
   const body = await readJson(request, 8192);
@@ -790,8 +811,12 @@ async function createUpload(request, env, session) {
   requireUpload(session);
   const body = await readJson(request, 16384);
   const sizeBytes = Number(body.sizeBytes);
-  const maxBytes = clampNumber(env.MAX_FILE_BYTES, 1, 10737418240, 10737418240);
-  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > maxBytes) throw new HttpError(400, "ファイル容量を確認してください。");
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1) {
+    throw new HttpError(400, "空ファイル（0バイト）はアップロード対象外です。");
+  }
+  if (sizeBytes > MAX_FILE_BYTES) {
+    throw new HttpError(413, "現在のアップロード方式では1ファイル最大約640GBです。");
+  }
   if (Number(body.cryptoVersion) !== 1) throw new HttpError(400, "暗号化されたファイルだけ保存できます。");
   const encrypted = normalizeEncryptedFile(body, sizeBytes);
   const folderId = optionalId(body.folderId);
@@ -1650,8 +1675,13 @@ function normalizeEncryptedFile(body, sizeBytes) {
   const chunkSizeBytes = Number(body.chunkSizeBytes);
   const chunkCount = Number(body.chunkCount);
   const encryptedSizeBytes = Number(body.encryptedSizeBytes);
-  const expectedChunks = Math.ceil(sizeBytes / (8 * 1024 * 1024));
-  if (chunkSizeBytes !== 8 * 1024 * 1024 || chunkCount !== expectedChunks || encryptedSizeBytes !== sizeBytes + chunkCount * 32) {
+  const expectedChunks = Math.ceil(sizeBytes / chunkSizeBytes);
+  const validChunkSize = Number.isSafeInteger(chunkSizeBytes)
+    && chunkSizeBytes >= MIN_MULTIPART_CHUNK_BYTES
+    && chunkSizeBytes <= MAX_MULTIPART_CHUNK_BYTES
+    && chunkSizeBytes % MIN_MULTIPART_CHUNK_BYTES === 0;
+  if (!validChunkSize || chunkCount !== expectedChunks || chunkCount < 1 || chunkCount > MAX_MULTIPART_PARTS
+    || encryptedSizeBytes !== sizeBytes + chunkCount * 32) {
     throw new HttpError(400, "暗号化ファイルの分割情報を確認してください。");
   }
   return {

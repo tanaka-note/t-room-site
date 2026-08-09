@@ -464,8 +464,8 @@ async function enterApp(session, password = "", accountKey = null) {
   if (session.role === "admin") loadUsage();
   initializeNavigationHistory();
   await prepareCryptoSession(password, accountKey);
-  await migrateLegacyFolderNames();
   await loadItems();
+  scheduleLegacyFolderMigration();
 }
 
 async function logout() {
@@ -616,8 +616,8 @@ async function handleVaultForm(event) {
       showRecoveryCode(vault.recoveryCode);
       setCryptoStatus("暗号化鍵：解除済み", true);
       setNotice("端末側暗号化の初期設定が完了しました。復旧鍵を安全に保管してください。");
-      await migrateLegacyFolderNames();
       await loadItems();
+      scheduleLegacyFolderMigration();
     } else {
       const privateKey = await TRoomCrypto.unlockAdminPrivateKey(accountKey, state.crypto.config);
       state.crypto.accountKey = accountKey;
@@ -626,8 +626,8 @@ async function handleVaultForm(event) {
       $("#vault-dialog").close();
       setCryptoStatus("暗号化鍵：解除済み", true);
       setNotice("暗号化鍵を解除しました。");
-      await migrateLegacyFolderNames();
       await loadItems();
+      scheduleLegacyFolderMigration();
     }
   } catch (error) {
     $("#vault-error").textContent = error.message;
@@ -717,20 +717,10 @@ function isLegacyFolderName(name) {
 async function migrateLegacyFolderNames() {
   if (state.folderNamesMigrated || state.session?.role !== "admin" || !state.crypto.adminPrivateKey) return;
   try {
-    await migrateLegacyFolderBranch(null);
-    state.folderNamesMigrated = true;
-  } catch (error) {
-    console.warn("Folder name migration was deferred.", error);
-  }
-}
-
-async function migrateLegacyFolderBranch(parentId) {
-  const params = new URLSearchParams();
-  if (parentId) params.set("folderId", parentId);
-  const data = await api(`/items?${params}`);
-  for (const folder of data.folders || []) {
-    const key = await ensureAdminFolderKey(folder);
-    if (isLegacyFolderName(folder.name)) {
+    const data = await api("/legacy-folders");
+    let changed = false;
+    for (const folder of data.folders || []) {
+      const key = await ensureAdminFolderKey(folder);
       const plaintextName = await TRoomCrypto.decryptFolderName(folder, key);
       await api(`/folders/${folder.id}`, {
         method: "PATCH",
@@ -742,10 +732,23 @@ async function migrateLegacyFolderBranch(parentId) {
           passwordAction: "keep"
         })
       });
-      folder.name = plaintextName;
+      changed = true;
     }
-    await migrateLegacyFolderBranch(folder.id);
+    state.folderNamesMigrated = true;
+    return changed;
+  } catch (error) {
+    console.warn("Folder name migration was deferred.", error);
+    return false;
   }
+}
+
+function scheduleLegacyFolderMigration() {
+  if (state.folderNamesMigrated || state.session?.role !== "admin" || !state.crypto.adminPrivateKey) return;
+  const run = () => migrateLegacyFolderNames().then((changed) => {
+    if (changed && state.view === "all") loadItems();
+  });
+  if ("requestIdleCallback" in window) window.requestIdleCallback(run, { timeout: 3000 });
+  else window.setTimeout(run, 250);
 }
 
 function showRecoveryCode(code) {
@@ -2326,6 +2329,11 @@ async function uploadFiles(files, destinations = null) {
     setNotice("暗号化の初期設定を完了してください。", true);
     return;
   }
+  const requestedTotal = files.length;
+  const skippedFiles = files
+    .filter((file) => Number(file.size) === 0)
+    .map((file) => ({ file, error: new Error("空ファイル（0バイト）のため、アップロード対象外です。") }));
+  files = files.filter((file) => Number(file.size) > 0);
   $("#file-input").value = "";
   state.uploading = true;
   state.uploadAbort = new AbortController();
@@ -2415,12 +2423,22 @@ async function uploadFiles(files, destinations = null) {
       $("#upload-file-progress").textContent = "未完了分は保存されていません";
       setNotice(`アップロードを停止しました。完了済みの${completed}件は保存されています。`);
     } else if (finalFailures.length) {
+      const unavailable = [...finalFailures, ...skippedFiles];
       panel.classList.add("upload-error");
       $("#upload-heading").textContent = "一部のアップロードに失敗しました";
-      $("#upload-status").textContent = `${completed} / ${total}件完了`;
-      $("#upload-file-progress").textContent = `${finalFailures.length}件エラー`;
-      renderTransferFailures("#upload-failure-summary", "#upload-failed-list", finalFailures);
+      $("#upload-status").textContent = `${completed} / ${requestedTotal}件保存`;
+      $("#upload-file-progress").textContent = `${unavailable.length}件を保存できませんでした`;
+      renderTransferFailures("#upload-failure-summary", "#upload-failed-list", unavailable);
       setNotice(`${completed}件を保存しました。保存できなかったデータを一覧に表示しています。`, true);
+    } else if (skippedFiles.length) {
+      panel.classList.add("upload-complete");
+      $("#upload-heading").textContent = completed ? "アップロード完了（対象外あり）" : "アップロード対象を確認してください";
+      $("#upload-status").textContent = `${completed} / ${requestedTotal}件保存`;
+      $("#upload-file-progress").textContent = `${skippedFiles.length}件は対象外`;
+      renderTransferFailures("#upload-failure-summary", "#upload-failed-list", skippedFiles);
+      setNotice(completed
+        ? `${completed}件を保存しました。空ファイルは理由とともに一覧へ表示しています。`
+        : "空ファイルは保存せず、理由を一覧へ表示しています。", true);
     } else {
       panel.classList.add("upload-complete");
       $("#upload-heading").textContent = "アップロード完了";

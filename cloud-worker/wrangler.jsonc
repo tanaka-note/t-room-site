@@ -30,8 +30,7 @@
   ],
   "vars": {
     "SESSION_TTL_SECONDS": "2592000",
-    "SESSION_VERSION": "3",
-    "MAX_FILE_BYTES": "10737418240"
+    "SESSION_VERSION": "3"
   },
   "triggers": {
     "crons": ["17 18 * * *"]
