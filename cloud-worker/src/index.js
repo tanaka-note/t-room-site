@@ -1463,6 +1463,12 @@ async function serveAsset(request, env, url, path) {
     ["/media-range.js", "/media-range.js"],
     ["/media-client.js", "/media-client.js"],
     ["/media-worker.js", "/media-worker.js"],
+    ["/manifest.webmanifest", "/manifest.webmanifest"],
+    ["/offline", "/offline"],
+    ["/icons/icon-192.png", "/icons/icon-192.png"],
+    ["/icons/icon-512.png", "/icons/icon-512.png"],
+    ["/icons/icon-maskable-512.png", "/icons/icon-maskable-512.png"],
+    ["/icons/apple-touch-icon.png", "/icons/apple-touch-icon.png"],
     ["/share.css", "/share.css"],
     ["/share.js", "/share.js"],
     ["/vendor/argon2.umd.min.js", "/vendor/argon2.umd.min.js"],
@@ -1479,6 +1485,8 @@ async function serveAsset(request, env, url, path) {
     ? "no-store"
     : "public, max-age=3600");
   if (assetPath === "/media-worker.js") headers.set("Service-Worker-Allowed", "/cloud/");
+  if (assetPath === "/manifest.webmanifest") headers.set("Content-Type", "application/manifest+json; charset=utf-8");
+  if (assetPath === "/offline") headers.set("Content-Type", "text/html; charset=utf-8");
   return new Response(response.body, { status: response.status, headers });
 }
 

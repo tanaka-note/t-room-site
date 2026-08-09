@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#071426">
+  <title>オフライン | T-Cloud Storage</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Noto Sans JP", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100svh; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 50% 20%, #18385a, #071426 65%); color: #eef7fa; text-align: center; }
+    main { width: min(100%, 420px); padding: 34px 26px; border: 1px solid rgba(157, 199, 217, .24); border-radius: 24px; background: rgba(7, 20, 38, .82); box-shadow: 0 24px 60px rgba(0,0,0,.34); }
+    img { width: 96px; height: 96px; border-radius: 24px; }
+    h1 { margin: 22px 0 10px; font-size: 1.45rem; }
+    p { margin: 0 0 24px; color: #b8ccd5; line-height: 1.8; }
+    button { width: 100%; border: 0; border-radius: 999px; padding: 13px 20px; background: #58c6c0; color: #061b23; font: inherit; font-weight: 800; }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="/cloud/icons/icon-192.png" alt="">
+    <h1>ネットワークに接続できません</h1>
+    <p>T-Cloud Storageは、安全にデータを取得するため通信が必要です。接続を確認して、もう一度お試しください。</p>
+    <button type="button" onclick="location.reload()">もう一度接続する</button>
+  </main>
+</body>
+</html>

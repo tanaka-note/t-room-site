@@ -6,9 +6,26 @@ importScripts("/cloud/media-range.js?v=20260808-1");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
+const APP_SHELL_CACHE = "tcloud-shell-20260810-2";
+const OFFLINE_URL = "/cloud/offline";
+const APP_SHELL_ASSETS = [
+  OFFLINE_URL,
+  "/cloud/manifest.webmanifest?v=20260810-1",
+  "/cloud/icons/icon-192.png",
+  "/cloud/icons/icon-512.png",
+  "/cloud/icons/icon-maskable-512.png"
+];
 
-self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("install", (event) => event.waitUntil((async () => {
+  const cache = await caches.open(APP_SHELL_CACHE);
+  await cache.addAll(APP_SHELL_ASSETS);
+  await self.skipWaiting();
+})()));
+self.addEventListener("activate", (event) => event.waitUntil((async () => {
+  const cacheNames = await caches.keys();
+  await Promise.all(cacheNames.filter((name) => name.startsWith("tcloud-shell-") && name !== APP_SHELL_CACHE).map((name) => caches.delete(name)));
+  await self.clients.claim();
+})()));
 self.addEventListener("message", (event) => {
   const data = event.data || {};
   if (data.type === "REGISTER_MEDIA" && validRegistration(data)) {
@@ -28,8 +45,13 @@ self.addEventListener("message", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   const match = url.pathname.match(/^\/cloud\/local-media\/([A-Za-z0-9_-]{22,64})$/);
-  if (!match) return;
-  event.respondWith(servePlainFile(match[1], event.request));
+  if (match) {
+    event.respondWith(servePlainFile(match[1], event.request));
+    return;
+  }
+  if (event.request.mode === "navigate" && url.origin === self.location.origin && url.pathname.startsWith("/cloud/")) {
+    event.respondWith(fetch(event.request).catch(() => caches.match(OFFLINE_URL)));
+  }
 });
 
 async function servePlainFile(token, request) {

@@ -4,8 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="theme-color" content="#071426">
+  <meta name="application-name" content="T-Cloud Storage">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>T-Cloud Storage</title>
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-20">
+  <link rel="manifest" href="/cloud/manifest.webmanifest?v=20260810-1">
+  <link rel="icon" href="/cloud/icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-21">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -30,6 +38,7 @@
         <p id="login-error" class="form-error" role="alert"></p>
         <button class="primary-button wide" type="submit">ログイン</button>
       </form>
+      <button id="install-app-button" class="secondary-button wide install-app-button" type="button" hidden>ホーム画面に追加</button>
       <p class="security-note">通信と保存データは暗号化され、ファイルは一般公開されません。</p>
     </section>
   </main>
@@ -85,6 +94,7 @@
           <button id="download-folder-button" class="secondary-button desktop-only" type="button">フォルダを一括DL</button>
           <button id="upload-button" class="primary-button" type="button">アップロード</button>
           <button id="mobile-add-button" class="primary-button mobile-add-button" type="button" aria-label="追加する">＋</button>
+          <button id="install-app-button-top" class="secondary-button install-app-top" type="button" hidden>アプリに追加</button>
           <button id="logout-button" class="top-logout-button" type="button" aria-label="ログアウト"><span aria-hidden="true">↪</span><span>ログアウト</span></button>
           <input id="file-input" type="file" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
@@ -400,7 +410,7 @@
   <script src="/cloud/crypto-vault.js?v=20260809-13" defer></script>
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
-  <script src="/cloud/media-client.js?v=20260808-3" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-68" defer></script>
+  <script src="/cloud/media-client.js?v=20260810-5" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-70" defer></script>
 </body>
 </html>

@@ -40,6 +40,7 @@ const state = {
   previewHistoryActive: false,
   previewTouchStart: null,
   folderUploadSelection: null,
+  installPrompt: null,
   thumbnailAttempts: new Set(),
   thumbnailBackfillRunning: false,
   handlingPopState: false,
@@ -55,6 +56,8 @@ document.addEventListener("DOMContentLoaded", initialize);
 
 async function initialize() {
   bindEvents();
+  registerPwaWorker();
+  updateInstallButtons();
   await restoreRememberedLogin();
   try {
     const session = await api("/session");
@@ -74,6 +77,8 @@ async function initialize() {
 }
 
 function bindEvents() {
+  window.addEventListener("beforeinstallprompt", handleInstallPrompt);
+  window.addEventListener("appinstalled", handleAppInstalled);
   $("#login-form").addEventListener("submit", login);
   $("#toggle-password").addEventListener("click", () => {
     const input = $("#login-password");
@@ -83,6 +88,8 @@ function bindEvents() {
   $("#remember-login").addEventListener("change", syncLoginAutocomplete);
   $("#logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
+  $("#install-app-button").addEventListener("click", installApp);
+  $("#install-app-button-top").addEventListener("click", installApp);
   $("#mobile-account-button").addEventListener("click", () => $("#account-dialog").showModal());
   $("#usage-details-button").addEventListener("click", openUsageDetails);
   $("#mobile-usage-details-button").addEventListener("click", openUsageDetails);
@@ -186,6 +193,44 @@ function bindEvents() {
   $$("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target === dialog && !["vault-dialog", "recovery-dialog"].includes(dialog.id)) dialog.close();
   }));
+}
+
+function handleInstallPrompt(event) {
+  event.preventDefault();
+  state.installPrompt = event;
+  updateInstallButtons();
+}
+
+function handleAppInstalled() {
+  state.installPrompt = null;
+  updateInstallButtons();
+  setNotice("T-Cloud Storageをホーム画面へ追加しました。");
+}
+
+function updateInstallButtons() {
+  const standalone = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+  const available = Boolean(state.installPrompt) && !standalone;
+  for (const button of [$("#install-app-button"), $("#install-app-button-top")]) {
+    if (button) button.hidden = !available;
+  }
+}
+
+async function installApp() {
+  const prompt = state.installPrompt;
+  if (!prompt) return;
+  await prompt.prompt();
+  await prompt.userChoice.catch(() => null);
+  state.installPrompt = null;
+  updateInstallButtons();
+}
+
+async function registerPwaWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-4", { scope: "/cloud/", updateViaCache: "none" });
+  } catch (error) {
+    console.warn("T-Cloud app worker registration failed", error);
+  }
 }
 
 function syncLoginAutocomplete() {
