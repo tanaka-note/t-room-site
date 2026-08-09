@@ -705,9 +705,19 @@ async function updateFolder(id, request, env, session) {
 }
 
 async function deleteFolder(id, env, session) {
-  requireDelete(session);
-  await requireFolder(env, id);
-  await requireFolderAccess(env, id, session);
+  const folder = await requireFolder(env, id);
+  if (session.canDelete) {
+    await requireFolderAccess(env, id, session);
+  } else {
+    if (!session.canTrashUnlockedFiles || !folder.parent_id) {
+      throw new HttpError(403, "PWで解除した最初のフォルダ配下だけ削除できます。");
+    }
+    const parentProtectedFolderUnlocked = await requireFolderAccess(env, folder.parent_id, session);
+    if (!parentProtectedFolderUnlocked) {
+      throw new HttpError(403, "PWで解除した最初のフォルダ配下だけ削除できます。");
+    }
+    await requireFolderAccess(env, id, session);
+  }
   const deletedAt = new Date().toISOString();
   const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL

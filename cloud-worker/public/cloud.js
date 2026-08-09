@@ -960,6 +960,19 @@ function canRenameFile(file) {
   return Boolean(state.session?.canRenameUnlockedItems && !file?.trashed && file?.fileKey && state.crypto.folderKeys.has(Number(file.folderId)));
 }
 
+function canTrashFile(file) {
+  if (state.session?.canDelete) return true;
+  return Boolean(state.session?.canTrashUnlockedFiles && !file?.trashed && file?.fileKey
+    && state.crypto.folderKeys.has(Number(file.folderId)));
+}
+
+function canTrashFolder(folder) {
+  if (state.session?.canDelete) return true;
+  return Boolean(state.session?.canTrashUnlockedFiles && folder?.parentId
+    && Number(folder.parentId) === Number(state.folderId)
+    && folder?.isUnlocked && state.crypto.folderKeys.has(Number(folder.id)));
+}
+
 function trashFolderCard(folder) {
   const card = document.createElement("article");
   card.className = "folder-card trash-folder-card";
@@ -1307,7 +1320,7 @@ function openFolderSettings(folder) {
   $("#folder-password-action").value = "keep";
   $("#folder-new-password").value = "";
   $("#folder-settings-error").textContent = "";
-  $("#delete-folder-button").hidden = !state.session.canDelete;
+  $("#delete-folder-button").hidden = !canTrashFolder(folder);
   const inheritsProtection = Boolean(folder.parentId && !folder.isProtected);
   const canEditPassword = Boolean(state.session.canEditFolders);
   $("#folder-password-settings-row").hidden = !canEditPassword || inheritsProtection;
@@ -1351,15 +1364,22 @@ async function saveFolderSettings(event) {
 
 async function deleteSelectedFolder() {
   const folder = state.selectedFolder;
-  if (!folder || !state.session.canDelete || !confirm(`「${folder.name}」を中身ごとゴミ箱へ移動しますか？`)) return;
+  if (!folder || !canTrashFolder(folder)) return;
+  const message = state.session?.canDelete ? `「${folder.name}」を中身ごとゴミ箱へ移動しますか？` : "本当に削除しますか？";
+  const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
+  if (!confirmed) return;
   const button = $("#delete-folder-button");
   button.disabled = true;
-  button.textContent = "ゴミ箱へ移動中…";
+  button.textContent = state.session?.canDelete ? "ゴミ箱へ移動中…" : "削除中…";
   try {
     const result = await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
     $("#folder-settings-dialog").close();
-    setNotice(`フォルダを中身ごとゴミ箱へ移動しました（合計${Number(result.deleted || 1).toLocaleString("ja-JP")}件）。`);
-    await Promise.all([loadItems(), loadUsage()]);
+    setNotice(state.session?.canDelete
+      ? `フォルダを中身ごとゴミ箱へ移動しました（合計${Number(result.deleted || 1).toLocaleString("ja-JP")}件）。`
+      : "削除しました。");
+    const reloads = [loadItems()];
+    if (state.session?.role === "admin") reloads.push(loadUsage());
+    await Promise.all(reloads);
   } catch (error) {
     $("#folder-settings-error").textContent = error.message;
   } finally {
@@ -1700,8 +1720,10 @@ function clearFileSelection(update = true, rewindHistory = update) {
 }
 
 function syncSelectionBar() {
-  const fileCount = state.selectedFiles.size;
-  const folderCount = state.selectedFolders.size;
+  const files = [...state.selectedFiles.values()];
+  const folders = [...state.selectedFolders.values()];
+  const fileCount = files.length;
+  const folderCount = folders.length;
   const count = fileCount + folderCount;
   $("#selection-count").textContent = `${count.toLocaleString("ja-JP")}件を選択中`;
   $("#selection-bar").hidden = count === 0;
@@ -1709,7 +1731,9 @@ function syncSelectionBar() {
   $("#selection-share").hidden = state.session?.role !== "admin" || fileCount < 1 || folderCount !== 0;
   $("#selection-move").hidden = !state.session?.canEditFiles || !state.session?.canEditFolders;
   $("#selection-move").disabled = count === 0;
-  const canDeleteSelection = Boolean((fileCount && (state.session?.canDelete || state.session?.canTrashUnlockedFiles)) || (folderCount && state.session?.canDelete));
+  const canDeleteSelection = Boolean(count
+    && files.every(canTrashFile)
+    && folders.every(canTrashFolder));
   $("#selection-delete").hidden = !canDeleteSelection;
   $("#selection-delete").disabled = count === 0;
   $("#selection-delete").textContent = "削除";
@@ -1733,10 +1757,14 @@ async function deleteSelectedItems() {
   const folders = [...state.selectedFolders.values()];
   const count = files.length + folders.length;
   if (!count) return;
+  if (!files.every(canTrashFile) || !folders.every(canTrashFolder)) {
+    setNotice("PWで解除した最初のフォルダ配下だけ削除できます。", true);
+    return;
+  }
   const folderNote = folders.length ? "\nフォルダは中身ごとゴミ箱へ移動します。" : "";
   const message = state.session?.canDelete
     ? `${count}件を削除しますか？ファイルはゴミ箱へ移動します。${folderNote}`
-    : `${files.length}件を本当に削除しますか？`;
+    : "本当に削除しますか？";
   const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
   if (!confirmed) return;
   const button = $("#selection-delete");
@@ -1763,24 +1791,25 @@ async function deleteSelectedItems() {
       }
     };
     await Promise.all(Array.from({ length: Math.min(4, files.length) }, () => fileWorker()));
-    if (state.session?.canDelete) {
-      for (const folder of folders) {
-        try {
-          const result = await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
-          completed += 1;
-          movedEntries += Number(result.deleted || 1);
-        } catch (error) {
-          failures.push({ name: folder.name, error });
-        }
-        processed += 1;
-        button.textContent = `削除中 ${processed} / ${count}`;
+    for (const folder of folders) {
+      try {
+        const result = await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
+        completed += 1;
+        movedEntries += Number(result.deleted || 1);
+      } catch (error) {
+        failures.push({ name: folder.name, error });
       }
+      processed += 1;
+      button.textContent = `削除中 ${processed} / ${count}`;
     }
     clearFileSelection();
     const failedNames = failures.slice(0, 3).map((item) => item.name).join("、");
+    const successMessage = state.session?.canDelete
+      ? `${completed}件の選択から、合計${movedEntries.toLocaleString("ja-JP")}件をゴミ箱へ移動しました。`
+      : `${completed}件を削除しました。`;
     setNotice(failures.length
       ? `${completed}件を処理しました。削除できなかった${failures.length}件：${failedNames}${failures.length > 3 ? " ほか" : ""}`
-      : `${completed}件の選択から、合計${movedEntries.toLocaleString("ja-JP")}件をゴミ箱へ移動しました。`, Boolean(failures.length));
+      : successMessage, Boolean(failures.length));
     const reloads = [loadItems()];
     if (state.session?.role === "admin") reloads.push(loadUsage());
     await Promise.all(reloads);
@@ -2874,7 +2903,7 @@ async function openPreview(file, options = {}) {
   $("#preview-date").textContent = formatDate(file.createdAt);
   $("#download-link").href = Number(file.cryptoVersion) === 1 ? "#" : `${API}/files/${file.id}/download`;
   $("#edit-file-button").hidden = !canRenameFile(file);
-  $("#delete-file-button").hidden = !state.session.canDelete && !state.session.canTrashUnlockedFiles;
+  $("#delete-file-button").hidden = !canTrashFile(file);
   $("#delete-file-button").textContent = state.session.canDelete ? "ゴミ箱へ" : "削除";
   const stage = $("#preview-stage");
   stage.innerHTML = "";
@@ -3141,7 +3170,7 @@ async function saveFile(event) {
 
 async function deleteSelectedFile() {
   const file = state.selected;
-  if (!file) return;
+  if (!file || !canTrashFile(file)) return;
   const message = state.session?.canDelete ? `「${file.name}」をゴミ箱へ移動しますか？` : "本当に削除しますか？";
   const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
   if (!confirmed) return;

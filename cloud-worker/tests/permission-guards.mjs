@@ -21,7 +21,7 @@ function requires(name, guard) {
 
 for (const name of ["createShare", "listShares", "stopShare", "listAdminShareEvents"]) requires(name, "requireAdmin");
 for (const name of ["createFolder", "createUpload", "uploadPart", "completeUpload", "cancelUpload", "putThumbnail"]) requires(name, "requireUpload");
-for (const name of ["deleteFolder", "restoreFolder", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");
+for (const name of ["restoreFolder", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");
 requires("updateFolder", "requireFolderEdit");
 requires("updateFile", "requireFileEdit");
 requires("requestFileDeletion", "requireDeletionRequest");
@@ -45,6 +45,11 @@ if (!functionBody("updateFolder").includes("if (!unlocked)") || !functionBody("u
 }
 if (!functionBody("moveFileToTrash").includes("canTrashUnlockedFiles") || !functionBody("moveFileToTrash").includes("requireFolderAccess(env, file.folder_id, session)")) {
   throw new Error("副管理者のPW解除済みフォルダ内削除を確認できません。");
+}
+if (!functionBody("deleteFolder").includes("canTrashUnlockedFiles")
+  || !functionBody("deleteFolder").includes("folder.parent_id")
+  || !functionBody("deleteFolder").includes("requireFolderAccess(env, folder.parent_id, session)")) {
+  throw new Error("副管理者のPW解除済みフォルダ配下の削除制限を確認できません。");
 }
 if (!functionBody("getUsage").includes("requireAdmin(session)")) throw new Error("容量内訳が管理者専用ではありません。");
 if (source.includes("purgeExpiredTrash(env)")) throw new Error("30日後の自動完全削除が残っています。");
