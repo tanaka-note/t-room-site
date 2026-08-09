@@ -2,6 +2,7 @@ const API = "/cloud/api";
 const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
 const VAULT_CACHE_DB = "tcloud-device-vault";
 const VAULT_CACHE_STORE = "crypto-keys";
+const FOLDER_CACHE_PREFIX = "folder-session:";
 const state = {
   session: null,
   loginId: "",
@@ -462,9 +463,15 @@ async function enterApp(session, password = "", accountKey = null) {
   $("#storage-meter").hidden = session.role !== "admin";
   $("#mobile-storage-summary").hidden = session.role !== "admin";
   if (session.role === "admin") loadUsage();
-  initializeNavigationHistory();
+  const restoredNavigation = initializeNavigationHistory();
   await prepareCryptoSession(password, accountKey);
-  await loadItems();
+  const loaded = await loadItems();
+  if (!loaded.ok && restoredNavigation.folderId && [403, 404, 423].includes(Number(loaded.error?.status))) {
+    await navigateToFolder(null, "フォルダ", { pushHistory: false, load: false });
+    history.replaceState(navigationEntry(null, "フォルダ"), "", location.href);
+    await loadItems();
+    setNotice("前回開いていたフォルダの再確認が必要なため、フォルダ一覧を表示しました。", true);
+  }
   scheduleLegacyFolderMigration();
 }
 
@@ -476,9 +483,21 @@ async function logout() {
 }
 
 function initializeNavigationHistory() {
-  if (state.historyReady) return;
-  history.replaceState({ tcloud: true, folderId: null, folderName: "フォルダ", previewId: null }, "", location.href);
+  if (state.historyReady) return navigationEntry(state.folderId, $("#view-title").textContent);
+  const saved = history.state?.tcloud ? history.state : null;
+  const folderId = Number.isInteger(Number(saved?.folderId)) && Number(saved.folderId) > 0 ? Number(saved.folderId) : null;
+  const folderName = String(saved?.folderName || (folderId ? "ファイル" : "フォルダ"));
+  state.folderId = folderId;
+  state.kind = "";
+  state.view = "all";
+  $("#view-title").textContent = folderName;
+  history.replaceState(navigationEntry(folderId, folderName), "", location.href);
   state.historyReady = true;
+  return navigationEntry(folderId, folderName);
+}
+
+function navigationEntry(folderId, folderName) {
+  return { tcloud: true, folderId: folderId ? Number(folderId) : null, folderName: folderName || (folderId ? "ファイル" : "フォルダ"), previewId: null };
 }
 
 async function navigateToFolder(folderId, folderName, options = {}) {
@@ -494,7 +513,7 @@ async function navigateToFolder(folderId, folderName, options = {}) {
   clearSearch();
   $("#view-title").textContent = folderName || (state.folderId ? "ファイル" : "フォルダ");
   if (pushHistory && state.historyReady) {
-    const entry = { tcloud: true, folderId: state.folderId, folderName: $("#view-title").textContent, previewId: null };
+    const entry = navigationEntry(state.folderId, $("#view-title").textContent);
     if (replaceSelectionHistory) history.replaceState(entry, "", location.href);
     else history.pushState(entry, "", location.href);
   }
@@ -548,6 +567,7 @@ async function prepareCryptoSession(password = "", accountKey = null) {
     if (state.session.role !== "admin") {
       if (accountKey) state.crypto.accountKey = accountKey;
       else if (password) state.crypto.accountKey = await TRoomCrypto.deriveAccountKey(password, state.loginId);
+      await loadCachedFolderKeys();
       setCryptoStatus("暗号化鍵：フォルダ単位", true);
       return;
     }
@@ -705,6 +725,85 @@ async function clearCachedAdminKeys() {
     });
   } catch {
     // ログアウト処理は、端末保存領域の削除失敗だけでは止めない。
+  } finally {
+    database?.close();
+  }
+}
+
+function folderCacheKey(folderId) {
+  return `${FOLDER_CACHE_PREFIX}${String(state.session?.sessionCacheId || "")}:${Number(folderId)}`;
+}
+
+async function loadCachedFolderKeys() {
+  if (state.session?.role !== "subadmin" || !state.session?.sessionCacheId) return;
+  let database = null;
+  try {
+    database = await openVaultCache();
+    if (!database) return;
+    const records = await new Promise((resolve, reject) => {
+      const request = database.transaction(VAULT_CACHE_STORE, "readonly").objectStore(VAULT_CACHE_STORE).getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+    const currentSession = String(state.session.sessionCacheId);
+    for (const record of records) {
+      if (record?.cacheType !== "folder" || String(record.sessionCacheId) !== currentSession) continue;
+      if (record.folderKey instanceof CryptoKey && record.folderKey.type === "secret") {
+        state.crypto.folderKeys.set(Number(record.folderId), record.folderKey);
+      }
+    }
+    await removeStaleFolderKeyCache(currentSession);
+  } catch {
+    // 端末保存が使えない場合も、通常のフォルダPW解除は利用できる。
+  } finally {
+    database?.close();
+  }
+}
+
+async function saveCachedFolderKey(folderId, folderKey) {
+  if (state.session?.role !== "subadmin" || !state.session?.sessionCacheId || !(folderKey instanceof CryptoKey) || folderKey.type !== "secret") return;
+  let database = null;
+  try {
+    database = await openVaultCache();
+    if (!database) return;
+    await new Promise((resolve, reject) => {
+      const request = database.transaction(VAULT_CACHE_STORE, "readwrite").objectStore(VAULT_CACHE_STORE).put({
+        cacheType: "folder",
+        sessionCacheId: String(state.session.sessionCacheId),
+        folderId: Number(folderId),
+        folderKey,
+        storedAt: Date.now()
+      }, folderCacheKey(folderId));
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    // 保存できないブラウザでは、再読み込み後にフォルダPWを再入力する。
+  } finally {
+    database?.close();
+  }
+}
+
+async function removeStaleFolderKeyCache(currentSession) {
+  let database = null;
+  try {
+    database = await openVaultCache();
+    if (!database) return;
+    const records = await new Promise((resolve, reject) => {
+      const request = database.transaction(VAULT_CACHE_STORE, "readonly").objectStore(VAULT_CACHE_STORE).getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+    const stale = records.filter((record) => record?.cacheType === "folder" && String(record.sessionCacheId) !== String(currentSession));
+    if (!stale.length) return;
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(VAULT_CACHE_STORE, "readwrite");
+      const store = transaction.objectStore(VAULT_CACHE_STORE);
+      for (const record of stale) store.delete(`${FOLDER_CACHE_PREFIX}${String(record.sessionCacheId)}:${Number(record.folderId)}`);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
   } finally {
     database?.close();
   }
@@ -898,8 +997,10 @@ async function loadItems() {
       renderBreadcrumbs(await hydrateFolderRecords(data.breadcrumbs || []));
     }
     renderItems();
+    return { ok: true, error: null };
   } catch (error) {
     handleError(error);
+    return { ok: false, error };
   }
 }
 
@@ -1049,6 +1150,7 @@ async function hydrateFolderRecords(records) {
           try {
             key = await TRoomCrypto.unlockFolderFromParent(folder, parentKey);
             state.crypto.folderKeys.set(Number(folder.id), key);
+            await saveCachedFolderKey(folder.id, key);
           } catch {}
         }
       }
@@ -2340,6 +2442,7 @@ async function createEncryptedFolder(name, parentId, parentKey, password = "") {
   });
   const created = { id: Number(result.id), key: encrypted.folderKey };
   state.crypto.folderKeys.set(created.id, created.key);
+  await saveCachedFolderKey(created.id, created.key);
   return created;
 }
 
@@ -2847,6 +2950,7 @@ async function createFolder(event) {
     const encrypted = await TRoomCrypto.createFolderPackage($("#folder-name").value, password, state.crypto.publicKey, parentKey);
     const result = await api("/folders", { method: "POST", body: JSON.stringify({ ...encrypted.payload, name: encrypted.name, parentId: state.folderId }) });
     state.crypto.folderKeys.set(result.id, encrypted.folderKey);
+    await saveCachedFolderKey(result.id, encrypted.folderKey);
     $("#folder-name").value = "";
     $("#folder-password-enabled").checked = false;
     $("#folder-password").value = "";
@@ -2866,6 +2970,7 @@ async function unlockFolder(event) {
     const unlocked = await TRoomCrypto.unlockFolderWithPassword(folder, $("#unlock-password").value);
     await api(`/folders/${id}/unlock`, { method: "POST", body: JSON.stringify({ authProof: unlocked.authProof }) });
     state.crypto.folderKeys.set(id, unlocked.folderKey);
+    await saveCachedFolderKey(id, unlocked.folderKey);
     folder.isUnlocked = true;
     $("#unlock-dialog").close();
     await navigateToFolder(id, folder.name);

@@ -1730,7 +1730,7 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), sessionCacheId: session.sessionId, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }
 function requireUploadOwnership(session, file) { if (session.role !== "admin" && file.created_by !== session.role) throw new HttpError(403, "別アカウントの処理途中アップロードは操作できません。"); }
