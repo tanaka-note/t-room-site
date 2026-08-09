@@ -1,6 +1,8 @@
 const API = "/cloud/api";
+const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
 const state = {
   session: null,
+  loginId: "",
   folderId: null,
   kind: "",
   view: "all",
@@ -49,6 +51,7 @@ document.addEventListener("DOMContentLoaded", initialize);
 
 async function initialize() {
   bindEvents();
+  await restoreRememberedLogin();
   try {
     const session = await api("/session");
     if (session.authenticated) await enterApp(session);
@@ -64,8 +67,8 @@ function bindEvents() {
     input.type = input.type === "password" ? "text" : "password";
     $("#toggle-password").setAttribute("aria-label", input.type === "password" ? "パスワードを表示" : "パスワードを隠す");
   });
+  $("#remember-login").addEventListener("change", syncLoginAutocomplete);
   $("#logout-button").addEventListener("click", logout);
-  $("#mobile-logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
   $("#mobile-account-button").addEventListener("click", () => $("#account-dialog").showModal());
   $("#upload-button").addEventListener("click", openAddAction);
@@ -100,7 +103,6 @@ function bindEvents() {
   $("#edit-form").addEventListener("submit", saveFile);
   $("#edit-file-button").addEventListener("click", openEditDialog);
   $("#delete-file-button").addEventListener("click", deleteSelectedFile);
-  $("#request-delete-file-button").addEventListener("click", requestSelectedFileDeletion);
   $("#share-file-button").addEventListener("click", () => openShareDialog("file", state.selected));
   $("#share-folder-button").addEventListener("click", () => openShareDialog("folder", state.selectedFolder));
   $("#share-form").addEventListener("submit", createShare);
@@ -167,6 +169,45 @@ function bindEvents() {
   $$("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target === dialog && !["vault-dialog", "recovery-dialog"].includes(dialog.id)) dialog.close();
   }));
+}
+
+function syncLoginAutocomplete() {
+  const remember = $("#remember-login").checked;
+  $("#login-id").setAttribute("autocomplete", remember ? "username" : "off");
+  $("#login-password").setAttribute("autocomplete", remember ? "current-password" : "off");
+}
+
+async function restoreRememberedLogin() {
+  const remember = localStorage.getItem(REMEMBER_LOGIN_KEY) === "1";
+  $("#remember-login").checked = remember;
+  syncLoginAutocomplete();
+  if (!remember || !navigator.credentials?.get || !globalThis.PasswordCredential) return;
+  try {
+    const credential = await navigator.credentials.get({ password: true, mediation: "optional" });
+    if (credential?.type !== "password") return;
+    $("#login-id").value = credential.id || "";
+    $("#login-password").value = credential.password || "";
+  } catch {
+    // ブラウザ側で認証情報の取得が拒否された場合は、空欄のまま手入力に戻す。
+  }
+}
+
+async function updateRememberedLogin(loginId, password) {
+  if (!$("#remember-login").checked) {
+    localStorage.removeItem(REMEMBER_LOGIN_KEY);
+    return;
+  }
+  localStorage.setItem(REMEMBER_LOGIN_KEY, "1");
+  if (!navigator.credentials?.store || !globalThis.PasswordCredential) return;
+  try {
+    await navigator.credentials.store(new PasswordCredential({
+      id: loginId,
+      password,
+      name: "T-Cloud Storage"
+    }));
+  } catch {
+    // 保存の許可や管理はブラウザ側に委ね、ログイン自体は失敗させない。
+  }
 }
 
 function openAddAction() {
@@ -346,16 +387,18 @@ async function login(event) {
   const submit = event.submitter || $("#login-form button[type='submit']");
   submit.disabled = true;
   try {
+    const loginId = $("#login-id").value.trim().toLowerCase();
     const password = $("#login-password").value;
     const mode = await api("/auth-mode");
-    const credentials = await TRoomCrypto.deriveAccountCredentials(password);
+    const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId);
     const loginBody = mode.mode === "proof"
-      ? { loginId: $("#login-id").value, authProof: credentials.authProof }
-      : { loginId: $("#login-id").value, password };
+      ? { loginId, authProof: credentials.authProof }
+      : { loginId, password };
     const session = await api("/login", {
       method: "POST",
       body: JSON.stringify(loginBody)
     });
+    await updateRememberedLogin(loginId, password);
     await enterApp(session, password, credentials.accountKey);
     $("#login-password").value = "";
   } catch (error) {
@@ -367,25 +410,25 @@ async function login(event) {
 
 async function enterApp(session, password = "", accountKey = null) {
   state.session = session;
+  state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
   $("#account-name").textContent = session.accountName;
-  const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード（編集・削除不可）";
+  const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード・削除（編集不可）";
   $("#account-permission").textContent = permissionText;
   $("#mobile-account-name").textContent = session.accountName;
   $("#mobile-account-permission").textContent = permissionText;
   $("#edit-file-button").hidden = !session.canEditFiles;
-  $("#request-delete-file-button").hidden = !session.canRequestDelete;
-  $("#delete-file-button").hidden = !session.canDelete;
+  $("#delete-file-button").hidden = !session.canDelete && !session.canTrashUnlockedFiles;
   $$('[data-view="trash"]').forEach((button) => { button.hidden = !session.canDelete; });
   $$('[data-view="history"]').forEach((button) => { button.hidden = !session.canViewHistory; });
-  $$('[data-view="requests"]').forEach((button) => { button.hidden = !session.canReviewDeletion; });
   $$('[data-view="shares"]').forEach((button) => { button.hidden = session.role !== "admin"; });
   $("#share-file-button").hidden = session.role !== "admin";
   $("#share-folder-button").hidden = session.role !== "admin";
   syncAvailableActions();
-  loadUsage();
-  if (session.canReviewDeletion) loadDeletionRequestCount();
+  $("#storage-meter").hidden = session.role !== "admin";
+  $("#mobile-storage-summary").hidden = session.role !== "admin";
+  if (session.role === "admin") loadUsage();
   initializeNavigationHistory();
   await prepareCryptoSession(password, accountKey);
   await migrateLegacyFolderNames();
@@ -470,7 +513,7 @@ async function prepareCryptoSession(password = "", accountKey = null) {
     syncAvailableActions();
     if (state.session.role !== "admin") {
       if (accountKey) state.crypto.accountKey = accountKey;
-      else if (password) state.crypto.accountKey = await TRoomCrypto.deriveAccountKey(password);
+      else if (password) state.crypto.accountKey = await TRoomCrypto.deriveAccountKey(password, state.loginId);
       setCryptoStatus("暗号化鍵：フォルダ単位", true);
       return;
     }
@@ -479,7 +522,7 @@ async function prepareCryptoSession(password = "", accountKey = null) {
       openVaultDialog("unlock");
       return;
     }
-    const resolvedAccountKey = accountKey || await TRoomCrypto.deriveAccountKey(password);
+    const resolvedAccountKey = accountKey || await TRoomCrypto.deriveAccountKey(password, state.loginId);
     const privateKey = await TRoomCrypto.unlockAdminPrivateKey(resolvedAccountKey, config);
     state.crypto.accountKey = resolvedAccountKey;
     state.crypto.adminPrivateKey = privateKey;
@@ -517,7 +560,7 @@ async function handleVaultForm(event) {
   $("#vault-error").textContent = "";
   submit.textContent = mode === "setup" ? "安全な鍵を生成中…" : "暗号化鍵を確認中…";
   try {
-    const accountKey = await TRoomCrypto.deriveAccountKey($("#vault-password").value);
+    const accountKey = await TRoomCrypto.deriveAccountKey($("#vault-password").value, state.loginId);
     if (mode === "setup") {
       const vault = await TRoomCrypto.createVault(accountKey);
       await api("/crypto-setup", { method: "POST", body: JSON.stringify(vault.payload) });
@@ -1192,7 +1235,7 @@ function fileCard(file) {
     ? `<img src="${API}/files/${file.id}/thumbnail" alt="" loading="lazy">`
     : `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
   button.innerHTML = `
-    <div class="thumb">${thumbnail}${file.deletionPending ? '<span class="pending-label">削除申請中</span>' : ""}</div>
+    <div class="thumb">${thumbnail}</div>
     <div class="file-copy"><strong>${escapeHtml(file.name)}</strong><span class="file-meta"><span>${formatBytes(file.sizeBytes)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
   button.addEventListener("click", (event) => {
     if (card.dataset.longPressed === "true") {
@@ -1495,9 +1538,9 @@ function syncSelectionBar() {
   $("#selection-share").hidden = state.session?.role !== "admin" || fileCount < 1 || folderCount !== 0;
   $("#selection-move").hidden = !state.session?.canEditFiles || !state.session?.canEditFolders;
   $("#selection-move").disabled = count === 0;
-  $("#selection-delete").hidden = !state.session?.canDelete && !state.session?.canRequestDelete;
+  $("#selection-delete").hidden = !state.session?.canDelete && !state.session?.canTrashUnlockedFiles;
   $("#selection-delete").disabled = count === 0;
-  $("#selection-delete").textContent = state.session?.canDelete ? "削除" : "削除申請";
+  $("#selection-delete").textContent = "削除";
 }
 
 async function startSelectedDownloads() {
@@ -1518,28 +1561,27 @@ async function deleteSelectedItems() {
   const folders = [...state.selectedFolders.values()];
   const count = files.length + folders.length;
   if (!count) return;
-  const requesting = !state.session?.canDelete && state.session?.canRequestDelete;
   const folderNote = folders.length ? "\nフォルダは空の場合だけ削除できます。" : "";
-  const message = requesting
-    ? `${files.length}件の削除を管理者へ申請しますか？`
-    : `${count}件を削除しますか？ファイルはゴミ箱へ移動します。${folderNote}`;
-  if (!confirm(message)) return;
+  const message = state.session?.canDelete
+    ? `${count}件を削除しますか？ファイルはゴミ箱へ移動します。${folderNote}`
+    : `${files.length}件を本当に削除しますか？`;
+  const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
+  if (!confirmed) return;
   const button = $("#selection-delete");
   button.disabled = true;
-  button.textContent = requesting ? "申請中…" : "削除中…";
+  button.textContent = "削除中…";
   let completed = 0;
   let failed = 0;
   try {
     for (const file of files) {
       try {
-        if (requesting) await api(`/files/${file.id}/deletion-request`, { method: "POST", body: "{}" });
-        else await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
+        await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
         completed += 1;
       } catch {
         failed += 1;
       }
     }
-    if (!requesting) {
+    if (state.session?.canDelete) {
       for (const folder of folders) {
         try {
           await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
@@ -1552,8 +1594,10 @@ async function deleteSelectedItems() {
     clearFileSelection();
     setNotice(failed
       ? `${completed}件を処理しました。${failed}件は削除できませんでした。中身のあるフォルダなどをご確認ください。`
-      : requesting ? `${completed}件の削除申請を送りました。` : `${completed}件を削除しました。`, Boolean(failed));
-    await Promise.all([loadItems(), loadUsage(), loadDeletionRequestCount()]);
+      : `${completed}件を削除しました。`, Boolean(failed));
+    const reloads = [loadItems()];
+    if (state.session?.role === "admin") reloads.push(loadUsage());
+    await Promise.all(reloads);
   } finally {
     button.disabled = false;
     syncSelectionBar();
@@ -1932,7 +1976,7 @@ async function handleDownloadVisibility() {
 
 function renderBreadcrumbs(items) {
   const nav = $("#breadcrumbs");
-  if (state.view === "trash") { nav.textContent = "削除されたファイルは30日後に完全削除されます。"; return; }
+  if (state.view === "trash") { nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; return; }
   if (state.view === "history") { nav.textContent = state.session?.role === "admin" ? "管理者・副管理者のアップロード／ダウンロード履歴です。" : "副管理者本人のアップロード／ダウンロード履歴です。"; return; }
   if (state.view === "requests") { nav.textContent = "承認するまでファイルは削除されず、通常どおり利用できます。"; return; }
   if (state.view === "shares") { nav.textContent = "共有URLの発行状況・期限・停止・利用履歴を管理できます。"; return; }
@@ -2535,10 +2579,8 @@ async function openPreview(file, options = {}) {
   $("#preview-date").textContent = formatDate(file.createdAt);
   $("#download-link").href = Number(file.cryptoVersion) === 1 ? "#" : `${API}/files/${file.id}/download`;
   $("#edit-file-button").hidden = !state.session.canEditFiles;
-  $("#request-delete-file-button").hidden = !state.session.canRequestDelete;
-  $("#request-delete-file-button").disabled = Boolean(file.deletionPending);
-  $("#request-delete-file-button").textContent = file.deletionPending ? "削除申請中" : "削除申請";
-  $("#delete-file-button").hidden = !state.session.canDelete;
+  $("#delete-file-button").hidden = !state.session.canDelete && !state.session.canTrashUnlockedFiles;
+  $("#delete-file-button").textContent = state.session.canDelete ? "ゴミ箱へ" : "削除";
   const stage = $("#preview-stage");
   stage.innerHTML = "";
   syncPreviewNavigation(file);
@@ -2799,25 +2841,28 @@ async function saveFile(event) {
 
 async function deleteSelectedFile() {
   const file = state.selected;
-  if (!file || !confirm(`「${file.name}」をゴミ箱へ移動しますか？`)) return;
+  if (!file) return;
+  const message = state.session?.canDelete ? `「${file.name}」をゴミ箱へ移動しますか？` : "本当に削除しますか？";
+  const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
+  if (!confirmed) return;
   try {
     await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
     $("#preview-dialog").close();
-    setNotice("ゴミ箱へ移動しました。");
-    await Promise.all([loadItems(), loadUsage()]);
+    setNotice(state.session?.canDelete ? "ゴミ箱へ移動しました。" : "削除しました。");
+    const reloads = [loadItems()];
+    if (state.session?.role === "admin") reloads.push(loadUsage());
+    await Promise.all(reloads);
   } catch (error) { setNotice(error.message, true); }
 }
 
-async function requestSelectedFileDeletion() {
-  const file = state.selected;
-  if (!file || !state.session.canRequestDelete || file.deletionPending) return;
-  if (!confirm(`「${file.name}」の削除を管理者へ申請しますか？承認までは通常どおり利用できます。`)) return;
-  try {
-    await api(`/files/${file.id}/deletion-request`, { method: "POST", body: "{}" });
-    $("#preview-dialog").close();
-    setNotice("削除申請を送信しました。管理者の承認まではファイルを利用できます。");
-    await loadItems();
-  } catch (error) { setNotice(error.message, true); }
+function confirmSubadminDeletion(message = "本当に削除しますか？") {
+  const dialog = $("#delete-confirm-dialog");
+  $("#delete-confirm-copy").textContent = message;
+  dialog.returnValue = "no";
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "yes"), { once: true });
+    dialog.showModal();
+  });
 }
 
 async function approveDeletionRequest(item) {
@@ -2882,10 +2927,15 @@ async function emptyTrash() {
 }
 
 async function loadUsage() {
+  if (state.session?.role !== "admin") return;
   try {
     const usage = await api("/usage");
-    $("#usage-text").textContent = formatBytes(usage.totalBytes);
-    $("#file-count").textContent = `${usage.fileCount.toLocaleString("ja-JP")}ファイル`;
+    $("#usage-text").textContent = formatBytes(usage.activeBytes);
+    $("#file-count").textContent = `${usage.activeFileCount.toLocaleString("ja-JP")}ファイル`;
+    $("#trash-usage-text").textContent = formatBytes(usage.trashBytes);
+    $("#trash-file-count").textContent = `${usage.trashFileCount.toLocaleString("ja-JP")}ファイル`;
+    $("#mobile-active-usage").textContent = `${usage.activeFileCount.toLocaleString("ja-JP")}ファイル・${formatBytes(usage.activeBytes)}`;
+    $("#mobile-trash-usage").textContent = `${usage.trashFileCount.toLocaleString("ja-JP")}ファイル・${formatBytes(usage.trashBytes)}`;
   } catch {}
 }
 

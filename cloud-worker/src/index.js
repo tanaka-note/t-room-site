@@ -7,8 +7,8 @@ const LOGIN_WINDOW_SECONDS = 15 * 60;
 const encoder = new TextEncoder();
 
 const ACCOUNTS = [
-  { role: "admin", label: "管理者", secretKey: "ADMIN_PASSWORD_HASH", proofSecretKey: "ADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: true, canEditFiles: true, canEditFolders: true, canViewHistory: true, canRequestDelete: false, canReviewDeletion: true },
-  { role: "subadmin", label: "副管理者", secretKey: "SUBADMIN_PASSWORD_HASH", proofSecretKey: "SUBADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: false, canEditFiles: false, canEditFolders: false, canViewHistory: true, canRequestDelete: true, canReviewDeletion: false }
+  { role: "admin", label: "管理者", secretKey: "ADMIN_PASSWORD_HASH", proofSecretKey: "ADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: true, canTrashUnlockedFiles: true, canEditFiles: true, canEditFolders: true, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false },
+  { role: "subadmin", label: "副管理者", secretKey: "SUBADMIN_PASSWORD_HASH", proofSecretKey: "SUBADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: false, canTrashUnlockedFiles: true, canEditFiles: false, canEditFolders: false, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false }
 ];
 
 export default {
@@ -28,7 +28,6 @@ export default {
   },
 
   async scheduled(_controller, env) {
-    await purgeExpiredTrash(env);
     await abortStaleUploads(env);
   }
 };
@@ -36,7 +35,7 @@ export default {
 async function handleApi(request, env, url, path) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
-    return json(session ? { authenticated: true, ...publicSession(session) } : { authenticated: false });
+    return json(session ? { authenticated: true, ...publicSession(session, env) } : { authenticated: false });
   }
 
   if (path === "/api/auth-mode" && request.method === "GET") {
@@ -133,14 +132,15 @@ async function handleApi(request, env, url, path) {
 
 async function login(request, env, url) {
   const proofMode = Boolean(env.ADMIN_AUTH_PROOF_HASH && env.SUBADMIN_AUTH_PROOF_HASH);
-  if ((!proofMode && (!env.ADMIN_PASSWORD_HASH || !env.SUBADMIN_PASSWORD_HASH)) || !env.SESSION_SECRET) {
+  const configuredLoginId = String(env.LOGIN_ID || "").trim().toLowerCase();
+  if ((!proofMode && (!env.ADMIN_PASSWORD_HASH || !env.SUBADMIN_PASSWORD_HASH)) || !env.SESSION_SECRET || !configuredLoginId) {
     throw new HttpError(503, "Cloud Storageの認証設定が完了していません。");
   }
   const body = await readJson(request, 4096);
   const loginId = String(body.loginId || "").trim().toLowerCase();
   const password = String(body.password || "");
   const authProof = String(body.authProof || "");
-  if (loginId !== "sub@a-tanaka.jp" || (proofMode ? !authProof || authProof.length > 256 : !password || password.length > 256)) {
+  if (loginId !== configuredLoginId || (proofMode ? !authProof || authProof.length > 256 : !password || password.length > 256)) {
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
 
@@ -179,7 +179,7 @@ async function login(request, env, url) {
   const token = await createSessionToken(session, maxAge, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
   await audit(env, "login", session, null, null);
-  return json({ authenticated: true, ...publicSession(session) }, 200, headers);
+  return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
 }
 
 async function getCryptoConfig(env, session) {
@@ -801,9 +801,14 @@ async function updateFile(id, request, env, session) {
 }
 
 async function moveFileToTrash(id, env, session) {
-  requireDelete(session);
   const file = await requireReadyFile(env, id, false);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  if (session.canDelete) {
+    if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  } else {
+    if (!session.canTrashUnlockedFiles || !file.folder_id) throw new HttpError(403, "このファイルは削除できません。");
+    const protectedFolderUnlocked = await requireFolderAccess(env, file.folder_id, session);
+    if (!protectedFolderUnlocked) throw new HttpError(403, "PWで解除したフォルダ内のファイルだけ削除できます。");
+  }
   await env.DB.batch([
     env.DB.prepare("UPDATE cloud_files SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id),
     env.DB.prepare("UPDATE cloud_deletion_requests SET status = 'approved', approved_at = CURRENT_TIMESTAMP, approved_by = ? WHERE file_id = ? AND status = 'pending'").bind(session.role, id)
@@ -919,14 +924,23 @@ async function listTrash(env, session) {
       if (!(error instanceof HttpError) || error.status !== 423) throw error;
     }
   }
-  return json({ files, retentionDays: 30 });
+  return json({ files });
 }
 
-async function getUsage(env) {
-  const row = await env.DB.prepare(`SELECT COUNT(*) AS fileCount, COALESCE(SUM(size_bytes), 0) AS totalBytes,
-    COALESCE(SUM(CASE WHEN media_kind = 'video' THEN size_bytes ELSE 0 END), 0) AS videoBytes
-    FROM cloud_files WHERE deleted_at IS NULL AND status = 'ready'`).first();
-  return json({ fileCount: Number(row?.fileCount || 0), totalBytes: Number(row?.totalBytes || 0), videoBytes: Number(row?.videoBytes || 0) });
+async function getUsage(env, session) {
+  requireAdmin(session);
+  const row = await env.DB.prepare(`SELECT
+    SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS activeFileCount,
+    COALESCE(SUM(CASE WHEN deleted_at IS NULL THEN size_bytes ELSE 0 END), 0) AS activeBytes,
+    SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS trashFileCount,
+    COALESCE(SUM(CASE WHEN deleted_at IS NOT NULL THEN size_bytes ELSE 0 END), 0) AS trashBytes
+    FROM cloud_files WHERE status = 'ready'`).first();
+  return json({
+    activeFileCount: Number(row?.activeFileCount || 0),
+    activeBytes: Number(row?.activeBytes || 0),
+    trashFileCount: Number(row?.trashFileCount || 0),
+    trashBytes: Number(row?.trashBytes || 0)
+  });
 }
 
 async function listUploadHistory(env, session) {
@@ -1072,16 +1086,6 @@ async function approveDeletionRequest(id, env, session) {
   await env.DB.batch(statements);
   await audit(env, "deletion_approved", session, "file", request.fileId, { requestId: id, name: request.fileName });
   return json({ ok: true, movedToTrash: Boolean(request.fileId && !request.deletedAt) });
-}
-
-async function purgeExpiredTrash(env) {
-  const expired = await env.DB.prepare("SELECT id, object_key, thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-30 days') LIMIT 100").all();
-  for (const file of expired.results || []) {
-    await env.FILES.delete(file.object_key);
-    if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
-    if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
-    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(file.id).run();
-  }
 }
 
 async function abortStaleUploads(env) {
@@ -1273,19 +1277,22 @@ async function ensureValidFolderMove(env, folderId, parentId) {
 }
 
 async function requireFolderAccess(env, folderId, session) {
-  if (session.role === "admin") return;
+  if (session.role === "admin") return true;
   let current = folderId;
   let guard = 0;
+  let protectedFolderUnlocked = false;
   const now = Math.floor(Date.now() / 1000);
   while (current && guard++ < 30) {
     const folder = await env.DB.prepare("SELECT id, parent_id, password_hash FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(current).first();
     if (!folder) throw new HttpError(404, "フォルダが見つかりません。");
     if (folder.password_hash) {
+      protectedFolderUnlocked = true;
       const unlocked = await env.DB.prepare("SELECT 1 AS ok FROM cloud_folder_unlocks WHERE session_id = ? AND folder_id = ? AND expires_at > ?").bind(session.sessionId, folder.id, now).first();
       if (!unlocked) throw new HttpError(423, "フォルダのロックを解除してください。");
     }
     current = folder.parent_id;
   }
+  return protectedFolderUnlocked;
 }
 
 async function rememberFolderUnlock(env, session, folderId) {
@@ -1389,6 +1396,7 @@ async function readSession(request, env) {
       label: account.label,
       canUpload: account.canUpload,
       canDelete: account.canDelete,
+      canTrashUnlockedFiles: account.canTrashUnlockedFiles,
       canEditFiles: account.canEditFiles,
       canEditFolders: account.canEditFolders,
       canViewHistory: account.canViewHistory,
@@ -1531,7 +1539,7 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session) { return { role: session.role, accountName: session.label, canUpload: session.canUpload, canDelete: session.canDelete, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }
 function requireUploadOwnership(session, file) { if (session.role !== "admin" && file.created_by !== session.role) throw new HttpError(403, "別アカウントの処理途中アップロードは操作できません。"); }

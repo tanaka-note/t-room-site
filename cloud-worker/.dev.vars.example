@@ -1,3 +1,4 @@
+LOGIN_ID="your-private-login-id"
 ADMIN_PASSWORD_HASH="pbkdf2-sha256$ITERATIONS$SALT$HASH"
 SUBADMIN_PASSWORD_HASH="pbkdf2-sha256$ITERATIONS$SALT$HASH"
 SESSION_SECRET="replace-with-a-long-random-secret"

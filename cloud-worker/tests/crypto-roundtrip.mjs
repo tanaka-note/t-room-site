@@ -3,8 +3,8 @@ globalThis.window = globalThis;
 await import("../public/vendor/argon2.umd.min.js");
 await import("../public/crypto-vault.js");
 
-const credentials = await TRoomCrypto.deriveAccountCredentials("temporary-local-test-4827");
-const repeatedCredentials = await TRoomCrypto.deriveAccountCredentials("temporary-local-test-4827");
+const credentials = await TRoomCrypto.deriveAccountCredentials("temporary-local-test-4827", "test@example.com");
+const repeatedCredentials = await TRoomCrypto.deriveAccountCredentials("temporary-local-test-4827", "test@example.com");
 const accountKey = credentials.accountKey;
 const vault = await TRoomCrypto.createVault(accountKey);
 const publicKey = await crypto.subtle.importKey(

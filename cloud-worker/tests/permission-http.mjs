@@ -40,7 +40,8 @@ await expectStatus("副管理者の共有管理拒否", await request("/shares",
 await expectStatus("副管理者の削除承認一覧拒否", await request("/deletion-requests", "subadmin"), 403);
 await expectStatus("副管理者の既存ファイル編集拒否", await request("/files/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 403);
 await expectStatus("副管理者の既存フォルダ編集拒否", await request("/folders/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 403);
-await expectStatus("副管理者の直接削除拒否", await request("/files/999999", "subadmin", { method: "DELETE", headers: { Origin: origin, "Content-Type": "application/json" } }), 403);
+await expectStatus("副管理者の存在しないファイル削除", await request("/files/999999", "subadmin", { method: "DELETE", headers: { Origin: origin, "Content-Type": "application/json" } }), 404);
+await expectStatus("副管理者の容量内訳拒否", await request("/usage", "subadmin"), 403);
 
 const subHistoryResponse = await expectStatus("副管理者本人の操作履歴", await request("/upload-history", "subadmin"), 200);
 const subHistory = await subHistoryResponse.json();
@@ -48,5 +49,6 @@ if ((subHistory.history || []).some((item) => item.actorRole !== "subadmin")) th
 await expectStatus("管理者の操作履歴", await request("/upload-history", "admin"), 200);
 await expectStatus("管理者のゴミ箱", await request("/trash", "admin"), 200);
 await expectStatus("管理者の共有管理", await request("/shares", "admin"), 200);
+await expectStatus("管理者の容量内訳", await request("/usage", "admin"), 200);
 
 console.log("permission HTTP routes: ok");

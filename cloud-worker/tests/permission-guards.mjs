@@ -21,7 +21,7 @@ function requires(name, guard) {
 
 for (const name of ["createShare", "listShares", "stopShare", "listAdminShareEvents"]) requires(name, "requireAdmin");
 for (const name of ["createFolder", "createUpload", "uploadPart", "completeUpload", "cancelUpload", "putThumbnail"]) requires(name, "requireUpload");
-for (const name of ["deleteFolder", "moveFileToTrash", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");
+for (const name of ["deleteFolder", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");
 requires("updateFolder", "requireFolderEdit");
 requires("updateFile", "requireFileEdit");
 requires("requestFileDeletion", "requireDeletionRequest");
@@ -34,6 +34,11 @@ for (const name of ["uploadPart", "completeUpload", "cancelUpload"]) {
 if (!source.includes('role: "subadmin"') || !source.includes("canDelete: false") || !source.includes("canEditFiles: false") || !source.includes("canEditFolders: false")) {
   throw new Error("副管理者の禁止権限を確認できません。");
 }
+if (!functionBody("moveFileToTrash").includes("canTrashUnlockedFiles") || !functionBody("moveFileToTrash").includes("requireFolderAccess(env, file.folder_id, session)")) {
+  throw new Error("副管理者のPW解除済みフォルダ内削除を確認できません。");
+}
+if (!functionBody("getUsage").includes("requireAdmin(session)")) throw new Error("容量内訳が管理者専用ではありません。");
+if (source.includes("purgeExpiredTrash(env)")) throw new Error("30日後の自動完全削除が残っています。");
 if (!functionBody("listUploadHistory").includes('session.role === "admin"') || !functionBody("listUploadHistory").includes("l.actor_role = ?")) {
   throw new Error("操作履歴の役割別フィルターを確認できません。");
 }

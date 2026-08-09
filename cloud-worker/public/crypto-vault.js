@@ -4,7 +4,7 @@
   const textEncoder = new TextEncoder();
   const textDecoder = new TextDecoder();
   const KDF_OPTIONS = Object.freeze({ iterations: 3, memorySize: 65536, parallelism: 1, hashLength: 32 });
-  const ACCOUNT_SALT_CONTEXT = "T-ROOM Cloud Storage account key v1|tanaka-note.com|sub@a-tanaka.jp";
+  const ACCOUNT_SALT_CONTEXT = "T-ROOM Cloud Storage account key v1|tanaka-note.com|";
   const ACCOUNT_AUTH_CONTEXT = "T-ROOM Cloud Storage account authentication v1";
   const ADMIN_WRAP_CONTEXT = "T-ROOM Cloud Storage admin private key v1";
   const RECOVERY_WRAP_CONTEXT = "T-ROOM Cloud Storage emergency recovery v1";
@@ -22,10 +22,12 @@
   const THUMBNAIL_CONTEXT = "T-ROOM Cloud Storage thumbnail v1";
   const FILE_CHUNK_SIZE = 8 * 1024 * 1024;
 
-  async function deriveAccountCredentials(password) {
+  async function deriveAccountCredentials(password, loginId) {
     ensureCryptoSupport();
     if (typeof password !== "string" || password.length < 8 || password.length > 256) throw new Error("アカウントパスワードを確認してください。");
-    const saltDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", textEncoder.encode(ACCOUNT_SALT_CONTEXT)));
+    const normalizedLoginId = String(loginId || "").trim().toLowerCase();
+    if (!normalizedLoginId || normalizedLoginId.length > 254) throw new Error("ログインIDを確認してください。");
+    const saltDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", textEncoder.encode(`${ACCOUNT_SALT_CONTEXT}${normalizedLoginId}`)));
     const master = await hashwasm.argon2id({
       password,
       salt: saltDigest.slice(0, 16),
@@ -43,8 +45,8 @@
     }
   }
 
-  async function deriveAccountKey(password) {
-    return (await deriveAccountCredentials(password)).accountKey;
+  async function deriveAccountKey(password, loginId) {
+    return (await deriveAccountCredentials(password, loginId)).accountKey;
   }
 
   async function createVault(accountKey) {
