@@ -38,8 +38,8 @@ await expectStatus("副管理者セッション", await request("/session", "sub
 await expectStatus("副管理者のゴミ箱拒否", await request("/trash", "subadmin"), 403);
 await expectStatus("副管理者の共有管理拒否", await request("/shares", "subadmin"), 403);
 await expectStatus("副管理者の削除承認一覧拒否", await request("/deletion-requests", "subadmin"), 403);
-await expectStatus("副管理者の既存ファイル編集拒否", await request("/files/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 403);
-await expectStatus("副管理者の既存フォルダ編集拒否", await request("/folders/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 403);
+await expectStatus("副管理者の存在しないファイル名称変更", await request("/files/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 404);
+await expectStatus("副管理者の存在しないフォルダ名称変更", await request("/folders/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 404);
 await expectStatus("副管理者の存在しないファイル削除", await request("/files/999999", "subadmin", { method: "DELETE", headers: { Origin: origin, "Content-Type": "application/json" } }), 404);
 await expectStatus("副管理者の容量内訳拒否", await request("/usage", "subadmin"), 403);
 

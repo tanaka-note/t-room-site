@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+
+const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
+const wranglerPath = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url));
+const port = 8796;
+const origin = `http://127.0.0.1:${port}`;
+
+function testHash(password) {
+  return `sha256$${createHash("sha256").update(password).digest("base64url")}`;
+}
+
+const migration = spawnSync(process.execPath, [wranglerPath, "d1", "migrations", "apply", "diary-db", "--local"], {
+  cwd: projectDirectory,
+  encoding: "utf8"
+});
+assert.equal(migration.status, 0, migration.stderr || migration.stdout);
+
+const server = spawn(process.execPath, [
+  wranglerPath,
+  "dev",
+  "--local",
+  "--port",
+  String(port),
+  "--var",
+  `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
+  "--var",
+  `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
+  "--var",
+  `DIARY_VIEW_PASSWORD_HASH:${testHash("viewer-test")}`,
+  "--var",
+  "SESSION_SECRET:diary-permission-integration-test-session-secret"
+], {
+  cwd: projectDirectory,
+  stdio: ["ignore", "pipe", "pipe"]
+});
+let serverOutput = "";
+server.stdout.on("data", (chunk) => { serverOutput += chunk; });
+server.stderr.on("data", (chunk) => { serverOutput += chunk; });
+
+async function waitForServer() {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    try {
+      const response = await fetch(`${origin}/diary/api/session`);
+      if (response.ok) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Local diary server did not start.\n${serverOutput}`);
+}
+
+async function request(path, { method = "GET", body, cookie } = {}) {
+  const headers = {};
+  if (cookie) headers.Cookie = cookie;
+  if (method !== "GET") headers["X-Diary-Request"] = "1";
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const response = await fetch(`${origin}/diary/api${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  let result = {};
+  try { result = await response.json(); } catch {}
+  return { response, result };
+}
+
+async function login(password) {
+  const { response, result } = await request("/login", { method: "POST", body: { password } });
+  assert.equal(response.status, 200, JSON.stringify(result));
+  return { session: result, cookie: response.headers.get("set-cookie").split(";", 1)[0] };
+}
+
+try {
+  await waitForServer();
+
+  const wife = await login("wife-test");
+  assert.equal(wife.session.canViewTrash, false);
+  assert.equal(wife.session.canPermanentlyDelete, false);
+
+  const created = await request("/entries", {
+    method: "POST",
+    cookie: wife.cookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: `permission-test-${randomUUID()}`,
+      content: "permission integration test",
+      tags: []
+    }
+  });
+  assert.equal(created.response.status, 200, JSON.stringify(created.result));
+  const entry = created.result.entry;
+
+  const moved = await request(`/entries/${entry.id}`, {
+    method: "DELETE",
+    cookie: wife.cookie,
+    body: { revision: entry.revision }
+  });
+  assert.equal(moved.response.status, 200, JSON.stringify(moved.result));
+
+  const wifeTrash = await request("/entries?trash=1", { cookie: wife.cookie });
+  assert.equal(wifeTrash.response.status, 403);
+  const wifePermanent = await request(`/entries/${entry.id}/permanent`, {
+    method: "DELETE",
+    cookie: wife.cookie,
+    body: { revision: entry.revision + 1 }
+  });
+  assert.equal(wifePermanent.response.status, 403);
+
+  const main = await login("main-test");
+  assert.equal(main.session.canViewTrash, true);
+  assert.equal(main.session.canPermanentlyDelete, true);
+  const trash = await request("/entries?trash=1", { cookie: main.cookie });
+  assert.equal(trash.response.status, 200, JSON.stringify(trash.result));
+  const deletedEntry = trash.result.entries.find((candidate) => candidate.id === entry.id);
+  assert.ok(deletedEntry);
+  assert.equal(deletedEntry.deletedByName, "田中暢美");
+
+  const permanentlyDeleted = await request(`/entries/${entry.id}/permanent`, {
+    method: "DELETE",
+    cookie: main.cookie,
+    body: { revision: deletedEntry.revision }
+  });
+  assert.equal(permanentlyDeleted.response.status, 200, JSON.stringify(permanentlyDeleted.result));
+  const missing = await request(`/entries/${entry.id}`, { cookie: main.cookie });
+  assert.equal(missing.response.status, 404);
+
+  process.stdout.write("Diary permission integration test passed.\n");
+} finally {
+  if (server.exitCode === null) {
+    server.kill();
+    await Promise.race([once(server, "exit"), new Promise((resolve) => setTimeout(resolve, 2000))]);
+  }
+}

@@ -1,5 +1,7 @@
 const API = "/cloud/api";
 const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
+const VAULT_CACHE_DB = "tcloud-device-vault";
+const VAULT_CACHE_STORE = "crypto-keys";
 const state = {
   session: null,
   loginId: "",
@@ -55,7 +57,16 @@ async function initialize() {
   await restoreRememberedLogin();
   try {
     const session = await api("/session");
-    if (session.authenticated) await enterApp(session);
+    if (session.authenticated) {
+      const rememberedId = $("#login-id").value.trim().toLowerCase();
+      const rememberedPassword = $("#login-password").value;
+      let accountKey = null;
+      if (session.role === "admin" && rememberedPassword && rememberedId === String(session.loginId || "").trim().toLowerCase()) {
+        accountKey = (await TRoomCrypto.deriveAccountCredentials(rememberedPassword, rememberedId)).accountKey;
+      }
+      await enterApp(session, rememberedPassword, accountKey);
+      $("#login-password").value = "";
+    }
   } catch (error) {
     showLoginError(error.message);
   }
@@ -436,11 +447,11 @@ async function enterApp(session, password = "", accountKey = null) {
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
   $("#account-name").textContent = session.accountName;
-  const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード・削除（編集不可）";
+  const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード・削除・解除済みフォルダ内の名前変更";
   $("#account-permission").textContent = permissionText;
   $("#mobile-account-name").textContent = session.accountName;
   $("#mobile-account-permission").textContent = permissionText;
-  $("#edit-file-button").hidden = !session.canEditFiles;
+  $("#edit-file-button").hidden = !session.canEditFiles && !session.canRenameUnlockedItems;
   $("#delete-file-button").hidden = !session.canDelete && !session.canTrashUnlockedFiles;
   $$('[data-view="trash"]').forEach((button) => { button.hidden = !session.canDelete; });
   $$('[data-view="history"]').forEach((button) => { button.hidden = !session.canViewHistory; });
@@ -459,6 +470,7 @@ async function enterApp(session, password = "", accountKey = null) {
 
 async function logout() {
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
+  await clearCachedAdminKeys();
   await api("/logout", { method: "POST", body: "{}" });
   location.reload();
 }
@@ -540,6 +552,12 @@ async function prepareCryptoSession(password = "", accountKey = null) {
       return;
     }
     if (!password) {
+      const cachedPrivateKey = await loadCachedAdminKey(config);
+      if (cachedPrivateKey) {
+        state.crypto.adminPrivateKey = cachedPrivateKey;
+        setCryptoStatus("暗号化鍵：解除済み", true);
+        return;
+      }
       setCryptoStatus("暗号化鍵：ロック中", false);
       openVaultDialog("unlock");
       return;
@@ -548,6 +566,7 @@ async function prepareCryptoSession(password = "", accountKey = null) {
     const privateKey = await TRoomCrypto.unlockAdminPrivateKey(resolvedAccountKey, config);
     state.crypto.accountKey = resolvedAccountKey;
     state.crypto.adminPrivateKey = privateKey;
+    await saveCachedAdminKey(config, privateKey);
     setCryptoStatus("暗号化鍵：解除済み", true);
   } catch (error) {
     setCryptoStatus("暗号化鍵：要確認", false);
@@ -591,6 +610,7 @@ async function handleVaultForm(event) {
       state.crypto.adminPrivateKey = vault.privateKey;
       state.crypto.publicKey = await crypto.subtle.importKey("jwk", vault.publicKeyJwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
       state.crypto.fileEncryptionReady = true;
+      await saveCachedAdminKey(state.crypto.config, vault.privateKey);
       syncAvailableActions();
       $("#vault-dialog").close();
       showRecoveryCode(vault.recoveryCode);
@@ -602,6 +622,7 @@ async function handleVaultForm(event) {
       const privateKey = await TRoomCrypto.unlockAdminPrivateKey(accountKey, state.crypto.config);
       state.crypto.accountKey = accountKey;
       state.crypto.adminPrivateKey = privateKey;
+      await saveCachedAdminKey(state.crypto.config, privateKey);
       $("#vault-dialog").close();
       setCryptoStatus("暗号化鍵：解除済み", true);
       setNotice("暗号化鍵を解除しました。");
@@ -615,6 +636,77 @@ async function handleVaultForm(event) {
     $("#vault-password").disabled = false;
     submit.disabled = false;
     submit.textContent = mode === "setup" ? "暗号化を設定する" : "暗号化鍵を解除";
+  }
+}
+
+function vaultCacheKey(config) {
+  return `${state.loginId}:${String(config?.createdAt || "v1")}`;
+}
+
+function openVaultCache() {
+  if (!globalThis.indexedDB) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(VAULT_CACHE_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(VAULT_CACHE_STORE)) request.result.createObjectStore(VAULT_CACHE_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("端末内の暗号化鍵保存領域を開けませんでした。"));
+  });
+}
+
+async function loadCachedAdminKey(config) {
+  let database = null;
+  try {
+    database = await openVaultCache();
+    if (!database) return null;
+    const record = await new Promise((resolve, reject) => {
+      const request = database.transaction(VAULT_CACHE_STORE, "readonly").objectStore(VAULT_CACHE_STORE).get(vaultCacheKey(config));
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+    const key = record?.privateKey;
+    return key instanceof CryptoKey && key.type === "private" && key.extractable === false ? key : null;
+  } catch {
+    return null;
+  } finally {
+    database?.close();
+  }
+}
+
+async function saveCachedAdminKey(config, privateKey) {
+  if (!(privateKey instanceof CryptoKey) || privateKey.type !== "private" || privateKey.extractable) return;
+  let database = null;
+  try {
+    database = await openVaultCache();
+    if (!database) return;
+    await new Promise((resolve, reject) => {
+      const request = database.transaction(VAULT_CACHE_STORE, "readwrite").objectStore(VAULT_CACHE_STORE)
+        .put({ privateKey, storedAt: Date.now() }, vaultCacheKey(config));
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    // 保存できないブラウザでは、従来どおり再入力で解除する。
+  } finally {
+    database?.close();
+  }
+}
+
+async function clearCachedAdminKeys() {
+  let database = null;
+  try {
+    database = await openVaultCache();
+    if (!database) return;
+    await new Promise((resolve, reject) => {
+      const request = database.transaction(VAULT_CACHE_STORE, "readwrite").objectStore(VAULT_CACHE_STORE).clear();
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    // ログアウト処理は、端末保存領域の削除失敗だけでは止めない。
+  } finally {
+    database?.close();
   }
 }
 
@@ -754,7 +846,7 @@ async function loadItems() {
   try {
     if (state.view === "trash") {
       const data = await api("/trash");
-      state.folders = [];
+      state.folders = (await hydrateFolderRecords(data.folders || [])).map((folder) => ({ ...folder, trashed: true }));
       state.files = (await hydrateFileRecords(data.files || [])).map((file) => ({ ...file, trashed: true }));
       state.history = [];
       state.requests = [];
@@ -822,7 +914,7 @@ function renderItems() {
   if (state.view === "shares") {
     for (const item of state.shares) grid.append(shareCard(item));
   }
-  for (const folder of state.folders) grid.append(folderCard(folder));
+  for (const folder of state.folders) grid.append(folder.trashed ? trashFolderCard(folder) : folderCard(folder));
   for (const file of state.files) grid.append(fileCard(file));
   $("#empty-state").hidden = state.folders.length + state.files.length + state.history.length + state.requests.length + state.shares.length > 0;
   $("#empty-title").textContent = state.view === "requests" ? "削除申請はありません" : state.view === "history" ? "履歴がありません" : state.view === "shares" ? "共有URLはありません" : state.view === "trash" ? "ゴミ箱は空です" : (state.folderId ? "ファイルがありません" : "フォルダがありません");
@@ -840,7 +932,7 @@ function renderItems() {
   $("#display-toggle").textContent = state.listMode ? "▦" : "▤";
   $("#display-toggle").setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
   $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
-  $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length === 0;
+  $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length + state.folders.length === 0;
   scheduleMissingVideoThumbnails();
 }
 
@@ -853,6 +945,28 @@ function renderFolderSummary() {
 
 function formatFolderCount(folder) {
   return `${Number(folder.fileCount || 0)}ファイル・${Number(folder.folderCount || 0)}フォルダ`;
+}
+
+function canRenameFolder(folder) {
+  if (state.session?.canEditFolders) return true;
+  return Boolean(state.session?.canRenameUnlockedItems && folder?.isUnlocked && state.crypto.folderKeys.has(Number(folder.id)));
+}
+
+function canRenameFile(file) {
+  if (state.session?.canEditFiles) return true;
+  return Boolean(state.session?.canRenameUnlockedItems && !file?.trashed && file?.fileKey && state.crypto.folderKeys.has(Number(file.folderId)));
+}
+
+function trashFolderCard(folder) {
+  const card = document.createElement("article");
+  card.className = "folder-card trash-folder-card";
+  const button = document.createElement("button");
+  button.className = "folder-open-button";
+  button.type = "button";
+  button.innerHTML = `<span class="folder-icon">▰</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}・${formatBytes(folder.sizeBytes)}</small><small class="folder-lock">フォルダごとゴミ箱へ移動済み</small></span>`;
+  button.addEventListener("click", () => showTrashFolderActions(folder));
+  card.append(button);
+  return card;
 }
 
 function folderCard(folder) {
@@ -876,15 +990,25 @@ function folderCard(folder) {
     }
     openFolder(folder);
   });
-  if (state.session.canDelete) {
-    button.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      selectFolder(folder, card);
-    });
-    installFolderLongPressSelection(card, folder);
-  }
+  button.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    selectFolder(folder, card);
+  });
+  installFolderLongPressSelection(card, folder);
   card.append(button);
-  if (state.session.canEditFolders) {
+  const selectButton = document.createElement("button");
+  selectButton.className = "folder-select-button";
+  selectButton.type = "button";
+  selectButton.setAttribute("aria-label", `${folder.name}を選択`);
+  selectButton.setAttribute("aria-pressed", state.selectedFolders.has(folder.id) ? "true" : "false");
+  selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
+  selectButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleFolderSelection(folder, card);
+  });
+  card.append(selectButton);
+  if (canRenameFolder(folder)) {
+    card.classList.add("has-settings");
     const settings = document.createElement("button");
     settings.className = "folder-settings-button";
     settings.type = "button";
@@ -1165,6 +1289,10 @@ function deletionRequestCard(item) {
 }
 
 function openFolderSettings(folder) {
+  if (!canRenameFolder(folder)) {
+    setNotice("PWで解除したフォルダ内の名前だけ変更できます。", true);
+    return;
+  }
   if (folder.isProtected && !folder.isUnlocked) {
     setNotice("先にフォルダのロックを解除してください。", true);
     openFolder(folder);
@@ -1178,8 +1306,11 @@ function openFolderSettings(folder) {
   $("#folder-settings-error").textContent = "";
   $("#delete-folder-button").hidden = !state.session.canDelete;
   const inheritsProtection = Boolean(folder.parentId && !folder.isProtected);
-  $("#folder-password-settings-row").hidden = inheritsProtection;
-  $("#folder-inherited-settings-note").hidden = !inheritsProtection;
+  const canEditPassword = Boolean(state.session.canEditFolders);
+  $("#folder-password-settings-row").hidden = !canEditPassword || inheritsProtection;
+  $("#folder-password-action").disabled = !canEditPassword || inheritsProtection;
+  $("#folder-new-password").disabled = !canEditPassword || inheritsProtection;
+  $("#folder-inherited-settings-note").hidden = !canEditPassword || !inheritsProtection;
   toggleFolderPasswordInput();
   $("#folder-settings-dialog").showModal();
 }
@@ -1193,7 +1324,7 @@ function toggleFolderPasswordInput() {
 async function saveFolderSettings(event) {
   event.preventDefault();
   const id = Number($("#folder-settings-id").value);
-  const passwordAction = state.selectedFolder?.parentId && !state.selectedFolder?.isProtected ? "keep" : $("#folder-password-action").value;
+  const passwordAction = !state.session.canEditFolders || (state.selectedFolder?.parentId && !state.selectedFolder?.isProtected) ? "keep" : $("#folder-password-action").value;
   $("#folder-settings-error").textContent = "";
   try {
     const folder = state.selectedFolder;
@@ -1217,13 +1348,21 @@ async function saveFolderSettings(event) {
 
 async function deleteSelectedFolder() {
   const folder = state.selectedFolder;
-  if (!folder || !state.session.canDelete || !confirm(`「${folder.name}」を削除しますか？空のフォルダだけ削除できます。`)) return;
+  if (!folder || !state.session.canDelete || !confirm(`「${folder.name}」を中身ごとゴミ箱へ移動しますか？`)) return;
+  const button = $("#delete-folder-button");
+  button.disabled = true;
+  button.textContent = "ゴミ箱へ移動中…";
   try {
-    await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
+    const result = await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
     $("#folder-settings-dialog").close();
-    setNotice("フォルダを削除しました。");
-    await loadItems();
-  } catch (error) { $("#folder-settings-error").textContent = error.message; }
+    setNotice(`フォルダを中身ごとゴミ箱へ移動しました（合計${Number(result.deleted || 1).toLocaleString("ja-JP")}件）。`);
+    await Promise.all([loadItems(), loadUsage()]);
+  } catch (error) {
+    $("#folder-settings-error").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "削除";
+  }
 }
 
 async function openFolder(folder) {
@@ -1278,11 +1417,12 @@ function fileCard(file) {
   });
   installLongPressSelection(card, file);
   card.append(button);
-  if (!file.trashed && ["image", "video"].includes(file.mediaKind)) {
+  if (!file.trashed) {
     const selectButton = document.createElement("button");
     selectButton.className = "file-select-button";
     selectButton.type = "button";
     selectButton.setAttribute("aria-label", `${file.name}を選択`);
+    selectButton.setAttribute("aria-pressed", state.selectedFiles.has(file.id) ? "true" : "false");
     selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
     selectButton.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -1462,6 +1602,7 @@ function selectFile(file, card) {
   beginSelectionHistory();
   state.selectedFiles.set(file.id, file);
   card.classList.add("selected", "selection-pass");
+  card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
   syncSelectionBar();
 }
 
@@ -1470,6 +1611,7 @@ function toggleFileSelection(file, card) {
   if (state.selectedFiles.has(file.id)) {
     state.selectedFiles.delete(file.id);
     card.classList.remove("selected", "selection-pass");
+    card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "false");
   } else {
     selectFile(file, card);
   }
@@ -1481,18 +1623,19 @@ function toggleFileSelection(file, card) {
 }
 
 function selectFolder(folder, card) {
-  if (!state.session?.canDelete || state.selectedFolders.has(folder.id)) return;
+  if (state.selectedFolders.has(folder.id)) return;
   beginSelectionHistory();
   state.selectedFolders.set(folder.id, folder);
   card.classList.add("selected", "selection-pass");
+  card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "true");
   syncSelectionBar();
 }
 
 function toggleFolderSelection(folder, card) {
-  if (!state.session?.canDelete) return;
   if (state.selectedFolders.has(folder.id)) {
     state.selectedFolders.delete(folder.id);
     card.classList.remove("selected", "selection-pass");
+    card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "false");
   } else {
     selectFolder(folder, card);
   }
@@ -1525,13 +1668,12 @@ function selectAllVisibleItems() {
       card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
     }
   }
-  if (state.session?.canDelete) {
-    for (const card of $$("#content-grid .folder-card[data-folder-id]")) {
-      const folder = state.folders.find((item) => String(item.id) === card.dataset.folderId);
-      if (folder) {
-        state.selectedFolders.set(folder.id, folder);
-        card.classList.add("selected", "selection-pass");
-      }
+  for (const card of $$("#content-grid .folder-card[data-folder-id]")) {
+    const folder = state.folders.find((item) => String(item.id) === card.dataset.folderId);
+    if (folder) {
+      state.selectedFolders.set(folder.id, folder);
+      card.classList.add("selected", "selection-pass");
+      card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "true");
     }
   }
   syncSelectionBar();
@@ -1542,7 +1684,10 @@ function clearFileSelection(update = true, rewindHistory = update) {
   state.selectedFiles.clear();
   state.selectedFolders.clear();
   state.selecting = false;
-  $$(".file-card.selected, .file-card.selection-pass").forEach((card) => card.classList.remove("selected", "selection-pass"));
+  $$(".file-card.selected, .file-card.selection-pass, .folder-card.selected, .folder-card.selection-pass").forEach((card) => {
+    card.classList.remove("selected", "selection-pass");
+    card.querySelector(".file-select-button, .folder-select-button")?.setAttribute("aria-pressed", "false");
+  });
   if (update) syncSelectionBar();
   else $("#selection-bar").hidden = true;
   if (rewindHistory && hadSelection && state.selectionHistoryActive && !state.handlingPopState) {
@@ -1561,7 +1706,8 @@ function syncSelectionBar() {
   $("#selection-share").hidden = state.session?.role !== "admin" || fileCount < 1 || folderCount !== 0;
   $("#selection-move").hidden = !state.session?.canEditFiles || !state.session?.canEditFolders;
   $("#selection-move").disabled = count === 0;
-  $("#selection-delete").hidden = !state.session?.canDelete && !state.session?.canTrashUnlockedFiles;
+  const canDeleteSelection = Boolean((fileCount && (state.session?.canDelete || state.session?.canTrashUnlockedFiles)) || (folderCount && state.session?.canDelete));
+  $("#selection-delete").hidden = !canDeleteSelection;
   $("#selection-delete").disabled = count === 0;
   $("#selection-delete").textContent = "削除";
 }
@@ -1584,7 +1730,7 @@ async function deleteSelectedItems() {
   const folders = [...state.selectedFolders.values()];
   const count = files.length + folders.length;
   if (!count) return;
-  const folderNote = folders.length ? "\nフォルダは空の場合だけ削除できます。" : "";
+  const folderNote = folders.length ? "\nフォルダは中身ごとゴミ箱へ移動します。" : "";
   const message = state.session?.canDelete
     ? `${count}件を削除しますか？ファイルはゴミ箱へ移動します。${folderNote}`
     : `${files.length}件を本当に削除しますか？`;
@@ -1592,32 +1738,46 @@ async function deleteSelectedItems() {
   if (!confirmed) return;
   const button = $("#selection-delete");
   button.disabled = true;
-  button.textContent = "削除中…";
+  button.textContent = `削除中 0 / ${count}`;
   let completed = 0;
-  let failed = 0;
+  let movedEntries = 0;
+  let processed = 0;
+  const failures = [];
   try {
-    for (const file of files) {
-      try {
-        await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
-        completed += 1;
-      } catch {
-        failed += 1;
+    let nextFileIndex = 0;
+    const fileWorker = async () => {
+      while (nextFileIndex < files.length) {
+        const file = files[nextFileIndex++];
+        try {
+          await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
+          completed += 1;
+          movedEntries += 1;
+        } catch (error) {
+          failures.push({ name: file.name, error });
+        }
+        processed += 1;
+        button.textContent = `削除中 ${processed} / ${count}`;
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, files.length) }, () => fileWorker()));
     if (state.session?.canDelete) {
       for (const folder of folders) {
         try {
-          await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
+          const result = await api(`/folders/${folder.id}`, { method: "DELETE", body: "{}" });
           completed += 1;
-        } catch {
-          failed += 1;
+          movedEntries += Number(result.deleted || 1);
+        } catch (error) {
+          failures.push({ name: folder.name, error });
         }
+        processed += 1;
+        button.textContent = `削除中 ${processed} / ${count}`;
       }
     }
     clearFileSelection();
-    setNotice(failed
-      ? `${completed}件を処理しました。${failed}件は削除できませんでした。中身のあるフォルダなどをご確認ください。`
-      : `${completed}件を削除しました。`, Boolean(failed));
+    const failedNames = failures.slice(0, 3).map((item) => item.name).join("、");
+    setNotice(failures.length
+      ? `${completed}件を処理しました。削除できなかった${failures.length}件：${failedNames}${failures.length > 3 ? " ほか" : ""}`
+      : `${completed}件の選択から、合計${movedEntries.toLocaleString("ja-JP")}件をゴミ箱へ移動しました。`, Boolean(failures.length));
     const reloads = [loadItems()];
     if (state.session?.role === "admin") reloads.push(loadUsage());
     await Promise.all(reloads);
@@ -1799,30 +1959,70 @@ async function executeDownloads(files, targets) {
   $("#download-close").disabled = true;
   if ($("#keep-screen-awake").checked) await requestDownloadWakeLock();
   let completed = 0;
+  let deferred = [];
   let activeFile = null;
+  let closeOnSuccess = false;
   try {
     for (const file of files) {
-      activeFile = file;
       if (state.downloadAbort.signal.aborted) throw new DOMException("中止しました", "AbortError");
+      activeFile = file;
       $("#download-current").textContent = file.downloadDisplayName || file.name;
       updateDownloadQueueItem(file.id, "処理中", "");
       await recordDownloadEvent(file.id, "download_started");
-      await downloadFile(file, state.downloadAbort.signal, targets.get(file.id) || null);
-      await recordDownloadEvent(file.id, "download_completed");
-      completed++;
-      updateDownloadQueueItem(file.id, "完了", "done");
-      updateDownloadProgress(completed, files.length);
+      try {
+        await downloadFile(file, state.downloadAbort.signal, targets.get(file.id) || null);
+        await recordDownloadEvent(file.id, "download_completed");
+        completed++;
+        activeFile = null;
+        updateDownloadQueueItem(file.id, "完了", "done");
+        updateDownloadProgress(completed, files.length);
+      } catch (error) {
+        if (error.name === "AbortError") throw error;
+        deferred.push({ file, error });
+        activeFile = null;
+        updateDownloadQueueItem(file.id, "後で再試行", "failed");
+      }
     }
-    $("#download-summary").textContent = `${completed}件の保存が完了しました`;
-    $("#download-current").textContent = "選択した保存先をご確認ください。";
+    if (deferred.length) {
+      $("#download-summary").textContent = "エラー分を再試行しています";
+      const retryFailures = [];
+      for (const item of deferred) {
+        if (state.downloadAbort.signal.aborted) throw new DOMException("中止しました", "AbortError");
+        const { file } = item;
+        activeFile = file;
+        $("#download-current").textContent = `${file.downloadDisplayName || file.name}を再試行中`;
+        updateDownloadQueueItem(file.id, "再試行中", "");
+        try {
+          await downloadFile(file, state.downloadAbort.signal, targets.get(file.id) || null);
+          await recordDownloadEvent(file.id, "download_completed");
+          completed++;
+          activeFile = null;
+          updateDownloadQueueItem(file.id, "完了", "done");
+          updateDownloadProgress(completed, files.length);
+        } catch (error) {
+          if (error.name === "AbortError") throw error;
+          retryFailures.push({ file, error });
+          activeFile = null;
+          updateDownloadQueueItem(file.id, "エラー", "failed");
+          await recordDownloadEvent(file.id, "download_failed", error.message);
+        }
+      }
+      deferred = retryFailures;
+    }
+    if (deferred.length) {
+      $("#download-summary").textContent = `${completed}件完了、${deferred.length}件エラー`;
+      $("#download-current").textContent = "保存できなかったデータを下にまとめました。";
+      renderTransferFailures("#download-failure-summary", "#download-failed-list", deferred);
+    } else {
+      $("#download-summary").textContent = `${completed}件の保存が完了しました`;
+      $("#download-current").textContent = "選択した保存先をご確認ください。";
+      closeOnSuccess = true;
+    }
   } catch (error) {
-    if (activeFile) await recordDownloadEvent(activeFile.id, "download_failed", error.name === "AbortError" ? "cancelled" : error.message);
     if (error.name === "AbortError") {
+      if (activeFile) await recordDownloadEvent(activeFile.id, "download_failed", "cancelled");
       $("#download-summary").textContent = "ダウンロードを中止しました";
       $("#download-current").textContent = "未処理のファイルは保存されません。";
-    } else {
-      $("#download-summary").textContent = "一部のダウンロードに失敗しました";
-      $("#download-current").textContent = error.message;
     }
   } finally {
     state.downloadActive = false;
@@ -1832,6 +2032,7 @@ async function executeDownloads(files, targets) {
     $("#download-cancel").hidden = true;
     $("#download-close").disabled = false;
     clearFileSelection();
+    if (closeOnSuccess && $("#download-dialog").open) $("#download-dialog").close();
   }
 }
 
@@ -1929,7 +2130,16 @@ function renderDownloadQueue(files) {
   $("#download-queue").innerHTML = files.map((file) => `<li data-download-id="${file.id}"><span>${escapeHtml(file.downloadDisplayName || file.name)}</span><span>待機中</span></li>`).join("");
   $("#download-summary").textContent = `${files.length}件を準備しています`;
   $("#download-current").textContent = "";
+  renderTransferFailures("#download-failure-summary", "#download-failed-list", []);
   updateDownloadProgress(0, files.length);
+}
+
+function renderTransferFailures(summarySelector, listSelector, failures) {
+  const summary = $(summarySelector);
+  const list = $(listSelector);
+  if (!summary || !list) return;
+  summary.hidden = !failures.length;
+  list.innerHTML = failures.map(({ file, error }) => `<li><strong>${escapeHtml(file.downloadDisplayName || file.name)}</strong>${error?.message ? ` — ${escapeHtml(error.message)}` : ""}</li>`).join("");
 }
 
 function updateDownloadQueueItem(id, label, className) {
@@ -2025,6 +2235,7 @@ async function uploadSelectedFolder(event) {
   const selection = state.folderUploadSelection;
   if (!selection || state.uploading) return;
   const submitButton = event.currentTarget.querySelector('button[type="submit"]');
+  let dialogClosed = false;
   $("#folder-upload-error").textContent = "";
   try {
     if (!state.crypto.publicKey || !state.crypto.fileEncryptionReady) throw new Error("暗号化の初期設定を完了してください。");
@@ -2044,6 +2255,10 @@ async function uploadSelectedFolder(event) {
     $("#upload-file-name").textContent = selection.roots.join("、");
     $("#upload-file-progress").textContent = "準備中…";
     $("#upload-progress").style.width = "0%";
+    state.folderUploadSelection = null;
+    $("#folder-upload-password").value = "";
+    $("#folder-upload-dialog").close();
+    dialogClosed = true;
 
     const foldersByPath = new Map();
     for (let index = 0; index < selection.directories.length; index++) {
@@ -2070,9 +2285,6 @@ async function uploadSelectedFolder(event) {
       destinations.set(record.file, { folderId: destination.id, folderKey: destination.key });
     }
 
-    state.folderUploadSelection = null;
-    $("#folder-upload-password").value = "";
-    $("#folder-upload-dialog").close();
     state.uploading = false;
     submitButton.disabled = false;
     syncAvailableActions();
@@ -2088,7 +2300,8 @@ async function uploadSelectedFolder(event) {
     submitButton.disabled = false;
     syncAvailableActions();
     $("#upload-panel").classList.add("upload-error");
-    $("#folder-upload-error").textContent = error.message;
+    if (dialogClosed) setNotice(`フォルダの保存に失敗しました：${error.message}`, true);
+    else $("#folder-upload-error").textContent = error.message;
   }
 }
 
@@ -2127,26 +2340,22 @@ async function uploadFiles(files, destinations = null) {
   const fixedFolderId = state.folderId ? Number(state.folderId) : null;
   const fixedFolderKey = fixedFolderId ? state.crypto.folderKeys.get(fixedFolderId) : null;
   let completed = 0;
-  let failed = false;
+  let cancelled = false;
   panel.hidden = false;
   panel.classList.remove("upload-complete", "upload-error");
   $("#upload-heading").textContent = "アップロード中";
   $("#upload-status").textContent = `0 / ${total}件完了`;
   $("#upload-progress").style.width = "0%";
   $("#upload-speed").textContent = "";
+  renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
   $("#upload-cancel").hidden = false;
   $("#upload-cancel").disabled = false;
   try {
     let nextFileIndex = 0;
-    let firstError = null;
+    const deferred = [];
     const fileWorker = async () => {
-      while (!firstError) {
+      while (true) {
         if (state.uploadAbort.signal.aborted) {
-          firstError ||= {
-            error: new DOMException("アップロードを停止しました", "AbortError"),
-            file: files[Math.min(nextFileIndex, files.length - 1)],
-            index: Math.min(nextFileIndex, files.length - 1)
-          };
           return;
         }
         const index = nextFileIndex++;
@@ -2160,23 +2369,59 @@ async function uploadFiles(files, destinations = null) {
           completed++;
           tracker.finish(file, completed);
         } catch (error) {
-          firstError ||= { error, file, index };
-          if (!state.uploadAbort.signal.aborted) state.uploadAbort.abort();
+          if (error.name === "AbortError") return;
+          tracker.defer(file);
+          deferred.push({ error, file, index });
         }
       }
     };
     await Promise.allSettled(Array.from({ length: fileLimit }, fileWorker));
-    if (firstError) {
-      failed = true;
-      const { error, file, index } = firstError;
-      const cancelled = error.name === "AbortError";
-      if (!cancelled) panel.classList.add("upload-error");
-      $("#upload-heading").textContent = cancelled ? "アップロードを停止しました" : "アップロード停止";
+    if (state.uploadAbort.signal.aborted) {
+      cancelled = true;
+      $("#upload-heading").textContent = "アップロードを停止しました";
       $("#upload-status").textContent = `${completed} / ${total}件完了`;
-      $("#upload-file-progress").textContent = cancelled ? "未完了分は保存されていません" : `${index + 1}件目で停止`;
-      setNotice(cancelled ? `アップロードを停止しました。完了済みの${completed}件は保存されています。` : `${file.name}: ${error.message}`, !cancelled);
+      $("#upload-file-progress").textContent = "未完了分は保存されていません";
+      setNotice(`アップロードを停止しました。完了済みの${completed}件は保存されています。`);
     }
-    if (!failed) {
+    let finalFailures = [];
+    if (!cancelled && deferred.length) {
+      $("#upload-heading").textContent = "エラー分を再試行中";
+      for (const item of deferred.sort((a, b) => a.index - b.index)) {
+        if (state.uploadAbort.signal.aborted) {
+          cancelled = true;
+          break;
+        }
+        const { file, index } = item;
+        const destination = destinations?.get(file);
+        const destinationFolderId = destination?.folderId ?? fixedFolderId;
+        const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
+        try {
+          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker);
+          completed++;
+          tracker.finish(file, completed);
+        } catch (error) {
+          if (error.name === "AbortError") {
+            cancelled = true;
+            break;
+          }
+          tracker.defer(file);
+          finalFailures.push({ file, error });
+        }
+      }
+    }
+    if (cancelled) {
+      $("#upload-heading").textContent = "アップロードを停止しました";
+      $("#upload-status").textContent = `${completed} / ${total}件完了`;
+      $("#upload-file-progress").textContent = "未完了分は保存されていません";
+      setNotice(`アップロードを停止しました。完了済みの${completed}件は保存されています。`);
+    } else if (finalFailures.length) {
+      panel.classList.add("upload-error");
+      $("#upload-heading").textContent = "一部のアップロードに失敗しました";
+      $("#upload-status").textContent = `${completed} / ${total}件完了`;
+      $("#upload-file-progress").textContent = `${finalFailures.length}件エラー`;
+      renderTransferFailures("#upload-failure-summary", "#upload-failed-list", finalFailures);
+      setNotice(`${completed}件を保存しました。保存できなかったデータを一覧に表示しています。`, true);
+    } else {
       panel.classList.add("upload-complete");
       $("#upload-heading").textContent = "アップロード完了";
       $("#upload-file-progress").textContent = "保存完了";
@@ -2245,10 +2490,15 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
     uploadCompleted = true;
     if (signal?.aborted) return;
     tracker.phase(file, "サムネイル処理中…");
-    const thumbnail = await thumbnailPromise;
-    if (thumbnail && !signal?.aborted) {
-      const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, encrypted.fileKey);
-      if (!signal?.aborted) await api(`/files/${init.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
+    try {
+      const thumbnail = await thumbnailPromise;
+      if (thumbnail && !signal?.aborted) {
+        const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, encrypted.fileKey);
+        if (!signal?.aborted) await api(`/files/${init.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
+      }
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      console.warn("Thumbnail upload failed after the file was saved", error);
     }
     tracker.phase(file, "完了");
   } catch (error) {
@@ -2305,8 +2555,9 @@ function createUploadLimiter(limit) {
 function createUploadTracker(files, totalBytes) {
   const startedAt = performance.now();
   const active = new Map();
-  let uploadedBytes = 0;
+  const uploadedByFile = new Map(files.map((file) => [file, 0]));
   const refresh = () => {
+    const uploadedBytes = [...uploadedByFile.values()].reduce((sum, value) => sum + value, 0);
     const elapsedSeconds = Math.max(.25, (performance.now() - startedAt) / 1000);
     const percent = totalBytes ? Math.min(100, Math.round((uploadedBytes / totalBytes) * 100)) : 100;
     const mbps = (uploadedBytes * 8) / elapsedSeconds / 1_000_000;
@@ -2318,11 +2569,17 @@ function createUploadTracker(files, totalBytes) {
   };
   return {
     start(file) { active.set(file, 0); refresh(); },
-    progress(file, delta, fileBytes) { uploadedBytes += delta; active.set(file, fileBytes); refresh(); },
+    progress(file, _delta, fileBytes) { uploadedByFile.set(file, fileBytes); active.set(file, fileBytes); refresh(); },
     phase(file, label) { if (active.has(file)) $("#upload-file-progress").textContent = label; },
     finish(file, completed) {
+      uploadedByFile.set(file, file.size);
       active.delete(file);
       $("#upload-status").textContent = `${completed} / ${files.length}件完了`;
+      refresh();
+    },
+    defer(file) {
+      uploadedByFile.set(file, 0);
+      active.delete(file);
       refresh();
     }
   };
@@ -2601,7 +2858,7 @@ async function openPreview(file, options = {}) {
   $("#preview-size").textContent = formatBytes(file.sizeBytes);
   $("#preview-date").textContent = formatDate(file.createdAt);
   $("#download-link").href = Number(file.cryptoVersion) === 1 ? "#" : `${API}/files/${file.id}/download`;
-  $("#edit-file-button").hidden = !state.session.canEditFiles;
+  $("#edit-file-button").hidden = !canRenameFile(file);
   $("#delete-file-button").hidden = !state.session.canDelete && !state.session.canTrashUnlockedFiles;
   $("#delete-file-button").textContent = state.session.canDelete ? "ゴミ箱へ" : "削除";
   const stage = $("#preview-stage");
@@ -2817,6 +3074,10 @@ function renderVideoPlayer(stage, file, url) {
 function openEditDialog() {
   const file = state.selected;
   if (!file) return;
+  if (!canRenameFile(file)) {
+    setNotice("PWで解除したフォルダ内のファイル名だけ変更できます。", true);
+    return;
+  }
   $("#edit-file-id").value = file.id;
   $("#edit-name").value = file.name;
   $("#edit-error").textContent = "";
@@ -2844,6 +3105,7 @@ async function saveFile(event) {
   try {
     const file = state.selected;
     if (!file || Number(file.id) !== id) throw new Error("変更するファイルをもう一度開いてください。");
+    if (!canRenameFile(file)) throw new Error("PWで解除したフォルダ内のファイル名だけ変更できます。");
     const name = cleanEditableName($("#edit-name").value);
     if (Number(file.cryptoVersion) === 1) {
       if (!file.fileKey) throw new Error("ファイルの暗号化鍵を解除してください。");
@@ -2899,26 +3161,38 @@ async function approveDeletionRequest(item) {
 }
 
 async function showTrashActions(file) {
-  state.selected = file;
+  state.selected = { ...file, trashTargetType: "file" };
   $("#trash-file-name").textContent = file.name;
+  $("#trash-action-note").textContent = "元に戻すか、完全に削除する操作を選んでください。";
   $("#permanent-delete-button").hidden = !state.session.canDelete;
   $("#trash-dialog").showModal();
 }
 
+async function showTrashFolderActions(folder) {
+  state.selected = { ...folder, trashTargetType: "folder" };
+  $("#trash-file-name").textContent = folder.name;
+  $("#trash-action-note").textContent = "フォルダと、その中にあったデータをまとめて元に戻せます。";
+  $("#permanent-delete-button").hidden = true;
+  $("#trash-dialog").showModal();
+}
+
 async function restoreSelectedFile() {
-  const file = state.selected;
-  if (!file) return;
+  const item = state.selected;
+  if (!item) return;
   try {
-    await api(`/files/${file.id}/restore`, { method: "POST", body: "{}" });
+    const isFolder = item.trashTargetType === "folder";
+    const result = await api(`/${isFolder ? "folders" : "files"}/${item.id}/restore`, { method: "POST", body: "{}" });
     $("#trash-dialog").close();
-    setNotice("ファイルを元に戻しました。");
-    await loadItems();
+    setNotice(isFolder
+      ? `フォルダを中身ごと元に戻しました（合計${Number(result.restored || 1).toLocaleString("ja-JP")}件）。`
+      : "ファイルを元に戻しました。");
+    await Promise.all([loadItems(), loadUsage()]);
   } catch (error) { setNotice(error.message, true); }
 }
 
 async function permanentlyDeleteSelectedFile() {
   const file = state.selected;
-  if (!file || !state.session.canDelete || !confirm("完全に削除すると元に戻せません。削除しますか？")) return;
+  if (!file || file.trashTargetType === "folder" || !state.session.canDelete || !confirm("完全に削除すると元に戻せません。削除しますか？")) return;
   try {
     await api(`/files/${file.id}/permanent`, { method: "DELETE", body: "{}" });
     $("#trash-dialog").close();
@@ -2928,18 +3202,31 @@ async function permanentlyDeleteSelectedFile() {
 }
 
 async function emptyTrash() {
-  const count = state.files.length;
+  const count = state.files.length + state.folders.length;
   if (!count || !state.session?.canDelete) return;
   if (!confirm(`ゴミ箱内の${count}件をすべて完全に削除します。元に戻せません。続けますか？`)) return;
   const button = $("#empty-trash-button");
   button.disabled = true;
-  button.textContent = "削除中…";
+  button.textContent = "削除中 0件";
   try {
-    const result = await api("/trash", { method: "DELETE", body: "{}" });
-    const failed = Number(result.failed || 0);
-    setNotice(failed
-      ? `${result.deleted}件を完全に削除しました。${failed}件は削除できなかったため、ゴミ箱に残しています。`
-      : `${result.deleted}件を完全に削除しました。` , Boolean(failed));
+    let totalDeleted = 0;
+    let expected = 0;
+    let failed = 0;
+    let remaining = 1;
+    while (remaining > 0 && failed === 0) {
+      const result = await api("/trash", { method: "DELETE", body: "{}" });
+      if (!expected) expected = Number(result.totalFiles || 0) + Number(result.totalFolders || 0);
+      totalDeleted += Number(result.deleted || 0) + Number(result.deletedFolders || 0);
+      failed += Number(result.failed || 0);
+      remaining = Number(result.remaining || 0);
+      button.textContent = expected
+        ? `削除中 ${Math.min(totalDeleted, expected).toLocaleString("ja-JP")} / ${expected.toLocaleString("ja-JP")}件`
+        : `削除中 ${totalDeleted.toLocaleString("ja-JP")}件`;
+      if (Number(result.deleted || 0) === 0 && Number(result.deletedFolders || 0) === 0 && remaining > 0) break;
+    }
+    setNotice(failed || remaining
+      ? `${totalDeleted}件を完全に削除しました。削除できなかったデータがあるため、ゴミ箱に残しています。`
+      : `${totalDeleted}件を完全に削除しました。` , Boolean(failed || remaining));
     await Promise.all([loadItems(), loadUsage()]);
   } catch (error) {
     setNotice(error.message, true);

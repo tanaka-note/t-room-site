@@ -3,9 +3,9 @@ const SESSION_COOKIE = "troom_diary_session";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DIARY_ACCOUNTS = [
-  { id: "main-admin", name: "田中宏知", role: "admin", canViewTrash: true, secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
-  { id: "wife-admin", name: "田中暢美", role: "admin", canViewTrash: false, secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" },
-  { id: "viewer", name: "閲覧者", role: "viewer", canViewTrash: false, secretKey: "DIARY_VIEW_PASSWORD_HASH" }
+  { id: "main-admin", name: "田中宏知", role: "admin", canViewTrash: true, canPermanentlyDelete: true, secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
+  { id: "wife-admin", name: "田中暢美", role: "admin", canViewTrash: false, canPermanentlyDelete: false, secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" },
+  { id: "viewer", name: "閲覧者", role: "viewer", canViewTrash: false, canPermanentlyDelete: false, secretKey: "DIARY_VIEW_PASSWORD_HASH" }
 ];
 
 export default {
@@ -59,7 +59,8 @@ async function handleApi(request, env, url, path) {
       authenticated: Boolean(session),
       role: session?.role || null,
       accountName: session?.accountName || null,
-      canViewTrash: Boolean(session?.canViewTrash)
+      canViewTrash: Boolean(session?.canViewTrash),
+      canPermanentlyDelete: Boolean(session?.canPermanentlyDelete)
     });
   }
 
@@ -89,7 +90,8 @@ async function handleApi(request, env, url, path) {
       authenticated: true,
       role: account.role,
       accountName: account.name,
-      canViewTrash: account.canViewTrash
+      canViewTrash: account.canViewTrash,
+      canPermanentlyDelete: account.canPermanentlyDelete
     }, 200, headers);
   }
 
@@ -134,13 +136,19 @@ async function handleApi(request, env, url, path) {
   }
   if (entryMatch && request.method === "DELETE") {
     requireAdmin(session);
-    return moveEntryToTrash(Number(entryMatch[1]), request, env);
+    return moveEntryToTrash(Number(entryMatch[1]), request, env, session);
   }
 
   const restoreMatch = path.match(/^\/api\/entries\/(\d+)\/restore$/);
   if (restoreMatch && request.method === "POST") {
     requireTrashAccess(session);
     return restoreEntry(Number(restoreMatch[1]), env);
+  }
+
+  const permanentDeleteMatch = path.match(/^\/api\/entries\/(\d+)\/permanent$/);
+  if (permanentDeleteMatch && request.method === "DELETE") {
+    requirePermanentDeleteAccess(session);
+    return permanentlyDeleteEntry(Number(permanentDeleteMatch[1]), request, env);
   }
 
   return json({ error: "Not found" }, 404);
@@ -248,7 +256,7 @@ async function listEntries(url, env, session) {
   const statement = `
     SELECT
       e.id, e.entry_date, e.title, e.content, e.author_id, e.author_name, e.created_at, e.updated_at,
-      e.deleted_at, e.revision,
+      e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
     WHERE ${conditions.join(" AND ")}
@@ -267,7 +275,7 @@ async function getEntry(id, env, session) {
   const row = await env.DB.prepare(`
     SELECT
       e.id, e.entry_date, e.title, e.content, e.author_id, e.author_name, e.created_at, e.updated_at,
-      e.deleted_at, e.revision,
+      e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
     WHERE e.id = ? ${deletedClause}
@@ -328,14 +336,15 @@ async function updateEntry(id, request, env) {
   return getEntry(id, env, { role: "admin" });
 }
 
-async function moveEntryToTrash(id, request, env) {
+async function moveEntryToTrash(id, request, env, session) {
   const body = await readJson(request, 4096);
   const revision = Number(body.revision);
   const result = await env.DB.prepare(`
     UPDATE diary_entries
-    SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, revision = revision + 1
+    SET deleted_at = CURRENT_TIMESTAMP, deleted_by_id = ?, deleted_by_name = ?,
+        updated_at = CURRENT_TIMESTAMP, revision = revision + 1
     WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(id, revision).run();
+  `).bind(session.accountId, session.accountName, id, revision).run();
   return result.meta?.changes
     ? json({ ok: true })
     : json({ error: "削除できませんでした。再読み込みしてください。" }, 409);
@@ -344,12 +353,30 @@ async function moveEntryToTrash(id, request, env) {
 async function restoreEntry(id, env) {
   const result = await env.DB.prepare(`
     UPDATE diary_entries
-    SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP, revision = revision + 1
+    SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL,
+        updated_at = CURRENT_TIMESTAMP, revision = revision + 1
     WHERE id = ? AND deleted_at IS NOT NULL
   `).bind(id).run();
   return result.meta?.changes
     ? getEntry(id, env, { role: "admin" })
     : json({ error: "復元する日記が見つかりません。" }, 404);
+}
+
+async function permanentlyDeleteEntry(id, request, env) {
+  const body = await readJson(request, 4096);
+  const revision = Number(body.revision);
+  if (!Number.isInteger(revision) || revision < 1) {
+    return json({ error: "削除情報を確認できませんでした。再読み込みしてください。" }, 400);
+  }
+
+  const result = await env.DB.prepare(`
+    DELETE FROM diary_entries
+    WHERE id = ? AND revision = ? AND deleted_at IS NOT NULL
+  `).bind(id, revision).run();
+
+  return result.meta?.changes
+    ? json({ ok: true })
+    : json({ error: "完全削除できませんでした。再読み込みしてください。" }, 409);
 }
 
 async function replaceTags(env, entryId, tags) {
@@ -393,6 +420,8 @@ function serializeEntry(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    deletedById: row.deleted_by_id || null,
+    deletedByName: row.deleted_by_name || null,
     revision: Number(row.revision)
   };
 }
@@ -412,7 +441,12 @@ async function readSession(request, env) {
     const account = DIARY_ACCOUNTS.find((candidate) => candidate.id === payload.accountId);
     if (!account || account.role !== payload.role) return null;
     if (String(payload.version || "1") !== String(env.SESSION_VERSION || "1")) return null;
-    return { ...payload, accountName: account.name, canViewTrash: account.canViewTrash };
+    return {
+      ...payload,
+      accountName: account.name,
+      canViewTrash: account.canViewTrash,
+      canPermanentlyDelete: account.canPermanentlyDelete
+    };
   } catch {
     return null;
   }
@@ -501,6 +535,10 @@ function requireAdmin(session) {
 
 function requireTrashAccess(session) {
   if (!session.canViewTrash) throw new HttpError(403, "ゴミ箱を操作する権限がありません。");
+}
+
+function requirePermanentDeleteAccess(session) {
+  if (!session.canPermanentlyDelete) throw new HttpError(403, "完全削除する権限がありません。");
 }
 
 function normalizeSearch(value, maxLength) {

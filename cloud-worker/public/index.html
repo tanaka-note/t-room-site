@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Storage</title>
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260809-17">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260809-18">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -124,6 +124,10 @@
         </div>
         <div class="upload-track"><span id="upload-progress"></span></div>
         <p class="upload-file-row"><span id="upload-file-name"></span><span><span id="upload-speed"></span><span id="upload-file-progress"></span></span></p>
+        <div id="upload-failure-summary" class="transfer-error-summary" hidden>
+          <strong>アップロードエラーになったデータ</strong>
+          <ul id="upload-failed-list"></ul>
+        </div>
       </div>
       <p id="notice" class="notice" role="status"></p>
       <div id="content-grid" class="content-grid" aria-live="polite"></div>
@@ -229,7 +233,7 @@
       <p id="folder-inherited-settings-note" class="dialog-note" hidden>このフォルダは親フォルダの保護を引き継いでいます。個別のパスワード設定はありません。</p>
       <p id="folder-settings-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions">
-        <button id="delete-folder-button" class="danger-button" type="button">空のフォルダを削除</button>
+        <button id="delete-folder-button" class="danger-button" type="button">フォルダを削除</button>
         <button id="share-folder-button" class="secondary-button" type="button">共有URLを作成</button>
         <button class="primary-button" type="submit">保存する</button>
       </div>
@@ -286,7 +290,7 @@
 
   <dialog id="trash-dialog" class="form-dialog compact-dialog">
     <div class="dialog-head"><div><span class="file-badge">TRASH</span><h2 id="trash-file-name">ファイル操作</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
-    <p class="dialog-note standalone-note">元に戻すか、完全に削除する操作を選んでください。</p>
+    <p id="trash-action-note" class="dialog-note standalone-note">元に戻すか、完全に削除する操作を選んでください。</p>
     <div class="dialog-actions stacked-actions">
       <button id="restore-file-button" class="primary-button" type="button">元に戻す</button>
       <button id="permanent-delete-button" class="danger-button" type="button">完全に削除</button>
@@ -361,6 +365,10 @@
         </div>
         <div class="upload-track download-track"><span id="download-progress"></span></div>
         <p id="download-current" class="download-current"></p>
+        <div id="download-failure-summary" class="transfer-error-summary transfer-error-summary-dark" hidden>
+          <strong>ダウンロードエラーになったデータ</strong>
+          <ul id="download-failed-list"></ul>
+        </div>
         <label class="wake-lock-setting">
           <input id="keep-screen-awake" type="checkbox" checked>
           <span><strong>ダウンロード中は画面を消灯しない</strong><small id="wake-lock-status">端末が対応している場合に有効になります。</small></span>
@@ -380,6 +388,6 @@
   <script src="/cloud/file-safety.js?v=20260808-1" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-3" defer></script>
-  <script src="/cloud/cloud.js?v=20260809-55" defer></script>
+  <script src="/cloud/cloud.js?v=20260809-61" defer></script>
 </body>
 </html>

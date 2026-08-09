@@ -7,8 +7,8 @@ const LOGIN_WINDOW_SECONDS = 15 * 60;
 const encoder = new TextEncoder();
 
 const ACCOUNTS = [
-  { role: "admin", label: "管理者", secretKey: "ADMIN_PASSWORD_HASH", proofSecretKey: "ADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: true, canTrashUnlockedFiles: true, canEditFiles: true, canEditFolders: true, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false },
-  { role: "subadmin", label: "副管理者", secretKey: "SUBADMIN_PASSWORD_HASH", proofSecretKey: "SUBADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: false, canTrashUnlockedFiles: true, canEditFiles: false, canEditFolders: false, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false }
+  { role: "admin", label: "管理者", secretKey: "ADMIN_PASSWORD_HASH", proofSecretKey: "ADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: true, canTrashUnlockedFiles: true, canEditFiles: true, canEditFolders: true, canRenameUnlockedItems: true, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false },
+  { role: "subadmin", label: "副管理者", secretKey: "SUBADMIN_PASSWORD_HASH", proofSecretKey: "SUBADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: false, canTrashUnlockedFiles: true, canEditFiles: false, canEditFolders: false, canRenameUnlockedItems: true, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false }
 ];
 
 export default {
@@ -99,6 +99,8 @@ async function handleApi(request, env, url, path) {
   const folderMatch = path.match(/^\/api\/folders\/(\d+)$/);
   if (folderMatch && request.method === "PATCH") return updateFolder(Number(folderMatch[1]), request, env, session);
   if (folderMatch && request.method === "DELETE") return deleteFolder(Number(folderMatch[1]), env, session);
+  const folderRestoreMatch = path.match(/^\/api\/folders\/(\d+)\/restore$/);
+  if (folderRestoreMatch && request.method === "POST") return restoreFolder(Number(folderRestoreMatch[1]), env, session);
   const folderUnlockMatch = path.match(/^\/api\/folders\/(\d+)\/unlock$/);
   if (folderUnlockMatch && request.method === "POST") return unlockFolder(Number(folderUnlockMatch[1]), request, env, session);
 
@@ -635,11 +637,17 @@ async function createFolder(request, env, session) {
 async function updateFolder(id, request, env, session) {
   requireFolderEdit(session);
   const folder = await requireFolder(env, id);
-  await requireFolderAccess(env, id, session);
+  const unlocked = await requireFolderAccess(env, id, session);
   const body = await readJson(request, 8192);
   const name = validName(body.name);
   const moving = Object.prototype.hasOwnProperty.call(body, "parentId");
   const parentId = moving ? optionalId(body.parentId) : folder.parent_id;
+  const passwordAction = body.passwordAction === "replace" ? "replace" : "keep";
+  if (!session.canEditFolders) {
+    if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内の名前だけ変更できます。");
+    if (moving) throw new HttpError(403, "副管理者はフォルダを移動できません。");
+    if (passwordAction !== "keep") throw new HttpError(403, "フォルダPWを変更できるのは管理者だけです。");
+  }
   let parentPackage = null;
   if (moving) {
     if (parentId) {
@@ -652,7 +660,6 @@ async function updateFolder(id, request, env, session) {
       parentPackage = normalizeParentWrappedFolder(body, false);
     }
   }
-  const passwordAction = body.passwordAction === "replace" ? "replace" : "keep";
   if (passwordAction === "replace") {
     if (folder.parent_id && !folder.password_hash) throw new HttpError(400, "親フォルダの保護を引き継ぐフォルダには個別PWを設定できません。");
     const authProof = validCryptoText(body.authProof, 256, "フォルダ認証");
@@ -680,13 +687,86 @@ async function deleteFolder(id, env, session) {
   requireDelete(session);
   await requireFolder(env, id);
   await requireFolderAccess(env, id, session);
-  const children = await env.DB.prepare(`SELECT
-    (SELECT COUNT(*) FROM cloud_folders WHERE parent_id = ? AND deleted_at IS NULL) +
-    (SELECT COUNT(*) FROM cloud_files WHERE folder_id = ? AND deleted_at IS NULL) AS count`).bind(id, id).first();
-  if (Number(children?.count || 0) > 0) throw new HttpError(409, "空のフォルダだけ削除できます。");
-  await env.DB.prepare("UPDATE cloud_folders SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
-  await audit(env, "folder_deleted", session, "folder", id);
-  return json({ ok: true });
+  const deletedAt = new Date().toISOString();
+  const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+      UNION ALL
+      SELECT child.id FROM cloud_folders child
+      JOIN folder_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at IS NULL
+    )
+    SELECT
+      (SELECT COUNT(*) FROM folder_tree) AS folderCount,
+      (SELECT COUNT(*) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at IS NULL) AS fileCount`)
+    .bind(id).first();
+  const folderCount = Number(summary?.folderCount || 0);
+  const fileCount = Number(summary?.fileCount || 0);
+  if (!folderCount) throw new HttpError(404, "フォルダが見つかりません。");
+  await env.DB.batch([
+    env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+        UNION ALL
+        SELECT child.id FROM cloud_folders child
+        JOIN folder_tree parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NULL
+      )
+      UPDATE cloud_files SET deleted_at = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE deleted_at IS NULL AND folder_id IN (SELECT id FROM folder_tree)`).bind(id, deletedAt),
+    env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+        UNION ALL
+        SELECT child.id FROM cloud_folders child
+        JOIN folder_tree parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NULL
+      )
+      UPDATE cloud_folders SET deleted_at = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id IN (SELECT id FROM folder_tree)`).bind(id, deletedAt)
+  ]);
+  await audit(env, "folder_trashed", session, "folder", id, { folderCount, fileCount });
+  return json({ ok: true, folderCount, fileCount, deleted: folderCount + fileCount });
+}
+
+async function restoreFolder(id, env, session) {
+  requireDelete(session);
+  const folder = await env.DB.prepare("SELECT id, deleted_at AS deletedAt FROM cloud_folders WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
+  if (!folder) throw new HttpError(404, "ゴミ箱にフォルダが見つかりません。");
+  const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
+      UNION ALL
+      SELECT child.id FROM cloud_folders child
+      JOIN folder_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at = ?
+    )
+    SELECT
+      (SELECT COUNT(*) FROM folder_tree) AS folderCount,
+      (SELECT COUNT(*) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ?) AS fileCount`)
+    .bind(id, folder.deletedAt, folder.deletedAt, folder.deletedAt).first();
+  const folderCount = Number(summary?.folderCount || 0);
+  const fileCount = Number(summary?.fileCount || 0);
+  await env.DB.batch([
+    env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
+        UNION ALL
+        SELECT child.id FROM cloud_folders child
+        JOIN folder_tree parent ON child.parent_id = parent.id
+        WHERE child.deleted_at = ?
+      )
+      UPDATE cloud_files SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE deleted_at = ? AND folder_id IN (SELECT id FROM folder_tree)`)
+      .bind(id, folder.deletedAt, folder.deletedAt, folder.deletedAt),
+    env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
+        UNION ALL
+        SELECT child.id FROM cloud_folders child
+        JOIN folder_tree parent ON child.parent_id = parent.id
+        WHERE child.deleted_at = ?
+      )
+      UPDATE cloud_folders SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id IN (SELECT id FROM folder_tree)`)
+      .bind(id, folder.deletedAt, folder.deletedAt)
+  ]);
+  await audit(env, "folder_restored", session, "folder", id, { folderCount, fileCount });
+  return json({ ok: true, folderCount, fileCount, restored: folderCount + fileCount });
 }
 
 async function unlockFolder(id, request, env, session) {
@@ -776,12 +856,16 @@ async function getFile(id, env, session) {
 async function updateFile(id, request, env, session) {
   requireFileEdit(session);
   const file = await requireReadyFile(env, id, false);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  const unlocked = file.folder_id ? await requireFolderAccess(env, file.folder_id, session) : false;
   const body = await readJson(request, 16384);
+  const moving = Object.prototype.hasOwnProperty.call(body, "folderId");
+  if (!session.canEditFiles) {
+    if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内のファイル名だけ変更できます。");
+    if (moving) throw new HttpError(403, "副管理者はファイルを移動できません。");
+  }
   if (Number(file.crypto_version) === 1) {
     const encryptedMetadata = body.encryptedMetadata === undefined ? file.encrypted_metadata : validCryptoText(body.encryptedMetadata, 4096, "ファイル情報");
     const metadataIv = body.metadataIv === undefined ? file.metadata_iv : validCryptoText(body.metadataIv, 64, "ファイル情報IV");
-    const moving = Object.prototype.hasOwnProperty.call(body, "folderId");
     const folderId = moving ? optionalId(body.folderId) : file.folder_id;
     if (!folderId) throw new HttpError(400, "ファイルはPW付きフォルダ内に保存してください。");
     if (moving) {
@@ -848,8 +932,12 @@ async function permanentlyDeleteFile(id, env, session) {
 
 async function emptyTrash(env, session) {
   requireDelete(session);
-  const rows = await env.DB.prepare("SELECT id, object_key, thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL ORDER BY id").all();
+  const totals = await env.DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM cloud_files WHERE deleted_at IS NOT NULL) AS fileCount,
+    (SELECT COUNT(*) FROM cloud_folders WHERE deleted_at IS NOT NULL) AS folderCount`).first();
+  const rows = await env.DB.prepare("SELECT id, object_key, thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL ORDER BY id LIMIT 20").all();
   let deleted = 0;
+  let deletedFolders = 0;
   let failed = 0;
   for (const file of rows.results || []) {
     try {
@@ -863,7 +951,25 @@ async function emptyTrash(env, session) {
       failed += 1;
     }
   }
-  return json({ ok: failed === 0, deleted, failed });
+  const remainingRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM cloud_files WHERE deleted_at IS NOT NULL").first();
+  const remaining = Number(remainingRow?.count || 0);
+  if (failed === 0 && remaining === 0) {
+    try {
+      const result = await env.DB.prepare("DELETE FROM cloud_folders WHERE deleted_at IS NOT NULL").run();
+      deletedFolders = Number(result.meta?.changes || 0);
+    } catch {
+      failed += 1;
+    }
+  }
+  return json({
+    ok: failed === 0 && remaining === 0,
+    deleted,
+    deletedFolders,
+    failed,
+    remaining,
+    totalFiles: Number(totals?.fileCount || 0),
+    totalFolders: Number(totals?.folderCount || 0)
+  });
 }
 
 async function putThumbnail(id, request, env, session) {
@@ -919,8 +1025,9 @@ async function listTrash(env, session) {
       fo.crypto_version AS folderCryptoVersion, fo.encrypted_name AS folderEncryptedName, fo.name_iv AS folderNameIv,
       fo.password_salt AS folderPasswordSalt, fo.password_wrapped_key AS folderPasswordWrappedKey,
       fo.password_wrap_iv AS folderPasswordWrapIv, fo.admin_wrapped_key AS folderAdminWrappedKey
-    FROM cloud_files f LEFT JOIN cloud_folders fo ON fo.id = f.folder_id
-    WHERE f.folder_id IS NOT NULL AND f.deleted_at IS NOT NULL ORDER BY f.deleted_at DESC LIMIT 500
+    FROM cloud_files f JOIN cloud_folders fo ON fo.id = f.folder_id
+    WHERE f.folder_id IS NOT NULL AND f.deleted_at IS NOT NULL AND fo.deleted_at IS NULL
+    ORDER BY f.deleted_at DESC LIMIT 500
   `).all();
   const files = [];
   for (const file of result.results || []) {
@@ -931,7 +1038,42 @@ async function listTrash(env, session) {
       if (!(error instanceof HttpError) || error.status !== 423) throw error;
     }
   }
-  return json({ files });
+  const folderResult = await env.DB.prepare(`SELECT f.id, f.parent_id AS parentId, f.name,
+      f.created_at AS createdAt, f.updated_at AS updatedAt, f.deleted_at AS deletedAt,
+      f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
+      f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
+      f.password_wrap_iv AS passwordWrapIv, f.admin_wrapped_key AS adminWrappedKey,
+      f.parent_wrapped_key AS parentWrappedKey, f.parent_wrap_iv AS parentWrapIv,
+      f.password_hash IS NOT NULL AS isProtected
+    FROM cloud_folders f
+    LEFT JOIN cloud_folders parent ON parent.id = f.parent_id
+    WHERE f.deleted_at IS NOT NULL
+      AND (parent.id IS NULL OR parent.deleted_at IS NULL OR parent.deleted_at <> f.deleted_at)
+    ORDER BY f.deleted_at DESC, f.id DESC LIMIT 500`).all();
+  const folders = [];
+  for (const folder of folderResult.results || []) {
+    const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
+        UNION ALL
+        SELECT child.id FROM cloud_folders child
+        JOIN folder_tree parent ON child.parent_id = parent.id
+        WHERE child.deleted_at = ?
+      )
+      SELECT
+        (SELECT COUNT(*) FROM folder_tree) AS folderCount,
+        (SELECT COUNT(*) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ?) AS fileCount,
+        (SELECT COALESCE(SUM(size_bytes), 0) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ?) AS sizeBytes`)
+      .bind(folder.id, folder.deletedAt, folder.deletedAt, folder.deletedAt, folder.deletedAt).first();
+    folders.push({
+      ...folder,
+      folderCount: Math.max(0, Number(summary?.folderCount || 1) - 1),
+      fileCount: Number(summary?.fileCount || 0),
+      sizeBytes: Number(summary?.sizeBytes || 0),
+      isUnlocked: 1,
+      adminAccess: true
+    });
+  }
+  return json({ files, folders });
 }
 
 async function getUsage(env, session) {
@@ -1407,6 +1549,7 @@ async function readSession(request, env) {
       canTrashUnlockedFiles: account.canTrashUnlockedFiles,
       canEditFiles: account.canEditFiles,
       canEditFolders: account.canEditFolders,
+      canRenameUnlockedItems: account.canRenameUnlockedItems,
       canViewHistory: account.canViewHistory,
       canRequestDelete: account.canRequestDelete,
       canReviewDeletion: account.canReviewDeletion,
@@ -1547,13 +1690,13 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }
 function requireUploadOwnership(session, file) { if (session.role !== "admin" && file.created_by !== session.role) throw new HttpError(403, "別アカウントの処理途中アップロードは操作できません。"); }
 function requireDelete(session) { if (!session.canDelete) throw new HttpError(403, "副管理者は削除できません。"); }
-function requireFileEdit(session) { if (!session.canEditFiles) throw new HttpError(403, "副管理者は既存ファイルの情報を変更できません。"); }
-function requireFolderEdit(session) { if (!session.canEditFolders) throw new HttpError(403, "副管理者はフォルダ名やPWを変更できません。"); }
+function requireFileEdit(session) { if (!session.canEditFiles && !session.canRenameUnlockedItems) throw new HttpError(403, "既存ファイルの情報を変更できません。"); }
+function requireFolderEdit(session) { if (!session.canEditFolders && !session.canRenameUnlockedItems) throw new HttpError(403, "フォルダ情報を変更できません。"); }
 function requireHistory(session) { if (!session.canViewHistory) throw new HttpError(403, "アップロード履歴は管理者のみ確認できます。"); }
 function requireDeletionRequest(session) { if (!session.canRequestDelete) throw new HttpError(403, "削除申請は副管理者のみ行えます。"); }
 function requireDeletionReview(session) { if (!session.canReviewDeletion) throw new HttpError(403, "削除申請の確認は管理者のみ行えます。"); }

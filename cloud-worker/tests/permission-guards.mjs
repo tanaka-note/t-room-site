@@ -21,7 +21,7 @@ function requires(name, guard) {
 
 for (const name of ["createShare", "listShares", "stopShare", "listAdminShareEvents"]) requires(name, "requireAdmin");
 for (const name of ["createFolder", "createUpload", "uploadPart", "completeUpload", "cancelUpload", "putThumbnail"]) requires(name, "requireUpload");
-for (const name of ["deleteFolder", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");
+for (const name of ["deleteFolder", "restoreFolder", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");
 requires("updateFolder", "requireFolderEdit");
 requires("updateFile", "requireFileEdit");
 requires("requestFileDeletion", "requireDeletionRequest");
@@ -33,6 +33,15 @@ for (const name of ["uploadPart", "completeUpload", "cancelUpload"]) {
 
 if (!source.includes('role: "subadmin"') || !source.includes("canDelete: false") || !source.includes("canEditFiles: false") || !source.includes("canEditFolders: false")) {
   throw new Error("副管理者の禁止権限を確認できません。");
+}
+if (!source.includes('role: "subadmin"') || !source.includes("canRenameUnlockedItems: true")) {
+  throw new Error("副管理者の解除済みフォルダ内名称変更権限を確認できません。");
+}
+if (!functionBody("updateFile").includes("if (!unlocked)") || !functionBody("updateFile").includes("if (moving)")) {
+  throw new Error("副管理者のファイル名変更が解除済みフォルダ内に限定されていません。");
+}
+if (!functionBody("updateFolder").includes("if (!unlocked)") || !functionBody("updateFolder").includes('passwordAction !== "keep"')) {
+  throw new Error("副管理者のフォルダ名変更が解除済み・PW維持に限定されていません。");
 }
 if (!functionBody("moveFileToTrash").includes("canTrashUnlockedFiles") || !functionBody("moveFileToTrash").includes("requireFolderAccess(env, file.folder_id, session)")) {
   throw new Error("副管理者のPW解除済みフォルダ内削除を確認できません。");

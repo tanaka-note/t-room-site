@@ -127,6 +127,7 @@
       </div>
       <h2 id="detail-title"></h2>
       <p id="detail-author" class="entry-author"></p>
+      <p id="detail-deletion" class="entry-author" hidden></p>
       <div id="detail-tags" class="diary-tags"></div>
       <div id="detail-content" class="entry-content"></div>
       <div id="detail-actions" class="dialog-actions" hidden>
@@ -135,8 +136,22 @@
       </div>
       <div id="restore-actions" class="dialog-actions" hidden>
         <button id="restore-entry-button" class="primary-button" type="button">日記を復元</button>
+        <button id="permanently-delete-entry-button" class="danger-button" type="button" hidden>完全に削除</button>
       </div>
     </article>
+  </dialog>
+
+  <dialog id="delete-confirm-dialog" class="entry-dialog">
+    <section class="entry-detail">
+      <div class="dialog-head">
+        <h2 id="delete-confirm-title">本当に削除しますか？</h2>
+      </div>
+      <p id="delete-confirm-message" class="field-help"></p>
+      <div class="dialog-actions">
+        <button id="delete-confirm-no" class="quiet-button" type="button">いいえ</button>
+        <button id="delete-confirm-yes" class="danger-button" type="button">はい</button>
+      </div>
+    </section>
   </dialog>
 
   <dialog id="editor-dialog" class="entry-dialog editor-dialog">
@@ -205,6 +220,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=6" defer></script>
+  <script src="/diary/diary.js?v=7" defer></script>
 </body>
 </html>

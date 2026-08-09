@@ -552,49 +552,64 @@ async function downloadFiles(files, button, bulk) {
     return;
   }
   const originalLabel = button.textContent;
+  renderSharedDownloadFailures([]);
   button.disabled = true;
   state.downloadAbort = new AbortController();
   state.downloadActive = true;
   $("#share-selection-cancel").hidden = !bulk;
   if ($("#share-keep-screen-awake").checked) await requestDownloadWakeLock();
   let completed = 0;
+  let deferred = [];
+  let activeFile = null;
   try {
-    for (const file of files) {
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
       if (state.downloadAbort.signal.aborted) throw new DOMException("ダウンロードを停止しました", "AbortError");
-      const prefix = files.length > 1 ? `${completed + 1} / ${files.length}件目 ` : "";
+      activeFile = file;
+      const prefix = files.length > 1 ? `${index + 1} / ${files.length}件目 ` : "";
       const targetHandle = targets.get(Number(file.id)) || null;
       try {
-        if (targetHandle) {
-          await TCloudMedia.streamDownload(file, file.fileKey, `${API}/files/${file.id}/download`, targetHandle, {
-            signal: state.downloadAbort.signal,
-            onProgress: (done, total) => { button.textContent = `${prefix}保存中 ${total ? Math.round(done / total * 100) : 100}%`; }
-          });
-        } else {
-          const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/download`, {
-            signal: state.downloadAbort.signal,
-            onProgress: (done, total) => { button.textContent = `${prefix}準備中 ${total ? Math.round(done / total * 100) : 100}%`; }
-          });
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = TCloudMedia.safeFilename(file.name);
-          document.body.append(link);
-          link.click();
-          link.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 60_000);
-        }
+        await downloadSharedFile(file, targetHandle, button, prefix, state.downloadAbort.signal);
         completed++;
+        activeFile = null;
         await recordEvent(file.id, "download_completed");
       } catch (error) {
-        await recordEvent(file.id, "download_failed", error.name === "AbortError" ? "cancelled" : String(error.message).slice(0, 80));
-        throw error;
+        if (error.name === "AbortError") throw error;
+        deferred.push({ file, error });
+        activeFile = null;
       }
     }
-    if (bulk) {
+    if (deferred.length) {
+      setNotice("エラーになったデータを最後に再試行しています。");
+      const retryFailures = [];
+      for (let index = 0; index < deferred.length; index++) {
+        if (state.downloadAbort.signal.aborted) throw new DOMException("ダウンロードを停止しました", "AbortError");
+        const { file } = deferred[index];
+        activeFile = file;
+        const prefix = `再試行 ${index + 1} / ${deferred.length}件 `;
+        try {
+          await downloadSharedFile(file, targets.get(Number(file.id)) || null, button, prefix, state.downloadAbort.signal);
+          completed++;
+          activeFile = null;
+          await recordEvent(file.id, "download_completed");
+        } catch (error) {
+          if (error.name === "AbortError") throw error;
+          retryFailures.push({ file, error });
+          activeFile = null;
+          await recordEvent(file.id, "download_failed", String(error.message).slice(0, 80));
+        }
+      }
+      deferred = retryFailures;
+    }
+    if (deferred.length) {
+      setNotice(`${completed}件を保存し、${deferred.length}件は保存できませんでした。`, true);
+      renderSharedDownloadFailures(deferred);
+    } else if (bulk) {
       setNotice(`${completed}件をZIP化せず、個別ファイルとして保存しました。`);
       clearFileSelection();
     }
   } catch (error) {
+    if (error.name === "AbortError" && activeFile) await recordEvent(activeFile.id, "download_failed", "cancelled");
     setNotice(error.name === "AbortError" ? `ダウンロードを停止しました。完了済みは${completed}件です。` : error.message, error.name !== "AbortError");
   } finally {
     state.downloadActive = false;
@@ -604,6 +619,36 @@ async function downloadFiles(files, button, bulk) {
     button.textContent = originalLabel;
     $("#share-selection-cancel").hidden = true;
   }
+}
+
+async function downloadSharedFile(file, targetHandle, button, prefix, signal) {
+  if (targetHandle) {
+    await TCloudMedia.streamDownload(file, file.fileKey, `${API}/files/${file.id}/download`, targetHandle, {
+      signal,
+      onProgress: (done, total) => { button.textContent = `${prefix}保存中 ${total ? Math.round(done / total * 100) : 100}%`; }
+    });
+    return;
+  }
+  const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/download`, {
+    signal,
+    onProgress: (done, total) => { button.textContent = `${prefix}準備中 ${total ? Math.round(done / total * 100) : 100}%`; }
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = TCloudMedia.safeFilename(file.name);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+function renderSharedDownloadFailures(failures) {
+  const summary = $("#share-download-failure-summary");
+  const list = $("#share-download-failed-list");
+  if (!summary || !list) return;
+  summary.hidden = !failures.length;
+  list.innerHTML = failures.map(({ file, error }) => `<li><strong>${escapeHtml(file.name)}</strong>${error?.message ? ` — ${escapeHtml(error.message)}` : ""}</li>`).join("");
 }
 
 function cancelSharedDownloads() {

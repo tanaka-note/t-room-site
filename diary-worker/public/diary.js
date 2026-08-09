@@ -4,6 +4,7 @@
     role: null,
     accountName: null,
     canViewTrash: false,
+    canPermanentlyDelete: false,
     entries: [],
     entryMap: new Map(),
     offset: 0,
@@ -17,7 +18,8 @@
     dateDraft: null,
     dateWheelTimers: {},
     searchTimer: null,
-    requestId: 0
+    requestId: 0,
+    deleteMode: null
   };
 
   const elements = {
@@ -45,6 +47,7 @@
     detailDate: document.querySelector("#detail-date"),
     detailTitle: document.querySelector("#detail-title"),
     detailAuthor: document.querySelector("#detail-author"),
+    detailDeletion: document.querySelector("#detail-deletion"),
     detailTags: document.querySelector("#detail-tags"),
     detailContent: document.querySelector("#detail-content"),
     detailActions: document.querySelector("#detail-actions"),
@@ -52,6 +55,12 @@
     editEntryButton: document.querySelector("#edit-entry-button"),
     deleteEntryButton: document.querySelector("#delete-entry-button"),
     restoreEntryButton: document.querySelector("#restore-entry-button"),
+    permanentlyDeleteEntryButton: document.querySelector("#permanently-delete-entry-button"),
+    deleteConfirmDialog: document.querySelector("#delete-confirm-dialog"),
+    deleteConfirmTitle: document.querySelector("#delete-confirm-title"),
+    deleteConfirmMessage: document.querySelector("#delete-confirm-message"),
+    deleteConfirmNo: document.querySelector("#delete-confirm-no"),
+    deleteConfirmYes: document.querySelector("#delete-confirm-yes"),
     editorDialog: document.querySelector("#editor-dialog"),
     entryForm: document.querySelector("#entry-form"),
     editorTitle: document.querySelector("#editor-title"),
@@ -120,8 +129,15 @@
         openEditor(state.activeEntry);
       }
     });
-    elements.deleteEntryButton.addEventListener("click", moveActiveEntryToTrash);
+    elements.deleteEntryButton.addEventListener("click", requestEntryDeletion);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
+    elements.permanentlyDeleteEntryButton.addEventListener("click", requestPermanentDeletion);
+    elements.deleteConfirmNo.addEventListener("click", closeDeleteConfirmation);
+    elements.deleteConfirmYes.addEventListener("click", confirmEntryDeletion);
+    elements.deleteConfirmDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeDeleteConfirmation();
+    });
     elements.entryForm.addEventListener("submit", saveEntry);
     elements.todayButton.addEventListener("click", setEntryDateToToday);
     elements.entryDate.addEventListener("pointerdown", handleDatePointerDown);
@@ -198,6 +214,7 @@
     state.role = session.role;
     state.accountName = session.accountName;
     state.canViewTrash = Boolean(session.canViewTrash);
+    state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     elements.roleLabel.textContent = session.role === "admin"
@@ -298,6 +315,12 @@
       const meta = document.createElement("div");
       meta.className = "entry-meta";
       meta.append(time, author);
+      if (state.trash && entry.deletedByName) {
+        const deletedBy = document.createElement("span");
+        deletedBy.className = "entry-author";
+        deletedBy.textContent = `削除者：${entry.deletedByName}`;
+        meta.append(deletedBy);
+      }
       const title = document.createElement("h3");
       title.textContent = entry.title;
       const summary = document.createElement("p");
@@ -383,11 +406,15 @@
     elements.detailDate.textContent = formatDate(entry.entryDate);
     elements.detailTitle.textContent = entry.title;
     elements.detailAuthor.textContent = `投稿者：${entry.authorName}`;
+    elements.detailDeletion.hidden = !entry.deletedAt || !entry.deletedByName;
+    elements.detailDeletion.textContent = entry.deletedByName ? `削除者：${entry.deletedByName}` : "";
     elements.detailContent.textContent = entry.content;
     elements.detailTags.replaceChildren(...createTagElements(entry.tags));
     const isDeleted = Boolean(entry.deletedAt);
     elements.detailActions.hidden = state.role !== "admin" || isDeleted;
-    elements.restoreActions.hidden = state.role !== "admin" || !isDeleted;
+    elements.restoreActions.hidden = !state.canViewTrash || !isDeleted;
+    elements.deleteEntryButton.textContent = state.canViewTrash ? "ゴミ箱へ移動" : "削除";
+    elements.permanentlyDeleteEntryButton.hidden = !state.canPermanentlyDelete || !isDeleted;
   }
 
   function openEditor(entry = null) {
@@ -582,10 +609,43 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
+  function requestEntryDeletion() {
+    if (!state.activeEntry) return;
+    state.deleteMode = "trash";
+    elements.deleteConfirmTitle.textContent = "本当に削除しますか？";
+    elements.deleteConfirmMessage.textContent = state.canViewTrash
+      ? `「${state.activeEntry.title}」をゴミ箱へ移動します。`
+      : "";
+    elements.deleteConfirmYes.textContent = "はい";
+    elements.deleteConfirmDialog.showModal();
+  }
+
+  function requestPermanentDeletion() {
+    if (!state.activeEntry || !state.canPermanentlyDelete || !state.activeEntry.deletedAt) return;
+    state.deleteMode = "permanent";
+    elements.deleteConfirmTitle.textContent = "本当に完全削除しますか？";
+    elements.deleteConfirmMessage.textContent = "この操作は取り消せません。";
+    elements.deleteConfirmYes.textContent = "完全に削除";
+    elements.deleteConfirmDialog.showModal();
+  }
+
+  function closeDeleteConfirmation() {
+    state.deleteMode = null;
+    if (elements.deleteConfirmDialog.open) elements.deleteConfirmDialog.close();
+  }
+
+  async function confirmEntryDeletion() {
+    const mode = state.deleteMode;
+    closeDeleteConfirmation();
+    if (mode === "permanent") await permanentlyDeleteActiveEntry();
+    else if (mode === "trash") await moveActiveEntryToTrash();
+  }
+
   async function moveActiveEntryToTrash() {
     const entry = state.activeEntry;
-    if (!entry || !window.confirm(`「${entry.title}」をゴミ箱へ移動しますか？`)) return;
-    setBusy(elements.deleteEntryButton, true, "移動中...");
+    if (!entry) return;
+    const privateDeletion = !state.canViewTrash;
+    setBusy(elements.deleteEntryButton, true, privateDeletion ? "削除中..." : "移動中...");
     try {
       await api(`/entries/${entry.id}`, {
         method: "DELETE",
@@ -593,12 +653,32 @@
       });
       elements.entryDialog.close();
       state.activeEntry = null;
-      showToast("日記をゴミ箱へ移動しました。");
+      showToast(privateDeletion ? "削除しました。" : "日記をゴミ箱へ移動しました。");
       await Promise.all([loadMeta(), loadEntries(true)]);
     } catch (error) {
       showToast(error.message);
     } finally {
-      setBusy(elements.deleteEntryButton, false, "ゴミ箱へ移動");
+      setBusy(elements.deleteEntryButton, false, privateDeletion ? "削除" : "ゴミ箱へ移動");
+    }
+  }
+
+  async function permanentlyDeleteActiveEntry() {
+    const entry = state.activeEntry;
+    if (!entry || !state.canPermanentlyDelete || !entry.deletedAt) return;
+    setBusy(elements.permanentlyDeleteEntryButton, true, "完全削除中...");
+    try {
+      await api(`/entries/${entry.id}/permanent`, {
+        method: "DELETE",
+        body: { revision: entry.revision }
+      });
+      elements.entryDialog.close();
+      state.activeEntry = null;
+      showToast("日記を完全に削除しました。");
+      await Promise.all([loadMeta(), loadEntries(true)]);
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setBusy(elements.permanentlyDeleteEntryButton, false, "完全に削除");
     }
   }
 
@@ -787,6 +867,7 @@
     state.role = null;
     state.accountName = null;
     state.canViewTrash = false;
+    state.canPermanentlyDelete = false;
     state.entries = [];
     state.entryMap.clear();
     state.offset = 0;
@@ -796,6 +877,7 @@
     state.tag = "";
     state.trash = false;
     state.activeEntry = null;
+    state.deleteMode = null;
     state.editorDirty = false;
     state.dateDraft = null;
     if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();

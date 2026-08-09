@@ -16,6 +16,15 @@ if (!script.includes("closePreviewForAction") || !script.includes("history.repla
 if (!script.includes('JSON.stringify({ name, passwordAction, ...passwordPackage })')) {
   throw new Error("フォルダ名の平文更新処理がありません。");
 }
+if (!script.includes("function canRenameFolder(folder)") || !script.includes("function canRenameFile(file)")) {
+  throw new Error("解除済みフォルダ内の名称変更表示判定がありません。");
+}
+if (!script.includes('$("#folder-password-settings-row").hidden = !canEditPassword || inheritsProtection')) {
+  throw new Error("副管理者のフォルダPW変更欄が非表示になっていません。");
+}
+if (!worker.includes("canRenameUnlockedItems: true") || !worker.includes("副管理者はファイルを移動できません") || !worker.includes("フォルダPWを変更できるのは管理者だけです")) {
+  throw new Error("副管理者の名称変更専用権限がサーバー側にありません。");
+}
 if (!worker.includes('UPDATE cloud_folders SET name = ?, updated_at = CURRENT_TIMESTAMP') || !worker.includes('name: folder.name')) {
   throw new Error("サーバーまたは共有画面の平文フォルダ名処理がありません。");
 }
