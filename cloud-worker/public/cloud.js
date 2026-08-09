@@ -18,6 +18,7 @@ const state = {
   listMode: false,
   selectedFiles: new Map(),
   selectedFolders: new Map(),
+  selectionHistoryActive: false,
   moveDestinations: new Map(),
   selecting: false,
   dragDepth: 0,
@@ -136,7 +137,8 @@ function bindEvents() {
   $("#search-input").addEventListener("input", debounce((event) => { state.query = event.target.value.trim(); loadItems(); }, 250));
   $("#sort-select").addEventListener("change", (event) => { state.sort = event.target.value; loadItems(); });
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
-  $("#selection-clear").addEventListener("click", clearFileSelection);
+  $("#selection-clear").addEventListener("click", () => clearFileSelection());
+  $("#selection-all").addEventListener("click", selectAllVisibleItems);
   $("#selection-download").addEventListener("click", startSelectedDownloads);
   $("#selection-share").addEventListener("click", () => {
     const files = [...state.selectedFiles.values()];
@@ -404,13 +406,20 @@ function initializeNavigationHistory() {
 
 async function navigateToFolder(folderId, folderName, options = {}) {
   const { pushHistory = true, load = true } = options;
+  const replaceSelectionHistory = pushHistory && state.selectionHistoryActive;
+  if (replaceSelectionHistory) {
+    clearFileSelection(true, false);
+    state.selectionHistoryActive = false;
+  }
   state.folderId = folderId ? Number(folderId) : null;
   state.kind = "";
   state.view = "all";
   clearSearch();
   $("#view-title").textContent = folderName || (state.folderId ? "ファイル" : "フォルダ");
   if (pushHistory && state.historyReady) {
-    history.pushState({ tcloud: true, folderId: state.folderId, folderName: $("#view-title").textContent, previewId: null }, "", location.href);
+    const entry = { tcloud: true, folderId: state.folderId, folderName: $("#view-title").textContent, previewId: null };
+    if (replaceSelectionHistory) history.replaceState(entry, "", location.href);
+    else history.pushState(entry, "", location.href);
   }
   syncNavigationActiveState();
   syncAvailableActions();
@@ -422,6 +431,12 @@ async function handleHistoryNavigation(event) {
   if (!target?.tcloud) return;
   state.handlingPopState = true;
   try {
+    if (state.selectedFiles.size || state.selectedFolders.size) {
+      state.selectionHistoryActive = false;
+      clearFileSelection(true, false);
+      const sameFolder = Number(target.folderId || 0) === Number(state.folderId || 0);
+      if (sameFolder && !target.previewId) return;
+    }
     state.previewHistoryActive = false;
     if ($("#preview-dialog").open) $("#preview-dialog").close();
     await navigateToFolder(target.folderId, target.folderName, { pushHistory: false });
@@ -1378,6 +1393,7 @@ function installFolderLongPressSelection(card, folder) {
 
 function selectFile(file, card) {
   if (file.trashed || state.selectedFiles.has(file.id)) return;
+  beginSelectionHistory();
   state.selectedFiles.set(file.id, file);
   card.classList.add("selected", "selection-pass");
   syncSelectionBar();
@@ -1392,10 +1408,15 @@ function toggleFileSelection(file, card) {
     selectFile(file, card);
   }
   syncSelectionBar();
+  if (!state.selectedFiles.size && !state.selectedFolders.size && state.selectionHistoryActive) {
+    state.selectionHistoryActive = false;
+    history.back();
+  }
 }
 
 function selectFolder(folder, card) {
   if (!state.session?.canDelete || state.selectedFolders.has(folder.id)) return;
+  beginSelectionHistory();
   state.selectedFolders.set(folder.id, folder);
   card.classList.add("selected", "selection-pass");
   syncSelectionBar();
@@ -1410,15 +1431,58 @@ function toggleFolderSelection(folder, card) {
     selectFolder(folder, card);
   }
   syncSelectionBar();
+  if (!state.selectedFiles.size && !state.selectedFolders.size && state.selectionHistoryActive) {
+    state.selectionHistoryActive = false;
+    history.back();
+  }
 }
 
-function clearFileSelection(update = true) {
+function beginSelectionHistory() {
+  if (!state.historyReady || state.selectionHistoryActive || state.selectedFiles.size || state.selectedFolders.size) return;
+  history.pushState({
+    tcloud: true,
+    folderId: state.folderId,
+    folderName: $("#view-title").textContent,
+    previewId: null,
+    selection: true
+  }, "", location.href);
+  state.selectionHistoryActive = true;
+}
+
+function selectAllVisibleItems() {
+  beginSelectionHistory();
+  for (const card of $$("#content-grid .file-card[data-file-id]")) {
+    const file = state.files.find((item) => String(item.id) === card.dataset.fileId);
+    if (file && !file.trashed) {
+      state.selectedFiles.set(file.id, file);
+      card.classList.add("selected", "selection-pass");
+      card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
+    }
+  }
+  if (state.session?.canDelete) {
+    for (const card of $$("#content-grid .folder-card[data-folder-id]")) {
+      const folder = state.folders.find((item) => String(item.id) === card.dataset.folderId);
+      if (folder) {
+        state.selectedFolders.set(folder.id, folder);
+        card.classList.add("selected", "selection-pass");
+      }
+    }
+  }
+  syncSelectionBar();
+}
+
+function clearFileSelection(update = true, rewindHistory = update) {
+  const hadSelection = Boolean(state.selectedFiles.size || state.selectedFolders.size);
   state.selectedFiles.clear();
   state.selectedFolders.clear();
   state.selecting = false;
   $$(".file-card.selected, .file-card.selection-pass").forEach((card) => card.classList.remove("selected", "selection-pass"));
   if (update) syncSelectionBar();
   else $("#selection-bar").hidden = true;
+  if (rewindHistory && hadSelection && state.selectionHistoryActive && !state.handlingPopState) {
+    state.selectionHistoryActive = false;
+    history.back();
+  }
 }
 
 function syncSelectionBar() {

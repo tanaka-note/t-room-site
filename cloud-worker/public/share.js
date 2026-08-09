@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "newest", selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "newest", selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -28,7 +28,8 @@ function bindEvents() {
     $("#toggle-password").setAttribute("aria-label", input.type === "password" ? "パスワードを表示" : "パスワードを隠す");
   });
   $("#download-button").addEventListener("click", downloadSelected);
-  $("#share-selection-clear").addEventListener("click", clearFileSelection);
+  $("#share-selection-clear").addEventListener("click", () => clearFileSelection());
+  $("#share-selection-all").addEventListener("click", selectAllSharedFiles);
   $("#share-selection-download").addEventListener("click", downloadFileSelection);
   $("#share-selection-cancel").addEventListener("click", cancelSharedDownloads);
   $("#share-sort").addEventListener("change", (event) => {
@@ -75,7 +76,9 @@ async function unlockShare(event) {
 
 async function loadItems(folderId = null, pathIndex = null, options = {}) {
   setNotice("");
-  clearFileSelection();
+  const replaceSelectionHistory = options.historyMode !== "none" && state.selectionHistoryActive;
+  clearFileSelection(true, false);
+  if (replaceSelectionHistory) state.selectionHistoryActive = false;
   let directFile = null;
   try {
     const query = folderId ? `?folderId=${folderId}` : "";
@@ -146,7 +149,7 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
       $("#share-toolbar").hidden = false;
     }
     $("#browser-expiry").textContent = `有効期限：${formatEpoch(data.expiresAt)}`;
-    if (options.historyMode !== "none") updateShareHistory(options.historyMode === "replace", null);
+    if (options.historyMode !== "none") updateShareHistory(replaceSelectionHistory || options.historyMode === "replace", null);
     if (directFile) await openPreview(directFile, { pushHistory: false });
   } catch (error) { setNotice(error.message, true); }
 }
@@ -238,6 +241,7 @@ function toggleFileSelection(file, article) {
   const selected = state.selectedFiles.has(Number(file.id));
   if (selected) state.selectedFiles.delete(Number(file.id));
   else {
+    beginSelectionHistory();
     state.selectedFiles.set(Number(file.id), file);
     state.selectionAnchorId = Number(file.id);
     state.selectionCursorId = Number(file.id);
@@ -249,10 +253,15 @@ function toggleFileSelection(file, article) {
     state.selectionCursorId = null;
   }
   syncFileSelection();
+  if (!state.selectedFiles.size && state.selectionHistoryActive) {
+    state.selectionHistoryActive = false;
+    history.back();
+  }
 }
 
 function selectSharedFile(file, article, setAnchor = false) {
   const id = Number(file.id);
+  if (!state.selectedFiles.has(id)) beginSelectionHistory();
   if (!state.selectedFiles.has(id)) state.selectedFiles.set(id, file);
   article.classList.add("selected");
   article.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
@@ -355,14 +364,38 @@ function installSharedLongPressSelection(card, file) {
   card.addEventListener("pointercancel", end);
 }
 
-function clearFileSelection() {
+function beginSelectionHistory() {
+  if (!state.historyReady || state.selectionHistoryActive || state.selectedFiles.size) return;
+  updateShareHistory(false, null);
+  state.selectionHistoryActive = true;
+}
+
+function selectAllSharedFiles() {
+  beginSelectionHistory();
+  for (const card of sharedFileCards()) {
+    const file = state.files.find((item) => Number(item.id) === Number(card.dataset.fileId));
+    if (file) state.selectedFiles.set(Number(file.id), file);
+  }
+  if (!state.selectionAnchorId && state.selectedFiles.size) state.selectionAnchorId = state.selectedFiles.keys().next().value;
+  state.selectionCursorId = [...state.selectedFiles.keys()].at(-1) || null;
+  syncSharedCardSelection();
+  syncFileSelection();
+}
+
+function clearFileSelection(update = true, rewindHistory = update) {
+  const hadSelection = Boolean(state.selectedFiles.size);
   state.selectedFiles.clear();
   state.selectionAnchorId = null;
   state.selectionCursorId = null;
   state.selecting = false;
   document.querySelectorAll(".file.selected").forEach((node) => node.classList.remove("selected"));
   document.querySelectorAll(".file-select-button").forEach((button) => button.setAttribute("aria-pressed", "false"));
-  syncFileSelection();
+  if (update) syncFileSelection();
+  else $("#share-selection-bar").hidden = true;
+  if (rewindHistory && hadSelection && state.selectionHistoryActive && !state.handlingPopState) {
+    state.selectionHistoryActive = false;
+    history.back();
+  }
 }
 
 function syncFileSelection() {
@@ -678,6 +711,12 @@ async function handleShareHistoryNavigation(event) {
   if (!entry?.tcloudShare || $("#browser-view").hidden) return;
   state.handlingPopState = true;
   try {
+    if (state.selectedFiles.size) {
+      state.selectionHistoryActive = false;
+      clearFileSelection(true, false);
+      const sameFolder = Number(entry.folderId || 0) === Number(state.folderId || 0);
+      if (sameFolder && !entry.previewId) return;
+    }
     if ($("#preview-dialog").open) {
       state.previewHistoryActive = false;
       $("#preview-dialog").close();
