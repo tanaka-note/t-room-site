@@ -40,6 +40,8 @@ const state = {
   previewHistoryActive: false,
   previewTouchStart: null,
   folderUploadSelection: null,
+  folderUploadOperationSequence: 0,
+  activeFolderUploadOperationId: null,
   installPrompt: null,
   thumbnailAttempts: new Set(),
   thumbnailBackfillRunning: false,
@@ -502,7 +504,11 @@ function mergeFolderSelections(current, incoming) {
 }
 
 function openFolderUploadDialog(selection, { append = false } = {}) {
-  if (!selection?.roots?.length || state.uploading) return;
+  if (!selection?.roots?.length) return;
+  if (state.uploading || state.activeFolderUploadOperationId) {
+    setNotice("現在のアップロードが完了してから、次のフォルダを追加してください。", true);
+    return;
+  }
   const dialog = $("#folder-upload-dialog");
   state.folderUploadSelection = append ? mergeFolderSelections(state.folderUploadSelection, selection) : selection;
   const queued = state.folderUploadSelection;
@@ -2512,32 +2518,47 @@ function renderBreadcrumbs(items) {
 
 async function uploadSelectedFolder(event) {
   event.preventDefault();
-  const selection = state.folderUploadSelection;
-  if (!selection || state.uploading) return;
   const submitButton = event.currentTarget.querySelector('button[type="submit"]');
-  let dialogClosed = false;
+  const selection = state.folderUploadSelection;
+  if (!selection) {
+    $("#folder-upload-error").textContent = "アップロードするフォルダを選択してください。";
+    return;
+  }
+  if (state.uploading || state.activeFolderUploadOperationId) {
+    const message = "現在のアップロードが完了してから、もう一度お試しください。";
+    $("#folder-upload-error").textContent = message;
+    setNotice(message, true);
+    return;
+  }
+  const operationId = ++state.folderUploadOperationSequence;
+  state.activeFolderUploadOperationId = operationId;
+  state.uploading = true;
+  submitButton.disabled = true;
+  submitButton.textContent = "準備中…";
+  state.folderUploadSelection = null;
+  $("#folder-upload-dialog").close();
   $("#folder-upload-error").textContent = "";
+  syncAvailableActions();
+  const panel = $("#upload-panel");
+  panel.hidden = false;
+  panel.classList.remove("upload-complete", "upload-error");
+  $("#upload-heading").textContent = "フォルダ構成を作成中";
+  $("#upload-status").textContent = `0 / ${selection.directories.length}フォルダ作成`;
+  $("#upload-file-name").textContent = selection.roots.join("、");
+  $("#upload-file-progress").textContent = "準備中…";
+  $("#upload-progress").style.width = "0%";
+  $("#upload-dismiss").hidden = true;
+  await waitForInterfacePaint();
   try {
+    if (state.activeFolderUploadOperationId !== operationId) return;
     if (!state.crypto.publicKey || !state.crypto.fileEncryptionReady) throw new Error("暗号化の初期設定を完了してください。");
     const baseParentId = state.folderId ? Number(state.folderId) : null;
     const baseParentKey = baseParentId ? state.crypto.folderKeys.get(baseParentId) : null;
     if (baseParentId && !baseParentKey) throw new Error("保存先フォルダの暗号化鍵を解除してください。");
-    state.uploading = true;
-    submitButton.disabled = true;
-    syncAvailableActions();
-    const panel = $("#upload-panel");
-    panel.hidden = false;
-    panel.classList.remove("upload-complete", "upload-error");
-    $("#upload-heading").textContent = "フォルダ構成を作成中";
-    $("#upload-file-name").textContent = selection.roots.join("、");
-    $("#upload-file-progress").textContent = "準備中…";
-    $("#upload-progress").style.width = "0%";
-    state.folderUploadSelection = null;
-    $("#folder-upload-dialog").close();
-    dialogClosed = true;
 
     const foldersByPath = new Map();
     for (let index = 0; index < selection.directories.length; index++) {
+      if (state.activeFolderUploadOperationId !== operationId) return;
       const path = selection.directories[index];
       const parts = path.split("/");
       const parentPath = parts.slice(0, -1).join("/");
@@ -2560,24 +2581,50 @@ async function uploadSelectedFolder(event) {
       destinations.set(record.file, { folderId: destination.id, folderKey: destination.key });
     }
 
-    state.uploading = false;
-    submitButton.disabled = false;
-    syncAvailableActions();
-    if (selection.files.length) await uploadFiles(selection.files.map((record) => record.file), destinations);
-    else {
+    if (selection.files.length) {
+      state.activeFolderUploadOperationId = null;
+      state.uploading = false;
+      submitButton.disabled = false;
+      submitButton.textContent = "まとめて保存する";
+      syncAvailableActions();
+      await uploadFiles(selection.files.map((record) => record.file), destinations);
+    } else {
       panel.classList.add("upload-complete");
       $("#upload-heading").textContent = "フォルダ作成完了";
       $("#upload-file-progress").textContent = "保存完了";
       await Promise.all([loadItems(), loadUsage()]);
     }
   } catch (error) {
-    state.uploading = false;
-    submitButton.disabled = false;
-    syncAvailableActions();
-    $("#upload-panel").classList.add("upload-error");
-    if (dialogClosed) setNotice(`フォルダの保存に失敗しました：${error.message}`, true);
-    else $("#folder-upload-error").textContent = error.message;
+    if (state.activeFolderUploadOperationId === operationId) {
+      panel.classList.add("upload-error");
+      $("#upload-heading").textContent = "フォルダの準備に失敗しました";
+      $("#upload-file-progress").textContent = "開始できませんでした";
+      $("#upload-dismiss").hidden = false;
+      setNotice(`フォルダの保存に失敗しました：${error.message}`, true);
+    }
+  } finally {
+    if (state.activeFolderUploadOperationId === operationId) {
+      state.activeFolderUploadOperationId = null;
+      state.uploading = false;
+      submitButton.disabled = false;
+      submitButton.textContent = "まとめて保存する";
+      syncAvailableActions();
+    }
   }
+}
+
+function waitForInterfacePaint() {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(fallback);
+      resolve();
+    };
+    const fallback = setTimeout(finish, 120);
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+  });
 }
 
 async function createEncryptedFolder(name, parentId, parentKey, password = "") {
