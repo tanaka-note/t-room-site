@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "name", sortDirection: "desc", selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "name", sortDirection: "desc", listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -33,6 +33,10 @@ function bindEvents() {
   $("#share-selection-download").addEventListener("click", downloadFileSelection);
   $("#share-selection-cancel").addEventListener("click", cancelSharedDownloads);
   document.querySelectorAll("#share-sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSharedSort(button.dataset.sortKey)));
+  $("#share-display-toggle").addEventListener("click", () => {
+    state.listMode = !state.listMode;
+    renderSortedItems();
+  });
   $("#share-preview-fullscreen").addEventListener("click", toggleSharedPreviewFullscreen);
   $("#preview-stage").addEventListener("dblclick", handleSharedPreviewDoubleClick);
   $("#share-download-retry-wake").addEventListener("click", requestDownloadWakeLock);
@@ -158,6 +162,7 @@ async function hydrateSharedFile(file, folderKey, directFile = state.targetType 
 
 function renderItems(folders, files) {
   const root = $("#items");
+  root.classList.toggle("list-mode", state.listMode);
   root.innerHTML = "";
   for (const folder of folders) {
     const article = document.createElement("article"); article.className = "folder";
@@ -168,6 +173,10 @@ function renderItems(folders, files) {
   }
   for (const file of files) root.append(fileCard(file));
   $("#empty").hidden = folders.length + files.length > 0;
+  const displayToggle = $("#share-display-toggle");
+  displayToggle.textContent = state.listMode ? "▦" : "▤";
+  displayToggle.setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
+  displayToggle.title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
 }
 
 function renderSortedItems() {

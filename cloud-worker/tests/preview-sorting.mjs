@@ -15,6 +15,7 @@ for (const key of ["updated", "name", "size"]) {
   assert.match(shareHtml, new RegExp(`data-sort-key="${key}"`));
 }
 assert.match(shareHtml, /id="share-sort-controls"/);
+assert.match(shareHtml, /id="share-display-toggle"[^>]*aria-label="横長表示へ切り替え"/);
 assert.match(shareJs, /function renderSortedItems\(\)/);
 assert.match(shareJs, /state\.sort === "size"/);
 assert.match(shareJs, /function changeSharedSort\(key\)/);
@@ -22,6 +23,11 @@ assert.match(mainJs, /function changeSort\(key\)/);
 assert.match(mainJs, /state\.sortDirection/);
 assert.match(mainJs, /sort: "name",\s*sortDirection: "desc"/);
 assert.match(shareJs, /sort: "name", sortDirection: "desc"/);
+assert.match(shareJs, /listMode: false/);
+assert.match(shareJs, /root\.classList\.toggle\("list-mode", state\.listMode\)/);
+assert.match(shareJs, /state\.listMode = !state\.listMode/);
+assert.match(shareCss, /\.folder \{ grid-column:1 \/ -1; \}/);
+assert.match(shareCss, /\.items\.list-mode \{ grid-template-columns:1fr/);
 assert.match(mainHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*>↓<\/span>/);
 assert.match(shareHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*>↓<\/span>/);
 
