@@ -9,7 +9,7 @@ const state = {
   folderId: null,
   kind: "",
   view: "all",
-  sort: "updated",
+  sort: "name",
   sortDirection: "desc",
   query: "",
   files: [],

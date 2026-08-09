@@ -552,8 +552,8 @@ async function listItems(url, env, session) {
   const folderId = optionalId(url.searchParams.get("folderId"));
   const query = normalizeText(url.searchParams.get("q"), 100).toLowerCase();
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
-  const requestedSort = url.searchParams.get("sort") || "updated-desc";
-  const sort = ["updated-desc", "updated-asc", "name-asc", "name-desc", "size-desc", "size-asc", "newest", "oldest", "name", "size"].includes(requestedSort) ? requestedSort : "updated-desc";
+  const requestedSort = url.searchParams.get("sort") || "name-desc";
+  const sort = ["updated-desc", "updated-asc", "name-asc", "name-desc", "size-desc", "size-asc", "newest", "oldest", "name", "size"].includes(requestedSort) ? requestedSort : "name-desc";
   const folder = folderId ? await env.DB.prepare(`SELECT f.id, f.parent_id, f.name,
     f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
     f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,

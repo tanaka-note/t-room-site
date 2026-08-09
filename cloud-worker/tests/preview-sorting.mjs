@@ -20,6 +20,10 @@ assert.match(shareJs, /state\.sort === "size"/);
 assert.match(shareJs, /function changeSharedSort\(key\)/);
 assert.match(mainJs, /function changeSort\(key\)/);
 assert.match(mainJs, /state\.sortDirection/);
+assert.match(mainJs, /sort: "name",\s*sortDirection: "desc"/);
+assert.match(shareJs, /sort: "name", sortDirection: "desc"/);
+assert.match(mainHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*>↓<\/span>/);
+assert.match(shareHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*>↓<\/span>/);
 
 assert.match(mainHtml, /id="preview-fullscreen"/);
 assert.match(shareHtml, /id="share-preview-fullscreen"/);
