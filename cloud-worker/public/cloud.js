@@ -59,6 +59,7 @@ document.addEventListener("DOMContentLoaded", initialize);
 async function initialize() {
   bindEvents();
   registerPwaWorker();
+  preserveAppOrientation();
   updateInstallButtons();
   await restoreRememberedLogin();
   try {
@@ -240,7 +241,7 @@ async function installApp() {
 async function registerPwaWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
-    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-4", { scope: "/cloud/", updateViaCache: "none" });
+    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-5", { scope: "/cloud/", updateViaCache: "none" });
   } catch (error) {
     console.warn("T-Cloud app worker registration failed", error);
   }
@@ -3481,7 +3482,10 @@ async function togglePreviewFullscreen() {
   const video = stage.querySelector("video");
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
-    else if (stage.requestFullscreen) await stage.requestFullscreen();
+    else if (stage.requestFullscreen) {
+      await stage.requestFullscreen();
+      await preserveAppOrientation(true);
+    }
     else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
   } catch (error) { setNotice(`全画面表示を開始できませんでした：${error.message}`, true); }
 }
@@ -3492,6 +3496,19 @@ function syncPreviewFullscreenButton() {
   button.setAttribute("aria-label", active ? "全画面表示を終了" : "全画面で表示");
   const label = button.querySelector("span");
   if (label) label.textContent = active ? "戻す" : "全画面";
+  preserveAppOrientation(active);
+}
+
+async function preserveAppOrientation(force = false) {
+  const standalone = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+  if ((!standalone && !force) || !screen.orientation?.lock) return false;
+  try {
+    await screen.orientation.lock("portrait-primary");
+    return true;
+  } catch {
+    // Some browsers only allow orientation locking after entering fullscreen.
+    return false;
+  }
 }
 
 function handlePreviewDoubleClick(event) {
