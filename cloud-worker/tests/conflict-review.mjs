@@ -33,6 +33,7 @@ assert.match(client, /visibleIdentities\.has\(uploadFileIdentity/);
 assert.match(client, /generation !== state\.conflictScanGeneration/);
 assert.match(client, /async function loadConflictOverview\(\)/);
 assert.match(client, /function buildConflictGroups\(files, folders/);
+assert.match(worker, /FROM cloud_files/, "競合判定はファイルだけを対象にしてください。");
 assert.match(client, /const topFolderId = Number\(file\.topFolderId/);
 assert.match(client, /nearSize && \(sameName \|\| sameTimestamp\)/);
 assert.match(client, /PWを解除したトップフォルダ内に、競合候補はありません/);
@@ -52,6 +53,6 @@ assert.match(client, /scopeFolderId: Number\(scopeFolderId\) \|\| null/, "競合
 assert.match(worker, /WITH RECURSIVE folder_access/);
 assert.match(worker, /access\.is_allowed = 1 AND access\.has_protected_ancestor = 1/);
 assert.match(html, /cloud\.css\?v=20260810-31/);
-assert.match(html, /cloud\.js\?v=20260810-102/);
+assert.match(html, /cloud\.js\?v=20260810-103/);
 
 console.log("stored conflict badges and grouped review: ok");

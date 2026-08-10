@@ -281,7 +281,7 @@ async function installApp() {
 async function registerPwaWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
-    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-6", { scope: "/cloud/", updateViaCache: "none" });
+    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-7", { scope: "/cloud/", updateViaCache: "none" });
   } catch (error) {
     console.warn("T-Cloud app worker registration failed", error);
   }
