@@ -66,6 +66,14 @@ assert.match(mainJs, /webkitbeginfullscreen[^\n]*prepareInstalledVideoFullscreen
 assert.match(shareJs, /webkitbeginfullscreen[^\n]*prepareInstalledVideoFullscreen/);
 assert.match(mainJs, /video\.currentTime.*10/);
 assert.match(shareJs, /video\.currentTime.*10/);
+assert.match(mainJs, /video\.disableRemotePlayback = true/);
+assert.match(shareJs, /video\.disableRemotePlayback = true/);
+assert.match(mainJs, /controlsList", "noremoteplayback"/);
+assert.match(shareJs, /controlsList", "noremoteplayback"/);
+assert.match(mainJs, /x-webkit-airplay", "deny"/);
+assert.match(shareJs, /x-webkit-airplay", "deny"/);
+assert.doesNotMatch(mainJs, /video\.addEventListener\("click"/);
+assert.doesNotMatch(shareJs, /video\.addEventListener\("click"/);
 assert.match(mainCss, /width: min\(1280px/);
 assert.match(shareCss, /width:min\(1280px/);
 assert.match(mainCss, /\.player-buffering/);

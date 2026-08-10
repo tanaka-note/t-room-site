@@ -60,6 +60,6 @@ assert.match(client, /scopeFolderId: Number\(scopeFolderId\) \|\| null/, "競合
 assert.match(worker, /WITH RECURSIVE folder_access/);
 assert.match(worker, /access\.is_allowed = 1 AND access\.has_protected_ancestor = 1/);
 assert.match(html, /cloud\.css\?v=20260810-37/);
-assert.match(html, /cloud\.js\?v=20260810-110/);
+assert.match(html, /cloud\.js\?v=20260810-111/);
 
 console.log("stored conflict badges and grouped review: ok");
