@@ -13,12 +13,12 @@ const [html, client, worker, server, offline, manifestSource, css] = await Promi
 const manifest = JSON.parse(manifestSource);
 
 for (const [source, runtime] of [
-  ["cloud.js", "cloud-runtime-20260810-111.js"],
+  ["cloud.js", "cloud-runtime-20260810-112.js"],
   ["cloud.css", "cloud-runtime-20260810-37.css"],
   ["media-client.js", "media-client-20260810-8.js"],
-  ["media-worker.js", "media-worker-20260810-8.js"],
-  ["manifest.webmanifest", "manifest-20260810-2.webmanifest"],
-  ["share.js", "share-runtime-20260810-36.js"],
+  ["media-worker.js", "media-worker-20260810-9.js"],
+  ["manifest.webmanifest", "manifest-20260810-3.webmanifest"],
+  ["share.js", "share-runtime-20260810-37.js"],
   ["share.css", "share-runtime-20260810-16.css"]
 ]) {
   assert.deepEqual(
@@ -33,7 +33,7 @@ assert.equal(manifest.name, "T-Cloud Storage");
 assert.equal(manifest.start_url, "/cloud/?source=pwa");
 assert.equal(manifest.scope, "/cloud/");
 assert.equal(manifest.display, "standalone");
-assert.equal(manifest.orientation, "any");
+assert.equal(manifest.orientation, "portrait-primary");
 assert.equal(manifest.theme_color, "#071426");
 assert.ok(manifest.icons.some((icon) => icon.sizes === "192x192"));
 assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512" && icon.purpose === "maskable"));
@@ -64,9 +64,9 @@ assert.match(client, /ホーム画面に追加/);
 assert.match(client, /async function registerPwaWorker\(\)/);
 assert.match(client, /await registration\.update\(\)/);
 assert.match(client, /screen\.orientation\.lock\("portrait-primary"\)/);
-assert.match(client, /screen\.orientation\?\.unlock/);
+assert.match(client, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\.lock\("any"\)/);
 assert.match(worker, /const APP_SHELL_CACHE/);
-assert.match(worker, /tcloud-shell-20260810-6/);
+assert.match(worker, /tcloud-shell-20260810-7/);
 assert.match(worker, /\/cloud\/manifest\.webmanifest/);
 assert.match(worker, /icon-192-v2\.png\?rev=20260810-2/);
 assert.match(worker, /event\.request\.mode === "navigate"/);

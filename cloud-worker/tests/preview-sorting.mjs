@@ -58,8 +58,8 @@ assert.doesNotMatch(mainJs, /PREVIEW_FULLSCREEN_PORTRAIT_HOLD_MS|previewOrientat
 assert.doesNotMatch(shareJs, /PREVIEW_FULLSCREEN_PORTRAIT_HOLD_MS|previewOrientationReleaseTimer/);
 assert.match(mainJs, /restoreInstalledAppPortrait[\s\S]*?screen\.orientation\.lock\("portrait-primary"\)/);
 assert.match(shareJs, /restoreInstalledAppPortrait[\s\S]*?screen\.orientation\.lock\("portrait-primary"\)/);
-assert.match(mainJs, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\?\.unlock/);
-assert.match(shareJs, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\?\.unlock/);
+assert.match(mainJs, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\.lock\("any"\)/);
+assert.match(shareJs, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\.lock\("any"\)/);
 assert.match(mainJs, /fullscreenchange[\s\S]*?handlePreviewFullscreenOrientationChange/);
 assert.match(shareJs, /fullscreenchange[\s\S]*?handleSharedPreviewFullscreenOrientationChange/);
 assert.match(mainJs, /webkitbeginfullscreen[^\n]*prepareInstalledVideoFullscreen/);
