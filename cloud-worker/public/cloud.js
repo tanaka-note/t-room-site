@@ -217,6 +217,7 @@ function bindEvents() {
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
   $("#selection-clear").addEventListener("click", clearSelectionWithoutRefresh);
   $("#selection-all").addEventListener("click", selectAllVisibleItems);
+  $("#selection-rename").addEventListener("click", openSelectedFileRenameDialog);
   $("#selection-download").addEventListener("click", startSelectedDownloads);
   $("#selection-share").addEventListener("click", () => {
     const files = [...state.selectedFiles.values()];
@@ -2460,6 +2461,9 @@ function syncSelectionBar() {
   const count = fileCount + folderCount;
   $("#selection-count").textContent = `${count.toLocaleString("ja-JP")}件を選択中`;
   $("#selection-bar").hidden = count === 0;
+  const canRenameSelection = fileCount === 1 && folderCount === 0 && canRenameFile(files[0]);
+  $("#selection-rename").hidden = !canRenameSelection;
+  $("#selection-rename").disabled = !canRenameSelection;
   $("#selection-download").disabled = fileCount === 0;
   $("#selection-share").hidden = state.session?.role !== "admin" || fileCount < 1 || folderCount !== 0;
   const canMoveSelection = Boolean(count && files.every(canMoveFile) && folders.every(canMoveFolder));
@@ -2472,6 +2476,13 @@ function syncSelectionBar() {
   $("#selection-delete").disabled = count === 0;
   $("#selection-delete").textContent = "削除";
   if (count) hideFloatingToolbar();
+}
+
+function openSelectedFileRenameDialog() {
+  const files = [...state.selectedFiles.values()];
+  if (files.length !== 1 || state.selectedFolders.size || !canRenameFile(files[0])) return;
+  state.selected = files[0];
+  openEditDialog();
 }
 
 function clearSelectionWithoutRefresh() {

@@ -19,6 +19,11 @@ if (!script.includes('JSON.stringify({ name, passwordAction, ...passwordPackage 
 if (!script.includes("function canRenameFolder(folder)") || !script.includes("function canRenameFile(file)")) {
   throw new Error("解除済みフォルダ内の名称変更表示判定がありません。");
 }
+if (!html.includes('id="selection-rename"')
+  || !script.includes('$("#selection-rename").addEventListener("click", openSelectedFileRenameDialog)')
+  || !script.includes("fileCount === 1 && folderCount === 0 && canRenameFile(files[0])")) {
+  throw new Error("長押しで1件選択したファイルの名前変更導線がありません。");
+}
 if (!script.includes("function canChangeFolderPassword(folder)") || !script.includes("const canEditPassword = canChangeFolderPassword(folder)")) {
   throw new Error("解除済み保護フォルダに限定したPW変更判定がありません。");
 }
