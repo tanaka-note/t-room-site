@@ -610,19 +610,28 @@ function openFolderUploadDialog(selection, { append = false } = {}) {
   const queued = state.folderUploadSelection;
   const fileCount = queued.files.length + (queued.looseFiles?.length || 0);
   $("#folder-upload-summary").textContent = `${queued.roots.length.toLocaleString("ja-JP")}フォルダ・${fileCount.toLocaleString("ja-JP")}ファイルを、フォルダ構成を保ってまとめて保存します。（${queued.roots.join("、")}）`;
+  const topLevelUpload = !state.folderId;
+  $("#folder-upload-password-row").hidden = !topLevelUpload;
+  $("#folder-upload-password-note").hidden = !topLevelUpload;
+  $("#folder-upload-password").required = topLevelUpload;
+  if (!topLevelUpload) $("#folder-upload-password").value = "";
   $("#folder-upload-error").textContent = "";
   if (!dialog.open) dialog.showModal();
 }
 
 function openFolderDialog() {
-  $("#folder-password-enabled").checked = false;
+  const topLevelFolder = !state.folderId;
+  $("#folder-password-enabled").checked = topLevelFolder;
+  $("#folder-password-enabled").disabled = topLevelFolder;
   $("#folder-password").value = "";
   toggleNewFolderPasswordInput();
   $("#folder-dialog").showModal();
 }
 
 function toggleNewFolderPasswordInput() {
-  const enabled = $("#folder-password-enabled").checked;
+  const topLevelFolder = !state.folderId;
+  if (topLevelFolder) $("#folder-password-enabled").checked = true;
+  const enabled = topLevelFolder || $("#folder-password-enabled").checked;
   $("#folder-password-row").hidden = !enabled;
   $("#folder-password-note").hidden = !enabled;
   $("#folder-password").required = enabled;
@@ -1425,6 +1434,30 @@ function canTrashFolder(folder) {
     && (!folder.isProtected || folder.isUnlocked));
 }
 
+function unlockedMoveScopeRoot() {
+  return state.breadcrumbs.find((folder) => folder.isProtected && state.crypto.folderKeys.has(Number(folder.id))) || null;
+}
+
+function canMoveFile(file) {
+  if (state.session?.canEditFiles) return !file?.trashed;
+  return Boolean(state.session?.canRenameUnlockedItems
+    && state.canTrashCurrentFolderContents
+    && unlockedMoveScopeRoot()
+    && !file?.trashed
+    && file?.fileKey
+    && Number(file.folderId) === Number(state.folderId));
+}
+
+function canMoveFolder(folder) {
+  if (state.session?.canEditFolders) return !folder?.trashed;
+  return Boolean(state.session?.canRenameUnlockedItems
+    && state.canTrashCurrentFolderContents
+    && unlockedMoveScopeRoot()
+    && !folder?.trashed
+    && Number(folder.parentId) === Number(state.folderId)
+    && state.crypto.folderKeys.has(Number(folder.id)));
+}
+
 function trashFolderCard(folder) {
   const card = document.createElement("article");
   card.className = "folder-card trash-folder-card";
@@ -2213,8 +2246,9 @@ function syncSelectionBar() {
   $("#selection-bar").hidden = count === 0;
   $("#selection-download").disabled = fileCount === 0;
   $("#selection-share").hidden = state.session?.role !== "admin" || fileCount < 1 || folderCount !== 0;
-  $("#selection-move").hidden = !state.session?.canEditFiles || !state.session?.canEditFolders;
-  $("#selection-move").disabled = count === 0;
+  const canMoveSelection = Boolean(count && files.every(canMoveFile) && folders.every(canMoveFolder));
+  $("#selection-move").hidden = !canMoveSelection;
+  $("#selection-move").disabled = !canMoveSelection;
   const canDeleteSelection = Boolean(count
     && files.every(canTrashFile)
     && folders.every(canTrashFolder));
@@ -2315,7 +2349,10 @@ async function openMoveDialog() {
   const files = [...state.selectedFiles.values()];
   const folders = [...state.selectedFolders.values()];
   if (!files.length && !folders.length) return;
-  if (!state.session?.canEditFiles || !state.session?.canEditFolders) return;
+  if (!files.every(canMoveFile) || !folders.every(canMoveFolder)) {
+    setNotice("PWで解除した最上位フォルダの配下だけ移動できます。", true);
+    return;
+  }
   const select = $("#move-destination");
   const submit = $("#move-submit");
   $("#move-error").textContent = "";
@@ -2325,7 +2362,15 @@ async function openMoveDialog() {
   submit.disabled = true;
   $("#move-dialog").showModal();
   try {
-    const destinations = await collectMoveDestinations();
+    let destinations;
+    if (state.session?.role === "admin") {
+      destinations = await collectMoveDestinations();
+    } else {
+      const scopeRoot = unlockedMoveScopeRoot();
+      if (!scopeRoot) throw new Error("移動元のPW解除済みフォルダを確認できません。");
+      destinations = [{ folder: scopeRoot, label: scopeRoot.name, ancestorIds: [] }];
+      await collectMoveDestinations(Number(scopeRoot.id), [scopeRoot.name], [Number(scopeRoot.id)], destinations, true);
+    }
     const selectedFolderIds = new Set(folders.map((folder) => Number(folder.id)));
     state.moveDestinations.clear();
     select.innerHTML = "";
@@ -2343,15 +2388,17 @@ async function openMoveDialog() {
   }
 }
 
-async function collectMoveDestinations(parentId = null, path = [], ancestorIds = [], output = []) {
+async function collectMoveDestinations(parentId = null, path = [], ancestorIds = [], output = [], unlockedOnly = false) {
   const params = new URLSearchParams({ sort: "name" });
   if (parentId) params.set("folderId", String(parentId));
   const data = await api(`/items?${params}`);
-  const folders = [...(data.folders || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), "ja"));
+  const folders = (await hydrateFolderRecords(data.folders || [], { preserveOrder: true }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), "ja"));
   for (const folder of folders) {
+    if (unlockedOnly && !state.crypto.folderKeys.has(Number(folder.id))) continue;
     const nextPath = [...path, folder.name];
     output.push({ folder, label: nextPath.join(" / "), ancestorIds: [...ancestorIds] });
-    await collectMoveDestinations(Number(folder.id), nextPath, [...ancestorIds, Number(folder.id)], output);
+    await collectMoveDestinations(Number(folder.id), nextPath, [...ancestorIds, Number(folder.id)], output, unlockedOnly);
   }
   return output;
 }
@@ -2373,7 +2420,10 @@ async function moveSelectedItems(event) {
   let completed = 0;
   let failed = 0;
   try {
-    const destinationKey = destination ? await ensureAdminFolderKey(destination) : null;
+    const destinationKey = destination
+      ? (state.crypto.folderKeys.get(Number(destination.id)) || (state.session?.role === "admin" ? await ensureAdminFolderKey(destination) : null))
+      : null;
+    if (destination && !destinationKey) throw new Error("移動先フォルダのPWを解除してください。");
     for (const file of files) {
       try {
         if (!file.fileKey || !destinationKey) throw new Error("ファイル鍵を確認できません。");
@@ -2387,7 +2437,8 @@ async function moveSelectedItems(event) {
     for (const folder of folders) {
       try {
         if (!destinationId && !folder.isProtected) throw new Error("PWを持たないフォルダは最上位へ移動できません。");
-        const folderKey = await ensureAdminFolderKey(folder);
+        const folderKey = state.crypto.folderKeys.get(Number(folder.id)) || (state.session?.role === "admin" ? await ensureAdminFolderKey(folder) : null);
+        if (!folderKey) throw new Error("移動するフォルダのPWを解除してください。");
         const parentPackage = destinationKey ? await TRoomCrypto.rewrapFolderForParent(folderKey, destinationKey) : {};
         await api(`/folders/${folder.id}`, { method: "PATCH", body: JSON.stringify({ name: folder.name, passwordAction: "keep", parentId: destinationId, ...parentPackage }) });
         completed += 1;
@@ -2840,12 +2891,14 @@ async function uploadSelectedFolder(event) {
     return;
   }
   const operationId = ++state.folderUploadOperationSequence;
+  const topLevelPassword = state.folderId ? "" : $("#folder-upload-password").value;
   state.activeFolderUploadOperationId = operationId;
   state.uploading = true;
   submitButton.disabled = true;
   submitButton.textContent = "準備中…";
   state.folderUploadSelection = null;
   $("#folder-upload-dialog").close();
+  $("#folder-upload-password").value = "";
   $("#folder-upload-error").textContent = "";
   syncAvailableActions();
   const panel = $("#upload-panel");
@@ -2894,7 +2947,8 @@ async function uploadSelectedFolder(event) {
       const inheritedParent = parentPath ? foldersByPath.get(parentPath) : { id: baseParentId, key: baseParentKey };
       if (!inheritedParent) throw new Error(`${path} の親フォルダを作成できませんでした。`);
       $("#upload-heading").textContent = "新しいフォルダを作成中";
-      const created = await createEncryptedFolder(folderPlan.name, inheritedParent.id, inheritedParent.key, "");
+      const folderPassword = !baseParentId && !folderPlan.parentPath ? topLevelPassword : "";
+      const created = await createEncryptedFolder(folderPlan.name, inheritedParent.id, inheritedParent.key, folderPassword);
       foldersByPath.set(path, created);
       createdFolderCount++;
       $("#upload-status").textContent = `${createdFolderCount} / ${plan.newFolderCount}フォルダ作成`;
@@ -2922,6 +2976,7 @@ async function uploadSelectedFolder(event) {
       state.uploading = false;
       submitButton.disabled = false;
       submitButton.textContent = "まとめて保存する";
+      $("#folder-upload-password").value = "";
       syncAvailableActions();
       await uploadFiles(uploadTargets, destinations, {
         skipExisting: false,

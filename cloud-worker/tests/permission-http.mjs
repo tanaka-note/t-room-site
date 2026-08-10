@@ -42,6 +42,7 @@ await expectStatus("副管理者の共有管理拒否", await request("/shares",
 await expectStatus("副管理者の削除承認一覧拒否", await request("/deletion-requests", "subadmin"), 403);
 await expectStatus("副管理者の存在しないファイル名称変更", await request("/files/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 404);
 await expectStatus("副管理者の存在しないフォルダ名称変更", await request("/folders/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 404);
+await expectStatus("最上位フォルダのPW必須", await request("/folders", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ name: "password-required-check", cryptoVersion: 1 }) }), 400);
 await expectStatus("副管理者の存在しないファイル削除", await request("/files/999999", "subadmin", { method: "DELETE", headers: { Origin: origin, "Content-Type": "application/json" } }), 404);
 await expectStatus("副管理者の容量内訳拒否", await request("/usage", "subadmin"), 403);
 await expectStatus("副管理者のフォルダ別容量内訳拒否", await request("/usage-details", "subadmin"), 403);

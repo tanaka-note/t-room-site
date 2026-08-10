@@ -260,6 +260,8 @@
       <div class="dialog-head"><div><span class="file-badge">FOLDER UPLOAD</span><h2>フォルダをアップロード</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
       <p id="folder-upload-summary" class="dialog-note standalone-note"></p>
       <p class="dialog-note">複数のフォルダは、画面へまとめてドロップするか、下のボタンから続けて追加できます。</p>
+      <label id="folder-upload-password-row" hidden><span>最上位フォルダのパスワード</span><input id="folder-upload-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"></label>
+      <p id="folder-upload-password-note" class="dialog-note" hidden>Cloud Storageの最上位へ追加するフォルダに、共通のパスワードを設定します。</p>
       <p id="folder-upload-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions">
         <button id="folder-upload-more" class="secondary-button" type="button">別のフォルダも追加</button>
@@ -457,6 +459,6 @@
   <script src="/cloud/file-safety.js?v=20260810-2" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260810-5" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-93" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-94" defer></script>
 </body>
 </html>

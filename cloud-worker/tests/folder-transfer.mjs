@@ -142,6 +142,7 @@ assert.equal(unique.name, "旅行 (1)");
 assert.match(html, /id="folder-input"[^>]*webkitdirectory/);
 assert.match(html, /id="desktop-folder-upload-action"/);
 assert.match(html, /id="folder-upload-more"/);
+assert.match(html, /id="folder-upload-password"[^>]*minlength="4"/);
 assert.match(source, /openFolderUploadDialog\(selection, \{ append: \$\("#folder-upload-dialog"\)\.open \}\)/);
 assert.match(source, /if \(!dialog\.open\) dialog\.showModal\(\)/);
 assert.match(source, /folderUploadOperationSequence: 0/);
@@ -151,6 +152,8 @@ assert.ok(uploadStart.indexOf('submitButton.textContent = "準備中…"') < upl
 assert.ok(uploadStart.indexOf('$("#folder-upload-dialog").close()') < uploadStart.indexOf("await waitForInterfacePaint()"));
 assert.ok(uploadStart.indexOf("await waitForInterfacePaint()") < uploadStart.indexOf("await planFolderUpload"), "描画後にフォルダの差分確認を開始してください。");
 assert.ok(uploadStart.indexOf("await planFolderUpload") < uploadStart.indexOf("await createEncryptedFolder"), "全差分を確認してからフォルダ作成を開始してください。");
+assert.match(uploadStart, /const topLevelPassword = state\.folderId \? "" : \$\("#folder-upload-password"\)\.value/);
+assert.match(uploadStart, /const folderPassword = !baseParentId && !folderPlan\.parentPath \? topLevelPassword : ""/);
 assert.match(uploadStart, /state\.activeFolderUploadOperationId !== operationId/);
 assert.match(source, /現在のアップロードが完了してから、もう一度お試しください/);
 assert.match(source, /function waitForInterfacePaint\(\)[\s\S]*?requestAnimationFrame\(\(\) => requestAnimationFrame\(finish\)\)/);

@@ -18,6 +18,12 @@ assert.match(client, /function installLongPressSelection[\s\S]*?\}, 380\);[\s\S]
 assert.match(client, /function installFolderLongPressSelection[\s\S]*?\}, 380\);[\s\S]*?setTimeout\(\(\) => \{ card\.dataset\.longPressed = "false"; \}, 0\)/);
 assert.match(client, /TRoomCrypto\.rewrapFileForFolder/);
 assert.match(client, /TRoomCrypto\.rewrapFolderForParent/);
+assert.match(client, /function canMoveFile/);
+assert.match(client, /function canMoveFolder/);
+assert.match(client, /function unlockedMoveScopeRoot/);
+assert.match(client, /files\.every\(canMoveFile\) && folders\.every\(canMoveFolder\)/);
+assert.match(client, /PWで解除した最上位フォルダの配下だけ移動できます/);
+assert.match(client, /state\.crypto\.folderKeys\.get\(Number\(destination\.id\)\)/);
 assert.match(css, /\.folder-card \.folder-select-button/);
 assert.match(css, /\.file-card\.selected \.file-select-button, \.folder-card\.selected \.folder-select-button/);
 assert.doesNotMatch(css, /\.content-grid\.list-mode \.file-select-button \{ display: none; \}/);
@@ -25,5 +31,11 @@ assert.match(client, /selectButton\.className = "folder-select-button"/);
 assert.match(client, /card\.querySelector\("\.folder-select-button"\)\?\.setAttribute\("aria-pressed", "true"\)/);
 assert.match(worker, /ensureValidFolderMove\(env, id, parentId\)/);
 assert.match(worker, /folder_id = \?, wrapped_file_key = \?, file_key_iv = \?/);
+assert.match(worker, /async function requireSameUnlockedMoveScope/);
+assert.match(worker, /const sourceScope = await unlockedMoveScopeId/);
+assert.match(worker, /const destinationScope = await unlockedMoveScopeId/);
+assert.match(worker, /sameUnlockedMoveScope|requireSameUnlockedMoveScope/);
+assert.doesNotMatch(worker, /副管理者はファイルを移動できません/);
+assert.doesNotMatch(worker, /副管理者はフォルダを移動できません/);
 
 console.log("selection, bulk actions, and encrypted moves: ok");

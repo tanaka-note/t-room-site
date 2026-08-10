@@ -646,7 +646,7 @@ async function listItems(url, env, session) {
   return json({
     folder,
     canTrashContents,
-    breadcrumbs: await breadcrumbs(env, folderId),
+    breadcrumbs: await breadcrumbs(env, folderId, session),
     folders: visibleFolders,
     files: visibleFiles,
     nextFileOffset
@@ -763,6 +763,7 @@ async function createFolder(request, env, session) {
   const body = await readJson(request, 8192);
   const name = validName(body.name);
   const parentId = optionalId(body.parentId);
+  if (!parentId && !body.authProof) throw new HttpError(400, "最上位フォルダにはパスワードが必要です。");
   if (parentId) {
     await requireFolder(env, parentId);
     await requireFolderAccess(env, parentId, session);
@@ -796,7 +797,7 @@ async function updateFolder(id, request, env, session) {
   const passwordAction = body.passwordAction === "replace" ? "replace" : "keep";
   if (!session.canEditFolders) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内の名前だけ変更できます。");
-    if (moving) throw new HttpError(403, "副管理者はフォルダを移動できません。");
+    if (moving) await requireSameUnlockedMoveScope(env, id, parentId, session, true);
     if (passwordAction !== "keep") throw new HttpError(403, "フォルダPWを変更できるのは管理者だけです。");
   }
   let parentPackage = null;
@@ -1034,7 +1035,7 @@ async function updateFile(id, request, env, session) {
   const moving = Object.prototype.hasOwnProperty.call(body, "folderId");
   if (!session.canEditFiles) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内のファイル名だけ変更できます。");
-    if (moving) throw new HttpError(403, "副管理者はファイルを移動できません。");
+    if (moving) await requireSameUnlockedMoveScope(env, file.folder_id, optionalId(body.folderId), session, false);
   }
   if (Number(file.crypto_version) === 1) {
     const encryptedMetadata = body.encryptedMetadata === undefined ? file.encrypted_metadata : validCryptoText(body.encryptedMetadata, 4096, "ファイル情報");
@@ -1652,13 +1653,39 @@ async function requireFolderAccess(env, folderId, session) {
   return protectedFolderUnlocked;
 }
 
+async function unlockedMoveScopeId(env, folderId, session) {
+  if (!folderId) throw new HttpError(403, "PWで解除したフォルダ内だけ移動できます。");
+  await requireFolderAccess(env, folderId, session);
+  let current = folderId;
+  let outermostProtectedId = null;
+  let guard = 0;
+  while (current && guard++ < 30) {
+    const folder = await env.DB.prepare("SELECT id, parent_id, password_hash FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(current).first();
+    if (!folder) throw new HttpError(404, "フォルダが見つかりません。");
+    if (folder.password_hash) outermostProtectedId = Number(folder.id);
+    current = folder.parent_id;
+  }
+  if (!outermostProtectedId) throw new HttpError(403, "PWで解除したフォルダ内だけ移動できます。");
+  return outermostProtectedId;
+}
+
+async function requireSameUnlockedMoveScope(env, sourceFolderId, destinationFolderId, session, movingFolder) {
+  if (session.role === "admin") return true;
+  if (!destinationFolderId) throw new HttpError(403, "副管理者はCloud Storageの最上位へ移動できません。");
+  const sourceScope = await unlockedMoveScopeId(env, sourceFolderId, session);
+  const destinationScope = await unlockedMoveScopeId(env, destinationFolderId, session);
+  if (sourceScope !== destinationScope) throw new HttpError(403, "同じPW解除済みフォルダの配下だけ移動できます。");
+  if (movingFolder && Number(sourceFolderId) === sourceScope) throw new HttpError(403, "PWで保護された最上位フォルダ自体は移動できません。");
+  return true;
+}
+
 async function rememberFolderUnlock(env, session, folderId) {
   const expiresAt = Math.floor(Date.now() / 1000) + 2592000;
   await env.DB.prepare(`INSERT INTO cloud_folder_unlocks (session_id, folder_id, expires_at) VALUES (?, ?, ?)
     ON CONFLICT(session_id, folder_id) DO UPDATE SET expires_at = excluded.expires_at`).bind(session.sessionId, folderId, expiresAt).run();
 }
 
-async function breadcrumbs(env, folderId) {
+async function breadcrumbs(env, folderId, session) {
   const result = [];
   let current = folderId;
   let guard = 0;
@@ -1667,7 +1694,10 @@ async function breadcrumbs(env, folderId) {
       encrypted_name AS encryptedName, name_iv AS nameIv, password_salt AS passwordSalt,
       password_wrapped_key AS passwordWrappedKey, password_wrap_iv AS passwordWrapIv,
       admin_wrapped_key AS adminWrappedKey, parent_wrapped_key AS parentWrappedKey,
-      parent_wrap_iv AS parentWrapIv FROM cloud_folders WHERE id = ? AND deleted_at IS NULL`).bind(current).first();
+      parent_wrap_iv AS parentWrapIv, password_hash IS NOT NULL AS isProtected,
+      EXISTS(SELECT 1 FROM cloud_folder_unlocks unlock WHERE unlock.folder_id = cloud_folders.id AND unlock.session_id = ? AND unlock.expires_at > ?) AS isUnlocked
+      FROM cloud_folders WHERE id = ? AND deleted_at IS NULL`)
+      .bind(session.sessionId, Math.floor(Date.now() / 1000), current).first();
     if (!folder) break;
     result.unshift({
       id: folder.id,
@@ -1680,7 +1710,10 @@ async function breadcrumbs(env, folderId) {
       passwordWrapIv: folder.passwordWrapIv,
       adminWrappedKey: folder.adminWrappedKey,
       parentWrappedKey: folder.parentWrappedKey,
-      parentWrapIv: folder.parentWrapIv
+      parentWrapIv: folder.parentWrapIv,
+      isProtected: Boolean(folder.isProtected),
+      isUnlocked: session.role === "admin" ? true : Boolean(folder.isUnlocked),
+      adminAccess: session.role === "admin"
     });
     current = folder.parent_id;
   }
