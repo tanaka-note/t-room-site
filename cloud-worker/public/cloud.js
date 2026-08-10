@@ -671,7 +671,7 @@ async function enterApp(session, password = "", accountKey = null) {
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
   $("#account-name").textContent = session.accountName;
-  const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード・削除・解除済みフォルダ内の名前変更";
+  const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード・削除・解除済みフォルダ内の名称・PW変更";
   $("#account-permission").textContent = permissionText;
   $("#mobile-account-name").textContent = session.accountName;
   $("#mobile-account-permission").textContent = permissionText;
@@ -1412,6 +1412,14 @@ function canRenameFolder(folder) {
   return Boolean(state.session?.canRenameUnlockedItems && folder?.isUnlocked && state.crypto.folderKeys.has(Number(folder.id)));
 }
 
+function canChangeFolderPassword(folder) {
+  if (state.session?.canEditFolders) return true;
+  return Boolean(state.session?.canRenameUnlockedItems
+    && folder?.isProtected
+    && folder?.isUnlocked
+    && state.crypto.folderKeys.has(Number(folder.id)));
+}
+
 function canRenameFile(file) {
   if (state.session?.canEditFiles) return true;
   return Boolean(state.session?.canRenameUnlockedItems && !file?.trashed && file?.fileKey && state.crypto.folderKeys.has(Number(file.folderId)));
@@ -1821,7 +1829,7 @@ function openFolderSettings(folder) {
   $("#folder-settings-error").textContent = "";
   $("#delete-folder-button").hidden = !canTrashFolder(folder);
   const inheritsProtection = Boolean(folder.parentId && !folder.isProtected);
-  const canEditPassword = Boolean(state.session.canEditFolders);
+  const canEditPassword = canChangeFolderPassword(folder);
   $("#folder-password-settings-row").hidden = !canEditPassword || inheritsProtection;
   $("#folder-password-action").disabled = !canEditPassword || inheritsProtection;
   $("#folder-new-password").disabled = !canEditPassword || inheritsProtection;
@@ -1839,7 +1847,10 @@ function toggleFolderPasswordInput() {
 async function saveFolderSettings(event) {
   event.preventDefault();
   const id = Number($("#folder-settings-id").value);
-  const passwordAction = !state.session.canEditFolders || (state.selectedFolder?.parentId && !state.selectedFolder?.isProtected) ? "keep" : $("#folder-password-action").value;
+  const passwordAction = !canChangeFolderPassword(state.selectedFolder)
+    || (state.selectedFolder?.parentId && !state.selectedFolder?.isProtected)
+    ? "keep"
+    : $("#folder-password-action").value;
   $("#folder-settings-error").textContent = "";
   try {
     const folder = state.selectedFolder;

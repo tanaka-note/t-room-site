@@ -40,8 +40,9 @@ if (!source.includes('role: "subadmin"') || !source.includes("canRenameUnlockedI
 if (!functionBody("updateFile").includes("if (!unlocked)") || !functionBody("updateFile").includes("if (moving)")) {
   throw new Error("副管理者のファイル名変更が解除済みフォルダ内に限定されていません。");
 }
-if (!functionBody("updateFolder").includes("if (!unlocked)") || !functionBody("updateFolder").includes('passwordAction !== "keep"')) {
-  throw new Error("副管理者のフォルダ名変更が解除済み・PW維持に限定されていません。");
+if (!functionBody("updateFolder").includes("if (!unlocked)")
+  || !functionBody("updateFolder").includes('passwordAction === "replace" && !folder.password_hash')) {
+  throw new Error("副管理者のフォルダ名称・PW変更が解除済み保護フォルダに限定されていません。");
 }
 if (!functionBody("moveFileToTrash").includes("canTrashUnlockedFiles") || !functionBody("moveFileToTrash").includes("requireFolderAccess(env, file.folder_id, session)")) {
   throw new Error("副管理者のPW解除済みフォルダ内削除を確認できません。");

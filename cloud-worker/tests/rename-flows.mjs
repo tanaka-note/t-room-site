@@ -19,11 +19,14 @@ if (!script.includes('JSON.stringify({ name, passwordAction, ...passwordPackage 
 if (!script.includes("function canRenameFolder(folder)") || !script.includes("function canRenameFile(file)")) {
   throw new Error("解除済みフォルダ内の名称変更表示判定がありません。");
 }
-if (!script.includes('$("#folder-password-settings-row").hidden = !canEditPassword || inheritsProtection')) {
-  throw new Error("副管理者のフォルダPW変更欄が非表示になっていません。");
+if (!script.includes("function canChangeFolderPassword(folder)") || !script.includes("const canEditPassword = canChangeFolderPassword(folder)")) {
+  throw new Error("解除済み保護フォルダに限定したPW変更判定がありません。");
 }
-if (!worker.includes("canRenameUnlockedItems: true") || !worker.includes("requireSameUnlockedMoveScope") || !worker.includes("フォルダPWを変更できるのは管理者だけです")) {
-  throw new Error("副管理者の名称変更・解除範囲内移動権限がサーバー側にありません。");
+if (!script.includes("folder?.isProtected") || !script.includes("folder?.isUnlocked") || !script.includes("state.crypto.folderKeys.has(Number(folder.id))")) {
+  throw new Error("副管理者のPW変更が保護・解除・鍵の3条件に限定されていません。");
+}
+if (!worker.includes("canRenameUnlockedItems: true") || !worker.includes("requireSameUnlockedMoveScope") || !worker.includes("副管理者はPWで解除した保護フォルダのPWだけ変更できます")) {
+  throw new Error("副管理者の名称・PW変更と解除範囲内移動権限がサーバー側にありません。");
 }
 if (!worker.includes('UPDATE cloud_folders SET name = ?, updated_at = CURRENT_TIMESTAMP') || !worker.includes('name: folder.name')) {
   throw new Error("サーバーまたは共有画面の平文フォルダ名処理がありません。");

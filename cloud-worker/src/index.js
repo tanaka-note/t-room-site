@@ -798,7 +798,9 @@ async function updateFolder(id, request, env, session) {
   if (!session.canEditFolders) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内の名前だけ変更できます。");
     if (moving) await requireSameUnlockedMoveScope(env, id, parentId, session, true);
-    if (passwordAction !== "keep") throw new HttpError(403, "フォルダPWを変更できるのは管理者だけです。");
+    if (passwordAction === "replace" && !folder.password_hash) {
+      throw new HttpError(403, "副管理者はPWで解除した保護フォルダのPWだけ変更できます。");
+    }
   }
   let parentPackage = null;
   if (moving) {
