@@ -66,8 +66,7 @@ const state = {
   durationObserver: null,
   durationBackfillRunning: false,
   durationScanGeneration: 0,
-  previewLandscape: false,
-  previewOrientationFallback: false,
+  previewAutoRotate: false,
   conflictScanGeneration: 0,
   handlingPopState: false,
   historyReady: false,
@@ -283,7 +282,7 @@ async function installApp() {
 async function registerPwaWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
-    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-5", { scope: "/cloud/", updateViaCache: "none" });
+    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-6", { scope: "/cloud/", updateViaCache: "none" });
   } catch (error) {
     console.warn("T-Cloud app worker registration failed", error);
   }
@@ -4516,7 +4515,7 @@ async function openPreview(file, options = {}) {
   clearPreviewUrl();
   state.previewFileId = Number(file.id);
   state.selected = file;
-  resetPreviewRotation(false);
+  resetPreviewRotation(true);
   $("#preview-rotate").hidden = file.mediaKind !== "video";
   $("#preview-more").open = false;
   $("#preview-title").textContent = file.name;
@@ -4648,7 +4647,7 @@ async function togglePreviewFullscreen() {
     if (document.fullscreenElement) await document.exitFullscreen();
     else if (stage.requestFullscreen) {
       await stage.requestFullscreen();
-      if (state.previewLandscape) await applyPreviewLandscapeOrientation();
+      if (state.previewAutoRotate) releasePreviewOrientationLock();
       else await preserveAppOrientation(true);
     }
     else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
@@ -4661,51 +4660,39 @@ function syncPreviewFullscreenButton() {
   button.setAttribute("aria-label", active ? "全画面表示を終了" : "全画面で表示");
   const label = button.querySelector("span");
   if (label) label.textContent = active ? "戻す" : "全画面";
-  if (!active && state.previewLandscape) resetPreviewRotation(true);
-  else if (active && state.previewLandscape) void applyPreviewLandscapeOrientation();
+  if (!active && state.previewAutoRotate) resetPreviewRotation(true);
+  else if (active && state.previewAutoRotate) releasePreviewOrientationLock();
   else void preserveAppOrientation(active);
 }
 
 async function togglePreviewRotation() {
   if (!$("#preview-stage video")) return;
-  state.previewLandscape = !state.previewLandscape;
-  if (state.previewLandscape && !document.fullscreenElement && $("#preview-stage-wrap").requestFullscreen) {
+  state.previewAutoRotate = !state.previewAutoRotate;
+  if (state.previewAutoRotate && !document.fullscreenElement && $("#preview-stage-wrap").requestFullscreen) {
     try { await $("#preview-stage-wrap").requestFullscreen(); } catch {}
   }
-  if (state.previewLandscape) await applyPreviewLandscapeOrientation();
+  if (state.previewAutoRotate) releasePreviewOrientationLock();
   else resetPreviewRotation(true);
   syncPreviewRotationButton();
 }
 
-async function applyPreviewLandscapeOrientation() {
-  let locked = false;
-  if (screen.orientation?.lock) {
-    try {
-      await screen.orientation.lock("landscape");
-      locked = true;
-    } catch {}
-  }
-  state.previewOrientationFallback = !locked;
-  $("#preview-stage-wrap").classList.toggle("is-video-rotated", state.previewLandscape && !locked);
+function releasePreviewOrientationLock() {
+  try { screen.orientation?.unlock?.(); } catch {}
   syncPreviewRotationButton();
-  return locked;
 }
 
 function resetPreviewRotation(restorePortrait = true) {
-  state.previewLandscape = false;
-  state.previewOrientationFallback = false;
-  $("#preview-stage-wrap").classList.remove("is-video-rotated");
-  try { screen.orientation?.unlock?.(); } catch {}
+  state.previewAutoRotate = false;
   syncPreviewRotationButton();
   if (restorePortrait) void preserveAppOrientation(false);
 }
 
 function syncPreviewRotationButton() {
   const button = $("#preview-rotate");
-  button.setAttribute("aria-pressed", String(state.previewLandscape));
-  button.setAttribute("aria-label", state.previewLandscape ? "動画を縦向きへ戻す" : "動画を横向きで表示");
+  button.setAttribute("aria-pressed", String(state.previewAutoRotate));
+  button.setAttribute("aria-label", state.previewAutoRotate ? "端末の自動回転を解除する" : "端末の自動回転を有効にする");
   const label = button.querySelector("span");
-  if (label) label.textContent = state.previewLandscape ? "縦向き" : "横向き";
+  if (label) label.textContent = state.previewAutoRotate ? "回転中" : "自動回転";
 }
 
 async function preserveAppOrientation(force = false) {

@@ -11,7 +11,7 @@
   "display_override": ["standalone", "minimal-ui"],
   "background_color": "#071426",
   "theme_color": "#071426",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "categories": ["productivity", "utilities"],
   "launch_handler": { "client_mode": "navigate-existing" },
   "prefer_related_applications": false,
