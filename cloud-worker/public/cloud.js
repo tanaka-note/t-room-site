@@ -10,7 +10,8 @@ const state = {
   kind: "",
   view: "all",
   sort: "name",
-  sortDirection: "desc",
+  sortDirection: "asc",
+  sortUsesTypeDefaults: true,
   query: "",
   files: [],
   folders: [],
@@ -263,8 +264,17 @@ function changeSort(key) {
     state.sort = key;
     state.sortDirection = key === "name" ? "asc" : "desc";
   }
+  state.sortUsesTypeDefaults = false;
   syncSortControls();
   loadItems();
+}
+
+function resetTypeDefaultSort() {
+  const fileView = Boolean(state.folderId || state.kind);
+  state.sort = fileView ? "updated" : "name";
+  state.sortDirection = fileView ? "desc" : "asc";
+  state.sortUsesTypeDefaults = true;
+  syncSortControls();
 }
 
 function syncSortControls() {
@@ -631,6 +641,7 @@ function initializeNavigationHistory() {
   state.folderId = folderId;
   state.kind = "";
   state.view = "all";
+  resetTypeDefaultSort();
   $("#view-title").textContent = folderName;
   history.replaceState(navigationEntry(folderId, folderName), "", location.href);
   state.historyReady = true;
@@ -651,6 +662,7 @@ async function navigateToFolder(folderId, folderName, options = {}) {
   state.folderId = folderId ? Number(folderId) : null;
   state.kind = "";
   state.view = "all";
+  resetTypeDefaultSort();
   clearSearch();
   $("#view-title").textContent = folderName || (state.folderId ? "ファイル" : "フォルダ");
   if (pushHistory && state.historyReady) {
@@ -1050,6 +1062,7 @@ function selectSection(button) {
     clearSearch();
   } else {
     state.kind = button.dataset.kind || "";
+    resetTypeDefaultSort();
   }
   state.view = button.dataset.view || "all";
   const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", requests: "削除申請", shares: "共有管理", image: "写真", video: "動画", audio: "音声", document: "書類" };
@@ -1151,7 +1164,7 @@ async function loadItems() {
       state.history = [];
       state.requests = [];
       state.shares = [];
-      renderBreadcrumbs(await hydrateFolderRecords(data.breadcrumbs || []));
+      renderBreadcrumbs(await hydrateFolderRecords(data.breadcrumbs || [], { preserveOrder: true }));
     }
     renderItems();
     return { ok: true, error: null };
@@ -1302,7 +1315,7 @@ function folderCard(folder) {
   return card;
 }
 
-async function hydrateFolderRecords(records) {
+async function hydrateFolderRecords(records, options = {}) {
   const hydrated = [];
   for (const original of records) {
     const folder = { ...original };
@@ -1330,9 +1343,11 @@ async function hydrateFolderRecords(records) {
     hydrated.push(folder);
   }
   let result = hydrated;
+  if (options.preserveOrder) return result;
   if (state.query) result = result.filter((folder) => folder.name.toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja")));
   const direction = state.sortDirection === "asc" ? 1 : -1;
-  if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
+  if (state.sortUsesTypeDefaults) result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
+  else if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   else if (state.sort === "updated") result.sort((a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || "")));
   else result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   return result;
@@ -1767,7 +1782,8 @@ async function hydrateFileRecords(records) {
   if (state.query) result = result.filter((file) => file.name.toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja")));
   if (state.kind) result = result.filter((file) => file.mediaKind === state.kind);
   const direction = state.sortDirection === "asc" ? 1 : -1;
-  if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
+  if (state.sortUsesTypeDefaults) result.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+  else if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   else if (state.sort === "size") result.sort((a, b) => direction * (Number(a.sizeBytes || 0) - Number(b.sizeBytes || 0)) || a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   else result.sort((a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || "")));
   return result;

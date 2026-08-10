@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "name", sortDirection: "desc", listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -185,7 +185,10 @@ function renderSortedItems() {
   const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ja", { numeric: true, sensitivity: "base" });
   const direction = state.sortDirection === "asc" ? 1 : -1;
   const byUpdated = (a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || ""));
-  if (state.sort === "name") {
+  if (state.sortUsesTypeDefaults) {
+    folders.sort(byName);
+    files.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+  } else if (state.sort === "name") {
     folders.sort((a, b) => direction * byName(a, b));
     files.sort((a, b) => direction * byName(a, b));
   } else if (state.sort === "size") {
@@ -205,6 +208,7 @@ function changeSharedSort(key) {
     state.sort = key;
     state.sortDirection = key === "name" ? "asc" : "desc";
   }
+  state.sortUsesTypeDefaults = false;
   document.querySelectorAll("#share-sort-controls [data-sort-key]").forEach((button) => {
     const active = button.dataset.sortKey === state.sort;
     button.classList.toggle("active", active);
