@@ -24,7 +24,7 @@ assert.match(main, /TRoomCrypto\.encryptFileMetadata\(fileMetadataForStorage/);
 assert.match(main, /file\.durationSeconds = normalizeDurationSeconds\(metadata\.durationSeconds\)/);
 assert.match(share, /observeSharedMediaDuration\(video, file\)/);
 assert.match(share, /observeSharedMediaDuration\(audio, file\)/);
-assert.match(mainHtml, /cloud\.js\?v=20260810-95/);
+assert.match(mainHtml, /cloud\.js\?v=20260810-96/);
 assert.match(shareHtml, /share\.js\?v=20260810-26/);
 
 console.log("encrypted media duration metadata and card display: ok");

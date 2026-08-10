@@ -23,6 +23,12 @@ const state = {
   history: [],
   requests: [],
   shares: [],
+  conflictGroups: [],
+  conflictFileGroups: new Map(),
+  conflictFolders: new Map(),
+  conflictScanRunning: false,
+  conflictScanCompleted: false,
+  conflictScanScheduled: false,
   selected: null,
   selectedFolder: null,
   shareTarget: null,
@@ -143,6 +149,8 @@ function bindEvents() {
   $("#edit-form").addEventListener("submit", saveFile);
   $("#edit-file-button").addEventListener("click", openEditDialog);
   $("#delete-file-button").addEventListener("click", deleteSelectedFile);
+  $$("#conflict-count-button, #floating-conflict-count-button").forEach((button) => button.addEventListener("click", openConflictGroupList));
+  $("#conflict-groups-back").addEventListener("click", renderConflictGroupList);
   $("#share-file-button").addEventListener("click", () => openShareDialog("file", state.selected));
   $("#share-folder-button").addEventListener("click", () => openShareDialog("folder", state.selectedFolder));
   $("#share-form").addEventListener("submit", createShare);
@@ -1193,6 +1201,7 @@ function syncAvailableActions() {
   });
   if (inHistory || inRequests || inShares || state.uploading || state.downloadActive) hideFloatingToolbar();
   $$('[data-kind]').forEach((button) => { button.disabled = !insideFolder || inTrash || inHistory || inRequests || inShares; });
+  syncStoredConflictButtons();
 }
 
 async function loadItems() {
@@ -1255,6 +1264,7 @@ async function loadItems() {
       renderBreadcrumbs(await hydrateFolderRecords(data.breadcrumbs || [], { preserveOrder: true }));
     }
     renderItems();
+    scheduleStoredConflictScan();
     return { ok: true, error: null };
   } catch (error) {
     handleError(error);
@@ -1868,6 +1878,7 @@ async function saveFolderSettings(event) {
     folder.name = name;
     $("#folder-settings-dialog").close();
     setNotice("フォルダ設定を更新しました。");
+    invalidateStoredConflicts();
     await loadItems();
   } catch (error) { $("#folder-settings-error").textContent = error.message; }
 }
@@ -1887,6 +1898,7 @@ async function deleteSelectedFolder() {
     setNotice(state.session?.canDelete
       ? `フォルダを中身ごとゴミ箱へ移動しました（合計${Number(result.deleted || 1).toLocaleString("ja-JP")}件）。`
       : "削除しました。");
+    invalidateStoredConflicts();
     const reloads = [loadItems()];
     if (state.session?.role === "admin") reloads.push(loadUsage());
     await Promise.all(reloads);
@@ -1950,6 +1962,20 @@ function fileCard(file) {
   });
   installLongPressSelection(card, file);
   card.append(button);
+  const conflictGroupId = state.conflictFileGroups.get(Number(file.id));
+  if (!state.listMode && conflictGroupId && !file.trashed) {
+    const conflictBadge = document.createElement("button");
+    conflictBadge.className = "conflict-badge";
+    conflictBadge.type = "button";
+    conflictBadge.textContent = "競合";
+    conflictBadge.setAttribute("aria-label", `${file.name}の競合候補を確認`);
+    conflictBadge.addEventListener("pointerdown", (event) => event.stopPropagation());
+    conflictBadge.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openConflictGroup(conflictGroupId);
+    });
+    card.append(conflictBadge);
+  }
   if (!file.trashed) {
     const selectButton = document.createElement("button");
     selectButton.className = "file-select-button";
@@ -1968,7 +1994,7 @@ function fileCard(file) {
   return card;
 }
 
-async function hydrateFileRecords(records) {
+async function hydrateFileRecords(records, options = {}) {
   const hydrated = [];
   for (const original of records) {
     const file = { ...original };
@@ -2009,6 +2035,7 @@ async function hydrateFileRecords(records) {
     }
     hydrated.push(file);
   }
+  if (options.preserveOrder) return hydrated;
   let result = hydrated;
   if (state.query) result = result.filter((file) => file.name.toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja")));
   if (state.kind) result = result.filter((file) => file.mediaKind === state.kind);
@@ -2347,6 +2374,7 @@ async function deleteSelectedItems() {
     setNotice(failures.length
       ? `${completed}件を処理しました。削除できなかった${failures.length}件：${failedNames}${failures.length > 3 ? " ほか" : ""}`
       : successMessage, Boolean(failures.length));
+    if (completed) invalidateStoredConflicts();
     const reloads = [loadItems()];
     if (state.session?.role === "admin") reloads.push(loadUsage());
     await Promise.all(reloads);
@@ -2460,6 +2488,7 @@ async function moveSelectedItems(event) {
     $("#move-dialog").close();
     clearFileSelection();
     setNotice(failed ? `${completed}件を移動しました。${failed}件は移動できませんでした。` : `${completed}件を移動しました。`, Boolean(failed));
+    if (completed) invalidateStoredConflicts();
     await loadItems();
   } catch (error) {
     $("#move-error").textContent = error.message;
@@ -3249,6 +3278,212 @@ function findIncomingUploadConflictGroups(files) {
   return [...groups.values()].filter((group) => group.length > 1);
 }
 
+function syncStoredConflictButtons(checking = state.conflictScanRunning) {
+  const count = state.conflictGroups.length;
+  $$("#conflict-count-button, #floating-conflict-count-button").forEach((button) => {
+    button.hidden = state.view !== "all" || (!checking && count === 0);
+    button.disabled = checking;
+    button.classList.toggle("is-checking", checking);
+    button.textContent = checking ? "競合確認中…" : `競合 ${count.toLocaleString("ja-JP")}組`;
+  });
+}
+
+function invalidateStoredConflicts() {
+  state.conflictScanCompleted = false;
+  state.conflictGroups = [];
+  state.conflictFileGroups = new Map();
+  state.conflictFolders = new Map();
+  syncStoredConflictButtons(false);
+}
+
+function scheduleStoredConflictScan(force = false) {
+  if (force) invalidateStoredConflicts();
+  if (!state.session || state.view !== "all" || state.conflictScanRunning || state.conflictScanCompleted || state.conflictScanScheduled) return;
+  if (state.session.role === "admin" && !state.crypto.adminPrivateKey) return;
+  if (state.session.role === "subadmin" && state.crypto.folderKeys.size === 0) return;
+  state.conflictScanScheduled = true;
+  const run = () => {
+    state.conflictScanScheduled = false;
+    scanStoredConflicts().catch((error) => console.warn("Stored conflict scan was deferred.", error));
+  };
+  if ("requestIdleCallback" in window) window.requestIdleCallback(run, { timeout: 2500 });
+  else window.setTimeout(run, 350);
+}
+
+async function loadStoredConflictCandidates() {
+  const candidates = [];
+  const folders = new Map();
+  let offset = 0;
+  let guard = 0;
+  do {
+    const data = await api(`/conflicts?offset=${offset}`);
+    candidates.push(...(data.candidates || []));
+    for (const folder of data.folders || []) folders.set(Number(folder.id), { ...folder, id: Number(folder.id), parentId: Number(folder.parentId) || null });
+    offset = Number.isInteger(data.nextOffset) ? data.nextOffset : -1;
+  } while (offset >= 0 && guard++ < 500);
+  if (offset >= 0) throw new Error("競合候補が多いため確認を完了できませんでした。");
+  return { candidates, folders };
+}
+
+async function scanStoredConflicts() {
+  if (state.conflictScanRunning || state.conflictScanCompleted) return;
+  state.conflictScanRunning = true;
+  syncStoredConflictButtons(true);
+  try {
+    const { candidates, folders } = await loadStoredConflictCandidates();
+    await unlockConflictFolderKeys(folders);
+    const hydrated = await hydrateFileRecords(candidates, { preserveOrder: true });
+    const grouped = new Map();
+    for (const file of hydrated) {
+      if (Number(file.cryptoVersion) === 1 && !file.fileKey) continue;
+      file.folderPath = conflictFolderPath(file.folderId, folders);
+      file.folderName = folders.get(Number(file.folderId))?.name || "フォルダ";
+      const identity = uploadFileIdentity(file.name, file.sizeBytes);
+      if (!grouped.has(identity)) grouped.set(identity, []);
+      grouped.get(identity).push(file);
+    }
+    const groups = [...grouped.values()]
+      .filter((files) => files.length > 1)
+      .sort((left, right) => left[0].name.localeCompare(right[0].name, "ja", { numeric: true, sensitivity: "base" }))
+      .map((files, index) => ({
+        id: `conflict-${index + 1}`,
+        name: files[0].name,
+        sizeBytes: Number(files[0].sizeBytes || 0),
+        files
+      }));
+    state.conflictGroups = groups;
+    state.conflictFileGroups = new Map(groups.flatMap((group) => group.files.map((file) => [Number(file.id), group.id])));
+    state.conflictFolders = folders;
+    state.conflictScanCompleted = true;
+    if (state.view === "all") renderItems();
+  } finally {
+    state.conflictScanRunning = false;
+    syncStoredConflictButtons(false);
+  }
+}
+
+function openConflictGroupList() {
+  if (state.conflictScanRunning) return;
+  if (!state.conflictGroups.length) {
+    setNotice("競合候補は見つかりませんでした。");
+    return;
+  }
+  renderConflictGroupList();
+  const dialog = $("#conflict-dialog");
+  if (!dialog.open) dialog.showModal();
+}
+
+function renderConflictGroupList() {
+  $("#conflict-dialog-title").textContent = "競合グループ";
+  $("#conflict-dialog-summary").textContent = "グループを選ぶと、その組だけを比較できます。";
+  $("#conflict-groups-back").hidden = true;
+  $("#conflict-file-list").hidden = true;
+  const list = $("#conflict-group-list");
+  list.hidden = false;
+  list.innerHTML = "";
+  for (const group of state.conflictGroups) {
+    const button = document.createElement("button");
+    button.className = "conflict-group-button";
+    button.type = "button";
+    button.innerHTML = `<span><strong>${escapeHtml(group.name)}</strong><small>${formatBytes(group.sizeBytes)}・同名／同容量</small></span><span class="conflict-group-count">${group.files.length.toLocaleString("ja-JP")}件</span>`;
+    button.addEventListener("click", () => openConflictGroup(group.id));
+    list.append(button);
+  }
+}
+
+function openConflictGroup(groupId) {
+  const group = state.conflictGroups.find((item) => item.id === groupId);
+  if (!group) {
+    setNotice("競合グループを再確認しています。", true);
+    scheduleStoredConflictScan(true);
+    return;
+  }
+  $("#conflict-dialog-title").textContent = group.name;
+  $("#conflict-dialog-summary").textContent = `${formatBytes(group.sizeBytes)}・${group.files.length.toLocaleString("ja-JP")}件の候補だけを表示しています。`;
+  $("#conflict-groups-back").hidden = false;
+  $("#conflict-group-list").hidden = true;
+  const list = $("#conflict-file-list");
+  list.hidden = false;
+  list.innerHTML = "";
+  for (const file of group.files) list.append(conflictFileRow(file));
+  const dialog = $("#conflict-dialog");
+  if (!dialog.open) dialog.showModal();
+}
+
+function canTrashConflictFile(file) {
+  if (state.session?.canDelete) return true;
+  return Boolean(state.session?.canTrashUnlockedFiles
+    && file?.fileKey
+    && state.crypto.folderKeys.has(Number(file.folderId)));
+}
+
+function conflictFileRow(file) {
+  const row = document.createElement("article");
+  row.className = "conflict-file-row";
+  const copy = document.createElement("div");
+  copy.className = "conflict-file-copy";
+  copy.innerHTML = `<strong>${escapeHtml(file.name)}</strong><span>${escapeHtml(file.folderPath)}</span><small>${formatBytes(file.sizeBytes)}・更新 ${formatDate(file.updatedAt || file.createdAt)}</small>`;
+  const actions = document.createElement("div");
+  actions.className = "conflict-file-actions";
+  const openButton = document.createElement("button");
+  openButton.className = "secondary-button";
+  openButton.type = "button";
+  openButton.textContent = "場所を開く";
+  openButton.addEventListener("click", () => openConflictFileLocation(file));
+  actions.append(openButton);
+  if (canRenameFile(file)) {
+    const renameButton = document.createElement("button");
+    renameButton.className = "secondary-button";
+    renameButton.type = "button";
+    renameButton.textContent = "名前変更";
+    renameButton.addEventListener("click", () => editConflictFile(file));
+    actions.append(renameButton);
+  }
+  if (canTrashConflictFile(file)) {
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "danger-button";
+    deleteButton.type = "button";
+    deleteButton.textContent = "削除";
+    deleteButton.addEventListener("click", () => deleteConflictFile(file));
+    actions.append(deleteButton);
+  }
+  row.append(copy, actions);
+  return row;
+}
+
+async function openConflictFileLocation(file) {
+  $("#conflict-dialog").close();
+  await navigateToFolder(Number(file.folderId), file.folderName || "ファイル");
+  requestAnimationFrame(() => {
+    const card = $(`.file-card[data-file-id="${Number(file.id)}"]`);
+    card?.scrollIntoView({ behavior: "smooth", block: "center" });
+    card?.classList.add("conflict-focus");
+    window.setTimeout(() => card?.classList.remove("conflict-focus"), 1800);
+  });
+}
+
+function editConflictFile(file) {
+  $("#conflict-dialog").close();
+  state.selected = file;
+  openEditDialog();
+}
+
+async function deleteConflictFile(file) {
+  if (!canTrashConflictFile(file)) return;
+  const message = state.session?.canDelete ? `「${file.name}」をゴミ箱へ移動しますか？` : "本当に削除しますか？";
+  const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
+  if (!confirmed) return;
+  try {
+    await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
+    $("#conflict-dialog").close();
+    invalidateStoredConflicts();
+    setNotice(state.session?.canDelete ? "ゴミ箱へ移動しました。競合を再確認します。" : "削除しました。競合を再確認します。");
+    const reloads = [loadItems()];
+    if (state.session?.role === "admin") reloads.push(loadUsage());
+    await Promise.all(reloads);
+  } catch (error) { setNotice(error.message, true); }
+}
+
 async function excludeExistingUploadFiles(files, destinations) {
   const skipped = [];
   const skippedSet = new Set();
@@ -3502,6 +3737,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
     syncAvailableActions();
     await syncTransferWakeLock();
   }
+  if (completed) invalidateStoredConflicts();
   await Promise.all([loadItems(), loadUsage()]);
 }
 
@@ -4106,6 +4342,7 @@ async function unlockFolder(event) {
     await saveCachedFolderKey(id, unlocked.folderKey);
     folder.isUnlocked = true;
     $("#unlock-dialog").close();
+    invalidateStoredConflicts();
     await navigateToFolder(id, folder.name);
   } catch (error) {
     $("#unlock-error").textContent = error.message;
@@ -4501,6 +4738,7 @@ async function saveFile(event) {
     }
     $("#edit-dialog").close();
     setNotice("ファイル情報を更新しました。");
+    invalidateStoredConflicts();
     await loadItems();
   } catch (error) { $("#edit-error").textContent = error.message; }
 }
@@ -4515,6 +4753,7 @@ async function deleteSelectedFile() {
     await api(`/files/${file.id}`, { method: "DELETE", body: "{}" });
     $("#preview-dialog").close();
     setNotice(state.session?.canDelete ? "ゴミ箱へ移動しました。" : "削除しました。");
+    invalidateStoredConflicts();
     const reloads = [loadItems()];
     if (state.session?.role === "admin") reloads.push(loadUsage());
     await Promise.all(reloads);

@@ -112,6 +112,7 @@
           <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true">↑</span></button>
           <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true">↓</span></button>
         </div>
+        <button id="conflict-count-button" class="secondary-button conflict-count-button" type="button" hidden>競合 0組</button>
         <button id="display-toggle" class="icon-button display-toggle" type="button" aria-label="表示を切り替え">▦</button>
       </div>
 
@@ -131,6 +132,7 @@
           <span>⌕</span>
           <input id="floating-search-input" type="search" placeholder="ファイル名を検索" aria-label="ファイル名を検索">
         </label>
+        <button id="floating-conflict-count-button" class="secondary-button conflict-count-button floating-conflict-count-button" type="button" hidden>競合 0組</button>
         <div id="floating-sort-controls" class="sort-controls floating-sort-controls" role="group" aria-label="並び順">
           <button class="sort-button" type="button" data-sort-key="updated" aria-pressed="false">更新 <span aria-hidden="true">↓</span></button>
           <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true">↑</span></button>
@@ -376,6 +378,19 @@
     </form>
   </dialog>
 
+  <dialog id="conflict-dialog" class="preview-dialog conflict-dialog">
+    <div class="dialog-head">
+      <div><span class="file-badge">CONFLICT CHECK</span><h2 id="conflict-dialog-title">競合グループ</h2></div>
+      <button class="dialog-close icon-button" type="button" aria-label="閉じる">×</button>
+    </div>
+    <div class="conflict-dialog-toolbar">
+      <button id="conflict-groups-back" class="secondary-button" type="button" hidden>競合グループ一覧へ</button>
+      <p id="conflict-dialog-summary">同名・同容量のファイルをグループ単位で確認できます。</p>
+    </div>
+    <div id="conflict-group-list" class="conflict-group-list"></div>
+    <div id="conflict-file-list" class="conflict-file-list" hidden></div>
+  </dialog>
+
   <dialog id="install-guide-dialog" class="form-dialog compact-dialog">
     <div class="dialog-head"><div><span class="file-badge">INSTALL</span><h2>ホームへ追加</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
     <p id="install-guide-copy" class="dialog-note standalone-note"></p>
@@ -459,6 +474,6 @@
   <script src="/cloud/file-safety.js?v=20260810-2" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260810-5" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-95" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-96" defer></script>
 </body>
 </html>

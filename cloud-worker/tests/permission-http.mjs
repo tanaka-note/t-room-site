@@ -49,6 +49,8 @@ await expectStatus("副管理者のフォルダ別容量内訳拒否", await req
 await expectStatus("管理者の競合候補照合", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], offset: 0 }) }), 200);
 await expectStatus("副管理者の解除範囲内競合候補照合", await request("/upload-conflict-candidates", "subadmin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], offset: 0 }) }), 200);
 await expectStatus("競合候補照合の容量指定検証", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [] }) }), 400);
+await expectStatus("管理者の保存済み競合グループ照合", await request("/conflicts?offset=0", "admin"), 200);
+await expectStatus("副管理者の解除範囲内保存済み競合グループ照合", await request("/conflicts?offset=0", "subadmin"), 200);
 
 const subHistoryResponse = await expectStatus("副管理者本人の操作履歴", await request("/upload-history", "subadmin"), 200);
 const subHistory = await subHistoryResponse.json();

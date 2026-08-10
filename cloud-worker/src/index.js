@@ -88,6 +88,7 @@ async function handleApi(request, env, url, path) {
 
   if (path === "/api/items" && request.method === "GET") return listItems(url, env, session);
   if (path === "/api/upload-conflict-candidates" && request.method === "POST") return listUploadConflictCandidates(request, env, session);
+  if (path === "/api/conflicts" && request.method === "GET") return listStoredConflictCandidates(url, env, session);
   if (path === "/api/legacy-folders" && request.method === "GET") return listLegacyFolders(env, session);
   if (path === "/api/folders" && request.method === "POST") return createFolder(request, env, session);
   if (path === "/api/uploads" && request.method === "POST") return createUpload(request, env, session);
@@ -740,6 +741,94 @@ async function listUploadConflictCandidates(request, env, session) {
     folders,
     nextOffset: rows.length > pageSize ? offset + pageSize : null
   });
+}
+
+async function listStoredConflictCandidates(url, env, session) {
+  const offset = Math.min(100000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
+  const pageSize = 200;
+  const selectFields = (alias) => `${alias}.id, ${alias}.folder_id AS folderId,
+      CASE WHEN ${alias}.crypto_version = 1 THEN '' ELSE ${alias}.original_name END AS name,
+      ${alias}.mime_type AS mimeType, ${alias}.media_kind AS mediaKind,
+      ${alias}.size_bytes AS sizeBytes, ${alias}.crypto_version AS cryptoVersion,
+      ${alias}.encrypted_metadata AS encryptedMetadata, ${alias}.metadata_iv AS metadataIv,
+      ${alias}.wrapped_file_key AS wrappedFileKey, ${alias}.file_key_iv AS fileKeyIv,
+      ${alias}.created_at AS createdAt, ${alias}.updated_at AS updatedAt`;
+  let query;
+  let values;
+  if (session.role === "admin") {
+    query = `WITH duplicate_sizes AS (
+        SELECT size_bytes FROM cloud_files
+        WHERE deleted_at IS NULL AND status = 'ready' AND size_bytes > 0
+        GROUP BY size_bytes HAVING COUNT(*) > 1
+      )
+      SELECT ${selectFields("f")}
+      FROM cloud_files f JOIN duplicate_sizes duplicate ON duplicate.size_bytes = f.size_bytes
+      WHERE f.deleted_at IS NULL AND f.status = 'ready'
+      ORDER BY f.size_bytes ASC, f.id ASC LIMIT ? OFFSET ?`;
+    values = [pageSize + 1, offset];
+  } else {
+    const now = Math.floor(Date.now() / 1000);
+    query = `WITH RECURSIVE folder_access(id, is_allowed, has_protected_ancestor) AS (
+        SELECT folder.id,
+          CASE WHEN folder.password_hash IS NULL THEN 1 ELSE EXISTS (
+            SELECT 1 FROM cloud_folder_unlocks unlock
+            WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
+          ) END,
+          CASE WHEN folder.password_hash IS NULL THEN 0 ELSE 1 END
+        FROM cloud_folders folder
+        WHERE folder.parent_id IS NULL AND folder.deleted_at IS NULL
+        UNION
+        SELECT child.id,
+          parent.is_allowed AND (child.password_hash IS NULL OR EXISTS (
+            SELECT 1 FROM cloud_folder_unlocks unlock
+            WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
+          )),
+          parent.has_protected_ancestor OR child.password_hash IS NOT NULL
+        FROM cloud_folders child
+        JOIN folder_access parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NULL
+      ), accessible_files AS (
+        SELECT file.* FROM cloud_files file
+        JOIN folder_access access ON access.id = file.folder_id
+        WHERE access.is_allowed = 1 AND access.has_protected_ancestor = 1
+          AND file.deleted_at IS NULL AND file.status = 'ready' AND file.size_bytes > 0
+      ), duplicate_sizes AS (
+        SELECT size_bytes FROM accessible_files GROUP BY size_bytes HAVING COUNT(*) > 1
+      )
+      SELECT ${selectFields("file")}
+      FROM accessible_files file JOIN duplicate_sizes duplicate ON duplicate.size_bytes = file.size_bytes
+      ORDER BY file.size_bytes ASC, file.id ASC LIMIT ? OFFSET ?`;
+    values = [session.sessionId, now, session.sessionId, now, pageSize + 1, offset];
+  }
+  const result = await env.DB.prepare(query).bind(...values).all();
+  const rows = result.results || [];
+  const candidates = rows.slice(0, pageSize);
+  const folderIds = [...new Set(candidates.map((file) => Number(file.folderId)).filter(Boolean))];
+  let folders = [];
+  if (folderIds.length) {
+    const placeholders = folderIds.map(() => "?").join(", ");
+    const folderResult = await env.DB.prepare(`WITH RECURSIVE ancestors AS (
+        SELECT id, parent_id, name, crypto_version, encrypted_name, name_iv,
+          password_salt, password_wrapped_key, password_wrap_iv,
+          admin_wrapped_key, parent_wrapped_key, parent_wrap_iv
+        FROM cloud_folders WHERE id IN (${placeholders}) AND deleted_at IS NULL
+        UNION
+        SELECT parent.id, parent.parent_id, parent.name, parent.crypto_version,
+          parent.encrypted_name, parent.name_iv, parent.password_salt,
+          parent.password_wrapped_key, parent.password_wrap_iv,
+          parent.admin_wrapped_key, parent.parent_wrapped_key, parent.parent_wrap_iv
+        FROM cloud_folders parent JOIN ancestors child ON parent.id = child.parent_id
+        WHERE parent.deleted_at IS NULL
+      )
+      SELECT id, parent_id AS parentId, name, crypto_version AS cryptoVersion,
+        encrypted_name AS encryptedName, name_iv AS nameIv,
+        password_salt AS passwordSalt, password_wrapped_key AS passwordWrappedKey,
+        password_wrap_iv AS passwordWrapIv, admin_wrapped_key AS adminWrappedKey,
+        parent_wrapped_key AS parentWrappedKey, parent_wrap_iv AS parentWrapIv
+      FROM ancestors ORDER BY id ASC`).bind(...folderIds).all();
+    folders = folderResult.results || [];
+  }
+  return json({ candidates, folders, nextOffset: rows.length > pageSize ? offset + pageSize : null });
 }
 
 async function listLegacyFolders(env, session) {
