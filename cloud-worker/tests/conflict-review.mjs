@@ -34,6 +34,13 @@ assert.match(client, /generation !== state\.conflictScanGeneration/);
 assert.match(client, /async function loadConflictOverview\(\)/);
 assert.match(client, /function buildConflictGroups\(files, folders/);
 assert.match(worker, /FROM cloud_files/, "競合判定はファイルだけを対象にしてください。");
+assert.match(client, /const CONFLICT_CATEGORY_ORDER = \["audio", "video", "other"\]/);
+assert.match(client, /audio: \{ label: "音楽", symbol: "♪" \}/);
+assert.match(client, /video: \{ label: "動画", symbol: "▶" \}/);
+assert.match(client, /other: \{ label: "その他", symbol: "□" \}/);
+assert.match(client, /appendConflictCategoryList\(list, groups\)/);
+assert.match(client, /appendConflictCategoryList\(list, groups, "h4"\)/);
+assert.match(css, /\.conflict-category-heading/);
 assert.match(client, /const topFolderId = Number\(file\.topFolderId/);
 assert.match(client, /nearSize && \(sameName \|\| sameTimestamp\)/);
 assert.match(client, /PWを解除したトップフォルダ内に、競合候補はありません/);
@@ -52,7 +59,7 @@ assert.match(worker, /scopeFolderId = optionalId\(body\.scopeFolderId\)/, "通�
 assert.match(client, /scopeFolderId: Number\(scopeFolderId\) \|\| null/, "競合照合時に現在のトップフォルダ範囲を送信してください。");
 assert.match(worker, /WITH RECURSIVE folder_access/);
 assert.match(worker, /access\.is_allowed = 1 AND access\.has_protected_ancestor = 1/);
-assert.match(html, /cloud\.css\?v=20260810-31/);
-assert.match(html, /cloud\.js\?v=20260810-103/);
+assert.match(html, /cloud\.css\?v=20260810-32/);
+assert.match(html, /cloud\.js\?v=20260810-104/);
 
 console.log("stored conflict badges and grouped review: ok");

@@ -3553,6 +3553,46 @@ function conflictGroupButton(group) {
   return button;
 }
 
+const CONFLICT_CATEGORY_ORDER = ["audio", "video", "other"];
+
+function conflictFileCategory(file) {
+  const kind = detectClientKind(String(file?.mimeType || ""), String(file?.name || ""));
+  if (kind === "audio") return "audio";
+  if (kind === "video") return "video";
+  return "other";
+}
+
+function conflictGroupCategory(group) {
+  const categories = new Set((group?.files || []).map(conflictFileCategory));
+  return categories.size === 1 ? [...categories][0] : "other";
+}
+
+function conflictCategoryDetails(category) {
+  return ({
+    audio: { label: "音楽", symbol: "♪" },
+    video: { label: "動画", symbol: "▶" },
+    other: { label: "その他", symbol: "□" }
+  })[category] || { label: "その他", symbol: "□" };
+}
+
+function conflictCategoryEntries(groups) {
+  return CONFLICT_CATEGORY_ORDER.map((category) => ({
+    category,
+    details: conflictCategoryDetails(category),
+    groups: groups.filter((group) => conflictGroupCategory(group) === category)
+  })).filter((entry) => entry.groups.length);
+}
+
+function appendConflictCategoryList(container, groups, headingTag = "h3") {
+  for (const entry of conflictCategoryEntries(groups)) {
+    const heading = document.createElement(headingTag);
+    heading.className = "conflict-category-heading";
+    heading.innerHTML = `<span aria-hidden="true">${entry.details.symbol}</span><strong>${entry.details.label}</strong><small>${entry.groups.length.toLocaleString("ja-JP")}組</small>`;
+    container.append(heading);
+    entry.groups.forEach((group) => container.append(conflictGroupButton(group)));
+  }
+}
+
 function renderConflictOverview(grid) {
   const guidance = document.createElement("p");
   guidance.className = "conflict-overview-guidance";
@@ -3574,7 +3614,7 @@ function renderConflictOverview(grid) {
     heading.innerHTML = `<span aria-hidden="true">⚠</span><div><h2>${escapeHtml(topFolder.name)}</h2><p>競合データ ${groups.length.toLocaleString("ja-JP")}組</p></div>`;
     const list = document.createElement("div");
     list.className = "conflict-overview-list";
-    groups.forEach((group) => list.append(conflictGroupButton(group)));
+    appendConflictCategoryList(list, groups);
     section.append(heading, list);
     grid.append(section);
   }
@@ -3638,16 +3678,16 @@ function renderConflictGroupList() {
   const list = $("#conflict-group-list");
   list.hidden = false;
   list.innerHTML = "";
-  let previousTopFolderId = null;
-  for (const group of state.conflictGroups) {
-    if (Number(group.topFolderId || 0) !== Number(previousTopFolderId || 0) && group.topFolderName) {
+  const topFolderIds = [...new Set(state.conflictGroups.map((group) => Number(group.topFolderId || 0)))];
+  for (const topFolderId of topFolderIds) {
+    const groups = state.conflictGroups.filter((group) => Number(group.topFolderId || 0) === topFolderId);
+    if (groups[0]?.topFolderName) {
       const heading = document.createElement("h3");
       heading.className = "conflict-dialog-folder-heading";
-      heading.textContent = group.topFolderName;
+      heading.textContent = groups[0].topFolderName;
       list.append(heading);
-      previousTopFolderId = group.topFolderId;
     }
-    list.append(conflictGroupButton(group));
+    appendConflictCategoryList(list, groups, "h4");
   }
 }
 

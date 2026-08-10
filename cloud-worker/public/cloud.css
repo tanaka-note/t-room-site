@@ -367,6 +367,10 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
 .conflict-overview-heading p { margin-top: 3px; color: var(--muted); font-size: .73rem; }
 .conflict-overview-list { display: grid; gap: 9px; padding: 13px; }
 .conflict-dialog-folder-heading { margin: 8px 2px 0; padding: 8px 4px 2px; color: #7b561e; font-size: .82rem; }
+.conflict-category-heading { display: flex; align-items: center; gap: 8px; margin: 4px 2px 0; padding: 8px 4px 3px; color: #5e513d; font-size: .78rem; }
+.conflict-category-heading > span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 8px; color: #76531c; background: #fff0cf; font-size: .74rem; }
+.conflict-category-heading strong { font-size: .82rem; }
+.conflict-category-heading small { margin-left: auto; color: var(--muted); font-size: .7rem; font-weight: 800; }
 .action-list { display: grid; padding: 8px; }
 .action-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 12px; width: 100%; padding: 14px 12px; border: 0; border-radius: 11px; color: var(--ink); background: white; text-align: left; }
 .action-row:hover { background: var(--soft); }
