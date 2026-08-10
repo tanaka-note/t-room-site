@@ -13,13 +13,13 @@ const [html, client, worker, server, offline, manifestSource, css] = await Promi
 const manifest = JSON.parse(manifestSource);
 
 for (const [source, runtime] of [
-  ["cloud.js", "cloud-runtime-20260810-108.js"],
-  ["cloud.css", "cloud-runtime-20260810-35.css"],
+  ["cloud.js", "cloud-runtime-20260810-109.js"],
+  ["cloud.css", "cloud-runtime-20260810-36.css"],
   ["media-client.js", "media-client-20260810-8.js"],
   ["media-worker.js", "media-worker-20260810-8.js"],
   ["manifest.webmanifest", "manifest-20260810-2.webmanifest"],
-  ["share.js", "share-runtime-20260810-33.js"],
-  ["share.css", "share-runtime-20260810-14.css"]
+  ["share.js", "share-runtime-20260810-34.js"],
+  ["share.css", "share-runtime-20260810-15.css"]
 ]) {
   assert.deepEqual(
     await readFile(new URL(`../public/${runtime}`, import.meta.url)),
