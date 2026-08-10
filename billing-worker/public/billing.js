@@ -391,8 +391,10 @@
   function togglePassword() {
     const showing = el["login-password"].type === "text";
     el["login-password"].type = showing ? "password" : "text";
-    el["password-toggle"].setAttribute("aria-label", showing ? "パスワードを表示" : "パスワードを隠す");
+    const label = showing ? "パスワードを表示" : "パスワードを隠す";
+    el["password-toggle"].setAttribute("aria-label", label);
     el["password-toggle"].setAttribute("aria-pressed", String(!showing));
+    el["password-toggle"].title = label;
   }
 
   function updateCategoryOptions(selected = "") {

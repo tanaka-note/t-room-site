@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Secure Share</title>
   <link rel="icon" href="/cloud/icons/icon-192-v2.png?rev=20260810-2" sizes="192x192" type="image/png">
-  <link rel="stylesheet" href="/cloud/share.css?v=20260810-16">
+  <link rel="stylesheet" href="/cloud/share.css?v=20260810-17">
 </head>
 <body>
   <main class="share-shell">
@@ -16,7 +16,7 @@
       <h1>共有データを開く</h1>
       <p id="unlock-copy" class="lead">発行者から受け取った共有パスワードを入力してください。</p>
       <form id="unlock-form">
-        <label><span>共有パスワード</span><span class="password-wrap"><input id="share-password" type="password" required minlength="12" maxlength="128" autocomplete="current-password"><button id="toggle-password" type="button" aria-label="パスワードを表示">◉</button></span></label>
+        <label><span>共有パスワード</span><span class="password-wrap"><input id="share-password" type="password" required minlength="12" maxlength="128" autocomplete="current-password"><button id="toggle-password" class="password-visibility-toggle" type="button" data-password-target="share-password" aria-controls="share-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
         <p id="unlock-error" class="error" role="alert"></p>
         <button class="primary" type="submit">共有データを開く</button>
       </form>
@@ -84,6 +84,6 @@
   <script src="/cloud/crypto-vault.js?v=20260809-13" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260808-2" defer></script>
-  <script src="/cloud/share.js?v=20260810-37" defer></script>
+  <script src="/cloud/share.js?v=20260810-38" defer></script>
 </body>
 </html>

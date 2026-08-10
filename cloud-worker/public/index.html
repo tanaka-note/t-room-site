@@ -13,7 +13,7 @@
   <link rel="manifest" href="/cloud/manifest.webmanifest">
   <link rel="icon" href="/cloud/icons/icon-192-v2.png?rev=20260810-2" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v2.png?rev=20260810-2">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-37">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-38">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -31,7 +31,7 @@
           <span>パスワード</span>
           <span class="password-wrap">
             <input id="login-password" name="password" type="password" autocomplete="off" required>
-            <button id="toggle-password" class="icon-button" type="button" aria-label="パスワードを表示">◉</button>
+            <button id="toggle-password" class="icon-button password-visibility-toggle" type="button" data-password-target="login-password" aria-controls="login-password" aria-label="パスワードを表示" aria-pressed="false"></button>
           </span>
         </label>
         <label class="remember-login"><input id="remember-login" type="checkbox"><span>ログインID・パスワードを記録する</span></label>
@@ -251,7 +251,7 @@
       <div class="dialog-head"><h2>新しいフォルダ</h2><button class="dialog-close icon-button" type="button">×</button></div>
       <label><span>フォルダ名</span><input id="folder-name" required maxlength="240"></label>
       <label class="check-row"><input id="folder-password-enabled" type="checkbox"><span>このフォルダにパスワードを設定する</span></label>
-      <label id="folder-password-row" hidden><span>フォルダパスワード</span><input id="folder-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"></label>
+      <label id="folder-password-row" hidden><span>フォルダパスワード</span><span class="password-wrap"><input id="folder-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"><button class="icon-button password-visibility-toggle" type="button" data-password-target="folder-password" aria-controls="folder-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
       <p id="folder-password-note" class="dialog-note" hidden>このフォルダと配下を開く際に必要です。解除後はログアウトまで有効です。</p>
       <div class="dialog-actions"><button class="primary-button" type="submit">作成する</button></div>
     </form>
@@ -262,7 +262,7 @@
       <div class="dialog-head"><div><span class="file-badge">FOLDER UPLOAD</span><h2>フォルダをアップロード</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
       <p id="folder-upload-summary" class="dialog-note standalone-note"></p>
       <p class="dialog-note">複数のフォルダは、画面へまとめてドロップするか、下のボタンから続けて追加できます。</p>
-      <label id="folder-upload-password-row" hidden><span>最上位フォルダのパスワード</span><input id="folder-upload-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"></label>
+      <label id="folder-upload-password-row" hidden><span>最上位フォルダのパスワード</span><span class="password-wrap"><input id="folder-upload-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"><button class="icon-button password-visibility-toggle" type="button" data-password-target="folder-upload-password" aria-controls="folder-upload-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
       <p id="folder-upload-password-note" class="dialog-note" hidden>Cloud Storageの最上位へ追加するフォルダに、共通のパスワードを設定します。</p>
       <p id="folder-upload-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions">
@@ -276,7 +276,7 @@
     <form id="unlock-form" method="dialog">
       <div class="dialog-head"><div><span class="file-badge">PROTECTED FOLDER</span><h2 id="unlock-folder-name">フォルダを開く</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
       <input id="unlock-folder-id" type="hidden">
-      <label><span>フォルダパスワード</span><input id="unlock-password" type="password" required maxlength="128" autocomplete="current-password"></label>
+      <label><span>フォルダパスワード</span><span class="password-wrap"><input id="unlock-password" type="password" required maxlength="128" autocomplete="current-password"><button class="icon-button password-visibility-toggle" type="button" data-password-target="unlock-password" aria-controls="unlock-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
       <p id="unlock-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions"><button class="primary-button" type="submit">ロックを解除</button></div>
     </form>
@@ -288,7 +288,7 @@
       <input id="folder-settings-id" type="hidden">
       <label><span>フォルダ名</span><input id="folder-settings-name" required maxlength="240"></label>
       <label id="folder-password-settings-row"><span>パスワード</span><select id="folder-password-action"><option value="keep">現在の設定を維持</option><option value="replace">新しいパスワードに変更</option></select></label>
-      <label id="folder-new-password-row" hidden><span>新しいフォルダパスワード</span><input id="folder-new-password" type="password" minlength="4" maxlength="128" autocomplete="new-password"></label>
+      <label id="folder-new-password-row" hidden><span>新しいフォルダパスワード</span><span class="password-wrap"><input id="folder-new-password" type="password" minlength="4" maxlength="128" autocomplete="new-password"><button class="icon-button password-visibility-toggle" type="button" data-password-target="folder-new-password" aria-controls="folder-new-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
       <p id="folder-inherited-settings-note" class="dialog-note" hidden>このフォルダには個別のパスワードが設定されていません。</p>
       <p id="folder-settings-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions">
@@ -308,7 +308,7 @@
         <span>共有パスワード（12文字以上）</span>
         <span class="password-wrap">
           <input id="share-password" type="password" required minlength="12" maxlength="128" autocomplete="new-password">
-          <button id="toggle-share-password" class="icon-button" type="button" aria-label="共有パスワードを表示">◉</button>
+          <button id="toggle-share-password" class="icon-button password-visibility-toggle" type="button" data-password-target="share-password" aria-controls="share-password" aria-label="パスワードを表示" aria-pressed="false"></button>
         </span>
       </label>
       <div class="share-password-actions">
@@ -417,7 +417,7 @@
     <form id="vault-form" method="dialog">
       <div class="dialog-head"><div><span class="file-badge">END-TO-END ENCRYPTION</span><h2 id="vault-title">暗号化鍵を解除</h2></div></div>
       <p id="vault-copy" class="dialog-note standalone-note">ファイルを復号するため、アカウントパスワードをもう一度入力してください。</p>
-      <label><span>アカウントパスワード</span><input id="vault-password" type="password" required minlength="8" maxlength="256" autocomplete="current-password"></label>
+      <label><span>アカウントパスワード</span><span class="password-wrap"><input id="vault-password" type="password" required minlength="8" maxlength="256" autocomplete="current-password"><button class="icon-button password-visibility-toggle" type="button" data-password-target="vault-password" aria-controls="vault-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
       <p id="vault-error" class="form-error dialog-error" role="alert"></p>
       <div class="dialog-actions">
         <button id="vault-logout-button" class="secondary-button" type="button">ログアウト</button>
@@ -474,6 +474,6 @@
   <script src="/cloud/file-safety.js?v=20260810-2" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260810-5" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-113" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-114" defer></script>
 </body>
 </html>

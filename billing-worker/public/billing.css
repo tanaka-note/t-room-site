@@ -33,7 +33,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .remember-login input { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: var(--accent); }
 .icon-button { position: absolute; top: 50%; right: 8px; width: 36px; height: 36px; transform: translateY(-50%); border: 0; border-radius: 8px; color: #73776f; background: transparent; }
 .icon-button:hover { background: var(--soft); }
-.icon-button svg { width: 21px; fill: currentColor; }
+.password-eye { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.password-eye-closed,
+.password-toggle[aria-pressed="true"] .password-eye-open { display: none; }
+.password-toggle[aria-pressed="true"] .password-eye-closed { display: block; }
 .button { min-height: 44px; padding: 10px 18px; border: 1px solid transparent; border-radius: 10px; font-weight: 800; }
 .button.primary { color: #fff; background: var(--accent); }
 .button.primary:hover { background: var(--accent-dark); }
