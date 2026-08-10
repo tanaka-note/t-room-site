@@ -1,4 +1,5 @@
 const BASE_PATH = "/cloud";
+const APP_BUILD_ID = "20260810-116";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -37,6 +38,10 @@ export default {
 };
 
 async function handleApi(request, env, url, path) {
+  if (path === "/api/app-version" && request.method === "GET") {
+    return json({ buildId: APP_BUILD_ID });
+  }
+
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (!session) return json({ authenticated: false });
@@ -1615,12 +1620,12 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260810-38.css"],
-    ["/cloud.js", "/cloud-runtime-20260810-115.js"],
+    ["/cloud.js", "/cloud-runtime-20260810-116.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
-    ["/media-client.js", "/media-client-20260810-8.js"],
-    ["/media-worker.js", "/media-worker-20260810-9.js"],
+    ["/media-client.js", "/media-client-20260810-9.js"],
+    ["/media-worker.js", "/media-worker-20260810-10.js"],
     ["/manifest.webmanifest", "/manifest-20260810-3.webmanifest"],
     ["/manifest-v2.webmanifest", "/manifest-20260810-3.webmanifest"],
     ["/offline", "/offline"],

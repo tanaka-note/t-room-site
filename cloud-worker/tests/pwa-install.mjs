@@ -13,10 +13,10 @@ const [html, client, worker, server, offline, manifestSource, css] = await Promi
 const manifest = JSON.parse(manifestSource);
 
 for (const [source, runtime] of [
-  ["cloud.js", "cloud-runtime-20260810-115.js"],
+  ["cloud.js", "cloud-runtime-20260810-116.js"],
   ["cloud.css", "cloud-runtime-20260810-38.css"],
-  ["media-client.js", "media-client-20260810-8.js"],
-  ["media-worker.js", "media-worker-20260810-9.js"],
+  ["media-client.js", "media-client-20260810-9.js"],
+  ["media-worker.js", "media-worker-20260810-10.js"],
   ["manifest.webmanifest", "manifest-20260810-3.webmanifest"],
   ["share.js", "share-runtime-20260810-39.js"],
   ["share.css", "share-runtime-20260810-17.css"]
@@ -42,6 +42,7 @@ assert.ok(manifest.icons.every((icon) => icon.src.includes("-v2.png?rev=20260810
 assert.match(html, /rel="manifest" href="\/cloud\/manifest\.webmanifest"/, "既存PWAの更新経路を維持するためmanifestのURLを変更しないでください。");
 assert.match(html, /apple-touch-icon-v2\.png\?rev=20260810-2/);
 assert.match(html, /name="theme-color" content="#071426"/);
+assert.match(html, /name="tcloud-build" content="20260810-116"/);
 assert.match(html, /id="install-app-button-top"/);
 assert.match(html, /id="update-app-button-top"/);
 assert.doesNotMatch(html, /id="install-app-button"/);
@@ -56,9 +57,14 @@ assert.match(client, /\$\("#install-app-button-top"\)\.hidden = standalone/);
 assert.match(client, /\$\("#update-app-button-top"\)\.hidden = !standalone/);
 assert.match(client, /async function updateInstalledApp\(\)/);
 assert.match(client, /state\.uploading \|\| state\.activeFolderUploadOperationId \|\| state\.downloadActive/);
-assert.match(client, /navigator\.serviceWorker\.getRegistration\("\/cloud\/"\)/);
-assert.match(client, /app-update=\$\{Date\.now\(\)\}[\s\S]*?cache: "no-store"/);
-assert.match(client, /location\.reload\(\)/);
+assert.match(client, /const APP_BUILD_ID = "20260810-116"/);
+assert.match(client, /app-version\?app-update=\$\{Date\.now\(\)\}[\s\S]*?cache: "no-store"/);
+assert.match(client, /registration\.addEventListener\("updatefound"/);
+assert.match(client, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);
+assert.match(client, /worker\.state === "activated"/);
+assert.match(client, /publishedBuild === APP_BUILD_ID/);
+assert.match(client, /location\.replace\(target\.href\)/);
+assert.doesNotMatch(client, /setTimeout\(\(\) => location\.reload\(\), 450\)/);
 assert.match(client, /Safariの共有ボタン/);
 assert.match(client, /ホーム画面に追加/);
 assert.match(client, /async function registerPwaWorker\(\)/);
@@ -66,7 +72,8 @@ assert.match(client, /await registration\.update\(\)/);
 assert.match(client, /screen\.orientation\.lock\("portrait-primary"\)/);
 assert.match(client, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\.lock\("any"\)/);
 assert.match(worker, /const APP_SHELL_CACHE/);
-assert.match(worker, /tcloud-shell-20260810-7/);
+assert.match(worker, /tcloud-shell-20260810-8/);
+assert.match(worker, /data\.type === "SKIP_WAITING"/);
 assert.match(worker, /\/cloud\/manifest\.webmanifest/);
 assert.match(worker, /icon-192-v2\.png\?rev=20260810-2/);
 assert.match(worker, /event\.request\.mode === "navigate"/);
