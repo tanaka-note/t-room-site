@@ -2769,11 +2769,12 @@ async function uploadSelectedFolder(event) {
   const panel = $("#upload-panel");
   panel.hidden = false;
   panel.classList.remove("upload-complete", "upload-error");
-  $("#upload-heading").textContent = "フォルダ構成を作成中";
-  $("#upload-status").textContent = `0 / ${selection.directories.length}フォルダ作成`;
+  $("#upload-heading").textContent = "アップロード内容を確認中";
+  $("#upload-status").textContent = `0 / ${selection.directories.length}フォルダ確認`;
   $("#upload-file-name").textContent = selection.roots.join("、");
   $("#upload-file-progress").textContent = "準備中…";
   $("#upload-progress").style.width = "0%";
+  $("#upload-plan-summary").hidden = true;
   $("#upload-dismiss").hidden = true;
   await waitForInterfacePaint();
   try {
@@ -2783,22 +2784,35 @@ async function uploadSelectedFolder(event) {
     const baseParentKey = baseParentId ? state.crypto.folderKeys.get(baseParentId) : null;
     if (baseParentId && !baseParentKey) throw new Error("保存先フォルダの暗号化鍵を解除してください。");
 
+    const plan = await planFolderUpload(selection, baseParentId, baseParentKey, operationId);
+    if (state.activeFolderUploadOperationId !== operationId) return;
+    const zeroByteCount = plan.pendingFiles.filter((file) => Number(file.size) === 0).length;
+    const actualFileCount = plan.pendingFiles.length - zeroByteCount;
+    $("#upload-heading").textContent = "差分確認完了";
+    $("#upload-status").textContent = `${plan.newFolderCount}フォルダ・${actualFileCount}ファイルを追加`;
+    $("#upload-file-progress").textContent = `${plan.reusedFolderCount}フォルダ・${plan.duplicateSkipped.length}ファイルは保存済み${zeroByteCount ? `・${zeroByteCount}件は空ファイル` : ""}`;
+    showUploadPlanSummary(plan.newFolderCount, actualFileCount, plan.reusedFolderCount, plan.duplicateSkipped.length, zeroByteCount);
+    $("#upload-progress").style.width = "100%";
+    await waitForInterfacePaint();
+
     const foldersByPath = new Map();
-    const folderListingCache = new Map();
+    let createdFolderCount = 0;
     for (let index = 0; index < selection.directories.length; index++) {
       if (state.activeFolderUploadOperationId !== operationId) return;
       const path = selection.directories[index];
-      const parts = path.split("/");
-      const parentPath = parts.slice(0, -1).join("/");
+      const folderPlan = plan.foldersByPath.get(path);
+      if (folderPlan.existing) {
+        foldersByPath.set(path, { id: folderPlan.id, key: folderPlan.key, reused: true });
+        continue;
+      }
+      const parentPath = folderPlan.parentPath;
       const inheritedParent = parentPath ? foldersByPath.get(parentPath) : { id: baseParentId, key: baseParentKey };
       if (!inheritedParent) throw new Error(`${path} の親フォルダを作成できませんでした。`);
-      const created = await findOrCreateUploadFolder(parts.at(-1), inheritedParent.id, inheritedParent.key, folderListingCache);
+      $("#upload-heading").textContent = "新しいフォルダを作成中";
+      const created = await createEncryptedFolder(folderPlan.name, inheritedParent.id, inheritedParent.key, "");
       foldersByPath.set(path, created);
-      const completed = index + 1;
-      const percent = Math.round(completed / selection.directories.length * 100);
-      $("#upload-status").textContent = `${completed} / ${selection.directories.length}フォルダ作成`;
-      $("#upload-file-progress").textContent = `${percent}%`;
-      $("#upload-progress").style.width = `${percent}%`;
+      createdFolderCount++;
+      $("#upload-status").textContent = `${createdFolderCount} / ${plan.newFolderCount}フォルダ作成`;
     }
 
     const destinations = new Map();
@@ -2812,18 +2826,24 @@ async function uploadSelectedFolder(event) {
       if (!baseParentId || !baseParentKey) throw new Error("単独ファイルの保存先フォルダを開いてから、もう一度ドロップしてください。");
       destinations.set(file, { folderId: baseParentId, folderKey: baseParentKey, displayName: file.name });
     }
+    const pendingSet = new Set(plan.pendingFiles);
     const uploadTargets = [
       ...selection.files.map((record) => record.file),
       ...(selection.looseFiles || [])
-    ];
+    ].filter((file) => pendingSet.has(file));
 
-    if (uploadTargets.length) {
+    if (uploadTargets.length || plan.duplicateSkipped.length) {
       state.activeFolderUploadOperationId = null;
       state.uploading = false;
       submitButton.disabled = false;
       submitButton.textContent = "まとめて保存する";
       syncAvailableActions();
-      await uploadFiles(uploadTargets, destinations, { skipExisting: true });
+      await uploadFiles(uploadTargets, destinations, {
+        skipExisting: false,
+        precheckedSkipped: plan.duplicateSkipped,
+        newFolderCount: plan.newFolderCount,
+        reusedFolderCount: plan.reusedFolderCount
+      });
     } else {
       panel.classList.add("upload-complete");
       $("#upload-heading").textContent = "フォルダ作成完了";
@@ -2875,25 +2895,20 @@ async function createEncryptedFolder(name, parentId, parentKey, password = "") {
   return created;
 }
 
-async function findOrCreateUploadFolder(name, parentId, parentKey, operationCache) {
+async function loadUploadFolderChildren(parentId, operationCache) {
   const cacheKey = `children:${parentId || "root"}`;
   let children = operationCache.get(cacheKey);
   if (!children) {
-    const params = new URLSearchParams({ sort: "name-asc" });
+    const params = new URLSearchParams({ sort: "name-asc", foldersOnly: "1" });
     if (parentId) params.set("folderId", parentId);
     const data = await api(`/items?${params}`);
     children = data.folders || [];
     operationCache.set(cacheKey, children);
   }
+  return children;
+}
 
-  const normalizedName = normalizeUploadName(name);
-  const existing = children.find((folder) => normalizeUploadName(folder.name) === normalizedName);
-  if (!existing) {
-    const created = await createEncryptedFolder(name, parentId, parentKey, "");
-    children.push({ id: created.id, name, cryptoVersion: 1 });
-    return created;
-  }
-
+async function resolveExistingUploadFolder(existing, parentKey) {
   const id = Number(existing.id);
   let key = state.crypto.folderKeys.get(id);
   if (!key && parentKey && existing.parentWrappedKey && existing.parentWrapIv) {
@@ -2903,11 +2918,91 @@ async function findOrCreateUploadFolder(name, parentId, parentKey, operationCach
     try { key = await ensureAdminFolderKey(existing); } catch {}
   }
   if (!key) {
-    throw new Error(`保存済みの「${name}」フォルダはロックされています。先にフォルダを開いてPWを解除してから、もう一度アップロードしてください。`);
+    throw new Error(`保存済みの「${existing.name}」フォルダはロックされています。先にフォルダを開いてPWを解除してから、もう一度アップロードしてください。`);
   }
   state.crypto.folderKeys.set(id, key);
   await saveCachedFolderKey(id, key);
   return { id, key, reused: true };
+}
+
+async function planFolderUpload(selection, baseParentId, baseParentKey, operationId) {
+  const foldersByPath = new Map();
+  const folderListingCache = new Map();
+  let reusedFolderCount = 0;
+  let newFolderCount = 0;
+
+  for (let index = 0; index < selection.directories.length; index++) {
+    if (state.activeFolderUploadOperationId !== operationId) throw new DOMException("中止しました", "AbortError");
+    const path = selection.directories[index];
+    const parts = path.split("/");
+    const name = parts.at(-1);
+    const parentPath = parts.slice(0, -1).join("/");
+    const parentPlan = parentPath ? foldersByPath.get(parentPath) : { existing: true, id: baseParentId, key: baseParentKey };
+    if (!parentPlan) throw new Error(`${path} の親フォルダを確認できませんでした。`);
+
+    let folderPlan = { path, parentPath, name, existing: false, id: null, key: null };
+    if (parentPlan.existing) {
+      const children = await loadUploadFolderChildren(parentPlan.id, folderListingCache);
+      const existing = children.find((folder) => normalizeUploadName(folder.name) === normalizeUploadName(name));
+      if (existing) {
+        const resolved = await resolveExistingUploadFolder(existing, parentPlan.key);
+        folderPlan = { ...folderPlan, existing: true, id: resolved.id, key: resolved.key };
+        reusedFolderCount++;
+      } else {
+        newFolderCount++;
+      }
+    } else {
+      newFolderCount++;
+    }
+    foldersByPath.set(path, folderPlan);
+    const completed = index + 1;
+    $("#upload-status").textContent = `${completed} / ${selection.directories.length}フォルダ確認`;
+    $("#upload-file-progress").textContent = `${Math.round(completed / selection.directories.length * 100)}%`;
+  }
+
+  const filesToCheck = [];
+  const precheckDestinations = new Map();
+  const pendingFiles = [];
+  for (const record of selection.files) {
+    if (Number(record.file.size) === 0) {
+      pendingFiles.push(record.file);
+      continue;
+    }
+    const folderPath = record.relativePath.split("/").slice(0, -1).join("/");
+    const destination = foldersByPath.get(folderPath);
+    if (!destination) throw new Error(`${record.relativePath} の保存先を確認できませんでした。`);
+    if (!destination.existing) {
+      pendingFiles.push(record.file);
+      continue;
+    }
+    filesToCheck.push(record.file);
+    precheckDestinations.set(record.file, {
+      folderId: destination.id,
+      folderKey: destination.key,
+      displayName: record.relativePath
+    });
+  }
+  for (const file of selection.looseFiles || []) {
+    if (!baseParentId || !baseParentKey) throw new Error("単独ファイルの保存先フォルダを開いてから、もう一度ドロップしてください。");
+    if (Number(file.size) === 0) {
+      pendingFiles.push(file);
+      continue;
+    }
+    filesToCheck.push(file);
+    precheckDestinations.set(file, { folderId: baseParentId, folderKey: baseParentKey, displayName: file.name });
+  }
+
+  const differential = filesToCheck.length
+    ? await excludeExistingUploadFiles(filesToCheck, precheckDestinations, null, null)
+    : { files: [], skipped: [] };
+  pendingFiles.push(...differential.files);
+  return {
+    foldersByPath,
+    reusedFolderCount,
+    newFolderCount,
+    pendingFiles,
+    duplicateSkipped: differential.skipped
+  };
 }
 
 function normalizeUploadName(value) {
@@ -2974,8 +3069,18 @@ async function excludeExistingUploadFiles(files, destinations, fixedFolderId, fi
   return { files: files.filter((file) => !skippedSet.has(file)), skipped };
 }
 
+function showUploadPlanSummary(newFolderCount, uploadFileCount, reusedFolderCount, skippedFileCount, zeroByteCount = 0) {
+  const added = `${Number(newFolderCount || 0)}フォルダ・${Number(uploadFileCount || 0)}ファイルを追加`;
+  const existing = `${Number(reusedFolderCount || 0)}フォルダ・${Number(skippedFileCount || 0)}ファイルは保存済み`;
+  const excluded = Number(zeroByteCount || 0) ? `・${Number(zeroByteCount)}件は空ファイル` : "";
+  const summary = $("#upload-plan-summary");
+  summary.textContent = `差分確認：${added}／${existing}${excluded}`;
+  summary.hidden = false;
+}
+
 async function uploadFiles(files, destinations = null, options = {}) {
-  if (!files.length || !state.session.canUpload) return;
+  const precheckedSkipped = Array.isArray(options.precheckedSkipped) ? options.precheckedSkipped : [];
+  if ((!files.length && !precheckedSkipped.length) || !state.session.canUpload) return;
   if (state.uploading) {
     setNotice("アップロードが完了してから、次のファイルを追加してください。", true);
     return;
@@ -3001,13 +3106,14 @@ async function uploadFiles(files, destinations = null, options = {}) {
   const panel = $("#upload-panel");
   const fixedFolderId = state.folderId ? Number(state.folderId) : null;
   const fixedFolderKey = fixedFolderId ? state.crypto.folderKeys.get(fixedFolderId) : null;
-  let duplicateSkipped = [];
+  let duplicateSkipped = [...precheckedSkipped];
   let tracker = { stop() {} };
   let completed = 0;
   let cancelled = false;
   panel.hidden = false;
   panel.classList.remove("upload-complete", "upload-error");
-  $("#upload-heading").textContent = "アップロード中";
+  $("#upload-plan-summary").hidden = true;
+  $("#upload-heading").textContent = options.skipExisting === false ? "アップロード中" : "アップロード内容を確認中";
   $("#upload-status").textContent = `0 / ${files.length}件完了`;
   $("#upload-progress").style.width = "0%";
   $("#upload-speed").textContent = "";
@@ -3022,7 +3128,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
   $("#upload-cancel").hidden = false;
   $("#upload-cancel").disabled = false;
   try {
-    if (options.skipExisting && files.length) {
+    if (options.skipExisting !== false && files.length) {
       $("#upload-heading").textContent = "保存済みデータを確認中";
       $("#upload-file-progress").textContent = "差分を確認しています";
       const differential = await excludeExistingUploadFiles(files, destinations, fixedFolderId, fixedFolderKey);
@@ -3037,6 +3143,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
     tracker = createUploadTracker(files, totalBytes);
     $("#upload-heading").textContent = total ? "アップロード中" : "差分確認完了";
     $("#upload-status").textContent = `0 / ${total}件完了`;
+    showUploadPlanSummary(options.newFolderCount, total, options.reusedFolderCount, duplicateSkipped.length, skippedFiles.length);
     $("#upload-bytes").textContent = `0 B / ${formatBytes(totalBytes)}`;
     $("#upload-activity").textContent = total ? "送信準備中" : "保存済みデータのみです";
     let nextFileIndex = 0;
@@ -3160,7 +3267,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
     }
   } catch (error) {
     panel.classList.add("upload-error");
-    $("#upload-heading").textContent = options.skipExisting ? "差分確認に失敗しました" : "アップロードを開始できませんでした";
+    $("#upload-heading").textContent = options.skipExisting === false ? "アップロードを開始できませんでした" : "差分確認に失敗しました";
     $("#upload-status").textContent = "データは追加していません";
     $("#upload-file-progress").textContent = error.message;
     $("#upload-dismiss").hidden = false;
@@ -3500,6 +3607,7 @@ function dismissUploadMessage() {
   renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
   panel.classList.remove("upload-complete", "upload-error");
   panel.hidden = true;
+  $("#upload-plan-summary").hidden = true;
   $("#upload-dismiss").hidden = true;
   setNotice("");
 }
@@ -3519,7 +3627,7 @@ async function continuePendingSafetyUpload() {
   const pending = state.pendingSafetyUpload;
   state.pendingSafetyUpload = null;
   $("#upload-safety-actions").hidden = true;
-  await uploadFiles(pending.files, pending.destinations, { safetyConfirmed: true });
+  await uploadFiles(pending.files, pending.destinations, { safetyConfirmed: true, skipExisting: false });
 }
 
 function safetyConfirmationError(message) {

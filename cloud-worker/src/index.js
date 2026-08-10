@@ -551,6 +551,7 @@ async function shareEvents(env, shareId) {
 async function listItems(url, env, session) {
   const folderId = optionalId(url.searchParams.get("folderId"));
   const uploadIndex = url.searchParams.get("uploadIndex") === "1";
+  const foldersOnly = url.searchParams.get("foldersOnly") === "1";
   const uploadOffset = uploadIndex
     ? Math.min(100000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0))
     : 0;
@@ -569,7 +570,7 @@ async function listItems(url, env, session) {
     FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first() : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
   const folderAccessGranted = folderId ? await requireFolderAccess(env, folderId, session) : false;
-  if (folderId && session.role === "subadmin") {
+  if (folderId && session.role === "subadmin" && !foldersOnly && !uploadIndex) {
     const total = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
       UNION ALL
@@ -611,7 +612,7 @@ async function listItems(url, env, session) {
   };
   const order = orderBySort[sort];
   let files = { results: [] };
-  if (folderId) {
+  if (folderId && !foldersOnly) {
     const clauses = ["folder_id = ?", "deleted_at IS NULL", "status = 'ready'"];
     const values = [folderId];
     if (query) { clauses.push("(crypto_version = 1 OR LOWER(original_name) LIKE ?)"); values.push(`%${query}%`); }

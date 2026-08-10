@@ -137,6 +137,7 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .upload-track { height: 7px; margin: 12px 0 8px; overflow: hidden; border-radius: 9px; background: #d6e8e5; }
 .upload-track span { display: block; width: 0; height: 100%; background: var(--teal); }
 .upload-panel p { margin: 0; color: var(--muted); font-size: .8rem; }
+.upload-panel .upload-plan-summary { margin: 9px 0 7px; color: var(--teal-dark); font-weight: 800; font-variant-numeric: tabular-nums; }
 .upload-file-row { display: flex; justify-content: space-between; gap: 16px; }
 #upload-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #upload-file-progress { flex: 0 0 auto; font-weight: 700; }
