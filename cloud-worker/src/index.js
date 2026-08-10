@@ -564,7 +564,7 @@ async function listItems(url, env, session) {
     (SELECT COUNT(*) FROM cloud_folders sf WHERE sf.parent_id = f.id AND sf.deleted_at IS NULL) AS folderCount
     FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first() : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
-  if (folderId) await requireFolderAccess(env, folderId, session);
+  const folderAccessGranted = folderId ? await requireFolderAccess(env, folderId, session) : false;
   if (folderId && session.role === "subadmin") {
     const total = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
@@ -630,7 +630,9 @@ async function listItems(url, env, session) {
     isUnlocked: session.role === "admin" ? 1 : item.isUnlocked,
     adminAccess: session.role === "admin"
   }));
-  return json({ folder, breadcrumbs: await breadcrumbs(env, folderId), folders: visibleFolders, files: files.results || [] });
+  const canTrashContents = Boolean(folderId && (session.canDelete
+    || (session.canTrashUnlockedFiles && folderAccessGranted)));
+  return json({ folder, canTrashContents, breadcrumbs: await breadcrumbs(env, folderId), folders: visibleFolders, files: files.results || [] });
 }
 
 async function listLegacyFolders(env, session) {

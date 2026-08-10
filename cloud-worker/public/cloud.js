@@ -19,6 +19,7 @@ const state = {
   folders: [],
   breadcrumbs: [],
   folderSummary: null,
+  canTrashCurrentFolderContents: false,
   history: [],
   requests: [],
   shares: [],
@@ -1198,6 +1199,7 @@ async function loadItems() {
   clearFileSelection(false);
   setNotice("");
   state.folderSummary = null;
+  state.canTrashCurrentFolderContents = false;
   try {
     if (state.view === "trash") {
       const data = await api("/trash");
@@ -1238,6 +1240,7 @@ async function loadItems() {
       if (state.kind) params.set("kind", state.kind);
       if (state.query) params.set("q", state.query);
       const data = await api(`/items?${params}`);
+      state.canTrashCurrentFolderContents = Boolean(data.canTrashContents);
       state.folderSummary = state.folderId ? {
         fileCount: Number(data.folder?.fileCount || 0),
         folderCount: Number(data.folder?.folderCount || 0),
@@ -1438,15 +1441,19 @@ function canRenameFile(file) {
 
 function canTrashFile(file) {
   if (state.session?.canDelete) return true;
-  return Boolean(state.session?.canTrashUnlockedFiles && !file?.trashed && file?.fileKey
-    && state.crypto.folderKeys.has(Number(file.folderId)));
+  return Boolean(state.session?.canTrashUnlockedFiles
+    && state.canTrashCurrentFolderContents
+    && !file?.trashed
+    && Number(file?.folderId) === Number(state.folderId));
 }
 
 function canTrashFolder(folder) {
   if (state.session?.canDelete) return true;
-  return Boolean(state.session?.canTrashUnlockedFiles && folder?.parentId
+  return Boolean(state.session?.canTrashUnlockedFiles
+    && state.canTrashCurrentFolderContents
+    && folder?.parentId
     && Number(folder.parentId) === Number(state.folderId)
-    && folder?.isUnlocked && state.crypto.folderKeys.has(Number(folder.id)));
+    && (!folder.isProtected || folder.isUnlocked));
 }
 
 function trashFolderCard(folder) {
