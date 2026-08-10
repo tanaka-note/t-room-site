@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [html, client, worker, server, offline, manifestSource] = await Promise.all([
+const [html, client, worker, server, offline, manifestSource, css] = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
   readFile(new URL("../public/media-worker.js", import.meta.url), "utf8"),
   readFile(new URL("../src/index.js", import.meta.url), "utf8"),
   readFile(new URL("../public/offline.html", import.meta.url), "utf8"),
-  readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8")
+  readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
+  readFile(new URL("../public/cloud.css", import.meta.url), "utf8")
 ]);
 const manifest = JSON.parse(manifestSource);
 
 for (const [source, runtime] of [
-  ["cloud.js", "cloud-runtime-20260810-107.js"],
-  ["cloud.css", "cloud-runtime-20260810-34.css"],
+  ["cloud.js", "cloud-runtime-20260810-108.js"],
+  ["cloud.css", "cloud-runtime-20260810-35.css"],
   ["media-client.js", "media-client-20260810-8.js"],
   ["media-worker.js", "media-worker-20260810-8.js"],
   ["manifest.webmanifest", "manifest-20260810-2.webmanifest"],
@@ -42,14 +43,22 @@ assert.match(html, /rel="manifest" href="\/cloud\/manifest\.webmanifest"/, "既�
 assert.match(html, /apple-touch-icon-v2\.png\?rev=20260810-2/);
 assert.match(html, /name="theme-color" content="#071426"/);
 assert.match(html, /id="install-app-button-top"/);
+assert.match(html, /id="update-app-button-top"/);
 assert.doesNotMatch(html, /id="install-app-button"/);
 assert.match(html, /id="install-app-button-top"[^>]*aria-label="ホームへ追加"[^>]*title="ホームへ追加"/);
+assert.match(html, /id="update-app-button-top"[^>]*aria-label="アプリを更新"[^>]*title="アプリを更新"/);
+assert.match(css, /#update-app-button-top\[hidden\][^{]*\{ display: none; \}/);
 assert.match(html, /id="install-app-button-top"[\s\S]*?<svg[\s\S]*?<path/);
 assert.match(html, /id="install-guide-dialog"/);
 assert.match(client, /beforeinstallprompt/);
 assert.match(client, /async function installApp\(\)/);
-assert.match(client, /const available = !standalone/);
-assert.match(client, /\$\("#install-app-button-top"\)\.hidden = !available/);
+assert.match(client, /\$\("#install-app-button-top"\)\.hidden = standalone/);
+assert.match(client, /\$\("#update-app-button-top"\)\.hidden = !standalone/);
+assert.match(client, /async function updateInstalledApp\(\)/);
+assert.match(client, /state\.uploading \|\| state\.activeFolderUploadOperationId \|\| state\.downloadActive/);
+assert.match(client, /navigator\.serviceWorker\.getRegistration\("\/cloud\/"\)/);
+assert.match(client, /app-update=\$\{Date\.now\(\)\}[\s\S]*?cache: "no-store"/);
+assert.match(client, /location\.reload\(\)/);
 assert.match(client, /Safariの共有ボタン/);
 assert.match(client, /ホーム画面に追加/);
 assert.match(client, /async function registerPwaWorker\(\)/);

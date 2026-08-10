@@ -1664,8 +1664,8 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud-runtime-20260810-34.css"],
-    ["/cloud.js", "/cloud-runtime-20260810-107.js"],
+    ["/cloud.css", "/cloud-runtime-20260810-35.css"],
+    ["/cloud.js", "/cloud-runtime-20260810-108.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
