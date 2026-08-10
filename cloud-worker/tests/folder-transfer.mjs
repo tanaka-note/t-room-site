@@ -149,7 +149,7 @@ assert.match(source, /activeFolderUploadOperationId: null/);
 const uploadStart = source.match(/async function uploadSelectedFolder\(event\) \{[\s\S]*?\n\}\n\nfunction waitForInterfacePaint/)?.[0] || "";
 assert.ok(uploadStart.indexOf('submitButton.textContent = "準備中…"') < uploadStart.indexOf('$("#folder-upload-dialog").close()'));
 assert.ok(uploadStart.indexOf('$("#folder-upload-dialog").close()') < uploadStart.indexOf("await waitForInterfacePaint()"));
-assert.ok(uploadStart.indexOf("await waitForInterfacePaint()") < uploadStart.indexOf("await createEncryptedFolder"), "描画後に暗号化処理を開始してください。");
+assert.ok(uploadStart.indexOf("await waitForInterfacePaint()") < uploadStart.indexOf("await findOrCreateUploadFolder"), "描画後にフォルダの差分確認と暗号化処理を開始してください。");
 assert.match(uploadStart, /state\.activeFolderUploadOperationId !== operationId/);
 assert.match(source, /現在のアップロードが完了してから、もう一度お試しください/);
 assert.match(source, /function waitForInterfacePaint\(\)[\s\S]*?requestAnimationFrame\(\(\) => requestAnimationFrame\(finish\)\)/);

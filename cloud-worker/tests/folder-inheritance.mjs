@@ -9,7 +9,8 @@ if (!worker.includes("const passwordHash = encrypted.authProof ? await hashPassw
 if (!worker.includes("requireFolderEdit(session)")) throw new Error("PW再設定の管理者権限確認がありません。");
 if (!worker.includes("個別PWがない配下フォルダでは、作成後にPWを追加できません")) throw new Error("個別PWなしフォルダの制約がありません。");
 if (!client.includes('const password = $("#folder-password-enabled").checked ? $("#folder-password").value : ""')) throw new Error("新規フォルダのPW選択処理がありません。");
-if (!client.includes('createEncryptedFolder(parts.at(-1), inheritedParent.id, inheritedParent.key, "")')) throw new Error("フォルダアップロードがPWなしになっていません。");
+if (!client.includes('findOrCreateUploadFolder(parts.at(-1), inheritedParent.id, inheritedParent.key, folderListingCache)')) throw new Error("フォルダアップロードの再利用処理がありません。");
+if (!client.includes('createEncryptedFolder(name, parentId, parentKey, "")')) throw new Error("フォルダアップロードがPWなしになっていません。");
 if (!client.includes("TRoomCrypto.unlockFolderFromParent(folder, parentKey)")) throw new Error("親フォルダ鍵による自動解除がありません。");
 for (const id of ["folder-password-enabled", "folder-password-row", "folder-password-settings-row", "folder-inherited-settings-note"]) {
   if (!html.includes(`id="${id}"`)) throw new Error(`${id} がありません。`);

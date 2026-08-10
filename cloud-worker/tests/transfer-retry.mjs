@@ -16,7 +16,7 @@ assert.match(indexHtml, /id="download-failure-summary"/);
 assert.match(shareHtml, /id="share-download-failure-summary"/);
 
 assert.match(client, /const deferred = \[\];/);
-assert.match(client, /deferred\.push\(\{ error, file, index, destinationFolderId, destinationFolderKey \}\)/);
+assert.match(client, /deferred\.push\(\{[\s\S]*?destinationFolderId,[\s\S]*?destinationFolderKey,[\s\S]*?displayName:/);
 assert.match(client, /エラー分を再試行中/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "後で再試行"/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "再試行中"/);

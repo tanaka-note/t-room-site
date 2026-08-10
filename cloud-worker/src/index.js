@@ -550,6 +550,10 @@ async function shareEvents(env, shareId) {
 
 async function listItems(url, env, session) {
   const folderId = optionalId(url.searchParams.get("folderId"));
+  const uploadIndex = url.searchParams.get("uploadIndex") === "1";
+  const uploadOffset = uploadIndex
+    ? Math.min(100000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0))
+    : 0;
   const query = normalizeText(url.searchParams.get("q"), 100).toLowerCase();
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
   const requestedSort = url.searchParams.get("sort") || "name-desc";
@@ -612,6 +616,7 @@ async function listItems(url, env, session) {
     const values = [folderId];
     if (query) { clauses.push("(crypto_version = 1 OR LOWER(original_name) LIKE ?)"); values.push(`%${query}%`); }
     if (kind) { clauses.push("(crypto_version = 1 OR media_kind = ?)"); values.push(kind); }
+    const uploadPageSize = 500;
     files = await env.DB.prepare(`
       SELECT id, folder_id AS folderId, original_name AS name, mime_type AS mimeType,
         media_kind AS mediaKind, size_bytes AS sizeBytes,
@@ -622,9 +627,13 @@ async function listItems(url, env, session) {
         thumbnail_key IS NOT NULL AS hasThumbnail,
         EXISTS(SELECT 1 FROM cloud_deletion_requests dr WHERE dr.file_id = cloud_files.id AND dr.status = 'pending') AS deletionPending,
         created_at AS createdAt, updated_at AS updatedAt
-      FROM cloud_files WHERE ${clauses.join(" AND ")} ORDER BY ${order} LIMIT 500
+      FROM cloud_files WHERE ${clauses.join(" AND ")} ORDER BY ${order}${uploadIndex ? ", id ASC" : ""}
+      LIMIT ${uploadIndex ? uploadPageSize + 1 : uploadPageSize} OFFSET ${uploadOffset}
     `).bind(...values).all();
   }
+  const fileResults = files.results || [];
+  const visibleFiles = uploadIndex ? fileResults.slice(0, 500) : fileResults;
+  const nextFileOffset = uploadIndex && fileResults.length > 500 ? uploadOffset + 500 : null;
   const visibleFolders = (folders.results || []).map((item) => ({
     ...item,
     isUnlocked: session.role === "admin" ? 1 : item.isUnlocked,
@@ -632,7 +641,14 @@ async function listItems(url, env, session) {
   }));
   const canTrashContents = Boolean(folderId && (session.canDelete
     || (session.canTrashUnlockedFiles && folderAccessGranted)));
-  return json({ folder, canTrashContents, breadcrumbs: await breadcrumbs(env, folderId), folders: visibleFolders, files: files.results || [] });
+  return json({
+    folder,
+    canTrashContents,
+    breadcrumbs: await breadcrumbs(env, folderId),
+    folders: visibleFolders,
+    files: visibleFiles,
+    nextFileOffset
+  });
 }
 
 async function listLegacyFolders(env, session) {
