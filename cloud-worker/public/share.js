@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewGeneration: 0, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewGeneration: 0, previewHistoryActive: false, previewLandscape: false, previewOrientationFallback: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -38,6 +38,7 @@ function bindEvents() {
     renderSortedItems();
   });
   $("#share-preview-fullscreen").addEventListener("click", toggleSharedPreviewFullscreen);
+  $("#share-preview-rotate").addEventListener("click", toggleSharedPreviewRotation);
   $("#preview-stage").addEventListener("dblclick", handleSharedPreviewDoubleClick);
   $("#share-download-retry-wake").addEventListener("click", requestDownloadWakeLock);
   $("#share-keep-screen-awake").addEventListener("change", async (event) => {
@@ -464,6 +465,8 @@ async function openPreview(file, options = {}) {
   const generation = ++state.previewGeneration;
   clearPreview();
   state.selected = file;
+  resetSharedPreviewRotation();
+  $("#share-preview-rotate").hidden = file.mediaKind !== "video";
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
   $("#share-preview-size").textContent = formatMediaDetails(file);
@@ -525,7 +528,10 @@ async function toggleSharedPreviewFullscreen() {
   const video = stage.querySelector("video");
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
-    else if (stage.requestFullscreen) await stage.requestFullscreen();
+    else if (stage.requestFullscreen) {
+      await stage.requestFullscreen();
+      if (state.previewLandscape) await applySharedLandscapeOrientation();
+    }
     else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
   } catch (error) { setNotice(`全画面表示を開始できませんでした：${error.message}`, true); }
 }
@@ -536,6 +542,49 @@ function syncSharedFullscreenButton() {
   button.setAttribute("aria-label", active ? "全画面表示を終了" : "全画面で表示");
   const label = button.querySelector("span");
   if (label) label.textContent = active ? "戻す" : "全画面";
+  if (!active && state.previewLandscape) resetSharedPreviewRotation();
+  else if (active && state.previewLandscape) void applySharedLandscapeOrientation();
+}
+
+async function toggleSharedPreviewRotation() {
+  if (!$("#preview-stage video")) return;
+  state.previewLandscape = !state.previewLandscape;
+  if (state.previewLandscape && !document.fullscreenElement && $("#preview-stage").requestFullscreen) {
+    try { await $("#preview-stage").requestFullscreen(); } catch {}
+  }
+  if (state.previewLandscape) await applySharedLandscapeOrientation();
+  else resetSharedPreviewRotation();
+  syncSharedPreviewRotationButton();
+}
+
+async function applySharedLandscapeOrientation() {
+  let locked = false;
+  if (screen.orientation?.lock) {
+    try {
+      await screen.orientation.lock("landscape");
+      locked = true;
+    } catch {}
+  }
+  state.previewOrientationFallback = !locked;
+  $("#preview-stage").classList.toggle("is-video-rotated", state.previewLandscape && !locked);
+  syncSharedPreviewRotationButton();
+  return locked;
+}
+
+function resetSharedPreviewRotation() {
+  state.previewLandscape = false;
+  state.previewOrientationFallback = false;
+  $("#preview-stage").classList.remove("is-video-rotated");
+  try { screen.orientation?.unlock?.(); } catch {}
+  syncSharedPreviewRotationButton();
+}
+
+function syncSharedPreviewRotationButton() {
+  const button = $("#share-preview-rotate");
+  button.setAttribute("aria-pressed", String(state.previewLandscape));
+  button.setAttribute("aria-label", state.previewLandscape ? "動画を縦向きへ戻す" : "動画を横向きで表示");
+  const label = button.querySelector("span");
+  if (label) label.textContent = state.previewLandscape ? "縦向き" : "横向き";
 }
 
 function handleSharedPreviewKeydown(event) {
@@ -788,6 +837,8 @@ function clearPreview() {
 function handlePreviewClosed() {
   state.previewGeneration += 1;
   clearPreview();
+  resetSharedPreviewRotation();
+  $("#share-preview-rotate").hidden = true;
   if (state.previewHistoryActive && !state.handlingPopState) {
     state.previewHistoryActive = false;
     history.back();

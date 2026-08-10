@@ -97,7 +97,7 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .top-logout-button:hover { border-color: #c7abab; background: #fff3f3; }
 .top-logout-button > span:first-child { font-size: 1rem; }
 .mobile-add-button { display: none; }
-.toolbar { display: grid; grid-template-columns: minmax(220px, 460px) auto auto 42px; justify-content: end; gap: 10px; margin: 30px 0 18px; }
+.toolbar { display: grid; grid-template-columns: minmax(220px, 460px) auto 42px; justify-content: end; gap: 10px; margin: 30px 0 18px; }
 .search-box { position: relative; }
 .search-box span { position: absolute; left: 15px; top: 10px; color: var(--muted); font-size: 1.2rem; }
 .search-box input { min-height: 42px; padding-left: 42px; background: var(--soft); }
@@ -108,7 +108,7 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .sort-button.active { color: var(--teal-dark); background: #edf7f5; }
 .sort-button span { display: inline-block; min-width: .8em; }
 .display-toggle { border: 1px solid var(--line); }
-.floating-toolbar { position: fixed; z-index: 18; top: calc(12px + env(safe-area-inset-top)); right: clamp(24px, 4vw, 52px); left: calc(248px + clamp(24px, 4vw, 52px)); display: grid; grid-template-columns: minmax(150px, 1fr) minmax(220px, 460px) auto auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid rgba(174, 195, 198, .86); border-radius: 15px; background: rgba(255,255,255,.94); box-shadow: 0 12px 36px rgba(20, 45, 54, .16); opacity: 0; pointer-events: none; transform: translateY(calc(-100% - 24px)); transition: opacity .18s ease, transform .22s ease; backdrop-filter: blur(18px); }
+.floating-toolbar { position: fixed; z-index: 18; top: calc(12px + env(safe-area-inset-top)); right: clamp(24px, 4vw, 52px); left: calc(248px + clamp(24px, 4vw, 52px)); display: grid; grid-template-columns: minmax(150px, 1fr) minmax(220px, 460px) auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid rgba(174, 195, 198, .86); border-radius: 15px; background: rgba(255,255,255,.94); box-shadow: 0 12px 36px rgba(20, 45, 54, .16); opacity: 0; pointer-events: none; transform: translateY(calc(-100% - 24px)); transition: opacity .18s ease, transform .22s ease; backdrop-filter: blur(18px); }
 .floating-toolbar.is-visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
 .floating-toolbar-location { position: relative; min-width: 0; }
 .floating-location-button { display: grid; grid-template-columns: 24px minmax(0, 1fr) 18px; align-items: center; gap: 7px; width: 100%; min-height: 42px; padding: 7px 9px; border: 0; border-radius: 10px; color: var(--ink); background: var(--soft); text-align: left; }
@@ -125,8 +125,6 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .floating-location-panel nav span { color: #98a4aa; font-size: .72rem; }
 .floating-search-box input { width: 100%; }
 .floating-sort-controls { min-width: 0; }
-.conflict-count-button { min-height: 42px; padding: 8px 12px; white-space: nowrap; }
-.conflict-count-button.is-checking { color: var(--muted); cursor: wait; }
 .breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-height: 28px; margin-bottom: 14px; color: var(--muted); font-size: .85rem; }
 .breadcrumbs button { padding: 0; border: 0; color: var(--teal-dark); background: none; }
 .breadcrumbs span::before { content: "/"; margin-right: 7px; color: #a3abb1; }
@@ -190,7 +188,7 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .file-card.selection-pass { border-color: #7ea9a5; background: #f3fbfa; }
 .file-card button, .folder-open-button { width: 100%; padding: 0; border: 0; background: none; text-align: left; }
 .file-card .file-select-button, .folder-card .folder-select-button { position: absolute; z-index: 5; top: 9px; right: 9px; display: grid; width: 30px; height: 30px; padding: 0; place-items: center; border: 2px solid rgba(255,255,255,.96); border-radius: 50%; color: #53616b; background: rgba(255,255,255,.9); box-shadow: 0 2px 10px rgba(23,33,42,.18); font-size: 0; }
-.file-card .conflict-badge { position: absolute; z-index: 6; top: 9px; left: 9px; width: auto; min-height: 28px; padding: 5px 8px; border: 1px solid rgba(126, 76, 16, .22); border-radius: 7px; color: #744912; background: rgba(255, 232, 184, .96); box-shadow: 0 2px 10px rgba(49, 35, 15, .14); font-size: .68rem; font-weight: 900; }
+.file-card .conflict-badge { position: absolute; z-index: 6; top: 9px; right: 47px; width: auto; min-height: 28px; padding: 5px 8px; border: 1px solid rgba(126, 76, 16, .22); border-radius: 7px; color: #744912; background: rgba(255, 232, 184, .96); box-shadow: 0 2px 10px rgba(49, 35, 15, .14); font-size: .68rem; font-weight: 900; }
 .file-card .conflict-badge:hover { background: #ffe2a1; }
 .file-card .file-select-button::before, .folder-card .folder-select-button::before { content: ""; width: 12px; height: 12px; border: 1.5px solid #75828b; border-radius: 50%; }
 .file-card.selected .file-select-button, .folder-card.selected .folder-select-button { color: white; background: var(--teal); }
@@ -238,7 +236,7 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
 .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
 .dialog-head h2 { display: -webkit-box; margin: 3px 0 0; max-width: 920px; overflow: hidden; overflow-wrap: anywhere; font-size: 1.05rem; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .preview-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.preview-fullscreen-button { min-height: 38px; padding: 7px 12px; }
+.preview-fullscreen-button, .preview-rotate-button { min-height: 38px; padding: 7px 12px; }
 .file-badge { color: var(--teal-dark); font-size: .7rem; font-weight: 800; letter-spacing: .08em; }
 .preview-stage-wrap { position: relative; background: #172025; touch-action: pan-y; }
 .preview-stage { position: relative; min-height: min(68svh, 720px); display: grid; place-items: center; padding: 0; background: #050708; color: white; }
@@ -248,6 +246,9 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
 .preview-stage:fullscreen, .preview-stage-wrap:fullscreen { width: 100vw; height: 100vh; background: #000; }
 .preview-stage-wrap:fullscreen .preview-stage { width: 100%; height: 100%; max-height: none; }
 .preview-stage-wrap:fullscreen .preview-stage video, .preview-stage-wrap:fullscreen .preview-stage img { width: 100%; height: 100%; max-height: none; }
+.preview-stage-wrap.is-video-rotated { overflow: hidden; }
+.preview-stage-wrap.is-video-rotated .preview-stage video { width: min(72svh, 100%); max-width: none; max-height: none; transform: rotate(90deg); transform-origin: center; }
+.preview-stage-wrap:fullscreen.is-video-rotated .preview-stage video { width: 100vh; height: 100vw; object-fit: contain; }
 .preview-loading { display: grid; justify-items: center; gap: 14px; color: #e9f0f1; }
 .preview-loading::before { content: ""; width: 34px; height: 34px; border: 3px solid rgba(255,255,255,.2); border-top-color: #8fd0ca; border-radius: 50%; animation: preview-spin .8s linear infinite; }
 .player-buffering { position: absolute; z-index: 2; display: grid; justify-items: center; gap: 10px; padding: 12px 16px; border-radius: 12px; color: white; background: rgba(0,0,0,.58); font-size: .8rem; pointer-events: none; }
@@ -383,8 +384,8 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
   .top-actions .mobile-add-button { display: inline-flex; min-width: 44px; width: 44px; height: 44px; padding: 0; font-size: 1.45rem; }
   .top-actions #install-app-button-top { display: inline-grid; }
   .top-actions .top-logout-button { min-height: 44px; padding: 0 11px; }
-  .toolbar { grid-template-columns: minmax(0, 1fr) auto auto 42px; margin-top: 22px; }
-  .floating-toolbar { top: calc(8px + env(safe-area-inset-top)); right: 12px; left: 12px; grid-template-columns: minmax(120px, .8fr) minmax(180px, 1.25fr) auto auto; }
+  .toolbar { grid-template-columns: minmax(0, 1fr) auto 42px; margin-top: 22px; }
+  .floating-toolbar { top: calc(8px + env(safe-area-inset-top)); right: 12px; left: 12px; grid-template-columns: minmax(120px, .8fr) minmax(180px, 1.25fr) auto; }
   .content-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .selection-bar { top: 8px; }
   .selection-bar { align-items: flex-start; }
@@ -426,11 +427,9 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
   .login-card { min-height: 100svh; padding: 30px 22px; border: 0; border-radius: 0; box-shadow: none; }
   .toolbar { grid-template-columns: minmax(0, 1fr) auto 42px; }
   .toolbar .sort-controls { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: repeat(3, 1fr); }
-  .toolbar .conflict-count-button { grid-column: 2; }
-  .floating-toolbar { grid-template-columns: minmax(102px, 1fr) auto; gap: 8px; padding: 8px; border-radius: 13px; }
+  .floating-toolbar { grid-template-columns: minmax(102px, 1fr); gap: 8px; padding: 8px; border-radius: 13px; }
   .floating-toolbar-location { grid-column: 1 / -1; }
   .floating-search-box { grid-column: 1; }
-  .floating-conflict-count-button { grid-column: 2; min-height: 38px; padding: 6px 9px; font-size: .7rem; }
   .floating-location-button { min-height: 32px; padding: 4px 7px; }
   .floating-location-icon { width: 21px; height: 15px; }
   .floating-search-box input { min-height: 38px; padding-left: 36px; font-size: .78rem; }
@@ -455,8 +454,8 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
   .preview-dialog { width: 100%; height: 100svh; max-height: 100svh; border-radius: 0; }
   .preview-dialog .dialog-head { padding: 12px 14px; }
   .preview-dialog .dialog-head h2 { font-size: .92rem; }
-  .preview-fullscreen-button span { display: none; }
-  .preview-fullscreen-button { width: 40px; min-height: 40px; padding: 0; }
+  .preview-fullscreen-button span, .preview-rotate-button span { display: none; }
+  .preview-fullscreen-button, .preview-rotate-button { width: 40px; min-height: 40px; padding: 0; }
   .preview-stage { min-height: 62svh; }
   .preview-dialog .file-details { padding: 12px 15px; }
   .preview-dialog .dialog-actions { position: sticky; bottom: 0; padding: 12px 15px calc(12px + env(safe-area-inset-bottom)); background: rgba(255,255,255,.96); backdrop-filter: blur(16px); }

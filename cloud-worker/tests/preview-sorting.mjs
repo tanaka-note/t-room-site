@@ -37,14 +37,24 @@ assert.match(shareJs, /if \(state\.sortUsesTypeDefaults\) \{[\s\S]*?folders\.sor
 
 assert.match(mainHtml, /id="preview-fullscreen"/);
 assert.match(shareHtml, /id="share-preview-fullscreen"/);
+assert.match(mainHtml, /id="preview-rotate"[^>]*hidden/);
+assert.match(shareHtml, /id="share-preview-rotate"[^>]*hidden/);
 assert.match(mainHtml, /id="preview-more"/);
 assert.match(mainJs, /function togglePreviewFullscreen\(\)/);
 assert.match(shareJs, /function toggleSharedPreviewFullscreen\(\)/);
+assert.match(mainJs, /function togglePreviewRotation\(\)/);
+assert.match(shareJs, /function toggleSharedPreviewRotation\(\)/);
+assert.match(mainJs, /screen\.orientation\.lock\("landscape"\)/);
+assert.match(shareJs, /screen\.orientation\.lock\("landscape"\)/);
+assert.match(mainJs, /resetPreviewRotation\(true\)/);
+assert.match(shareJs, /resetSharedPreviewRotation\(\)/);
 assert.match(mainJs, /video\.currentTime.*10/);
 assert.match(shareJs, /video\.currentTime.*10/);
 assert.match(mainCss, /width: min\(1280px/);
 assert.match(shareCss, /width:min\(1280px/);
 assert.match(mainCss, /\.player-buffering/);
 assert.match(shareCss, /\.player-buffering/);
+assert.match(mainCss, /\.preview-stage-wrap\.is-video-rotated[\s\S]*?transform: rotate\(90deg\)/);
+assert.match(shareCss, /\.preview-stage\.is-video-rotated[\s\S]*?transform:rotate\(90deg\)/);
 
 console.log("shared sorting and immersive previews: ok");

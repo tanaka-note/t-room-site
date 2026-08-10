@@ -61,6 +61,14 @@ const state = {
   thumbnailAttempts: new Set(),
   thumbnailBackfillRunning: false,
   durationUpdates: new Set(),
+  durationAttempts: new Map(),
+  durationQueue: [],
+  durationObserver: null,
+  durationBackfillRunning: false,
+  durationScanGeneration: 0,
+  previewLandscape: false,
+  previewOrientationFallback: false,
+  conflictScanGeneration: 0,
   handlingPopState: false,
   historyReady: false,
   folderNamesMigrated: false,
@@ -149,7 +157,6 @@ function bindEvents() {
   $("#edit-form").addEventListener("submit", saveFile);
   $("#edit-file-button").addEventListener("click", openEditDialog);
   $("#delete-file-button").addEventListener("click", deleteSelectedFile);
-  $$("#conflict-count-button, #floating-conflict-count-button").forEach((button) => button.addEventListener("click", openConflictGroupList));
   $("#conflict-groups-back").addEventListener("click", renderConflictGroupList);
   $("#share-file-button").addEventListener("click", () => openShareDialog("file", state.selected));
   $("#share-folder-button").addEventListener("click", () => openShareDialog("folder", state.selectedFolder));
@@ -179,6 +186,7 @@ function bindEvents() {
   $("#preview-prev").addEventListener("click", () => navigatePreview(-1));
   $("#preview-next").addEventListener("click", () => navigatePreview(1));
   $("#preview-fullscreen").addEventListener("click", togglePreviewFullscreen);
+  $("#preview-rotate").addEventListener("click", togglePreviewRotation);
   $("#preview-stage-wrap").addEventListener("dblclick", handlePreviewDoubleClick);
   $("#preview-stage-wrap").addEventListener("touchstart", handlePreviewTouchStart, { passive: true });
   $("#preview-stage-wrap").addEventListener("touchend", handlePreviewTouchEnd, { passive: true });
@@ -1201,10 +1209,10 @@ function syncAvailableActions() {
   });
   if (inHistory || inRequests || inShares || state.uploading || state.downloadActive) hideFloatingToolbar();
   $$('[data-kind]').forEach((button) => { button.disabled = !insideFolder || inTrash || inHistory || inRequests || inShares; });
-  syncStoredConflictButtons();
 }
 
 async function loadItems() {
+  invalidateStoredConflicts();
   clearFileSelection(false);
   setNotice("");
   state.folderSummary = null;
@@ -1305,6 +1313,7 @@ function renderItems() {
   $("#display-toggle").setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
   $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
   $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length + state.folders.length === 0;
+  scheduleMissingMediaDurations();
   scheduleMissingVideoThumbnails();
   queueFloatingToolbarUpdate();
 }
@@ -1969,17 +1978,7 @@ function fileCard(file) {
   card.append(button);
   const conflictGroupId = state.conflictFileGroups.get(Number(file.id));
   if (!state.listMode && conflictGroupId && !file.trashed) {
-    const conflictBadge = document.createElement("button");
-    conflictBadge.className = "conflict-badge";
-    conflictBadge.type = "button";
-    conflictBadge.textContent = "競合";
-    conflictBadge.setAttribute("aria-label", `${file.name}の競合候補を確認`);
-    conflictBadge.addEventListener("pointerdown", (event) => event.stopPropagation());
-    conflictBadge.addEventListener("click", (event) => {
-      event.stopPropagation();
-      openConflictGroup(conflictGroupId);
-    });
-    card.append(conflictBadge);
+    card.append(createConflictBadge(file, conflictGroupId));
   }
   if (!file.trashed) {
     const selectButton = document.createElement("button");
@@ -1997,6 +1996,30 @@ function fileCard(file) {
   if (state.selectedFiles.has(file.id)) card.classList.add("selected", "selection-pass");
   if (file.hasThumbnail && Number(file.cryptoVersion) === 1 && file.fileKey) loadEncryptedThumbnail(file, card.querySelector(".thumb"));
   return card;
+}
+
+function createConflictBadge(file, groupId) {
+  const badge = document.createElement("button");
+  badge.className = "conflict-badge";
+  badge.type = "button";
+  badge.textContent = "競合";
+  badge.setAttribute("aria-label", `${file.name}の競合候補を確認`);
+  badge.addEventListener("pointerdown", (event) => event.stopPropagation());
+  badge.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openConflictGroup(groupId);
+  });
+  return badge;
+}
+
+function syncVisibleConflictBadges() {
+  $$(".file-card .conflict-badge").forEach((badge) => badge.remove());
+  if (state.listMode || state.view !== "all") return;
+  for (const file of state.files) {
+    const groupId = state.conflictFileGroups.get(Number(file.id));
+    const card = $(`.file-card[data-file-id="${Number(file.id)}"]`);
+    if (groupId && card && !file.trashed) card.append(createConflictBadge(file, groupId));
+  }
 }
 
 async function hydrateFileRecords(records, options = {}) {
@@ -3186,7 +3209,11 @@ async function planFolderUpload(selection, baseParentId, baseParentKey, operatio
 }
 
 function normalizeUploadName(value) {
-  return String(value || "").normalize("NFC");
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase("ja");
 }
 
 function uploadFileIdentity(name, size) {
@@ -3283,27 +3310,21 @@ function findIncomingUploadConflictGroups(files) {
   return [...groups.values()].filter((group) => group.length > 1);
 }
 
-function syncStoredConflictButtons(checking = state.conflictScanRunning) {
-  const count = state.conflictGroups.length;
-  $$("#conflict-count-button, #floating-conflict-count-button").forEach((button) => {
-    button.hidden = state.view !== "all" || (!checking && count === 0);
-    button.disabled = checking;
-    button.classList.toggle("is-checking", checking);
-    button.textContent = checking ? "競合確認中…" : `競合 ${count.toLocaleString("ja-JP")}組`;
-  });
-}
-
 function invalidateStoredConflicts() {
+  state.conflictScanGeneration += 1;
+  state.conflictScanRunning = false;
   state.conflictScanCompleted = false;
+  state.conflictScanScheduled = false;
   state.conflictGroups = [];
   state.conflictFileGroups = new Map();
   state.conflictFolders = new Map();
-  syncStoredConflictButtons(false);
+  syncVisibleConflictBadges();
 }
 
 function scheduleStoredConflictScan(force = false) {
   if (force) invalidateStoredConflicts();
   if (!state.session || state.view !== "all" || state.conflictScanRunning || state.conflictScanCompleted || state.conflictScanScheduled) return;
+  if (!state.files.some((file) => Number(file.sizeBytes || 0) > 0)) return;
   if (state.session.role === "admin" && !state.crypto.adminPrivateKey) return;
   if (state.session.role === "subadmin" && state.crypto.folderKeys.size === 0) return;
   state.conflictScanScheduled = true;
@@ -3316,28 +3337,20 @@ function scheduleStoredConflictScan(force = false) {
 }
 
 async function loadStoredConflictCandidates() {
-  const candidates = [];
-  const folders = new Map();
-  let offset = 0;
-  let guard = 0;
-  do {
-    const data = await api(`/conflicts?offset=${offset}`);
-    candidates.push(...(data.candidates || []));
-    for (const folder of data.folders || []) folders.set(Number(folder.id), { ...folder, id: Number(folder.id), parentId: Number(folder.parentId) || null });
-    offset = Number.isInteger(data.nextOffset) ? data.nextOffset : -1;
-  } while (offset >= 0 && guard++ < 500);
-  if (offset >= 0) throw new Error("競合候補が多いため確認を完了できませんでした。");
-  return { candidates, folders };
+  return loadUploadConflictCandidates(state.files.map((file) => Number(file.sizeBytes || 0)));
 }
 
 async function scanStoredConflicts() {
   if (state.conflictScanRunning || state.conflictScanCompleted) return;
+  const generation = state.conflictScanGeneration;
+  const visibleIdentities = new Set(state.files.map((file) => uploadFileIdentity(file.name, file.sizeBytes)));
   state.conflictScanRunning = true;
-  syncStoredConflictButtons(true);
   try {
     const { candidates, folders } = await loadStoredConflictCandidates();
+    if (generation !== state.conflictScanGeneration) return;
     await unlockConflictFolderKeys(folders);
     const hydrated = await hydrateFileRecords(candidates, { preserveOrder: true });
+    if (generation !== state.conflictScanGeneration) return;
     const grouped = new Map();
     for (const file of hydrated) {
       if (Number(file.cryptoVersion) === 1 && !file.fileKey) continue;
@@ -3348,7 +3361,7 @@ async function scanStoredConflicts() {
       grouped.get(identity).push(file);
     }
     const groups = [...grouped.values()]
-      .filter((files) => files.length > 1)
+      .filter((files) => files.length > 1 && visibleIdentities.has(uploadFileIdentity(files[0].name, files[0].sizeBytes)))
       .sort((left, right) => left[0].name.localeCompare(right[0].name, "ja", { numeric: true, sensitivity: "base" }))
       .map((files, index) => ({
         id: `conflict-${index + 1}`,
@@ -3360,10 +3373,9 @@ async function scanStoredConflicts() {
     state.conflictFileGroups = new Map(groups.flatMap((group) => group.files.map((file) => [Number(file.id), group.id])));
     state.conflictFolders = folders;
     state.conflictScanCompleted = true;
-    if (state.view === "all") renderItems();
+    syncVisibleConflictBadges();
   } finally {
-    state.conflictScanRunning = false;
-    syncStoredConflictButtons(false);
+    if (generation === state.conflictScanGeneration) state.conflictScanRunning = false;
   }
 }
 
@@ -4265,6 +4277,126 @@ function mpegContainerType(name) {
   return "";
 }
 
+function scheduleMissingMediaDurations() {
+  state.durationScanGeneration += 1;
+  const generation = state.durationScanGeneration;
+  state.durationObserver?.disconnect();
+  state.durationObserver = null;
+  state.durationQueue = state.durationQueue.filter((entry) => entry.generation === generation);
+  if (state.view !== "all" || state.uploading || state.downloadActive) return;
+  const eligible = state.files.filter((file) => {
+    if (!["video", "audio"].includes(file.mediaKind) || file.durationSeconds || !file.fileKey || !canRenameFile(file)) return false;
+    if (state.session?.role === "admin" && file.mediaKind === "video" && !file.hasThumbnail && !state.thumbnailAttempts.has(Number(file.id))) return false;
+    return (state.durationAttempts.get(Number(file.id)) || 0) < 2;
+  });
+  if (!eligible.length) return;
+  const enqueueCard = (card) => {
+    const file = eligible.find((item) => Number(item.id) === Number(card.dataset.fileId));
+    if (file) enqueueDurationBackfill(file, generation);
+  };
+  if (!globalThis.IntersectionObserver) {
+    eligible.slice(0, 8).forEach((file) => enqueueDurationBackfill(file, generation));
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      enqueueCard(entry.target);
+    }
+  }, { rootMargin: "240px 0px" });
+  state.durationObserver = observer;
+  for (const file of eligible) {
+    const card = $(`.file-card[data-file-id="${Number(file.id)}"]`);
+    if (card) observer.observe(card);
+  }
+}
+
+function enqueueDurationBackfill(file, generation, retryDelay = 0) {
+  if (generation !== state.durationScanGeneration || file.durationSeconds) return;
+  const queued = state.durationQueue.some((entry) => Number(entry.file.id) === Number(file.id) && entry.generation === generation);
+  if (queued || state.durationUpdates.has(Number(file.id))) return;
+  const enqueue = () => {
+    if (generation !== state.durationScanGeneration || file.durationSeconds) return;
+    file.durationPending = true;
+    updateDurationDisplay(file);
+    state.durationQueue.push({ file, generation });
+    void processDurationBackfillQueue();
+  };
+  if (retryDelay) window.setTimeout(enqueue, retryDelay);
+  else enqueue();
+}
+
+async function processDurationBackfillQueue() {
+  if (state.durationBackfillRunning) return;
+  state.durationBackfillRunning = true;
+  try {
+    while (state.durationQueue.length) {
+      const { file, generation } = state.durationQueue.shift();
+      if (generation !== state.durationScanGeneration || file.durationSeconds) continue;
+      const fileId = Number(file.id);
+      const attempts = (state.durationAttempts.get(fileId) || 0) + 1;
+      state.durationAttempts.set(fileId, attempts);
+      const duration = await readStoredMediaDuration(file);
+      if (generation !== state.durationScanGeneration) continue;
+      file.durationPending = false;
+      if (duration) {
+        file.durationUnavailable = false;
+        await persistMediaDuration(file, duration);
+      } else if (attempts < 2) {
+        enqueueDurationBackfill(file, generation, 1200);
+      } else {
+        file.durationUnavailable = true;
+        updateDurationDisplay(file);
+      }
+    }
+  } finally {
+    state.durationBackfillRunning = false;
+    if (state.durationQueue.length) void processDurationBackfillQueue();
+  }
+}
+
+async function readStoredMediaDuration(file) {
+  let mediaToken = "";
+  try {
+    const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
+    mediaToken = media.token;
+    return await readMediaDurationFromUrl(media.url, file);
+  } catch {
+    return null;
+  } finally {
+    if (mediaToken) TCloudMedia.releaseMedia(mediaToken);
+  }
+}
+
+async function readMediaDurationFromUrl(url, file) {
+  const media = document.createElement(file.mediaKind === "audio" ? "audio" : "video");
+  media.preload = "metadata";
+  media.muted = true;
+  const mpegType = file.mediaKind === "video" ? mpegContainerType(file.name) : "";
+  let player = null;
+  try {
+    if (mpegType && globalThis.mpegts?.isSupported()) {
+      player = mpegts.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes || 0) || undefined }, { enableWorker: false, lazyLoad: true, lazyLoadMaxDuration: 30, seekType: "range" });
+      player.attachMediaElement(media);
+      player.load();
+    } else {
+      media.src = url;
+      media.load();
+    }
+    await waitForVideoEvent(media, "loadedmetadata", 20000);
+    return normalizeDurationSeconds(media.duration);
+  } catch {
+    return null;
+  } finally {
+    try { player?.unload(); } catch {}
+    try { player?.detachMediaElement(); } catch {}
+    try { player?.destroy(); } catch {}
+    media.removeAttribute("src");
+    try { media.load(); } catch {}
+  }
+}
+
 function scheduleMissingVideoThumbnails() {
   if (state.session?.role !== "admin" || state.view !== "all" || state.thumbnailBackfillRunning) return;
   void backfillMissingVideoThumbnails();
@@ -4288,12 +4420,19 @@ async function backfillVideoThumbnail(file) {
   try {
     const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
     mediaToken = media.token;
-    const thumbnail = await captureVideoThumbnail(media.url, file);
-    if (!thumbnail) return;
-    const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
-    await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true });
-    file.hasThumbnail = true;
-    showGeneratedThumbnail(file, thumbnail);
+    const [thumbnailResult, durationResult] = await Promise.allSettled([
+      captureVideoThumbnail(media.url, file),
+      file.durationSeconds ? Promise.resolve(file.durationSeconds) : readMediaDurationFromUrl(media.url, file)
+    ]);
+    const duration = durationResult.status === "fulfilled" ? normalizeDurationSeconds(durationResult.value) : null;
+    if (duration) await persistMediaDuration(file, duration);
+    const thumbnail = thumbnailResult.status === "fulfilled" ? thumbnailResult.value : null;
+    if (thumbnail) {
+      const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
+      await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true });
+      file.hasThumbnail = true;
+      showGeneratedThumbnail(file, thumbnail);
+    }
   } catch {
     // 再生できない形式では、明確な動画アイコンを残す。
   } finally {
@@ -4377,6 +4516,8 @@ async function openPreview(file, options = {}) {
   clearPreviewUrl();
   state.previewFileId = Number(file.id);
   state.selected = file;
+  resetPreviewRotation(false);
+  $("#preview-rotate").hidden = file.mediaKind !== "video";
   $("#preview-more").open = false;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
@@ -4507,7 +4648,8 @@ async function togglePreviewFullscreen() {
     if (document.fullscreenElement) await document.exitFullscreen();
     else if (stage.requestFullscreen) {
       await stage.requestFullscreen();
-      await preserveAppOrientation(true);
+      if (state.previewLandscape) await applyPreviewLandscapeOrientation();
+      else await preserveAppOrientation(true);
     }
     else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
   } catch (error) { setNotice(`全画面表示を開始できませんでした：${error.message}`, true); }
@@ -4519,7 +4661,51 @@ function syncPreviewFullscreenButton() {
   button.setAttribute("aria-label", active ? "全画面表示を終了" : "全画面で表示");
   const label = button.querySelector("span");
   if (label) label.textContent = active ? "戻す" : "全画面";
-  preserveAppOrientation(active);
+  if (!active && state.previewLandscape) resetPreviewRotation(true);
+  else if (active && state.previewLandscape) void applyPreviewLandscapeOrientation();
+  else void preserveAppOrientation(active);
+}
+
+async function togglePreviewRotation() {
+  if (!$("#preview-stage video")) return;
+  state.previewLandscape = !state.previewLandscape;
+  if (state.previewLandscape && !document.fullscreenElement && $("#preview-stage-wrap").requestFullscreen) {
+    try { await $("#preview-stage-wrap").requestFullscreen(); } catch {}
+  }
+  if (state.previewLandscape) await applyPreviewLandscapeOrientation();
+  else resetPreviewRotation(true);
+  syncPreviewRotationButton();
+}
+
+async function applyPreviewLandscapeOrientation() {
+  let locked = false;
+  if (screen.orientation?.lock) {
+    try {
+      await screen.orientation.lock("landscape");
+      locked = true;
+    } catch {}
+  }
+  state.previewOrientationFallback = !locked;
+  $("#preview-stage-wrap").classList.toggle("is-video-rotated", state.previewLandscape && !locked);
+  syncPreviewRotationButton();
+  return locked;
+}
+
+function resetPreviewRotation(restorePortrait = true) {
+  state.previewLandscape = false;
+  state.previewOrientationFallback = false;
+  $("#preview-stage-wrap").classList.remove("is-video-rotated");
+  try { screen.orientation?.unlock?.(); } catch {}
+  syncPreviewRotationButton();
+  if (restorePortrait) void preserveAppOrientation(false);
+}
+
+function syncPreviewRotationButton() {
+  const button = $("#preview-rotate");
+  button.setAttribute("aria-pressed", String(state.previewLandscape));
+  button.setAttribute("aria-label", state.previewLandscape ? "動画を縦向きへ戻す" : "動画を横向きで表示");
+  const label = button.querySelector("span");
+  if (label) label.textContent = state.previewLandscape ? "縦向き" : "横向き";
 }
 
 async function preserveAppOrientation(force = false) {
@@ -4561,6 +4747,8 @@ function handlePreviewTouchEnd(event) {
 function handlePreviewClosed() {
   state.previewGeneration += 1;
   clearPreviewUrl();
+  resetPreviewRotation(true);
+  $("#preview-rotate").hidden = true;
   state.previewFileId = null;
   state.previewTouchStart = null;
   if (state.previewHistoryActive && !state.handlingPopState) {
@@ -4660,6 +4848,8 @@ async function persistMediaDuration(file, durationSeconds) {
   const normalized = normalizeDurationSeconds(durationSeconds);
   if (!normalized || normalized === normalizeDurationSeconds(file.durationSeconds)) return;
   file.durationSeconds = normalized;
+  file.durationPending = false;
+  file.durationUnavailable = false;
   updateDurationDisplay(file);
   if (Number(file.cryptoVersion) !== 1 || !file.fileKey || !canRenameFile(file) || state.durationUpdates.has(Number(file.id))) return;
   state.durationUpdates.add(Number(file.id));
@@ -4952,7 +5142,7 @@ function cleanEditableName(value) {
 function formatBytes(bytes) { const value = Number(bytes || 0); if (value < 1024) return `${value} B`; const units = ["KB", "MB", "GB", "TB"]; let size = value / 1024; let i = 0; while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; } return `${size >= 100 ? size.toFixed(0) : size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${units[i]}`; }
 function normalizeDurationSeconds(value) { const seconds = Number(value); return Number.isFinite(seconds) && seconds > 0 ? Math.max(1, Math.round(seconds)) : null; }
 function formatMediaDuration(value) { const total = normalizeDurationSeconds(value); if (!total) return ""; const hours = Math.floor(total / 3600); const minutes = Math.floor((total % 3600) / 60); const seconds = total % 60; return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : `${minutes}:${String(seconds).padStart(2, "0")}`; }
-function formatMediaDetails(file) { const duration = ["video", "audio"].includes(file?.mediaKind) ? formatMediaDuration(file.durationSeconds) : ""; return duration ? `${formatBytes(file.sizeBytes)}・${duration}` : formatBytes(file?.sizeBytes); }
+function formatMediaDetails(file) { const media = ["video", "audio"].includes(file?.mediaKind); const duration = media ? formatMediaDuration(file.durationSeconds) : ""; if (duration) return `${formatBytes(file.sizeBytes)}・${duration}`; if (media && file?.durationPending) return `${formatBytes(file.sizeBytes)}・確認中`; if (media && file?.durationUnavailable) return `${formatBytes(file.sizeBytes)}・時間不明`; return formatBytes(file?.sizeBytes); }
 function formatDate(value) { if (!value) return "—"; const date = new Date(String(value).replace(" ", "T") + (String(value).includes("Z") ? "" : "Z")); return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric" }).format(date); }
 function formatDateTime(value) { if (!value) return "—"; const date = new Date(String(value).replace(" ", "T") + (String(value).includes("Z") ? "" : "Z")); return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date); }
 function formatEpoch(value) { const date = new Date(Number(value) * 1000); return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date) : "—"; }
