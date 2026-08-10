@@ -22,13 +22,15 @@ assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512" && icon.purpose
 
 assert.match(html, /rel="manifest" href="\/cloud\/manifest\.webmanifest/);
 assert.match(html, /name="theme-color" content="#071426"/);
-assert.match(html, /id="install-app-button"/);
 assert.match(html, /id="install-app-button-top"/);
-assert.match(html, /id="install-app-button-top"[\s\S]*?ホームへ追加/);
+assert.doesNotMatch(html, /id="install-app-button"/);
+assert.match(html, /id="install-app-button-top"[^>]*aria-label="ホームへ追加"[^>]*title="ホームへ追加"/);
+assert.match(html, /id="install-app-button-top"[\s\S]*?<svg[\s\S]*?<path/);
 assert.match(html, /id="install-guide-dialog"/);
 assert.match(client, /beforeinstallprompt/);
 assert.match(client, /async function installApp\(\)/);
 assert.match(client, /const available = !standalone/);
+assert.match(client, /\$\("#install-app-button-top"\)\.hidden = !available/);
 assert.match(client, /Safariの共有ボタン/);
 assert.match(client, /ホーム画面に追加/);
 assert.match(client, /async function registerPwaWorker\(\)/);

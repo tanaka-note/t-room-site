@@ -93,7 +93,6 @@ function bindEvents() {
   $("#remember-login").addEventListener("change", syncLoginAutocomplete);
   $("#logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
-  $("#install-app-button").addEventListener("click", installApp);
   $("#install-app-button-top").addEventListener("click", installApp);
   $("#mobile-account-button").addEventListener("click", () => $("#account-dialog").showModal());
   $("#usage-details-button").addEventListener("click", openUsageDetails);
@@ -218,9 +217,7 @@ function handleAppInstalled() {
 function updateInstallButtons() {
   const standalone = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
   const available = !standalone;
-  for (const button of [$("#install-app-button"), $("#install-app-button-top")]) {
-    if (button) button.hidden = !available;
-  }
+  $("#install-app-button-top").hidden = !available;
 }
 
 async function installApp() {
