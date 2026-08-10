@@ -1,0 +1,38 @@
+{
+  "id": "/cloud/",
+  "name": "T-Cloud Storage",
+  "short_name": "T-Cloud",
+  "description": "写真、動画、音声、書類を安全に保管するプライベートクラウドストレージ。",
+  "lang": "ja",
+  "dir": "ltr",
+  "start_url": "/cloud/?source=pwa",
+  "scope": "/cloud/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#071426",
+  "theme_color": "#071426",
+  "orientation": "any",
+  "categories": ["productivity", "utilities"],
+  "launch_handler": { "client_mode": "navigate-existing" },
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/cloud/icons/icon-192-v2.png?rev=20260810-2",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/cloud/icons/icon-512-v2.png?rev=20260810-2",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/cloud/icons/icon-maskable-512-v2.png?rev=20260810-2",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

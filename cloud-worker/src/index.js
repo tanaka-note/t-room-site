@@ -1664,15 +1664,15 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud.css"],
-    ["/cloud.js", "/cloud.js"],
+    ["/cloud.css", "/cloud-runtime-20260810-33.css"],
+    ["/cloud.js", "/cloud-runtime-20260810-105.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
-    ["/media-client.js", "/media-client.js"],
-    ["/media-worker.js", "/media-worker.js"],
-    ["/manifest.webmanifest", "/manifest.webmanifest"],
-    ["/manifest-v2.webmanifest", "/manifest.webmanifest"],
+    ["/media-client.js", "/media-client-20260810-8.js"],
+    ["/media-worker.js", "/media-worker-20260810-8.js"],
+    ["/manifest.webmanifest", "/manifest-20260810-2.webmanifest"],
+    ["/manifest-v2.webmanifest", "/manifest-20260810-2.webmanifest"],
     ["/offline", "/offline"],
     ["/icons/icon-192.png", "/icons/icon-192.png"],
     ["/icons/icon-512.png", "/icons/icon-512.png"],
@@ -1682,8 +1682,8 @@ async function serveAsset(request, env, url, path) {
     ["/icons/icon-512-v2.png", "/icons/icon-512-v2.png"],
     ["/icons/icon-maskable-512-v2.png", "/icons/icon-maskable-512-v2.png"],
     ["/icons/apple-touch-icon-v2.png", "/icons/apple-touch-icon-v2.png"],
-    ["/share.css", "/share.css"],
-    ["/share.js", "/share.js"],
+    ["/share.css", "/share-runtime-20260810-13.css"],
+    ["/share.js", "/share-runtime-20260810-31.js"],
     ["/vendor/argon2.umd.min.js", "/vendor/argon2.umd.min.js"],
     ["/vendor/mpegts-1.8.0.js", "/vendor/mpegts-1.8.0.js"],
     ["/vendor/mpegts-1.8.0.LICENSE.txt", "/vendor/mpegts-1.8.0.LICENSE.txt"]
@@ -1693,13 +1693,13 @@ async function serveAsset(request, env, url, path) {
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  const isAuthenticationAsset = assetPath === "/cloud.js" || assetPath === "/crypto-vault.js" || assetPath === "/file-safety.js" || assetPath === "/media-range.js" || assetPath === "/media-client.js" || assetPath === "/media-worker.js" || assetPath === "/share.js";
-  const isPwaMetadataAsset = assetPath === "/manifest.webmanifest" || assetPath.startsWith("/icons/");
+  const isAuthenticationAsset = ["/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
+  const isPwaMetadataAsset = path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest" || path.startsWith("/icons/");
   headers.set("Cache-Control", assetPath === "/" || assetPath === "/share" || isAuthenticationAsset || isPwaMetadataAsset
     ? "no-store"
     : "public, max-age=3600");
-  if (assetPath === "/media-worker.js") headers.set("Service-Worker-Allowed", "/cloud/");
-  if (assetPath === "/manifest.webmanifest") headers.set("Content-Type", "application/manifest+json; charset=utf-8");
+  if (path === "/media-worker.js") headers.set("Service-Worker-Allowed", "/cloud/");
+  if (path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest") headers.set("Content-Type", "application/manifest+json; charset=utf-8");
   if (assetPath === "/offline") headers.set("Content-Type", "text/html; charset=utf-8");
   return new Response(response.body, { status: response.status, headers });
 }

@@ -11,6 +11,23 @@ const [html, client, worker, server, offline, manifestSource] = await Promise.al
 ]);
 const manifest = JSON.parse(manifestSource);
 
+for (const [source, runtime] of [
+  ["cloud.js", "cloud-runtime-20260810-105.js"],
+  ["cloud.css", "cloud-runtime-20260810-33.css"],
+  ["media-client.js", "media-client-20260810-8.js"],
+  ["media-worker.js", "media-worker-20260810-8.js"],
+  ["manifest.webmanifest", "manifest-20260810-2.webmanifest"],
+  ["share.js", "share-runtime-20260810-31.js"],
+  ["share.css", "share-runtime-20260810-13.css"]
+]) {
+  assert.deepEqual(
+    await readFile(new URL(`../public/${runtime}`, import.meta.url)),
+    await readFile(new URL(`../public/${source}`, import.meta.url)),
+    `${runtime}を最新ソースと一致させてください。`
+  );
+  assert.ok(server.includes(`"/${runtime}"`), `${runtime}をCloudflareの実体ファイルとして配信してください。`);
+}
+
 assert.equal(manifest.name, "T-Cloud Storage");
 assert.equal(manifest.start_url, "/cloud/?source=pwa");
 assert.equal(manifest.scope, "/cloud/");
@@ -47,7 +64,7 @@ assert.match(worker, /event\.request\.mode === "navigate"/);
 assert.doesNotMatch(worker, /caches\.put/);
 assert.doesNotMatch(worker.match(/const APP_SHELL_ASSETS = \[[\s\S]*?\];/)?.[0] || "", /\/cloud\/api/);
 for (const path of ["/manifest.webmanifest", "/offline", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png", "/icons/apple-touch-icon.png"]) {
-  assert.ok(server.includes(`["${path}", "${path}"]`), `${path} is not publicly routed`);
+  assert.ok(server.includes(`["${path}",`), `${path} is not publicly routed`);
 }
 for (const path of ["/manifest-v2.webmanifest", "/icons/icon-192-v2.png", "/icons/icon-512-v2.png", "/icons/icon-maskable-512-v2.png", "/icons/apple-touch-icon-v2.png"]) {
   assert.ok(server.includes(`["${path}",`), `${path} is not publicly routed`);
