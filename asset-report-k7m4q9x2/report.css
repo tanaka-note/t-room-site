@@ -219,6 +219,39 @@ table {
   height: 100%;
 }
 
+.range-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 30px;
+}
+
+.range-controls button {
+  min-height: 38px;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.018);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.range-controls button:hover,
+.range-controls button:focus-visible {
+  border-color: rgba(82, 230, 170, 0.58);
+  color: var(--text);
+  outline: none;
+}
+
+.range-controls button.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #092218;
+}
+
 .donut-center {
   position: absolute;
   inset: 50% auto auto 50%;
@@ -366,7 +399,7 @@ td {
   display: flex;
   justify-content: flex-end;
   gap: 22px;
-  margin-top: 32px;
+  margin-top: 20px;
   color: var(--muted);
   font-size: 0.7rem;
   font-weight: 700;
@@ -432,8 +465,57 @@ td {
 }
 
 .chart-frame-history {
+  position: relative;
   height: 360px;
-  margin-top: 52px;
+  margin-top: 28px;
+  padding: 14px 12px 4px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(82, 230, 170, 0.045), rgba(255, 255, 255, 0.012));
+  overflow: hidden;
+}
+
+.chart-frame-history canvas {
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  min-width: 156px;
+  padding: 11px 13px;
+  border: 1px solid rgba(82, 230, 170, 0.36);
+  border-radius: 12px;
+  background: rgba(7, 9, 13, 0.94);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
+  color: var(--text);
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 14px));
+  backdrop-filter: blur(12px);
+}
+
+.chart-tooltip[hidden] {
+  display: none;
+}
+
+.chart-tooltip time {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.chart-tooltip strong {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tooltip span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 @media (max-width: 900px) {
@@ -607,6 +689,26 @@ td {
 
   .history-legend {
     justify-content: flex-start;
+  }
+
+  .range-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    margin-top: 24px;
+  }
+
+  .range-controls button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+
+  .chart-frame-history {
+    height: 320px;
+    margin-top: 20px;
+    padding: 8px 4px 2px;
+    border-radius: 14px;
   }
 }
 

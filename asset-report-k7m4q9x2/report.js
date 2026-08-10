@@ -121,6 +121,25 @@ const yenFormatter = new Intl.NumberFormat("ja-JP", {
   maximumFractionDigits: 0
 });
 
+const HISTORY_RANGE_DEFINITIONS = {
+  "7d": { label: "1週間", days: 7 },
+  "1m": { label: "1ヶ月", days: 31 },
+  all: { label: "すべて", days: null }
+};
+
+const historyView = {
+  range: "all",
+  records: [],
+  visibleRecords: [],
+  geometry: null,
+  selectedIndex: -1,
+  eventsBound: false,
+  resizeObserver: null,
+  observedWidth: 0
+};
+
+let currentPortfolioTotal = 0;
+
 function formatYen(value, signed = false) {
   if (value === null || value === undefined) return "—";
   const formatted = yenFormatter.format(Math.abs(value));
@@ -255,77 +274,265 @@ function drawAllocationChart(total) {
   });
 }
 
-function drawHistoryChart() {
+function initializeHistoryChart() {
   const section = document.querySelector("#history-section");
-  if (reportData.history.length < 2) {
+  historyView.records = [...reportData.history]
+    .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry.period)
+      && Number.isFinite(entry.principal)
+      && Number.isFinite(entry.marketValue))
+    .sort((entryA, entryB) => entryA.period.localeCompare(entryB.period));
+
+  if (historyView.records.length < 2) {
     section.hidden = true;
     return;
   }
 
   section.hidden = false;
+  bindHistoryChartEvents();
+  applyHistoryRange(historyView.range);
+}
+
+function bindHistoryChartEvents() {
+  if (historyView.eventsBound) return;
+  historyView.eventsBound = true;
+  const controls = document.querySelector("#history-range-controls");
+  const canvas = document.querySelector("#history-chart");
+  const frame = document.querySelector(".chart-frame-history");
+  controls.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-history-range]");
+    if (button) applyHistoryRange(button.dataset.historyRange);
+  });
+  canvas.addEventListener("pointerdown", showNearestHistoryPoint);
+  canvas.addEventListener("pointermove", showNearestHistoryPoint);
+  canvas.addEventListener("pointerleave", (event) => {
+    if (event.pointerType === "mouse") hideHistoryTooltip();
+  });
+  if ("ResizeObserver" in window) {
+    historyView.resizeObserver = new ResizeObserver(([entry]) => {
+      const nextWidth = Math.round(entry.contentRect.width);
+      if (!nextWidth || nextWidth === historyView.observedWidth) return;
+      historyView.observedWidth = nextWidth;
+      window.requestAnimationFrame(() => drawHistoryChart());
+    });
+    historyView.resizeObserver.observe(frame);
+  }
+}
+
+function applyHistoryRange(rangeKey) {
+  const definition = HISTORY_RANGE_DEFINITIONS[rangeKey] || HISTORY_RANGE_DEFINITIONS.all;
+  historyView.range = HISTORY_RANGE_DEFINITIONS[rangeKey] ? rangeKey : "all";
+  const latestDate = parseHistoryDate(historyView.records.at(-1).period);
+  let threshold = null;
+  if (definition.days) {
+    threshold = new Date(latestDate);
+    threshold.setDate(threshold.getDate() - definition.days);
+  }
+  historyView.visibleRecords = threshold
+    ? historyView.records.filter((entry) => parseHistoryDate(entry.period) >= threshold)
+    : [...historyView.records];
+  if (!historyView.visibleRecords.length) historyView.visibleRecords = [historyView.records.at(-1)];
+  historyView.selectedIndex = -1;
+  hideHistoryTooltip(false);
+  updateHistoryRangeUi(definition);
+  drawHistoryChart();
+}
+
+function updateHistoryRangeUi(definition) {
+  const first = historyView.visibleRecords[0];
+  const latest = historyView.visibleRecords.at(-1);
+  document.querySelector("#history-period").textContent = `${formatHistoryDateShort(first.period)} — ${formatHistoryDateShort(latest.period)}`;
+  document.querySelector("#history-summary").textContent = `${formatHistoryDateLong(first.period)}の${formatYen(first.marketValue)}から、${formatHistoryDateLong(latest.period)}の${formatYen(latest.marketValue)}までの推移です。`;
+  document.querySelectorAll("button[data-history-range]").forEach((button) => {
+    const active = button.dataset.historyRange === historyView.range;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+    if (active) button.setAttribute("aria-label", `${definition.label}を表示中`);
+    else button.removeAttribute("aria-label");
+  });
+}
+
+function drawHistoryChart() {
+  if (!historyView.visibleRecords?.length) return;
 
   const canvas = document.querySelector("#history-chart");
   const { context, width, height } = setupCanvas(canvas);
-  const padding = { top: 24, right: 24, bottom: 44, left: 76 };
-  const minValue = 5900000;
-  const maxValue = 6400000;
-  const tickInterval = 100000;
-  const tickCount = (maxValue - minValue) / tickInterval;
+  const compact = width < 560;
+  const padding = { top: 24, right: compact ? 12 : 22, bottom: 44, left: compact ? 62 : 82 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  const xStep = chartWidth / (reportData.history.length - 1);
-  const yFor = (value) => padding.top + chartHeight - ((value - minValue) / (maxValue - minValue)) * chartHeight;
+  const values = historyView.visibleRecords.flatMap((entry) => [entry.principal, entry.marketValue]);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const rawSpread = Math.max(maxValue - minValue, 100000);
+  const tickInterval = niceHistoryStep(rawSpread / 5);
+  const yMin = Math.max(0, Math.floor((minValue - rawSpread * 0.08) / tickInterval) * tickInterval);
+  const yMax = Math.ceil((maxValue + rawSpread * 0.08) / tickInterval) * tickInterval;
+  const ySpan = Math.max(yMax - yMin, tickInterval);
+  const pointCount = historyView.visibleRecords.length;
+  const xFor = (index) => padding.left + (pointCount === 1 ? chartWidth / 2 : (index / (pointCount - 1)) * chartWidth);
+  const yFor = (value) => padding.top + ((yMax - value) / ySpan) * chartHeight;
 
   context.clearRect(0, 0, width, height);
-  context.font = '600 11px "Yu Gothic UI", sans-serif';
+  context.font = `600 ${compact ? 10 : 11}px "Yu Gothic UI", sans-serif`;
   context.fillStyle = "#8996a8";
   context.strokeStyle = "rgba(178, 201, 218, 0.15)";
   context.lineWidth = 1;
 
-  for (let index = 0; index <= tickCount; index += 1) {
-    const y = padding.top + (chartHeight / tickCount) * index;
-    const value = maxValue - tickInterval * index;
+  for (let value = yMin; value <= yMax + tickInterval * 0.5; value += tickInterval) {
+    const y = yFor(value);
     context.beginPath();
     context.moveTo(padding.left, y);
     context.lineTo(width - padding.right, y);
     context.stroke();
-    context.fillText(`${Math.round(value / 10000)}万円`, 4, y + 4);
+    context.textAlign = "right";
+    context.textBaseline = "middle";
+    context.fillText(formatHistoryAxisValue(value), padding.left - 10, y);
   }
 
-  const drawSeries = (key, color) => {
+  const labelCount = Math.min(compact ? 4 : 6, pointCount);
+  const labelIndexes = new Set();
+  for (let index = 0; index < labelCount; index += 1) {
+    labelIndexes.add(Math.round((index / Math.max(labelCount - 1, 1)) * (pointCount - 1)));
+  }
+  context.fillStyle = "#8996a8";
+  context.textBaseline = "top";
+  [...labelIndexes].forEach((recordIndex, position, indexes) => {
+    const x = xFor(recordIndex);
+    context.textAlign = position === 0 ? "left" : position === indexes.length - 1 ? "right" : "center";
+    context.fillText(formatHistoryDateAxis(historyView.visibleRecords[recordIndex].period), x, padding.top + chartHeight + 14);
+  });
+
+  const gradient = context.createLinearGradient(0, padding.top, 0, padding.top + chartHeight);
+  gradient.addColorStop(0, "rgba(82, 230, 170, 0.24)");
+  gradient.addColorStop(1, "rgba(82, 230, 170, 0)");
+  context.beginPath();
+  historyView.visibleRecords.forEach((entry, index) => {
+    const x = xFor(index);
+    const y = yFor(entry.marketValue);
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.lineTo(xFor(pointCount - 1), padding.top + chartHeight);
+  context.lineTo(xFor(0), padding.top + chartHeight);
+  context.closePath();
+  context.fillStyle = gradient;
+  context.fill();
+
+  const drawSeries = (key, color, options = {}) => {
     context.beginPath();
-    reportData.history.forEach((entry, index) => {
-      const x = padding.left + xStep * index;
+    historyView.visibleRecords.forEach((entry, index) => {
+      const x = xFor(index);
       const y = yFor(entry[key]);
       if (index === 0) context.moveTo(x, y);
       else context.lineTo(x, y);
     });
     context.strokeStyle = color;
-    context.lineWidth = 3;
+    context.lineWidth = options.lineWidth || 2.5;
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    context.setLineDash(options.dash || []);
     context.stroke();
-
-    reportData.history.forEach((entry, index) => {
-      const x = padding.left + xStep * index;
-      const y = yFor(entry[key]);
-      context.beginPath();
-      context.arc(x, y, 4, 0, Math.PI * 2);
-      context.fillStyle = color;
-      context.fill();
-    });
+    context.setLineDash([]);
   };
 
-  drawSeries("principal", "#8996a8");
-  drawSeries("marketValue", "#52e6aa");
+  drawSeries("principal", "#8996a8", { lineWidth: 1.8, dash: [7, 7] });
+  drawSeries("marketValue", "#52e6aa", { lineWidth: compact ? 2.2 : 2.8 });
 
-  context.fillStyle = "#8996a8";
-  context.font = '600 11px "Yu Gothic UI", sans-serif';
-  context.textAlign = "center";
-  reportData.history.forEach((entry, index) => {
-    const [, month, day] = entry.period.split("-");
-    const x = padding.left + xStep * index;
-    context.fillText(`${Number(month)}/${Number(day)}`, x, height - 14);
-  });
-  context.textAlign = "start";
+  if (historyView.selectedIndex >= 0 && historyView.visibleRecords[historyView.selectedIndex]) {
+    const entry = historyView.visibleRecords[historyView.selectedIndex];
+    const x = xFor(historyView.selectedIndex);
+    context.strokeStyle = "rgba(245, 247, 250, 0.25)";
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(x, padding.top);
+    context.lineTo(x, padding.top + chartHeight);
+    context.stroke();
+    [[entry.marketValue, "#52e6aa"], [entry.principal, "#8996a8"]].forEach(([value, color]) => {
+      context.beginPath();
+      context.arc(x, yFor(value), 5, 0, Math.PI * 2);
+      context.fillStyle = "#07090d";
+      context.fill();
+      context.strokeStyle = color;
+      context.lineWidth = 3;
+      context.stroke();
+    });
+  }
+
+  historyView.geometry = { padding, chartWidth, xFor, yFor };
+}
+
+function showNearestHistoryPoint(event) {
+  if (!historyView.geometry || !historyView.visibleRecords.length) return;
+  const canvas = document.querySelector("#history-chart");
+  const bounds = canvas.getBoundingClientRect();
+  const localX = event.clientX - bounds.left;
+  const { padding, chartWidth, xFor, yFor } = historyView.geometry;
+  const clampedX = Math.min(chartWidth, Math.max(0, localX - padding.left));
+  const index = historyView.visibleRecords.length === 1
+    ? 0
+    : Math.round((clampedX / chartWidth) * (historyView.visibleRecords.length - 1));
+  const entry = historyView.visibleRecords[index];
+  historyView.selectedIndex = index;
+  drawHistoryChart();
+  renderHistoryTooltip(entry, xFor(index), yFor(entry.marketValue));
+}
+
+function renderHistoryTooltip(entry, x, y) {
+  const tooltip = document.querySelector("#history-tooltip");
+  const frame = document.querySelector(".chart-frame-history");
+  const canvas = document.querySelector("#history-chart");
+  const profit = entry.marketValue - entry.principal;
+  const date = document.createElement("time");
+  date.dateTime = entry.period;
+  date.textContent = formatHistoryDateLong(entry.period);
+  const value = document.createElement("strong");
+  value.textContent = formatYen(entry.marketValue);
+  const change = document.createElement("span");
+  change.className = valueClass(profit);
+  change.textContent = `損益 ${formatYen(profit, true)}`;
+  tooltip.replaceChildren(date, value, change);
+  const tooltipHalf = 84;
+  const relativeX = canvas.offsetLeft + x;
+  tooltip.style.left = `${Math.min(frame.clientWidth - tooltipHalf, Math.max(tooltipHalf, relativeX))}px`;
+  tooltip.style.top = `${Math.max(92, canvas.offsetTop + y)}px`;
+  tooltip.hidden = false;
+}
+
+function hideHistoryTooltip(redraw = true) {
+  historyView.selectedIndex = -1;
+  document.querySelector("#history-tooltip").hidden = true;
+  if (redraw && historyView.visibleRecords?.length) drawHistoryChart();
+}
+
+function parseHistoryDate(value) {
+  return new Date(`${value}T00:00:00+09:00`);
+}
+
+function formatHistoryDateLong(value) {
+  const date = parseHistoryDate(value);
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function formatHistoryDateShort(value) {
+  const date = parseHistoryDate(value);
+  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatHistoryDateAxis(value) {
+  const date = parseHistoryDate(value);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function formatHistoryAxisValue(value) {
+  return `${Math.round(value / 10000).toLocaleString("ja-JP")}万円`;
+}
+
+function niceHistoryStep(value) {
+  const safeValue = Math.max(Number(value) || 1, 1);
+  const magnitude = 10 ** Math.floor(Math.log10(safeValue));
+  const normalized = safeValue / magnitude;
+  const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return factor * magnitude;
 }
 
 function renderComment() {
@@ -364,17 +571,21 @@ function renderComment() {
 
 function renderReport() {
   const total = renderSummary();
+  currentPortfolioTotal = total;
   renderLegend(total);
   renderHoldings();
   renderComment();
   drawAllocationChart(total);
-  drawHistoryChart();
+  initializeHistoryChart();
 }
 
 let resizeTimer;
 window.addEventListener("resize", () => {
   window.clearTimeout(resizeTimer);
-  resizeTimer = window.setTimeout(renderReport, 120);
+  resizeTimer = window.setTimeout(() => {
+    drawAllocationChart(currentPortfolioTotal);
+    drawHistoryChart();
+  }, 120);
 });
 
 renderReport();
