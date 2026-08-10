@@ -110,10 +110,12 @@ async function verifyClosedPreviewWinsOrientationRace(source, startMarker, endMa
   const container = { contains: (value) => value === video };
   const dialog = { open: true };
   let orientation = "portrait-primary";
+  const orientationLocks = [];
   const context = {
     document: { fullscreenElement: { matches: () => false, querySelector: () => video }, webkitFullscreenElement: null },
-    screen: { orientation: { lock: async (mode) => {
+    screen: { orientation: { type: "portrait-primary", lock: async (mode) => {
       if (mode === "any") await new Promise((resolve) => setTimeout(resolve, 15));
+      orientationLocks.push(mode);
       orientation = mode;
     } } },
     state: { previewOrientationGeneration: 0 },
@@ -130,9 +132,45 @@ async function verifyClosedPreviewWinsOrientationRace(source, startMarker, endMa
   await context.orientationApi.restoreInstalledAppPortrait();
   await pendingFullscreen;
   assert.equal(orientation, "portrait-primary", `${shared ? "共有" : "管理"}画面では、閉じる処理が遅れて完了した回転許可より優先されます。`);
+  assert.ok(orientationLocks.includes("portrait-primary"), `${shared ? "共有" : "管理"}画面では、現在縦向きでも縦固定処理を省略しないでください。`);
+}
+
+async function verifyPortraitRetryAfterFullscreenExit(source, startMarker, endMarker, shared = false) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, "回転制御関数を検査できる形で維持してください。");
+  const container = { contains: () => false };
+  const dialog = { open: false };
+  let attempts = 0;
+  const context = {
+    document: { fullscreenElement: null, webkitFullscreenElement: null },
+    screen: { orientation: { type: "portrait-primary", lock: async (mode) => {
+      assert.equal(mode, "portrait-primary");
+      attempts += 1;
+      if (attempts < 3) throw new Error("temporary lock failure");
+    } } },
+    state: { previewOrientationGeneration: 0, previewVideoFullscreenActive: false },
+    isInstalledAppMode: () => true,
+    requestAnimationFrame: (callback) => callback(),
+    setTimeout,
+    console: { warn: () => {} },
+    $: (selector) => selector.includes("stage-wrap") ? container : dialog
+  };
+  vm.runInNewContext(`${source.slice(start, end)}; globalThis.orientationApi = { restoreInstalledAppPortrait };`, context);
+  const locked = await context.orientationApi.restoreInstalledAppPortrait({ settle: true, reason: "fullscreen-exit" });
+  assert.equal(locked, true, `${shared ? "共有" : "管理"}画面では、一時的な固定失敗後に再試行してください。`);
+  assert.equal(attempts, 3, `${shared ? "共有" : "管理"}画面では、縦固定が成功するまで所定回数再試行してください。`);
+  assert.equal(context.state.previewOrientationLastError, null, `${shared ? "共有" : "管理"}画面では、固定成功後に一時エラーを解消済みとして記録してください。`);
 }
 
 await verifyClosedPreviewWinsOrientationRace(mainJs, "function previewVideoIsFullscreen", "function handlePreviewFullscreenOrientationChange");
 await verifyClosedPreviewWinsOrientationRace(shareJs, "function sharedPreviewVideoIsFullscreen", "function handleSharedPreviewFullscreenOrientationChange", true);
+await verifyPortraitRetryAfterFullscreenExit(mainJs, "function previewVideoIsFullscreen", "function handlePreviewFullscreenOrientationChange");
+await verifyPortraitRetryAfterFullscreenExit(shareJs, "function sharedPreviewVideoIsFullscreen", "function handleSharedPreviewFullscreenOrientationChange", true);
+
+assert.doesNotMatch(mainJs, /screen\.orientation\.type[^\n]*startsWith\("portrait"\)[^\n]*return/, "現在の向きと固定状態を混同しないでください。");
+assert.doesNotMatch(shareJs, /screen\.orientation\.type[^\n]*startsWith\("portrait"\)[^\n]*return/, "共有画面でも現在の向きと固定状態を混同しないでください。");
+assert.match(mainJs, /waitForOrientationSettle\(\)[\s\S]*?retryDelays = \[0, 120, 360\]/, "全画面終了後に描画を待ち、縦固定を再試行してください。");
+assert.match(shareJs, /waitForOrientationSettle\(\)[\s\S]*?retryDelays = \[0, 120, 360\]/, "共有画面でも全画面終了後に縦固定を再試行してください。");
 
 console.log("shared sorting and immersive previews: ok");

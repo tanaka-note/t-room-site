@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260810-117";
+const APP_BUILD_ID = "20260810-118";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -189,8 +189,10 @@ async function login(request, env, url) {
     label: account.label,
     canUpload: account.canUpload,
     canDelete: account.canDelete,
+    canTrashUnlockedFiles: account.canTrashUnlockedFiles,
     canEditFiles: account.canEditFiles,
     canEditFolders: account.canEditFolders,
+    canRenameUnlockedItems: account.canRenameUnlockedItems,
     canViewHistory: account.canViewHistory,
     canRequestDelete: account.canRequestDelete,
     canReviewDeletion: account.canReviewDeletion,
@@ -1620,7 +1622,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260810-39.css"],
-    ["/cloud.js", "/cloud-runtime-20260810-117.js"],
+    ["/cloud.js", "/cloud-runtime-20260810-118.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
@@ -1638,7 +1640,7 @@ async function serveAsset(request, env, url, path) {
     ["/icons/icon-maskable-512-v2.png", "/icons/icon-maskable-512-v2.png"],
     ["/icons/apple-touch-icon-v2.png", "/icons/apple-touch-icon-v2.png"],
     ["/share.css", "/share-runtime-20260810-18.css"],
-    ["/share.js", "/share-runtime-20260810-40.js"],
+    ["/share.js", "/share-runtime-20260810-41.js"],
     ["/vendor/argon2.umd.min.js", "/vendor/argon2.umd.min.js"],
     ["/vendor/mpegts-1.8.0.js", "/vendor/mpegts-1.8.0.js"],
     ["/vendor/mpegts-1.8.0.LICENSE.txt", "/vendor/mpegts-1.8.0.LICENSE.txt"]

@@ -28,6 +28,12 @@ if (!script.includes("folder?.isProtected") || !script.includes("folder?.isUnloc
 if (!worker.includes("canRenameUnlockedItems: true") || !worker.includes("requireSameUnlockedMoveScope") || !worker.includes("副管理者はPWで解除した保護フォルダのPWだけ変更できます")) {
   throw new Error("副管理者の名称・PW変更と解除範囲内移動権限がサーバー側にありません。");
 }
+const loginStart = worker.indexOf("async function login(");
+const loginEnd = worker.indexOf("async function getCryptoConfig(", loginStart);
+const loginBody = worker.slice(loginStart, loginEnd);
+if (!loginBody.includes("canRenameUnlockedItems: account.canRenameUnlockedItems")) {
+  throw new Error("ログイン直後の副管理者セッションに、解除済み範囲の名称変更権限が反映されません。");
+}
 if (!worker.includes('UPDATE cloud_folders SET name = ?, updated_at = CURRENT_TIMESTAMP') || !worker.includes('name: folder.name')) {
   throw new Error("サーバーまたは共有画面の平文フォルダ名処理がありません。");
 }
