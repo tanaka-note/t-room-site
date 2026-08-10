@@ -13,7 +13,7 @@
   <link rel="manifest" href="/cloud/manifest.webmanifest?v=20260810-2">
   <link rel="icon" href="/cloud/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-25">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-26">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -114,6 +114,29 @@
         </div>
         <button id="display-toggle" class="icon-button display-toggle" type="button" aria-label="表示を切り替え">▦</button>
       </div>
+
+      <aside id="floating-toolbar" class="floating-toolbar" aria-hidden="true" aria-label="検索と並び替え">
+        <div class="floating-toolbar-location">
+          <button id="floating-location-button" class="floating-location-button" type="button" aria-expanded="false" aria-controls="floating-location-panel">
+            <span class="floating-location-icon" aria-hidden="true"></span>
+            <span id="floating-folder-name">すべてのファイル</span>
+            <span class="floating-location-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <div id="floating-location-panel" class="floating-location-panel" hidden>
+            <small>現在の場所</small>
+            <nav id="floating-breadcrumbs" aria-label="現在のフォルダ階層"></nav>
+          </div>
+        </div>
+        <label class="search-box floating-search-box">
+          <span>⌕</span>
+          <input id="floating-search-input" type="search" placeholder="ファイル名を検索" aria-label="ファイル名を検索">
+        </label>
+        <div id="floating-sort-controls" class="sort-controls floating-sort-controls" role="group" aria-label="並び順">
+          <button class="sort-button" type="button" data-sort-key="updated" aria-pressed="false">更新 <span aria-hidden="true">↓</span></button>
+          <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true">↑</span></button>
+          <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true">↓</span></button>
+        </div>
+      </aside>
 
       <div id="selection-bar" class="selection-bar" hidden>
         <div><strong id="selection-count">0件を選択中</strong><small>保存・移動・削除する項目を選択</small></div>
@@ -426,6 +449,6 @@
   <script src="/cloud/file-safety.js?v=20260810-2" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260810-5" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-83" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-84" defer></script>
 </body>
 </html>

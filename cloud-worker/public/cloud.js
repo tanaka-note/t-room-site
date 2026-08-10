@@ -15,6 +15,7 @@ const state = {
   query: "",
   files: [],
   folders: [],
+  breadcrumbs: [],
   folderSummary: null,
   history: [],
   requests: [],
@@ -52,6 +53,16 @@ const state = {
   folderNamesMigrated: false,
   crypto: { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false }
 };
+
+const floatingToolbarState = {
+  lastScrollY: 0,
+  direction: 0,
+  distance: 0,
+  frame: 0,
+  searchFocused: false,
+  programmaticUntil: 0
+};
+const FLOATING_TOOLBAR_SCROLL_THRESHOLD = 30;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -164,8 +175,25 @@ function bindEvents() {
   document.addEventListener("fullscreenchange", syncPreviewFullscreenButton);
   document.addEventListener("keydown", handlePreviewKeydown);
   window.addEventListener("popstate", handleHistoryNavigation);
-  $("#search-input").addEventListener("input", debounce((event) => { state.query = event.target.value.trim(); loadItems(); }, 250));
-  $$("#sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSort(button.dataset.sortKey)));
+  const runSearch = debounce(async () => {
+    await loadItems();
+    scrollToResultsStart();
+  }, 250);
+  $$("#search-input, #floating-search-input").forEach((input) => input.addEventListener("input", (event) => {
+    state.query = event.target.value.trim();
+    syncSearchInputs(event.target);
+    runSearch();
+  }));
+  $$(".sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSort(button.dataset.sortKey)));
+  $("#floating-search-input").addEventListener("focus", () => {
+    floatingToolbarState.searchFocused = true;
+    showFloatingToolbar();
+  });
+  $("#floating-search-input").addEventListener("blur", () => { floatingToolbarState.searchFocused = false; });
+  $("#floating-location-button").addEventListener("click", toggleFloatingLocation);
+  document.addEventListener("click", closeFloatingLocationOnOutsideClick);
+  window.addEventListener("scroll", queueFloatingToolbarUpdate, { passive: true });
+  window.addEventListener("resize", queueFloatingToolbarUpdate, { passive: true });
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
   $("#selection-clear").addEventListener("click", () => clearFileSelection());
   $("#selection-all").addEventListener("click", selectAllVisibleItems);
@@ -254,7 +282,7 @@ function syncLoginAutocomplete() {
   $("#login-password").setAttribute("autocomplete", remember ? "current-password" : "off");
 }
 
-function changeSort(key) {
+async function changeSort(key) {
   if (!["updated", "name", "size"].includes(key)) return;
   if (state.sort === key) state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
   else {
@@ -263,7 +291,8 @@ function changeSort(key) {
   }
   state.sortUsesTypeDefaults = false;
   syncSortControls();
-  loadItems();
+  await loadItems();
+  scrollToResultsStart();
 }
 
 function resetTypeDefaultSort() {
@@ -275,7 +304,7 @@ function resetTypeDefaultSort() {
 }
 
 function syncSortControls() {
-  $$("#sort-controls [data-sort-key]").forEach((button) => {
+  $$(".sort-controls [data-sort-key]").forEach((button) => {
     const active = button.dataset.sortKey === state.sort;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
@@ -594,6 +623,7 @@ async function enterApp(session, password = "", accountKey = null) {
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
+  floatingToolbarState.lastScrollY = Math.max(0, window.scrollY);
   $("#account-name").textContent = session.accountName;
   const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード・削除・解除済みフォルダ内の名前変更";
   $("#account-permission").textContent = permissionText;
@@ -1081,7 +1111,13 @@ function syncNavigationActiveState() {
 
 function clearSearch() {
   state.query = "";
-  $("#search-input").value = "";
+  syncSearchInputs();
+}
+
+function syncSearchInputs(source = null) {
+  $$("#search-input, #floating-search-input").forEach((input) => {
+    if (input !== source && input.value !== state.query) input.value = state.query;
+  });
 }
 
 function syncAvailableActions() {
@@ -1102,7 +1138,10 @@ function syncAvailableActions() {
   $("#mobile-upload-action").hidden = !insideFolder || !state.session?.canUpload;
   $("#mobile-upload-action").disabled = !state.crypto.fileEncryptionReady || state.uploading;
   $("#toolbar").hidden = inHistory || inRequests || inShares;
-  $("#search-input").placeholder = insideFolder ? "ファイル名を検索" : "フォルダ名を検索";
+  $$("#search-input, #floating-search-input").forEach((input) => {
+    input.placeholder = insideFolder ? "ファイル名を検索" : "フォルダ名を検索";
+  });
+  if (inHistory || inRequests || inShares || state.uploading || state.downloadActive) hideFloatingToolbar();
   $$('[data-kind]').forEach((button) => { button.disabled = !insideFolder || inTrash || inHistory || inRequests || inShares; });
 }
 
@@ -1205,6 +1244,119 @@ function renderItems() {
   $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
   $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length + state.folders.length === 0;
   scheduleMissingVideoThumbnails();
+}
+
+function queueFloatingToolbarUpdate() {
+  if (floatingToolbarState.frame) return;
+  floatingToolbarState.frame = requestAnimationFrame(() => {
+    floatingToolbarState.frame = 0;
+    updateFloatingToolbarFromScroll();
+  });
+}
+
+function updateFloatingToolbarFromScroll() {
+  const scrollY = Math.max(0, window.scrollY);
+  const delta = scrollY - floatingToolbarState.lastScrollY;
+  floatingToolbarState.lastScrollY = scrollY;
+  if (!floatingToolbarAvailable(scrollY)) {
+    hideFloatingToolbar();
+    floatingToolbarState.direction = 0;
+    floatingToolbarState.distance = 0;
+    return;
+  }
+  if (floatingToolbarState.searchFocused || Date.now() < floatingToolbarState.programmaticUntil) {
+    showFloatingToolbar();
+    return;
+  }
+  const direction = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+  if (!direction) return;
+  if (direction !== floatingToolbarState.direction) {
+    floatingToolbarState.direction = direction;
+    floatingToolbarState.distance = Math.abs(delta);
+  } else {
+    floatingToolbarState.distance += Math.abs(delta);
+  }
+  if (floatingToolbarState.distance < FLOATING_TOOLBAR_SCROLL_THRESHOLD) return;
+  if (direction > 0) showFloatingToolbar();
+  else hideFloatingToolbar();
+  floatingToolbarState.distance = 0;
+}
+
+function floatingToolbarAvailable(scrollY = Math.max(0, window.scrollY)) {
+  const toolbar = $("#toolbar");
+  if (!state.session || $("#app-view").hidden || toolbar.hidden) return false;
+  if (!$("#selection-bar").hidden || state.uploading || state.downloadActive) return false;
+  if (document.querySelector("dialog[open]")) return false;
+  const trigger = toolbar.offsetTop + toolbar.offsetHeight + 12;
+  return scrollY > trigger;
+}
+
+function showFloatingToolbar() {
+  if (!floatingToolbarAvailable()) return;
+  const toolbar = $("#floating-toolbar");
+  toolbar.classList.add("is-visible");
+  toolbar.setAttribute("aria-hidden", "false");
+}
+
+function hideFloatingToolbar() {
+  const toolbar = $("#floating-toolbar");
+  toolbar.classList.remove("is-visible");
+  toolbar.setAttribute("aria-hidden", "true");
+  closeFloatingLocation();
+}
+
+function scrollToResultsStart() {
+  const grid = $("#content-grid");
+  if (!grid || !floatingToolbarAvailable()) return;
+  const floatingHeight = $("#floating-toolbar").offsetHeight;
+  const target = Math.max(0, grid.getBoundingClientRect().top + window.scrollY - floatingHeight - 16);
+  floatingToolbarState.programmaticUntil = Date.now() + 900;
+  window.scrollTo({ top: target, behavior: "smooth" });
+  showFloatingToolbar();
+}
+
+function toggleFloatingLocation() {
+  const panel = $("#floating-location-panel");
+  const willOpen = panel.hidden;
+  panel.hidden = !willOpen;
+  $("#floating-location-button").setAttribute("aria-expanded", String(willOpen));
+}
+
+function closeFloatingLocation() {
+  $("#floating-location-panel").hidden = true;
+  $("#floating-location-button").setAttribute("aria-expanded", "false");
+}
+
+function closeFloatingLocationOnOutsideClick(event) {
+  if (!event.target.closest(".floating-toolbar-location")) closeFloatingLocation();
+}
+
+function renderFloatingLocation(items) {
+  state.breadcrumbs = items;
+  const currentName = items.at(-1)?.name || (state.folderId ? $("#view-title").textContent : "すべてのファイル");
+  const pathNames = ["Cloud Storage", ...items.map((item) => item.name)];
+  $("#floating-folder-name").textContent = currentName;
+  $("#floating-location-button").title = pathNames.join(" / ");
+  const nav = $("#floating-breadcrumbs");
+  nav.innerHTML = "";
+  const appendLocation = (name, folderId = null) => {
+    if (nav.childElementCount) {
+      const divider = document.createElement("span");
+      divider.textContent = "/";
+      divider.setAttribute("aria-hidden", "true");
+      nav.append(divider);
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = name;
+    button.addEventListener("click", () => {
+      closeFloatingLocation();
+      navigateToFolder(folderId, folderId ? name : "フォルダ");
+    });
+    nav.append(button);
+  };
+  appendLocation("Cloud Storage");
+  for (const item of items) appendLocation(item.name, item.id);
 }
 
 function renderFolderSummary() {
@@ -2031,6 +2183,7 @@ function syncSelectionBar() {
   $("#selection-delete").hidden = !canDeleteSelection;
   $("#selection-delete").disabled = count === 0;
   $("#selection-delete").textContent = "削除";
+  if (count) hideFloatingToolbar();
 }
 
 async function startSelectedDownloads() {
@@ -2531,10 +2684,11 @@ async function handleDownloadVisibility() {
 
 function renderBreadcrumbs(items) {
   const nav = $("#breadcrumbs");
-  if (state.view === "trash") { nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; return; }
-  if (state.view === "history") { nav.textContent = state.session?.role === "admin" ? "管理者・副管理者のアップロード／ダウンロード履歴です。" : "副管理者本人のアップロード／ダウンロード履歴です。"; return; }
-  if (state.view === "requests") { nav.textContent = "承認するまでファイルは削除されず、通常どおり利用できます。"; return; }
-  if (state.view === "shares") { nav.textContent = "共有URLの発行状況・期限・停止・利用履歴を管理できます。"; return; }
+  if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; renderFloatingLocation([]); return; }
+  if (state.view === "history") { state.breadcrumbs = []; nav.textContent = state.session?.role === "admin" ? "管理者・副管理者のアップロード／ダウンロード履歴です。" : "副管理者本人のアップロード／ダウンロード履歴です。"; renderFloatingLocation([]); return; }
+  if (state.view === "requests") { state.breadcrumbs = []; nav.textContent = "承認するまでファイルは削除されず、通常どおり利用できます。"; renderFloatingLocation([]); return; }
+  if (state.view === "shares") { state.breadcrumbs = []; nav.textContent = "共有URLの発行状況・期限・停止・利用履歴を管理できます。"; renderFloatingLocation([]); return; }
+  renderFloatingLocation(items);
   nav.innerHTML = "";
   const home = document.createElement("button");
   home.type = "button";
