@@ -524,7 +524,7 @@ function renderSharedPreviewImage(stage, file, url, generation) {
 }
 
 async function toggleSharedPreviewFullscreen() {
-  const stage = $("#preview-stage");
+  const stage = $("#share-preview-stage-wrap");
   const video = stage.querySelector("video");
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
@@ -550,9 +550,6 @@ function syncSharedFullscreenButton() {
 async function toggleSharedPreviewRotation() {
   if (!$("#preview-stage video")) return;
   state.previewAutoRotate = !state.previewAutoRotate;
-  if (state.previewAutoRotate && !document.fullscreenElement && $("#preview-stage").requestFullscreen) {
-    try { await $("#preview-stage").requestFullscreen(); } catch {}
-  }
   if (state.previewAutoRotate) releaseSharedOrientationLock();
   else resetSharedPreviewRotation(true);
   syncSharedPreviewRotationButton();

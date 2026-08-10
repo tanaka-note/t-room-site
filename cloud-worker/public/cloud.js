@@ -4668,9 +4668,6 @@ function syncPreviewFullscreenButton() {
 async function togglePreviewRotation() {
   if (!$("#preview-stage video")) return;
   state.previewAutoRotate = !state.previewAutoRotate;
-  if (state.previewAutoRotate && !document.fullscreenElement && $("#preview-stage-wrap").requestFullscreen) {
-    try { await $("#preview-stage-wrap").requestFullscreen(); } catch {}
-  }
   if (state.previewAutoRotate) releasePreviewOrientationLock();
   else resetPreviewRotation(true);
   syncPreviewRotationButton();
