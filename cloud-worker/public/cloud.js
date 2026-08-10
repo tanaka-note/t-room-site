@@ -39,6 +39,7 @@ const state = {
   pendingSafetyUpload: null,
   downloadAbort: null,
   wakeLock: null,
+  wakeLockRequest: null,
   downloadActive: false,
   previewUrl: "",
   previewMediaToken: "",
@@ -209,12 +210,11 @@ function bindEvents() {
   $("#upload-safety-continue").addEventListener("click", continuePendingSafetyUpload);
   $("#download-cancel").addEventListener("click", cancelDownloads);
   $("#download-close").addEventListener("click", closeDownloadDialog);
-  $("#download-retry-wake").addEventListener("click", requestDownloadWakeLock);
+  $("#download-retry-wake").addEventListener("click", requestTransferWakeLock);
   $("#keep-screen-awake").addEventListener("change", async (event) => {
-    if (event.target.checked && state.downloadActive) await requestDownloadWakeLock();
-    else await releaseDownloadWakeLock();
+    await syncTransferWakeLock();
   });
-  document.addEventListener("visibilitychange", handleDownloadVisibility);
+  document.addEventListener("visibilitychange", handleTransferVisibility);
   $("#vault-form").addEventListener("submit", handleVaultForm);
   $("#copy-recovery-code").addEventListener("click", copyRecoveryCode);
   $("#recovery-saved").addEventListener("change", (event) => { $("#recovery-close").disabled = !event.target.checked; });
@@ -2469,7 +2469,7 @@ async function executeDownloads(files, targets) {
   $("#download-dialog").showModal();
   $("#download-cancel").hidden = false;
   $("#download-close").disabled = true;
-  if ($("#keep-screen-awake").checked) await requestDownloadWakeLock();
+  await syncTransferWakeLock();
   let completed = 0;
   let deferred = [];
   let activeFile = null;
@@ -2540,7 +2540,7 @@ async function executeDownloads(files, targets) {
     state.downloadActive = false;
     state.downloadAbort = null;
     syncAvailableActions();
-    await releaseDownloadWakeLock();
+    await syncTransferWakeLock();
     $("#download-cancel").hidden = true;
     $("#download-close").disabled = false;
     clearFileSelection();
@@ -2676,46 +2676,103 @@ function closeDownloadDialog() {
   $("#download-dialog").close();
 }
 
-async function requestDownloadWakeLock() {
+function uploadKeepsScreenAwake() {
+  return Boolean(state.uploading || state.activeFolderUploadOperationId);
+}
+
+function downloadKeepsScreenAwake() {
+  return Boolean(state.downloadActive && $("#keep-screen-awake")?.checked);
+}
+
+function shouldKeepScreenAwake() {
+  return uploadKeepsScreenAwake() || downloadKeepsScreenAwake();
+}
+
+function setTransferWakeLockStatus(message, status = "idle") {
+  const uploadStatus = $("#upload-wake-lock-status");
+  if (uploadStatus) {
+    uploadStatus.textContent = message;
+    uploadStatus.dataset.status = status;
+  }
+  const downloadStatus = $("#wake-lock-status");
+  if (downloadStatus) downloadStatus.textContent = message;
+}
+
+async function requestTransferWakeLock() {
   $("#download-retry-wake").hidden = true;
+  if (!shouldKeepScreenAwake()) return false;
   if (!("wakeLock" in navigator)) {
-    $("#wake-lock-status").textContent = "このブラウザは消灯防止に対応していません。端末の画面設定をご確認ください。";
-    return;
+    setTransferWakeLockStatus("消灯防止を開始できませんでした。端末の画面設定をご確認ください。", "error");
+    return false;
   }
   if (document.visibilityState !== "visible") {
-    $("#wake-lock-status").textContent = "画面へ戻ると消灯防止を再開します。";
-    return;
+    setTransferWakeLockStatus("画面へ戻ると消灯防止を再開します。", "waiting");
+    return false;
   }
-  try {
-    if (!state.wakeLock) {
-      state.wakeLock = await navigator.wakeLock.request("screen");
-      state.wakeLock.addEventListener("release", () => {
-        state.wakeLock = null;
-        if (state.downloadActive && $("#keep-screen-awake").checked && document.visibilityState === "visible") {
-          $("#wake-lock-status").textContent = "消灯防止が解除されました。再試行できます。";
-          $("#download-retry-wake").hidden = false;
+  if (state.wakeLock && !state.wakeLock.released) {
+    setTransferWakeLockStatus("消灯防止中", "active");
+    return true;
+  }
+  if (state.wakeLockRequest) return state.wakeLockRequest;
+
+  state.wakeLockRequest = (async () => {
+    try {
+      const lock = await navigator.wakeLock.request("screen");
+      if (!shouldKeepScreenAwake() || document.visibilityState !== "visible") {
+        try { await lock.release(); } catch {}
+        return false;
+      }
+      state.wakeLock = lock;
+      lock.addEventListener("release", () => {
+        if (state.wakeLock === lock) state.wakeLock = null;
+        if (!shouldKeepScreenAwake()) {
+          setTransferWakeLockStatus("消灯防止を終了しました。", "idle");
+        } else if (document.visibilityState !== "visible") {
+          setTransferWakeLockStatus("画面へ戻ると消灯防止を再開します。", "waiting");
+        } else {
+          setTransferWakeLockStatus("消灯防止が解除されました。画面へ戻ると再開します。", "waiting");
+          $("#download-retry-wake").hidden = !state.downloadActive;
         }
       }, { once: true });
+      setTransferWakeLockStatus("消灯防止中", "active");
+      return true;
+    } catch {
+      setTransferWakeLockStatus("消灯防止を開始できませんでした。省電力設定などをご確認ください。", "error");
+      $("#download-retry-wake").hidden = !state.downloadActive;
+      return false;
     }
-    $("#wake-lock-status").textContent = "ダウンロード中の消灯を防止しています。";
-  } catch {
-    $("#wake-lock-status").textContent = "省電力設定などにより消灯防止を開始できませんでした。";
-    $("#download-retry-wake").hidden = false;
+  })();
+  try {
+    return await state.wakeLockRequest;
+  } finally {
+    state.wakeLockRequest = null;
   }
 }
 
-async function releaseDownloadWakeLock() {
+async function releaseTransferWakeLock() {
+  if (state.wakeLockRequest) {
+    try { await state.wakeLockRequest; } catch {}
+  }
   if (state.wakeLock) {
     const lock = state.wakeLock;
     state.wakeLock = null;
     try { await lock.release(); } catch {}
   }
-  if (!state.downloadActive) $("#wake-lock-status").textContent = "端末が対応している場合に有効になります。";
+  setTransferWakeLockStatus("消灯防止を終了しました。", "idle");
+  $("#download-retry-wake").hidden = true;
 }
 
-async function handleDownloadVisibility() {
-  if (document.visibilityState === "visible" && state.downloadActive && $("#keep-screen-awake").checked) {
-    await requestDownloadWakeLock();
+async function syncTransferWakeLock() {
+  if (shouldKeepScreenAwake()) return requestTransferWakeLock();
+  await releaseTransferWakeLock();
+  return false;
+}
+
+async function handleTransferVisibility() {
+  if (document.visibilityState === "visible" && shouldKeepScreenAwake()) {
+    await requestTransferWakeLock();
+  } else if (shouldKeepScreenAwake()) {
+    setTransferWakeLockStatus("画面へ戻ると消灯防止を再開します。", "waiting");
   }
 }
 
@@ -2776,6 +2833,7 @@ async function uploadSelectedFolder(event) {
   $("#upload-progress").style.width = "0%";
   $("#upload-plan-summary").hidden = true;
   $("#upload-dismiss").hidden = true;
+  await syncTransferWakeLock();
   await waitForInterfacePaint();
   try {
     if (state.activeFolderUploadOperationId !== operationId) return;
@@ -2865,6 +2923,7 @@ async function uploadSelectedFolder(event) {
       submitButton.disabled = false;
       submitButton.textContent = "まとめて保存する";
       syncAvailableActions();
+      await syncTransferWakeLock();
     }
   }
 }
@@ -3127,6 +3186,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
   $("#upload-dismiss").hidden = true;
   $("#upload-cancel").hidden = false;
   $("#upload-cancel").disabled = false;
+  await syncTransferWakeLock();
   try {
     if (options.skipExisting !== false && files.length) {
       $("#upload-heading").textContent = "保存済みデータを確認中";
@@ -3280,6 +3340,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
     $("#upload-cancel").disabled = false;
     $("#upload-dismiss").hidden = $("#upload-failure-summary").hidden && !duplicateSkipped.length && !skippedFiles.length && !panel.classList.contains("upload-error");
     syncAvailableActions();
+    await syncTransferWakeLock();
   }
   await Promise.all([loadItems(), loadUsage()]);
 }

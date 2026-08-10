@@ -147,6 +147,9 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .upload-live-metrics span + span::before { content: "・"; position: absolute; left: -11px; color: #a0aeb2; }
 #upload-activity { color: var(--teal-dark); font-weight: 750; }
 #upload-activity.waiting { color: #9a642b; }
+#upload-wake-lock-status { color: var(--teal-dark); font-weight: 750; }
+#upload-wake-lock-status[data-status="waiting"] { color: #9a642b; }
+#upload-wake-lock-status[data-status="error"] { color: #a33d3d; }
 .install-app-top { display: inline-grid; width: 44px; min-width: 44px; height: 44px; padding: 0; place-items: center; }
 .install-app-top[hidden] { display: none; }
 .install-app-top svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -410,7 +413,7 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
   .upload-file-row { align-items: flex-start; flex-direction: column; gap: 4px; }
   .upload-live-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; }
   .upload-live-metrics span + span::before { display: none; }
-  #upload-activity { grid-column: 1 / -1; }
+  #upload-activity, #upload-wake-lock-status { grid-column: 1 / -1; }
   .usage-details-row { grid-template-columns: 1fr; gap: 5px; }
   .usage-details-row span { text-align: left; }
   .preview-dialog { width: 100%; height: 100svh; max-height: 100svh; border-radius: 0; }
