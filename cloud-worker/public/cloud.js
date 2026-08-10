@@ -61,14 +61,8 @@ const state = {
 };
 
 const floatingToolbarState = {
-  lastScrollY: 0,
-  direction: 0,
-  distance: 0,
-  frame: 0,
-  searchFocused: false,
-  programmaticUntil: 0
+  frame: 0
 };
-const FLOATING_TOOLBAR_SCROLL_THRESHOLD = 30;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -191,11 +185,7 @@ function bindEvents() {
     runSearch();
   }));
   $$(".sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSort(button.dataset.sortKey)));
-  $("#floating-search-input").addEventListener("focus", () => {
-    floatingToolbarState.searchFocused = true;
-    showFloatingToolbar();
-  });
-  $("#floating-search-input").addEventListener("blur", () => { floatingToolbarState.searchFocused = false; });
+  $("#floating-search-input").addEventListener("focus", showFloatingToolbar);
   $("#floating-location-button").addEventListener("click", toggleFloatingLocation);
   document.addEventListener("click", closeFloatingLocationOnOutsideClick);
   window.addEventListener("scroll", queueFloatingToolbarUpdate, { passive: true });
@@ -670,7 +660,6 @@ async function enterApp(session, password = "", accountKey = null) {
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
-  floatingToolbarState.lastScrollY = Math.max(0, window.scrollY);
   $("#account-name").textContent = session.accountName;
   const permissionText = session.role === "admin" ? "すべての操作が可能" : "閲覧・アップロード・削除・解除済みフォルダ内の名前変更";
   $("#account-permission").textContent = permissionText;
@@ -1297,6 +1286,7 @@ function renderItems() {
   $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
   $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length + state.folders.length === 0;
   scheduleMissingVideoThumbnails();
+  queueFloatingToolbarUpdate();
 }
 
 function queueFloatingToolbarUpdate() {
@@ -1309,30 +1299,8 @@ function queueFloatingToolbarUpdate() {
 
 function updateFloatingToolbarFromScroll() {
   const scrollY = Math.max(0, window.scrollY);
-  const delta = scrollY - floatingToolbarState.lastScrollY;
-  floatingToolbarState.lastScrollY = scrollY;
-  if (!floatingToolbarAvailable(scrollY)) {
-    hideFloatingToolbar();
-    floatingToolbarState.direction = 0;
-    floatingToolbarState.distance = 0;
-    return;
-  }
-  if (floatingToolbarState.searchFocused || Date.now() < floatingToolbarState.programmaticUntil) {
-    showFloatingToolbar();
-    return;
-  }
-  const direction = delta > 0 ? 1 : delta < 0 ? -1 : 0;
-  if (!direction) return;
-  if (direction !== floatingToolbarState.direction) {
-    floatingToolbarState.direction = direction;
-    floatingToolbarState.distance = Math.abs(delta);
-  } else {
-    floatingToolbarState.distance += Math.abs(delta);
-  }
-  if (floatingToolbarState.distance < FLOATING_TOOLBAR_SCROLL_THRESHOLD) return;
-  if (direction > 0) showFloatingToolbar();
+  if (floatingToolbarAvailable(scrollY)) showFloatingToolbar();
   else hideFloatingToolbar();
-  floatingToolbarState.distance = 0;
 }
 
 function floatingToolbarAvailable(scrollY = Math.max(0, window.scrollY)) {
@@ -1363,7 +1331,6 @@ function scrollToResultsStart() {
   if (!grid || !floatingToolbarAvailable()) return;
   const floatingHeight = $("#floating-toolbar").offsetHeight;
   const target = Math.max(0, grid.getBoundingClientRect().top + window.scrollY - floatingHeight - 16);
-  floatingToolbarState.programmaticUntil = Date.now() + 900;
   window.scrollTo({ top: target, behavior: "smooth" });
   showFloatingToolbar();
 }
