@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewGeneration: 0, previewHistoryActive: false, previewAutoRotate: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewGeneration: 0, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -38,7 +38,6 @@ function bindEvents() {
     renderSortedItems();
   });
   $("#share-preview-fullscreen").addEventListener("click", toggleSharedPreviewFullscreen);
-  $("#share-preview-rotate").addEventListener("click", toggleSharedPreviewRotation);
   $("#preview-stage").addEventListener("dblclick", handleSharedPreviewDoubleClick);
   $("#share-download-retry-wake").addEventListener("click", requestDownloadWakeLock);
   $("#share-keep-screen-awake").addEventListener("change", async (event) => {
@@ -465,8 +464,6 @@ async function openPreview(file, options = {}) {
   const generation = ++state.previewGeneration;
   clearPreview();
   state.selected = file;
-  resetSharedPreviewRotation(true);
-  $("#share-preview-rotate").hidden = file.mediaKind !== "video";
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
   $("#share-preview-size").textContent = formatMediaDetails(file);
@@ -530,7 +527,7 @@ async function toggleSharedPreviewFullscreen() {
     if (document.fullscreenElement) await document.exitFullscreen();
     else if (stage.requestFullscreen) {
       await stage.requestFullscreen();
-      if (state.previewAutoRotate) releaseSharedOrientationLock();
+      if (video) releaseSharedOrientationLock();
     }
     else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
   } catch (error) { setNotice(`全画面表示を開始できませんでした：${error.message}`, true); }
@@ -542,28 +539,23 @@ function syncSharedFullscreenButton() {
   button.setAttribute("aria-label", active ? "全画面表示を終了" : "全画面で表示");
   const label = button.querySelector("span");
   if (label) label.textContent = active ? "戻す" : "全画面";
-  if (!active && state.previewAutoRotate) resetSharedPreviewRotation(true);
-  else if (active && state.previewAutoRotate) releaseSharedOrientationLock();
+  const fullscreenVideo = document.fullscreenElement?.matches?.("video")
+    ? document.fullscreenElement
+    : document.fullscreenElement?.querySelector?.("video");
+  if (active && fullscreenVideo) releaseSharedOrientationLock();
   else void preserveSharedPortraitOrientation(active);
-}
-
-async function toggleSharedPreviewRotation() {
-  if (!$("#preview-stage video")) return;
-  state.previewAutoRotate = !state.previewAutoRotate;
-  if (state.previewAutoRotate) releaseSharedOrientationLock();
-  else resetSharedPreviewRotation(true);
-  syncSharedPreviewRotationButton();
 }
 
 function releaseSharedOrientationLock() {
   try { screen.orientation?.unlock?.(); } catch {}
-  syncSharedPreviewRotationButton();
 }
 
-function resetSharedPreviewRotation(restorePortrait = false) {
-  state.previewAutoRotate = false;
-  syncSharedPreviewRotationButton();
-  if (restorePortrait) void preserveSharedPortraitOrientation();
+function handleSharedVideoFullscreenEnter() {
+  releaseSharedOrientationLock();
+}
+
+function handleSharedVideoFullscreenExit() {
+  void preserveSharedPortraitOrientation();
 }
 
 async function preserveSharedPortraitOrientation(force = false) {
@@ -575,14 +567,6 @@ async function preserveSharedPortraitOrientation(force = false) {
   } catch {
     return false;
   }
-}
-
-function syncSharedPreviewRotationButton() {
-  const button = $("#share-preview-rotate");
-  button.setAttribute("aria-pressed", String(state.previewAutoRotate));
-  button.setAttribute("aria-label", state.previewAutoRotate ? "端末の自動回転を解除する" : "端末の自動回転を有効にする");
-  const label = button.querySelector("span");
-  if (label) label.textContent = state.previewAutoRotate ? "回転中" : "自動回転";
 }
 
 function handleSharedPreviewKeydown(event) {
@@ -835,8 +819,7 @@ function clearPreview() {
 function handlePreviewClosed() {
   state.previewGeneration += 1;
   clearPreview();
-  resetSharedPreviewRotation(true);
-  $("#share-preview-rotate").hidden = true;
+  void preserveSharedPortraitOrientation();
   if (state.previewHistoryActive && !state.handlingPopState) {
     state.previewHistoryActive = false;
     history.back();
@@ -910,6 +893,8 @@ function sharedPreviewRequestActive(generation, fileId) {
 
 function renderVideoPlayer(stage, file, url, generation) {
   const video = document.createElement("video"); video.controls = true; video.playsInline = true; video.preload = "metadata";
+  video.addEventListener("webkitbeginfullscreen", handleSharedVideoFullscreenEnter);
+  video.addEventListener("webkitendfullscreen", handleSharedVideoFullscreenExit);
   const buffering = document.createElement("div"); buffering.className = "player-buffering"; buffering.textContent = "再生準備中…";
   stage.replaceChildren(video, buffering);
   observeSharedMediaDuration(video, file);

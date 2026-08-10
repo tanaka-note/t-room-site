@@ -66,7 +66,6 @@ const state = {
   durationObserver: null,
   durationBackfillRunning: false,
   durationScanGeneration: 0,
-  previewAutoRotate: false,
   conflictScanGeneration: 0,
   handlingPopState: false,
   historyReady: false,
@@ -185,7 +184,6 @@ function bindEvents() {
   $("#preview-prev").addEventListener("click", () => navigatePreview(-1));
   $("#preview-next").addEventListener("click", () => navigatePreview(1));
   $("#preview-fullscreen").addEventListener("click", togglePreviewFullscreen);
-  $("#preview-rotate").addEventListener("click", togglePreviewRotation);
   $("#preview-stage-wrap").addEventListener("dblclick", handlePreviewDoubleClick);
   $("#preview-stage-wrap").addEventListener("touchstart", handlePreviewTouchStart, { passive: true });
   $("#preview-stage-wrap").addEventListener("touchend", handlePreviewTouchEnd, { passive: true });
@@ -4515,8 +4513,6 @@ async function openPreview(file, options = {}) {
   clearPreviewUrl();
   state.previewFileId = Number(file.id);
   state.selected = file;
-  resetPreviewRotation(true);
-  $("#preview-rotate").hidden = file.mediaKind !== "video";
   $("#preview-more").open = false;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
@@ -4647,7 +4643,7 @@ async function togglePreviewFullscreen() {
     if (document.fullscreenElement) await document.exitFullscreen();
     else if (stage.requestFullscreen) {
       await stage.requestFullscreen();
-      if (state.previewAutoRotate) releasePreviewOrientationLock();
+      if (video) releasePreviewOrientationLock();
       else await preserveAppOrientation(true);
     }
     else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
@@ -4660,36 +4656,23 @@ function syncPreviewFullscreenButton() {
   button.setAttribute("aria-label", active ? "全画面表示を終了" : "全画面で表示");
   const label = button.querySelector("span");
   if (label) label.textContent = active ? "戻す" : "全画面";
-  if (!active && state.previewAutoRotate) resetPreviewRotation(true);
-  else if (active && state.previewAutoRotate) releasePreviewOrientationLock();
+  const fullscreenVideo = document.fullscreenElement?.matches?.("video")
+    ? document.fullscreenElement
+    : document.fullscreenElement?.querySelector?.("video");
+  if (active && fullscreenVideo) releasePreviewOrientationLock();
   else void preserveAppOrientation(active);
-}
-
-async function togglePreviewRotation() {
-  if (!$("#preview-stage video")) return;
-  state.previewAutoRotate = !state.previewAutoRotate;
-  if (state.previewAutoRotate) releasePreviewOrientationLock();
-  else resetPreviewRotation(true);
-  syncPreviewRotationButton();
 }
 
 function releasePreviewOrientationLock() {
   try { screen.orientation?.unlock?.(); } catch {}
-  syncPreviewRotationButton();
 }
 
-function resetPreviewRotation(restorePortrait = true) {
-  state.previewAutoRotate = false;
-  syncPreviewRotationButton();
-  if (restorePortrait) void preserveAppOrientation(false);
+function handlePreviewVideoFullscreenEnter() {
+  releasePreviewOrientationLock();
 }
 
-function syncPreviewRotationButton() {
-  const button = $("#preview-rotate");
-  button.setAttribute("aria-pressed", String(state.previewAutoRotate));
-  button.setAttribute("aria-label", state.previewAutoRotate ? "端末の自動回転を解除する" : "端末の自動回転を有効にする");
-  const label = button.querySelector("span");
-  if (label) label.textContent = state.previewAutoRotate ? "回転中" : "自動回転";
+function handlePreviewVideoFullscreenExit() {
+  void preserveAppOrientation(false);
 }
 
 async function preserveAppOrientation(force = false) {
@@ -4731,8 +4714,7 @@ function handlePreviewTouchEnd(event) {
 function handlePreviewClosed() {
   state.previewGeneration += 1;
   clearPreviewUrl();
-  resetPreviewRotation(true);
-  $("#preview-rotate").hidden = true;
+  void preserveAppOrientation(false);
   state.previewFileId = null;
   state.previewTouchStart = null;
   if (state.previewHistoryActive && !state.handlingPopState) {
@@ -4777,6 +4759,8 @@ function renderVideoPlayer(stage, file, url, generation) {
   video.controls = true;
   video.playsInline = true;
   video.preload = "metadata";
+  video.addEventListener("webkitbeginfullscreen", handlePreviewVideoFullscreenEnter);
+  video.addEventListener("webkitendfullscreen", handlePreviewVideoFullscreenExit);
   const buffering = document.createElement("div");
   buffering.className = "player-buffering";
   buffering.textContent = "再生準備中…";
