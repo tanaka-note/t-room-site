@@ -15,12 +15,17 @@ for (const client of [main, share]) {
   assert.match(client, /clearFileSelection\(true, false\)/);
   assert.match(client, /history\.back\(\)/);
   assert.match(client, /sameFolder/);
+  assert.match(client, /function clearSelectionWithoutRefresh\(\)/);
+  assert.match(client, /selectionClearBackPending = true/);
+  assert.match(client, /if \(state\.selectionClearBackPending\)[\s\S]*?if \(sameFolder && !.*previewId\) return/);
 }
 
 assert.match(mainHtml, /id="selection-all"/);
 assert.match(shareHtml, /id="share-selection-all"/);
 assert.match(main, /function selectAllVisibleItems\(\)/);
 assert.match(share, /function selectAllSharedFiles\(\)/);
+assert.match(main, /#selection-clear"\)\.addEventListener\("click", clearSelectionWithoutRefresh\)/);
+assert.match(share, /#share-selection-clear"\)\.addEventListener\("click", clearSelectionWithoutRefresh\)/);
 assert.match(styles, /@media \(max-width: 520px\)[\s\S]*?\.selection-actions \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)[^}]*max-width: none/);
 
 console.log("selection back navigation and select all: ok");

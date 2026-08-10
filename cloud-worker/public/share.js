@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewGeneration: 0, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewGeneration: 0, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -28,7 +28,7 @@ function bindEvents() {
     $("#toggle-password").setAttribute("aria-label", input.type === "password" ? "パスワードを表示" : "パスワードを隠す");
   });
   $("#download-button").addEventListener("click", downloadSelected);
-  $("#share-selection-clear").addEventListener("click", () => clearFileSelection());
+  $("#share-selection-clear").addEventListener("click", clearSelectionWithoutRefresh);
   $("#share-selection-all").addEventListener("click", selectAllSharedFiles);
   $("#share-selection-download").addEventListener("click", downloadFileSelection);
   $("#share-selection-cancel").addEventListener("click", cancelSharedDownloads);
@@ -425,6 +425,15 @@ function clearFileSelection(update = true, rewindHistory = update) {
   }
 }
 
+function clearSelectionWithoutRefresh() {
+  const shouldRewind = Boolean(state.selectedFiles.size && state.selectionHistoryActive && !state.handlingPopState);
+  clearFileSelection(true, false);
+  if (!shouldRewind) return;
+  state.selectionHistoryActive = false;
+  state.selectionClearBackPending = true;
+  history.back();
+}
+
 function syncFileSelection() {
   const count = state.selectedFiles.size;
   $("#share-selection-bar").hidden = count === 0;
@@ -805,10 +814,14 @@ async function handleShareHistoryNavigation(event) {
   if (!entry?.tcloudShare || $("#browser-view").hidden) return;
   state.handlingPopState = true;
   try {
+    const sameFolder = Number(entry.folderId || 0) === Number(state.folderId || 0);
+    if (state.selectionClearBackPending) {
+      state.selectionClearBackPending = false;
+      if (sameFolder && !entry.previewId) return;
+    }
     if (state.selectedFiles.size) {
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
-      const sameFolder = Number(entry.folderId || 0) === Number(state.folderId || 0);
       if (sameFolder && !entry.previewId) return;
     }
     if ($("#preview-dialog").open) {

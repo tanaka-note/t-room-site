@@ -29,6 +29,7 @@ const state = {
   selectedFiles: new Map(),
   selectedFolders: new Map(),
   selectionHistoryActive: false,
+  selectionClearBackPending: false,
   moveDestinations: new Map(),
   selecting: false,
   dragDepth: 0,
@@ -198,7 +199,7 @@ function bindEvents() {
   window.addEventListener("scroll", queueFloatingToolbarUpdate, { passive: true });
   window.addEventListener("resize", queueFloatingToolbarUpdate, { passive: true });
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
-  $("#selection-clear").addEventListener("click", () => clearFileSelection());
+  $("#selection-clear").addEventListener("click", clearSelectionWithoutRefresh);
   $("#selection-all").addEventListener("click", selectAllVisibleItems);
   $("#selection-download").addEventListener("click", startSelectedDownloads);
   $("#selection-share").addEventListener("click", () => {
@@ -752,6 +753,10 @@ async function handleHistoryNavigation(event) {
   state.handlingPopState = true;
   try {
     const sameFolder = Number(target.folderId || 0) === Number(state.folderId || 0);
+    if (state.selectionClearBackPending) {
+      state.selectionClearBackPending = false;
+      if (sameFolder && !target.previewId) return;
+    }
     const previewOriginId = $("#preview-dialog").open && sameFolder && !target.previewId
       ? Number(state.previewFileId)
       : null;
@@ -2228,6 +2233,17 @@ function syncSelectionBar() {
   $("#selection-delete").disabled = count === 0;
   $("#selection-delete").textContent = "削除";
   if (count) hideFloatingToolbar();
+}
+
+function clearSelectionWithoutRefresh() {
+  const shouldRewind = Boolean((state.selectedFiles.size || state.selectedFolders.size)
+    && state.selectionHistoryActive
+    && !state.handlingPopState);
+  clearFileSelection(true, false);
+  if (!shouldRewind) return;
+  state.selectionHistoryActive = false;
+  state.selectionClearBackPending = true;
+  history.back();
 }
 
 async function startSelectedDownloads() {
