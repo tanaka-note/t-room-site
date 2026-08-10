@@ -87,6 +87,7 @@ async function handleApi(request, env, url, path) {
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
   if (path === "/api/items" && request.method === "GET") return listItems(url, env, session);
+  if (path === "/api/upload-conflict-candidates" && request.method === "POST") return listUploadConflictCandidates(request, env, session);
   if (path === "/api/legacy-folders" && request.method === "GET") return listLegacyFolders(env, session);
   if (path === "/api/folders" && request.method === "POST") return createFolder(request, env, session);
   if (path === "/api/uploads" && request.method === "POST") return createUpload(request, env, session);
@@ -649,6 +650,95 @@ async function listItems(url, env, session) {
     folders: visibleFolders,
     files: visibleFiles,
     nextFileOffset
+  });
+}
+
+async function listUploadConflictCandidates(request, env, session) {
+  requireUpload(session);
+  const body = await readJson(request, 16384);
+  const sizes = [...new Set((Array.isArray(body.sizes) ? body.sizes : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isSafeInteger(value) && value > 0))];
+  if (!sizes.length || sizes.length > 50) throw new HttpError(400, "確認するファイル容量を1〜50件で指定してください。");
+  const offset = Math.min(100000, Math.max(0, Number.parseInt(body.offset || "0", 10) || 0));
+  const pageSize = 200;
+  const sizePlaceholders = sizes.map(() => "?").join(", ");
+  const select = `SELECT f.id, f.folder_id AS folderId,
+      CASE WHEN f.crypto_version = 1 THEN '' ELSE f.original_name END AS name,
+      f.size_bytes AS sizeBytes, f.crypto_version AS cryptoVersion,
+      f.encrypted_metadata AS encryptedMetadata, f.metadata_iv AS metadataIv,
+      f.wrapped_file_key AS wrappedFileKey, f.file_key_iv AS fileKeyIv,
+      f.created_at AS createdAt, f.updated_at AS updatedAt
+    FROM cloud_files f`;
+  let query;
+  let values;
+  if (session.role === "admin") {
+    query = `${select}
+      WHERE f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes IN (${sizePlaceholders})
+      ORDER BY f.id ASC LIMIT ? OFFSET ?`;
+    values = [...sizes, pageSize + 1, offset];
+  } else {
+    const now = Math.floor(Date.now() / 1000);
+    query = `WITH RECURSIVE folder_access(id, is_allowed, has_protected_ancestor) AS (
+        SELECT folder.id,
+          CASE WHEN folder.password_hash IS NULL THEN 1 ELSE EXISTS (
+            SELECT 1 FROM cloud_folder_unlocks unlock
+            WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
+          ) END,
+          CASE WHEN folder.password_hash IS NULL THEN 0 ELSE 1 END
+        FROM cloud_folders folder
+        WHERE folder.parent_id IS NULL AND folder.deleted_at IS NULL
+        UNION
+        SELECT child.id,
+          parent.is_allowed AND (child.password_hash IS NULL OR EXISTS (
+            SELECT 1 FROM cloud_folder_unlocks unlock
+            WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
+          )),
+          parent.has_protected_ancestor OR child.password_hash IS NOT NULL
+        FROM cloud_folders child
+        JOIN folder_access parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NULL
+      )
+      ${select}
+      WHERE f.folder_id IN (
+        SELECT id FROM folder_access WHERE is_allowed = 1 AND has_protected_ancestor = 1
+      )
+        AND f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes IN (${sizePlaceholders})
+      ORDER BY f.id ASC LIMIT ? OFFSET ?`;
+    values = [session.sessionId, now, session.sessionId, now, ...sizes, pageSize + 1, offset];
+  }
+  const result = await env.DB.prepare(query).bind(...values).all();
+  const rows = result.results || [];
+  const candidates = rows.slice(0, pageSize);
+  const folderIds = [...new Set(candidates.map((file) => Number(file.folderId)).filter(Boolean))];
+  let folders = [];
+  if (folderIds.length) {
+    const placeholders = folderIds.map(() => "?").join(", ");
+    const folderResult = await env.DB.prepare(`WITH RECURSIVE ancestors AS (
+        SELECT id, parent_id, name, crypto_version, encrypted_name, name_iv,
+          password_salt, password_wrapped_key, password_wrap_iv,
+          admin_wrapped_key, parent_wrapped_key, parent_wrap_iv
+        FROM cloud_folders WHERE id IN (${placeholders}) AND deleted_at IS NULL
+        UNION
+        SELECT parent.id, parent.parent_id, parent.name, parent.crypto_version,
+          parent.encrypted_name, parent.name_iv, parent.password_salt,
+          parent.password_wrapped_key, parent.password_wrap_iv,
+          parent.admin_wrapped_key, parent.parent_wrapped_key, parent.parent_wrap_iv
+        FROM cloud_folders parent JOIN ancestors child ON parent.id = child.parent_id
+        WHERE parent.deleted_at IS NULL
+      )
+      SELECT id, parent_id AS parentId, name, crypto_version AS cryptoVersion,
+        encrypted_name AS encryptedName, name_iv AS nameIv,
+        password_salt AS passwordSalt, password_wrapped_key AS passwordWrappedKey,
+        password_wrap_iv AS passwordWrapIv, admin_wrapped_key AS adminWrappedKey,
+        parent_wrapped_key AS parentWrappedKey, parent_wrap_iv AS parentWrapIv
+      FROM ancestors ORDER BY id ASC`).bind(...folderIds).all();
+    folders = folderResult.results || [];
+  }
+  return json({
+    candidates,
+    folders,
+    nextOffset: rows.length > pageSize ? offset + pageSize : null
   });
 }
 

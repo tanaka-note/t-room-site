@@ -45,6 +45,9 @@ await expectStatus("副管理者の存在しないフォルダ名称変更", awa
 await expectStatus("副管理者の存在しないファイル削除", await request("/files/999999", "subadmin", { method: "DELETE", headers: { Origin: origin, "Content-Type": "application/json" } }), 404);
 await expectStatus("副管理者の容量内訳拒否", await request("/usage", "subadmin"), 403);
 await expectStatus("副管理者のフォルダ別容量内訳拒否", await request("/usage-details", "subadmin"), 403);
+await expectStatus("管理者の競合候補照合", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], offset: 0 }) }), 200);
+await expectStatus("副管理者の解除範囲内競合候補照合", await request("/upload-conflict-candidates", "subadmin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], offset: 0 }) }), 200);
+await expectStatus("競合候補照合の容量指定検証", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [] }) }), 400);
 
 const subHistoryResponse = await expectStatus("副管理者本人の操作履歴", await request("/upload-history", "subadmin"), 200);
 const subHistory = await subHistoryResponse.json();

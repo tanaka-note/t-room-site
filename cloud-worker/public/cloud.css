@@ -161,6 +161,13 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .transfer-error-summary strong { display: block; margin-bottom: 6px; }
 .transfer-error-summary ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; }
 .transfer-error-summary li { overflow-wrap: anywhere; }
+.transfer-conflict-summary { margin-top: 13px; padding: 11px 13px; border: 1px solid #d7bd78; border-radius: 10px; color: #6e5517; background: #fffdf5; font-size: .78rem; }
+.transfer-conflict-summary[hidden] { display: none; }
+.transfer-conflict-summary strong { display: block; margin-bottom: 6px; }
+.transfer-conflict-summary ul { display: grid; gap: 7px; margin: 0; padding-left: 20px; }
+.transfer-conflict-summary li { overflow-wrap: anywhere; }
+.transfer-conflict-summary li span { display: block; margin-top: 2px; color: #756b52; }
+.transfer-conflict-summary p { margin: 8px 0 0; color: #756b52; }
 .upload-safety-actions { margin-top: 13px; padding-top: 12px; border-top: 1px solid #e7c5c8; }
 .upload-safety-actions[hidden] { display: none; }
 .upload-safety-actions p { margin: 0 0 10px; color: var(--ink); font-weight: 700; }

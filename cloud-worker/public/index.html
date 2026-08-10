@@ -177,6 +177,11 @@
             </div>
           </div>
         </div>
+        <div id="upload-conflict-summary" class="transfer-conflict-summary" hidden>
+          <strong>競合の疑いがあるため保留したデータ</strong>
+          <ul id="upload-conflict-list"></ul>
+          <p>自動で削除・名前変更はしていません。表示内容を確認し、必要に応じて名前を変更してから再度アップロードしてください。</p>
+        </div>
       </div>
       <p id="notice" class="notice" role="status"></p>
       <div id="content-grid" class="content-grid" aria-live="polite"></div>
@@ -320,6 +325,7 @@
     <div class="dialog-actions">
       <button id="copy-share-url" class="secondary-button" type="button">URLをコピー</button>
       <button id="copy-share-password" class="secondary-button" type="button">PWをコピー</button>
+      <button id="copy-share-bundle" class="secondary-button" type="button">URL・PWをまとめてコピー</button>
       <button id="close-share-result" class="primary-button" type="button">閉じる</button>
     </div>
   </dialog>
@@ -451,6 +457,6 @@
   <script src="/cloud/file-safety.js?v=20260810-2" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260810-5" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-92" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-93" defer></script>
 </body>
 </html>
