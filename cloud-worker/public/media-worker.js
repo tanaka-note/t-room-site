@@ -10,10 +10,10 @@ const APP_SHELL_CACHE = "tcloud-shell-20260810-5";
 const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
-  "/cloud/manifest.webmanifest?v=20260810-4",
-  "/cloud/icons/icon-192.png?v=20260810-2",
-  "/cloud/icons/icon-512.png?v=20260810-2",
-  "/cloud/icons/icon-maskable-512.png?v=20260810-2"
+  "/cloud/manifest-v2.webmanifest",
+  "/cloud/icons/icon-192-v2.png",
+  "/cloud/icons/icon-512-v2.png",
+  "/cloud/icons/icon-maskable-512-v2.png"
 ];
 
 self.addEventListener("install", (event) => event.waitUntil((async () => {
