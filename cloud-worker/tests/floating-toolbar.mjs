@@ -14,6 +14,8 @@ assert.match(html, /id="floating-sort-controls"[\s\S]*?更新[\s\S]*?名前[\s\S
 assert.match(client, /window\.addEventListener\("scroll", queueFloatingToolbarUpdate, \{ passive: true \}\)/);
 assert.match(client, /if \(floatingToolbarAvailable\(scrollY\)\) showFloatingToolbar\(\);[\s\S]*?else hideFloatingToolbar\(\);/);
 assert.doesNotMatch(client, /FLOATING_TOOLBAR_SCROLL_THRESHOLD|direction > 0|searchFocused|programmaticUntil/);
+assert.match(client, /function floatingToolbarTrigger\(\)[\s\S]*?toolbar\.offsetTop \+ toolbar\.offsetHeight \+ 12/);
+assert.match(client, /const target = Math\.max\(floatingToolbarTrigger\(\) \+ 1, resultsTarget\)/);
 assert.match(client, /scheduleMissingVideoThumbnails\(\);\s*queueFloatingToolbarUpdate\(\);/);
 assert.match(client, /if \(!\$\("#selection-bar"\)\.hidden \|\| state\.uploading \|\| state\.downloadActive\) return false/);
 assert.match(client, /function renderFloatingLocation\(items\)/);

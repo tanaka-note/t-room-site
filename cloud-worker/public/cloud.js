@@ -1328,8 +1328,12 @@ function floatingToolbarAvailable(scrollY = Math.max(0, window.scrollY)) {
   if (!state.session || $("#app-view").hidden || toolbar.hidden) return false;
   if (!$("#selection-bar").hidden || state.uploading || state.downloadActive) return false;
   if (document.querySelector("dialog[open]")) return false;
-  const trigger = toolbar.offsetTop + toolbar.offsetHeight + 12;
-  return scrollY > trigger;
+  return scrollY > floatingToolbarTrigger();
+}
+
+function floatingToolbarTrigger() {
+  const toolbar = $("#toolbar");
+  return toolbar.offsetTop + toolbar.offsetHeight + 12;
 }
 
 function showFloatingToolbar() {
@@ -1350,7 +1354,8 @@ function scrollToResultsStart() {
   const grid = $("#content-grid");
   if (!grid || !floatingToolbarAvailable()) return;
   const floatingHeight = $("#floating-toolbar").offsetHeight;
-  const target = Math.max(0, grid.getBoundingClientRect().top + window.scrollY - floatingHeight - 16);
+  const resultsTarget = grid.getBoundingClientRect().top + window.scrollY - floatingHeight - 16;
+  const target = Math.max(floatingToolbarTrigger() + 1, resultsTarget);
   window.scrollTo({ top: target, behavior: "smooth" });
   showFloatingToolbar();
 }
