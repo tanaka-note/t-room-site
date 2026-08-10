@@ -24,7 +24,7 @@ if (!/function restorePreviewOrigin\(fileId\)[\s\S]*?scrollIntoView\(\{ block: "
 if (!css.includes(".preview-nav") || !css.includes("touch-action: pan-y")) {
   throw new Error("写真移動UIのスタイルがありません。");
 }
-if (!script.includes("function renderPreviewImage(stage, file, url)") || !script.includes("stage.replaceChildren(image)") || script.includes("stage.append(image)")) {
+if (!/function renderPreviewImage\(stage, file, url(?:, generation)?\)/.test(script) || !script.includes("stage.replaceChildren(image)") || script.includes("stage.append(image)")) {
   throw new Error("写真の復号案内を写真表示へ置き換える処理がありません。");
 }
 

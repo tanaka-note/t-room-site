@@ -1,5 +1,7 @@
 const API = "/cloud/api";
 const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
+const SORT_PREFERENCES_KEY = "tcloud-folder-sort-preferences-v1";
+const SORT_PREFERENCE_LIMIT = 1000;
 const VAULT_CACHE_DB = "tcloud-device-vault";
 const VAULT_CACHE_STORE = "crypto-keys";
 const FOLDER_CACHE_PREFIX = "folder-session:";
@@ -40,6 +42,7 @@ const state = {
   previewMediaToken: "",
   previewPlayer: null,
   previewFileId: null,
+  previewGeneration: 0,
   previewHistoryActive: false,
   previewTouchStart: null,
   folderUploadSelection: null,
@@ -290,6 +293,7 @@ async function changeSort(key) {
     state.sortDirection = key === "name" ? "asc" : "desc";
   }
   state.sortUsesTypeDefaults = false;
+  rememberCurrentSort();
   syncSortControls();
   await loadItems();
   scrollToResultsStart();
@@ -301,6 +305,46 @@ function resetTypeDefaultSort() {
   state.sortDirection = fileView ? "desc" : "asc";
   state.sortUsesTypeDefaults = true;
   syncSortControls();
+}
+
+function restoreFolderSortPreference(folderId = state.folderId) {
+  const preferences = readSortPreferences();
+  const saved = preferences[sortPreferenceLocationKey(folderId)];
+  if (!saved || !["updated", "name", "size"].includes(saved.sort) || !["asc", "desc"].includes(saved.direction)) {
+    resetTypeDefaultSort();
+    return;
+  }
+  state.sort = saved.sort;
+  state.sortDirection = saved.direction;
+  state.sortUsesTypeDefaults = false;
+  syncSortControls();
+}
+
+function rememberCurrentSort(folderId = state.folderId) {
+  const preferences = readSortPreferences();
+  preferences[sortPreferenceLocationKey(folderId)] = {
+    sort: state.sort,
+    direction: state.sortDirection,
+    savedAt: Date.now()
+  };
+  const entries = Object.entries(preferences).sort((a, b) => Number(b[1]?.savedAt || 0) - Number(a[1]?.savedAt || 0));
+  const limited = Object.fromEntries(entries.slice(0, SORT_PREFERENCE_LIMIT));
+  try { localStorage.setItem(SORT_PREFERENCES_KEY, JSON.stringify(limited)); } catch {}
+}
+
+function readSortPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SORT_PREFERENCES_KEY) || "{}");
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
+function sortPreferenceLocationKey(folderId = state.folderId) {
+  const role = state.session?.role === "admin" ? "admin" : "subadmin";
+  const location = folderId ? `folder:${Number(folderId)}` : "root";
+  return `${role}:${location}`;
 }
 
 function syncSortControls() {
@@ -668,7 +712,7 @@ function initializeNavigationHistory() {
   state.folderId = folderId;
   state.kind = "";
   state.view = "all";
-  resetTypeDefaultSort();
+  restoreFolderSortPreference(folderId);
   $("#view-title").textContent = folderName;
   history.replaceState(navigationEntry(folderId, folderName), "", location.href);
   state.historyReady = true;
@@ -689,7 +733,7 @@ async function navigateToFolder(folderId, folderName, options = {}) {
   state.folderId = folderId ? Number(folderId) : null;
   state.kind = "";
   state.view = "all";
-  resetTypeDefaultSort();
+  restoreFolderSortPreference(state.folderId);
   clearSearch();
   $("#view-title").textContent = folderName || (state.folderId ? "ファイル" : "フォルダ");
   if (pushHistory && state.historyReady) {
@@ -1089,7 +1133,7 @@ function selectSection(button) {
     clearSearch();
   } else {
     state.kind = button.dataset.kind || "";
-    resetTypeDefaultSort();
+    restoreFolderSortPreference(state.folderId);
   }
   state.view = button.dataset.view || "all";
   const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", requests: "削除申請", shares: "共有管理", image: "写真", video: "動画", audio: "音声", document: "書類" };
@@ -3558,6 +3602,7 @@ async function unlockFolder(event) {
 async function openPreview(file, options = {}) {
   const { pushHistory = true } = options;
   const dialog = $("#preview-dialog");
+  const generation = ++state.previewGeneration;
   if (pushHistory && !dialog.open && state.historyReady) {
     history.pushState({
       tcloud: true,
@@ -3602,22 +3647,33 @@ async function openPreview(file, options = {}) {
       const streaming = file.mediaKind === "video" || file.mediaKind === "audio" || Number(file.sizeBytes) > 128 * 1024 * 1024;
       if (streaming) {
         const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
+        if (!previewRequestActive(generation, file.id)) {
+          TCloudMedia.releaseMedia(media.token);
+          return;
+        }
         state.previewMediaToken = media.token;
         url = media.url;
       } else {
         const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/view`);
-        state.previewUrl = URL.createObjectURL(blob);
+        const objectUrl = URL.createObjectURL(blob);
+        if (!previewRequestActive(generation, file.id)) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        state.previewUrl = objectUrl;
         url = state.previewUrl;
       }
     } catch (error) {
+      if (!previewRequestActive(generation, file.id)) return;
       stage.innerHTML = `<div class="preview-fallback"><p>${escapeHtml(error.message)}</p></div>`;
       return;
     }
   }
+  if (!previewRequestActive(generation, file.id)) return;
   if (file.mediaKind === "image") {
-    renderPreviewImage(stage, file, url);
+    renderPreviewImage(stage, file, url, generation);
   } else if (file.mediaKind === "video") {
-    renderVideoPlayer(stage, file, url);
+    renderVideoPlayer(stage, file, url, generation);
   } else if (file.mediaKind === "audio") {
     const audio = document.createElement("audio"); audio.controls = true; audio.preload = "metadata"; audio.src = url; stage.replaceChildren(audio);
   } else if (file.mimeType === "application/pdf") {
@@ -3628,14 +3684,14 @@ async function openPreview(file, options = {}) {
   if (!dialog.open) dialog.showModal();
 }
 
-function renderPreviewImage(stage, file, url) {
+function renderPreviewImage(stage, file, url, generation) {
   const image = new Image();
   image.alt = file.name;
   image.addEventListener("load", () => {
-    if (Number(state.previewFileId) === Number(file.id) && $("#preview-dialog").open) stage.replaceChildren(image);
+    if (previewRequestActive(generation, file.id) && $("#preview-dialog").open) stage.replaceChildren(image);
   }, { once: true });
   image.addEventListener("error", () => {
-    if (Number(state.previewFileId) === Number(file.id) && $("#preview-dialog").open) {
+    if (previewRequestActive(generation, file.id) && $("#preview-dialog").open) {
       stage.innerHTML = '<div class="preview-fallback"><p>写真を表示できませんでした。</p><p>ダウンロードしてご確認ください。</p></div>';
     }
   }, { once: true });
@@ -3748,6 +3804,7 @@ function handlePreviewTouchEnd(event) {
 }
 
 function handlePreviewClosed() {
+  state.previewGeneration += 1;
   clearPreviewUrl();
   state.previewFileId = null;
   state.previewTouchStart = null;
@@ -3758,7 +3815,11 @@ function handlePreviewClosed() {
 }
 
 function clearPreviewUrl() {
+  const stage = $("#preview-stage");
+  stopPreviewMediaElements(stage);
   if (state.previewPlayer) {
+    try { state.previewPlayer.unload(); } catch {}
+    try { state.previewPlayer.detachMediaElement(); } catch {}
     try { state.previewPlayer.destroy(); } catch {}
     state.previewPlayer = null;
   }
@@ -3766,9 +3827,25 @@ function clearPreviewUrl() {
   state.previewUrl = "";
   if (state.previewMediaToken) TCloudMedia.releaseMedia(state.previewMediaToken);
   state.previewMediaToken = "";
+  stage?.replaceChildren();
 }
 
-function renderVideoPlayer(stage, file, url) {
+function stopPreviewMediaElements(stage) {
+  if (!stage) return;
+  for (const media of stage.querySelectorAll("video, audio")) {
+    try { media.pause(); } catch {}
+    try { media.srcObject = null; } catch {}
+    media.removeAttribute("src");
+    try { media.load(); } catch {}
+  }
+  for (const frame of stage.querySelectorAll("iframe")) frame.src = "about:blank";
+}
+
+function previewRequestActive(generation, fileId) {
+  return generation === state.previewGeneration && Number(state.previewFileId) === Number(fileId);
+}
+
+function renderVideoPlayer(stage, file, url, generation) {
   const video = document.createElement("video");
   video.controls = true;
   video.playsInline = true;
@@ -3788,6 +3865,7 @@ function renderVideoPlayer(stage, file, url) {
       seekType: "range"
     });
     player.on(mpegts.Events.ERROR, () => {
+      if (!previewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
       if (stage.querySelector(".player-error")) return;
       buffering.remove();
       const message = document.createElement("p");
@@ -3803,6 +3881,7 @@ function renderVideoPlayer(stage, file, url) {
   }
   video.src = url;
   video.addEventListener("error", () => {
+    if (!previewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
     if (!video.error) return;
     buffering.remove();
     const message = document.createElement("p");

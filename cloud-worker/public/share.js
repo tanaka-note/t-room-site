@@ -1,6 +1,6 @@
 const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1] || "";
 const API = `/cloud/api/public/shares/${token}`;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewGeneration: 0, previewHistoryActive: false, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", initialize);
@@ -452,6 +452,8 @@ function renderBreadcrumbs() {
 }
 
 async function openPreview(file, options = {}) {
+  const generation = ++state.previewGeneration;
+  clearPreview();
   state.selected = file;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
@@ -464,34 +466,45 @@ async function openPreview(file, options = {}) {
     state.previewHistoryActive = true;
   }
   try {
-    clearPreview();
     const streaming = file.mediaKind === "video" || file.mediaKind === "audio" || Number(file.sizeBytes) > 128 * 1024 * 1024;
     let url;
     if (streaming) {
       const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
+      if (!sharedPreviewRequestActive(generation, file.id)) {
+        TCloudMedia.releaseMedia(media.token);
+        return;
+      }
       state.previewMediaToken = media.token;
       url = media.url;
     } else {
       const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/view`);
-      state.previewUrl = URL.createObjectURL(blob);
+      const objectUrl = URL.createObjectURL(blob);
+      if (!sharedPreviewRequestActive(generation, file.id)) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      state.previewUrl = objectUrl;
       url = state.previewUrl;
     }
-    if (file.mediaKind === "image") { renderSharedPreviewImage(stage, file, url); }
-    else if (file.mediaKind === "video") { renderVideoPlayer(stage, file, url); }
+    if (!sharedPreviewRequestActive(generation, file.id)) return;
+    if (file.mediaKind === "image") { renderSharedPreviewImage(stage, file, url, generation); }
+    else if (file.mediaKind === "video") { renderVideoPlayer(stage, file, url, generation); }
     else if (file.mediaKind === "audio") { const audio = document.createElement("audio"); audio.controls = true; audio.src = url; stage.replaceChildren(audio); }
     else if (file.mimeType === "application/pdf") { const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.replaceChildren(frame); }
     else stage.innerHTML = "<p>この形式はブラウザ内表示に対応していません。ダウンロードしてご確認ください。</p>";
-  } catch (error) { stage.innerHTML = `<p>${escapeHtml(error.message)}</p>`; }
+  } catch (error) {
+    if (sharedPreviewRequestActive(generation, file.id)) stage.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+  }
 }
 
-function renderSharedPreviewImage(stage, file, url) {
+function renderSharedPreviewImage(stage, file, url, generation) {
   const image = new Image();
   image.alt = file.name;
   image.addEventListener("load", () => {
-    if (Number(state.selected?.id) === Number(file.id) && $("#preview-dialog").open) stage.replaceChildren(image);
+    if (sharedPreviewRequestActive(generation, file.id) && $("#preview-dialog").open) stage.replaceChildren(image);
   }, { once: true });
   image.addEventListener("error", () => {
-    if (Number(state.selected?.id) === Number(file.id) && $("#preview-dialog").open) {
+    if (sharedPreviewRequestActive(generation, file.id) && $("#preview-dialog").open) {
       stage.innerHTML = "<p>写真を表示できませんでした。ダウンロードしてご確認ください。</p>";
     }
   }, { once: true });
@@ -748,14 +761,23 @@ async function openHistory() {
 }
 
 function clearPreview() {
-  if (state.previewPlayer) { try { state.previewPlayer.destroy(); } catch {} state.previewPlayer = null; }
+  const stage = $("#preview-stage");
+  stopSharedPreviewMediaElements(stage);
+  if (state.previewPlayer) {
+    try { state.previewPlayer.unload(); } catch {}
+    try { state.previewPlayer.detachMediaElement(); } catch {}
+    try { state.previewPlayer.destroy(); } catch {}
+    state.previewPlayer = null;
+  }
   if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   state.previewUrl = "";
   if (state.previewMediaToken) TCloudMedia.releaseMedia(state.previewMediaToken);
   state.previewMediaToken = "";
+  stage?.replaceChildren();
 }
 
 function handlePreviewClosed() {
+  state.previewGeneration += 1;
   clearPreview();
   if (state.previewHistoryActive && !state.handlingPopState) {
     state.previewHistoryActive = false;
@@ -809,7 +831,22 @@ async function handleShareHistoryNavigation(event) {
   }
 }
 
-function renderVideoPlayer(stage, file, url) {
+function stopSharedPreviewMediaElements(stage) {
+  if (!stage) return;
+  for (const media of stage.querySelectorAll("video, audio")) {
+    try { media.pause(); } catch {}
+    try { media.srcObject = null; } catch {}
+    media.removeAttribute("src");
+    try { media.load(); } catch {}
+  }
+  for (const frame of stage.querySelectorAll("iframe")) frame.src = "about:blank";
+}
+
+function sharedPreviewRequestActive(generation, fileId) {
+  return generation === state.previewGeneration && Number(state.selected?.id) === Number(fileId);
+}
+
+function renderVideoPlayer(stage, file, url, generation) {
   const video = document.createElement("video"); video.controls = true; video.playsInline = true; video.preload = "metadata";
   const buffering = document.createElement("div"); buffering.className = "player-buffering"; buffering.textContent = "再生準備中…";
   stage.replaceChildren(video, buffering);
@@ -819,6 +856,7 @@ function renderVideoPlayer(stage, file, url) {
   if (mpegType && globalThis.mpegts?.isSupported()) {
     const player = mpegts.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes) }, { enableWorker: false, lazyLoad: true, lazyLoadMaxDuration: 180, seekType: "range" });
     player.on(mpegts.Events.ERROR, () => {
+      if (!sharedPreviewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
       if (stage.querySelector(".player-error")) return;
       buffering.remove();
       const message = document.createElement("p"); message.className = "player-error";
@@ -830,6 +868,7 @@ function renderVideoPlayer(stage, file, url) {
   }
   video.src = url;
   video.addEventListener("error", () => {
+    if (!sharedPreviewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
     buffering.remove();
     const message = document.createElement("p"); message.textContent = "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。"; stage.append(message);
   }, { once: true });
