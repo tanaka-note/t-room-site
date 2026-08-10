@@ -1615,7 +1615,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260810-38.css"],
-    ["/cloud.js", "/cloud-runtime-20260810-114.js"],
+    ["/cloud.js", "/cloud-runtime-20260810-115.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
@@ -1633,7 +1633,7 @@ async function serveAsset(request, env, url, path) {
     ["/icons/icon-maskable-512-v2.png", "/icons/icon-maskable-512-v2.png"],
     ["/icons/apple-touch-icon-v2.png", "/icons/apple-touch-icon-v2.png"],
     ["/share.css", "/share-runtime-20260810-17.css"],
-    ["/share.js", "/share-runtime-20260810-38.js"],
+    ["/share.js", "/share-runtime-20260810-39.js"],
     ["/vendor/argon2.umd.min.js", "/vendor/argon2.umd.min.js"],
     ["/vendor/mpegts-1.8.0.js", "/vendor/mpegts-1.8.0.js"],
     ["/vendor/mpegts-1.8.0.LICENSE.txt", "/vendor/mpegts-1.8.0.LICENSE.txt"]

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 
 const [mainHtml, mainCss, mainJs, shareHtml, shareCss, shareJs] = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
@@ -60,6 +61,12 @@ assert.match(mainJs, /restoreInstalledAppPortrait[\s\S]*?screen\.orientation\.lo
 assert.match(shareJs, /restoreInstalledAppPortrait[\s\S]*?screen\.orientation\.lock\("portrait-primary"\)/);
 assert.match(mainJs, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\.lock\("any"\)/);
 assert.match(shareJs, /prepareInstalledVideoFullscreen[\s\S]*?screen\.orientation\.lock\("any"\)/);
+assert.match(mainJs, /function previewVideoIsFullscreen\(/);
+assert.match(shareJs, /function sharedPreviewVideoIsFullscreen\(/);
+assert.match(mainJs, /requestGeneration !== state\.previewOrientationGeneration/);
+assert.match(shareJs, /requestGeneration !== state\.previewOrientationGeneration/);
+assert.match(mainJs, /!previewVideoIsFullscreen\(sourceVideo\)[\s\S]*?restoreInstalledAppPortrait\(\)/);
+assert.match(shareJs, /!sharedPreviewVideoIsFullscreen\(sourceVideo\)[\s\S]*?restoreInstalledAppPortrait\(\)/);
 assert.match(mainJs, /fullscreenchange[\s\S]*?handlePreviewFullscreenOrientationChange/);
 assert.match(shareJs, /fullscreenchange[\s\S]*?handleSharedPreviewFullscreenOrientationChange/);
 assert.match(mainJs, /webkitbeginfullscreen[^\n]*prepareInstalledVideoFullscreen/);
@@ -94,5 +101,38 @@ assert.doesNotMatch(mainCss, /preview-rotate-overlay/);
 assert.doesNotMatch(shareCss, /preview-rotate-overlay/);
 assert.doesNotMatch(mainCss, /is-video-rotated|transform: rotate\(90deg\)/);
 assert.doesNotMatch(shareCss, /is-video-rotated|transform:rotate\(90deg\)/);
+
+async function verifyClosedPreviewWinsOrientationRace(source, startMarker, endMarker, shared = false) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, "回転制御関数を検査できる形で維持してください。");
+  const video = {};
+  const container = { contains: (value) => value === video };
+  const dialog = { open: true };
+  let orientation = "portrait-primary";
+  const context = {
+    document: { fullscreenElement: { matches: () => false, querySelector: () => video }, webkitFullscreenElement: null },
+    screen: { orientation: { lock: async (mode) => {
+      if (mode === "any") await new Promise((resolve) => setTimeout(resolve, 15));
+      orientation = mode;
+    } } },
+    state: { previewOrientationGeneration: 0 },
+    isInstalledAppMode: () => true,
+    setTimeout,
+    $: (selector) => selector.includes("stage-wrap") ? container : dialog
+  };
+  const prepareName = "prepareInstalledVideoFullscreen";
+  const restoreName = "restoreInstalledAppPortrait";
+  vm.runInNewContext(`${source.slice(start, end)}; globalThis.orientationApi = { ${prepareName}, ${restoreName} };`, context);
+  const pendingFullscreen = context.orientationApi.prepareInstalledVideoFullscreen();
+  dialog.open = false;
+  context.document.fullscreenElement = null;
+  await context.orientationApi.restoreInstalledAppPortrait();
+  await pendingFullscreen;
+  assert.equal(orientation, "portrait-primary", `${shared ? "共有" : "管理"}画面では、閉じる処理が遅れて完了した回転許可より優先されます。`);
+}
+
+await verifyClosedPreviewWinsOrientationRace(mainJs, "function previewVideoIsFullscreen", "function handlePreviewFullscreenOrientationChange");
+await verifyClosedPreviewWinsOrientationRace(shareJs, "function sharedPreviewVideoIsFullscreen", "function handleSharedPreviewFullscreenOrientationChange", true);
 
 console.log("shared sorting and immersive previews: ok");
