@@ -53,6 +53,7 @@ const state = {
   installPrompt: null,
   thumbnailAttempts: new Set(),
   thumbnailBackfillRunning: false,
+  durationUpdates: new Set(),
   handlingPopState: false,
   historyReady: false,
   folderNamesMigrated: false,
@@ -1907,7 +1908,7 @@ function fileCard(file) {
     : `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
   button.innerHTML = `
     <div class="thumb">${thumbnail}</div>
-    <div class="file-copy"><strong>${escapeHtml(file.name)}</strong><span class="file-meta"><span>${formatBytes(file.sizeBytes)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
+    <div class="file-copy"><strong>${escapeHtml(file.name)}</strong><span class="file-meta"><span class="file-size">${formatMediaDetails(file)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
   button.addEventListener("click", (event) => {
     if (card.dataset.longPressed === "true") {
       card.dataset.longPressed = "false";
@@ -1974,6 +1975,8 @@ async function hydrateFileRecords(records) {
           file.name = metadata.name;
           file.mimeType = metadata.mimeType;
           file.mediaKind = metadata.mediaKind;
+          file.lastModified = Number(metadata.lastModified || 0);
+          file.durationSeconds = normalizeDurationSeconds(metadata.durationSeconds);
         } catch {
           file.name = "復号できないファイル";
           file.mimeType = "application/octet-stream";
@@ -3072,6 +3075,7 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
   if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
   const mediaKind = detectClientKind(file.type || "application/octet-stream", file.name);
   const thumbnailPromise = makeThumbnail(file);
+  const durationPromise = readLocalMediaDuration(file, mediaKind);
   tracker.phase(file, "暗号化準備中…");
   const encrypted = await TRoomCrypto.createFilePackage(file, folderKey, mediaKind);
   throwIfUploadCancelled(signal);
@@ -3120,6 +3124,16 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
     uploadCompleted = true;
     tracker.phase(file, "Cloudflareへの保存確認済み");
     if (signal?.aborted) return;
+    try {
+      const durationSeconds = normalizeDurationSeconds(await durationPromise);
+      if (durationSeconds) {
+        const metadata = await TRoomCrypto.encryptFileMetadata(fileMetadataForStorage(file, mediaKind, durationSeconds), encrypted.fileKey);
+        await api(`/files/${init.id}`, { method: "PATCH", body: JSON.stringify(metadata), signal });
+      }
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      console.warn("Media duration metadata could not be saved", error);
+    }
     tracker.phase(file, "サムネイル処理中…");
     try {
       const thumbnail = await thumbnailPromise;
@@ -3425,6 +3439,37 @@ async function makeThumbnail(file) {
   } catch { return null; }
 }
 
+async function readLocalMediaDuration(file, mediaKind) {
+  if (!["video", "audio"].includes(mediaKind)) return null;
+  const url = URL.createObjectURL(file);
+  const media = document.createElement(mediaKind === "audio" ? "audio" : "video");
+  media.preload = "metadata";
+  media.muted = true;
+  const mpegType = mediaKind === "video" ? mpegContainerType(file.name) : "";
+  let player = null;
+  try {
+    if (mpegType && globalThis.mpegts?.isSupported()) {
+      player = mpegts.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.size || 0) || undefined }, { enableWorker: false, lazyLoad: true, lazyLoadMaxDuration: 30, seekType: "range" });
+      player.attachMediaElement(media);
+      player.load();
+    } else {
+      media.src = url;
+      media.load();
+    }
+    await waitForVideoEvent(media, "loadedmetadata", 20000);
+    return normalizeDurationSeconds(media.duration);
+  } catch {
+    return null;
+  } finally {
+    try { player?.unload(); } catch {}
+    try { player?.detachMediaElement(); } catch {}
+    try { player?.destroy(); } catch {}
+    media.removeAttribute("src");
+    try { media.load(); } catch {}
+    URL.revokeObjectURL(url);
+  }
+}
+
 async function makeVideoThumbnail(file) {
   const url = URL.createObjectURL(file);
   try {
@@ -3648,7 +3693,7 @@ async function openPreview(file, options = {}) {
   $("#preview-more").open = false;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
-  $("#preview-size").textContent = formatBytes(file.sizeBytes);
+  $("#preview-size").textContent = formatMediaDetails(file);
   $("#preview-date").textContent = formatDate(file.createdAt);
   $("#download-link").href = Number(file.cryptoVersion) === 1 ? "#" : `${API}/files/${file.id}/download`;
   $("#edit-file-button").hidden = !canRenameFile(file);
@@ -3698,7 +3743,7 @@ async function openPreview(file, options = {}) {
   } else if (file.mediaKind === "video") {
     renderVideoPlayer(stage, file, url, generation);
   } else if (file.mediaKind === "audio") {
-    const audio = document.createElement("audio"); audio.controls = true; audio.preload = "metadata"; audio.src = url; stage.replaceChildren(audio);
+    const audio = document.createElement("audio"); audio.controls = true; audio.preload = "metadata"; observeAndPersistMediaDuration(audio, file); audio.src = url; stage.replaceChildren(audio);
   } else if (file.mimeType === "application/pdf") {
     const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.replaceChildren(frame);
   } else {
@@ -3877,6 +3922,7 @@ function renderVideoPlayer(stage, file, url, generation) {
   buffering.className = "player-buffering";
   buffering.textContent = "再生準備中…";
   stage.replaceChildren(video, buffering);
+  observeAndPersistMediaDuration(video, file);
   video.addEventListener("canplay", () => buffering.remove(), { once: true });
   const extension = String(file.name || "").split(".").pop().toLowerCase();
   const mpegType = extension === "flv" ? "flv" : ["ts", "m2ts", "mts"].includes(extension) ? "m2ts" : "";
@@ -3912,6 +3958,53 @@ function renderVideoPlayer(stage, file, url, generation) {
     message.textContent = "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。";
     stage.append(message);
   }, { once: true });
+}
+
+function observeAndPersistMediaDuration(media, file) {
+  const update = () => {
+    const durationSeconds = normalizeDurationSeconds(media.duration);
+    if (durationSeconds) void persistMediaDuration(file, durationSeconds);
+  };
+  media.addEventListener("loadedmetadata", update, { once: true });
+  media.addEventListener("durationchange", update);
+}
+
+async function persistMediaDuration(file, durationSeconds) {
+  const normalized = normalizeDurationSeconds(durationSeconds);
+  if (!normalized || normalized === normalizeDurationSeconds(file.durationSeconds)) return;
+  file.durationSeconds = normalized;
+  updateDurationDisplay(file);
+  if (Number(file.cryptoVersion) !== 1 || !file.fileKey || !canRenameFile(file) || state.durationUpdates.has(Number(file.id))) return;
+  state.durationUpdates.add(Number(file.id));
+  try {
+    const encryptedMetadata = await TRoomCrypto.encryptFileMetadata(fileMetadataForStorage(file, file.mediaKind, normalized), file.fileKey);
+    await api(`/files/${file.id}`, { method: "PATCH", body: JSON.stringify(encryptedMetadata) });
+    file.encryptedMetadata = encryptedMetadata.encryptedMetadata;
+    file.metadataIv = encryptedMetadata.metadataIv;
+  } catch (error) {
+    console.warn("Media duration metadata could not be updated", error);
+  } finally {
+    state.durationUpdates.delete(Number(file.id));
+  }
+}
+
+function updateDurationDisplay(file) {
+  const card = $(`.file-card[data-file-id="${Number(file.id)}"]`);
+  const size = card?.querySelector(".file-size");
+  if (size) size.textContent = formatMediaDetails(file);
+  if (Number(state.previewFileId) === Number(file.id)) $("#preview-size").textContent = formatMediaDetails(file);
+}
+
+function fileMetadataForStorage(file, mediaKind, durationSeconds = null, name = file.name) {
+  const metadata = {
+    name,
+    mimeType: file.type || file.mimeType || "application/octet-stream",
+    mediaKind,
+    lastModified: Number(file.lastModified || 0)
+  };
+  const normalized = normalizeDurationSeconds(durationSeconds);
+  if (normalized) metadata.durationSeconds = normalized;
+  return metadata;
 }
 
 function openEditDialog() {
@@ -3952,7 +4045,7 @@ async function saveFile(event) {
     const name = cleanEditableName($("#edit-name").value);
     if (Number(file.cryptoVersion) === 1) {
       if (!file.fileKey) throw new Error("ファイルの暗号化鍵を解除してください。");
-      const metadata = { name, mimeType: file.mimeType, mediaKind: file.mediaKind };
+      const metadata = fileMetadataForStorage(file, file.mediaKind, file.durationSeconds, name);
       const encryptedMetadata = await TRoomCrypto.encryptFileMetadata(metadata, file.fileKey);
       await api(`/files/${id}`, { method: "PATCH", body: JSON.stringify(encryptedMetadata) });
       file.name = metadata.name;
@@ -4168,6 +4261,9 @@ function cleanEditableName(value) {
   return name;
 }
 function formatBytes(bytes) { const value = Number(bytes || 0); if (value < 1024) return `${value} B`; const units = ["KB", "MB", "GB", "TB"]; let size = value / 1024; let i = 0; while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; } return `${size >= 100 ? size.toFixed(0) : size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${units[i]}`; }
+function normalizeDurationSeconds(value) { const seconds = Number(value); return Number.isFinite(seconds) && seconds > 0 ? Math.max(1, Math.round(seconds)) : null; }
+function formatMediaDuration(value) { const total = normalizeDurationSeconds(value); if (!total) return ""; const hours = Math.floor(total / 3600); const minutes = Math.floor((total % 3600) / 60); const seconds = total % 60; return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : `${minutes}:${String(seconds).padStart(2, "0")}`; }
+function formatMediaDetails(file) { const duration = ["video", "audio"].includes(file?.mediaKind) ? formatMediaDuration(file.durationSeconds) : ""; return duration ? `${formatBytes(file.sizeBytes)}・${duration}` : formatBytes(file?.sizeBytes); }
 function formatDate(value) { if (!value) return "—"; const date = new Date(String(value).replace(" ", "T") + (String(value).includes("Z") ? "" : "Z")); return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric" }).format(date); }
 function formatDateTime(value) { if (!value) return "—"; const date = new Date(String(value).replace(" ", "T") + (String(value).includes("Z") ? "" : "Z")); return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date); }
 function formatEpoch(value) { const date = new Date(Number(value) * 1000); return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date) : "—"; }

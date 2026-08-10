@@ -224,7 +224,7 @@ function fileCard(file) {
   const article = document.createElement("article"); article.className = "file";
   article.dataset.fileId = String(file.id);
   const button = document.createElement("button"); button.type = "button";
-  button.innerHTML = `<div class="thumb"><span class="symbol">${kindSymbol(file.mediaKind)}</span></div><div class="file-copy"><strong>${escapeHtml(file.name)}</strong><small>${formatBytes(file.sizeBytes)}</small></div>`;
+  button.innerHTML = `<div class="thumb"><span class="symbol">${kindSymbol(file.mediaKind)}</span></div><div class="file-copy"><strong>${escapeHtml(file.name)}</strong><small class="file-size">${formatMediaDetails(file)}</small></div>`;
   button.addEventListener("click", (event) => {
     if (article.dataset.longPressed === "true") {
       article.dataset.longPressed = "false";
@@ -466,7 +466,7 @@ async function openPreview(file, options = {}) {
   state.selected = file;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
-  $("#share-preview-size").textContent = formatBytes(file.sizeBytes);
+  $("#share-preview-size").textContent = formatMediaDetails(file);
   $("#share-preview-date").textContent = formatDateTime(file.createdAt);
   const stage = $("#preview-stage"); stage.innerHTML = '<div class="preview-loading"><p>暗号を復号して再生準備をしています…</p></div>';
   if (!$("#preview-dialog").open) $("#preview-dialog").showModal();
@@ -498,7 +498,7 @@ async function openPreview(file, options = {}) {
     if (!sharedPreviewRequestActive(generation, file.id)) return;
     if (file.mediaKind === "image") { renderSharedPreviewImage(stage, file, url, generation); }
     else if (file.mediaKind === "video") { renderVideoPlayer(stage, file, url, generation); }
-    else if (file.mediaKind === "audio") { const audio = document.createElement("audio"); audio.controls = true; audio.src = url; stage.replaceChildren(audio); }
+    else if (file.mediaKind === "audio") { const audio = document.createElement("audio"); audio.controls = true; observeSharedMediaDuration(audio, file); audio.src = url; stage.replaceChildren(audio); }
     else if (file.mimeType === "application/pdf") { const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.replaceChildren(frame); }
     else stage.innerHTML = "<p>この形式はブラウザ内表示に対応していません。ダウンロードしてご確認ください。</p>";
   } catch (error) {
@@ -863,6 +863,7 @@ function renderVideoPlayer(stage, file, url, generation) {
   const video = document.createElement("video"); video.controls = true; video.playsInline = true; video.preload = "metadata";
   const buffering = document.createElement("div"); buffering.className = "player-buffering"; buffering.textContent = "再生準備中…";
   stage.replaceChildren(video, buffering);
+  observeSharedMediaDuration(video, file);
   video.addEventListener("canplay", () => buffering.remove(), { once: true });
   const extension = String(file.name || "").split(".").pop().toLowerCase();
   const mpegType = extension === "flv" ? "flv" : ["ts", "m2ts", "mts"].includes(extension) ? "m2ts" : "";
@@ -886,6 +887,19 @@ function renderVideoPlayer(stage, file, url, generation) {
     const message = document.createElement("p"); message.textContent = "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。"; stage.append(message);
   }, { once: true });
 }
+
+function observeSharedMediaDuration(media, file) {
+  const update = () => {
+    const durationSeconds = normalizeDurationSeconds(media.duration);
+    if (!durationSeconds) return;
+    file.durationSeconds = durationSeconds;
+    const size = document.querySelector(`.file[data-file-id="${Number(file.id)}"] .file-size`);
+    if (size) size.textContent = formatMediaDetails(file);
+    if (Number(state.selected?.id) === Number(file.id)) $("#share-preview-size").textContent = formatMediaDetails(file);
+  };
+  media.addEventListener("loadedmetadata", update, { once: true });
+  media.addEventListener("durationchange", update);
+}
 async function api(path, options = {}) { const headers = new Headers(options.headers); if (!options.rawBody) headers.set("Content-Type", "application/json"); const response = await fetch(`${API}${path}`, { ...options, headers, credentials: "same-origin" }); if (!response.ok) throw await responseError(response); return response.json(); }
 async function responseError(response) { let message = `通信に失敗しました（${response.status}）`; try { message = (await response.json()).error || message; } catch {} return new Error(message); }
 function failUnlock(message) { $("#unlock-error").textContent = message; }
@@ -893,6 +907,9 @@ function setNotice(message, error = false) { const node = $("#notice"); node.tex
 function kindSymbol(kind) { return ({ image:"▧",video:"▶",audio:"♪",document:"▤",other:"□" })[kind] || "□"; }
 function kindLabel(kind) { return ({ image:"写真",video:"動画",audio:"音声",document:"書類",other:"ファイル" })[kind] || "ファイル"; }
 function formatBytes(bytes) { const value=Number(bytes||0); if(value<1024)return `${value} B`; const units=["KB","MB","GB","TB"]; let size=value/1024,i=0; while(size>=1024&&i<units.length-1){size/=1024;i++;} return `${size>=100?size.toFixed(0):size>=10?size.toFixed(1):size.toFixed(2)} ${units[i]}`; }
+function normalizeDurationSeconds(value) { const seconds=Number(value); return Number.isFinite(seconds)&&seconds>0?Math.max(1,Math.round(seconds)):null; }
+function formatMediaDuration(value) { const total=normalizeDurationSeconds(value); if(!total)return ""; const hours=Math.floor(total/3600),minutes=Math.floor((total%3600)/60),seconds=total%60; return hours?`${hours}:${String(minutes).padStart(2,"0")}:${String(seconds).padStart(2,"0")}`:`${minutes}:${String(seconds).padStart(2,"0")}`; }
+function formatMediaDetails(file) { const duration=["video","audio"].includes(file?.mediaKind)?formatMediaDuration(file.durationSeconds):""; return duration?`${formatBytes(file.sizeBytes)}・${duration}`:formatBytes(file?.sizeBytes); }
 function formatEpoch(value) { return new Intl.DateTimeFormat("ja-JP",{year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}).format(new Date(Number(value)*1000)); }
 function formatDateTime(value) { const date=new Date(String(value).replace(" ","T")+(String(value).includes("Z")?"":"Z")); return new Intl.DateTimeFormat("ja-JP",{year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}).format(date); }
 function escapeHtml(value) { return String(value).replace(/[&<>"]/g,(char)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[char]); }
