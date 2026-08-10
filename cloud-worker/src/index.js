@@ -691,20 +691,10 @@ async function listUploadConflictCandidates(request, env, session) {
     .map((value) => Number(value))
     .filter((value) => Number.isSafeInteger(value) && value > 0))];
   if (!sizes.length || sizes.length > 50) throw new HttpError(400, "確認するファイル容量を1〜50件で指定してください。");
-  const scopeFolderId = optionalId(body.scopeFolderId);
-  let scopeTopFolderId = null;
-  if (scopeFolderId) {
-    await requireFolder(env, scopeFolderId);
-    await requireFolderAccess(env, scopeFolderId, session);
-    const scopeResult = await env.DB.prepare(`WITH RECURSIVE ancestors(id, parent_id) AS (
-        SELECT id, parent_id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
-        UNION ALL
-        SELECT parent.id, parent.parent_id FROM cloud_folders parent
-        JOIN ancestors child ON child.parent_id = parent.id
-        WHERE parent.deleted_at IS NULL
-      ) SELECT id FROM ancestors WHERE parent_id IS NULL LIMIT 1`).bind(scopeFolderId).first();
-    scopeTopFolderId = Number(scopeResult?.id || 0) || null;
-  }
+  const folderId = optionalId(body.folderId);
+  if (!folderId) throw new HttpError(400, "保存先フォルダを確認してください。");
+  await requireFolder(env, folderId);
+  await requireFolderAccess(env, folderId, session);
   const offset = Math.min(100000, Math.max(0, Number.parseInt(body.offset || "0", 10) || 0));
   const pageSize = 200;
   const sizePlaceholders = sizes.map(() => "?").join(", ");
@@ -715,51 +705,11 @@ async function listUploadConflictCandidates(request, env, session) {
       f.wrapped_file_key AS wrappedFileKey, f.file_key_iv AS fileKeyIv,
       f.created_at AS createdAt, f.updated_at AS updatedAt
     FROM cloud_files f`;
-  let query;
-  let values;
-  if (session.role === "admin") {
-    query = `WITH RECURSIVE folder_scope(id) AS (
-        SELECT id FROM cloud_folders WHERE id = COALESCE(?, id) AND parent_id IS NULL AND deleted_at IS NULL
-        UNION ALL
-        SELECT child.id FROM cloud_folders child JOIN folder_scope parent ON child.parent_id = parent.id
-        WHERE child.deleted_at IS NULL
-      ) ${select}
-      WHERE f.folder_id IN (SELECT id FROM folder_scope)
+  const query = `${select}
+      WHERE f.folder_id = ?
         AND f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes IN (${sizePlaceholders})
       ORDER BY f.id ASC LIMIT ? OFFSET ?`;
-    values = [scopeTopFolderId, ...sizes, pageSize + 1, offset];
-  } else {
-    const now = Math.floor(Date.now() / 1000);
-    query = `WITH RECURSIVE folder_access(id, top_folder_id, is_allowed, has_protected_ancestor) AS (
-        SELECT folder.id, folder.id,
-          CASE WHEN folder.password_hash IS NULL THEN 1 ELSE EXISTS (
-            SELECT 1 FROM cloud_folder_unlocks unlock
-            WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
-          ) END,
-          CASE WHEN folder.password_hash IS NULL THEN 0 ELSE 1 END
-        FROM cloud_folders folder
-        WHERE folder.parent_id IS NULL AND folder.deleted_at IS NULL
-        UNION
-        SELECT child.id, parent.top_folder_id,
-          parent.is_allowed AND (child.password_hash IS NULL OR EXISTS (
-            SELECT 1 FROM cloud_folder_unlocks unlock
-            WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
-          )),
-          parent.has_protected_ancestor OR child.password_hash IS NOT NULL
-        FROM cloud_folders child
-        JOIN folder_access parent ON child.parent_id = parent.id
-        WHERE child.deleted_at IS NULL
-      )
-      ${select}
-      WHERE f.folder_id IN (
-        SELECT id FROM folder_access
-        WHERE is_allowed = 1 AND has_protected_ancestor = 1
-          AND (? IS NULL OR top_folder_id = ?)
-      )
-        AND f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes IN (${sizePlaceholders})
-      ORDER BY f.id ASC LIMIT ? OFFSET ?`;
-    values = [session.sessionId, now, session.sessionId, now, scopeTopFolderId, scopeTopFolderId, ...sizes, pageSize + 1, offset];
-  }
+  const values = [folderId, ...sizes, pageSize + 1, offset];
   const result = await env.DB.prepare(query).bind(...values).all();
   const rows = result.results || [];
   const candidates = rows.slice(0, pageSize);
@@ -1665,7 +1615,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260810-37.css"],
-    ["/cloud.js", "/cloud-runtime-20260810-112.js"],
+    ["/cloud.js", "/cloud-runtime-20260810-113.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],

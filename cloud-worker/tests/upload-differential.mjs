@@ -26,6 +26,20 @@ assert.notEqual(composed, changed, "同名でも容量が異なるデータは�
 const incomingGroups = vm.runInContext('findIncomingUploadConflictGroups([{ name: "same.mp4", size: 100 }, { name: "same.mp4", size: 100 }, { name: "same.mp4", size: 101 }])', context);
 assert.equal(incomingGroups.length, 1, "同名・同容量の選択データだけを競合グループにしてください。");
 assert.equal(incomingGroups[0].length, 2, "同名・同容量の選択データは片方を選ばず全件保留してください。");
+const separateFolders = vm.runInContext(`(() => {
+  const left = { name: "same.mp4", size: 100 };
+  const right = { name: "same.mp4", size: 100 };
+  const destinations = new Map([[left, { displayName: "folder-a/same.mp4" }], [right, { displayName: "folder-b/same.mp4" }]]);
+  return findIncomingUploadConflictGroups([left, right], destinations);
+})()`, context);
+assert.equal(separateFolders.length, 0, "別フォルダへ保存する同名・同容量データは、アップロード時の競合にしないでください。");
+const sameRelativeFolder = vm.runInContext(`(() => {
+  const left = { name: "same.mp4", size: 100 };
+  const right = { name: "same.mp4", size: 100 };
+  const destinations = new Map([[left, { displayName: "folder-a/same.mp4" }], [right, { displayName: "folder-a/same.mp4" }]]);
+  return findIncomingUploadConflictGroups([left, right], destinations);
+})()`, context);
+assert.equal(sameRelativeFolder.length, 1, "同じ相対パスへ保存する同名・同容量データは、アップロード時の競合にしてください。");
 
 const folderUpload = client.match(/async function uploadSelectedFolder\(event\) \{[\s\S]*?\n\}\n\nfunction waitForInterfacePaint/)?.[0] || "";
 assert.match(folderUpload, /planFolderUpload/);
@@ -46,16 +60,20 @@ assert.match(client, /差分アップロード完了/);
 assert.match(client, /displayName \|\| file\.downloadDisplayName \|\| file\.name/);
 assert.match(client, /復号できない既存データは誤って保留せず/);
 assert.match(client, /今回選択したデータ内に同名・同容量のファイルがあります/);
-assert.match(client, /同名・同容量の保存済みデータがあります/);
+assert.match(client, /同じ保存先に、同名・同容量の保存済みデータがあります/);
 assert.match(client, /findIncomingUploadConflictGroups/);
+assert.match(client, /incomingUploadRelativeFolder/);
+assert.match(client, /destinations\?\.get\(file\)\?\.folderId \?\? state\.folderId/);
 assert.match(client, /existingLocations: locations/);
 assert.match(client, /renderUploadConflicts/);
 
 assert.match(worker, /async function listUploadConflictCandidates/);
 assert.match(worker, /f\.size_bytes IN \(\$\{sizePlaceholders\}\)/);
-assert.match(worker, /WITH RECURSIVE folder_access/);
-assert.match(worker, /is_allowed = 1 AND has_protected_ancestor = 1/);
-assert.match(worker, /unlock\.session_id = \?/);
+const uploadCandidateRoute = worker.match(/async function listUploadConflictCandidates[\s\S]*?\n\}/)?.[0] || "";
+assert.match(uploadCandidateRoute, /WHERE f\.folder_id = \?/, "保存済みデータは実際の保存先フォルダ内だけを照合してください。");
+assert.doesNotMatch(uploadCandidateRoute, /WITH RECURSIVE/, "アップロード前判定で別フォルダを横断しないでください。");
+const storedConflictRoute = worker.match(/async function listStoredConflictCandidates[\s\S]*?\n\}/)?.[0] || "";
+assert.match(storedConflictRoute, /WITH RECURSIVE folder_scope/, "既存の競合一覧のフォルダ横断処理は変更しないでください。");
 assert.match(worker, /CASE WHEN f\.crypto_version = 1 THEN '' ELSE f\.original_name END/);
 assert.match(html, /id="upload-plan-summary"[^>]*hidden/);
 assert.match(html, /id="upload-conflict-summary"[^>]*hidden/);

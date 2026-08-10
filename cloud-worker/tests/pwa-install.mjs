@@ -13,7 +13,7 @@ const [html, client, worker, server, offline, manifestSource, css] = await Promi
 const manifest = JSON.parse(manifestSource);
 
 for (const [source, runtime] of [
-  ["cloud.js", "cloud-runtime-20260810-112.js"],
+  ["cloud.js", "cloud-runtime-20260810-113.js"],
   ["cloud.css", "cloud-runtime-20260810-37.css"],
   ["media-client.js", "media-client-20260810-8.js"],
   ["media-worker.js", "media-worker-20260810-9.js"],

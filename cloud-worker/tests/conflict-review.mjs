@@ -55,11 +55,11 @@ assert.match(worker, /path === "\/api\/conflicts"/);
 assert.match(worker, /async function listStoredConflictCandidates/);
 assert.match(worker, /folder_scope\(id, top_folder_id\)/);
 assert.match(worker, /scope\.top_folder_id AS topFolderId/);
-assert.match(worker, /scopeFolderId = optionalId\(body\.scopeFolderId\)/, "通常の競合判定にもトップフォルダ境界を適用してください。");
-assert.match(client, /scopeFolderId: Number\(scopeFolderId\) \|\| null/, "競合照合時に現在のトップフォルダ範囲を送信してください。");
+assert.match(worker, /folderId = optionalId\(body\.folderId\)/, "アップロード前判定は実際の保存先フォルダを指定してください。");
+assert.match(client, /folderId: exactFolderId/, "アップロード前判定へ実際の保存先フォルダを送信してください。");
 assert.match(worker, /WITH RECURSIVE folder_access/);
 assert.match(worker, /access\.is_allowed = 1 AND access\.has_protected_ancestor = 1/);
 assert.match(html, /cloud\.css\?v=20260810-37/);
-assert.match(html, /cloud\.js\?v=20260810-112/);
+assert.match(html, /cloud\.js\?v=20260810-113/);
 
 console.log("stored conflict badges and grouped review: ok");

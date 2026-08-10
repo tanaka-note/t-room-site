@@ -46,8 +46,13 @@ await expectStatus("最上位フォルダのPW必須", await request("/folders",
 await expectStatus("副管理者の存在しないファイル削除", await request("/files/999999", "subadmin", { method: "DELETE", headers: { Origin: origin, "Content-Type": "application/json" } }), 404);
 await expectStatus("副管理者の容量内訳拒否", await request("/usage", "subadmin"), 403);
 await expectStatus("副管理者のフォルダ別容量内訳拒否", await request("/usage-details", "subadmin"), 403);
-await expectStatus("管理者の競合候補照合", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], offset: 0 }) }), 200);
-await expectStatus("副管理者の解除範囲内競合候補照合", await request("/upload-conflict-candidates", "subadmin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], offset: 0 }) }), 200);
+const adminItemsResponse = await expectStatus("管理者の保存先候補取得", await request("/items", "admin"), 200);
+const adminItems = await adminItemsResponse.json();
+const uploadDestinationFolderId = Number(adminItems.folders?.[0]?.id || 0);
+if (uploadDestinationFolderId) {
+  await expectStatus("管理者の保存先限定競合候補照合", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], folderId: uploadDestinationFolderId, offset: 0 }) }), 200);
+}
+await expectStatus("競合候補照合の保存先指定必須", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], offset: 0 }) }), 400);
 await expectStatus("競合候補照合の容量指定検証", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [] }) }), 400);
 await expectStatus("管理者の保存済み競合グループ照合", await request("/conflicts?offset=0", "admin"), 200);
 await expectStatus("副管理者の解除範囲内保存済み競合グループ照合", await request("/conflicts?offset=0", "subadmin"), 200);
