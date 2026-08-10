@@ -654,6 +654,36 @@ async function listItems(url, env, session) {
   });
 }
 
+async function loadConflictFolderRecords(env, folderIds) {
+  const uniqueFolderIds = [...new Set(folderIds.map(Number).filter(Boolean))];
+  const folders = new Map();
+  for (let start = 0; start < uniqueFolderIds.length; start += 75) {
+    const batch = uniqueFolderIds.slice(start, start + 75);
+    const placeholders = batch.map(() => "?").join(", ");
+    const result = await env.DB.prepare(`WITH RECURSIVE ancestors AS (
+        SELECT id, parent_id, name, crypto_version, encrypted_name, name_iv,
+          password_salt, password_wrapped_key, password_wrap_iv,
+          admin_wrapped_key, parent_wrapped_key, parent_wrap_iv
+        FROM cloud_folders WHERE id IN (${placeholders}) AND deleted_at IS NULL
+        UNION
+        SELECT parent.id, parent.parent_id, parent.name, parent.crypto_version,
+          parent.encrypted_name, parent.name_iv, parent.password_salt,
+          parent.password_wrapped_key, parent.password_wrap_iv,
+          parent.admin_wrapped_key, parent.parent_wrapped_key, parent.parent_wrap_iv
+        FROM cloud_folders parent JOIN ancestors child ON parent.id = child.parent_id
+        WHERE parent.deleted_at IS NULL
+      )
+      SELECT id, parent_id AS parentId, name, crypto_version AS cryptoVersion,
+        encrypted_name AS encryptedName, name_iv AS nameIv,
+        password_salt AS passwordSalt, password_wrapped_key AS passwordWrappedKey,
+        password_wrap_iv AS passwordWrapIv, admin_wrapped_key AS adminWrappedKey,
+        parent_wrapped_key AS parentWrappedKey, parent_wrap_iv AS parentWrapIv
+      FROM ancestors ORDER BY id ASC`).bind(...batch).all();
+    for (const folder of result.results || []) folders.set(Number(folder.id), folder);
+  }
+  return [...folders.values()];
+}
+
 async function listUploadConflictCandidates(request, env, session) {
   requireUpload(session);
   const body = await readJson(request, 16384);
@@ -734,30 +764,7 @@ async function listUploadConflictCandidates(request, env, session) {
   const rows = result.results || [];
   const candidates = rows.slice(0, pageSize);
   const folderIds = [...new Set(candidates.map((file) => Number(file.folderId)).filter(Boolean))];
-  let folders = [];
-  if (folderIds.length) {
-    const placeholders = folderIds.map(() => "?").join(", ");
-    const folderResult = await env.DB.prepare(`WITH RECURSIVE ancestors AS (
-        SELECT id, parent_id, name, crypto_version, encrypted_name, name_iv,
-          password_salt, password_wrapped_key, password_wrap_iv,
-          admin_wrapped_key, parent_wrapped_key, parent_wrap_iv
-        FROM cloud_folders WHERE id IN (${placeholders}) AND deleted_at IS NULL
-        UNION
-        SELECT parent.id, parent.parent_id, parent.name, parent.crypto_version,
-          parent.encrypted_name, parent.name_iv, parent.password_salt,
-          parent.password_wrapped_key, parent.password_wrap_iv,
-          parent.admin_wrapped_key, parent.parent_wrapped_key, parent.parent_wrap_iv
-        FROM cloud_folders parent JOIN ancestors child ON parent.id = child.parent_id
-        WHERE parent.deleted_at IS NULL
-      )
-      SELECT id, parent_id AS parentId, name, crypto_version AS cryptoVersion,
-        encrypted_name AS encryptedName, name_iv AS nameIv,
-        password_salt AS passwordSalt, password_wrapped_key AS passwordWrappedKey,
-        password_wrap_iv AS passwordWrapIv, admin_wrapped_key AS adminWrappedKey,
-        parent_wrapped_key AS parentWrappedKey, parent_wrap_iv AS parentWrapIv
-      FROM ancestors ORDER BY id ASC`).bind(...folderIds).all();
-    folders = folderResult.results || [];
-  }
+  const folders = await loadConflictFolderRecords(env, folderIds);
   return json({
     candidates,
     folders,
@@ -827,30 +834,7 @@ async function listStoredConflictCandidates(url, env, session) {
   const rows = result.results || [];
   const candidates = rows.slice(0, pageSize);
   const folderIds = [...new Set(candidates.map((file) => Number(file.folderId)).filter(Boolean))];
-  let folders = [];
-  if (folderIds.length) {
-    const placeholders = folderIds.map(() => "?").join(", ");
-    const folderResult = await env.DB.prepare(`WITH RECURSIVE ancestors AS (
-        SELECT id, parent_id, name, crypto_version, encrypted_name, name_iv,
-          password_salt, password_wrapped_key, password_wrap_iv,
-          admin_wrapped_key, parent_wrapped_key, parent_wrap_iv
-        FROM cloud_folders WHERE id IN (${placeholders}) AND deleted_at IS NULL
-        UNION
-        SELECT parent.id, parent.parent_id, parent.name, parent.crypto_version,
-          parent.encrypted_name, parent.name_iv, parent.password_salt,
-          parent.password_wrapped_key, parent.password_wrap_iv,
-          parent.admin_wrapped_key, parent.parent_wrapped_key, parent.parent_wrap_iv
-        FROM cloud_folders parent JOIN ancestors child ON parent.id = child.parent_id
-        WHERE parent.deleted_at IS NULL
-      )
-      SELECT id, parent_id AS parentId, name, crypto_version AS cryptoVersion,
-        encrypted_name AS encryptedName, name_iv AS nameIv,
-        password_salt AS passwordSalt, password_wrapped_key AS passwordWrappedKey,
-        password_wrap_iv AS passwordWrapIv, admin_wrapped_key AS adminWrappedKey,
-        parent_wrapped_key AS parentWrappedKey, parent_wrap_iv AS parentWrapIv
-      FROM ancestors ORDER BY id ASC`).bind(...folderIds).all();
-    folders = folderResult.results || [];
-  }
+  const folders = await loadConflictFolderRecords(env, folderIds);
   return json({ candidates, folders, nextOffset: rows.length > pageSize ? offset + pageSize : null });
 }
 
