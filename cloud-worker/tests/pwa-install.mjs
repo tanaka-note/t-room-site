@@ -19,10 +19,10 @@ assert.equal(manifest.orientation, "any");
 assert.equal(manifest.theme_color, "#071426");
 assert.ok(manifest.icons.some((icon) => icon.sizes === "192x192"));
 assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512" && icon.purpose === "maskable"));
-assert.ok(manifest.icons.every((icon) => icon.src.includes("-v2.png?rev=71e8df8")), "既存PWAへ新しいアイコンURLを通知してください。");
+assert.ok(manifest.icons.every((icon) => icon.src.includes("-v2.png?rev=20260810-2")), "既存PWAへ新しいアイコンURLを通知してください。");
 
-assert.match(html, /rel="manifest" href="\/cloud\/manifest-v2\.webmanifest\?rev=71e8df8"/);
-assert.match(html, /apple-touch-icon-v2\.png\?rev=71e8df8/);
+assert.match(html, /rel="manifest" href="\/cloud\/manifest\.webmanifest"/, "既存PWAの更新経路を維持するためmanifestのURLを変更しないでください。");
+assert.match(html, /apple-touch-icon-v2\.png\?rev=20260810-2/);
 assert.match(html, /name="theme-color" content="#071426"/);
 assert.match(html, /id="install-app-button-top"/);
 assert.doesNotMatch(html, /id="install-app-button"/);
@@ -36,13 +36,13 @@ assert.match(client, /\$\("#install-app-button-top"\)\.hidden = !available/);
 assert.match(client, /Safariの共有ボタン/);
 assert.match(client, /ホーム画面に追加/);
 assert.match(client, /async function registerPwaWorker\(\)/);
-assert.match(client, /preserveAppOrientation/);
-assert.match(client, /screen\.orientation\.lock\("portrait-primary"\)/);
+assert.match(client, /await registration\.update\(\)/);
 assert.match(client, /screen\.orientation\?\.unlock/);
-assert.doesNotMatch(client, /screen\.orientation\.lock\("landscape"\)/);
+assert.doesNotMatch(client, /screen\.orientation\.lock\(/, "端末の自動回転設定を上書きしないでください。");
 assert.match(worker, /const APP_SHELL_CACHE/);
-assert.match(worker, /tcloud-shell-20260810-5/);
-assert.match(worker, /icon-192-v2\.png\?rev=71e8df8/);
+assert.match(worker, /tcloud-shell-20260810-6/);
+assert.match(worker, /\/cloud\/manifest\.webmanifest/);
+assert.match(worker, /icon-192-v2\.png\?rev=20260810-2/);
 assert.match(worker, /event\.request\.mode === "navigate"/);
 assert.doesNotMatch(worker, /caches\.put/);
 assert.doesNotMatch(worker.match(/const APP_SHELL_ASSETS = \[[\s\S]*?\];/)?.[0] || "", /\/cloud\/api/);
@@ -53,6 +53,7 @@ for (const path of ["/manifest-v2.webmanifest", "/icons/icon-192-v2.png", "/icon
   assert.ok(server.includes(`["${path}",`), `${path} is not publicly routed`);
 }
 assert.match(server, /application\/manifest\+json/);
+assert.match(server, /isPwaMetadataAsset[\s\S]*?Cache-Control/, "manifestとアイコンは再検証できるキャッシュ設定にしてください。");
 assert.match(offline, /ネットワークに接続できません/);
 
 for (const [filename, expected] of [["icon-192.png", 192], ["icon-512.png", 512], ["icon-maskable-512.png", 512], ["apple-touch-icon.png", 180]]) {

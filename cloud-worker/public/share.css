@@ -94,7 +94,7 @@ dialog::backdrop { background:rgba(10,20,24,.7); backdrop-filter:blur(4px); }
 .preview-stage video { touch-action:pinch-zoom; }
 .preview-stage audio { width:min(620px,100%); }
 .preview-stage iframe { width:100%; min-height:65svh; border:0; background:white; }
-.preview-stage-wrap:fullscreen { width:100vw; height:100vh; max-height:none; background:#000; }
+.preview-stage-wrap:fullscreen { width:100vw; width:100dvw; height:100vh; height:100dvh; max-height:none; background:#000; }
 .preview-stage-wrap:fullscreen .preview-stage { width:100%; height:100%; max-height:none; }
 .preview-stage-wrap:fullscreen .preview-stage img,.preview-stage-wrap:fullscreen .preview-stage video { width:100%; height:100%; max-height:none; object-fit:contain; }
 .preview-loading { display:grid; justify-items:center; gap:14px; color:#e9f0f1; }

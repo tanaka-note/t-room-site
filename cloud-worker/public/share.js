@@ -526,6 +526,7 @@ async function toggleSharedPreviewFullscreen() {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
     else if (stage.requestFullscreen) {
+      releaseSharedOrientationLock();
       await stage.requestFullscreen();
       if (video) releaseSharedOrientationLock();
     }
@@ -543,7 +544,7 @@ function syncSharedFullscreenButton() {
     ? document.fullscreenElement
     : document.fullscreenElement?.querySelector?.("video");
   if (active && fullscreenVideo) releaseSharedOrientationLock();
-  else void preserveSharedPortraitOrientation(active);
+  else releaseSharedOrientationLock();
 }
 
 function releaseSharedOrientationLock() {
@@ -555,18 +556,7 @@ function handleSharedVideoFullscreenEnter() {
 }
 
 function handleSharedVideoFullscreenExit() {
-  void preserveSharedPortraitOrientation();
-}
-
-async function preserveSharedPortraitOrientation(force = false) {
-  const standalone = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
-  if ((!standalone && !force) || !screen.orientation?.lock) return false;
-  try {
-    await screen.orientation.lock("portrait-primary");
-    return true;
-  } catch {
-    return false;
-  }
+  releaseSharedOrientationLock();
 }
 
 function handleSharedPreviewKeydown(event) {
@@ -819,7 +809,7 @@ function clearPreview() {
 function handlePreviewClosed() {
   state.previewGeneration += 1;
   clearPreview();
-  void preserveSharedPortraitOrientation();
+  releaseSharedOrientationLock();
   if (state.previewHistoryActive && !state.handlingPopState) {
     state.previewHistoryActive = false;
     history.back();

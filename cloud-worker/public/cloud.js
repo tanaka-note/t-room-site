@@ -86,7 +86,7 @@ document.addEventListener("DOMContentLoaded", initialize);
 async function initialize() {
   bindEvents();
   registerPwaWorker();
-  preserveAppOrientation();
+  releasePreviewOrientationLock();
   updateInstallButtons();
   await restoreRememberedLogin();
   try {
@@ -281,7 +281,8 @@ async function installApp() {
 async function registerPwaWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
-    await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-7", { scope: "/cloud/", updateViaCache: "none" });
+    const registration = await navigator.serviceWorker.register("/cloud/media-worker.js?v=20260810-8", { scope: "/cloud/", updateViaCache: "none" });
+    await registration.update();
   } catch (error) {
     console.warn("T-Cloud app worker registration failed", error);
   }
@@ -4928,9 +4929,9 @@ async function togglePreviewFullscreen() {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
     else if (stage.requestFullscreen) {
+      releasePreviewOrientationLock();
       await stage.requestFullscreen();
       if (video) releasePreviewOrientationLock();
-      else await preserveAppOrientation(true);
     }
     else if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
   } catch (error) { setNotice(`全画面表示を開始できませんでした：${error.message}`, true); }
@@ -4946,7 +4947,7 @@ function syncPreviewFullscreenButton() {
     ? document.fullscreenElement
     : document.fullscreenElement?.querySelector?.("video");
   if (active && fullscreenVideo) releasePreviewOrientationLock();
-  else void preserveAppOrientation(active);
+  else releasePreviewOrientationLock();
 }
 
 function releasePreviewOrientationLock() {
@@ -4958,19 +4959,7 @@ function handlePreviewVideoFullscreenEnter() {
 }
 
 function handlePreviewVideoFullscreenExit() {
-  void preserveAppOrientation(false);
-}
-
-async function preserveAppOrientation(force = false) {
-  const standalone = window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
-  if ((!standalone && !force) || !screen.orientation?.lock) return false;
-  try {
-    await screen.orientation.lock("portrait-primary");
-    return true;
-  } catch {
-    // Some browsers only allow orientation locking after entering fullscreen.
-    return false;
-  }
+  releasePreviewOrientationLock();
 }
 
 function handlePreviewDoubleClick(event) {
@@ -5000,7 +4989,7 @@ function handlePreviewTouchEnd(event) {
 function handlePreviewClosed() {
   state.previewGeneration += 1;
   clearPreviewUrl();
-  void preserveAppOrientation(false);
+  releasePreviewOrientationLock();
   state.previewFileId = null;
   state.previewTouchStart = null;
   if (state.previewHistoryActive && !state.handlingPopState) {

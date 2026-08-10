@@ -1694,7 +1694,8 @@ async function serveAsset(request, env, url, path) {
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   const isAuthenticationAsset = assetPath === "/cloud.js" || assetPath === "/crypto-vault.js" || assetPath === "/file-safety.js" || assetPath === "/media-range.js" || assetPath === "/media-client.js" || assetPath === "/media-worker.js" || assetPath === "/share.js";
-  headers.set("Cache-Control", assetPath === "/" || assetPath === "/share" || isAuthenticationAsset
+  const isPwaMetadataAsset = assetPath === "/manifest.webmanifest" || assetPath.startsWith("/icons/");
+  headers.set("Cache-Control", assetPath === "/" || assetPath === "/share" || isAuthenticationAsset || isPwaMetadataAsset
     ? "no-store"
     : "public, max-age=3600");
   if (assetPath === "/media-worker.js") headers.set("Service-Worker-Allowed", "/cloud/");

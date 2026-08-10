@@ -6,14 +6,14 @@ importScripts("/cloud/media-range.js?v=20260808-1");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-20260810-5";
+const APP_SHELL_CACHE = "tcloud-shell-20260810-6";
 const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
-  "/cloud/manifest-v2.webmanifest?rev=71e8df8",
-  "/cloud/icons/icon-192-v2.png?rev=71e8df8",
-  "/cloud/icons/icon-512-v2.png?rev=71e8df8",
-  "/cloud/icons/icon-maskable-512-v2.png?rev=71e8df8"
+  "/cloud/manifest.webmanifest",
+  "/cloud/icons/icon-192-v2.png?rev=20260810-2",
+  "/cloud/icons/icon-512-v2.png?rev=20260810-2",
+  "/cloud/icons/icon-maskable-512-v2.png?rev=20260810-2"
 ];
 
 self.addEventListener("install", (event) => event.waitUntil((async () => {
