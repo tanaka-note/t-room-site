@@ -12,13 +12,13 @@ const [html, client, worker, server, offline, manifestSource] = await Promise.al
 const manifest = JSON.parse(manifestSource);
 
 for (const [source, runtime] of [
-  ["cloud.js", "cloud-runtime-20260810-105.js"],
-  ["cloud.css", "cloud-runtime-20260810-33.css"],
+  ["cloud.js", "cloud-runtime-20260810-106.js"],
+  ["cloud.css", "cloud-runtime-20260810-34.css"],
   ["media-client.js", "media-client-20260810-8.js"],
   ["media-worker.js", "media-worker-20260810-8.js"],
   ["manifest.webmanifest", "manifest-20260810-2.webmanifest"],
-  ["share.js", "share-runtime-20260810-31.js"],
-  ["share.css", "share-runtime-20260810-13.css"]
+  ["share.js", "share-runtime-20260810-32.js"],
+  ["share.css", "share-runtime-20260810-14.css"]
 ]) {
   assert.deepEqual(
     await readFile(new URL(`../public/${runtime}`, import.meta.url)),
@@ -54,7 +54,7 @@ assert.match(client, /Safariの共有ボタン/);
 assert.match(client, /ホーム画面に追加/);
 assert.match(client, /async function registerPwaWorker\(\)/);
 assert.match(client, /await registration\.update\(\)/);
-assert.match(client, /screen\.orientation\?\.unlock/);
+assert.doesNotMatch(client, /screen\.orientation/, "端末標準の全画面回転へ介入しないでください。");
 assert.doesNotMatch(client, /screen\.orientation\.lock\(/, "端末の自動回転設定を上書きしないでください。");
 assert.match(worker, /const APP_SHELL_CACHE/);
 assert.match(worker, /tcloud-shell-20260810-6/);
