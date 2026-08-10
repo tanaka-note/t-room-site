@@ -10,15 +10,20 @@ const [indexHtml, shareHtml, client, shareClient] = await Promise.all([
 
 assert.match(indexHtml, /id="upload-failure-summary"/);
 assert.match(indexHtml, /id="upload-dismiss"[^>]*>閉じる</);
+assert.match(indexHtml, /id="upload-safety-cancel"[^>]*>キャンセル</);
+assert.match(indexHtml, /id="upload-safety-continue"[^>]*>確認して続行</);
 assert.match(indexHtml, /id="download-failure-summary"/);
 assert.match(shareHtml, /id="share-download-failure-summary"/);
 
 assert.match(client, /const deferred = \[\];/);
-assert.match(client, /deferred\.push\(\{ error, file, index \}\)/);
+assert.match(client, /deferred\.push\(\{ error, file, index, destinationFolderId, destinationFolderKey \}\)/);
 assert.match(client, /エラー分を再試行中/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "後で再試行"/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "再試行中"/);
 assert.match(client, /renderTransferFailures\("#upload-failure-summary"/);
+assert.match(client, /function continuePendingSafetyUpload\(\)/);
+assert.match(client, /safetyConfirmed: true/);
+assert.match(client, /function isSafetyConfirmationError\(error\)/);
 assert.match(client, /function dismissUploadMessage\(\)[\s\S]*?renderTransferFailures\("#upload-failure-summary"[\s\S]*?panel\.hidden = true/);
 assert.match(client, /renderTransferFailures\("#download-failure-summary"/);
 assert.match(client, /recordDownloadEvent\(activeFile\.id, "download_failed", "cancelled"\)/);

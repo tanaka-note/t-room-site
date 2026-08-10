@@ -14,7 +14,7 @@ assert.match(client, /uploadAbort: null/);
 assert.match(client, /const fixedFolderId = state\.folderId \? Number\(state\.folderId\) : null/);
 assert.match(client, /const fixedFolderKey = fixedFolderId \? state\.crypto\.folderKeys\.get\(fixedFolderId\) : null/);
 assert.doesNotMatch(client, /destinationFolderId = state\.folderId/);
-assert.match(client, /async function uploadOne\(file, index, total, destinationFolderId, destinationFolderKey, signal, partLimiter, tracker\)/);
+assert.match(client, /async function uploadOne\(file, index, total, destinationFolderId, destinationFolderKey, signal, partLimiter, tracker, safetyConfirmed = false\)/);
 assert.match(client, /rawBody: true, signal/);
 assert.match(client, /function cancelUploads\(\)/);
 assert.match(client, /state\.uploadAbort\.abort\(\)/);

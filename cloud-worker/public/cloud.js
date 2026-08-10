@@ -30,6 +30,7 @@ const state = {
   dragDepth: 0,
   uploading: false,
   uploadAbort: null,
+  pendingSafetyUpload: null,
   downloadAbort: null,
   wakeLock: null,
   downloadActive: false,
@@ -180,6 +181,8 @@ function bindEvents() {
   $("#move-form").addEventListener("submit", moveSelectedItems);
   $("#upload-cancel").addEventListener("click", cancelUploads);
   $("#upload-dismiss").addEventListener("click", dismissUploadMessage);
+  $("#upload-safety-cancel").addEventListener("click", cancelPendingSafetyUpload);
+  $("#upload-safety-continue").addEventListener("click", continuePendingSafetyUpload);
   $("#download-cancel").addEventListener("click", cancelDownloads);
   $("#download-close").addEventListener("click", closeDownloadDialog);
   $("#download-retry-wake").addEventListener("click", requestDownloadWakeLock);
@@ -2667,7 +2670,7 @@ async function createEncryptedFolder(name, parentId, parentKey, password = "") {
   return created;
 }
 
-async function uploadFiles(files, destinations = null) {
+async function uploadFiles(files, destinations = null, options = {}) {
   if (!files.length || !state.session.canUpload) return;
   if (state.uploading) {
     setNotice("アップロードが完了してから、次のファイルを追加してください。", true);
@@ -2678,6 +2681,7 @@ async function uploadFiles(files, destinations = null) {
     return;
   }
   const requestedTotal = files.length;
+  const safetyConfirmed = options.safetyConfirmed === true;
   const skippedFiles = files
     .filter((file) => Number(file.size) === 0)
     .map((file) => ({ file, error: new Error("空ファイル（0バイト）のため、アップロード対象外です。") }));
@@ -2708,6 +2712,8 @@ async function uploadFiles(files, destinations = null) {
   $("#upload-activity").textContent = "送信準備中";
   $("#upload-activity").classList.remove("waiting");
   renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
+  state.pendingSafetyUpload = null;
+  $("#upload-safety-actions").hidden = true;
   $("#upload-dismiss").hidden = true;
   $("#upload-cancel").hidden = false;
   $("#upload-cancel").disabled = false;
@@ -2722,17 +2728,17 @@ async function uploadFiles(files, destinations = null) {
         const index = nextFileIndex++;
         if (index >= files.length) return;
         const file = files[index];
+        const destination = destinations?.get(file);
+        const destinationFolderId = destination?.folderId ?? fixedFolderId;
+        const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
         try {
-          const destination = destinations?.get(file);
-          const destinationFolderId = destination?.folderId ?? fixedFolderId;
-          const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
-          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker);
+          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker, safetyConfirmed);
           completed++;
           tracker.finish(file, completed);
         } catch (error) {
           if (error.name === "AbortError") return;
           tracker.defer(file);
-          deferred.push({ error, file, index });
+          deferred.push({ error, file, index, destinationFolderId, destinationFolderKey });
         }
       }
     };
@@ -2752,12 +2758,13 @@ async function uploadFiles(files, destinations = null) {
           cancelled = true;
           break;
         }
-        const { file, index } = item;
-        const destination = destinations?.get(file);
-        const destinationFolderId = destination?.folderId ?? fixedFolderId;
-        const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
+        const { file, index, destinationFolderId, destinationFolderKey } = item;
+        if (isSafetyConfirmationError(item.error)) {
+          finalFailures.push({ file, error: item.error, destinationFolderId, destinationFolderKey });
+          continue;
+        }
         try {
-          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker);
+          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker, safetyConfirmed);
           completed++;
           tracker.finish(file, completed);
         } catch (error) {
@@ -2766,7 +2773,7 @@ async function uploadFiles(files, destinations = null) {
             break;
           }
           tracker.defer(file);
-          finalFailures.push({ file, error });
+          finalFailures.push({ file, error, destinationFolderId, destinationFolderKey });
         }
       }
     }
@@ -2777,8 +2784,15 @@ async function uploadFiles(files, destinations = null) {
       setNotice(`アップロードを停止しました。完了済みの${completed}件は保存されています。`);
     } else if (finalFailures.length) {
       const unavailable = [...finalFailures, ...skippedFiles];
+      const safetyFailures = finalFailures.filter((item) => isSafetyConfirmationError(item.error));
+      if (safetyFailures.length) {
+        const retryDestinations = new Map();
+        for (const item of safetyFailures) retryDestinations.set(item.file, { folderId: item.destinationFolderId, folderKey: item.destinationFolderKey });
+        state.pendingSafetyUpload = { files: safetyFailures.map((item) => item.file), destinations: retryDestinations };
+        $("#upload-safety-actions").hidden = false;
+      }
       panel.classList.add("upload-error");
-      $("#upload-heading").textContent = "一部のアップロードに失敗しました";
+      $("#upload-heading").textContent = safetyFailures.length ? "アップロードの確認が必要です" : "一部のアップロードに失敗しました";
       $("#upload-status").textContent = `${completed} / ${requestedTotal}件保存`;
       $("#upload-file-progress").textContent = `${unavailable.length}件を保存できませんでした`;
       renderTransferFailures("#upload-failure-summary", "#upload-failed-list", unavailable);
@@ -2811,13 +2825,13 @@ async function uploadFiles(files, destinations = null) {
   await Promise.all([loadItems(), loadUsage()]);
 }
 
-async function uploadOne(file, index, total, destinationFolderId, destinationFolderKey, signal, partLimiter, tracker) {
+async function uploadOne(file, index, total, destinationFolderId, destinationFolderKey, signal, partLimiter, tracker, safetyConfirmed = false) {
   throwIfUploadCancelled(signal);
   tracker.start(file, index, total);
   tracker.phase(file, "安全性確認中…");
-  if (isBlockedClientFile(file)) throw new Error("安全上、このファイル形式は保存できません。");
+  if (!safetyConfirmed && isBlockedClientFile(file)) throw safetyConfirmationError("安全上、このファイル形式は保存できません。");
   if (!globalThis.TCloudSafety) throw new Error("安全性確認機能を読み込めません。ページを再読み込みしてください。");
-  await TCloudSafety.inspect(file);
+  if (!safetyConfirmed) await TCloudSafety.inspect(file);
   throwIfUploadCancelled(signal);
   const folderId = Number(destinationFolderId);
   const folderKey = destinationFolderKey || state.crypto.folderKeys.get(folderId);
@@ -3117,12 +3131,43 @@ function cancelUploads() {
 
 function dismissUploadMessage() {
   if (state.uploading) return;
+  state.pendingSafetyUpload = null;
+  $("#upload-safety-actions").hidden = true;
   const panel = $("#upload-panel");
   renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
   panel.classList.remove("upload-complete", "upload-error");
   panel.hidden = true;
   $("#upload-dismiss").hidden = true;
   setNotice("");
+}
+
+function cancelPendingSafetyUpload() {
+  if (state.uploading) return;
+  const count = state.pendingSafetyUpload?.files?.length || 0;
+  state.pendingSafetyUpload = null;
+  $("#upload-safety-actions").hidden = true;
+  $("#upload-heading").textContent = "確認対象のアップロードをキャンセルしました";
+  $("#upload-file-progress").textContent = `${count}件は保存されていません`;
+  setNotice("確認対象のデータは保存していません。");
+}
+
+async function continuePendingSafetyUpload() {
+  if (state.uploading || !state.pendingSafetyUpload?.files?.length) return;
+  const pending = state.pendingSafetyUpload;
+  state.pendingSafetyUpload = null;
+  $("#upload-safety-actions").hidden = true;
+  await uploadFiles(pending.files, pending.destinations, { safetyConfirmed: true });
+}
+
+function safetyConfirmationError(message) {
+  const error = new Error(message);
+  error.code = "SAFETY_CONFIRM_REQUIRED";
+  error.requiresConfirmation = true;
+  return error;
+}
+
+function isSafetyConfirmationError(error) {
+  return error?.code === "SAFETY_CONFIRM_REQUIRED" || error?.requiresConfirmation === true;
 }
 
 function throwIfUploadCancelled(signal) {

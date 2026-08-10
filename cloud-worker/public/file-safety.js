@@ -8,28 +8,35 @@
   ]);
   const ACTIVE_WEB_EXTENSIONS = new Set(["html", "htm", "xhtml", "svg"]);
 
+  function confirmationRequired(message) {
+    const error = new Error(message);
+    error.code = "SAFETY_CONFIRM_REQUIRED";
+    error.requiresConfirmation = true;
+    return error;
+  }
+
   async function inspect(file) {
     if (!file || typeof file.name !== "string" || typeof file.slice !== "function") {
       throw new Error("ファイル情報を確認できません。");
     }
     const name = file.name.normalize("NFKC");
     if (/[\u202A-\u202E\u2066-\u2069]/u.test(name)) {
-      throw new Error("ファイル名に表示方向を偽装する文字が含まれています。");
+      throw confirmationRequired("ファイル名に表示方向を偽装する文字が含まれています。");
     }
     const extensions = name.toLowerCase().split(".").slice(1).map((value) => value.trim()).filter(Boolean);
     const extension = extensions.at(-1) || "";
-    if (extensions.some((value) => BLOCKED_EXTENSIONS.has(value)) || ACTIVE_WEB_EXTENSIONS.has(extension)) {
-      throw new Error("安全上、このファイル形式は保存できません。");
+    if (BLOCKED_EXTENSIONS.has(extension) || ACTIVE_WEB_EXTENSIONS.has(extension)) {
+      throw confirmationRequired("安全上、このファイル形式は保存できません。");
     }
 
     const header = new Uint8Array(await file.slice(0, 8192).arrayBuffer());
     try {
       if (isExecutable(header) || isScript(header)) {
-        throw new Error("実行可能な内容が検出されたため保存できません。");
+        throw confirmationRequired("実行可能な内容が検出されました。");
       }
       const signature = signatureKind(header);
       if (!matchesExtension(extension, signature, header)) {
-        throw new Error("拡張子とファイル内容が一致しません。元のファイルをご確認ください。");
+        throw confirmationRequired("拡張子とファイル内容が一致しません。元のファイルをご確認ください。");
       }
       return Object.freeze({ status: "passed", inspectedBytes: header.byteLength });
     } finally {

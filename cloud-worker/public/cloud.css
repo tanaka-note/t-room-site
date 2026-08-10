@@ -140,6 +140,10 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .transfer-error-summary strong { display: block; margin-bottom: 6px; }
 .transfer-error-summary ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; }
 .transfer-error-summary li { overflow-wrap: anywhere; }
+.upload-safety-actions { margin-top: 13px; padding-top: 12px; border-top: 1px solid #e7c5c8; }
+.upload-safety-actions[hidden] { display: none; }
+.upload-safety-actions p { margin: 0 0 10px; color: var(--ink); font-weight: 700; }
+.upload-safety-actions > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 
 .content-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; }
 .selection-bar { position: sticky; z-index: 12; top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid #8fbab5; border-radius: 14px; background: rgba(241, 249, 248, .96); box-shadow: 0 8px 24px rgba(24, 62, 65, .12); backdrop-filter: blur(14px); }
