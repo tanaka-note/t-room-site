@@ -13,7 +13,7 @@
   <link rel="manifest" href="/cloud/manifest.webmanifest?v=20260810-3">
   <link rel="icon" href="/cloud/icons/icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-30">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260810-31">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -52,7 +52,7 @@
         <button class="nav-item" data-kind="video"><span>▶</span>動画</button>
         <button class="nav-item" data-kind="audio"><span>♪</span>音声</button>
         <button class="nav-item" data-kind="document"><span>▤</span>書類</button>
-        <button class="nav-item" data-view="history" hidden><span>↕</span>操作履歴</button>
+        <button class="nav-item" data-view="conflicts"><span aria-hidden="true">⚠</span>競合</button>
         <button class="nav-item" data-view="shares" hidden><span>↗</span>共有管理</button>
         <button class="nav-item" data-view="trash"><span>♲</span>ゴミ箱</button>
       </nav>
@@ -196,7 +196,7 @@
       <button class="active" data-view="all"><span>▦</span>フォルダ</button>
       <button data-kind="image"><span>▧</span>写真</button>
       <button data-kind="video"><span>▶</span>動画</button>
-      <button data-view="history" hidden><span>↑</span>履歴</button>
+      <button data-view="conflicts"><span aria-hidden="true">⚠</span>競合</button>
       <button data-view="shares" hidden><span>↗</span>共有</button>
       <button data-view="trash"><span>♲</span>ゴミ箱</button>
       <button id="mobile-account-button" type="button"><span>●</span>アカウント</button>
@@ -383,7 +383,7 @@
     </div>
     <div class="conflict-dialog-toolbar">
       <button id="conflict-groups-back" class="secondary-button" type="button" hidden>競合グループ一覧へ</button>
-      <p id="conflict-dialog-summary">同名・同容量のファイルをグループ単位で確認できます。</p>
+      <p id="conflict-dialog-summary">名前・容量・更新日時から、競合の疑いがあるファイルを確認できます。</p>
     </div>
     <div id="conflict-group-list" class="conflict-group-list"></div>
     <div id="conflict-file-list" class="conflict-file-list" hidden></div>
@@ -472,6 +472,6 @@
   <script src="/cloud/file-safety.js?v=20260810-2" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/media-client.js?v=20260810-5" defer></script>
-  <script src="/cloud/cloud.js?v=20260810-101" defer></script>
+  <script src="/cloud/cloud.js?v=20260810-102" defer></script>
 </body>
 </html>

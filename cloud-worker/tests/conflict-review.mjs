@@ -12,6 +12,8 @@ for (const id of ["conflict-dialog", "conflict-group-list", "conflict-file-list"
   assert.match(html, new RegExp(`id="${id}"`), `${id} がありません。`);
 }
 assert.doesNotMatch(html, /id="(?:floating-)?conflict-count-button"/, "競合確認の進捗を並び替え欄へ表示しないでください。");
+assert.match(html, /data-view="conflicts"><span aria-hidden="true">⚠<\/span>競合<\/button>/, "履歴欄が⚠の競合メニューへ変わっていません。");
+assert.doesNotMatch(html, /data-view="history"/, "操作履歴メニューを表示しないでください。");
 assert.match(css, /\.file-card \.conflict-badge \{[^}]*top: 9px;[^}]*right: 47px;/);
 assert.match(client, /if \(!state\.listMode && conflictGroupId && !file\.trashed\)/);
 assert.match(client, /badge\.textContent = "競合"/);
@@ -29,6 +31,13 @@ assert.match(client, /state\.conflictScanCompleted/);
 assert.match(client, /loadUploadConflictCandidates\(state\.files\.map/);
 assert.match(client, /visibleIdentities\.has\(uploadFileIdentity/);
 assert.match(client, /generation !== state\.conflictScanGeneration/);
+assert.match(client, /async function loadConflictOverview\(\)/);
+assert.match(client, /function buildConflictGroups\(files, folders/);
+assert.match(client, /const topFolderId = Number\(file\.topFolderId/);
+assert.match(client, /nearSize && \(sameName \|\| sameTimestamp\)/);
+assert.match(client, /PWを解除したトップフォルダ内に、競合候補はありません/);
+assert.match(client, /競合データ \$\{groups\.length\.toLocaleString/);
+assert.match(client, /競合ではないファイルが表示された場合は、T-Cloud管理者へお知らせください。/);
 assert.match(client, /\.normalize\("NFKC"\)[\s\S]*?\.trim\(\)[\s\S]*?toLocaleLowerCase\("ja"\)/);
 
 const scanBody = client.match(/async function scanStoredConflicts\(\) \{[\s\S]*?\n\}/)?.[0] || "";
@@ -36,9 +45,13 @@ assert.doesNotMatch(scanBody, /method:\s*"(?:DELETE|PATCH)"/, "競合確認中�
 
 assert.match(worker, /path === "\/api\/conflicts"/);
 assert.match(worker, /async function listStoredConflictCandidates/);
-assert.match(worker, /GROUP BY size_bytes HAVING COUNT\(\*\) > 1/);
+assert.match(worker, /folder_scope\(id, top_folder_id\)/);
+assert.match(worker, /scope\.top_folder_id AS topFolderId/);
+assert.match(worker, /scopeFolderId = optionalId\(body\.scopeFolderId\)/, "通常の競合判定にもトップフォルダ境界を適用してください。");
+assert.match(client, /scopeFolderId: Number\(scopeFolderId\) \|\| null/, "競合照合時に現在のトップフォルダ範囲を送信してください。");
 assert.match(worker, /WITH RECURSIVE folder_access/);
 assert.match(worker, /access\.is_allowed = 1 AND access\.has_protected_ancestor = 1/);
-assert.match(html, /cloud\.js\?v=20260810-101/);
+assert.match(html, /cloud\.css\?v=20260810-31/);
+assert.match(html, /cloud\.js\?v=20260810-102/);
 
 console.log("stored conflict badges and grouped review: ok");

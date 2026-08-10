@@ -661,6 +661,20 @@ async function listUploadConflictCandidates(request, env, session) {
     .map((value) => Number(value))
     .filter((value) => Number.isSafeInteger(value) && value > 0))];
   if (!sizes.length || sizes.length > 50) throw new HttpError(400, "確認するファイル容量を1〜50件で指定してください。");
+  const scopeFolderId = optionalId(body.scopeFolderId);
+  let scopeTopFolderId = null;
+  if (scopeFolderId) {
+    await requireFolder(env, scopeFolderId);
+    await requireFolderAccess(env, scopeFolderId, session);
+    const scopeResult = await env.DB.prepare(`WITH RECURSIVE ancestors(id, parent_id) AS (
+        SELECT id, parent_id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+        UNION ALL
+        SELECT parent.id, parent.parent_id FROM cloud_folders parent
+        JOIN ancestors child ON child.parent_id = parent.id
+        WHERE parent.deleted_at IS NULL
+      ) SELECT id FROM ancestors WHERE parent_id IS NULL LIMIT 1`).bind(scopeFolderId).first();
+    scopeTopFolderId = Number(scopeResult?.id || 0) || null;
+  }
   const offset = Math.min(100000, Math.max(0, Number.parseInt(body.offset || "0", 10) || 0));
   const pageSize = 200;
   const sizePlaceholders = sizes.map(() => "?").join(", ");
@@ -674,14 +688,20 @@ async function listUploadConflictCandidates(request, env, session) {
   let query;
   let values;
   if (session.role === "admin") {
-    query = `${select}
-      WHERE f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes IN (${sizePlaceholders})
+    query = `WITH RECURSIVE folder_scope(id) AS (
+        SELECT id FROM cloud_folders WHERE id = COALESCE(?, id) AND parent_id IS NULL AND deleted_at IS NULL
+        UNION ALL
+        SELECT child.id FROM cloud_folders child JOIN folder_scope parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NULL
+      ) ${select}
+      WHERE f.folder_id IN (SELECT id FROM folder_scope)
+        AND f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes IN (${sizePlaceholders})
       ORDER BY f.id ASC LIMIT ? OFFSET ?`;
-    values = [...sizes, pageSize + 1, offset];
+    values = [scopeTopFolderId, ...sizes, pageSize + 1, offset];
   } else {
     const now = Math.floor(Date.now() / 1000);
-    query = `WITH RECURSIVE folder_access(id, is_allowed, has_protected_ancestor) AS (
-        SELECT folder.id,
+    query = `WITH RECURSIVE folder_access(id, top_folder_id, is_allowed, has_protected_ancestor) AS (
+        SELECT folder.id, folder.id,
           CASE WHEN folder.password_hash IS NULL THEN 1 ELSE EXISTS (
             SELECT 1 FROM cloud_folder_unlocks unlock
             WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
@@ -690,7 +710,7 @@ async function listUploadConflictCandidates(request, env, session) {
         FROM cloud_folders folder
         WHERE folder.parent_id IS NULL AND folder.deleted_at IS NULL
         UNION
-        SELECT child.id,
+        SELECT child.id, parent.top_folder_id,
           parent.is_allowed AND (child.password_hash IS NULL OR EXISTS (
             SELECT 1 FROM cloud_folder_unlocks unlock
             WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
@@ -702,11 +722,13 @@ async function listUploadConflictCandidates(request, env, session) {
       )
       ${select}
       WHERE f.folder_id IN (
-        SELECT id FROM folder_access WHERE is_allowed = 1 AND has_protected_ancestor = 1
+        SELECT id FROM folder_access
+        WHERE is_allowed = 1 AND has_protected_ancestor = 1
+          AND (? IS NULL OR top_folder_id = ?)
       )
         AND f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes IN (${sizePlaceholders})
       ORDER BY f.id ASC LIMIT ? OFFSET ?`;
-    values = [session.sessionId, now, session.sessionId, now, ...sizes, pageSize + 1, offset];
+    values = [session.sessionId, now, session.sessionId, now, scopeTopFolderId, scopeTopFolderId, ...sizes, pageSize + 1, offset];
   }
   const result = await env.DB.prepare(query).bind(...values).all();
   const rows = result.results || [];
@@ -745,7 +767,7 @@ async function listUploadConflictCandidates(request, env, session) {
 
 async function listStoredConflictCandidates(url, env, session) {
   const offset = Math.min(100000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
-  const pageSize = 200;
+  const pageSize = 300;
   const selectFields = (alias) => `${alias}.id, ${alias}.folder_id AS folderId,
       CASE WHEN ${alias}.crypto_version = 1 THEN '' ELSE ${alias}.original_name END AS name,
       ${alias}.mime_type AS mimeType, ${alias}.media_kind AS mediaKind,
@@ -756,20 +778,25 @@ async function listStoredConflictCandidates(url, env, session) {
   let query;
   let values;
   if (session.role === "admin") {
-    query = `WITH duplicate_sizes AS (
-        SELECT size_bytes FROM cloud_files
-        WHERE deleted_at IS NULL AND status = 'ready' AND size_bytes > 0
-        GROUP BY size_bytes HAVING COUNT(*) > 1
+    query = `WITH RECURSIVE folder_scope(id, top_folder_id) AS (
+        SELECT id, id FROM cloud_folders
+        WHERE parent_id IS NULL AND deleted_at IS NULL
+        UNION ALL
+        SELECT child.id, parent.top_folder_id
+        FROM cloud_folders child
+        JOIN folder_scope parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NULL
       )
-      SELECT ${selectFields("f")}
-      FROM cloud_files f JOIN duplicate_sizes duplicate ON duplicate.size_bytes = f.size_bytes
-      WHERE f.deleted_at IS NULL AND f.status = 'ready'
-      ORDER BY f.size_bytes ASC, f.id ASC LIMIT ? OFFSET ?`;
+      SELECT ${selectFields("f")}, scope.top_folder_id AS topFolderId
+      FROM cloud_files f
+      JOIN folder_scope scope ON scope.id = f.folder_id
+      WHERE f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes > 0
+      ORDER BY scope.top_folder_id ASC, f.id ASC LIMIT ? OFFSET ?`;
     values = [pageSize + 1, offset];
   } else {
     const now = Math.floor(Date.now() / 1000);
-    query = `WITH RECURSIVE folder_access(id, is_allowed, has_protected_ancestor) AS (
-        SELECT folder.id,
+    query = `WITH RECURSIVE folder_access(id, top_folder_id, is_allowed, has_protected_ancestor) AS (
+        SELECT folder.id, folder.id,
           CASE WHEN folder.password_hash IS NULL THEN 1 ELSE EXISTS (
             SELECT 1 FROM cloud_folder_unlocks unlock
             WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
@@ -778,7 +805,7 @@ async function listStoredConflictCandidates(url, env, session) {
         FROM cloud_folders folder
         WHERE folder.parent_id IS NULL AND folder.deleted_at IS NULL
         UNION
-        SELECT child.id,
+        SELECT child.id, parent.top_folder_id,
           parent.is_allowed AND (child.password_hash IS NULL OR EXISTS (
             SELECT 1 FROM cloud_folder_unlocks unlock
             WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
@@ -787,17 +814,13 @@ async function listStoredConflictCandidates(url, env, session) {
         FROM cloud_folders child
         JOIN folder_access parent ON child.parent_id = parent.id
         WHERE child.deleted_at IS NULL
-      ), accessible_files AS (
-        SELECT file.* FROM cloud_files file
-        JOIN folder_access access ON access.id = file.folder_id
-        WHERE access.is_allowed = 1 AND access.has_protected_ancestor = 1
-          AND file.deleted_at IS NULL AND file.status = 'ready' AND file.size_bytes > 0
-      ), duplicate_sizes AS (
-        SELECT size_bytes FROM accessible_files GROUP BY size_bytes HAVING COUNT(*) > 1
       )
-      SELECT ${selectFields("file")}
-      FROM accessible_files file JOIN duplicate_sizes duplicate ON duplicate.size_bytes = file.size_bytes
-      ORDER BY file.size_bytes ASC, file.id ASC LIMIT ? OFFSET ?`;
+      SELECT ${selectFields("file")}, access.top_folder_id AS topFolderId
+      FROM cloud_files file
+      JOIN folder_access access ON access.id = file.folder_id
+      WHERE access.is_allowed = 1 AND access.has_protected_ancestor = 1
+        AND file.deleted_at IS NULL AND file.status = 'ready' AND file.size_bytes > 0
+      ORDER BY access.top_folder_id ASC, file.id ASC LIMIT ? OFFSET ?`;
     values = [session.sessionId, now, session.sessionId, now, pageSize + 1, offset];
   }
   const result = await env.DB.prepare(query).bind(...values).all();

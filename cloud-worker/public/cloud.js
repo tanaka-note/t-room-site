@@ -26,6 +26,7 @@ const state = {
   conflictGroups: [],
   conflictFileGroups: new Map(),
   conflictFolders: new Map(),
+  conflictTopFolders: [],
   conflictScanRunning: false,
   conflictScanCompleted: false,
   conflictScanScheduled: false,
@@ -691,7 +692,7 @@ async function enterApp(session, password = "", accountKey = null) {
   $("#edit-file-button").hidden = !session.canEditFiles && !session.canRenameUnlockedItems;
   $("#delete-file-button").hidden = !session.canDelete && !session.canTrashUnlockedFiles;
   $$('[data-view="trash"]').forEach((button) => { button.hidden = !session.canDelete; });
-  $$('[data-view="history"]').forEach((button) => { button.hidden = !session.canViewHistory; });
+  $$('[data-view="conflicts"]').forEach((button) => { button.hidden = false; });
   $$('[data-view="shares"]').forEach((button) => { button.hidden = session.role !== "admin"; });
   $("#share-file-button").hidden = session.role !== "admin";
   $("#share-folder-button").hidden = session.role !== "admin";
@@ -1146,7 +1147,7 @@ function selectSection(button) {
   if (button.dataset.view === "all") {
     navigateToFolder(null, "フォルダ");
     return;
-  } else if (["trash", "history", "requests", "shares"].includes(button.dataset.view)) {
+  } else if (["trash", "history", "conflicts", "requests", "shares"].includes(button.dataset.view)) {
     state.folderId = null;
     state.kind = "";
     clearSearch();
@@ -1155,7 +1156,7 @@ function selectSection(button) {
     restoreFolderSortPreference(state.folderId);
   }
   state.view = button.dataset.view || "all";
-  const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", requests: "削除申請", shares: "共有管理", image: "写真", video: "動画", audio: "音声", document: "書類" };
+  const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", conflicts: "競合", requests: "削除申請", shares: "共有管理", image: "写真", video: "動画", audio: "音声", document: "書類" };
   $("#view-title").textContent = labels[state.view] || labels[state.kind] || "ファイル";
   syncNavigationActiveState();
   syncAvailableActions();
@@ -1186,26 +1187,27 @@ function syncSearchInputs(source = null) {
 function syncAvailableActions() {
   const inTrash = state.view === "trash";
   const inHistory = state.view === "history";
+  const inConflicts = state.view === "conflicts";
   const inRequests = state.view === "requests";
   const inShares = state.view === "shares";
   const insideFolder = Boolean(state.folderId);
-  $("#new-folder-button").hidden = inTrash || inHistory || inRequests || inShares;
+  $("#new-folder-button").hidden = inTrash || inHistory || inConflicts || inRequests || inShares;
   $("#new-folder-button").disabled = !state.crypto.publicKey;
-  $("#upload-button").hidden = inTrash || inHistory || inRequests || inShares || !state.session?.canUpload;
+  $("#upload-button").hidden = inTrash || inHistory || inConflicts || inRequests || inShares || !state.session?.canUpload;
   $("#upload-button").disabled = !state.crypto.fileEncryptionReady || state.uploading;
   $("#desktop-folder-upload-action").hidden = !state.session?.canUpload;
   $("#desktop-folder-upload-action").disabled = !state.crypto.fileEncryptionReady || state.uploading;
-  $("#download-folder-button").hidden = !insideFolder || inTrash || inHistory || inRequests || inShares || !("showDirectoryPicker" in window);
+  $("#download-folder-button").hidden = !insideFolder || inTrash || inHistory || inConflicts || inRequests || inShares || !("showDirectoryPicker" in window);
   $("#download-folder-button").disabled = state.downloadActive;
-  $("#mobile-add-button").hidden = inTrash || inHistory || inRequests || inShares;
+  $("#mobile-add-button").hidden = inTrash || inHistory || inConflicts || inRequests || inShares;
   $("#mobile-upload-action").hidden = !insideFolder || !state.session?.canUpload;
   $("#mobile-upload-action").disabled = !state.crypto.fileEncryptionReady || state.uploading;
-  $("#toolbar").hidden = inHistory || inRequests || inShares;
+  $("#toolbar").hidden = inHistory || inConflicts || inRequests || inShares;
   $$("#search-input, #floating-search-input").forEach((input) => {
     input.placeholder = insideFolder ? "ファイル名を検索" : "フォルダ名を検索";
   });
-  if (inHistory || inRequests || inShares || state.uploading || state.downloadActive) hideFloatingToolbar();
-  $$('[data-kind]').forEach((button) => { button.disabled = !insideFolder || inTrash || inHistory || inRequests || inShares; });
+  if (inHistory || inConflicts || inRequests || inShares || state.uploading || state.downloadActive) hideFloatingToolbar();
+  $$('[data-kind]').forEach((button) => { button.disabled = !insideFolder || inTrash || inHistory || inConflicts || inRequests || inShares; });
 }
 
 async function loadItems() {
@@ -1223,6 +1225,16 @@ async function loadItems() {
       state.requests = [];
       state.shares = [];
       renderBreadcrumbs([]);
+    } else if (state.view === "conflicts") {
+      state.folders = [];
+      state.files = [];
+      state.history = [];
+      state.requests = [];
+      state.shares = [];
+      renderBreadcrumbs([]);
+      state.conflictScanRunning = true;
+      renderItems();
+      await loadConflictOverview();
     } else if (state.view === "history") {
       const data = await api("/upload-history");
       state.folders = [];
@@ -1280,8 +1292,10 @@ async function loadItems() {
 function renderItems() {
   renderFolderSummary();
   const grid = $("#content-grid");
-  grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "requests" || state.view === "shares");
+  grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "conflicts" || state.view === "requests" || state.view === "shares");
+  grid.classList.toggle("conflict-overview", state.view === "conflicts");
   grid.innerHTML = "";
+  if (state.view === "conflicts") renderConflictOverview(grid);
   if (state.view === "history") {
     for (const item of state.history) grid.append(historyCard(item));
   }
@@ -1293,10 +1307,13 @@ function renderItems() {
   }
   for (const folder of state.folders) grid.append(folder.trashed ? trashFolderCard(folder) : folderCard(folder));
   for (const file of state.files) grid.append(fileCard(file));
-  $("#empty-state").hidden = state.folders.length + state.files.length + state.history.length + state.requests.length + state.shares.length > 0;
-  $("#empty-title").textContent = state.view === "requests" ? "削除申請はありません" : state.view === "history" ? "履歴がありません" : state.view === "shares" ? "共有URLはありません" : state.view === "trash" ? "ゴミ箱は空です" : (state.folderId ? "ファイルがありません" : "フォルダがありません");
+  const conflictItemCount = state.conflictGroups.length + (state.conflictScanRunning ? 1 : 0);
+  $("#empty-state").hidden = state.folders.length + state.files.length + state.history.length + state.requests.length + state.shares.length + conflictItemCount > 0;
+  $("#empty-title").textContent = state.view === "requests" ? "削除申請はありません" : state.view === "conflicts" ? "競合候補はありません" : state.view === "history" ? "履歴がありません" : state.view === "shares" ? "共有URLはありません" : state.view === "trash" ? "ゴミ箱は空です" : (state.folderId ? "ファイルがありません" : "フォルダがありません");
   $("#empty-copy").textContent = state.view === "requests"
     ? "副管理者から申請が届くと、ここに表示されます。"
+    : state.view === "conflicts"
+    ? (state.session?.role === "subadmin" ? "PWを解除したトップフォルダ内に、競合候補はありません。" : "トップフォルダごとに確認しましたが、競合候補はありません。")
     : state.view === "history"
     ? "ファイルのアップロードが完了すると、ここに記録されます。"
     : state.view === "shares"
@@ -2920,6 +2937,7 @@ async function handleTransferVisibility() {
 function renderBreadcrumbs(items) {
   const nav = $("#breadcrumbs");
   if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; renderFloatingLocation([]); return; }
+  if (state.view === "conflicts") { state.breadcrumbs = []; nav.textContent = state.session?.role === "subadmin" ? "PWを解除したトップフォルダごとに、配下の競合候補を確認します。" : "トップフォルダの境界を越えず、各フォルダ配下の競合候補を確認します。"; renderFloatingLocation([]); return; }
   if (state.view === "history") { state.breadcrumbs = []; nav.textContent = state.session?.role === "admin" ? "管理者・副管理者のアップロード／ダウンロード履歴です。" : "副管理者本人のアップロード／ダウンロード履歴です。"; renderFloatingLocation([]); return; }
   if (state.view === "requests") { state.breadcrumbs = []; nav.textContent = "承認するまでファイルは削除されず、通常どおり利用できます。"; renderFloatingLocation([]); return; }
   if (state.view === "shares") { state.breadcrumbs = []; nav.textContent = "共有URLの発行状況・期限・停止・利用履歴を管理できます。"; renderFloatingLocation([]); return; }
@@ -3217,7 +3235,7 @@ function uploadFileIdentity(name, size) {
   return [normalizeUploadName(name), Number(size || 0)].join("\u0000");
 }
 
-async function loadUploadConflictCandidates(sizes) {
+async function loadUploadConflictCandidates(sizes, scopeFolderId = state.folderId) {
   const candidates = [];
   const folders = new Map();
   const uniqueSizes = [...new Set(sizes.map(Number).filter((size) => Number.isSafeInteger(size) && size > 0))];
@@ -3227,7 +3245,7 @@ async function loadUploadConflictCandidates(sizes) {
     do {
       const data = await api("/upload-conflict-candidates", {
         method: "POST",
-        body: JSON.stringify({ sizes: batch, offset })
+        body: JSON.stringify({ sizes: batch, offset, scopeFolderId: Number(scopeFolderId) || null })
       });
       for (const folder of data.folders || []) folders.set(Number(folder.id), { ...folder, id: Number(folder.id), parentId: Number(folder.parentId) || null });
       candidates.push(...(data.candidates || []));
@@ -3315,6 +3333,7 @@ function invalidateStoredConflicts() {
   state.conflictGroups = [];
   state.conflictFileGroups = new Map();
   state.conflictFolders = new Map();
+  state.conflictTopFolders = [];
   syncVisibleConflictBadges();
 }
 
@@ -3335,6 +3354,230 @@ function scheduleStoredConflictScan(force = false) {
 
 async function loadStoredConflictCandidates() {
   return loadUploadConflictCandidates(state.files.map((file) => Number(file.sizeBytes || 0)));
+}
+
+async function loadConflictOverviewCandidates() {
+  const candidates = [];
+  const folders = new Map();
+  let offset = 0;
+  do {
+    const data = await api(`/conflicts?offset=${offset}`);
+    candidates.push(...(data.candidates || []));
+    for (const folder of data.folders || []) {
+      folders.set(Number(folder.id), { ...folder, id: Number(folder.id), parentId: Number(folder.parentId) || null });
+    }
+    offset = Number.isInteger(data.nextOffset) ? data.nextOffset : -1;
+  } while (offset >= 0);
+  return { candidates, folders };
+}
+
+function conflictTimestampIdentity(file) {
+  const originalTimestamp = Number(file.lastModified || 0);
+  if (Number.isFinite(originalTimestamp) && originalTimestamp > 0) return `original:${Math.round(originalTimestamp)}`;
+  const storedTimestamp = Date.parse(String(file.updatedAt || file.createdAt || "").replace(" ", "T") + "Z");
+  return Number.isFinite(storedTimestamp) ? `stored:${Math.floor(storedTimestamp / 1000)}` : "";
+}
+
+function conflictSizesAreNear(left, right) {
+  const a = Number(left || 0);
+  const b = Number(right || 0);
+  if (!a || !b) return false;
+  const tolerance = Math.min(2 * 1024 * 1024, Math.max(64 * 1024, Math.ceil(Math.max(a, b) * 0.005)));
+  return Math.abs(a - b) <= tolerance;
+}
+
+function conflictPairReasons(left, right) {
+  const sameName = normalizeUploadName(left.name) === normalizeUploadName(right.name);
+  const exactSize = Number(left.sizeBytes || 0) === Number(right.sizeBytes || 0) && Number(left.sizeBytes || 0) > 0;
+  const nearSize = conflictSizesAreNear(left.sizeBytes, right.sizeBytes);
+  const leftTimestamp = conflictTimestampIdentity(left);
+  const sameTimestamp = Boolean(leftTimestamp && leftTimestamp === conflictTimestampIdentity(right));
+  if (!(nearSize && (sameName || sameTimestamp))) return [];
+  const reasons = [];
+  if (sameName) reasons.push("同じ名前");
+  if (exactSize) reasons.push("同じ容量");
+  else if (nearSize) reasons.push("容量が近い");
+  if (sameTimestamp) reasons.push("更新日時が同じ");
+  return reasons;
+}
+
+function buildConflictGroups(files, folders, options = {}) {
+  const visibleIdentities = options.visibleIdentities || null;
+  const groups = [];
+  const byTopFolder = new Map();
+  for (const file of files) {
+    const topFolderId = Number(file.topFolderId || 0);
+    if (!topFolderId) continue;
+    if (!byTopFolder.has(topFolderId)) byTopFolder.set(topFolderId, []);
+    byTopFolder.get(topFolderId).push(file);
+  }
+
+  for (const [topFolderId, scopedFiles] of byTopFolder) {
+    const parent = new Map(scopedFiles.map((file) => [Number(file.id), Number(file.id)]));
+    const rank = new Map(scopedFiles.map((file) => [Number(file.id), 0]));
+    const pairReasons = new Map();
+    const find = (id) => {
+      let root = parent.get(id);
+      while (root !== parent.get(root)) root = parent.get(root);
+      let current = id;
+      while (current !== root) {
+        const next = parent.get(current);
+        parent.set(current, root);
+        current = next;
+      }
+      return root;
+    };
+    const union = (leftId, rightId) => {
+      let leftRoot = find(leftId);
+      let rightRoot = find(rightId);
+      if (leftRoot === rightRoot) return;
+      if ((rank.get(leftRoot) || 0) < (rank.get(rightRoot) || 0)) [leftRoot, rightRoot] = [rightRoot, leftRoot];
+      parent.set(rightRoot, leftRoot);
+      if ((rank.get(leftRoot) || 0) === (rank.get(rightRoot) || 0)) rank.set(leftRoot, (rank.get(leftRoot) || 0) + 1);
+    };
+    const inspectNameIndex = (values) => {
+      for (const originalFiles of values.values()) {
+        const indexedFiles = [...originalFiles].sort((left, right) => Number(left.sizeBytes || 0) - Number(right.sizeBytes || 0));
+        for (let leftIndex = 0; leftIndex < indexedFiles.length; leftIndex += 1) {
+          for (let rightIndex = leftIndex + 1; rightIndex < indexedFiles.length; rightIndex += 1) {
+            const left = indexedFiles[leftIndex];
+            const right = indexedFiles[rightIndex];
+            if (Number(right.sizeBytes || 0) - Number(left.sizeBytes || 0) > 2 * 1024 * 1024) break;
+            const pairKey = [Math.min(left.id, right.id), Math.max(left.id, right.id)].join(":");
+            if (pairReasons.has(pairKey)) continue;
+            const reasons = conflictPairReasons(left, right);
+            if (!reasons.length) continue;
+            pairReasons.set(pairKey, reasons);
+            union(Number(left.id), Number(right.id));
+          }
+        }
+      }
+    };
+    const inspectExactSizeTimestampIndex = (values) => {
+      for (const indexedFiles of values.values()) {
+        if (indexedFiles.length < 2) continue;
+        const left = indexedFiles[0];
+        for (let index = 1; index < indexedFiles.length; index += 1) {
+          const right = indexedFiles[index];
+          const pairKey = [Math.min(left.id, right.id), Math.max(left.id, right.id)].join(":");
+          const reasons = conflictPairReasons(left, right);
+          if (!reasons.length) continue;
+          pairReasons.set(pairKey, reasons);
+          union(Number(left.id), Number(right.id));
+        }
+      }
+    };
+    const nameIndex = new Map();
+    const sizeTimestampIndex = new Map();
+    for (const file of scopedFiles) {
+      const timestampIdentity = conflictTimestampIdentity(file);
+      const indexValues = [
+        [nameIndex, normalizeUploadName(file.name)],
+        [sizeTimestampIndex, timestampIdentity ? `${Number(file.sizeBytes || 0)}\u0000${timestampIdentity}` : ""]
+      ];
+      for (const [index, key] of indexValues) {
+        if (!key || key === "0") continue;
+        if (!index.has(key)) index.set(key, []);
+        index.get(key).push(file);
+      }
+    }
+    inspectNameIndex(nameIndex);
+    inspectExactSizeTimestampIndex(sizeTimestampIndex);
+
+    const components = new Map();
+    for (const file of scopedFiles) {
+      const root = find(Number(file.id));
+      if (!components.has(root)) components.set(root, []);
+      components.get(root).push(file);
+    }
+    const componentReasons = new Map();
+    for (const [pairKey, values] of pairReasons) {
+      const [leftId] = pairKey.split(":").map(Number);
+      const root = find(leftId);
+      if (!componentReasons.has(root)) componentReasons.set(root, new Set());
+      values.forEach((reason) => componentReasons.get(root).add(reason));
+    }
+    const topFolderName = folders.get(topFolderId)?.name || "フォルダ";
+    for (const [root, component] of components) {
+      if (component.length < 2) continue;
+      if (visibleIdentities && !component.some((file) => visibleIdentities.has(uploadFileIdentity(file.name, file.sizeBytes)))) continue;
+      const reasons = componentReasons.get(root) || new Set();
+      const normalizedNames = new Set(component.map((file) => normalizeUploadName(file.name)));
+      const displayName = normalizedNames.size === 1 ? component[0].name : "更新日時・容量が一致する候補";
+      groups.push({
+        id: `conflict-${topFolderId}-${component.map((file) => Number(file.id)).sort((a, b) => a - b).join("-")}`,
+        name: displayName,
+        topFolderId,
+        topFolderName,
+        sizeBytes: Number(component[0].sizeBytes || 0),
+        reasons: [...reasons],
+        files: component.sort((left, right) => left.name.localeCompare(right.name, "ja", { numeric: true, sensitivity: "base" }))
+      });
+    }
+  }
+  return groups.sort((left, right) => left.topFolderName.localeCompare(right.topFolderName, "ja", { numeric: true, sensitivity: "base" }) || left.name.localeCompare(right.name, "ja", { numeric: true, sensitivity: "base" }));
+}
+
+async function loadConflictOverview() {
+  const generation = state.conflictScanGeneration;
+  try {
+    const { candidates, folders } = await loadConflictOverviewCandidates();
+    if (generation !== state.conflictScanGeneration || state.view !== "conflicts") return;
+    await unlockConflictFolderKeys(folders);
+    const hydrated = await hydrateFileRecords(candidates, { preserveOrder: true });
+    if (generation !== state.conflictScanGeneration || state.view !== "conflicts") return;
+    for (const file of hydrated) {
+      file.folderPath = conflictFolderPath(file.folderId, folders);
+      file.folderName = folders.get(Number(file.folderId))?.name || "フォルダ";
+    }
+    state.conflictFolders = folders;
+    state.conflictGroups = buildConflictGroups(hydrated.filter((file) => Number(file.cryptoVersion) !== 1 || file.fileKey), folders);
+    state.conflictFileGroups = new Map(state.conflictGroups.flatMap((group) => group.files.map((file) => [Number(file.id), group.id])));
+    state.conflictTopFolders = [...new Map(state.conflictGroups.map((group) => [group.topFolderId, { id: group.topFolderId, name: group.topFolderName }])).values()];
+    state.conflictScanCompleted = true;
+  } finally {
+    if (generation === state.conflictScanGeneration) state.conflictScanRunning = false;
+  }
+}
+
+function conflictReasonText(group) {
+  return group.reasons?.length ? group.reasons.join("・") : "競合の疑いあり";
+}
+
+function conflictGroupButton(group) {
+  const button = document.createElement("button");
+  button.className = "conflict-group-button";
+  button.type = "button";
+  button.innerHTML = `<span><strong>${escapeHtml(group.name)}</strong><small>判定：${escapeHtml(conflictReasonText(group))}</small></span><span class="conflict-group-count">${group.files.length.toLocaleString("ja-JP")}件</span>`;
+  button.addEventListener("click", () => openConflictGroup(group.id));
+  return button;
+}
+
+function renderConflictOverview(grid) {
+  const guidance = document.createElement("p");
+  guidance.className = "conflict-overview-guidance";
+  guidance.innerHTML = '<span aria-hidden="true">⚠</span><span>競合ではないファイルが表示された場合は、T-Cloud管理者へお知らせください。</span>';
+  grid.append(guidance);
+  if (state.conflictScanRunning) {
+    const loading = document.createElement("section");
+    loading.className = "conflict-overview-loading";
+    loading.innerHTML = "<strong>競合候補を確認しています</strong><span>トップフォルダごとに、配下のファイルを確認しています。</span>";
+    grid.append(loading);
+    return;
+  }
+  for (const topFolder of state.conflictTopFolders) {
+    const groups = state.conflictGroups.filter((group) => Number(group.topFolderId) === Number(topFolder.id));
+    const section = document.createElement("section");
+    section.className = "conflict-overview-section";
+    const heading = document.createElement("div");
+    heading.className = "conflict-overview-heading";
+    heading.innerHTML = `<span aria-hidden="true">⚠</span><div><h2>${escapeHtml(topFolder.name)}</h2><p>競合データ ${groups.length.toLocaleString("ja-JP")}組</p></div>`;
+    const list = document.createElement("div");
+    list.className = "conflict-overview-list";
+    groups.forEach((group) => list.append(conflictGroupButton(group)));
+    section.append(heading, list);
+    grid.append(section);
+  }
 }
 
 async function scanStoredConflicts() {
@@ -3389,19 +3632,22 @@ function openConflictGroupList() {
 
 function renderConflictGroupList() {
   $("#conflict-dialog-title").textContent = "競合グループ";
-  $("#conflict-dialog-summary").textContent = "グループを選ぶと、その組だけを比較できます。";
+  $("#conflict-dialog-summary").textContent = "トップフォルダの境界を越えず、グループ単位で比較します。";
   $("#conflict-groups-back").hidden = true;
   $("#conflict-file-list").hidden = true;
   const list = $("#conflict-group-list");
   list.hidden = false;
   list.innerHTML = "";
+  let previousTopFolderId = null;
   for (const group of state.conflictGroups) {
-    const button = document.createElement("button");
-    button.className = "conflict-group-button";
-    button.type = "button";
-    button.innerHTML = `<span><strong>${escapeHtml(group.name)}</strong><small>${formatBytes(group.sizeBytes)}・同名／同容量</small></span><span class="conflict-group-count">${group.files.length.toLocaleString("ja-JP")}件</span>`;
-    button.addEventListener("click", () => openConflictGroup(group.id));
-    list.append(button);
+    if (Number(group.topFolderId || 0) !== Number(previousTopFolderId || 0) && group.topFolderName) {
+      const heading = document.createElement("h3");
+      heading.className = "conflict-dialog-folder-heading";
+      heading.textContent = group.topFolderName;
+      list.append(heading);
+      previousTopFolderId = group.topFolderId;
+    }
+    list.append(conflictGroupButton(group));
   }
 }
 
@@ -3413,7 +3659,7 @@ function openConflictGroup(groupId) {
     return;
   }
   $("#conflict-dialog-title").textContent = group.name;
-  $("#conflict-dialog-summary").textContent = `${formatBytes(group.sizeBytes)}・${group.files.length.toLocaleString("ja-JP")}件の候補だけを表示しています。`;
+  $("#conflict-dialog-summary").textContent = `${group.topFolderName ? `${group.topFolderName}・` : ""}${conflictReasonText(group)}・${group.files.length.toLocaleString("ja-JP")}件の候補です。`;
   $("#conflict-groups-back").hidden = false;
   $("#conflict-group-list").hidden = true;
   const list = $("#conflict-file-list");
