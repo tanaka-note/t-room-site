@@ -17,19 +17,19 @@
   "prefer_related_applications": false,
   "icons": [
     {
-      "src": "/cloud/icons/icon-192-v2.png",
+      "src": "/cloud/icons/icon-192-v2.png?rev=71e8df8",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/cloud/icons/icon-512-v2.png",
+      "src": "/cloud/icons/icon-512-v2.png?rev=71e8df8",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/cloud/icons/icon-maskable-512-v2.png",
+      "src": "/cloud/icons/icon-maskable-512-v2.png?rev=71e8df8",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
