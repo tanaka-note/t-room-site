@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="20260811-4">
+  <meta name="tcloud-build" content="20260811-5">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,7 +14,7 @@
   <link rel="manifest" href="/cloud/manifest.webmanifest">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260811-1">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260811-2">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -187,6 +187,25 @@
           <strong>競合の疑いがあるため保留したデータ</strong>
           <ul id="upload-conflict-list"></ul>
           <p>自動で削除・名前変更はしていません。表示内容を確認し、必要に応じて名前を変更してから再度アップロードしてください。</p>
+        </div>
+      </div>
+      <div id="offline-panel" class="upload-panel offline-progress-panel" hidden>
+        <div class="upload-panel-head">
+          <div class="transfer-progress-title"><strong id="offline-heading">オフライン保存中</strong><span id="offline-count">0 / 0件</span></div>
+          <button id="offline-cancel" class="danger-button transfer-stop-button" type="button" hidden>停止</button>
+          <button id="offline-dismiss" class="secondary-button transfer-stop-button" type="button" hidden>閉じる</button>
+        </div>
+        <div class="upload-track"><span id="offline-progress"></span></div>
+        <p class="upload-file-row"><span id="offline-file-name"></span><span><span id="offline-speed"></span><span id="offline-percent">0%</span></span></p>
+        <div class="upload-live-metrics" aria-live="polite">
+          <span id="offline-bytes">0 B / 0 B</span>
+          <span id="offline-eta">残り時間：計算中</span>
+          <span id="offline-activity">保存準備中</span>
+          <span id="offline-wake-lock-status" data-status="idle">消灯防止を準備しています。</span>
+        </div>
+        <div id="offline-failure-summary" class="transfer-error-summary" hidden>
+          <strong>オフライン保存できなかったデータ</strong>
+          <ul id="offline-failed-list"></ul>
         </div>
       </div>
       <p id="notice" class="notice" role="status"></p>
@@ -514,6 +533,6 @@
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/offline-store.js?v=20260811-1" defer></script>
   <script src="/cloud/media-client.js?v=20260811-1" defer></script>
-  <script src="/cloud/cloud.js?v=20260811-4" defer></script>
+  <script src="/cloud/cloud.js?v=20260811-5" defer></script>
 </body>
 </html>

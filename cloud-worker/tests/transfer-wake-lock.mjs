@@ -9,6 +9,7 @@ const [client, html] = await Promise.all([
 
 assert.match(client, /function shouldKeepScreenAwake\(\)/);
 assert.match(client, /state\.uploading \|\| state\.activeFolderUploadOperationId/);
+assert.match(client, /state\.activeFolderUploadOperationId \|\| state\.offlineActive/);
 assert.match(client, /state\.downloadActive && \$\("#keep-screen-awake"\)\?\.checked/);
 assert.match(client, /async function requestTransferWakeLock\(\)/);
 assert.match(client, /async function syncTransferWakeLock\(\)/);
@@ -26,7 +27,8 @@ assert.ok(fileUpload.indexOf("await syncTransferWakeLock()") < fileUpload.indexO
 assert.match(fileUpload, /state\.uploading = false;[\s\S]*?await syncTransferWakeLock\(\)/);
 
 assert.match(html, /id="upload-wake-lock-status"[^>]*>消灯防止を準備しています。/);
-assert.match(html, /cloud\.js\?v=20260811-4/);
+assert.match(html, /id="offline-wake-lock-status"[^>]*>消灯防止を準備しています。/);
+assert.match(html, /cloud\.js\?v=20260811-5/);
 
 const wakeLockFunctions = client.match(/function uploadKeepsScreenAwake\(\) \{[\s\S]*?\r?\n\}\r?\n\r?\nfunction renderBreadcrumbs/)?.[0]
   .replace(/\r?\n\r?\nfunction renderBreadcrumbs$/, "") || "";
@@ -46,6 +48,7 @@ const context = vm.createContext({
     uploading: false,
     activeFolderUploadOperationId: null,
     downloadActive: false,
+    offlineActive: false,
     wakeLock: null,
     wakeLockRequest: null
   },
@@ -94,4 +97,9 @@ elements["keep-screen-awake"].checked = false;
 await vm.runInContext("syncTransferWakeLock()", context);
 assert.equal(locks.at(-1).released, true);
 
-console.log("shared upload and download wake lock lifecycle: ok");
+await vm.runInContext("state.downloadActive = false; state.offlineActive = true; syncTransferWakeLock()", context);
+assert.equal(requestCount, 4, "オフライン保存は設定に関係なく消灯防止を使用してください。");
+await vm.runInContext("state.offlineActive = false; syncTransferWakeLock()", context);
+assert.equal(locks.at(-1).released, true);
+
+console.log("shared upload, download, and offline wake lock lifecycle: ok");
