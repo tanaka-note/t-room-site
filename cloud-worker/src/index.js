@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-3";
+const APP_BUILD_ID = "20260811-4";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1655,15 +1655,15 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260811-1.css"],
-    ["/cloud.js", "/cloud-runtime-20260811-3.js"],
+    ["/cloud.js", "/cloud-runtime-20260811-4.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
     ["/offline-store.js", "/offline-store-20260811-1.js"],
     ["/media-client.js", "/media-client-20260811-1.js"],
-    ["/media-worker.js", "/media-worker-20260811-1.js"],
-    ["/manifest.webmanifest", "/manifest-20260810-3.webmanifest"],
-    ["/manifest-v2.webmanifest", "/manifest-20260810-3.webmanifest"],
+    ["/media-worker.js", "/media-worker-20260811-2.js"],
+    ["/manifest.webmanifest", "/manifest-20260811-1.webmanifest"],
+    ["/manifest-v2.webmanifest", "/manifest-20260811-1.webmanifest"],
     ["/offline", "/offline"],
     ["/icons/icon-192.png", "/icons/icon-192.png"],
     ["/icons/icon-512.png", "/icons/icon-512.png"],
@@ -1673,6 +1673,10 @@ async function serveAsset(request, env, url, path) {
     ["/icons/icon-512-v2.png", "/icons/icon-512-v2.png"],
     ["/icons/icon-maskable-512-v2.png", "/icons/icon-maskable-512-v2.png"],
     ["/icons/apple-touch-icon-v2.png", "/icons/apple-touch-icon-v2.png"],
+    ["/icons/icon-192-v3.png", "/icons/icon-192-v3.png"],
+    ["/icons/icon-512-v3.png", "/icons/icon-512-v3.png"],
+    ["/icons/icon-maskable-512-v3.png", "/icons/icon-maskable-512-v3.png"],
+    ["/icons/apple-touch-icon-v3.png", "/icons/apple-touch-icon-v3.png"],
     ["/share.css", "/share-runtime-20260810-18.css"],
     ["/share.js", "/share-runtime-20260810-41.js"],
     ["/vendor/argon2.umd.min.js", "/vendor/argon2.umd.min.js"],
