@@ -8,6 +8,9 @@
     "check": "node --check src/index.js && node --check public/diary.js && node --check public/investment.js",
     "test:permissions": "node tests/permissions.e2e.mjs",
     "test:photos": "node tests/photos.e2e.mjs && node tests/photos-ui.mjs",
+    "test:tags": "node tests/tags-ui.mjs",
+    "test:history": "node tests/history-ui.mjs",
+    "test:pwa": "node tests/pwa-ui.mjs",
     "import:investment": "node scripts/import-investment-data.mjs"
   },
   "devDependencies": {

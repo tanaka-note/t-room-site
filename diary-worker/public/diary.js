@@ -1,5 +1,12 @@
 (() => {
   const BASE_PATH = "/diary";
+  const ENTRY_HISTORY_KEY = "troomDiaryEntry";
+  const tagCollator = new Intl.Collator(["ja-JP", "en-US"], {
+    usage: "sort",
+    sensitivity: "base",
+    numeric: true,
+    ignorePunctuation: true
+  });
   const state = {
     role: null,
     accountName: null,
@@ -21,6 +28,7 @@
     requestId: 0,
     deleteMode: null,
     editorPhotos: [],
+    photoPreparing: false,
     photoOffset: 0,
     photos: [],
     photoHasMore: false,
@@ -30,7 +38,12 @@
     photoRequestId: 0,
     photoSearchTimer: null,
     viewerPhotos: [],
-    viewerIndex: -1
+    viewerIndex: -1,
+    entryHistoryToken: null,
+    entryAfterClose: null,
+    entryClosePending: false,
+    deferredInstallPrompt: null,
+    lastSessionRefreshAt: 0
   };
 
   const elements = {
@@ -45,6 +58,9 @@
     newEntryButton: document.querySelector("#new-entry-button"),
     trashButton: document.querySelector("#trash-button"),
     logoutButton: document.querySelector("#logout-button"),
+    installButtons: [...document.querySelectorAll(".install-app-button")],
+    installAppDialog: document.querySelector("#install-app-dialog"),
+    installAppMessage: document.querySelector("#install-app-message"),
     searchInput: document.querySelector("#diary-search-input"),
     searchClear: document.querySelector("#diary-search-clear"),
     searchStatus: document.querySelector("#diary-search-status"),
@@ -84,6 +100,7 @@
     entryContent: document.querySelector("#entry-content"),
     addPhotoButton: document.querySelector("#add-photo-button"),
     photoInput: document.querySelector("#photo-input"),
+    photoDropZone: document.querySelector("#photo-drop-zone"),
     editorPhotoList: document.querySelector("#editor-photo-list"),
     photoPreparationStatus: document.querySelector("#photo-preparation-status"),
     entryTags: document.querySelector("#entry-tags"),
@@ -120,6 +137,8 @@
 
   async function boot() {
     bindEvents();
+    registerPwa();
+    updateInstallButtonVisibility();
     try {
       const session = await api("/session");
       if (session.authenticated) {
@@ -136,6 +155,7 @@
     elements.loginForm.addEventListener("submit", handleLogin);
     elements.passwordToggle.addEventListener("click", togglePassword);
     elements.logoutButton.addEventListener("click", handleLogout);
+    elements.installButtons.forEach((button) => button.addEventListener("click", requestAppInstall));
     elements.cameraRollButton.addEventListener("click", openCameraRoll);
     elements.newEntryButton.addEventListener("click", () => openEditor());
     elements.trashButton.addEventListener("click", toggleTrash);
@@ -159,9 +179,13 @@
     elements.tagList.addEventListener("click", handleTagClick);
     elements.editEntryButton.addEventListener("click", () => {
       if (state.activeEntry) {
-        elements.entryDialog.close();
-        openEditor(state.activeEntry);
+        const entry = state.activeEntry;
+        closeEntryDialog(() => openEditor(entry));
       }
+    });
+    elements.entryDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeEntryDialog();
     });
     elements.deleteEntryButton.addEventListener("click", requestEntryDeletion);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
@@ -175,6 +199,13 @@
     elements.entryForm.addEventListener("submit", saveEntry);
     elements.addPhotoButton.addEventListener("click", () => elements.photoInput.click());
     elements.photoInput.addEventListener("change", handlePhotoSelection);
+    elements.photoDropZone.addEventListener("click", () => {
+      if (!state.photoPreparing) elements.photoInput.click();
+    });
+    elements.photoDropZone.addEventListener("keydown", handlePhotoDropKeydown);
+    for (const eventName of ["dragenter", "dragover", "dragleave", "drop"]) {
+      elements.photoDropZone.addEventListener(eventName, handlePhotoDragEvent);
+    }
     elements.editorPhotoList.addEventListener("click", handleEditorPhotoAction);
     elements.todayButton.addEventListener("click", setEntryDateToToday);
     elements.entryDate.addEventListener("pointerdown", handleDatePointerDown);
@@ -229,6 +260,63 @@
       event.preventDefault();
       event.returnValue = "";
     });
+    window.addEventListener("popstate", handleHistoryNavigation);
+    window.addEventListener("beforeinstallprompt", (event) => {
+      event.preventDefault();
+      state.deferredInstallPrompt = event;
+      updateInstallButtonVisibility();
+    });
+    window.addEventListener("appinstalled", () => {
+      state.deferredInstallPrompt = null;
+      updateInstallButtonVisibility();
+      showToast("日記をホーム画面に追加しました。");
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) refreshSessionIfNeeded();
+    });
+  }
+
+  function registerPwa() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register(`${BASE_PATH}/service-worker.js`, {
+      scope: `${BASE_PATH}/`,
+      updateViaCache: "none"
+    }).then((registration) => registration.update()).catch(() => {
+      // Safariの古い版など、Service Worker非対応環境でも日記本体は利用できます。
+    });
+  }
+
+  function isStandaloneApp() {
+    return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  }
+
+  function updateInstallButtonVisibility() {
+    const hidden = isStandaloneApp();
+    elements.installButtons.forEach((button) => {
+      button.hidden = hidden;
+    });
+  }
+
+  async function requestAppInstall() {
+    if (state.deferredInstallPrompt) {
+      const prompt = state.deferredInstallPrompt;
+      state.deferredInstallPrompt = null;
+      await prompt.prompt();
+      await prompt.userChoice.catch(() => null);
+      updateInstallButtonVisibility();
+      return;
+    }
+    elements.installAppDialog.showModal();
+  }
+
+  async function refreshSessionIfNeeded() {
+    if (!state.role || Date.now() - state.lastSessionRefreshAt < 15 * 60 * 1000) return;
+    try {
+      const session = await api("/session");
+      if (session.authenticated) state.lastSessionRefreshAt = Date.now();
+    } catch {
+      // 期限切れの場合はapi()がログイン画面へ戻します。
+    }
   }
 
   async function handleLogin(event) {
@@ -277,6 +365,7 @@
     state.accountName = session.accountName;
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
+    state.lastSessionRefreshAt = Date.now();
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     elements.roleLabel.textContent = session.role === "admin"
@@ -418,7 +507,12 @@
       elements.tagList.replaceChildren(createEmpty("#はまだありません。"));
       return;
     }
-    elements.tagList.replaceChildren(...tags.map((item) => {
+    const sortedTags = [...tags].sort((left, right) => (
+      Number(right.count || 0) - Number(left.count || 0)
+      || tagCollator.compare(tagSortKey(left.value), tagSortKey(right.value))
+      || tagCollator.compare(String(left.value || ""), String(right.value || ""))
+    ));
+    elements.tagList.replaceChildren(...sortedTags.map((item) => {
       const button = document.createElement("button");
       button.className = "diary-tag";
       button.type = "button";
@@ -459,9 +553,53 @@
       state.activeEntry = result.entry;
       renderEntryDetail(result.entry);
       elements.entryDialog.showModal();
+      pushEntryHistory();
     } catch (error) {
       showToast(error.message);
     }
+  }
+
+  function pushEntryHistory() {
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    state.entryHistoryToken = token;
+    state.entryClosePending = false;
+    window.history.pushState({
+      ...(window.history.state || {}),
+      [ENTRY_HISTORY_KEY]: token
+    }, "", window.location.href);
+  }
+
+  function closeEntryDialog(afterClose = null) {
+    if (typeof afterClose === "function") state.entryAfterClose = afterClose;
+    if (state.entryClosePending) return;
+    if (!elements.entryDialog.open) {
+      finishEntryClose();
+      return;
+    }
+    if (
+      state.entryHistoryToken
+      && window.history.state?.[ENTRY_HISTORY_KEY] === state.entryHistoryToken
+    ) {
+      state.entryClosePending = true;
+      window.history.back();
+      return;
+    }
+    finishEntryClose();
+  }
+
+  function handleHistoryNavigation() {
+    if (!state.entryHistoryToken || !elements.entryDialog.open) return;
+    finishEntryClose();
+  }
+
+  function finishEntryClose() {
+    const afterClose = state.entryAfterClose;
+    state.entryAfterClose = null;
+    state.entryHistoryToken = null;
+    state.entryClosePending = false;
+    if (elements.entryDialog.open) elements.entryDialog.close();
+    state.activeEntry = null;
+    if (afterClose) afterClose();
   }
 
   function renderEntryDetail(entry) {
@@ -523,10 +661,48 @@
   async function handlePhotoSelection() {
     const files = [...(elements.photoInput.files || [])];
     elements.photoInput.value = "";
+    await prepareSelectedPhotos(files);
+  }
+
+  function handlePhotoDropKeydown(event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    if (!state.photoPreparing) elements.photoInput.click();
+  }
+
+  function handlePhotoDragEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === "dragenter" || event.type === "dragover") {
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      if (!state.photoPreparing) elements.photoDropZone.classList.add("is-dragging");
+      return;
+    }
+    if (event.type === "dragleave") {
+      if (!event.relatedTarget || !elements.photoDropZone.contains(event.relatedTarget)) {
+        elements.photoDropZone.classList.remove("is-dragging");
+      }
+      return;
+    }
+    elements.photoDropZone.classList.remove("is-dragging");
+    if (state.photoPreparing) {
+      elements.photoPreparationStatus.textContent = "画像を準備中です。完了してから追加してください。";
+      return;
+    }
+    prepareSelectedPhotos([...(event.dataTransfer?.files || [])]);
+  }
+
+  async function prepareSelectedPhotos(files) {
     if (!files.length) return;
+    if (state.photoPreparing) return;
+    state.photoPreparing = true;
+    elements.photoInput.disabled = true;
+    elements.photoDropZone.classList.add("is-busy");
+    elements.photoDropZone.setAttribute("aria-disabled", "true");
     setBusy(elements.addPhotoButton, true, "準備中...");
     elements.photoPreparationStatus.textContent = `${files.length}件の写真を準備しています。`;
     const failures = [];
+    let preparedCount = 0;
     try {
       for (let index = 0; index < files.length; index += 1) {
         const file = files[index];
@@ -535,6 +711,7 @@
           const photo = await preparePhoto(file);
           state.editorPhotos.push(photo);
           insertPhotoMarker(photo.id);
+          preparedCount += 1;
         } catch (error) {
           failures.push(`${file.name}：${error.message}`);
         }
@@ -542,9 +719,13 @@
       state.editorDirty = true;
       renderEditorPhotos();
       elements.photoPreparationStatus.textContent = failures.length
-        ? `準備できなかった写真があります。${failures.join(" / ")}`
-        : `${files.length}件の写真を本文へ追加しました。`;
+        ? `${preparedCount}件を追加しました。追加できなかったファイル：${failures.join(" / ")}`
+        : `${preparedCount}件の写真を本文へ追加しました。`;
     } finally {
+      state.photoPreparing = false;
+      elements.photoInput.disabled = false;
+      elements.photoDropZone.classList.remove("is-busy", "is-dragging");
+      elements.photoDropZone.removeAttribute("aria-disabled");
       setBusy(elements.addPhotoButton, false, "写真を追加");
     }
   }
@@ -838,13 +1019,21 @@
         button.className = "camera-roll-item";
         button.type = "button";
         button.dataset.photoIndex = String(index);
+        button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の日記を開く`);
         const image = document.createElement("img");
         image.src = photo.thumbnailUrl;
         image.alt = photo.fileName;
         image.loading = "lazy";
         const caption = document.createElement("span");
         caption.className = "camera-roll-caption";
-        caption.textContent = `${formatShortDate(photo.entryDate)} ${photo.entryTitle || ""}`.trim();
+        const date = document.createElement("time");
+        date.className = "camera-roll-date";
+        date.dateTime = photo.entryDate;
+        date.textContent = formatShortDate(photo.entryDate);
+        const title = document.createElement("strong");
+        title.className = "camera-roll-title";
+        title.textContent = photo.entryTitle || "無題";
+        caption.append(date, title);
         button.append(image, caption);
         return button;
       }));
@@ -856,7 +1045,10 @@
   function handleCameraRollClick(event) {
     const button = event.target.closest("[data-photo-index]");
     if (!button) return;
-    openPhotoViewer(state.photos, Number(button.dataset.photoIndex));
+    const photo = state.photos[Number(button.dataset.photoIndex)];
+    if (!photo) return;
+    elements.cameraRollDialog.close();
+    openEntry(photo.entryId);
   }
 
   function openPhotoViewer(photos, index) {
@@ -1098,8 +1290,7 @@
         method: "DELETE",
         body: { revision: entry.revision }
       });
-      elements.entryDialog.close();
-      state.activeEntry = null;
+      closeEntryDialog();
       showToast(privateDeletion ? "削除しました。" : "日記をゴミ箱へ移動しました。");
       await Promise.all([loadMeta(), loadEntries(true)]);
     } catch (error) {
@@ -1118,8 +1309,7 @@
         method: "DELETE",
         body: { revision: entry.revision }
       });
-      elements.entryDialog.close();
-      state.activeEntry = null;
+      closeEntryDialog();
       showToast("日記を完全に削除しました。");
       await Promise.all([loadMeta(), loadEntries(true)]);
     } catch (error) {
@@ -1135,8 +1325,7 @@
     setBusy(elements.restoreEntryButton, true, "復元中...");
     try {
       await api(`/entries/${entry.id}/restore`, { method: "POST" });
-      elements.entryDialog.close();
-      state.activeEntry = null;
+      closeEntryDialog();
       showToast("日記を復元しました。");
       await Promise.all([loadMeta(), loadEntries(true)]);
     } catch (error) {
@@ -1210,6 +1399,10 @@
   function closeDialog(id) {
     const dialog = document.getElementById(id);
     if (!dialog?.open) return;
+    if (id === "entry-dialog") {
+      closeEntryDialog();
+      return;
+    }
     if (id === "editor-dialog" && state.editorDirty && !window.confirm("入力中の内容を破棄しますか？")) return;
     if (id === "editor-dialog") {
       state.editorDirty = false;
@@ -1248,6 +1441,13 @@
     group.className = "diary-tags";
     group.append(...createTagElements(tags));
     return group;
+  }
+
+  function tagSortKey(value) {
+    return String(value || "")
+      .normalize("NFKC")
+      .replace(/[ァ-ヶ]/g, (character) => String.fromCharCode(character.charCodeAt(0) - 0x60))
+      .toLocaleLowerCase("ja-JP");
   }
 
   function createTagElements(tags) {
@@ -1339,6 +1539,9 @@
     state.viewerIndex = -1;
     state.editorDirty = false;
     state.dateDraft = null;
+    state.entryAfterClose = null;
+    state.entryHistoryToken = null;
+    state.entryClosePending = false;
     if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();
     state.requestId += 1;
     if (elements.entryDialog.open) elements.entryDialog.close();

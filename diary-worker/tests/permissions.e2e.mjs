@@ -70,7 +70,9 @@ async function request(path, { method = "GET", body, cookie } = {}) {
 async function login(password) {
   const { response, result } = await request("/login", { method: "POST", body: { password } });
   assert.equal(response.status, 200, JSON.stringify(result));
-  return { session: result, cookie: response.headers.get("set-cookie").split(";", 1)[0] };
+  const setCookie = response.headers.get("set-cookie");
+  assert.match(setCookie, /Max-Age=31536000/);
+  return { session: result, cookie: setCookie.split(";", 1)[0] };
 }
 
 try {
@@ -79,6 +81,10 @@ try {
   const wife = await login("wife-test");
   assert.equal(wife.session.canViewTrash, false);
   assert.equal(wife.session.canPermanentlyDelete, false);
+  const refreshedSession = await request("/session", { cookie: wife.cookie });
+  assert.equal(refreshedSession.response.status, 200);
+  assert.equal(refreshedSession.result.authenticated, true);
+  assert.match(refreshedSession.response.headers.get("set-cookie"), /Max-Age=31536000/);
 
   const created = await request("/entries", {
     method: "POST",

@@ -1,0 +1,35 @@
+{
+  "id": "/diary/",
+  "name": "日記",
+  "short_name": "日記",
+  "description": "家族で読み返せる、非公開の日記。",
+  "lang": "ja",
+  "start_url": "/diary/?source=pwa",
+  "scope": "/diary/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#eef2f5",
+  "theme_color": "#50647d",
+  "categories": ["lifestyle", "productivity"],
+  "icons": [
+    {
+      "src": "/diary/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/diary/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/diary/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

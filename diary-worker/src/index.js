@@ -1,5 +1,6 @@
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
+const SESSION_TTL_SECONDS = 365 * 24 * 60 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DIARY_ACCOUNTS = [
@@ -24,7 +25,8 @@ export default {
       }
 
       if (path.startsWith("/api/")) {
-        return secureResponse(await handleApi(request, env, url, path));
+        const response = await handleApi(request, env, url, path);
+        return secureResponse(await withRollingSession(request, response, env, url, path));
       }
 
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -82,7 +84,7 @@ async function handleApi(request, env, url, path) {
     const account = DIARY_ACCOUNTS[matches.findIndex(Boolean)];
     if (!account) return json({ error: "パスワードが違います。" }, 401);
 
-    const maxAge = clampNumber(env.SESSION_TTL_SECONDS, 3600, 2592000, 2592000);
+    const maxAge = getSessionMaxAge(env);
     const token = await createSessionToken(account, maxAge, env);
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
@@ -179,6 +181,14 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/manifest.webmanifest", "/manifest.webmanifest"],
+    ["/service-worker.js", "/service-worker.js"],
+    ["/icons/diary-icon-source.png", "/icons/diary-icon-source.png"],
+    ["/icons/icon-192.png", "/icons/icon-192.png"],
+    ["/icons/icon-512.png", "/icons/icon-512.png"],
+    ["/icons/icon-maskable-512.png", "/icons/icon-maskable-512.png"],
+    ["/icons/apple-touch-icon.png", "/icons/apple-touch-icon.png"],
+    ["/icons/favicon-64.png", "/icons/favicon-64.png"],
     ["/investment.css", "/investment.css"],
     ["/investment.js", "/investment.js"]
   ]);
@@ -196,7 +206,9 @@ async function serveAsset(request, env, url, path) {
   }
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  headers.set("Cache-Control", assetPath === "/" ? "no-store" : "public, max-age=3600");
+  headers.set("Cache-Control", assetPath === "/"
+    ? "no-store"
+    : (assetPath === "/service-worker.js" ? "no-cache" : "public, max-age=3600"));
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -679,6 +691,28 @@ async function readSession(request, env) {
   } catch {
     return null;
   }
+}
+
+function getSessionMaxAge(env) {
+  return clampNumber(env.SESSION_TTL_SECONDS, 3600, SESSION_TTL_SECONDS, SESSION_TTL_SECONDS);
+}
+
+async function withRollingSession(request, response, env, url, path) {
+  if (path === "/api/login" || path === "/api/logout" || response.status === 401) return response;
+  const session = await readSession(request, env);
+  if (!session) return response;
+  const account = DIARY_ACCOUNTS.find((candidate) => candidate.id === session.accountId);
+  if (!account) return response;
+
+  const maxAge = getSessionMaxAge(env);
+  const token = await createSessionToken(account, maxAge, env);
+  const headers = new Headers(response.headers);
+  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
 }
 
 async function createSessionToken(account, maxAge, env) {

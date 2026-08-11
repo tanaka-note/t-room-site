@@ -29,7 +29,7 @@
     }
   ],
   "vars": {
-    "SESSION_TTL_SECONDS": "2592000",
+    "SESSION_TTL_SECONDS": "31536000",
     "SESSION_VERSION": "2"
   }
 }

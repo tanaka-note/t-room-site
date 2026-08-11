@@ -2,11 +2,20 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#50647d">
+  <meta name="application-name" content="日記">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="stylesheet" href="/diary/diary.css?v=6">
+  <link rel="manifest" href="/diary/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/diary/diary.css?v=10">
 </head>
 <body>
   <main id="login-view" class="login-shell" aria-labelledby="login-title">
@@ -32,18 +41,20 @@
         <button class="primary-button full-button" type="submit">開く</button>
         <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
       </form>
+      <button class="install-app-button quiet-button full-button" type="button">ホーム画面に追加</button>
     </section>
   </main>
 
   <div id="app-view" hidden>
     <header class="site-header">
       <div class="brand" aria-label="日記">
-        <span class="brand-mark">T</span>
+        <img class="brand-mark" src="/diary/icons/favicon-64.png" alt="">
         <span>日記</span>
       </div>
       <div class="header-actions">
         <span id="role-label" class="role-label"></span>
-        <button id="camera-roll-button" class="quiet-button" type="button">カメラロール</button>
+        <button class="install-app-button quiet-button" type="button">ホームへ追加</button>
+        <button id="camera-roll-button" class="quiet-button" type="button">画像まとめ</button>
         <button id="trash-button" class="quiet-button" type="button" hidden>ゴミ箱</button>
         <button id="new-entry-button" class="primary-button" type="button" hidden>新しい日記</button>
         <button id="logout-button" class="quiet-button" type="button">ログアウト</button>
@@ -100,7 +111,7 @@
           <section class="diary-panel">
             <p class="section-kicker">Tags</p>
             <h2>#から見る</h2>
-            <div id="tag-list" class="diary-tag-cloud"></div>
+            <div id="tag-list" class="diary-tag-cloud" tabindex="0" aria-label="使用回数の多い順に並んだタグ一覧"></div>
           </section>
         </aside>
       </section>
@@ -140,6 +151,32 @@
         <button id="permanently-delete-entry-button" class="danger-button" type="button" hidden>完全に削除</button>
       </div>
     </article>
+  </dialog>
+
+  <dialog id="install-app-dialog" class="entry-dialog install-app-dialog" aria-labelledby="install-app-title">
+    <section class="install-app-sheet">
+      <header class="dialog-head">
+        <div>
+          <p class="section-kicker">Web app</p>
+          <h2 id="install-app-title">日記をホーム画面に追加</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-dialog="install-app-dialog" aria-label="閉じる">×</button>
+      </header>
+      <div id="install-app-message" class="install-app-message">
+        <p><strong>iPhone・iPad</strong></p>
+        <ol>
+          <li>Safariの共有ボタンを押します。</li>
+          <li>「ホーム画面に追加」を選びます。</li>
+          <li>「Webアプリとして開く」を有効にして追加します。</li>
+        </ol>
+        <p><strong>Android</strong></p>
+        <p>Chromeのメニューから「ホーム画面に追加」または「アプリをインストール」を選びます。</p>
+      </div>
+      <p class="install-app-note">追加後は、青灰色の本のアイコンから日記を開けます。</p>
+      <div class="dialog-actions">
+        <button class="primary-button" type="button" data-close-dialog="install-app-dialog">閉じる</button>
+      </div>
+    </section>
   </dialog>
 
   <dialog id="delete-confirm-dialog" class="entry-dialog">
@@ -189,6 +226,11 @@
           <button id="add-photo-button" class="secondary-button" type="button">写真を追加</button>
         </div>
         <input id="photo-input" type="file" accept="image/*" multiple hidden>
+        <div id="photo-drop-zone" class="photo-drop-zone" role="button" tabindex="0" aria-controls="photo-input" aria-label="画像を選択またはドラッグ＆ドロップして追加">
+          <span class="photo-drop-icon" aria-hidden="true">＋</span>
+          <strong>画像をここへドラッグ＆ドロップ</strong>
+          <span>またはタップして選択（複数枚対応）</span>
+        </div>
         <div id="editor-photo-list" class="editor-photo-list"></div>
         <p id="photo-preparation-status" class="form-message" role="status" aria-live="polite"></p>
       </section>
@@ -209,8 +251,8 @@
     <section class="camera-roll-shell">
       <header class="camera-roll-head">
         <div>
-          <p class="section-kicker">Camera roll</p>
-          <h2>カメラロール</h2>
+          <p class="section-kicker">Image collection</p>
+          <h2>画像まとめ</h2>
         </div>
         <button class="icon-button" type="button" data-close-dialog="camera-roll-dialog" aria-label="閉じる">×</button>
       </header>
@@ -292,6 +334,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=8" defer></script>
+  <script src="/diary/diary.js?v=14" defer></script>
 </body>
 </html>
