@@ -39,11 +39,13 @@ assert.match(main, /relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX
 assert.match(main, /state\.previewPlayer\.currentTime = target/);
 assert.doesNotMatch(main, /seek\.addEventListener\("input", \(\) => \{[\s\S]*?video\.currentTime/);
 assert.match(main, /bufferedEnd\(duration\)/);
+assert.match(main, /contiguousCachedPlaybackPercent\(file, entry\)/);
+assert.match(main, /Math\.max\(playedPercent, bufferedEnd\(duration\) \/ duration \* 100, cachedPlaybackPercent\)/);
 assert.match(mainCss, /--buffered-percent/);
 assert.match(share, /prepareSharedVideoPlayer\(stage, file\)[\s\S]*?TCloudMedia\.registerMedia/);
 assert.match(share, /seek\.addEventListener\("pointerdown"/);
 assert.match(share, /relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX, event\.clientX/);
-assert.match(mainHtml, /media-client\.js\?v=20260811-2/);
-assert.match(shareHtml, /media-client\.js\?v=20260810-10/);
+assert.match(mainHtml, /media-client\.js\?v=20260811-3/);
+assert.match(shareHtml, /media-client\.js\?v=20260811-3/);
 
 console.log("player registration, stable rendering, and portrait recovery: ok");
