@@ -11,6 +11,7 @@ assert.doesNotMatch(html, /value="sub@a-tanaka\.jp"/);
 assert.doesNotMatch(cryptoClient, /sub@a-tanaka\.jp/);
 assert.match(html, /id="remember-login"/);
 assert.match(client, /navigator\.credentials\.store/);
+assert.doesNotMatch(client, /navigator\.credentials\.get/);
 assert.match(client, /REMEMBER_LOGIN_KEY/);
 
 console.log("login privacy and opt-in credential storage: ok");
