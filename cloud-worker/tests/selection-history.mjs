@@ -27,5 +27,8 @@ assert.match(share, /function selectAllSharedFiles\(\)/);
 assert.match(main, /#selection-clear"\)\.addEventListener\("click", clearSelectionWithoutRefresh\)/);
 assert.match(share, /#share-selection-clear"\)\.addEventListener\("click", clearSelectionWithoutRefresh\)/);
 assert.match(styles, /@media \(max-width: 520px\)[\s\S]*?\.selection-actions \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)[^}]*max-width: none/);
+assert.match(main, /const canDownloadSelection = fileCount > 0 && folderCount === 0;/);
+assert.match(main, /\$\("#selection-download"\)\.hidden = !canDownloadSelection;/);
+assert.match(main, /\$\("#selection-download"\)\.disabled = !canDownloadSelection;/);
 
 console.log("selection back navigation and select all: ok");

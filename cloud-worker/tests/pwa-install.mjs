@@ -13,7 +13,7 @@ const [html, client, worker, server, offline, manifestSource, css] = await Promi
 const manifest = JSON.parse(manifestSource);
 
 for (const [source, runtime] of [
-  ["cloud.js", "cloud-runtime-20260811-10.js"],
+  ["cloud.js", "cloud-runtime-20260811-11.js"],
   ["cloud.css", "cloud-runtime-20260811-6.css"],
   ["offline-store.js", "offline-store-20260811-1.js"],
   ["media-client.js", "media-client-20260811-2.js"],
@@ -43,7 +43,7 @@ assert.ok(manifest.icons.every((icon) => icon.src.includes("-v3.png?rev=20260811
 assert.match(html, /rel="manifest" href="\/cloud\/manifest\.webmanifest"/, "既存PWAの更新経路を維持するためmanifestのURLを変更しないでください。");
 assert.match(html, /apple-touch-icon-v3\.png\?rev=20260811-3/);
 assert.match(html, /name="theme-color" content="#071426"/);
-assert.match(html, /name="tcloud-build" content="20260811-10"/);
+assert.match(html, /name="tcloud-build" content="20260811-11"/);
 assert.match(html, /id="install-app-button-top"/);
 assert.match(html, /id="update-app-button-top"/);
 assert.doesNotMatch(html, /id="install-app-button"/);
@@ -61,7 +61,7 @@ assert.match(client, /\$\("#install-app-button-top"\)\.hidden = standalone/);
 assert.match(client, /\$\("#update-app-button-top"\)\.hidden = !standalone/);
 assert.match(client, /async function updateInstalledApp\(\)/);
 assert.match(client, /state\.uploading \|\| state\.activeFolderUploadOperationId \|\| state\.downloadActive/);
-assert.match(client, /const APP_BUILD_ID = "20260811-10"/);
+assert.match(client, /const APP_BUILD_ID = "20260811-11"/);
 assert.match(client, /app-version\?app-update=\$\{Date\.now\(\)\}[\s\S]*?cache: "no-store"/);
 assert.match(client, /registration\.addEventListener\("updatefound"/);
 assert.match(client, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);
