@@ -20,9 +20,14 @@ if (!script.includes("function canRenameFolder(folder)") || !script.includes("fu
   throw new Error("解除済みフォルダ内の名称変更表示判定がありません。");
 }
 if (!html.includes('id="selection-rename"')
-  || !script.includes('$("#selection-rename").addEventListener("click", openSelectedFileRenameDialog)')
-  || !script.includes("fileCount === 1 && folderCount === 0 && canRenameFile(files[0])")) {
-  throw new Error("長押しで1件選択したファイルの名前変更導線がありません。");
+  || !html.includes('id="folder-rename-dialog"')
+  || !script.includes('$("#selection-rename").addEventListener("click", openSelectedRenameDialog)')
+  || !script.includes("folderCount === 1 && fileCount === 0 && canRenameFolder(folders[0])")
+  || !script.includes("openFolderRenameDialog(folders[0])")) {
+  throw new Error("長押しで1件選択したファイル・フォルダの名前変更導線がありません。");
+}
+if (!html.includes('id="folder-settings-name" type="hidden"')) {
+  throw new Error("三点リーダーの設定画面からフォルダ名変更欄が分離されていません。");
 }
 if (!script.includes("function canChangeFolderPassword(folder)") || !script.includes("const canEditPassword = canChangeFolderPassword(folder)")) {
   throw new Error("解除済み保護フォルダに限定したPW変更判定がありません。");

@@ -48,6 +48,13 @@ await expectStatus("副管理者の容量内訳拒否", await request("/usage", 
 await expectStatus("副管理者のフォルダ別容量内訳拒否", await request("/usage-details", "subadmin"), 403);
 const adminItemsResponse = await expectStatus("管理者の保存先候補取得", await request("/items", "admin"), 200);
 const adminItems = await adminItemsResponse.json();
+const moveDestinationsResponse = await expectStatus("管理者の移動先一括取得", await request("/move-destinations", "admin"), 200);
+const moveDestinations = await moveDestinationsResponse.json();
+if (!Array.isArray(moveDestinations.folders)) throw new Error("移動先フォルダ一覧を取得できません。");
+if (moveDestinations.folders.some((folder) => "adminWrappedKey" in folder || "passwordWrappedKey" in folder)) {
+  throw new Error("移動先一覧へ不要な暗号鍵情報が含まれています。");
+}
+await expectStatus("副管理者の解除範囲指定必須", await request("/move-destinations", "subadmin"), 400);
 const uploadDestinationFolderId = Number(adminItems.folders?.[0]?.id || 0);
 if (uploadDestinationFolderId) {
   await expectStatus("管理者の保存先限定競合候補照合", await request("/upload-conflict-candidates", "admin", { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ sizes: [123456789], folderId: uploadDestinationFolderId, offset: 0 }) }), 200);

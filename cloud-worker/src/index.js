@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-1";
+const APP_BUILD_ID = "20260811-2";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -92,6 +92,7 @@ async function handleApi(request, env, url, path) {
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
   if (path === "/api/items" && request.method === "GET") return listItems(url, env, session);
+  if (path === "/api/move-destinations" && request.method === "GET") return listMoveDestinations(url, env, session);
   if (path === "/api/upload-conflict-candidates" && request.method === "POST") return listUploadConflictCandidates(request, env, session);
   if (path === "/api/conflicts" && request.method === "GET") return listStoredConflictCandidates(url, env, session);
   if (path === "/api/legacy-folders" && request.method === "GET") return listLegacyFolders(env, session);
@@ -659,6 +660,38 @@ async function listItems(url, env, session) {
     files: visibleFiles,
     nextFileOffset
   });
+}
+
+async function listMoveDestinations(url, env, session) {
+  const requestedScopeRootId = optionalId(url.searchParams.get("scopeRootId"));
+  let anchorCondition = "f.parent_id IS NULL";
+  let descendantAccessCondition = "1 = 1";
+  const values = [];
+  if (session.role === "subadmin") {
+    if (!requestedScopeRootId) throw new HttpError(400, "移動元のPW解除済みフォルダを確認できません。");
+    const unlockedScopeRootId = await unlockedMoveScopeId(env, requestedScopeRootId, session);
+    if (Number(unlockedScopeRootId) !== Number(requestedScopeRootId)) {
+      throw new HttpError(403, "PWで解除した最上位フォルダの配下だけ移動できます。");
+    }
+    anchorCondition = "f.id = ?";
+    descendantAccessCondition = `(child.password_hash IS NULL OR EXISTS(
+      SELECT 1 FROM cloud_folder_unlocks unlock
+      WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
+    ))`;
+    values.push(requestedScopeRootId, session.sessionId, Math.floor(Date.now() / 1000));
+  }
+  const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(id, depth) AS (
+      SELECT f.id, 0 FROM cloud_folders f WHERE ${anchorCondition} AND f.deleted_at IS NULL
+      UNION ALL
+      SELECT child.id, parent.depth + 1 FROM cloud_folders child
+      JOIN folder_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at IS NULL AND parent.depth < 100 AND ${descendantAccessCondition}
+    )
+    SELECT f.id, f.parent_id AS parentId, f.name,
+      f.password_hash IS NOT NULL AS isProtected, folder_tree.depth
+    FROM folder_tree JOIN cloud_folders f ON f.id = folder_tree.id
+    ORDER BY folder_tree.depth ASC, f.name COLLATE NOCASE ASC, f.id ASC`).bind(...values).all();
+  return json({ folders: result.results || [] });
 }
 
 async function loadConflictFolderRecords(env, folderIds) {
@@ -1622,7 +1655,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260810-39.css"],
-    ["/cloud.js", "/cloud-runtime-20260811-1.js"],
+    ["/cloud.js", "/cloud-runtime-20260811-2.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
