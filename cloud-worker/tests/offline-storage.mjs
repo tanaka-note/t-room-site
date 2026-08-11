@@ -78,6 +78,12 @@ assert.match(worker, /cacheWriteChain/);
 assert.match(worker, /shouldWarmTail\(descriptor\)/);
 assert.match(worker, /isMp4Descriptor\(descriptor\)/);
 assert.match(worker, /constrainOpenEndedMp4Range/);
+assert.match(worker, /BACKGROUND_PREFETCH_DELAY_MS = 30_000/);
+assert.match(worker, /MP4_METADATA_WARM_CHUNKS = 4/);
+assert.match(worker, /MP4_RANGE_RESPONSE_LIMIT_BYTES = 2 \* 1024 \* 1024/);
+assert.match(worker, /requested\.start \+ MP4_RANGE_RESPONSE_LIMIT_BYTES - 1/);
+assert.doesNotMatch(worker, /MARK_MEDIA_READY|mediaReady|MP4_READY_RANGE_RESPONSE_LIMIT_BYTES/);
+assert.match(worker, /if \(isMp4Descriptor\(descriptor\)\) await warmMp4Metadata\(entry\)/);
 assert.match(worker, /SET_CACHE_LIMIT/);
 assert.match(media, /cacheLimitBytes = Number\(global\.TCloudOffline/);
 assert.match(media, /setCacheLimitBytes/);
@@ -85,8 +91,8 @@ assert.match(client, /const openLabel = \["video", "audio"\]\.includes\(item\.fi
 assert.match(client, /event\.target\.closest\("\.offline-manager-item"\)/);
 assert.doesNotMatch(client, /entries = await syncOfflineSourceRecords\(entries, context\)/);
 assert.match(server, /\["\/offline-store\.js", "\/offline-store-20260811-2\.js"\]/);
-assert.match(server, /\["\/media-client\.js", "\/media-client-20260811-4\.js"\]/);
-assert.match(server, /\["\/media-worker\.js", "\/media-worker-20260811-7\.js"\]/);
+assert.match(server, /\["\/media-client\.js", "\/media-client-20260811-12\.js"\]/);
+assert.match(server, /\["\/media-worker\.js", "\/media-worker-20260811-19\.js"\]/);
 assert.match(server, /deletedAt: file\.deleted_at/);
 
 console.log("encrypted file-only cache and 30-day offline storage: ok");

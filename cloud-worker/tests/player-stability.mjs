@@ -14,6 +14,8 @@ const [main, share, mediaClient, mainCss, shareCss, mainHtml, shareHtml] = await
 assert.match(mediaClient, /const pendingRegistrations = new Map\(\)/);
 assert.match(mediaClient, /await confirmMediaRegistration\(/);
 assert.match(mediaClient, /data\.type === "MEDIA_REGISTERED"/);
+assert.match(mediaClient, /navigator\.serviceWorker\.controller \|\| registration\.active/);
+assert.match(mediaClient, /controllerchange", registerMediaWithCurrentWorker/);
 
 for (const client of [main, share]) {
   assert.match(client, /previewVideoFullscreenActive: false/);
@@ -45,8 +47,8 @@ assert.match(mainCss, /--buffered-percent/);
 assert.match(share, /prepareSharedVideoPlayer\(stage, file\)[\s\S]*?TCloudMedia\.registerMedia/);
 assert.match(share, /seek\.addEventListener\("pointerdown"/);
 assert.match(share, /relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX, event\.clientX/);
-assert.match(mainHtml, /media-client\.js\?v=20260811-4/);
-assert.match(shareHtml, /media-client\.js\?v=20260811-4/);
+assert.match(mainHtml, /media-client\.js\?v=20260811-12/);
+assert.match(shareHtml, /media-client\.js\?v=20260811-12/);
 assert.match(mediaClient, /function playbackMimeType\(file\)/);
 assert.match(mediaClient, /mp4: "video\/mp4"/);
 
