@@ -43,7 +43,7 @@ assert.ok(manifest.icons.every((icon) => icon.src.includes("-v3.png?rev=20260811
 assert.match(html, /rel="manifest" href="\/cloud\/manifest\.webmanifest"/, "既存PWAの更新経路を維持するためmanifestのURLを変更しないでください。");
 assert.match(html, /apple-touch-icon-v3\.png\?rev=20260811-3/);
 assert.match(html, /name="theme-color" content="#071426"/);
-assert.match(html, /name="tcloud-build" content="20260811-37"/);
+assert.match(html, /name="tcloud-build" content="20260811-41"/);
 assert.match(html, /id="install-app-button-top"/);
 assert.match(html, /id="update-app-button-top"/);
 assert.doesNotMatch(html, /id="install-app-button"/);
@@ -51,6 +51,8 @@ assert.match(html, /id="install-app-button-top"[^>]*aria-label="ホームへ追�
 assert.match(html, /id="update-app-button-top"[^>]*aria-label="アプリを更新"[^>]*title="アプリを更新"/);
 assert.match(css, /#update-app-button-top\[hidden\][^{]*\{ display: none; \}/);
 assert.match(css, /\.file-card \.file-select-button, \.folder-card \.folder-select-button \{[^}]*width: 30px;[^}]*min-width: 30px;[^}]*max-width: 30px;[^}]*height: 30px;/);
+assert.doesNotMatch(css, /\.list-mode \.file-card button \{/);
+assert.match(css, /\.list-mode \.file-card > button:not\(\.file-select-button\) \{ min-height: 76px;/);
 assert.match(css, /\.content-grid\.list-mode \.file-card > button:not\(\.file-select-button\) \{ grid-template-columns: 76px minmax\(0,1fr\); \}/);
 assert.doesNotMatch(css, /\.folder-settings-button/);
 assert.match(html, /id="install-app-button-top"[\s\S]*?<svg[\s\S]*?<path/);
@@ -61,7 +63,7 @@ assert.match(client, /\$\("#install-app-button-top"\)\.hidden = standalone/);
 assert.match(client, /\$\("#update-app-button-top"\)\.hidden = !standalone/);
 assert.match(client, /async function updateInstalledApp\(\)/);
 assert.match(client, /state\.uploading \|\| state\.activeFolderUploadOperationId \|\| state\.downloadActive/);
-assert.match(client, /const APP_BUILD_ID = "20260811-37"/);
+assert.match(client, /const APP_BUILD_ID = "20260811-41"/);
 assert.match(client, /app-version\?app-update=\$\{Date\.now\(\)\}[\s\S]*?cache: "no-store"/);
 assert.match(client, /registration\.addEventListener\("updatefound"/);
 assert.match(client, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);

@@ -208,10 +208,10 @@ function renderSortedItems() {
   const files = [...state.files];
   const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ja", { numeric: true, sensitivity: "base" });
   const direction = state.sortDirection === "asc" ? 1 : -1;
-  const byUpdated = (a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || ""));
+  const byUpdated = (a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
   if (state.sortUsesTypeDefaults) {
     folders.sort(byName);
-    files.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+    files.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   } else if (state.sort === "name") {
     folders.sort((a, b) => direction * byName(a, b));
     files.sort((a, b) => direction * byName(a, b));

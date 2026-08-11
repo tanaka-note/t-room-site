@@ -53,6 +53,10 @@
     password: document.querySelector("#password"),
     passwordToggle: document.querySelector("#password-toggle"),
     loginMessage: document.querySelector("#login-message"),
+    diaryKicker: document.querySelector("#diary-kicker"),
+    diaryTitle: document.querySelector("#diary-title"),
+    tagPageBack: document.querySelector("#tag-page-back"),
+    searchPanel: document.querySelector("#diary-search-panel"),
     roleLabel: document.querySelector("#role-label"),
     cameraRollButton: document.querySelector("#camera-roll-button"),
     newEntryButton: document.querySelector("#new-entry-button"),
@@ -136,6 +140,7 @@
   boot();
 
   async function boot() {
+    applyRouteState();
     bindEvents();
     registerPwa();
     updateInstallButtonVisibility();
@@ -176,7 +181,6 @@
     });
     elements.entryList.addEventListener("click", handleEntryListClick);
     elements.archiveList.addEventListener("click", handleArchiveClick);
-    elements.tagList.addEventListener("click", handleTagClick);
     elements.editEntryButton.addEventListener("click", () => {
       if (state.activeEntry) {
         const entry = state.activeEntry;
@@ -513,13 +517,9 @@
       || tagCollator.compare(String(left.value || ""), String(right.value || ""))
     ));
     elements.tagList.replaceChildren(...sortedTags.map((item) => {
-      const button = document.createElement("button");
-      button.className = "diary-tag";
-      button.type = "button";
-      button.dataset.tag = item.value;
-      button.setAttribute("aria-pressed", String(state.tag === item.value));
-      button.textContent = `#${item.value} ${item.count}`;
-      return button;
+      const link = createTagLink(item.value, `#${item.value} ${item.count}`);
+      if (state.tag === item.value) link.setAttribute("aria-current", "page");
+      return link;
     }));
   }
 
@@ -533,15 +533,6 @@
     const button = event.target.closest("[data-month]");
     if (!button) return;
     state.month = state.month === button.dataset.month ? "" : button.dataset.month;
-    state.trash = false;
-    updateFilterControls();
-    loadEntries(true);
-  }
-
-  function handleTagClick(event) {
-    const button = event.target.closest("[data-tag]");
-    if (!button) return;
-    state.tag = state.tag === button.dataset.tag ? "" : button.dataset.tag;
     state.trash = false;
     updateFilterControls();
     loadEntries(true);
@@ -1365,7 +1356,8 @@
       button.setAttribute("aria-pressed", String(button.dataset.month === state.month));
     });
     document.querySelectorAll("[data-tag]").forEach((button) => {
-      button.setAttribute("aria-pressed", String(button.dataset.tag === state.tag));
+      if (button.dataset.tag === state.tag) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
     });
   }
 
@@ -1373,7 +1365,10 @@
     if (state.trash) {
       elements.listKicker.textContent = "Trash";
       elements.listTitle.textContent = "ゴミ箱";
-    } else if (state.query || state.month || state.tag) {
+    } else if (state.tag) {
+      elements.listKicker.textContent = "Hashtag";
+      elements.listTitle.textContent = `#${state.tag}の記事一覧`;
+    } else if (state.query || state.month) {
       elements.listKicker.textContent = "Results";
       elements.listTitle.textContent = "検索結果";
     } else {
@@ -1451,12 +1446,35 @@
   }
 
   function createTagElements(tags) {
-    return (tags || []).map((tag) => {
-      const span = document.createElement("span");
-      span.className = "diary-tag";
-      span.textContent = `#${tag}`;
-      return span;
-    });
+    return (tags || []).map((tag) => createTagLink(tag, `#${tag}`));
+  }
+
+  function createTagLink(tag, label) {
+    const link = document.createElement("a");
+    link.className = "diary-tag";
+    link.dataset.tag = tag;
+    link.href = `${BASE_PATH}/tag/${encodeURIComponent(tag)}/`;
+    link.textContent = label;
+    return link;
+  }
+
+  function applyRouteState() {
+    const match = window.location.pathname.match(/^\/diary\/tag\/([^/]+)\/?$/);
+    let tag = "";
+    if (match) {
+      try {
+        tag = decodeURIComponent(match[1]).normalize("NFKC").trim().slice(0, 100);
+      } catch {
+        tag = "";
+      }
+    }
+    state.tag = tag;
+    const onTagPage = Boolean(tag);
+    elements.tagPageBack.hidden = !onTagPage;
+    elements.searchPanel.hidden = onTagPage;
+    elements.diaryKicker.textContent = onTagPage ? "Hashtag" : "Diary";
+    elements.diaryTitle.textContent = onTagPage ? `#${tag}の記事一覧` : "日記";
+    document.title = onTagPage ? `#${tag}の記事一覧 | 日記` : "日記";
   }
 
   function createEmpty(message) {

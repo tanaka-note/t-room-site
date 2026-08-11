@@ -15,7 +15,7 @@
   <link rel="manifest" href="/diary/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/diary/diary.css?v=10">
+  <link rel="stylesheet" href="/diary/diary.css?v=11">
 </head>
 <body>
   <main id="login-view" class="login-shell" aria-labelledby="login-title">
@@ -64,14 +64,15 @@
     <main>
       <section class="sub-hero diary-hero" aria-labelledby="diary-title">
         <div class="sub-hero-content">
-          <p class="eyebrow">Diary</p>
+          <a id="tag-page-back" class="tag-page-back" href="/diary/" hidden>← 日記へ戻る</a>
+          <p id="diary-kicker" class="eyebrow">Diary</p>
           <h1 id="diary-title">日記</h1>
         </div>
       </section>
 
       <section class="section diary-layout" aria-label="日記">
         <div class="diary-main">
-          <section class="diary-panel" aria-labelledby="diary-search-title">
+          <section id="diary-search-panel" class="diary-panel" aria-labelledby="diary-search-title">
             <div class="diary-section-head">
               <div>
                 <p class="section-kicker">Search</p>
@@ -334,6 +335,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=14" defer></script>
+  <script src="/diary/diary.js?v=15" defer></script>
 </body>
 </html>

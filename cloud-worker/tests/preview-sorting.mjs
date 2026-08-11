@@ -10,6 +10,7 @@ const [mainHtml, mainCss, mainJs, shareHtml, shareCss, shareJs] = await Promise.
   readFile(new URL("../public/share.css", import.meta.url), "utf8"),
   readFile(new URL("../public/share.js", import.meta.url), "utf8")
 ]);
+const workerJs = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 
 for (const key of ["updated", "name", "size"]) {
   assert.match(mainHtml, new RegExp(`data-sort-key="${key}"`));
@@ -33,7 +34,10 @@ assert.match(mainHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*
 assert.match(shareHtml, /class="sort-button active"[^>]*data-sort-key="updated"[^>]*aria-pressed="true">更新日 <span[^>]*>↓<\/span>/);
 assert.match(mainJs, /function resetTypeDefaultSort\(\)/);
 assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => a\.name\.localeCompare/);
-assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => String\(b\.updatedAt/);
+assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => String\(b\.createdAt/);
+assert.doesNotMatch(mainJs, /state\.sort === "updated"[^\n]+updatedAt/, "更新日順に名称変更日時を使用しないでください。");
+assert.match(shareJs, /const byUpdated = \(a, b\) => direction \* String\(a\.createdAt/);
+assert.match(workerJs, /"updated-desc": "created_at DESC", "updated-asc": "created_at ASC"/);
 assert.match(shareJs, /if \(state\.sortUsesTypeDefaults\) \{[\s\S]*?folders\.sort\(byName\);[\s\S]*?files\.sort/);
 
 assert.doesNotMatch(mainHtml, /id="preview-fullscreen"/, "右上の全画面ボタンを表示しないでください。");

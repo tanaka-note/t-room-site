@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="20260811-37">
+  <meta name="tcloud-build" content="20260811-41">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,7 +14,7 @@
   <link rel="manifest" href="/cloud/manifest.webmanifest">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260811-11">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260811-12">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -465,6 +465,19 @@
         </div>
       </section>
       <div id="mobile-usage-details-action" class="dialog-actions compact-actions" hidden><button id="mobile-usage-details-button" class="secondary-button" type="button">フォルダ別の詳細</button></div>
+      <div id="batch-rename-action" class="dialog-actions compact-actions" hidden><button id="open-batch-rename" class="secondary-button" type="button">名称の一括整理</button></div>
+  </dialog>
+
+  <dialog id="batch-rename-dialog" class="form-dialog">
+    <div class="dialog-head"><div><span class="file-badge">ADMIN MAINTENANCE</span><h2>名称の一括整理</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <p class="dialog-note standalone-note">平文の名称は端末内だけで照合し、暗号化後の情報だけをまとめて送信します。</p>
+    <label><span>処理定義（JSON）</span><textarea id="batch-rename-input" rows="9" spellcheck="false" autocomplete="off"></textarea></label>
+    <p id="batch-rename-status" class="dialog-note standalone-note" aria-live="polite">事前確認を行ってください。</p>
+    <pre id="batch-rename-preview" class="batch-rename-preview" hidden></pre>
+    <div class="dialog-actions">
+      <button id="batch-rename-preflight" class="secondary-button" type="button">事前確認</button>
+      <button id="batch-rename-execute" class="primary-button" type="button" disabled>一括変更を実行</button>
+    </div>
   </dialog>
 
   <dialog id="offline-manager-dialog" class="form-dialog offline-manager-dialog">
@@ -546,6 +559,6 @@
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/offline-store.js?v=20260811-2" defer></script>
   <script src="/cloud/media-client.js?v=20260811-12" defer></script>
-  <script src="/cloud/cloud.js?v=20260811-37" defer></script>
+  <script src="/cloud/cloud.js?v=20260811-41" defer></script>
 </body>
 </html>

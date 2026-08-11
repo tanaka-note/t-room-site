@@ -118,6 +118,20 @@ button {
   color: var(--muted);
 }
 
+.tag-page-back {
+  display: inline-flex;
+  margin-bottom: 18px;
+  color: #50647d;
+  font-size: 0.9rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.tag-page-back:hover,
+.tag-page-back:focus-visible {
+  text-decoration: underline;
+}
+
 .diary-hero {
   background:
     linear-gradient(90deg, rgba(194, 165, 107, 0.12), transparent 44%),
@@ -364,11 +378,12 @@ button {
   color: #43615d;
   font-size: 0.82rem;
   font-weight: 700;
+  text-decoration: none;
 }
 
-button.diary-tag:hover,
-button.diary-tag:focus-visible,
-button.diary-tag[aria-pressed="true"] {
+.diary-tag:hover,
+.diary-tag:focus-visible,
+.diary-tag[aria-current="page"] {
   border-color: rgba(15, 118, 110, 0.36);
   background: #eaf3ef;
   color: var(--teal-dark);

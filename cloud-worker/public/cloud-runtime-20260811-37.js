@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "20260811-37";
+const APP_BUILD_ID = "20260811-41";
 const LONG_PRESS_DRAG_THRESHOLD_PX = 28;
 const PWA_WORKER_URL = "/cloud/media-worker.js";
 const APP_UPDATE_EXPECTED_BUILD_KEY = "tcloud-app-update-expected-build";
@@ -59,6 +59,7 @@ const state = {
   offlineAbort: null,
   offlineStatus: "",
   offlineManagerEntries: [],
+  batchRenamePlan: null,
   unlockedTopFolderNames: new Map(),
   previewUrl: "",
   previewMediaToken: "",
@@ -140,6 +141,9 @@ function bindEvents() {
   $("#install-app-button-top").addEventListener("click", installApp);
   $("#update-app-button-top").addEventListener("click", updateInstalledApp);
   $("#mobile-account-button").addEventListener("click", openAccountDialog);
+  $("#open-batch-rename").addEventListener("click", openBatchRenameDialog);
+  $("#batch-rename-preflight").addEventListener("click", preflightBatchRename);
+  $("#batch-rename-execute").addEventListener("click", executeBatchRename);
   $("#usage-details-button").addEventListener("click", openUsageDetails);
   $("#mobile-usage-details-button").addEventListener("click", openUsageDetails);
   $("#upload-button").addEventListener("click", openAddAction);
@@ -1862,7 +1866,7 @@ async function hydrateFolderRecords(records, options = {}) {
   const direction = state.sortDirection === "asc" ? 1 : -1;
   if (state.sortUsesTypeDefaults) result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   else if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else if (state.sort === "updated") result.sort((a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || "")));
+  else if (state.sort === "updated") result.sort((a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
   else result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   return result;
 }
@@ -2391,10 +2395,10 @@ async function hydrateFileRecords(records, options = {}) {
   if (state.query) result = result.filter((file) => file.name.toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja")));
   if (state.kind) result = result.filter((file) => file.mediaKind === state.kind);
   const direction = state.sortDirection === "asc" ? 1 : -1;
-  if (state.sortUsesTypeDefaults) result.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+  if (state.sortUsesTypeDefaults) result.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   else if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
   else if (state.sort === "size") result.sort((a, b) => direction * (Number(a.sizeBytes || 0) - Number(b.sizeBytes || 0)) || a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else result.sort((a, b) => direction * String(a.updatedAt || a.createdAt || "").localeCompare(String(b.updatedAt || b.createdAt || "")));
+  else result.sort((a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
   return result;
 }
 
@@ -6614,6 +6618,7 @@ async function emptyTrash() {
 
 async function openAccountDialog() {
   const dialog = $("#account-dialog");
+  $("#batch-rename-action").hidden = state.session?.role !== "admin";
   if (!dialog.open) dialog.showModal();
   const context = currentOfflineContext();
   if (context && navigator.onLine && globalThis.TCloudOffline?.supported()) {
@@ -6621,6 +6626,192 @@ async function openAccountDialog() {
     await syncOfflineSourceRecords(entries, context).catch(() => entries);
   }
   await refreshDeviceStorageSummary();
+}
+
+function openBatchRenameDialog() {
+  if (state.session?.role !== "admin") return;
+  state.batchRenamePlan = null;
+  $("#batch-rename-status").textContent = "事前確認を行ってください。";
+  $("#batch-rename-preview").hidden = true;
+  $("#batch-rename-preview").textContent = "";
+  $("#batch-rename-execute").disabled = true;
+  $("#account-dialog").close();
+  $("#batch-rename-dialog").showModal();
+}
+
+const batchRenameVariantRules = [
+  [/女子(?:高|校)生/g, "学園風女性"],
+  [/女子(?:小|中)学生/g, "学園風女性"],
+  [/(?<![A-Za-z0-9])J[SKC](?![A-Za-z0-9])/gi, "学園風女性"],
+  [/(?:小|中|高)学生/g, "学園風"],
+  [/(?:小|中|高)[●○〇◯・＊*]+生/g, "学園風"],
+  [/[●○〇◯・＊*]+学生/g, "学園風女性"],
+  [/女[●○〇◯・＊*]+高生/g, "学園風女性"],
+  [/(?<![A-Za-z0-9])J[●○〇◯・＊*]+(?![A-Za-z0-9])/gi, "学園風女性"]
+];
+
+function applyBatchRenameVariantRules(name) {
+  return batchRenameVariantRules.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), name);
+}
+
+async function resolveBatchFolderPath(path, childCache) {
+  let parentId = null;
+  for (const segment of path) {
+    const cacheKey = parentId === null ? "root" : String(parentId);
+    let folders = childCache.get(cacheKey);
+    if (!folders) {
+      const params = new URLSearchParams({ foldersOnly: "1", sort: "name-asc" });
+      if (parentId !== null) params.set("folderId", String(parentId));
+      const data = await api(`/items?${params}`);
+      folders = await hydrateFolderRecords(data.folders || [], { preserveOrder: true });
+      childCache.set(cacheKey, folders);
+    }
+    const matches = folders.filter((folder) => folder.name === segment);
+    if (matches.length !== 1) throw new Error(`フォルダを一意に確認できません：${path.join(" / ")}`);
+    parentId = Number(matches[0].id);
+  }
+  return parentId;
+}
+
+async function loadBatchFolderFiles(folderId, fileCache) {
+  if (!fileCache.has(folderId)) {
+    const data = await api(`/items?folderId=${Number(folderId)}&sort=name-asc`);
+    fileCache.set(folderId, await hydrateFileRecords(data.files || [], { preserveOrder: true }));
+  }
+  return fileCache.get(folderId);
+}
+
+function normalizeBatchPath(value) {
+  if (!Array.isArray(value) || !value.length || value.length > 20) throw new Error("フォルダ場所を確認してください。");
+  return value.map((part) => cleanEditableName(part));
+}
+
+async function preflightBatchRename() {
+  const status = $("#batch-rename-status");
+  const execute = $("#batch-rename-execute");
+  const preview = $("#batch-rename-preview");
+  execute.disabled = true;
+  state.batchRenamePlan = null;
+  preview.hidden = true;
+  preview.textContent = "";
+  if (state.session?.role !== "admin" || !state.crypto.adminPrivateKey) {
+    status.textContent = "管理者の暗号化鍵を解除してから実行してください。";
+    return;
+  }
+  let definition;
+  try { definition = JSON.parse($("#batch-rename-input").value); }
+  catch { status.textContent = "処理定義のJSONを確認してください。"; return; }
+  const mappings = Array.isArray(definition?.mappings) ? definition.mappings : [];
+  const scanPaths = Array.isArray(definition?.scanPaths) ? definition.scanPaths : [];
+  if (!mappings.length && !scanPaths.length) { status.textContent = "変更候補がありません。"; return; }
+  if (mappings.length > 1000 || scanPaths.length > 100) { status.textContent = "一度に確認できる件数を超えています。"; return; }
+
+  status.textContent = "フォルダと暗号化名称を照合しています…";
+  try {
+    const childCache = new Map();
+    const fileCache = new Map();
+    const operations = new Map();
+    const already = [];
+    const missing = [];
+    const collisions = [];
+    const normalizedMappings = mappings.map((item) => ({
+      path: normalizeBatchPath(item.path),
+      before: cleanEditableName(item.before),
+      after: cleanEditableName(applyBatchRenameVariantRules(item.after))
+    }));
+    const grouped = new Map();
+    for (const item of normalizedMappings) {
+      const key = JSON.stringify(item.path);
+      if (!grouped.has(key)) grouped.set(key, { path: item.path, items: [] });
+      grouped.get(key).items.push(item);
+    }
+
+    for (const group of grouped.values()) {
+      const folderId = await resolveBatchFolderPath(group.path, childCache);
+      const files = await loadBatchFolderFiles(folderId, fileCache);
+      for (const item of group.items) {
+        const sources = files.filter((file) => file.name === item.before);
+        if (!sources.length) {
+          if (files.some((file) => file.name === item.after)) already.push({ ...item, folderId });
+          else missing.push({ ...item, folderId });
+          continue;
+        }
+        const occupied = files.some((file) => file.name === item.after && !sources.some((source) => Number(source.id) === Number(file.id)));
+        if (occupied) { collisions.push({ ...item, folderId }); continue; }
+        for (const file of sources) operations.set(Number(file.id), { file, folderId, path: group.path, before: file.name, after: item.after, reason: "approved" });
+      }
+    }
+
+    for (const rawPath of scanPaths) {
+      const path = normalizeBatchPath(rawPath);
+      const folderId = await resolveBatchFolderPath(path, childCache);
+      const files = await loadBatchFolderFiles(folderId, fileCache);
+      for (const file of files) {
+        if (operations.has(Number(file.id))) continue;
+        const after = cleanEditableName(applyBatchRenameVariantRules(file.name));
+        if (after === file.name) continue;
+        if (files.some((other) => Number(other.id) !== Number(file.id) && other.name === after)) {
+          collisions.push({ path, before: file.name, after, folderId });
+          continue;
+        }
+        operations.set(Number(file.id), { file, folderId, path, before: file.name, after, reason: "variant" });
+      }
+    }
+
+    if (missing.length || collisions.length) {
+      preview.textContent = [...missing.map((item) => `未検出｜${item.path.join(" / ")}｜${item.before}`), ...collisions.map((item) => `名称衝突｜${item.path.join(" / ")}｜${item.before} → ${item.after}`)].join("\n");
+      preview.hidden = false;
+      status.textContent = `事前確認で停止しました。未検出 ${missing.length}件・名称衝突 ${collisions.length}件。変更は行っていません。`;
+      return;
+    }
+    const plan = [...operations.values()];
+    const variants = plan.filter((item) => item.reason === "variant");
+    preview.textContent = variants.map((item) => `${item.path.join(" / ")}｜${item.before} → ${item.after}`).join("\n");
+    preview.hidden = variants.length === 0;
+    state.batchRenamePlan = { operations: plan, already };
+    status.textContent = `事前確認完了：変更 ${plan.length}件（追加検出 ${variants.length}件）・変更済み ${already.length}件・未検出 0件・名称衝突 0件。`;
+    execute.disabled = plan.length === 0;
+  } catch (error) {
+    status.textContent = `事前確認を中止しました：${error.message}`;
+  }
+}
+
+async function executeBatchRename() {
+  const status = $("#batch-rename-status");
+  const preflight = $("#batch-rename-preflight");
+  const execute = $("#batch-rename-execute");
+  const plan = state.batchRenamePlan?.operations || [];
+  if (!plan.length || state.session?.role !== "admin") return;
+  preflight.disabled = true;
+  execute.disabled = true;
+  const operationId = `rename_${Date.now()}_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  const prepared = [];
+  try {
+    for (let index = 0; index < plan.length; index++) {
+      const operation = plan[index];
+      if (!operation.file.fileKey) throw new Error(`暗号化鍵を確認できません：${operation.before}`);
+      const metadata = fileMetadataForStorage(operation.file, operation.file.mediaKind, operation.file.durationSeconds, operation.after);
+      const encrypted = await TRoomCrypto.encryptFileMetadata(metadata, operation.file.fileKey);
+      prepared.push({ id: Number(operation.file.id), ...encrypted });
+      if ((index + 1) % 10 === 0 || index + 1 === plan.length) status.textContent = `暗号化中 ${index + 1} / ${plan.length}件`;
+    }
+    let completed = 0;
+    for (let offset = 0; offset < prepared.length; offset += 50) {
+      const entries = prepared.slice(offset, offset + 50);
+      await api("/files/batch-metadata", { method: "POST", body: JSON.stringify({ operationId, entries }) });
+      completed += entries.length;
+      status.textContent = `更新中 ${completed} / ${prepared.length}件`;
+    }
+    status.textContent = `完了：${prepared.length}件を変更しました。変更済みとして照合した${state.batchRenamePlan.already.length}件は再処理していません。処理ID：${operationId}`;
+    state.batchRenamePlan = null;
+    invalidateStoredConflicts();
+    await loadItems();
+  } catch (error) {
+    status.textContent = `一括変更を停止しました：${error.message}。同じ定義で再度事前確認すると、完了済みは自動で除外されます。`;
+  } finally {
+    preflight.disabled = false;
+    execute.disabled = true;
+  }
 }
 
 async function refreshDeviceStorageSummary() {

@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-37";
+const APP_BUILD_ID = "20260811-41";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -109,6 +109,7 @@ async function handleApi(request, env, url, path) {
   if (path === "/api/crypto-setup" && request.method === "POST") return setupCrypto(request, env, session);
   if (path === "/api/shares" && request.method === "GET") return listShares(env, session);
   if (path === "/api/shares" && request.method === "POST") return createShare(request, env, session);
+  if (path === "/api/files/batch-metadata" && request.method === "POST") return updateFileMetadataBatch(request, env, session);
 
   const shareStopMatch = path.match(/^\/api\/shares\/(\d+)\/stop$/);
   if (shareStopMatch && request.method === "POST") return stopShare(Number(shareStopMatch[1]), env, session);
@@ -618,7 +619,7 @@ async function listItems(url, env, session) {
   `).bind(...folderValues).all();
 
   const orderBySort = {
-    "updated-desc": "updated_at DESC", "updated-asc": "updated_at ASC",
+    "updated-desc": "created_at DESC", "updated-asc": "created_at ASC",
     "name-asc": "original_name COLLATE NOCASE ASC", "name-desc": "original_name COLLATE NOCASE DESC",
     "size-desc": "size_bytes DESC", "size-asc": "size_bytes ASC",
     newest: "created_at DESC", oldest: "created_at ASC", name: "original_name COLLATE NOCASE ASC", size: "size_bytes DESC"
@@ -1177,6 +1178,46 @@ async function updateFile(id, request, env, session) {
   await env.DB.prepare("UPDATE cloud_files SET original_name = ?, folder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(name, folderId, id).run();
   await audit(env, "file_updated", session, "file", id, { name, folderId });
   return json({ ok: true });
+}
+
+async function updateFileMetadataBatch(request, env, session) {
+  requireAdmin(session);
+  const body = await readJson(request, 512 * 1024);
+  const operationId = String(body.operationId || "").trim();
+  const entries = Array.isArray(body.entries) ? body.entries : [];
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(operationId)) throw new HttpError(400, "一括処理IDを確認してください。");
+  if (!entries.length || entries.length > 50) throw new HttpError(400, "一度に更新できるファイルは1～50件です。");
+
+  const normalized = entries.map((entry) => ({
+    id: optionalId(entry?.id),
+    encryptedMetadata: validCryptoText(entry?.encryptedMetadata, 4096, "ファイル情報"),
+    metadataIv: validCryptoText(entry?.metadataIv, 64, "ファイル情報IV")
+  }));
+  if (normalized.some((entry) => !entry.id)) throw new HttpError(400, "ファイルIDを確認してください。");
+  const ids = normalized.map((entry) => entry.id);
+  if (new Set(ids).size !== ids.length) throw new HttpError(400, "同じファイルが一括処理内で重複しています。");
+
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = await env.DB.prepare(`SELECT id, crypto_version AS cryptoVersion, status, deleted_at AS deletedAt
+    FROM cloud_files WHERE id IN (${placeholders})`).bind(...ids).all();
+  const byId = new Map((rows.results || []).map((row) => [Number(row.id), row]));
+  for (const id of ids) {
+    const file = byId.get(id);
+    if (!file || file.status !== "ready" || file.deletedAt || Number(file.cryptoVersion) !== 1) {
+      throw new HttpError(409, `更新できないファイルが含まれています（ID: ${id}）。`);
+    }
+  }
+
+  await env.DB.batch(normalized.map((entry) => env.DB.prepare(`UPDATE cloud_files
+    SET encrypted_metadata = ?, metadata_iv = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'ready' AND deleted_at IS NULL AND crypto_version = 1`)
+    .bind(entry.encryptedMetadata, entry.metadataIv, entry.id)));
+  await audit(env, "file_metadata_batch_updated", session, "file_batch", null, {
+    operationId,
+    count: normalized.length,
+    encrypted: true
+  });
+  return json({ ok: true, operationId, updated: ids });
 }
 
 async function moveFileToTrash(id, env, session) {
