@@ -51,6 +51,16 @@ assert.match(mainJs, /className = "preview-player-controls"/);
 assert.match(shareJs, /className = "preview-player-controls"/);
 assert.match(mainJs, /class="preview-player-seek"[\s\S]*?class="preview-player-button preview-player-fullscreen"/);
 assert.match(shareJs, /class="preview-player-seek"[\s\S]*?class="preview-player-button preview-player-fullscreen"/);
+assert.match(mainJs, /class="preview-player-seek" role="slider"/);
+assert.match(shareJs, /class="preview-player-seek" role="slider"/);
+assert.doesNotMatch(mainJs, /class="preview-player-seek" type="range"/);
+assert.doesNotMatch(shareJs, /class="preview-player-seek" type="range"/);
+assert.match(mainJs, /seekPointerStartSeconds[\s\S]*?relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX, event\.clientX/);
+assert.match(shareJs, /seekPointerStartSeconds[\s\S]*?relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX, event\.clientX/);
+assert.doesNotMatch(mainCss, /preview-player-seek::-(?:webkit-slider-thumb|moz-range-thumb)/);
+assert.doesNotMatch(shareCss, /preview-player-seek::-(?:webkit-slider-thumb|moz-range-thumb)/);
+assert.match(mainCss, /\.preview-player-seek::before/);
+assert.match(shareCss, /\.preview-player-seek::before/);
 assert.match(mainJs, /container\.requestFullscreen/);
 assert.match(shareJs, /container\.requestFullscreen/);
 assert.match(mainJs, /document\.exitFullscreen/);
@@ -101,6 +111,21 @@ assert.doesNotMatch(mainCss, /preview-rotate-overlay/);
 assert.doesNotMatch(shareCss, /preview-rotate-overlay/);
 assert.doesNotMatch(mainCss, /is-video-rotated|transform: rotate\(90deg\)/);
 assert.doesNotMatch(shareCss, /is-video-rotated|transform:rotate\(90deg\)/);
+
+function verifyRelativeSeek(source, nextFunctionMarker, shared = false) {
+  const start = source.indexOf("function relativeSeekTime");
+  const end = source.indexOf(nextFunctionMarker, start);
+  assert.ok(start >= 0 && end > start, `${shared ? "共有" : "管理"}画面に相対シーク計算を実装してください。`);
+  const context = { Number, Math };
+  vm.runInNewContext(`${source.slice(start, end)}; globalThis.relativeSeek = relativeSeekTime;`, context);
+  assert.equal(context.relativeSeek(50, 100, 100, 200, 120), 50, "押しただけでは再生位置を移動しないでください。");
+  assert.equal(context.relativeSeek(50, 100, 200, 200, 120), 110, "右へ動かした距離に応じて進めてください。");
+  assert.equal(context.relativeSeek(50, 100, 0, 200, 120), 0, "左端を超えないようにしてください。");
+  assert.equal(context.relativeSeek(110, 100, 200, 200, 120), 120, "動画の終端を超えないようにしてください。");
+}
+
+verifyRelativeSeek(mainJs, "function addPreviewPlayerControls");
+verifyRelativeSeek(shareJs, "function addSharedPreviewPlayerControls", true);
 
 async function verifyClosedPreviewWinsOrientationRace(source, startMarker, endMarker, shared = false) {
   const start = source.indexOf(startMarker);
