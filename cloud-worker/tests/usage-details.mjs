@@ -14,6 +14,7 @@ assert.match(worker, /folderId && session\.role === "subadmin"[\s\S]*?totalFileC
 assert.match(client, /showUnlockedTotals[\s\S]*?総ファイル数：[\s\S]*?総容量：/, "解除済みフォルダの総量表示がありません。");
 assert.match(client, /function syncUnlockedTopFolderNames\(\)/, "解除済み最上位フォルダのアカウント表示がありません。");
 assert.match(client, /unlockedNames\.length \? unlockedNames\.join\("\\n"\) : "未ログイン"/, "副管理者の未ログイン・複数フォルダ表示がありません。");
+assert.match(client, /state\.session\?\.role === "admin"[\s\S]*?\? "管理者"/, "管理者のアカウント表記が固定されていません。");
 assert.doesNotMatch(client, /閲覧・アップロード・削除・解除済みフォルダ内の名称・PW変更/, "削除対象の権限説明が残っています。");
 assert.match(html, /id="usage-details-button"[\s\S]*?>詳細</);
 assert.match(html, /id="usage-details-dialog"/);

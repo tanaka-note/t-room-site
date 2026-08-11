@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="20260811-11">
+  <meta name="tcloud-build" content="20260811-12">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -442,6 +442,7 @@
         <div><span>端末保存</span><small id="device-storage-scope">最上位フォルダを解除すると表示します</small></div>
         <dl id="device-storage-values" hidden>
           <div><dt>再生キャッシュ</dt><dd id="device-cache-usage">— / 最大1GB</dd></div>
+          <div><dt><label for="device-cache-limit">容量上限</label></dt><dd><select id="device-cache-limit" aria-label="再生キャッシュ容量の上限"><option value="536870912">512MB</option><option value="1073741824" selected>1GB</option><option value="2147483648">2GB</option><option value="3221225472">3GB</option></select></dd></div>
           <div><dt>オフライン保存</dt><dd id="device-offline-usage">—</dd></div>
           <div><dt>利用可能容量（目安）</dt><dd id="device-storage-available">—</dd></div>
         </dl>
@@ -533,8 +534,8 @@
   <script src="/cloud/crypto-vault.js?v=20260809-13" defer></script>
   <script src="/cloud/file-safety.js?v=20260810-2" defer></script>
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
-  <script src="/cloud/offline-store.js?v=20260811-1" defer></script>
+  <script src="/cloud/offline-store.js?v=20260811-2" defer></script>
   <script src="/cloud/media-client.js?v=20260811-2" defer></script>
-  <script src="/cloud/cloud.js?v=20260811-11" defer></script>
+  <script src="/cloud/cloud.js?v=20260811-12" defer></script>
 </body>
 </html>

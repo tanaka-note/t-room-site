@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-11";
+const APP_BUILD_ID = "20260811-12";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1679,13 +1679,13 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260811-6.css"],
-    ["/cloud.js", "/cloud-runtime-20260811-11.js"],
+    ["/cloud.js", "/cloud-runtime-20260811-12.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
-    ["/offline-store.js", "/offline-store-20260811-1.js"],
+    ["/offline-store.js", "/offline-store-20260811-2.js"],
     ["/media-client.js", "/media-client-20260811-2.js"],
-    ["/media-worker.js", "/media-worker-20260811-3.js"],
+    ["/media-worker.js", "/media-worker-20260811-4.js"],
     ["/manifest.webmanifest", "/manifest-20260811-1.webmanifest"],
     ["/manifest-v2.webmanifest", "/manifest-20260811-1.webmanifest"],
     ["/offline", "/offline"],
