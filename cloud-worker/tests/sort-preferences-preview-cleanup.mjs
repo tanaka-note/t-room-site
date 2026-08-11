@@ -30,7 +30,7 @@ for (const client of [main, share]) {
 
 assert.match(main, /TCloudMedia\.releaseMedia\(media\.token\)/);
 assert.match(share, /TCloudMedia\.releaseMedia\(media\.token\)/);
-assert.match(mainHtml, /cloud\.js\?v=20260811-31/);
+assert.match(mainHtml, /cloud\.js\?v=20260811-33/);
 assert.match(shareHtml, /share\.js\?v=20260811-42/);
 
 console.log("per-folder sort memory and complete preview cleanup: ok");
