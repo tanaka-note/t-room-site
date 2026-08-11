@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="20260811-28">
+  <meta name="tcloud-build" content="20260811-30">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,7 +14,7 @@
   <link rel="manifest" href="/cloud/manifest.webmanifest">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=20260811-7">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=20260811-9">
 </head>
 <body>
   <main id="login-view" class="login-shell">
@@ -406,9 +406,18 @@
     <form id="move-form">
       <div class="dialog-head"><div><span class="file-badge">MOVE</span><h2>移動先を選択</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
       <p id="move-copy" class="dialog-note standalone-note"></p>
-      <label><span>移動先フォルダ</span><select id="move-destination" required></select></label>
+      <div class="move-picker" aria-label="移動先フォルダ">
+        <div class="move-picker-location">
+          <button id="move-picker-up" class="icon-button" type="button" aria-label="1つ上のフォルダへ戻る">←</button>
+          <div><small>現在の移動先</small><strong id="move-current-location">読み込み中…</strong></div>
+        </div>
+        <nav id="move-breadcrumbs" class="move-breadcrumbs" aria-label="移動先の階層"></nav>
+        <div id="move-folder-list" class="move-folder-list" role="list"></div>
+        <p id="move-folder-empty" class="move-folder-empty" hidden>この中にフォルダはありません。</p>
+      </div>
+      <input id="move-destination" type="hidden" value="">
       <p id="move-error" class="form-error dialog-error" role="alert"></p>
-      <div class="dialog-actions"><button class="secondary-button dialog-close" type="button">キャンセル</button><button id="move-submit" class="primary-button" type="submit">移動する</button></div>
+      <div class="dialog-actions"><button class="secondary-button dialog-close" type="button">キャンセル</button><button id="move-submit" class="primary-button" type="submit">ここへ移動</button></div>
     </form>
   </dialog>
 
@@ -536,6 +545,6 @@
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/offline-store.js?v=20260811-2" defer></script>
   <script src="/cloud/media-client.js?v=20260811-12" defer></script>
-  <script src="/cloud/cloud.js?v=20260811-28" defer></script>
+  <script src="/cloud/cloud.js?v=20260811-30" defer></script>
 </body>
 </html>
