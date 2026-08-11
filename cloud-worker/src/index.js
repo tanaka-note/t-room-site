@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-33";
+const APP_BUILD_ID = "20260811-34";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -253,7 +253,7 @@ async function setupCrypto(request, env, session) {
 }
 
 async function createShare(request, env, session) {
-  requireAdmin(session);
+  requireShareCreation(session);
   const body = await readJson(request, 65536);
   const token = normalizeShareToken(body.token);
   const targetType = ["folder", "file", "selection"].includes(body.targetType) ? body.targetType : "";
@@ -267,9 +267,10 @@ async function createShare(request, env, session) {
   const storedTargetType = targetType === "selection" ? "file" : targetType;
   const target = storedTargetType === "folder"
     ? await env.DB.prepare("SELECT id, crypto_version AS cryptoVersion FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(targetId).first()
-    : await env.DB.prepare("SELECT id, crypto_version AS cryptoVersion FROM cloud_files WHERE id = ? AND deleted_at IS NULL AND status = 'ready'").bind(targetId).first();
+    : await env.DB.prepare("SELECT id, folder_id AS folderId, crypto_version AS cryptoVersion FROM cloud_files WHERE id = ? AND deleted_at IS NULL AND status = 'ready'").bind(targetId).first();
   if (!target) throw new HttpError(404, "共有対象が見つかりません。");
   if (Number(target.cryptoVersion) !== 1) throw new HttpError(400, "暗号化済みの対象だけ共有できます。");
+  await requireShareFolderAccess(env, session, [storedTargetType === "folder" ? target.id : target.folderId]);
   let selectedFiles = [];
   if (targetType === "selection") {
     if (!Array.isArray(body.selectedFiles) || body.selectedFiles.length < 2 || body.selectedFiles.length > 100) {
@@ -289,10 +290,11 @@ async function createShare(request, env, session) {
       });
     }
     const placeholders = selectedFiles.map(() => "?").join(",");
-    const available = await env.DB.prepare(`SELECT id FROM cloud_files WHERE id IN (${placeholders})
+    const available = await env.DB.prepare(`SELECT id, folder_id AS folderId FROM cloud_files WHERE id IN (${placeholders})
       AND crypto_version = 1 AND deleted_at IS NULL AND status = 'ready'`).bind(...selectedFiles.map((file) => file.id)).all();
     if ((available.results || []).length !== selectedFiles.length) throw new HttpError(404, "共有するファイルが見つかりません。");
     if (selectedFiles[0].id !== targetId) throw new HttpError(400, "共有の基準ファイルを確認してください。");
+    await requireShareFolderAccess(env, session, (available.results || []).map((file) => file.folderId));
   }
   const authProof = validCryptoText(body.authProof, 256, "共有認証");
   const tokenHash = await sha256Base64Url(token);
@@ -1679,7 +1681,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260811-10.css"],
-    ["/cloud.js", "/cloud-runtime-20260811-33.js"],
+    ["/cloud.js", "/cloud-runtime-20260811-34.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
@@ -1774,6 +1776,17 @@ async function requireFolderAccess(env, folderId, session) {
     current = folder.parent_id;
   }
   return protectedFolderUnlocked;
+}
+
+async function requireShareFolderAccess(env, session, folderIds) {
+  if (session.role === "admin") return true;
+  const uniqueFolderIds = [...new Set(folderIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!uniqueFolderIds.length) throw new HttpError(403, "PWで解除したフォルダ内のデータだけ共有できます。");
+  for (const folderId of uniqueFolderIds) {
+    const unlocked = await requireFolderAccess(env, folderId, session);
+    if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内のデータだけ共有できます。");
+  }
+  return true;
 }
 
 async function unlockedMoveScopeId(env, folderId, session) {
@@ -2066,6 +2079,7 @@ function sessionMaxAge(env, role) {
     : clampNumber(env.SESSION_TTL_SECONDS, 3600, 2592000, 2592000);
 }
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
+function requireShareCreation(session) { if (!["admin", "subadmin"].includes(session.role)) throw new HttpError(403, "共有URLを発行できません。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }
 function requireUploadOwnership(session, file) { if (session.role !== "admin" && file.created_by !== session.role) throw new HttpError(403, "別アカウントの処理途中アップロードは操作できません。"); }
 function requireDelete(session) { if (!session.canDelete) throw new HttpError(403, "副管理者は削除できません。"); }

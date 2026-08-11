@@ -36,7 +36,7 @@ assert.match(client, /function unlockedMoveScopeRoot/);
 assert.match(client, /files\.every\(canMoveFile\) && folders\.every\(canMoveFolder\)/);
 assert.match(client, /PWで解除した最上位フォルダの配下だけ移動できます/);
 assert.match(client, /state\.crypto\.folderKeys\.get\(Number\(destination\.id\)\)/);
-assert.match(client, /const canShareSelection = state\.session\?\.role === "admin"/);
+assert.match(client, /const canShareSelection = \(fileCount >= 1 && folderCount === 0 && files\.every\(canShareFile\)\)/);
 assert.match(client, /api\(`\/move-destinations/);
 assert.match(client, /function buildMovePicker/);
 assert.match(client, /function renderMovePicker/);

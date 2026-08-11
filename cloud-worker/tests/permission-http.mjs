@@ -49,6 +49,14 @@ await expectStatus("副管理者の容量内訳拒否", await request("/usage", 
 await expectStatus("副管理者のフォルダ別容量内訳拒否", await request("/usage-details", "subadmin"), 403);
 const adminItemsResponse = await expectStatus("管理者の保存先候補取得", await request("/items", "admin"), 200);
 const adminItems = await adminItemsResponse.json();
+const protectedShareFolderId = Number(adminItems.folders?.[0]?.id || 0);
+if (protectedShareFolderId) {
+  await expectStatus("副管理者の未解除フォルダ共有拒否", await request("/shares", "subadmin", {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify({ token: "A".repeat(43), targetType: "folder", targetId: protectedShareFolderId, expiresAt: Math.floor(Date.now() / 1000) + 3600 })
+  }), 423);
+}
 const moveDestinationsResponse = await expectStatus("管理者の移動先一括取得", await request("/move-destinations", "admin"), 200);
 const moveDestinations = await moveDestinationsResponse.json();
 if (!Array.isArray(moveDestinations.folders)) throw new Error("移動先フォルダ一覧を取得できません。");

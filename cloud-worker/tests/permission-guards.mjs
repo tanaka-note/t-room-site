@@ -19,7 +19,8 @@ function requires(name, guard) {
   if (!body.includes(`${guard}(session)`)) throw new Error(`${name} に ${guard} がありません。`);
 }
 
-for (const name of ["createShare", "listShares", "stopShare", "listAdminShareEvents"]) requires(name, "requireAdmin");
+requires("createShare", "requireShareCreation");
+for (const name of ["listShares", "stopShare", "listAdminShareEvents"]) requires(name, "requireAdmin");
 for (const name of ["createFolder", "createUpload", "uploadPart", "completeUpload", "cancelUpload", "putThumbnail"]) requires(name, "requireUpload");
 for (const name of ["restoreFolder", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");
 requires("updateFolder", "requireFolderEdit");
@@ -46,6 +47,10 @@ if (!functionBody("updateFolder").includes("if (!unlocked)")
 }
 if (!functionBody("moveFileToTrash").includes("canTrashUnlockedFiles") || !functionBody("moveFileToTrash").includes("requireFolderAccess(env, file.folder_id, session)")) {
   throw new Error("副管理者のPW解除済みフォルダ内削除を確認できません。");
+}
+if (!functionBody("createShare").includes("requireShareFolderAccess(env, session")
+  || !functionBody("requireShareFolderAccess").includes("requireFolderAccess(env, folderId, session)")) {
+  throw new Error("副管理者の共有URL発行がPW解除済みフォルダ内に限定されていません。");
 }
 if (!functionBody("deleteFolder").includes("canTrashUnlockedFiles")
   || !functionBody("deleteFolder").includes("folder.parent_id")
