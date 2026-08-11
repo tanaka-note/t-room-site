@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-2";
+const APP_BUILD_ID = "20260811-3";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1654,13 +1654,14 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud-runtime-20260810-39.css"],
-    ["/cloud.js", "/cloud-runtime-20260811-2.js"],
+    ["/cloud.css", "/cloud-runtime-20260811-1.css"],
+    ["/cloud.js", "/cloud-runtime-20260811-3.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
-    ["/media-client.js", "/media-client-20260810-10.js"],
-    ["/media-worker.js", "/media-worker-20260810-10.js"],
+    ["/offline-store.js", "/offline-store-20260811-1.js"],
+    ["/media-client.js", "/media-client-20260811-1.js"],
+    ["/media-worker.js", "/media-worker-20260811-1.js"],
     ["/manifest.webmanifest", "/manifest-20260810-3.webmanifest"],
     ["/manifest-v2.webmanifest", "/manifest-20260810-3.webmanifest"],
     ["/offline", "/offline"],
@@ -1683,7 +1684,7 @@ async function serveAsset(request, env, url, path) {
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  const isAuthenticationAsset = ["/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
+  const isAuthenticationAsset = ["/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/offline-store.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
   const isPwaMetadataAsset = path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest" || path.startsWith("/icons/");
   headers.set("Cache-Control", assetPath === "/" || assetPath === "/share" || isAuthenticationAsset || isPwaMetadataAsset
     ? "no-store"
@@ -1822,7 +1823,8 @@ function mapFile(file) {
     metadataIv: file.metadata_iv, wrappedFileKey: file.wrapped_file_key, fileKeyIv: file.file_key_iv,
     encryptedSizeBytes: file.encrypted_size_bytes, chunkSizeBytes: file.chunk_size_bytes,
     chunkCount: file.chunk_count,
-    hasThumbnail: Boolean(file.thumbnail_key), createdAt: file.created_at, updatedAt: file.updated_at
+    hasThumbnail: Boolean(file.thumbnail_key), createdAt: file.created_at, updatedAt: file.updated_at,
+    deletedAt: file.deleted_at
   };
 }
 

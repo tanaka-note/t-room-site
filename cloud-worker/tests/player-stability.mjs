@@ -31,9 +31,9 @@ for (const css of [mainCss, shareCss]) {
   assert.match(css, /player-buffering\.is-hidden/);
 }
 
-assert.match(main, /prepareVideoPlayer\(stage, file\)[\s\S]*?TCloudMedia\.registerMedia/);
+assert.match(main, /prepareVideoPlayer\(stage, file\)[\s\S]*?registerMediaWithDeviceCache/);
 assert.match(share, /prepareSharedVideoPlayer\(stage, file\)[\s\S]*?TCloudMedia\.registerMedia/);
-assert.match(mainHtml, /media-client\.js\?v=20260810-10/);
+assert.match(mainHtml, /media-client\.js\?v=20260811-1/);
 assert.match(shareHtml, /media-client\.js\?v=20260810-10/);
 
 console.log("player registration, stable rendering, and portrait recovery: ok");
