@@ -11,6 +11,8 @@ const [client, html, css, worker] = await Promise.all([
 
 assert.match(html, /id="selection-move"/);
 assert.match(html, /id="selection-delete"/);
+assert.match(html, /id="selection-share"/);
+assert.ok(html.indexOf('id="selection-share"') < html.indexOf('id="selection-rename"'), "共有は長押し直後に見える位置へ配置してください。");
 assert.match(html, /id="move-dialog"/);
 assert.match(html, /id="move-picker-up"/);
 assert.match(html, /id="move-breadcrumbs"/);
@@ -21,6 +23,10 @@ assert.match(client, /if \(!file\.trashed\) \{/);
 assert.match(client, /function installFolderLongPressSelection/);
 assert.doesNotMatch(client, /state\.selectedFiles\.size \|\| state\.selectedFolders\.size \? 80 : 380/);
 assert.match(client, /function installLongPressSelection[\s\S]*?\}, 380\);[\s\S]*?setTimeout\(\(\) => \{ card\.dataset\.longPressed = "false"; \}, 0\)/);
+assert.match(client, /const LONG_PRESS_DRAG_THRESHOLD_PX = 28/);
+assert.match(client, /const distance = Math\.hypot\(event\.clientX - startX, event\.clientY - startY\)/);
+assert.match(client, /if \(!dragSelectionActive && distance < LONG_PRESS_DRAG_THRESHOLD_PX\) return/);
+assert.match(client, /dragSelectionActive = true;[\s\S]*?state\.selecting = true/);
 assert.match(client, /function installFolderLongPressSelection[\s\S]*?\}, 380\);[\s\S]*?setTimeout\(\(\) => \{ card\.dataset\.longPressed = "false"; \}, 0\)/);
 assert.match(client, /TRoomCrypto\.rewrapFileForFolder/);
 assert.match(client, /TRoomCrypto\.rewrapFolderForParent/);
@@ -30,6 +36,7 @@ assert.match(client, /function unlockedMoveScopeRoot/);
 assert.match(client, /files\.every\(canMoveFile\) && folders\.every\(canMoveFolder\)/);
 assert.match(client, /PWで解除した最上位フォルダの配下だけ移動できます/);
 assert.match(client, /state\.crypto\.folderKeys\.get\(Number\(destination\.id\)\)/);
+assert.match(client, /const canShareSelection = state\.session\?\.role === "admin"/);
 assert.match(client, /api\(`\/move-destinations/);
 assert.match(client, /function buildMovePicker/);
 assert.match(client, /function renderMovePicker/);
@@ -63,7 +70,12 @@ assert.doesNotMatch(worker, /副管理者はフォルダを移動できません
 
 const context = vm.createContext({
   console,
-  document: { addEventListener() {} },
+  setTimeout,
+  clearTimeout,
+  navigator: {},
+  innerHeight: 800,
+  scrollBy() {},
+  document: { addEventListener() {}, elementFromPoint() { return null; } },
   TCloudMedia: {}
 });
 vm.runInContext(client, context);
@@ -109,5 +121,36 @@ const subadminSummary = vm.runInContext(`(() => {
 assert.equal(subadminSummary.currentId, 1);
 assert.equal(subadminSummary.rootName, "Atsushi");
 assert.deepEqual([...subadminSummary.children], ["動画"]);
+
+const longPressResult = await vm.runInContext(`(async () => {
+  const listeners = new Map();
+  const makeCard = (id) => ({
+    dataset: { fileId: String(id) },
+    classList: { add() {}, remove() {} },
+    querySelector() { return null; },
+    addEventListener(type, handler) { listeners.set(type, handler); },
+    closest(selector) { return selector === ".file-card" ? this : null; }
+  });
+  const firstCard = makeCard(201);
+  const secondCard = makeCard(202);
+  const firstFile = { id: 201, name: "first.mp4" };
+  const secondFile = { id: 202, name: "second.mp4" };
+  state.files = [firstFile, secondFile];
+  state.selectedFiles.clear();
+  state.selectedFolders.clear();
+  syncSelectionBar = () => {};
+  document.elementFromPoint = () => secondCard;
+  installLongPressSelection(firstCard, firstFile);
+  listeners.get("pointerdown")({ pointerType: "touch", button: 0, pointerId: 9, clientX: 10, clientY: 10 });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const afterLongPress = state.selectedFiles.size;
+  listeners.get("pointermove")({ pointerId: 9, clientX: 16, clientY: 10, preventDefault() {} });
+  const afterFingerJitter = state.selectedFiles.size;
+  listeners.get("pointermove")({ pointerId: 9, clientX: 45, clientY: 10, preventDefault() {} });
+  const afterDeliberateDrag = state.selectedFiles.size;
+  listeners.get("pointerup")({ pointerId: 9, preventDefault() {} });
+  return { afterLongPress, afterFingerJitter, afterDeliberateDrag };
+})()`, context);
+assert.deepEqual({ ...longPressResult }, { afterLongPress: 1, afterFingerJitter: 1, afterDeliberateDrag: 2 });
 
 console.log("selection, bulk actions, and encrypted moves: ok");
