@@ -47,7 +47,16 @@ assert.match(client, /保存済み部分は次回の再開に利用します/);
 assert.match(client, /await syncTransferWakeLock\(\)/);
 assert.match(media, /fetchEncryptedChunk/);
 assert.match(worker, /TCloudOffline\.getChunk/);
+assert.match(media, /descriptor\.offlineOnly/);
+assert.match(media, /if \(file\.offlineOnly\) throw new Error/);
+assert.match(worker, /if \(file\.offlineOnly\) throw new Error/);
+assert.match(worker, /DECRYPTED_CACHE_LIMIT_BYTES = 96 \* 1024 \* 1024/);
+assert.match(worker, /fetchAndDecryptChunk\(entry, index \+ 1, \{ prefetch: true \}\)/);
+assert.match(client, /const openLabel = \["video", "audio"\]\.includes\(item\.file\.mediaKind\) \? "オフライン再生" : "開く"/);
+assert.doesNotMatch(client, /entries = await syncOfflineSourceRecords\(entries, context\)/);
 assert.match(server, /\["\/offline-store\.js", "\/offline-store-20260811-1\.js"\]/);
+assert.match(server, /\["\/media-client\.js", "\/media-client-20260811-2\.js"\]/);
+assert.match(server, /\["\/media-worker\.js", "\/media-worker-20260811-3\.js"\]/);
 assert.match(server, /deletedAt: file\.deleted_at/);
 
 console.log("encrypted file-only cache and 30-day offline storage: ok");

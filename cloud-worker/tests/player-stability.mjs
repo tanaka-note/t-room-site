@@ -32,8 +32,14 @@ for (const css of [mainCss, shareCss]) {
 }
 
 assert.match(main, /prepareVideoPlayer\(stage, file\)[\s\S]*?registerMediaWithDeviceCache/);
+assert.match(main, /seek\.addEventListener\("input", previewSeek\)/);
+assert.match(main, /seek\.addEventListener\("change", commitSeek\)/);
+assert.match(main, /state\.previewPlayer\.currentTime = target/);
+assert.doesNotMatch(main, /seek\.addEventListener\("input", \(\) => \{[\s\S]*?video\.currentTime/);
+assert.match(main, /bufferedEnd\(duration\)/);
+assert.match(mainCss, /--buffered-percent/);
 assert.match(share, /prepareSharedVideoPlayer\(stage, file\)[\s\S]*?TCloudMedia\.registerMedia/);
-assert.match(mainHtml, /media-client\.js\?v=20260811-1/);
+assert.match(mainHtml, /media-client\.js\?v=20260811-2/);
 assert.match(shareHtml, /media-client\.js\?v=20260810-10/);
 
 console.log("player registration, stable rendering, and portrait recovery: ok");
