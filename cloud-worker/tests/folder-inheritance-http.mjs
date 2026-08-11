@@ -158,4 +158,19 @@ const updatedFile = (await (await api(`/files/${upload.id}`, "admin", { method: 
 const updatedMetadata = await TRoomCrypto.decryptFileMetadata(updatedFile, filePackage.fileKey);
 if (updatedMetadata.name !== changedFileName) throw new Error("変更後のファイル名が暗号化メタデータへ保存されていません。");
 
+const relockResponse = await api(`/folders/${rootId}/unlock`, "subadmin", { method: "DELETE", body: "{}" });
+if (relockResponse.status !== 200) throw new Error(`副管理者の最上位フォルダ再ロック: ${relockResponse.status}`);
+const relockResult = await relockResponse.json();
+if (!(relockResult.folderIds || []).includes(Number(rootId)) || !(relockResult.folderIds || []).includes(Number(childId))) {
+  throw new Error("再ロック時に配下フォルダの解除情報が対象になっていません。");
+}
+const relockedRootItems = await (await api("/items?sort=name-asc", "subadmin", { method: "GET", headers: {} })).json();
+const relockedRootRecord = (relockedRootItems.folders || []).find((folder) => Number(folder.id) === Number(rootId));
+if (relockedRootRecord?.isUnlocked) throw new Error("再ロック後も最上位フォルダが解除済みです。");
+const renameAfterRelock = await api(`/files/${upload.id}`, "subadmin", {
+  method: "PATCH",
+  body: JSON.stringify(renamedFileMetadata)
+});
+if (renameAfterRelock.status !== 423) throw new Error(`再ロック後の配下ファイル操作拒否: ${renameAfterRelock.status}`);
+
 console.log("folder inheritance HTTP routes: ok");

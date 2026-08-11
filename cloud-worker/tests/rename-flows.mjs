@@ -20,15 +20,24 @@ if (!script.includes("function canRenameFolder(folder)") || !script.includes("fu
   throw new Error("解除済みフォルダ内の名称変更表示判定がありません。");
 }
 if (!html.includes('id="selection-rename"')
+  || !html.includes('id="selection-password"')
   || !html.includes('id="folder-rename-dialog"')
   || !script.includes('$("#selection-rename").addEventListener("click", openSelectedRenameDialog)')
   || !script.includes("folderCount === 1 && fileCount === 0 && canRenameFolder(folders[0])")
   || !script.includes("openFolderRenameDialog(folders[0])")) {
   throw new Error("長押しで1件選択したファイル・フォルダの名前変更導線がありません。");
 }
-if (!html.includes('id="folder-settings-name" type="hidden"')) {
-  throw new Error("三点リーダーの設定画面からフォルダ名変更欄が分離されていません。");
+if (!html.includes('id="folder-settings-name" type="hidden"')
+  || !script.includes('$("#selection-password").addEventListener("click", openSelectedFolderSettings)')
+  || script.includes('settings.textContent = "⋯"')
+  || script.includes('settings.className = "folder-settings-button"')) {
+  throw new Error("三点リーダーを廃止し、PW変更を選択操作へ統合できていません。");
 }
+if (!html.includes('id="selection-lock"')
+  || !script.includes("function canRelockTopFolder(folder)")
+  || !script.includes("async function lockSelectedTopFolder()")
+  || !worker.includes('request.method === "DELETE") return lockFolder')
+  || !worker.includes('DELETE FROM cloud_folder_unlocks')) throw new Error("解除済み最上位フォルダの再ロック導線がありません。");
 if (!script.includes("function canChangeFolderPassword(folder)") || !script.includes("const canEditPassword = canChangeFolderPassword(folder)")) {
   throw new Error("解除済み保護フォルダに限定したPW変更判定がありません。");
 }

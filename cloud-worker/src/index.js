@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-6";
+const APP_BUILD_ID = "20260811-7";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -122,6 +122,7 @@ async function handleApi(request, env, url, path) {
   if (folderRestoreMatch && request.method === "POST") return restoreFolder(Number(folderRestoreMatch[1]), env, session);
   const folderUnlockMatch = path.match(/^\/api\/folders\/(\d+)\/unlock$/);
   if (folderUnlockMatch && request.method === "POST") return unlockFolder(Number(folderUnlockMatch[1]), request, env, session);
+  if (folderUnlockMatch && request.method === "DELETE") return lockFolder(Number(folderUnlockMatch[1]), env, session);
 
   const partMatch = path.match(/^\/api\/uploads\/(\d+)\/parts\/(\d+)$/);
   if (partMatch && request.method === "PUT") return uploadPart(Number(partMatch[1]), Number(partMatch[2]), request, env, session);
@@ -1036,6 +1037,29 @@ async function unlockFolder(id, request, env, session) {
   return json({ ok: true, folder });
 }
 
+async function lockFolder(id, env, session) {
+  if (session.role !== "subadmin") throw new HttpError(403, "再ロックは副管理者の解除済み最上位フォルダで利用できます。");
+  const folder = await env.DB.prepare("SELECT id, parent_id, password_hash FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(id).first();
+  if (!folder) throw new HttpError(404, "フォルダが見つかりません。");
+  if (folder.parent_id || !folder.password_hash) throw new HttpError(400, "最上位のPW付きフォルダだけ再ロックできます。");
+  const descendants = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+      UNION ALL
+      SELECT child.id FROM cloud_folders child JOIN folder_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at IS NULL
+    ) SELECT id FROM folder_tree`).bind(id).all();
+  const folderIds = (descendants.results || []).map((item) => Number(item.id));
+  await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
+      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+      UNION ALL
+      SELECT child.id FROM cloud_folders child JOIN folder_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at IS NULL
+    ) DELETE FROM cloud_folder_unlocks WHERE session_id = ? AND folder_id IN (SELECT id FROM folder_tree)`)
+    .bind(id, session.sessionId).run();
+  await audit(env, "folder_locked", session, "folder", id, { folderCount: folderIds.length });
+  return json({ ok: true, folderIds });
+}
+
 async function createUpload(request, env, session) {
   requireUpload(session);
   const body = await readJson(request, 16384);
@@ -1654,8 +1678,8 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud-runtime-20260811-3.css"],
-    ["/cloud.js", "/cloud-runtime-20260811-6.js"],
+    ["/cloud.css", "/cloud-runtime-20260811-4.css"],
+    ["/cloud.js", "/cloud-runtime-20260811-7.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],

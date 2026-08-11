@@ -32,7 +32,7 @@ assert.match(main, /durationUnavailable[\s\S]*?時間不明/);
 assert.match(main, /Promise\.allSettled\(\[[\s\S]*?captureVideoThumbnail[\s\S]*?readMediaDurationFromUrl/);
 assert.match(share, /observeSharedMediaDuration\(video, file\)/);
 assert.match(share, /observeSharedMediaDuration\(audio, file\)/);
-assert.match(mainHtml, /cloud\.js\?v=20260811-6/);
+assert.match(mainHtml, /cloud\.js\?v=20260811-7/);
 assert.match(shareHtml, /share\.js\?v=20260810-41/);
 
 console.log("encrypted media duration metadata and card display: ok");
