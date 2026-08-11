@@ -76,6 +76,7 @@ assert.match(worker, /warmMediaForPlayback\(data\.token, entry\)/);
 assert.match(worker, /await loadEncryptedChunk\(entry, index\)/);
 assert.match(worker, /cacheWriteChain/);
 assert.match(worker, /shouldWarmTail\(descriptor\)/);
+assert.match(worker, /isMp4Descriptor\(descriptor\)/);
 assert.match(worker, /constrainOpenEndedMp4Range/);
 assert.match(worker, /SET_CACHE_LIMIT/);
 assert.match(media, /cacheLimitBytes = Number\(global\.TCloudOffline/);
@@ -84,8 +85,8 @@ assert.match(client, /const openLabel = \["video", "audio"\]\.includes\(item\.fi
 assert.match(client, /event\.target\.closest\("\.offline-manager-item"\)/);
 assert.doesNotMatch(client, /entries = await syncOfflineSourceRecords\(entries, context\)/);
 assert.match(server, /\["\/offline-store\.js", "\/offline-store-20260811-2\.js"\]/);
-assert.match(server, /\["\/media-client\.js", "\/media-client-20260811-3\.js"\]/);
-assert.match(server, /\["\/media-worker\.js", "\/media-worker-20260811-6\.js"\]/);
+assert.match(server, /\["\/media-client\.js", "\/media-client-20260811-4\.js"\]/);
+assert.match(server, /\["\/media-worker\.js", "\/media-worker-20260811-7\.js"\]/);
 assert.match(server, /deletedAt: file\.deleted_at/);
 
 console.log("encrypted file-only cache and 30-day offline storage: ok");

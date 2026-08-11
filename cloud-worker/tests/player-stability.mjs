@@ -45,7 +45,9 @@ assert.match(mainCss, /--buffered-percent/);
 assert.match(share, /prepareSharedVideoPlayer\(stage, file\)[\s\S]*?TCloudMedia\.registerMedia/);
 assert.match(share, /seek\.addEventListener\("pointerdown"/);
 assert.match(share, /relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX, event\.clientX/);
-assert.match(mainHtml, /media-client\.js\?v=20260811-3/);
-assert.match(shareHtml, /media-client\.js\?v=20260811-3/);
+assert.match(mainHtml, /media-client\.js\?v=20260811-4/);
+assert.match(shareHtml, /media-client\.js\?v=20260811-4/);
+assert.match(mediaClient, /function playbackMimeType\(file\)/);
+assert.match(mediaClient, /mp4: "video\/mp4"/);
 
 console.log("player registration, stable rendering, and portrait recovery: ok");
