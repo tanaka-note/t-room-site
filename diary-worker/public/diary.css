@@ -68,13 +68,12 @@ button {
   border-bottom: 1px solid rgba(216, 222, 230, 0.78);
   background: rgba(248, 250, 249, 0.94);
   backdrop-filter: blur(16px);
-  transform: translateY(0);
-  transition: transform 180ms ease, box-shadow 180ms ease;
+  transform: translateY(calc(-1 * var(--header-scroll-offset, 0px)));
+  transition: box-shadow 180ms ease;
   will-change: transform;
 }
 
 .site-header.is-scroll-hidden {
-  transform: translateY(calc(-100% - 2px));
   box-shadow: none;
 }
 

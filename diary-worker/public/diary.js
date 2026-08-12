@@ -4,7 +4,6 @@
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const DATE_TAP_MAX_MOVEMENT_PX = 4;
   const DATE_TAP_MAX_DURATION_MS = 650;
-  const HEADER_SCROLL_THRESHOLD_PX = 10;
   const datePointerGestures = new WeakMap();
   const tagCollator = new Intl.Collator(["ja-JP", "en-US"], {
     usage: "sort",
@@ -62,6 +61,7 @@
     deferredInstallPrompt: null,
     lastSessionRefreshAt: 0,
     lastHeaderScrollY: 0,
+    headerScrollOffset: 0,
     headerScrollFrame: 0
   };
 
@@ -354,21 +354,32 @@
     state.headerScrollFrame = window.requestAnimationFrame(updateHeaderVisibility);
   }
 
+  function resetHeaderVisibilityTracking() {
+    state.lastHeaderScrollY = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
+    state.headerScrollOffset = 0;
+    elements.siteHeader?.style.setProperty("--header-scroll-offset", "0px");
+    elements.siteHeader?.classList.remove("is-scroll-hidden");
+  }
+
   function updateHeaderVisibility() {
     state.headerScrollFrame = 0;
     const currentY = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
     const movement = currentY - state.lastHeaderScrollY;
     const focusedInsideHeader = elements.siteHeader?.contains(document.activeElement);
+    const headerHeight = Math.max(0, (elements.siteHeader?.offsetHeight || 0) + 2);
 
-    if (currentY <= HEADER_SCROLL_THRESHOLD_PX || movement < -HEADER_SCROLL_THRESHOLD_PX || focusedInsideHeader) {
-      elements.siteHeader?.classList.remove("is-scroll-hidden");
-    } else if (movement > HEADER_SCROLL_THRESHOLD_PX) {
-      elements.siteHeader?.classList.add("is-scroll-hidden");
+    if (currentY <= 0 || focusedInsideHeader) {
+      state.headerScrollOffset = 0;
+    } else {
+      state.headerScrollOffset = Math.min(
+        currentY,
+        Math.min(headerHeight, Math.max(0, state.headerScrollOffset + movement))
+      );
     }
 
-    if (Math.abs(movement) > HEADER_SCROLL_THRESHOLD_PX || currentY <= HEADER_SCROLL_THRESHOLD_PX) {
-      state.lastHeaderScrollY = currentY;
-    }
+    elements.siteHeader?.style.setProperty("--header-scroll-offset", `${state.headerScrollOffset}px`);
+    elements.siteHeader?.classList.toggle("is-scroll-hidden", state.headerScrollOffset >= headerHeight - 0.5);
+    state.lastHeaderScrollY = currentY;
   }
 
   function registerPwa() {
@@ -560,6 +571,7 @@
     elements.bootView.hidden = true;
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
+    resetHeaderVisibilityTracking();
     elements.roleLabel.textContent = `${session.accountName}（管理者）`;
     elements.newEntryButton.hidden = session.role !== "admin";
     elements.trashButton.hidden = !state.canViewTrash;
@@ -1975,6 +1987,7 @@
   }
 
   function resetState() {
+    resetHeaderVisibilityTracking();
     state.role = null;
     state.accountName = null;
     state.householdId = null;
