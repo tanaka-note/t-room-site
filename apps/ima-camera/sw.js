@@ -1,4 +1,4 @@
-const CACHE_NAME = "t-room-ima-camera-v9";
+const CACHE_NAME = "t-room-ima-camera-v10";
 const APP_ASSETS = [
   "./",
   "./index.html",

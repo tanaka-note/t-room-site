@@ -7,6 +7,6 @@ if (!html.includes("<title>T-Cloud Secure Share</title>")) throw new Error("共�
 if ((html.match(/T-Cloud Storage/g) || []).length !== 2) throw new Error("共有ページのブランド表記を確認してください。");
 if (/T-ROOM/.test(html)) throw new Error("共有ページにT-ROOM表記が残っています。");
 if (/<a\b[^>]*href=["']\/?["']/i.test(html)) throw new Error("共有ページにT-ROOMトップへ戻るリンクがあります。");
-if (!worker.includes('assetPath === "/share" || isAuthenticationAsset')) throw new Error("共有HTMLがno-storeに設定されていません。");
+if (!worker.includes('assetPath === "/" || assetPath === "/share" || isServiceWorkerAsset || isPwaMetadataAsset')) throw new Error("共有HTMLがno-storeに設定されていません。");
 
 console.log("shared page isolation: ok");

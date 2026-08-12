@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 const [html, client, runtime, worker] = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
-  readFile(new URL("../public/cloud-runtime-20260812-1.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/cloud-runtime-20260812-2.js", import.meta.url), "utf8"),
   readFile(new URL("../src/index.js", import.meta.url), "utf8")
 ]);
 

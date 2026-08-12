@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260812-4";
+const APP_BUILD_ID = "20260812-5";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1725,7 +1725,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260811-11.css"],
-    ["/cloud.js", "/cloud-runtime-20260812-1.js"],
+    ["/cloud.js", "/cloud-runtime-20260812-2.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
@@ -1760,9 +1760,15 @@ async function serveAsset(request, env, url, path) {
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   const isAuthenticationAsset = ["/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/offline-store.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
   const isPwaMetadataAsset = path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest" || path.startsWith("/icons/");
-  headers.set("Cache-Control", assetPath === "/" || assetPath === "/share" || isAuthenticationAsset || isPwaMetadataAsset
+  const isVersionedAsset = url.searchParams.has("v") || url.searchParams.has("rev");
+  const isServiceWorkerAsset = path === "/media-worker.js";
+  headers.set("Cache-Control", assetPath === "/" || assetPath === "/share" || isServiceWorkerAsset || isPwaMetadataAsset
     ? "no-store"
-    : "public, max-age=3600");
+    : isVersionedAsset
+      ? "public, max-age=31536000, immutable"
+      : isAuthenticationAsset
+        ? "no-cache"
+        : "public, max-age=3600");
   if (path === "/media-worker.js") headers.set("Service-Worker-Allowed", "/cloud/");
   if (path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest") headers.set("Content-Type", "application/manifest+json; charset=utf-8");
   if (assetPath === "/offline") headers.set("Content-Type", "text/html; charset=utf-8");

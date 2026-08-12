@@ -200,6 +200,9 @@
   }
 
   function bindEvents() {
+    document.addEventListener("troom:before-auto-update", (event) => {
+      if (state.editorDirty || state.photoPreparing || document.querySelector("dialog[open]")) event.preventDefault();
+    });
     window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
     elements.loginForm.addEventListener("submit", handleLogin);
     elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
