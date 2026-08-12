@@ -14,7 +14,7 @@ async function cookie(role) {
     label: role === "admin" ? "管理者" : "副管理者",
     sessionId: webcrypto.randomUUID(),
     exp: Math.floor(Date.now() / 1000) + 3600,
-    version: "3"
+    version: "4"
   };
   const encoded = b64(encoder.encode(JSON.stringify(payload)));
   const key = await webcrypto.subtle.importKey("raw", encoder.encode(vars.SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -34,9 +34,9 @@ async function expectStatus(label, response, expected) {
 
 await expectStatus("未認証の一覧", await request("/items", null), 401);
 const adminSessionResponse = await expectStatus("管理者セッション", await request("/session", "admin"), 200);
-if (adminSessionResponse.headers.get("Set-Cookie")) throw new Error("管理者セッションが長期ローリング更新されています。");
+if (!/Max-Age=2592000/.test(adminSessionResponse.headers.get("Set-Cookie") || "")) throw new Error("管理者セッションが最終利用から30日へ更新されていません。");
 const subadminSessionResponse = await expectStatus("副管理者セッション", await request("/session", "subadmin"), 200);
-if (!/Max-Age=34560000/.test(subadminSessionResponse.headers.get("Set-Cookie") || "")) throw new Error("副管理者セッションが400日へ更新されていません。");
+if (!/Max-Age=2592000/.test(subadminSessionResponse.headers.get("Set-Cookie") || "")) throw new Error("副管理者セッションが最終利用から30日へ更新されていません。");
 await expectStatus("副管理者のゴミ箱拒否", await request("/trash", "subadmin"), 403);
 await expectStatus("副管理者の共有管理拒否", await request("/shares", "subadmin"), 403);
 await expectStatus("副管理者の削除承認一覧拒否", await request("/deletion-requests", "subadmin"), 403);

@@ -23,7 +23,7 @@ async function sessionCookie(hash = tokenHash) {
     tokenHash: hash,
     sessionId: webcrypto.randomUUID(),
     exp: Math.floor(Date.now() / 1000) + 3600,
-    version: "3"
+    version: "4"
   };
   const encoded = b64(encoder.encode(JSON.stringify(payload)));
   const key = await webcrypto.subtle.importKey("raw", encoder.encode(vars.SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

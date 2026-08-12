@@ -23,7 +23,10 @@ export default {
       if (url.pathname === `${BASE_PATH}.html`) return Response.redirect(`${url.origin}${BASE_PATH}/`, 301);
       if (!url.pathname.startsWith(BASE_PATH)) return new Response("Not found", { status: 404 });
       const path = url.pathname.slice(BASE_PATH.length) || "/";
-      if (path.startsWith("/api/")) return secureResponse(await handleApi(request, env, url, path));
+      if (path.startsWith("/api/")) {
+        const response = await handleApi(request, env, url, path);
+        return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
+      }
       return secureResponse(await serveAsset(request, env, url, path));
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
@@ -45,11 +48,7 @@ async function handleApi(request, env, url, path) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (!session) return json({ authenticated: false });
-    if (session.role !== "subadmin") return json({ authenticated: true, ...publicSession(session, env) });
-    const maxAge = sessionMaxAge(env, session.role);
-    const token = await createSessionToken(session, maxAge, env);
-    const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
-    return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
+    return json({ authenticated: true, ...publicSession(session, env) });
   }
 
   if (path === "/api/auth-mode" && request.method === "GET") {
@@ -1946,6 +1945,18 @@ async function createSessionToken(session, maxAge, env) {
   return `${encoded}.${await sign(encoded, env.SESSION_SECRET)}`;
 }
 
+async function refreshAuthenticatedSession(request, response, env, url, path) {
+  if (["/api/login", "/api/logout", "/api/auth-mode", "/api/app-version"].includes(path)
+    || path.startsWith("/api/public/")) return response;
+  const session = await readSession(request, env);
+  if (!session) return response;
+  const maxAge = sessionMaxAge(env, session.role);
+  const token = await createSessionToken(session, maxAge, env);
+  const headers = new Headers(response.headers);
+  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 async function readSession(request, env) {
   try {
     const token = readCookie(request, SESSION_COOKIE);
@@ -2111,9 +2122,8 @@ function validateRsaPublicJwk(value) {
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
 function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), sessionCacheId: session.sessionId, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function sessionMaxAge(env, role) {
-  return role === "subadmin"
-    ? clampNumber(env.SUBADMIN_SESSION_TTL_SECONDS, 2592000, 34560000, 34560000)
-    : clampNumber(env.SESSION_TTL_SECONDS, 3600, 2592000, 2592000);
+  const configured = role === "subadmin" ? env.SUBADMIN_SESSION_TTL_SECONDS : env.SESSION_TTL_SECONDS;
+  return clampNumber(configured, 3600, 2592000, 2592000);
 }
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireShareCreation(session) { if (!["admin", "subadmin"].includes(session.role)) throw new HttpError(403, "共有URLを発行できません。"); }

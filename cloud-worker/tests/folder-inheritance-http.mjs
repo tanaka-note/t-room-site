@@ -13,7 +13,7 @@ if (!vars.SESSION_SECRET) throw new Error("ローカル用SESSION_SECRETがあ�
 const encoder = new TextEncoder();
 const b64 = (bytes) => Buffer.from(bytes).toString("base64url");
 async function cookie(role) {
-  const payload = { role, label: role === "admin" ? "管理者" : "副管理者", sessionId: webcrypto.randomUUID(), exp: Math.floor(Date.now() / 1000) + 3600, version: "3" };
+  const payload = { role, label: role === "admin" ? "管理者" : "副管理者", sessionId: webcrypto.randomUUID(), exp: Math.floor(Date.now() / 1000) + 3600, version: "4" };
   const encoded = b64(encoder.encode(JSON.stringify(payload)));
   const key = await webcrypto.subtle.importKey("raw", encoder.encode(vars.SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const signature = b64(new Uint8Array(await webcrypto.subtle.sign("HMAC", key, encoder.encode(encoded))));
