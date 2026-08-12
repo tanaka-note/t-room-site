@@ -34,8 +34,8 @@ if (!html.includes('id="folder-settings-name" type="hidden"')
   throw new Error("三点リーダーを廃止し、PW変更を選択操作へ統合できていません。");
 }
 if (!html.includes('id="selection-lock"')
-  || !script.includes("function canRelockTopFolder(folder)")
-  || !script.includes("async function lockSelectedTopFolder()")
+  || !script.includes("function canRelockFolder(folder)")
+  || !script.includes("async function lockSelectedFolder()")
   || !worker.includes('request.method === "DELETE") return lockFolder')
   || !worker.includes('DELETE FROM cloud_folder_unlocks')) throw new Error("解除済み最上位フォルダの再ロック導線がありません。");
 if (!script.includes("function canChangeFolderPassword(folder)") || !script.includes("const canEditPassword = canChangeFolderPassword(folder)")) {

@@ -163,6 +163,16 @@ const updatedFile = (await (await api(`/files/${upload.id}`, "admin", { method: 
 const updatedMetadata = await TRoomCrypto.decryptFileMetadata(updatedFile, filePackage.fileKey);
 if (updatedMetadata.name !== changedFileName) throw new Error("変更後のファイル名が暗号化メタデータへ保存されていません。");
 
+const childRelockResponse = await api(`/folders/${protectedChildId}/unlock`, "subadmin", { method: "DELETE", body: "{}" });
+if (childRelockResponse.status !== 200) throw new Error(`副管理者の配下フォルダ再ロック: ${childRelockResponse.status}`);
+const childRelockResult = await childRelockResponse.json();
+if (!(childRelockResult.folderIds || []).includes(Number(protectedChildId))) throw new Error("配下フォルダの解除情報が削除対象になっていません。");
+const childUnlockAgain = await api(`/folders/${protectedChildId}/unlock`, "subadmin", {
+  method: "POST",
+  body: JSON.stringify({ authProof: unlockedChildPassword.authProof })
+});
+if (childUnlockAgain.status !== 200) throw new Error(`配下フォルダ再ロック後の再解除: ${childUnlockAgain.status}`);
+
 const relockResponse = await api(`/folders/${rootId}/unlock`, "subadmin", { method: "DELETE", body: "{}" });
 if (relockResponse.status !== 200) throw new Error(`副管理者の最上位フォルダ再ロック: ${relockResponse.status}`);
 const relockResult = await relockResponse.json();

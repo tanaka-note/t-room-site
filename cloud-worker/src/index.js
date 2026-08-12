@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260812-3";
+const APP_BUILD_ID = "20260812-4";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1047,7 +1047,7 @@ async function lockFolder(id, env, session) {
   if (session.role !== "subadmin") throw new HttpError(403, "再ロックは副管理者の解除済み最上位フォルダで利用できます。");
   const folder = await env.DB.prepare("SELECT id, parent_id, password_hash FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(id).first();
   if (!folder) throw new HttpError(404, "フォルダが見つかりません。");
-  if (folder.parent_id || !folder.password_hash) throw new HttpError(400, "最上位のPW付きフォルダだけ再ロックできます。");
+  if (!folder.password_hash) throw new HttpError(400, "PW付きフォルダだけロックできます。");
   const descendants = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
       UNION ALL
@@ -1725,7 +1725,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260811-11.css"],
-    ["/cloud.js", "/cloud-runtime-20260811-37.js"],
+    ["/cloud.js", "/cloud-runtime-20260812-1.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
