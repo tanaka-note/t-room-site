@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="20260812-1">
+  <meta name="troom-app-build" content="20260812-2">
   <meta name="troom-service-worker" content="/diary/service-worker.js">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -102,7 +102,7 @@
             <div class="diary-search-card">
               <label class="diary-search-label" for="diary-search-input">キーワード検索</label>
               <div class="diary-search-box">
-                <input id="diary-search-input" type="search" autocomplete="off" maxlength="100" placeholder="例：仕事、旅行、サイトづくり">
+                <input id="diary-search-input" type="search" autocomplete="off" maxlength="100" placeholder="ここに入力する">
                 <button id="diary-search-clear" class="diary-search-clear" type="button" aria-label="検索キーワードをクリア" hidden>×</button>
               </div>
               <fieldset class="diary-date-search">
@@ -319,7 +319,7 @@
       </section>
 
       <label for="entry-tags">タグ</label>
-      <input id="entry-tags" name="tags" type="text" maxlength="320" placeholder="家族、仕事、旅行">
+      <input id="entry-tags" name="tags" type="text" maxlength="320" placeholder="ここに入力する">
       <p class="field-help">読点またはカンマで区切って10個まで入力できます。</p>
 
       <p id="editor-message" class="form-message" role="status" aria-live="polite"></p>
@@ -417,7 +417,7 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=20260812-1" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=20260812-2" defer></script>
   <script src="/diary/diary.js?v=27" defer></script>
 </body>
 </html>
