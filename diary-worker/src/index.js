@@ -248,11 +248,17 @@ async function serveAsset(request, env, url, path) {
     ["/manifest.webmanifest", "/manifest.webmanifest"],
     ["/service-worker.js", "/service-worker.js"],
     ["/icons/diary-icon-source.png", "/icons/diary-icon-source.png"],
+    ["/icons/diary-icon-source-v2.png", "/icons/diary-icon-source-v2.png"],
     ["/icons/icon-192.png", "/icons/icon-192.png"],
+    ["/icons/icon-192-v2.png", "/icons/icon-192-v2.png"],
     ["/icons/icon-512.png", "/icons/icon-512.png"],
+    ["/icons/icon-512-v2.png", "/icons/icon-512-v2.png"],
     ["/icons/icon-maskable-512.png", "/icons/icon-maskable-512.png"],
+    ["/icons/icon-maskable-512-v2.png", "/icons/icon-maskable-512-v2.png"],
     ["/icons/apple-touch-icon.png", "/icons/apple-touch-icon.png"],
+    ["/icons/apple-touch-icon-v2.png", "/icons/apple-touch-icon-v2.png"],
     ["/icons/favicon-64.png", "/icons/favicon-64.png"],
+    ["/icons/favicon-64-v2.png", "/icons/favicon-64-v2.png"],
     ["/investment.css", "/investment.css"],
     ["/investment.js", "/investment.js"]
   ]);
