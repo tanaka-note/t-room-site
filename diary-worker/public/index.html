@@ -58,6 +58,10 @@
       </div>
       <div class="header-actions">
         <span id="role-label" class="role-label"></span>
+        <label id="household-switcher-wrap" class="household-switcher" hidden>
+          <span>管理する日記</span>
+          <select id="household-switcher" aria-label="管理する日記を切り替える"></select>
+        </label>
         <button class="install-app-button quiet-button" type="button">ホームへ追加</button>
         <button id="camera-roll-button" class="quiet-button" type="button">画像まとめ</button>
         <button id="trash-button" class="quiet-button" type="button" hidden>ゴミ箱</button>
@@ -122,7 +126,7 @@
         </aside>
       </section>
 
-      <section class="section diary-investment-section" aria-label="My Investment Performance">
+      <section id="investment-section" class="section diary-investment-section" aria-label="My Investment Performance">
         <a class="investment-performance-entry" href="/diary/investment/">
           <div>
             <p class="investment-performance-label">Portfolio dashboard</p>
@@ -136,6 +140,40 @@
       </section>
     </main>
   </div>
+
+  <dialog id="initial-password-dialog" class="entry-dialog initial-password-dialog" aria-labelledby="initial-password-title">
+    <form id="initial-password-form" class="entry-form initial-password-form">
+      <div>
+        <p class="section-kicker">First login</p>
+        <h2 id="initial-password-title">新しいパスワードを設定</h2>
+        <p class="field-help">仮パスワードに代わる、ご本人専用のパスワードを設定してください。</p>
+      </div>
+
+      <label for="initial-password">新しいパスワード</label>
+      <div class="password-field">
+        <input id="initial-password" type="password" autocomplete="new-password" required minlength="6" maxlength="128">
+        <button class="password-toggle" type="button" data-password-toggle="initial-password" aria-pressed="false" aria-label="パスワードを表示" title="パスワードを表示">
+          <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
+          <svg class="password-eye password-eye-closed" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><path d="M4 4l16 16"></path></svg>
+        </button>
+      </div>
+
+      <label for="initial-password-confirmation">新しいパスワード（確認）</label>
+      <div class="password-field">
+        <input id="initial-password-confirmation" type="password" autocomplete="new-password" required minlength="6" maxlength="128">
+        <button class="password-toggle" type="button" data-password-toggle="initial-password-confirmation" aria-pressed="false" aria-label="パスワードを表示" title="パスワードを表示">
+          <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
+          <svg class="password-eye password-eye-closed" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><path d="M4 4l16 16"></path></svg>
+        </button>
+      </div>
+      <p class="password-requirements">パスワードは6文字以上で設定してください。</p>
+      <aside class="initial-password-notice">
+        初回設定後は、登録したパスワードを確認し、安全な場所に保管してください。パスワードを紛失するとログインできません。お忘れの場合は、T-ROOM管理者へ再発行をご依頼ください。
+      </aside>
+      <p id="initial-password-message" class="form-message" role="status" aria-live="polite"></p>
+      <button id="initial-password-submit" class="primary-button full-button" type="submit">パスワードを設定</button>
+    </form>
+  </dialog>
 
   <dialog id="entry-dialog" class="entry-dialog">
     <article class="entry-detail">
@@ -340,6 +378,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=16" defer></script>
+  <script src="/diary/diary.js?v=17" defer></script>
 </body>
 </html>

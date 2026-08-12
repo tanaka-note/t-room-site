@@ -11,8 +11,14 @@
   const state = {
     role: null,
     accountName: null,
+    householdId: null,
+    activeHouseholdId: null,
+    isGlobalOwner: false,
+    mustChangePassword: false,
+    pendingLoginId: "",
     canViewTrash: false,
     canPermanentlyDelete: false,
+    canViewInvestment: false,
     entries: [],
     entryMap: new Map(),
     offset: 0,
@@ -56,15 +62,24 @@
     passwordToggle: document.querySelector("#password-toggle"),
     rememberLogin: document.querySelector("#remember-login"),
     loginMessage: document.querySelector("#login-message"),
+    initialPasswordDialog: document.querySelector("#initial-password-dialog"),
+    initialPasswordForm: document.querySelector("#initial-password-form"),
+    initialPassword: document.querySelector("#initial-password"),
+    initialPasswordConfirmation: document.querySelector("#initial-password-confirmation"),
+    initialPasswordMessage: document.querySelector("#initial-password-message"),
+    initialPasswordSubmit: document.querySelector("#initial-password-submit"),
     diaryKicker: document.querySelector("#diary-kicker"),
     diaryTitle: document.querySelector("#diary-title"),
     tagPageBack: document.querySelector("#tag-page-back"),
     searchPanel: document.querySelector("#diary-search-panel"),
     roleLabel: document.querySelector("#role-label"),
+    householdSwitcherWrap: document.querySelector("#household-switcher-wrap"),
+    householdSwitcher: document.querySelector("#household-switcher"),
     cameraRollButton: document.querySelector("#camera-roll-button"),
     newEntryButton: document.querySelector("#new-entry-button"),
     trashButton: document.querySelector("#trash-button"),
     logoutButton: document.querySelector("#logout-button"),
+    investmentSection: document.querySelector("#investment-section"),
     installButtons: [...document.querySelectorAll(".install-app-button")],
     installAppDialog: document.querySelector("#install-app-dialog"),
     installAppMessage: document.querySelector("#install-app-message"),
@@ -151,7 +166,8 @@
     try {
       const session = await api("/session");
       if (session.authenticated) {
-        await enterDiary(session);
+        if (session.mustChangePassword) await showInitialPasswordSetup(session);
+        else await enterDiary(session);
       } else {
         showLogin();
       }
@@ -164,6 +180,12 @@
     elements.loginForm.addEventListener("submit", handleLogin);
     elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
     elements.passwordToggle.addEventListener("click", togglePassword);
+    elements.initialPasswordForm.addEventListener("submit", handleInitialPasswordChange);
+    elements.initialPasswordDialog.addEventListener("cancel", (event) => event.preventDefault());
+    document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+      button.addEventListener("click", () => togglePasswordField(button.dataset.passwordToggle, button));
+    });
+    elements.householdSwitcher.addEventListener("change", changeActiveHousehold);
     elements.logoutButton.addEventListener("click", handleLogout);
     elements.installButtons.forEach((button) => button.addEventListener("click", requestAppInstall));
     elements.cameraRollButton.addEventListener("click", openCameraRoll);
@@ -340,9 +362,14 @@
         method: "POST",
         body: { loginId, password }
       });
-      await updateRememberedLogin(loginId, password);
       elements.password.value = "";
-      await enterDiary(result);
+      if (result.mustChangePassword) {
+        state.pendingLoginId = loginId;
+        await showInitialPasswordSetup(result);
+      } else {
+        await updateRememberedLogin(loginId, password);
+        await enterDiary(result);
+      }
     } catch (error) {
       elements.loginMessage.textContent = error.message;
       elements.password.select();
@@ -389,29 +416,115 @@
   }
 
   function togglePassword() {
-    const show = elements.password.type === "password";
-    elements.password.type = show ? "text" : "password";
+    togglePasswordField("password", elements.passwordToggle);
+  }
+
+  function togglePasswordField(inputId, button) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
     const label = show ? "パスワードを隠す" : "パスワードを表示";
-    elements.passwordToggle.setAttribute("aria-label", label);
-    elements.passwordToggle.title = label;
-    elements.passwordToggle.setAttribute("aria-pressed", String(show));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.setAttribute("aria-pressed", String(show));
+  }
+
+  async function showInitialPasswordSetup(session) {
+    state.role = session.role;
+    state.accountName = session.accountName;
+    state.mustChangePassword = true;
+    elements.loginView.hidden = true;
+    elements.appView.hidden = true;
+    elements.initialPasswordForm.reset();
+    elements.initialPasswordMessage.textContent = "";
+    if (!elements.initialPasswordDialog.open) elements.initialPasswordDialog.showModal();
+    window.setTimeout(() => elements.initialPassword.focus(), 0);
+  }
+
+  async function handleInitialPasswordChange(event) {
+    event.preventDefault();
+    const password = elements.initialPassword.value;
+    const confirmation = elements.initialPasswordConfirmation.value;
+    elements.initialPasswordMessage.textContent = "";
+    if (password !== confirmation) {
+      elements.initialPasswordMessage.textContent = "確認用パスワードが一致しません。";
+      elements.initialPasswordConfirmation.focus();
+      return;
+    }
+    setBusy(elements.initialPasswordSubmit, true, "設定中…");
+    try {
+      const session = await api("/password/initial", { method: "POST", body: { password, confirmation } });
+      await updateRememberedLogin(state.pendingLoginId || elements.loginId.value.trim().toLowerCase(), password);
+      state.pendingLoginId = "";
+      elements.initialPasswordForm.reset();
+      elements.initialPasswordDialog.close();
+      await enterDiary(session);
+      showToast("新しいパスワードを設定しました。");
+    } catch (error) {
+      elements.initialPasswordMessage.textContent = error.message;
+    } finally {
+      setBusy(elements.initialPasswordSubmit, false, "パスワードを設定");
+    }
   }
 
   async function enterDiary(session) {
     state.role = session.role;
     state.accountName = session.accountName;
+    state.householdId = session.householdId;
+    state.activeHouseholdId = session.activeHouseholdId || session.householdId;
+    state.isGlobalOwner = Boolean(session.isGlobalOwner);
+    state.mustChangePassword = false;
+    state.pendingLoginId = "";
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
+    state.canViewInvestment = Boolean(session.canViewInvestment);
     state.lastSessionRefreshAt = Date.now();
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     elements.roleLabel.textContent = `${session.accountName}（管理者）`;
     elements.newEntryButton.hidden = session.role !== "admin";
     elements.trashButton.hidden = !state.canViewTrash;
+    elements.investmentSection.hidden = !state.canViewInvestment;
+    await loadHouseholdSwitcher();
     await Promise.all([loadMeta(), loadEntries(true)]);
   }
 
+  async function loadHouseholdSwitcher() {
+    elements.householdSwitcherWrap.hidden = !state.isGlobalOwner;
+    if (!state.isGlobalOwner) return;
+    const result = await api("/households");
+    elements.householdSwitcher.replaceChildren(...result.households.map((household) => {
+      const option = document.createElement("option");
+      option.value = household.id;
+      option.textContent = household.name;
+      option.selected = household.id === result.activeHouseholdId;
+      return option;
+    }));
+  }
+
+  async function changeActiveHousehold() {
+    const householdId = elements.householdSwitcher.value;
+    elements.householdSwitcher.disabled = true;
+    try {
+      await api("/households/select", { method: "POST", body: { householdId } });
+      state.activeHouseholdId = householdId;
+      state.trash = false;
+      state.query = "";
+      state.month = "";
+      state.tag = "";
+      updateFilterControls();
+      await Promise.all([loadMeta(), loadEntries(true)]);
+    } catch (error) {
+      showToast(error.message);
+      await loadHouseholdSwitcher();
+    } finally {
+      elements.householdSwitcher.disabled = false;
+    }
+  }
+
   function showLogin(message = "") {
+    if (elements.initialPasswordDialog.open) elements.initialPasswordDialog.close();
     elements.loginView.hidden = false;
     elements.appView.hidden = true;
     elements.loginMessage.textContent = message;
@@ -1565,8 +1678,14 @@
   function resetState() {
     state.role = null;
     state.accountName = null;
+    state.householdId = null;
+    state.activeHouseholdId = null;
+    state.isGlobalOwner = false;
+    state.mustChangePassword = false;
+    state.pendingLoginId = "";
     state.canViewTrash = false;
     state.canPermanentlyDelete = false;
+    state.canViewInvestment = false;
     state.entries = [];
     state.entryMap.clear();
     state.offset = 0;

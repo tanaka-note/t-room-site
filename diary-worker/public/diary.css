@@ -98,6 +98,26 @@ button {
   font-weight: 700;
 }
 
+.household-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.household-switcher select {
+  min-height: 40px;
+  max-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 34px 0 10px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+}
+
 .sub-hero {
   padding: clamp(54px, 9vw, 90px) clamp(18px, 6vw, 72px);
 }
@@ -677,6 +697,36 @@ button:disabled {
   margin: 24px 0 0;
   padding: 8px 0 8px 14px;
   color: var(--muted);
+}
+
+.initial-password-dialog {
+  width: min(520px, calc(100% - 28px));
+}
+
+.initial-password-form {
+  padding: clamp(26px, 6vw, 42px);
+}
+
+.initial-password-form h2 {
+  margin: 6px 0 8px;
+  font-size: clamp(1.7rem, 6vw, 2.4rem);
+  line-height: 1.3;
+}
+
+.password-requirements {
+  margin: -2px 0 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.initial-password-notice {
+  border: 1px solid rgba(194, 120, 3, 0.24);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #fffbeb;
+  color: #694c12;
+  font-size: 0.88rem;
+  line-height: 1.75;
 }
 
 .login-form label,

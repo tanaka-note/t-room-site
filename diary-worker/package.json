@@ -7,6 +7,8 @@
     "deploy": "wrangler deploy",
     "check": "node --check src/index.js && node --check public/diary.js && node --check public/investment.js",
     "test:permissions": "node tests/permissions.e2e.mjs",
+    "test:households": "node tests/household-isolation.e2e.mjs",
+    "test:initial-password": "node tests/initial-password-ui.mjs",
     "test:photos": "node tests/photos.e2e.mjs && node tests/photos-ui.mjs",
     "test:tags": "node tests/tags-ui.mjs",
     "test:history": "node tests/history-ui.mjs",

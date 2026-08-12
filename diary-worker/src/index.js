@@ -6,8 +6,8 @@ const LOGIN_WINDOW_SECONDS = 15 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DIARY_ACCOUNTS = [
-  { id: "main-admin", name: "田中宏知", role: "admin", canViewTrash: true, canPermanentlyDelete: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
-  { id: "wife-admin", name: "田中暢美", role: "admin", canViewTrash: false, canPermanentlyDelete: false, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" }
+  { id: "main-admin", name: "田中宏知", householdId: "tanaka-household", role: "admin", isGlobalOwner: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH", sessionVersion: 1 },
+  { id: "wife-admin", name: "田中暢美", householdId: "tanaka-household", role: "admin", isGlobalOwner: false, canViewTrash: false, canPermanentlyDelete: false, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH", sessionVersion: 1 }
 ];
 
 export default {
@@ -36,11 +36,11 @@ export default {
 
       if (isInvestmentAssetPath(path)) {
         const session = await readSession(request, env);
-        if (!session) {
+        if (!session || !session.canViewInvestment) {
           const isPageRequest = path === "/investment" || path === "/investment/";
           return secureResponse(isPageRequest
             ? Response.redirect(`${url.origin}${BASE_PATH}/`, 302)
-            : new Response("Unauthorized", { status: 401 }));
+            : new Response("Not found", { status: 404 }));
         }
       }
 
@@ -63,8 +63,13 @@ async function handleApi(request, env, url, path) {
       role: session?.role || null,
       accountName: session?.accountName || null,
       loginId: session?.loginId || null,
+      householdId: session?.householdId || null,
+      activeHouseholdId: session?.activeHouseholdId || null,
+      isGlobalOwner: Boolean(session?.isGlobalOwner),
+      mustChangePassword: Boolean(session?.mustChangePassword),
       canViewTrash: Boolean(session?.canViewTrash),
-      canPermanentlyDelete: Boolean(session?.canPermanentlyDelete)
+      canPermanentlyDelete: Boolean(session?.canPermanentlyDelete),
+      canViewInvestment: Boolean(session?.canViewInvestment)
     });
   }
 
@@ -81,7 +86,7 @@ async function handleApi(request, env, url, path) {
       return json({ error: "IDまたはパスワードを確認してください。" }, 400);
     }
 
-    const requestedAccount = DIARY_ACCOUNTS.find((account) => accountLoginId(account, env) === loginId);
+    const requestedAccount = await findAccountByLoginId(loginId, env);
     const now = Math.floor(Date.now() / 1000);
     const fingerprint = requestedAccount ? await loginFingerprint(request, requestedAccount, env) : "";
     if (fingerprint) {
@@ -90,10 +95,12 @@ async function handleApi(request, env, url, path) {
         return json({ error: "ログインが一時停止されています。15分ほど待ってからお試しください。" }, 429);
       }
     }
-    const matches = await Promise.all(DIARY_ACCOUNTS.map((account) => (
-      verifyPassword(password, env[account.secretKey])
-    )));
-    const account = requestedAccount && matches[DIARY_ACCOUNTS.indexOf(requestedAccount)] ? requestedAccount : null;
+    const passwordHash = requestedAccount
+      ? (requestedAccount.passwordHash || (requestedAccount.temporarySecretKey ? env[requestedAccount.temporarySecretKey] : env[requestedAccount.secretKey]))
+      : null;
+    const account = requestedAccount && passwordHash && await verifyPassword(password, passwordHash)
+      ? requestedAccount
+      : null;
     if (!account) {
       if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
       return json({ error: "IDまたはパスワードが違います。" }, 401);
@@ -109,8 +116,13 @@ async function handleApi(request, env, url, path) {
       role: account.role,
       accountName: account.name,
       loginId: accountLoginId(account, env),
+      householdId: account.householdId,
+      activeHouseholdId: account.householdId,
+      isGlobalOwner: Boolean(account.isGlobalOwner),
+      mustChangePassword: Boolean(account.mustChangePassword),
       canViewTrash: account.canViewTrash,
-      canPermanentlyDelete: account.canPermanentlyDelete
+      canPermanentlyDelete: account.canPermanentlyDelete,
+      canViewInvestment: account.canViewInvestment
     }, 200, headers);
   }
 
@@ -123,6 +135,40 @@ async function handleApi(request, env, url, path) {
 
   const session = await readSession(request, env);
   if (!session) return json({ error: "ログインが必要です。" }, 401);
+
+  if (path === "/api/password/initial" && request.method === "POST") {
+    if (!validMutationRequest(request, url)) return json({ error: "不正なリクエストです。" }, 403);
+    return changeInitialPassword(request, env, session, url);
+  }
+
+  if (session.mustChangePassword) {
+    return json({ error: "最初にパスワードを再設定してください。", mustChangePassword: true }, 428);
+  }
+
+  if (path === "/api/households" && request.method === "GET") {
+    const households = session.isGlobalOwner
+      ? [
+          { id: "tanaka-household", name: "田中宏知・田中暢美" },
+          { id: "chiharu-household", name: "田中千晴" }
+        ]
+      : [{ id: session.householdId, name: session.accountName }];
+    return json({ households, activeHouseholdId: session.activeHouseholdId });
+  }
+
+  if (path === "/api/households/select" && request.method === "POST") {
+    if (!session.isGlobalOwner) return json({ error: "この操作を行う権限がありません。" }, 403);
+    const body = await readJson(request, 4096);
+    const householdId = String(body.householdId || "");
+    if (!["tanaka-household", "chiharu-household"].includes(householdId)) {
+      return json({ error: "日記の管理対象を確認できませんでした。" }, 400);
+    }
+    const account = await findAccountById(session.accountId, env);
+    const maxAge = getSessionMaxAge(env);
+    const token = await createSessionToken(account, maxAge, env, householdId);
+    const headers = new Headers();
+    headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+    return json({ ok: true, activeHouseholdId: householdId }, 200, headers);
+  }
 
   if (request.method !== "GET" && !validMutationRequest(request, url)) {
     return json({ error: "不正なリクエストです。" }, 403);
@@ -138,19 +184,20 @@ async function handleApi(request, env, url, path) {
   }
 
   if (path === "/api/meta" && request.method === "GET") {
-    return listMeta(env);
+    return listMeta(env, session);
   }
 
   if (path === "/api/investment-history" && request.method === "GET") {
+    if (!session.canViewInvestment) return json({ error: "Not found" }, 404);
     return listInvestmentHistory(env);
   }
 
   if (path === "/api/photos" && request.method === "GET") {
-    return listPhotos(url, env);
+    return listPhotos(url, env, session);
   }
 
   if (path === "/api/photos/meta" && request.method === "GET") {
-    return listPhotoMeta(env);
+    return listPhotoMeta(env, session);
   }
 
   const photoAssetMatch = path.match(/^\/api\/photos\/([0-9a-f-]{36})\/(thumbnail|display|original)$/i);
@@ -170,7 +217,7 @@ async function handleApi(request, env, url, path) {
   }
   if (entryMatch && request.method === "PUT") {
     requireAdmin(session);
-    return updateEntry(Number(entryMatch[1]), request, env);
+    return updateEntry(Number(entryMatch[1]), request, env, session);
   }
   if (entryMatch && request.method === "DELETE") {
     requireAdmin(session);
@@ -180,13 +227,13 @@ async function handleApi(request, env, url, path) {
   const restoreMatch = path.match(/^\/api\/entries\/(\d+)\/restore$/);
   if (restoreMatch && request.method === "POST") {
     requireTrashAccess(session);
-    return restoreEntry(Number(restoreMatch[1]), env);
+    return restoreEntry(Number(restoreMatch[1]), env, session);
   }
 
   const permanentDeleteMatch = path.match(/^\/api\/entries\/(\d+)\/permanent$/);
   if (permanentDeleteMatch && request.method === "DELETE") {
     requirePermanentDeleteAccess(session);
-    return permanentlyDeleteEntry(Number(permanentDeleteMatch[1]), request, env);
+    return permanentlyDeleteEntry(Number(permanentDeleteMatch[1]), request, env, session);
   }
 
   return json({ error: "Not found" }, 404);
@@ -286,8 +333,8 @@ async function listEntries(url, env, session) {
   }
   const trash = trashRequested;
 
-  const conditions = [trash ? "e.deleted_at IS NOT NULL" : "e.deleted_at IS NULL"];
-  const bindings = [];
+  const conditions = ["e.household_id = ?", trash ? "e.deleted_at IS NOT NULL" : "e.deleted_at IS NULL"];
+  const bindings = [session.activeHouseholdId];
   if (query) {
     conditions.push("(instr(e.title, ?) > 0 OR instr(e.content, ?) > 0)");
     bindings.push(query, query);
@@ -326,27 +373,27 @@ async function getEntry(id, env, session) {
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
-    WHERE e.id = ? ${deletedClause}
-  `).bind(id).first();
+    WHERE e.id = ? AND e.household_id = ? ${deletedClause}
+  `).bind(id, session.activeHouseholdId).first();
   if (!row) return json({ error: "日記が見つかりません。" }, 404);
-  const photos = await listEntryPhotos(id, env);
+  const photos = await listEntryPhotos(id, env, session);
   return json({ entry: { ...serializeEntry(row), photos } });
 }
 
-async function listEntryPhotos(entryId, env) {
+async function listEntryPhotos(entryId, env, session) {
   const result = await env.DB.prepare(`
     SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size, p.width, p.height,
            p.created_by_name, p.created_at, e.entry_date, e.title AS entry_title,
            e.author_id, e.author_name
     FROM diary_photos p
     JOIN diary_entries e ON e.id = p.entry_id
-    WHERE p.entry_id = ?
+    WHERE p.entry_id = ? AND e.household_id = ?
     ORDER BY p.created_at ASC, p.id ASC
-  `).bind(entryId).all();
+  `).bind(entryId, session.activeHouseholdId).all();
   return (result.results || []).map(serializePhoto);
 }
 
-async function listPhotos(url, env) {
+async function listPhotos(url, env, session) {
   const limit = clampNumber(url.searchParams.get("limit"), 1, 100, 48);
   const offset = clampNumber(url.searchParams.get("offset"), 0, 1000000, 0);
   const query = normalizeSearch(url.searchParams.get("q") || "", 100);
@@ -354,8 +401,8 @@ async function listPhotos(url, env) {
     ? url.searchParams.get("month")
     : "";
   const author = normalizeSearch(url.searchParams.get("author") || "", 100);
-  const conditions = ["e.deleted_at IS NULL"];
-  const bindings = [];
+  const conditions = ["e.household_id = ?", "e.deleted_at IS NULL"];
+  const bindings = [session.activeHouseholdId];
   if (query) {
     conditions.push("(instr(p.file_name, ?) > 0 OR instr(e.title, ?) > 0 OR instr(e.content, ?) > 0)");
     bindings.push(query, query, query);
@@ -388,24 +435,24 @@ async function listPhotos(url, env) {
   });
 }
 
-async function listPhotoMeta(env) {
+async function listPhotoMeta(env, session) {
   const [months, authors] = await Promise.all([
     env.DB.prepare(`
       SELECT substr(e.entry_date, 1, 7) AS value, COUNT(*) AS count
       FROM diary_photos p
       JOIN diary_entries e ON e.id = p.entry_id
-      WHERE e.deleted_at IS NULL
+      WHERE e.household_id = ? AND e.deleted_at IS NULL
       GROUP BY value
       ORDER BY value DESC
-    `).all(),
+    `).bind(session.activeHouseholdId).all(),
     env.DB.prepare(`
       SELECT e.author_id AS value, e.author_name AS label, COUNT(*) AS count
       FROM diary_photos p
       JOIN diary_entries e ON e.id = p.entry_id
-      WHERE e.deleted_at IS NULL
+      WHERE e.household_id = ? AND e.deleted_at IS NULL
       GROUP BY e.author_id, e.author_name
       ORDER BY e.author_name ASC
-    `).all()
+    `).bind(session.activeHouseholdId).all()
   ]);
   return json({ months: months.results || [], authors: authors.results || [] });
 }
@@ -414,7 +461,8 @@ async function uploadEntryPhoto(entryId, request, env, session) {
   if (!env.MEDIA) throw new HttpError(503, "画像の保存先が設定されていません。");
   const contentLength = Number(request.headers.get("Content-Length") || 0);
   if (contentLength > 80 * 1024 * 1024) throw new HttpError(413, "画像の容量が大きすぎます。");
-  const entry = await env.DB.prepare("SELECT id FROM diary_entries WHERE id = ? AND deleted_at IS NULL").bind(entryId).first();
+  const entry = await env.DB.prepare("SELECT id FROM diary_entries WHERE id = ? AND household_id = ? AND deleted_at IS NULL")
+    .bind(entryId, session.activeHouseholdId).first();
   if (!entry) throw new HttpError(404, "画像を追加する日記が見つかりません。");
 
   let form;
@@ -443,7 +491,7 @@ async function uploadEntryPhoto(entryId, request, env, session) {
   const safeName = normalizeFileName(original.name || "photo");
   const width = clampNumber(form.get("width"), 1, 100000, null);
   const height = clampNumber(form.get("height"), 1, 100000, null);
-  const baseKey = `diary/${entryId}/${id}`;
+  const baseKey = `diary/${session.activeHouseholdId}/${entryId}/${id}`;
   const originalKey = `${baseKey}/original`;
   const displayKey = `${baseKey}/display`;
   const thumbnailKey = `${baseKey}/thumbnail`;
@@ -484,8 +532,8 @@ async function servePhoto(id, variant, request, env, session, url) {
     SELECT p.file_name, p.content_type, p.original_key, p.display_key, p.thumbnail_key, e.deleted_at
     FROM diary_photos p
     JOIN diary_entries e ON e.id = p.entry_id
-    WHERE p.id = ?
-  `).bind(id.toLowerCase()).first();
+    WHERE p.id = ? AND e.household_id = ?
+  `).bind(id.toLowerCase(), session.activeHouseholdId).first();
   if (!row || (row.deleted_at && !session.canViewTrash)) return new Response("Not found", { status: 404 });
   const key = variant === "original" ? row.original_key : (variant === "display" ? row.display_key : row.thumbnail_key);
   const object = await env.MEDIA.get(key);
@@ -503,23 +551,23 @@ async function servePhoto(id, variant, request, env, session, url) {
   return new Response(object.body, { status: 200, headers });
 }
 
-async function listMeta(env) {
+async function listMeta(env, session) {
   const [months, tags] = await Promise.all([
     env.DB.prepare(`
       SELECT substr(entry_date, 1, 7) AS value, COUNT(*) AS count
       FROM diary_entries
-      WHERE deleted_at IS NULL
+      WHERE household_id = ? AND deleted_at IS NULL
       GROUP BY value
       ORDER BY value DESC
-    `).all(),
+    `).bind(session.activeHouseholdId).all(),
     env.DB.prepare(`
       SELECT dt.tag AS value, COUNT(*) AS count
       FROM diary_tags dt
       JOIN diary_entries e ON e.id = dt.entry_id
-      WHERE e.deleted_at IS NULL
+      WHERE e.household_id = ? AND e.deleted_at IS NULL
       GROUP BY dt.tag
       ORDER BY count DESC, dt.tag ASC
-    `).all()
+    `).bind(session.activeHouseholdId).all()
   ]);
   return json({ months: months.results || [], tags: tags.results || [] });
 }
@@ -527,15 +575,15 @@ async function listMeta(env) {
 async function createEntry(request, env, session) {
   const input = validateEntryInput(await readJson(request, 500000));
   const result = await env.DB.prepare(`
-    INSERT INTO diary_entries (entry_date, title, content, author_id, author_name)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(input.entryDate, input.title, input.content, session.accountId, session.accountName).run();
+    INSERT INTO diary_entries (entry_date, title, content, author_id, author_name, household_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(input.entryDate, input.title, input.content, session.accountId, session.accountName, session.activeHouseholdId).run();
   const id = Number(result.meta?.last_row_id);
   await replaceTags(env, id, input.tags);
-  return getEntry(id, env, { role: "admin" });
+  return getEntry(id, env, session);
 }
 
-async function updateEntry(id, request, env) {
+async function updateEntry(id, request, env, session) {
   const body = await readJson(request, 500000);
   const input = validateEntryInput(body);
   const revision = Number(body.revision);
@@ -546,14 +594,14 @@ async function updateEntry(id, request, env) {
   const result = await env.DB.prepare(`
     UPDATE diary_entries
     SET entry_date = ?, title = ?, content = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1
-    WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(input.entryDate, input.title, input.content, id, revision).run();
+    WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NULL
+  `).bind(input.entryDate, input.title, input.content, id, session.activeHouseholdId, revision).run();
 
   if (!result.meta?.changes) {
     return json({ error: "別の端末で更新された可能性があります。再読み込みしてください。" }, 409);
   }
   await replaceTags(env, id, input.tags);
-  return getEntry(id, env, { role: "admin" });
+  return getEntry(id, env, session);
 }
 
 async function moveEntryToTrash(id, request, env, session) {
@@ -563,26 +611,26 @@ async function moveEntryToTrash(id, request, env, session) {
     UPDATE diary_entries
     SET deleted_at = CURRENT_TIMESTAMP, deleted_by_id = ?, deleted_by_name = ?,
         updated_at = CURRENT_TIMESTAMP, revision = revision + 1
-    WHERE id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(session.accountId, session.accountName, id, revision).run();
+    WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NULL
+  `).bind(session.accountId, session.accountName, id, session.activeHouseholdId, revision).run();
   return result.meta?.changes
     ? json({ ok: true })
     : json({ error: "削除できませんでした。再読み込みしてください。" }, 409);
 }
 
-async function restoreEntry(id, env) {
+async function restoreEntry(id, env, session) {
   const result = await env.DB.prepare(`
     UPDATE diary_entries
     SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL,
         updated_at = CURRENT_TIMESTAMP, revision = revision + 1
-    WHERE id = ? AND deleted_at IS NOT NULL
-  `).bind(id).run();
+    WHERE id = ? AND household_id = ? AND deleted_at IS NOT NULL
+  `).bind(id, session.activeHouseholdId).run();
   return result.meta?.changes
-    ? getEntry(id, env, { role: "admin" })
+    ? getEntry(id, env, session)
     : json({ error: "復元する日記が見つかりません。" }, 404);
 }
 
-async function permanentlyDeleteEntry(id, request, env) {
+async function permanentlyDeleteEntry(id, request, env, session) {
   const body = await readJson(request, 4096);
   const revision = Number(body.revision);
   if (!Number.isInteger(revision) || revision < 1) {
@@ -592,8 +640,10 @@ async function permanentlyDeleteEntry(id, request, env) {
   const photoResult = await env.DB.prepare(`
     SELECT original_key, display_key, thumbnail_key
     FROM diary_photos
-    WHERE entry_id = ?
-  `).bind(id).all();
+    WHERE entry_id = ? AND EXISTS (
+      SELECT 1 FROM diary_entries e WHERE e.id = diary_photos.entry_id AND e.household_id = ?
+    )
+  `).bind(id, session.activeHouseholdId).all();
   if ((photoResult.results || []).length && !env.MEDIA) {
     throw new HttpError(503, "画像の保存先を確認できないため、完全削除を中止しました。");
   }
@@ -608,8 +658,8 @@ async function permanentlyDeleteEntry(id, request, env) {
 
   const result = await env.DB.prepare(`
     DELETE FROM diary_entries
-    WHERE id = ? AND revision = ? AND deleted_at IS NOT NULL
-  `).bind(id, revision).run();
+    WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NOT NULL
+  `).bind(id, session.activeHouseholdId, revision).run();
 
   return result.meta?.changes
     ? json({ ok: true })
@@ -696,15 +746,25 @@ async function readSession(request, env) {
   try {
     const payload = JSON.parse(decoder.decode(base64UrlToBytes(encodedPayload)));
     if (!payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
-    const account = DIARY_ACCOUNTS.find((candidate) => candidate.id === payload.accountId);
+    const account = await findAccountById(payload.accountId, env);
     if (!account || account.role !== payload.role) return null;
     if (String(payload.version || "1") !== String(env.SESSION_VERSION || "1")) return null;
+    if (Number(payload.accountVersion || 1) !== Number(account.sessionVersion || 1)) return null;
+    const activeHouseholdId = account.isGlobalOwner && payload.activeHouseholdId
+      ? payload.activeHouseholdId
+      : account.householdId;
+    if (account.isGlobalOwner && !["tanaka-household", "chiharu-household"].includes(activeHouseholdId)) return null;
     return {
       ...payload,
       accountName: account.name,
       loginId: accountLoginId(account, env),
+      householdId: account.householdId,
+      activeHouseholdId,
+      isGlobalOwner: Boolean(account.isGlobalOwner),
+      mustChangePassword: Boolean(account.mustChangePassword),
       canViewTrash: account.canViewTrash,
-      canPermanentlyDelete: account.canPermanentlyDelete
+      canPermanentlyDelete: account.canPermanentlyDelete,
+      canViewInvestment: account.canViewInvestment
     };
   } catch {
     return null;
@@ -716,14 +776,15 @@ function getSessionMaxAge(env) {
 }
 
 async function withRollingSession(request, response, env, url, path) {
-  if (path === "/api/login" || path === "/api/logout" || response.status === 401) return response;
+  if (path === "/api/login" || path === "/api/logout" || path === "/api/password/initial"
+    || path === "/api/households/select" || response.status === 401) return response;
   const session = await readSession(request, env);
   if (!session) return response;
-  const account = DIARY_ACCOUNTS.find((candidate) => candidate.id === session.accountId);
+  const account = await findAccountById(session.accountId, env);
   if (!account) return response;
 
   const maxAge = getSessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env);
+  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId);
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
   return new Response(response.body, {
@@ -733,10 +794,12 @@ async function withRollingSession(request, response, env, url, path) {
   });
 }
 
-async function createSessionToken(account, maxAge, env) {
+async function createSessionToken(account, maxAge, env, activeHouseholdId = account.householdId) {
   const payload = {
     role: account.role,
     accountId: account.id,
+    activeHouseholdId,
+    accountVersion: Number(account.sessionVersion || 1),
     exp: Math.floor(Date.now() / 1000) + maxAge,
     version: String(env.SESSION_VERSION || "1")
   };
@@ -750,7 +813,100 @@ function normalizeLoginId(value) {
 }
 
 function accountLoginId(account, env) {
-  return normalizeLoginId(env[account.loginIdSecretKey]);
+  return normalizeLoginId(account.loginId || env[account.loginIdSecretKey]);
+}
+
+async function findAccountByLoginId(loginId, env) {
+  const staticAccount = DIARY_ACCOUNTS.find((account) => accountLoginId(account, env) === loginId);
+  if (staticAccount) return staticAccount;
+  const row = await env.DB.prepare(`
+    SELECT id, household_id, display_name, login_id, password_hash, role,
+           must_change_password, can_view_trash, can_permanently_delete,
+           can_view_investment, session_version
+    FROM diary_accounts WHERE login_id = ? AND active = 1
+  `).bind(loginId).first();
+  return row ? databaseAccount(row) : null;
+}
+
+async function findAccountById(id, env) {
+  const staticAccount = DIARY_ACCOUNTS.find((account) => account.id === id);
+  if (staticAccount) return staticAccount;
+  const row = await env.DB.prepare(`
+    SELECT id, household_id, display_name, login_id, password_hash, role,
+           must_change_password, can_view_trash, can_permanently_delete,
+           can_view_investment, session_version
+    FROM diary_accounts WHERE id = ? AND active = 1
+  `).bind(id).first();
+  return row ? databaseAccount(row) : null;
+}
+
+function databaseAccount(row) {
+  return {
+    id: row.id,
+    name: row.display_name,
+    loginId: row.login_id,
+    householdId: row.household_id,
+    passwordHash: row.password_hash || null,
+    temporarySecretKey: row.must_change_password ? "DIARY_CHIHARU_TEMP_PASSWORD_HASH" : null,
+    role: row.role,
+    isGlobalOwner: false,
+    mustChangePassword: Boolean(row.must_change_password),
+    canViewTrash: Boolean(row.can_view_trash),
+    canPermanentlyDelete: Boolean(row.can_permanently_delete),
+    canViewInvestment: Boolean(row.can_view_investment),
+    sessionVersion: Number(row.session_version || 1)
+  };
+}
+
+async function changeInitialPassword(request, env, session, url) {
+  if (!session.mustChangePassword) return json({ error: "初回パスワード設定は完了しています。" }, 409);
+  const body = await readJson(request, 4096);
+  const password = typeof body.password === "string" ? body.password : "";
+  const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
+  if (password !== confirmation) return json({ error: "確認用パスワードが一致しません。" }, 400);
+  if (!isStrongPassword(password)) {
+    return json({ error: "パスワードは6文字以上で入力してください。" }, 400);
+  }
+  const passwordHash = await createPasswordHash(password);
+  const result = await env.DB.prepare(`
+    UPDATE diary_accounts
+    SET password_hash = ?, must_change_password = 0,
+        session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND must_change_password = 1 AND active = 1
+  `).bind(passwordHash, session.accountId).run();
+  if (!result.meta?.changes) return json({ error: "パスワードを更新できませんでした。再度ログインしてください。" }, 409);
+  const account = await findAccountById(session.accountId, env);
+  const maxAge = getSessionMaxAge(env);
+  const token = await createSessionToken(account, maxAge, env, account.householdId);
+  const headers = new Headers();
+  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  return json({
+    authenticated: true,
+    role: account.role,
+    accountName: account.name,
+    loginId: account.loginId,
+    householdId: account.householdId,
+    activeHouseholdId: account.householdId,
+    isGlobalOwner: false,
+    mustChangePassword: false,
+    canViewTrash: account.canViewTrash,
+    canPermanentlyDelete: account.canPermanentlyDelete,
+    canViewInvestment: account.canViewInvestment
+  }, 200, headers);
+}
+
+function isStrongPassword(password) {
+  return password.length >= 6 && password.length <= 128;
+}
+
+async function createPasswordHash(password) {
+  const iterations = 600000;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const derived = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256
+  ));
+  return `pbkdf2-sha256$${iterations}$${bytesToBase64Url(salt)}$${bytesToBase64Url(derived)}`;
 }
 
 async function loginFingerprint(request, account, env) {
