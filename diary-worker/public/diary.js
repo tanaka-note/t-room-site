@@ -2,6 +2,9 @@
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
+  const DATE_TAP_MAX_MOVEMENT_PX = 4;
+  const DATE_TAP_MAX_DURATION_MS = 650;
+  const datePointerGestures = new WeakMap();
   const tagCollator = new Intl.Collator(["ja-JP", "en-US"], {
     usage: "sort",
     sensitivity: "base",
@@ -24,7 +27,8 @@
     offset: 0,
     hasMore: false,
     query: "",
-    month: "",
+    month: japanDateString().slice(0, 7),
+    monthExpanded: false,
     dateFrom: "",
     dateTo: "",
     tag: "",
@@ -94,11 +98,15 @@
     searchStatus: document.querySelector("#diary-search-status"),
     dateFrom: document.querySelector("#diary-date-from"),
     dateTo: document.querySelector("#diary-date-to"),
+    dateReset: document.querySelector("#diary-date-reset"),
     clearFilters: document.querySelector("#clear-filters-button"),
     listKicker: document.querySelector("#list-kicker"),
     listTitle: document.querySelector("#diary-recent-title"),
     entryList: document.querySelector("#entry-list"),
     loadMore: document.querySelector("#load-more-button"),
+    monthNavigation: document.querySelector("#month-navigation"),
+    previousMonth: document.querySelector("#previous-month-button"),
+    nextMonth: document.querySelector("#next-month-button"),
     archiveList: document.querySelector("#archive-list"),
     tagList: document.querySelector("#tag-list"),
     tagSearchInput: document.querySelector("#tag-search-input"),
@@ -204,11 +212,15 @@
     elements.cameraRollButton.addEventListener("click", openCameraRoll);
     elements.newEntryButton.addEventListener("click", () => openEditor());
     elements.trashButton.addEventListener("click", toggleTrash);
-    elements.loadMore.addEventListener("click", () => loadEntries(false));
+    elements.loadMore.addEventListener("click", handleLoadMore);
+    elements.previousMonth.addEventListener("click", () => changeBrowseMonth(-1));
+    elements.nextMonth.addEventListener("click", () => changeBrowseMonth(1));
     elements.clearFilters.addEventListener("click", clearFilters);
+    elements.dateReset.addEventListener("click", resetDateSearch);
     elements.searchClear.addEventListener("click", () => {
       elements.searchInput.value = "";
       state.query = "";
+      state.monthExpanded = false;
       updateFilterControls();
       loadEntries(true);
       elements.searchInput.focus();
@@ -216,6 +228,7 @@
     elements.searchInput.addEventListener("input", () => {
       window.clearTimeout(state.searchTimer);
       state.query = elements.searchInput.value.trim();
+      state.monthExpanded = false;
       updateFilterControls();
       state.searchTimer = window.setTimeout(() => loadEntries(true), 300);
     });
@@ -518,6 +531,7 @@
     elements.newEntryButton.hidden = session.role !== "admin";
     elements.trashButton.hidden = !state.canViewTrash;
     elements.investmentSection.hidden = !state.canViewInvestment;
+    updateFilterControls();
     await loadHouseholdSwitcher();
     await Promise.all([loadMeta(), loadEntries(true)]);
   }
@@ -543,7 +557,8 @@
       state.activeHouseholdId = householdId;
       state.trash = false;
       state.query = "";
-      state.month = "";
+      state.month = currentJapanMonth();
+      state.monthExpanded = false;
       state.dateFrom = "";
       state.dateTo = "";
       state.tag = "";
@@ -571,6 +586,12 @@
 
   async function loadEntries(reset) {
     const requestId = ++state.requestId;
+    const monthlyView = isMonthlyView();
+    const pageSize = monthlyView ? (state.monthExpanded ? 50 : 5) : 20;
+    const loadedEntries = reset ? [] : [...state.entries];
+    let nextOffset = reset ? 0 : state.offset;
+    let hasMore = true;
+    let pageGuard = 0;
     if (reset) {
       state.offset = 0;
       state.entries = [];
@@ -580,26 +601,32 @@
     setBusy(elements.loadMore, true, "読み込んでいます...");
     updateListHeading();
 
-    const parameters = new URLSearchParams({
-      limit: "20",
-      offset: String(state.offset)
-    });
-    if (state.query) parameters.set("q", state.query);
-    if (state.month) parameters.set("month", state.month);
-    if (state.dateFrom) parameters.set("dateFrom", state.dateFrom);
-    if (state.dateTo) parameters.set("dateTo", state.dateTo);
-    if (state.tag) parameters.set("tag", state.tag);
-    if (state.trash) parameters.set("trash", "1");
-
     try {
-      const result = await api(`/entries?${parameters}`);
-      if (requestId !== state.requestId) return;
-      for (const entry of result.entries) {
-        state.entries.push(entry);
-        state.entryMap.set(entry.id, entry);
-      }
+      do {
+        const parameters = new URLSearchParams({
+          limit: String(pageSize),
+          offset: String(nextOffset)
+        });
+        if (state.query) parameters.set("q", state.query);
+        if (monthlyView) parameters.set("month", state.month);
+        if (state.dateFrom) parameters.set("dateFrom", state.dateFrom);
+        if (state.dateTo) parameters.set("dateTo", state.dateTo);
+        if (state.tag) parameters.set("tag", state.tag);
+        if (state.trash) parameters.set("trash", "1");
+
+        const result = await api(`/entries?${parameters}`);
+        if (requestId !== state.requestId) return;
+        loadedEntries.push(...result.entries);
+        nextOffset += result.entries.length;
+        hasMore = result.hasMore;
+        pageGuard += 1;
+      } while (monthlyView && state.monthExpanded && hasMore && pageGuard < 100);
+
+      state.entries = loadedEntries;
+      state.entryMap.clear();
+      for (const entry of state.entries) state.entryMap.set(entry.id, entry);
       state.offset = state.entries.length;
-      state.hasMore = result.hasMore;
+      state.hasMore = hasMore;
       renderEntries();
       updateSearchStatus();
     } catch (error) {
@@ -608,10 +635,19 @@
       elements.searchStatus.textContent = error.message;
     } finally {
       if (requestId === state.requestId) {
-        elements.loadMore.hidden = !state.hasMore;
-        setBusy(elements.loadMore, false, "さらに表示");
+        elements.loadMore.hidden = monthlyView ? state.monthExpanded || !state.hasMore : !state.hasMore;
+        setBusy(elements.loadMore, false, monthlyView ? "もっと見る" : "さらに表示");
       }
     }
+  }
+
+  function handleLoadMore() {
+    if (isMonthlyView()) {
+      state.monthExpanded = true;
+      loadEntries(true);
+      return;
+    }
+    loadEntries(false);
   }
 
   async function loadMeta() {
@@ -629,7 +665,9 @@
     if (!state.entries.length) {
       const message = state.trash
         ? "ゴミ箱は空です。"
-        : state.query || state.month || state.dateFrom || state.dateTo || state.tag
+        : isMonthlyView()
+          ? "記事なし"
+          : state.query || state.dateFrom || state.dateTo || state.tag
           ? "条件に合う日記はありません。"
           : "まだ日記はありません。";
       elements.entryList.replaceChildren(createEmpty(message));
@@ -720,12 +758,20 @@
   function handleArchiveClick(event) {
     const button = event.target.closest("[data-month]");
     if (!button) return;
-    state.month = state.month === button.dataset.month ? "" : button.dataset.month;
+    state.month = button.dataset.month;
+    state.monthExpanded = false;
+    state.query = "";
     state.dateFrom = "";
     state.dateTo = "";
+    state.tag = "";
     elements.dateFrom.value = "";
     elements.dateTo.value = "";
+    elements.searchInput.value = "";
     state.trash = false;
+    if (window.location.pathname !== `${BASE_PATH}/`) {
+      window.history.replaceState({}, "", `${BASE_PATH}/`);
+      applyRouteState();
+    }
     updateFilterControls();
     loadEntries(true);
   }
@@ -1286,24 +1332,44 @@
 
   function bindDateInput(input) {
     input.addEventListener("pointerdown", handleDatePointerDown);
+    input.addEventListener("pointermove", handleDatePointerMove);
+    input.addEventListener("pointerup", handleDatePointerUp);
+    input.addEventListener("pointercancel", handleDatePointerCancel);
     input.addEventListener("keydown", handleDateKeydown);
   }
 
   function handleDatePointerDown(event) {
+    if (!useMobileDateWheel()) return;
+    event.preventDefault();
+    datePointerGestures.set(event.currentTarget, {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      startedAt: performance.now(),
+      moved: false
+    });
+  }
+
+  function handleDatePointerMove(event) {
+    const gesture = datePointerGestures.get(event.currentTarget);
+    if (!gesture || gesture.pointerId !== event.pointerId || gesture.moved) return;
+    const distance = Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y);
+    if (distance > DATE_TAP_MAX_MOVEMENT_PX) gesture.moved = true;
+  }
+
+  function handleDatePointerUp(event) {
     const input = event.currentTarget;
-    if (useMobileDateWheel()) {
-      event.preventDefault();
-      openDateWheel(input);
-      return;
-    }
-    if (typeof input.showPicker === "function") {
-      try {
-        event.preventDefault();
-        input.showPicker();
-      } catch {
-        // If the browser blocks showPicker, keep its standard date interaction available.
-      }
-    }
+    const gesture = datePointerGestures.get(input);
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    datePointerGestures.delete(input);
+    const duration = performance.now() - gesture.startedAt;
+    if (gesture.moved || duration > DATE_TAP_MAX_DURATION_MS) return;
+    openDateWheel(input);
+  }
+
+  function handleDatePointerCancel(event) {
+    datePointerGestures.delete(event.currentTarget);
   }
 
   function handleDateKeydown(event) {
@@ -1532,7 +1598,8 @@
     if (!state.canViewTrash) return;
     state.trash = !state.trash;
     state.query = "";
-    state.month = "";
+    state.month = currentJapanMonth();
+    state.monthExpanded = false;
     state.dateFrom = "";
     state.dateTo = "";
     state.tag = "";
@@ -1545,7 +1612,8 @@
 
   function clearFilters() {
     state.query = "";
-    state.month = "";
+    state.month = currentJapanMonth();
+    state.monthExpanded = false;
     state.dateFrom = "";
     state.dateTo = "";
     state.tag = "";
@@ -1557,11 +1625,23 @@
     loadEntries(true);
   }
 
+  function resetDateSearch() {
+    state.dateFrom = "";
+    state.dateTo = "";
+    state.monthExpanded = false;
+    elements.dateFrom.value = "";
+    elements.dateTo.value = "";
+    updateFilterControls();
+    loadEntries(true);
+  }
+
   function updateFilterControls() {
-    const active = Boolean(state.query || state.month || state.dateFrom || state.dateTo || state.tag || state.trash);
+    const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash);
     elements.searchClear.hidden = !state.query;
+    elements.dateReset.hidden = !state.dateFrom && !state.dateTo;
     elements.clearFilters.hidden = !active;
     elements.trashButton.textContent = state.trash ? "日記一覧" : "ゴミ箱";
+    elements.monthNavigation.hidden = !isMonthlyView();
     document.querySelectorAll("[data-month]").forEach((button) => {
       button.setAttribute("aria-pressed", String(button.dataset.month === state.month));
     });
@@ -1578,19 +1658,22 @@
     } else if (state.tag) {
       elements.listKicker.textContent = "Hashtag";
       elements.listTitle.textContent = `#${state.tag}の記事一覧`;
-    } else if (state.query || state.month || state.dateFrom || state.dateTo) {
+    } else if (state.query || state.dateFrom || state.dateTo) {
       elements.listKicker.textContent = "Results";
       elements.listTitle.textContent = "検索結果";
     } else {
-      elements.listKicker.textContent = "Recent";
-      elements.listTitle.textContent = "最近の更新";
+      elements.listKicker.textContent = "Monthly";
+      elements.listTitle.textContent = state.month === currentJapanMonth()
+        ? "今月の投稿"
+        : formatPostMonth(state.month);
     }
+    elements.monthNavigation.hidden = !isMonthlyView();
   }
 
   function updateSearchStatus() {
     const conditions = [];
     if (state.query) conditions.push(`「${state.query}」`);
-    if (state.month) conditions.push(formatMonth(state.month));
+    if (isMonthlyView()) conditions.push(formatMonth(state.month));
     if (state.dateFrom || state.dateTo) {
       const from = state.dateFrom || state.dateTo;
       const to = state.dateTo || state.dateFrom;
@@ -1623,10 +1706,29 @@
     }
     state.dateFrom = from;
     state.dateTo = to;
-    state.month = "";
+    state.monthExpanded = false;
     state.trash = false;
     updateFilterControls();
     loadEntries(true);
+  }
+
+  function isMonthlyView() {
+    return !state.trash && !state.query && !state.dateFrom && !state.dateTo && !state.tag;
+  }
+
+  function changeBrowseMonth(offset) {
+    if (!isMonthlyView()) return;
+    const nextMonth = shiftMonth(state.month, offset);
+    state.month = nextMonth;
+    state.monthExpanded = false;
+    updateFilterControls();
+    loadEntries(true);
+  }
+
+  function shiftMonth(value, offset) {
+    const [year, month] = String(value || currentJapanMonth()).split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1 + offset, 1));
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
   }
 
   function closeDialog(id) {
@@ -1739,6 +1841,13 @@
     return year && month ? `${year}年${month}月` : value;
   }
 
+  function formatPostMonth(value) {
+    const [year, month] = String(value || "").split("-").map(Number);
+    const currentYear = Number(currentJapanMonth().slice(0, 4));
+    if (!year || !month) return "月別の投稿";
+    return year === currentYear ? `${month}月の投稿` : `${year}年${month}月の投稿`;
+  }
+
   function excerpt(value, length) {
     const text = String(value || "").replace(/\[\[写真:[0-9a-f-]{36}\]\]/gi, "").replace(/\s+/g, " ").trim();
     return text.length > length ? `${text.slice(0, length)}…` : text;
@@ -1753,6 +1862,10 @@
     }).formatToParts(new Date());
     const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function currentJapanMonth() {
+    return japanDateString().slice(0, 7);
   }
 
   function setBusy(button, busy, label) {
@@ -1785,7 +1898,8 @@
     state.offset = 0;
     state.hasMore = false;
     state.query = "";
-    state.month = "";
+    state.month = currentJapanMonth();
+    state.monthExpanded = false;
     state.dateFrom = "";
     state.dateTo = "";
     state.tag = "";

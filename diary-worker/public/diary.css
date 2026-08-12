@@ -291,6 +291,23 @@ button {
   margin-bottom: 20px;
 }
 
+.month-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.month-navigation-button {
+  min-width: 76px;
+  white-space: nowrap;
+}
+
+.month-navigation-button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
 .diary-entry-list {
   display: grid;
 }
@@ -516,10 +533,36 @@ button {
 
 .diary-date-search legend {
   grid-column: 1 / -1;
+  width: 100%;
   margin-bottom: 5px;
   padding: 0;
   font-size: 0.85rem;
   font-weight: 800;
+}
+
+.diary-date-search-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.diary-date-reset {
+  min-height: 28px;
+  border: 1px solid rgba(31, 41, 51, 0.14);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: #f5f3ed;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.diary-date-reset:hover,
+.diary-date-reset:focus-visible {
+  border-color: rgba(31, 41, 51, 0.32);
+  color: var(--ink);
 }
 
 .diary-date-search label {
@@ -543,6 +586,13 @@ button {
   background: #fffdf9;
   color: var(--ink);
   font-weight: 650;
+}
+
+@media (pointer: coarse) {
+  .diary-date-search input,
+  #entry-date {
+    touch-action: pan-y;
+  }
 }
 
 .diary-date-search input:focus,
@@ -1522,6 +1572,11 @@ button:disabled {
   .diary-section-head {
     align-items: start;
     flex-direction: column;
+  }
+
+  .month-navigation {
+    align-self: stretch;
+    justify-content: flex-end;
   }
 
   .diary-panel {
