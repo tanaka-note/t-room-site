@@ -4,6 +4,7 @@
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const DATE_TAP_MAX_MOVEMENT_PX = 4;
   const DATE_TAP_MAX_DURATION_MS = 650;
+  const HEADER_SCROLL_THRESHOLD_PX = 10;
   const datePointerGestures = new WeakMap();
   const tagCollator = new Intl.Collator(["ja-JP", "en-US"], {
     usage: "sort",
@@ -59,13 +60,16 @@
     entryAfterClose: null,
     entryClosePending: false,
     deferredInstallPrompt: null,
-    lastSessionRefreshAt: 0
+    lastSessionRefreshAt: 0,
+    lastHeaderScrollY: 0,
+    headerScrollFrame: 0
   };
 
   const elements = {
     bootView: document.querySelector("#boot-view"),
     loginView: document.querySelector("#login-view"),
     appView: document.querySelector("#app-view"),
+    siteHeader: document.querySelector("#site-header"),
     loginForm: document.querySelector("#login-form"),
     loginId: document.querySelector("#login-id"),
     password: document.querySelector("#password"),
@@ -195,6 +199,7 @@
   }
 
   function bindEvents() {
+    window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
     elements.loginForm.addEventListener("submit", handleLogin);
     elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
     elements.passwordToggle.addEventListener("click", togglePassword);
@@ -339,6 +344,28 @@
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) refreshSessionIfNeeded();
     });
+  }
+
+  function scheduleHeaderVisibilityUpdate() {
+    if (state.headerScrollFrame) return;
+    state.headerScrollFrame = window.requestAnimationFrame(updateHeaderVisibility);
+  }
+
+  function updateHeaderVisibility() {
+    state.headerScrollFrame = 0;
+    const currentY = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
+    const movement = currentY - state.lastHeaderScrollY;
+    const focusedInsideHeader = elements.siteHeader?.contains(document.activeElement);
+
+    if (currentY <= HEADER_SCROLL_THRESHOLD_PX || movement < -HEADER_SCROLL_THRESHOLD_PX || focusedInsideHeader) {
+      elements.siteHeader?.classList.remove("is-scroll-hidden");
+    } else if (movement > HEADER_SCROLL_THRESHOLD_PX) {
+      elements.siteHeader?.classList.add("is-scroll-hidden");
+    }
+
+    if (Math.abs(movement) > HEADER_SCROLL_THRESHOLD_PX || currentY <= HEADER_SCROLL_THRESHOLD_PX) {
+      state.lastHeaderScrollY = currentY;
+    }
   }
 
   function registerPwa() {
