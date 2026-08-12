@@ -10,7 +10,7 @@ const [client, worker, html] = await Promise.all([
 assert.match(worker, /path === "\/api\/usage-details"[\s\S]*?getUsageDetails/);
 assert.match(worker, /async function getUsageDetails[\s\S]*?requireAdmin\(session\)/, "フォルダ別容量の管理者権限確認がありません。");
 assert.match(worker, /WITH RECURSIVE folder_tree\(root_id, id\)/, "最上位フォルダ別の再帰集計がありません。");
-assert.match(worker, /folderId && session\.role === "subadmin"[\s\S]*?totalFileCount[\s\S]*?totalSizeBytes/, "副管理者向けフォルダ総量集計がありません。");
+assert.match(worker, /folderId && !continuation && session\.role === "subadmin"[\s\S]*?totalFileCount[\s\S]*?totalSizeBytes/, "副管理者向けフォルダ総量集計がありません。");
 assert.match(client, /showUnlockedTotals[\s\S]*?総ファイル数：[\s\S]*?総容量：/, "解除済みフォルダの総量表示がありません。");
 assert.match(client, /function syncUnlockedTopFolderNames\(\)/, "解除済み最上位フォルダのアカウント表示がありません。");
 assert.match(client, /unlockedNames\.length \? unlockedNames\.join\("\\n"\) : "未ログイン"/, "副管理者の未ログイン・複数フォルダ表示がありません。");

@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260812-6";
+const APP_BUILD_ID = "20260812-7";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -574,6 +574,7 @@ async function listItems(url, env, session) {
   const uploadIndex = url.searchParams.get("uploadIndex") === "1";
   const foldersOnly = url.searchParams.get("foldersOnly") === "1";
   const filesOnly = url.searchParams.get("filesOnly") === "1";
+  const continuation = url.searchParams.get("continuation") === "1";
   const fileOffset = Math.min(100000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
   const requestedPageSize = Number.parseInt(url.searchParams.get("pageSize") || "500", 10) || 500;
   const filePageSize = uploadIndex ? 500 : Math.min(500, Math.max(1, requestedPageSize));
@@ -583,7 +584,9 @@ async function listItems(url, env, session) {
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
   const requestedSort = url.searchParams.get("sort") || "name-desc";
   const sort = ["updated-desc", "updated-asc", "name-asc", "name-desc", "size-desc", "size-asc", "newest", "oldest", "name", "size"].includes(requestedSort) ? requestedSort : "name-desc";
-  const folder = folderId ? await env.DB.prepare(`SELECT f.id, f.parent_id, f.name,
+  const folder = folderId ? (continuation
+    ? await env.DB.prepare("SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(folderId).first()
+    : await env.DB.prepare(`SELECT f.id, f.parent_id, f.name,
     f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
     f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
     f.password_wrap_iv AS passwordWrapIv, f.admin_wrapped_key AS adminWrappedKey,
@@ -591,10 +594,10 @@ async function listItems(url, env, session) {
     f.password_hash IS NOT NULL AS is_protected,
     (SELECT COUNT(*) FROM cloud_files cf WHERE cf.folder_id = f.id AND cf.deleted_at IS NULL AND cf.status = 'ready') AS fileCount,
     (SELECT COUNT(*) FROM cloud_folders sf WHERE sf.parent_id = f.id AND sf.deleted_at IS NULL) AS folderCount
-    FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first() : null;
+    FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first()) : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
   const folderAccessGranted = folderId ? await requireFolderAccess(env, folderId, session) : false;
-  if (folderId && session.role === "subadmin" && !foldersOnly && !uploadIndex && !filesOnly) {
+  if (folderId && !continuation && session.role === "subadmin" && !foldersOnly && !uploadIndex && !filesOnly) {
     const total = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
       UNION ALL
@@ -1730,8 +1733,8 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud-runtime-20260811-11.css"],
-    ["/cloud.js", "/cloud-runtime-20260812-3.js"],
+    ["/cloud.css", "/cloud-runtime-20260812-1.css"],
+    ["/cloud.js", "/cloud-runtime-20260812-4.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
