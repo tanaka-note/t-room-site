@@ -1,7 +1,7 @@
-const CACHE_NAME = "troom-diary-shell-v8";
+const CACHE_NAME = "troom-diary-shell-v9";
 const STATIC_ASSETS = [
   "/diary/diary.css?v=14",
-  "/diary/diary.js?v=21",
+  "/diary/diary.js?v=22",
   "/diary/manifest.webmanifest",
   "/diary/icons/icon-192.png",
   "/diary/icons/icon-512.png",

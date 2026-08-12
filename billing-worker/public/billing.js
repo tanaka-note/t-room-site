@@ -56,6 +56,7 @@
       event.preventDefault();
       closeDateWheel();
     });
+    el["date-wheel-dialog"].addEventListener("click", closeDateWheelFromBackdrop);
     bindDateWheel(el["date-wheel-year"], "year");
     bindDateWheel(el["date-wheel-month"], "month");
     bindDateWheel(el["date-wheel-day"], "day");
@@ -500,6 +501,10 @@
 
   function closeDateWheel() {
     if (el["date-wheel-dialog"].open) el["date-wheel-dialog"].close();
+  }
+
+  function closeDateWheelFromBackdrop(event) {
+    if (event.target === el["date-wheel-dialog"]) closeDateWheel();
   }
 
   function applyDateWheel() {
