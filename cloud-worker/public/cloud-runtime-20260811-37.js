@@ -1,5 +1,6 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "20260812-1";
+const APP_BUILD_ID = "20260812-2";
+const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
 const LONG_PRESS_DRAG_THRESHOLD_PX = 28;
 const PWA_WORKER_URL = "/cloud/media-worker.js";
 const APP_UPDATE_EXPECTED_BUILD_KEY = "tcloud-app-update-expected-build";
@@ -94,7 +95,11 @@ const state = {
 };
 
 const floatingToolbarState = {
-  frame: 0
+  frame: 0,
+  lastScrollY: 0,
+  direction: "",
+  travel: 0,
+  forceVisibleUntil: 0
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -938,6 +943,10 @@ async function navigateToFolder(folderId, folderName, options = {}) {
 
 function resetFolderScrollPosition() {
   window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  floatingToolbarState.lastScrollY = 0;
+  floatingToolbarState.direction = "";
+  floatingToolbarState.travel = 0;
+  floatingToolbarState.forceVisibleUntil = 0;
   hideFloatingToolbar();
 }
 
@@ -1548,8 +1557,35 @@ function queueFloatingToolbarUpdate() {
 
 function updateFloatingToolbarFromScroll() {
   const scrollY = Math.max(0, window.scrollY);
-  if (floatingToolbarAvailable(scrollY)) showFloatingToolbar();
+  const previousScrollY = floatingToolbarState.lastScrollY;
+  const delta = scrollY - previousScrollY;
+  floatingToolbarState.lastScrollY = scrollY;
+  if (!floatingToolbarAvailable(scrollY)) {
+    floatingToolbarState.direction = "";
+    floatingToolbarState.travel = 0;
+    hideFloatingToolbar();
+    return;
+  }
+  if (floatingToolbarIsBeingUsed() || performance.now() < floatingToolbarState.forceVisibleUntil) {
+    showFloatingToolbar();
+    return;
+  }
+  const direction = delta > 0 ? "down" : delta < 0 ? "up" : "";
+  if (!direction) return;
+  if (floatingToolbarState.direction !== direction) {
+    floatingToolbarState.direction = direction;
+    floatingToolbarState.travel = 0;
+  }
+  floatingToolbarState.travel += Math.abs(delta);
+  if (floatingToolbarState.travel < FLOATING_TOOLBAR_DIRECTION_THRESHOLD) return;
+  floatingToolbarState.travel = 0;
+  if (direction === "up") showFloatingToolbar();
   else hideFloatingToolbar();
+}
+
+function floatingToolbarIsBeingUsed() {
+  const toolbar = $("#floating-toolbar");
+  return toolbar.contains(document.activeElement) || !$("#floating-location-panel").hidden;
 }
 
 function floatingToolbarAvailable(scrollY = Math.max(0, window.scrollY)) {
@@ -1585,6 +1621,7 @@ function scrollToResultsStart() {
   const floatingHeight = $("#floating-toolbar").offsetHeight;
   const resultsTarget = grid.getBoundingClientRect().top + window.scrollY - floatingHeight - 16;
   const target = Math.max(floatingToolbarTrigger() + 1, resultsTarget);
+  floatingToolbarState.forceVisibleUntil = performance.now() + 700;
   window.scrollTo({ top: target, behavior: "smooth" });
   showFloatingToolbar();
 }
