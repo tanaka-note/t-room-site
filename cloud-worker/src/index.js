@@ -888,9 +888,6 @@ async function updateFolder(id, request, env, session) {
   if (!session.canEditFolders) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内の名前だけ変更できます。");
     if (moving) await requireSameUnlockedMoveScope(env, id, parentId, session, true);
-    if (passwordAction === "replace" && !folder.password_hash) {
-      throw new HttpError(403, "副管理者はPWで解除した保護フォルダのPWだけ変更できます。");
-    }
   }
   let parentPackage = null;
   if (moving) {
@@ -905,7 +902,6 @@ async function updateFolder(id, request, env, session) {
     }
   }
   if (passwordAction === "replace") {
-    if (folder.parent_id && !folder.password_hash) throw new HttpError(400, "個別PWがない配下フォルダでは、作成後にPWを追加できません。");
     const authProof = validCryptoText(body.authProof, 256, "フォルダ認証");
     const passwordSalt = validCryptoText(body.passwordSalt, 128, "フォルダSalt");
     const passwordWrappedKey = validCryptoText(body.passwordWrappedKey, 512, "フォルダ鍵");

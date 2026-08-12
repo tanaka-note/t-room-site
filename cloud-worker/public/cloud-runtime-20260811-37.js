@@ -1717,11 +1717,11 @@ function canOpenFolderSettings(folder) {
 }
 
 function canChangeFolderPassword(folder) {
+  if (!folder || !state.crypto.folderKeys.has(Number(folder.id))) return false;
+  if (folder.isProtected && !folder.isUnlocked && state.session?.role !== "admin") return false;
   if (state.session?.canEditFolders) return true;
   return Boolean(state.session?.canRenameUnlockedItems
-    && folder?.isProtected
-    && folder?.isUnlocked
-    && state.crypto.folderKeys.has(Number(folder.id)));
+    && (folder.isProtected || folder.parentId));
 }
 
 function canRelockTopFolder(folder) {
@@ -1839,7 +1839,12 @@ async function hydrateFolderRecords(records, options = {}) {
     const folder = { ...original };
     if (Number(folder.cryptoVersion) === 1) {
       let key = state.crypto.folderKeys.get(folder.id);
-      if (!key && folder.parentId && folder.parentWrappedKey) {
+      if (state.session?.role === "subadmin" && folder.isProtected && !folder.isUnlocked) {
+        key = null;
+        state.crypto.folderKeys.delete(Number(folder.id));
+        await removeCachedFolderKeys([folder.id]);
+      }
+      if (!key && (!folder.isProtected || folder.isUnlocked) && folder.parentId && folder.parentWrappedKey) {
         const parentKey = state.crypto.folderKeys.get(Number(folder.parentId));
         if (parentKey) {
           try {
@@ -2135,12 +2140,14 @@ function openFolderSettings(folder) {
   $("#folder-settings-error").textContent = "";
   $("#delete-folder-button").hidden = !canTrashFolder(folder);
   $("#share-folder-button").hidden = !canShareFolder(folder);
-  const inheritsProtection = Boolean(folder.parentId && !folder.isProtected);
   const canEditPassword = canChangeFolderPassword(folder);
-  $("#folder-password-settings-row").hidden = !canEditPassword || inheritsProtection;
-  $("#folder-password-action").disabled = !canEditPassword || inheritsProtection;
-  $("#folder-new-password").disabled = !canEditPassword || inheritsProtection;
-  $("#folder-inherited-settings-note").hidden = !canEditPassword || !inheritsProtection;
+  $("#folder-password-settings-row").hidden = !canEditPassword;
+  $("#folder-password-action").disabled = !canEditPassword;
+  $("#folder-new-password").disabled = !canEditPassword;
+  $("#folder-password-replace-option").textContent = folder.isProtected
+    ? "新しいパスワードに変更"
+    : "個別パスワードを設定";
+  $("#folder-inherited-settings-note").hidden = !canEditPassword || folder.isProtected;
   toggleFolderPasswordInput();
   $("#folder-settings-dialog").showModal();
 }
@@ -2155,7 +2162,6 @@ async function saveFolderSettings(event) {
   event.preventDefault();
   const id = Number($("#folder-settings-id").value);
   const passwordAction = !canChangeFolderPassword(state.selectedFolder)
-    || (state.selectedFolder?.parentId && !state.selectedFolder?.isProtected)
     ? "keep"
     : $("#folder-password-action").value;
   $("#folder-settings-error").textContent = "";
@@ -2173,6 +2179,9 @@ async function saveFolderSettings(event) {
       body: JSON.stringify({ name, passwordAction, ...passwordPackage })
     });
     folder.name = name;
+    if (passwordAction === "replace") {
+      Object.assign(folder, passwordPackage, { isProtected: true, isUnlocked: true });
+    }
     $("#folder-settings-dialog").close();
     setNotice("フォルダ設定を更新しました。");
     invalidateStoredConflicts();
@@ -2662,8 +2671,7 @@ function syncSelectionBar() {
   $("#selection-rename").disabled = !canRenameSelection;
   const canChangeSelectedPassword = folderCount === 1
     && fileCount === 0
-    && canChangeFolderPassword(folders[0])
-    && !(folders[0].parentId && !folders[0].isProtected);
+    && canChangeFolderPassword(folders[0]);
   $("#selection-password").hidden = !canChangeSelectedPassword;
   $("#selection-password").disabled = !canChangeSelectedPassword;
   const canLockSelection = folderCount === 1 && fileCount === 0 && canRelockTopFolder(folders[0]);
@@ -2712,8 +2720,7 @@ function openSelectedFolderSettings() {
   const folders = [...state.selectedFolders.values()];
   if (folders.length !== 1
     || state.selectedFiles.size
-    || !canChangeFolderPassword(folders[0])
-    || (folders[0].parentId && !folders[0].isProtected)) return;
+    || !canChangeFolderPassword(folders[0])) return;
   openFolderSettings(folders[0]);
 }
 

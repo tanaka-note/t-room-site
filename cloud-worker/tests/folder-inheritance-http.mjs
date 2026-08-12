@@ -118,11 +118,16 @@ if (!(renamedItems.folders || []).some((folder) => Number(folder.id) === Number(
 }
 
 const inheritedPassword = await TRoomCrypto.rewrapFolderPassword(child.folderKey, "temporary-child-password");
-const inheritedPasswordPatch = await api(`/folders/${childId}`, "admin", {
+const inheritedPasswordPatch = await api(`/folders/${childId}`, "subadmin", {
   method: "PATCH",
   body: JSON.stringify({ name: renamedChild, passwordAction: "replace", ...inheritedPassword })
 });
-if (inheritedPasswordPatch.status !== 400) throw new Error(`継承フォルダ個別PW拒否: ${inheritedPasswordPatch.status}`);
+if (inheritedPasswordPatch.status !== 200) throw new Error(`継承フォルダへの個別PW追加: ${inheritedPasswordPatch.status}`);
+const protectedInheritedItems = await (await api(`/items?folderId=${rootId}`, "subadmin", { method: "GET", headers: {} })).json();
+const protectedInheritedRecord = (protectedInheritedItems.folders || []).find((folder) => Number(folder.id) === Number(childId));
+if (!protectedInheritedRecord?.isProtected || !protectedInheritedRecord?.isUnlocked) {
+  throw new Error("個別PW追加後の保護・解除状態が一覧へ反映されていません。");
+}
 
 const fileBytes = new TextEncoder().encode("rename-http-test-body");
 const fileSource = { name: "変更前の写真.jpg", type: "image/jpeg", size: fileBytes.byteLength, lastModified: 1 };

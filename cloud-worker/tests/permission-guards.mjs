@@ -42,8 +42,8 @@ if (!functionBody("updateFile").includes("if (!unlocked)") || !functionBody("upd
   throw new Error("副管理者のファイル名変更が解除済みフォルダ内に限定されていません。");
 }
 if (!functionBody("updateFolder").includes("if (!unlocked)")
-  || !functionBody("updateFolder").includes('passwordAction === "replace" && !folder.password_hash')) {
-  throw new Error("副管理者のフォルダ名称・PW変更が解除済み保護フォルダに限定されていません。");
+  || functionBody("updateFolder").includes('passwordAction === "replace" && !folder.password_hash')) {
+  throw new Error("副管理者のフォルダ名称・PW変更が解除済み範囲に限定されていないか、個別PW追加が拒否されています。");
 }
 if (!functionBody("moveFileToTrash").includes("canTrashUnlockedFiles") || !functionBody("moveFileToTrash").includes("requireFolderAccess(env, file.folder_id, session)")) {
   throw new Error("副管理者のPW解除済みフォルダ内削除を確認できません。");

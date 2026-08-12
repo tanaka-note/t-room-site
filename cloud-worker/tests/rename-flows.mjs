@@ -41,10 +41,12 @@ if (!html.includes('id="selection-lock"')
 if (!script.includes("function canChangeFolderPassword(folder)") || !script.includes("const canEditPassword = canChangeFolderPassword(folder)")) {
   throw new Error("解除済み保護フォルダに限定したPW変更判定がありません。");
 }
-if (!script.includes("folder?.isProtected") || !script.includes("folder?.isUnlocked") || !script.includes("state.crypto.folderKeys.has(Number(folder.id))")) {
-  throw new Error("副管理者のPW変更が保護・解除・鍵の3条件に限定されていません。");
+if (!script.includes("folder.isProtected && !folder.isUnlocked")
+  || !script.includes("folder.isProtected || folder.parentId")
+  || !script.includes("state.crypto.folderKeys.has(Number(folder.id))")) {
+  throw new Error("副管理者のPW追加・変更が、解除済み範囲とフォルダ鍵の条件に限定されていません。");
 }
-if (!worker.includes("canRenameUnlockedItems: true") || !worker.includes("requireSameUnlockedMoveScope") || !worker.includes("副管理者はPWで解除した保護フォルダのPWだけ変更できます")) {
+if (!worker.includes("canRenameUnlockedItems: true") || !worker.includes("requireSameUnlockedMoveScope") || !worker.includes("if (!unlocked)")) {
   throw new Error("副管理者の名称・PW変更と解除範囲内移動権限がサーバー側にありません。");
 }
 const loginStart = worker.indexOf("async function login(");

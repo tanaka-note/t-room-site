@@ -1,0 +1,1547 @@
+package jp.tanaka.tcloud.ui
+
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.graphics.Bitmap
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadForOffline
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.OfflinePin
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Settings as SettingsIcon
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import jp.tanaka.tcloud.MainViewModel
+import jp.tanaka.tcloud.R
+import jp.tanaka.tcloud.data.CloudFile
+import jp.tanaka.tcloud.data.CloudFolder
+import jp.tanaka.tcloud.data.MoveDestination
+import jp.tanaka.tcloud.data.ShareResult
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.PlayerView
+import java.text.DecimalFormat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.security.SecureRandom
+import jp.tanaka.tcloud.offline.TCloudOfflineStore
+import jp.tanaka.tcloud.backup.CameraBackupSettings
+
+private val TCloudBlue = Color(0xFF212562)
+private val TCloudBackground = Color(0xFFF7F8FC)
+
+@Composable
+fun TCloudApp(viewModel: MainViewModel) {
+    val state by viewModel.state.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val powerManager = remember { context.getSystemService(PowerManager::class.java) }
+    var batteryOptimizationExcluded by remember {
+        mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
+    }
+    var showAppSettings by remember { mutableStateOf(false) }
+    val batterySettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        batteryOptimizationExcluded = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    }
+    var pendingTransfer by remember { mutableStateOf<Pair<CloudFile, Boolean>?>(null) }
+    var pendingSelectionTransfer by remember { mutableStateOf<Boolean?>(null) }
+    var pendingCameraBackupSettings by remember { mutableStateOf<Triple<Boolean, Boolean, Boolean>?>(null) }
+
+    fun hasCameraMediaPermission(): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
+            context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
+                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) ==
+                PackageManager.PERMISSION_GRANTED
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+            context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        else -> context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        uris.forEach { uri ->
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+        }
+        viewModel.upload(uris)
+    }
+    val uploadPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) filePicker.launch(arrayOf("*/*"))
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { results ->
+        val pendingSelection = pendingSelectionTransfer
+        pendingSelectionTransfer = null
+        val pending = pendingTransfer
+        pendingTransfer = null
+        if (pendingSelection != null && results.values.all { it }) {
+            if (pendingSelection) viewModel.saveSelectionOffline() else viewModel.downloadSelection()
+        } else if (pending != null && results.values.all { it }) {
+            if (pending.second) viewModel.saveOffline(pending.first) else viewModel.download(pending.first)
+        }
+    }
+    val cameraBackupPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { results ->
+        val pending = pendingCameraBackupSettings
+        pendingCameraBackupSettings = null
+        if (pending != null) {
+            if (hasCameraMediaPermission()) {
+                viewModel.updateCameraBackup(pending.first, pending.second, pending.third)
+            } else {
+                viewModel.cameraBackupPermissionDenied()
+            }
+        }
+    }
+
+    fun transferPermissions(includeStorage: Boolean): Array<String> = buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) add(Manifest.permission.POST_NOTIFICATIONS)
+        if (includeStorage && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }.toTypedArray()
+
+    fun requestDownload(file: CloudFile) {
+        val permissions = transferPermissions(includeStorage = true)
+        if (permissions.isEmpty()) {
+            viewModel.download(file)
+        } else {
+            pendingTransfer = file to false
+            permissionLauncher.launch(permissions)
+        }
+    }
+
+    fun requestOffline(file: CloudFile) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingTransfer = file to true
+            permissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+        } else {
+            viewModel.saveOffline(file)
+        }
+    }
+
+
+    fun requestSelectionDownload() {
+        val permissions = transferPermissions(includeStorage = true)
+        if (permissions.isEmpty()) {
+            viewModel.downloadSelection()
+        } else {
+            pendingSelectionTransfer = false
+            permissionLauncher.launch(permissions)
+        }
+    }
+
+    fun requestSelectionOffline() {
+        val permissions = transferPermissions(includeStorage = false)
+        if (permissions.isEmpty()) {
+            viewModel.saveSelectionOffline()
+        } else {
+            pendingSelectionTransfer = true
+            permissionLauncher.launch(permissions)
+        }
+    }
+
+    fun requestUpload() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            uploadPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            filePicker.launch(arrayOf("*/*"))
+        }
+    }
+
+    fun requestCameraBackup(enabled: Boolean, wifiOnly: Boolean, chargingOnly: Boolean) {
+        if (!enabled) {
+            viewModel.updateCameraBackup(false, wifiOnly, chargingOnly)
+            return
+        }
+        val permissions = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+            )
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
+            )
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }.toMutableList().apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+        }.filter {
+            context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+        if (permissions.isEmpty()) {
+            viewModel.updateCameraBackup(true, wifiOnly, chargingOnly)
+        } else {
+            pendingCameraBackupSettings = Triple(true, wifiOnly, chargingOnly)
+            cameraBackupPermissionLauncher.launch(permissions)
+        }
+    }
+
+    LaunchedEffect(state.error) {
+        state.error?.let {
+            snackbar.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
+
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbar.showSnackbar(it)
+            viewModel.clearMessage()
+        }
+    }
+
+    MaterialTheme(
+        colorScheme = MaterialTheme.colorScheme.copy(
+            primary = TCloudBlue,
+            background = TCloudBackground,
+            surface = Color.White,
+        ),
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = TCloudBackground) {
+            when {
+                state.restoring -> LoadingScreen("ログイン状態を確認しています")
+                state.session == null -> LoginScreen(
+                    busy = state.busy,
+                    snackbar = snackbar,
+                    onLogin = viewModel::login,
+                )
+                state.selectedFile?.mediaKind == "image" -> ImageViewerScreen(
+                    file = checkNotNull(state.selectedFile),
+                    bitmap = state.imageBitmap,
+                    loading = state.imageLoading,
+                    error = state.imageError,
+                    onClose = viewModel::closeFile,
+                )
+                state.selectedFile != null && state.selectedFile?.mediaKind in setOf("video", "audio") ->
+                    MediaPlayerScreen(
+                        file = checkNotNull(state.selectedFile),
+                        dataSourceFactory = viewModel.playbackDataSource(checkNotNull(state.selectedFile)),
+                        onClose = viewModel::closeFile,
+                    )
+                state.showingOffline -> OfflineScreen(
+                    entries = state.offlineEntries,
+                    busy = state.busy,
+                    snackbar = snackbar,
+                    onOpenFile = viewModel::openFile,
+                    onDelete = viewModel::deleteOffline,
+                    onBack = { viewModel.goBack() },
+                )
+                else -> FolderScreen(
+                    accountName = state.session?.accountName.orEmpty(),
+                    currentName = state.page?.currentFolder?.name ?: "ファイル",
+                    canGoBack = state.folderStack.isNotEmpty(),
+                    canUpload = state.session?.canUpload == true && state.page?.currentFolder != null,
+                    canManageItems = state.session?.isAdmin == true ||
+                        (state.session?.isSubAdmin == true && state.page?.currentFolder != null),
+                    canDeleteItems = state.page?.canTrashContents == true,
+                    folders = state.page?.folders.orEmpty(),
+                    files = state.page?.files.orEmpty(),
+                    selectedFileIds = state.selectedFileIds,
+                    selectedFolderIds = state.selectedFolderIds,
+                    busy = state.busy,
+                    snackbar = snackbar,
+                    onOpenFolder = viewModel::openFolder,
+                    onOpenFile = viewModel::openFile,
+                    onDownload = ::requestDownload,
+                    onOffline = ::requestOffline,
+                    onMove = viewModel::openMove,
+                    onMoveFolder = viewModel::openMoveFolder,
+                    onRenameFile = viewModel::openRename,
+                    onRenameFolder = viewModel::openRename,
+                    onShareFile = viewModel::openShare,
+                    onShareFolder = viewModel::openShare,
+                    onToggleFileSelection = viewModel::toggleSelection,
+                    onToggleFolderSelection = viewModel::toggleSelection,
+                    onClearSelection = viewModel::clearSelection,
+                    onSelectAll = viewModel::selectAll,
+                    onMoveSelection = viewModel::openMoveSelection,
+                    onShareSelection = viewModel::openShareSelection,
+                    onDownloadSelection = ::requestSelectionDownload,
+                    onOfflineSelection = ::requestSelectionOffline,
+                    onDeleteSelection = viewModel::openDeleteSelection,
+                    onUpload = ::requestUpload,
+                    onBack = viewModel::goBack,
+                    onLogout = viewModel::logout,
+                    onOpenOffline = viewModel::openOffline,
+                    onOpenSettings = { showAppSettings = true },
+                )
+            }
+
+            state.pendingUnlock?.let { folder ->
+                UnlockFolderDialog(
+                    folder = folder,
+                    busy = state.busy,
+                    onUnlock = viewModel::unlockFolder,
+                    onDismiss = viewModel::cancelUnlock,
+                )
+            }
+
+            if (showAppSettings) {
+                AppSettingsDialog(
+                    batteryOptimizationExcluded = batteryOptimizationExcluded,
+                    cameraBackupSettings = state.cameraBackupSettings,
+                    currentFolderName = state.page?.currentFolder?.name,
+                    canSetCameraBackupTarget = state.session?.canUpload == true &&
+                        state.page?.currentFolder != null,
+                    onRequestBatteryExclusion = {
+                        val directIntent = Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:${context.packageName}"),
+                        )
+                        runCatching { batterySettingsLauncher.launch(directIntent) }
+                            .onFailure {
+                                batterySettingsLauncher.launch(
+                                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                                )
+                            }
+                    },
+                    onSetCameraBackupTarget = viewModel::setCurrentFolderAsCameraBackupTarget,
+                    onSaveCameraBackup = ::requestCameraBackup,
+                    onDismiss = { showAppSettings = false },
+                )
+            }
+
+            state.pendingMoveFile?.let { file ->
+                MoveItemDialog(
+                    itemName = file.name,
+                    destinations = state.moveDestinations,
+                    busy = state.busy,
+                    onMove = viewModel::moveFile,
+                    onDismiss = viewModel::cancelMove,
+                )
+            }
+            state.pendingMoveFolder?.let { folder ->
+                MoveItemDialog(
+                    itemName = folder.name,
+                    destinations = state.moveDestinations,
+                    busy = state.busy,
+                    onMove = viewModel::moveFolder,
+                    onDismiss = viewModel::cancelMove,
+                )
+            }
+            if (state.pendingMoveFiles.isNotEmpty() || state.pendingMoveFolders.isNotEmpty()) {
+                MoveItemDialog(
+                    itemName = "${state.pendingMoveFiles.size + state.pendingMoveFolders.size}件のデータ",
+                    destinations = state.moveDestinations,
+                    busy = state.busy,
+                    onMove = viewModel::moveSelection,
+                    onDismiss = viewModel::cancelMove,
+                )
+            }
+            val renameName = state.pendingRenameFile?.name ?: state.pendingRenameFolder?.name
+            if (renameName != null) {
+                RenameItemDialog(
+                    currentName = renameName,
+                    busy = state.busy,
+                    onRename = viewModel::renamePending,
+                    onDismiss = viewModel::cancelRename,
+                )
+            }
+            val shareName = state.pendingShareFile?.name ?: state.pendingShareFolder?.name
+                ?: state.pendingShareFiles.takeIf { it.isNotEmpty() }?.let { "${it.size}件のファイル" }
+            if (shareName != null) {
+                ShareCreateDialog(
+                    itemName = shareName,
+                    busy = state.busy,
+                    onCreate = viewModel::createShare,
+                    onDismiss = viewModel::cancelShare,
+                )
+            }
+            state.shareResult?.let { result ->
+                ShareResultDialog(result = result, onDismiss = viewModel::cancelShare)
+            }
+            if (state.confirmingSelectionDelete) {
+                DeleteSelectionDialog(
+                    count = state.selectedFileIds.size + state.selectedFolderIds.size,
+                    isAdmin = state.session?.isAdmin == true,
+                    busy = state.busy,
+                    onConfirm = viewModel::confirmDeleteSelection,
+                    onDismiss = viewModel::cancelDeleteSelection,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImageViewerScreen(
+    file: CloudFile,
+    bitmap: Bitmap?,
+    loading: Boolean,
+    error: String?,
+    onClose: () -> Unit,
+) {
+    var scale by remember(file.id) { mutableStateOf(1f) }
+    var offset by remember(file.id) { mutableStateOf(Offset.Zero) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        val nextScale = (scale * zoomChange).coerceIn(1f, 6f)
+        scale = nextScale
+        offset = if (nextScale == 1f) Offset.Zero else offset + panChange
+    }
+
+    Scaffold(
+        containerColor = Color.Black,
+        topBar = {
+            TopAppBar(
+                title = { Text(file.name, maxLines = 1) },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "閉じる")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                loading -> CircularProgressIndicator(color = Color.White)
+                bitmap != null -> Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = file.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y,
+                        )
+                        .transformable(transformState),
+                )
+                else -> Text(error ?: "画像を表示できませんでした。", color = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingScreen(message: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = TCloudBlue)
+            Spacer(Modifier.height(16.dp))
+            Text(message)
+        }
+    }
+}
+
+@Composable
+private fun LoginScreen(
+    busy: Boolean,
+    snackbar: SnackbarHostState,
+    onLogin: (String, String) -> Unit,
+) {
+    var loginId by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("T-Cloud", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.service_name), color = Color(0xFF667085))
+                Spacer(Modifier.height(32.dp))
+                OutlinedTextField(
+                    value = loginId,
+                    onValueChange = { loginId = it },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("ログインID") },
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("パスワード") },
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (passwordVisible) "パスワードを隠す" else "パスワードを表示",
+                            )
+                        }
+                    },
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = { onLogin(loginId, password) },
+                    enabled = !busy && loginId.isNotBlank() && password.length >= 8,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    if (busy) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
+                    else Text("ログイン")
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "パスワードと復号鍵は端末内で保護され、Cloudflareへ送信しません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF667085),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FolderScreen(
+    accountName: String,
+    currentName: String,
+    canGoBack: Boolean,
+    canUpload: Boolean,
+    canManageItems: Boolean,
+    canDeleteItems: Boolean,
+    folders: List<CloudFolder>,
+    files: List<CloudFile>,
+    selectedFileIds: Set<Long>,
+    selectedFolderIds: Set<Long>,
+    busy: Boolean,
+    snackbar: SnackbarHostState,
+    onOpenFolder: (CloudFolder) -> Unit,
+    onOpenFile: (CloudFile) -> Unit,
+    onDownload: (CloudFile) -> Unit,
+    onOffline: (CloudFile) -> Unit,
+    onMove: (CloudFile) -> Unit,
+    onMoveFolder: (CloudFolder) -> Unit,
+    onRenameFile: (CloudFile) -> Unit,
+    onRenameFolder: (CloudFolder) -> Unit,
+    onShareFile: (CloudFile) -> Unit,
+    onShareFolder: (CloudFolder) -> Unit,
+    onToggleFileSelection: (CloudFile) -> Unit,
+    onToggleFolderSelection: (CloudFolder) -> Unit,
+    onClearSelection: () -> Unit,
+    onSelectAll: () -> Unit,
+    onMoveSelection: () -> Unit,
+    onShareSelection: () -> Unit,
+    onDownloadSelection: () -> Unit,
+    onOfflineSelection: () -> Unit,
+    onDeleteSelection: () -> Unit,
+    onUpload: () -> Unit,
+    onBack: () -> Boolean,
+    onLogout: () -> Unit,
+    onOpenOffline: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val selectionCount = selectedFileIds.size + selectedFolderIds.size
+    val selectionMode = selectionCount > 0
+    var selectionActionsExpanded by remember { mutableStateOf(false) }
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    if (selectionMode) {
+                        IconButton(onClick = onClearSelection, enabled = !busy) {
+                            Icon(Icons.Default.Close, contentDescription = "選択解除")
+                        }
+                    } else if (canGoBack) {
+                        IconButton(onClick = { onBack() }, enabled = !busy) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                        }
+                    }
+                },
+                title = {
+                    Column {
+                        Text(
+                            if (selectionMode) "${selectionCount}件を選択中" else currentName,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (!selectionMode && accountName.isNotBlank()) {
+                            Text(accountName, style = MaterialTheme.typography.labelSmall, color = Color(0xFF667085))
+                        }
+                    }
+                },
+                actions = {
+                    if (selectionMode) {
+                        IconButton(onClick = onSelectAll, enabled = !busy) {
+                            Icon(Icons.Default.SelectAll, contentDescription = "すべて選択")
+                        }
+                        Box {
+                            IconButton(
+                                onClick = { selectionActionsExpanded = true },
+                                enabled = !busy,
+                            ) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "選択したデータの操作")
+                            }
+                            DropdownMenu(
+                                expanded = selectionActionsExpanded,
+                                onDismissRequest = { selectionActionsExpanded = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("ダウンロード") },
+                                    leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
+                                    onClick = {
+                                        selectionActionsExpanded = false
+                                        onDownloadSelection()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("オフライン保存") },
+                                    leadingIcon = { Icon(Icons.Default.DownloadForOffline, contentDescription = null) },
+                                    onClick = {
+                                        selectionActionsExpanded = false
+                                        onOfflineSelection()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("移動") },
+                                    leadingIcon = {
+                                        Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        selectionActionsExpanded = false
+                                        onMoveSelection()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("共有") },
+                                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                                    onClick = {
+                                        selectionActionsExpanded = false
+                                        onShareSelection()
+                                    },
+                                )
+                                if (canDeleteItems) {
+                                    DropdownMenuItem(
+                                        text = { Text("削除", color = Color(0xFFB42318)) },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.DeleteOutline,
+                                                contentDescription = null,
+                                                tint = Color(0xFFB42318),
+                                            )
+                                        },
+                                        onClick = {
+                                            selectionActionsExpanded = false
+                                            onDeleteSelection()
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                    IconButton(onClick = onOpenSettings, enabled = !busy) {
+                        Icon(Icons.Default.SettingsIcon, contentDescription = "アプリ設定")
+                    }
+                    IconButton(onClick = onOpenOffline, enabled = !busy) {
+                        Icon(Icons.Default.OfflinePin, contentDescription = "端末保存")
+                    }
+                    if (canUpload) {
+                        IconButton(onClick = onUpload, enabled = !busy) {
+                            Icon(Icons.Default.Add, contentDescription = "アップロード")
+                        }
+                    }
+                    IconButton(onClick = onLogout, enabled = !busy) {
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "ログアウト")
+                    }
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                if (folders.isEmpty() && files.isEmpty()) {
+                    item {
+                        Text(
+                            "表示できるデータはありません。",
+                            modifier = Modifier.padding(24.dp),
+                            color = Color(0xFF667085),
+                        )
+                    }
+                }
+                items(folders, key = { "folder-${it.id}" }) { folder ->
+                    FolderRow(
+                        folder = folder,
+                        selected = folder.id in selectedFolderIds,
+                        selectionMode = selectionMode,
+                        canManage = canManageItems,
+                        onOpenFolder = onOpenFolder,
+                        onToggleSelection = onToggleFolderSelection,
+                        onRename = onRenameFolder,
+                        onMove = onMoveFolder,
+                        onShare = onShareFolder,
+                    )
+                    HorizontalDivider(color = Color(0xFFE7E9F0))
+                }
+                items(files, key = { "file-${it.id}" }) { file ->
+                    FileRow(
+                        file = file,
+                        selected = file.id in selectedFileIds,
+                        selectionMode = selectionMode,
+                        canManage = canManageItems,
+                        onOpenFile = onOpenFile,
+                        onToggleSelection = onToggleFileSelection,
+                        onDownload = onDownload,
+                        onOffline = onOffline,
+                        onMove = onMove,
+                        onRename = onRenameFile,
+                        onShare = onShareFile,
+                    )
+                    HorizontalDivider(color = Color(0xFFE7E9F0))
+                }
+            }
+            if (busy) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = TCloudBlue)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppSettingsDialog(
+    batteryOptimizationExcluded: Boolean,
+    cameraBackupSettings: CameraBackupSettings,
+    currentFolderName: String?,
+    canSetCameraBackupTarget: Boolean,
+    onRequestBatteryExclusion: () -> Unit,
+    onSetCameraBackupTarget: () -> Unit,
+    onSaveCameraBackup: (Boolean, Boolean, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var backupEnabled by remember(cameraBackupSettings.enabled) {
+        mutableStateOf(cameraBackupSettings.enabled)
+    }
+    var wifiOnly by remember(cameraBackupSettings.wifiOnly) {
+        mutableStateOf(cameraBackupSettings.wifiOnly)
+    }
+    var chargingOnly by remember(cameraBackupSettings.chargingOnly) {
+        mutableStateOf(cameraBackupSettings.chargingOnly)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("T-Cloud の設定") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("正式名称：T-Cloud Storage")
+                Text("対応：Android 8.0 以降")
+                Text(
+                    if (batteryOptimizationExcluded) {
+                        "バッテリー最適化：除外済み"
+                    } else {
+                        "長時間転送を安定させるため、バッテリー最適化から除外してください。"
+                    },
+                )
+                if (!batteryOptimizationExcluded) {
+                    Button(onClick = onRequestBatteryExclusion) { Text("Androidの許可画面を開く") }
+                }
+                HorizontalDivider()
+                Text("カメラロール自動バックアップ", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "保存先：${cameraBackupSettings.folderName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (canSetCameraBackupTarget) {
+                    TextButton(onClick = onSetCameraBackupTarget) {
+                        Text("「${currentFolderName.orEmpty()}」を保存先に設定")
+                    }
+                } else {
+                    Text(
+                        "保存先にしたいフォルダを開いてから設定してください。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF667085),
+                    )
+                }
+                SettingSwitchRow(
+                    label = "自動バックアップ",
+                    checked = backupEnabled,
+                    enabled = cameraBackupSettings.hasTarget,
+                    onCheckedChange = { backupEnabled = it },
+                )
+                SettingSwitchRow(
+                    label = "Wi-Fiなど従量課金なしの通信のみ",
+                    checked = wifiOnly,
+                    enabled = true,
+                    onCheckedChange = { wifiOnly = it },
+                )
+                SettingSwitchRow(
+                    label = "充電中のみ",
+                    checked = chargingOnly,
+                    enabled = true,
+                    onCheckedChange = { chargingOnly = it },
+                )
+                Text(
+                    "有効にした時点以降に端末へ追加された写真・動画だけを暗号化して保存します。失敗分は次回自動で再試行します。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF667085),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSaveCameraBackup(backupEnabled, wifiOnly, chargingOnly)
+                    onDismiss()
+                },
+                enabled = !backupEnabled || cameraBackupSettings.hasTarget,
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("キャンセル") }
+        },
+    )
+}
+
+@Composable
+private fun SettingSwitchRow(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OfflineScreen(
+    entries: List<TCloudOfflineStore.OfflineEntry>,
+    busy: Boolean,
+    snackbar: SnackbarHostState,
+    onOpenFile: (CloudFile) -> Unit,
+    onDelete: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = { Text("端末保存") },
+                navigationIcon = {
+                    IconButton(onClick = onBack, enabled = !busy) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                if (entries.isEmpty()) {
+                    item {
+                        Text(
+                            "端末に暗号化保存したファイルはありません。",
+                            modifier = Modifier.padding(24.dp),
+                            color = Color(0xFF667085),
+                        )
+                    }
+                }
+                items(entries, key = { "offline-${it.file.id}" }) { entry ->
+                    Surface(
+                        onClick = { if (entry.file.metadataDecrypted) onOpenFile(entry.file) },
+                        color = Color.Transparent,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Icon(
+                                if (entry.file.metadataDecrypted) fileIcon(entry.file.mediaKind) else Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = TCloudBlue,
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    if (entry.file.metadataDecrypted) entry.file.name else "フォルダを解除すると表示できます",
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    "${formatBytes(entry.file.sizeBytes)}・${formatDate(entry.expiresAtMillis)}まで",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF667085),
+                                )
+                            }
+                            IconButton(onClick = { onDelete(entry.file.id) }, enabled = !busy) {
+                                Icon(Icons.Default.DeleteOutline, contentDescription = "端末保存から削除")
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = Color(0xFFE7E9F0))
+                }
+            }
+            if (busy) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = TCloudBlue)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FolderRow(
+    folder: CloudFolder,
+    selected: Boolean,
+    selectionMode: Boolean,
+    canManage: Boolean,
+    onOpenFolder: (CloudFolder) -> Unit,
+    onToggleSelection: (CloudFolder) -> Unit,
+    onRename: (CloudFolder) -> Unit,
+    onMove: (CloudFolder) -> Unit,
+    onShare: (CloudFolder) -> Unit,
+) {
+    var menuExpanded by remember(folder.id) { mutableStateOf(false) }
+    Surface(
+        color = if (selected) Color(0xFFE8EAF8) else Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = {
+                    if (selectionMode) onToggleSelection(folder) else onOpenFolder(folder)
+                },
+                onLongClick = { if (canManage) onToggleSelection(folder) },
+            ),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            if (selectionMode) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onToggleSelection(folder) },
+                )
+            }
+            Icon(Icons.Default.Folder, contentDescription = null, tint = TCloudBlue)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(folder.name.ifBlank { "フォルダ" }, fontWeight = FontWeight.Medium)
+                Text(
+                    "${folder.folderCount}フォルダ・${folder.fileCount}ファイル",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF667085),
+                )
+            }
+            if (folder.isProtected) {
+                Icon(
+                    if (folder.isUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                    contentDescription = if (folder.isUnlocked) "ロック解除済み" else "ロック中",
+                    tint = Color(0xFF667085),
+                )
+            }
+            if (!selectionMode && canManage) Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "操作", tint = Color(0xFF667085))
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("名前変更") },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                        onClick = { menuExpanded = false; onRename(folder) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("移動") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
+                        onClick = { menuExpanded = false; onMove(folder) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("共有") },
+                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                        onClick = { menuExpanded = false; onShare(folder) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FileRow(
+    file: CloudFile,
+    selected: Boolean,
+    selectionMode: Boolean,
+    canManage: Boolean,
+    onOpenFile: (CloudFile) -> Unit,
+    onToggleSelection: (CloudFile) -> Unit,
+    onDownload: (CloudFile) -> Unit,
+    onOffline: (CloudFile) -> Unit,
+    onMove: (CloudFile) -> Unit,
+    onRename: (CloudFile) -> Unit,
+    onShare: (CloudFile) -> Unit,
+) {
+    var menuExpanded by remember(file.id) { mutableStateOf(false) }
+    Surface(
+        color = if (selected) Color(0xFFE8EAF8) else Color.Transparent,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = {
+                    if (selectionMode) onToggleSelection(file) else onOpenFile(file)
+                },
+                onLongClick = { if (canManage && file.metadataDecrypted) onToggleSelection(file) },
+            ),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            if (selectionMode) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onToggleSelection(file) },
+                    enabled = file.metadataDecrypted,
+                )
+            }
+            Icon(fileIcon(file.mediaKind), contentDescription = null, tint = TCloudBlue)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(file.name.ifBlank { "暗号化ファイル" }, fontWeight = FontWeight.Medium)
+                Text(
+                    formatBytes(file.sizeBytes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF667085),
+                )
+            }
+            if (file.cryptoVersion == 1 && !file.metadataDecrypted) {
+                Icon(Icons.Default.Lock, contentDescription = "暗号化", tint = Color(0xFF667085))
+            } else if (!selectionMode && canManage) {
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "操作", tint = Color(0xFF667085))
+                    }
+                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("名前変更") },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            onClick = { menuExpanded = false; onRename(file) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("移動") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
+                            onClick = { menuExpanded = false; onMove(file) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("共有") },
+                            leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                            onClick = { menuExpanded = false; onShare(file) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("オフライン保存") },
+                            leadingIcon = { Icon(Icons.Default.DownloadForOffline, contentDescription = null) },
+                            onClick = { menuExpanded = false; onOffline(file) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("ダウンロード") },
+                            leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
+                            onClick = { menuExpanded = false; onDownload(file) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShareCreateDialog(
+    itemName: String,
+    busy: Boolean,
+    onCreate: (String, Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var password by remember(itemName) { mutableStateOf("") }
+    var validDays by remember(itemName) { mutableStateOf("7") }
+    var passwordVisible by remember(itemName) { mutableStateOf(false) }
+    fun generatePassword() {
+        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!#%+-_"
+        val random = ByteArray(28).also(SecureRandom()::nextBytes)
+        password = buildString(random.size) {
+            random.forEach { value -> append(alphabet[(value.toInt() and 0xff) % alphabet.length]) }
+        }
+        random.fill(0)
+        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
+            ClipData.newPlainText("T-Cloud 共有PW", password),
+        )
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("共有URLを発行") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(itemName, style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { if (it.length <= 128) password = it },
+                    label = { Text("共有PW（12文字以上）") },
+                    singleLine = true,
+                    enabled = !busy,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (passwordVisible) "PWを隠す" else "PWを表示",
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(onClick = ::generatePassword, enabled = !busy) {
+                    Text("強固なPWを生成してコピー")
+                }
+                OutlinedTextField(
+                    value = validDays,
+                    onValueChange = { value -> if (value.all(Char::isDigit) && value.length <= 4) validDays = value },
+                    label = { Text("有効期間（日）") },
+                    supportingText = { Text("1〜3650日。初期値は7日です。") },
+                    singleLine = true,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "共有先では、このPWだけで対象を開けます。フォルダPWや復号鍵は共有されません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF667085),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onCreate(password, validDays.toIntOrNull() ?: 0) },
+                enabled = !busy && password.length in 12..128 && (validDays.toIntOrNull() ?: 0) in 1..3650,
+            ) { Text(if (busy) "発行中…" else "発行する") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("キャンセル") }
+        },
+    )
+}
+
+@Composable
+private fun ShareResultDialog(
+    result: ShareResult,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    fun copy(label: String, value: String) {
+        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
+            ClipData.newPlainText(label, value),
+        )
+    }
+    val combined = "【T-Cloud Storage 共有】\n\nURL\n${result.url}\n\nパスワード\n${result.password}"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("共有URLを発行しました") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("URL", fontWeight = FontWeight.SemiBold)
+                Text(result.url, style = MaterialTheme.typography.bodySmall)
+                Text("パスワード", fontWeight = FontWeight.SemiBold)
+                Text(result.password)
+                Text(
+                    "有効期限：${formatDate(result.expiresAt * 1000)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF667085),
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    TextButton(onClick = { copy("T-Cloud 共有URL", result.url) }) { Text("URL") }
+                    TextButton(onClick = { copy("T-Cloud 共有PW", result.password) }) { Text("PW") }
+                    TextButton(onClick = { copy("T-Cloud 共有", combined) }) { Text("まとめて") }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } },
+    )
+}
+
+@Composable
+private fun DeleteSelectionDialog(
+    count: Int,
+    isAdmin: Boolean,
+    busy: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("本当に削除しますか？") },
+        text = {
+            Text(
+                if (isAdmin) {
+                    "選択した${count}件をゴミ箱へ移動します。"
+                } else {
+                    "選択した${count}件を削除します。"
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = !busy) {
+                Text(if (busy) "削除中…" else "はい", color = Color(0xFFB42318))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("いいえ") }
+        },
+    )
+}
+
+@Composable
+private fun RenameItemDialog(
+    currentName: String,
+    busy: Boolean,
+    onRename: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember(currentName) { mutableStateOf(currentName) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("名前変更") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { if (it.length <= 240) name = it },
+                label = { Text("新しい名前") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onRename(name.trim()) },
+                enabled = !busy && name.trim().isNotEmpty() && name.trim() != currentName,
+            ) { Text(if (busy) "変更中…" else "変更する") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("キャンセル") }
+        },
+    )
+}
+
+@Composable
+private fun MoveItemDialog(
+    itemName: String,
+    destinations: List<MoveDestination>,
+    busy: Boolean,
+    onMove: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selectedId by remember(itemName) { mutableStateOf<Long?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("移動先を選択") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(itemName, style = MaterialTheme.typography.bodyMedium)
+                when {
+                    busy && destinations.isEmpty() -> Box(
+                        modifier = Modifier.fillMaxWidth().height(120.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { CircularProgressIndicator(color = TCloudBlue) }
+                    destinations.isEmpty() -> Text("選択できる移動先がありません。")
+                    else -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                        items(destinations, key = { "move-${it.id}" }) { destination ->
+                            Surface(
+                                onClick = { if (!busy) selectedId = destination.id },
+                                color = Color.Transparent,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(
+                                        selected = selectedId == destination.id,
+                                        onClick = { if (!busy) selectedId = destination.id },
+                                    )
+                                    Text(
+                                        text = "　".repeat(destination.depth.coerceAtMost(8)) + destination.name,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (destination.isProtected) {
+                                        Icon(Icons.Default.Lock, contentDescription = "PW付き")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { selectedId?.let(onMove) },
+                enabled = !busy && selectedId != null,
+            ) { Text(if (busy && selectedId != null) "移動中…" else "移動する") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("キャンセル") }
+        },
+    )
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MediaPlayerScreen(
+    file: CloudFile,
+    dataSourceFactory: androidx.media3.datasource.DataSource.Factory,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    val playbackFactory = remember(file.id) { dataSourceFactory }
+    val player = remember(file.id) {
+        ExoPlayer.Builder(context).build().apply {
+            val mediaItem = MediaItem.Builder()
+                .setUri("tcloud://file/${file.id}")
+                .setMimeType(playbackMimeType(file))
+                .build()
+            setMediaSource(ProgressiveMediaSource.Factory(playbackFactory).createMediaSource(mediaItem))
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(player) {
+        onDispose {
+            player.stop()
+            player.clearMediaItems()
+            player.release()
+            (playbackFactory as? AutoCloseable)?.close()
+        }
+    }
+
+    Scaffold(
+        containerColor = Color.Black,
+        topBar = {
+            TopAppBar(
+                title = { Text(file.name, maxLines = 1) },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "閉じる")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        AndroidView(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            factory = { viewContext ->
+                PlayerView(viewContext).apply {
+                    useController = true
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    this.player = player
+                }
+            },
+            update = { it.player = player },
+        )
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun playbackMimeType(file: CloudFile): String = when (file.name.substringAfterLast('.', "").lowercase()) {
+    "flv" -> MimeTypes.VIDEO_FLV
+    "mp4", "m4v", "mov" -> MimeTypes.VIDEO_MP4
+    "mp3" -> MimeTypes.AUDIO_MPEG
+    "m4a", "aac" -> MimeTypes.AUDIO_AAC
+    else -> file.mimeType.ifBlank { "application/octet-stream" }
+}
+
+@Composable
+private fun UnlockFolderDialog(
+    folder: CloudFolder,
+    busy: Boolean,
+    onUnlock: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by remember(folder.id) { mutableStateOf("") }
+    var visible by remember(folder.id) { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(folder.name.ifBlank { "フォルダを開く" }) },
+        text = {
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("フォルダのパスワード") },
+                visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { visible = !visible }) {
+                        Icon(
+                            if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (visible) "パスワードを隠す" else "パスワードを表示",
+                        )
+                    }
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onUnlock(password) }, enabled = !busy && password.length >= 4) {
+                Text(if (busy) "確認中…" else "開く")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("キャンセル") }
+        },
+    )
+}
+
+private fun fileIcon(mediaKind: String): ImageVector = when (mediaKind) {
+    "image" -> Icons.Default.Image
+    "video" -> Icons.Default.Movie
+    "audio" -> Icons.Default.MusicNote
+    else -> Icons.AutoMirrored.Filled.InsertDriveFile
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "${bytes} B"
+    val units = listOf("KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unit = -1
+    do {
+        value /= 1024
+        unit += 1
+    } while (value >= 1024 && unit < units.lastIndex)
+    return "${DecimalFormat("0.#").format(value)} ${units[unit]}"
+}
+
+private fun formatDate(epochMillis: Long): String =
+    SimpleDateFormat("yyyy年M月d日", Locale.JAPAN).format(Date(epochMillis))

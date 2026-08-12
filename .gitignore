@@ -4,3 +4,12 @@ node_modules/
 **/.wrangler/
 **/tmp/
 *.log
+
+# T-Cloud Android (local build/signing state)
+android-tcloud/.gradle/
+android-tcloud/**/build/
+android-tcloud/local.properties
+android-tcloud/keystore.properties
+android-tcloud/signing/
+*.jks
+*.keystore
