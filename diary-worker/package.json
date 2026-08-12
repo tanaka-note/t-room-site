@@ -15,6 +15,7 @@
     "test:tags": "node tests/tags-ui.mjs",
     "test:history": "node tests/history-ui.mjs",
     "test:pwa": "node tests/pwa-ui.mjs",
+    "test:startup": "node tests/startup-view.mjs",
     "import:investment": "node scripts/import-investment-data.mjs"
   },
   "devDependencies": {

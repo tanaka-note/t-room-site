@@ -63,6 +63,7 @@
   };
 
   const elements = {
+    bootView: document.querySelector("#boot-view"),
     loginView: document.querySelector("#login-view"),
     appView: document.querySelector("#app-view"),
     loginForm: document.querySelector("#login-form"),
@@ -467,6 +468,7 @@
     state.role = session.role;
     state.accountName = session.accountName;
     state.mustChangePassword = true;
+    elements.bootView.hidden = true;
     elements.loginView.hidden = true;
     elements.appView.hidden = true;
     elements.initialPasswordForm.reset();
@@ -525,6 +527,7 @@
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
     state.lastSessionRefreshAt = Date.now();
+    elements.bootView.hidden = true;
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     elements.roleLabel.textContent = `${session.accountName}（管理者）`;
@@ -578,6 +581,7 @@
 
   function showLogin(message = "") {
     if (elements.initialPasswordDialog.open) elements.initialPasswordDialog.close();
+    elements.bootView.hidden = true;
     elements.loginView.hidden = false;
     elements.appView.hidden = true;
     elements.loginMessage.textContent = message;

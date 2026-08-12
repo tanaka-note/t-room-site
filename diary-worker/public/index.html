@@ -18,7 +18,15 @@
   <link rel="stylesheet" href="/diary/diary.css?v=13">
 </head>
 <body>
-  <main id="login-view" class="login-shell" aria-labelledby="login-title">
+  <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
+    <section class="login-card">
+      <p class="eyebrow">Private diary</p>
+      <h1>日記</h1>
+      <p class="login-description">安全なログイン状態を確認しています…</p>
+    </section>
+  </main>
+
+  <main id="login-view" class="login-shell" aria-labelledby="login-title" hidden>
     <section class="login-card">
       <p class="eyebrow">Private diary</p>
       <h1 id="login-title">日記を開く</h1>
@@ -406,6 +414,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=19" defer></script>
+  <script src="/diary/diary.js?v=20" defer></script>
 </body>
 </html>

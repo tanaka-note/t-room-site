@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="20260812-2">
+  <meta name="tcloud-build" content="20260812-3">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,16 @@
   <link rel="stylesheet" href="/cloud/cloud.css?v=20260811-12">
 </head>
 <body>
-  <main id="login-view" class="login-shell">
+  <main id="boot-view" class="login-shell" aria-label="T-Cloud Storageを準備中" aria-busy="true">
+    <section class="login-card">
+      <a class="wordmark" aria-label="T-Cloud Storage"><span>T</span> T-Cloud</a>
+      <p class="eyebrow">PRIVATE STORAGE</p>
+      <h1>T-Cloud<br>Storage</h1>
+      <p class="login-lead">安全なログイン状態を確認しています…</p>
+    </section>
+  </main>
+
+  <main id="login-view" class="login-shell" hidden>
     <section class="login-card" aria-labelledby="login-title">
       <a class="wordmark" href="/" aria-label="T-ROOMトップへ"><span>T</span> T-ROOM</a>
       <p class="eyebrow">PRIVATE STORAGE</p>
@@ -559,6 +568,6 @@
   <script src="/cloud/media-range.js?v=20260808-1" defer></script>
   <script src="/cloud/offline-store.js?v=20260811-2" defer></script>
   <script src="/cloud/media-client.js?v=20260811-12" defer></script>
-  <script src="/cloud/cloud.js?v=20260812-2" defer></script>
+  <script src="/cloud/cloud.js?v=20260812-3" defer></script>
 </body>
 </html>

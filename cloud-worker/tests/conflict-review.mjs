@@ -60,6 +60,6 @@ assert.match(client, /folderId: exactFolderId/, "アップロード前判定へ�
 assert.match(worker, /WITH RECURSIVE folder_access/);
 assert.match(worker, /access\.is_allowed = 1 AND access\.has_protected_ancestor = 1/);
 assert.match(html, /cloud\.css\?v=20260811-12/);
-assert.match(html, /cloud\.js\?v=20260812-2/);
+assert.match(html, /cloud\.js\?v=20260812-3/);
 
 console.log("stored conflict badges and grouped review: ok");

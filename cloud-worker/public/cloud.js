@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "20260812-2";
+const APP_BUILD_ID = "20260812-3";
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
 const LONG_PRESS_DRAG_THRESHOLD_PX = 28;
 const PWA_WORKER_URL = "/cloud/media-worker.js";
@@ -129,8 +129,11 @@ async function initialize() {
       }
       await enterApp(session, rememberedPassword, accountKey);
       $("#login-password").value = "";
+    } else {
+      showLoginView();
     }
   } catch (error) {
+    showLoginView();
     showLoginError(error.message);
   }
   reportCompletedAppUpdate();
@@ -860,6 +863,7 @@ async function enterApp(session, password = "", accountKey = null) {
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
   state.credentialSalt = String(session.credentialSalt || "");
   applyPlaybackCacheLimit();
+  $("#boot-view").hidden = true;
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
   $("#account-name").textContent = session.accountName;
@@ -939,6 +943,12 @@ async function navigateToFolder(folderId, folderName, options = {}) {
   if (resetScroll) resetFolderScrollPosition();
   if (load) await loadItems();
   if (resetScroll) requestAnimationFrame(resetFolderScrollPosition);
+}
+
+function showLoginView() {
+  $("#boot-view").hidden = true;
+  $("#login-view").hidden = false;
+  $("#app-view").hidden = true;
 }
 
 function resetFolderScrollPosition() {
