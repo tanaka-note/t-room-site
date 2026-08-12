@@ -839,15 +839,14 @@ function accountLoginId(account, env) {
 }
 
 async function findAccountByLoginId(loginId, env) {
-  const staticAccount = DIARY_ACCOUNTS.find((account) => accountLoginId(account, env) === loginId);
-  if (staticAccount) return staticAccount;
   const row = await env.DB.prepare(`
     SELECT id, household_id, display_name, login_id, password_hash, role,
            must_change_password, can_view_trash, can_permanently_delete,
            can_view_investment, session_version
     FROM diary_accounts WHERE login_id = ? AND active = 1
   `).bind(loginId).first();
-  return row ? databaseAccount(row) : null;
+  if (row) return databaseAccount(row);
+  return DIARY_ACCOUNTS.find((account) => accountLoginId(account, env) === loginId) || null;
 }
 
 async function findAccountById(id, env) {
@@ -863,13 +862,16 @@ async function findAccountById(id, env) {
 }
 
 function databaseAccount(row) {
+  const temporarySecretKeys = {
+    "chiharu-admin": "DIARY_CHIHARU_TEMP_PASSWORD_HASH"
+  };
   return {
     id: row.id,
     name: row.display_name,
     loginId: row.login_id,
     householdId: row.household_id,
     passwordHash: row.password_hash || null,
-    temporarySecretKey: row.must_change_password ? "DIARY_CHIHARU_TEMP_PASSWORD_HASH" : null,
+    temporarySecretKey: row.must_change_password ? (temporarySecretKeys[row.id] || null) : null,
     role: row.role,
     isGlobalOwner: false,
     mustChangePassword: Boolean(row.must_change_password),

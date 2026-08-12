@@ -107,12 +107,13 @@ try {
   assert.equal(refreshedSession.result.authenticated, true);
   assert.match(refreshedSession.response.headers.get("set-cookie"), /Max-Age=2592000/);
 
+  const title = `permission-test-${randomUUID()}`;
   const created = await request("/entries", {
     method: "POST",
     cookie: wife.cookie,
     body: {
       entryDate: "2026-08-09",
-      title: `permission-test-${randomUUID()}`,
+      title,
       content: "permission integration test",
       tags: []
     }
@@ -139,7 +140,7 @@ try {
   const main = await login("main@example.test", "main-test");
   assert.equal(main.session.canViewTrash, true);
   assert.equal(main.session.canPermanentlyDelete, true);
-  const trash = await request("/entries?trash=1", { cookie: main.cookie });
+  const trash = await request(`/entries?trash=1&q=${encodeURIComponent(title)}`, { cookie: main.cookie });
   assert.equal(trash.response.status, 200, JSON.stringify(trash.result));
   const deletedEntry = trash.result.entries.find((candidate) => candidate.id === entry.id);
   assert.ok(deletedEntry);
