@@ -7,6 +7,7 @@ const html = readFileSync(`${root}/public/index.html`, "utf8");
 const script = readFileSync(`${root}/public/diary.js`, "utf8");
 const worker = readFileSync(`${root}/src/index.js`, "utf8");
 
+assert.match(html, /id="current-month-button"/);
 assert.match(html, /id="diary-recent-title">今月の投稿<\/h2>/);
 assert.match(html, /id="previous-month-button"[^>]*>前月<\/button>/);
 assert.match(html, /id="next-month-button"[^>]*>翌月<\/button>/);
@@ -19,6 +20,8 @@ assert.match(script, /elements\.listTitle\.textContent = state\.month === curren
 assert.match(script, /return year === currentYear \? `\$\{month\}月の投稿` : `\$\{year\}年\$\{month\}月の投稿`/);
 assert.match(script, /\? "記事なし"/);
 assert.match(script, /function changeBrowseMonth\(offset\)/);
+assert.match(script, /function returnToCurrentMonth\(\)[\s\S]*?state\.month = currentJapanMonth\(\);[\s\S]*?loadEntries\(true\)/);
+assert.match(script, /elements\.currentMonth\.disabled = state\.month === currentJapanMonth\(\)/);
 assert.doesNotMatch(script, /nextMonth > currentJapanMonth\(\)/);
 assert.match(worker, /ORDER BY e\.entry_date DESC, e\.id DESC/);
 

@@ -110,6 +110,7 @@
     entryList: document.querySelector("#entry-list"),
     loadMore: document.querySelector("#load-more-button"),
     monthNavigation: document.querySelector("#month-navigation"),
+    currentMonth: document.querySelector("#current-month-button"),
     previousMonth: document.querySelector("#previous-month-button"),
     nextMonth: document.querySelector("#next-month-button"),
     archiveList: document.querySelector("#archive-list"),
@@ -219,6 +220,7 @@
     elements.newEntryButton.addEventListener("click", () => openEditor());
     elements.trashButton.addEventListener("click", toggleTrash);
     elements.loadMore.addEventListener("click", handleLoadMore);
+    elements.currentMonth.addEventListener("click", returnToCurrentMonth);
     elements.previousMonth.addEventListener("click", () => changeBrowseMonth(-1));
     elements.nextMonth.addEventListener("click", () => changeBrowseMonth(1));
     elements.clearFilters.addEventListener("click", clearFilters);
@@ -1678,6 +1680,7 @@
     elements.clearFilters.hidden = !active;
     elements.trashButton.textContent = state.trash ? "日記一覧" : "ゴミ箱";
     elements.monthNavigation.hidden = !isMonthlyView();
+    elements.currentMonth.disabled = state.month === currentJapanMonth();
     document.querySelectorAll("[data-month]").forEach((button) => {
       button.setAttribute("aria-pressed", String(button.dataset.month === state.month));
     });
@@ -1756,6 +1759,14 @@
     if (!isMonthlyView()) return;
     const nextMonth = shiftMonth(state.month, offset);
     state.month = nextMonth;
+    state.monthExpanded = false;
+    updateFilterControls();
+    loadEntries(true);
+  }
+
+  function returnToCurrentMonth() {
+    if (!isMonthlyView() || state.month === currentJapanMonth()) return;
+    state.month = currentJapanMonth();
     state.monthExpanded = false;
     updateFilterControls();
     loadEntries(true);
