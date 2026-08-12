@@ -13,3 +13,4 @@ android-tcloud/keystore.properties
 android-tcloud/signing/
 *.jks
 *.keystore
+.site-assets/

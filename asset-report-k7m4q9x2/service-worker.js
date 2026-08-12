@@ -1,0 +1,53 @@
+"use strict";
+
+const CACHE_NAME = "asset-report-shell-v1";
+const APP_PATH = "/asset-report-k7m4q9x2/";
+const APP_SHELL = [
+  APP_PATH,
+  `${APP_PATH}index.html`,
+  `${APP_PATH}report.css?v=20260812-1`,
+  `${APP_PATH}report.js?v=20260811-1`,
+  `${APP_PATH}pwa.js?v=20260812-1`,
+  `${APP_PATH}manifest.webmanifest?v=20260812-1`,
+  "/assets/site-icon-192.png",
+  "/assets/site-icon-512.png"
+];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(Promise.all([
+    caches.keys().then((keys) => Promise.all(keys
+      .filter((key) => key.startsWith("asset-report-shell-") && key !== CACHE_NAME)
+      .map((key) => caches.delete(key)))),
+    self.clients.claim()
+  ]));
+});
+
+self.addEventListener("fetch", (event) => {
+  const request = event.request;
+  if (request.method !== "GET") return;
+
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith(APP_PATH) && !url.pathname.startsWith("/assets/site-icon-")) return;
+
+  event.respondWith((async () => {
+    try {
+      const response = await fetch(request);
+      if (response.ok) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, response.clone());
+      }
+      return response;
+    } catch {
+      const cached = await caches.match(request, { ignoreSearch: true });
+      if (cached) return cached;
+      if (request.mode === "navigate") return caches.match(`${APP_PATH}index.html`);
+      return new Response("オフラインではこのデータを表示できません。", { status: 503 });
+    }
+  })());
+});

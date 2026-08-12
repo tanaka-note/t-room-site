@@ -121,6 +121,31 @@ table {
   font-variant-numeric: tabular-nums;
 }
 
+.install-app-button {
+  justify-self: end;
+  margin-top: 12px;
+  padding: 7px 12px;
+  border: 1px solid rgba(82, 230, 170, 0.5);
+  border-radius: 999px;
+  background: rgba(82, 230, 170, 0.08);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.install-app-button:hover,
+.install-app-button:focus-visible {
+  border-color: var(--accent);
+  background: rgba(82, 230, 170, 0.16);
+  outline: none;
+}
+
+.install-app-button[hidden] {
+  display: none;
+}
+
 .summary-section {
   padding: clamp(34px, 5vw, 58px) 0;
   border-bottom: 1px solid var(--line);

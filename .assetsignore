@@ -1,12 +1,24 @@
-node_modules/
-billing-worker/
-diary-worker/
-.git/
-.agents/
-.codex/
-package.json
-pnpm-lock.yaml
-wrangler.jsonc
-README.md
-.gitignore
-.assetsignore
+# Development dependencies and source-only applications
+/node_modules/**
+/billing-worker/**
+/cloud-worker/**
+/diary-worker/**
+/android-tcloud/**
+
+# Local agent, build, and version-control state
+/.git/**
+/.agents/**
+/.codex/**
+/.codex-csv-inspect/**
+/.wrangler/**
+/**/.dev.vars
+/**/.wrangler/**
+/**/tmp/**
+/**/*.log
+
+# Repository metadata is not part of the website
+/.gitignore
+/package.json
+/pnpm-lock.yaml
+/README.md
+/wrangler.jsonc

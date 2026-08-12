@@ -2,13 +2,22 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
   <meta name="referrer" content="no-referrer">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07090d">
+  <meta name="application-name" content="資産運用報告">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="資産報告">
   <title>資産運用報告ページ</title>
   <meta name="description" content="月次の資産運用状況を記録する報告ページです。">
-  <link rel="stylesheet" href="./report.css?v=20260811-1">
+  <link rel="manifest" href="./manifest.webmanifest?v=20260812-1">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="icon" href="/assets/favicon-32.png" sizes="32x32">
+  <link rel="stylesheet" href="./report.css?v=20260812-1">
 </head>
 <body>
   <main class="report-shell">
@@ -20,6 +29,7 @@
       <div class="report-period" aria-label="集計時点">
         <span>AS OF</span>
         <time datetime="2026-08-10">2026.08.10</time>
+        <button id="install-app-button" class="install-app-button" type="button">ホームへ追加</button>
         <small>8月10日時点</small>
       </div>
     </header>
@@ -136,5 +146,6 @@
   </main>
 
   <script src="./report.js?v=20260811-1"></script>
+  <script src="./pwa.js?v=20260812-1"></script>
 </body>
 </html>
