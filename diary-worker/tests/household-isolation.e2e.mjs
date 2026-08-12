@@ -65,7 +65,7 @@ try {
   await waitForServer();
   const main = await login("main@example.test", "main-test");
   const wife = await login("wife@example.test", "wife-test");
-  const chiharuFirst = await login("flw2-0203freedom@ezweb.ne.jp", temporaryPassword);
+  const chiharuFirst = await login("giantz3031@gmail.com", temporaryPassword);
   assert.equal(chiharuFirst.session.mustChangePassword, true);
 
   const blockedBeforeChange = await request("/entries", { cookie: chiharuFirst.cookie });
@@ -78,7 +78,7 @@ try {
   assert.equal(changed.response.status, 200, JSON.stringify(changed.result));
   assert.equal(changed.result.mustChangePassword, false);
   await request("/logout", { method: "POST", cookie: changed.cookie });
-  const chiharuAfterReset = await login("flw2-0203freedom@ezweb.ne.jp", "ちはるの日記");
+  const chiharuAfterReset = await login("giantz3031@gmail.com", "ちはるの日記");
   assert.equal(chiharuAfterReset.session.mustChangePassword, false);
   const chiharuCookie = chiharuAfterReset.cookie;
 
