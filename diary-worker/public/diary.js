@@ -623,6 +623,7 @@
     const monthlyView = isMonthlyView();
     const pageSize = monthlyView ? (state.monthExpanded ? 50 : 5) : 20;
     const loadedEntries = reset ? [] : [...state.entries];
+    const previousEntryCount = loadedEntries.length;
     let nextOffset = reset ? 0 : state.offset;
     let hasMore = true;
     let pageGuard = 0;
@@ -661,7 +662,7 @@
       for (const entry of state.entries) state.entryMap.set(entry.id, entry);
       state.offset = state.entries.length;
       state.hasMore = hasMore;
-      renderEntries();
+      renderEntries(reset ? 0 : previousEntryCount);
       updateSearchStatus();
     } catch (error) {
       if (requestId !== state.requestId) return;
@@ -675,13 +676,49 @@
     }
   }
 
-  function handleLoadMore() {
+  function captureEntryListPosition() {
+    const visibleEntry = [...elements.entryList.querySelectorAll("[data-entry-id]")]
+      .find((entry) => {
+        const rect = entry.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+
+    return {
+      entryId: visibleEntry?.dataset.entryId || "",
+      top: visibleEntry?.getBoundingClientRect().top || 0,
+      scrollY: window.scrollY
+    };
+  }
+
+  function restoreEntryListPosition(position) {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const anchor = position.entryId
+          ? elements.entryList.querySelector(`[data-entry-id="${position.entryId}"]`)
+          : null;
+        if (anchor) {
+          window.scrollBy({
+            top: anchor.getBoundingClientRect().top - position.top,
+            left: 0,
+            behavior: "auto"
+          });
+          return;
+        }
+        window.scrollTo({ top: position.scrollY, left: 0, behavior: "auto" });
+      });
+    });
+  }
+
+  async function handleLoadMore() {
     if (isMonthlyView()) {
+      const position = captureEntryListPosition();
+      elements.loadMore.blur();
       state.monthExpanded = true;
-      loadEntries(true);
+      await loadEntries(false);
+      restoreEntryListPosition(position);
       return;
     }
-    loadEntries(false);
+    await loadEntries(false);
   }
 
   async function loadMeta() {
@@ -695,7 +732,7 @@
     }
   }
 
-  function renderEntries() {
+  function renderEntries(appendFrom = 0) {
     if (!state.entries.length) {
       const message = state.trash
         ? "ゴミ箱は空です。"
@@ -708,7 +745,10 @@
       return;
     }
 
-    elements.entryList.replaceChildren(...state.entries.map((entry) => {
+    const existingCardCount = elements.entryList.querySelectorAll(":scope > .diary-entry-card").length;
+    const canAppend = appendFrom > 0 && existingCardCount === appendFrom;
+    const entriesToRender = canAppend ? state.entries.slice(appendFrom) : state.entries;
+    const cards = entriesToRender.map((entry) => {
       const article = document.createElement("article");
       article.className = "diary-entry-card";
 
@@ -739,7 +779,12 @@
       button.append(meta, title, summary);
       article.append(button, createTagGroup(entry.tags));
       return article;
-    }));
+    });
+    if (canAppend) {
+      elements.entryList.append(...cards);
+      return;
+    }
+    elements.entryList.replaceChildren(...cards);
   }
 
   function renderArchive(months) {
