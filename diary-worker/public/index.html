@@ -95,6 +95,18 @@
                 <input id="diary-search-input" type="search" autocomplete="off" maxlength="100" placeholder="例：仕事、旅行、サイトづくり">
                 <button id="diary-search-clear" class="diary-search-clear" type="button" aria-label="検索キーワードをクリア" hidden>×</button>
               </div>
+              <fieldset class="diary-date-search">
+                <legend>日付検索</legend>
+                <label for="diary-date-from">
+                  <span>開始日</span>
+                  <input id="diary-date-from" type="date">
+                </label>
+                <span class="diary-date-separator" aria-hidden="true">から</span>
+                <label for="diary-date-to">
+                  <span>終了日</span>
+                  <input id="diary-date-to" type="date">
+                </label>
+              </fieldset>
               <p id="diary-search-status" class="diary-search-status" aria-live="polite">日記のタイトルと本文から探します。</p>
             </div>
           </section>
@@ -121,6 +133,10 @@
           <section class="diary-panel">
             <p class="section-kicker">Tags</p>
             <h2>#から見る</h2>
+            <label class="tag-search" for="tag-search-input">
+              <span class="visually-hidden">タグを検索</span>
+              <input id="tag-search-input" type="search" autocomplete="off" maxlength="30" placeholder="タグを検索">
+            </label>
             <div id="tag-list" class="diary-tag-cloud" tabindex="0" aria-label="使用回数の多い順に並んだタグ一覧"></div>
           </section>
         </aside>
@@ -171,7 +187,10 @@
         初回設定後は、登録したパスワードを確認し、安全な場所に保管してください。パスワードを紛失するとログインできません。お忘れの場合は、T-ROOM管理者へ再発行をご依頼ください。
       </aside>
       <p id="initial-password-message" class="form-message" role="status" aria-live="polite"></p>
-      <button id="initial-password-submit" class="primary-button full-button" type="submit">パスワードを設定</button>
+      <div class="initial-password-actions">
+        <button id="initial-password-cancel" class="quiet-button" type="button">ログイン画面へ戻る</button>
+        <button id="initial-password-submit" class="primary-button" type="submit">パスワードを設定</button>
+      </div>
     </form>
   </dialog>
 
@@ -378,6 +397,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=17" defer></script>
+  <script src="/diary/diary.js?v=18" defer></script>
 </body>
 </html>

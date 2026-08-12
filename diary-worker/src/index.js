@@ -98,7 +98,7 @@ async function handleApi(request, env, url, path) {
     const passwordHash = requestedAccount
       ? (requestedAccount.passwordHash || (requestedAccount.temporarySecretKey ? env[requestedAccount.temporarySecretKey] : env[requestedAccount.secretKey]))
       : null;
-    const account = requestedAccount && passwordHash && await verifyPassword(password, passwordHash)
+    const account = requestedAccount && passwordHash && await verifyPassword(password, passwordHash, env)
       ? requestedAccount
       : null;
     if (!account) {
@@ -326,6 +326,9 @@ async function listEntries(url, env, session) {
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("month") || "")
     ? url.searchParams.get("month")
     : "";
+  const dateFrom = normalizeFilterDate(url.searchParams.get("dateFrom"));
+  const dateTo = normalizeFilterDate(url.searchParams.get("dateTo"));
+  const dateRange = validateDateRange(dateFrom, dateTo);
   const tag = normalizeTag(url.searchParams.get("tag") || "");
   const trashRequested = url.searchParams.get("trash") === "1";
   if (trashRequested && !session.canViewTrash) {
@@ -342,6 +345,19 @@ async function listEntries(url, env, session) {
   if (month) {
     conditions.push("substr(e.entry_date, 1, 7) = ?");
     bindings.push(month);
+  }
+  if (dateRange.from === dateRange.to && dateRange.from) {
+    conditions.push("e.entry_date = ?");
+    bindings.push(dateRange.from);
+  } else {
+    if (dateRange.from) {
+      conditions.push("e.entry_date >= ?");
+      bindings.push(dateRange.from);
+    }
+    if (dateRange.to) {
+      conditions.push("e.entry_date <= ?");
+      bindings.push(dateRange.to);
+    }
   }
   if (tag) {
     conditions.push("EXISTS (SELECT 1 FROM diary_tags filter_tag WHERE filter_tag.entry_id = e.id AND filter_tag.tag = ?)");
@@ -867,7 +883,7 @@ async function changeInitialPassword(request, env, session, url) {
   if (!isStrongPassword(password)) {
     return json({ error: "パスワードは6文字以上で入力してください。" }, 400);
   }
-  const passwordHash = await createPasswordHash(password);
+  const passwordHash = await createPasswordHash(password, env);
   const result = await env.DB.prepare(`
     UPDATE diary_accounts
     SET password_hash = ?, must_change_password = 0,
@@ -899,14 +915,10 @@ function isStrongPassword(password) {
   return password.length >= 6 && password.length <= 128;
 }
 
-async function createPasswordHash(password) {
-  const iterations = 600000;
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const derived = new Uint8Array(await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256
-  ));
-  return `pbkdf2-sha256$${iterations}$${bytesToBase64Url(salt)}$${bytesToBase64Url(derived)}`;
+async function createPasswordHash(password, env) {
+  const pepper = env.DIARY_PASSWORD_PEPPER || env.SESSION_SECRET;
+  if (!pepper) throw new HttpError(503, "パスワード設定を完了できません。管理者へご連絡ください。");
+  return `hmac-sha256$${await sign(password, pepper)}`;
 }
 
 async function loginFingerprint(request, account, env) {
@@ -933,8 +945,15 @@ async function sign(value, secret) {
   return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
 }
 
-async function verifyPassword(password, encodedHash) {
+async function verifyPassword(password, encodedHash, env = {}) {
   try {
+    if (String(encodedHash).startsWith("hmac-sha256$")) {
+      const [, hashText] = String(encodedHash).split("$");
+      const pepper = env.DIARY_PASSWORD_PEPPER || env.SESSION_SECRET;
+      if (!pepper) return false;
+      const actual = await sign(password, pepper);
+      return constantTimeEqual(base64UrlToBytes(actual), base64UrlToBytes(hashText));
+    }
     if (String(encodedHash).startsWith("sha256$")) {
       const [, hashText] = String(encodedHash).split("$");
       const expected = base64UrlToBytes(hashText);
@@ -1008,6 +1027,24 @@ function requirePermanentDeleteAccess(session) {
 
 function normalizeSearch(value, maxLength) {
   return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizeFilterDate(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (!isValidDate(normalized)) throw new HttpError(400, "検索する日付を確認してください。");
+  return normalized;
+}
+
+function validateDateRange(dateFrom, dateTo) {
+  const from = dateFrom || dateTo;
+  const to = dateTo || dateFrom;
+  if (!from && !to) return { from: "", to: "" };
+  const fromTime = Date.parse(`${from}T00:00:00Z`);
+  const toTime = Date.parse(`${to}T00:00:00Z`);
+  if (fromTime > toTime) throw new HttpError(400, "開始日は終了日以前の日付を選択してください。");
+  if ((toTime - fromTime) / 86400000 > 29) throw new HttpError(400, "検索期間が長すぎます。期間を短くしてください。");
+  return { from, to };
 }
 
 function normalizeTag(value) {

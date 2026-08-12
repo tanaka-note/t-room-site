@@ -25,11 +25,16 @@
     hasMore: false,
     query: "",
     month: "",
+    dateFrom: "",
+    dateTo: "",
     tag: "",
+    tagQuery: "",
+    availableTags: [],
     trash: false,
     activeEntry: null,
     editorDirty: false,
     dateDraft: null,
+    dateWheelTarget: null,
     dateWheelTimers: {},
     searchTimer: null,
     requestId: 0,
@@ -68,6 +73,7 @@
     initialPasswordConfirmation: document.querySelector("#initial-password-confirmation"),
     initialPasswordMessage: document.querySelector("#initial-password-message"),
     initialPasswordSubmit: document.querySelector("#initial-password-submit"),
+    initialPasswordCancel: document.querySelector("#initial-password-cancel"),
     diaryKicker: document.querySelector("#diary-kicker"),
     diaryTitle: document.querySelector("#diary-title"),
     tagPageBack: document.querySelector("#tag-page-back"),
@@ -86,6 +92,8 @@
     searchInput: document.querySelector("#diary-search-input"),
     searchClear: document.querySelector("#diary-search-clear"),
     searchStatus: document.querySelector("#diary-search-status"),
+    dateFrom: document.querySelector("#diary-date-from"),
+    dateTo: document.querySelector("#diary-date-to"),
     clearFilters: document.querySelector("#clear-filters-button"),
     listKicker: document.querySelector("#list-kicker"),
     listTitle: document.querySelector("#diary-recent-title"),
@@ -93,6 +101,7 @@
     loadMore: document.querySelector("#load-more-button"),
     archiveList: document.querySelector("#archive-list"),
     tagList: document.querySelector("#tag-list"),
+    tagSearchInput: document.querySelector("#tag-search-input"),
     entryDialog: document.querySelector("#entry-dialog"),
     detailDate: document.querySelector("#detail-date"),
     detailTitle: document.querySelector("#detail-title"),
@@ -181,7 +190,11 @@
     elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
     elements.passwordToggle.addEventListener("click", togglePassword);
     elements.initialPasswordForm.addEventListener("submit", handleInitialPasswordChange);
-    elements.initialPasswordDialog.addEventListener("cancel", (event) => event.preventDefault());
+    elements.initialPasswordCancel.addEventListener("click", leaveInitialPasswordSetup);
+    elements.initialPasswordDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      leaveInitialPasswordSetup();
+    });
     document.querySelectorAll("[data-password-toggle]").forEach((button) => {
       button.addEventListener("click", () => togglePasswordField(button.dataset.passwordToggle, button));
     });
@@ -205,6 +218,14 @@
       state.query = elements.searchInput.value.trim();
       updateFilterControls();
       state.searchTimer = window.setTimeout(() => loadEntries(true), 300);
+    });
+    for (const input of [elements.dateFrom, elements.dateTo]) {
+      bindDateInput(input);
+      input.addEventListener("change", handleDateSearchChange);
+    }
+    elements.tagSearchInput.addEventListener("input", () => {
+      state.tagQuery = elements.tagSearchInput.value.normalize("NFKC").trim().toLocaleLowerCase("ja-JP");
+      renderTags(state.availableTags);
     });
     elements.entryList.addEventListener("click", handleEntryListClick);
     elements.archiveList.addEventListener("click", handleArchiveClick);
@@ -239,8 +260,7 @@
     }
     elements.editorPhotoList.addEventListener("click", handleEditorPhotoAction);
     elements.todayButton.addEventListener("click", setEntryDateToToday);
-    elements.entryDate.addEventListener("pointerdown", handleDatePointerDown);
-    elements.entryDate.addEventListener("keydown", handleDateKeydown);
+    bindDateInput(elements.entryDate);
     elements.dateWheelCancel.addEventListener("click", closeDateWheel);
     elements.dateWheelDone.addEventListener("click", applyDateWheel);
     elements.dateWheelDialog.addEventListener("cancel", (event) => {
@@ -468,6 +488,18 @@
     }
   }
 
+  async function leaveInitialPasswordSetup() {
+    elements.initialPasswordCancel.disabled = true;
+    try {
+      await api("/logout", { method: "POST" });
+    } catch {
+      // ログアウト応答に失敗しても、初回設定画面から安全に戻します。
+    }
+    resetState();
+    showLogin();
+    elements.initialPasswordCancel.disabled = false;
+  }
+
   async function enterDiary(session) {
     state.role = session.role;
     state.accountName = session.accountName;
@@ -512,7 +544,13 @@
       state.trash = false;
       state.query = "";
       state.month = "";
+      state.dateFrom = "";
+      state.dateTo = "";
       state.tag = "";
+      state.tagQuery = "";
+      elements.dateFrom.value = "";
+      elements.dateTo.value = "";
+      elements.tagSearchInput.value = "";
       updateFilterControls();
       await Promise.all([loadMeta(), loadEntries(true)]);
     } catch (error) {
@@ -548,6 +586,8 @@
     });
     if (state.query) parameters.set("q", state.query);
     if (state.month) parameters.set("month", state.month);
+    if (state.dateFrom) parameters.set("dateFrom", state.dateFrom);
+    if (state.dateTo) parameters.set("dateTo", state.dateTo);
     if (state.tag) parameters.set("tag", state.tag);
     if (state.trash) parameters.set("trash", "1");
 
@@ -589,7 +629,7 @@
     if (!state.entries.length) {
       const message = state.trash
         ? "ゴミ箱は空です。"
-        : state.query || state.month || state.tag
+        : state.query || state.month || state.dateFrom || state.dateTo || state.tag
           ? "条件に合う日記はありません。"
           : "まだ日記はありません。";
       elements.entryList.replaceChildren(createEmpty(message));
@@ -651,11 +691,15 @@
   }
 
   function renderTags(tags) {
-    if (!tags.length) {
-      elements.tagList.replaceChildren(createEmpty("#はまだありません。"));
+    state.availableTags = [...tags];
+    const filteredTags = state.tagQuery
+      ? tags.filter((item) => String(item.value || "").normalize("NFKC").toLocaleLowerCase("ja-JP").includes(state.tagQuery))
+      : tags;
+    if (!filteredTags.length) {
+      elements.tagList.replaceChildren(createEmpty(state.tagQuery ? "一致するタグはありません。" : "#はまだありません。"));
       return;
     }
-    const sortedTags = [...tags].sort((left, right) => (
+    const sortedTags = [...filteredTags].sort((left, right) => (
       Number(right.count || 0) - Number(left.count || 0)
       || tagCollator.compare(tagSortKey(left.value), tagSortKey(right.value))
       || tagCollator.compare(String(left.value || ""), String(right.value || ""))
@@ -677,6 +721,10 @@
     const button = event.target.closest("[data-month]");
     if (!button) return;
     state.month = state.month === button.dataset.month ? "" : button.dataset.month;
+    state.dateFrom = "";
+    state.dateTo = "";
+    elements.dateFrom.value = "";
+    elements.dateTo.value = "";
     state.trash = false;
     updateFilterControls();
     loadEntries(true);
@@ -1236,16 +1284,22 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
 
+  function bindDateInput(input) {
+    input.addEventListener("pointerdown", handleDatePointerDown);
+    input.addEventListener("keydown", handleDateKeydown);
+  }
+
   function handleDatePointerDown(event) {
+    const input = event.currentTarget;
     if (useMobileDateWheel()) {
       event.preventDefault();
-      openDateWheel();
+      openDateWheel(input);
       return;
     }
-    if (typeof elements.entryDate.showPicker === "function") {
+    if (typeof input.showPicker === "function") {
       try {
         event.preventDefault();
-        elements.entryDate.showPicker();
+        input.showPicker();
       } catch {
         // If the browser blocks showPicker, keep its standard date interaction available.
       }
@@ -1255,7 +1309,7 @@
   function handleDateKeydown(event) {
     if (!useMobileDateWheel() || !["Enter", " "].includes(event.key)) return;
     event.preventDefault();
-    openDateWheel();
+    openDateWheel(event.currentTarget);
   }
 
   function useMobileDateWheel() {
@@ -1274,23 +1328,27 @@
     }
   }
 
-  function openDateWheel() {
+  function openDateWheel(target = elements.entryDate) {
     if (elements.dateWheelDialog.open) return;
-    setDateDraft(elements.entryDate.value || japanDateString());
+    state.dateWheelTarget = target;
+    setDateDraft(target.value || japanDateString());
     renderDateWheel();
     elements.dateWheelDialog.showModal();
   }
 
   function closeDateWheel() {
     if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();
+    state.dateWheelTarget = null;
   }
 
   function applyDateWheel() {
     if (!state.dateDraft) return closeDateWheel();
     const nextValue = datePartsToString(state.dateDraft);
-    if (elements.entryDate.value !== nextValue) {
-      elements.entryDate.value = nextValue;
-      elements.entryDate.dispatchEvent(new Event("input", { bubbles: true }));
+    const target = state.dateWheelTarget || elements.entryDate;
+    if (target.value !== nextValue) {
+      target.value = nextValue;
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+      target.dispatchEvent(new Event("change", { bubbles: true }));
     }
     closeDateWheel();
   }
@@ -1475,8 +1533,12 @@
     state.trash = !state.trash;
     state.query = "";
     state.month = "";
+    state.dateFrom = "";
+    state.dateTo = "";
     state.tag = "";
     elements.searchInput.value = "";
+    elements.dateFrom.value = "";
+    elements.dateTo.value = "";
     updateFilterControls();
     loadEntries(true);
   }
@@ -1484,15 +1546,19 @@
   function clearFilters() {
     state.query = "";
     state.month = "";
+    state.dateFrom = "";
+    state.dateTo = "";
     state.tag = "";
     state.trash = false;
     elements.searchInput.value = "";
+    elements.dateFrom.value = "";
+    elements.dateTo.value = "";
     updateFilterControls();
     loadEntries(true);
   }
 
   function updateFilterControls() {
-    const active = Boolean(state.query || state.month || state.tag || state.trash);
+    const active = Boolean(state.query || state.month || state.dateFrom || state.dateTo || state.tag || state.trash);
     elements.searchClear.hidden = !state.query;
     elements.clearFilters.hidden = !active;
     elements.trashButton.textContent = state.trash ? "日記一覧" : "ゴミ箱";
@@ -1512,7 +1578,7 @@
     } else if (state.tag) {
       elements.listKicker.textContent = "Hashtag";
       elements.listTitle.textContent = `#${state.tag}の記事一覧`;
-    } else if (state.query || state.month) {
+    } else if (state.query || state.month || state.dateFrom || state.dateTo) {
       elements.listKicker.textContent = "Results";
       elements.listTitle.textContent = "検索結果";
     } else {
@@ -1525,6 +1591,11 @@
     const conditions = [];
     if (state.query) conditions.push(`「${state.query}」`);
     if (state.month) conditions.push(formatMonth(state.month));
+    if (state.dateFrom || state.dateTo) {
+      const from = state.dateFrom || state.dateTo;
+      const to = state.dateTo || state.dateFrom;
+      conditions.push(from === to ? formatDate(from) : `${formatDate(from)}から${formatDate(to)}`);
+    }
     if (state.tag) conditions.push(`#${state.tag}`);
     if (state.trash) {
       elements.searchStatus.textContent = `${state.entries.length}件を表示しています。`;
@@ -1533,6 +1604,29 @@
     } else {
       elements.searchStatus.textContent = `${state.entries.length}件の日記を表示しています。`;
     }
+  }
+
+  function handleDateSearchChange() {
+    const from = elements.dateFrom.value;
+    const to = elements.dateTo.value;
+    if (from && to) {
+      const fromTime = Date.parse(`${from}T00:00:00Z`);
+      const toTime = Date.parse(`${to}T00:00:00Z`);
+      if (fromTime > toTime) {
+        elements.searchStatus.textContent = "開始日は終了日以前の日付を選択してください。";
+        return;
+      }
+      if ((toTime - fromTime) / 86400000 > 29) {
+        elements.searchStatus.textContent = "検索期間が長すぎます。期間を短くしてください。";
+        return;
+      }
+    }
+    state.dateFrom = from;
+    state.dateTo = to;
+    state.month = "";
+    state.trash = false;
+    updateFilterControls();
+    loadEntries(true);
   }
 
   function closeDialog(id) {
@@ -1692,7 +1786,11 @@
     state.hasMore = false;
     state.query = "";
     state.month = "";
+    state.dateFrom = "";
+    state.dateTo = "";
     state.tag = "";
+    state.tagQuery = "";
+    state.availableTags = [];
     state.trash = false;
     state.activeEntry = null;
     state.deleteMode = null;
@@ -1707,9 +1805,14 @@
     state.viewerIndex = -1;
     state.editorDirty = false;
     state.dateDraft = null;
+    state.dateWheelTarget = null;
     state.entryAfterClose = null;
     state.entryHistoryToken = null;
     state.entryClosePending = false;
+    elements.searchInput.value = "";
+    elements.dateFrom.value = "";
+    elements.dateTo.value = "";
+    elements.tagSearchInput.value = "";
     if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();
     state.requestId += 1;
     if (elements.entryDialog.open) elements.entryDialog.close();

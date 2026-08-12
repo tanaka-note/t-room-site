@@ -28,6 +28,7 @@ const server = spawn(process.execPath, [wranglerPath, "dev", "--local", "--port"
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
   "--var", `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
   "--var", `DIARY_CHIHARU_TEMP_PASSWORD_HASH:${testHash(temporaryPassword)}`,
+  "--var", "DIARY_PASSWORD_PEPPER:diary-household-test-password-pepper",
   "--var", "SESSION_SECRET:diary-household-test-session-secret"
 ], { cwd: projectDirectory, stdio: ["ignore", "pipe", "pipe"] });
 let output = "";
@@ -76,7 +77,10 @@ try {
   });
   assert.equal(changed.response.status, 200, JSON.stringify(changed.result));
   assert.equal(changed.result.mustChangePassword, false);
-  const chiharuCookie = changed.cookie;
+  await request("/logout", { method: "POST", cookie: changed.cookie });
+  const chiharuAfterReset = await login("flw2-0203freedom@ezweb.ne.jp", "ちはるの日記");
+  assert.equal(chiharuAfterReset.session.mustChangePassword, false);
+  const chiharuCookie = chiharuAfterReset.cookie;
 
   const title = `household-test-${randomUUID()}`;
   const created = await request("/entries", {
@@ -85,6 +89,14 @@ try {
   });
   assert.equal(created.response.status, 200, JSON.stringify(created.result));
   const id = created.result.entry.id;
+
+  const oneDay = await request("/entries?dateFrom=2026-08-12", { cookie: chiharuCookie });
+  assert.equal(oneDay.response.status, 200);
+  assert.ok(oneDay.result.entries.some((entry) => entry.id === id));
+  const thirtyDays = await request("/entries?dateFrom=2026-08-01&dateTo=2026-08-30", { cookie: chiharuCookie });
+  assert.equal(thirtyDays.response.status, 200);
+  const tooLong = await request("/entries?dateFrom=2026-08-01&dateTo=2026-08-31", { cookie: chiharuCookie });
+  assert.equal(tooLong.response.status, 400);
 
   for (const otherCookie of [main.cookie, wife.cookie]) {
     const direct = await request(`/entries/${id}`, { cookie: otherCookie });
