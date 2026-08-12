@@ -19,7 +19,7 @@ assert.match(client, /toolbar\.contains\(document\.activeElement\) \|\| !\$\("#f
 assert.match(client, /floatingToolbarState\.forceVisibleUntil = performance\.now\(\) \+ 700/);
 assert.match(client, /function floatingToolbarTrigger\(\)[\s\S]*?toolbar\.offsetTop \+ toolbar\.offsetHeight \+ 12/);
 assert.match(client, /const target = Math\.max\(floatingToolbarTrigger\(\) \+ 1, resultsTarget\)/);
-assert.match(client, /scheduleMissingVideoThumbnails\(\);\s*queueFloatingToolbarUpdate\(\);/);
+assert.match(client, /if \(!state\.progressiveItemsLoading\) \{[\s\S]*?scheduleMissingVideoThumbnails\(\);[\s\S]*?\}\s*queueFloatingToolbarUpdate\(\);/);
 assert.match(client, /if \(!\$\("#selection-bar"\)\.hidden \|\| state\.uploading \|\| state\.downloadActive\) return false/);
 assert.match(client, /function renderFloatingLocation\(items\)/);
 assert.match(client, /pathNames\.join\(" \/ "\)/);

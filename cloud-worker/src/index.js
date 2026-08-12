@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260812-5";
+const APP_BUILD_ID = "20260812-6";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -573,9 +573,12 @@ async function listItems(url, env, session) {
   const folderId = optionalId(url.searchParams.get("folderId"));
   const uploadIndex = url.searchParams.get("uploadIndex") === "1";
   const foldersOnly = url.searchParams.get("foldersOnly") === "1";
-  const uploadOffset = uploadIndex
-    ? Math.min(100000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0))
-    : 0;
+  const filesOnly = url.searchParams.get("filesOnly") === "1";
+  const fileOffset = Math.min(100000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
+  const requestedPageSize = Number.parseInt(url.searchParams.get("pageSize") || "500", 10) || 500;
+  const filePageSize = uploadIndex ? 500 : Math.min(500, Math.max(1, requestedPageSize));
+  const folderOffset = uploadIndex ? 0 : fileOffset;
+  const folderPageSize = uploadIndex ? 500 : filePageSize;
   const query = normalizeText(url.searchParams.get("q"), 100).toLowerCase();
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
   const requestedSort = url.searchParams.get("sort") || "name-desc";
@@ -591,7 +594,7 @@ async function listItems(url, env, session) {
     FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first() : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
   const folderAccessGranted = folderId ? await requireFolderAccess(env, folderId, session) : false;
-  if (folderId && session.role === "subadmin" && !foldersOnly && !uploadIndex) {
+  if (folderId && session.role === "subadmin" && !foldersOnly && !uploadIndex && !filesOnly) {
     const total = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
       UNION ALL
@@ -610,7 +613,7 @@ async function listItems(url, env, session) {
   const folderClauses = [folderId ? "f.parent_id = ?" : "f.parent_id IS NULL", "f.deleted_at IS NULL"];
   const folderValues = [session.sessionId, Math.floor(Date.now() / 1000), ...(folderId ? [folderId] : [])];
   if (query) { folderClauses.push("LOWER(f.name) LIKE ?"); folderValues.push(`%${query}%`); }
-  const folders = await env.DB.prepare(`
+  const folders = filesOnly ? { results: [] } : await env.DB.prepare(`
     SELECT f.id, f.parent_id AS parentId, f.name, f.created_at AS createdAt, f.updated_at AS updatedAt,
       f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
       f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
@@ -623,7 +626,8 @@ async function listItems(url, env, session) {
     FROM cloud_folders f
     WHERE ${folderClauses.join(" AND ")}
     ORDER BY f.name COLLATE NOCASE ASC
-  `).bind(...folderValues).all();
+    LIMIT ? OFFSET ?
+  `).bind(...folderValues, folderPageSize + 1, folderOffset).all();
 
   const orderBySort = {
     "updated-desc": "created_at DESC", "updated-asc": "created_at ASC",
@@ -638,7 +642,6 @@ async function listItems(url, env, session) {
     const values = [folderId];
     if (query) { clauses.push("(crypto_version = 1 OR LOWER(original_name) LIKE ?)"); values.push(`%${query}%`); }
     if (kind) { clauses.push("(crypto_version = 1 OR media_kind = ?)"); values.push(kind); }
-    const uploadPageSize = 500;
     files = await env.DB.prepare(`
       SELECT id, folder_id AS folderId, original_name AS name, mime_type AS mimeType,
         media_kind AS mediaKind, size_bytes AS sizeBytes,
@@ -650,25 +653,28 @@ async function listItems(url, env, session) {
         EXISTS(SELECT 1 FROM cloud_deletion_requests dr WHERE dr.file_id = cloud_files.id AND dr.status = 'pending') AS deletionPending,
         created_at AS createdAt, updated_at AS updatedAt
       FROM cloud_files WHERE ${clauses.join(" AND ")} ORDER BY ${order}${uploadIndex ? ", id ASC" : ""}
-      LIMIT ${uploadIndex ? uploadPageSize + 1 : uploadPageSize} OFFSET ${uploadOffset}
-    `).bind(...values).all();
+      LIMIT ? OFFSET ?
+    `).bind(...values, filePageSize + 1, fileOffset).all();
   }
   const fileResults = files.results || [];
-  const visibleFiles = uploadIndex ? fileResults.slice(0, 500) : fileResults;
-  const nextFileOffset = uploadIndex && fileResults.length > 500 ? uploadOffset + 500 : null;
-  const visibleFolders = (folders.results || []).map((item) => ({
+  const visibleFiles = fileResults.slice(0, filePageSize);
+  const nextFileOffset = fileResults.length > filePageSize ? fileOffset + filePageSize : null;
+  const folderResults = folders.results || [];
+  const visibleFolders = folderResults.slice(0, folderPageSize).map((item) => ({
     ...item,
     isUnlocked: session.role === "admin" ? 1 : item.isUnlocked,
     adminAccess: session.role === "admin"
   }));
+  const nextFolderOffset = !uploadIndex && folderResults.length > folderPageSize ? folderOffset + folderPageSize : null;
   const canTrashContents = Boolean(folderId && (session.canDelete
     || (session.canTrashUnlockedFiles && folderAccessGranted)));
   return json({
     folder,
     canTrashContents,
-    breadcrumbs: await breadcrumbs(env, folderId, session),
+    breadcrumbs: filesOnly || foldersOnly ? [] : await breadcrumbs(env, folderId, session),
     folders: visibleFolders,
     files: visibleFiles,
+    nextFolderOffset,
     nextFileOffset
   });
 }
@@ -1725,7 +1731,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260811-11.css"],
-    ["/cloud.js", "/cloud-runtime-20260812-2.js"],
+    ["/cloud.js", "/cloud-runtime-20260812-3.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
