@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260811-41";
+const APP_BUILD_ID = "20260812-1";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -52,7 +52,10 @@ async function handleApi(request, env, url, path) {
   }
 
   if (path === "/api/auth-mode" && request.method === "GET") {
-    return json({ mode: env.ADMIN_AUTH_PROOF_HASH && env.SUBADMIN_AUTH_PROOF_HASH ? "proof" : "legacy" });
+    return json({
+      mode: env.ADMIN_AUTH_PROOF_HASH && env.SUBADMIN_AUTH_PROOF_HASH ? "proof" : "legacy",
+      credentialSalt: await accountCredentialSalt(env)
+    });
   }
 
   if (path === "/api/login" && request.method === "POST") {
@@ -154,15 +157,18 @@ async function handleApi(request, env, url, path) {
 
 async function login(request, env, url) {
   const proofMode = Boolean(env.ADMIN_AUTH_PROOF_HASH && env.SUBADMIN_AUTH_PROOF_HASH);
-  const configuredLoginId = String(env.LOGIN_ID || "").trim().toLowerCase();
-  if ((!proofMode && (!env.ADMIN_PASSWORD_HASH || !env.SUBADMIN_PASSWORD_HASH)) || !env.SESSION_SECRET || !configuredLoginId) {
+  const configuredAccounts = ACCOUNTS.map((account) => ({ ...account, loginId: configuredLoginId(env, account.role) }));
+  if ((!proofMode && (!env.ADMIN_PASSWORD_HASH || !env.SUBADMIN_PASSWORD_HASH))
+    || !env.SESSION_SECRET
+    || configuredAccounts.some((account) => !account.loginId)) {
     throw new HttpError(503, "Cloud Storageの認証設定が完了していません。");
   }
   const body = await readJson(request, 4096);
   const loginId = String(body.loginId || "").trim().toLowerCase();
   const password = String(body.password || "");
   const authProof = String(body.authProof || "");
-  if (loginId !== configuredLoginId || (proofMode ? !authProof || authProof.length > 256 : !password || password.length > 256)) {
+  const matchingAccounts = configuredAccounts.filter((account) => account.loginId === loginId);
+  if (!matchingAccounts.length || (proofMode ? !authProof || authProof.length > 256 : !password || password.length > 256)) {
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
 
@@ -172,7 +178,7 @@ async function login(request, env, url) {
   if (Number(attempt?.locked_until || 0) > now) throw new HttpError(429, "ログインが一時停止されています。しばらくしてからお試しください。");
 
   let account = null;
-  for (const candidate of ACCOUNTS) {
+  for (const candidate of matchingAccounts) {
     const credential = proofMode ? authProof : password;
     const hash = env[proofMode ? candidate.proofSecretKey : candidate.secretKey];
     if (await verifyPassword(credential, hash)) {
@@ -189,6 +195,8 @@ async function login(request, env, url) {
   const session = {
     role: account.role,
     label: account.label,
+    loginId,
+    credentialSalt: await accountCredentialSalt(env),
     canUpload: account.canUpload,
     canDelete: account.canDelete,
     canTrashUnlockedFiles: account.canTrashUnlockedFiles,
@@ -1978,7 +1986,9 @@ async function readSession(request, env) {
       canViewHistory: account.canViewHistory,
       canRequestDelete: account.canRequestDelete,
       canReviewDeletion: account.canReviewDeletion,
-      sessionId: payload.sessionId
+      sessionId: payload.sessionId,
+      loginId: configuredLoginId(env, account.role),
+      credentialSalt: await accountCredentialSalt(env)
     } : null;
   } catch { return null; }
 }
@@ -2120,7 +2130,18 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session, env) { return { role: session.role, accountName: session.label, loginId: String(env.LOGIN_ID || "").trim().toLowerCase(), sessionCacheId: session.sessionId, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session) { return { role: session.role, accountName: session.label, loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function configuredLoginId(env, role) {
+  const roleSpecific = role === "admin" ? env.ADMIN_LOGIN_ID : env.SUBADMIN_LOGIN_ID;
+  return String(roleSpecific || env.LOGIN_ID || "").trim().toLowerCase();
+}
+async function accountCredentialSalt(env) {
+  const credentialIdentity = String(env.ACCOUNT_KDF_ID || env.LOGIN_ID || "").trim().toLowerCase();
+  if (!credentialIdentity || credentialIdentity.length > 254) throw new HttpError(503, "Cloud Storageの暗号化認証設定が完了していません。");
+  const context = "T-ROOM Cloud Storage account key v1|tanaka-note.com|";
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(`${context}${credentialIdentity}`)));
+  return bytesToBase64Url(digest.slice(0, 16));
+}
 function sessionMaxAge(env, role) {
   const configured = role === "subadmin" ? env.SUBADMIN_SESSION_TTL_SECONDS : env.SESSION_TTL_SECONDS;
   return clampNumber(configured, 3600, 2592000, 2592000);

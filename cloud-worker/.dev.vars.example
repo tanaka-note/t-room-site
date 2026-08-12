@@ -1,4 +1,6 @@
-LOGIN_ID="your-private-login-id"
+ADMIN_LOGIN_ID="your-admin-login-id"
+SUBADMIN_LOGIN_ID="your-subadmin-login-id"
+ACCOUNT_KDF_ID="the-original-login-id-used-for-account-encryption"
 ADMIN_PASSWORD_HASH="pbkdf2-sha256$ITERATIONS$SALT$HASH"
 SUBADMIN_PASSWORD_HASH="pbkdf2-sha256$ITERATIONS$SALT$HASH"
 SESSION_SECRET="replace-with-a-long-random-secret"

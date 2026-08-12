@@ -14,7 +14,7 @@ async function cookie(role) {
     label: role === "admin" ? "管理者" : "副管理者",
     sessionId: webcrypto.randomUUID(),
     exp: Math.floor(Date.now() / 1000) + 3600,
-    version: "4"
+    version: "5"
   };
   const encoded = b64(encoder.encode(JSON.stringify(payload)));
   const key = await webcrypto.subtle.importKey("raw", encoder.encode(vars.SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

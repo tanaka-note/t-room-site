@@ -9,7 +9,7 @@ const [client, worker, config] = await Promise.all([
 
 assert.match(config, /"SESSION_TTL_SECONDS"\s*:\s*"2592000"/, "管理者のログイン期限が30日ではありません。");
 assert.match(config, /"SUBADMIN_SESSION_TTL_SECONDS"\s*:\s*"2592000"/, "副管理者のログイン期限が30日ではありません。");
-assert.match(config, /"SESSION_VERSION"\s*:\s*"4"/, "旧400日セッションを無効化する世代更新がありません。");
+assert.match(config, /"SESSION_VERSION"\s*:\s*"5"/, "旧共通IDセッションを無効化する世代更新がありません。");
 assert.match(worker, /Max-Age=\$\{maxAge\}/, "永続セッションCookieのMax-Ageがありません。");
 assert.match(worker, /refreshAuthenticatedSession\(request, response, env, url, path\)/, "認証済みAPI利用時の期限更新がありません。");
 assert.match(worker, /headers\.set\("Set-Cookie", sessionCookie\(token, maxAge/, "スライディング更新Cookieがありません。");

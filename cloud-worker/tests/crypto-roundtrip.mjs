@@ -5,6 +5,15 @@ await import("../public/crypto-vault.js");
 
 const credentials = await TRoomCrypto.deriveAccountCredentials("temporary-local-test-4827", "test@example.com");
 const repeatedCredentials = await TRoomCrypto.deriveAccountCredentials("temporary-local-test-4827", "test@example.com");
+const legacyCredentialSalt = TRoomCrypto.toBase64Url(new Uint8Array(await crypto.subtle.digest(
+  "SHA-256",
+  new TextEncoder().encode("T-ROOM Cloud Storage account key v1|tanaka-note.com|test@example.com")
+)).slice(0, 16));
+const renamedLoginCredentials = await TRoomCrypto.deriveAccountCredentials(
+  "temporary-local-test-4827",
+  "renamed@example.com",
+  legacyCredentialSalt
+);
 const accountKey = credentials.accountKey;
 const vault = await TRoomCrypto.createVault(accountKey);
 const publicKey = await crypto.subtle.importKey(
@@ -88,6 +97,9 @@ if (!vault.recoveryCode.startsWith("TRC1-") || subadmin.authProof.length < 40) {
 }
 if (credentials.authProof !== repeatedCredentials.authProof || credentials.authProof.length < 40) {
   throw new Error("アカウント認証値の導出テストに失敗しました。");
+}
+if (credentials.authProof !== renamedLoginCredentials.authProof) {
+  throw new Error("ログインID変更時に既存の認証値を維持できません。");
 }
 if (fileMetadata.name !== fileSource.name || renamedMetadata.name !== "家族写真・変更後.jpg" || new TextDecoder().decode(decryptedChunk) !== "encrypted file body" || decryptedThumbnail.join(",") !== "1,2,3,4") {
   throw new Error("ファイル暗号化の往復テストに失敗しました。");

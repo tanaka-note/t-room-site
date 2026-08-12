@@ -24,15 +24,17 @@
   const MAX_FILE_CHUNK_SIZE = 64 * 1024 * 1024;
   const MAX_MULTIPART_PARTS = 10000;
 
-  async function deriveAccountCredentials(password, loginId) {
+  async function deriveAccountCredentials(password, loginId, credentialSalt = "") {
     ensureCryptoSupport();
     if (typeof password !== "string" || password.length < 8 || password.length > 256) throw new Error("アカウントパスワードを確認してください。");
     const normalizedLoginId = String(loginId || "").trim().toLowerCase();
     if (!normalizedLoginId || normalizedLoginId.length > 254) throw new Error("ログインIDを確認してください。");
-    const saltDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", textEncoder.encode(`${ACCOUNT_SALT_CONTEXT}${normalizedLoginId}`)));
+    const explicitSalt = credentialSalt ? fromBase64Url(credentialSalt) : null;
+    if (explicitSalt && explicitSalt.length !== 16) throw new Error("認証設定を確認してください。");
+    const saltDigest = explicitSalt || new Uint8Array(await crypto.subtle.digest("SHA-256", textEncoder.encode(`${ACCOUNT_SALT_CONTEXT}${normalizedLoginId}`)));
     const master = await hashwasm.argon2id({
       password,
-      salt: saltDigest.slice(0, 16),
+      salt: explicitSalt || saltDigest.slice(0, 16),
       ...KDF_OPTIONS,
       outputType: "binary"
     });
@@ -47,8 +49,8 @@
     }
   }
 
-  async function deriveAccountKey(password, loginId) {
-    return (await deriveAccountCredentials(password, loginId)).accountKey;
+  async function deriveAccountKey(password, loginId, credentialSalt = "") {
+    return (await deriveAccountCredentials(password, loginId, credentialSalt)).accountKey;
   }
 
   async function createVault(accountKey) {

@@ -31,7 +31,7 @@
   "vars": {
     "SESSION_TTL_SECONDS": "2592000",
     "SUBADMIN_SESSION_TTL_SECONDS": "2592000",
-    "SESSION_VERSION": "4"
+    "SESSION_VERSION": "5"
   },
   "triggers": {
     "crons": ["17 18 * * *"]

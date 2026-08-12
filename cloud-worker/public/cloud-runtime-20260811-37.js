@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "20260811-41";
+const APP_BUILD_ID = "20260812-1";
 const LONG_PRESS_DRAG_THRESHOLD_PX = 28;
 const PWA_WORKER_URL = "/cloud/media-worker.js";
 const APP_UPDATE_EXPECTED_BUILD_KEY = "tcloud-app-update-expected-build";
@@ -14,6 +14,7 @@ const FOLDER_CACHE_PREFIX = "folder-session:";
 const state = {
   session: null,
   loginId: "",
+  credentialSalt: "",
   folderId: null,
   kind: "",
   view: "all",
@@ -119,7 +120,7 @@ async function initialize() {
       const rememberedPassword = $("#login-password").value;
       let accountKey = null;
       if (session.role === "admin" && rememberedPassword && rememberedId === String(session.loginId || "").trim().toLowerCase()) {
-        accountKey = (await TRoomCrypto.deriveAccountCredentials(rememberedPassword, rememberedId)).accountKey;
+        accountKey = (await TRoomCrypto.deriveAccountCredentials(rememberedPassword, rememberedId, session.credentialSalt)).accountKey;
       }
       await enterApp(session, rememberedPassword, accountKey);
       $("#login-password").value = "";
@@ -831,7 +832,7 @@ async function login(event) {
     const loginId = $("#login-id").value.trim().toLowerCase();
     const password = $("#login-password").value;
     const mode = await api("/auth-mode");
-    const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId);
+    const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId, mode.credentialSalt);
     const loginBody = mode.mode === "proof"
       ? { loginId, authProof: credentials.authProof }
       : { loginId, password };
@@ -852,6 +853,7 @@ async function login(event) {
 async function enterApp(session, password = "", accountKey = null) {
   state.session = session;
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
+  state.credentialSalt = String(session.credentialSalt || "");
   applyPlaybackCacheLimit();
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
@@ -1001,7 +1003,7 @@ async function prepareCryptoSession(password = "", accountKey = null) {
     syncAvailableActions();
     if (state.session.role !== "admin") {
       if (accountKey) state.crypto.accountKey = accountKey;
-      else if (password) state.crypto.accountKey = await TRoomCrypto.deriveAccountKey(password, state.loginId);
+      else if (password) state.crypto.accountKey = await TRoomCrypto.deriveAccountKey(password, state.loginId, state.credentialSalt);
       await loadCachedFolderKeys();
       setCryptoStatus("暗号化鍵：フォルダ単位", true);
       return;
@@ -1017,7 +1019,7 @@ async function prepareCryptoSession(password = "", accountKey = null) {
       openVaultDialog("unlock");
       return;
     }
-    const resolvedAccountKey = accountKey || await TRoomCrypto.deriveAccountKey(password, state.loginId);
+    const resolvedAccountKey = accountKey || await TRoomCrypto.deriveAccountKey(password, state.loginId, state.credentialSalt);
     const privateKey = await TRoomCrypto.unlockAdminPrivateKey(resolvedAccountKey, config);
     state.crypto.accountKey = resolvedAccountKey;
     state.crypto.adminPrivateKey = privateKey;
@@ -1056,7 +1058,7 @@ async function handleVaultForm(event) {
   $("#vault-error").textContent = "";
   submit.textContent = mode === "setup" ? "安全な鍵を生成中…" : "暗号化鍵を確認中…";
   try {
-    const accountKey = await TRoomCrypto.deriveAccountKey($("#vault-password").value, state.loginId);
+    const accountKey = await TRoomCrypto.deriveAccountKey($("#vault-password").value, state.loginId, state.credentialSalt);
     if (mode === "setup") {
       const vault = await TRoomCrypto.createVault(accountKey);
       await api("/crypto-setup", { method: "POST", body: JSON.stringify(vault.payload) });
