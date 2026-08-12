@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "asset-report-shell-v1";
+const CACHE_NAME = "asset-report-shell-v2";
 const APP_PATH = "/asset-report-k7m4q9x2/";
 const APP_SHELL = [
   APP_PATH,
@@ -8,9 +8,12 @@ const APP_SHELL = [
   `${APP_PATH}report.css?v=20260812-1`,
   `${APP_PATH}report.js?v=20260811-1`,
   `${APP_PATH}pwa.js?v=20260812-1`,
-  `${APP_PATH}manifest.webmanifest?v=20260812-1`,
-  "/assets/site-icon-192.png",
-  "/assets/site-icon-512.png"
+  `${APP_PATH}manifest.webmanifest?v=20260812-2`,
+  `${APP_PATH}icons/icon-192.png?v=20260812-2`,
+  `${APP_PATH}icons/icon-512.png?v=20260812-2`,
+  `${APP_PATH}icons/icon-maskable-512.png?v=20260812-2`,
+  `${APP_PATH}icons/apple-touch-icon.png?v=20260812-2`,
+  `${APP_PATH}icons/favicon-32.png?v=20260812-2`
 ];
 
 self.addEventListener("install", (event) => {
@@ -33,7 +36,7 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (!url.pathname.startsWith(APP_PATH) && !url.pathname.startsWith("/assets/site-icon-")) return;
+  if (!url.pathname.startsWith(APP_PATH)) return;
 
   event.respondWith((async () => {
     try {
