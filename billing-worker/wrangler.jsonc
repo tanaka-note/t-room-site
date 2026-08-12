@@ -23,8 +23,8 @@
     }
   ],
   "vars": {
-    "SESSION_TTL_SECONDS": "15552000",
-    "SESSION_VERSION": "2"
+    "SESSION_TTL_SECONDS": "2592000",
+    "SESSION_VERSION": "3"
   },
   "observability": {
     "enabled": false,

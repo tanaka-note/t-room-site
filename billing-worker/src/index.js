@@ -3,7 +3,7 @@ import { LOGIN_LOCK_MINUTES, MAX_FAILED_LOGIN_ATTEMPTS, isLoginLocked } from "./
 
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
-const MAX_SESSION_SECONDS = 15552000;
+const MAX_SESSION_SECONDS = 30 * 24 * 60 * 60;
 const PASSWORD_ITERATIONS = 100000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -21,7 +21,8 @@ export default {
         : url.pathname;
 
       if (path.startsWith("/api/")) {
-        return secureResponse(await handleApi(request, env, url, path));
+        const response = await handleApi(request, env, url, path);
+        return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return secureResponse(json({ error: "Method not allowed" }, 405));
@@ -110,10 +111,10 @@ async function handleApi(request, env, url, path) {
       attemptedLoginId: loginId
     });
 
-    const maxAge = clampNumber(env.SESSION_TTL_SECONDS, 3600, MAX_SESSION_SECONDS, MAX_SESSION_SECONDS);
+    const maxAge = sessionMaxAge(env);
     const token = await createSessionToken(account, maxAge, env);
     const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, url.protocol === "https:"));
+    headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name }, 200, headers);
   }
 
@@ -498,6 +499,31 @@ async function createSessionToken(account, maxAge, env) {
   return `${encoded}.${await sign(encoded, env.SESSION_SECRET)}`;
 }
 
+function sessionMaxAge(env) {
+  return clampNumber(env.SESSION_TTL_SECONDS, 3600, MAX_SESSION_SECONDS, MAX_SESSION_SECONDS);
+}
+
+async function refreshAuthenticatedSession(request, response, env, url, path) {
+  if (path === "/api/login" || path === "/api/logout" || response.status === 401) return response;
+  const session = await readSession(request, env);
+  if (!session) return response;
+
+  const account = await env.DB.prepare(`
+    SELECT id, role, session_version FROM billing_accounts WHERE id = ? AND is_active = 1
+  `).bind(session.accountId).first();
+  if (!account) return response;
+
+  const maxAge = sessionMaxAge(env);
+  const token = await createSessionToken(account, maxAge, env);
+  const headers = new Headers(response.headers);
+  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
 async function verifyPassword(password, saltBase64, expectedBase64, iterations = PASSWORD_ITERATIONS) {
   const keyMaterial = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits({
@@ -625,8 +651,8 @@ function sameOrigin(request, url) {
   return request.headers.get("Origin") === url.origin;
 }
 
-function sessionCookie(token, secure) {
-  return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+function sessionCookie(token, maxAge, secure) {
+  return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
 }
 
 function clearSessionCookie(secure) {
