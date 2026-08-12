@@ -15,15 +15,19 @@
   <link rel="manifest" href="/diary/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/diary/diary.css?v=11">
+  <link rel="stylesheet" href="/diary/diary.css?v=12">
 </head>
 <body>
   <main id="login-view" class="login-shell" aria-labelledby="login-title">
     <section class="login-card">
       <p class="eyebrow">Private diary</p>
       <h1 id="login-title">日記を開く</h1>
-      <p class="login-description">パスワードを入力してください。</p>
+      <p class="login-description">ログインIDとパスワードを入力してください。</p>
       <form id="login-form" class="login-form">
+        <label class="login-field" for="login-id">
+          <span>ログインID</span>
+          <input id="login-id" name="loginId" type="email" autocomplete="off" required maxlength="254">
+        </label>
         <label for="password">パスワード</label>
         <div class="password-field">
           <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
@@ -38,6 +42,7 @@
             </svg>
           </button>
         </div>
+        <label class="remember-login"><input id="remember-login" type="checkbox"><span>ログインID・パスワードを記録する</span></label>
         <button class="primary-button full-button" type="submit">開く</button>
         <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
       </form>
@@ -335,6 +340,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/diary/diary.js?v=15" defer></script>
+  <script src="/diary/diary.js?v=16" defer></script>
 </body>
 </html>

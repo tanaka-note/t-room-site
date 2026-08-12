@@ -1,6 +1,7 @@
 (() => {
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
+  const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const tagCollator = new Intl.Collator(["ja-JP", "en-US"], {
     usage: "sort",
     sensitivity: "base",
@@ -50,8 +51,10 @@
     loginView: document.querySelector("#login-view"),
     appView: document.querySelector("#app-view"),
     loginForm: document.querySelector("#login-form"),
+    loginId: document.querySelector("#login-id"),
     password: document.querySelector("#password"),
     passwordToggle: document.querySelector("#password-toggle"),
+    rememberLogin: document.querySelector("#remember-login"),
     loginMessage: document.querySelector("#login-message"),
     diaryKicker: document.querySelector("#diary-kicker"),
     diaryTitle: document.querySelector("#diary-title"),
@@ -142,6 +145,7 @@
   async function boot() {
     applyRouteState();
     bindEvents();
+    restoreRememberedLogin();
     registerPwa();
     updateInstallButtonVisibility();
     try {
@@ -158,6 +162,7 @@
 
   function bindEvents() {
     elements.loginForm.addEventListener("submit", handleLogin);
+    elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
     elements.passwordToggle.addEventListener("click", togglePassword);
     elements.logoutButton.addEventListener("click", handleLogout);
     elements.installButtons.forEach((button) => button.addEventListener("click", requestAppInstall));
@@ -329,10 +334,13 @@
     setBusy(submit, true, "確認中...");
     elements.loginMessage.textContent = "";
     try {
+      const loginId = elements.loginId.value.trim().toLowerCase();
+      const password = elements.password.value;
       const result = await api("/login", {
         method: "POST",
-        body: { password: elements.password.value }
+        body: { loginId, password }
       });
+      await updateRememberedLogin(loginId, password);
       elements.password.value = "";
       await enterDiary(result);
     } catch (error) {
@@ -340,6 +348,31 @@
       elements.password.select();
     } finally {
       setBusy(submit, false, "開く");
+    }
+  }
+
+  function restoreRememberedLogin() {
+    elements.rememberLogin.checked = localStorage.getItem(REMEMBER_LOGIN_KEY) === "1";
+    syncLoginAutocomplete();
+  }
+
+  function syncLoginAutocomplete() {
+    const remember = elements.rememberLogin.checked;
+    elements.loginId.setAttribute("autocomplete", remember ? "username" : "off");
+    elements.password.setAttribute("autocomplete", remember ? "current-password" : "off");
+  }
+
+  async function updateRememberedLogin(loginId, password) {
+    if (!elements.rememberLogin.checked) {
+      localStorage.removeItem(REMEMBER_LOGIN_KEY);
+      return;
+    }
+    localStorage.setItem(REMEMBER_LOGIN_KEY, "1");
+    if (!navigator.credentials?.store || !globalThis.PasswordCredential) return;
+    try {
+      await navigator.credentials.store(new PasswordCredential({ id: loginId, password, name: "日記" }));
+    } catch {
+      // 保存可否はブラウザのパスワード管理機能へ委ねる。
     }
   }
 
@@ -372,9 +405,7 @@
     state.lastSessionRefreshAt = Date.now();
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
-    elements.roleLabel.textContent = session.role === "admin"
-      ? `${session.accountName}（管理者）`
-      : "閲覧者";
+    elements.roleLabel.textContent = `${session.accountName}（管理者）`;
     elements.newEntryButton.hidden = session.role !== "admin";
     elements.trashButton.hidden = !state.canViewTrash;
     await Promise.all([loadMeta(), loadEntries(true)]);
@@ -384,7 +415,7 @@
     elements.loginView.hidden = false;
     elements.appView.hidden = true;
     elements.loginMessage.textContent = message;
-    window.setTimeout(() => elements.password.focus(), 0);
+    window.setTimeout(() => (elements.loginId.value ? elements.password : elements.loginId).focus(), 0);
   }
 
   async function loadEntries(reset) {

@@ -1,12 +1,13 @@
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
-const SESSION_TTL_SECONDS = 365 * 24 * 60 * 60;
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const LOGIN_LIMIT = 5;
+const LOGIN_WINDOW_SECONDS = 15 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DIARY_ACCOUNTS = [
-  { id: "main-admin", name: "田中宏知", role: "admin", canViewTrash: true, canPermanentlyDelete: true, secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
-  { id: "wife-admin", name: "田中暢美", role: "admin", canViewTrash: false, canPermanentlyDelete: false, secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" },
-  { id: "viewer", name: "閲覧者", role: "viewer", canViewTrash: false, canPermanentlyDelete: false, secretKey: "DIARY_VIEW_PASSWORD_HASH" }
+  { id: "main-admin", name: "田中宏知", role: "admin", canViewTrash: true, canPermanentlyDelete: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH" },
+  { id: "wife-admin", name: "田中暢美", role: "admin", canViewTrash: false, canPermanentlyDelete: false, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH" }
 ];
 
 export default {
@@ -61,6 +62,7 @@ async function handleApi(request, env, url, path) {
       authenticated: Boolean(session),
       role: session?.role || null,
       accountName: session?.accountName || null,
+      loginId: session?.loginId || null,
       canViewTrash: Boolean(session?.canViewTrash),
       canPermanentlyDelete: Boolean(session?.canPermanentlyDelete)
     });
@@ -68,21 +70,35 @@ async function handleApi(request, env, url, path) {
 
   if (path === "/api/login" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (!DIARY_ACCOUNTS.every((account) => env[account.secretKey]) || !env.SESSION_SECRET) {
+    if (!DIARY_ACCOUNTS.every((account) => env[account.secretKey] && env[account.loginIdSecretKey]) || !env.SESSION_SECRET) {
       return json({ error: "日記の認証設定が完了していません。" }, 503);
     }
 
     const body = await readJson(request, 4096);
+    const loginId = normalizeLoginId(body.loginId);
     const password = typeof body.password === "string" ? body.password : "";
-    if (!password || password.length > 256) {
-      return json({ error: "パスワードを確認してください。" }, 400);
+    if (!loginId || !password || password.length > 256) {
+      return json({ error: "IDまたはパスワードを確認してください。" }, 400);
     }
 
+    const requestedAccount = DIARY_ACCOUNTS.find((account) => accountLoginId(account, env) === loginId);
+    const now = Math.floor(Date.now() / 1000);
+    const fingerprint = requestedAccount ? await loginFingerprint(request, requestedAccount, env) : "";
+    if (fingerprint) {
+      const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
+      if (Number(attempt?.locked_until || 0) > now) {
+        return json({ error: "ログインが一時停止されています。15分ほど待ってからお試しください。" }, 429);
+      }
+    }
     const matches = await Promise.all(DIARY_ACCOUNTS.map((account) => (
       verifyPassword(password, env[account.secretKey])
     )));
-    const account = DIARY_ACCOUNTS[matches.findIndex(Boolean)];
-    if (!account) return json({ error: "パスワードが違います。" }, 401);
+    const account = requestedAccount && matches[DIARY_ACCOUNTS.indexOf(requestedAccount)] ? requestedAccount : null;
+    if (!account) {
+      if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
+      return json({ error: "IDまたはパスワードが違います。" }, 401);
+    }
+    await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
 
     const maxAge = getSessionMaxAge(env);
     const token = await createSessionToken(account, maxAge, env);
@@ -92,6 +108,7 @@ async function handleApi(request, env, url, path) {
       authenticated: true,
       role: account.role,
       accountName: account.name,
+      loginId: accountLoginId(account, env),
       canViewTrash: account.canViewTrash,
       canPermanentlyDelete: account.canPermanentlyDelete
     }, 200, headers);
@@ -685,6 +702,7 @@ async function readSession(request, env) {
     return {
       ...payload,
       accountName: account.name,
+      loginId: accountLoginId(account, env),
       canViewTrash: account.canViewTrash,
       canPermanentlyDelete: account.canPermanentlyDelete
     };
@@ -724,6 +742,34 @@ async function createSessionToken(account, maxAge, env) {
   };
   const encodedPayload = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encodedPayload}.${await sign(encodedPayload, env.SESSION_SECRET)}`;
+}
+
+function normalizeLoginId(value) {
+  const loginId = String(value || "").trim().toLowerCase();
+  return loginId && loginId.length <= 254 ? loginId : "";
+}
+
+function accountLoginId(account, env) {
+  return normalizeLoginId(env[account.loginIdSecretKey]);
+}
+
+async function loginFingerprint(request, account, env) {
+  const ip = request.headers.get("CF-Connecting-IP") || "local";
+  const secret = env.LOGIN_FINGERPRINT_SECRET || env.SESSION_SECRET;
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(`${ip}:${account.id}:${secret}`));
+  return bytesToBase64Url(new Uint8Array(digest));
+}
+
+async function recordFailedLogin(env, fingerprint, now) {
+  const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
+  const inWindow = attempt && now - Number(attempt.first_failed_at) <= LOGIN_WINDOW_SECONDS;
+  const failedCount = inWindow ? Number(attempt.failed_count) + 1 : 1;
+  const firstFailedAt = inWindow ? Number(attempt.first_failed_at) : now;
+  const lockedUntil = failedCount >= LOGIN_LIMIT ? now + LOGIN_WINDOW_SECONDS : null;
+  await env.DB.prepare(`INSERT INTO diary_login_attempts (fingerprint, failed_count, first_failed_at, locked_until)
+    VALUES (?, ?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET failed_count = excluded.failed_count,
+    first_failed_at = excluded.first_failed_at, locked_until = excluded.locked_until`)
+    .bind(fingerprint, failedCount, firstFailedAt, lockedUntil).run();
 }
 
 async function sign(value, secret) {

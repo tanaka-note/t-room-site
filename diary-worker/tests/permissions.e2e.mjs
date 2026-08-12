@@ -19,6 +19,20 @@ const migration = spawnSync(process.execPath, [wranglerPath, "d1", "migrations",
 });
 assert.equal(migration.status, 0, migration.stderr || migration.stdout);
 
+const clearLoginAttempts = spawnSync(process.execPath, [
+  wranglerPath,
+  "d1",
+  "execute",
+  "diary-db",
+  "--local",
+  "--command",
+  "DELETE FROM diary_login_attempts"
+], {
+  cwd: projectDirectory,
+  encoding: "utf8"
+});
+assert.equal(clearLoginAttempts.status, 0, clearLoginAttempts.stderr || clearLoginAttempts.stdout);
+
 const server = spawn(process.execPath, [
   wranglerPath,
   "dev",
@@ -26,11 +40,13 @@ const server = spawn(process.execPath, [
   "--port",
   String(port),
   "--var",
+  "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
+  "--var",
+  "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
+  "--var",
   `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
   "--var",
   `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
-  "--var",
-  `DIARY_VIEW_PASSWORD_HASH:${testHash("viewer-test")}`,
   "--var",
   "SESSION_SECRET:diary-permission-integration-test-session-secret"
 ], {
@@ -67,24 +83,29 @@ async function request(path, { method = "GET", body, cookie } = {}) {
   return { response, result };
 }
 
-async function login(password) {
-  const { response, result } = await request("/login", { method: "POST", body: { password } });
+async function login(loginId, password) {
+  const { response, result } = await request("/login", { method: "POST", body: { loginId, password } });
   assert.equal(response.status, 200, JSON.stringify(result));
   const setCookie = response.headers.get("set-cookie");
-  assert.match(setCookie, /Max-Age=31536000/);
+  assert.match(setCookie, /Max-Age=2592000/);
   return { session: result, cookie: setCookie.split(";", 1)[0] };
 }
 
 try {
   await waitForServer();
 
-  const wife = await login("wife-test");
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const wrongId = await request("/login", { method: "POST", body: { loginId: "unknown@example.test", password: "wrong" } });
+    assert.equal(wrongId.response.status, 401);
+  }
+
+  const wife = await login("wife@example.test", "wife-test");
   assert.equal(wife.session.canViewTrash, false);
   assert.equal(wife.session.canPermanentlyDelete, false);
   const refreshedSession = await request("/session", { cookie: wife.cookie });
   assert.equal(refreshedSession.response.status, 200);
   assert.equal(refreshedSession.result.authenticated, true);
-  assert.match(refreshedSession.response.headers.get("set-cookie"), /Max-Age=31536000/);
+  assert.match(refreshedSession.response.headers.get("set-cookie"), /Max-Age=2592000/);
 
   const created = await request("/entries", {
     method: "POST",
@@ -115,7 +136,7 @@ try {
   });
   assert.equal(wifePermanent.response.status, 403);
 
-  const main = await login("main-test");
+  const main = await login("main@example.test", "main-test");
   assert.equal(main.session.canViewTrash, true);
   assert.equal(main.session.canPermanentlyDelete, true);
   const trash = await request("/entries?trash=1", { cookie: main.cookie });
@@ -132,6 +153,13 @@ try {
   assert.equal(permanentlyDeleted.response.status, 200, JSON.stringify(permanentlyDeleted.result));
   const missing = await request(`/entries/${entry.id}`, { cookie: main.cookie });
   assert.equal(missing.response.status, 404);
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const wrongPassword = await request("/login", { method: "POST", body: { loginId: "main@example.test", password: "wrong" } });
+    assert.equal(wrongPassword.response.status, 401);
+  }
+  const locked = await request("/login", { method: "POST", body: { loginId: "main@example.test", password: "main-test" } });
+  assert.equal(locked.response.status, 429);
 
   process.stdout.write("Diary permission integration test passed.\n");
 } finally {

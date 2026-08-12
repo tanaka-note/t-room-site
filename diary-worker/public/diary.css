@@ -601,6 +601,42 @@ button:disabled {
   gap: 12px;
 }
 
+.login-field {
+  display: grid;
+  gap: 8px;
+}
+
+.login-field input {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid rgba(31, 41, 51, 0.16);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: #fffdf9;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.login-field input:focus {
+  outline: 3px solid rgba(194, 165, 107, 0.2);
+  border-color: rgba(194, 165, 107, 0.72);
+}
+
+.login-form .remember-login {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.remember-login input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--teal-dark);
+}
+
 .install-app-button {
   margin-top: 14px;
 }

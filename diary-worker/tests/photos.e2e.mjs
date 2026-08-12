@@ -26,11 +26,13 @@ const server = spawn(process.execPath, [
   "--port",
   String(port),
   "--var",
+  "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
+  "--var",
+  "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
+  "--var",
   `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
   "--var",
   `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
-  "--var",
-  `DIARY_VIEW_PASSWORD_HASH:${testHash("viewer-test")}`,
   "--var",
   "SESSION_SECRET:diary-photo-integration-test-session-secret"
 ], {
@@ -66,15 +68,15 @@ async function jsonRequest(path, { method = "GET", body, cookie } = {}) {
   return { response, result };
 }
 
-async function login(password) {
-  const { response, result } = await jsonRequest("/login", { method: "POST", body: { password } });
+async function login(loginId, password) {
+  const { response, result } = await jsonRequest("/login", { method: "POST", body: { loginId, password } });
   assert.equal(response.status, 200, JSON.stringify(result));
   return response.headers.get("set-cookie").split(";", 1)[0];
 }
 
 try {
   await waitForServer();
-  const wifeCookie = await login("wife-test");
+  const wifeCookie = await login("wife@example.test", "wife-test");
   const photoId = randomUUID();
   const created = await jsonRequest("/entries", {
     method: "POST",
@@ -110,11 +112,10 @@ try {
   assert.equal(detailed.result.entry.photos.length, 1);
   assert.equal(detailed.result.entry.photos[0].fileName, "family-photo.png");
 
-  const viewerCookie = await login("viewer-test");
-  const roll = await jsonRequest("/photos", { cookie: viewerCookie });
+  const roll = await jsonRequest("/photos", { cookie: wifeCookie });
   assert.equal(roll.response.status, 200);
   assert.ok(roll.result.photos.some((photo) => photo.id === photoId));
-  const imageResponse = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: viewerCookie } });
+  const imageResponse = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: wifeCookie } });
   assert.equal(imageResponse.status, 200);
   assert.equal(imageResponse.headers.get("content-type"), "image/webp");
 
@@ -124,10 +125,10 @@ try {
     body: { revision: detailed.result.entry.revision }
   });
   assert.equal(moved.response.status, 200);
-  const hiddenImage = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: viewerCookie } });
+  const hiddenImage = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: wifeCookie } });
   assert.equal(hiddenImage.status, 404);
 
-  const mainCookie = await login("main-test");
+  const mainCookie = await login("main@example.test", "main-test");
   const visibleToMain = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: mainCookie } });
   assert.equal(visibleToMain.status, 200);
   const trash = await jsonRequest("/entries?trash=1", { cookie: mainCookie });
