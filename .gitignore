@@ -11,6 +11,10 @@ android-tcloud/**/build/
 android-tcloud/local.properties
 android-tcloud/keystore.properties
 android-tcloud/signing/
+android-tcloud-twa/.gradle/
+android-tcloud-twa/**/build/
+android-tcloud-twa/local.properties
+android-tcloud-twa/keystore.properties
 *.jks
 *.keystore
 .site-assets/

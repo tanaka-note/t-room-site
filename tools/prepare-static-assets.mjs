@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = resolve(workspace, ".site-assets");
 const publicDirectories = [
+  ".well-known",
   "apps",
   "asset-report-k7m4q9x2",
   "assets",
@@ -64,7 +65,7 @@ await collectFiles(output);
 if (!publishedFiles.includes(join("asset-report-k7m4q9x2", "index.html"))) {
   throw new Error("資産運用報告ページが公開対象に含まれていません。");
 }
-if (publishedFiles.some((path) => /(?:^|[\\/])(?:cloud-worker|diary-worker|billing-worker|android-tcloud)(?:[\\/]|$)/.test(path))) {
+if (publishedFiles.some((path) => /(?:^|[\\/])(?:cloud-worker|diary-worker|billing-worker|android-tcloud|android-tcloud-twa)(?:[\\/]|$)/.test(path))) {
   throw new Error("非公開のアプリケーションコードが公開対象に含まれています。");
 }
 

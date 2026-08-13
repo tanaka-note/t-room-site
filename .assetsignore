@@ -4,6 +4,7 @@
 /cloud-worker/**
 /diary-worker/**
 /android-tcloud/**
+/android-tcloud-twa/**
 
 # Local agent, build, and version-control state
 /.git/**
