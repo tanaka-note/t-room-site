@@ -1069,6 +1069,8 @@ private fun FolderScreen(
                         Text(
                             if (selectionMode) "${selectionCount}件を選択中" else currentName,
                             fontWeight = FontWeight.ExtraBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         if (!selectionMode) {
                             Text(
@@ -2195,7 +2197,12 @@ private fun FolderRow(
                 )
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(folder.name.ifBlank { "フォルダ" }, fontWeight = FontWeight.Medium)
+                Text(
+                    folder.name.ifBlank { "フォルダ" },
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 if (folder.searchPath.isNotBlank()) {
                     Text(
                         folder.searchPath,
@@ -2320,7 +2327,12 @@ private fun FileRow(
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text(file.name.ifBlank { "暗号化ファイル" }, fontWeight = FontWeight.Medium)
+                Text(
+                    file.name.ifBlank { "暗号化ファイル" },
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 if (file.searchPath.isNotBlank()) {
                     Text(
                         file.searchPath,

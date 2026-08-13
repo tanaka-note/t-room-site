@@ -110,6 +110,7 @@ class TCloudPlaybackManager(
 internal fun playbackStatusText(repeatAll: Boolean): String =
     if (repeatAll) "全体リピート中" else "再生中"
 
+@androidx.annotation.OptIn(UnstableApi::class)
 internal fun playbackMimeType(file: CloudFile): String = when (file.name.substringAfterLast('.', "").lowercase()) {
     "flv" -> MimeTypes.VIDEO_FLV
     "mp4", "m4v", "mov" -> MimeTypes.VIDEO_MP4

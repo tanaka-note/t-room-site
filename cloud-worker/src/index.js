@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260813-7";
+const APP_BUILD_ID = "20260814-1";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1966,8 +1966,8 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud-runtime-20260813-4.css"],
-    ["/cloud.js", "/cloud-runtime-20260813-7.js"],
+    ["/cloud.css", "/cloud-runtime-20260814-1.css"],
+    ["/cloud.js", "/cloud-runtime-20260814-1.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
