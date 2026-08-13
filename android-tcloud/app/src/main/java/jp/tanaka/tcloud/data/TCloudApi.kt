@@ -11,6 +11,27 @@ import kotlin.math.min
 
 private const val T_CLOUD_ORIGIN = "https://tanaka-note.com"
 
+internal fun cloudSearchQueryParameters(
+    folderId: Long?,
+    query: String,
+    kind: String,
+    folderOffset: Int?,
+    fileOffset: Int?,
+    pageSize: Int,
+): LinkedHashMap<String, String> = linkedMapOf(
+    "q" to query,
+    "recursive" to "1",
+    "pageSize" to pageSize.coerceIn(1, 250).toString(),
+    "sort" to "updated-desc",
+).apply {
+    folderId?.let { put("folderId", it.toString()) }
+    if (kind.isNotBlank() && kind != "all") put("kind", kind)
+    folderOffset?.let { put("folderOffset", it.toString()) }
+    fileOffset?.let { put("fileOffset", it.toString()) }
+    if (folderOffset == null) put("filesOnly", "1")
+    if (fileOffset == null) put("foldersOnly", "1")
+}
+
 internal fun tCloudApiHeaders(method: String): Map<String, String> = buildMap {
     put("Accept", "application/json")
     put("User-Agent", "T-Cloud-Android/0.1")
@@ -95,6 +116,36 @@ class TCloudApi(
             folders = json.optJSONArray("folders").orEmpty().mapObjects { it.toFolder() },
             files = json.optJSONArray("files").orEmpty().mapObjects { it.toCloudFile() },
             canTrashContents = json.optBooleanCompat("canTrashContents"),
+        )
+    }
+
+    suspend fun searchItems(
+        folderId: Long?,
+        query: String,
+        kind: String,
+        folderOffset: Int?,
+        fileOffset: Int?,
+        pageSize: Int = 250,
+    ): CloudSearchPage {
+        val parameters = cloudSearchQueryParameters(
+            folderId = folderId,
+            query = query,
+            kind = kind,
+            folderOffset = folderOffset,
+            fileOffset = fileOffset,
+            pageSize = pageSize,
+        )
+        val suffix = parameters.entries.joinToString("&", prefix = "?") { (key, value) ->
+            "${java.net.URLEncoder.encode(key, Charsets.UTF_8.name())}=" +
+                java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
+        }
+        val json = request("GET", "/items$suffix")
+        return CloudSearchPage(
+            folders = json.optJSONArray("folders").orEmpty().mapObjects { it.toFolder() },
+            files = json.optJSONArray("files").orEmpty().mapObjects { it.toCloudFile() },
+            keyFolders = json.optJSONArray("searchFolders").orEmpty().mapObjects { it.toFolder() },
+            nextFolderOffset = json.optIntOrNull("nextFolderOffset"),
+            nextFileOffset = json.optIntOrNull("nextFileOffset"),
         )
     }
 
@@ -489,6 +540,7 @@ class TCloudApi(
         folderCount = optInt("folderCount", 0),
         createdAtMillis = optInstantMillis("createdAt"),
         updatedAtMillis = optInstantMillis("updatedAt"),
+        searchPath = optString("searchPath", ""),
     )
 
     private fun JSONObject.toCloudFile() = CloudFile(
@@ -509,6 +561,7 @@ class TCloudApi(
         lastModified = optLong("lastModified", 0),
         createdAtMillis = optInstantMillis("createdAt"),
         updatedAtMillis = optInstantMillis("updatedAt"),
+        searchPath = optString("searchPath", ""),
     )
 
     private fun JSONArray?.orEmpty(): JSONArray = this ?: JSONArray()
@@ -520,6 +573,9 @@ class TCloudApi(
 
     private fun JSONObject.optLongOrNull(name: String): Long? =
         if (isNull(name) || !has(name)) null else optLong(name)
+
+    private fun JSONObject.optIntOrNull(name: String): Int? =
+        if (isNull(name) || !has(name)) null else optInt(name)
 
     private fun JSONObject.optBooleanCompat(vararg names: String): Boolean {
         for (name in names) {

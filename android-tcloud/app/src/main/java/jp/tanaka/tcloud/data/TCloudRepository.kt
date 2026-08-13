@@ -129,6 +129,85 @@ class TCloudRepository(
 
     suspend fun listItems(folderId: Long?): FolderPage = decryptPage(api.listItems(folderId))
 
+    suspend fun searchItems(
+        folderId: Long?,
+        query: String,
+        kind: String,
+        onProgress: (Int) -> Unit = {},
+    ): CloudSearchResults {
+        val normalizedQuery = query.trim().lowercase()
+        if (normalizedQuery.isBlank()) return CloudSearchResults()
+        var folderOffset: Int? = 0
+        var fileOffset: Int? = 0
+        var scanned = 0
+        var pages = 0
+        val folders = linkedMapOf<Long, CloudFolder>()
+        val files = linkedMapOf<Long, CloudFile>()
+        while ((folderOffset != null || fileOffset != null) && pages < MAX_SEARCH_PAGES &&
+            folders.size + files.size < MAX_SEARCH_RESULTS
+        ) {
+            currentCoroutineContext().ensureActive()
+            val page = api.searchItems(
+                folderId = folderId,
+                query = normalizedQuery,
+                kind = kind,
+                folderOffset = folderOffset,
+                fileOffset = fileOffset,
+            )
+            page.keyFolders.forEach { folder ->
+                knownFolders[folder.id] = folder
+                runCatching { prepareFolderKey(folder).fill(0) }
+            }
+            page.folders.forEach { folder ->
+                knownFolders[folder.id] = folder
+                val visible = runCatching {
+                    val key = prepareFolderKey(folder)
+                    try {
+                        if (folder.name.isBlank() || folder.name == "[encrypted]") {
+                            folder.copy(name = TCloudCrypto.decryptFolderName(folder, key), isUnlocked = true)
+                        } else {
+                            folder.copy(isUnlocked = true)
+                        }
+                    } finally {
+                        key.fill(0)
+                    }
+                }.getOrDefault(folder)
+                if (visible.name.contains(normalizedQuery, ignoreCase = true)) folders[visible.id] = visible
+            }
+            page.files.forEach { file ->
+                val parent = knownFolders[file.folderId] ?: return@forEach
+                val visible = runCatching {
+                    val key = prepareFolderKey(parent)
+                    try {
+                        val metadata = TCloudCrypto.decryptFileMetadata(file, key)
+                        file.copy(
+                            name = metadata.name,
+                            mimeType = metadata.mimeType,
+                            mediaKind = metadata.mediaKind,
+                            lastModified = metadata.lastModified,
+                            metadataDecrypted = true,
+                        )
+                    } finally {
+                        key.fill(0)
+                    }
+                }.getOrNull() ?: return@forEach
+                if (visible.name.contains(normalizedQuery, ignoreCase = true) &&
+                    (kind.isBlank() || kind == "all" || visible.mediaKind == kind)
+                ) files[visible.id] = visible
+            }
+            scanned += page.folders.size + page.files.size
+            onProgress(scanned)
+            folderOffset = page.nextFolderOffset
+            fileOffset = page.nextFileOffset
+            pages += 1
+        }
+        return CloudSearchResults(
+            folders = folders.values.take(MAX_SEARCH_RESULTS),
+            files = files.values.take((MAX_SEARCH_RESULTS - folders.size).coerceAtLeast(0)),
+            truncated = folderOffset != null || fileOffset != null,
+        )
+    }
+
     suspend fun usage(): CloudUsage = api.usage()
 
     suspend fun usageDetails(): List<CloudUsageFolder> = api.usageDetails()
@@ -737,6 +816,8 @@ class TCloudRepository(
     private companion object {
         const val PUBLIC_ORIGIN = "https://tanaka-note.com"
         const val FOLDER_KEY_TTL_SECONDS = 30L * 24 * 60 * 60
+        const val MAX_SEARCH_RESULTS = 2_000
+        const val MAX_SEARCH_PAGES = 4_000
     }
 
     class PlaybackSession internal constructor(

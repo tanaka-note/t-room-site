@@ -11,6 +11,7 @@ import jp.tanaka.tcloud.data.FolderPage
 import jp.tanaka.tcloud.data.FolderPasswordRequiredException
 import jp.tanaka.tcloud.data.CloudUsage
 import jp.tanaka.tcloud.data.CloudUsageFolder
+import jp.tanaka.tcloud.data.CloudSearchResults
 import jp.tanaka.tcloud.data.TrashPage
 import jp.tanaka.tcloud.data.MoveDestination
 import jp.tanaka.tcloud.data.Session
@@ -19,6 +20,7 @@ import jp.tanaka.tcloud.data.TCloudRepository
 import jp.tanaka.tcloud.transfer.TCloudDownloadManager
 import jp.tanaka.tcloud.transfer.TCloudUploadManager
 import jp.tanaka.tcloud.media.TCloudDataSource
+import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import jp.tanaka.tcloud.offline.TCloudOfflineManager
 import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupManager
@@ -32,6 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 data class MainUiState(
     val restoring: Boolean = true,
@@ -70,6 +73,10 @@ data class MainUiState(
     val trashPage: TrashPage = TrashPage(emptyList(), emptyList()),
     val cloudUsage: CloudUsage = CloudUsage(),
     val usageDetails: List<CloudUsageFolder> = emptyList(),
+    val searchResults: CloudSearchResults = CloudSearchResults(),
+    val searchQuery: String = "",
+    val searching: Boolean = false,
+    val searchScannedCount: Int = 0,
     val message: String? = null,
     val error: String? = null,
 )
@@ -77,16 +84,24 @@ data class MainUiState(
 internal fun canDeleteSelection(session: Session?, page: FolderPage?): Boolean =
     session?.isAdmin == true || page?.canTrashContents == true
 
+private fun MainUiState.activeFiles(): List<CloudFile> =
+    if (searchQuery.isNotBlank()) searchResults.files else page?.files.orEmpty()
+
+private fun MainUiState.activeFolders(): List<CloudFolder> =
+    if (searchQuery.isNotBlank()) searchResults.folders else page?.folders.orEmpty()
+
 class MainViewModel(
     private val repository: TCloudRepository,
     private val downloadManager: TCloudDownloadManager,
     private val uploadManager: TCloudUploadManager,
     private val offlineManager: TCloudOfflineManager,
     private val cameraBackupManager: CameraBackupManager,
+    private val playbackManager: TCloudPlaybackManager,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
     private var imageLoadJob: Job? = null
+    private var searchJob: Job? = null
     private val thumbnailJobs = mutableMapOf<Long, Job>()
 
     init {
@@ -189,12 +204,17 @@ class MainViewModel(
     }
 
     private fun showOpenedFolder(folder: CloudFolder, page: FolderPage) {
+        searchJob?.cancel()
         mutableState.update {
             it.copy(
                 busy = false,
                 page = page,
                 folderStack = it.folderStack + folder,
                 pendingUnlock = null,
+                searchResults = CloudSearchResults(),
+                searchQuery = "",
+                searching = false,
+                searchScannedCount = 0,
                 error = null,
             )
         }
@@ -250,10 +270,21 @@ class MainViewModel(
         val nextStack = current.folderStack.dropLast(1)
         val parentId = nextStack.lastOrNull()?.id
         mutableState.update { it.copy(busy = true, error = null) }
+        searchJob?.cancel()
         viewModelScope.launch {
             runCatching { repository.listItems(parentId) }
                 .onSuccess { page ->
-                    mutableState.update { it.copy(busy = false, page = page, folderStack = nextStack) }
+                    mutableState.update {
+                        it.copy(
+                            busy = false,
+                            page = page,
+                            folderStack = nextStack,
+                            searchResults = CloudSearchResults(),
+                            searchQuery = "",
+                            searching = false,
+                            searchScannedCount = 0,
+                        )
+                    }
                 }
                 .onFailure { error ->
                     mutableState.update { it.copy(busy = false, error = error.userMessage()) }
@@ -262,8 +293,53 @@ class MainViewModel(
         return true
     }
 
+    fun search(query: String, kind: String) {
+        val normalized = query.trim()
+        searchJob?.cancel()
+        if (normalized.isBlank()) {
+            mutableState.update {
+                it.copy(
+                    searchResults = CloudSearchResults(),
+                    searchQuery = "",
+                    searching = false,
+                    searchScannedCount = 0,
+                )
+            }
+            return
+        }
+        val folderId = mutableState.value.page?.currentFolderId
+        mutableState.update {
+            it.copy(searchQuery = normalized, searching = true, searchScannedCount = 0, error = null)
+        }
+        searchJob = viewModelScope.launch {
+            delay(300)
+            runCatching {
+                repository.searchItems(folderId, normalized, kind) { scanned ->
+                    mutableState.update { current ->
+                        if (current.searchQuery == normalized) current.copy(searchScannedCount = scanned)
+                        else current
+                    }
+                }
+            }.onSuccess { results ->
+                mutableState.update { current ->
+                    if (current.searchQuery == normalized) {
+                        current.copy(searchResults = results, searching = false)
+                    } else current
+                }
+            }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) return@onFailure
+                mutableState.update { current ->
+                    if (current.searchQuery == normalized) {
+                        current.copy(searching = false, error = error.userMessage())
+                    } else current
+                }
+            }
+        }
+    }
+
     fun logout() {
         viewModelScope.launch {
+            playbackManager.stop()
             val backup = cameraBackupManager.settings()
             if (backup.enabled) cameraBackupManager.update(
                 false,
@@ -407,7 +483,7 @@ class MainViewModel(
 
     fun downloadSelection() {
         val current = mutableState.value
-        val files = current.page?.files.orEmpty().filter { it.id in current.selectedFileIds }
+        val files = current.activeFiles().filter { it.id in current.selectedFileIds }
         if (current.selectedFolderIds.isNotEmpty()) {
             mutableState.update { it.copy(error = "フォルダはダウンロード対象外です。ファイルだけを選択してください。") }
             return
@@ -425,7 +501,7 @@ class MainViewModel(
 
     fun saveSelectionOffline() {
         val current = mutableState.value
-        val files = current.page?.files.orEmpty().filter { it.id in current.selectedFileIds }
+        val files = current.activeFiles().filter { it.id in current.selectedFileIds }
         if (current.selectedFolderIds.isNotEmpty()) {
             mutableState.update { it.copy(error = "フォルダはオフライン保存対象外です。ファイルだけを選択してください。") }
             return
@@ -457,8 +533,8 @@ class MainViewModel(
     fun confirmDeleteSelection() {
         val current = mutableState.value
         val currentPage = current.page ?: return
-        val files = currentPage.files.filter { it.id in current.selectedFileIds }
-        val folders = currentPage.folders.filter { it.id in current.selectedFolderIds }
+        val files = current.activeFiles().filter { it.id in current.selectedFileIds }
+        val folders = current.activeFolders().filter { it.id in current.selectedFolderIds }
         if (current.busy || (files.isEmpty() && folders.isEmpty()) ||
             !canDeleteSelection(current.session, current.page)
         ) return
@@ -569,8 +645,8 @@ class MainViewModel(
 
     fun selectAll() = mutableState.update { state ->
         state.copy(
-            selectedFileIds = state.page?.files.orEmpty().mapTo(mutableSetOf()) { it.id },
-            selectedFolderIds = state.page?.folders.orEmpty().mapTo(mutableSetOf()) { it.id },
+            selectedFileIds = state.activeFiles().mapTo(mutableSetOf()) { it.id },
+            selectedFolderIds = state.activeFolders().mapTo(mutableSetOf()) { it.id },
         )
     }
 
@@ -581,7 +657,7 @@ class MainViewModel(
     fun openFolderSecuritySelection() {
         val current = mutableState.value
         if (current.busy || current.selectedFileIds.isNotEmpty() || current.selectedFolderIds.size != 1) return
-        val folder = current.page?.folders.orEmpty().firstOrNull { it.id in current.selectedFolderIds } ?: return
+        val folder = current.activeFolders().firstOrNull { it.id in current.selectedFolderIds } ?: return
         if (current.session?.isSubAdmin == true && !folder.isUnlocked &&
             (folder.isProtected || current.page?.canTrashContents != true)
         ) {
@@ -646,8 +722,8 @@ class MainViewModel(
     fun openMoveSelection() {
         val current = mutableState.value
         if (current.busy) return
-        val files = current.page?.files.orEmpty().filter { it.id in current.selectedFileIds }
-        val folders = current.page?.folders.orEmpty().filter { it.id in current.selectedFolderIds }
+        val files = current.activeFiles().filter { it.id in current.selectedFileIds }
+        val folders = current.activeFolders().filter { it.id in current.selectedFolderIds }
         if (files.isEmpty() && folders.isEmpty()) return
         val scopeRootId = if (current.session?.isSubAdmin == true) {
             current.folderStack.firstOrNull { it.isProtected }?.id
@@ -906,8 +982,12 @@ class MainViewModel(
 
     fun openShareSelection() {
         val current = mutableState.value
-        val files = current.page?.files.orEmpty().filter { it.id in current.selectedFileIds }
-        val folders = current.page?.folders.orEmpty().filter { it.id in current.selectedFolderIds }
+        val files = current.activeFiles().filter { it.id in current.selectedFileIds }
+        val folders = current.activeFolders().filter { it.id in current.selectedFolderIds }
+        if (files.map { it.folderId }.distinct().size > 1) {
+            mutableState.update { it.copy(error = "複数フォルダのファイルはフォルダごとに共有してください。") }
+            return
+        }
         when {
             folders.isEmpty() && files.size == 1 -> openShare(files.first())
             folders.isEmpty() && files.size in 2..100 -> mutableState.update {
@@ -1103,6 +1183,7 @@ class MainViewModel(
         if (!file.metadataDecrypted || file.mediaKind !in setOf("image", "video", "audio")) return
         imageLoadJob?.cancel()
         if (file.mediaKind != "image") {
+            if (file.mediaKind == "video") playbackManager.stop()
             mutableState.update {
                 it.copy(selectedFile = file, imageBitmap = null, imageLoading = false, imageError = null)
             }
@@ -1180,12 +1261,19 @@ class MainViewModel(
 
     fun navigateAudio(direction: Int) {
         val current = mutableState.value
-        val selected = current.selectedFile ?: return
-        val audioFiles = current.page?.files.orEmpty().filter { it.metadataDecrypted && it.mediaKind == "audio" }
-        val index = audioFiles.indexOfFirst { it.id == selected.id }
+        val selected = current.selectedFile
+        val currentFileId = selected?.id ?: playbackManager.currentFileId ?: return
+        val audioFiles = current.activeFiles().filter { it.metadataDecrypted && it.mediaKind == "audio" }
+        val index = audioFiles.indexOfFirst { it.id == currentFileId }
         if (index < 0 || audioFiles.isEmpty()) return
         val next = index + direction
-        if (next in audioFiles.indices) openFile(audioFiles[next])
+        if (next !in audioFiles.indices) return
+        val nextFile = audioFiles[next]
+        if (selected != null) {
+            openFile(nextFile)
+        } else {
+            playbackManager.playAudio(nextFile, playbackDataSource(nextFile))
+        }
     }
 
     fun playbackDataSource(file: CloudFile) = TCloudDataSource.Factory(repository, file)

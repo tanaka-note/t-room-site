@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260813-5";
+const APP_BUILD_ID = "20260813-6";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -587,6 +587,9 @@ async function listItems(url, env, session) {
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
   const requestedSort = url.searchParams.get("sort") || "name-desc";
   const sort = ["updated-desc", "updated-asc", "name-asc", "name-desc", "size-desc", "size-asc", "newest", "oldest", "name", "size"].includes(requestedSort) ? requestedSort : "name-desc";
+  if (query && url.searchParams.get("recursive") === "1") {
+    return searchItems(url, env, session, { folderId, query, kind, sort });
+  }
   const folder = folderId ? (continuation
     ? await env.DB.prepare("SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(folderId).first()
     : await env.DB.prepare(`SELECT f.id, f.parent_id, f.name,
@@ -687,6 +690,145 @@ async function listItems(url, env, session) {
     files: visibleFiles,
     nextFolderOffset,
     nextFileOffset
+  });
+}
+
+async function searchItems(url, env, session, { folderId, query, kind, sort }) {
+  const foldersOnly = url.searchParams.get("foldersOnly") === "1";
+  const filesOnly = url.searchParams.get("filesOnly") === "1";
+  const offset = Math.min(1000000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
+  const folderOffset = Math.min(1000000, Math.max(0, Number.parseInt(url.searchParams.get("folderOffset") || String(offset), 10) || 0));
+  const fileOffset = Math.min(1000000, Math.max(0, Number.parseInt(url.searchParams.get("fileOffset") || String(offset), 10) || 0));
+  const pageSize = Math.min(250, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "100", 10) || 100));
+  let folderAccessGranted = false;
+  if (folderId) {
+    await requireFolder(env, folderId);
+    folderAccessGranted = await requireFolderAccess(env, folderId, session);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const anchor = folderId ? "folder.id = ?" : "folder.parent_id IS NULL";
+  const scopeValues = folderId ? [folderId] : [];
+  const accessAnchor = session.role === "admin" ? "1" : `(folder.password_hash IS NULL OR EXISTS (
+    SELECT 1 FROM cloud_folder_unlocks unlock
+    WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
+  ))`;
+  const accessChild = session.role === "admin" ? "parent.is_allowed" : `(parent.is_allowed AND
+    (child.password_hash IS NULL OR EXISTS (
+      SELECT 1 FROM cloud_folder_unlocks unlock
+      WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
+    )))`;
+  const scopeSql = `WITH RECURSIVE folder_scope(id, parent_id, name, depth, path, is_allowed) AS (
+    SELECT folder.id, folder.parent_id, folder.name, 0, folder.name, ${accessAnchor}
+    FROM cloud_folders folder
+    WHERE ${anchor} AND folder.deleted_at IS NULL
+    UNION ALL
+    SELECT child.id, child.parent_id, child.name, parent.depth + 1,
+      parent.path || ' / ' || child.name, ${accessChild}
+    FROM cloud_folders child
+    JOIN folder_scope parent ON child.parent_id = parent.id
+    WHERE child.deleted_at IS NULL AND parent.depth < 100
+  )`;
+  const bindPrefix = session.role === "admin"
+    ? scopeValues
+    : [session.sessionId, now, ...scopeValues, session.sessionId, now];
+  let folderRows = [];
+  if (!filesOnly) {
+    const rootExclusion = folderId ? "scope.depth > 0" : "1 = 1";
+    const result = await env.DB.prepare(`${scopeSql}
+      SELECT folder.id, folder.parent_id AS parentId, folder.name,
+        folder.created_at AS createdAt, folder.updated_at AS updatedAt,
+        folder.crypto_version AS cryptoVersion, folder.encrypted_name AS encryptedName,
+        folder.name_iv AS nameIv, folder.password_salt AS passwordSalt,
+        folder.password_wrapped_key AS passwordWrappedKey,
+        folder.password_wrap_iv AS passwordWrapIv, folder.admin_wrapped_key AS adminWrappedKey,
+        folder.parent_wrapped_key AS parentWrappedKey, folder.parent_wrap_iv AS parentWrapIv,
+        folder.password_hash IS NOT NULL AS isProtected, 1 AS isUnlocked,
+        scope.path AS searchPath,
+        (SELECT COUNT(*) FROM cloud_files file WHERE file.folder_id = folder.id
+          AND file.deleted_at IS NULL AND file.status = 'ready') AS fileCount,
+        (SELECT COUNT(*) FROM cloud_folders child WHERE child.parent_id = folder.id
+          AND child.deleted_at IS NULL) AS folderCount
+      FROM folder_scope scope JOIN cloud_folders folder ON folder.id = scope.id
+      WHERE scope.is_allowed = 1 AND ${rootExclusion} AND LOWER(folder.name) LIKE ?
+      ORDER BY folder.name COLLATE NOCASE ASC, folder.id ASC LIMIT ? OFFSET ?`)
+      .bind(...bindPrefix, `%${query}%`, pageSize + 1, folderOffset).all();
+    folderRows = result.results || [];
+  }
+
+  const fileOrder = {
+    "updated-desc": "file.created_at DESC", "updated-asc": "file.created_at ASC",
+    "name-asc": "COALESCE(file.display_name, file.original_name) COLLATE NOCASE ASC",
+    "name-desc": "COALESCE(file.display_name, file.original_name) COLLATE NOCASE DESC",
+    "size-desc": "file.size_bytes DESC", "size-asc": "file.size_bytes ASC",
+    newest: "file.created_at DESC", oldest: "file.created_at ASC",
+    name: "COALESCE(file.display_name, file.original_name) COLLATE NOCASE ASC",
+    size: "file.size_bytes DESC"
+  }[sort] || "file.created_at DESC";
+  let fileRows = [];
+  if (!foldersOnly) {
+    const fileClauses = [
+      "scope.is_allowed = 1", "file.deleted_at IS NULL", "file.status = 'ready'",
+      "(file.display_metadata_version = 0 OR LOWER(COALESCE(file.display_name, file.original_name)) LIKE ?)"
+    ];
+    const fileValues = [...bindPrefix, `%${query}%`];
+    if (kind) {
+      fileClauses.push("(file.display_metadata_version = 0 OR COALESCE(file.display_media_kind, file.media_kind) = ?)");
+      fileValues.push(kind);
+    }
+    const result = await env.DB.prepare(`${scopeSql}
+      SELECT file.id, file.folder_id AS folderId,
+        COALESCE(file.display_name, file.original_name) AS name,
+        COALESCE(file.display_mime_type, file.mime_type) AS mimeType,
+        COALESCE(file.display_media_kind, file.media_kind) AS mediaKind,
+        file.size_bytes AS sizeBytes, file.display_metadata_version AS displayMetadataVersion,
+        file.display_last_modified AS displayLastModified,
+        file.display_duration_seconds AS displayDurationSeconds,
+        file.crypto_version AS cryptoVersion, file.encrypted_metadata AS encryptedMetadata,
+        file.metadata_iv AS metadataIv, file.wrapped_file_key AS wrappedFileKey,
+        file.file_key_iv AS fileKeyIv, file.encrypted_size_bytes AS encryptedSizeBytes,
+        file.chunk_size_bytes AS chunkSizeBytes, file.chunk_count AS chunkCount,
+        (file.thumbnail_key IS NOT NULL OR file.display_thumbnail_key IS NOT NULL) AS hasThumbnail,
+        file.display_thumbnail_key IS NOT NULL AS hasDisplayThumbnail,
+        EXISTS(SELECT 1 FROM cloud_deletion_requests request
+          WHERE request.file_id = file.id AND request.status = 'pending') AS deletionPending,
+        file.created_at AS createdAt, file.updated_at AS updatedAt,
+        scope.path AS searchPath
+      FROM folder_scope scope JOIN cloud_files file ON file.folder_id = scope.id
+      WHERE ${fileClauses.join(" AND ")} ORDER BY ${fileOrder}, file.id ASC LIMIT ? OFFSET ?`)
+      .bind(...fileValues, pageSize + 1, fileOffset).all();
+    fileRows = result.results || [];
+  }
+
+  const visibleFolders = folderRows.slice(0, pageSize);
+  const visibleFiles = fileRows.slice(0, pageSize);
+  const folderIds = [...new Set([
+    ...visibleFolders.map((folder) => Number(folder.id)),
+    ...visibleFiles.map((file) => Number(file.folderId))
+  ].filter(Boolean))];
+  const cryptoFolders = await loadConflictFolderRecords(env, folderIds);
+  const byId = new Map(cryptoFolders.map((folder) => [Number(folder.id), folder]));
+  const depthMemo = new Map();
+  const folderDepth = (record) => {
+    if (!record) return 0;
+    if (depthMemo.has(Number(record.id))) return depthMemo.get(Number(record.id));
+    const depth = record.parentId ? 1 + folderDepth(byId.get(Number(record.parentId))) : 0;
+    depthMemo.set(Number(record.id), depth);
+    return depth;
+  };
+  const orderedCryptoFolders = cryptoFolders
+    .map((folder) => ({ ...folder, isProtected: Boolean(folder.passwordWrappedKey), isUnlocked: true }))
+    .sort((left, right) => folderDepth(left) - folderDepth(right) || Number(left.id) - Number(right.id));
+  return json({
+    folder: folderId ? (orderedCryptoFolders.find((folder) => Number(folder.id) === folderId) || null) : null,
+    canTrashContents: Boolean(folderId && (session.canDelete
+      || (session.canTrashUnlockedFiles && folderAccessGranted))),
+    breadcrumbs: filesOnly || foldersOnly || !folderId ? [] : await breadcrumbs(env, folderId, session),
+    folders: visibleFolders,
+    files: visibleFiles,
+    searchFolders: orderedCryptoFolders,
+    recursiveSearch: true,
+    nextFolderOffset: folderRows.length > pageSize ? folderOffset + pageSize : null,
+    nextFileOffset: fileRows.length > pageSize ? fileOffset + pageSize : null
   });
 }
 
@@ -1824,8 +1966,8 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud-runtime-20260813-3.css"],
-    ["/cloud.js", "/cloud-runtime-20260813-5.js"],
+    ["/cloud.css", "/cloud-runtime-20260813-4.css"],
+    ["/cloud.js", "/cloud-runtime-20260813-6.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
@@ -2182,7 +2324,7 @@ function normalizeFastDisplayMetadata(value, existingFile = null) {
     throw new HttpError(400, "動画または判定が曖昧な形式は、オンライン表示用の平文情報を保存できません。");
   }
   const name = validName(value.name);
-  const mimeType = validMime(value.mimeType);
+  const mimeType = normalizeMime(value.mimeType);
   if (detectKind(mimeType, name) !== mediaKind || mediaKind === "video") {
     throw new HttpError(400, "表示用情報の形式を確認してください。");
   }

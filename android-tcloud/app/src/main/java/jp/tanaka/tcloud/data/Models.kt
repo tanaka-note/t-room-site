@@ -59,6 +59,7 @@ data class CloudFolder(
     val folderCount: Int,
     val createdAtMillis: Long = 0,
     val updatedAtMillis: Long = 0,
+    val searchPath: String = "",
 )
 
 data class CloudFile(
@@ -80,6 +81,7 @@ data class CloudFile(
     val metadataDecrypted: Boolean = false,
     val createdAtMillis: Long = 0,
     val updatedAtMillis: Long = 0,
+    val searchPath: String = "",
 )
 
 data class FolderPage(
@@ -91,6 +93,20 @@ data class FolderPage(
 ) {
     val currentFolderId: Long? get() = currentFolder?.id
 }
+
+data class CloudSearchPage(
+    val folders: List<CloudFolder>,
+    val files: List<CloudFile>,
+    val keyFolders: List<CloudFolder>,
+    val nextFolderOffset: Int?,
+    val nextFileOffset: Int?,
+)
+
+data class CloudSearchResults(
+    val folders: List<CloudFolder> = emptyList(),
+    val files: List<CloudFile> = emptyList(),
+    val truncated: Boolean = false,
+)
 
 data class CloudUsage(
     val activeFileCount: Int = 0,

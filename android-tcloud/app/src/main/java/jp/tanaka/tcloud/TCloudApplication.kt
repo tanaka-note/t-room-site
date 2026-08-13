@@ -10,6 +10,7 @@ import jp.tanaka.tcloud.transfer.TCloudDownloadManager
 import jp.tanaka.tcloud.transfer.TCloudUploadManager
 import jp.tanaka.tcloud.backup.CameraBackupManager
 import jp.tanaka.tcloud.backup.CameraBackupStore
+import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,6 +24,7 @@ class TCloudApplication : Application() {
     val offlineManager: TCloudOfflineManager by lazy { TCloudOfflineManager(this) }
     val cameraBackupStore: CameraBackupStore by lazy { CameraBackupStore(this) }
     val cameraBackupManager: CameraBackupManager by lazy { CameraBackupManager(this, cameraBackupStore) }
+    val playbackManager: TCloudPlaybackManager by lazy { TCloudPlaybackManager(this) }
 
     val repository: TCloudRepository by lazy {
         val sessionStore = SecureSessionStore(this)

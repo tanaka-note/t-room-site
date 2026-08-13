@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
                     app.uploadManager,
                     app.offlineManager,
                     app.cameraBackupManager,
+                    app.playbackManager,
                 ) as T
         }
     }

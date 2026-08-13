@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
@@ -85,10 +86,13 @@ import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -136,6 +140,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import jp.tanaka.tcloud.MainViewModel
 import jp.tanaka.tcloud.R
+import jp.tanaka.tcloud.TCloudApplication
 import jp.tanaka.tcloud.data.CloudFile
 import jp.tanaka.tcloud.data.CloudFolder
 import jp.tanaka.tcloud.data.MoveDestination
@@ -159,6 +164,7 @@ import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupSettings
 import jp.tanaka.tcloud.backup.CameraBackupSourceFolder
 import jp.tanaka.tcloud.media.TvCastLauncher
+import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import kotlinx.coroutines.delay
 
 private val TCloudBlue = Color(0xFF16756D)
@@ -183,6 +189,17 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
     val state by viewModel.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val playbackManager = remember {
+        (context.applicationContext as TCloudApplication).playbackManager
+    }
+    DisposableEffect(viewModel, playbackManager) {
+        playbackManager.playPrevious = { viewModel.navigateAudio(-1) }
+        playbackManager.playNext = { viewModel.navigateAudio(1) }
+        onDispose {
+            playbackManager.playPrevious = null
+            playbackManager.playNext = null
+        }
+    }
     val powerManager = remember { context.getSystemService(PowerManager::class.java) }
     var batteryOptimizationExcluded by remember {
         mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
@@ -197,6 +214,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
     var pendingSelectionTransfer by remember { mutableStateOf<Boolean?>(null) }
     var pendingCameraBackupSettings by remember { mutableStateOf<PendingCameraBackupSettings?>(null) }
     var pendingCameraFolderScan by remember { mutableStateOf(false) }
+    var pendingAudioFile by remember { mutableStateOf<CloudFile?>(null) }
 
     fun hasCameraMediaPermission(includeImages: Boolean, includeVideos: Boolean): Boolean = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
@@ -233,6 +251,12 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) filePicker.launch(arrayOf("*/*"))
+    }
+    val audioNotificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        pendingAudioFile?.let(viewModel::openFile)
+        pendingAudioFile = null
     }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -332,6 +356,17 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
             uploadPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             filePicker.launch(arrayOf("*/*"))
+        }
+    }
+
+    fun requestOpenFile(file: CloudFile) {
+        if (file.mediaKind == "audio" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingAudioFile = file
+            audioNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.openFile(file)
         }
     }
 
@@ -470,14 +505,21 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     onNext = { viewModel.navigateImage(1) },
                     onClose = viewModel::closeFile,
                 )
-                state.selectedFile != null && state.selectedFile?.mediaKind in setOf("video", "audio") ->
+                state.selectedFile != null && state.selectedFile?.mediaKind in setOf("video", "audio") -> {
+                    val selectedMedia = checkNotNull(state.selectedFile)
+                    val playbackFactory = remember(selectedMedia.id) {
+                        viewModel.playbackDataSource(selectedMedia)
+                    }
                     MediaPlayerScreen(
-                        file = checkNotNull(state.selectedFile),
-                        dataSourceFactory = viewModel.playbackDataSource(checkNotNull(state.selectedFile)),
+                        file = selectedMedia,
+                        dataSourceFactory = playbackFactory,
+                        playbackManager = playbackManager,
                         pictureInPicture = pictureInPicture,
+                        onPlayPreviousAudio = { viewModel.navigateAudio(-1) },
                         onPlayNextAudio = { viewModel.navigateAudio(1) },
                         onClose = viewModel::closeFile,
                     )
+                }
                 state.showingTrash -> TrashScreen(
                     page = state.trashPage,
                     busy = state.busy,
@@ -492,7 +534,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     entries = state.offlineEntries,
                     busy = state.busy,
                     snackbar = snackbar,
-                    onOpenFile = viewModel::openFile,
+                    onOpenFile = ::requestOpenFile,
                     onDelete = viewModel::deleteOffline,
                     onDeleteSelection = viewModel::deleteOfflineSelection,
                     onBack = { viewModel.goBack() },
@@ -508,13 +550,18 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     canDeleteItems = state.session?.isAdmin == true || state.page?.canTrashContents == true,
                     folders = state.page?.folders.orEmpty(),
                     files = state.page?.files.orEmpty(),
+                    searchFolders = state.searchResults.folders,
+                    searchFiles = state.searchResults.files,
+                    searching = state.searching,
+                    searchScannedCount = state.searchScannedCount,
+                    searchTruncated = state.searchResults.truncated,
                     thumbnailBitmaps = state.thumbnailBitmaps,
                     selectedFileIds = state.selectedFileIds,
                     selectedFolderIds = state.selectedFolderIds,
                     busy = state.busy,
                     snackbar = snackbar,
                     onOpenFolder = viewModel::openFolder,
-                    onOpenFile = viewModel::openFile,
+                    onOpenFile = ::requestOpenFile,
                     onRequestThumbnail = viewModel::loadThumbnail,
                     onDownload = ::requestDownload,
                     onOffline = ::requestOffline,
@@ -545,6 +592,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                         viewModel.refreshUsage()
                         showAppSettings = true
                     },
+                    onSearch = viewModel::search,
                 )
             }
 
@@ -881,6 +929,11 @@ private fun FolderScreen(
     canDeleteItems: Boolean,
     folders: List<CloudFolder>,
     files: List<CloudFile>,
+    searchFolders: List<CloudFolder>,
+    searchFiles: List<CloudFile>,
+    searching: Boolean,
+    searchScannedCount: Int,
+    searchTruncated: Boolean,
     thumbnailBitmaps: Map<Long, Bitmap>,
     selectedFileIds: Set<Long>,
     selectedFolderIds: Set<Long>,
@@ -913,12 +966,16 @@ private fun FolderScreen(
     onLogout: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenSettings: () -> Unit,
+    onSearch: (String, String) -> Unit,
 ) {
     val selectionCount = selectedFileIds.size + selectedFolderIds.size
     val selectionMode = selectionCount > 0
     var selectionActionsExpanded by remember { mutableStateOf(false) }
-    var searchQuery by remember(currentName) { mutableStateOf("") }
-    var kindFilter by remember(currentName) { mutableStateOf("all") }
+    var searchQuery by remember(currentFolderId) { mutableStateOf("") }
+    var kindFilter by remember(currentFolderId) { mutableStateOf("all") }
+    LaunchedEffect(searchQuery, kindFilter, currentFolderId) {
+        onSearch(searchQuery, kindFilter)
+    }
     val context = LocalContext.current
     val viewPreferences = remember {
         context.getSharedPreferences("tcloud_folder_view", Context.MODE_PRIVATE)
@@ -926,11 +983,31 @@ private fun FolderScreen(
     val sortPreferences = remember {
         context.getSharedPreferences("tcloud_folder_sort", Context.MODE_PRIVATE)
     }
+    val scrollPreferences = remember {
+        context.getSharedPreferences("tcloud_folder_scroll", Context.MODE_PRIVATE)
+    }
     val viewPreferenceKey = remember(accountName, currentFolderId) {
         "${accountName.hashCode()}-${currentFolderId ?: 0L}"
     }
     val sortPreferenceKey = remember(accountName, currentFolderId) {
         "${accountName.hashCode()}-${currentFolderId ?: 0L}"
+    }
+    val scrollPreferenceKey = remember(accountName, currentFolderId) {
+        "${accountName.hashCode()}-${currentFolderId ?: 0L}"
+    }
+    val listState = remember(scrollPreferenceKey) {
+        LazyListState(
+            firstVisibleItemIndex = scrollPreferences.getInt("$scrollPreferenceKey-index", 0),
+            firstVisibleItemScrollOffset = scrollPreferences.getInt("$scrollPreferenceKey-offset", 0),
+        )
+    }
+    DisposableEffect(listState, scrollPreferenceKey) {
+        onDispose {
+            scrollPreferences.edit()
+                .putInt("$scrollPreferenceKey-index", listState.firstVisibleItemIndex)
+                .putInt("$scrollPreferenceKey-offset", listState.firstVisibleItemScrollOffset)
+                .apply()
+        }
     }
     var sortState by remember(sortPreferenceKey) {
         val saved = sortPreferences.getString(sortPreferenceKey, null)
@@ -959,11 +1036,13 @@ private fun FolderScreen(
         sortState = next
         sortPreferences.edit().putString(sortPreferenceKey, next.mode).apply()
     }
-    val filteredFolders = remember(folders, searchQuery, sortState, kindFilter) {
-        if (kindFilter == "all") sortFolders(folders, searchQuery, sortState) else emptyList()
+    val sourceFolders = if (searchQuery.isBlank()) folders else searchFolders
+    val sourceFiles = if (searchQuery.isBlank()) files else searchFiles
+    val filteredFolders = remember(sourceFolders, searchQuery, sortState, kindFilter) {
+        if (kindFilter == "all") sortFolders(sourceFolders, "", sortState) else emptyList()
     }
-    val filteredFiles = remember(files, searchQuery, sortState, kindFilter) {
-        sortFiles(files, searchQuery, sortState).filter { file ->
+    val filteredFiles = remember(sourceFiles, searchQuery, sortState, kindFilter) {
+        sortFiles(sourceFiles, "", sortState).filter { file ->
             kindFilter == "all" || file.mediaKind == kindFilter
         }
     }
@@ -1101,6 +1180,7 @@ private fun FolderScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1132,7 +1212,9 @@ private fun FolderScreen(
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             leadingIcon = { Text("⌕", color = TCloudMuted) },
-                            placeholder = { Text("フォルダまたはファイルを検索") },
+                            placeholder = {
+                                Text(if (currentFolderId == null) "すべてのフォルダを検索" else "このフォルダ以下を検索")
+                            },
                             shape = RoundedCornerShape(10.dp),
                         )
                         Row(
@@ -1181,6 +1263,20 @@ private fun FolderScreen(
                                     tint = TCloudBlue,
                                 )
                             }
+                        }
+                        if (searching) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text(
+                                if (searchScannedCount > 0) "配下を検索中：${searchScannedCount}件確認" else "配下を検索しています…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TCloudMuted,
+                            )
+                        } else if (searchQuery.isNotBlank() && searchTruncated) {
+                            Text(
+                                "検索結果が多いため、先頭2,000件を表示しています。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TCloudMuted,
+                            )
                         }
                     }
                 }
@@ -1911,6 +2007,15 @@ private fun FolderGridCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (folder.searchPath.isNotBlank()) {
+                    Text(
+                        folder.searchPath,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TCloudMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(
                     "${folder.folderCount}フォルダ・${folder.fileCount}ファイル",
                     style = MaterialTheme.typography.labelSmall,
@@ -2002,6 +2107,15 @@ private fun FileGridCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (file.searchPath.isNotBlank()) {
+                        Text(
+                            file.searchPath,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TCloudMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         formatBytes(file.sizeBytes),
                         style = MaterialTheme.typography.labelSmall,
@@ -2080,6 +2194,15 @@ private fun FolderRow(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(folder.name.ifBlank { "フォルダ" }, fontWeight = FontWeight.Medium)
+                if (folder.searchPath.isNotBlank()) {
+                    Text(
+                        folder.searchPath,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TCloudMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(
                     "${folder.folderCount}フォルダ・${folder.fileCount}ファイル",
                     style = MaterialTheme.typography.bodySmall,
@@ -2196,6 +2319,15 @@ private fun FileRow(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(file.name.ifBlank { "暗号化ファイル" }, fontWeight = FontWeight.Medium)
+                if (file.searchPath.isNotBlank()) {
+                    Text(
+                        file.searchPath,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TCloudMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(
                     formatBytes(file.sizeBytes),
                     style = MaterialTheme.typography.bodySmall,
@@ -2498,7 +2630,9 @@ private fun MoveItemDialog(
 private fun MediaPlayerScreen(
     file: CloudFile,
     dataSourceFactory: androidx.media3.datasource.DataSource.Factory,
+    playbackManager: TCloudPlaybackManager,
     pictureInPicture: Boolean,
+    onPlayPreviousAudio: () -> Unit,
     onPlayNextAudio: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -2506,13 +2640,27 @@ private fun MediaPlayerScreen(
     val activity = context as? Activity
     val orientation = LocalConfiguration.current.orientation
     val isVideo = file.mediaKind == "video"
+    val isAudio = file.mediaKind == "audio"
     var manualFullscreen by remember(file.id) { mutableStateOf(false) }
-    var playbackMode by remember { mutableStateOf(PlaybackMode.OFF) }
+    var playbackMode by remember(file.id) {
+        mutableStateOf(
+            if (isAudio) {
+                when (playbackManager.statusText) {
+                    "リピート再生中" -> PlaybackMode.REPEAT_ONE
+                    "連続再生中" -> PlaybackMode.CONTINUOUS_AUDIO
+                    else -> PlaybackMode.OFF
+                }
+            } else PlaybackMode.OFF,
+        )
+    }
     val isLandscape = orientation == Configuration.ORIENTATION_LANDSCAPE
     val isVideoFullscreen = isVideo && (isLandscape || manualFullscreen) && !pictureInPicture
     val playbackFactory = remember(file.id) { dataSourceFactory }
+    val reusingBackgroundAudio = isAudio && playbackManager.currentFileId == file.id
     val player = remember(file.id) {
-        ExoPlayer.Builder(context).build().apply {
+        if (isAudio) {
+            playbackManager.playAudio(file, playbackFactory)
+        } else ExoPlayer.Builder(context).build().apply {
             val mediaItem = MediaItem.Builder()
                 .setUri("tcloud://file/${file.id}")
                 .setMimeType(playbackMimeType(file))
@@ -2524,37 +2672,35 @@ private fun MediaPlayerScreen(
     }
     LaunchedEffect(player, file.id) {
         val resumePosition = context.readPlaybackPosition(file.id)
-        if (resumePosition > 0L) player.seekTo(resumePosition)
+        if (!reusingBackgroundAudio && resumePosition > 0L) player.seekTo(resumePosition)
         while (true) {
             delay(5_000)
             context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
         }
     }
     LaunchedEffect(player, playbackMode, file.id) {
-        player.repeatMode = if (playbackMode == PlaybackMode.REPEAT_ONE) {
-            Player.REPEAT_MODE_ONE
+        if (isAudio) {
+            playbackManager.setPlaybackStatus(
+                repeatOne = playbackMode == PlaybackMode.REPEAT_ONE,
+                continuous = playbackMode == PlaybackMode.CONTINUOUS_AUDIO,
+            )
         } else {
-            Player.REPEAT_MODE_OFF
-        }
-    }
-    DisposableEffect(player, file.id, playbackMode) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED &&
-                    file.mediaKind == "audio" && playbackMode == PlaybackMode.CONTINUOUS_AUDIO
-                ) onPlayNextAudio()
+            player.repeatMode = if (playbackMode == PlaybackMode.REPEAT_ONE) {
+                Player.REPEAT_MODE_ONE
+            } else {
+                Player.REPEAT_MODE_OFF
             }
         }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
     }
     DisposableEffect(player, context, file.id) {
         onDispose {
             context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
-            player.stop()
-            player.clearMediaItems()
-            player.release()
-            (playbackFactory as? AutoCloseable)?.close()
+            if (!isAudio) {
+                player.stop()
+                player.clearMediaItems()
+                player.release()
+                (playbackFactory as? AutoCloseable)?.close()
+            }
         }
     }
     DisposableEffect(activity, file.id, isVideo) {
@@ -2572,13 +2718,32 @@ private fun MediaPlayerScreen(
         containerColor = Color.Black,
         topBar = {
             if (!pictureInPicture && !isVideoFullscreen) TopAppBar(
-                title = { Text(file.name, maxLines = 1) },
+                title = {
+                    Column {
+                        Text(file.name, maxLines = 1)
+                        if (isAudio && playbackMode != PlaybackMode.OFF) {
+                            Text(
+                                if (playbackMode == PlaybackMode.REPEAT_ONE) "リピート再生中" else "連続再生中",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TCloudBlue,
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "閉じる")
                     }
                 },
                 actions = {
+                    if (isAudio) {
+                        IconButton(onClick = onPlayPreviousAudio) {
+                            Icon(Icons.Default.SkipPrevious, contentDescription = "前の曲")
+                        }
+                        IconButton(onClick = onPlayNextAudio) {
+                            Icon(Icons.Default.SkipNext, contentDescription = "次の曲")
+                        }
+                    }
                     IconButton(
                         onClick = {
                             playbackMode = nextPlaybackMode(playbackMode, file.mediaKind)

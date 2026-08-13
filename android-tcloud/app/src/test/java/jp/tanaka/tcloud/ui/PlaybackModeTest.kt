@@ -1,5 +1,6 @@
 package jp.tanaka.tcloud.ui
 
+import jp.tanaka.tcloud.media.playbackStatusText
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -22,5 +23,12 @@ class PlaybackModeTest {
 
         assertEquals(PlaybackMode.REPEAT_ONE, repeat)
         assertEquals(PlaybackMode.OFF, off)
+    }
+
+    @Test
+    fun notificationStatusIdentifiesRepeatAndContinuousPlayback() {
+        assertEquals("再生中", playbackStatusText(repeatOne = false, continuous = false))
+        assertEquals("リピート再生中", playbackStatusText(repeatOne = true, continuous = false))
+        assertEquals("連続再生中", playbackStatusText(repeatOne = false, continuous = true))
     }
 }
