@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+const [client, cache, html, worker] = await Promise.all([
+  readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/display-cache.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  readFile(new URL("../src/index.js", import.meta.url), "utf8")
+]);
+
+assert.match(cache, /LISTING_LIMIT_BYTES = 512 \* 1024 \* 1024/);
+assert.match(cache, /THUMBNAIL_LIMIT_BYTES = 1024 \* 1024 \* 1024/);
+assert.match(cache, /lastAccessed/);
+assert.match(cache, /async function trim\(kind, limitBytes\)/);
+assert.match(cache, /removeOldThumbnailVersions/);
+assert.match(client, /const cached = await readDisplayListingCache\(cacheKey\)/);
+assert.match(client, /const dataPromise = api\(`\/items\?\$\{params\}`/);
+assert.match(client, /renderCachedDisplayListing\(cached\)/);
+assert.match(client, /scheduleDisplayListingCacheWrite\(cacheKey\)/);
+assert.match(client, /TCloudDisplayCache\?\.getThumbnail/);
+assert.match(client, /TCloudDisplayCache\?\.putThumbnail/);
+assert.match(client, /state\.session\?\.role === "subadmin" && state\.folderId && !state\.crypto\.folderKeys\.has/);
+assert.match(client, /renderedCachedItems && \[401, 403, 404, 423\]/);
+assert.match(html, /display-cache\.js\?v=20260813-1/);
+assert.match(worker, /\["\/display-cache\.js", "\/display-cache-20260813-1\.js"\]/);
+assert.match(worker, /if \(Number\(body\.cryptoVersion\) !== 1\).*暗号化されたファイルだけ保存できます/);
+assert.match(worker, /display_media_kind !== "image"/);
+assert.match(worker, /file\.display_media_kind === "video"/);
+assert.match(worker, /allowedSignatures = \{[\s\S]*?image:[\s\S]*?audio:[\s\S]*?document:/);
+assert.match(client, /if \(mediaKind === "video" \|\| !allowed\[mediaKind\]\?\.has\(signature\)\) return null/);
+assert.match(client, /fastDisplay\?\.mediaKind === "image"[\s\S]*?\/display-thumbnail/);
+assert.doesNotMatch(client, /fastDisplay\?\.mediaKind === "video"[\s\S]*?\/display-thumbnail/);
+
+console.log("device listing and thumbnail caches preserve access boundaries: ok");

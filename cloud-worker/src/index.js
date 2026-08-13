@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260812-7";
+const APP_BUILD_ID = "20260813-1";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -141,6 +141,9 @@ async function handleApi(request, env, url, path) {
   const thumbMatch = path.match(/^\/api\/files\/(\d+)\/thumbnail$/);
   if (thumbMatch && request.method === "PUT") return putThumbnail(Number(thumbMatch[1]), request, env, session);
   if (thumbMatch && request.method === "GET") return getThumbnail(Number(thumbMatch[1]), env, session);
+  const displayThumbMatch = path.match(/^\/api\/files\/(\d+)\/display-thumbnail$/);
+  if (displayThumbMatch && request.method === "PUT") return putDisplayThumbnail(Number(displayThumbMatch[1]), request, env, session);
+  if (displayThumbMatch && request.method === "GET") return getDisplayThumbnail(Number(displayThumbMatch[1]), env, session);
   const contentMatch = path.match(/^\/api\/files\/(\d+)\/(view|download)$/);
   if (contentMatch && request.method === "GET") return streamFile(Number(contentMatch[1]), contentMatch[2], request, env, session);
   const restoreMatch = path.match(/^\/api\/files\/(\d+)\/restore$/);
@@ -634,7 +637,7 @@ async function listItems(url, env, session) {
 
   const orderBySort = {
     "updated-desc": "created_at DESC", "updated-asc": "created_at ASC",
-    "name-asc": "original_name COLLATE NOCASE ASC", "name-desc": "original_name COLLATE NOCASE DESC",
+    "name-asc": "COALESCE(display_name, original_name) COLLATE NOCASE ASC", "name-desc": "COALESCE(display_name, original_name) COLLATE NOCASE DESC",
     "size-desc": "size_bytes DESC", "size-asc": "size_bytes ASC",
     newest: "created_at DESC", oldest: "created_at ASC", name: "original_name COLLATE NOCASE ASC", size: "size_bytes DESC"
   };
@@ -643,16 +646,21 @@ async function listItems(url, env, session) {
   if (folderId && !foldersOnly) {
     const clauses = ["folder_id = ?", "deleted_at IS NULL", "status = 'ready'"];
     const values = [folderId];
-    if (query) { clauses.push("(crypto_version = 1 OR LOWER(original_name) LIKE ?)"); values.push(`%${query}%`); }
-    if (kind) { clauses.push("(crypto_version = 1 OR media_kind = ?)"); values.push(kind); }
+    if (query) { clauses.push("(display_metadata_version = 0 OR LOWER(COALESCE(display_name, original_name)) LIKE ?)"); values.push(`%${query}%`); }
+    if (kind) { clauses.push("(display_metadata_version = 0 OR COALESCE(display_media_kind, media_kind) = ?)"); values.push(kind); }
     files = await env.DB.prepare(`
-      SELECT id, folder_id AS folderId, original_name AS name, mime_type AS mimeType,
-        media_kind AS mediaKind, size_bytes AS sizeBytes,
+      SELECT id, folder_id AS folderId, COALESCE(display_name, original_name) AS name,
+        COALESCE(display_mime_type, mime_type) AS mimeType,
+        COALESCE(display_media_kind, media_kind) AS mediaKind, size_bytes AS sizeBytes,
+        display_metadata_version AS displayMetadataVersion,
+        display_last_modified AS displayLastModified,
+        display_duration_seconds AS displayDurationSeconds,
         crypto_version AS cryptoVersion, encrypted_metadata AS encryptedMetadata,
         metadata_iv AS metadataIv, wrapped_file_key AS wrappedFileKey, file_key_iv AS fileKeyIv,
         encrypted_size_bytes AS encryptedSizeBytes, chunk_size_bytes AS chunkSizeBytes,
         chunk_count AS chunkCount,
-        thumbnail_key IS NOT NULL AS hasThumbnail,
+        (thumbnail_key IS NOT NULL OR display_thumbnail_key IS NOT NULL) AS hasThumbnail,
+        display_thumbnail_key IS NOT NULL AS hasDisplayThumbnail,
         EXISTS(SELECT 1 FROM cloud_deletion_requests dr WHERE dr.file_id = cloud_files.id AND dr.status = 'pending') AS deletionPending,
         created_at AS createdAt, updated_at AS updatedAt
       FROM cloud_files WHERE ${clauses.join(" AND ")} ORDER BY ${order}${uploadIndex ? ", id ASC" : ""}
@@ -1087,6 +1095,7 @@ async function createUpload(request, env, session) {
   }
   if (Number(body.cryptoVersion) !== 1) throw new HttpError(400, "暗号化されたファイルだけ保存できます。");
   const encrypted = normalizeEncryptedFile(body, sizeBytes);
+  const display = normalizeFastDisplayMetadata(body.fastDisplay);
   const folderId = optionalId(body.folderId);
   if (!folderId) throw new HttpError(400, "ファイルはPW付きフォルダ内に保存してください。");
   await requireFolder(env, folderId);
@@ -1096,11 +1105,15 @@ async function createUpload(request, env, session) {
   const result = await env.DB.prepare(`
     INSERT INTO cloud_files (folder_id, object_key, original_name, mime_type, media_kind, size_bytes,
       multipart_upload_id, created_by, crypto_version, encrypted_metadata, metadata_iv,
-      wrapped_file_key, file_key_iv, encrypted_size_bytes, chunk_size_bytes, chunk_count)
-    VALUES (?, ?, '[encrypted]', 'application/octet-stream', 'other', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+      wrapped_file_key, file_key_iv, encrypted_size_bytes, chunk_size_bytes, chunk_count,
+      display_metadata_version, display_name, display_mime_type, display_media_kind,
+      display_last_modified, display_duration_seconds)
+    VALUES (?, ?, '[encrypted]', 'application/octet-stream', 'other', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(folderId, objectKey, sizeBytes, upload.uploadId, session.role, encrypted.encryptedMetadata,
     encrypted.metadataIv, encrypted.wrappedFileKey, encrypted.fileKeyIv, encrypted.encryptedSizeBytes,
-    encrypted.chunkSizeBytes, encrypted.chunkCount).run();
+    encrypted.chunkSizeBytes, encrypted.chunkCount, display ? 1 : 0, display?.name || null,
+    display?.mimeType || null, display?.mediaKind || null, display?.lastModified || null,
+    display?.durationSeconds || null).run();
   const id = Number(result.meta.last_row_id);
   await audit(env, "upload_started", session, "file", id, { encrypted: true, sizeBytes });
   return json({ id, uploadId: upload.uploadId, chunkSize: encrypted.chunkSizeBytes }, 201);
@@ -1151,7 +1164,20 @@ async function getFile(id, env, session) {
   const file = await requireReadyFile(env, id, true);
   requireTrashVisibility(session, file);
   if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
-  return json({ file: mapFile(file) });
+  const mapped = mapFile(file);
+  if (Number(file.crypto_version) === 1 && file.folder_id) {
+    const folder = await requireFolder(env, file.folder_id);
+    Object.assign(mapped, {
+      folderCryptoVersion: folder.cryptoVersion,
+      folderEncryptedName: folder.encryptedName,
+      folderNameIv: folder.nameIv,
+      folderPasswordSalt: folder.passwordSalt,
+      folderPasswordWrappedKey: folder.passwordWrappedKey,
+      folderPasswordWrapIv: folder.passwordWrapIv,
+      folderAdminWrappedKey: folder.adminWrappedKey
+    });
+  }
+  return json({ file: mapped });
 }
 
 async function updateFile(id, request, env, session) {
@@ -1175,8 +1201,24 @@ async function updateFile(id, request, env, session) {
     }
     const wrappedFileKey = moving ? validCryptoText(body.wrappedFileKey, 512, "ファイル鍵") : file.wrapped_file_key;
     const fileKeyIv = moving ? validCryptoText(body.fileKeyIv, 64, "ファイル鍵IV") : file.file_key_iv;
-    await env.DB.prepare("UPDATE cloud_files SET encrypted_metadata = ?, metadata_iv = ?, folder_id = ?, wrapped_file_key = ?, file_key_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(encryptedMetadata, metadataIv, folderId, wrappedFileKey, fileKeyIv, id).run();
+    const display = body.fastDisplay === undefined ? null : normalizeFastDisplayMetadata(body.fastDisplay, file);
+    const retainDisplay = body.fastDisplay === undefined;
+    await env.DB.prepare(`UPDATE cloud_files SET encrypted_metadata = ?, metadata_iv = ?,
+      folder_id = ?, wrapped_file_key = ?, file_key_iv = ?,
+      display_metadata_version = CASE WHEN ? THEN display_metadata_version ELSE ? END,
+      display_name = CASE WHEN ? THEN display_name ELSE ? END,
+      display_mime_type = CASE WHEN ? THEN display_mime_type ELSE ? END,
+      display_media_kind = CASE WHEN ? THEN display_media_kind ELSE ? END,
+      display_last_modified = CASE WHEN ? THEN display_last_modified ELSE ? END,
+      display_duration_seconds = CASE WHEN ? THEN display_duration_seconds ELSE ? END,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(encryptedMetadata, metadataIv, folderId, wrappedFileKey, fileKeyIv,
+        retainDisplay ? 1 : 0, display ? 1 : 0,
+        retainDisplay ? 1 : 0, display?.name || null,
+        retainDisplay ? 1 : 0, display?.mimeType || null,
+        retainDisplay ? 1 : 0, display?.mediaKind || null,
+        retainDisplay ? 1 : 0, display?.lastModified || null,
+        retainDisplay ? 1 : 0, display?.durationSeconds || null, id).run();
     await audit(env, "file_updated", session, "file", id, { encrypted: true, moved: moving, folderId });
     return json({ ok: true });
   }
@@ -1203,14 +1245,16 @@ async function updateFileMetadataBatch(request, env, session) {
   const normalized = entries.map((entry) => ({
     id: optionalId(entry?.id),
     encryptedMetadata: validCryptoText(entry?.encryptedMetadata, 4096, "ファイル情報"),
-    metadataIv: validCryptoText(entry?.metadataIv, 64, "ファイル情報IV")
+    metadataIv: validCryptoText(entry?.metadataIv, 64, "ファイル情報IV"),
+    fastDisplayInput: entry?.fastDisplay
   }));
   if (normalized.some((entry) => !entry.id)) throw new HttpError(400, "ファイルIDを確認してください。");
   const ids = normalized.map((entry) => entry.id);
   if (new Set(ids).size !== ids.length) throw new HttpError(400, "同じファイルが一括処理内で重複しています。");
 
   const placeholders = ids.map(() => "?").join(", ");
-  const rows = await env.DB.prepare(`SELECT id, crypto_version AS cryptoVersion, status, deleted_at AS deletedAt
+  const rows = await env.DB.prepare(`SELECT id, crypto_version AS cryptoVersion, status, deleted_at AS deletedAt,
+      display_metadata_version, display_media_kind
     FROM cloud_files WHERE id IN (${placeholders})`).bind(...ids).all();
   const byId = new Map((rows.results || []).map((row) => [Number(row.id), row]));
   for (const id of ids) {
@@ -1219,11 +1263,27 @@ async function updateFileMetadataBatch(request, env, session) {
       throw new HttpError(409, `更新できないファイルが含まれています（ID: ${id}）。`);
     }
   }
+  for (const entry of normalized) {
+    entry.fastDisplay = entry.fastDisplayInput === undefined
+      ? null
+      : normalizeFastDisplayMetadata(entry.fastDisplayInput, byId.get(entry.id));
+    delete entry.fastDisplayInput;
+  }
 
   await env.DB.batch(normalized.map((entry) => env.DB.prepare(`UPDATE cloud_files
-    SET encrypted_metadata = ?, metadata_iv = ?, updated_at = CURRENT_TIMESTAMP
+    SET encrypted_metadata = ?, metadata_iv = ?,
+      display_name = CASE WHEN ? THEN ? ELSE display_name END,
+      display_mime_type = CASE WHEN ? THEN ? ELSE display_mime_type END,
+      display_last_modified = CASE WHEN ? THEN ? ELSE display_last_modified END,
+      display_duration_seconds = CASE WHEN ? THEN ? ELSE display_duration_seconds END,
+      updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND status = 'ready' AND deleted_at IS NULL AND crypto_version = 1`)
-    .bind(entry.encryptedMetadata, entry.metadataIv, entry.id)));
+    .bind(entry.encryptedMetadata, entry.metadataIv,
+      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.name || null,
+      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.mimeType || null,
+      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.lastModified || null,
+      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.durationSeconds || null,
+      entry.id)));
   await audit(env, "file_metadata_batch_updated", session, "file_batch", null, {
     operationId,
     count: normalized.length,
@@ -1261,10 +1321,11 @@ async function restoreFile(id, env, session) {
 
 async function permanentlyDeleteFile(id, env, session) {
   requireDelete(session);
-  const file = await env.DB.prepare("SELECT object_key, thumbnail_key, stream_uid FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
+  const file = await env.DB.prepare("SELECT object_key, thumbnail_key, display_thumbnail_key, stream_uid FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
   await env.FILES.delete(file.object_key);
   if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
+  if (file.display_thumbnail_key) await env.FILES.delete(file.display_thumbnail_key);
   if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
   await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(id).run();
   await audit(env, "file_deleted", session, "file", id);
@@ -1276,7 +1337,7 @@ async function emptyTrash(env, session) {
   const totals = await env.DB.prepare(`SELECT
     (SELECT COUNT(*) FROM cloud_files WHERE deleted_at IS NOT NULL) AS fileCount,
     (SELECT COUNT(*) FROM cloud_folders WHERE deleted_at IS NOT NULL) AS folderCount`).first();
-  const rows = await env.DB.prepare("SELECT id, object_key, thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL ORDER BY id LIMIT 20").all();
+  const rows = await env.DB.prepare("SELECT id, object_key, thumbnail_key, display_thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL ORDER BY id LIMIT 20").all();
   let deleted = 0;
   let deletedFolders = 0;
   let failed = 0;
@@ -1284,6 +1345,7 @@ async function emptyTrash(env, session) {
     try {
       await env.FILES.delete(file.object_key);
       if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
+      if (file.display_thumbnail_key) await env.FILES.delete(file.display_thumbnail_key);
       if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
       await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(file.id).run();
       await audit(env, "file_deleted", session, "file", file.id, { bulk: true });
@@ -1338,6 +1400,37 @@ async function getThumbnail(id, env, session) {
   const object = await env.FILES.get(file.thumbnail_key);
   if (!object) throw new HttpError(404, "サムネイルがありません。");
   return objectResponse(object, "inline", Number(file.crypto_version) === 1 ? "encrypted-thumbnail.bin" : "thumbnail.webp", Number(file.crypto_version) === 1 ? "application/octet-stream" : "image/webp");
+}
+
+async function putDisplayThumbnail(id, request, env, session) {
+  requireUpload(session);
+  const file = await requireReadyFile(env, id, false);
+  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  if (Number(file.display_metadata_version) !== 1 || file.display_media_kind !== "image") {
+    throw new HttpError(403, "動画・未確認形式の表示用データはオンラインへ平文保存できません。");
+  }
+  const length = Number(request.headers.get("Content-Length") || 0);
+  if (length <= 0 || length > 2 * 1024 * 1024) throw new HttpError(413, "表示用サムネイルの容量を確認してください。");
+  const key = file.display_thumbnail_key || `display-thumbnails/${crypto.randomUUID()}.webp`;
+  await env.FILES.put(key, request.body, { httpMetadata: { contentType: "image/webp" } });
+  await env.DB.prepare("UPDATE cloud_files SET display_thumbnail_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(key, id).run();
+  return json({ ok: true });
+}
+
+async function getDisplayThumbnail(id, env, session) {
+  const file = await requireReadyFile(env, id, true);
+  requireTrashVisibility(session, file);
+  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  if (Number(file.display_metadata_version) !== 1 || file.display_media_kind === "video" || !file.display_thumbnail_key) {
+    throw new HttpError(404, "表示用サムネイルがありません。");
+  }
+  const object = await env.FILES.get(file.display_thumbnail_key);
+  if (!object) throw new HttpError(404, "表示用サムネイルがありません。");
+  const response = objectResponse(object, "inline", "thumbnail.webp", "image/webp");
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "private, max-age=2592000, immutable");
+  return new Response(response.body, { status: response.status, headers });
 }
 
 async function streamFile(id, disposition, request, env, session) {
@@ -1420,11 +1513,9 @@ async function listTrash(env, session) {
 async function getUsage(env, session) {
   requireAdmin(session);
   const row = await env.DB.prepare(`SELECT
-    SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS activeFileCount,
-    COALESCE(SUM(CASE WHEN deleted_at IS NULL THEN size_bytes ELSE 0 END), 0) AS activeBytes,
-    SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS trashFileCount,
-    COALESCE(SUM(CASE WHEN deleted_at IS NOT NULL THEN size_bytes ELSE 0 END), 0) AS trashBytes
-    FROM cloud_files WHERE status = 'ready'`).first();
+    active_file_count AS activeFileCount, active_bytes AS activeBytes,
+    trash_file_count AS trashFileCount, trash_bytes AS trashBytes
+    FROM cloud_usage_summary WHERE id = 1`).first();
   return json({
     activeFileCount: Number(row?.activeFileCount || 0),
     activeBytes: Number(row?.activeBytes || 0),
@@ -1734,11 +1825,12 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260812-1.css"],
-    ["/cloud.js", "/cloud-runtime-20260812-4.js"],
+    ["/cloud.js", "/cloud-runtime-20260813-1.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
     ["/offline-store.js", "/offline-store-20260811-2.js"],
+    ["/display-cache.js", "/display-cache-20260813-1.js"],
     ["/media-client.js", "/media-client-20260811-12.js"],
     ["/media-worker.js", "/media-worker-20260811-19.js"],
     ["/manifest.webmanifest", "/manifest-20260811-1.webmanifest"],
@@ -1767,7 +1859,7 @@ async function serveAsset(request, env, url, path) {
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  const isAuthenticationAsset = ["/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/offline-store.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
+  const isAuthenticationAsset = ["/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/offline-store.js", "/display-cache.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
   const isPwaMetadataAsset = path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest" || path.startsWith("/icons/");
   const isVersionedAsset = url.searchParams.has("v") || url.searchParams.has("rev");
   const isServiceWorkerAsset = path === "/media-worker.js";
@@ -1917,13 +2009,18 @@ async function breadcrumbs(env, folderId, session) {
 
 function mapFile(file) {
   return {
-    id: file.id, folderId: file.folder_id, name: file.original_name, mimeType: file.mime_type,
-    mediaKind: file.media_kind, sizeBytes: file.size_bytes,
+    id: file.id, folderId: file.folder_id, name: file.display_name || file.original_name,
+    mimeType: file.display_mime_type || file.mime_type,
+    mediaKind: file.display_media_kind || file.media_kind, sizeBytes: file.size_bytes,
+    displayMetadataVersion: Number(file.display_metadata_version || 0),
+    displayLastModified: Number(file.display_last_modified || 0),
+    displayDurationSeconds: Number(file.display_duration_seconds || 0),
     cryptoVersion: file.crypto_version, encryptedMetadata: file.encrypted_metadata,
     metadataIv: file.metadata_iv, wrappedFileKey: file.wrapped_file_key, fileKeyIv: file.file_key_iv,
     encryptedSizeBytes: file.encrypted_size_bytes, chunkSizeBytes: file.chunk_size_bytes,
     chunkCount: file.chunk_count,
-    hasThumbnail: Boolean(file.thumbnail_key), createdAt: file.created_at, updatedAt: file.updated_at,
+    hasThumbnail: Boolean(file.thumbnail_key || file.display_thumbnail_key),
+    hasDisplayThumbnail: Boolean(file.display_thumbnail_key), createdAt: file.created_at, updatedAt: file.updated_at,
     deletedAt: file.deleted_at
   };
 }
@@ -2043,7 +2140,7 @@ async function audit(env, eventType, session, targetType, targetId, details = nu
 }
 
 function detectKind(mime, name) {
-  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("image/") || /\.(jpe?g|png|gif|webp)$/i.test(name)) return "image";
   if (mime.startsWith("video/") || /\.(mp4|m4v|flv|mkv|mov|avi|webm|mpg|mpeg|mxf|gxf|lxf|3gp|ts|m2ts|mts)$/i.test(name)) return "video";
   if (mime.startsWith("audio/") || /\.(m4a|mp3|wav|aac|flac|ogg)$/i.test(name)) return "audio";
   if (/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/i.test(name)) return "document";
@@ -2066,6 +2163,38 @@ function normalizeFolderPassword(value, required) {
   if (!password && !required) return "";
   if (password.length < 4 || password.length > 128) throw new HttpError(400, "フォルダパスワードは4文字以上128文字以内で設定してください。");
   return password;
+}
+
+function normalizeFastDisplayMetadata(value, existingFile = null) {
+  if (value == null || value === false) return null;
+  if (!value || typeof value !== "object") throw new HttpError(400, "表示用情報を確認してください。");
+  const signature = String(value.signature || "").toLowerCase();
+  const mediaKind = String(value.mediaKind || "").toLowerCase();
+  const allowedSignatures = {
+    image: new Set(["jpeg", "png", "gif", "webp"]),
+    audio: new Set(["wav", "ogg", "flac", "mpeg-audio"]),
+    document: new Set(["pdf", "zip"])
+  };
+  const confirmedExisting = Number(existingFile?.display_metadata_version || 0) === 1
+    && existingFile?.display_media_kind === mediaKind
+    && mediaKind !== "video";
+  if (!confirmedExisting && !allowedSignatures[mediaKind]?.has(signature)) {
+    throw new HttpError(400, "動画または判定が曖昧な形式は、オンライン表示用の平文情報を保存できません。");
+  }
+  const name = validName(value.name);
+  const mimeType = validMime(value.mimeType);
+  if (detectKind(mimeType, name) !== mediaKind || mediaKind === "video") {
+    throw new HttpError(400, "表示用情報の形式を確認してください。");
+  }
+  const lastModified = Number(value.lastModified || 0);
+  const durationSeconds = Number(value.durationSeconds || 0);
+  return {
+    name,
+    mimeType,
+    mediaKind,
+    lastModified: Number.isSafeInteger(lastModified) && lastModified > 0 ? lastModified : null,
+    durationSeconds: Number.isSafeInteger(durationSeconds) && durationSeconds > 0 ? durationSeconds : null
+  };
 }
 
 function normalizeEncryptedFolder(body, passwordRequired = true) {

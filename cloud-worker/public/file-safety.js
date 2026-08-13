@@ -38,7 +38,7 @@
       if (!matchesExtension(extension, signature, header)) {
         throw confirmationRequired("拡張子とファイル内容が一致しません。元のファイルをご確認ください。");
       }
-      return Object.freeze({ status: "passed", inspectedBytes: header.byteLength });
+      return Object.freeze({ status: "passed", inspectedBytes: header.byteLength, signature });
     } finally {
       header.fill(0);
     }
