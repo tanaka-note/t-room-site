@@ -305,7 +305,7 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
 .preview-player-button:focus-visible, .preview-player-seek:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
 .preview-player-button svg { width: 21px; height: 21px; fill: currentColor; }
 .preview-player-time { min-width: 76px; font-variant-numeric: tabular-nums; font-size: .72rem; white-space: nowrap; }
-.preview-player-seek { --played-percent: 0%; --buffered-percent: 0%; position: relative; width: 100%; min-width: 0; height: 24px; margin: 0; padding: 0; border: 0; background: transparent; cursor: ew-resize; touch-action: none; }
+.preview-player-seek { --played-percent: 0%; --buffered-percent: 0%; position: relative; width: 100%; min-width: 0; height: 24px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; touch-action: none; }
 .preview-player-seek::before { content: ""; position: absolute; inset: 50% 0 auto; height: 5px; border-radius: 999px; transform: translateY(-50%); background: linear-gradient(to right, #64d2c8 0 var(--played-percent), rgba(221,230,232,.72) var(--played-percent) var(--buffered-percent), rgba(255,255,255,.22) var(--buffered-percent) 100%); transition: height .12s ease; }
 .preview-player-seek.is-scrubbing::before { height: 7px; }
 .preview-player-seek[aria-disabled="true"] { opacity: .45; cursor: default; }

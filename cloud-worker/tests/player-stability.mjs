@@ -31,6 +31,8 @@ for (const client of [main, share]) {
 for (const css of [mainCss, shareCss]) {
   assert.match(css, /has-custom-video-controls\.is-media-ready video/);
   assert.match(css, /player-buffering\.is-hidden/);
+  assert.match(css, /\.preview-player-seek \{[^}]*cursor:\s*pointer;/);
+  assert.doesNotMatch(css, /\.preview-player-seek \{[^}]*cursor:\s*ew-resize;/);
 }
 
 assert.match(main, /prepareVideoPlayer\(stage, file\)[\s\S]*?registerMediaWithDeviceCache/);

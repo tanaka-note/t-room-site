@@ -1113,7 +1113,7 @@ function secureResponse(response) {
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
