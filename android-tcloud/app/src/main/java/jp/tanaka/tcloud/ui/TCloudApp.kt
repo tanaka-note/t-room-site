@@ -3,6 +3,7 @@ package jp.tanaka.tcloud.ui
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,6 +14,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -27,15 +29,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Edit
@@ -55,6 +61,8 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -91,11 +99,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -119,8 +130,12 @@ import java.security.SecureRandom
 import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupSettings
 
-private val TCloudBlue = Color(0xFF212562)
-private val TCloudBackground = Color(0xFFF7F8FC)
+private val TCloudBlue = Color(0xFF16756D)
+private val TCloudBlueDark = Color(0xFF0F5B55)
+private val TCloudBackground = Color(0xFFF4F7F8)
+private val TCloudLine = Color(0xFFDCE2E7)
+private val TCloudMuted = Color(0xFF68737D)
+private val TCloudSelection = Color(0xFFE4F3F0)
 
 @Composable
 fun TCloudApp(viewModel: MainViewModel) {
@@ -341,6 +356,7 @@ fun TCloudApp(viewModel: MainViewModel) {
                 else -> FolderScreen(
                     accountName = state.session?.accountName.orEmpty(),
                     currentName = state.page?.currentFolder?.name ?: "ファイル",
+                    currentFolderId = state.page?.currentFolder?.id,
                     canGoBack = state.folderStack.isNotEmpty(),
                     canUpload = state.session?.canUpload == true && state.page?.currentFolder != null,
                     canManageItems = state.session?.isAdmin == true ||
@@ -348,12 +364,14 @@ fun TCloudApp(viewModel: MainViewModel) {
                     canDeleteItems = state.page?.canTrashContents == true,
                     folders = state.page?.folders.orEmpty(),
                     files = state.page?.files.orEmpty(),
+                    thumbnailBitmaps = state.thumbnailBitmaps,
                     selectedFileIds = state.selectedFileIds,
                     selectedFolderIds = state.selectedFolderIds,
                     busy = state.busy,
                     snackbar = snackbar,
                     onOpenFolder = viewModel::openFolder,
                     onOpenFile = viewModel::openFile,
+                    onRequestThumbnail = viewModel::loadThumbnail,
                     onDownload = ::requestDownload,
                     onOffline = ::requestOffline,
                     onMove = viewModel::openMove,
@@ -372,6 +390,7 @@ fun TCloudApp(viewModel: MainViewModel) {
                     onOfflineSelection = ::requestSelectionOffline,
                     onDeleteSelection = viewModel::openDeleteSelection,
                     onUpload = ::requestUpload,
+                    onCreateFolder = viewModel::openCreateFolder,
                     onBack = viewModel::goBack,
                     onLogout = viewModel::logout,
                     onOpenOffline = viewModel::openOffline,
@@ -385,6 +404,15 @@ fun TCloudApp(viewModel: MainViewModel) {
                     busy = state.busy,
                     onUnlock = viewModel::unlockFolder,
                     onDismiss = viewModel::cancelUnlock,
+                )
+            }
+
+            if (state.creatingFolder) {
+                CreateFolderDialog(
+                    topLevel = state.page?.currentFolder == null,
+                    busy = state.busy,
+                    onCreate = viewModel::createFolder,
+                    onDismiss = viewModel::cancelCreateFolder,
                 )
             }
 
@@ -552,57 +580,89 @@ private fun LoginScreen(
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+    Scaffold(
+        containerColor = TCloudBackground,
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { padding ->
         Box(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 24.dp),
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("T-Cloud", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                Text(stringResource(R.string.service_name), color = Color(0xFF667085))
-                Spacer(Modifier.height(32.dp))
-                OutlinedTextField(
-                    value = loginId,
-                    onValueChange = { loginId = it },
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("ログインID") },
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("パスワード") },
-                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                            Icon(
-                                if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = if (passwordVisible) "パスワードを隠す" else "パスワードを表示",
-                            )
-                        }
-                    },
-                )
-                Spacer(Modifier.height(20.dp))
-                Button(
-                    onClick = { onLogin(loginId, password) },
-                    enabled = !busy && loginId.isNotBlank() && password.length >= 8,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(14.dp),
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                color = Color.White,
+                shadowElevation = 10.dp,
+                tonalElevation = 0.dp,
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 32.dp),
+                    horizontalAlignment = Alignment.Start,
                 ) {
-                    if (busy) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
-                    else Text("ログイン")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Image(
+                            painter = painterResource(R.drawable.tcloud_logo),
+                            contentDescription = null,
+                            modifier = Modifier.size(42.dp).clip(CircleShape),
+                            contentScale = ContentScale.Crop,
+                        )
+                        Column {
+                            Text("T-Cloud", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+                            Text("Cloud Storage", style = MaterialTheme.typography.labelMedium, color = TCloudMuted)
+                        }
+                    }
+                    Spacer(Modifier.height(34.dp))
+                    Text("PRIVATE STORAGE", color = TCloudBlue, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Text("ログイン", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.ExtraBold)
+                    Text("保存したファイルへ安全にアクセスします。", color = TCloudMuted, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(28.dp))
+                    OutlinedTextField(
+                        value = loginId,
+                        onValueChange = { loginId = it },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("ログインID") },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("パスワード") },
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (passwordVisible) "パスワードを隠す" else "パスワードを表示",
+                                )
+                            }
+                        },
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = { onLogin(loginId, password) },
+                        enabled = !busy && loginId.isNotBlank() && password.length >= 8,
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        if (busy) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
+                        else Text("ログイン", fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "パスワードと復号鍵は端末内で保護され、Cloudflareへ送信しません。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TCloudMuted,
+                    )
                 }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "パスワードと復号鍵は端末内で保護され、Cloudflareへ送信しません。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF667085),
-                )
             }
         }
     }
@@ -613,18 +673,21 @@ private fun LoginScreen(
 private fun FolderScreen(
     accountName: String,
     currentName: String,
+    currentFolderId: Long?,
     canGoBack: Boolean,
     canUpload: Boolean,
     canManageItems: Boolean,
     canDeleteItems: Boolean,
     folders: List<CloudFolder>,
     files: List<CloudFile>,
+    thumbnailBitmaps: Map<Long, Bitmap>,
     selectedFileIds: Set<Long>,
     selectedFolderIds: Set<Long>,
     busy: Boolean,
     snackbar: SnackbarHostState,
     onOpenFolder: (CloudFolder) -> Unit,
     onOpenFile: (CloudFile) -> Unit,
+    onRequestThumbnail: (CloudFile) -> Unit,
     onDownload: (CloudFile) -> Unit,
     onOffline: (CloudFile) -> Unit,
     onMove: (CloudFile) -> Unit,
@@ -643,6 +706,7 @@ private fun FolderScreen(
     onOfflineSelection: () -> Unit,
     onDeleteSelection: () -> Unit,
     onUpload: () -> Unit,
+    onCreateFolder: () -> Unit,
     onBack: () -> Boolean,
     onLogout: () -> Unit,
     onOpenOffline: () -> Unit,
@@ -651,7 +715,54 @@ private fun FolderScreen(
     val selectionCount = selectedFileIds.size + selectedFolderIds.size
     val selectionMode = selectionCount > 0
     var selectionActionsExpanded by remember { mutableStateOf(false) }
+    var searchQuery by remember(currentName) { mutableStateOf("") }
+    var sortMode by remember(currentName) { mutableStateOf("name-asc") }
+    val context = LocalContext.current
+    val viewPreferences = remember {
+        context.getSharedPreferences("tcloud_folder_view", Context.MODE_PRIVATE)
+    }
+    val viewPreferenceKey = remember(accountName, currentFolderId) {
+        "${accountName.hashCode()}-${currentFolderId ?: 0L}"
+    }
+    val defaultGridView = currentFolderId != null && folders.isEmpty() &&
+        files.any { it.mediaKind == "image" || it.mediaKind == "video" }
+    var gridView by remember(viewPreferenceKey) {
+        mutableStateOf(
+            if (viewPreferences.contains(viewPreferenceKey)) {
+                viewPreferences.getBoolean(viewPreferenceKey, false)
+            } else {
+                defaultGridView
+            },
+        )
+    }
+    fun setGridView(enabled: Boolean) {
+        gridView = enabled
+        viewPreferences.edit().putBoolean(viewPreferenceKey, enabled).apply()
+    }
+    val filteredFolders = remember(folders, searchQuery, sortMode) {
+        folders.filter { it.name.contains(searchQuery, ignoreCase = true) }.let { source ->
+            when (sortMode) {
+                "name-desc" -> source.sortedByDescending { it.name.lowercase(Locale.JAPANESE) }
+                "size-desc" -> source.sortedByDescending { it.fileCount }
+                "size-asc" -> source.sortedBy { it.fileCount }
+                else -> source.sortedBy { it.name.lowercase(Locale.JAPANESE) }
+            }
+        }
+    }
+    val filteredFiles = remember(files, searchQuery, sortMode) {
+        files.filter { it.name.contains(searchQuery, ignoreCase = true) }.let { source ->
+            when (sortMode) {
+                "name-desc" -> source.sortedByDescending { it.name.lowercase(Locale.JAPANESE) }
+                "size-desc" -> source.sortedByDescending { it.sizeBytes }
+                "size-asc" -> source.sortedBy { it.sizeBytes }
+                "updated-asc" -> source.sortedBy { it.lastModified }
+                "updated-desc" -> source.sortedByDescending { it.lastModified }
+                else -> source.sortedBy { it.name.lowercase(Locale.JAPANESE) }
+            }
+        }
+    }
     Scaffold(
+        containerColor = Color.White,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
@@ -670,10 +781,14 @@ private fun FolderScreen(
                     Column {
                         Text(
                             if (selectionMode) "${selectionCount}件を選択中" else currentName,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.ExtraBold,
                         )
-                        if (!selectionMode && accountName.isNotBlank()) {
-                            Text(accountName, style = MaterialTheme.typography.labelSmall, color = Color(0xFF667085))
+                        if (!selectionMode) {
+                            Text(
+                                if (canGoBack) "Cloud Storage" else "すべてのファイル",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TCloudMuted,
+                            )
                         }
                     }
                 },
@@ -753,8 +868,11 @@ private fun FolderScreen(
                         Icon(Icons.Default.OfflinePin, contentDescription = "端末保存")
                     }
                     if (canUpload) {
+                        IconButton(onClick = onCreateFolder, enabled = !busy) {
+                            Icon(Icons.Default.CreateNewFolder, contentDescription = "新しいフォルダ")
+                        }
                         IconButton(onClick = onUpload, enabled = !busy) {
-                            Icon(Icons.Default.Add, contentDescription = "アップロード")
+                            Icon(Icons.Default.Add, contentDescription = "ファイルをアップロード")
                         }
                     }
                     IconButton(onClick = onLogout, enabled = !busy) {
@@ -768,46 +886,162 @@ private fun FolderScreen(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (folders.isEmpty() && files.isEmpty()) {
+                item(key = "toolbar") {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            leadingIcon = { Text("⌕", color = TCloudMuted) },
+                            placeholder = { Text("フォルダまたはファイルを検索") },
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            TCloudSortButton(
+                                label = "更新",
+                                selected = sortMode.startsWith("updated"),
+                                descending = sortMode != "updated-asc",
+                                onClick = {
+                                    sortMode = if (sortMode == "updated-desc") "updated-asc" else "updated-desc"
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                            TCloudSortButton(
+                                label = "名前",
+                                selected = sortMode.startsWith("name"),
+                                descending = sortMode == "name-desc",
+                                onClick = { sortMode = if (sortMode == "name-asc") "name-desc" else "name-asc" },
+                                modifier = Modifier.weight(1f),
+                            )
+                            TCloudSortButton(
+                                label = "容量",
+                                selected = sortMode.startsWith("size"),
+                                descending = sortMode != "size-asc",
+                                onClick = { sortMode = if (sortMode == "size-desc") "size-asc" else "size-desc" },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${filteredFolders.size}フォルダ・${filteredFiles.size}ファイル",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = TCloudMuted,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(
+                                onClick = { setGridView(false) },
+                                enabled = !busy,
+                            ) {
+                                Icon(
+                                    Icons.Default.ViewList,
+                                    contentDescription = "横長表示",
+                                    tint = if (!gridView) TCloudBlue else TCloudMuted,
+                                )
+                            }
+                            IconButton(
+                                onClick = { setGridView(true) },
+                                enabled = !busy,
+                            ) {
+                                Icon(
+                                    Icons.Default.GridView,
+                                    contentDescription = "1:1表示",
+                                    tint = if (gridView) TCloudBlue else TCloudMuted,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (filteredFolders.isEmpty() && filteredFiles.isEmpty()) {
                     item {
                         Text(
-                            "表示できるデータはありません。",
+                            if (searchQuery.isBlank()) "表示できるデータはありません。" else "検索結果はありません。",
                             modifier = Modifier.padding(24.dp),
-                            color = Color(0xFF667085),
+                            color = TCloudMuted,
                         )
                     }
                 }
-                items(folders, key = { "folder-${it.id}" }) { folder ->
-                    FolderRow(
-                        folder = folder,
-                        selected = folder.id in selectedFolderIds,
-                        selectionMode = selectionMode,
-                        canManage = canManageItems,
-                        onOpenFolder = onOpenFolder,
-                        onToggleSelection = onToggleFolderSelection,
-                        onRename = onRenameFolder,
-                        onMove = onMoveFolder,
-                        onShare = onShareFolder,
-                    )
-                    HorizontalDivider(color = Color(0xFFE7E9F0))
-                }
-                items(files, key = { "file-${it.id}" }) { file ->
-                    FileRow(
-                        file = file,
-                        selected = file.id in selectedFileIds,
-                        selectionMode = selectionMode,
-                        canManage = canManageItems,
-                        onOpenFile = onOpenFile,
-                        onToggleSelection = onToggleFileSelection,
-                        onDownload = onDownload,
-                        onOffline = onOffline,
-                        onMove = onMove,
-                        onRename = onRenameFile,
-                        onShare = onShareFile,
-                    )
-                    HorizontalDivider(color = Color(0xFFE7E9F0))
+                if (!gridView) {
+                    items(filteredFolders, key = { "folder-${it.id}" }) { folder ->
+                        FolderRow(
+                            folder = folder,
+                            selected = folder.id in selectedFolderIds,
+                            selectionMode = selectionMode,
+                            canManage = canManageItems,
+                            onOpenFolder = onOpenFolder,
+                            onToggleSelection = onToggleFolderSelection,
+                            onRename = onRenameFolder,
+                            onMove = onMoveFolder,
+                            onShare = onShareFolder,
+                        )
+                    }
+                    items(filteredFiles, key = { "file-${it.id}" }) { file ->
+                        FileRow(
+                            file = file,
+                            thumbnailBitmap = thumbnailBitmaps[file.id],
+                            selected = file.id in selectedFileIds,
+                            selectionMode = selectionMode,
+                            canManage = canManageItems,
+                            onOpenFile = onOpenFile,
+                            onRequestThumbnail = onRequestThumbnail,
+                            onToggleSelection = onToggleFileSelection,
+                            onDownload = onDownload,
+                            onOffline = onOffline,
+                            onMove = onMove,
+                            onRename = onRenameFile,
+                            onShare = onShareFile,
+                        )
+                    }
+                } else {
+                    items(filteredFolders.chunked(2), key = { row -> "folder-grid-${row.first().id}" }) { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            row.forEach { folder ->
+                                FolderGridCard(
+                                    folder = folder,
+                                    selected = folder.id in selectedFolderIds,
+                                    selectionMode = selectionMode,
+                                    canManage = canManageItems,
+                                    onOpenFolder = onOpenFolder,
+                                    onToggleSelection = onToggleFolderSelection,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                    items(filteredFiles.chunked(2), key = { row -> "file-grid-${row.first().id}" }) { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            row.forEach { file ->
+                                FileGridCard(
+                                    file = file,
+                                    thumbnailBitmap = thumbnailBitmaps[file.id],
+                                    selected = file.id in selectedFileIds,
+                                    selectionMode = selectionMode,
+                                    canManage = canManageItems,
+                                    onOpenFile = onOpenFile,
+                                    onRequestThumbnail = onRequestThumbnail,
+                                    onToggleSelection = onToggleFileSelection,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
             }
             if (busy) {
@@ -815,6 +1049,97 @@ private fun FolderScreen(
                     CircularProgressIndicator(color = TCloudBlue)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CreateFolderDialog(
+    topLevel: Boolean,
+    busy: Boolean,
+    onCreate: (String, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var passwordEnabled by remember(topLevel) { mutableStateOf(topLevel) }
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("新しいフォルダ") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("フォルダ名") },
+                    singleLine = true,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = passwordEnabled,
+                        onCheckedChange = if (topLevel) null else { checked -> passwordEnabled = checked },
+                        enabled = !busy && !topLevel,
+                    )
+                    Text(if (topLevel) "最上位フォルダのPW（必須）" else "このフォルダに個別PWを設定")
+                }
+                if (passwordEnabled) {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("フォルダPW") },
+                        singleLine = true,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (passwordVisible) "PWを隠す" else "PWを表示",
+                                )
+                            }
+                        },
+                    )
+                    Text("4文字以上で設定してください。", style = MaterialTheme.typography.bodySmall, color = TCloudMuted)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onCreate(name.trim(), if (passwordEnabled) password else "") },
+                enabled = !busy && name.isNotBlank() && (!passwordEnabled || password.length >= 4),
+            ) { Text(if (busy) "作成中…" else "作成") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("キャンセル") } },
+    )
+}
+
+@Composable
+private fun TCloudSortButton(
+    label: String,
+    selected: Boolean,
+    descending: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(9.dp),
+        color = if (selected) TCloudSelection else Color.White,
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) Color(0xFF9BCBC5) else TCloudLine),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(4.dp))
+            Text(if (descending) "↓" else "↑", color = if (selected) TCloudBlueDark else TCloudMuted)
         }
     }
 }
@@ -1013,6 +1338,173 @@ private fun OfflineScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
+private fun FolderGridCard(
+    folder: CloudFolder,
+    selected: Boolean,
+    selectionMode: Boolean,
+    canManage: Boolean,
+    onOpenFolder: (CloudFolder) -> Unit,
+    onToggleSelection: (CloudFolder) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = if (selected) TCloudSelection else Color.White,
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) Color(0xFF8FBAB5) else TCloudLine,
+        ),
+        shadowElevation = if (selected) 0.dp else 1.dp,
+        modifier = modifier
+            .aspectRatio(1f)
+            .combinedClickable(
+                onClick = {
+                    if (selectionMode) onToggleSelection(folder) else onOpenFolder(folder)
+                },
+                onLongClick = { if (canManage) onToggleSelection(folder) },
+            ),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFFFFF4D8),
+                modifier = Modifier.align(Alignment.Center).size(78.dp),
+            ) {
+                Icon(
+                    Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = Color(0xFFD79A22),
+                    modifier = Modifier.padding(17.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(10.dp),
+            ) {
+                Text(
+                    folder.name.ifBlank { "フォルダ" },
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${folder.folderCount}フォルダ・${folder.fileCount}ファイル",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TCloudMuted,
+                )
+            }
+            if (canManage) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onToggleSelection(folder) },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(5.dp).size(34.dp),
+                )
+            }
+            if (folder.isProtected) {
+                Icon(
+                    if (folder.isUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                    contentDescription = null,
+                    tint = TCloudMuted,
+                    modifier = Modifier.align(Alignment.TopStart).padding(10.dp).size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FileGridCard(
+    file: CloudFile,
+    thumbnailBitmap: Bitmap?,
+    selected: Boolean,
+    selectionMode: Boolean,
+    canManage: Boolean,
+    onOpenFile: (CloudFile) -> Unit,
+    onRequestThumbnail: (CloudFile) -> Unit,
+    onToggleSelection: (CloudFile) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LaunchedEffect(file.id, file.hasThumbnail, thumbnailBitmap) {
+        if (file.hasThumbnail && thumbnailBitmap == null) onRequestThumbnail(file)
+    }
+    Surface(
+        color = if (selected) TCloudSelection else Color.White,
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) Color(0xFF8FBAB5) else TCloudLine,
+        ),
+        shadowElevation = if (selected) 0.dp else 1.dp,
+        modifier = modifier
+            .aspectRatio(1f)
+            .combinedClickable(
+                onClick = {
+                    if (selectionMode) onToggleSelection(file) else onOpenFile(file)
+                },
+                onLongClick = { if (canManage && file.metadataDecrypted) onToggleSelection(file) },
+            ),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            if (thumbnailBitmap != null) {
+                Image(
+                    bitmap = thumbnailBitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(bottom = 48.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        fileIcon(file.mediaKind),
+                        contentDescription = null,
+                        tint = TCloudBlue,
+                        modifier = Modifier.size(52.dp),
+                    )
+                }
+            }
+            Surface(
+                color = Color.White.copy(alpha = 0.92f),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
+                    Text(
+                        file.name.ifBlank { "暗号化ファイル" },
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        formatBytes(file.sizeBytes),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TCloudMuted,
+                    )
+                }
+            }
+            if (canManage && file.metadataDecrypted) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onToggleSelection(file) },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(5.dp).size(34.dp),
+                )
+            }
+            if (!file.metadataDecrypted) {
+                Icon(
+                    Icons.Default.Lock,
+                    contentDescription = "暗号化",
+                    tint = TCloudMuted,
+                    modifier = Modifier.align(Alignment.TopStart).padding(10.dp).size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 private fun FolderRow(
     folder: CloudFolder,
     selected: Boolean,
@@ -1026,7 +1518,13 @@ private fun FolderRow(
 ) {
     var menuExpanded by remember(folder.id) { mutableStateOf(false) }
     Surface(
-        color = if (selected) Color(0xFFE8EAF8) else Color.Transparent,
+        color = if (selected) TCloudSelection else Color.White,
+        shape = RoundedCornerShape(13.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) Color(0xFF8FBAB5) else TCloudLine,
+        ),
+        shadowElevation = if (selected) 0.dp else 1.dp,
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
@@ -1037,9 +1535,9 @@ private fun FolderRow(
             ),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp, horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (selectionMode) {
                 Checkbox(
@@ -1047,13 +1545,20 @@ private fun FolderRow(
                     onCheckedChange = { onToggleSelection(folder) },
                 )
             }
-            Icon(Icons.Default.Folder, contentDescription = null, tint = TCloudBlue)
+            Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFFFF4D8)) {
+                Icon(
+                    Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = Color(0xFFD79A22),
+                    modifier = Modifier.padding(9.dp).size(25.dp),
+                )
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(folder.name.ifBlank { "フォルダ" }, fontWeight = FontWeight.Medium)
                 Text(
                     "${folder.folderCount}フォルダ・${folder.fileCount}ファイル",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF667085),
+                    color = TCloudMuted,
                 )
             }
             if (folder.isProtected) {
@@ -1093,10 +1598,12 @@ private fun FolderRow(
 @Composable
 private fun FileRow(
     file: CloudFile,
+    thumbnailBitmap: Bitmap?,
     selected: Boolean,
     selectionMode: Boolean,
     canManage: Boolean,
     onOpenFile: (CloudFile) -> Unit,
+    onRequestThumbnail: (CloudFile) -> Unit,
     onToggleSelection: (CloudFile) -> Unit,
     onDownload: (CloudFile) -> Unit,
     onOffline: (CloudFile) -> Unit,
@@ -1105,8 +1612,17 @@ private fun FileRow(
     onShare: (CloudFile) -> Unit,
 ) {
     var menuExpanded by remember(file.id) { mutableStateOf(false) }
+    LaunchedEffect(file.id, file.hasThumbnail, thumbnailBitmap) {
+        if (file.hasThumbnail && thumbnailBitmap == null) onRequestThumbnail(file)
+    }
     Surface(
-        color = if (selected) Color(0xFFE8EAF8) else Color.Transparent,
+        color = if (selected) TCloudSelection else Color.White,
+        shape = RoundedCornerShape(13.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) Color(0xFF8FBAB5) else TCloudLine,
+        ),
+        shadowElevation = if (selected) 0.dp else 1.dp,
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
@@ -1117,9 +1633,9 @@ private fun FileRow(
             ),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp, horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (selectionMode) {
                 Checkbox(
@@ -1128,13 +1644,37 @@ private fun FileRow(
                     enabled = file.metadataDecrypted,
                 )
             }
-            Icon(fileIcon(file.mediaKind), contentDescription = null, tint = TCloudBlue)
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = when (file.mediaKind) {
+                    "image" -> Color(0xFFE7F4EF)
+                    "video" -> Color(0xFFE8ECF8)
+                    "audio" -> Color(0xFFF3EAF7)
+                    else -> Color(0xFFF1F3F5)
+                },
+            ) {
+                if (thumbnailBitmap != null) {
+                    Image(
+                        bitmap = thumbnailBitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.size(44.dp),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Icon(
+                        fileIcon(file.mediaKind),
+                        contentDescription = null,
+                        tint = TCloudBlue,
+                        modifier = Modifier.padding(9.dp).size(25.dp),
+                    )
+                }
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(file.name.ifBlank { "暗号化ファイル" }, fontWeight = FontWeight.Medium)
                 Text(
                     formatBytes(file.sizeBytes),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF667085),
+                    color = TCloudMuted,
                 )
             }
             if (file.cryptoVersion == 1 && !file.metadataDecrypted) {
@@ -1363,8 +1903,13 @@ private fun MoveItemDialog(
     onDismiss: () -> Unit,
 ) {
     var selectedId by remember(itemName) { mutableStateOf<Long?>(null) }
+    var submitted by remember(itemName) { mutableStateOf(false) }
+    val operationBusy = busy || submitted
+    LaunchedEffect(busy) {
+        if (submitted && !busy) submitted = false
+    }
     AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
+        onDismissRequest = { if (!operationBusy) onDismiss() },
         title = { Text("移動先を選択") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1378,7 +1923,7 @@ private fun MoveItemDialog(
                     else -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                         items(destinations, key = { "move-${it.id}" }) { destination ->
                             Surface(
-                                onClick = { if (!busy) selectedId = destination.id },
+                                onClick = { if (!operationBusy) selectedId = destination.id },
                                 color = Color.Transparent,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
@@ -1388,7 +1933,7 @@ private fun MoveItemDialog(
                                 ) {
                                     RadioButton(
                                         selected = selectedId == destination.id,
-                                        onClick = { if (!busy) selectedId = destination.id },
+                                        onClick = { if (!operationBusy) selectedId = destination.id },
                                     )
                                     Text(
                                         text = "　".repeat(destination.depth.coerceAtMost(8)) + destination.name,
@@ -1406,12 +1951,17 @@ private fun MoveItemDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { selectedId?.let(onMove) },
-                enabled = !busy && selectedId != null,
-            ) { Text(if (busy && selectedId != null) "移動中…" else "移動する") }
+                onClick = {
+                    val destinationId = selectedId ?: return@TextButton
+                    if (operationBusy) return@TextButton
+                    submitted = true
+                    onMove(destinationId)
+                },
+                enabled = !operationBusy && selectedId != null,
+            ) { Text(if (operationBusy && selectedId != null) "移動中…" else "移動する") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("キャンセル") }
+            TextButton(onClick = onDismiss, enabled = !operationBusy) { Text("キャンセル") }
         },
     )
 }

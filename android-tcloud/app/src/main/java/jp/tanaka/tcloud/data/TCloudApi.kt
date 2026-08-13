@@ -32,9 +32,29 @@ class TCloudApi(
         return CryptoConfig(
             initialized = json.optBooleanCompat("initialized"),
             cryptoVersion = json.optInt("cryptoVersion", 1),
+            publicKeyJwk = json.optJSONObject("publicKeyJwk")?.toString().orEmpty(),
             adminPrivateCipher = json.optString("adminPrivateCipher", ""),
             adminPrivateIv = json.optString("adminPrivateIv", ""),
         )
+    }
+
+    suspend fun createFolder(parentId: Long?, payload: EncryptedFolderPayload): Long {
+        val body = JSONObject()
+            .put("name", payload.name)
+            .put("parentId", parentId)
+            .put("cryptoVersion", payload.cryptoVersion)
+            .put("encryptedName", payload.encryptedName)
+            .put("nameIv", payload.nameIv)
+            .put("adminWrappedKey", payload.adminWrappedKey)
+            .put("parentWrappedKey", payload.parentWrappedKey)
+            .put("parentWrapIv", payload.parentWrapIv)
+        if (payload.authProof.isNotBlank()) {
+            body.put("authProof", payload.authProof)
+                .put("passwordSalt", payload.passwordSalt)
+                .put("passwordWrappedKey", payload.passwordWrappedKey)
+                .put("passwordWrapIv", payload.passwordWrapIv)
+        }
+        return request("POST", "/folders", body).getLong("id")
     }
 
 
@@ -202,6 +222,28 @@ class TCloudApi(
                 connection.disconnect()
             }
         }
+
+    suspend fun downloadThumbnail(fileId: Long): ByteArray = withContext(Dispatchers.IO) {
+        val connection = (URL("$BASE_URL/files/$fileId/thumbnail").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 20_000
+            readTimeout = 60_000
+            instanceFollowRedirects = false
+            setRequestProperty("Accept", "application/octet-stream")
+            setRequestProperty("User-Agent", "T-Cloud-Android/0.3")
+            sessionStore.readSessionCookie()?.let { setRequestProperty("Cookie", it) }
+        }
+        try {
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                if (status == HttpURLConnection.HTTP_UNAUTHORIZED) sessionStore.clear()
+                throw TCloudApiException(status, "サムネイルを取得できませんでした。")
+            }
+            connection.inputStream.use { it.readBytes() }
+        } finally {
+            connection.disconnect()
+        }
+    }
 
     suspend fun createUpload(payload: EncryptedFilePayload): UploadTicket {
         val body = JSONObject()

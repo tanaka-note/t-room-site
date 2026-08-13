@@ -15,8 +15,24 @@ data class Session(
 data class CryptoConfig(
     val initialized: Boolean,
     val cryptoVersion: Int,
+    val publicKeyJwk: String = "",
     val adminPrivateCipher: String = "",
     val adminPrivateIv: String = "",
+)
+
+data class EncryptedFolderPayload(
+    val name: String,
+    val cryptoVersion: Int = 1,
+    val encryptedName: String,
+    val nameIv: String,
+    val adminWrappedKey: String,
+    val parentWrappedKey: String = "",
+    val parentWrapIv: String = "",
+    val authProof: String = "",
+    val passwordSalt: String = "",
+    val passwordWrappedKey: String = "",
+    val passwordWrapIv: String = "",
+    val folderKey: ByteArray,
 )
 
 data class CloudFolder(

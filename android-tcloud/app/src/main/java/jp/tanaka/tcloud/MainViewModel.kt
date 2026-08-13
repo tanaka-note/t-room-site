@@ -40,6 +40,7 @@ data class MainUiState(
     val imageBitmap: Bitmap? = null,
     val imageLoading: Boolean = false,
     val imageError: String? = null,
+    val thumbnailBitmaps: Map<Long, Bitmap> = emptyMap(),
     val pendingMoveFile: CloudFile? = null,
     val pendingMoveFolder: CloudFolder? = null,
     val pendingMoveFiles: List<CloudFile> = emptyList(),
@@ -54,6 +55,7 @@ data class MainUiState(
     val selectedFileIds: Set<Long> = emptySet(),
     val selectedFolderIds: Set<Long> = emptySet(),
     val confirmingSelectionDelete: Boolean = false,
+    val creatingFolder: Boolean = false,
     val cameraBackupSettings: CameraBackupSettings = CameraBackupSettings(),
     val showingOffline: Boolean = false,
     val offlineEntries: List<TCloudOfflineStore.OfflineEntry> = emptyList(),
@@ -71,6 +73,7 @@ class MainViewModel(
     private val mutableState = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
     private var imageLoadJob: Job? = null
+    private val thumbnailJobs = mutableMapOf<Long, Job>()
 
     init {
         viewModelScope.launch {
@@ -142,6 +145,34 @@ class MainViewModel(
     }
 
     fun cancelUnlock() = mutableState.update { it.copy(pendingUnlock = null) }
+
+    fun openCreateFolder() {
+        val current = mutableState.value
+        if (current.busy || current.session?.canUpload != true) return
+        mutableState.update { it.copy(creatingFolder = true, error = null) }
+    }
+
+    fun cancelCreateFolder() = mutableState.update { it.copy(creatingFolder = false) }
+
+    fun createFolder(name: String, password: String) {
+        val current = mutableState.value
+        if (current.busy || current.session?.canUpload != true) return
+        val parentId = current.page?.currentFolderId
+        if (parentId == null && password.length < 4) {
+            mutableState.update { it.copy(error = "最上位フォルダには4文字以上のパスワードが必要です。") }
+            return
+        }
+        mutableState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            runCatching { repository.createFolder(parentId, name, password) }
+                .onSuccess { page ->
+                    mutableState.update {
+                        it.copy(busy = false, page = page, creatingFolder = false, message = "フォルダを作成しました。")
+                    }
+                }
+                .onFailure { error -> mutableState.update { it.copy(busy = false, error = error.userMessage()) } }
+        }
+    }
 
     private fun showOpenedFolder(folder: CloudFolder, page: FolderPage) {
         mutableState.update {
@@ -855,6 +886,36 @@ class MainViewModel(
                         }
                     }
                 }
+        }
+    }
+
+    fun loadThumbnail(file: CloudFile) {
+        if (!file.hasThumbnail || !file.metadataDecrypted ||
+            mutableState.value.thumbnailBitmaps.containsKey(file.id) || thumbnailJobs.containsKey(file.id)
+        ) return
+        thumbnailJobs[file.id] = viewModelScope.launch {
+            runCatching {
+                val bytes = repository.loadThumbnail(file)
+                try {
+                    withContext(Dispatchers.Default) {
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            ?: error("サムネイルを表示できません。")
+                    }
+                } finally {
+                    bytes.fill(0)
+                }
+            }.onSuccess { bitmap ->
+                mutableState.update { current ->
+                    val entries = LinkedHashMap(current.thumbnailBitmaps)
+                    entries[file.id] = bitmap
+                    while (entries.size > 96) {
+                        val first = entries.entries.first()
+                        entries.remove(first.key)?.recycle()
+                    }
+                    current.copy(thumbnailBitmaps = entries)
+                }
+            }
+            thumbnailJobs.remove(file.id)
         }
     }
 

@@ -63,6 +63,45 @@ class TCloudRepository(
         return listItems(folder.id)
     }
 
+    suspend fun loadThumbnail(file: CloudFile): ByteArray {
+        require(file.hasThumbnail && file.metadataDecrypted) { "サムネイルを表示できません。" }
+        val envelope = api.downloadThumbnail(file.id)
+        if (file.cryptoVersion != 1) return envelope
+        val folder = knownFolders[file.folderId]
+            ?: throw IllegalStateException("フォルダの暗号鍵を確認できません。")
+        val folderKey = prepareFolderKey(folder)
+        return try {
+            TCloudCrypto.decryptThumbnail(file, folderKey, envelope)
+        } finally {
+            envelope.fill(0)
+            folderKey.fill(0)
+        }
+    }
+
+    suspend fun createFolder(parentId: Long?, name: String, password: String): FolderPage {
+        val parentKey = parentId?.let { id ->
+            val parent = knownFolders[id]
+                ?: throw IllegalStateException("親フォルダの暗号鍵を確認できません。")
+            prepareFolderKey(parent)
+        }
+        val config = api.cryptoConfig()
+        check(config.initialized && config.publicKeyJwk.isNotBlank()) {
+            "暗号化設定を確認できません。"
+        }
+        val payload = try {
+            TCloudCrypto.createFolderPackage(name, password, config.publicKeyJwk, parentKey)
+        } finally {
+            parentKey?.fill(0)
+        }
+        try {
+            val id = api.createFolder(parentId, payload)
+            cacheFolderKey(id, payload.folderKey, persist = true)
+            return listItems(parentId)
+        } finally {
+            payload.folderKey.fill(0)
+        }
+    }
+
     suspend fun unlockAndOpenFolder(folder: CloudFolder, password: String): FolderPage {
         val credentials = TCloudCrypto.deriveFolderCredentials(folder, password)
         try {

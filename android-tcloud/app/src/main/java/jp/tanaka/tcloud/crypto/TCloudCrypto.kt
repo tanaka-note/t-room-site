@@ -7,6 +7,7 @@ import jp.tanaka.tcloud.data.FileMetadata
 import jp.tanaka.tcloud.data.FolderCredentials
 import jp.tanaka.tcloud.data.EncryptedFilePayload
 import jp.tanaka.tcloud.data.EncryptedFileMetadata
+import jp.tanaka.tcloud.data.EncryptedFolderPayload
 import jp.tanaka.tcloud.data.WrappedFileKey
 import jp.tanaka.tcloud.data.WrappedFolderKey
 import jp.tanaka.tcloud.data.SharePayload
@@ -23,6 +24,8 @@ import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.spec.MGF1ParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.RSAPublicKeySpec
+import java.math.BigInteger
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.Mac
@@ -46,6 +49,7 @@ object TCloudCrypto {
     private const val FILE_KEY_CONTEXT = "T-ROOM Cloud Storage file key v1"
     private const val FILE_METADATA_CONTEXT = "T-ROOM Cloud Storage file metadata v1"
     private const val FILE_CHUNK_CONTEXT = "T-ROOM Cloud Storage file chunk v1"
+    private const val THUMBNAIL_CONTEXT = "T-ROOM Cloud Storage thumbnail v1"
 
     class FileDecryptor internal constructor(
         private val fileKey: ByteArray,
@@ -204,6 +208,79 @@ object TCloudCrypto {
         )
     }
 
+    suspend fun createFolderPackage(
+        name: String,
+        password: String,
+        publicKeyJwk: String,
+        parentFolderKey: ByteArray?,
+    ): EncryptedFolderPayload = withContext(Dispatchers.Default) {
+        val cleanName = name.trim()
+        require(cleanName.isNotEmpty() && cleanName.length <= 160) { "フォルダ名を確認してください。" }
+        if (parentFolderKey == null) require(password.length in 4..128) {
+            "最上位フォルダには4文字以上のパスワードが必要です。"
+        }
+        if (password.isNotEmpty()) require(password.length in 4..128) {
+            "フォルダパスワードは4文字以上で設定してください。"
+        }
+        require(publicKeyJwk.isNotBlank()) { "暗号化の公開鍵を確認できません。" }
+        val rawFolderKey = ByteArray(32).also(SecureRandom()::nextBytes)
+        try {
+            val encryptedName = encryptAesGcm(
+                key = rawFolderKey,
+                plain = cleanName.toByteArray(Charsets.UTF_8),
+                additionalData = FOLDER_NAME_CONTEXT.toByteArray(),
+            )
+            val adminWrapped = wrapForAdmin(rawFolderKey, publicKeyJwk)
+            val parentWrapped = parentFolderKey?.let {
+                encryptAesGcm(it, rawFolderKey, PARENT_FOLDER_WRAP_CONTEXT.toByteArray())
+            }
+            val passwordSalt = if (password.isNotEmpty()) ByteArray(16).also(SecureRandom()::nextBytes) else null
+            val master = passwordSalt?.let { deriveArgon2(password, it) }
+            val passwordWrapped = master?.let {
+                val wrappingKey = deriveContextKey(it, FOLDER_WRAP_CONTEXT)
+                try { encryptAesGcm(wrappingKey, rawFolderKey, FOLDER_WRAP_CONTEXT.toByteArray()) }
+                finally { wrappingKey.fill(0) }
+            }
+            try {
+                EncryptedFolderPayload(
+                    name = cleanName,
+                    encryptedName = base64Url(encryptedName.ciphertext),
+                    nameIv = base64Url(encryptedName.iv),
+                    adminWrappedKey = base64Url(adminWrapped),
+                    parentWrappedKey = parentWrapped?.let { base64Url(it.ciphertext) }.orEmpty(),
+                    parentWrapIv = parentWrapped?.let { base64Url(it.iv) }.orEmpty(),
+                    authProof = master?.let { hmacProof(it, FOLDER_AUTH_CONTEXT) }.orEmpty(),
+                    passwordSalt = passwordSalt?.let(::base64Url).orEmpty(),
+                    passwordWrappedKey = passwordWrapped?.let { base64Url(it.ciphertext) }.orEmpty(),
+                    passwordWrapIv = passwordWrapped?.let { base64Url(it.iv) }.orEmpty(),
+                    folderKey = rawFolderKey.copyOf(),
+                )
+            } finally {
+                encryptedName.iv.fill(0); encryptedName.ciphertext.fill(0)
+                adminWrapped.fill(0)
+                parentWrapped?.iv?.fill(0); parentWrapped?.ciphertext?.fill(0)
+                passwordWrapped?.iv?.fill(0); passwordWrapped?.ciphertext?.fill(0)
+                passwordSalt?.fill(0); master?.fill(0)
+            }
+        } finally {
+            rawFolderKey.fill(0)
+        }
+    }
+
+    private fun wrapForAdmin(rawFolderKey: ByteArray, publicKeyJwk: String): ByteArray {
+        val jwk = JSONObject(publicKeyJwk)
+        val modulus = BigInteger(1, base64UrlDecode(jwk.getString("n")))
+        val exponent = BigInteger(1, base64UrlDecode(jwk.getString("e")))
+        val publicKey = KeyFactory.getInstance("RSA").generatePublic(RSAPublicKeySpec(modulus, exponent))
+        val cipher = Cipher.getInstance("RSA/ECB/OAEPPadding")
+        cipher.init(
+            Cipher.ENCRYPT_MODE,
+            publicKey,
+            OAEPParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT),
+        )
+        return cipher.doFinal(rawFolderKey)
+    }
+
     fun decryptFolderName(folder: CloudFolder, folderKey: ByteArray): String {
         if (folder.cryptoVersion != 1 || folder.encryptedName.isBlank()) return folder.name
         val bytes = decryptAesGcm(
@@ -247,6 +324,24 @@ object TCloudCrypto {
             } finally {
                 metadataBytes.fill(0)
             }
+        } finally {
+            fileKey.fill(0)
+        }
+    }
+
+    fun decryptThumbnail(file: CloudFile, folderKey: ByteArray, envelope: ByteArray): ByteArray {
+        require(envelope.size >= 32 &&
+            envelope[0] == 0x54.toByte() && envelope[1] == 0x52.toByte() &&
+            envelope[2] == 0x54.toByte() && envelope[3] == 0x48.toByte()
+        ) { "サムネイルの暗号形式が不正です。" }
+        val fileKey = unwrapFileKey(file, folderKey)
+        return try {
+            decryptAesGcm(
+                key = fileKey,
+                ciphertext = envelope.copyOfRange(16, envelope.size),
+                iv = envelope.copyOfRange(4, 16),
+                additionalData = THUMBNAIL_CONTEXT.toByteArray(),
+            )
         } finally {
             fileKey.fill(0)
         }
