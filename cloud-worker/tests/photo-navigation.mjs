@@ -18,7 +18,7 @@ for (const marker of ["pushState", "popstate", "navigateToFolder", "handlePrevie
 if (!/const previewOriginId = [\s\S]*?restorePreviewOrigin\(previewOriginId\);[\s\S]*?return;/.test(script)) {
   throw new Error("同じフォルダへ戻る際に、一覧を再読込せず元のファイル位置へ戻す処理がありません。");
 }
-if (!/function restorePreviewOrigin\(fileId\)[\s\S]*?scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/.test(script)) {
+if (!/function restorePreviewOrigin\(fileId, scrollX = state\.previewOriginScrollX, scrollY = state\.previewOriginScrollY\)[\s\S]*?window\.scrollTo\(\{ top, left, behavior: "auto" \}\)[\s\S]*?scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/.test(script)) {
   throw new Error("開いていたファイル位置の復元処理がありません。");
 }
 if (!css.includes(".preview-nav") || !css.includes("touch-action: pan-y")) {
