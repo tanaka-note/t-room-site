@@ -65,7 +65,7 @@ await collectFiles(output);
 if (!publishedFiles.includes(join("asset-report-k7m4q9x2", "index.html"))) {
   throw new Error("資産運用報告ページが公開対象に含まれていません。");
 }
-if (publishedFiles.some((path) => /(?:^|[\\/])(?:cloud-worker|diary-worker|billing-worker|android-tcloud|android-tcloud-twa)(?:[\\/]|$)/.test(path))) {
+if (publishedFiles.some((path) => /(?:^|[\\/])(?:cloud-worker|diary-worker|billing-worker|android-tcloud|android-tcloud-twa|android-diary-twa)(?:[\\/]|$)/.test(path))) {
   throw new Error("非公開のアプリケーションコードが公開対象に含まれています。");
 }
 

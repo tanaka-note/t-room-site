@@ -15,6 +15,10 @@ android-tcloud-twa/.gradle/
 android-tcloud-twa/**/build/
 android-tcloud-twa/local.properties
 android-tcloud-twa/keystore.properties
+android-diary-twa/.gradle/
+android-diary-twa/**/build/
+android-diary-twa/local.properties
+android-diary-twa/keystore.properties
 *.jks
 *.keystore
 .site-assets/
