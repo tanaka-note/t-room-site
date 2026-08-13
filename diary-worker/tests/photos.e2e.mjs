@@ -119,6 +119,34 @@ try {
   assert.equal(imageResponse.status, 200);
   assert.equal(imageResponse.headers.get("content-type"), "image/webp");
 
+  const deletablePhotoId = randomUUID();
+  const deletableForm = new FormData();
+  deletableForm.set("id", deletablePhotoId);
+  deletableForm.set("width", "640");
+  deletableForm.set("height", "480");
+  deletableForm.set("original", new File([new Uint8Array([10, 11, 12])], "delete-me.png", { type: "image/png" }));
+  deletableForm.set("display", new File([new Uint8Array([13, 14])], "delete-me-display.webp", { type: "image/webp" }));
+  deletableForm.set("thumbnail", new File([new Uint8Array([15])], "delete-me-thumbnail.webp", { type: "image/webp" }));
+  const deletableUploadResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: deletableForm
+  });
+  const deletableUpload = await deletableUploadResponse.json();
+  assert.equal(deletableUploadResponse.status, 200, JSON.stringify(deletableUpload));
+
+  const photoDelete = await jsonRequest(`/photos/${deletablePhotoId}`, {
+    method: "DELETE",
+    cookie: wifeCookie
+  });
+  assert.equal(photoDelete.response.status, 200, JSON.stringify(photoDelete.result));
+  const deletedPhotoAsset = await fetch(`${origin}${deletableUpload.photo.displayUrl}`, { headers: { Cookie: wifeCookie } });
+  assert.equal(deletedPhotoAsset.status, 404);
+  const afterPhotoDelete = await jsonRequest(`/entries/${entry.id}`, { cookie: wifeCookie });
+  assert.equal(afterPhotoDelete.result.entry.photos.some((photo) => photo.id === deletablePhotoId), false);
+  const rollAfterPhotoDelete = await jsonRequest("/photos", { cookie: wifeCookie });
+  assert.equal(rollAfterPhotoDelete.result.photos.some((photo) => photo.id === deletablePhotoId), false);
+
   const moved = await jsonRequest(`/entries/${entry.id}`, {
     method: "DELETE",
     cookie: wifeCookie,
@@ -131,7 +159,7 @@ try {
   const mainCookie = await login("main@example.test", "main-test");
   const visibleToMain = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: mainCookie } });
   assert.equal(visibleToMain.status, 200);
-  const trash = await jsonRequest("/entries?trash=1", { cookie: mainCookie });
+  const trash = await jsonRequest(`/entries?trash=1&q=${encodeURIComponent(`photo-test-${photoId}`)}`, { cookie: mainCookie });
   const deletedEntry = trash.result.entries.find((candidate) => candidate.id === entry.id);
   const permanent = await jsonRequest(`/entries/${entry.id}/permanent`, {
     method: "DELETE",

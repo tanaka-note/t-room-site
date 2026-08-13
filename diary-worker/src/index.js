@@ -205,6 +205,12 @@ async function handleApi(request, env, url, path) {
     return servePhoto(photoAssetMatch[1], photoAssetMatch[2], request, env, session, url);
   }
 
+  const photoDeleteMatch = path.match(/^\/api\/photos\/([0-9a-f-]{36})$/i);
+  if (photoDeleteMatch && request.method === "DELETE") {
+    requireAdmin(session);
+    return deleteEntryPhoto(photoDeleteMatch[1], env, session);
+  }
+
   const entryPhotoMatch = path.match(/^\/api\/entries\/(\d+)\/photos$/);
   if (entryPhotoMatch && request.method === "POST") {
     requireAdmin(session);
@@ -582,6 +588,29 @@ async function servePhoto(id, variant, request, env, session, url) {
   }
   if (request.method === "HEAD") return new Response(null, { status: 200, headers });
   return new Response(object.body, { status: 200, headers });
+}
+
+async function deleteEntryPhoto(id, env, session) {
+  if (!env.MEDIA) throw new HttpError(503, "画像の保存先を確認できないため、削除を中止しました。");
+  const normalizedId = id.toLowerCase();
+  const row = await env.DB.prepare(`
+    SELECT p.original_key, p.display_key, p.thumbnail_key
+    FROM diary_photos p
+    JOIN diary_entries e ON e.id = p.entry_id
+    WHERE p.id = ? AND e.household_id = ? AND e.deleted_at IS NULL
+  `).bind(normalizedId, session.activeHouseholdId).first();
+  if (!row) throw new HttpError(404, "削除する画像が見つかりません。");
+
+  await env.MEDIA.delete([row.original_key, row.display_key, row.thumbnail_key]);
+  const result = await env.DB.prepare(`
+    DELETE FROM diary_photos
+    WHERE id = ? AND EXISTS (
+      SELECT 1 FROM diary_entries e
+      WHERE e.id = diary_photos.entry_id AND e.household_id = ? AND e.deleted_at IS NULL
+    )
+  `).bind(normalizedId, session.activeHouseholdId).run();
+  if (!result.meta?.changes) throw new HttpError(409, "画像を削除できませんでした。日記を読み込み直してください。");
+  return json({ ok: true });
 }
 
 async function listMeta(env, session) {

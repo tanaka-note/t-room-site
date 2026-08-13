@@ -24,6 +24,9 @@ assert.match(script, /String\(file\.type\)\.startsWith\("image\/"\)/);
 assert.match(script, /state\.editorPhotos = \(entry\?\.photos \|\| \[\]\)\.map/);
 assert.match(script, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);
 assert.match(script, /image\.src = photo\.thumbnailUrl \|\| photo\.previewUrl/);
+assert.match(script, /remove\.textContent = photo\.existing \? "削除" : "取り除く"/);
+assert.match(script, /state\.editorDeletedPhotoIds\.add\(photo\.id\)/);
+assert.match(script, /method: "DELETE"/);
 assert.match(script, /\[\[写真:/);
 assert.match(script, /openPhotoViewer/);
 assert.match(script, /camera-roll-date/);
@@ -31,6 +34,8 @@ assert.match(script, /camera-roll-title/);
 assert.match(script, /elements\.cameraRollDialog\.close\(\);\s*openEntry\(photo\.entryId\);/s);
 assert.doesNotMatch(script, /openPhotoViewer\(state\.photos/);
 assert.match(worker, /diary_photos|uploadEntryPhoto/);
+assert.match(worker, /async function deleteEntryPhoto/);
+assert.match(worker, /env\.MEDIA\.delete\(\[row\.original_key, row\.display_key, row\.thumbnail_key\]\)/);
 assert.match(worker, /img-src 'self' data: blob:/);
 assert.match(wrangler, /t-room-diary-media/);
 

@@ -45,6 +45,7 @@
     requestId: 0,
     deleteMode: null,
     editorPhotos: [],
+    editorDeletedPhotoIds: new Set(),
     photoPreparing: false,
     photoOffset: 0,
     photos: [],
@@ -1253,15 +1254,13 @@
       insert.textContent = markerPresent ? "挿入済み" : "本文へ挿入";
       insert.disabled = markerPresent;
       actions.append(insert);
-      if (!photo.existing) {
-        const remove = document.createElement("button");
-        remove.className = "danger-button";
-        remove.type = "button";
-        remove.dataset.photoAction = "remove";
-        remove.dataset.photoId = photo.id;
-        remove.textContent = "取り除く";
-        actions.append(remove);
-      }
+      const remove = document.createElement("button");
+      remove.className = "danger-button";
+      remove.type = "button";
+      remove.dataset.photoAction = "remove";
+      remove.dataset.photoId = photo.id;
+      remove.textContent = photo.existing ? "削除" : "取り除く";
+      actions.append(remove);
       body.append(name, actions);
       card.append(image, body);
       return card;
@@ -1278,9 +1277,11 @@
       renderEditorPhotos();
       return;
     }
-    if (button.dataset.photoAction === "remove" && !photo.existing) {
+    if (button.dataset.photoAction === "remove") {
+      if (photo.existing && !window.confirm("この画像を日記から削除しますか？保存するまで削除は確定しません。")) return;
       elements.entryContent.value = elements.entryContent.value.replaceAll(photoMarker(photo.id), "").replace(/\n{3,}/g, "\n\n");
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
+      if (photo.existing) state.editorDeletedPhotoIds.add(photo.id);
       state.editorPhotos = state.editorPhotos.filter((candidate) => candidate.id !== photo.id);
       state.editorDirty = true;
       renderEditorPhotos();
@@ -1292,6 +1293,7 @@
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
     }
     state.editorPhotos = [];
+    state.editorDeletedPhotoIds.clear();
     elements.editorPhotoList?.replaceChildren();
   }
 
@@ -1311,6 +1313,17 @@
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "画像を保存できませんでした。");
+    return result;
+  }
+
+  async function deletePhoto(photoId) {
+    const response = await fetch(`${BASE_PATH}/api/photos/${photoId}`, {
+      method: "DELETE",
+      headers: { "X-Diary-Request": "1" },
+      credentials: "same-origin"
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "画像を削除できませんでした。");
     return result;
   }
 
@@ -1354,6 +1367,17 @@
       });
       const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
       const failures = [];
+      const deletedPhotoIds = [...state.editorDeletedPhotoIds];
+      for (let index = 0; index < deletedPhotoIds.length; index += 1) {
+        const photoId = deletedPhotoIds[index];
+        setBusy(elements.saveEntryButton, true, `画像を削除中 ${index + 1}/${deletedPhotoIds.length}`);
+        try {
+          await deletePhoto(photoId);
+          state.editorDeletedPhotoIds.delete(photoId);
+        } catch (error) {
+          failures.push(`画像の削除：${error.message}`);
+        }
+      }
       for (let index = 0; index < pendingPhotos.length; index += 1) {
         const photo = pendingPhotos[index];
         setBusy(elements.saveEntryButton, true, `写真を保存中 ${index + 1}/${pendingPhotos.length}`);
