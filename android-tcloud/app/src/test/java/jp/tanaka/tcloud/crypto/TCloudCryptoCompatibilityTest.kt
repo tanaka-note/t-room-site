@@ -63,6 +63,26 @@ class TCloudCryptoCompatibilityTest {
     }
 
     @Test
+    fun changedFolderPasswordUnlocksTheSameExistingKey() = runBlocking {
+        val originalKey = ByteArray(32) { (it + 17).toByte() }
+        val password = TCloudCrypto.rewrapFolderPassword(originalKey, "NewFolderPass9")
+        val folder = folderFixture().copy(
+            isProtected = true,
+            isUnlocked = false,
+            passwordSalt = password.passwordSalt,
+            passwordWrappedKey = password.passwordWrappedKey,
+            passwordWrapIv = password.passwordWrapIv,
+        )
+
+        val unlocked = TCloudCrypto.deriveFolderCredentials(folder, "NewFolderPass9")
+
+        assertEquals(password.authProof, unlocked.authProof)
+        assertArrayEquals(originalKey, unlocked.folderKey)
+        originalKey.fill(0)
+        unlocked.folderKey.fill(0)
+    }
+
+    @Test
     fun fileMetadataMatchesExistingWebImplementation() {
         val folderKey = ByteArray(32) { (it + 1).toByte() }
         val file = CloudFile(

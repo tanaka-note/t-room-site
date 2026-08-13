@@ -30,30 +30,42 @@ class CameraBackupManager(
     }
 
     fun update(enabled: Boolean, wifiOnly: Boolean, chargingOnly: Boolean): CameraBackupSettings {
-        val previous = store.settings()
         val updated = store.update(enabled, wifiOnly, chargingOnly)
-        if (previous.wifiOnly != updated.wifiOnly || previous.chargingOnly != updated.chargingOnly) {
-            workManager.cancelAllWorkByTag(TCloudUploadManager.TAG_CAMERA_UPLOAD)
-        }
         applySchedule(updated)
         return updated
     }
 
     fun restoreSchedule() = applySchedule(store.settings())
 
+    fun runNow(): CameraBackupSettings {
+        val settings = store.settings()
+        if (settings.enabled && settings.hasTarget) enqueueImmediate(settings)
+        return settings
+    }
+
+    internal fun enqueueContinuation(settings: CameraBackupSettings) {
+        if (!settings.enabled || !settings.hasTarget) return
+        val request = OneTimeWorkRequestBuilder<CameraBackupScanWorker>()
+            .setConstraints(constraints(settings))
+            .addTag(TAG_CAMERA_BACKUP)
+            .build()
+        workManager.enqueueUniqueWork(
+            CONTINUATION_WORK,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            request,
+        )
+    }
+
     private fun applySchedule(settings: CameraBackupSettings) {
         if (!settings.enabled || !settings.hasTarget) {
             workManager.cancelUniqueWork(PERIODIC_WORK)
             workManager.cancelUniqueWork(IMMEDIATE_WORK)
+            workManager.cancelUniqueWork(CONTINUATION_WORK)
             workManager.cancelAllWorkByTag(TCloudUploadManager.TAG_CAMERA_UPLOAD)
             return
         }
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(if (settings.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
-            .setRequiresCharging(settings.chargingOnly)
-            .build()
         val periodic = PeriodicWorkRequestBuilder<CameraBackupScanWorker>(15, TimeUnit.MINUTES)
-            .setConstraints(constraints)
+            .setConstraints(constraints(settings))
             .addTag(TAG_CAMERA_BACKUP)
             .build()
         workManager.enqueueUniquePeriodicWork(
@@ -61,16 +73,26 @@ class CameraBackupManager(
             ExistingPeriodicWorkPolicy.UPDATE,
             periodic,
         )
+        enqueueImmediate(settings)
+    }
+
+    private fun enqueueImmediate(settings: CameraBackupSettings) {
         val immediate = OneTimeWorkRequestBuilder<CameraBackupScanWorker>()
-            .setConstraints(constraints)
+            .setConstraints(constraints(settings))
             .addTag(TAG_CAMERA_BACKUP)
             .build()
         workManager.enqueueUniqueWork(IMMEDIATE_WORK, ExistingWorkPolicy.REPLACE, immediate)
     }
 
+    private fun constraints(settings: CameraBackupSettings) = Constraints.Builder()
+        .setRequiredNetworkType(if (settings.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+        .setRequiresCharging(settings.chargingOnly)
+        .build()
+
     companion object {
         const val TAG_CAMERA_BACKUP = "tcloud_camera_backup"
         private const val PERIODIC_WORK = "tcloud_camera_backup_periodic"
         private const val IMMEDIATE_WORK = "tcloud_camera_backup_now"
+        private const val CONTINUATION_WORK = "tcloud_camera_backup_continue"
     }
 }

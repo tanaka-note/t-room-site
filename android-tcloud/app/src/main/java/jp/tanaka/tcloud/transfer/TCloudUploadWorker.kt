@@ -111,7 +111,18 @@ class TCloudUploadWorker(
             if (isStopped) {
                 showCompletion("アップロードを中止しました")
                 Result.failure(errorData("中止しました。"))
+            } else if (cameraAssetKey != null && runAttemptCount < MAX_CAMERA_RETRIES) {
+                showCompletion("自動バックアップを再試行します")
+                Result.retry()
             } else {
+                if (cameraAssetKey != null) {
+                    (applicationContext as TCloudApplication).cameraBackupStore.markFailed(
+                        assetKey = cameraAssetKey,
+                        sourceUri = source.toString(),
+                        folderId = folderId,
+                        error = error.message ?: "アップロードに失敗しました。",
+                    )
+                }
                 showCompletion("アップロードに失敗しました")
                 Result.failure(errorData(error.message ?: "アップロードに失敗しました。"))
             }
@@ -155,6 +166,7 @@ class TCloudUploadWorker(
             size = applicationContext.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
         }
         check(size >= 0) { "ファイル容量を確認できませんでした。" }
+        if (modified in 1 until 100_000_000_000L) modified *= 1_000
         val mime = applicationContext.contentResolver.getType(uri) ?: "application/octet-stream"
         SourceInfo(
             name = name.ifBlank { "T-Cloud-file" },
@@ -256,5 +268,6 @@ class TCloudUploadWorker(
         const val KEY_PROGRESS_PERCENT = "progress_percent"
         const val KEY_ERROR = "error"
         private const val CHANNEL_ID = "tcloud_transfers"
+        private const val MAX_CAMERA_RETRIES = 5
     }
 }

@@ -9,8 +9,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
+import android.app.Activity
+import android.app.PictureInPictureParams
+import android.util.Rational
 import android.provider.Settings
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -40,6 +44,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
@@ -62,7 +67,8 @@ import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -129,6 +135,8 @@ import java.util.Locale
 import java.security.SecureRandom
 import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupSettings
+import jp.tanaka.tcloud.media.TvCastLauncher
+import kotlinx.coroutines.delay
 
 private val TCloudBlue = Color(0xFF16756D)
 private val TCloudBlueDark = Color(0xFF0F5B55)
@@ -138,7 +146,7 @@ private val TCloudMuted = Color(0xFF68737D)
 private val TCloudSelection = Color(0xFFE4F3F0)
 
 @Composable
-fun TCloudApp(viewModel: MainViewModel) {
+fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
     val state by viewModel.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -317,6 +325,13 @@ fun TCloudApp(viewModel: MainViewModel) {
         }
     }
 
+    LaunchedEffect(showAppSettings) {
+        while (showAppSettings) {
+            delay(3_000)
+            viewModel.refreshCameraBackupSettings()
+        }
+    }
+
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
             primary = TCloudBlue,
@@ -343,6 +358,7 @@ fun TCloudApp(viewModel: MainViewModel) {
                     MediaPlayerScreen(
                         file = checkNotNull(state.selectedFile),
                         dataSourceFactory = viewModel.playbackDataSource(checkNotNull(state.selectedFile)),
+                        pictureInPicture = pictureInPicture,
                         onClose = viewModel::closeFile,
                     )
                 state.showingOffline -> OfflineScreen(
@@ -389,12 +405,16 @@ fun TCloudApp(viewModel: MainViewModel) {
                     onDownloadSelection = ::requestSelectionDownload,
                     onOfflineSelection = ::requestSelectionOffline,
                     onDeleteSelection = viewModel::openDeleteSelection,
+                    onFolderSecurity = viewModel::openFolderSecuritySelection,
                     onUpload = ::requestUpload,
                     onCreateFolder = viewModel::openCreateFolder,
                     onBack = viewModel::goBack,
                     onLogout = viewModel::logout,
                     onOpenOffline = viewModel::openOffline,
-                    onOpenSettings = { showAppSettings = true },
+                    onOpenSettings = {
+                        viewModel.refreshCameraBackupSettings()
+                        showAppSettings = true
+                    },
                 )
             }
 
@@ -437,6 +457,7 @@ fun TCloudApp(viewModel: MainViewModel) {
                     },
                     onSetCameraBackupTarget = viewModel::setCurrentFolderAsCameraBackupTarget,
                     onSaveCameraBackup = ::requestCameraBackup,
+                    onRunCameraBackupNow = viewModel::runCameraBackupNow,
                     onDismiss = { showAppSettings = false },
                 )
             }
@@ -497,6 +518,16 @@ fun TCloudApp(viewModel: MainViewModel) {
                     busy = state.busy,
                     onConfirm = viewModel::confirmDeleteSelection,
                     onDismiss = viewModel::cancelDeleteSelection,
+                )
+            }
+            state.pendingFolderSecurity?.let { folder ->
+                FolderSecurityDialog(
+                    folder = folder,
+                    busy = state.busy,
+                    canRelock = state.session?.isSubAdmin == true && folder.isProtected,
+                    onChangePassword = viewModel::changePendingFolderPassword,
+                    onRelock = viewModel::lockPendingFolder,
+                    onDismiss = viewModel::cancelFolderSecurity,
                 )
             }
         }
@@ -705,6 +736,7 @@ private fun FolderScreen(
     onDownloadSelection: () -> Unit,
     onOfflineSelection: () -> Unit,
     onDeleteSelection: () -> Unit,
+    onFolderSecurity: () -> Unit,
     onUpload: () -> Unit,
     onCreateFolder: () -> Unit,
     onBack: () -> Boolean,
@@ -716,13 +748,25 @@ private fun FolderScreen(
     val selectionMode = selectionCount > 0
     var selectionActionsExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember(currentName) { mutableStateOf("") }
-    var sortMode by remember(currentName) { mutableStateOf("name-asc") }
     val context = LocalContext.current
     val viewPreferences = remember {
         context.getSharedPreferences("tcloud_folder_view", Context.MODE_PRIVATE)
     }
+    val sortPreferences = remember {
+        context.getSharedPreferences("tcloud_folder_sort", Context.MODE_PRIVATE)
+    }
     val viewPreferenceKey = remember(accountName, currentFolderId) {
         "${accountName.hashCode()}-${currentFolderId ?: 0L}"
+    }
+    val sortPreferenceKey = remember(accountName, currentFolderId) {
+        "${accountName.hashCode()}-${currentFolderId ?: 0L}"
+    }
+    var sortState by remember(sortPreferenceKey) {
+        val saved = sortPreferences.getString(sortPreferenceKey, null)
+        mutableStateOf(
+            if (saved.isNullOrBlank()) defaultFolderSort(currentFolderId)
+            else FolderSortState(saved, usesTypeDefaults = false),
+        )
     }
     val defaultGridView = currentFolderId != null && folders.isEmpty() &&
         files.any { it.mediaKind == "image" || it.mediaKind == "video" }
@@ -739,27 +783,16 @@ private fun FolderScreen(
         gridView = enabled
         viewPreferences.edit().putBoolean(viewPreferenceKey, enabled).apply()
     }
-    val filteredFolders = remember(folders, searchQuery, sortMode) {
-        folders.filter { it.name.contains(searchQuery, ignoreCase = true) }.let { source ->
-            when (sortMode) {
-                "name-desc" -> source.sortedByDescending { it.name.lowercase(Locale.JAPANESE) }
-                "size-desc" -> source.sortedByDescending { it.fileCount }
-                "size-asc" -> source.sortedBy { it.fileCount }
-                else -> source.sortedBy { it.name.lowercase(Locale.JAPANESE) }
-            }
-        }
+    fun selectSort(key: String) {
+        val next = nextFolderSort(sortState, key)
+        sortState = next
+        sortPreferences.edit().putString(sortPreferenceKey, next.mode).apply()
     }
-    val filteredFiles = remember(files, searchQuery, sortMode) {
-        files.filter { it.name.contains(searchQuery, ignoreCase = true) }.let { source ->
-            when (sortMode) {
-                "name-desc" -> source.sortedByDescending { it.name.lowercase(Locale.JAPANESE) }
-                "size-desc" -> source.sortedByDescending { it.sizeBytes }
-                "size-asc" -> source.sortedBy { it.sizeBytes }
-                "updated-asc" -> source.sortedBy { it.lastModified }
-                "updated-desc" -> source.sortedByDescending { it.lastModified }
-                else -> source.sortedBy { it.name.lowercase(Locale.JAPANESE) }
-            }
-        }
+    val filteredFolders = remember(folders, searchQuery, sortState) {
+        sortFolders(folders, searchQuery, sortState)
+    }
+    val filteredFiles = remember(files, searchQuery, sortState) {
+        sortFiles(files, searchQuery, sortState)
     }
     Scaffold(
         containerColor = Color.White,
@@ -842,6 +875,16 @@ private fun FolderScreen(
                                         onShareSelection()
                                     },
                                 )
+                                if (selectedFileIds.isEmpty() && selectedFolderIds.size == 1) {
+                                    DropdownMenuItem(
+                                        text = { Text("PW・ロック") },
+                                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                                        onClick = {
+                                            selectionActionsExpanded = false
+                                            onFolderSecurity()
+                                        },
+                                    )
+                                }
                                 if (canDeleteItems) {
                                     DropdownMenuItem(
                                         text = { Text("削除", color = Color(0xFFB42318)) },
@@ -906,25 +949,23 @@ private fun FolderScreen(
                         ) {
                             TCloudSortButton(
                                 label = "更新",
-                                selected = sortMode.startsWith("updated"),
-                                descending = sortMode != "updated-asc",
-                                onClick = {
-                                    sortMode = if (sortMode == "updated-desc") "updated-asc" else "updated-desc"
-                                },
+                                selected = sortState.mode.startsWith("updated"),
+                                descending = sortState.mode != "updated-asc",
+                                onClick = { selectSort("updated") },
                                 modifier = Modifier.weight(1f),
                             )
                             TCloudSortButton(
                                 label = "名前",
-                                selected = sortMode.startsWith("name"),
-                                descending = sortMode == "name-desc",
-                                onClick = { sortMode = if (sortMode == "name-asc") "name-desc" else "name-asc" },
+                                selected = sortState.mode.startsWith("name"),
+                                descending = sortState.mode == "name-desc",
+                                onClick = { selectSort("name") },
                                 modifier = Modifier.weight(1f),
                             )
                             TCloudSortButton(
                                 label = "容量",
-                                selected = sortMode.startsWith("size"),
-                                descending = sortMode != "size-asc",
-                                onClick = { sortMode = if (sortMode == "size-desc") "size-asc" else "size-desc" },
+                                selected = sortState.mode.startsWith("size"),
+                                descending = sortState.mode != "size-asc",
+                                onClick = { selectSort("size") },
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -939,23 +980,13 @@ private fun FolderScreen(
                                 modifier = Modifier.weight(1f),
                             )
                             IconButton(
-                                onClick = { setGridView(false) },
+                                onClick = { setGridView(!gridView) },
                                 enabled = !busy,
                             ) {
                                 Icon(
-                                    Icons.Default.ViewList,
-                                    contentDescription = "横長表示",
-                                    tint = if (!gridView) TCloudBlue else TCloudMuted,
-                                )
-                            }
-                            IconButton(
-                                onClick = { setGridView(true) },
-                                enabled = !busy,
-                            ) {
-                                Icon(
-                                    Icons.Default.GridView,
-                                    contentDescription = "1:1表示",
-                                    tint = if (gridView) TCloudBlue else TCloudMuted,
+                                    if (gridView) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+                                    contentDescription = if (gridView) "横長表示へ切り替え" else "1:1表示へ切り替え",
+                                    tint = TCloudBlue,
                                 )
                             }
                         }
@@ -1153,6 +1184,7 @@ private fun AppSettingsDialog(
     onRequestBatteryExclusion: () -> Unit,
     onSetCameraBackupTarget: () -> Unit,
     onSaveCameraBackup: (Boolean, Boolean, Boolean) -> Unit,
+    onRunCameraBackupNow: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var backupEnabled by remember(cameraBackupSettings.enabled) {
@@ -1221,6 +1253,25 @@ private fun AppSettingsDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF667085),
                 )
+                if (cameraBackupSettings.lastScanAtMillis > 0) {
+                    Text(
+                        "最終確認：${formatDateTime(cameraBackupSettings.lastScanAtMillis)}" +
+                            "・${cameraBackupSettings.lastQueuedCount}件を処理",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TCloudMuted,
+                    )
+                }
+                if (cameraBackupSettings.lastError.isNotBlank()) {
+                    Text(
+                        "確認が必要：${cameraBackupSettings.lastError}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB42318),
+                    )
+                }
+                TextButton(
+                    onClick = onRunCameraBackupNow,
+                    enabled = cameraBackupSettings.enabled && cameraBackupSettings.hasTarget,
+                ) { Text("今すぐ確認") }
             }
         },
         confirmButton = {
@@ -1972,6 +2023,7 @@ private fun MoveItemDialog(
 private fun MediaPlayerScreen(
     file: CloudFile,
     dataSourceFactory: androidx.media3.datasource.DataSource.Factory,
+    pictureInPicture: Boolean,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1999,11 +2051,47 @@ private fun MediaPlayerScreen(
     Scaffold(
         containerColor = Color.Black,
         topBar = {
-            TopAppBar(
+            if (!pictureInPicture) TopAppBar(
                 title = { Text(file.name, maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "閉じる")
+                    }
+                },
+                actions = {
+                    if (file.mediaKind == "video") {
+                        IconButton(
+                            onClick = {
+                                val activity = context as? Activity
+                                if (activity != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    val params = PictureInPictureParams.Builder()
+                                        .setAspectRatio(Rational(16, 9))
+                                        .build()
+                                    activity.enterPictureInPictureMode(params)
+                                }
+                            },
+                        ) {
+                            Icon(Icons.Default.PictureInPictureAlt, contentDescription = "小窓で再生")
+                        }
+                        IconButton(
+                            onClick = {
+                                if (TvCastLauncher.launch(context)) {
+                                    Toast.makeText(
+                                        context,
+                                        "テレビを選択すると、端末画面を安全に映せます。",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        "この端末ではテレビへの画面共有を開けませんでした。",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            },
+                        ) {
+                            Icon(Icons.Default.Cast, contentDescription = "テレビに映す")
+                        }
                     }
                 },
             )
@@ -2030,6 +2118,72 @@ private fun playbackMimeType(file: CloudFile): String = when (file.name.substrin
     "mp3" -> MimeTypes.AUDIO_MPEG
     "m4a", "aac" -> MimeTypes.AUDIO_AAC
     else -> file.mimeType.ifBlank { "application/octet-stream" }
+}
+
+@Composable
+private fun FolderSecurityDialog(
+    folder: CloudFolder,
+    busy: Boolean,
+    canRelock: Boolean,
+    onChangePassword: (String) -> Unit,
+    onRelock: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by remember(folder.id) { mutableStateOf("") }
+    var confirmation by remember(folder.id) { mutableStateOf("") }
+    var visible by remember(folder.id) { mutableStateOf(false) }
+    val valid = password.length >= 4 && password == confirmation
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("${folder.name} のPW・ロック") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("PWを変更しても、保存済みデータを再アップロードする必要はありません。")
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it.take(128) },
+                    label = { Text("新しいフォルダPW") },
+                    singleLine = true,
+                    visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { visible = !visible }) {
+                            Icon(
+                                if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (visible) "PWを隠す" else "PWを表示",
+                            )
+                        }
+                    },
+                )
+                OutlinedTextField(
+                    value = confirmation,
+                    onValueChange = { confirmation = it.take(128) },
+                    label = { Text("もう一度入力") },
+                    singleLine = true,
+                    visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                )
+                if (confirmation.isNotEmpty() && confirmation != password) {
+                    Text("PWが一致していません。", color = Color(0xFFB42318))
+                }
+                if (canRelock) {
+                    HorizontalDivider()
+                    Text("再ロックすると、この端末でも次回はフォルダPWの入力が必要です。")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onChangePassword(password) }, enabled = !busy && valid) {
+                Text(if (busy) "変更中…" else "PWを変更")
+            }
+        },
+        dismissButton = {
+            Row {
+                if (canRelock) {
+                    TextButton(onClick = onRelock, enabled = !busy) { Text("再ロック") }
+                }
+                TextButton(onClick = onDismiss, enabled = !busy) { Text("閉じる") }
+            }
+        },
+    )
 }
 
 @Composable
@@ -2095,3 +2249,6 @@ private fun formatBytes(bytes: Long): String {
 
 private fun formatDate(epochMillis: Long): String =
     SimpleDateFormat("yyyy年M月d日", Locale.JAPAN).format(Date(epochMillis))
+
+private fun formatDateTime(epochMillis: Long): String =
+    if (epochMillis <= 0) "—" else SimpleDateFormat("M月d日 HH:mm", Locale.JAPAN).format(Date(epochMillis))

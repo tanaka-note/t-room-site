@@ -6,6 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
 import kotlin.math.min
 
 class TCloudApi(
@@ -124,6 +125,24 @@ class TCloudApi(
                 .put("name", name)
                 .put("passwordAction", "keep"),
         )
+    }
+
+    suspend fun changeFolderPassword(folderId: Long, name: String, password: FolderPasswordPackage) {
+        request(
+            "PATCH",
+            "/folders/$folderId",
+            JSONObject()
+                .put("name", name)
+                .put("passwordAction", "replace")
+                .put("authProof", password.authProof)
+                .put("passwordSalt", password.passwordSalt)
+                .put("passwordWrappedKey", password.passwordWrappedKey)
+                .put("passwordWrapIv", password.passwordWrapIv),
+        )
+    }
+
+    suspend fun lockFolder(folderId: Long) {
+        request("DELETE", "/folders/$folderId/unlock")
     }
 
 
@@ -379,6 +398,8 @@ class TCloudApi(
         isUnlocked = optBooleanCompat("isUnlocked", "adminAccess"),
         fileCount = optInt("fileCount", 0),
         folderCount = optInt("folderCount", 0),
+        createdAtMillis = optInstantMillis("createdAt"),
+        updatedAtMillis = optInstantMillis("updatedAt"),
     )
 
     private fun JSONObject.toCloudFile() = CloudFile(
@@ -397,6 +418,8 @@ class TCloudApi(
         chunkCount = optInt("chunkCount"),
         hasThumbnail = optBooleanCompat("hasThumbnail"),
         lastModified = optLong("lastModified", 0),
+        createdAtMillis = optInstantMillis("createdAt"),
+        updatedAtMillis = optInstantMillis("updatedAt"),
     )
 
     private fun JSONArray?.orEmpty(): JSONArray = this ?: JSONArray()
@@ -420,6 +443,13 @@ class TCloudApi(
             }
         }
         return false
+    }
+
+    private fun JSONObject.optInstantMillis(name: String): Long {
+        val raw = optString(name, "").trim()
+        if (raw.isEmpty()) return 0
+        val normalized = if (raw.endsWith("Z") || raw.contains('+')) raw else raw.replace(' ', 'T') + "Z"
+        return runCatching { Instant.parse(normalized).toEpochMilli() }.getOrDefault(0)
     }
 
     private companion object {

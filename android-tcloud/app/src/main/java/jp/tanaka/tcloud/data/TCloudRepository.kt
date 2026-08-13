@@ -279,6 +279,33 @@ class TCloudRepository(
         return folder.copy(name = cleanName).also { knownFolders[folder.id] = it }
     }
 
+    suspend fun changeFolderPassword(folder: CloudFolder, newPassword: String): CloudFolder {
+        val folderKey = prepareFolderKey(folder)
+        return try {
+            val password = TCloudCrypto.rewrapFolderPassword(folderKey, newPassword)
+            api.changeFolderPassword(folder.id, folder.name, password)
+            folder.copy(
+                passwordSalt = password.passwordSalt,
+                passwordWrappedKey = password.passwordWrappedKey,
+                passwordWrapIv = password.passwordWrapIv,
+                isProtected = true,
+                isUnlocked = true,
+            ).also {
+                knownFolders[folder.id] = it
+                cacheFolderKey(folder.id, folderKey, persist = true)
+            }
+        } finally {
+            folderKey.fill(0)
+        }
+    }
+
+    suspend fun lockFolder(folder: CloudFolder) {
+        check(session?.isSubAdmin == true) { "再ロックは副管理者アカウントで利用できます。" }
+        check(folder.isProtected) { "PW付きフォルダだけ再ロックできます。" }
+        api.lockFolder(folder.id)
+        forgetFolderTree(folder.id)
+    }
+
     suspend fun moveFolder(folder: CloudFolder, destinationParentId: Long): CloudFolder {
         require(folder.id != destinationParentId && folder.parentId != destinationParentId) {
             "現在と同じ移動先が選択されています。"
@@ -625,6 +652,21 @@ class TCloudRepository(
         folderKeys.clear()
         knownFolders.clear()
         adminPrivateKey = null
+    }
+
+    private fun forgetFolderTree(rootId: Long) = synchronized(keyLock) {
+        val targets = mutableSetOf(rootId)
+        var changed: Boolean
+        do {
+            changed = false
+            knownFolders.values.forEach { folder ->
+                if (folder.parentId in targets && targets.add(folder.id)) changed = true
+            }
+        } while (changed)
+        targets.forEach { id ->
+            folderKeys.remove(id)?.fill(0)
+            sessionStore.removeFolderKey(id)
+        }
     }
 
     private companion object {

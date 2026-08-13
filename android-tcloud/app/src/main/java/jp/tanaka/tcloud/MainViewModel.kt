@@ -56,6 +56,7 @@ data class MainUiState(
     val selectedFolderIds: Set<Long> = emptySet(),
     val confirmingSelectionDelete: Boolean = false,
     val creatingFolder: Boolean = false,
+    val pendingFolderSecurity: CloudFolder? = null,
     val cameraBackupSettings: CameraBackupSettings = CameraBackupSettings(),
     val showingOffline: Boolean = false,
     val offlineEntries: List<TCloudOfflineStore.OfflineEntry> = emptyList(),
@@ -216,6 +217,10 @@ class MainViewModel(
             cancelDeleteSelection()
             return true
         }
+        if (current.pendingFolderSecurity != null) {
+            cancelFolderSecurity()
+            return true
+        }
         if (current.selectedFileIds.isNotEmpty() || current.selectedFolderIds.isNotEmpty()) {
             clearSelection()
             return true
@@ -286,6 +291,29 @@ class MainViewModel(
                 }
             }
             .onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
+    }
+
+    fun refreshCameraBackupSettings() = mutableState.update {
+        it.copy(cameraBackupSettings = cameraBackupManager.settings())
+    }
+
+    fun runCameraBackupNow() {
+        val settings = cameraBackupManager.runNow()
+        mutableState.update {
+            it.copy(
+                cameraBackupSettings = settings,
+                message = if (settings.enabled && settings.hasTarget) {
+                    "カメラロールの確認を開始しました。結果は設定画面で確認できます。"
+                } else {
+                    null
+                },
+                error = if (!settings.enabled || !settings.hasTarget) {
+                    "先に保存先を設定し、自動バックアップを有効にしてください。"
+                } else {
+                    null
+                },
+            )
+        }
     }
 
     fun cameraBackupPermissionDenied() = mutableState.update {
@@ -475,6 +503,71 @@ class MainViewModel(
     fun clearSelection() = mutableState.update {
         it.copy(selectedFileIds = emptySet(), selectedFolderIds = emptySet())
     }
+
+    fun openFolderSecuritySelection() {
+        val current = mutableState.value
+        if (current.busy || current.selectedFileIds.isNotEmpty() || current.selectedFolderIds.size != 1) return
+        val folder = current.page?.folders.orEmpty().firstOrNull { it.id in current.selectedFolderIds } ?: return
+        if (current.session?.isSubAdmin == true && !folder.isUnlocked &&
+            (folder.isProtected || current.page?.canTrashContents != true)
+        ) {
+            mutableState.update { it.copy(error = "先にフォルダのPWを解除してください。") }
+            return
+        }
+        mutableState.update { it.copy(pendingFolderSecurity = folder, error = null) }
+    }
+
+    fun changePendingFolderPassword(password: String) {
+        val current = mutableState.value
+        val folder = current.pendingFolderSecurity ?: return
+        if (current.busy) return
+        mutableState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            runCatching {
+                repository.changeFolderPassword(folder, password)
+                repository.listItems(current.page?.currentFolderId)
+            }.onSuccess { page ->
+                mutableState.update {
+                    it.copy(
+                        busy = false,
+                        page = page,
+                        pendingFolderSecurity = null,
+                        selectedFolderIds = emptySet(),
+                        message = "フォルダPWを変更しました。",
+                    )
+                }
+            }.onFailure { error ->
+                mutableState.update { it.copy(busy = false, error = error.userMessage()) }
+            }
+        }
+    }
+
+    fun lockPendingFolder() {
+        val current = mutableState.value
+        val folder = current.pendingFolderSecurity ?: return
+        if (current.busy) return
+        mutableState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            runCatching {
+                repository.lockFolder(folder)
+                repository.listItems(current.page?.currentFolderId)
+            }.onSuccess { page ->
+                mutableState.update {
+                    it.copy(
+                        busy = false,
+                        page = page,
+                        pendingFolderSecurity = null,
+                        selectedFolderIds = emptySet(),
+                        message = "フォルダを再ロックしました。",
+                    )
+                }
+            }.onFailure { error ->
+                mutableState.update { it.copy(busy = false, error = error.userMessage()) }
+            }
+        }
+    }
+
+    fun cancelFolderSecurity() = mutableState.update { it.copy(pendingFolderSecurity = null) }
 
     fun openMoveSelection() {
         val current = mutableState.value

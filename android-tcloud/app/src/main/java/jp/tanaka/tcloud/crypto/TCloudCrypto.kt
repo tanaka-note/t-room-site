@@ -5,6 +5,7 @@ import jp.tanaka.tcloud.data.CloudFile
 import jp.tanaka.tcloud.data.CloudFolder
 import jp.tanaka.tcloud.data.FileMetadata
 import jp.tanaka.tcloud.data.FolderCredentials
+import jp.tanaka.tcloud.data.FolderPasswordPackage
 import jp.tanaka.tcloud.data.EncryptedFilePayload
 import jp.tanaka.tcloud.data.EncryptedFileMetadata
 import jp.tanaka.tcloud.data.EncryptedFolderPayload
@@ -266,6 +267,34 @@ object TCloudCrypto {
             rawFolderKey.fill(0)
         }
     }
+
+    suspend fun rewrapFolderPassword(folderKey: ByteArray, password: String): FolderPasswordPackage =
+        withContext(Dispatchers.Default) {
+            require(folderKey.size == 32) { "フォルダの暗号鍵を確認できません。" }
+            require(password.length in 4..128) { "フォルダパスワードは4文字以上で設定してください。" }
+            val salt = ByteArray(16).also(SecureRandom()::nextBytes)
+            val master = deriveArgon2(password, salt)
+            val wrappingKey = deriveContextKey(master, FOLDER_WRAP_CONTEXT)
+            val wrapped = encryptAesGcm(
+                wrappingKey,
+                folderKey,
+                FOLDER_WRAP_CONTEXT.toByteArray(),
+            )
+            try {
+                FolderPasswordPackage(
+                    authProof = hmacProof(master, FOLDER_AUTH_CONTEXT),
+                    passwordSalt = base64Url(salt),
+                    passwordWrappedKey = base64Url(wrapped.ciphertext),
+                    passwordWrapIv = base64Url(wrapped.iv),
+                )
+            } finally {
+                salt.fill(0)
+                master.fill(0)
+                wrappingKey.fill(0)
+                wrapped.iv.fill(0)
+                wrapped.ciphertext.fill(0)
+            }
+        }
 
     private fun wrapForAdmin(rawFolderKey: ByteArray, publicKeyJwk: String): ByteArray {
         val jwk = JSONObject(publicKeyJwk)

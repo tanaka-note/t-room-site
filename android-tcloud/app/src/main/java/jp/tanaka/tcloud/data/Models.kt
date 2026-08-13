@@ -52,6 +52,8 @@ data class CloudFolder(
     val isUnlocked: Boolean,
     val fileCount: Int,
     val folderCount: Int,
+    val createdAtMillis: Long = 0,
+    val updatedAtMillis: Long = 0,
 )
 
 data class CloudFile(
@@ -71,6 +73,8 @@ data class CloudFile(
     val hasThumbnail: Boolean,
     val lastModified: Long = 0,
     val metadataDecrypted: Boolean = false,
+    val createdAtMillis: Long = 0,
+    val updatedAtMillis: Long = 0,
 )
 
 data class FolderPage(
@@ -91,6 +95,13 @@ data class AccountCredentials(
 data class FolderCredentials(
     val folderKey: ByteArray,
     val authProof: String,
+)
+
+data class FolderPasswordPackage(
+    val authProof: String,
+    val passwordSalt: String,
+    val passwordWrappedKey: String,
+    val passwordWrapIv: String,
 )
 
 data class FileMetadata(
