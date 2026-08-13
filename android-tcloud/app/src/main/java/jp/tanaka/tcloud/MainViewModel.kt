@@ -64,6 +64,9 @@ data class MainUiState(
     val error: String? = null,
 )
 
+internal fun canDeleteSelection(session: Session?, page: FolderPage?): Boolean =
+    session?.isAdmin == true || page?.canTrashContents == true
+
 class MainViewModel(
     private val repository: TCloudRepository,
     private val downloadManager: TCloudDownloadManager,
@@ -248,7 +251,13 @@ class MainViewModel(
     fun logout() {
         viewModelScope.launch {
             val backup = cameraBackupManager.settings()
-            if (backup.enabled) cameraBackupManager.update(false, backup.wifiOnly, backup.chargingOnly)
+            if (backup.enabled) cameraBackupManager.update(
+                false,
+                backup.wifiOnly,
+                backup.chargingOnly,
+                backup.includeImages,
+                backup.includeVideos,
+            )
             repository.logout()
             mutableState.value = MainUiState(
                 restoring = false,
@@ -276,14 +285,26 @@ class MainViewModel(
             .onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
     }
 
-    fun updateCameraBackup(enabled: Boolean, wifiOnly: Boolean, chargingOnly: Boolean) {
-        runCatching { cameraBackupManager.update(enabled, wifiOnly, chargingOnly) }
+    fun updateCameraBackup(
+        enabled: Boolean,
+        wifiOnly: Boolean,
+        chargingOnly: Boolean,
+        includeImages: Boolean,
+        includeVideos: Boolean,
+    ) {
+        runCatching {
+            cameraBackupManager.update(enabled, wifiOnly, chargingOnly, includeImages, includeVideos)
+        }
             .onSuccess { settings ->
                 mutableState.update {
                     it.copy(
                         cameraBackupSettings = settings,
                         message = if (enabled) {
-                            "カメラロール自動バックアップを有効にしました。今後追加される写真・動画が対象です。"
+                            val targets = buildList {
+                                if (includeImages) add("写真")
+                                if (includeVideos) add("動画")
+                            }.joinToString("・")
+                            "カメラロール自動バックアップを有効にしました。今後追加される${targets}が対象です。"
                         } else {
                             "カメラロール自動バックアップを停止しました。"
                         },
@@ -374,7 +395,7 @@ class MainViewModel(
         val current = mutableState.value
         val count = current.selectedFileIds.size + current.selectedFolderIds.size
         if (current.busy || count == 0) return
-        if (current.page?.canTrashContents != true) {
+        if (!canDeleteSelection(current.session, current.page)) {
             mutableState.update { it.copy(error = "この場所では削除できません。PWで解除したフォルダ内で操作してください。") }
             return
         }
@@ -385,9 +406,12 @@ class MainViewModel(
 
     fun confirmDeleteSelection() {
         val current = mutableState.value
-        val files = current.page?.files.orEmpty().filter { it.id in current.selectedFileIds }
-        val folders = current.page?.folders.orEmpty().filter { it.id in current.selectedFolderIds }
-        if (current.busy || (files.isEmpty() && folders.isEmpty()) || current.page?.canTrashContents != true) return
+        val currentPage = current.page ?: return
+        val files = currentPage.files.filter { it.id in current.selectedFileIds }
+        val folders = currentPage.folders.filter { it.id in current.selectedFolderIds }
+        if (current.busy || (files.isEmpty() && folders.isEmpty()) ||
+            !canDeleteSelection(current.session, current.page)
+        ) return
         val scopeRootId = if (current.session?.isSubAdmin == true) {
             current.folderStack.firstOrNull { it.isProtected }?.id
         } else {
@@ -407,7 +431,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 repository.deleteItems(files, folders, scopeRootId)
-                val page = repository.listItems(current.page.currentFolderId)
+                val page = repository.listItems(currentPage.currentFolderId)
                 mutableState.update {
                     it.copy(
                         busy = false,
@@ -422,7 +446,7 @@ class MainViewModel(
                     )
                 }
             } catch (error: Exception) {
-                val refreshedPage = runCatching { repository.listItems(current.page.currentFolderId) }.getOrNull()
+                val refreshedPage = runCatching { repository.listItems(currentPage.currentFolderId) }.getOrNull()
                 mutableState.update {
                     it.copy(
                         busy = false,
@@ -495,7 +519,7 @@ class MainViewModel(
 
     fun selectAll() = mutableState.update { state ->
         state.copy(
-            selectedFileIds = state.page?.files.orEmpty().filter { it.metadataDecrypted }.mapTo(mutableSetOf()) { it.id },
+            selectedFileIds = state.page?.files.orEmpty().mapTo(mutableSetOf()) { it.id },
             selectedFolderIds = state.page?.folders.orEmpty().mapTo(mutableSetOf()) { it.id },
         )
     }

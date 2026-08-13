@@ -29,8 +29,18 @@ class CameraBackupManager(
         return updated
     }
 
-    fun update(enabled: Boolean, wifiOnly: Boolean, chargingOnly: Boolean): CameraBackupSettings {
-        val updated = store.update(enabled, wifiOnly, chargingOnly)
+    fun update(
+        enabled: Boolean,
+        wifiOnly: Boolean,
+        chargingOnly: Boolean,
+        includeImages: Boolean,
+        includeVideos: Boolean,
+    ): CameraBackupSettings {
+        val previous = store.settings()
+        val updated = store.update(enabled, wifiOnly, chargingOnly, includeImages, includeVideos)
+        if (!enabled || previous.includeImages != includeImages || previous.includeVideos != includeVideos) {
+            workManager.cancelAllWorkByTag(TCloudUploadManager.TAG_CAMERA_UPLOAD)
+        }
         applySchedule(updated)
         return updated
     }

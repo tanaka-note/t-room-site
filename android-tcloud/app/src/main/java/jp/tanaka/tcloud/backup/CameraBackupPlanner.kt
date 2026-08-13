@@ -42,3 +42,17 @@ internal fun planCameraBackup(
         reachedBatchLimit = ordered.size >= batchLimit,
     )
 }
+
+internal fun cameraMediaKind(
+    mediaType: Int,
+    mimeType: String,
+    includeImages: Boolean,
+    includeVideos: Boolean,
+): String? = when {
+    includeImages && mediaType == CAMERA_MEDIA_IMAGE && mimeType.startsWith("image/", ignoreCase = true) -> "image"
+    includeVideos && mediaType == CAMERA_MEDIA_VIDEO && mimeType.startsWith("video/", ignoreCase = true) -> "video"
+    else -> null
+}
+
+internal const val CAMERA_MEDIA_IMAGE = 1
+internal const val CAMERA_MEDIA_VIDEO = 3

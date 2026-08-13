@@ -29,4 +29,13 @@ class CameraBackupPlannerTest {
         val plan = planCameraBackup(10, assets, emptySet(), 10)
         assertEquals(listOf(2L), plan.pending.map { it.second.id })
     }
+
+    @Test
+    fun `camera roll accepts only selected image and video MIME types`() {
+        assertEquals("image", cameraMediaKind(1, "image/jpeg", includeImages = true, includeVideos = false))
+        assertEquals(null, cameraMediaKind(1, "application/pdf", includeImages = true, includeVideos = true))
+        assertEquals(null, cameraMediaKind(2, "audio/mpeg", includeImages = true, includeVideos = true))
+        assertEquals(null, cameraMediaKind(3, "video/mp4", includeImages = true, includeVideos = false))
+        assertEquals("video", cameraMediaKind(3, "video/mp4", includeImages = false, includeVideos = true))
+    }
 }

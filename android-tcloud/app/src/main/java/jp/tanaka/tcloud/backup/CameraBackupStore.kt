@@ -11,6 +11,8 @@ data class CameraBackupSettings(
     val folderName: String = "未設定",
     val wifiOnly: Boolean = true,
     val chargingOnly: Boolean = true,
+    val includeImages: Boolean = true,
+    val includeVideos: Boolean = true,
     val startedAtMillis: Long = 0,
     val scanDateAddedSeconds: Long = 0,
     val scanMediaId: Long = 0,
@@ -19,6 +21,16 @@ data class CameraBackupSettings(
     val lastError: String = "",
 ) {
     val hasTarget: Boolean get() = folderId > 0
+}
+
+data class CameraBackupBatchProgress(
+    val total: Int = 0,
+    val completed: Int = 0,
+    val failed: Int = 0,
+    val pendingAssetKeys: Set<String> = emptySet(),
+) {
+    val processed: Int get() = completed + failed
+    val finished: Boolean get() = total > 0 && pendingAssetKeys.isEmpty()
 }
 
 data class FailedCameraAsset(
@@ -42,6 +54,8 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
         folderName = preferences.getString(KEY_FOLDER_NAME, null).orEmpty().ifBlank { "未設定" },
         wifiOnly = preferences.getBoolean(KEY_WIFI_ONLY, true),
         chargingOnly = preferences.getBoolean(KEY_CHARGING_ONLY, true),
+        includeImages = preferences.getBoolean(KEY_INCLUDE_IMAGES, true),
+        includeVideos = preferences.getBoolean(KEY_INCLUDE_VIDEOS, true),
         startedAtMillis = preferences.getLong(KEY_STARTED_AT, 0),
         scanDateAddedSeconds = preferences.getLong(KEY_SCAN_DATE, 0),
         scanMediaId = preferences.getLong(KEY_SCAN_ID, 0),
@@ -65,18 +79,31 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
                 }
             }
             .apply()
-        if (targetChanged) writableDatabase.delete(TABLE_FAILED, null, null)
+        if (targetChanged) {
+            writableDatabase.delete(TABLE_FAILED, null, null)
+            resetBatch()
+        }
         return settings()
     }
 
     @Synchronized
-    fun update(enabled: Boolean, wifiOnly: Boolean, chargingOnly: Boolean): CameraBackupSettings {
+    fun update(
+        enabled: Boolean,
+        wifiOnly: Boolean,
+        chargingOnly: Boolean,
+        includeImages: Boolean,
+        includeVideos: Boolean,
+    ): CameraBackupSettings {
         val current = settings()
         require(!enabled || current.hasTarget) { "先にバックアップ先フォルダを設定してください。" }
+        require(!enabled || includeImages || includeVideos) { "写真または動画を1つ以上選択してください。" }
+        val mediaSelectionChanged = current.includeImages != includeImages || current.includeVideos != includeVideos
         preferences.edit()
             .putBoolean(KEY_ENABLED, enabled)
             .putBoolean(KEY_WIFI_ONLY, wifiOnly)
             .putBoolean(KEY_CHARGING_ONLY, chargingOnly)
+            .putBoolean(KEY_INCLUDE_IMAGES, includeImages)
+            .putBoolean(KEY_INCLUDE_VIDEOS, includeVideos)
             .apply {
                 if (enabled && current.startedAtMillis <= 0) {
                     putLong(KEY_STARTED_AT, System.currentTimeMillis())
@@ -84,10 +111,66 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
                 } else if (!enabled && current.enabled) {
                     // 中止された未完了データを、次回有効化時に完了履歴と照合し直す。
                     resetCursor(this)
+                } else if (mediaSelectionChanged) {
+                    resetCursor(this)
                 }
             }
             .apply()
+        if (!enabled || mediaSelectionChanged) {
+            writableDatabase.delete(TABLE_FAILED, null, null)
+            resetBatch()
+        }
         return settings()
+    }
+
+    @Synchronized
+    fun beginBatch(assetKeys: Collection<String>): CameraBackupBatchProgress {
+        val unique = assetKeys.filter(String::isNotBlank).toSet()
+        if (unique.isEmpty()) return batchProgress()
+        val current = batchProgress()
+        val base = if (current.pendingAssetKeys.isEmpty()) CameraBackupBatchProgress() else current
+        val added = unique - base.pendingAssetKeys
+        val updated = base.copy(
+            total = base.total + added.size,
+            pendingAssetKeys = base.pendingAssetKeys + added,
+        )
+        saveBatch(updated)
+        return updated
+    }
+
+    @Synchronized
+    fun finishBatchAsset(assetKey: String, failed: Boolean): CameraBackupBatchProgress {
+        val current = batchProgress()
+        if (assetKey !in current.pendingAssetKeys) return current
+        val updated = current.copy(
+            completed = current.completed + if (failed) 0 else 1,
+            failed = current.failed + if (failed) 1 else 0,
+            pendingAssetKeys = current.pendingAssetKeys - assetKey,
+        )
+        saveBatch(updated)
+        return updated
+    }
+
+    @Synchronized
+    fun batchProgress(): CameraBackupBatchProgress = CameraBackupBatchProgress(
+        total = preferences.getInt(KEY_BATCH_TOTAL, 0),
+        completed = preferences.getInt(KEY_BATCH_COMPLETED, 0),
+        failed = preferences.getInt(KEY_BATCH_FAILED, 0),
+        pendingAssetKeys = preferences.getStringSet(KEY_BATCH_PENDING, emptySet()).orEmpty().toSet(),
+    )
+
+    @Synchronized
+    fun resetBatch() {
+        preferences.edit()
+            .remove(KEY_BATCH_TOTAL)
+            .remove(KEY_BATCH_COMPLETED)
+            .remove(KEY_BATCH_FAILED)
+            .remove(KEY_BATCH_PENDING)
+            .apply()
+    }
+
+    fun discardFailed(assetKey: String) {
+        writableDatabase.delete(TABLE_FAILED, "$COLUMN_ASSET_KEY = ?", arrayOf(assetKey))
     }
 
     @Synchronized
@@ -189,6 +272,15 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
             .putString(KEY_LAST_ERROR, "")
     }
 
+    private fun saveBatch(progress: CameraBackupBatchProgress) {
+        preferences.edit()
+            .putInt(KEY_BATCH_TOTAL, progress.total)
+            .putInt(KEY_BATCH_COMPLETED, progress.completed)
+            .putInt(KEY_BATCH_FAILED, progress.failed)
+            .putStringSet(KEY_BATCH_PENDING, progress.pendingAssetKeys)
+            .apply()
+    }
+
     private companion object {
         const val DATABASE_NAME = "tcloud_camera_backup.db"
         const val DATABASE_VERSION = 2
@@ -206,11 +298,17 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
         const val KEY_FOLDER_NAME = "folder_name"
         const val KEY_WIFI_ONLY = "wifi_only"
         const val KEY_CHARGING_ONLY = "charging_only"
+        const val KEY_INCLUDE_IMAGES = "include_images"
+        const val KEY_INCLUDE_VIDEOS = "include_videos"
         const val KEY_STARTED_AT = "started_at"
         const val KEY_SCAN_DATE = "scan_date_added_seconds"
         const val KEY_SCAN_ID = "scan_media_id"
         const val KEY_LAST_SCAN_AT = "last_scan_at"
         const val KEY_LAST_QUEUED = "last_queued_count"
         const val KEY_LAST_ERROR = "last_error"
+        const val KEY_BATCH_TOTAL = "batch_total"
+        const val KEY_BATCH_COMPLETED = "batch_completed"
+        const val KEY_BATCH_FAILED = "batch_failed"
+        const val KEY_BATCH_PENDING = "batch_pending"
     }
 }

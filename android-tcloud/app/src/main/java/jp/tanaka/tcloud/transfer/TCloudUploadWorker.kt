@@ -39,13 +39,31 @@ class TCloudUploadWorker(
         val folderId = inputData.getLong(KEY_FOLDER_ID, 0)
         val source = inputData.getString(KEY_SOURCE_URI)?.let(Uri::parse)
         val cameraAssetKey = inputData.getString(KEY_CAMERA_ASSET_KEY)
+        val expectedCameraKind = inputData.getString(KEY_CAMERA_MEDIA_KIND)
+            ?: cameraAssetKey?.let(::mediaKindFromAssetKey)
         if (folderId <= 0 || source == null) return Result.failure(errorData("アップロード情報が不正です。"))
 
-        createNotificationChannel()
-        setForeground(notification("準備しています", 0, indeterminate = true))
+        cameraAssetKey?.let {
+            (applicationContext as TCloudApplication).cameraBackupStore.beginBatch(listOf(it))
+        }
+
+        createNotificationChannel(cameraAssetKey != null)
+        setForeground(
+            if (cameraAssetKey == null) {
+                notification("準備しています", 0, indeterminate = true)
+            } else {
+                cameraNotification(0, indeterminate = true)
+            },
+        )
         var ticket: UploadTicket? = null
         return try {
             val sourceInfo = readSourceInfo(source)
+            if (cameraAssetKey != null && sourceInfo.mediaKind != expectedCameraKind) {
+                val store = (applicationContext as TCloudApplication).cameraBackupStore
+                store.markCompleted(cameraAssetKey)
+                finishCameraAsset(cameraAssetKey, failed = false)
+                return Result.success()
+            }
             check(sourceInfo.sizeBytes > 0) { "空ファイルのためスキップしました。" }
             val repository = (applicationContext as TCloudApplication).repository
             repository.prepareUpload(
@@ -93,7 +111,13 @@ class TCloudUploadWorker(
                                 .putInt(KEY_PROGRESS_PERCENT, percent)
                                 .build(),
                         )
-                        setForeground(notification("${sourceInfo.name} を保存中", percent, indeterminate = false))
+                        setForeground(
+                            if (cameraAssetKey == null) {
+                                notification("${sourceInfo.name} を保存中", percent, indeterminate = false)
+                            } else {
+                                cameraNotification(percent, indeterminate = false)
+                            },
+                        )
                     }
                     check(input.read() == -1) { "選択後にファイル容量が変更されました。" }
                 }
@@ -102,17 +126,24 @@ class TCloudUploadWorker(
             cameraAssetKey?.let {
                 (applicationContext as TCloudApplication).cameraBackupStore.markCompleted(it)
             }
-            showCompletion("アップロードが完了しました")
+            if (cameraAssetKey == null) {
+                showCompletion("アップロードが完了しました")
+            } else {
+                finishCameraAsset(cameraAssetKey, failed = false)
+            }
             Result.success()
         } catch (error: Throwable) {
             withContext(NonCancellable) {
                 ticket?.let { runCatching { (applicationContext as TCloudApplication).repository.cancelUpload(it.id) } }
             }
             if (isStopped) {
-                showCompletion("アップロードを中止しました")
+                if (cameraAssetKey == null) showCompletion("アップロードを中止しました")
                 Result.failure(errorData("中止しました。"))
             } else if (cameraAssetKey != null && runAttemptCount < MAX_CAMERA_RETRIES) {
-                showCompletion("自動バックアップを再試行します")
+                notificationManager.notify(
+                    CAMERA_NOTIFICATION_ID,
+                    buildCameraNotification("通信を確認後、自動で再試行します", 0, indeterminate = true),
+                )
                 Result.retry()
             } else {
                 if (cameraAssetKey != null) {
@@ -122,8 +153,10 @@ class TCloudUploadWorker(
                         folderId = folderId,
                         error = error.message ?: "アップロードに失敗しました。",
                     )
+                    finishCameraAsset(cameraAssetKey, failed = true)
+                } else {
+                    showCompletion("アップロードに失敗しました")
                 }
-                showCompletion("アップロードに失敗しました")
                 Result.failure(errorData(error.message ?: "アップロードに失敗しました。"))
             }
         }
@@ -222,6 +255,54 @@ class TCloudUploadWorker(
         }
     }
 
+    private fun cameraNotification(fileProgress: Int, indeterminate: Boolean): ForegroundInfo {
+        val batch = (applicationContext as TCloudApplication).cameraBackupStore.batchProgress()
+        val total = batch.total.coerceAtLeast(1)
+        val overallProgress = if (indeterminate) {
+            0
+        } else {
+            ((batch.processed * 100 + fileProgress.coerceIn(0, 100)) / total).coerceIn(0, 100)
+        }
+        val text = "${batch.processed} / ${batch.total.coerceAtLeast(1)}件完了・バックアップ中"
+        val notification = buildCameraNotification(text, overallProgress, indeterminate)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(CAMERA_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(CAMERA_NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun finishCameraAsset(assetKey: String, failed: Boolean) {
+        val batch = (applicationContext as TCloudApplication).cameraBackupStore
+            .finishBatchAsset(assetKey, failed)
+        val text = when {
+            batch.finished && batch.failed > 0 ->
+                "${batch.total}件中${batch.completed}件完了・${batch.failed}件を再確認します"
+            batch.finished -> "${batch.total}件のバックアップが完了しました"
+            else -> "${batch.processed} / ${batch.total}件完了・バックアップ中"
+        }
+        val progress = if (batch.total > 0) ((batch.processed * 100) / batch.total).coerceIn(0, 100) else 0
+        notificationManager.notify(
+            CAMERA_NOTIFICATION_ID,
+            buildCameraNotification(text, progress, indeterminate = false, ongoing = !batch.finished),
+        )
+    }
+
+    private fun buildCameraNotification(
+        text: String,
+        progress: Int,
+        indeterminate: Boolean,
+        ongoing: Boolean = true,
+    ): Notification = Notification.Builder(applicationContext, CAMERA_CHANNEL_ID)
+        .setSmallIcon(R.drawable.ic_stat_cloud_upload)
+        .setContentTitle("T-Cloud カメラロール")
+        .setContentText(text)
+        .setOnlyAlertOnce(true)
+        .setOngoing(ongoing)
+        .setAutoCancel(!ongoing)
+        .setProgress(100, progress.coerceIn(0, 100), indeterminate)
+        .build()
+
     private fun showCompletion(text: String) {
         notificationManager.notify(
             notificationId() + 1,
@@ -234,7 +315,21 @@ class TCloudUploadWorker(
         )
     }
 
-    private fun createNotificationChannel() {
+    private fun createNotificationChannel(cameraBackup: Boolean) {
+        if (cameraBackup) {
+            notificationManager.createNotificationChannel(
+                NotificationChannel(
+                    CAMERA_CHANNEL_ID,
+                    "T-Cloud カメラロール",
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = "カメラロール自動バックアップの進行状況"
+                    setShowBadge(false)
+                    setSound(null, null)
+                },
+            )
+            return
+        }
         notificationManager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
@@ -251,6 +346,14 @@ class TCloudUploadWorker(
 
     private fun errorData(message: String) = Data.Builder().putString(KEY_ERROR, message).build()
 
+    private fun mediaKindFromAssetKey(assetKey: String): String? = when (
+        assetKey.split(':').getOrNull(1)?.toIntOrNull()
+    ) {
+        1 -> "image"
+        3 -> "video"
+        else -> null
+    }
+
     private data class SourceInfo(
         val name: String,
         val sizeBytes: Long,
@@ -263,11 +366,14 @@ class TCloudUploadWorker(
         const val KEY_FOLDER_ID = "folder_id"
         const val KEY_SOURCE_URI = "source_uri"
         const val KEY_CAMERA_ASSET_KEY = "camera_asset_key"
+        const val KEY_CAMERA_MEDIA_KIND = "camera_media_kind"
         const val KEY_UPLOADED_BYTES = "uploaded_bytes"
         const val KEY_TOTAL_BYTES = "total_bytes"
         const val KEY_PROGRESS_PERCENT = "progress_percent"
         const val KEY_ERROR = "error"
         private const val CHANNEL_ID = "tcloud_transfers"
+        private const val CAMERA_CHANNEL_ID = "tcloud_camera_backup_v2"
+        private const val CAMERA_NOTIFICATION_ID = 101_500
         private const val MAX_CAMERA_RETRIES = 5
     }
 }

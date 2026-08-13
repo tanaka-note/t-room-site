@@ -24,28 +24,31 @@ class CameraBackupScanWorker(
         val settings = store.settings()
         if (!settings.enabled || !settings.hasTarget) return@withContext Result.success()
 
-        val mediaTypes = permittedMediaTypes()
+        val mediaTypes = permittedMediaTypes(settings)
         if (mediaTypes.isEmpty()) {
             store.recordScan(0, "写真・動画へのアクセスが許可されていません。")
             return@withContext Result.success()
         }
         return@withContext runCatching {
             var queued = 0
+            val queuedItems = mutableListOf<QueuedCameraAsset>()
             store.failedAssets(settings.folderId).forEach { failed ->
-                application.uploadManager.enqueueCameraBackup(
-                    folderId = failed.folderId,
-                    uri = Uri.parse(failed.sourceUri),
-                    assetKey = failed.assetKey,
-                    wifiOnly = settings.wifiOnly,
-                    chargingOnly = settings.chargingOnly,
-                )
-                queued += 1
+                val mediaType = failed.assetKey.split(':').getOrNull(1)?.toIntOrNull()
+                val kind = mediaType?.let {
+                    expectedKindForType(it, settings.includeImages, settings.includeVideos)
+                }
+                if (kind == null) {
+                    store.discardFailed(failed.assetKey)
+                    return@forEach
+                }
+                queuedItems += QueuedCameraAsset(failed.folderId, Uri.parse(failed.sourceUri), failed.assetKey, kind)
             }
 
             val collection = MediaStore.Files.getContentUri("external")
             val projection = arrayOf(
                 MediaStore.Files.FileColumns._ID,
                 MediaStore.Files.FileColumns.MEDIA_TYPE,
+                MediaStore.Files.FileColumns.MIME_TYPE,
                 MediaStore.Files.FileColumns.SIZE,
                 MediaStore.Files.FileColumns.DATE_MODIFIED,
                 MediaStore.Files.FileColumns.DATE_ADDED,
@@ -79,14 +82,24 @@ class CameraBackupScanWorker(
             )?.use { cursor ->
                 val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
                 val typeIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
+                val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MIME_TYPE)
                 val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
                 val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
                 val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_ADDED)
                 while (cursor.moveToNext() && assets.size < MAX_SCAN_ITEMS) {
                     val id = cursor.getLong(idIndex)
+                    val mediaType = cursor.getInt(typeIndex)
+                    val mimeType = cursor.getString(mimeIndex).orEmpty()
+                    if (cameraMediaKind(
+                            mediaType,
+                            mimeType,
+                            settings.includeImages,
+                            settings.includeVideos,
+                        ) == null
+                    ) continue
                     assets += CameraMediaAsset(
                         id = id,
-                        mediaType = cursor.getInt(typeIndex),
+                        mediaType = mediaType,
                         sizeBytes = cursor.getLong(sizeIndex),
                         modifiedSeconds = cursor.getLong(modifiedIndex),
                         dateAddedSeconds = cursor.getLong(addedIndex),
@@ -101,10 +114,17 @@ class CameraBackupScanWorker(
             }.toSet()
             val plan = planCameraBackup(settings.folderId, assets, completed, MAX_SCAN_ITEMS)
             plan.pending.forEach { (assetKey, asset) ->
+                val kind = expectedKindForType(asset.mediaType, settings.includeImages, settings.includeVideos)
+                    ?: return@forEach
+                queuedItems += QueuedCameraAsset(settings.folderId, Uri.parse(asset.uri), assetKey, kind)
+            }
+            store.beginBatch(queuedItems.map { it.assetKey })
+            queuedItems.forEach { item ->
                 application.uploadManager.enqueueCameraBackup(
-                    folderId = settings.folderId,
-                    uri = Uri.parse(asset.uri),
-                    assetKey = assetKey,
+                    folderId = item.folderId,
+                    uri = item.uri,
+                    assetKey = item.assetKey,
+                    expectedMediaKind = item.expectedMediaKind,
                     wifiOnly = settings.wifiOnly,
                     chargingOnly = settings.chargingOnly,
                 )
@@ -122,29 +142,47 @@ class CameraBackupScanWorker(
         }
     }
 
-    private fun permittedMediaTypes(): List<Int> {
+    private fun permittedMediaTypes(settings: CameraBackupSettings): List<Int> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             val allowed = ContextCompat.checkSelfPermission(
                 applicationContext,
                 Manifest.permission.READ_EXTERNAL_STORAGE,
             ) == PackageManager.PERMISSION_GRANTED
-            return if (allowed) listOf(MEDIA_IMAGE, MEDIA_VIDEO) else emptyList()
+            return if (allowed) selectedMediaTypes(settings) else emptyList()
         }
         val result = mutableListOf<Int>()
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_MEDIA_IMAGES) ==
             PackageManager.PERMISSION_GRANTED
-        ) result += MEDIA_IMAGE
+        ) if (settings.includeImages) result += MEDIA_IMAGE
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_MEDIA_VIDEO) ==
             PackageManager.PERMISSION_GRANTED
-        ) result += MEDIA_VIDEO
+        ) if (settings.includeVideos) result += MEDIA_VIDEO
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && result.isEmpty() &&
             ContextCompat.checkSelfPermission(
                 applicationContext,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
             ) == PackageManager.PERMISSION_GRANTED
-        ) result += listOf(MEDIA_IMAGE, MEDIA_VIDEO)
+        ) result += selectedMediaTypes(settings)
         return result.distinct()
     }
+
+    private fun selectedMediaTypes(settings: CameraBackupSettings) = buildList {
+        if (settings.includeImages) add(MEDIA_IMAGE)
+        if (settings.includeVideos) add(MEDIA_VIDEO)
+    }
+
+    private fun expectedKindForType(mediaType: Int, includeImages: Boolean, includeVideos: Boolean): String? = when {
+        includeImages && mediaType == MEDIA_IMAGE -> "image"
+        includeVideos && mediaType == MEDIA_VIDEO -> "video"
+        else -> null
+    }
+
+    private data class QueuedCameraAsset(
+        val folderId: Long,
+        val uri: Uri,
+        val assetKey: String,
+        val expectedMediaKind: String,
+    )
 
     private companion object {
         const val MEDIA_IMAGE = MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE

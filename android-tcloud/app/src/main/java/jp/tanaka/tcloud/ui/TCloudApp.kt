@@ -154,6 +154,14 @@ private val TCloudLine = Color(0xFFDCE2E7)
 private val TCloudMuted = Color(0xFF68737D)
 private val TCloudSelection = Color(0xFFE4F3F0)
 
+private data class PendingCameraBackupSettings(
+    val enabled: Boolean,
+    val wifiOnly: Boolean,
+    val chargingOnly: Boolean,
+    val includeImages: Boolean,
+    val includeVideos: Boolean,
+)
+
 @Composable
 fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
     val state by viewModel.state.collectAsState()
@@ -171,17 +179,23 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
     }
     var pendingTransfer by remember { mutableStateOf<Pair<CloudFile, Boolean>?>(null) }
     var pendingSelectionTransfer by remember { mutableStateOf<Boolean?>(null) }
-    var pendingCameraBackupSettings by remember { mutableStateOf<Triple<Boolean, Boolean, Boolean>?>(null) }
+    var pendingCameraBackupSettings by remember { mutableStateOf<PendingCameraBackupSettings?>(null) }
 
-    fun hasCameraMediaPermission(): Boolean = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
-            context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
-                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) ==
+    fun hasCameraMediaPermission(includeImages: Boolean, includeVideos: Boolean): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+            val selectedAccess = context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) ==
                 PackageManager.PERMISSION_GRANTED
+            selectedAccess ||
+                ((!includeImages || context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) ==
+                    PackageManager.PERMISSION_GRANTED) &&
+                    (!includeVideos || context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) ==
+                        PackageManager.PERMISSION_GRANTED))
+        }
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
-            context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-                context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            (!includeImages || context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) ==
+                PackageManager.PERMISSION_GRANTED) &&
+                (!includeVideos || context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) ==
+                    PackageManager.PERMISSION_GRANTED)
         else -> context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
             PackageManager.PERMISSION_GRANTED
     }
@@ -222,8 +236,14 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
         val pending = pendingCameraBackupSettings
         pendingCameraBackupSettings = null
         if (pending != null) {
-            if (hasCameraMediaPermission()) {
-                viewModel.updateCameraBackup(pending.first, pending.second, pending.third)
+            if (hasCameraMediaPermission(pending.includeImages, pending.includeVideos)) {
+                viewModel.updateCameraBackup(
+                    pending.enabled,
+                    pending.wifiOnly,
+                    pending.chargingOnly,
+                    pending.includeImages,
+                    pending.includeVideos,
+                )
             } else {
                 viewModel.cameraBackupPermissionDenied()
             }
@@ -291,21 +311,27 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
         }
     }
 
-    fun requestCameraBackup(enabled: Boolean, wifiOnly: Boolean, chargingOnly: Boolean) {
+    fun requestCameraBackup(
+        enabled: Boolean,
+        wifiOnly: Boolean,
+        chargingOnly: Boolean,
+        includeImages: Boolean,
+        includeVideos: Boolean,
+    ) {
         if (!enabled) {
-            viewModel.updateCameraBackup(false, wifiOnly, chargingOnly)
+            viewModel.updateCameraBackup(false, wifiOnly, chargingOnly, includeImages, includeVideos)
             return
         }
         val permissions = when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
-            )
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.READ_MEDIA_VIDEO,
-            )
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> buildList {
+                if (includeImages) add(Manifest.permission.READ_MEDIA_IMAGES)
+                if (includeVideos) add(Manifest.permission.READ_MEDIA_VIDEO)
+                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            }.toTypedArray()
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> buildList {
+                if (includeImages) add(Manifest.permission.READ_MEDIA_IMAGES)
+                if (includeVideos) add(Manifest.permission.READ_MEDIA_VIDEO)
+            }.toTypedArray()
             else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }.toMutableList().apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
@@ -313,9 +339,15 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
             context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
         if (permissions.isEmpty()) {
-            viewModel.updateCameraBackup(true, wifiOnly, chargingOnly)
+            viewModel.updateCameraBackup(true, wifiOnly, chargingOnly, includeImages, includeVideos)
         } else {
-            pendingCameraBackupSettings = Triple(true, wifiOnly, chargingOnly)
+            pendingCameraBackupSettings = PendingCameraBackupSettings(
+                true,
+                wifiOnly,
+                chargingOnly,
+                includeImages,
+                includeVideos,
+            )
             cameraBackupPermissionLauncher.launch(permissions)
         }
     }
@@ -386,7 +418,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     canUpload = state.session?.canUpload == true && state.page?.currentFolder != null,
                     canManageItems = state.session?.isAdmin == true ||
                         (state.session?.isSubAdmin == true && state.page?.currentFolder != null),
-                    canDeleteItems = state.page?.canTrashContents == true,
+                    canDeleteItems = state.session?.isAdmin == true || state.page?.canTrashContents == true,
                     folders = state.page?.folders.orEmpty(),
                     files = state.page?.files.orEmpty(),
                     thumbnailBitmaps = state.thumbnailBitmaps,
@@ -1192,7 +1224,7 @@ private fun AppSettingsDialog(
     canSetCameraBackupTarget: Boolean,
     onRequestBatteryExclusion: () -> Unit,
     onSetCameraBackupTarget: () -> Unit,
-    onSaveCameraBackup: (Boolean, Boolean, Boolean) -> Unit,
+    onSaveCameraBackup: (Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onRunCameraBackupNow: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1204,6 +1236,12 @@ private fun AppSettingsDialog(
     }
     var chargingOnly by remember(cameraBackupSettings.chargingOnly) {
         mutableStateOf(cameraBackupSettings.chargingOnly)
+    }
+    var includeImages by remember(cameraBackupSettings.includeImages) {
+        mutableStateOf(cameraBackupSettings.includeImages)
+    }
+    var includeVideos by remember(cameraBackupSettings.includeVideos) {
+        mutableStateOf(cameraBackupSettings.includeVideos)
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1246,6 +1284,18 @@ private fun AppSettingsDialog(
                     onCheckedChange = { backupEnabled = it },
                 )
                 SettingSwitchRow(
+                    label = "写真を保存",
+                    checked = includeImages,
+                    enabled = true,
+                    onCheckedChange = { includeImages = it },
+                )
+                SettingSwitchRow(
+                    label = "動画を保存",
+                    checked = includeVideos,
+                    enabled = true,
+                    onCheckedChange = { includeVideos = it },
+                )
+                SettingSwitchRow(
                     label = "Wi-Fiなど従量課金なしの通信のみ",
                     checked = wifiOnly,
                     enabled = true,
@@ -1258,7 +1308,7 @@ private fun AppSettingsDialog(
                     onCheckedChange = { chargingOnly = it },
                 )
                 Text(
-                    "有効にした時点以降に端末へ追加された写真・動画だけを暗号化して保存します。失敗分は次回自動で再試行します。",
+                    "有効にした時点以降に端末へ追加された、選択中の写真・動画だけを暗号化して保存します。失敗分は次回自動で再試行します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF667085),
                 )
@@ -1286,10 +1336,10 @@ private fun AppSettingsDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onSaveCameraBackup(backupEnabled, wifiOnly, chargingOnly)
+                    onSaveCameraBackup(backupEnabled, wifiOnly, chargingOnly, includeImages, includeVideos)
                     onDismiss()
                 },
-                enabled = !backupEnabled || cameraBackupSettings.hasTarget,
+                enabled = !backupEnabled || (cameraBackupSettings.hasTarget && (includeImages || includeVideos)),
             ) { Text("保存") }
         },
         dismissButton = {

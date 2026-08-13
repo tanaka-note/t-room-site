@@ -39,6 +39,7 @@ class TCloudUploadManager(context: Context) {
         folderId: Long,
         uri: Uri,
         assetKey: String,
+        expectedMediaKind: String,
         wifiOnly: Boolean,
         chargingOnly: Boolean,
     ): UUID {
@@ -48,6 +49,7 @@ class TCloudUploadManager(context: Context) {
                     .putLong(TCloudUploadWorker.KEY_FOLDER_ID, folderId)
                     .putString(TCloudUploadWorker.KEY_SOURCE_URI, uri.toString())
                     .putString(TCloudUploadWorker.KEY_CAMERA_ASSET_KEY, assetKey)
+                    .putString(TCloudUploadWorker.KEY_CAMERA_MEDIA_KIND, expectedMediaKind)
                     .build(),
             )
             .setConstraints(
