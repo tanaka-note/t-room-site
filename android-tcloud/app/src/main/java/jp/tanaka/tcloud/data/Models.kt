@@ -12,6 +12,11 @@ data class Session(
     val isSubAdmin: Boolean get() = role == "subadmin"
 }
 
+data class AuthMode(
+    val mode: String,
+    val credentialSalt: String = "",
+)
+
 data class CryptoConfig(
     val initialized: Boolean,
     val cryptoVersion: Int,

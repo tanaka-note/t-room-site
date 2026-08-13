@@ -108,7 +108,11 @@ object TCloudCrypto {
         val ciphertext: ByteArray,
     )
 
-    suspend fun deriveAccountCredentials(password: String, loginId: String): AccountCredentials =
+    suspend fun deriveAccountCredentials(
+        password: String,
+        loginId: String,
+        credentialSalt: String = "",
+    ): AccountCredentials =
         withContext(Dispatchers.Default) {
             require(password.length in 8..256) { "アカウントパスワードを確認してください。" }
             val normalizedLoginId = loginId.trim().lowercase()
@@ -116,7 +120,13 @@ object TCloudCrypto {
                 "ログインIDを確認してください。"
             }
 
-            val salt = sha256("$ACCOUNT_SALT_CONTEXT$normalizedLoginId".toByteArray()).copyOfRange(0, 16)
+            val salt = if (credentialSalt.isBlank()) {
+                sha256("$ACCOUNT_SALT_CONTEXT$normalizedLoginId".toByteArray()).copyOfRange(0, 16)
+            } else {
+                base64UrlDecode(credentialSalt).also {
+                    require(it.size == 16) { "認証互換情報が正しくありません。" }
+                }
+            }
             val master = deriveArgon2(password, salt)
             try {
                 val accountKey = deriveContextKey(master, ADMIN_WRAP_CONTEXT)

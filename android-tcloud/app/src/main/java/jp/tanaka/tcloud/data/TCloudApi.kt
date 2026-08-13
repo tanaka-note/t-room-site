@@ -12,7 +12,12 @@ import kotlin.math.min
 class TCloudApi(
     private val sessionStore: SecureSessionStore,
 ) {
-    suspend fun authMode(): String = request("GET", "/auth-mode").optString("mode", "legacy")
+    suspend fun authMode(): AuthMode = request("GET", "/auth-mode").let { json ->
+        AuthMode(
+            mode = json.optString("mode", "legacy"),
+            credentialSalt = json.optString("credentialSalt", ""),
+        )
+    }
 
     suspend fun session(): Session = request("GET", "/session").toSession()
 

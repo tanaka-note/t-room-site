@@ -37,10 +37,18 @@ class TCloudRepository(
     }
 
     suspend fun login(loginId: String, password: String): Pair<Session, FolderPage> {
-        check(api.authMode() == "proof") {
+        val authMode = api.authMode()
+        check(authMode.mode == "proof") {
             "Androidアプリで利用できる暗号認証がCloudflare側に設定されていません。"
         }
-        val credentials = TCloudCrypto.deriveAccountCredentials(password, loginId)
+        check(authMode.credentialSalt.isNotBlank()) {
+            "認証互換情報を取得できませんでした。アプリを更新して再試行してください。"
+        }
+        val credentials = TCloudCrypto.deriveAccountCredentials(
+            password = password,
+            loginId = loginId,
+            credentialSalt = authMode.credentialSalt,
+        )
         try {
             val loggedInSession = api.login(loginId, credentials.authProof)
             session = loggedInSession

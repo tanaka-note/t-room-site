@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.security.MessageDigest
 import java.util.Base64
 
 class TCloudCryptoCompatibilityTest {
@@ -25,6 +26,29 @@ class TCloudCryptoCompatibilityTest {
             Base64.getUrlEncoder().withoutPadding().encodeToString(credentials.accountKey),
         )
         credentials.accountKey.fill(0)
+    }
+
+    @Test
+    fun renamedLoginIdUsesServerCredentialSaltWithoutChangingExistingVaultKey() = runBlocking {
+        val password = "CorrectHorseBattery1!"
+        val legacyLoginId = "sub@example.com"
+        val renamedLoginId = "contact@example.com"
+        val legacy = TCloudCrypto.deriveAccountCredentials(password, legacyLoginId)
+        val salt = MessageDigest.getInstance("SHA-256")
+            .digest("T-ROOM Cloud Storage account key v1|tanaka-note.com|$legacyLoginId".toByteArray())
+            .copyOfRange(0, 16)
+        val credentialSalt = Base64.getUrlEncoder().withoutPadding().encodeToString(salt)
+        val renamed = TCloudCrypto.deriveAccountCredentials(
+            password = password,
+            loginId = renamedLoginId,
+            credentialSalt = credentialSalt,
+        )
+
+        assertEquals(legacy.authProof, renamed.authProof)
+        assertArrayEquals(legacy.accountKey, renamed.accountKey)
+        legacy.accountKey.fill(0)
+        renamed.accountKey.fill(0)
+        salt.fill(0)
     }
 
     @Test
