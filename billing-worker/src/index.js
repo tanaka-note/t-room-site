@@ -1,10 +1,17 @@
 import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
-import { LOGIN_LOCK_MINUTES, MAX_FAILED_LOGIN_ATTEMPTS, isLoginLocked } from "./login-limit.js";
+import { LOGIN_LOCK_MINUTES, isLoginLocked } from "./login-limit.js";
+import {
+  ACCOUNT_LOGIN_LIMIT,
+  createCurrentPasswordRecord,
+  isSourceLocked,
+  needsPasswordUpgrade,
+  nextSourceAttempt,
+  verifyPasswordRecord
+} from "./auth-security.js";
 
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
 const MAX_SESSION_SECONDS = 30 * 24 * 60 * 60;
-const PASSWORD_ITERATIONS = 100000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -57,10 +64,26 @@ async function handleApi(request, env, url, path) {
 
     const account = await env.DB.prepare(`
       SELECT id, login_id, display_name, role, password_salt, password_hash,
-             password_iterations, session_version, is_active, failed_login_attempts, locked_until
+             password_iterations, password_pepper_version, session_version, is_active,
+             failed_login_attempts, locked_until
       FROM billing_accounts WHERE login_id = ? COLLATE NOCASE LIMIT 1
     `).bind(loginId).first();
+    const fingerprint = await loginFingerprint(request, loginId, env);
+    const sourceAttempt = await env.DB.prepare(`
+      SELECT failed_count, first_failed_at, locked_until
+      FROM billing_login_attempts WHERE fingerprint = ?
+    `).bind(fingerprint).first();
+    if (isSourceLocked(sourceAttempt?.locked_until)) {
+      await writeAudit(env, {
+        eventType: "login_blocked",
+        targetAccountId: account?.id || null,
+        attemptedLoginId: loginId,
+        details: { scope: "source" }
+      });
+      throw loginRejected();
+    }
     if (!account?.is_active) {
+      await recordSourceLoginFailure(env, fingerprint, sourceAttempt);
       await writeAudit(env, { eventType: "login_failure", attemptedLoginId: loginId });
       throw loginRejected();
     }
@@ -75,8 +98,9 @@ async function handleApi(request, env, url, path) {
     }
 
     const verified = Boolean(account.password_hash && account.password_salt)
-      && await verifyPassword(password, account.password_salt, account.password_hash, account.password_iterations);
+      && await verifyPasswordRecord(password, account, env.BILLING_PASSWORD_PEPPER || "");
     if (!verified) {
+      const nextSource = await recordSourceLoginFailure(env, fingerprint, sourceAttempt);
       await env.DB.prepare(`
         UPDATE billing_accounts SET
           failed_login_attempts = failed_login_attempts + 1,
@@ -86,24 +110,31 @@ async function handleApi(request, env, url, path) {
           END,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).bind(MAX_FAILED_LOGIN_ATTEMPTS, `+${LOGIN_LOCK_MINUTES} minutes`, account.id).run();
+      `).bind(ACCOUNT_LOGIN_LIMIT, `+${LOGIN_LOCK_MINUTES} minutes`, account.id).run();
       const failedState = await env.DB.prepare(`
         SELECT failed_login_attempts, locked_until FROM billing_accounts WHERE id = ?
       `).bind(account.id).first();
-      const locked = isLoginLocked(failedState?.locked_until);
+      const accountLocked = isLoginLocked(failedState?.locked_until);
+      const sourceLocked = isSourceLocked(nextSource.lockedUntil);
       await writeAudit(env, {
-        eventType: locked ? "login_locked" : "login_failure",
+        eventType: accountLocked || sourceLocked ? "login_locked" : "login_failure",
         targetAccountId: account.id,
         attemptedLoginId: loginId,
-        details: { failedAttempts: Number(failedState?.failed_login_attempts || 0), lockedUntil: failedState?.locked_until || null }
+        details: {
+          accountFailedAttempts: Number(failedState?.failed_login_attempts || 0),
+          sourceFailedAttempts: nextSource.failedCount,
+          scope: accountLocked ? "account" : (sourceLocked ? "source" : null)
+        }
       });
       throw loginRejected();
     }
 
+    await env.DB.prepare("DELETE FROM billing_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
     await env.DB.prepare(`
       UPDATE billing_accounts SET failed_login_attempts = 0, locked_until = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND (failed_login_attempts != 0 OR locked_until IS NOT NULL)
     `).bind(account.id).run();
+    await upgradePasswordAfterLogin(env, account, password);
     await writeAudit(env, {
       eventType: "login_success",
       actorAccountId: account.id,
@@ -524,15 +555,46 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
   });
 }
 
-async function verifyPassword(password, saltBase64, expectedBase64, iterations = PASSWORD_ITERATIONS) {
-  const keyMaterial = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({
-    name: "PBKDF2",
-    hash: "SHA-256",
-    salt: base64UrlToBytes(saltBase64),
-    iterations: clampNumber(iterations, 100000, 100000, PASSWORD_ITERATIONS)
-  }, keyMaterial, 256);
-  return constantTimeEqual(new Uint8Array(bits), base64UrlToBytes(expectedBase64));
+async function upgradePasswordAfterLogin(env, account, password) {
+  if (!needsPasswordUpgrade(account) || !env.BILLING_PASSWORD_PEPPER) return false;
+  const upgraded = await createCurrentPasswordRecord(password, env.BILLING_PASSWORD_PEPPER);
+  const result = await env.DB.prepare(`
+    UPDATE billing_accounts SET
+      password_salt = ?, password_hash = ?, password_iterations = ?, password_pepper_version = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND password_pepper_version = ? AND password_iterations = ?
+  `).bind(
+    upgraded.passwordSalt,
+    upgraded.passwordHash,
+    upgraded.passwordIterations,
+    upgraded.passwordPepperVersion,
+    account.id,
+    Number(account.password_pepper_version || 0),
+    Number(account.password_iterations || 0)
+  ).run();
+  return Boolean(result.meta?.changes);
+}
+
+async function loginFingerprint(request, loginId, env) {
+  const secret = env.LOGIN_FINGERPRINT_SECRET || env.SESSION_SECRET;
+  if (!secret) throw new HttpError(503, "認証設定が完了していません。");
+  const ip = request.headers.get("CF-Connecting-IP") || "local";
+  return sign(`${ip}:${loginId}`, secret);
+}
+
+async function recordSourceLoginFailure(env, fingerprint, previous) {
+  const next = nextSourceAttempt(previous);
+  await env.DB.prepare(`
+    INSERT INTO billing_login_attempts
+      (fingerprint, failed_count, first_failed_at, locked_until, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(fingerprint) DO UPDATE SET
+      failed_count = excluded.failed_count,
+      first_failed_at = excluded.first_failed_at,
+      locked_until = excluded.locked_until,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(fingerprint, next.failedCount, next.firstFailedAt, next.lockedUntil).run();
+  return next;
 }
 
 async function sign(value, secret) {

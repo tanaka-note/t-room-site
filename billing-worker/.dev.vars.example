@@ -1,0 +1,4 @@
+SESSION_SECRET="replace-with-a-long-random-secret"
+BILLING_PASSWORD_PEPPER="replace-with-a-separate-long-random-secret"
+LOGIN_FINGERPRINT_SECRET="replace-with-another-long-random-secret"
+ALLOW_LOCAL_HTTP="true"

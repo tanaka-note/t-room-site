@@ -1,4 +1,3 @@
-export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
 export const LOGIN_LOCK_MINUTES = 15;
 
 export function isLoginLocked(lockedUntil, nowMilliseconds = Date.now()) {
@@ -8,9 +7,4 @@ export function isLoginLocked(lockedUntil, nowMilliseconds = Date.now()) {
     : `${lockedUntil.replace(" ", "T")}Z`;
   const lockedUntilMilliseconds = Date.parse(normalized);
   return Number.isFinite(lockedUntilMilliseconds) && lockedUntilMilliseconds > nowMilliseconds;
-}
-
-export function reachesLoginLimit(failedAttemptsBeforeFailure) {
-  const attempts = Number(failedAttemptsBeforeFailure);
-  return Number.isInteger(attempts) && attempts >= 0 && attempts + 1 >= MAX_FAILED_LOGIN_ATTEMPTS;
 }

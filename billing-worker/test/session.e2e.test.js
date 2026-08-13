@@ -42,7 +42,11 @@ test("owner and member sessions roll forward for 30 days", async () => {
     "--var",
     "ALLOW_LOCAL_HTTP:true",
     "--var",
-    "SESSION_SECRET:billing-session-e2e-secret"
+    "SESSION_SECRET:billing-session-e2e-secret",
+    "--var",
+    "BILLING_PASSWORD_PEPPER:billing-password-e2e-pepper",
+    "--var",
+    "LOGIN_FINGERPRINT_SECRET:billing-login-e2e-secret"
   ], {
     cwd: projectDirectory,
     stdio: ["ignore", "pipe", "pipe"]
@@ -86,6 +90,13 @@ test("owner and member sessions roll forward for 30 days", async () => {
       assert.match(refreshedCookie, /Max-Age=2592000/);
       assert.ok(sessionExpiry(refreshedCookie) > firstExpiry);
     }
+    const database = spawnSync(process.execPath, [
+      wranglerPath, "d1", "execute", "billing-db", "--local", "--command",
+      "SELECT id, password_iterations, password_pepper_version FROM billing_accounts WHERE id IN ('owner', 'chiharu') ORDER BY id"
+    ], { cwd: projectDirectory, encoding: "utf8" });
+    assert.equal(database.status, 0, database.stderr || database.stdout);
+    assert.match(database.stdout, /"password_iterations": 600000/);
+    assert.match(database.stdout, /"password_pepper_version": 1/);
   } finally {
     if (server.exitCode === null) {
       server.kill();

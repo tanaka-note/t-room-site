@@ -1,11 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isLoginLocked, reachesLoginLimit } from "../src/login-limit.js";
-
-test("only the fifth consecutive password failure reaches the limit", () => {
-  assert.equal(reachesLoginLimit(3), false);
-  assert.equal(reachesLoginLimit(4), true);
-});
+import { isLoginLocked } from "../src/login-limit.js";
 
 test("locked timestamps are compared as UTC", () => {
   const now = Date.parse("2026-08-05T12:00:00Z");
