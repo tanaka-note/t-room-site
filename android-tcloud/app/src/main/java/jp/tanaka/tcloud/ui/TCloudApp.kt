@@ -1,12 +1,15 @@
 package jp.tanaka.tcloud.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.PowerManager
 import android.app.Activity
@@ -15,6 +18,11 @@ import android.util.Rational
 import android.provider.Settings
 import android.net.Uri
 import android.widget.Toast
+import android.view.View
+import android.view.GestureDetector
+import android.view.MotionEvent
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -105,6 +113,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
@@ -2019,6 +2028,7 @@ private fun MoveItemDialog(
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("ClickableViewAccessibility")
 @Composable
 private fun MediaPlayerScreen(
     file: CloudFile,
@@ -2027,6 +2037,12 @@ private fun MediaPlayerScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
+    val orientation = LocalConfiguration.current.orientation
+    val isVideo = file.mediaKind == "video"
+    var manualFullscreen by remember(file.id) { mutableStateOf(false) }
+    val isLandscape = orientation == Configuration.ORIENTATION_LANDSCAPE
+    val isVideoFullscreen = isVideo && (isLandscape || manualFullscreen) && !pictureInPicture
     val playbackFactory = remember(file.id) { dataSourceFactory }
     val player = remember(file.id) {
         ExoPlayer.Builder(context).build().apply {
@@ -2039,19 +2055,38 @@ private fun MediaPlayerScreen(
             playWhenReady = true
         }
     }
-    DisposableEffect(player) {
+    LaunchedEffect(player, file.id) {
+        val resumePosition = context.readPlaybackPosition(file.id)
+        if (resumePosition > 0L) player.seekTo(resumePosition)
+        while (true) {
+            delay(5_000)
+            context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
+        }
+    }
+    DisposableEffect(player, context, file.id) {
         onDispose {
+            context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
             player.stop()
             player.clearMediaItems()
             player.release()
             (playbackFactory as? AutoCloseable)?.close()
         }
     }
+    DisposableEffect(activity, file.id, isVideo) {
+        if (isVideo) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        onDispose {
+            activity?.setVideoSystemBarsHidden(false)
+            if (isVideo) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+    LaunchedEffect(activity, isVideoFullscreen) {
+        activity?.setVideoSystemBarsHidden(isVideoFullscreen)
+    }
 
     Scaffold(
         containerColor = Color.Black,
         topBar = {
-            if (!pictureInPicture) TopAppBar(
+            if (!pictureInPicture && !isVideoFullscreen) TopAppBar(
                 title = { Text(file.name, maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
@@ -2104,10 +2139,95 @@ private fun MediaPlayerScreen(
                     useController = true
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     this.player = player
+                    if (isVideo) {
+                        val edgeSeekDetector = GestureDetector(
+                            viewContext,
+                            object : GestureDetector.SimpleOnGestureListener() {
+                                override fun onDown(event: MotionEvent): Boolean = true
+
+                                override fun onDoubleTap(event: MotionEvent): Boolean {
+                                    val offset = if (event.x < width / 2f) -10_000L else 10_000L
+                                    val duration = player.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                                    player.seekTo((player.currentPosition + offset).coerceIn(0L, duration))
+                                    showController()
+                                    return true
+                                }
+                            },
+                        )
+                        setOnTouchListener { _, event ->
+                            edgeSeekDetector.onTouchEvent(event)
+                            false
+                        }
+                        setFullscreenButtonClickListener { enterFullscreen ->
+                            manualFullscreen = enterFullscreen
+                            if (enterFullscreen) {
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                            } else {
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            }
+                        }
+                    }
                 }
             },
-            update = { it.player = player },
+            update = { playerView ->
+                playerView.player = player
+                if (isVideo) {
+                    playerView.setFullscreenButtonState(isVideoFullscreen)
+                    playerView.setFullscreenButtonClickListener { enterFullscreen ->
+                        manualFullscreen = enterFullscreen
+                        if (enterFullscreen) {
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                        } else {
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        }
+                    }
+                }
+            },
         )
+    }
+}
+
+private const val PLAYBACK_POSITION_PREFERENCES = "tcloud_playback_positions"
+private const val PLAYBACK_POSITION_MINIMUM_MS = 5_000L
+private const val PLAYBACK_POSITION_FINISHED_MARGIN_MS = 10_000L
+
+private fun Context.readPlaybackPosition(fileId: Long): Long =
+    getSharedPreferences(PLAYBACK_POSITION_PREFERENCES, Context.MODE_PRIVATE)
+        .getLong("position_$fileId", 0L)
+        .coerceAtLeast(0L)
+
+private fun Context.savePlaybackPosition(fileId: Long, positionMs: Long, durationMs: Long) {
+    val preferences = getSharedPreferences(PLAYBACK_POSITION_PREFERENCES, Context.MODE_PRIVATE)
+    val finished = durationMs > 0L && durationMs - positionMs <= PLAYBACK_POSITION_FINISHED_MARGIN_MS
+    if (positionMs < PLAYBACK_POSITION_MINIMUM_MS || finished) {
+        preferences.edit().remove("position_$fileId").apply()
+    } else {
+        preferences.edit().putLong("position_$fileId", positionMs).apply()
+    }
+}
+
+private fun Activity.setVideoSystemBarsHidden(hidden: Boolean) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        window.insetsController?.let { controller ->
+            if (hidden) {
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                controller.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            }
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = if (hidden) {
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        } else {
+            View.SYSTEM_UI_FLAG_VISIBLE
+        }
     }
 }
 
