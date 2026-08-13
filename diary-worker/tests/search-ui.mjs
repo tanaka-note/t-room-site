@@ -15,8 +15,9 @@ assert.match(script, /parameters\.set\("dateTo", state\.dateTo\)/);
 assert.match(script, /bindDateInput\(elements\.entryDate\)/);
 assert.match(script, /for \(const input of \[elements\.dateFrom, elements\.dateTo\]\)/);
 assert.match(script, /elements\.dateReset\.addEventListener\("click", resetDateSearch\)/);
-assert.match(script, /distance > DATE_TAP_MAX_MOVEMENT_PX/);
-assert.match(script, /gesture\.moved \|\| duration > DATE_TAP_MAX_DURATION_MS/);
+assert.match(script, /input\.addEventListener\("click", handleDateClick\)/);
+assert.match(script, /function handleDateClick\(event\) \{\s*if \(!useMobileDateWheel\(\)\) return;\s*event\.preventDefault\(\);\s*openDateWheel\(event\.currentTarget\);\s*\}/);
+assert.doesNotMatch(script, /handleDatePointerDown|DATE_TAP_MAX_MOVEMENT_PX|DATE_TAP_MAX_DURATION_MS/);
 assert.match(script, /includes\(state\.tagQuery\)/);
 
 process.stdout.write("Diary date and tag search UI contract test passed.\n");

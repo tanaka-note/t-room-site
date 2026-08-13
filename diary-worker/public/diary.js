@@ -2,9 +2,6 @@
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
-  const DATE_TAP_MAX_MOVEMENT_PX = 4;
-  const DATE_TAP_MAX_DURATION_MS = 650;
-  const datePointerGestures = new WeakMap();
   const tagCollator = new Intl.Collator(["ja-JP", "en-US"], {
     usage: "sort",
     sensitivity: "base",
@@ -791,7 +788,8 @@
       author.textContent = `投稿者：${entry.authorName}`;
       const meta = document.createElement("div");
       meta.className = "entry-meta";
-      meta.append(time, author);
+      meta.append(time);
+      if (shouldShowEntryAuthor()) meta.append(author);
       if (state.trash && entry.deletedByName) {
         const deletedBy = document.createElement("span");
         deletedBy.className = "entry-author";
@@ -1032,6 +1030,7 @@
     elements.detailDate.textContent = formatDate(entry.entryDate);
     elements.detailTitle.textContent = entry.title;
     elements.detailAuthor.textContent = `投稿者：${entry.authorName}`;
+    elements.detailAuthor.hidden = !shouldShowEntryAuthor();
     elements.detailDeletion.hidden = !entry.deletedAt || !entry.deletedByName;
     elements.detailDeletion.textContent = entry.deletedByName ? `削除者：${entry.deletedByName}` : "";
     renderEntryContent(entry);
@@ -1410,6 +1409,7 @@
   }
 
   async function openCameraRoll() {
+    syncHouseholdPresentation();
     elements.cameraRollDialog.showModal();
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
@@ -1431,6 +1431,19 @@
     )));
     elements.photoMonthFilter.value = monthValue;
     elements.photoAuthorFilter.value = authorValue;
+  }
+
+  function shouldShowEntryAuthor() {
+    return state.activeHouseholdId !== "chiharu-household";
+  }
+
+  function syncHouseholdPresentation() {
+    const hideAuthors = !shouldShowEntryAuthor();
+    elements.photoAuthorFilter.closest("label").hidden = hideAuthors;
+    if (hideAuthors) {
+      state.photoAuthor = "";
+      elements.photoAuthorFilter.value = "";
+    }
   }
 
   function createOption(value, label) {
@@ -1552,45 +1565,14 @@
   }
 
   function bindDateInput(input) {
-    input.addEventListener("pointerdown", handleDatePointerDown);
-    input.addEventListener("pointermove", handleDatePointerMove);
-    input.addEventListener("pointerup", handleDatePointerUp);
-    input.addEventListener("pointercancel", handleDatePointerCancel);
+    input.addEventListener("click", handleDateClick);
     input.addEventListener("keydown", handleDateKeydown);
   }
 
-  function handleDatePointerDown(event) {
+  function handleDateClick(event) {
     if (!useMobileDateWheel()) return;
     event.preventDefault();
-    datePointerGestures.set(event.currentTarget, {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      startedAt: performance.now(),
-      moved: false
-    });
-  }
-
-  function handleDatePointerMove(event) {
-    const gesture = datePointerGestures.get(event.currentTarget);
-    if (!gesture || gesture.pointerId !== event.pointerId || gesture.moved) return;
-    const distance = Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y);
-    if (distance > DATE_TAP_MAX_MOVEMENT_PX) gesture.moved = true;
-  }
-
-  function handleDatePointerUp(event) {
-    const input = event.currentTarget;
-    const gesture = datePointerGestures.get(input);
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    datePointerGestures.delete(input);
-    const duration = performance.now() - gesture.startedAt;
-    if (gesture.moved || duration > DATE_TAP_MAX_DURATION_MS) return;
-    openDateWheel(input);
-  }
-
-  function handleDatePointerCancel(event) {
-    datePointerGestures.delete(event.currentTarget);
+    openDateWheel(event.currentTarget);
   }
 
   function handleDateKeydown(event) {
@@ -1690,6 +1672,15 @@
     column.addEventListener("click", (event) => {
       const option = event.target.closest(".date-wheel-option");
       if (!option) return;
+      const value = Number(option.dataset.value);
+      if (state.dateDraft) {
+        state.dateDraft[key] = value;
+        if (key === "year" || key === "month") renderDayWheel();
+        updateDateWheelValue();
+      }
+      column.querySelectorAll(".date-wheel-option").forEach((item) => {
+        item.setAttribute("aria-selected", String(item === option));
+      });
       column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "smooth" });
     });
     column.addEventListener("wheel", (event) => {
