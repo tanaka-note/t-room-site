@@ -32,7 +32,7 @@ assert.deepEqual(pngSize(appleIcon), { width: 180, height: 180 });
 assert.match(html, /rel="manifest" href="\/diary\/manifest\.webmanifest"/);
 assert.match(html, /apple-mobile-web-app-capable/);
 assert.match(html, /apple-touch-icon/);
-assert.match(html, /name="troom-app-build" content="20260813-1"/);
+assert.match(html, /name="troom-app-build" content="20260813-2"/);
 assert.match(html, /apple-touch-icon-v3\.png/);
 assert.match(html, /pwa-auto-update\.js\?v=20260812-5/);
 assert.match(html, /diary\.css\?v=17/);
