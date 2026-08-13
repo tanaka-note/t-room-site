@@ -1,7 +1,7 @@
 "use strict";
 
 const reportData = {
-  period: "2026-08-10",
+  period: "2026-08-11",
   principal: 6000000,
   realizedProfit: {
     name: "投資信託売却益",
@@ -32,7 +32,8 @@ const reportData = {
     { period: "2026-08-07", principal: 6000000, marketValue: 6393495 },
     { period: "2026-08-08", principal: 6000000, marketValue: 6387548 },
     { period: "2026-08-09", principal: 6000000, marketValue: 6384282 },
-    { period: "2026-08-10", principal: 6000000, marketValue: 6409958 }
+    { period: "2026-08-10", principal: 6000000, marketValue: 6409958 },
+    { period: "2026-08-11", principal: 6000000, marketValue: 6389451 }
   ],
   assets: [
     {
@@ -109,7 +110,7 @@ const reportData = {
       name: "ビットコイン",
       category: "暗号資産",
       principal: 2500000,
-      marketValue: 1675355,
+      marketValue: 1654848,
       color: "#a98cff"
     }
   ]
