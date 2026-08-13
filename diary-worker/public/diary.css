@@ -1071,6 +1071,55 @@ button:disabled {
   font-size: 0.82rem;
 }
 
+.entry-tag-input-wrap {
+  position: relative;
+}
+
+.entry-tag-input-wrap > input {
+  width: 100%;
+}
+
+.entry-tag-suggestions {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  overflow-y: auto;
+  max-height: 246px;
+  border: 1px solid rgba(31, 41, 51, 0.16);
+  border-radius: 8px;
+  padding: 5px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(31, 41, 51, 0.16);
+}
+
+.entry-tag-suggestion {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.entry-tag-suggestion:hover,
+.entry-tag-suggestion:focus-visible,
+.entry-tag-suggestion[aria-selected="true"] {
+  background: #edf5f2;
+}
+
+.entry-tag-suggestion small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .form-label {
   font-weight: 700;
 }

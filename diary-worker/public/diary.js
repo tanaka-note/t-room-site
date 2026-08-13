@@ -34,6 +34,7 @@
     tag: "",
     tagQuery: "",
     availableTags: [],
+    entryTagSuggestionIndex: -1,
     trash: false,
     activeEntry: null,
     editorDirty: false,
@@ -149,6 +150,7 @@
     editorPhotoList: document.querySelector("#editor-photo-list"),
     photoPreparationStatus: document.querySelector("#photo-preparation-status"),
     entryTags: document.querySelector("#entry-tags"),
+    entryTagSuggestions: document.querySelector("#entry-tag-suggestions"),
     editorMessage: document.querySelector("#editor-message"),
     saveEntryButton: document.querySelector("#save-entry-button"),
     dateWheelDialog: document.querySelector("#date-wheel-dialog"),
@@ -297,6 +299,14 @@
     bindDateWheel(elements.dateWheelDay, "day");
     elements.entryForm.addEventListener("input", () => {
       state.editorDirty = true;
+    });
+    elements.entryTags.addEventListener("input", renderEntryTagSuggestions);
+    elements.entryTags.addEventListener("focus", renderEntryTagSuggestions);
+    elements.entryTags.addEventListener("click", renderEntryTagSuggestions);
+    elements.entryTags.addEventListener("keydown", handleEntryTagSuggestionKeydown);
+    elements.entryTagSuggestions.addEventListener("click", handleEntryTagSuggestionClick);
+    document.addEventListener("pointerdown", (event) => {
+      if (!event.target.closest(".entry-tag-input-wrap")) closeEntryTagSuggestions();
     });
     elements.cameraRollMore.addEventListener("click", () => loadPhotos(false));
     elements.cameraRollGrid.addEventListener("click", handleCameraRollClick);
@@ -843,6 +853,98 @@
     }));
   }
 
+  function renderEntryTagSuggestions() {
+    const context = currentEntryTagContext();
+    const query = normalizeTagForMatch(context.value);
+    const selected = new Set(context.otherTags.map(normalizeTagForMatch));
+    const suggestions = state.availableTags
+      .filter((item) => !selected.has(normalizeTagForMatch(item.value)))
+      .filter((item) => !query || normalizeTagForMatch(item.value).startsWith(query))
+      .sort((left, right) => {
+        return Number(right.count || 0) - Number(left.count || 0)
+          || tagCollator.compare(tagSortKey(left.value), tagSortKey(right.value));
+      })
+      .slice(0, 6);
+    if (!suggestions.length || !elements.editorDialog.open) return closeEntryTagSuggestions();
+    state.entryTagSuggestionIndex = -1;
+    elements.entryTagSuggestions.replaceChildren(...suggestions.map((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "entry-tag-suggestion";
+      button.id = `entry-tag-suggestion-${index}`;
+      button.dataset.tag = item.value;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", "false");
+      const name = document.createElement("span");
+      name.textContent = `#${item.value}`;
+      const count = document.createElement("small");
+      count.textContent = `${item.count || 0}件`;
+      button.append(name, count);
+      return button;
+    }));
+    elements.entryTagSuggestions.hidden = false;
+    elements.entryTags.setAttribute("aria-expanded", "true");
+  }
+
+  function currentEntryTagContext() {
+    const value = elements.entryTags.value;
+    const caret = Number.isInteger(elements.entryTags.selectionStart) ? elements.entryTags.selectionStart : value.length;
+    const beforeCaret = value.slice(0, caret);
+    const delimiterIndex = Math.max(beforeCaret.lastIndexOf("、"), beforeCaret.lastIndexOf(","), beforeCaret.lastIndexOf("，"));
+    const start = delimiterIndex + 1;
+    const remainder = value.slice(caret);
+    const nextDelimiter = remainder.search(/[、,，]/);
+    const end = nextDelimiter < 0 ? value.length : caret + nextDelimiter;
+    const otherTags = parseTags(`${value.slice(0, start)}${value.slice(end)}`);
+    return { start, end, value: value.slice(start, end).trim().replace(/^#+/, ""), otherTags };
+  }
+
+  function normalizeTagForMatch(value) {
+    return String(value || "").normalize("NFKC").trim().replace(/^#+/, "").toLocaleLowerCase("ja-JP");
+  }
+
+  function handleEntryTagSuggestionClick(event) {
+    const button = event.target.closest("[data-tag]");
+    if (button) applyEntryTagSuggestion(button.dataset.tag);
+  }
+
+  function handleEntryTagSuggestionKeydown(event) {
+    if (elements.entryTagSuggestions.hidden || !["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(event.key)) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeEntryTagSuggestions();
+      return;
+    }
+    const options = [...elements.entryTagSuggestions.querySelectorAll("[data-tag]")];
+    if (!options.length) return;
+    event.preventDefault();
+    if (event.key === "Enter") {
+      const selected = options[state.entryTagSuggestionIndex];
+      if (selected) applyEntryTagSuggestion(selected.dataset.tag);
+      return;
+    }
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    state.entryTagSuggestionIndex = (state.entryTagSuggestionIndex + direction + options.length) % options.length;
+    options.forEach((option, index) => option.setAttribute("aria-selected", String(index === state.entryTagSuggestionIndex)));
+    elements.entryTags.setAttribute("aria-activedescendant", options[state.entryTagSuggestionIndex].id);
+  }
+
+  function applyEntryTagSuggestion(tag) {
+    const context = currentEntryTagContext();
+    elements.entryTags.setRangeText(tag, context.start, context.end, "end");
+    elements.entryTags.dispatchEvent(new Event("input", { bubbles: true }));
+    closeEntryTagSuggestions();
+    elements.entryTags.focus();
+  }
+
+  function closeEntryTagSuggestions() {
+    state.entryTagSuggestionIndex = -1;
+    elements.entryTagSuggestions.hidden = true;
+    elements.entryTagSuggestions.replaceChildren();
+    elements.entryTags.setAttribute("aria-expanded", "false");
+    elements.entryTags.removeAttribute("aria-activedescendant");
+  }
+
   function handleEntryListClick(event) {
     const button = event.target.closest("[data-entry-id]");
     if (!button) return;
@@ -1222,6 +1324,7 @@
     elements.entryTitle.value = entry?.title || "";
     elements.entryContent.value = entry?.content || "";
     elements.entryTags.value = entry?.tags?.join("、") || "";
+    closeEntryTagSuggestions();
     clearEditorPhotos();
     state.editorPhotos = (entry?.photos || []).map((photo) => ({ ...photo, existing: true }));
     elements.photoPreparationStatus.textContent = "";

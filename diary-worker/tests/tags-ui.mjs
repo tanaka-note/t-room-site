@@ -13,6 +13,8 @@ const [html, script, style, worker] = await Promise.all([
 assert.match(html, /id="tag-list"[^>]*tabindex="0"/);
 assert.match(html, /id="tag-page-back"[^>]*href="\/diary\/"/);
 assert.match(html, /id="diary-search-panel"/);
+assert.match(html, /id="entry-tag-suggestions"[^>]*role="listbox"/);
+assert.match(html, /id="entry-tags"[^>]*aria-autocomplete="list"/);
 assert.match(script, /Number\(right\.count \|\| 0\) - Number\(left\.count \|\| 0\)/);
 assert.match(script, /new Intl\.Collator\(\["ja-JP", "en-US"\]/);
 assert.match(script, /tagCollator\.compare\(tagSortKey\(left\.value\), tagSortKey\(right\.value\)\)/);
@@ -22,9 +24,18 @@ assert.match(script, /applyRouteState\(\)/);
 assert.match(script, /\/diary\\\/tag\\\/\(\[\^\/\]\+\)/);
 assert.match(script, /#\$\{tag\}の記事一覧/);
 assert.match(script, /createTagLink\(tag, `#\$\{tag\}`\)/);
+assert.match(script, /function renderEntryTagSuggestions\(\)/);
+assert.match(script, /currentEntryTagContext\(\)/);
+assert.match(script, /replace\(\/\^#\+\//);
+assert.match(script, /!query \|\| normalizeTagForMatch\(item\.value\)\.startsWith\(query\)/);
+assert.match(script, /Number\(right\.count \|\| 0\) - Number\(left\.count \|\| 0\)/);
+assert.match(script, /\.slice\(0, 6\)/);
+assert.match(script, /setRangeText\(tag, context\.start, context\.end, "end"\)/);
+assert.match(script, /\["ArrowDown", "ArrowUp", "Enter", "Escape"\]/);
 assert.match(script, /href = `\$\{BASE_PATH\}\/tag\/\$\{encodeURIComponent\(tag\)\}\//);
 assert.match(style, /\.diary-tag-cloud \{[^}]*max-height:[^}]*overflow-y: auto;/s);
 assert.match(style, /overscroll-behavior-y: auto/);
+assert.match(style, /\.entry-tag-suggestions \{[^}]*position: absolute;[^}]*max-height:/s);
 assert.match(worker, /ORDER BY count DESC, dt\.tag ASC/);
 assert.match(worker, /path\.startsWith\("\/tag\/"\)/);
 

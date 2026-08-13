@@ -17,7 +17,7 @@
   <link rel="manifest" href="/diary/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png">
-  <link rel="stylesheet" href="/diary/diary.css?v=16">
+  <link rel="stylesheet" href="/diary/diary.css?v=17">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -319,7 +319,10 @@
       </section>
 
       <label for="entry-tags">タグ</label>
-      <input id="entry-tags" name="tags" type="text" maxlength="320" placeholder="ここに入力する">
+      <div class="entry-tag-input-wrap">
+        <input id="entry-tags" name="tags" type="text" maxlength="320" placeholder="ここに入力する" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="entry-tag-suggestions" aria-expanded="false">
+        <div id="entry-tag-suggestions" class="entry-tag-suggestions" role="listbox" aria-label="既存のタグ候補" hidden></div>
+      </div>
       <p class="field-help">読点またはカンマで区切って10個まで入力できます。</p>
 
       <p id="editor-message" class="form-message" role="status" aria-live="polite"></p>
@@ -418,6 +421,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/assets/pwa-auto-update.js?v=20260812-5" defer></script>
-  <script src="/diary/diary.js?v=28" defer></script>
+  <script src="/diary/diary.js?v=29" defer></script>
 </body>
 </html>
