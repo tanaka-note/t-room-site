@@ -9,6 +9,19 @@ import java.net.URL
 import java.time.Instant
 import kotlin.math.min
 
+private const val T_CLOUD_ORIGIN = "https://tanaka-note.com"
+
+internal fun tCloudApiHeaders(method: String): Map<String, String> = buildMap {
+    put("Accept", "application/json")
+    put("User-Agent", "T-Cloud-Android/0.1")
+    if (method.uppercase() !in setOf("GET", "HEAD")) {
+        // Worker の CSRF 保護へ、ネイティブアプリからの正規の変更要求であることを明示する。
+        // 本文を持たない DELETE でも JSON を宣言し、端末依存の既定値を送信させない。
+        put("Origin", T_CLOUD_ORIGIN)
+        put("Content-Type", "application/json; charset=utf-8")
+    }
+}
+
 class TCloudApi(
     private val sessionStore: SecureSessionStore,
 ) {
@@ -415,12 +428,10 @@ class TCloudApi(
                 connectTimeout = 20_000
                 readTimeout = 60_000
                 instanceFollowRedirects = false
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("User-Agent", "T-Cloud-Android/0.1")
+                tCloudApiHeaders(method).forEach(::setRequestProperty)
                 sessionStore.readSessionCookie()?.let { setRequestProperty("Cookie", it) }
                 if (body != null) {
                     doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 }
             }
             try {
