@@ -101,6 +101,79 @@ class TCloudApi(
             }
     }
 
+    suspend fun usage(): CloudUsage {
+        val json = request("GET", "/usage")
+        return CloudUsage(
+            activeFileCount = json.optInt("activeFileCount", 0),
+            activeBytes = json.optLong("activeBytes", 0),
+            trashFileCount = json.optInt("trashFileCount", 0),
+            trashBytes = json.optLong("trashBytes", 0),
+        )
+    }
+
+    suspend fun usageDetails(): List<CloudUsageFolder> = request("GET", "/usage-details")
+        .optJSONArray("folders")
+        .orEmpty()
+        .mapObjects { item ->
+            CloudUsageFolder(
+                id = item.getLong("id"),
+                name = item.optString("name", "フォルダ"),
+                fileCount = item.optInt("fileCount", 0),
+                sizeBytes = item.optLong("sizeBytes", 0),
+            )
+        }
+
+    suspend fun listTrash(): TrashPage {
+        val json = request("GET", "/trash")
+        val files = json.optJSONArray("files").orEmpty().mapObjects { item ->
+            val folder = CloudFolder(
+                id = item.getLong("folderId"),
+                parentId = null,
+                name = "",
+                cryptoVersion = item.optInt("folderCryptoVersion", 0),
+                encryptedName = item.optString("folderEncryptedName", ""),
+                nameIv = item.optString("folderNameIv", ""),
+                passwordSalt = item.optString("folderPasswordSalt", ""),
+                passwordWrappedKey = item.optString("folderPasswordWrappedKey", ""),
+                passwordWrapIv = item.optString("folderPasswordWrapIv", ""),
+                adminWrappedKey = item.optString("folderAdminWrappedKey", ""),
+                parentWrappedKey = "",
+                parentWrapIv = "",
+                isProtected = item.optString("folderPasswordWrappedKey", "").isNotBlank(),
+                isUnlocked = true,
+                fileCount = 0,
+                folderCount = 0,
+            )
+            TrashFile(
+                file = item.toCloudFile(),
+                folder = folder,
+                deletedAtMillis = item.optInstantMillis("deletedAt"),
+            )
+        }
+        val folders = json.optJSONArray("folders").orEmpty().mapObjects { item ->
+            TrashFolder(
+                folder = item.toFolder(),
+                sizeBytes = item.optLong("sizeBytes", 0),
+                deletedAtMillis = item.optInstantMillis("deletedAt"),
+            )
+        }
+        return TrashPage(files, folders)
+    }
+
+    suspend fun restoreFile(fileId: Long) {
+        request("POST", "/files/$fileId/restore", JSONObject())
+    }
+
+    suspend fun permanentlyDeleteFile(fileId: Long) {
+        request("DELETE", "/files/$fileId/permanent")
+    }
+
+    suspend fun restoreFolder(folderId: Long) {
+        request("POST", "/folders/$folderId/restore", JSONObject())
+    }
+
+    suspend fun emptyTrash(): Boolean = request("DELETE", "/trash", JSONObject()).optBoolean("ok", false)
+
     suspend fun moveFile(fileId: Long, folderId: Long, wrapped: WrappedFileKey) {
         request(
             method = "PATCH",

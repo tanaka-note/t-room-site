@@ -129,6 +129,61 @@ class TCloudRepository(
 
     suspend fun listItems(folderId: Long?): FolderPage = decryptPage(api.listItems(folderId))
 
+    suspend fun usage(): CloudUsage = api.usage()
+
+    suspend fun usageDetails(): List<CloudUsageFolder> = api.usageDetails()
+
+    suspend fun listTrash(): TrashPage {
+        check(session?.isAdmin == true) { "ゴミ箱は管理者のみ確認できます。" }
+        val page = api.listTrash()
+        val files = page.files.map { item ->
+            knownFolders[item.folder.id] = item.folder
+            val key = runCatching { prepareFolderKey(item.folder) }.getOrNull()
+                ?: return@map item
+            try {
+                val metadata = TCloudCrypto.decryptFileMetadata(item.file, key)
+                item.copy(
+                    file = item.file.copy(
+                        name = metadata.name,
+                        mimeType = metadata.mimeType,
+                        mediaKind = metadata.mediaKind,
+                        lastModified = metadata.lastModified,
+                        metadataDecrypted = true,
+                    ),
+                )
+            } finally {
+                key.fill(0)
+            }
+        }
+        val folders = page.folders.map { item ->
+            knownFolders[item.folder.id] = item.folder
+            val key = runCatching { prepareFolderKey(item.folder) }.getOrNull()
+                ?: return@map item
+            try {
+                item.copy(
+                    folder = item.folder.copy(
+                        name = TCloudCrypto.decryptFolderName(item.folder, key),
+                        isUnlocked = true,
+                    ),
+                )
+            } finally {
+                key.fill(0)
+            }
+        }
+        return TrashPage(files, folders)
+    }
+
+    suspend fun restoreTrashFile(fileId: Long) = api.restoreFile(fileId)
+
+    suspend fun permanentlyDeleteTrashFile(fileId: Long) {
+        api.permanentlyDeleteFile(fileId)
+        offlineStore.delete(fileId)
+    }
+
+    suspend fun restoreTrashFolder(folderId: Long) = api.restoreFolder(folderId)
+
+    suspend fun emptyTrash(): Boolean = api.emptyTrash()
+
     suspend fun loadFileForBackground(folderId: Long, fileId: Long): CloudFile {
         if (session?.authenticated != true) {
             val (restoredSession) = restore()
@@ -537,6 +592,8 @@ class TCloudRepository(
         }
 
     fun deleteOfflineFile(fileId: Long): Boolean = offlineStore.delete(fileId)
+
+    fun deleteOfflineFiles(fileIds: Set<Long>): Int = fileIds.count(offlineStore::delete)
 
     private suspend fun prepareAdminKey(): Boolean {
         if (adminPrivateKey != null) return true

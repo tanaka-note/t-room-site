@@ -92,6 +92,37 @@ data class FolderPage(
     val currentFolderId: Long? get() = currentFolder?.id
 }
 
+data class CloudUsage(
+    val activeFileCount: Int = 0,
+    val activeBytes: Long = 0,
+    val trashFileCount: Int = 0,
+    val trashBytes: Long = 0,
+)
+
+data class CloudUsageFolder(
+    val id: Long,
+    val name: String,
+    val fileCount: Int,
+    val sizeBytes: Long,
+)
+
+data class TrashFile(
+    val file: CloudFile,
+    val folder: CloudFolder,
+    val deletedAtMillis: Long,
+)
+
+data class TrashFolder(
+    val folder: CloudFolder,
+    val sizeBytes: Long,
+    val deletedAtMillis: Long,
+)
+
+data class TrashPage(
+    val files: List<TrashFile>,
+    val folders: List<TrashFolder>,
+)
+
 data class AccountCredentials(
     val accountKey: ByteArray,
     val authProof: String,

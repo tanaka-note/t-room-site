@@ -5,7 +5,7 @@
 ## 名称と対応範囲
 
 - 正式サービス名: `T-Cloud Storage`
-- Androidのアプリ表示名: `T-Cloud`
+- Androidのアプリ表示名: `T-Cloud Player`
 - パッケージ名: `jp.tanaka.tcloud`
 - 対応OS: Android 8.0（API 26）以降
 - 対象SDK: Android 16（API 36）

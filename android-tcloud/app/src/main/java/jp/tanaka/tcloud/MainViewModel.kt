@@ -9,6 +9,9 @@ import jp.tanaka.tcloud.data.CloudFolder
 import jp.tanaka.tcloud.data.CloudFile
 import jp.tanaka.tcloud.data.FolderPage
 import jp.tanaka.tcloud.data.FolderPasswordRequiredException
+import jp.tanaka.tcloud.data.CloudUsage
+import jp.tanaka.tcloud.data.CloudUsageFolder
+import jp.tanaka.tcloud.data.TrashPage
 import jp.tanaka.tcloud.data.MoveDestination
 import jp.tanaka.tcloud.data.Session
 import jp.tanaka.tcloud.data.ShareResult
@@ -60,6 +63,10 @@ data class MainUiState(
     val cameraBackupSettings: CameraBackupSettings = CameraBackupSettings(),
     val showingOffline: Boolean = false,
     val offlineEntries: List<TCloudOfflineStore.OfflineEntry> = emptyList(),
+    val showingTrash: Boolean = false,
+    val trashPage: TrashPage = TrashPage(emptyList(), emptyList()),
+    val cloudUsage: CloudUsage = CloudUsage(),
+    val usageDetails: List<CloudUsageFolder> = emptyList(),
     val message: String? = null,
     val error: String? = null,
 )
@@ -230,6 +237,10 @@ class MainViewModel(
         }
         if (current.showingOffline) {
             mutableState.update { it.copy(showingOffline = false, offlineEntries = emptyList()) }
+            return true
+        }
+        if (current.showingTrash) {
+            mutableState.update { it.copy(showingTrash = false, trashPage = TrashPage(emptyList(), emptyList())) }
             return true
         }
         if (current.folderStack.isEmpty() || current.busy) return false
@@ -966,6 +977,80 @@ class MainViewModel(
         }
     }
 
+    fun deleteOfflineSelection(fileIds: Set<Long>) {
+        if (mutableState.value.busy || fileIds.isEmpty()) return
+        mutableState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { repository.deleteOfflineFiles(fileIds) } }
+                .onSuccess { count ->
+                    mutableState.update {
+                        it.copy(
+                            busy = false,
+                            offlineEntries = it.offlineEntries.filterNot { entry -> entry.file.id in fileIds },
+                            message = "端末保存から${count}件を削除しました。",
+                        )
+                    }
+                }
+                .onFailure { error -> mutableState.update { it.copy(busy = false, error = error.userMessage()) } }
+        }
+    }
+
+    fun refreshUsage() {
+        if (mutableState.value.session?.isAdmin != true || mutableState.value.busy) return
+        viewModelScope.launch {
+            runCatching { repository.usage() to repository.usageDetails() }
+                .onSuccess { (usage, details) ->
+                    mutableState.update { it.copy(cloudUsage = usage, usageDetails = details) }
+                }
+                .onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
+        }
+    }
+
+    fun openTrash() {
+        if (mutableState.value.session?.isAdmin != true || mutableState.value.busy) return
+        mutableState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            runCatching { repository.listTrash() }
+                .onSuccess { page -> mutableState.update { it.copy(busy = false, showingTrash = true, trashPage = page) } }
+                .onFailure { error -> mutableState.update { it.copy(busy = false, error = error.userMessage()) } }
+        }
+    }
+
+    fun restoreTrashFile(fileId: Long) = updateTrash("ファイルを復元しました。") {
+        repository.restoreTrashFile(fileId)
+    }
+
+    fun permanentlyDeleteTrashFile(fileId: Long) = updateTrash("ファイルを完全に削除しました。") {
+        repository.permanentlyDeleteTrashFile(fileId)
+    }
+
+    fun restoreTrashFolder(folderId: Long) = updateTrash("フォルダを復元しました。") {
+        repository.restoreTrashFolder(folderId)
+    }
+
+    fun emptyTrash() = updateTrash("ゴミ箱を空にしました。") {
+        var complete = false
+        var attempts = 0
+        while (!complete && attempts < 100) {
+            complete = repository.emptyTrash()
+            attempts += 1
+        }
+        check(complete) { "ゴミ箱の削除が完了していません。もう一度お試しください。" }
+    }
+
+    private fun updateTrash(message: String, operation: suspend () -> Unit) {
+        if (mutableState.value.busy) return
+        mutableState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            runCatching {
+                operation()
+                repository.listTrash()
+            }.onSuccess { page ->
+                mutableState.update { it.copy(busy = false, trashPage = page, message = message) }
+            }.onFailure { error -> mutableState.update { it.copy(busy = false, error = error.userMessage()) } }
+        }
+    }
+
     fun upload(uris: List<Uri>) {
         val folderId = mutableState.value.page?.currentFolderId ?: return
         if (uris.isEmpty()) return
@@ -1042,6 +1127,26 @@ class MainViewModel(
         mutableState.update {
             it.copy(selectedFile = null, imageBitmap = null, imageLoading = false, imageError = null)
         }
+    }
+
+    fun navigateImage(direction: Int) {
+        val current = mutableState.value
+        val selected = current.selectedFile ?: return
+        val images = current.page?.files.orEmpty().filter { it.metadataDecrypted && it.mediaKind == "image" }
+        val index = images.indexOfFirst { it.id == selected.id }
+        if (index < 0 || images.isEmpty()) return
+        val next = (index + direction).coerceIn(0, images.lastIndex)
+        if (next != index) openFile(images[next])
+    }
+
+    fun navigateAudio(direction: Int) {
+        val current = mutableState.value
+        val selected = current.selectedFile ?: return
+        val audioFiles = current.page?.files.orEmpty().filter { it.metadataDecrypted && it.mediaKind == "audio" }
+        val index = audioFiles.indexOfFirst { it.id == selected.id }
+        if (index < 0 || audioFiles.isEmpty()) return
+        val next = index + direction
+        if (next in audioFiles.indices) openFile(audioFiles[next])
     }
 
     fun playbackDataSource(file: CloudFile) = TCloudDataSource.Factory(repository, file)
