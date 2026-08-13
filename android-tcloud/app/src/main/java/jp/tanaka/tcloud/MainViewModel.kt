@@ -44,6 +44,7 @@ data class MainUiState(
     val folderStack: List<CloudFolder> = emptyList(),
     val pendingUnlock: CloudFolder? = null,
     val selectedFile: CloudFile? = null,
+    val selectedFileStartsAtBeginning: Boolean = false,
     val imageBitmap: Bitmap? = null,
     val imageLoading: Boolean = false,
     val imageError: String? = null,
@@ -1179,18 +1180,32 @@ class MainViewModel(
         }
     }
 
-    fun openFile(file: CloudFile) {
+    fun openFile(file: CloudFile) = openFile(file, startAtBeginning = false)
+
+    private fun openFile(file: CloudFile, startAtBeginning: Boolean) {
         if (!file.metadataDecrypted || file.mediaKind !in setOf("image", "video", "audio")) return
         imageLoadJob?.cancel()
         if (file.mediaKind != "image") {
             if (file.mediaKind == "video") playbackManager.stop()
             mutableState.update {
-                it.copy(selectedFile = file, imageBitmap = null, imageLoading = false, imageError = null)
+                it.copy(
+                    selectedFile = file,
+                    selectedFileStartsAtBeginning = startAtBeginning,
+                    imageBitmap = null,
+                    imageLoading = false,
+                    imageError = null,
+                )
             }
             return
         }
         mutableState.update {
-            it.copy(selectedFile = file, imageBitmap = null, imageLoading = true, imageError = null)
+            it.copy(
+                selectedFile = file,
+                selectedFileStartsAtBeginning = false,
+                imageBitmap = null,
+                imageLoading = true,
+                imageError = null,
+            )
         }
         imageLoadJob = viewModelScope.launch {
             runCatching { loadImage(file) }
@@ -1245,7 +1260,13 @@ class MainViewModel(
         imageLoadJob?.cancel()
         imageLoadJob = null
         mutableState.update {
-            it.copy(selectedFile = null, imageBitmap = null, imageLoading = false, imageError = null)
+            it.copy(
+                selectedFile = null,
+                selectedFileStartsAtBeginning = false,
+                imageBitmap = null,
+                imageLoading = false,
+                imageError = null,
+            )
         }
     }
 
@@ -1259,20 +1280,26 @@ class MainViewModel(
         if (next != index) openFile(images[next])
     }
 
-    fun navigateAudio(direction: Int) {
+    fun navigateMedia(direction: Int, automaticRepeat: Boolean = false) {
         val current = mutableState.value
         val selected = current.selectedFile
         val currentFileId = selected?.id ?: playbackManager.currentFileId ?: return
-        val audioFiles = current.activeFiles().filter { it.metadataDecrypted && it.mediaKind == "audio" }
-        val index = audioFiles.indexOfFirst { it.id == currentFileId }
-        if (index < 0 || audioFiles.isEmpty()) return
-        val next = index + direction
-        if (next !in audioFiles.indices) return
-        val nextFile = audioFiles[next]
+        val mediaKind = selected?.mediaKind ?: "audio"
+        val mediaFiles = current.activeFiles().filter {
+            it.metadataDecrypted && it.mediaKind == mediaKind
+        }
+        val index = mediaFiles.indexOfFirst { it.id == currentFileId }
+        if (index < 0 || mediaFiles.isEmpty()) return
+        val next = nextMediaIndex(index, mediaFiles.size, direction, automaticRepeat) ?: return
+        val nextFile = mediaFiles[next]
         if (selected != null) {
-            openFile(nextFile)
+            openFile(nextFile, startAtBeginning = automaticRepeat)
         } else {
-            playbackManager.playAudio(nextFile, playbackDataSource(nextFile))
+            playbackManager.playAudio(
+                nextFile,
+                playbackDataSource(nextFile),
+                startAtBeginning = automaticRepeat,
+            )
         }
     }
 
@@ -1318,5 +1345,21 @@ class MainViewModel(
     private companion object {
         const val MAX_IMAGE_FILE_BYTES = 128L * 1024 * 1024
         const val MAX_IMAGE_EDGE_PIXELS = 4096
+    }
+}
+
+internal fun nextMediaIndex(
+    currentIndex: Int,
+    itemCount: Int,
+    direction: Int,
+    automaticRepeat: Boolean,
+): Int? {
+    if (itemCount <= 0 || currentIndex !in 0 until itemCount || direction == 0) return null
+    val requested = currentIndex + direction
+    return when {
+        requested in 0 until itemCount -> requested
+        automaticRepeat && direction > 0 -> 0
+        automaticRepeat && direction < 0 -> itemCount - 1
+        else -> null
     }
 }

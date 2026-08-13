@@ -193,8 +193,8 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
         (context.applicationContext as TCloudApplication).playbackManager
     }
     DisposableEffect(viewModel, playbackManager) {
-        playbackManager.playPrevious = { viewModel.navigateAudio(-1) }
-        playbackManager.playNext = { viewModel.navigateAudio(1) }
+        playbackManager.playPrevious = { automatic -> viewModel.navigateMedia(-1, automatic) }
+        playbackManager.playNext = { automatic -> viewModel.navigateMedia(1, automatic) }
         onDispose {
             playbackManager.playPrevious = null
             playbackManager.playNext = null
@@ -514,9 +514,11 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                         file = selectedMedia,
                         dataSourceFactory = playbackFactory,
                         playbackManager = playbackManager,
+                        startAtBeginning = state.selectedFileStartsAtBeginning,
                         pictureInPicture = pictureInPicture,
-                        onPlayPreviousAudio = { viewModel.navigateAudio(-1) },
-                        onPlayNextAudio = { viewModel.navigateAudio(1) },
+                        onPlayPrevious = { viewModel.navigateMedia(-1) },
+                        onPlayNext = { viewModel.navigateMedia(1) },
+                        onAutomaticRepeatNext = { viewModel.navigateMedia(1, automaticRepeat = true) },
                         onClose = viewModel::closeFile,
                     )
                 }
@@ -2631,9 +2633,11 @@ private fun MediaPlayerScreen(
     file: CloudFile,
     dataSourceFactory: androidx.media3.datasource.DataSource.Factory,
     playbackManager: TCloudPlaybackManager,
+    startAtBeginning: Boolean,
     pictureInPicture: Boolean,
-    onPlayPreviousAudio: () -> Unit,
-    onPlayNextAudio: () -> Unit,
+    onPlayPrevious: () -> Unit,
+    onPlayNext: () -> Unit,
+    onAutomaticRepeatNext: () -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -2644,12 +2648,8 @@ private fun MediaPlayerScreen(
     var manualFullscreen by remember(file.id) { mutableStateOf(false) }
     var playbackMode by remember(file.id) {
         mutableStateOf(
-            if (isAudio) {
-                when (playbackManager.statusText) {
-                    "リピート再生中" -> PlaybackMode.REPEAT_ONE
-                    "連続再生中" -> PlaybackMode.CONTINUOUS_AUDIO
-                    else -> PlaybackMode.OFF
-                }
+            if (playbackManager.repeatAllEnabled) {
+                PlaybackMode.REPEAT_ALL
             } else PlaybackMode.OFF,
         )
     }
@@ -2659,7 +2659,7 @@ private fun MediaPlayerScreen(
     val reusingBackgroundAudio = isAudio && playbackManager.currentFileId == file.id
     val player = remember(file.id) {
         if (isAudio) {
-            playbackManager.playAudio(file, playbackFactory)
+            playbackManager.playAudio(file, playbackFactory, startAtBeginning)
         } else ExoPlayer.Builder(context).build().apply {
             val mediaItem = MediaItem.Builder()
                 .setUri("tcloud://file/${file.id}")
@@ -2672,7 +2672,11 @@ private fun MediaPlayerScreen(
     }
     LaunchedEffect(player, file.id) {
         val resumePosition = context.readPlaybackPosition(file.id)
-        if (!reusingBackgroundAudio && resumePosition > 0L) player.seekTo(resumePosition)
+        if (startAtBeginning) {
+            player.seekTo(0L)
+        } else if (!reusingBackgroundAudio && resumePosition > 0L) {
+            player.seekTo(resumePosition)
+        }
         while (true) {
             delay(5_000)
             context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
@@ -2680,17 +2684,25 @@ private fun MediaPlayerScreen(
     }
     LaunchedEffect(player, playbackMode, file.id) {
         if (isAudio) {
-            playbackManager.setPlaybackStatus(
-                repeatOne = playbackMode == PlaybackMode.REPEAT_ONE,
-                continuous = playbackMode == PlaybackMode.CONTINUOUS_AUDIO,
-            )
+            playbackManager.setPlaybackStatus(playbackMode == PlaybackMode.REPEAT_ALL)
         } else {
-            player.repeatMode = if (playbackMode == PlaybackMode.REPEAT_ONE) {
-                Player.REPEAT_MODE_ONE
-            } else {
-                Player.REPEAT_MODE_OFF
+            player.repeatMode = Player.REPEAT_MODE_OFF
+            playbackManager.setPlaybackStatus(
+                playbackMode == PlaybackMode.REPEAT_ALL,
+                refreshNotification = false,
+            )
+        }
+    }
+    DisposableEffect(player, file.id, playbackMode) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (!isAudio && playbackState == Player.STATE_ENDED && playbackMode == PlaybackMode.REPEAT_ALL) {
+                    onAutomaticRepeatNext()
+                }
             }
         }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
     DisposableEffect(player, context, file.id) {
         onDispose {
@@ -2721,9 +2733,9 @@ private fun MediaPlayerScreen(
                 title = {
                     Column {
                         Text(file.name, maxLines = 1)
-                        if (isAudio && playbackMode != PlaybackMode.OFF) {
+                        if (playbackMode == PlaybackMode.REPEAT_ALL) {
                             Text(
-                                if (playbackMode == PlaybackMode.REPEAT_ONE) "リピート再生中" else "連続再生中",
+                                "全体リピート中",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TCloudBlue,
                             )
@@ -2737,10 +2749,10 @@ private fun MediaPlayerScreen(
                 },
                 actions = {
                     if (isAudio) {
-                        IconButton(onClick = onPlayPreviousAudio) {
+                        IconButton(onClick = onPlayPrevious) {
                             Icon(Icons.Default.SkipPrevious, contentDescription = "前の曲")
                         }
-                        IconButton(onClick = onPlayNextAudio) {
+                        IconButton(onClick = onPlayNext) {
                             Icon(Icons.Default.SkipNext, contentDescription = "次の曲")
                         }
                     }
@@ -2752,13 +2764,11 @@ private fun MediaPlayerScreen(
                         Icon(
                             when (playbackMode) {
                                 PlaybackMode.OFF -> Icons.Default.Repeat
-                                PlaybackMode.REPEAT_ONE -> Icons.Default.RepeatOne
-                                PlaybackMode.CONTINUOUS_AUDIO -> Icons.AutoMirrored.Filled.PlaylistPlay
+                                PlaybackMode.REPEAT_ALL -> Icons.AutoMirrored.Filled.PlaylistPlay
                             },
                             contentDescription = when (playbackMode) {
                                 PlaybackMode.OFF -> "再生後に停止"
-                                PlaybackMode.REPEAT_ONE -> "リピート再生"
-                                PlaybackMode.CONTINUOUS_AUDIO -> "音楽を連続再生"
+                                PlaybackMode.REPEAT_ALL -> "全体リピート"
                             },
                             tint = if (playbackMode == PlaybackMode.OFF) TCloudMuted else TCloudBlue,
                         )
@@ -2858,20 +2868,11 @@ private fun MediaPlayerScreen(
 
 internal enum class PlaybackMode {
     OFF,
-    REPEAT_ONE,
-    CONTINUOUS_AUDIO,
+    REPEAT_ALL,
 }
 
-internal fun nextPlaybackMode(current: PlaybackMode, mediaKind: String): PlaybackMode =
-    if (mediaKind == "audio") {
-        when (current) {
-            PlaybackMode.OFF -> PlaybackMode.REPEAT_ONE
-            PlaybackMode.REPEAT_ONE -> PlaybackMode.CONTINUOUS_AUDIO
-            PlaybackMode.CONTINUOUS_AUDIO -> PlaybackMode.OFF
-        }
-    } else {
-        if (current == PlaybackMode.REPEAT_ONE) PlaybackMode.OFF else PlaybackMode.REPEAT_ONE
-    }
+internal fun nextPlaybackMode(current: PlaybackMode, @Suppress("UNUSED_PARAMETER") mediaKind: String): PlaybackMode =
+    if (current == PlaybackMode.REPEAT_ALL) PlaybackMode.OFF else PlaybackMode.REPEAT_ALL
 
 private const val PLAYBACK_POSITION_PREFERENCES = "tcloud_playback_positions"
 private const val PLAYBACK_POSITION_MINIMUM_MS = 5_000L

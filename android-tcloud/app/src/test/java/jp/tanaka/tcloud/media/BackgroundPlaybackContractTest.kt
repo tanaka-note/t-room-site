@@ -25,6 +25,8 @@ class BackgroundPlaybackContractTest {
         assertTrue(service.contains("ACTION_NEXT -> manager.skipNext()"))
         assertTrue(service.contains("setShowActionsInCompactView(0, 1, 2)"))
         assertTrue(service.contains("MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE"))
+        assertTrue(service.contains("ACTION_SKIP_TO_PREVIOUS"))
+        assertTrue(service.contains("ACTION_SKIP_TO_NEXT"))
     }
 
     @Test

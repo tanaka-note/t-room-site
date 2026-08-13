@@ -6,29 +6,26 @@ import org.junit.Test
 
 class PlaybackModeTest {
     @Test
-    fun audioCyclesOffRepeatContinuousAndOff() {
-        val repeat = nextPlaybackMode(PlaybackMode.OFF, "audio")
-        val continuous = nextPlaybackMode(repeat, "audio")
-        val off = nextPlaybackMode(continuous, "audio")
+    fun audioCyclesOffRepeatAllAndOff() {
+        val repeatAll = nextPlaybackMode(PlaybackMode.OFF, "audio")
+        val off = nextPlaybackMode(repeatAll, "audio")
 
-        assertEquals(PlaybackMode.REPEAT_ONE, repeat)
-        assertEquals(PlaybackMode.CONTINUOUS_AUDIO, continuous)
+        assertEquals(PlaybackMode.REPEAT_ALL, repeatAll)
         assertEquals(PlaybackMode.OFF, off)
     }
 
     @Test
-    fun videoOnlyCyclesOffAndRepeat() {
-        val repeat = nextPlaybackMode(PlaybackMode.OFF, "video")
-        val off = nextPlaybackMode(repeat, "video")
+    fun videoCyclesOffRepeatAllAndOff() {
+        val repeatAll = nextPlaybackMode(PlaybackMode.OFF, "video")
+        val off = nextPlaybackMode(repeatAll, "video")
 
-        assertEquals(PlaybackMode.REPEAT_ONE, repeat)
+        assertEquals(PlaybackMode.REPEAT_ALL, repeatAll)
         assertEquals(PlaybackMode.OFF, off)
     }
 
     @Test
-    fun notificationStatusIdentifiesRepeatAndContinuousPlayback() {
-        assertEquals("再生中", playbackStatusText(repeatOne = false, continuous = false))
-        assertEquals("リピート再生中", playbackStatusText(repeatOne = true, continuous = false))
-        assertEquals("連続再生中", playbackStatusText(repeatOne = false, continuous = true))
+    fun notificationStatusIdentifiesRepeatAllPlayback() {
+        assertEquals("再生中", playbackStatusText(repeatAll = false))
+        assertEquals("全体リピート中", playbackStatusText(repeatAll = true))
     }
 }

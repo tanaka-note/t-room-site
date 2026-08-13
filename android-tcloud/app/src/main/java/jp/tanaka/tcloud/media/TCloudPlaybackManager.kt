@@ -17,8 +17,7 @@ import jp.tanaka.tcloud.data.CloudFile
 class TCloudPlaybackManager(
     private val context: Context,
 ) {
-    private var continuousPlayback = false
-    private var repeatOnePlayback = false
+    private var repeatAllPlayback = false
 
     val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -29,7 +28,7 @@ class TCloudPlaybackManager(
     init {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED && continuousPlayback) skipNext()
+                if (playbackState == Player.STATE_ENDED && repeatAllPlayback) skipNext(automaticRepeat = true)
             }
         })
     }
@@ -40,15 +39,22 @@ class TCloudPlaybackManager(
         private set
     var statusText: String = "再生中"
         private set
+    val repeatAllEnabled: Boolean
+        get() = repeatAllPlayback
     var stateChanged: (() -> Unit)? = null
-    var playPrevious: (() -> Unit)? = null
-    var playNext: (() -> Unit)? = null
+    var playPrevious: ((Boolean) -> Unit)? = null
+    var playNext: ((Boolean) -> Unit)? = null
 
     private var currentFactory: DataSource.Factory? = null
 
-    fun playAudio(file: CloudFile, factory: DataSource.Factory): ExoPlayer {
+    fun playAudio(
+        file: CloudFile,
+        factory: DataSource.Factory,
+        startAtBeginning: Boolean = false,
+    ): ExoPlayer {
         if (currentFileId == file.id && player.mediaItemCount > 0) {
             (factory as? AutoCloseable)?.close()
+            if (startAtBeginning) player.seekTo(0L)
             if (!player.isPlaying) player.play()
             TCloudPlaybackService.start(context)
             stateChanged?.invoke()
@@ -58,7 +64,7 @@ class TCloudPlaybackManager(
         currentFactory = factory
         currentFileId = file.id
         currentTitle = file.name
-        player.repeatMode = if (repeatOnePlayback) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        player.repeatMode = Player.REPEAT_MODE_OFF
         val item = MediaItem.Builder()
             .setUri("tcloud://file/${file.id}")
             .setMimeType(playbackMimeType(file))
@@ -71,18 +77,17 @@ class TCloudPlaybackManager(
         return player
     }
 
-    fun setPlaybackStatus(repeatOne: Boolean, continuous: Boolean) {
-        repeatOnePlayback = repeatOne
-        player.repeatMode = if (repeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-        continuousPlayback = continuous
-        statusText = playbackStatusText(repeatOne, continuous)
-        TCloudPlaybackService.refresh(context)
+    fun setPlaybackStatus(repeatAll: Boolean, refreshNotification: Boolean = true) {
+        player.repeatMode = Player.REPEAT_MODE_OFF
+        repeatAllPlayback = repeatAll
+        statusText = playbackStatusText(repeatAll)
+        if (refreshNotification && currentFileId != null) TCloudPlaybackService.refresh(context)
         stateChanged?.invoke()
     }
 
-    fun skipPrevious() = playPrevious?.invoke()
+    fun skipPrevious(automaticRepeat: Boolean = false) = playPrevious?.invoke(automaticRepeat)
 
-    fun skipNext() = playNext?.invoke()
+    fun skipNext(automaticRepeat: Boolean = false) = playNext?.invoke(automaticRepeat)
 
     fun stop() {
         player.stop()
@@ -90,8 +95,7 @@ class TCloudPlaybackManager(
         currentFileId = null
         currentTitle = ""
         statusText = "再生中"
-        continuousPlayback = false
-        repeatOnePlayback = false
+        repeatAllPlayback = false
         closeFactory()
         stateChanged?.invoke()
         context.stopService(Intent(context, TCloudPlaybackService::class.java))
@@ -103,11 +107,8 @@ class TCloudPlaybackManager(
     }
 }
 
-internal fun playbackStatusText(repeatOne: Boolean, continuous: Boolean): String = when {
-    repeatOne -> "リピート再生中"
-    continuous -> "連続再生中"
-    else -> "再生中"
-}
+internal fun playbackStatusText(repeatAll: Boolean): String =
+    if (repeatAll) "全体リピート中" else "再生中"
 
 internal fun playbackMimeType(file: CloudFile): String = when (file.name.substringAfterLast('.', "").lowercase()) {
     "flv" -> MimeTypes.VIDEO_FLV
