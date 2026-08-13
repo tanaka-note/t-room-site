@@ -1,12 +1,12 @@
 "use strict";
 
-const CACHE_NAME = "asset-report-shell-v4";
+const CACHE_NAME = "asset-report-shell-v5";
 const APP_PATH = "/asset-report-k7m4q9x2/";
 const APP_SHELL = [
   APP_PATH,
   `${APP_PATH}index.html`,
   `${APP_PATH}report.css?v=20260812-1`,
-  `${APP_PATH}report.js?v=20260813-1`,
+  `${APP_PATH}report.js?v=20260813-2`,
   `${APP_PATH}pwa.js?v=20260812-1`,
   `${APP_PATH}manifest.webmanifest?v=20260812-2`,
   `${APP_PATH}icons/icon-192.png?v=20260812-2`,
