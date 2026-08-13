@@ -10,6 +10,7 @@
 - 開始URL: `https://tanaka-note.com/diary/?source=twa`
 - 対応Android: Android 8.0（API 26）以降
 - TWAライブラリ: Android Browser Helper 2.7.2
+- 現在のバージョン: 1.0.1
 
 ## ビルド
 
