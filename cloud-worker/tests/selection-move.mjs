@@ -51,6 +51,10 @@ assert.match(client, /\$\("#move-submit"\)\?\.addEventListener\("click", moveSel
 assert.match(client, /const destinationId = picker\.currentId == null \? null : Number\(picker\.currentId\)/);
 assert.match(client, /submit\.textContent = sameLocation \? "移動先を変更" : "ここへ移動"/);
 assert.match(client, /async function loadMoveDestination/);
+assert.match(client, /api\(`\/items\?folderId=\$\{Number\(folderId\)\}&pageSize=1`\)/);
+assert.doesNotMatch(client, /api\(`\/items\?folderId=\$\{Number\(folderId\)\}&foldersOnly=1`\)/);
+assert.match(client, /if \(!completed && failures\.length\)/);
+assert.match(client, /if \(fatalError\) \$\("#move-error"\)\.textContent/);
 assert.doesNotMatch(client, /async function collectMoveDestinations/);
 assert.match(worker, /\/api\/move-destinations/);
 assert.match(worker, /async function listMoveDestinations/);
@@ -125,6 +129,32 @@ const subadminSummary = vm.runInContext(`(() => {
 assert.equal(subadminSummary.currentId, 1);
 assert.equal(subadminSummary.rootName, "Atsushi");
 assert.deepEqual([...subadminSummary.children], ["動画"]);
+
+const destinationLoadSummary = await vm.runInContext(`(async () => {
+  const originalApi = api;
+  const originalHydrateFolderRecords = hydrateFolderRecords;
+  let requestedPath = "";
+  api = async (path) => {
+    requestedPath = path;
+    return { breadcrumbs: [
+      { id: 1, parentId: null, name: "Atsushi" },
+      { id: 55, parentId: 1, name: "T-Cloud apk" }
+    ] };
+  };
+  hydrateFolderRecords = async (records) => records;
+  try {
+    const destination = await loadMoveDestination(55);
+    return { requestedPath, id: destination.id, name: destination.name };
+  } finally {
+    api = originalApi;
+    hydrateFolderRecords = originalHydrateFolderRecords;
+  }
+})()`, context);
+assert.deepEqual({ ...destinationLoadSummary }, {
+  requestedPath: "/items?folderId=55&pageSize=1",
+  id: 55,
+  name: "T-Cloud apk"
+});
 
 const longPressResult = await vm.runInContext(`(async () => {
   const listeners = new Map();
