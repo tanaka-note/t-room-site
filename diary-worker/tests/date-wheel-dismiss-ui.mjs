@@ -9,7 +9,9 @@ assert.match(script, /dateWheelDialog\.addEventListener\("click", closeDateWheel
 assert.match(script, /function closeDateWheelFromBackdrop\(event\) \{\s*if \(event\.target === elements\.dateWheelDialog\) closeDateWheel\(\);\s*\}/);
 assert.match(script, /column\.addEventListener\("wheel", \(event\) => \{/);
 assert.match(script, /event\.preventDefault\(\);/);
-assert.match(script, /wheelTargetIndex \+ \(event\.deltaY > 0 \? 1 : -1\)/);
+assert.match(script, /const direction = event\.deltaY > 0 \? 1 : -1;/);
+assert.match(script, /column\.scrollTop = clamp\(visibleIndex \+ direction, 0, options\.length - 1\) \* 44;/);
+assert.doesNotMatch(script, /Math\.abs\(wheelTargetIndex - visibleIndex\)/);
 assert.match(script, /\}, \{ passive: false \}\);/);
 
-process.stdout.write("Diary date wheel dismissal and one-step mouse scrolling contract test passed.\n");
+process.stdout.write("Diary date wheel dismissal and exact one-step mouse scrolling contract test passed.\n");

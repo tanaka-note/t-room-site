@@ -1663,9 +1663,6 @@
   }
 
   function bindDateWheel(column, key) {
-    let wheelTargetIndex = null;
-    let wheelTargetResetTimer = 0;
-
     column.addEventListener("click", (event) => {
       const option = event.target.closest(".date-wheel-option");
       if (!option) return;
@@ -1677,15 +1674,8 @@
       const options = column.querySelectorAll(".date-wheel-option");
       if (!options.length) return;
       const visibleIndex = clamp(Math.round(column.scrollTop / 44), 0, options.length - 1);
-      if (wheelTargetIndex === null || Math.abs(wheelTargetIndex - visibleIndex) > 1) {
-        wheelTargetIndex = visibleIndex;
-      }
-      wheelTargetIndex = clamp(wheelTargetIndex + (event.deltaY > 0 ? 1 : -1), 0, options.length - 1);
-      column.scrollTo({ top: wheelTargetIndex * 44, behavior: "smooth" });
-      window.clearTimeout(wheelTargetResetTimer);
-      wheelTargetResetTimer = window.setTimeout(() => {
-        wheelTargetIndex = null;
-      }, 180);
+      const direction = event.deltaY > 0 ? 1 : -1;
+      column.scrollTop = clamp(visibleIndex + direction, 0, options.length - 1) * 44;
     }, { passive: false });
     column.addEventListener("scroll", () => {
       window.clearTimeout(state.dateWheelTimers[key]);
