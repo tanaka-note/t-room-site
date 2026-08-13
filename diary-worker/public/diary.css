@@ -514,6 +514,15 @@ button {
   padding: 0 54px 0 16px;
 }
 
+.diary-search-box input::-webkit-search-cancel-button,
+.diary-search-box input::-webkit-search-decoration,
+.diary-search-box input::-webkit-search-results-button,
+.diary-search-box input::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 .diary-search-box input:focus,
 .password-field input:focus,
 .entry-form input:focus,

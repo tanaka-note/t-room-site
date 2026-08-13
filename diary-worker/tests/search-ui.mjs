@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const html = readFileSync(`${root}/public/index.html`, "utf8");
 const script = readFileSync(`${root}/public/diary.js`, "utf8");
+const style = readFileSync(`${root}/public/diary.css`, "utf8");
 
 assert.match(html, /id="diary-date-from" type="date"/);
 assert.match(html, /id="diary-date-to" type="date"/);
@@ -19,5 +20,6 @@ assert.match(script, /input\.addEventListener\("click", handleDateClick\)/);
 assert.match(script, /function handleDateClick\(event\) \{\s*if \(!useMobileDateWheel\(\)\) return;\s*event\.preventDefault\(\);\s*openDateWheel\(event\.currentTarget\);\s*\}/);
 assert.doesNotMatch(script, /handleDatePointerDown|DATE_TAP_MAX_MOVEMENT_PX|DATE_TAP_MAX_DURATION_MS/);
 assert.match(script, /includes\(state\.tagQuery\)/);
+assert.match(style, /\.diary-search-box input::\-webkit-search-cancel-button,[\s\S]*?appearance: none;[\s\S]*?display: none;/);
 
 process.stdout.write("Diary date and tag search UI contract test passed.\n");
