@@ -15,6 +15,7 @@ class CameraBackupManager(
     context: Context,
     private val store: CameraBackupStore,
 ) {
+    private val applicationContext = context.applicationContext
     private val workManager = WorkManager.getInstance(context)
 
     fun settings(): CameraBackupSettings = store.settings()
@@ -35,10 +36,24 @@ class CameraBackupManager(
         chargingOnly: Boolean,
         includeImages: Boolean,
         includeVideos: Boolean,
+        allSourceFolders: Boolean,
+        sourceFolderIds: Set<String>,
     ): CameraBackupSettings {
         val previous = store.settings()
-        val updated = store.update(enabled, wifiOnly, chargingOnly, includeImages, includeVideos)
-        if (!enabled || previous.includeImages != includeImages || previous.includeVideos != includeVideos) {
+        val updated = store.update(
+            enabled,
+            wifiOnly,
+            chargingOnly,
+            includeImages,
+            includeVideos,
+            allSourceFolders,
+            sourceFolderIds,
+        )
+        if (!enabled || previous.includeImages != includeImages ||
+            previous.includeVideos != includeVideos ||
+            previous.allSourceFolders != allSourceFolders ||
+            previous.sourceFolderIds != sourceFolderIds
+        ) {
             workManager.cancelAllWorkByTag(TCloudUploadManager.TAG_CAMERA_UPLOAD)
         }
         applySchedule(updated)
@@ -46,6 +61,9 @@ class CameraBackupManager(
     }
 
     fun restoreSchedule() = applySchedule(store.settings())
+
+    suspend fun sourceFolders(): List<CameraBackupSourceFolder> =
+        queryCameraBackupSourceFolders(applicationContext)
 
     fun runNow(): CameraBackupSettings {
         val settings = store.settings()

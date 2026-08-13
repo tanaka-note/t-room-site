@@ -157,6 +157,7 @@ import java.util.Locale
 import java.security.SecureRandom
 import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupSettings
+import jp.tanaka.tcloud.backup.CameraBackupSourceFolder
 import jp.tanaka.tcloud.media.TvCastLauncher
 import kotlinx.coroutines.delay
 
@@ -173,6 +174,8 @@ private data class PendingCameraBackupSettings(
     val chargingOnly: Boolean,
     val includeImages: Boolean,
     val includeVideos: Boolean,
+    val allSourceFolders: Boolean,
+    val sourceFolderIds: Set<String>,
 )
 
 @Composable
@@ -193,6 +196,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
     var pendingTransfer by remember { mutableStateOf<Pair<CloudFile, Boolean>?>(null) }
     var pendingSelectionTransfer by remember { mutableStateOf<Boolean?>(null) }
     var pendingCameraBackupSettings by remember { mutableStateOf<PendingCameraBackupSettings?>(null) }
+    var pendingCameraFolderScan by remember { mutableStateOf(false) }
 
     fun hasCameraMediaPermission(includeImages: Boolean, includeVideos: Boolean): Boolean = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
@@ -246,6 +250,11 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
     val cameraBackupPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { results ->
+        if (pendingCameraFolderScan) {
+            pendingCameraFolderScan = false
+            viewModel.refreshCameraBackupSourceFolders()
+            return@rememberLauncherForActivityResult
+        }
         val pending = pendingCameraBackupSettings
         pendingCameraBackupSettings = null
         if (pending != null) {
@@ -256,6 +265,8 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     pending.chargingOnly,
                     pending.includeImages,
                     pending.includeVideos,
+                    pending.allSourceFolders,
+                    pending.sourceFolderIds,
                 )
             } else {
                 viewModel.cameraBackupPermissionDenied()
@@ -330,9 +341,19 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
         chargingOnly: Boolean,
         includeImages: Boolean,
         includeVideos: Boolean,
+        allSourceFolders: Boolean,
+        sourceFolderIds: Set<String>,
     ) {
         if (!enabled) {
-            viewModel.updateCameraBackup(false, wifiOnly, chargingOnly, includeImages, includeVideos)
+            viewModel.updateCameraBackup(
+                false,
+                wifiOnly,
+                chargingOnly,
+                includeImages,
+                includeVideos,
+                allSourceFolders,
+                sourceFolderIds,
+            )
             return
         }
         val permissions = when {
@@ -352,7 +373,15 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
             context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
         if (permissions.isEmpty()) {
-            viewModel.updateCameraBackup(true, wifiOnly, chargingOnly, includeImages, includeVideos)
+            viewModel.updateCameraBackup(
+                true,
+                wifiOnly,
+                chargingOnly,
+                includeImages,
+                includeVideos,
+                allSourceFolders,
+                sourceFolderIds,
+            )
         } else {
             pendingCameraBackupSettings = PendingCameraBackupSettings(
                 true,
@@ -360,7 +389,32 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                 chargingOnly,
                 includeImages,
                 includeVideos,
+                allSourceFolders,
+                sourceFolderIds,
             )
+            cameraBackupPermissionLauncher.launch(permissions)
+        }
+    }
+
+    fun requestCameraBackupSourceFolders(includeImages: Boolean, includeVideos: Boolean) {
+        val permissions = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> buildList {
+                if (includeImages) add(Manifest.permission.READ_MEDIA_IMAGES)
+                if (includeVideos) add(Manifest.permission.READ_MEDIA_VIDEO)
+                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            }.toTypedArray()
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> buildList {
+                if (includeImages) add(Manifest.permission.READ_MEDIA_IMAGES)
+                if (includeVideos) add(Manifest.permission.READ_MEDIA_VIDEO)
+            }.toTypedArray()
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }.filter {
+            context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+        if (permissions.isEmpty()) {
+            viewModel.refreshCameraBackupSourceFolders()
+        } else {
+            pendingCameraFolderScan = true
             cameraBackupPermissionLauncher.launch(permissions)
         }
     }
@@ -487,6 +541,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     onOpenOffline = viewModel::openOffline,
                     onOpenSettings = {
                         viewModel.refreshCameraBackupSettings()
+                        viewModel.refreshCameraBackupSourceFolders()
                         viewModel.refreshUsage()
                         showAppSettings = true
                     },
@@ -515,6 +570,8 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                 AppSettingsDialog(
                     batteryOptimizationExcluded = batteryOptimizationExcluded,
                     cameraBackupSettings = state.cameraBackupSettings,
+                    cameraBackupSourceFolders = state.cameraBackupSourceFolders,
+                    loadingCameraBackupSourceFolders = state.loadingCameraBackupSourceFolders,
                     isAdmin = state.session?.isAdmin == true,
                     cloudUsage = state.cloudUsage,
                     usageDetails = state.usageDetails,
@@ -535,6 +592,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     },
                     onSetCameraBackupTarget = viewModel::setCurrentFolderAsCameraBackupTarget,
                     onSaveCameraBackup = ::requestCameraBackup,
+                    onLoadCameraBackupSourceFolders = ::requestCameraBackupSourceFolders,
                     onRunCameraBackupNow = viewModel::runCameraBackupNow,
                     onOpenTrash = {
                         showAppSettings = false
@@ -1313,6 +1371,8 @@ private fun TCloudSortButton(
 private fun AppSettingsDialog(
     batteryOptimizationExcluded: Boolean,
     cameraBackupSettings: CameraBackupSettings,
+    cameraBackupSourceFolders: List<CameraBackupSourceFolder>,
+    loadingCameraBackupSourceFolders: Boolean,
     isAdmin: Boolean,
     cloudUsage: CloudUsage,
     usageDetails: List<CloudUsageFolder>,
@@ -1320,7 +1380,8 @@ private fun AppSettingsDialog(
     canSetCameraBackupTarget: Boolean,
     onRequestBatteryExclusion: () -> Unit,
     onSetCameraBackupTarget: () -> Unit,
-    onSaveCameraBackup: (Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
+    onSaveCameraBackup: (Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, Set<String>) -> Unit,
+    onLoadCameraBackupSourceFolders: (Boolean, Boolean) -> Unit,
     onRunCameraBackupNow: () -> Unit,
     onOpenTrash: () -> Unit,
     onDismiss: () -> Unit,
@@ -1339,6 +1400,12 @@ private fun AppSettingsDialog(
     }
     var includeVideos by remember(cameraBackupSettings.includeVideos) {
         mutableStateOf(cameraBackupSettings.includeVideos)
+    }
+    var allSourceFolders by remember(cameraBackupSettings.allSourceFolders) {
+        mutableStateOf(cameraBackupSettings.allSourceFolders)
+    }
+    var selectedSourceFolderIds by remember(cameraBackupSettings.sourceFolderIds) {
+        mutableStateOf(cameraBackupSettings.sourceFolderIds)
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1412,6 +1479,57 @@ private fun AppSettingsDialog(
                     enabled = true,
                     onCheckedChange = { includeVideos = it },
                 )
+                HorizontalDivider()
+                Text("バックアップ対象の端末フォルダ", fontWeight = FontWeight.SemiBold)
+                SettingSwitchRow(
+                    label = "すべての端末フォルダ",
+                    checked = allSourceFolders,
+                    enabled = true,
+                    onCheckedChange = { selected ->
+                        allSourceFolders = selected
+                        if (!selected && selectedSourceFolderIds.isEmpty()) {
+                            selectedSourceFolderIds = cameraBackupSourceFolders.mapTo(mutableSetOf()) { it.id }
+                        }
+                    },
+                )
+                if (!allSourceFolders) {
+                    TextButton(
+                        onClick = { onLoadCameraBackupSourceFolders(includeImages, includeVideos) },
+                        enabled = !loadingCameraBackupSourceFolders,
+                    ) {
+                        Text(if (loadingCameraBackupSourceFolders) "端末フォルダを確認中…" else "端末フォルダを読み込む")
+                    }
+                    if (!loadingCameraBackupSourceFolders && cameraBackupSourceFolders.isEmpty()) {
+                        Text(
+                            "写真・動画へのアクセスを許可すると、CameraやScreenshotsなどを選択できます。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TCloudMuted,
+                        )
+                    }
+                    cameraBackupSourceFolders.forEach { source ->
+                        val detail = buildList {
+                            if (source.imageCount > 0) add("写真${source.imageCount}件")
+                            if (source.videoCount > 0) add("動画${source.videoCount}件")
+                        }.joinToString("・")
+                        SettingSwitchRow(
+                            label = "${source.name}（${detail}）",
+                            checked = source.id in selectedSourceFolderIds,
+                            enabled = true,
+                            onCheckedChange = { checked ->
+                                selectedSourceFolderIds = if (checked) {
+                                    selectedSourceFolderIds + source.id
+                                } else {
+                                    selectedSourceFolderIds - source.id
+                                }
+                            },
+                        )
+                    }
+                    Text(
+                        "${selectedSourceFolderIds.size}フォルダを選択中",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TCloudMuted,
+                    )
+                }
                 SettingSwitchRow(
                     label = "Wi-Fiなど従量課金なしの通信のみ",
                     checked = wifiOnly,
@@ -1425,7 +1543,7 @@ private fun AppSettingsDialog(
                     onCheckedChange = { chargingOnly = it },
                 )
                 Text(
-                    "有効にした時点以降に端末へ追加された、選択中の写真・動画だけを暗号化して保存します。失敗分は次回自動で再試行します。",
+                    "有効にした時点以降に選択した端末フォルダへ追加された写真・動画だけを暗号化して保存します。失敗分は次回自動で再試行します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF667085),
                 )
@@ -1453,10 +1571,20 @@ private fun AppSettingsDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onSaveCameraBackup(backupEnabled, wifiOnly, chargingOnly, includeImages, includeVideos)
+                    onSaveCameraBackup(
+                        backupEnabled,
+                        wifiOnly,
+                        chargingOnly,
+                        includeImages,
+                        includeVideos,
+                        allSourceFolders,
+                        selectedSourceFolderIds,
+                    )
                     onDismiss()
                 },
-                enabled = !backupEnabled || (cameraBackupSettings.hasTarget && (includeImages || includeVideos)),
+                enabled = !backupEnabled ||
+                    (cameraBackupSettings.hasTarget && (includeImages || includeVideos) &&
+                        (allSourceFolders || selectedSourceFolderIds.isNotEmpty())),
             ) { Text("保存") }
         },
         dismissButton = {

@@ -23,6 +23,7 @@ import jp.tanaka.tcloud.offline.TCloudOfflineManager
 import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupManager
 import jp.tanaka.tcloud.backup.CameraBackupSettings
+import jp.tanaka.tcloud.backup.CameraBackupSourceFolder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,6 +62,8 @@ data class MainUiState(
     val creatingFolder: Boolean = false,
     val pendingFolderSecurity: CloudFolder? = null,
     val cameraBackupSettings: CameraBackupSettings = CameraBackupSettings(),
+    val cameraBackupSourceFolders: List<CameraBackupSourceFolder> = emptyList(),
+    val loadingCameraBackupSourceFolders: Boolean = false,
     val showingOffline: Boolean = false,
     val offlineEntries: List<TCloudOfflineStore.OfflineEntry> = emptyList(),
     val showingTrash: Boolean = false,
@@ -268,6 +271,8 @@ class MainViewModel(
                 backup.chargingOnly,
                 backup.includeImages,
                 backup.includeVideos,
+                backup.allSourceFolders,
+                backup.sourceFolderIds,
             )
             repository.logout()
             mutableState.value = MainUiState(
@@ -302,9 +307,19 @@ class MainViewModel(
         chargingOnly: Boolean,
         includeImages: Boolean,
         includeVideos: Boolean,
+        allSourceFolders: Boolean,
+        sourceFolderIds: Set<String>,
     ) {
         runCatching {
-            cameraBackupManager.update(enabled, wifiOnly, chargingOnly, includeImages, includeVideos)
+            cameraBackupManager.update(
+                enabled,
+                wifiOnly,
+                chargingOnly,
+                includeImages,
+                includeVideos,
+                allSourceFolders,
+                sourceFolderIds,
+            )
         }
             .onSuccess { settings ->
                 mutableState.update {
@@ -327,6 +342,30 @@ class MainViewModel(
 
     fun refreshCameraBackupSettings() = mutableState.update {
         it.copy(cameraBackupSettings = cameraBackupManager.settings())
+    }
+
+    fun refreshCameraBackupSourceFolders() {
+        if (mutableState.value.loadingCameraBackupSourceFolders) return
+        mutableState.update { it.copy(loadingCameraBackupSourceFolders = true) }
+        viewModelScope.launch {
+            runCatching { cameraBackupManager.sourceFolders() }
+                .onSuccess { folders ->
+                    mutableState.update {
+                        it.copy(
+                            cameraBackupSourceFolders = folders,
+                            loadingCameraBackupSourceFolders = false,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update {
+                        it.copy(
+                            loadingCameraBackupSourceFolders = false,
+                            error = error.userMessage(),
+                        )
+                    }
+                }
+        }
     }
 
     fun runCameraBackupNow() {

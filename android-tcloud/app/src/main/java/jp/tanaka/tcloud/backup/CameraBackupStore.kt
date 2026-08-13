@@ -13,6 +13,8 @@ data class CameraBackupSettings(
     val chargingOnly: Boolean = true,
     val includeImages: Boolean = true,
     val includeVideos: Boolean = true,
+    val allSourceFolders: Boolean = true,
+    val sourceFolderIds: Set<String> = emptySet(),
     val startedAtMillis: Long = 0,
     val scanDateAddedSeconds: Long = 0,
     val scanMediaId: Long = 0,
@@ -56,6 +58,8 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
         chargingOnly = preferences.getBoolean(KEY_CHARGING_ONLY, true),
         includeImages = preferences.getBoolean(KEY_INCLUDE_IMAGES, true),
         includeVideos = preferences.getBoolean(KEY_INCLUDE_VIDEOS, true),
+        allSourceFolders = preferences.getBoolean(KEY_ALL_SOURCE_FOLDERS, true),
+        sourceFolderIds = preferences.getStringSet(KEY_SOURCE_FOLDER_IDS, emptySet()).orEmpty().toSet(),
         startedAtMillis = preferences.getLong(KEY_STARTED_AT, 0),
         scanDateAddedSeconds = preferences.getLong(KEY_SCAN_DATE, 0),
         scanMediaId = preferences.getLong(KEY_SCAN_ID, 0),
@@ -93,17 +97,28 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
         chargingOnly: Boolean,
         includeImages: Boolean,
         includeVideos: Boolean,
+        allSourceFolders: Boolean,
+        sourceFolderIds: Set<String>,
     ): CameraBackupSettings {
         val current = settings()
         require(!enabled || current.hasTarget) { "先にバックアップ先フォルダを設定してください。" }
         require(!enabled || includeImages || includeVideos) { "写真または動画を1つ以上選択してください。" }
-        val mediaSelectionChanged = current.includeImages != includeImages || current.includeVideos != includeVideos
+        require(!enabled || allSourceFolders || sourceFolderIds.isNotEmpty()) {
+            "バックアップする端末フォルダを1つ以上選択してください。"
+        }
+        val normalizedSourceFolderIds = sourceFolderIds.filter(String::isNotBlank).toSet()
+        val mediaSelectionChanged = current.includeImages != includeImages ||
+            current.includeVideos != includeVideos ||
+            current.allSourceFolders != allSourceFolders ||
+            current.sourceFolderIds != normalizedSourceFolderIds
         preferences.edit()
             .putBoolean(KEY_ENABLED, enabled)
             .putBoolean(KEY_WIFI_ONLY, wifiOnly)
             .putBoolean(KEY_CHARGING_ONLY, chargingOnly)
             .putBoolean(KEY_INCLUDE_IMAGES, includeImages)
             .putBoolean(KEY_INCLUDE_VIDEOS, includeVideos)
+            .putBoolean(KEY_ALL_SOURCE_FOLDERS, allSourceFolders)
+            .putStringSet(KEY_SOURCE_FOLDER_IDS, normalizedSourceFolderIds)
             .apply {
                 if (enabled && current.startedAtMillis <= 0) {
                     putLong(KEY_STARTED_AT, System.currentTimeMillis())
@@ -300,6 +315,8 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
         const val KEY_CHARGING_ONLY = "charging_only"
         const val KEY_INCLUDE_IMAGES = "include_images"
         const val KEY_INCLUDE_VIDEOS = "include_videos"
+        const val KEY_ALL_SOURCE_FOLDERS = "all_source_folders"
+        const val KEY_SOURCE_FOLDER_IDS = "source_folder_ids"
         const val KEY_STARTED_AT = "started_at"
         const val KEY_SCAN_DATE = "scan_date_added_seconds"
         const val KEY_SCAN_ID = "scan_media_id"

@@ -52,6 +52,7 @@ class CameraBackupScanWorker(
                 MediaStore.Files.FileColumns.SIZE,
                 MediaStore.Files.FileColumns.DATE_MODIFIED,
                 MediaStore.Files.FileColumns.DATE_ADDED,
+                MediaStore.Files.FileColumns.BUCKET_ID,
             )
             val typePlaceholders = mediaTypes.joinToString(",") { "?" }
             val selectionParts = mutableListOf(
@@ -70,6 +71,16 @@ class CameraBackupScanWorker(
                     add(settings.scanMediaId.toString())
                 }
             }.toTypedArray()
+            val mutableArguments = arguments.toMutableList()
+            if (!settings.allSourceFolders) {
+                if (settings.sourceFolderIds.isEmpty()) {
+                    store.recordScan(0, "バックアップする端末フォルダを選択してください。")
+                    return@withContext Result.success()
+                }
+                val sourceFilter = cameraSourceFolderFilter(false, settings.sourceFolderIds)
+                sourceFilter.sql?.let(selectionParts::add)
+                mutableArguments += sourceFilter.arguments
+            }
             val order = "${MediaStore.Files.FileColumns.DATE_ADDED} ASC, " +
                 "${MediaStore.Files.FileColumns._ID} ASC"
             val assets = mutableListOf<CameraMediaAsset>()
@@ -77,7 +88,7 @@ class CameraBackupScanWorker(
                 collection,
                 projection,
                 selectionParts.joinToString(" AND "),
-                arguments,
+                mutableArguments.toTypedArray(),
                 order,
             )?.use { cursor ->
                 val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
