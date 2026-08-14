@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260814-2";
+const APP_BUILD_ID = "20260814-3";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1980,7 +1980,7 @@ async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
     ["/cloud.css", "/cloud-runtime-20260814-2.css"],
-    ["/cloud.js", "/cloud-runtime-20260814-2.js"],
+    ["/cloud.js", "/cloud-runtime-20260814-3.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
@@ -2004,7 +2004,7 @@ async function serveAsset(request, env, url, path) {
     ["/icons/icon-maskable-512-v3.png", "/icons/icon-maskable-512-v3.png"],
     ["/icons/apple-touch-icon-v3.png", "/icons/apple-touch-icon-v3.png"],
     ["/share.css", "/share-runtime-20260813-1.css"],
-    ["/share.js", "/share-runtime-20260813-1.js"],
+    ["/share.js", "/share-runtime-20260814-1.js"],
     ["/vendor/argon2.umd.min.js", "/vendor/argon2.umd.min.js"],
     ["/vendor/mpegts-1.8.0.js", "/vendor/mpegts-1.8.0.js"],
     ["/vendor/mpegts-1.8.0.LICENSE.txt", "/vendor/mpegts-1.8.0.LICENSE.txt"]

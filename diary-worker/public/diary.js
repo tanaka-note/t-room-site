@@ -1292,13 +1292,34 @@
   function handleRichEditorBeforeInput(event) {
     if (["insertParagraph", "insertLineBreak"].includes(event.inputType)) {
       event.preventDefault();
-      insertPlainTextAtEditorSelection("\n");
+      insertEditorLineBreak();
       return;
     }
     if (event.inputType.startsWith("insert") && event.data && !canInsertEditorText(event.data)) {
       event.preventDefault();
       elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
     }
+  }
+
+  function insertEditorLineBreak() {
+    if (!canInsertEditorText("\n")) {
+      elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
+      return false;
+    }
+    restoreEditorSelection();
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return false;
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const lineBreak = document.createElement("br");
+    range.insertNode(lineBreak);
+    range.setStartAfter(lineBreak);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    state.editorSelection = range.cloneRange();
+    elements.entryContent.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
   }
 
   function handleRichEditorPaste(event) {

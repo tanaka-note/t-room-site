@@ -40,6 +40,48 @@ assert.match(shareJs, /const byUpdated = \(a, b\) => direction \* String\(a\.cre
 assert.match(workerJs, /"updated-desc": "created_at DESC", "updated-asc": "created_at ASC"/);
 assert.match(shareJs, /if \(state\.sortUsesTypeDefaults\) \{[\s\S]*?folders\.sort\(byName\);[\s\S]*?files\.sort/);
 
+assert.match(mainHtml, /id="preview-date-label">保存日<\/dt>/);
+assert.match(shareHtml, /id="share-preview-date-label">保存日<\/dt>/);
+assert.match(mainJs, /\$\("#preview-date-label"\)\.textContent = previewDate\.label/);
+assert.match(shareJs, /\$\("#share-preview-date-label"\)\.textContent = previewDate\.label/);
+
+function verifyPreviewDateDetails(source, endMarker, shared = false) {
+  const start = source.indexOf("function previewDateDetails");
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, `${shared ? "共有" : "管理"}画面の日時表示判定を検査できる形で維持してください。`);
+  const context = {};
+  vm.runInNewContext(`${source.slice(start, end)}; globalThis.previewDateDetails = previewDateDetails;`, context);
+  const dates = { createdAt: "2026-08-01 01:00:00", updatedAt: "2026-08-14 02:00:00" };
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.previewDateDetails({ ...dates, name: "photo.jpg", mimeType: "image/jpeg", mediaKind: "image" }))),
+    { label: "保存日", value: dates.createdAt },
+    "画像は作成日時を保存日として表示してください。"
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.previewDateDetails({ ...dates, name: "movie.mp4", mimeType: "video/mp4", mediaKind: "video" }))),
+    { label: "保存日", value: dates.createdAt },
+    "動画は作成日時を保存日として表示してください。"
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.previewDateDetails({ ...dates, name: "report.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", mediaKind: "document" }))),
+    { label: "更新日", value: dates.updatedAt },
+    "Excelは最終更新日時を更新日として表示してください。"
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.previewDateDetails({ ...dates, name: "minutes.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", mediaKind: "document" }))),
+    { label: "更新日", value: dates.updatedAt },
+    "Wordは最終更新日時を更新日として表示してください。"
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.previewDateDetails({ ...dates, name: "manual.pdf", mimeType: "application/pdf", mediaKind: "document" }))),
+    { label: "保存日", value: dates.createdAt },
+    "編集前提でないPDFは保存日のままにしてください。"
+  );
+}
+
+verifyPreviewDateDetails(mainJs, "function detectClientKind");
+verifyPreviewDateDetails(shareJs, "function formatBytes", true);
+
 assert.doesNotMatch(mainHtml, /id="preview-fullscreen"/, "右上の全画面ボタンを表示しないでください。");
 assert.doesNotMatch(shareHtml, /id="share-preview-fullscreen"/, "共有画面でも右上の全画面ボタンを表示しないでください。");
 assert.doesNotMatch(mainHtml, /id="preview-rotate"/);

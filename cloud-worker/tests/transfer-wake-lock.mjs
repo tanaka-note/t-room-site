@@ -28,7 +28,7 @@ assert.match(fileUpload, /state\.uploading = false;[\s\S]*?await syncTransferWak
 
 assert.match(html, /id="upload-wake-lock-status"[^>]*>消灯防止を準備しています。/);
 assert.match(html, /id="offline-wake-lock-status"[^>]*>消灯防止を準備しています。/);
-assert.match(html, /cloud\.js\?v=20260814-2/);
+assert.match(html, /cloud\.js\?v=20260814-3/);
 
 const wakeLockFunctions = client.match(/function uploadKeepsScreenAwake\(\) \{[\s\S]*?\r?\n\}\r?\n\r?\nfunction renderBreadcrumbs/)?.[0]
   .replace(/\r?\n\r?\nfunction renderBreadcrumbs$/, "") || "";
