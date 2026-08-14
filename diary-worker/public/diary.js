@@ -50,6 +50,7 @@
     editorSelection: null,
     editorToolbarOpen: false,
     editorTypingMarks: { bold: false, italic: false, underline: false, color: null },
+    editorTypingModeExplicit: false,
     applyingEditorFormat: false,
     dateDraft: null,
     dateWheelTarget: null,
@@ -303,8 +304,8 @@
     elements.entryContent.addEventListener("beforeinput", handleRichEditorBeforeInput);
     elements.entryContent.addEventListener("paste", handleRichEditorPaste);
     elements.entryContent.addEventListener("focus", rememberEditorSelection);
-    elements.entryContent.addEventListener("pointerup", rememberEditorSelection);
-    elements.entryContent.addEventListener("keyup", rememberEditorSelection);
+    elements.entryContent.addEventListener("pointerup", handleRichEditorPointerUp);
+    elements.entryContent.addEventListener("keyup", handleRichEditorKeyup);
     elements.entryFormatToggle.addEventListener("pointerdown", preserveEditorSelectionFromToolbar);
     elements.entryFormatToggle.addEventListener("click", toggleEntryFormatToolbar);
     elements.entryFormatToolbar.addEventListener("pointerdown", preserveEditorSelectionFromToolbar);
@@ -1283,52 +1284,30 @@
     elements.entryContent.focus();
   }
 
-  function handleRichEditorInput() {
+  function handleRichEditorInput(event) {
     state.editorDirty = true;
+    finalizeTypingFormatMarkers();
+    if (["insertParagraph", "insertLineBreak"].includes(event?.inputType) && state.editorTypingModeExplicit) {
+      installTypingFormatSelection(state.editorTypingMarks);
+      updateFormattingToolbarState();
+      return;
+    }
     rememberEditorSelection();
     updateFormattingToolbarState();
   }
 
   function handleRichEditorBeforeInput(event) {
     if (["insertParagraph", "insertLineBreak"].includes(event.inputType)) {
-      event.preventDefault();
-      insertEditorLineBreak();
+      if (!canInsertEditorText("\n")) {
+        event.preventDefault();
+        elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
+      }
       return;
     }
     if (event.inputType.startsWith("insert") && event.data && !canInsertEditorText(event.data)) {
       event.preventDefault();
       elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
     }
-  }
-
-  function insertEditorLineBreak() {
-    if (!canInsertEditorText("\n")) {
-      elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
-      return false;
-    }
-    let selection = window.getSelection();
-    let range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-    if (!range || !elements.entryContent.contains(range.commonAncestorContainer)) {
-      restoreEditorSelection();
-      selection = window.getSelection();
-      range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-    }
-    if (!selection || !range) return false;
-    range.deleteContents();
-    const lineBreak = document.createElement("br");
-    const typingAnchor = createFormattedTextSpan("\u200b", state.editorTypingMarks);
-    typingAnchor.dataset.typingAnchor = "true";
-    const fragment = document.createDocumentFragment();
-    fragment.append(lineBreak, typingAnchor);
-    range.insertNode(fragment);
-    const anchorText = typingAnchor.firstChild;
-    range.setStart(anchorText, anchorText.nodeValue.length);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    state.editorSelection = range.cloneRange();
-    elements.entryContent.dispatchEvent(new Event("input", { bubbles: true }));
-    return true;
   }
 
   function handleRichEditorPaste(event) {
@@ -1343,6 +1322,19 @@
     if (!command) return;
     event.preventDefault();
     applyEntryFormat(command);
+  }
+
+  function handleRichEditorPointerUp() {
+    discardUnusedTypingFormatMarkers();
+    state.editorTypingModeExplicit = false;
+    rememberEditorSelection();
+  }
+
+  function handleRichEditorKeyup(event) {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+      state.editorTypingModeExplicit = false;
+    }
+    rememberEditorSelection();
   }
 
   function preserveEditorSelectionFromToolbar(event) {
@@ -1381,7 +1373,9 @@
     restoreEditorSelection();
     const selection = window.getSelection();
     const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-    if (range?.collapsed) {
+    const typingMarkerSelection = range && !range.collapsed
+      && !range.toString().replace(/[\u200b\ufeff]/g, "").length;
+    if (range?.collapsed || typingMarkerSelection) {
       const nextMarks = { ...state.editorTypingMarks };
       if (command === "clear") {
         Object.assign(nextMarks, { bold: false, italic: false, underline: false, color: null });
@@ -1391,11 +1385,13 @@
         nextMarks[command] = !nextMarks[command];
       }
       state.editorTypingMarks = nextMarks;
+      state.editorTypingModeExplicit = true;
       state.applyingEditorFormat = true;
-      installTypingFormatAnchor(nextMarks);
+      installTypingFormatSelection(nextMarks);
       state.applyingEditorFormat = false;
       state.editorDirty = true;
-      rememberEditorSelection();
+      const activeSelection = window.getSelection();
+      if (activeSelection?.rangeCount) state.editorSelection = activeSelection.getRangeAt(0).cloneRange();
       updateFormattingToolbarState();
       return;
     }
@@ -1409,6 +1405,7 @@
       document.execCommand(command, false, null);
     }
     state.editorDirty = true;
+    state.editorTypingModeExplicit = false;
     rememberEditorSelection();
     updateFormattingToolbarState();
     elements.entryContent.focus({ preventScroll: true });
@@ -1420,7 +1417,9 @@
     const range = selection.getRangeAt(0);
     if (!elements.entryContent.contains(range.commonAncestorContainer)) return;
     state.editorSelection = range.cloneRange();
-    if (range.collapsed && !state.applyingEditorFormat) state.editorTypingMarks = marksAtRange(range);
+    if (range.collapsed && !state.applyingEditorFormat && !state.editorTypingModeExplicit) {
+      state.editorTypingMarks = marksAtRange(range);
+    }
     updateFormattingToolbarState(range);
   }
 
@@ -1445,7 +1444,7 @@
     const before = document.createRange();
     before.selectNodeContents(elements.entryContent);
     before.setEnd(range.startContainer, range.startOffset);
-    return before.toString().replace(/\u200b/g, "").length;
+    return before.toString().replace(/[\u200b\ufeff]/g, "").length;
   }
 
   function insertPlainTextAtEditorSelection(text) {
@@ -1472,7 +1471,7 @@
   function canInsertEditorText(text) {
     const selection = window.getSelection();
     const selectedLength = selection?.rangeCount && elements.entryContent.contains(selection.getRangeAt(0).commonAncestorContainer)
-      ? selection.getRangeAt(0).toString().replace(/\u200b/g, "").length
+      ? selection.getRangeAt(0).toString().replace(/[\u200b\ufeff]/g, "").length
       : 0;
     return getRichEditorPlainText().length - selectedLength + String(text || "").length <= 200000;
   }
@@ -1526,72 +1525,39 @@
     return marksForElement(container);
   }
 
-  function installTypingFormatAnchor(marks) {
-    const offset = getEditorSelectionOffset();
-    const current = serializeRichEditor(false);
-    setRichEditorDocument(current.content, current.contentFormat);
-    placeEditorCaretAtOffset(offset);
+  function installTypingFormatSelection(marks) {
     const selection = window.getSelection();
     if (!selection?.rangeCount) return;
     const range = selection.getRangeAt(0);
-    const span = createFormattedTextSpan("\u200b", marks);
-    span.dataset.typingAnchor = "true";
-    range.insertNode(span);
-    const textNode = span.firstChild;
-    range.setStart(textNode, textNode.nodeValue.length);
-    range.collapse(true);
+    if (!elements.entryContent.contains(range.commonAncestorContainer)) return;
+    range.deleteContents();
+    const marker = document.createElement("span");
+    marker.dataset.typingMarker = "true";
+    marker.textContent = "\ufeff";
+    marker.style.fontWeight = marks.bold ? "700" : "400";
+    marker.style.fontStyle = marks.italic ? "italic" : "normal";
+    marker.style.textDecoration = marks.underline ? "underline" : "none";
+    marker.style.color = marks.color && RICH_TEXT_COLORS[marks.color]
+      ? RICH_TEXT_COLORS[marks.color]
+      : RICH_TEXT_COLORS.default;
+    range.insertNode(marker);
+    range.selectNodeContents(marker);
     selection.removeAllRanges();
     selection.addRange(range);
     state.editorSelection = range.cloneRange();
   }
 
-  function placeEditorCaretAtOffset(offset) {
-    const selection = window.getSelection();
-    const range = document.createRange();
-    const walker = document.createTreeWalker(elements.entryContent, NodeFilter.SHOW_TEXT);
-    let remaining = Math.max(0, offset);
-    let node;
-    while ((node = walker.nextNode())) {
-      const textLength = (node.nodeValue || "").replace(/\u200b/g, "").length;
-      if (remaining <= textLength) {
-        const parent = node.parentElement;
-        const beforeText = (node.nodeValue || "").slice(0, remaining);
-        const afterText = (node.nodeValue || "").slice(remaining);
-        if (parent && parent !== elements.entryContent && parent.childNodes.length === 1) {
-          const before = beforeText ? parent.cloneNode(false) : null;
-          const after = afterText ? parent.cloneNode(false) : null;
-          if (before) {
-            before.removeAttribute("data-typing-anchor");
-            before.textContent = beforeText;
-          }
-          if (after) {
-            after.removeAttribute("data-typing-anchor");
-            after.textContent = afterText;
-          }
-          const reference = parent.nextSibling;
-          if (before) elements.entryContent.insertBefore(before, parent);
-          if (after) elements.entryContent.insertBefore(after, parent);
-          parent.remove();
-          if (after) range.setStartBefore(after);
-          else if (before) range.setStartAfter(before);
-          else if (reference) range.setStartBefore(reference);
-          else range.selectNodeContents(elements.entryContent);
-        } else {
-          range.setStart(node, Math.min(remaining, node.nodeValue.length));
-        }
-        range.collapse(true);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        state.editorSelection = range.cloneRange();
-        return;
-      }
-      remaining -= textLength;
-    }
-    range.selectNodeContents(elements.entryContent);
-    range.collapse(false);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    state.editorSelection = range.cloneRange();
+  function finalizeTypingFormatMarkers() {
+    elements.entryContent.querySelectorAll("[data-typing-marker]").forEach((marker) => {
+      if (marker.textContent.replace(/[\u200b\ufeff]/g, "").length) marker.removeAttribute("data-typing-marker");
+    });
+  }
+
+  function discardUnusedTypingFormatMarkers() {
+    elements.entryContent.querySelectorAll("[data-typing-marker]").forEach((marker) => {
+      if (!marker.textContent.replace(/[\u200b\ufeff]/g, "").length) marker.remove();
+      else marker.removeAttribute("data-typing-marker");
+    });
   }
 
   function serializeRichEditor(trim = true) {
@@ -1638,7 +1604,7 @@
       if (node.nodeType === Node.TEXT_NODE) {
         const parent = node.parentElement || root;
         const style = getComputedStyle(parent);
-        append((node.nodeValue || "").replace(/\u200b/g, ""), {
+        append((node.nodeValue || "").replace(/[\u200b\ufeff]/g, ""), {
           bold: Number.parseInt(style.fontWeight, 10) >= 700 || style.fontWeight === "bold",
           italic: style.fontStyle === "italic" || style.fontStyle === "oblique",
           underline: style.textDecorationLine.includes("underline"),
@@ -1853,6 +1819,8 @@
     elements.entryRevision.value = entry ? String(entry.revision) : "";
     elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
+    state.editorTypingMarks = { bold: false, italic: false, underline: false, color: null };
+    state.editorTypingModeExplicit = false;
     setRichEditorDocument(entry?.content || "", entry?.contentFormat || null);
     elements.entryTags.value = entry?.tags?.join("、") || "";
     closeEntryTagSuggestions();
