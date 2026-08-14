@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const script = readFileSync(`${root}/public/diary.js`, "utf8");
+const style = readFileSync(`${root}/public/diary.css`, "utf8");
 const functionMatch = script.match(/function handleDateClick\(event\) \{[\s\S]*?\n  \}\n\n  function handleDateKeydown/);
 
 assert.ok(functionMatch, "handleDateClick must exist immediately before handleDateKeydown");
@@ -35,5 +36,7 @@ assert.equal(mobile.calls.openedWith, mobile.target, "mobile must open the share
 
 assert.match(script, /for \(const input of \[elements\.dateFrom, elements\.dateTo\]\) \{\s*bindDateInput\(input\);/);
 assert.match(script, /bindDateInput\(elements\.entryDate\)/);
+assert.match(style, /@media \(pointer: coarse\)[\s\S]*#entry-date \{\s*touch-action: manipulation;/,
+  "mobile date inputs must recognize a deliberate tap instead of disabling the calendar action");
 
 process.stdout.write("Diary mobile and desktop date input behavior test passed.\n");

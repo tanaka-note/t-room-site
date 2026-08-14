@@ -48,10 +48,8 @@
     activeEntry: null,
     editorDirty: false,
     editorSelection: null,
+    editorSelectionOffsets: null,
     editorToolbarOpen: false,
-    editorTypingMarks: { bold: false, italic: false, underline: false, color: null },
-    editorTypingModeExplicit: false,
-    applyingEditorFormat: false,
     dateDraft: null,
     dateWheelTarget: null,
     dateWheelTimers: {},
@@ -304,8 +302,9 @@
     elements.entryContent.addEventListener("beforeinput", handleRichEditorBeforeInput);
     elements.entryContent.addEventListener("paste", handleRichEditorPaste);
     elements.entryContent.addEventListener("focus", rememberEditorSelection);
-    elements.entryContent.addEventListener("pointerup", handleRichEditorPointerUp);
-    elements.entryContent.addEventListener("keyup", handleRichEditorKeyup);
+    elements.entryContent.addEventListener("pointerdown", handleRichEditorPointerDown);
+    elements.entryContent.addEventListener("pointerup", rememberEditorSelection);
+    elements.entryContent.addEventListener("keyup", rememberEditorSelection);
     elements.entryFormatToggle.addEventListener("pointerdown", preserveEditorSelectionFromToolbar);
     elements.entryFormatToggle.addEventListener("click", toggleEntryFormatToolbar);
     elements.entryFormatToolbar.addEventListener("pointerdown", preserveEditorSelectionFromToolbar);
@@ -1284,16 +1283,9 @@
     elements.entryContent.focus();
   }
 
-  function handleRichEditorInput(event) {
+  function handleRichEditorInput() {
     state.editorDirty = true;
-    finalizeTypingFormatMarkers();
-    if (["insertParagraph", "insertLineBreak"].includes(event?.inputType) && state.editorTypingModeExplicit) {
-      installTypingFormatSelection(state.editorTypingMarks);
-      updateFormattingToolbarState();
-      return;
-    }
-    rememberEditorSelection();
-    updateFormattingToolbarState();
+    if (state.editorToolbarOpen) closeEntryFormatToolbar();
   }
 
   function handleRichEditorBeforeInput(event) {
@@ -1324,31 +1316,30 @@
     applyEntryFormat(command);
   }
 
-  function handleRichEditorPointerUp() {
-    discardUnusedTypingFormatMarkers();
-    state.editorTypingModeExplicit = false;
-    rememberEditorSelection();
-  }
-
-  function handleRichEditorKeyup(event) {
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
-      state.editorTypingModeExplicit = false;
-    }
-    rememberEditorSelection();
+  function handleRichEditorPointerDown() {
+    if (state.editorToolbarOpen) closeEntryFormatToolbar();
+    state.editorSelectionOffsets = null;
   }
 
   function preserveEditorSelectionFromToolbar(event) {
     rememberEditorSelection();
+    captureEditorSelectionOffsets();
+    event.preventDefault();
   }
 
   function toggleEntryFormatToolbar() {
     const open = elements.entryFormatToolbar.hidden;
+    if (open && !hasSelectedEditorText()) {
+      closeEntryFormatToolbar();
+      elements.editorMessage.textContent = "書式を変更する文字を選択してください。";
+      return;
+    }
+    elements.editorMessage.textContent = "";
     elements.entryFormatToolbar.hidden = !open;
     elements.entryFormatToggle.setAttribute("aria-expanded", String(open));
     elements.entryContentShell.classList.toggle("is-formatting", open);
     state.editorToolbarOpen = open;
     updateEditorKeyboardOffset();
-    restoreEditorSelection();
     updateFormattingToolbarState();
   }
 
@@ -1370,45 +1361,26 @@
   }
 
   function applyEntryFormat(command, value = null) {
-    restoreEditorSelection();
-    const selection = window.getSelection();
-    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-    const typingMarkerSelection = range && !range.collapsed
-      && !range.toString().replace(/[\u200b\ufeff]/g, "").length;
-    if (range?.collapsed || typingMarkerSelection) {
-      const nextMarks = { ...state.editorTypingMarks };
-      if (command === "clear") {
-        Object.assign(nextMarks, { bold: false, italic: false, underline: false, color: null });
-      } else if (command === "color") {
-        nextMarks.color = value === "default" ? null : value;
-      } else if (["bold", "italic", "underline"].includes(command)) {
-        nextMarks[command] = !nextMarks[command];
-      }
-      state.editorTypingMarks = nextMarks;
-      state.editorTypingModeExplicit = true;
-      state.applyingEditorFormat = true;
-      installTypingFormatSelection(nextMarks);
-      state.applyingEditorFormat = false;
-      state.editorDirty = true;
-      const activeSelection = window.getSelection();
-      if (activeSelection?.rangeCount) state.editorSelection = activeSelection.getRangeAt(0).cloneRange();
-      updateFormattingToolbarState();
+    const offsets = state.editorSelectionOffsets || captureEditorSelectionOffsets();
+    if (!offsets || offsets.end <= offsets.start) {
+      closeEntryFormatToolbar();
+      elements.editorMessage.textContent = "書式を変更する文字を選択してください。";
       return;
     }
-    if (command === "clear") {
-      document.execCommand("removeFormat", false, null);
-    } else if (command === "color") {
-      const color = RICH_TEXT_COLORS[value] || RICH_TEXT_COLORS.default;
-      document.execCommand("styleWithCSS", false, true);
-      document.execCommand("foreColor", false, color);
-    } else if (["bold", "italic", "underline"].includes(command)) {
-      document.execCommand(command, false, null);
-    }
+    const editorDocument = serializeRichEditor(false);
+    const runs = applyFormatToSelection(
+      editorDocument.content.length,
+      editorDocument.contentFormat?.runs || [],
+      offsets.start,
+      offsets.end,
+      command,
+      value
+    );
+    setRichEditorDocument(editorDocument.content, runs.length ? { version: 1, runs } : null);
+    restoreEditorSelectionFromOffsets(offsets);
     state.editorDirty = true;
-    state.editorTypingModeExplicit = false;
-    rememberEditorSelection();
+    state.editorSelectionOffsets = offsets;
     updateFormattingToolbarState();
-    elements.entryContent.focus({ preventScroll: true });
   }
 
   function rememberEditorSelection() {
@@ -1417,10 +1389,8 @@
     const range = selection.getRangeAt(0);
     if (!elements.entryContent.contains(range.commonAncestorContainer)) return;
     state.editorSelection = range.cloneRange();
-    if (range.collapsed && !state.applyingEditorFormat && !state.editorTypingModeExplicit) {
-      state.editorTypingMarks = marksAtRange(range);
-    }
-    updateFormattingToolbarState(range);
+    if (!state.editorToolbarOpen) state.editorSelectionOffsets = null;
+    if (state.editorToolbarOpen) updateFormattingToolbarState();
   }
 
   function restoreEditorSelection() {
@@ -1445,6 +1415,76 @@
     before.selectNodeContents(elements.entryContent);
     before.setEnd(range.startContainer, range.startOffset);
     return before.toString().replace(/[\u200b\ufeff]/g, "").length;
+  }
+
+  function captureEditorSelectionOffsets() {
+    const range = state.editorSelection;
+    if (!range || range.collapsed || !elements.entryContent.contains(range.commonAncestorContainer)) {
+      state.editorSelectionOffsets = null;
+      return null;
+    }
+    const startToken = "\ue000";
+    const endToken = "\ue001";
+    const startMarker = document.createElement("span");
+    const endMarker = document.createElement("span");
+    startMarker.dataset.selectionBoundary = "start";
+    endMarker.dataset.selectionBoundary = "end";
+    startMarker.textContent = startToken;
+    endMarker.textContent = endToken;
+    const endBoundary = range.cloneRange();
+    endBoundary.collapse(false);
+    endBoundary.insertNode(endMarker);
+    const startBoundary = range.cloneRange();
+    startBoundary.collapse(true);
+    startBoundary.insertNode(startMarker);
+    const contentWithMarkers = serializeRichEditor(false).content;
+    const startIndex = contentWithMarkers.indexOf(startToken);
+    const endIndex = contentWithMarkers.indexOf(endToken);
+    const startParent = startMarker.parentNode;
+    const endParent = endMarker.parentNode;
+    startMarker.remove();
+    endMarker.remove();
+    startParent?.normalize();
+    if (endParent !== startParent) endParent?.normalize();
+    if (startIndex < 0 || endIndex <= startIndex) {
+      state.editorSelectionOffsets = null;
+      return null;
+    }
+    state.editorSelectionOffsets = { start: startIndex, end: endIndex - 1 };
+    return state.editorSelectionOffsets;
+  }
+
+  function hasSelectedEditorText() {
+    const offsets = state.editorSelectionOffsets || captureEditorSelectionOffsets();
+    return Boolean(offsets && offsets.end > offsets.start);
+  }
+
+  function restoreEditorSelectionFromOffsets(offsets) {
+    const locate = (requestedOffset) => {
+      const walker = document.createTreeWalker(elements.entryContent, NodeFilter.SHOW_TEXT);
+      const maximum = getRichEditorPlainText().length;
+      let remaining = Math.max(0, Math.min(maximum, requestedOffset));
+      let node = walker.nextNode();
+      let lastNode = null;
+      while (node) {
+        lastNode = node;
+        if (remaining <= node.nodeValue.length) return { node, offset: remaining };
+        remaining -= node.nodeValue.length;
+        node = walker.nextNode();
+      }
+      return lastNode
+        ? { node: lastNode, offset: lastNode.nodeValue.length }
+        : { node: elements.entryContent, offset: 0 };
+    };
+    const start = locate(offsets.start);
+    const end = locate(offsets.end);
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    state.editorSelection = range.cloneRange();
   }
 
   function insertPlainTextAtEditorSelection(text) {
@@ -1476,18 +1516,82 @@
     return getRichEditorPlainText().length - selectedLength + String(text || "").length <= 200000;
   }
 
-  function updateFormattingToolbarState(range = state.editorSelection) {
+  function updateFormattingToolbarState() {
     if (!elements.entryFormatToolbar) return;
-    const collapsed = Boolean(range?.collapsed);
+    const offsets = state.editorSelectionOffsets;
+    const editorDocument = serializeRichEditor(false);
+    const formatState = getSelectionFormatState(
+      editorDocument.content.length,
+      editorDocument.contentFormat?.runs || [],
+      offsets?.start,
+      offsets?.end
+    );
     for (const command of ["bold", "italic", "underline"]) {
       const button = elements.entryFormatToolbar.querySelector(`[data-format-command="${command}"]`);
-      const active = collapsed ? Boolean(state.editorTypingMarks[command]) : document.queryCommandState(command);
-      button?.setAttribute("aria-pressed", String(active));
+      button?.setAttribute("aria-pressed", String(Boolean(formatState?.[command])));
     }
-    const colorKey = collapsed ? (state.editorTypingMarks.color || "default") : (marksAtRange(range).color || "default");
     elements.entryFormatToolbar.querySelectorAll("[data-format-color]").forEach((button) => {
-      button.setAttribute("aria-pressed", String(button.dataset.formatColor === colorKey));
+      button.setAttribute("aria-pressed", String(button.dataset.formatColor === formatState?.color));
     });
+  }
+
+  function getSelectionSegments(contentLength, runs, start, end) {
+    const selectionStart = Math.max(0, Math.min(contentLength, Number(start) || 0));
+    const selectionEnd = Math.max(selectionStart, Math.min(contentLength, Number(end) || 0));
+    const boundaries = new Set([0, contentLength, selectionStart, selectionEnd]);
+    for (const run of runs) {
+      boundaries.add(Math.max(0, Math.min(contentLength, Number(run.start) || 0)));
+      boundaries.add(Math.max(0, Math.min(contentLength, Number(run.end) || 0)));
+    }
+    const points = [...boundaries].sort((left, right) => left - right);
+    return points.slice(0, -1).flatMap((segmentStart, index) => {
+      const segmentEnd = points[index + 1];
+      if (segmentEnd <= segmentStart) return [];
+      const run = runs.find((candidate) => candidate.start <= segmentStart && candidate.end >= segmentEnd);
+      return [{
+        start: segmentStart,
+        end: segmentEnd,
+        selected: segmentStart >= selectionStart && segmentEnd <= selectionEnd,
+        bold: Boolean(run?.bold),
+        italic: Boolean(run?.italic),
+        underline: Boolean(run?.underline),
+        color: run?.color || null
+      }];
+    });
+  }
+
+  function getSelectionFormatState(contentLength, runs, start, end) {
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    const selected = getSelectionSegments(contentLength, runs, start, end).filter((segment) => segment.selected);
+    if (!selected.length) return null;
+    const colors = new Set(selected.map((segment) => segment.color || "default"));
+    return {
+      bold: selected.every((segment) => segment.bold),
+      italic: selected.every((segment) => segment.italic),
+      underline: selected.every((segment) => segment.underline),
+      color: colors.size === 1 ? [...colors][0] : null
+    };
+  }
+
+  function applyFormatToSelection(contentLength, runs, start, end, command, value) {
+    const segments = getSelectionSegments(contentLength, runs, start, end);
+    const selected = segments.filter((segment) => segment.selected);
+    const enableCommand = ["bold", "italic", "underline"].includes(command)
+      ? !selected.every((segment) => segment[command])
+      : false;
+    return mergeRichTextRuns(segments.map((segment) => {
+      const marks = {
+        start: segment.start,
+        end: segment.end,
+        bold: segment.bold,
+        italic: segment.italic,
+        underline: segment.underline,
+        color: segment.color
+      };
+      if (segment.selected && command === "color") marks.color = value === "default" ? null : value;
+      if (segment.selected && ["bold", "italic", "underline"].includes(command)) marks[command] = enableCommand;
+      return marks;
+    }));
   }
 
   function updateEditorKeyboardOffset() {
@@ -1515,50 +1619,6 @@
     return serializeRichEditor(false).content;
   }
 
-  function marksAtRange(range) {
-    const container = range?.startContainer?.nodeType === Node.ELEMENT_NODE
-      ? range.startContainer
-      : range?.startContainer?.parentElement;
-    if (!container || !elements.entryContent.contains(container)) {
-      return { bold: false, italic: false, underline: false, color: null };
-    }
-    return marksForElement(container);
-  }
-
-  function installTypingFormatSelection(marks) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount) return;
-    const range = selection.getRangeAt(0);
-    if (!elements.entryContent.contains(range.commonAncestorContainer)) return;
-    range.deleteContents();
-    const marker = document.createElement("span");
-    marker.dataset.typingMarker = "true";
-    marker.textContent = "\ufeff";
-    marker.style.fontWeight = marks.bold ? "700" : "400";
-    marker.style.fontStyle = marks.italic ? "italic" : "normal";
-    marker.style.textDecoration = marks.underline ? "underline" : "none";
-    marker.style.color = marks.color && RICH_TEXT_COLORS[marks.color]
-      ? RICH_TEXT_COLORS[marks.color]
-      : RICH_TEXT_COLORS.default;
-    range.insertNode(marker);
-    range.selectNodeContents(marker);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    state.editorSelection = range.cloneRange();
-  }
-
-  function finalizeTypingFormatMarkers() {
-    elements.entryContent.querySelectorAll("[data-typing-marker]").forEach((marker) => {
-      if (marker.textContent.replace(/[\u200b\ufeff]/g, "").length) marker.removeAttribute("data-typing-marker");
-    });
-  }
-
-  function discardUnusedTypingFormatMarkers() {
-    elements.entryContent.querySelectorAll("[data-typing-marker]").forEach((marker) => {
-      if (!marker.textContent.replace(/[\u200b\ufeff]/g, "").length) marker.remove();
-      else marker.removeAttribute("data-typing-marker");
-    });
-  }
 
   function serializeRichEditor(trim = true) {
     const chunks = [];
@@ -1679,6 +1739,7 @@
     if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
     elements.entryContent.replaceChildren(fragment);
     state.editorSelection = null;
+    state.editorSelectionOffsets = null;
   }
 
   function createFormattedTextSpan(text, marks) {
@@ -1819,8 +1880,7 @@
     elements.entryRevision.value = entry ? String(entry.revision) : "";
     elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
-    state.editorTypingMarks = { bold: false, italic: false, underline: false, color: null };
-    state.editorTypingModeExplicit = false;
+    state.editorSelectionOffsets = null;
     setRichEditorDocument(entry?.content || "", entry?.contentFormat || null);
     elements.entryTags.value = entry?.tags?.join("、") || "";
     closeEntryTagSuggestions();

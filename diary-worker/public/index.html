@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="20260814-10">
+  <meta name="troom-app-build" content="20260814-11">
   <meta name="troom-service-worker" content="/diary/service-worker.js">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
   <link rel="manifest" href="/diary/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png">
-  <link rel="stylesheet" href="/diary/diary.css?v=20">
+  <link rel="stylesheet" href="/diary/diary.css?v=21">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -325,11 +325,11 @@
             <button class="format-color is-light-blue" type="button" data-format-color="light-blue" aria-label="水色" title="水色"></button>
             <button class="format-color is-brown" type="button" data-format-color="brown" aria-label="茶色" title="茶色"></button>
           </div>
-          <span class="entry-format-divider" aria-hidden="true"></span>
-          <button class="format-command" type="button" data-format-command="bold" aria-pressed="false" aria-label="太字" title="太字"><strong>B</strong></button>
-          <button class="format-command" type="button" data-format-command="italic" aria-pressed="false" aria-label="斜体" title="斜体"><em>I</em></button>
-          <button class="format-command format-underline" type="button" data-format-command="underline" aria-pressed="false" aria-label="下線" title="下線">U</button>
-          <button class="format-clear" type="button" data-format-command="clear" aria-label="書式を解除" title="書式を解除">解除</button>
+          <div class="entry-format-commands" role="group" aria-label="文字の種類">
+            <button class="format-command" type="button" data-format-command="bold" aria-pressed="false" aria-label="太字" title="太字"><strong>B</strong></button>
+            <button class="format-command" type="button" data-format-command="italic" aria-pressed="false" aria-label="斜体" title="斜体"><em>I</em></button>
+            <button class="format-command format-underline" type="button" data-format-command="underline" aria-pressed="false" aria-label="下線" title="下線">U</button>
+          </div>
         </div>
       </div>
 
@@ -454,6 +454,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/assets/pwa-auto-update.js?v=20260812-5" defer></script>
-  <script src="/diary/diary.js?v=42" defer></script>
+  <script src="/diary/diary.js?v=43" defer></script>
 </body>
 </html>

@@ -693,7 +693,7 @@ button {
 @media (pointer: coarse) {
   .diary-date-search input,
   #entry-date {
-    touch-action: pan-y;
+    touch-action: manipulation;
   }
 }
 
@@ -1195,40 +1195,35 @@ button:disabled {
 
 .entry-format-toolbar {
   position: fixed;
-  left: max(70px, calc(env(safe-area-inset-left) + 70px));
+  left: max(12px, env(safe-area-inset-left));
   right: max(12px, env(safe-area-inset-right));
-  bottom: calc(12px + env(safe-area-inset-bottom) + var(--editor-keyboard-offset));
+  bottom: calc(70px + env(safe-area-inset-bottom) + var(--editor-keyboard-offset));
   z-index: 129;
-  align-items: center;
-  gap: 7px;
-  min-height: 54px;
-  max-width: 680px;
+  gap: 8px;
+  max-width: 430px;
   border: 1px solid rgba(31, 41, 51, 0.14);
   border-radius: 15px;
-  padding: 6px 9px;
+  padding: 9px;
   background: rgba(255, 253, 249, 0.98);
   box-shadow: 0 8px 28px rgba(31, 41, 51, 0.18);
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
 }
 
 .entry-format-toolbar:not([hidden]) {
-  display: flex;
+  display: grid;
 }
 
 .entry-format-colors {
-  display: flex;
-  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   align-items: center;
-  gap: 5px;
+  gap: 7px;
 }
 
 .format-color {
   position: relative;
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  width: min(30px, 7.2vw);
+  height: min(30px, 7.2vw);
+  justify-self: center;
   border: 2px solid #fff;
   border-radius: 999px;
   background: var(--format-color, #27313b);
@@ -1253,17 +1248,14 @@ button:disabled {
 .format-color.is-light-blue { --format-color: #007aa3; }
 .format-color.is-brown { --format-color: #7a4b2a; }
 
-.entry-format-divider {
-  flex: 0 0 auto;
-  width: 1px;
-  height: 30px;
-  background: rgba(31, 41, 51, 0.16);
+.entry-format-commands {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
 }
 
-.format-command,
-.format-clear {
-  flex: 0 0 auto;
-  min-width: 38px;
+.format-command {
+  width: 100%;
   height: 38px;
   border: 1px solid rgba(31, 41, 51, 0.14);
   border-radius: 9px;
@@ -1283,12 +1275,6 @@ button:disabled {
   text-underline-offset: 3px;
 }
 
-.format-clear {
-  min-width: 54px;
-  font-size: 0.82rem;
-  font-weight: 800;
-}
-
 .diary-text-bold { font-weight: 800; }
 .diary-text-italic { font-style: italic; }
 .diary-text-underline { text-decoration: underline; text-underline-offset: 0.14em; }
@@ -1304,7 +1290,7 @@ button:disabled {
 @media (min-width: 760px) {
   .entry-format-toolbar {
     right: auto;
-    width: min(680px, calc(100vw - 92px));
+    width: min(430px, calc(100vw - 28px));
   }
 }
 
