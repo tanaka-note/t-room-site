@@ -116,6 +116,7 @@ dialog::backdrop { background: rgba(24,31,26,.48); backdrop-filter: blur(3px); }
 .date-wheel-head p { margin: 0; font-size: 13px; font-weight: 800; }
 .date-wheel-head strong { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
 .date-wheel-window { position: relative; display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 8px; padding-top: 10px; }
+.date-wheel-window.is-month-only { grid-template-columns: 1.35fr 1fr; }
 .date-wheel-highlight { position: absolute; z-index: 0; top: 126px; right: 0; left: 0; height: 44px; border-block: 1px solid rgba(87,114,99,.32); border-radius: 7px; background: rgba(87,114,99,.08); pointer-events: none; }
 .date-wheel-group { position: relative; z-index: 1; min-width: 0; }
 .date-wheel-group > span { display: block; height: 28px; color: var(--muted); font-size: 12px; font-weight: 800; text-align: center; }

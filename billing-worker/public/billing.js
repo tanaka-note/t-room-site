@@ -1,5 +1,13 @@
 (() => {
-  const state = { session: null, accounts: [], summary: null, dateDraft: null, dateWheelTimers: {} };
+  const state = {
+    session: null,
+    accounts: [],
+    summary: null,
+    dateDraft: null,
+    dateWheelTarget: null,
+    dateWheelMode: "date",
+    dateWheelTimers: {}
+  };
   const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
   const integerFormat = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 0 });
   const documentLabels = { invoice: "請求書", payment_notice: "支払通知書" };
@@ -36,6 +44,7 @@
     el["login-form"].addEventListener("submit", login);
     el["logout-button"].addEventListener("click", logout);
     el["password-toggle"].addEventListener("click", togglePassword);
+    bindMonthInput(el["month-input"]);
     el["month-input"].addEventListener("change", loadSummary);
     el["account-select"].addEventListener("change", changeAccount);
     el["document-filter"].addEventListener("change", renderSummary);
@@ -491,6 +500,34 @@
     }
   }
 
+  function bindMonthInput(input) {
+    input.addEventListener("click", handleMonthClick);
+    input.addEventListener("keydown", handleMonthKeydown);
+    input.addEventListener("beforeinput", preventMonthDirectInput);
+    input.addEventListener("paste", preventMonthDirectInput);
+    input.addEventListener("drop", preventMonthDirectInput);
+    input.addEventListener("selectstart", preventMonthDirectInput);
+  }
+
+  function preventMonthDirectInput(event) {
+    event.preventDefault();
+  }
+
+  function handleMonthClick(event) {
+    event.preventDefault();
+    event.currentTarget.blur();
+    openDateWheel(event.currentTarget, "month");
+  }
+
+  function handleMonthKeydown(event) {
+    if (event.key === "Tab") return;
+    event.preventDefault();
+    if (["Enter", " "].includes(event.key)) {
+      event.currentTarget.blur();
+      openDateWheel(event.currentTarget, "month");
+    }
+  }
+
   function handleDateKeydown(event) {
     if (!useMobileDateWheel() || !["Enter", " "].includes(event.key)) return;
     event.preventDefault();
@@ -513,15 +550,19 @@
     }
   }
 
-  function openDateWheel() {
+  function openDateWheel(target = el["entry-date"], mode = "date") {
     if (el["date-wheel-dialog"].open) return;
-    setDateDraft(el["entry-date"].value || japanToday());
+    state.dateWheelTarget = target;
+    state.dateWheelMode = mode;
+    setDateDraft(target.value || (mode === "month" ? japanToday().slice(0, 7) : japanToday()));
     renderDateWheel();
     el["date-wheel-dialog"].showModal();
   }
 
   function closeDateWheel() {
     if (el["date-wheel-dialog"].open) el["date-wheel-dialog"].close();
+    state.dateWheelTarget = null;
+    state.dateWheelMode = "date";
   }
 
   function closeDateWheelFromBackdrop(event) {
@@ -530,10 +571,13 @@
 
   function applyDateWheel() {
     if (!state.dateDraft) return closeDateWheel();
-    const nextValue = datePartsToString(state.dateDraft);
-    if (el["entry-date"].value !== nextValue) {
-      el["entry-date"].value = nextValue;
-      el["entry-date"].dispatchEvent(new Event("input", { bubbles: true }));
+    const target = state.dateWheelTarget || el["entry-date"];
+    const isMonth = state.dateWheelMode === "month";
+    const nextValue = isMonth ? datePartsToMonth(state.dateDraft) : datePartsToString(state.dateDraft);
+    if (target.value !== nextValue) {
+      target.value = nextValue;
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+      if (isMonth) target.dispatchEvent(new Event("change", { bubbles: true }));
     }
     closeDateWheel();
   }
@@ -550,9 +594,13 @@
 
   function renderDateWheel() {
     if (!state.dateDraft) return;
+    const isMonth = state.dateWheelMode === "month";
+    el["date-wheel-title"].textContent = isMonth ? "表示月を選択" : "日付を選択";
+    el["date-wheel-window"].classList.toggle("is-month-only", isMonth);
+    el["date-wheel-day-group"].hidden = isMonth;
     fillDateWheel(el["date-wheel-year"], range(1900, 2100), state.dateDraft.year, "年");
     fillDateWheel(el["date-wheel-month"], range(1, 12), state.dateDraft.month, "月");
-    renderDayWheel();
+    if (!isMonth) renderDayWheel();
     updateDateWheelValue();
   }
 
@@ -584,6 +632,13 @@
     column.addEventListener("click", (event) => {
       const option = event.target.closest(".date-wheel-option");
       if (!option) return;
+      if (state.dateWheelMode === "month" && state.dateDraft) {
+        state.dateDraft[key] = Number(option.dataset.value);
+        column.querySelectorAll(".date-wheel-option").forEach((item) => {
+          item.setAttribute("aria-selected", String(item === option));
+        });
+        updateDateWheelValue();
+      }
       column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "smooth" });
     });
     column.addEventListener("scroll", () => {
@@ -601,13 +656,19 @@
     if (state.dateDraft[key] === value) return;
     state.dateDraft[key] = value;
     options.forEach((item, itemIndex) => item.setAttribute("aria-selected", String(itemIndex === index)));
-    if (key === "year" || key === "month") renderDayWheel();
+    if (state.dateWheelMode === "date" && (key === "year" || key === "month")) renderDayWheel();
     updateDateWheelValue();
   }
 
   function updateDateWheelValue() {
     const { year, month, day } = state.dateDraft;
-    el["date-wheel-value"].textContent = `${year}年${month}月${day}日`;
+    el["date-wheel-value"].textContent = state.dateWheelMode === "month"
+      ? `${year}年${month}月`
+      : `${year}年${month}月${day}日`;
+  }
+
+  function datePartsToMonth({ year, month }) {
+    return `${year}-${String(month).padStart(2, "0")}`;
   }
 
   function datePartsToString({ year, month, day }) {

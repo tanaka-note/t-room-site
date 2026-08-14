@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260810-password-visibility">
-  <script src="./billing.js?v=20260814-login-recovery" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260814-month-wheel">
+  <script src="./billing.js?v=20260814-month-wheel" defer></script>
 </head>
 <body>
   <main>
@@ -49,7 +49,7 @@
         <label id="account-select-label" hidden>発行先
           <select id="account-select"></select>
         </label>
-        <label>表示月<input id="month-input" type="month"></label>
+        <label>表示月<input id="month-input" type="month" aria-haspopup="dialog" aria-controls="date-wheel-dialog"></label>
         <label>書類種別
           <select id="document-filter">
             <option value="invoice">請求書</option>
@@ -155,7 +155,7 @@
         </div>
         <button id="date-wheel-done" class="text-button" type="button">完了</button>
       </header>
-      <div class="date-wheel-window">
+      <div id="date-wheel-window" class="date-wheel-window">
         <div class="date-wheel-highlight" aria-hidden="true"></div>
         <div class="date-wheel-group">
           <span>年</span>
@@ -165,7 +165,7 @@
           <span>月</span>
           <div id="date-wheel-month" class="date-wheel-column" role="listbox" aria-label="月"></div>
         </div>
-        <div class="date-wheel-group">
+        <div id="date-wheel-day-group" class="date-wheel-group">
           <span>日</span>
           <div id="date-wheel-day" class="date-wheel-column" role="listbox" aria-label="日"></div>
         </div>
