@@ -33,6 +33,7 @@ for (const css of [mainCss, shareCss]) {
   assert.match(css, /player-buffering\.is-hidden/);
   assert.match(css, /\.preview-player-seek \{[^}]*cursor:\s*pointer;/);
   assert.doesNotMatch(css, /\.preview-player-seek \{[^}]*cursor:\s*ew-resize;/);
+  assert.match(css, /video::-webkit-media-controls-picture-in-picture-button\s*\{[^}]*display:\s*none\s*!important;/, "動画内のブラウザ標準PiPボタンだけを非表示にしてください。");
 }
 
 assert.match(main, /prepareVideoPlayer\(stage, file\)[\s\S]*?registerMediaWithDeviceCache/);
