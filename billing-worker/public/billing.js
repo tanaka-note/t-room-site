@@ -45,6 +45,7 @@
     el["logout-button"].addEventListener("click", logout);
     el["password-toggle"].addEventListener("click", togglePassword);
     bindMonthInput(el["month-input"]);
+    el["month-picker-button"].addEventListener("click", openMonthWheelFromButton);
     el["month-input"].addEventListener("change", loadSummary);
     el["account-select"].addEventListener("change", changeAccount);
     el["document-filter"].addEventListener("change", renderSummary);
@@ -61,6 +62,7 @@
     el["today-button"].addEventListener("click", setEntryDateToToday);
     el["entry-date"].addEventListener("pointerdown", handleDatePointerDown);
     el["entry-date"].addEventListener("keydown", handleDateKeydown);
+    el["entry-date-picker-button"].addEventListener("click", openEntryDateWheelFromButton);
     el["date-wheel-cancel"].addEventListener("click", closeDateWheel);
     el["date-wheel-done"].addEventListener("click", applyDateWheel);
     el["date-wheel-dialog"].addEventListener("cancel", (event) => {
@@ -507,6 +509,18 @@
     input.addEventListener("paste", preventMonthDirectInput);
     input.addEventListener("drop", preventMonthDirectInput);
     input.addEventListener("selectstart", preventMonthDirectInput);
+  }
+
+  function openMonthWheelFromButton(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    openDateWheel(el["month-input"], "month");
+  }
+
+  function openEntryDateWheelFromButton(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    openDateWheel(el["entry-date"], "date");
   }
 
   function preventMonthDirectInput(event) {

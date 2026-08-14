@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260814-month-wheel">
-  <script src="./billing.js?v=20260814-month-wheel-controls" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260814-month-calendar-button">
+  <script src="./billing.js?v=20260814-month-calendar-button" defer></script>
 </head>
 <body>
   <main>
@@ -49,7 +49,14 @@
         <label id="account-select-label" hidden>発行先
           <select id="account-select"></select>
         </label>
-        <label>表示月<input id="month-input" type="month" aria-haspopup="dialog" aria-controls="date-wheel-dialog"></label>
+        <label for="month-input">表示月
+          <span class="date-input-shell">
+            <input id="month-input" type="month" aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+            <button id="month-picker-button" class="date-picker-button" type="button" aria-label="表示月をカレンダーから選ぶ" title="カレンダーから選ぶ">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
+            </button>
+          </span>
+        </label>
         <label>書類種別
           <select id="document-filter">
             <option value="invoice">請求書</option>
@@ -112,7 +119,12 @@
           <label for="entry-date">日付</label>
           <button id="today-button" class="today-button" type="button">本日</button>
         </div>
-        <input id="entry-date" type="date" required>
+        <span class="date-input-shell">
+          <input id="entry-date" type="date" required aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+          <button id="entry-date-picker-button" class="date-picker-button" type="button" aria-label="日付をカレンダーから選ぶ" title="カレンダーから選ぶ">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
+          </button>
+        </span>
       </div>
       <label>区分<select id="entry-category" required></select></label>
       <label id="entry-description-label">内容<input id="entry-description" type="text" maxlength="100" required></label>
