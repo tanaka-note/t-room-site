@@ -340,7 +340,7 @@
       event.preventDefault();
       closeDateWheel();
     });
-    elements.dateWheelDialog.addEventListener("click", closeDateWheelFromBackdrop);
+    elements.dateWheelDialog.addEventListener("click", applyDateWheelFromBackdrop);
     bindDateWheel(elements.dateWheelYear, "year");
     bindDateWheel(elements.dateWheelMonth, "month");
     bindDateWheel(elements.dateWheelDay, "day");
@@ -2308,8 +2308,8 @@
     state.dateWheelTarget = null;
   }
 
-  function closeDateWheelFromBackdrop(event) {
-    if (event.target === elements.dateWheelDialog) closeDateWheel();
+  function applyDateWheelFromBackdrop(event) {
+    if (event.target === elements.dateWheelDialog) applyDateWheel();
   }
 
   function applyDateWheel() {

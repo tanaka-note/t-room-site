@@ -36,7 +36,7 @@ assert.match(html, /name="troom-app-build" content="20260814-18"/);
 assert.match(html, /apple-touch-icon-v3\.png/);
 assert.match(html, /pwa-auto-update\.js\?v=20260812-5/);
 assert.match(html, /diary\.css\?v=24/);
-assert.match(html, /diary\.js\?v=50/);
+assert.match(html, /diary\.js\?v=51/);
 assert.match(html, /ホーム画面に追加/);
 assert.match(html, /id="login-id"[^>]*type="email"/);
 assert.match(html, /id="remember-login"/);
