@@ -2696,7 +2696,10 @@ private fun MediaPlayerScreen(
     val player = remember(file.id) {
         if (isAudio) {
             playbackManager.playAudio(file, playbackFactory, startAtBeginning)
-        } else ExoPlayer.Builder(context).build().apply {
+        } else ExoPlayer.Builder(context)
+            .setSeekBackIncrementMs(PLAYER_BUTTON_SEEK_MS)
+            .setSeekForwardIncrementMs(PLAYER_BUTTON_SEEK_MS)
+            .build().apply {
             val mediaItem = MediaItem.Builder()
                 .setUri("tcloud://file/${file.id}")
                 .setMimeType(playbackMimeType(file))
@@ -2924,6 +2927,7 @@ internal fun nextPlaybackMode(current: PlaybackMode, @Suppress("UNUSED_PARAMETER
     if (current == PlaybackMode.REPEAT_ALL) PlaybackMode.OFF else PlaybackMode.REPEAT_ALL
 
 private const val PLAYBACK_POSITION_PREFERENCES = "tcloud_playback_positions"
+internal const val PLAYER_BUTTON_SEEK_MS = 10_000L
 private const val PLAYBACK_POSITION_MINIMUM_MS = 5_000L
 private const val PLAYBACK_POSITION_FINISHED_MARGIN_MS = 10_000L
 
