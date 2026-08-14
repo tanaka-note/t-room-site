@@ -2834,6 +2834,8 @@ private fun MediaPlayerScreen(
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     this.player = player
                     if (isVideo) {
+                        val normalControllerShowTimeoutMs = controllerShowTimeoutMs
+                        val doubleTapSeekControlsHold = DoubleTapSeekControlsHold()
                         val edgeSeekDetector = GestureDetector(
                             viewContext,
                             object : GestureDetector.SimpleOnGestureListener() {
@@ -2843,13 +2845,22 @@ private fun MediaPlayerScreen(
                                     val offset = if (event.x < width / 2f) -10_000L else 10_000L
                                     val duration = player.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
                                     player.seekTo((player.currentPosition + offset).coerceIn(0L, duration))
-                                    showController()
+                                    val releaseToken = doubleTapSeekControlsHold.begin()
+                                    controllerShowTimeoutMs = 0
+                                    post { showController() }
+                                    postDelayed({
+                                        if (doubleTapSeekControlsHold.complete(releaseToken)) {
+                                            controllerShowTimeoutMs = normalControllerShowTimeoutMs
+                                            showController()
+                                        }
+                                    }, DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS)
                                     return true
                                 }
                             },
                         )
                         setOnTouchListener { _, event ->
                             edgeSeekDetector.onTouchEvent(event)
+                            if (doubleTapSeekControlsHold.isHolding) post { showController() }
                             false
                         }
                         setFullscreenButtonClickListener { enterFullscreen ->
