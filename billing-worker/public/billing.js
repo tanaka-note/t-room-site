@@ -611,6 +611,9 @@
   }
 
   function fillDateWheel(column, values, selected, suffix) {
+    const scrollToken = String((Number(column.dataset.settingScrollToken) || 0) + 1);
+    column.dataset.settingScroll = "true";
+    column.dataset.settingScrollToken = scrollToken;
     column.replaceChildren(...values.map((value, index) => {
       const button = document.createElement("button");
       button.className = "date-wheel-option";
@@ -624,7 +627,13 @@
     }));
     const selectedIndex = Math.max(0, values.indexOf(selected));
     window.requestAnimationFrame(() => {
+      if (column.dataset.settingScrollToken !== scrollToken) return;
       column.scrollTop = selectedIndex * 44;
+      window.setTimeout(() => {
+        if (column.dataset.settingScrollToken !== scrollToken) return;
+        delete column.dataset.settingScroll;
+        delete column.dataset.settingScrollToken;
+      }, 160);
     });
   }
 
@@ -632,16 +641,28 @@
     column.addEventListener("click", (event) => {
       const option = event.target.closest(".date-wheel-option");
       if (!option) return;
-      if (state.dateWheelMode === "month" && state.dateDraft) {
-        state.dateDraft[key] = Number(option.dataset.value);
-        column.querySelectorAll(".date-wheel-option").forEach((item) => {
-          item.setAttribute("aria-selected", String(item === option));
-        });
+      const value = Number(option.dataset.value);
+      if (state.dateDraft) {
+        state.dateDraft[key] = value;
+        if (state.dateWheelMode === "date" && (key === "year" || key === "month")) renderDayWheel();
         updateDateWheelValue();
       }
+      column.querySelectorAll(".date-wheel-option").forEach((item) => {
+        item.setAttribute("aria-selected", String(item === option));
+      });
       column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "smooth" });
     });
+    column.addEventListener("wheel", (event) => {
+      if (!event.deltaY) return;
+      event.preventDefault();
+      const options = column.querySelectorAll(".date-wheel-option");
+      if (!options.length) return;
+      const visibleIndex = clamp(Math.round(column.scrollTop / 44), 0, options.length - 1);
+      const direction = event.deltaY > 0 ? 1 : -1;
+      column.scrollTop = clamp(visibleIndex + direction, 0, options.length - 1) * 44;
+    }, { passive: false });
     column.addEventListener("scroll", () => {
+      if (column.dataset.settingScroll === "true") return;
       window.clearTimeout(state.dateWheelTimers[key]);
       state.dateWheelTimers[key] = window.setTimeout(() => updateDateWheelFromScroll(column, key), 80);
     }, { passive: true });

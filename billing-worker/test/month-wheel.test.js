@@ -15,7 +15,13 @@ test("invoice month field reuses the bottom wheel without a day selector", async
   assert.match(script, /openDateWheel\(event\.currentTarget, "month"\)/);
   assert.match(script, /el\["date-wheel-day-group"\]\.hidden = isMonth/);
   assert.match(script, /el\["date-wheel-window"\]\.classList\.toggle\("is-month-only", isMonth\)/);
-  assert.match(script, /state\.dateWheelMode === "month" && state\.dateDraft/);
+  assert.match(script, /column\.addEventListener\("wheel", \(event\) => \{/);
+  assert.match(script, /const visibleIndex = clamp\(Math\.round\(column\.scrollTop \/ 44\), 0, options\.length - 1\)/);
+  assert.match(script, /column\.scrollTop = clamp\(visibleIndex \+ direction, 0, options\.length - 1\) \* 44/);
+  assert.match(script, /\}, \{ passive: false \}\)/);
+  assert.match(script, /column\.dataset\.settingScroll = "true"/);
+  assert.match(script, /if \(column\.dataset\.settingScroll === "true"\) return/);
+  assert.match(script, /column\.scrollTo\(\{ top: Number\(option\.dataset\.index\) \* 44, behavior: "smooth" \}\)/);
   assert.match(script, /isMonth \? datePartsToMonth\(state\.dateDraft\) : datePartsToString\(state\.dateDraft\)/);
   assert.match(script, /if \(isMonth\) target\.dispatchEvent\(new Event\("change", \{ bubbles: true \}\)\)/);
   assert.match(styles, /\.date-wheel-window\.is-month-only\s*\{\s*grid-template-columns:\s*1\.35fr 1fr;/);
