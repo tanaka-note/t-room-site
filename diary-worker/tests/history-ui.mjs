@@ -8,7 +8,7 @@ const [html, script] = await Promise.all([
   readFile(`${root}/public/diary.js`, "utf8")
 ]);
 
-assert.match(html, /diary\.js\?v=47/);
+assert.match(html, /diary\.js\?v=48/);
 assert.match(script, /const ENTRY_HISTORY_KEY = "troomDiaryEntry"/);
 assert.match(script, /elements\.entryDialog\.showModal\(\);\s*pushEntryHistory\(\);/);
 assert.match(script, /window\.history\.pushState\(/);
@@ -19,6 +19,8 @@ assert.match(script, /state\.entryClosePending = true;\s*window\.history\.back\(
 assert.match(script, /window\.addEventListener\("popstate", handleHistoryNavigation\)/);
 assert.match(script, /function handleHistoryNavigation\(\) \{[^}]*finishEntryClose\(\);/s);
 assert.match(script, /elements\.entryDialog\.addEventListener\("cancel", \(event\) => \{\s*event\.preventDefault\(\);\s*closeEntryDialog\(\);/s);
+assert.match(script, /elements\.entryDialog\.addEventListener\("click", closeEntryFromDesktopBackdrop\)/);
+assert.match(script, /function closeEntryFromDesktopBackdrop\(event\) \{\s*if \(event\.target !== elements\.entryDialog\) return;\s*if \(!window\.matchMedia\("\(min-width: 861px\) and \(hover: hover\) and \(pointer: fine\)"\)\.matches\) return;\s*closeEntryDialog\(\);\s*\}/s);
 assert.match(script, /if \(id === "entry-dialog"\) \{\s*closeEntryDialog\(\);/s);
 
 process.stdout.write("Diary entry history behavior test passed.\n");

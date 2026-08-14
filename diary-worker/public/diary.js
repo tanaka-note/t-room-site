@@ -290,6 +290,7 @@
       event.preventDefault();
       closeEntryDialog();
     });
+    elements.entryDialog.addEventListener("click", closeEntryFromDesktopBackdrop);
     elements.deleteEntryButton.addEventListener("click", requestEntryDeletion);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
     elements.permanentlyDeleteEntryButton.addEventListener("click", requestPermanentDeletion);
@@ -1056,6 +1057,12 @@
       return;
     }
     finishEntryClose();
+  }
+
+  function closeEntryFromDesktopBackdrop(event) {
+    if (event.target !== elements.entryDialog) return;
+    if (!window.matchMedia("(min-width: 861px) and (hover: hover) and (pointer: fine)").matches) return;
+    closeEntryDialog();
   }
 
   function handleHistoryNavigation() {
