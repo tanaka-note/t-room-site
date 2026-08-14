@@ -11,6 +11,8 @@ const [html, script, style, worker] = await Promise.all([
 ]);
 
 assert.match(html, /id="tag-list"[^>]*tabindex="0"/);
+assert.match(html, /id="tag-directory-link"[^>]*href="\/diary\/tags\/"/);
+assert.match(html, /id="tag-more-button"[^>]*href="\/diary\/tags\/"[^>]*>もっと見る<\/a>/);
 assert.match(html, /id="tag-page-back"[^>]*href="\/diary\/"/);
 assert.match(html, /id="diary-search-panel"/);
 assert.match(html, /id="entry-tag-suggestions"[^>]*role="listbox"/);
@@ -24,6 +26,9 @@ assert.match(script, /applyRouteState\(\)/);
 assert.match(script, /\/diary\\\/tag\\\/\(\[\^\/\]\+\)/);
 assert.match(script, /#\$\{tag\}の日記一覧/);
 assert.match(script, /createTagLink\(tag, `#\$\{tag\}`\)/);
+assert.match(script, /elements\.tagList\.replaceChildren\(\.\.\.sortedTags\.map/);
+assert.match(script, /elements\.tagMore\.hidden = state\.tagDirectory/);
+assert.match(script, /onTagDirectory \? "タグ一覧" : "日記"/);
 assert.match(script, /function renderEntryTagSuggestions\(\)/);
 assert.match(script, /currentEntryTagContext\(\)/);
 assert.match(script, /replace\(\/\^#\+\//);
@@ -35,8 +40,11 @@ assert.match(script, /\["ArrowDown", "ArrowUp", "Enter", "Escape"\]/);
 assert.match(script, /href = `\$\{BASE_PATH\}\/tag\/\$\{encodeURIComponent\(tag\)\}\//);
 assert.match(style, /\.diary-tag-cloud \{[^}]*max-height:[^}]*overflow-y: auto;/s);
 assert.match(style, /overscroll-behavior-y: auto/);
+assert.match(style, /\.tag-directory-link \{/);
+assert.match(style, /\.tag-more-button \{/);
 assert.match(style, /\.entry-tag-suggestions \{[^}]*position: absolute;[^}]*max-height:/s);
 assert.match(worker, /ORDER BY count DESC, dt\.tag ASC/);
 assert.match(worker, /path\.startsWith\("\/tag\/"\)/);
+assert.match(worker, /path === "\/tags\/"/);
 
 process.stdout.write("Diary tag ordering and scrolling contract test passed.\n");

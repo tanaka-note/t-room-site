@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="20260814-3">
+  <meta name="troom-app-build" content="20260814-4">
   <meta name="troom-service-worker" content="/diary/service-worker.js">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
   <link rel="manifest" href="/diary/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png">
-  <link rel="stylesheet" href="/diary/diary.css?v=19">
+  <link rel="stylesheet" href="/diary/diary.css?v=20">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -89,8 +89,8 @@
         </div>
       </section>
 
-      <section class="section diary-layout" aria-label="日記">
-        <div class="diary-main">
+      <section id="diary-layout" class="section diary-layout" aria-label="日記">
+        <div id="diary-main" class="diary-main">
           <section id="diary-search-panel" class="diary-panel" aria-labelledby="diary-search-title">
             <div class="diary-section-head">
               <div>
@@ -144,20 +144,30 @@
         </div>
 
         <aside class="diary-side" aria-label="日記をたどる">
-          <section class="diary-panel">
+          <section id="archive-panel" class="diary-panel">
             <p class="section-kicker">Archive</p>
             <h2>年月から見る</h2>
             <nav id="archive-list" class="diary-archive-nav" aria-label="年月別の日記"></nav>
           </section>
 
-          <section class="diary-panel">
-            <p class="section-kicker">Tags</p>
-            <h2>#から見る</h2>
+          <section id="tag-panel" class="diary-panel tag-panel">
+            <div class="tag-panel-head">
+              <div>
+                <p class="section-kicker">Tags</p>
+                <h2>#から見る</h2>
+              </div>
+              <a id="tag-directory-link" class="tag-directory-link" href="/diary/tags/" aria-label="タグ一覧ページを開く" title="タグ一覧ページを開く">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path>
+                </svg>
+              </a>
+            </div>
             <label class="tag-search" for="tag-search-input">
               <span class="visually-hidden">タグを検索</span>
               <input id="tag-search-input" type="search" autocomplete="off" maxlength="30" placeholder="タグを検索">
             </label>
             <div id="tag-list" class="diary-tag-cloud" tabindex="0" aria-label="使用回数の多い順に並んだタグ一覧"></div>
+            <a id="tag-more-button" class="tag-more-button" href="/diary/tags/" hidden>もっと見る</a>
           </section>
         </aside>
       </section>
@@ -444,6 +454,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/assets/pwa-auto-update.js?v=20260812-5" defer></script>
-  <script src="/diary/diary.js?v=35" defer></script>
+  <script src="/diary/diary.js?v=36" defer></script>
 </body>
 </html>

@@ -279,7 +279,7 @@ async function serveAsset(request, env, url, path) {
     ["/investment.css", "/investment.css"],
     ["/investment.js", "/investment.js"]
   ]);
-  const isDiaryRoute = path === "/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash";
+  const isDiaryRoute = path === "/" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash";
   const isInvestmentRoute = path === "/investment" || path === "/investment/";
   const assetPath = assetPaths.get(path) || (isDiaryRoute ? "/" : (isInvestmentRoute ? "/investment.html" : null));
   if (!assetPath) return new Response("Not found", { status: 404 });

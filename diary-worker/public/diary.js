@@ -41,6 +41,7 @@
     dateTo: "",
     tag: "",
     tagQuery: "",
+    tagDirectory: false,
     availableTags: [],
     entryTagSuggestionIndex: -1,
     trash: false,
@@ -101,6 +102,8 @@
     diaryTitle: document.querySelector("#diary-title"),
     tagPageBack: document.querySelector("#tag-page-back"),
     searchPanel: document.querySelector("#diary-search-panel"),
+    diaryLayout: document.querySelector("#diary-layout"),
+    diaryMain: document.querySelector("#diary-main"),
     roleLabel: document.querySelector("#role-label"),
     householdSwitcherWrap: document.querySelector("#household-switcher-wrap"),
     householdSwitcher: document.querySelector("#household-switcher"),
@@ -128,8 +131,12 @@
     previousMonth: document.querySelector("#previous-month-button"),
     nextMonth: document.querySelector("#next-month-button"),
     archiveList: document.querySelector("#archive-list"),
+    archivePanel: document.querySelector("#archive-panel"),
+    tagPanel: document.querySelector("#tag-panel"),
     tagList: document.querySelector("#tag-list"),
     tagSearchInput: document.querySelector("#tag-search-input"),
+    tagDirectoryLink: document.querySelector("#tag-directory-link"),
+    tagMore: document.querySelector("#tag-more-button"),
     entryDialog: document.querySelector("#entry-dialog"),
     detailDate: document.querySelector("#detail-date"),
     detailTitle: document.querySelector("#detail-title"),
@@ -621,7 +628,7 @@
     elements.roleLabel.textContent = `${session.accountName}（管理者）`;
     elements.newEntryButton.hidden = session.role !== "admin";
     elements.trashButton.hidden = !state.canViewTrash;
-    elements.investmentSection.hidden = !state.canViewInvestment;
+    elements.investmentSection.hidden = !state.canViewInvestment || state.tagDirectory;
     updateFilterControls();
     await loadHouseholdSwitcher();
     await Promise.all([loadMeta(), loadEntries(true)]);
@@ -873,6 +880,7 @@
       : tags;
     if (!filteredTags.length) {
       elements.tagList.replaceChildren(createEmpty(state.tagQuery ? "一致するタグはありません。" : "#はまだありません。"));
+      elements.tagMore.hidden = true;
       return;
     }
     const sortedTags = [...filteredTags].sort((left, right) => (
@@ -885,6 +893,7 @@
       if (state.tag === item.value) link.setAttribute("aria-current", "page");
       return link;
     }));
+    elements.tagMore.hidden = state.tagDirectory;
   }
 
   function renderEntryTagSuggestions() {
@@ -2520,6 +2529,7 @@
 
   function applyRouteState() {
     const match = window.location.pathname.match(/^\/diary\/tag\/([^/]+)\/?$/);
+    const onTagDirectory = /^\/diary\/tags\/?$/.test(window.location.pathname);
     let tag = "";
     if (match) {
       try {
@@ -2529,12 +2539,18 @@
       }
     }
     state.tag = tag;
+    state.tagDirectory = onTagDirectory;
     const onTagPage = Boolean(tag);
-    elements.tagPageBack.hidden = !onTagPage;
+    elements.tagPageBack.hidden = !onTagPage && !onTagDirectory;
     elements.searchPanel.hidden = onTagPage;
-    elements.diaryKicker.textContent = onTagPage ? "Hashtag" : "Diary";
-    elements.diaryTitle.textContent = onTagPage ? `#${tag}の日記一覧` : "日記";
-    document.title = onTagPage ? `#${tag}の日記一覧 | 日記` : "日記";
+    elements.diaryMain.hidden = onTagDirectory;
+    elements.archivePanel.hidden = onTagDirectory;
+    elements.tagDirectoryLink.hidden = onTagDirectory;
+    elements.diaryLayout.classList.toggle("is-tag-directory", onTagDirectory);
+    elements.tagPanel.classList.toggle("is-directory", onTagDirectory);
+    elements.diaryKicker.textContent = onTagPage || onTagDirectory ? "Hashtag" : "Diary";
+    elements.diaryTitle.textContent = onTagPage ? `#${tag}の日記一覧` : (onTagDirectory ? "タグ一覧" : "日記");
+    document.title = onTagPage ? `#${tag}の日記一覧 | 日記` : (onTagDirectory ? "タグ一覧 | 日記" : "日記");
   }
 
   function createEmpty(message) {

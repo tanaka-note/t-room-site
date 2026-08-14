@@ -26,6 +26,8 @@ assert.match(script, /function renderEntryContent\(/);
 assert.match(script, /createFormattedTextSpan/);
 assert.match(script, /document\.execCommand\("removeFormat"/);
 assert.match(script, /document\.execCommand\("foreColor"/);
+assert.match(script, /document\.execCommand\("styleWithCSS", false, true\)/);
+assert.match(script, /restoreEditorSelection\(\);[\s\S]*document\.execCommand\("foreColor", false, color\)/);
 assert.match(style, /\.entry-format-toggle \{[^}]*position: fixed;[^}]*left:/s);
 assert.match(style, /\.diary-text-color-light-blue/);
 assert.match(worker, /validateContentFormat/);
