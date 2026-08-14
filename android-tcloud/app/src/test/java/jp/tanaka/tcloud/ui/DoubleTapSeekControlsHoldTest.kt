@@ -8,17 +8,19 @@ import org.junit.Test
 class DoubleTapSeekControlsHoldTest {
     @Test
     fun consecutiveDoubleTapsKeepOnlyTheLatestReleaseActive() {
-        val hold = DoubleTapSeekControlsHold()
+        listOf("left", "right").forEach { _ ->
+            val hold = DoubleTapSeekControlsHold()
 
-        val releases = List(6) { hold.begin() }
+            val releases = List(6) { hold.begin() }
 
-        assertTrue(hold.isHolding)
-        releases.dropLast(1).forEach { staleRelease ->
-            assertFalse(hold.complete(staleRelease))
             assertTrue(hold.isHolding)
+            releases.dropLast(1).forEach { staleRelease ->
+                assertFalse(hold.complete(staleRelease))
+                assertTrue(hold.isHolding)
+            }
+            assertTrue(hold.complete(releases.last()))
+            assertFalse(hold.isHolding)
         }
-        assertTrue(hold.complete(releases.last()))
-        assertFalse(hold.isHolding)
     }
 
     @Test

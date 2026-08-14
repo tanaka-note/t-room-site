@@ -41,40 +41,42 @@ for (const [index, source] of clients.entries()) {
   const holdName = index === 0 ? "holdPreviewControlsForDoubleTapSeek" : "holdSharedPreviewControlsForDoubleTapSeek";
   const holdSource = source.match(new RegExp(`function ${holdName}\\([\\s\\S]*?\\n\\}`))?.[0];
   assert.ok(holdSource, "ダブルタップ中の表示固定処理が必要です。");
-  const scheduled = new Map();
-  const cancelled = new Set();
-  let timerSequence = 0;
-  const activeClasses = new Set();
-  const holdContext = {
-    state: { previewDoubleTapSeekTimer: 0, previewDoubleTapSeekSequence: 0 },
-    DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS: 900,
-    setTimeout(callback) {
-      const timer = ++timerSequence;
-      scheduled.set(timer, callback);
-      return timer;
-    },
-    clearTimeout(timer) { cancelled.add(timer); },
-  };
-  const stage = {
-    classList: {
-      add(value) { activeClasses.add(value); },
-      remove(value) { activeClasses.delete(value); },
-    },
-  };
-  vm.runInNewContext(`${holdSource}; globalThis.holdControls = ${holdName};`, holdContext);
-  const releaseTimers = [];
-  for (let tap = 0; tap < 6; tap += 1) {
-    holdContext.holdControls(stage);
-    releaseTimers.push(holdContext.state.previewDoubleTapSeekTimer);
-    assert.equal(activeClasses.has("is-double-tap-seeking"), true, `ダブルタップ${tap + 1}回目の直後にシークバーを隠さないでください。`);
+  for (const direction of ["left", "right"]) {
+    const scheduled = new Map();
+    const cancelled = new Set();
+    let timerSequence = 0;
+    const activeClasses = new Set();
+    const holdContext = {
+      state: { previewDoubleTapSeekTimer: 0, previewDoubleTapSeekSequence: 0 },
+      DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS: 900,
+      setTimeout(callback) {
+        const timer = ++timerSequence;
+        scheduled.set(timer, callback);
+        return timer;
+      },
+      clearTimeout(timer) { cancelled.add(timer); },
+    };
+    const stage = {
+      classList: {
+        add(value) { activeClasses.add(value); },
+        remove(value) { activeClasses.delete(value); },
+      },
+    };
+    vm.runInNewContext(`${holdSource}; globalThis.holdControls = ${holdName};`, holdContext);
+    const releaseTimers = [];
+    for (let tap = 0; tap < 6; tap += 1) {
+      holdContext.holdControls(stage);
+      releaseTimers.push(holdContext.state.previewDoubleTapSeekTimer);
+      assert.equal(activeClasses.has("is-double-tap-seeking"), true, `${direction}ダブルタップ${tap + 1}回目の直後にシークバーを隠さないでください。`);
+    }
+    for (const timer of releaseTimers.slice(0, -1)) {
+      assert.equal(cancelled.has(timer), true, "新しいダブルタップ時に直前の解除予約を取り消してください。");
+      scheduled.get(timer)();
+      assert.equal(activeClasses.has("is-double-tap-seeking"), true, `${direction}の古い解除処理で連続スキップ中のシークバーを隠さないでください。`);
+    }
+    scheduled.get(releaseTimers.at(-1))();
+    assert.equal(activeClasses.has("is-double-tap-seeking"), false, `${direction}の最後のスキップ終了後だけ通常表示へ戻してください。`);
   }
-  for (const timer of releaseTimers.slice(0, -1)) {
-    assert.equal(cancelled.has(timer), true, "新しいダブルタップ時に直前の解除予約を取り消してください。");
-    scheduled.get(timer)();
-    assert.equal(activeClasses.has("is-double-tap-seeking"), true, "古い解除処理で連続スキップ中のシークバーを隠さないでください。");
-  }
-  scheduled.get(releaseTimers.at(-1))();
-  assert.equal(activeClasses.has("is-double-tap-seeking"), false, "最後のスキップ終了後だけ通常表示へ戻してください。");
 }
 
 assert.match(clients[0], /previewSuppressTapUntil = performance\.now\(\) \+ 700/, "スワイプ直後の誤操作を防止してください。");
