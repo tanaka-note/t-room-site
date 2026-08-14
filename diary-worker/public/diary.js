@@ -2,6 +2,8 @@
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
+  const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
+  const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RICH_TEXT_COLORS = Object.freeze({
     default: "#27313b",
     red: "#b42318",
@@ -230,6 +232,8 @@
       if (state.editorDirty || state.photoPreparing || document.querySelector("dialog[open]")) event.preventDefault();
     });
     window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
+    document.addEventListener("click", rememberDiaryReturnViewFromNavigation, true);
+    window.addEventListener("pageshow", restoreDiaryReturnViewFromPageCache);
     elements.loginForm.addEventListener("submit", handleLogin);
     elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
     elements.passwordToggle.addEventListener("click", togglePassword);
@@ -624,6 +628,8 @@
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
+    const returnView = takeDiaryReturnView(state.activeHouseholdId);
+    if (returnView) applyDiaryReturnView(returnView);
     state.lastSessionRefreshAt = Date.now();
     elements.bootView.hidden = true;
     elements.loginView.hidden = true;
@@ -636,6 +642,10 @@
     updateFilterControls();
     await loadHouseholdSwitcher();
     await Promise.all([loadMeta(), loadEntries(true)]);
+    if (returnView) {
+      await loadEntriesForDiaryReturn(returnView.entryCount);
+      restoreDiaryReturnPosition(returnView.position);
+    }
   }
 
   async function loadHouseholdSwitcher() {
@@ -760,6 +770,7 @@
   }
 
   function restoreEntryListPosition(position) {
+    if (!position) return;
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         const anchor = position.entryId
@@ -776,6 +787,104 @@
         window.scrollTo({ top: position.scrollY, left: 0, behavior: "auto" });
       });
     });
+  }
+
+  function rememberDiaryReturnViewFromNavigation(event) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (!isDiaryHomeRoute() || elements.appView.hidden) return;
+    const link = event.target.closest("a[href]");
+    if (!link) return;
+    let destination;
+    try {
+      destination = new URL(link.href, window.location.href);
+    } catch {
+      return;
+    }
+    if (destination.origin !== window.location.origin) return;
+    if (!destination.pathname.startsWith(`${BASE_PATH}/`) || /^\/diary\/?$/.test(destination.pathname)) return;
+    storeDiaryReturnView();
+  }
+
+  function storeDiaryReturnView() {
+    const position = captureEntryListPosition();
+    const returnView = {
+      version: 1,
+      savedAt: Date.now(),
+      householdId: state.activeHouseholdId || "",
+      query: state.query,
+      month: state.month,
+      monthExpanded: state.monthExpanded,
+      dateFrom: state.dateFrom,
+      dateTo: state.dateTo,
+      tagQuery: state.tagQuery,
+      tagQueryInput: elements.tagSearchInput.value,
+      trash: state.trash,
+      entryCount: state.entries.length,
+      position
+    };
+    try {
+      window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
+    } catch {
+      // 保存領域が利用できない場合はブラウザ標準の戻る位置復元へ委ねます。
+    }
+  }
+
+  function takeDiaryReturnView(householdId) {
+    if (!isDiaryHomeRoute()) return null;
+    let returnView = null;
+    try {
+      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+    if (!returnView || returnView.version !== 1) return null;
+    if (!Number.isFinite(returnView.savedAt) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return null;
+    if (returnView.householdId && householdId && returnView.householdId !== householdId) return null;
+    return returnView;
+  }
+
+  function applyDiaryReturnView(returnView) {
+    state.query = String(returnView.query || "").slice(0, 200);
+    state.month = /^\d{4}-\d{2}$/.test(returnView.month) ? returnView.month : currentJapanMonth();
+    state.monthExpanded = Boolean(returnView.monthExpanded);
+    state.dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateFrom) ? returnView.dateFrom : "";
+    state.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateTo) ? returnView.dateTo : "";
+    state.tagQuery = String(returnView.tagQuery || "").normalize("NFKC").trim().toLocaleLowerCase("ja-JP").slice(0, 100);
+    state.trash = Boolean(returnView.trash && state.canViewTrash);
+    elements.searchInput.value = state.query;
+    elements.dateFrom.value = state.dateFrom;
+    elements.dateTo.value = state.dateTo;
+    elements.tagSearchInput.value = String(returnView.tagQueryInput || returnView.tagQuery || "").slice(0, 100);
+  }
+
+  async function loadEntriesForDiaryReturn(entryCount) {
+    const targetCount = Math.max(0, Math.min(Number(entryCount) || 0, 2000));
+    let pageGuard = 0;
+    while (state.entries.length < targetCount && state.hasMore && pageGuard < 100) {
+      await loadEntries(false);
+      pageGuard += 1;
+    }
+  }
+
+  function restoreDiaryReturnPosition(position) {
+    if (!position) return;
+    const scrollY = Math.max(0, Number(position.scrollY) || 0);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: scrollY, left: 0, behavior: "auto" });
+      });
+    });
+  }
+
+  function restoreDiaryReturnViewFromPageCache(event) {
+    if (!event.persisted || !isDiaryHomeRoute()) return;
+    const returnView = takeDiaryReturnView(state.activeHouseholdId);
+    if (returnView) restoreDiaryReturnPosition(returnView.position);
+  }
+
+  function isDiaryHomeRoute() {
+    return /^\/diary\/?$/.test(window.location.pathname);
   }
 
   async function handleLoadMore() {
