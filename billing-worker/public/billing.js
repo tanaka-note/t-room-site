@@ -72,10 +72,14 @@
   async function login(event) {
     event.preventDefault();
     el["login-error"].textContent = "";
-    const submit = event.submitter;
-    const loginId = el["login-id"].value;
+    // Enter送信や一部ブラウザでは event.submitter が null になるため、
+    // 固定の送信ボタンへフォールバックして認証処理を止めないようにします。
+    const submit = event.submitter || el["login-submit"];
+    const loginId = el["login-id"].value.trim();
     const password = el["login-password"].value;
+    el["login-id"].value = loginId;
     submit.disabled = true;
+    submit.setAttribute("aria-busy", "true");
     try {
       const session = await api("/login", {
         method: "POST",
@@ -88,6 +92,7 @@
       el["login-error"].textContent = error.message;
     } finally {
       submit.disabled = false;
+      submit.removeAttribute("aria-busy");
     }
   }
 

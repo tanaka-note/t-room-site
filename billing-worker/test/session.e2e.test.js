@@ -30,7 +30,7 @@ test("owner and member sessions roll forward for 30 days", async () => {
   const hash = pbkdf2Sync(testPassword, salt, 100000, 32, "sha256");
   runWrangler([
     "d1", "execute", "billing-db", "--local", "--command",
-    `UPDATE billing_accounts SET password_salt = '${salt.toString("base64url")}', password_hash = '${hash.toString("base64url")}', password_iterations = 100000, failed_login_attempts = 0, locked_until = NULL WHERE id IN ('owner', 'chiharu')`
+    `UPDATE billing_accounts SET password_salt = '${salt.toString("base64url")}', password_hash = '${hash.toString("base64url")}', password_iterations = 100000, password_pepper_version = 0, failed_login_attempts = 0, locked_until = NULL WHERE is_active = 1`
   ]);
 
   const server = spawn(process.execPath, [
@@ -80,7 +80,7 @@ test("owner and member sessions roll forward for 30 days", async () => {
 
   try {
     await waitForServer();
-    for (const loginId of ["contact@a-tanaka.jp", "chiharu"]) {
+    for (const loginId of ["contact@a-tanaka.jp", "chiharu", "hideaki", "machiko", "masami", "yuuka"]) {
       const cookie = await login(loginId);
       const firstExpiry = sessionExpiry(cookie);
       await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -92,7 +92,7 @@ test("owner and member sessions roll forward for 30 days", async () => {
     }
     const database = spawnSync(process.execPath, [
       wranglerPath, "d1", "execute", "billing-db", "--local", "--command",
-      "SELECT id, password_iterations, password_pepper_version FROM billing_accounts WHERE id IN ('owner', 'chiharu') ORDER BY id"
+      "SELECT id, password_iterations, password_pepper_version FROM billing_accounts WHERE is_active = 1 ORDER BY id"
     ], { cwd: projectDirectory, encoding: "utf8" });
     assert.equal(database.status, 0, database.stderr || database.stdout);
     assert.match(database.stdout, /"password_iterations": 600000/);
