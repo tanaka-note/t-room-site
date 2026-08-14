@@ -1306,14 +1306,23 @@
       elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
       return false;
     }
-    restoreEditorSelection();
-    const selection = window.getSelection();
-    if (!selection?.rangeCount) return false;
-    const range = selection.getRangeAt(0);
+    let selection = window.getSelection();
+    let range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    if (!range || !elements.entryContent.contains(range.commonAncestorContainer)) {
+      restoreEditorSelection();
+      selection = window.getSelection();
+      range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    }
+    if (!selection || !range) return false;
     range.deleteContents();
     const lineBreak = document.createElement("br");
-    range.insertNode(lineBreak);
-    range.setStartAfter(lineBreak);
+    const typingAnchor = createFormattedTextSpan("\u200b", state.editorTypingMarks);
+    typingAnchor.dataset.typingAnchor = "true";
+    const fragment = document.createDocumentFragment();
+    fragment.append(lineBreak, typingAnchor);
+    range.insertNode(fragment);
+    const anchorText = typingAnchor.firstChild;
+    range.setStart(anchorText, anchorText.nodeValue.length);
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
