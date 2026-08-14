@@ -2830,6 +2830,7 @@ private fun MediaPlayerScreen(
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     this.player = player
                     if (isVideo) {
+                        val playerView = this
                         val normalControllerShowTimeoutMs = controllerShowTimeoutMs
                         val doubleTapSeekControlsHold = DoubleTapSeekControlsHold()
                         val edgeSeekDetector = GestureDetector(
@@ -2837,13 +2838,18 @@ private fun MediaPlayerScreen(
                             object : GestureDetector.SimpleOnGestureListener() {
                                 override fun onDown(event: MotionEvent): Boolean = true
 
+                                override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
+                                    if (!doubleTapSeekControlsHold.isHolding) playerView.performClick()
+                                    return true
+                                }
+
                                 override fun onDoubleTap(event: MotionEvent): Boolean {
+                                    val releaseToken = doubleTapSeekControlsHold.begin()
+                                    controllerShowTimeoutMs = 0
+                                    showController()
                                     val offset = if (event.x < width / 2f) -DOUBLE_TAP_SEEK_MS else DOUBLE_TAP_SEEK_MS
                                     val duration = player.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
                                     player.seekTo((player.currentPosition + offset).coerceIn(0L, duration))
-                                    val releaseToken = doubleTapSeekControlsHold.begin()
-                                    controllerShowTimeoutMs = 0
-                                    post { showController() }
                                     postDelayed({
                                         if (doubleTapSeekControlsHold.complete(releaseToken)) {
                                             controllerShowTimeoutMs = normalControllerShowTimeoutMs
@@ -2856,8 +2862,7 @@ private fun MediaPlayerScreen(
                         )
                         setOnTouchListener { _, event ->
                             edgeSeekDetector.onTouchEvent(event)
-                            if (doubleTapSeekControlsHold.isHolding) post { showController() }
-                            false
+                            true
                         }
                         setFullscreenButtonClickListener { enterFullscreen ->
                             manualFullscreen = enterFullscreen
