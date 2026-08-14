@@ -112,6 +112,8 @@ const documents = await createFolder("資料", "", rootA.id, rootA.folderKey);
 const nested = await createFolder("検索対象の深い階層", "", documents.id, documents.folderKey);
 const locked = await createFolder("検索対象の個別ロック", "child-lock-password", rootA.id, rootA.folderKey);
 const outside = await createFolder("別家庭の検索対象", "", rootB.id, rootB.folderKey);
+const directMatch = await createFolder("検索対象", "", rootA.id, rootA.folderKey);
+const deeperMatch = await createFolder("検索対象", "", nested.id, nested.folderKey);
 for (let index = 1; index <= 5; index += 1) {
   await createFolder(`検索対象ページ${index}`, "", documents.id, documents.folderKey);
 }
@@ -130,6 +132,8 @@ assert(adminRoot.files.some((item) => Number(item.id) === outsideFile.id), "管�
 assert(adminRoot.files.every((item) => item.searchPath), "検索結果に保存場所がありません。");
 
 const scopedAdmin = await jsonApi(`/items?folderId=${rootA.id}&q=検索対象&recursive=1&pageSize=100`, "admin");
+assert.equal(Number(scopedAdmin.folders[0]?.id), directMatch.id, "直下の一致フォルダが深い階層より先に表示されません。");
+assert(scopedAdmin.folders.findIndex((item) => Number(item.id) === directMatch.id) < scopedAdmin.folders.findIndex((item) => Number(item.id) === deeperMatch.id), "深い階層のフォルダが直下フォルダより先に表示されています。");
 assert(scopedAdmin.files.some((item) => Number(item.id) === image.id), "現在地以下の深いファイルが見つかりません。");
 assert(!scopedAdmin.files.some((item) => Number(item.id) === outsideFile.id), "現在地外のファイルが検索結果へ混入しました。");
 assert.equal(scopedAdmin.canTrashContents, true, "管理者の検索結果で既存の削除権限が失われました。");

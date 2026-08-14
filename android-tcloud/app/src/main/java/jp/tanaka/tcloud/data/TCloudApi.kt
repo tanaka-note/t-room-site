@@ -541,6 +541,7 @@ class TCloudApi(
         createdAtMillis = optInstantMillis("createdAt"),
         updatedAtMillis = optInstantMillis("updatedAt"),
         searchPath = optString("searchPath", ""),
+        searchDepth = optInt("searchDepth", 0),
     )
 
     private fun JSONObject.toCloudFile() = CloudFile(
@@ -562,6 +563,7 @@ class TCloudApi(
         createdAtMillis = optInstantMillis("createdAt"),
         updatedAtMillis = optInstantMillis("updatedAt"),
         searchPath = optString("searchPath", ""),
+        searchDepth = optInt("searchDepth", 0),
     )
 
     private fun JSONArray?.orEmpty(): JSONArray = this ?: JSONArray()

@@ -60,6 +60,7 @@ data class CloudFolder(
     val createdAtMillis: Long = 0,
     val updatedAtMillis: Long = 0,
     val searchPath: String = "",
+    val searchDepth: Int = 0,
 )
 
 data class CloudFile(
@@ -82,6 +83,7 @@ data class CloudFile(
     val createdAtMillis: Long = 0,
     val updatedAtMillis: Long = 0,
     val searchPath: String = "",
+    val searchDepth: Int = 0,
 )
 
 data class FolderPage(

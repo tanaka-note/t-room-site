@@ -1,5 +1,5 @@
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "20260814-1";
+const APP_BUILD_ID = "20260814-2";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -743,15 +743,21 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
         folder.password_wrap_iv AS passwordWrapIv, folder.admin_wrapped_key AS adminWrappedKey,
         folder.parent_wrapped_key AS parentWrappedKey, folder.parent_wrap_iv AS parentWrapIv,
         folder.password_hash IS NOT NULL AS isProtected, 1 AS isUnlocked,
-        scope.path AS searchPath,
+        scope.path AS searchPath, scope.depth AS searchDepth,
         (SELECT COUNT(*) FROM cloud_files file WHERE file.folder_id = folder.id
           AND file.deleted_at IS NULL AND file.status = 'ready') AS fileCount,
         (SELECT COUNT(*) FROM cloud_folders child WHERE child.parent_id = folder.id
           AND child.deleted_at IS NULL) AS folderCount
       FROM folder_scope scope JOIN cloud_folders folder ON folder.id = scope.id
       WHERE scope.is_allowed = 1 AND ${rootExclusion} AND LOWER(folder.name) LIKE ?
-      ORDER BY folder.name COLLATE NOCASE ASC, folder.id ASC LIMIT ? OFFSET ?`)
-      .bind(...bindPrefix, `%${query}%`, pageSize + 1, folderOffset).all();
+      ORDER BY scope.depth ASC,
+        CASE
+          WHEN LOWER(folder.name) = ? THEN 0
+          WHEN LOWER(folder.name) LIKE ? THEN 1
+          ELSE 2
+        END ASC,
+        folder.name COLLATE NOCASE ASC, folder.id ASC LIMIT ? OFFSET ?`)
+      .bind(...bindPrefix, `%${query}%`, query, `${query}%`, pageSize + 1, folderOffset).all();
     folderRows = result.results || [];
   }
 
@@ -792,10 +798,17 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
         EXISTS(SELECT 1 FROM cloud_deletion_requests request
           WHERE request.file_id = file.id AND request.status = 'pending') AS deletionPending,
         file.created_at AS createdAt, file.updated_at AS updatedAt,
-        scope.path AS searchPath
+        scope.path AS searchPath, scope.depth AS searchDepth
       FROM folder_scope scope JOIN cloud_files file ON file.folder_id = scope.id
-      WHERE ${fileClauses.join(" AND ")} ORDER BY ${fileOrder}, file.id ASC LIMIT ? OFFSET ?`)
-      .bind(...fileValues, pageSize + 1, fileOffset).all();
+      WHERE ${fileClauses.join(" AND ")} ORDER BY scope.depth ASC,
+        CASE
+          WHEN file.display_metadata_version > 0 AND LOWER(COALESCE(file.display_name, file.original_name)) = ? THEN 0
+          WHEN file.display_metadata_version > 0 AND LOWER(COALESCE(file.display_name, file.original_name)) LIKE ? THEN 1
+          WHEN file.display_metadata_version > 0 THEN 2
+          ELSE 3
+        END ASC,
+        ${fileOrder}, file.id ASC LIMIT ? OFFSET ?`)
+      .bind(...fileValues, query, `${query}%`, pageSize + 1, fileOffset).all();
     fileRows = result.results || [];
   }
 
@@ -1966,8 +1979,8 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
-    ["/cloud.css", "/cloud-runtime-20260814-1.css"],
-    ["/cloud.js", "/cloud-runtime-20260814-1.js"],
+    ["/cloud.css", "/cloud-runtime-20260814-2.css"],
+    ["/cloud.js", "/cloud-runtime-20260814-2.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],

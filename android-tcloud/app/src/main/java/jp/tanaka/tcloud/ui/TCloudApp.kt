@@ -1041,10 +1041,13 @@ private fun FolderScreen(
     val sourceFolders = if (searchQuery.isBlank()) folders else searchFolders
     val sourceFiles = if (searchQuery.isBlank()) files else searchFiles
     val filteredFolders = remember(sourceFolders, searchQuery, sortState, kindFilter) {
-        if (kindFilter == "all") sortFolders(sourceFolders, "", sortState) else emptyList()
+        if (kindFilter != "all") emptyList()
+        else if (searchQuery.isNotBlank()) sourceFolders
+        else sortFolders(sourceFolders, "", sortState)
     }
     val filteredFiles = remember(sourceFiles, searchQuery, sortState, kindFilter) {
-        sortFiles(sourceFiles, "", sortState).filter { file ->
+        val ordered = if (searchQuery.isNotBlank()) sourceFiles else sortFiles(sourceFiles, "", sortState)
+        ordered.filter { file ->
             kindFilter == "all" || file.mediaKind == kindFilter
         }
     }

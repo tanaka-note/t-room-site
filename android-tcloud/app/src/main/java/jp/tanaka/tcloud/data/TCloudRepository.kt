@@ -201,12 +201,39 @@ class TCloudRepository(
             fileOffset = page.nextFileOffset
             pages += 1
         }
+        val orderedFolders = folders.values.sortedWith(searchResultComparator(normalizedQuery))
+        val orderedFiles = files.values.sortedWith(searchResultComparator(normalizedQuery))
         return CloudSearchResults(
-            folders = folders.values.take(MAX_SEARCH_RESULTS),
-            files = files.values.take((MAX_SEARCH_RESULTS - folders.size).coerceAtLeast(0)),
+            folders = orderedFolders.take(MAX_SEARCH_RESULTS),
+            files = orderedFiles.take((MAX_SEARCH_RESULTS - orderedFolders.size).coerceAtLeast(0)),
             truncated = folderOffset != null || fileOffset != null,
         )
     }
+
+    private fun <T> searchResultComparator(query: String): Comparator<T> where T : Any =
+        Comparator { left, right ->
+            val leftDepth = when (left) {
+                is CloudFolder -> left.searchDepth
+                is CloudFile -> left.searchDepth
+                else -> 0
+            }
+            val rightDepth = when (right) {
+                is CloudFolder -> right.searchDepth
+                is CloudFile -> right.searchDepth
+                else -> 0
+            }
+            val leftName = when (left) {
+                is CloudFolder -> left.name
+                is CloudFile -> left.name
+                else -> ""
+            }
+            val rightName = when (right) {
+                is CloudFolder -> right.name
+                is CloudFile -> right.name
+                else -> ""
+            }
+            compareSearchResultValues(leftDepth, leftName, rightDepth, rightName, query)
+        }
 
     suspend fun usage(): CloudUsage = api.usage()
 
@@ -837,5 +864,29 @@ class TCloudRepository(
         }
 
         override fun close() = decryptor.close()
+    }
+}
+
+internal fun compareSearchResultValues(
+    leftDepth: Int,
+    leftName: String,
+    rightDepth: Int,
+    rightName: String,
+    query: String,
+): Int {
+    if (leftDepth != rightDepth) return leftDepth.compareTo(rightDepth)
+    val rankDifference = searchNameMatchRank(leftName, query) - searchNameMatchRank(rightName, query)
+    if (rankDifference != 0) return rankDifference
+    return leftName.compareTo(rightName, ignoreCase = true)
+}
+
+internal fun searchNameMatchRank(name: String, query: String): Int {
+    val normalizedName = name.trim().lowercase()
+    val normalizedQuery = query.trim().lowercase()
+    return when {
+        normalizedName == normalizedQuery -> 0
+        normalizedName.startsWith(normalizedQuery) -> 1
+        normalizedName.contains(normalizedQuery) -> 2
+        else -> 3
     }
 }
