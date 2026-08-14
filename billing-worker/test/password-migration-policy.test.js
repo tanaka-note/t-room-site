@@ -11,6 +11,7 @@ test("billing login upgrades legacy hashes without changing account identity or 
 
   assert.match(worker, /verifyPasswordRecord\(password, account, env\.BILLING_PASSWORD_PEPPER/);
   assert.match(worker, /upgradePasswordAfterLogin\(env, account, password\)/);
+  assert.match(worker, /try \{\s*await upgradePasswordAfterLogin\(env, account, password\);\s*\} catch \(error\)/s);
   assert.match(worker, /WHERE id = \? AND password_pepper_version = \? AND password_iterations = \?/);
   assert.match(worker, /SOURCE_LOGIN_LIMIT|recordSourceLoginFailure/);
   assert.match(migration, /password_pepper_version INTEGER NOT NULL DEFAULT 0/);

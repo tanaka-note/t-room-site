@@ -77,23 +77,27 @@
     // Enter送信や一部ブラウザでは event.submitter が null になるため、
     // 固定の送信ボタンへフォールバックして認証処理を止めないようにします。
     const submit = event.submitter || el["login-submit"];
+    const submitLabel = submit.textContent;
     const loginId = canonicalLoginId(el["login-id"].value);
     const password = el["login-password"].value;
     el["login-id"].value = loginId;
     submit.disabled = true;
+    submit.textContent = "確認中…";
     submit.setAttribute("aria-busy", "true");
     try {
       const session = await api("/login", {
         method: "POST",
         body: { loginId, password }
       });
-      await saveLoginPreference(loginId, password);
       el["login-password"].value = "";
       await enterApp(session);
+      // ブラウザのパスワード保存確認が長引いても、ログイン後の画面表示を止めません。
+      saveLoginPreference(loginId, password).catch(() => {});
     } catch (error) {
       el["login-error"].textContent = error.message;
     } finally {
       submit.disabled = false;
+      submit.textContent = submitLabel;
       submit.removeAttribute("aria-busy");
     }
   }

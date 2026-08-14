@@ -95,7 +95,7 @@ test("owner and member sessions roll forward for 30 days", async () => {
       "SELECT id, password_iterations, password_pepper_version FROM billing_accounts WHERE is_active = 1 ORDER BY id"
     ], { cwd: projectDirectory, encoding: "utf8" });
     assert.equal(database.status, 0, database.stderr || database.stdout);
-    assert.match(database.stdout, /"password_iterations": 600000/);
+    assert.match(database.stdout, /"password_iterations": 100000/);
     assert.match(database.stdout, /"password_pepper_version": 1/);
   } finally {
     if (server.exitCode === null) {

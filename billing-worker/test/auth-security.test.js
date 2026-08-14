@@ -29,7 +29,7 @@ test("legacy billing passwords remain valid until their next successful upgrade"
   assert.equal(needsPasswordUpgrade(record), true);
 });
 
-test("current billing passwords use the server pepper and 600000 PBKDF2 iterations", async () => {
+test("current billing passwords use the server pepper and the Workers-supported PBKDF2 limit", async () => {
   const password = "current-test-password";
   const pepper = "test-only-billing-pepper-that-is-not-used-in-production";
   const created = await createCurrentPasswordRecord(password, pepper);
@@ -41,6 +41,7 @@ test("current billing passwords use the server pepper and 600000 PBKDF2 iteratio
   };
 
   assert.equal(created.passwordIterations, CURRENT_PASSWORD_ITERATIONS);
+  assert.equal(created.passwordIterations, 100000);
   assert.equal(created.passwordPepperVersion, CURRENT_PEPPER_VERSION);
   assert.equal(await verifyPasswordRecord(password, record, pepper), true);
   assert.equal(await verifyPasswordRecord(password, record, "wrong-pepper"), false);

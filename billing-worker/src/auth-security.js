@@ -1,5 +1,7 @@
 export const LEGACY_PASSWORD_ITERATIONS = 100000;
-export const CURRENT_PASSWORD_ITERATIONS = 600000;
+// Cloudflare Workers Web Crypto supports PBKDF2 iteration counts up to 100000.
+// The current format adds a server-side HMAC pepper while retaining that supported limit.
+export const CURRENT_PASSWORD_ITERATIONS = 100000;
 export const CURRENT_PEPPER_VERSION = 1;
 export const SOURCE_LOGIN_LIMIT = 5;
 export const ACCOUNT_LOGIN_LIMIT = 25;

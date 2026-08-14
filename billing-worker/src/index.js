@@ -136,7 +136,12 @@ async function handleApi(request, env, url, path) {
       UPDATE billing_accounts SET failed_login_attempts = 0, locked_until = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND (failed_login_attempts != 0 OR locked_until IS NOT NULL)
     `).bind(account.id).run();
-    await upgradePasswordAfterLogin(env, account, password);
+    try {
+      await upgradePasswordAfterLogin(env, account, password);
+    } catch (error) {
+      // 認証済みの利用者を、補助的なハッシュ更新の失敗だけで締め出さないようにします。
+      console.error("Billing password upgrade failed", error instanceof Error ? error.message : "unknown error");
+    }
     await writeAudit(env, {
       eventType: "login_success",
       actorAccountId: account.id,
