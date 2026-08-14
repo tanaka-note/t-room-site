@@ -14,6 +14,8 @@
   };
   const REMEMBER_LOGIN_KEY = "troom-billing-remember-login";
   const SAVED_LOGIN_ID_KEY = "troom-billing-login-id";
+  const CURRENT_OWNER_LOGIN_ID = "contact@a-tanaka.jp";
+  const LEGACY_OWNER_LOGIN_ID = "sub@a-tanaka.jp";
 
   document.addEventListener("DOMContentLoaded", initialize);
 
@@ -75,7 +77,7 @@
     // Enter送信や一部ブラウザでは event.submitter が null になるため、
     // 固定の送信ボタンへフォールバックして認証処理を止めないようにします。
     const submit = event.submitter || el["login-submit"];
-    const loginId = el["login-id"].value.trim();
+    const loginId = canonicalLoginId(el["login-id"].value);
     const password = el["login-password"].value;
     el["login-id"].value = loginId;
     submit.disabled = true;
@@ -126,13 +128,18 @@
     try {
       const remember = localStorage.getItem(REMEMBER_LOGIN_KEY) !== "false";
       el["remember-login"].checked = remember;
-      if (remember) el["login-id"].value = localStorage.getItem(SAVED_LOGIN_ID_KEY) || "";
+      if (remember) {
+        const savedLoginId = canonicalLoginId(localStorage.getItem(SAVED_LOGIN_ID_KEY) || "");
+        el["login-id"].value = savedLoginId;
+        if (savedLoginId) localStorage.setItem(SAVED_LOGIN_ID_KEY, savedLoginId);
+      }
     } catch {
       el["remember-login"].checked = true;
     }
   }
 
   async function saveLoginPreference(loginId, password) {
+    loginId = canonicalLoginId(loginId);
     const remember = el["remember-login"].checked;
     try {
       localStorage.setItem(REMEMBER_LOGIN_KEY, String(remember));
@@ -152,6 +159,11 @@
     } catch {
       // 保存の可否と確認画面はブラウザのパスワード管理機能に任せます。
     }
+  }
+
+  function canonicalLoginId(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    return normalized === LEGACY_OWNER_LOGIN_ID ? CURRENT_OWNER_LOGIN_ID : normalized;
   }
 
   function fillAccountSelects() {

@@ -12,6 +12,8 @@ import {
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
 const MAX_SESSION_SECONDS = 30 * 24 * 60 * 60;
+const CURRENT_OWNER_LOGIN_ID = "contact@a-tanaka.jp";
+const LEGACY_OWNER_LOGIN_ID = "sub@a-tanaka.jp";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -58,7 +60,7 @@ async function handleApi(request, env, url, path) {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
     if (!env.SESSION_SECRET) throw new HttpError(503, "認証設定が完了していません。");
     const body = await readJson(request, 4096);
-    const loginId = normalizeLoginId(body.loginId);
+    const loginId = canonicalLoginId(body.loginId);
     const password = typeof body.password === "string" ? body.password : "";
     if (!loginId || !password || password.length > 256) throw new HttpError(400, "IDとパスワードを確認してください。");
 
@@ -749,6 +751,11 @@ function constantTimeEqual(left, right) {
 
 function normalizeLoginId(value) {
   return typeof value === "string" ? value.trim().toLowerCase().slice(0, 120) : "";
+}
+
+function canonicalLoginId(value) {
+  const normalized = normalizeLoginId(value);
+  return normalized === LEGACY_OWNER_LOGIN_ID ? CURRENT_OWNER_LOGIN_ID : normalized;
 }
 
 function normalizeAccountId(value) {

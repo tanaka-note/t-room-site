@@ -80,7 +80,7 @@ test("owner and member sessions roll forward for 30 days", async () => {
 
   try {
     await waitForServer();
-    for (const loginId of ["contact@a-tanaka.jp", "chiharu", "hideaki", "machiko", "masami", "yuuka"]) {
+    for (const loginId of ["contact@a-tanaka.jp", "sub@a-tanaka.jp", "chiharu", "hideaki", "machiko", "masami", "yuuka"]) {
       const cookie = await login(loginId);
       const firstExpiry = sessionExpiry(cookie);
       await new Promise((resolve) => setTimeout(resolve, 1100));

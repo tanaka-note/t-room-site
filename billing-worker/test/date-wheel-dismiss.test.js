@@ -8,5 +8,5 @@ test("date wheel closes only when its backdrop is selected", async () => {
 
   assert.match(script, /date-wheel-dialog"\]\.addEventListener\("click", closeDateWheelFromBackdrop\)/);
   assert.match(script, /function closeDateWheelFromBackdrop\(event\) \{\s*if \(event\.target === el\["date-wheel-dialog"\]\) closeDateWheel\(\);\s*\}/);
-  assert.match(html, /billing\.js\?v=20260814-login-submit/);
+  assert.match(html, /billing\.js\?v=20260814-owner-id-recovery/);
 });
