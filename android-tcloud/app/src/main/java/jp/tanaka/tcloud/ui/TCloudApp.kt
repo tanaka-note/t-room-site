@@ -88,7 +88,6 @@ import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -2777,10 +2776,7 @@ private fun MediaPlayerScreen(
                         },
                     ) {
                         Icon(
-                            when (playbackMode) {
-                                PlaybackMode.OFF -> Icons.Default.Repeat
-                                PlaybackMode.REPEAT_ALL -> Icons.AutoMirrored.Filled.PlaylistPlay
-                            },
+                            Icons.Default.Repeat,
                             contentDescription = when (playbackMode) {
                                 PlaybackMode.OFF -> "再生後に停止"
                                 PlaybackMode.REPEAT_ALL -> "全体リピート"

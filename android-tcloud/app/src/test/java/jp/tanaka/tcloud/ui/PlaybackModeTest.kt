@@ -1,7 +1,10 @@
 package jp.tanaka.tcloud.ui
 
+import java.io.File
 import jp.tanaka.tcloud.media.playbackStatusText
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackModeTest {
@@ -21,6 +24,16 @@ class PlaybackModeTest {
 
         assertEquals(PlaybackMode.REPEAT_ALL, repeatAll)
         assertEquals(PlaybackMode.OFF, off)
+    }
+
+    @Test
+    fun repeatButtonKeepsTheSameIconAndUsesTintForState() {
+        val source = File("src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt").readText()
+
+        assertTrue(source.contains("Icons.Default.Repeat,"))
+        assertTrue(source.contains("tint = if (playbackMode == PlaybackMode.OFF) TCloudMuted else TCloudBlue"))
+        assertFalse(source.contains("PlaybackMode.REPEAT_ALL -> Icons.AutoMirrored.Filled.PlaylistPlay"))
+        assertFalse(source.contains("Icons.Default.RepeatOne"))
     }
 
     @Test

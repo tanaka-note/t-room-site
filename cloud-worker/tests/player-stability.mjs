@@ -26,6 +26,9 @@ for (const client of [main, share]) {
   assert.match(client, /requestAnimationFrame\(syncPlayback\)/);
   assert.match(client, /classList\.add\("is-media-ready"\)/);
   assert.match(client, /loadeddata/);
+  assert.doesNotMatch(client, /↻1/, "リピートON時に数字の1を表示しないでください。");
+  assert.match(client, /button\.textContent = state\.previewPlaybackMode === "continuous-audio" \? "連続" : "↻"/);
+  assert.match(client, /classList\.toggle\("is-active", (?:active|state\.previewPlaybackMode !== "off")\)/, "ON/OFFの既存色切替を維持してください。");
 }
 
 for (const css of [mainCss, shareCss]) {
