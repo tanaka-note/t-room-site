@@ -1,5 +1,6 @@
 package jp.tanaka.tcloud.ui
 
+internal const val DOUBLE_TAP_SEEK_MS = 10_000L
 internal const val DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900L
 
 internal class DoubleTapSeekControlsHold {

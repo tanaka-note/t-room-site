@@ -22,6 +22,7 @@ class DoubleTapSeekControlsHoldTest {
 
     @Test
     fun controllerHoldDurationAllowsContinuousDoubleTapFeedback() {
+        assertTrue(DOUBLE_TAP_SEEK_MS == 10_000L)
         assertTrue(DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS >= 700L)
     }
 
@@ -34,7 +35,7 @@ class DoubleTapSeekControlsHoldTest {
         assertTrue(source.contains("doubleTapSeekControlsHold.complete(releaseToken)"))
         assertTrue(source.contains("controllerShowTimeoutMs = normalControllerShowTimeoutMs"))
         assertTrue(source.contains("DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS"))
-        assertTrue(source.contains("if (event.x < width / 2f) -10_000L else 10_000L"))
+        assertTrue(source.contains("if (event.x < width / 2f) -DOUBLE_TAP_SEEK_MS else DOUBLE_TAP_SEEK_MS"))
         assertTrue(source.contains("player.seekTo((player.currentPosition + offset).coerceIn(0L, duration))"))
     }
 }

@@ -16,18 +16,20 @@ for (const [index, source] of clients.entries()) {
   assert.match(source, /addEventListener\("click", handle(?:Shared)?PreviewVideoTap\)/);
   assert.match(source, /addEventListener\("dblclick", suppress(?:Shared)?PreviewVideoDoubleClick\)/);
   assert.match(source, /for \(const eventName of \["click", "dblclick", "pointerdown", "pointerup", "touchstart", "touchend"\]\)/);
-  assert.doesNotMatch(source, /function handle(?:Shared)?PreviewDoubleClick\(/, "PCのダブルクリックで10秒移動させないでください。");
-  assert.match(source, /const timer = setTimeout\([\s\S]*?280\)/, "単独タップとダブルタップを判定してから操作してください。");
-  assert.match(source, /side \* 10/, "スマホの左右ダブルタップは10秒移動にしてください。");
+  assert.doesNotMatch(source, /function handle(?:Shared)?PreviewDoubleClick\(/, "PCのダブルクリックでスキップさせないでください。");
+  assert.match(source, /const timer = setTimeout\([\s\S]*?280\)/, "既存の1回タップ判定を維持してください。");
+  assert.match(source, /const DOUBLE_TAP_SEEK_SECONDS = 10;/, "左右のダブルタップは10秒に統一してください。");
+  assert.match(source, /side \* DOUBLE_TAP_SEEK_SECONDS/, "左右とも共通の10秒定数を使用してください。");
+  assert.doesNotMatch(source, /DOUBLE_TAP_SEEK_SECONDS\s*=\s*(?:5|15)\b/, "5秒戻る・15秒進む旧仕様を残さないでください。");
   assert.match(source, /const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900/);
-  assert.match(source, /classList\.add\("is-double-tap-seeking"\)[\s\S]*?clearTimeout\(state\.previewDoubleTapSeekTimer\)[\s\S]*?setTimeout\([\s\S]*?classList\.remove\("is-double-tap-seeking"\)[\s\S]*?DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS/s, "連続ダブルタップ中は直前の解除予約を取り消してシークバーを固定してください。");
-  assert.match(source, /hold(?:Shared)?PreviewControlsForDoubleTapSeek\(stage\);\s*seek(?:Shared)?PreviewVideoBy\(video, side \* 10\);/s);
-  assert.match(source, /dispatchEvent\(new Event\("tcloud:seek-feedback"\)\)/, "スキップ直後に現在位置をシークバーへ反映してください。");
-  assert.match(source, /"tcloud:seek-feedback"[\s\S]*?queuePlaybackSync/, "スキップ位置の同期イベントをシークバー更新へ接続してください。");
-  assert.match(styles[index], /\.preview-stage\.is-double-tap-seeking \.preview-player-controls\s*\{[^}]*opacity:\s*1\s*!important;[^}]*visibility:\s*visible\s*!important;/, "ダブルタップスキップ中はコントロールを固定表示してください。");
+  assert.match(source, /classList\.add\("is-double-tap-seeking"\)[\s\S]*?clearTimeout\(state\.previewDoubleTapSeekTimer\)[\s\S]*?setTimeout\([\s\S]*?classList\.remove\("is-double-tap-seeking"\)[\s\S]*?DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS/s, "連続ダブルタップ中は直前の解除予約を取り消してください。");
+  assert.match(source, /hold(?:Shared)?PreviewControlsForDoubleTapSeek\(stage\);\s*seek(?:Shared)?PreviewVideoBy\(video, side \* DOUBLE_TAP_SEEK_SECONDS\);/s);
+  assert.match(source, /dispatchEvent\(new Event\("tcloud:seek-feedback"\)\)/, "スキップ直後にシーク位置を更新してください。");
+  assert.match(source, /"tcloud:seek-feedback"[\s\S]*?queuePlaybackSync/, "現在位置更新をシークバーへ接続してください。");
+  assert.match(styles[index], /\.preview-stage\.is-double-tap-seeking \.preview-player-controls\s*\{[^}]*opacity:\s*1\s*!important;[^}]*visibility:\s*visible\s*!important;/, "ダブルタップ中はコントロールを表示してください。");
 
   const functionSource = source.match(/function previewVideoTapAction\([\s\S]*?\n\}/)?.[0];
-  assert.ok(functionSource, "端末別のタップ動作判定が必要です。");
+  assert.ok(functionSource, "端末別のダブルタップ判定が必要です。");
   const context = {};
   vm.runInNewContext(`${functionSource}; globalThis.tapAction = previewVideoTapAction;`, context);
   assert.equal(context.tapAction("touch", false), "toggle");
@@ -37,6 +39,6 @@ for (const [index, source] of clients.entries()) {
   assert.equal(context.tapAction("mouse", true), "none");
 }
 
-assert.match(clients[0], /previewSuppressTapUntil = performance\.now\(\) \+ 700/, "写真・動画のスワイプ直後に誤って再生を切り替えないでください。");
+assert.match(clients[0], /previewSuppressTapUntil = performance\.now\(\) \+ 700/, "スワイプ直後の誤操作を防止してください。");
 
-console.log("double-tap seek keeps controls visible, updates position, and preserves existing tap behavior: ok");
+console.log("touch double-tap seeks 10 seconds on both sides while desktop double-click does not seek: ok");

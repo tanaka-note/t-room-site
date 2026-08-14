@@ -2842,7 +2842,7 @@ private fun MediaPlayerScreen(
                                 override fun onDown(event: MotionEvent): Boolean = true
 
                                 override fun onDoubleTap(event: MotionEvent): Boolean {
-                                    val offset = if (event.x < width / 2f) -10_000L else 10_000L
+                                    val offset = if (event.x < width / 2f) -DOUBLE_TAP_SEEK_MS else DOUBLE_TAP_SEEK_MS
                                     val duration = player.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
                                     player.seekTo((player.currentPosition + offset).coerceIn(0L, duration))
                                     val releaseToken = doubleTapSeekControlsHold.begin()
