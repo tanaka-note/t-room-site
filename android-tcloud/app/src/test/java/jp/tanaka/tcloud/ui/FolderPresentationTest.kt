@@ -40,16 +40,48 @@ class FolderPresentationTest {
         assertEquals(listOf("sample-large.mp4", "sample-small.mp4"), result.map { it.name })
     }
 
+    @Test
+    fun `only photos and videos use square file cards`() {
+        assertEquals(true, usesSquareFileCard(file(1, "photo.jpg", 1, "image/jpeg", "image")))
+        assertEquals(true, usesSquareFileCard(file(2, "movie.mp4", 1, "video/mp4", "video")))
+        assertEquals(false, usesSquareFileCard(file(3, "memo.txt", 1, "text/plain", "document")))
+        assertEquals(false, usesSquareFileCard(file(4, "report.docx", 1, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "document")))
+        assertEquals(false, usesSquareFileCard(file(5, "sheet.xlsx", 1, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "document")))
+        assertEquals(false, usesSquareFileCard(file(6, "release.apk", 1, "application/vnd.android.package-archive", "other")))
+        assertEquals(false, usesSquareFileCard(file(7, "song.mp3", 1, "audio/mpeg", "audio")))
+    }
+
+    @Test
+    fun `grid display preserves order while non media files occupy their own rows`() {
+        val files = listOf(
+            file(1, "photo.jpg", 1, "image/jpeg", "image"),
+            file(2, "memo.txt", 1, "text/plain", "document"),
+            file(3, "movie.mp4", 1, "video/mp4", "video"),
+            file(4, "another.jpg", 1, "image/jpeg", "image"),
+            file(5, "release.apk", 1, "application/vnd.android.package-archive", "other"),
+        )
+        val rows = groupFilesForGridDisplay(files)
+
+        assertEquals(listOf(listOf(1L), listOf(2L), listOf(3L, 4L), listOf(5L)), rows.map { row -> row.map { it.id } })
+        assertEquals(files.map { it.id }, rows.flatten().map { it.id })
+    }
+
     private fun folder(id: Long, name: String) = CloudFolder(
         id, null, name, 1, "", "", "", "", "", "", "", "", false, true, 0, 0,
     )
 
-    private fun file(id: Long, name: String, updated: Long) = CloudFile(
+    private fun file(
+        id: Long,
+        name: String,
+        updated: Long,
+        mimeType: String = "video/mp4",
+        mediaKind: String = "video",
+    ) = CloudFile(
         id = id,
         folderId = 10,
         name = name,
-        mimeType = "video/mp4",
-        mediaKind = "video",
+        mimeType = mimeType,
+        mediaKind = mediaKind,
         sizeBytes = updated,
         cryptoVersion = 1,
         encryptedMetadata = "",

@@ -59,7 +59,28 @@ internal fun sortFiles(
     }
 }
 
+internal fun usesSquareFileCard(file: CloudFile): Boolean =
+    file.mediaKind == "image" || file.mediaKind == "video"
+
+internal fun groupFilesForGridDisplay(files: List<CloudFile>): List<List<CloudFile>> {
+    val rows = mutableListOf<List<CloudFile>>()
+    var pendingMedia: CloudFile? = null
+    files.forEach { file ->
+        if (!usesSquareFileCard(file)) {
+            pendingMedia?.let { rows += listOf(it) }
+            pendingMedia = null
+            rows += listOf(file)
+        } else if (pendingMedia == null) {
+            pendingMedia = file
+        } else {
+            rows += listOf(pendingMedia, file)
+            pendingMedia = null
+        }
+    }
+    pendingMedia?.let { rows += listOf(it) }
+    return rows
+}
+
 private fun normalizedName(folder: CloudFolder) = folder.name.lowercase(Locale.JAPANESE)
 private fun normalizedName(file: CloudFile) = file.name.lowercase(Locale.JAPANESE)
 private fun updatedTime(file: CloudFile): Long = file.updatedAtMillis.coerceAtLeast(file.createdAtMillis)
-

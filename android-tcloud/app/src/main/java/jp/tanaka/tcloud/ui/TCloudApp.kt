@@ -1346,25 +1346,47 @@ private fun FolderScreen(
                             if (row.size == 1) Spacer(Modifier.weight(1f))
                         }
                     }
-                    items(filteredFiles.chunked(2), key = { row -> "file-grid-${row.first().id}" }) { row ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            row.forEach { file ->
-                                FileGridCard(
-                                    file = file,
-                                    thumbnailBitmap = thumbnailBitmaps[file.id],
-                                    selected = file.id in selectedFileIds,
-                                    selectionMode = selectionMode,
-                                    canManage = canManageItems,
-                                    onOpenFile = onOpenFile,
-                                    onRequestThumbnail = onRequestThumbnail,
-                                    onToggleSelection = onToggleFileSelection,
-                                    modifier = Modifier.weight(1f),
-                                )
+                    items(
+                        groupFilesForGridDisplay(filteredFiles),
+                        key = { row -> "file-grid-${row.joinToString("-") { it.id.toString() }}" },
+                    ) { row ->
+                        if (usesSquareFileCard(row.first())) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                row.forEach { file ->
+                                    FileGridCard(
+                                        file = file,
+                                        thumbnailBitmap = thumbnailBitmaps[file.id],
+                                        selected = file.id in selectedFileIds,
+                                        selectionMode = selectionMode,
+                                        canManage = canManageItems,
+                                        onOpenFile = onOpenFile,
+                                        onRequestThumbnail = onRequestThumbnail,
+                                        onToggleSelection = onToggleFileSelection,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                if (row.size == 1) Spacer(Modifier.weight(1f))
                             }
-                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        } else {
+                            val file = row.single()
+                            FileRow(
+                                file = file,
+                                thumbnailBitmap = thumbnailBitmaps[file.id],
+                                selected = file.id in selectedFileIds,
+                                selectionMode = selectionMode,
+                                canManage = canManageItems,
+                                onOpenFile = onOpenFile,
+                                onRequestThumbnail = onRequestThumbnail,
+                                onToggleSelection = onToggleFileSelection,
+                                onDownload = onDownload,
+                                onOffline = onOffline,
+                                onMove = onMove,
+                                onRename = onRenameFile,
+                                onShare = onShareFile,
+                            )
                         }
                     }
                 }
