@@ -10,11 +10,12 @@ test("invoice month field reuses the bottom wheel without a day selector", async
   ]);
 
   assert.match(html, /id="month-input" type="month"[^>]*aria-controls="date-wheel-dialog"/);
-  assert.match(html, /id="month-picker-button" class="date-picker-button"[^>]*aria-label="表示月をカレンダーから選ぶ"/);
+  assert.match(html, /id="month-picker-button" class="date-picker-button"[^>]*data-date-picker-target="month-input"[^>]*aria-label="表示月をカレンダーから選ぶ"/);
   assert.match(html, /id="date-wheel-day-group"/);
   assert.match(script, /bindMonthInput\(el\["month-input"\]\)/);
-  assert.match(script, /el\["month-picker-button"\]\.addEventListener\("click", openMonthWheelFromButton\)/);
-  assert.match(script, /openDateWheel\(el\["month-input"\], "month"\)/);
+  assert.match(script, /el\["month-picker-button"\]\.addEventListener\("click", openNativeDatePicker\)/);
+  assert.match(script, /function openNativeDatePicker\(event\)[\s\S]*target\.showPicker\(\)/);
+  assert.match(script, /state\.nativeDatePickerTarget === event\.currentTarget/);
   assert.match(script, /openDateWheel\(event\.currentTarget, "month"\)/);
   assert.match(script, /el\["date-wheel-day-group"\]\.hidden = isMonth/);
   assert.match(script, /el\["date-wheel-window"\]\.classList\.toggle\("is-month-only", isMonth\)/);
@@ -29,6 +30,13 @@ test("invoice month field reuses the bottom wheel without a day selector", async
   assert.match(script, /if \(isMonth\) target\.dispatchEvent\(new Event\("change", \{ bubbles: true \}\)\)/);
   assert.match(styles, /\.date-wheel-window\.is-month-only\s*\{\s*grid-template-columns:\s*1\.35fr 1fr;/);
   assert.match(styles, /\.date-picker-button\s*\{[^}]*right:\s*5px;[^}]*width:\s*38px;[^}]*height:\s*38px;/s);
+  assert.match(styles, /::-webkit-calendar-picker-indicator\s*\{[^}]*display:\s*none;/s);
+  assert.equal((html.match(/class="date-picker-button"/g) || []).length, 2,
+    "only one explicit native-calendar button must be shown for each date field");
+  const nativePickerSource = script.match(/function openNativeDatePicker\(event\)\s*\{[\s\S]*?\n  \}\n\n  function preventMonthDirectInput/)?.[0] || "";
+  assert.ok(nativePickerSource, "native calendar picker handler must exist");
+  assert.doesNotMatch(nativePickerSource, /openDateWheel\(/,
+    "the calendar buttons must not open the bottom wheel");
 });
 
 test("entry dates retain the existing year-month-day wheel and storage value", async () => {
@@ -38,10 +46,11 @@ test("entry dates retain the existing year-month-day wheel and storage value", a
   ]);
 
   assert.match(html, /id="entry-date" type="date" required[^>]*aria-controls="date-wheel-dialog"/);
-  assert.match(html, /id="entry-date-picker-button" class="date-picker-button"[^>]*aria-label="日付をカレンダーから選ぶ"/);
+  assert.match(html, /id="entry-date-picker-button" class="date-picker-button"[^>]*data-date-picker-target="entry-date"[^>]*aria-label="日付をカレンダーから選ぶ"/);
   assert.match(html, /id="date-wheel-day"[^>]*aria-label="日"/);
-  assert.match(script, /el\["entry-date-picker-button"\]\.addEventListener\("click", openEntryDateWheelFromButton\)/);
-  assert.match(script, /openDateWheel\(el\["entry-date"\], "date"\)/);
+  assert.match(script, /bindDateInput\(el\["entry-date"\]\)/);
+  assert.match(script, /el\["entry-date-picker-button"\]\.addEventListener\("click", openNativeDatePicker\)/);
+  assert.match(script, /function handleDateClick\(event\)[\s\S]*openDateWheel\(event\.currentTarget, "date"\)/);
   assert.match(script, /function datePartsToString\(\{ year, month, day \}\)/);
   assert.match(script, /entryDate = el\["entry-date"\]\.value/);
 });

@@ -6,7 +6,8 @@
     dateDraft: null,
     dateWheelTarget: null,
     dateWheelMode: "date",
-    dateWheelTimers: {}
+    dateWheelTimers: {},
+    nativeDatePickerTarget: null
   };
   const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
   const integerFormat = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 0 });
@@ -45,7 +46,7 @@
     el["logout-button"].addEventListener("click", logout);
     el["password-toggle"].addEventListener("click", togglePassword);
     bindMonthInput(el["month-input"]);
-    el["month-picker-button"].addEventListener("click", openMonthWheelFromButton);
+    el["month-picker-button"].addEventListener("click", openNativeDatePicker);
     el["month-input"].addEventListener("change", loadSummary);
     el["account-select"].addEventListener("change", changeAccount);
     el["document-filter"].addEventListener("change", renderSummary);
@@ -60,9 +61,8 @@
     });
     el["entry-amount"].addEventListener("compositionend", () => formatYenInput(el["entry-amount"], false));
     el["today-button"].addEventListener("click", setEntryDateToToday);
-    el["entry-date"].addEventListener("pointerdown", handleDatePointerDown);
-    el["entry-date"].addEventListener("keydown", handleDateKeydown);
-    el["entry-date-picker-button"].addEventListener("click", openEntryDateWheelFromButton);
+    bindDateInput(el["entry-date"]);
+    el["entry-date-picker-button"].addEventListener("click", openNativeDatePicker);
     el["date-wheel-cancel"].addEventListener("click", closeDateWheel);
     el["date-wheel-done"].addEventListener("click", applyDateWheel);
     el["date-wheel-dialog"].addEventListener("cancel", (event) => {
@@ -495,13 +495,6 @@
     element.classList.toggle("negative", Number(value) < 0);
   }
 
-  function handleDatePointerDown(event) {
-    if (useMobileDateWheel()) {
-      event.preventDefault();
-      openDateWheel();
-    }
-  }
-
   function bindMonthInput(input) {
     input.addEventListener("click", handleMonthClick);
     input.addEventListener("keydown", handleMonthKeydown);
@@ -511,16 +504,30 @@
     input.addEventListener("selectstart", preventMonthDirectInput);
   }
 
-  function openMonthWheelFromButton(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    openDateWheel(el["month-input"], "month");
+  function bindDateInput(input) {
+    input.addEventListener("click", handleDateClick);
+    input.addEventListener("keydown", handleDateKeydown);
+    input.addEventListener("beforeinput", preventMonthDirectInput);
+    input.addEventListener("paste", preventMonthDirectInput);
+    input.addEventListener("drop", preventMonthDirectInput);
+    input.addEventListener("selectstart", preventMonthDirectInput);
   }
 
-  function openEntryDateWheelFromButton(event) {
+  function openNativeDatePicker(event) {
     event.preventDefault();
     event.stopPropagation();
-    openDateWheel(el["entry-date"], "date");
+    const target = document.getElementById(event.currentTarget.dataset.datePickerTarget);
+    if (!target) return;
+    state.nativeDatePickerTarget = target;
+    try {
+      if (typeof target.showPicker === "function") target.showPicker();
+      else target.click();
+    } catch {
+      target.click();
+    }
+    window.setTimeout(() => {
+      if (state.nativeDatePickerTarget === target) state.nativeDatePickerTarget = null;
+    }, 500);
   }
 
   function preventMonthDirectInput(event) {
@@ -528,6 +535,10 @@
   }
 
   function handleMonthClick(event) {
+    if (state.nativeDatePickerTarget === event.currentTarget) {
+      state.nativeDatePickerTarget = null;
+      return;
+    }
     event.preventDefault();
     event.currentTarget.blur();
     openDateWheel(event.currentTarget, "month");
@@ -543,13 +554,22 @@
   }
 
   function handleDateKeydown(event) {
-    if (!useMobileDateWheel() || !["Enter", " "].includes(event.key)) return;
+    if (event.key === "Tab") return;
     event.preventDefault();
-    openDateWheel();
+    if (["Enter", " "].includes(event.key)) {
+      event.currentTarget.blur();
+      openDateWheel(event.currentTarget, "date");
+    }
   }
 
-  function useMobileDateWheel() {
-    return window.matchMedia("(max-width: 760px)").matches;
+  function handleDateClick(event) {
+    if (state.nativeDatePickerTarget === event.currentTarget) {
+      state.nativeDatePickerTarget = null;
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.blur();
+    openDateWheel(event.currentTarget, "date");
   }
 
   function setEntryDateToToday() {
