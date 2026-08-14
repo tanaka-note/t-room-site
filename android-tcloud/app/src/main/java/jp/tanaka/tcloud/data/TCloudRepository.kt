@@ -299,7 +299,7 @@ class TCloudRepository(
             ?: error("対象ファイルが見つかりません。")
     }
 
-    suspend fun downloadFile(
+    suspend fun downloadDecryptedFile(
         file: CloudFile,
         output: OutputStream,
         onProgress: suspend (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> },
@@ -309,25 +309,13 @@ class TCloudRepository(
         val folderKey = prepareFolderKey(folder)
         try {
             TCloudCrypto.createFileDecryptor(file, folderKey).use { decryptor ->
-                var downloaded = 0L
-                for (index in 0 until file.chunkCount) {
-                    currentCoroutineContext().ensureActive()
-                    val envelope = api.downloadEncryptedChunk(file, index)
-                    try {
-                        val plain = decryptor.decryptChunk(envelope, index)
-                        try {
-                            output.write(plain)
-                            downloaded += plain.size
-                            onProgress(downloaded, file.sizeBytes)
-                        } finally {
-                            plain.fill(0)
-                        }
-                    } finally {
-                        envelope.fill(0)
-                    }
-                }
-                output.flush()
-                check(downloaded == file.sizeBytes) { "復号後のファイル容量が一致しません。" }
+                TCloudPlainDownload.writeDecrypted(
+                    file = file,
+                    decryptor = decryptor,
+                    output = output,
+                    loadEncryptedChunk = { index -> api.downloadEncryptedChunk(file, index) },
+                    onProgress = onProgress,
+                )
             }
         } finally {
             folderKey.fill(0)

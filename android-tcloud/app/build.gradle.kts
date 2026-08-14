@@ -18,8 +18,8 @@ android {
         applicationId = "jp.tanaka.tcloud"
         minSdk = 26
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.5.10"
+        versionCode = 23
+        versionName = "0.5.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

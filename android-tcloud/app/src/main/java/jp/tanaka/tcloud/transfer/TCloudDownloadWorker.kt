@@ -50,7 +50,7 @@ class TCloudDownloadWorker(
             val file = repository.loadFileForBackground(folderId, fileId)
             destination = createDestination(file)
             destination.output.use { output ->
-                repository.downloadFile(file, output) { downloaded, total ->
+                repository.downloadDecryptedFile(file, output) { downloaded, total ->
                     val percent = if (total > 0) ((downloaded * 100.0) / total).roundToInt() else 0
                     setProgress(
                         Data.Builder()
