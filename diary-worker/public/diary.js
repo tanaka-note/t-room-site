@@ -52,6 +52,7 @@
     editorToolbarOpen: false,
     dateDraft: null,
     dateWheelTarget: null,
+    nativeDatePickerTarget: null,
     dateWheelTimers: {},
     searchTimer: null,
     requestId: 0,
@@ -182,6 +183,7 @@
     dateWheelYear: document.querySelector("#date-wheel-year"),
     dateWheelMonth: document.querySelector("#date-wheel-month"),
     dateWheelDay: document.querySelector("#date-wheel-day"),
+    datePickerButtons: [...document.querySelectorAll("[data-date-picker-target]")],
     cameraRollDialog: document.querySelector("#camera-roll-dialog"),
     photoSearch: document.querySelector("#photo-search"),
     photoMonthFilter: document.querySelector("#photo-month-filter"),
@@ -271,6 +273,7 @@
       bindDateInput(input);
       input.addEventListener("change", handleDateSearchChange);
     }
+    elements.datePickerButtons.forEach((button) => button.addEventListener("click", openNativeDatePicker));
     elements.tagSearchInput.addEventListener("input", () => {
       state.tagQuery = elements.tagSearchInput.value.normalize("NFKC").trim().toLocaleLowerCase("ja-JP");
       renderTags(state.availableTags);
@@ -1321,10 +1324,9 @@
     state.editorSelectionOffsets = null;
   }
 
-  function preserveEditorSelectionFromToolbar(event) {
+  function preserveEditorSelectionFromToolbar() {
     rememberEditorSelection();
     captureEditorSelectionOffsets();
-    event.preventDefault();
   }
 
   function toggleEntryFormatToolbar() {
@@ -2119,22 +2121,50 @@
   function bindDateInput(input) {
     input.addEventListener("click", handleDateClick);
     input.addEventListener("keydown", handleDateKeydown);
+    input.addEventListener("beforeinput", preventDateDirectInput);
+    input.addEventListener("paste", preventDateDirectInput);
+    input.addEventListener("drop", preventDateDirectInput);
+    input.addEventListener("selectstart", preventDateDirectInput);
+  }
+
+  function preventDateDirectInput(event) {
+    event.preventDefault();
+  }
+
+  function openNativeDatePicker(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = document.getElementById(event.currentTarget.dataset.datePickerTarget);
+    if (!target) return;
+    state.nativeDatePickerTarget = target;
+    try {
+      if (typeof target.showPicker === "function") target.showPicker();
+      else target.click();
+    } catch {
+      target.click();
+    }
+    window.setTimeout(() => {
+      if (state.nativeDatePickerTarget === target) state.nativeDatePickerTarget = null;
+    }, 500);
   }
 
   function handleDateClick(event) {
-    if (!useMobileDateWheel()) return;
+    if (state.nativeDatePickerTarget === event.currentTarget) {
+      state.nativeDatePickerTarget = null;
+      return;
+    }
     event.preventDefault();
+    event.currentTarget.blur();
     openDateWheel(event.currentTarget);
   }
 
   function handleDateKeydown(event) {
-    if (!useMobileDateWheel() || !["Enter", " "].includes(event.key)) return;
+    if (event.key === "Tab") return;
     event.preventDefault();
-    openDateWheel(event.currentTarget);
-  }
-
-  function useMobileDateWheel() {
-    return window.matchMedia("(max-width: 760px)").matches;
+    if (["Enter", " "].includes(event.key)) {
+      event.currentTarget.blur();
+      openDateWheel(event.currentTarget);
+    }
   }
 
   function setEntryDateToToday() {
@@ -2203,6 +2233,9 @@
   }
 
   function fillDateWheel(column, values, selected, suffix) {
+    const scrollToken = String((Number(column.dataset.settingScrollToken) || 0) + 1);
+    column.dataset.settingScroll = "true";
+    column.dataset.settingScrollToken = scrollToken;
     column.replaceChildren(...values.map((value, index) => {
       const button = document.createElement("button");
       button.className = "date-wheel-option";
@@ -2216,7 +2249,13 @@
     }));
     const selectedIndex = Math.max(0, values.indexOf(selected));
     window.requestAnimationFrame(() => {
+      if (column.dataset.settingScrollToken !== scrollToken) return;
       column.scrollTop = selectedIndex * 44;
+      window.setTimeout(() => {
+        if (column.dataset.settingScrollToken !== scrollToken) return;
+        delete column.dataset.settingScroll;
+        delete column.dataset.settingScrollToken;
+      }, 160);
     });
   }
 
@@ -2245,6 +2284,7 @@
       column.scrollTop = clamp(visibleIndex + direction, 0, options.length - 1) * 44;
     }, { passive: false });
     column.addEventListener("scroll", () => {
+      if (column.dataset.settingScroll === "true") return;
       window.clearTimeout(state.dateWheelTimers[key]);
       state.dateWheelTimers[key] = window.setTimeout(() => updateDateWheelFromScroll(column, key), 80);
     }, { passive: true });

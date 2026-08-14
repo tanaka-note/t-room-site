@@ -14,5 +14,8 @@ assert.match(script, /const direction = event\.deltaY > 0 \? 1 : -1;/);
 assert.match(script, /column\.scrollTop = clamp\(visibleIndex \+ direction, 0, options\.length - 1\) \* 44;/);
 assert.doesNotMatch(script, /Math\.abs\(wheelTargetIndex - visibleIndex\)/);
 assert.match(script, /\}, \{ passive: false \}\);/);
+assert.match(script, /column\.dataset\.settingScroll = "true"/);
+assert.match(script, /if \(column\.dataset\.settingScroll === "true"\) return;/,
+  "programmatic initial positioning must not overwrite the selected date");
 
 process.stdout.write("Diary date wheel dismissal and exact one-step mouse scrolling contract test passed.\n");

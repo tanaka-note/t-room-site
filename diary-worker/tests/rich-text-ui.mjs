@@ -33,6 +33,8 @@ assert.doesNotMatch(script, /typingMarker|editorTyping|installTypingFormat/);
 assert.match(script, /function captureEditorSelectionOffsets\(\)/);
 assert.match(script, /function applyFormatToSelection\(/);
 assert.match(script, /function restoreEditorSelectionFromOffsets\(/);
+assert.match(script, /function preserveEditorSelectionFromToolbar\(\) \{\s*rememberEditorSelection\(\);\s*captureEditorSelectionOffsets\(\);\s*\}/,
+  "touching the pencil must preserve the selection without cancelling the synthesized mobile click");
 assert.match(script, /書式を変更する文字を選択してください。/);
 assert.match(script, /function handleRichEditorInput\(\) \{\s*state\.editorDirty = true;\s*if \(state\.editorToolbarOpen\) closeEntryFormatToolbar\(\);\s*\}/);
 
