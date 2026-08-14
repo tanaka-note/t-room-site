@@ -389,7 +389,7 @@ async function listEntries(url, env, session) {
 
   const statement = `
     SELECT
-      e.id, e.entry_date, e.title, e.content, e.author_id, e.author_name, e.created_at, e.updated_at,
+      e.id, e.entry_date, e.title, e.content, e.content_format, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
@@ -408,7 +408,7 @@ async function getEntry(id, env, session) {
   const deletedClause = session.canViewTrash ? "" : "AND e.deleted_at IS NULL";
   const row = await env.DB.prepare(`
     SELECT
-      e.id, e.entry_date, e.title, e.content, e.author_id, e.author_name, e.created_at, e.updated_at,
+      e.id, e.entry_date, e.title, e.content, e.content_format, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
@@ -635,18 +635,18 @@ async function listMeta(env, session) {
 }
 
 async function createEntry(request, env, session) {
-  const input = validateEntryInput(await readJson(request, 500000));
+  const input = validateEntryInput(await readJson(request, 1500000));
   const result = await env.DB.prepare(`
-    INSERT INTO diary_entries (entry_date, title, content, author_id, author_name, household_id)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(input.entryDate, input.title, input.content, session.accountId, session.accountName, session.activeHouseholdId).run();
+    INSERT INTO diary_entries (entry_date, title, content, content_format, author_id, author_name, household_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(input.entryDate, input.title, input.content, input.contentFormat, session.accountId, session.accountName, session.activeHouseholdId).run();
   const id = Number(result.meta?.last_row_id);
   await replaceTags(env, id, input.tags);
   return getEntry(id, env, session);
 }
 
 async function updateEntry(id, request, env, session) {
-  const body = await readJson(request, 500000);
+  const body = await readJson(request, 1500000);
   const input = validateEntryInput(body);
   const revision = Number(body.revision);
   if (!Number.isInteger(revision) || revision < 1) {
@@ -655,9 +655,9 @@ async function updateEntry(id, request, env, session) {
 
   const result = await env.DB.prepare(`
     UPDATE diary_entries
-    SET entry_date = ?, title = ?, content = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1
+    SET entry_date = ?, title = ?, content = ?, content_format = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1
     WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(input.entryDate, input.title, input.content, id, session.activeHouseholdId, revision).run();
+  `).bind(input.entryDate, input.title, input.content, input.contentFormat, id, session.activeHouseholdId, revision).run();
 
   if (!result.meta?.changes) {
     return json({ error: "別の端末で更新された可能性があります。再読み込みしてください。" }, 409);
@@ -748,7 +748,46 @@ function validateEntryInput(body) {
   if (tags.length > 10 || tags.some((tag) => tag.length > 30)) {
     throw new HttpError(400, "タグは10個まで、1個30文字以内で入力してください。");
   }
-  return { entryDate, title, content, tags };
+  const contentFormat = validateContentFormat(body.contentFormat, content);
+  return { entryDate, title, content, contentFormat, tags };
+}
+
+function validateContentFormat(value, content) {
+  if (value == null || value === "") return null;
+  if (!value || typeof value !== "object" || value.version !== 1 || !Array.isArray(value.runs)) {
+    throw new HttpError(400, "本文の書式情報を確認してください。");
+  }
+  if (value.runs.length > 5000) {
+    throw new HttpError(400, "本文の書式が多すぎます。");
+  }
+  const colors = new Set(["red", "blue", "green", "orange", "purple", "gray", "light-blue", "brown"]);
+  const normalized = [];
+  let previousEnd = 0;
+  for (const run of value.runs) {
+    const start = Number(run?.start);
+    const end = Number(run?.end);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < previousEnd || start < 0 || end <= start || end > content.length) {
+      throw new HttpError(400, "本文の書式範囲を確認してください。");
+    }
+    const color = run.color == null || run.color === "" ? null : String(run.color);
+    if (color && !colors.has(color)) {
+      throw new HttpError(400, "本文の文字色を確認してください。");
+    }
+    const item = {
+      start,
+      end,
+      bold: run.bold === true,
+      italic: run.italic === true,
+      underline: run.underline === true,
+      color
+    };
+    if (!item.bold && !item.italic && !item.underline && !item.color) {
+      throw new HttpError(400, "本文の書式情報を確認してください。");
+    }
+    normalized.push(item);
+    previousEnd = end;
+  }
+  return normalized.length ? JSON.stringify({ version: 1, runs: normalized }) : null;
 }
 
 function serializePhoto(row) {
@@ -784,6 +823,7 @@ function serializeEntry(row) {
     entryDate: row.entry_date,
     title: row.title,
     content: row.content,
+    contentFormat: parseContentFormat(row.content_format),
     authorId: row.author_id,
     authorName: row.author_name,
     tags,
@@ -794,6 +834,16 @@ function serializeEntry(row) {
     deletedByName: row.deleted_by_name || null,
     revision: Number(row.revision)
   };
+}
+
+function parseContentFormat(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed?.version === 1 && Array.isArray(parsed.runs) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readSession(request, env) {

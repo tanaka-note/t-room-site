@@ -2,6 +2,17 @@
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
+  const RICH_TEXT_COLORS = Object.freeze({
+    default: "#27313b",
+    red: "#b42318",
+    blue: "#175cd3",
+    green: "#067647",
+    orange: "#b54708",
+    purple: "#6938ef",
+    gray: "#667085",
+    "light-blue": "#007aa3",
+    brown: "#7a4b2a"
+  });
   const tagCollator = new Intl.Collator(["ja-JP", "en-US"], {
     usage: "sort",
     sensitivity: "base",
@@ -35,6 +46,10 @@
     trash: false,
     activeEntry: null,
     editorDirty: false,
+    editorSelection: null,
+    editorToolbarOpen: false,
+    editorTypingMarks: { bold: false, italic: false, underline: false, color: null },
+    applyingEditorFormat: false,
     dateDraft: null,
     dateWheelTarget: null,
     dateWheelTimers: {},
@@ -142,6 +157,9 @@
     todayButton: document.querySelector("#today-button"),
     entryTitle: document.querySelector("#entry-title"),
     entryContent: document.querySelector("#entry-content"),
+    entryContentShell: document.querySelector("#entry-content-shell"),
+    entryFormatToggle: document.querySelector("#entry-format-toggle"),
+    entryFormatToolbar: document.querySelector("#entry-format-toolbar"),
     addPhotoButton: document.querySelector("#add-photo-button"),
     photoInput: document.querySelector("#photo-input"),
     photoDropZone: document.querySelector("#photo-drop-zone"),
@@ -273,6 +291,22 @@
       closeDeleteConfirmation();
     });
     elements.entryForm.addEventListener("submit", saveEntry);
+    elements.entryContent.addEventListener("input", handleRichEditorInput);
+    elements.entryContent.addEventListener("keydown", handleRichEditorKeydown);
+    elements.entryContent.addEventListener("beforeinput", handleRichEditorBeforeInput);
+    elements.entryContent.addEventListener("paste", handleRichEditorPaste);
+    elements.entryContent.addEventListener("focus", rememberEditorSelection);
+    elements.entryContent.addEventListener("pointerup", rememberEditorSelection);
+    elements.entryContent.addEventListener("keyup", rememberEditorSelection);
+    elements.entryFormatToggle.addEventListener("pointerdown", preserveEditorSelectionFromToolbar);
+    elements.entryFormatToggle.addEventListener("click", toggleEntryFormatToolbar);
+    elements.entryFormatToolbar.addEventListener("pointerdown", preserveEditorSelectionFromToolbar);
+    elements.entryFormatToolbar.addEventListener("click", handleEntryFormatAction);
+    document.addEventListener("selectionchange", rememberEditorSelection);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", updateEditorKeyboardOffset);
+      window.visualViewport.addEventListener("scroll", updateEditorKeyboardOffset);
+    }
     elements.addPhotoButton.addEventListener("click", () => elements.photoInput.click());
     elements.photoInput.addEventListener("change", handlePhotoSelection);
     elements.photoDropZone.addEventListener("click", () => {
@@ -337,6 +371,7 @@
       else {
         state.editorDirty = false;
         clearEditorPhotos();
+        closeEntryFormatToolbar();
       }
     });
     window.addEventListener("beforeunload", (event) => {
@@ -1050,7 +1085,7 @@
     let cursor = 0;
     let match;
     while ((match = markerPattern.exec(entry.content)) !== null) {
-      appendEntryText(fragment, entry.content.slice(cursor, match.index));
+      appendEntryText(fragment, entry.content.slice(cursor, match.index), entry.contentFormat, cursor);
       const photo = photos.get(match[1].toLowerCase());
       if (photo) {
         fragment.append(createEntryPhoto(photo, entry.photos));
@@ -1058,19 +1093,34 @@
       }
       cursor = match.index + match[0].length;
     }
-    appendEntryText(fragment, entry.content.slice(cursor));
+    appendEntryText(fragment, entry.content.slice(cursor), entry.contentFormat, cursor);
     for (const photo of entry.photos || []) {
       if (!rendered.has(photo.id)) fragment.append(createEntryPhoto(photo, entry.photos));
     }
     elements.detailContent.replaceChildren(fragment);
   }
 
-  function appendEntryText(fragment, text) {
+  function appendEntryText(fragment, text, contentFormat = null, baseOffset = 0) {
     if (!text) return;
-    const span = document.createElement("span");
-    span.className = "entry-content-text";
-    span.textContent = text;
-    fragment.append(span);
+    const runs = Array.isArray(contentFormat?.runs) ? contentFormat.runs : [];
+    const sliceEnd = baseOffset + text.length;
+    let cursor = baseOffset;
+    for (const run of runs) {
+      const start = Math.max(baseOffset, Number(run.start) || 0);
+      const end = Math.min(sliceEnd, Number(run.end) || 0);
+      if (end <= start || end <= cursor) continue;
+      if (start > cursor) fragment.append(createEntryTextSpan(text.slice(cursor - baseOffset, start - baseOffset)));
+      fragment.append(createEntryTextSpan(text.slice(Math.max(cursor, start) - baseOffset, end - baseOffset), run));
+      cursor = end;
+    }
+    if (cursor < sliceEnd) fragment.append(createEntryTextSpan(text.slice(cursor - baseOffset)));
+  }
+
+  function createEntryTextSpan(text, marks = null) {
+    const span = marks ? createFormattedTextSpan(text, marks) : document.createElement("span");
+    span.classList.add("entry-content-text");
+    if (!marks) span.textContent = text;
+    return span;
   }
 
   function createEntryPhoto(photo, photos) {
@@ -1216,14 +1266,444 @@
 
   function insertPhotoMarker(id) {
     const marker = photoMarker(id);
-    const textarea = elements.entryContent;
-    const start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
-    const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start;
-    const prefix = start > 0 && textarea.value[start - 1] !== "\n" ? "\n" : "";
-    const suffix = end < textarea.value.length && textarea.value[end] !== "\n" ? "\n" : "";
-    textarea.setRangeText(`${prefix}${marker}${suffix}`, start, end, "end");
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.focus();
+    const content = getRichEditorPlainText();
+    const offset = getEditorSelectionOffset();
+    const prefix = offset > 0 && content[offset - 1] !== "\n" ? "\n" : "";
+    const suffix = offset < content.length && content[offset] !== "\n" ? "\n" : "";
+    insertPlainTextAtEditorSelection(`${prefix}${marker}${suffix}`);
+    elements.entryContent.focus();
+  }
+
+  function handleRichEditorInput() {
+    state.editorDirty = true;
+    rememberEditorSelection();
+    updateFormattingToolbarState();
+  }
+
+  function handleRichEditorBeforeInput(event) {
+    if (["insertParagraph", "insertLineBreak"].includes(event.inputType)) {
+      event.preventDefault();
+      insertPlainTextAtEditorSelection("\n");
+      return;
+    }
+    if (event.inputType.startsWith("insert") && event.data && !canInsertEditorText(event.data)) {
+      event.preventDefault();
+      elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
+    }
+  }
+
+  function handleRichEditorPaste(event) {
+    event.preventDefault();
+    const text = event.clipboardData?.getData("text/plain") || "";
+    if (text) insertPlainTextAtEditorSelection(text.replace(/\r\n?/g, "\n"));
+  }
+
+  function handleRichEditorKeydown(event) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const command = ({ b: "bold", i: "italic", u: "underline" })[event.key.toLowerCase()];
+    if (!command) return;
+    event.preventDefault();
+    applyEntryFormat(command);
+  }
+
+  function preserveEditorSelectionFromToolbar(event) {
+    rememberEditorSelection();
+  }
+
+  function toggleEntryFormatToolbar() {
+    const open = elements.entryFormatToolbar.hidden;
+    elements.entryFormatToolbar.hidden = !open;
+    elements.entryFormatToggle.setAttribute("aria-expanded", String(open));
+    elements.entryContentShell.classList.toggle("is-formatting", open);
+    state.editorToolbarOpen = open;
+    updateEditorKeyboardOffset();
+    restoreEditorSelection();
+    updateFormattingToolbarState();
+  }
+
+  function closeEntryFormatToolbar() {
+    elements.entryFormatToolbar.hidden = true;
+    elements.entryFormatToggle.setAttribute("aria-expanded", "false");
+    elements.entryContentShell.classList.remove("is-formatting");
+    state.editorToolbarOpen = false;
+  }
+
+  function handleEntryFormatAction(event) {
+    const colorButton = event.target.closest("[data-format-color]");
+    if (colorButton) {
+      applyEntryFormat("color", colorButton.dataset.formatColor);
+      return;
+    }
+    const commandButton = event.target.closest("[data-format-command]");
+    if (commandButton) applyEntryFormat(commandButton.dataset.formatCommand);
+  }
+
+  function applyEntryFormat(command, value = null) {
+    restoreEditorSelection();
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    if (range?.collapsed) {
+      const nextMarks = { ...state.editorTypingMarks };
+      if (command === "clear") {
+        Object.assign(nextMarks, { bold: false, italic: false, underline: false, color: null });
+      } else if (command === "color") {
+        nextMarks.color = value === "default" ? null : value;
+      } else if (["bold", "italic", "underline"].includes(command)) {
+        nextMarks[command] = !nextMarks[command];
+      }
+      state.editorTypingMarks = nextMarks;
+      state.applyingEditorFormat = true;
+      installTypingFormatAnchor(nextMarks);
+      state.applyingEditorFormat = false;
+      state.editorDirty = true;
+      rememberEditorSelection();
+      updateFormattingToolbarState();
+      return;
+    }
+    if (command === "clear") {
+      document.execCommand("removeFormat", false, null);
+    } else if (command === "color") {
+      const color = RICH_TEXT_COLORS[value] || RICH_TEXT_COLORS.default;
+      document.execCommand("styleWithCSS", false, true);
+      document.execCommand("foreColor", false, color);
+    } else if (["bold", "italic", "underline"].includes(command)) {
+      document.execCommand(command, false, null);
+    }
+    state.editorDirty = true;
+    rememberEditorSelection();
+    updateFormattingToolbarState();
+    elements.entryContent.focus({ preventScroll: true });
+  }
+
+  function rememberEditorSelection() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (!elements.entryContent.contains(range.commonAncestorContainer)) return;
+    state.editorSelection = range.cloneRange();
+    if (range.collapsed && !state.applyingEditorFormat) state.editorTypingMarks = marksAtRange(range);
+    updateFormattingToolbarState(range);
+  }
+
+  function restoreEditorSelection() {
+    elements.entryContent.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    if (state.editorSelection && elements.entryContent.contains(state.editorSelection.commonAncestorContainer)) {
+      selection.addRange(state.editorSelection);
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(elements.entryContent);
+    range.collapse(false);
+    selection.addRange(range);
+    state.editorSelection = range.cloneRange();
+  }
+
+  function getEditorSelectionOffset() {
+    const range = state.editorSelection;
+    if (!range || !elements.entryContent.contains(range.startContainer)) return getRichEditorPlainText().length;
+    const before = document.createRange();
+    before.selectNodeContents(elements.entryContent);
+    before.setEnd(range.startContainer, range.startOffset);
+    return before.toString().replace(/\u200b/g, "").length;
+  }
+
+  function insertPlainTextAtEditorSelection(text) {
+    if (!canInsertEditorText(text)) {
+      elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
+      return false;
+    }
+    restoreEditorSelection();
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const node = document.createTextNode(text);
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    state.editorSelection = range.cloneRange();
+    elements.entryContent.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+
+  function canInsertEditorText(text) {
+    const selection = window.getSelection();
+    const selectedLength = selection?.rangeCount && elements.entryContent.contains(selection.getRangeAt(0).commonAncestorContainer)
+      ? selection.getRangeAt(0).toString().replace(/\u200b/g, "").length
+      : 0;
+    return getRichEditorPlainText().length - selectedLength + String(text || "").length <= 200000;
+  }
+
+  function updateFormattingToolbarState(range = state.editorSelection) {
+    if (!elements.entryFormatToolbar) return;
+    const collapsed = Boolean(range?.collapsed);
+    for (const command of ["bold", "italic", "underline"]) {
+      const button = elements.entryFormatToolbar.querySelector(`[data-format-command="${command}"]`);
+      const active = collapsed ? Boolean(state.editorTypingMarks[command]) : document.queryCommandState(command);
+      button?.setAttribute("aria-pressed", String(active));
+    }
+    const colorKey = collapsed ? (state.editorTypingMarks.color || "default") : (marksAtRange(range).color || "default");
+    elements.entryFormatToolbar.querySelectorAll("[data-format-color]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.formatColor === colorKey));
+    });
+  }
+
+  function updateEditorKeyboardOffset() {
+    const viewport = window.visualViewport;
+    const offset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+    elements.entryContentShell?.style.setProperty("--editor-keyboard-offset", `${Math.round(offset)}px`);
+  }
+
+  function richColorKey(value) {
+    const normalized = String(value || "").toLowerCase().replace(/\s+/g, "");
+    for (const [key, hex] of Object.entries(RICH_TEXT_COLORS)) {
+      if (key === "default") continue;
+      const rgb = hexToRgb(hex);
+      if (normalized === hex || normalized === `rgb(${rgb.join(",")})`) return key;
+    }
+    return null;
+  }
+
+  function hexToRgb(value) {
+    const normalized = value.replace("#", "");
+    return [0, 2, 4].map((index) => Number.parseInt(normalized.slice(index, index + 2), 16));
+  }
+
+  function getRichEditorPlainText() {
+    return serializeRichEditor(false).content;
+  }
+
+  function marksAtRange(range) {
+    const container = range?.startContainer?.nodeType === Node.ELEMENT_NODE
+      ? range.startContainer
+      : range?.startContainer?.parentElement;
+    if (!container || !elements.entryContent.contains(container)) {
+      return { bold: false, italic: false, underline: false, color: null };
+    }
+    return marksForElement(container);
+  }
+
+  function installTypingFormatAnchor(marks) {
+    const offset = getEditorSelectionOffset();
+    const current = serializeRichEditor(false);
+    setRichEditorDocument(current.content, current.contentFormat);
+    placeEditorCaretAtOffset(offset);
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    const span = createFormattedTextSpan("\u200b", marks);
+    span.dataset.typingAnchor = "true";
+    range.insertNode(span);
+    const textNode = span.firstChild;
+    range.setStart(textNode, textNode.nodeValue.length);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    state.editorSelection = range.cloneRange();
+  }
+
+  function placeEditorCaretAtOffset(offset) {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    const walker = document.createTreeWalker(elements.entryContent, NodeFilter.SHOW_TEXT);
+    let remaining = Math.max(0, offset);
+    let node;
+    while ((node = walker.nextNode())) {
+      const textLength = (node.nodeValue || "").replace(/\u200b/g, "").length;
+      if (remaining <= textLength) {
+        const parent = node.parentElement;
+        const beforeText = (node.nodeValue || "").slice(0, remaining);
+        const afterText = (node.nodeValue || "").slice(remaining);
+        if (parent && parent !== elements.entryContent && parent.childNodes.length === 1) {
+          const before = beforeText ? parent.cloneNode(false) : null;
+          const after = afterText ? parent.cloneNode(false) : null;
+          if (before) {
+            before.removeAttribute("data-typing-anchor");
+            before.textContent = beforeText;
+          }
+          if (after) {
+            after.removeAttribute("data-typing-anchor");
+            after.textContent = afterText;
+          }
+          const reference = parent.nextSibling;
+          if (before) elements.entryContent.insertBefore(before, parent);
+          if (after) elements.entryContent.insertBefore(after, parent);
+          parent.remove();
+          if (after) range.setStartBefore(after);
+          else if (before) range.setStartAfter(before);
+          else if (reference) range.setStartBefore(reference);
+          else range.selectNodeContents(elements.entryContent);
+        } else {
+          range.setStart(node, Math.min(remaining, node.nodeValue.length));
+        }
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        state.editorSelection = range.cloneRange();
+        return;
+      }
+      remaining -= textLength;
+    }
+    range.selectNodeContents(elements.entryContent);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    state.editorSelection = range.cloneRange();
+  }
+
+  function serializeRichEditor(trim = true) {
+    const chunks = [];
+    collectRichEditorChunks(elements.entryContent, chunks);
+    let content = chunks.map((chunk) => chunk.text).join("").replace(/\u00a0/g, " ");
+    let offset = 0;
+    const runs = [];
+    for (const chunk of chunks) {
+      const length = chunk.text.length;
+      if (length && hasTextMarks(chunk.marks)) {
+        runs.push({ start: offset, end: offset + length, ...chunk.marks });
+      }
+      offset += length;
+    }
+    let normalizedRuns = mergeRichTextRuns(runs);
+    if (trim && content) {
+      const leading = content.search(/\S/);
+      const trailing = content.length - content.trimEnd().length;
+      const start = leading < 0 ? content.length : leading;
+      const end = content.length - trailing;
+      content = content.slice(start, end);
+      normalizedRuns = normalizedRuns.flatMap((run) => {
+        const runStart = Math.max(run.start, start);
+        const runEnd = Math.min(run.end, end);
+        return runEnd > runStart ? [{ ...run, start: runStart - start, end: runEnd - start }] : [];
+      });
+    }
+    return {
+      content,
+      contentFormat: normalizedRuns.length ? { version: 1, runs: mergeRichTextRuns(normalizedRuns) } : null
+    };
+  }
+
+  function collectRichEditorChunks(root, chunks) {
+    const blockTags = new Set(["DIV", "P", "LI", "UL", "OL", "H1", "H2", "H3", "BLOCKQUOTE"]);
+    const append = (text, marks) => {
+      if (!text) return;
+      const previous = chunks.at(-1);
+      if (previous && sameTextMarks(previous.marks, marks)) previous.text += text;
+      else chunks.push({ text, marks });
+    };
+    const visit = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const parent = node.parentElement || root;
+        const style = getComputedStyle(parent);
+        append((node.nodeValue || "").replace(/\u200b/g, ""), {
+          bold: Number.parseInt(style.fontWeight, 10) >= 700 || style.fontWeight === "bold",
+          italic: style.fontStyle === "italic" || style.fontStyle === "oblique",
+          underline: style.textDecorationLine.includes("underline"),
+          color: richColorKey(style.color)
+        });
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      if (node.tagName === "BR") {
+        append("\n", marksForElement(node.parentElement || root));
+        return;
+      }
+      const isBlock = node !== root && blockTags.has(node.tagName);
+      if (isBlock && chunks.length && !chunks.at(-1).text.endsWith("\n")) append("\n", marksForElement(node));
+      [...node.childNodes].forEach(visit);
+      if (isBlock && node.nextSibling && !chunks.at(-1)?.text.endsWith("\n")) append("\n", marksForElement(node));
+    };
+    [...root.childNodes].forEach(visit);
+  }
+
+  function marksForElement(element) {
+    const style = getComputedStyle(element);
+    return {
+      bold: Number.parseInt(style.fontWeight, 10) >= 700 || style.fontWeight === "bold",
+      italic: style.fontStyle === "italic" || style.fontStyle === "oblique",
+      underline: style.textDecorationLine.includes("underline"),
+      color: richColorKey(style.color)
+    };
+  }
+
+  function hasTextMarks(marks) {
+    return Boolean(marks.bold || marks.italic || marks.underline || marks.color);
+  }
+
+  function sameTextMarks(left, right) {
+    return Boolean(left?.bold) === Boolean(right?.bold)
+      && Boolean(left?.italic) === Boolean(right?.italic)
+      && Boolean(left?.underline) === Boolean(right?.underline)
+      && (left?.color || null) === (right?.color || null);
+  }
+
+  function mergeRichTextRuns(runs) {
+    const merged = [];
+    for (const run of runs) {
+      if (run.end <= run.start || !hasTextMarks(run)) continue;
+      const previous = merged.at(-1);
+      if (previous && previous.end === run.start && sameTextMarks(previous, run)) previous.end = run.end;
+      else merged.push({
+        start: run.start,
+        end: run.end,
+        bold: Boolean(run.bold),
+        italic: Boolean(run.italic),
+        underline: Boolean(run.underline),
+        color: run.color || null
+      });
+    }
+    return merged;
+  }
+
+  function setRichEditorDocument(content, contentFormat = null) {
+    const text = String(content || "");
+    const runs = Array.isArray(contentFormat?.runs) ? contentFormat.runs : [];
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    for (const run of runs) {
+      const start = Math.max(cursor, Math.min(text.length, Number(run.start) || 0));
+      const end = Math.max(start, Math.min(text.length, Number(run.end) || 0));
+      if (start > cursor) fragment.append(document.createTextNode(text.slice(cursor, start)));
+      if (end > start) fragment.append(createFormattedTextSpan(text.slice(start, end), run));
+      cursor = end;
+    }
+    if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
+    elements.entryContent.replaceChildren(fragment);
+    state.editorSelection = null;
+  }
+
+  function createFormattedTextSpan(text, marks) {
+    const span = document.createElement("span");
+    span.textContent = text;
+    if (marks.bold) span.classList.add("diary-text-bold");
+    if (marks.italic) span.classList.add("diary-text-italic");
+    if (marks.underline) span.classList.add("diary-text-underline");
+    if (marks.color && RICH_TEXT_COLORS[marks.color]) span.classList.add(`diary-text-color-${marks.color}`);
+    return span;
+  }
+
+  function removePhotoMarkerFromEditor(marker) {
+    const documentValue = serializeRichEditor(false);
+    let content = documentValue.content;
+    let runs = documentValue.contentFormat?.runs || [];
+    let index = content.lastIndexOf(marker);
+    while (index >= 0) {
+      const end = index + marker.length;
+      content = content.slice(0, index) + content.slice(end);
+      runs = runs.flatMap((run) => {
+        if (run.end <= index) return [run];
+        if (run.start >= end) return [{ ...run, start: run.start - marker.length, end: run.end - marker.length }];
+        const newStart = run.start < index ? run.start : index;
+        const newEnd = run.end > end ? run.end - marker.length : index;
+        return newEnd > newStart ? [{ ...run, start: newStart, end: newEnd }] : [];
+      });
+      index = content.lastIndexOf(marker, index - 1);
+    }
+    setRichEditorDocument(content, runs.length ? { version: 1, runs: mergeRichTextRuns(runs) } : null);
   }
 
   function photoMarker(id) {
@@ -1244,7 +1724,7 @@
       name.textContent = photo.fileName;
       const actions = document.createElement("div");
       actions.className = "editor-photo-card-actions";
-      const markerPresent = elements.entryContent.value.includes(photoMarker(photo.id));
+      const markerPresent = getRichEditorPlainText().includes(photoMarker(photo.id));
       const insert = document.createElement("button");
       insert.className = "quiet-button";
       insert.type = "button";
@@ -1278,7 +1758,7 @@
     }
     if (button.dataset.photoAction === "remove") {
       if (photo.existing && !window.confirm("この画像を日記から削除しますか？保存するまで削除は確定しません。")) return;
-      elements.entryContent.value = elements.entryContent.value.replaceAll(photoMarker(photo.id), "").replace(/\n{3,}/g, "\n\n");
+      removePhotoMarkerFromEditor(photoMarker(photo.id));
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
       if (photo.existing) state.editorDeletedPhotoIds.add(photo.id);
       state.editorPhotos = state.editorPhotos.filter((candidate) => candidate.id !== photo.id);
@@ -1334,7 +1814,7 @@
     elements.entryRevision.value = entry ? String(entry.revision) : "";
     elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
-    elements.entryContent.value = entry?.content || "";
+    setRichEditorDocument(entry?.content || "", entry?.contentFormat || null);
     elements.entryTags.value = entry?.tags?.join("、") || "";
     closeEntryTagSuggestions();
     clearEditorPhotos();
@@ -1342,17 +1822,21 @@
     elements.photoPreparationStatus.textContent = "";
     renderEditorPhotos();
     state.editorDirty = false;
+    closeEntryFormatToolbar();
     elements.editorDialog.showModal();
+    updateEditorKeyboardOffset();
     window.setTimeout(() => (entry ? elements.entryTitle : elements.entryTitle).focus(), 0);
   }
 
   async function saveEntry(event) {
     event.preventDefault();
     const id = Number(elements.entryId.value || 0);
+    const editorDocument = serializeRichEditor(true);
     const body = {
       entryDate: elements.entryDate.value,
       title: elements.entryTitle.value,
-      content: elements.entryContent.value,
+      content: editorDocument.content,
+      contentFormat: editorDocument.contentFormat,
       tags: parseTags(elements.entryTags.value)
     };
     if (id) body.revision = Number(elements.entryRevision.value);
@@ -1397,6 +1881,7 @@
       }
       state.editorDirty = false;
       clearEditorPhotos();
+      closeEntryFormatToolbar();
       elements.editorDialog.close();
       showToast(id ? "日記を更新しました。" : "日記を保存しました。");
       state.trash = false;
@@ -1883,7 +2368,7 @@
       elements.listTitle.textContent = "ゴミ箱";
     } else if (state.tag) {
       elements.listKicker.textContent = "Hashtag";
-      elements.listTitle.textContent = `#${state.tag}の記事一覧`;
+      elements.listTitle.textContent = `#${state.tag}の日記一覧`;
     } else if (state.query || state.dateFrom || state.dateTo) {
       elements.listKicker.textContent = "Results";
       elements.listTitle.textContent = "検索結果";
@@ -1976,6 +2461,7 @@
     if (id === "editor-dialog") {
       state.editorDirty = false;
       clearEditorPhotos();
+      closeEntryFormatToolbar();
     }
     dialog.close();
   }
@@ -2047,8 +2533,8 @@
     elements.tagPageBack.hidden = !onTagPage;
     elements.searchPanel.hidden = onTagPage;
     elements.diaryKicker.textContent = onTagPage ? "Hashtag" : "Diary";
-    elements.diaryTitle.textContent = onTagPage ? `#${tag}の記事一覧` : "日記";
-    document.title = onTagPage ? `#${tag}の記事一覧 | 日記` : "日記";
+    elements.diaryTitle.textContent = onTagPage ? `#${tag}の日記一覧` : "日記";
+    document.title = onTagPage ? `#${tag}の日記一覧 | 日記` : "日記";
   }
 
   function createEmpty(message) {
@@ -2166,6 +2652,7 @@
     state.requestId += 1;
     if (elements.entryDialog.open) elements.entryDialog.close();
     if (elements.editorDialog.open) elements.editorDialog.close();
+    closeEntryFormatToolbar();
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
   }

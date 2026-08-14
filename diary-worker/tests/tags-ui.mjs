@@ -22,7 +22,7 @@ assert.match(script, /replace\(\/\[ァ-ヶ\]\/g/);
 assert.match(script, /numeric: true/);
 assert.match(script, /applyRouteState\(\)/);
 assert.match(script, /\/diary\\\/tag\\\/\(\[\^\/\]\+\)/);
-assert.match(script, /#\$\{tag\}の記事一覧/);
+assert.match(script, /#\$\{tag\}の日記一覧/);
 assert.match(script, /createTagLink\(tag, `#\$\{tag\}`\)/);
 assert.match(script, /function renderEntryTagSuggestions\(\)/);
 assert.match(script, /currentEntryTagContext\(\)/);

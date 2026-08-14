@@ -20,6 +20,7 @@
     "test:date-dismiss": "node tests/date-wheel-dismiss-ui.mjs",
     "test:date-input": "node tests/date-input-platform-ui.mjs",
     "test:chiharu-author": "node tests/chiharu-author-ui.mjs",
+    "test:rich-text": "node tests/rich-text-ui.mjs",
     "import:investment": "node scripts/import-investment-data.mjs"
   },
   "devDependencies": {

@@ -115,11 +115,19 @@ try {
       entryDate: "2026-08-09",
       title,
       content: "permission integration test",
+      contentFormat: {
+        version: 1,
+        runs: [{ start: 0, end: 10, bold: true, italic: false, underline: true, color: "blue" }]
+      },
       tags: []
     }
   });
   assert.equal(created.response.status, 200, JSON.stringify(created.result));
   const entry = created.result.entry;
+  assert.deepEqual(entry.contentFormat, {
+    version: 1,
+    runs: [{ start: 0, end: 10, bold: true, italic: false, underline: true, color: "blue" }]
+  });
 
   const moved = await request(`/entries/${entry.id}`, {
     method: "DELETE",
