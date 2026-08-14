@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260814-calendar-entrypoints">
-  <script src="./billing.js?v=20260814-backdrop-apply" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260815-firefox-calendar">
+  <script src="./billing.js?v=20260815-firefox-calendar" defer></script>
 </head>
 <body>
   <main>
@@ -182,6 +182,17 @@
           <div id="date-wheel-day" class="date-wheel-column" role="listbox" aria-label="日"></div>
         </div>
       </div>
+    </section>
+  </dialog>
+
+  <dialog id="month-calendar-dialog" class="month-calendar-dialog" aria-labelledby="month-calendar-year">
+    <section class="month-calendar-sheet">
+      <header class="month-calendar-head">
+        <button id="month-calendar-previous" class="month-calendar-nav" type="button" aria-label="前年">‹</button>
+        <strong id="month-calendar-year"></strong>
+        <button id="month-calendar-next" class="month-calendar-nav" type="button" aria-label="翌年">›</button>
+      </header>
+      <div id="month-calendar-grid" class="month-calendar-grid" aria-label="月を選択"></div>
     </section>
   </dialog>
 

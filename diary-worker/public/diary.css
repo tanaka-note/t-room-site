@@ -698,7 +698,7 @@ button {
 
 .date-input-shell > input {
   width: 100%;
-  padding-right: 52px;
+  padding-right: 8px;
   appearance: none;
   -webkit-appearance: none;
   background-image: none;
@@ -707,6 +707,12 @@ button {
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+}
+
+@supports selector(input::-webkit-calendar-picker-indicator) {
+  .date-input-shell > input {
+    padding-right: 52px;
+  }
 }
 
 .date-input-shell input::-webkit-calendar-picker-indicator {
@@ -728,6 +734,7 @@ button {
 
 .date-picker-button {
   position: absolute;
+  z-index: 1;
   top: 50%;
   right: 5px;
   display: grid;

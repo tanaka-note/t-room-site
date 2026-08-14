@@ -9,7 +9,7 @@ test("date wheel applies only when its backdrop is selected", async () => {
 
   assert.match(script, /date-wheel-dialog"\]\.addEventListener\("click", applyDateWheelFromBackdrop\)/);
   assert.match(script, /function applyDateWheelFromBackdrop\(event\) \{\s*if \(event\.target === el\["date-wheel-dialog"\]\) applyDateWheel\(\);\s*\}/);
-  assert.match(html, /billing\.js\?v=20260814-backdrop-apply/);
+  assert.match(html, /billing\.js\?v=20260815-firefox-calendar/);
 
   const source = script.match(/function applyDateWheelFromBackdrop\(event\) \{[\s\S]*?\n  \}/)?.[0] || "";
   assert.ok(source);

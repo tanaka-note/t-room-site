@@ -52,10 +52,14 @@ assert.doesNotMatch(script, /function openNativeDatePicker\(event\)[\s\S]*target
 assert.match(script, /input\.addEventListener\("beforeinput", preventDateDirectInput\)/);
 assert.match(script, /input\.addEventListener\("paste", preventDateDirectInput\)/);
 assert.match(style, /\.date-picker-button \{[\s\S]*position: absolute;/);
-assert.match(style, /\.date-input-shell > input \{[\s\S]*appearance: none;[\s\S]*-webkit-appearance: none;/,
-  "the browser-provided calendar icon must be hidden so only the explicit button is visible");
+assert.match(style, /\.date-input-shell > input \{[\s\S]*padding-right: 8px;[\s\S]*appearance: none;[\s\S]*-webkit-appearance: none;/,
+  "Firefox must keep its native date indicator underneath the explicit calendar button");
+assert.match(style, /@supports selector\(input::\-webkit-calendar-picker-indicator\)[\s\S]*padding-right: 52px;/,
+  "Chromium and WebKit must preserve room for the explicit calendar button after hiding their native indicator");
 assert.match(style, /::-webkit-calendar-picker-indicator \{[\s\S]*display: none;/,
   "WebKit and Chromium must not render a second calendar icon");
+assert.match(style, /\.date-picker-button \{[\s\S]*z-index: 1;/,
+  "the explicit button must cover Firefox's non-styleable native date indicator");
 assert.match(style, /\.date-input-shell > input \{[\s\S]*color: #7a8490;[\s\S]*user-select: none;/,
   "dates must look like non-editable examples instead of active blue text segments");
 assert.match(style, /@media \(pointer: coarse\)[\s\S]*#entry-date \{\s*touch-action: manipulation;/,
