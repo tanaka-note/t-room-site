@@ -34,7 +34,7 @@ assert.match(html, /元画質で保存/);
 assert.match(html, /低画質で保存/);
 assert.match(script, /resizePhoto\(bitmap, 1800, 320 \* 1024/);
 assert.match(script, /\["dragenter", "dragover", "dragleave", "drop"\]/);
-assert.match(script, /prepareSelectedPhotos\(\[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\]\)/);
+assert.match(script, /prepareSelectedPhotos\(\[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\], getEditorSelectionOffset\("end"\)\)/);
 assert.match(script, /String\(file\.type\)\.startsWith\("image\/"\)/);
 assert.match(script, /state\.editorPhotos = \(entry\?\.photos \|\| \[\]\)\.map/);
 assert.match(script, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);

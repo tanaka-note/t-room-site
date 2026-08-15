@@ -56,6 +56,7 @@
     editorSourceEntry: null,
     editorSelection: null,
     editorSelectionOffsets: null,
+    editorComposing: false,
     editorToolbarOpen: false,
     dateDraft: null,
     dateWheelTarget: null,
@@ -66,6 +67,7 @@
     editorPhotos: [],
     editorDeletedPhotoIds: new Set(),
     photoPreparing: false,
+    photoInsertionOffset: null,
     photoOffset: 0,
     photos: [],
     photoHasMore: false,
@@ -326,6 +328,8 @@
     elements.entryContent.addEventListener("keydown", handleRichEditorKeydown);
     elements.entryContent.addEventListener("beforeinput", handleRichEditorBeforeInput);
     elements.entryContent.addEventListener("paste", handleRichEditorPaste);
+    elements.entryContent.addEventListener("compositionstart", handleRichEditorCompositionStart);
+    elements.entryContent.addEventListener("compositionend", handleRichEditorCompositionEnd);
     elements.entryContent.addEventListener("focus", rememberEditorSelection);
     elements.entryContent.addEventListener("pointerdown", handleRichEditorPointerDown);
     elements.entryContent.addEventListener("pointerup", rememberEditorSelection);
@@ -339,10 +343,10 @@
       window.visualViewport.addEventListener("resize", updateEditorKeyboardOffset);
       window.visualViewport.addEventListener("scroll", updateEditorKeyboardOffset);
     }
-    elements.addPhotoButton.addEventListener("click", () => elements.photoInput.click());
+    elements.addPhotoButton.addEventListener("click", openPhotoPicker);
     elements.photoInput.addEventListener("change", handlePhotoSelection);
     elements.photoDropZone.addEventListener("click", () => {
-      if (!state.photoPreparing) elements.photoInput.click();
+      if (!state.photoPreparing) openPhotoPicker();
     });
     elements.photoDropZone.addEventListener("keydown", handlePhotoDropKeydown);
     for (const eventName of ["dragenter", "dragover", "dragleave", "drop"]) {
@@ -1397,13 +1401,20 @@
   async function handlePhotoSelection() {
     const files = [...(elements.photoInput.files || [])];
     elements.photoInput.value = "";
-    await prepareSelectedPhotos(files);
+    const insertionOffset = state.photoInsertionOffset ?? getEditorSelectionOffset("end");
+    state.photoInsertionOffset = null;
+    await prepareSelectedPhotos(files, insertionOffset);
+  }
+
+  function openPhotoPicker() {
+    state.photoInsertionOffset = getEditorSelectionOffset("end");
+    elements.photoInput.click();
   }
 
   function handlePhotoDropKeydown(event) {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    if (!state.photoPreparing) elements.photoInput.click();
+    if (!state.photoPreparing) openPhotoPicker();
   }
 
   function handlePhotoDragEvent(event) {
@@ -1425,10 +1436,10 @@
       elements.photoPreparationStatus.textContent = "画像を準備中です。完了してから追加してください。";
       return;
     }
-    prepareSelectedPhotos([...(event.dataTransfer?.files || [])]);
+    prepareSelectedPhotos([...(event.dataTransfer?.files || [])], getEditorSelectionOffset("end"));
   }
 
-  async function prepareSelectedPhotos(files) {
+  async function prepareSelectedPhotos(files, insertionOffset = getEditorSelectionOffset("end")) {
     if (!files.length) return;
     if (state.photoPreparing) return;
     state.photoPreparing = true;
@@ -1438,6 +1449,7 @@
     setBusy(elements.addPhotoButton, true, "準備中...");
     elements.photoPreparationStatus.textContent = `${files.length}件の写真を準備しています。`;
     const failures = [];
+    const preparedPhotos = [];
     let preparedCount = 0;
     try {
       for (let index = 0; index < files.length; index += 1) {
@@ -1446,13 +1458,16 @@
         try {
           const photo = await preparePhoto(file);
           state.editorPhotos.push(photo);
-          insertPhotoMarker(photo.id);
+          preparedPhotos.push(photo);
           preparedCount += 1;
         } catch (error) {
           failures.push(`${file.name}：${error.message}`);
         }
       }
-      state.editorDirty = true;
+      await waitForEditorCompositionEnd();
+      if (preparedPhotos.length) {
+        insertPhotoMarkersAtOffset(preparedPhotos.map((photo) => photo.id), insertionOffset);
+      }
       renderEditorPhotos();
       elements.photoPreparationStatus.textContent = failures.length
         ? `${preparedCount}件を追加しました。追加できなかったファイル：${failures.join(" / ")}`
@@ -1526,18 +1541,51 @@
   }
 
   function insertPhotoMarker(id) {
-    const marker = photoMarker(id);
-    const content = getRichEditorPlainText();
-    const offset = getEditorSelectionOffset();
+    insertPhotoMarkersAtOffset([id], getEditorSelectionOffset("end"));
+  }
+
+  function insertPhotoMarkersAtOffset(ids, requestedOffset) {
+    if (!ids.length) return false;
+    const editorDocument = serializeRichEditor(false);
+    const content = editorDocument.content;
+    const offset = Math.max(0, Math.min(content.length, Number(requestedOffset) || 0));
     const prefix = offset > 0 && content[offset - 1] !== "\n" ? "\n" : "";
     const suffix = offset < content.length && content[offset] !== "\n" ? "\n" : "";
-    insertPlainTextAtEditorSelection(`${prefix}${marker}${suffix}`);
-    elements.entryContent.focus();
+    const insertedText = `${prefix}${ids.map(photoMarker).join("\n")}${suffix}`;
+    if (content.length + insertedText.length > 200000) {
+      elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
+      return false;
+    }
+    const updatedDocument = insertTextIntoRichDocument(editorDocument, offset, insertedText);
+    setRichEditorDocument(updatedDocument.content, updatedDocument.contentFormat);
+    elements.entryContent.focus({ preventScroll: true });
+    const caret = offset + insertedText.length;
+    restoreEditorSelectionFromOffsets({ start: caret, end: caret });
+    state.editorSelectionOffsets = null;
+    elements.entryContent.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
   }
 
   function handleRichEditorInput() {
     state.editorDirty = true;
     if (state.editorToolbarOpen) closeEntryFormatToolbar();
+  }
+
+  function handleRichEditorCompositionStart() {
+    state.editorComposing = true;
+  }
+
+  function handleRichEditorCompositionEnd() {
+    state.editorComposing = false;
+  }
+
+  function waitForEditorCompositionEnd() {
+    if (!state.editorComposing) return Promise.resolve();
+    return new Promise((resolve) => {
+      elements.entryContent.addEventListener("compositionend", () => {
+        window.setTimeout(resolve, 0);
+      }, { once: true });
+    });
   }
 
   function handleRichEditorBeforeInput(event) {
@@ -1659,12 +1707,13 @@
     state.editorSelection = range.cloneRange();
   }
 
-  function getEditorSelectionOffset() {
+  function getEditorSelectionOffset(boundary = "start") {
     const range = state.editorSelection;
     if (!range || !elements.entryContent.contains(range.startContainer)) return getRichEditorPlainText().length;
     const before = document.createRange();
     before.selectNodeContents(elements.entryContent);
-    before.setEnd(range.startContainer, range.startOffset);
+    const useEnd = boundary === "end" && elements.entryContent.contains(range.endContainer);
+    before.setEnd(useEnd ? range.endContainer : range.startContainer, useEnd ? range.endOffset : range.startOffset);
     return before.toString().replace(/[\u200b\ufeff]/g, "").length;
   }
 
@@ -1975,6 +2024,34 @@
     return merged;
   }
 
+  function shiftRichTextRunsForInsertion(runs, offset, insertedLength) {
+    return mergeRichTextRuns(runs.flatMap((run) => {
+      if (run.end <= offset) return [run];
+      if (run.start >= offset) {
+        return [{ ...run, start: run.start + insertedLength, end: run.end + insertedLength }];
+      }
+      return [
+        { ...run, end: offset },
+        { ...run, start: offset + insertedLength, end: run.end + insertedLength }
+      ];
+    }));
+  }
+
+  function insertTextIntoRichDocument(documentValue, requestedOffset, insertedText) {
+    const content = String(documentValue?.content || "");
+    const offset = Math.max(0, Math.min(content.length, Number(requestedOffset) || 0));
+    const text = String(insertedText || "");
+    const runs = shiftRichTextRunsForInsertion(
+      Array.isArray(documentValue?.contentFormat?.runs) ? documentValue.contentFormat.runs : [],
+      offset,
+      text.length
+    );
+    return {
+      content: content.slice(0, offset) + text + content.slice(offset),
+      contentFormat: runs.length ? { version: 1, runs } : null
+    };
+  }
+
   function setRichEditorDocument(content, contentFormat = null) {
     const text = String(content || "");
     const runs = Array.isArray(contentFormat?.runs) ? contentFormat.runs : [];
@@ -2134,6 +2211,8 @@
     elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
     state.editorSelectionOffsets = null;
+    state.editorComposing = false;
+    state.photoInsertionOffset = null;
     setRichEditorDocument(entry?.content || "", entry?.contentFormat || null);
     elements.entryTags.value = entry?.tags?.join("、") || "";
     closeEntryTagSuggestions();
