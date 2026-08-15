@@ -8,7 +8,7 @@ const [html, script] = await Promise.all([
   readFile(`${root}/public/diary.js`, "utf8")
 ]);
 
-assert.match(html, /diary\.js\?v=57/);
+assert.match(html, /diary\.js\?v=58/);
 assert.match(script, /const ENTRY_HISTORY_KEY = "troomDiaryEntry"/);
 assert.match(script, /elements\.entryDialog\.showModal\(\);\s*pushEntryHistory\(\);/);
 assert.match(script, /window\.history\.pushState\(/);
@@ -38,7 +38,9 @@ assert.match(script, /elements\.photoViewerDialog\.showModal\(\);\s*pushPhotoVie
 assert.match(script, /function handleHistoryNavigation\(\)[\s\S]*?finishPhotoViewerClose\(\)[\s\S]*?finishCameraRollClose\(\)[\s\S]*?finishEditorClose\(\)[\s\S]*?finishEntryClose\(\)/);
 assert.match(script, /if \(id === "camera-roll-dialog"\)[\s\S]*?closeCameraRollDialog\(\)/);
 assert.match(script, /if \(id === "photo-viewer-dialog"\)[\s\S]*?closePhotoViewerDialog\(\)/);
-assert.match(script, /elements\.photoInput\.addEventListener\("cancel", finishPhotoPickerInteraction\)/);
+assert.match(script, /elements\.photoInput\.addEventListener\("cancel", handlePhotoPickerCancel\)/);
+assert.match(script, /function handlePhotoPickerCancel\(event\) \{\s*event\.stopPropagation\(\);\s*finishPhotoPickerInteraction\(\);\s*\}/);
+assert.match(script, /elements\.editorDialog\.addEventListener\("cancel", \(event\) => \{\s*if \(event\.target !== elements\.editorDialog\) return;\s*event\.preventDefault\(\);\s*requestEditorClose\(\);/s);
 assert.match(script, /function openPhotoPicker\(\)[\s\S]*?state\.photoPickerActive = true[\s\S]*?window\.addEventListener\("focus", photoPickerReturnHandler, \{ once: true \}\)[\s\S]*?elements\.photoInput\.click\(\)/);
 assert.match(script, /function handlePhotoSelection\(\) \{\s*finishPhotoPickerInteraction\(\)/);
 

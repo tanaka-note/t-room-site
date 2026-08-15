@@ -355,7 +355,7 @@
     }
     elements.addPhotoButton.addEventListener("click", openPhotoPicker);
     elements.photoInput.addEventListener("change", handlePhotoSelection);
-    elements.photoInput.addEventListener("cancel", finishPhotoPickerInteraction);
+    elements.photoInput.addEventListener("cancel", handlePhotoPickerCancel);
     elements.photoDropZone.addEventListener("click", () => {
       if (!state.photoPreparing) openPhotoPicker();
     });
@@ -423,6 +423,7 @@
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
     });
     elements.editorDialog.addEventListener("cancel", (event) => {
+      if (event.target !== elements.editorDialog) return;
       event.preventDefault();
       requestEditorClose();
     });
@@ -1467,6 +1468,11 @@
     const insertionOffset = state.photoInsertionOffset ?? getEditorSelectionOffset("end");
     state.photoInsertionOffset = null;
     await prepareSelectedPhotos(files, insertionOffset);
+  }
+
+  function handlePhotoPickerCancel(event) {
+    event.stopPropagation();
+    finishPhotoPickerInteraction();
   }
 
   function openPhotoPicker() {
