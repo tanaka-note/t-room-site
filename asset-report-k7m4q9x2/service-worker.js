@@ -6,7 +6,7 @@ const APP_SHELL = [
   APP_PATH,
   `${APP_PATH}index.html`,
   `${APP_PATH}report.css?v=20260812-1`,
-  `${APP_PATH}report.js?v=20260815-1`,
+  `${APP_PATH}report.js?v=20260815-2`,
   `${APP_PATH}pwa.js?v=20260812-1`,
   `${APP_PATH}manifest.webmanifest?v=20260812-2`,
   `${APP_PATH}icons/icon-192.png?v=20260812-2`,

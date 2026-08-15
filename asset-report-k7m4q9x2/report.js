@@ -7,6 +7,10 @@ const reportData = {
     name: "投資信託売却益",
     value: 1058649
   },
+  operatingExpense: {
+    name: "運用手数料・雑費",
+    value: 0
+  },
   monthlyReport: {
     entries: [
       {
@@ -174,13 +178,23 @@ function assetReturnRate(asset) {
   return (assetProfit(asset) / asset.principal) * 100;
 }
 
+function totalMarketValue(includeAdjustment = false) {
+  const baseTotal = reportData.assets.reduce((sum, asset) => sum + asset.marketValue, 0);
+  return includeAdjustment ? baseTotal + reportData.operatingExpense.value : baseTotal;
+}
+
+function historyMarketValue(entry) {
+  return entry.marketValue + (entry.period === reportData.period ? reportData.operatingExpense.value : 0);
+}
+
 function renderSummary() {
-  const total = reportData.assets.reduce((sum, asset) => sum + asset.marketValue, 0);
-  const profit = total - reportData.principal;
+  const total = totalMarketValue(false);
+  const adjustedTotal = totalMarketValue(true);
+  const profit = adjustedTotal - reportData.principal;
   const returnRate = (profit / reportData.principal) * 100;
 
   document.querySelector("#principal-value").textContent = formatYen(reportData.principal);
-  document.querySelector("#market-value").textContent = formatYen(total);
+  document.querySelector("#market-value").textContent = formatYen(adjustedTotal);
 
   const profitElement = document.querySelector("#profit-value");
   profitElement.textContent = formatYen(profit, true);
@@ -241,6 +255,17 @@ function renderHoldings() {
     <td data-label="損益率" class="unknown-value">—</td>
   `;
   fragment.appendChild(realizedRow);
+
+  const operatingExpenseRow = document.createElement("tr");
+  const operatingExpenseClass = valueClass(reportData.operatingExpense.value);
+  operatingExpenseRow.className = "realized-profit-row";
+  operatingExpenseRow.innerHTML = `
+    <td><span class="asset-name"><strong>${reportData.operatingExpense.name}</strong><small>運用成績調整</small></span></td>
+    <td data-label="時価総額" class="unknown-value">—</td>
+    <td data-label="手数料・雑費" class="${operatingExpenseClass}">${formatYen(reportData.operatingExpense.value, true)}</td>
+    <td data-label="損益率" class="unknown-value">—</td>
+  `;
+  fragment.appendChild(operatingExpenseRow);
 
   body.replaceChildren(fragment);
 }
@@ -345,7 +370,7 @@ function updateHistoryRangeUi(definition) {
   const first = historyView.visibleRecords[0];
   const latest = historyView.visibleRecords.at(-1);
   document.querySelector("#history-period").textContent = `${formatHistoryDateShort(first.period)} — ${formatHistoryDateShort(latest.period)}`;
-  document.querySelector("#history-summary").textContent = `${formatHistoryDateLong(first.period)}の${formatYen(first.marketValue)}から、${formatHistoryDateLong(latest.period)}の${formatYen(latest.marketValue)}までの推移です。`;
+  document.querySelector("#history-summary").textContent = `${formatHistoryDateLong(first.period)}の${formatYen(historyMarketValue(first))}から、${formatHistoryDateLong(latest.period)}の${formatYen(historyMarketValue(latest))}までの推移です。`;
   document.querySelectorAll("button[data-history-range]").forEach((button) => {
     const active = button.dataset.historyRange === historyView.range;
     button.classList.toggle("is-active", active);
@@ -364,7 +389,7 @@ function drawHistoryChart() {
   const padding = { top: 24, right: compact ? 12 : 22, bottom: 44, left: compact ? 62 : 82 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  const values = historyView.visibleRecords.flatMap((entry) => [entry.principal, entry.marketValue]);
+  const values = historyView.visibleRecords.flatMap((entry) => [entry.principal, historyMarketValue(entry)]);
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const rawSpread = Math.max(maxValue - minValue, 100000);
@@ -426,7 +451,8 @@ function drawHistoryChart() {
     context.beginPath();
     historyView.visibleRecords.forEach((entry, index) => {
       const x = xFor(index);
-      const y = yFor(entry[key]);
+      const yValue = key === "marketValue" ? historyMarketValue(entry) : entry[key];
+      const y = yFor(yValue);
       if (index === 0) context.moveTo(x, y);
       else context.lineTo(x, y);
     });
@@ -445,13 +471,14 @@ function drawHistoryChart() {
   if (historyView.selectedIndex >= 0 && historyView.visibleRecords[historyView.selectedIndex]) {
     const entry = historyView.visibleRecords[historyView.selectedIndex];
     const x = xFor(historyView.selectedIndex);
+    const marketValue = historyMarketValue(entry);
     context.strokeStyle = "rgba(245, 247, 250, 0.25)";
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, padding.top);
     context.lineTo(x, padding.top + chartHeight);
     context.stroke();
-    [[entry.marketValue, "#52e6aa"], [entry.principal, "#8996a8"]].forEach(([value, color]) => {
+    [[marketValue, "#52e6aa"], [entry.principal, "#8996a8"]].forEach(([value, color]) => {
       context.beginPath();
       context.arc(x, yFor(value), 5, 0, Math.PI * 2);
       context.fillStyle = "#07090d";
@@ -485,12 +512,13 @@ function renderHistoryTooltip(entry, x, y) {
   const tooltip = document.querySelector("#history-tooltip");
   const frame = document.querySelector(".chart-frame-history");
   const canvas = document.querySelector("#history-chart");
-  const profit = entry.marketValue - entry.principal;
+  const marketValue = historyMarketValue(entry);
+  const profit = marketValue - entry.principal;
   const date = document.createElement("time");
   date.dateTime = entry.period;
   date.textContent = formatHistoryDateLong(entry.period);
   const value = document.createElement("strong");
-  value.textContent = formatYen(entry.marketValue);
+  value.textContent = formatYen(marketValue);
   const change = document.createElement("span");
   change.className = valueClass(profit);
   change.textContent = `損益 ${formatYen(profit, true)}`;
