@@ -17,6 +17,7 @@ for (const mediaKind of ["audio", "document", "other", ""]) {
 }
 
 assert.match(script, /card\.classList\.add\(usesSquareFileCard\(file\) \? "media-file-card" : "non-media-file-card"\)/);
+assert.match(css, /\.folder-card \{ grid-column: 1 \/ -1; \}/, "folders must stay horizontal in mixed mode");
 assert.match(css, /\.content-grid:not\(\.list-mode\) \.file-card\.non-media-file-card \{ grid-column: 1 \/ -1; \}/);
 assert.match(css, /\.content-grid:not\(\.list-mode\) \.file-card\.non-media-file-card > button:not\(\.file-select-button\) \{[^}]*grid-template-columns: 92px minmax\(0,1fr\);/);
 assert.match(css, /@media \(max-width: 900px\)[\s\S]*?\.content-grid:not\(\.list-mode\) \.file-card\.non-media-file-card > button:not\(\.file-select-button\) \{[^}]*grid-template-columns: 76px minmax\(0, 1fr\);/);

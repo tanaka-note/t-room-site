@@ -148,6 +148,9 @@ import jp.tanaka.tcloud.data.CloudUsage
 import jp.tanaka.tcloud.data.CloudUsageFolder
 import jp.tanaka.tcloud.data.TrashPage
 import androidx.media3.common.MediaItem
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.Player
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -187,7 +190,11 @@ private data class PendingCameraBackupSettings(
 )
 
 @Composable
-fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
+fun TCloudApp(
+    viewModel: MainViewModel,
+    pictureInPicture: Boolean = false,
+    applicationVisible: Boolean = true,
+) {
     val state by viewModel.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -518,6 +525,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                         playbackManager = playbackManager,
                         startAtBeginning = state.selectedFileStartsAtBeginning,
                         pictureInPicture = pictureInPicture,
+                        applicationVisible = applicationVisible,
                         onPlayPrevious = { viewModel.navigateMedia(-1) },
                         onPlayNext = { viewModel.navigateMedia(1) },
                         onAutomaticRepeatNext = { viewModel.navigateMedia(1, automaticRepeat = true) },
@@ -1334,24 +1342,18 @@ private fun FolderScreen(
                         )
                     }
                 } else {
-                    items(filteredFolders.chunked(2), key = { row -> "folder-grid-${row.first().id}" }) { row ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            row.forEach { folder ->
-                                FolderGridCard(
-                                    folder = folder,
-                                    selected = folder.id in selectedFolderIds,
-                                    selectionMode = selectionMode,
-                                    canManage = canManageItems,
-                                    onOpenFolder = onOpenFolder,
-                                    onToggleSelection = onToggleFolderSelection,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                            if (row.size == 1) Spacer(Modifier.weight(1f))
-                        }
+                    items(filteredFolders, key = { "folder-grid-${it.id}" }) { folder ->
+                        FolderRow(
+                            folder = folder,
+                            selected = folder.id in selectedFolderIds,
+                            selectionMode = selectionMode,
+                            canManage = canManageItems,
+                            onOpenFolder = onOpenFolder,
+                            onToggleSelection = onToggleFolderSelection,
+                            onRename = onRenameFolder,
+                            onMove = onMoveFolder,
+                            onShare = onShareFolder,
+                        )
                     }
                     items(
                         groupFilesForGridDisplay(filteredFiles),
@@ -1527,7 +1529,12 @@ private fun TransferProgressCard(batch: TransferBatchSnapshot) {
                 style = MaterialTheme.typography.bodySmall,
                 color = TCloudMuted,
             )
-            if (batch.currentName.isNotBlank()) {
+            if (batch.activeCount > 1) {
+                Text(
+                    "${batch.activeCount}件を処理中",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (batch.currentName.isNotBlank()) {
                 Text(
                     batch.currentName,
                     maxLines = 1,
@@ -2769,12 +2776,14 @@ private fun MediaPlayerScreen(
     playbackManager: TCloudPlaybackManager,
     startAtBeginning: Boolean,
     pictureInPicture: Boolean,
+    applicationVisible: Boolean,
     onPlayPrevious: () -> Unit,
     onPlayNext: () -> Unit,
     onAutomaticRepeatNext: () -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val activity = context as? Activity
     val orientation = LocalConfiguration.current.orientation
     val isVideo = file.mediaKind == "video"
@@ -2829,6 +2838,33 @@ private fun MediaPlayerScreen(
                 refreshNotification = false,
             )
         }
+    }
+    LaunchedEffect(player, file.id, isVideo, applicationVisible, pictureInPicture) {
+        if (shouldPauseVideoForBackground(
+                isVideo,
+                applicationVisible,
+                pictureInPicture || activity?.isInPictureInPictureMode == true,
+            )
+        ) {
+            context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
+            player.pause()
+        }
+    }
+    DisposableEffect(lifecycleOwner, player, file.id, isVideo, activity, pictureInPicture) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP &&
+                shouldPauseVideoForBackground(
+                    isVideo = isVideo,
+                    applicationVisible = false,
+                    pictureInPicture = pictureInPicture || activity?.isInPictureInPictureMode == true,
+                )
+            ) {
+                context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
+                player.pause()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     DisposableEffect(player, file.id, playbackMode) {
         val listener = object : Player.Listener {
@@ -3023,6 +3059,12 @@ internal enum class PlaybackMode {
 
 internal fun nextPlaybackMode(current: PlaybackMode, @Suppress("UNUSED_PARAMETER") mediaKind: String): PlaybackMode =
     if (current == PlaybackMode.REPEAT_ALL) PlaybackMode.OFF else PlaybackMode.REPEAT_ALL
+
+internal fun shouldPauseVideoForBackground(
+    isVideo: Boolean,
+    applicationVisible: Boolean,
+    pictureInPicture: Boolean,
+): Boolean = isVideo && !applicationVisible && !pictureInPicture
 
 private const val PLAYBACK_POSITION_PREFERENCES = "tcloud_playback_positions"
 internal const val PLAYER_BUTTON_SEEK_MS = 10_000L

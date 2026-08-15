@@ -43,6 +43,22 @@ class BackgroundPlaybackContractTest {
         assertTrue(ui.contains("state = listState"))
     }
 
+    @Test
+    fun activityVisibilityPausesOnlyNormalVideoAndKeepsPipExclusion() {
+        val activity = projectFile(
+            "app/src/main/java/jp/tanaka/tcloud/MainActivity.kt",
+        ).readText()
+        val ui = projectFile(
+            "app/src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt",
+        ).readText()
+
+        assertTrue(activity.contains("override fun onStop()"))
+        assertTrue(activity.contains("applicationVisible = false"))
+        assertTrue(ui.contains("pictureInPicture || activity?.isInPictureInPictureMode == true"))
+        assertTrue(ui.contains("player.pause()"))
+        assertTrue(ui.contains("if (!isAudio)"))
+    }
+
     private fun projectFile(relativePath: String): File {
         var current = File(checkNotNull(System.getProperty("user.dir"))).canonicalFile
         repeat(6) {

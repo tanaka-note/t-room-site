@@ -16,6 +16,8 @@ import jp.tanaka.tcloud.data.CloudFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
@@ -25,6 +27,9 @@ class TCloudDownloadWorker(
     appContext: Context,
     parameters: WorkerParameters,
 ) : CoroutineWorker(appContext, parameters) {
+    private val progressMutex = Mutex()
+    private var lastProgressSignature = ""
+
     override suspend fun doWork(): Result {
         val batchId = inputData.getString(KEY_BATCH_ID).orEmpty()
         if (batchId.isBlank()) return Result.failure(errorData("ダウンロード情報が不正です。"))
@@ -41,16 +46,20 @@ class TCloudDownloadWorker(
         setForeground(notifications.foreground(checkNotNull(store.batch(batchId)), id))
 
         return try {
-            store.items(batchId)
-                .filter { it.status == TransferStatus.QUEUED }
-                .forEach { item ->
-                    currentCoroutineContext().ensureActive()
-                    downloadOne(application, store, notifications, batchId, item)
-                }
-            store.finishBatch(batchId)
-            Result.success()
-        } catch (_: TransferRetryRequested) {
-            Result.retry()
+            val outcomes = runFileTransfers(
+                store.items(batchId).filter { it.status == TransferStatus.QUEUED },
+            ) { item ->
+                currentCoroutineContext().ensureActive()
+                downloadOne(application, store, notifications, batchId, item)
+            }
+            if (outcomes.any { it == TransferItemOutcome.RETRY }) {
+                store.markBatchRetryPending(batchId)
+                publishProgress(store, notifications, batchId, force = true)
+                Result.retry()
+            } else {
+                store.finishBatch(batchId)
+                Result.success()
+            }
         } catch (cancelled: CancellationException) {
             store.items(batchId)
                 .filter { it.status == TransferStatus.RUNNING }
@@ -77,9 +86,9 @@ class TCloudDownloadWorker(
         notifications: TCloudTransferNotifications,
         batchId: String,
         item: TransferItem,
-    ) {
+    ): TransferItemOutcome {
         store.markItemRunning(batchId, item.index, item.name)
-        updateForeground(store, notifications, batchId)
+        publishProgress(store, notifications, batchId)
         try {
             val resultUri = retryTransientTransfer {
                 val file = application.repository.loadFileForBackground(item.folderId, item.fileId)
@@ -95,9 +104,15 @@ class TCloudDownloadWorker(
                             } else 0
                             if (percent != lastReportedProgress) {
                                 lastReportedProgress = percent
-                                store.updateProgress(batchId, file.name, percent)
-                                setProgress(progressData(store, batchId))
-                                updateForeground(store, notifications, batchId)
+                                store.updateProgress(
+                                    batchId,
+                                    item.index,
+                                    file.name,
+                                    percent,
+                                    downloaded,
+                                    total,
+                                )
+                                publishProgress(store, notifications, batchId)
                             }
                         }
                     }
@@ -121,11 +136,13 @@ class TCloudDownloadWorker(
                 ?.let(::deleteDestination)
             if (isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
                 store.deferItem(batchId, item.index)
-                throw TransferRetryRequested(error)
+                publishProgress(store, notifications, batchId)
+                return TransferItemOutcome.RETRY
             }
             store.markItemFailure(batchId, item.index, error.userMessage())
         }
-        updateForeground(store, notifications, batchId)
+        publishProgress(store, notifications, batchId)
+        return TransferItemOutcome.FINISHED
     }
 
     private suspend fun createDestination(file: CloudFile): DownloadDestination {
@@ -169,7 +186,11 @@ class TCloudDownloadWorker(
             "T-Cloud",
         )
         check(directory.exists() || directory.mkdirs()) { "保存フォルダを作成できませんでした。" }
-        val outputFile = uniqueFile(directory, safeName)
+        val outputFile = synchronized(DESTINATION_LOCK) {
+            uniqueFile(directory, safeName).also { file ->
+                check(file.createNewFile()) { "保存先を作成できませんでした。" }
+            }
+        }
         return DownloadDestination(
             uri = Uri.fromFile(outputFile),
             output = FileOutputStream(outputFile),
@@ -178,12 +199,17 @@ class TCloudDownloadWorker(
         )
     }
 
-    private suspend fun updateForeground(
+    private suspend fun publishProgress(
         store: TCloudTransferStore,
         notifications: TCloudTransferNotifications,
         batchId: String,
-    ) {
-        val batch = store.batch(batchId) ?: return
+        force: Boolean = false,
+    ) = progressMutex.withLock {
+        val batch = store.batch(batchId) ?: return@withLock
+        val signature = "${batch.status}:${batch.processed}:${batch.activeCount}:${batch.overallProgress}"
+        if (!force && signature == lastProgressSignature) return@withLock
+        lastProgressSignature = signature
+        setProgress(progressData(batch))
         setForeground(notifications.foreground(batch, id))
     }
 
@@ -215,8 +241,7 @@ class TCloudDownloadWorker(
         }
     }
 
-    private fun progressData(store: TCloudTransferStore, batchId: String): Data {
-        val batch = store.batch(batchId) ?: return Data.EMPTY
+    private fun progressData(batch: TransferBatchSnapshot): Data {
         return Data.Builder()
             .putInt(KEY_TOTAL_COUNT, batch.total)
             .putInt(KEY_COMPLETED_COUNT, batch.processed)
@@ -245,5 +270,6 @@ class TCloudDownloadWorker(
         const val KEY_PROGRESS_PERCENT = "progress_percent"
         const val KEY_ERROR = "error"
         private const val MAX_BATCH_RETRIES = 5
+        private val DESTINATION_LOCK = Any()
     }
 }

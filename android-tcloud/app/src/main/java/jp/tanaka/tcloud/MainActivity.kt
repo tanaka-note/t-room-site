@@ -15,6 +15,7 @@ import jp.tanaka.tcloud.ui.TCloudApp
 
 class MainActivity : ComponentActivity() {
     private var pictureInPicture by mutableStateOf(false)
+    private var applicationVisible by mutableStateOf(true)
     private val viewModel: MainViewModel by viewModels {
         val app = application as TCloudApplication
         object : ViewModelProvider.Factory {
@@ -43,7 +44,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         })
-        setContent { TCloudApp(viewModel, pictureInPicture) }
+        setContent { TCloudApp(viewModel, pictureInPicture, applicationVisible) }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        applicationVisible = true
+    }
+
+    override fun onStop() {
+        applicationVisible = false
+        super.onStop()
     }
 
     override fun onPictureInPictureModeChanged(

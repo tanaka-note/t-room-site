@@ -49,6 +49,8 @@ class FolderPresentationTest {
         assertEquals(false, usesSquareFileCard(file(5, "sheet.xlsx", 1, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "document")))
         assertEquals(false, usesSquareFileCard(file(6, "release.apk", 1, "application/vnd.android.package-archive", "other")))
         assertEquals(false, usesSquareFileCard(file(7, "song.mp3", 1, "audio/mpeg", "audio")))
+        assertEquals(false, usesSquareFileCard(file(8, "archive.zip", 1, "application/zip", "other")))
+        assertEquals(false, usesSquareFileCard(file(9, "unknown.bin", 1, "application/octet-stream", "")))
     }
 
     @Test

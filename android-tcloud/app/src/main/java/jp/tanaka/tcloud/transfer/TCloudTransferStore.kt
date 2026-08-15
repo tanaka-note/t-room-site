@@ -47,6 +47,9 @@ data class TransferItem(
     val stage: String,
     val error: String,
     val resultUri: String,
+    val progressPercent: Int,
+    val transferredBytes: Long,
+    val totalBytes: Long,
 )
 
 data class TransferFailure(
@@ -68,6 +71,10 @@ data class TransferBatchSnapshot(
     val failures: List<TransferFailure>,
     val createdAt: Long,
     val updatedAt: Long,
+    val activeCount: Int = 0,
+    val transferredBytes: Long = 0,
+    val totalBytes: Long = 0,
+    private val aggregateProgress: Int? = null,
 ) {
     val processed: Int get() = (succeeded + failed).coerceAtMost(total)
     val remaining: Int get() = (total - processed).coerceAtLeast(0)
@@ -75,6 +82,7 @@ data class TransferBatchSnapshot(
     val overallProgress: Int get() = when {
         total <= 0 -> 0
         !active -> 100
+        aggregateProgress != null -> aggregateProgress.coerceIn(0, 99)
         else -> ((processed * 100 + currentFileProgress.coerceIn(0, 100)) / total).coerceIn(0, 99)
     }
 }
@@ -92,7 +100,8 @@ data class CreatedCameraBatch(
 )
 
 internal fun transferProgressText(batch: TransferBatchSnapshot): String =
-    "${batch.total}件中${batch.processed}件完了・残り${batch.remaining}件"
+    "${batch.total}件中${batch.processed}件完了・残り${batch.remaining}件" +
+        if (batch.activeCount > 0) "\n${batch.activeCount}件を処理中" else ""
 
 internal fun transferResultText(batch: TransferBatchSnapshot): String =
     "${batch.total}件中${batch.succeeded}件成功・${batch.failed}件失敗"
@@ -129,6 +138,9 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                     stage = STAGE_QUEUED,
                     error = "",
                     resultUri = "",
+                    progressPercent = 0,
+                    transferredBytes = 0,
+                    totalBytes = 0,
                 )
             },
         )
@@ -170,6 +182,9 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                     stage = STAGE_QUEUED,
                     error = "",
                     resultUri = "",
+                    progressPercent = 0,
+                    transferredBytes = 0,
+                    totalBytes = 0,
                 )
             },
         )
@@ -195,6 +210,9 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                     stage = STAGE_QUEUED,
                     error = "",
                     resultUri = "",
+                    progressPercent = 0,
+                    transferredBytes = 0,
+                    totalBytes = file.sizeBytes.coerceAtLeast(0),
                 )
             },
         )
@@ -229,6 +247,9 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                         stage = cursor.getString(9),
                         error = cursor.getString(10),
                         resultUri = cursor.getString(11),
+                        progressPercent = cursor.getInt(12),
+                        transferredBytes = cursor.getLong(13),
+                        totalBytes = cursor.getLong(14),
                     ),
                 )
             }
@@ -254,6 +275,8 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                         put(COLUMN_STATUS, TransferStatus.QUEUED.value)
                         put(COLUMN_STAGE, STAGE_QUEUED)
                         put(COLUMN_RESULT_URI, "")
+                        put(COLUMN_PROGRESS_PERCENT, 0)
+                        put(COLUMN_TRANSFERRED_BYTES, 0)
                     },
                     "$COLUMN_BATCH_ID = ? AND $COLUMN_ITEM_INDEX = ?",
                     arrayOf(batchId, item.index.toString()),
@@ -269,11 +292,18 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
     fun markBatchRunning(batchId: String) = updateBatch(batchId, TransferStatus.RUNNING, "", 0)
 
     @Synchronized
-    fun markItemRunning(batchId: String, index: Int, name: String) {
+    fun markBatchRetryPending(batchId: String) =
+        updateBatch(batchId, TransferStatus.QUEUED, "通信回復後に再試行します", 0)
+
+    @Synchronized
+    fun markItemRunning(batchId: String, index: Int, name: String, totalBytes: Long? = null) {
         updateItem(batchId, index) {
             put(COLUMN_STATUS, TransferStatus.RUNNING.value)
             put(COLUMN_STAGE, STAGE_PREPARING)
             put(COLUMN_ERROR, "")
+            put(COLUMN_PROGRESS_PERCENT, 0)
+            put(COLUMN_TRANSFERRED_BYTES, 0)
+            totalBytes?.let { put(COLUMN_TOTAL_BYTES, it.coerceAtLeast(0)) }
             if (name.isNotBlank()) put(COLUMN_NAME, name)
         }
         updateBatch(batchId, TransferStatus.RUNNING, name, 0)
@@ -290,8 +320,21 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
     }
 
     @Synchronized
-    fun updateProgress(batchId: String, name: String, progress: Int) =
+    fun updateProgress(
+        batchId: String,
+        index: Int,
+        name: String,
+        progress: Int,
+        transferredBytes: Long,
+        totalBytes: Long,
+    ) {
+        updateItem(batchId, index, publishNow = false) {
+            put(COLUMN_PROGRESS_PERCENT, progress.coerceIn(0, 100))
+            put(COLUMN_TRANSFERRED_BYTES, transferredBytes.coerceAtLeast(0))
+            put(COLUMN_TOTAL_BYTES, totalBytes.coerceAtLeast(0))
+        }
         updateBatch(batchId, TransferStatus.RUNNING, name, progress.coerceIn(0, 100))
+    }
 
     @Synchronized
     fun markItemSuccess(batchId: String, index: Int, resultUri: String = "") {
@@ -300,6 +343,7 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
             put(COLUMN_STAGE, STAGE_DONE)
             put(COLUMN_ERROR, "")
             put(COLUMN_RESULT_URI, resultUri)
+            put(COLUMN_PROGRESS_PERCENT, 100)
         }
         refreshBatchCounts(batchId)
     }
@@ -316,6 +360,8 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
             put(COLUMN_STAGE, STAGE_DONE)
             put(COLUMN_ERROR, error.take(500))
             put(COLUMN_RESULT_URI, "")
+            put(COLUMN_PROGRESS_PERCENT, 0)
+            put(COLUMN_TRANSFERRED_BYTES, 0)
         }
         refreshBatchCounts(batchId, publishNow)
     }
@@ -350,6 +396,7 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                 put(COLUMN_STATUS, TransferStatus.CANCELLED.value)
                 put(COLUMN_STAGE, STAGE_DONE)
                 put(COLUMN_ERROR, "中止しました。")
+                put(COLUMN_RESULT_URI, "")
             },
             "$COLUMN_BATCH_ID = ? AND $COLUMN_STATUS IN (?, ?)",
             arrayOf(batchId, TransferStatus.QUEUED.value, TransferStatus.RUNNING.value),
@@ -386,13 +433,22 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                 $COLUMN_STAGE TEXT NOT NULL,
                 $COLUMN_ERROR TEXT NOT NULL DEFAULT '',
                 $COLUMN_RESULT_URI TEXT NOT NULL DEFAULT '',
+                $COLUMN_PROGRESS_PERCENT INTEGER NOT NULL DEFAULT 0,
+                $COLUMN_TRANSFERRED_BYTES INTEGER NOT NULL DEFAULT 0,
+                $COLUMN_TOTAL_BYTES INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY ($COLUMN_BATCH_ID, $COLUMN_ITEM_INDEX)
             )""".trimIndent(),
         )
         database.execSQL("CREATE INDEX transfer_items_batch_status ON $TABLE_ITEMS ($COLUMN_BATCH_ID, $COLUMN_STATUS)")
     }
 
-    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            database.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COLUMN_PROGRESS_PERCENT INTEGER NOT NULL DEFAULT 0")
+            database.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COLUMN_TRANSFERRED_BYTES INTEGER NOT NULL DEFAULT 0")
+            database.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COLUMN_TOTAL_BYTES INTEGER NOT NULL DEFAULT 0")
+        }
+    }
 
     private fun createBatch(direction: TransferDirection, items: List<TransferItem>): String {
         val batchId = UUID.randomUUID().toString()
@@ -432,6 +488,9 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                         put(COLUMN_STAGE, STAGE_QUEUED)
                         put(COLUMN_ERROR, "")
                         put(COLUMN_RESULT_URI, "")
+                        put(COLUMN_PROGRESS_PERCENT, item.progressPercent)
+                        put(COLUMN_TRANSFERRED_BYTES, item.transferredBytes)
+                        put(COLUMN_TOTAL_BYTES, item.totalBytes)
                     },
                 )
             }
@@ -527,6 +586,22 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                 val batchId = cursor.getString(0)
                 val direction = TransferDirection.from(cursor.getString(1))
                 val itemRows = items(batchId)
+                val running = itemRows.filter { it.status == TransferStatus.RUNNING }
+                val allSizesKnown = itemRows.isNotEmpty() && itemRows.all { it.totalBytes > 0 }
+                val knownTotalBytes = itemRows.sumOf { it.totalBytes.coerceAtLeast(0) }
+                val effectiveTransferredBytes = itemRows.sumOf { item ->
+                    if (item.status in setOf(TransferStatus.SUCCEEDED, TransferStatus.FAILED, TransferStatus.CANCELLED)) {
+                        item.totalBytes.coerceAtLeast(item.transferredBytes)
+                    } else item.transferredBytes.coerceAtMost(item.totalBytes.coerceAtLeast(item.transferredBytes))
+                }
+                val aggregateProgress = if (allSizesKnown && knownTotalBytes > 0) {
+                    ((effectiveTransferredBytes * 100.0) / knownTotalBytes).toInt()
+                } else {
+                    itemRows.sumOf { item ->
+                        if (item.status in setOf(TransferStatus.SUCCEEDED, TransferStatus.FAILED, TransferStatus.CANCELLED)) 100
+                        else item.progressPercent.coerceIn(0, 100)
+                    } / itemRows.size.coerceAtLeast(1)
+                }
                 add(
                     TransferBatchSnapshot(
                         id = batchId,
@@ -543,6 +618,10 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
                         },
                         createdAt = cursor.getLong(8),
                         updatedAt = cursor.getLong(9),
+                        activeCount = running.size,
+                        transferredBytes = effectiveTransferredBytes,
+                        totalBytes = knownTotalBytes,
+                        aggregateProgress = aggregateProgress,
                     ),
                 )
             }
@@ -557,7 +636,7 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
         internal const val STAGE_UPLOADING = "uploading"
         internal const val STAGE_COMPLETING = "completing"
         const val DATABASE_NAME = "tcloud_transfers.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
         const val TABLE_BATCHES = "transfer_batches"
         const val TABLE_ITEMS = "transfer_items"
         const val COLUMN_BATCH_ID = "batch_id"
@@ -580,6 +659,9 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
         const val COLUMN_STAGE = "stage"
         const val COLUMN_ERROR = "error"
         const val COLUMN_RESULT_URI = "result_uri"
+        const val COLUMN_PROGRESS_PERCENT = "progress_percent"
+        const val COLUMN_TRANSFERRED_BYTES = "transferred_bytes"
+        const val COLUMN_TOTAL_BYTES = "total_bytes"
         const val STAGE_QUEUED = "queued"
         const val STAGE_PREPARING = "preparing"
         const val STAGE_DONE = "done"
@@ -609,6 +691,9 @@ class TCloudTransferStore(context: Context) : SQLiteOpenHelper(
             COLUMN_STAGE,
             COLUMN_ERROR,
             COLUMN_RESULT_URI,
+            COLUMN_PROGRESS_PERCENT,
+            COLUMN_TRANSFERRED_BYTES,
+            COLUMN_TOTAL_BYTES,
         )
     }
 }

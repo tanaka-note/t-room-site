@@ -15,6 +15,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import kotlin.math.roundToInt
@@ -23,6 +25,9 @@ class TCloudUploadWorker(
     appContext: Context,
     parameters: WorkerParameters,
 ) : CoroutineWorker(appContext, parameters) {
+    private val progressMutex = Mutex()
+    private var lastProgressSignature = ""
+
     override suspend fun doWork(): Result {
         val batchId = inputData.getString(KEY_BATCH_ID).orEmpty()
         if (batchId.isBlank()) return Result.failure(errorData("アップロード情報が不正です。"))
@@ -39,16 +44,20 @@ class TCloudUploadWorker(
         setForeground(notifications.foreground(checkNotNull(store.batch(batchId)), id))
 
         return try {
-            store.items(batchId)
-                .filter { it.status == TransferStatus.QUEUED }
-                .forEach { item ->
-                    currentCoroutineContext().ensureActive()
-                    uploadOne(application, store, notifications, batchId, item)
-                }
-            store.finishBatch(batchId)
-            Result.success()
-        } catch (_: TransferRetryRequested) {
-            Result.retry()
+            val outcomes = runFileTransfers(
+                store.items(batchId).filter { it.status == TransferStatus.QUEUED },
+            ) { item ->
+                currentCoroutineContext().ensureActive()
+                uploadOne(application, store, notifications, batchId, item)
+            }
+            if (outcomes.any { it == TransferItemOutcome.RETRY }) {
+                store.markBatchRetryPending(batchId)
+                publishProgress(store, notifications, batchId, force = true)
+                Result.retry()
+            } else {
+                store.finishBatch(batchId)
+                Result.success()
+            }
         } catch (cancelled: CancellationException) {
             store.cancelBatch(batchId)
             throw cancelled
@@ -67,20 +76,20 @@ class TCloudUploadWorker(
         notifications: TCloudTransferNotifications,
         batchId: String,
         item: TransferItem,
-    ) {
+    ): TransferItemOutcome {
         val source = Uri.parse(item.sourceUri)
         var ticket: UploadTicket? = null
         var completionStarted = false
         try {
             val sourceInfo = readSourceInfo(source)
-            store.markItemRunning(batchId, item.index, sourceInfo.name)
-            updateForeground(store, notifications, batchId)
+            store.markItemRunning(batchId, item.index, sourceInfo.name, sourceInfo.sizeBytes)
+            publishProgress(store, notifications, batchId)
             if (item.cameraAssetKey.isNotBlank() && sourceInfo.mediaKind != item.expectedMediaKind) {
                 application.cameraBackupStore.markCompleted(item.cameraAssetKey)
                 application.cameraBackupStore.finishBatchAsset(item.cameraAssetKey, failed = false)
                 store.markItemSuccess(batchId, item.index)
-                updateForeground(store, notifications, batchId)
-                return
+                publishProgress(store, notifications, batchId)
+                return TransferItemOutcome.FINISHED
             }
             check(sourceInfo.sizeBytes > 0) { "空ファイルのためスキップしました。" }
 
@@ -136,9 +145,15 @@ class TCloudUploadWorker(
                                 val percent = ((uploadedPlainBytes * 100.0) / prepared.payload.sizeBytes).roundToInt()
                                 if (percent != lastReportedProgress) {
                                     lastReportedProgress = percent
-                                    store.updateProgress(batchId, sourceInfo.name, percent)
-                                    setProgress(progressData(store, batchId))
-                                    updateForeground(store, notifications, batchId)
+                                    store.updateProgress(
+                                        batchId,
+                                        item.index,
+                                        sourceInfo.name,
+                                        percent,
+                                        uploadedPlainBytes,
+                                        prepared.payload.sizeBytes,
+                                    )
+                                    publishProgress(store, notifications, batchId)
                                 }
                             }
                             check(input.read() == -1) { "選択後にファイル容量が変更されました。" }
@@ -178,7 +193,8 @@ class TCloudUploadWorker(
             }
             if (!completionStarted && isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
                 store.deferItem(batchId, item.index)
-                throw TransferRetryRequested(error)
+                publishProgress(store, notifications, batchId)
+                return TransferItemOutcome.RETRY
             }
             if (item.cameraAssetKey.isNotBlank()) {
                 application.cameraBackupStore.markFailed(
@@ -191,15 +207,21 @@ class TCloudUploadWorker(
             }
             store.markItemFailure(batchId, item.index, error.userMessage())
         }
-        updateForeground(store, notifications, batchId)
+        publishProgress(store, notifications, batchId)
+        return TransferItemOutcome.FINISHED
     }
 
-    private suspend fun updateForeground(
+    private suspend fun publishProgress(
         store: TCloudTransferStore,
         notifications: TCloudTransferNotifications,
         batchId: String,
-    ) {
-        val batch = store.batch(batchId) ?: return
+        force: Boolean = false,
+    ) = progressMutex.withLock {
+        val batch = store.batch(batchId) ?: return@withLock
+        val signature = "${batch.status}:${batch.processed}:${batch.activeCount}:${batch.overallProgress}"
+        if (!force && signature == lastProgressSignature) return@withLock
+        lastProgressSignature = signature
+        setProgress(progressData(batch))
         setForeground(notifications.foreground(batch, id))
     }
 
@@ -271,8 +293,7 @@ class TCloudUploadWorker(
         return if (index >= 0 && !isNull(index)) getLong(index) else null
     }
 
-    private fun progressData(store: TCloudTransferStore, batchId: String): Data {
-        val batch = store.batch(batchId) ?: return Data.EMPTY
+    private fun progressData(batch: TransferBatchSnapshot): Data {
         return Data.Builder()
             .putInt(KEY_TOTAL_COUNT, batch.total)
             .putInt(KEY_COMPLETED_COUNT, batch.processed)

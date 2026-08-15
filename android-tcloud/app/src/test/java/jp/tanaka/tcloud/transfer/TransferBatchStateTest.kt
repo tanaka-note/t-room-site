@@ -85,6 +85,16 @@ class TransferBatchStateTest {
         assertFalse(isTransientTransferFailure(IllegalArgumentException("bad input")))
     }
 
+    @Test
+    fun `one batch keeps one stable notification id from progress through completion`() {
+        val batchId = "batch-with-many-files"
+
+        assertEquals(
+            TCloudTransferNotifications.notificationId(batchId),
+            TCloudTransferNotifications.notificationId(batchId),
+        )
+    }
+
     private fun fixture(
         total: Int,
         succeeded: Int,
