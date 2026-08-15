@@ -88,6 +88,7 @@
     headerScrollFrame: 0
   };
 
+  const DESKTOP_DIALOG_BACKDROP_MATCHER = "(min-width: 861px) and (hover: hover) and (pointer: fine)";
   const elements = {
     bootView: document.querySelector("#boot-view"),
     loginView: document.querySelector("#login-view"),
@@ -402,9 +403,7 @@
       event.preventDefault();
       requestEditorClose();
     });
-    elements.editorDialog.addEventListener("click", (event) => {
-      if (event.target === elements.editorDialog) requestEditorClose();
-    });
+    elements.editorDialog.addEventListener("click", closeEditorFromDesktopBackdrop);
     elements.editorLeaveCancel.addEventListener("click", cancelEditorLeave);
     elements.editorLeaveDiscard.addEventListener("click", discardEditorChanges);
     elements.editorLeaveSaveDraft.addEventListener("click", () => saveEntryAsDraft({ closeAfter: true }));
@@ -1283,9 +1282,21 @@
   }
 
   function closeEntryFromDesktopBackdrop(event) {
-    if (event.target !== elements.entryDialog) return;
-    if (!window.matchMedia("(min-width: 861px) and (hover: hover) and (pointer: fine)").matches) return;
-    closeEntryDialog();
+    closeDialogFromBackdrop(event, elements.entryDialog, closeEntryDialog);
+  }
+
+  function closeEditorFromDesktopBackdrop(event) {
+    closeDialogFromBackdrop(event, elements.editorDialog, requestEditorClose);
+  }
+
+  function isDesktopDialogBackdropEnabled() {
+    return window.matchMedia(DESKTOP_DIALOG_BACKDROP_MATCHER).matches;
+  }
+
+  function closeDialogFromBackdrop(event, dialog, onClose) {
+    if (event.target !== dialog) return;
+    if (!isDesktopDialogBackdropEnabled()) return;
+    onClose();
   }
 
   function handleHistoryNavigation() {

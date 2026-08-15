@@ -16,6 +16,7 @@
     invoice: ["purchase", "discount", "income", "offset", "other"],
     payment_notice: ["purchase", "offset", "income", "other"]
   };
+  const DESKTOP_DIALOG_BACKDROP_MATCHER = "(min-width: 861px) and (hover: hover) and (pointer: fine)";
   const settlementDirectionLabels = { incoming: "入金", outgoing: "着金" };
   const settlementMethodLabels = {
     bank_transfer: "振込", cash: "現金", offset: "相殺", other: "その他", unspecified: "未設定"
@@ -72,8 +73,13 @@
     bindDateWheel(el["date-wheel-day"], "day");
     el["entry-form"].addEventListener("submit", saveEntry);
     document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => {
+      if (button.dataset.closeDialog === "entry-dialog") {
+        closeEntryDialog();
+        return;
+      }
       document.getElementById(button.dataset.closeDialog).close();
     }));
+    el["entry-dialog"].addEventListener("click", closeEntryFromDesktopBackdrop);
     el["entries-body"].addEventListener("click", handleEntryAction);
     el["settlements-card"].addEventListener("click", openSettlements);
     el["settlements-body"].addEventListener("click", handleSettlementAction);
@@ -573,6 +579,16 @@
 
   function applyDateWheelFromBackdrop(event) {
     if (event.target === el["date-wheel-dialog"]) applyDateWheel();
+  }
+
+  function closeEntryFromDesktopBackdrop(event) {
+    if (event.target !== el["entry-dialog"]) return;
+    if (!window.matchMedia(DESKTOP_DIALOG_BACKDROP_MATCHER).matches) return;
+    closeEntryDialog();
+  }
+
+  function closeEntryDialog() {
+    if (el["entry-dialog"]?.open) el["entry-dialog"].close();
   }
 
   function applyDateWheel() {

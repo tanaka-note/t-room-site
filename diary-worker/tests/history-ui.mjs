@@ -23,7 +23,12 @@ assert.match(script, /function requestEditorClose\(\)/);
 assert.match(script, /function discardEditorChanges\(\)/);
 assert.match(script, /elements\.entryDialog\.addEventListener\("cancel", \(event\) => \{\s*event\.preventDefault\(\);\s*closeEntryDialog\(\);/s);
 assert.match(script, /elements\.entryDialog\.addEventListener\("click", closeEntryFromDesktopBackdrop\)/);
-assert.match(script, /function closeEntryFromDesktopBackdrop\(event\) \{\s*if \(event\.target !== elements\.entryDialog\) return;\s*if \(!window\.matchMedia\("\(min-width: 861px\) and \(hover: hover\) and \(pointer: fine\)"\)\.matches\) return;\s*closeEntryDialog\(\);\s*\}/s);
-assert.match(script, /if \(id === "entry-dialog"\) \{\s*closeEntryDialog\(\);/s);
+assert.match(script, /const DESKTOP_DIALOG_BACKDROP_MATCHER = "\(min-width: 861px\) and \(hover: hover\) and \(pointer: fine\)"/);
+assert.match(script, /function isDesktopDialogBackdropEnabled\(\) \{\s*return window\.matchMedia\(DESKTOP_DIALOG_BACKDROP_MATCHER\)\.matches;\s*\}/);
+assert.match(script, /function closeDialogFromBackdrop\(event, dialog, onClose\) \{\s*if \(event\.target !== dialog\) return;\s*if \(!isDesktopDialogBackdropEnabled\(\)\) return;\s*onClose\(\);\s*\}/);
+assert.match(script, /function closeEntryFromDesktopBackdrop\(event\) \{\s*closeDialogFromBackdrop\(event, elements\.entryDialog, closeEntryDialog\);\s*\}/);
+assert.match(script, /function closeEditorFromDesktopBackdrop\(event\) \{\s*closeDialogFromBackdrop\(event, elements\.editorDialog, requestEditorClose\);\s*\}/);
+assert.match(script, /elements\.editorDialog\.addEventListener\("click", closeEditorFromDesktopBackdrop\)/);
+assert.match(script, /if \(id === "entry-dialog"\) \{\s*closeEntryDialog\(\);\s*return;\s*\}/s);
 
 process.stdout.write("Diary entry history behavior test passed.\n");
