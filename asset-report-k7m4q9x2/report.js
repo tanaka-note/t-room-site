@@ -1,7 +1,7 @@
 "use strict";
 
 const reportData = {
-  period: "2026-08-14",
+  period: "2026-08-15",
   principal: 6000000,
   realizedProfit: {
     name: "投資信託売却益",
@@ -20,8 +20,8 @@ const reportData = {
         text: "インド株式の低迷とBTC価格下落に伴い、損益が悪化。バランス改善のため国内株式および全世界株式への分散投資の比率を引き上げました。インド株式への投資については追加の売却を行う予定はありません。"
       }
     ],
-    updated: "2026-08-14",
-    updatedLabel: "2026年8月14日"
+    updated: "2026-08-15",
+    updatedLabel: "2026年8月15日"
   },
   history: [
     { period: "2026-07-31", principal: 6000000, marketValue: 6221192 },
@@ -35,7 +35,8 @@ const reportData = {
     { period: "2026-08-10", principal: 6000000, marketValue: 6409958 },
     { period: "2026-08-11", principal: 6000000, marketValue: 6389451 },
     { period: "2026-08-13", principal: 6000000, marketValue: 6411887 },
-    { period: "2026-08-14", principal: 6000000, marketValue: 6423188 }
+    { period: "2026-08-14", principal: 6000000, marketValue: 6423188 },
+    { period: "2026-08-15", principal: 6000000, marketValue: 6422213 }
   ],
   assets: [
     {
@@ -112,7 +113,7 @@ const reportData = {
       name: "ビットコイン",
       category: "暗号資産",
       principal: 2500000,
-      marketValue: 1630540,
+      marketValue: 1629565,
       color: "#a98cff"
     }
   ]
