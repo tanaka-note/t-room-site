@@ -28,6 +28,9 @@
       "bucket_name": "t-room-diary-media"
     }
   ],
+  "triggers": {
+    "crons": ["25 18 * * *"]
+  },
   "vars": {
     "SESSION_TTL_SECONDS": "2592000",
     "SESSION_VERSION": "3"

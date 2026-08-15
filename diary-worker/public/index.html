@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="20260815-2">
+  <meta name="troom-app-build" content="20260815-3">
   <meta name="troom-service-worker" content="/diary/service-worker.js">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
   <link rel="manifest" href="/diary/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png">
-  <link rel="stylesheet" href="/diary/diary.css?v=26">
+  <link rel="stylesheet" href="/diary/diary.css?v=29">
   <link rel="stylesheet" href="/diary/troom-date-picker.css?v=1">
 </head>
 <body>
@@ -73,11 +73,25 @@
           <span>管理する日記</span>
           <select id="household-switcher" aria-label="管理する日記を切り替える"></select>
         </label>
-        <button class="install-app-button quiet-button" type="button">ホームへ追加</button>
-        <button id="camera-roll-button" class="quiet-button" type="button">画像まとめ</button>
-        <button id="trash-button" class="quiet-button" type="button" hidden>ゴミ箱</button>
-        <button id="new-entry-button" class="primary-button" type="button" hidden>新しい日記</button>
-        <button id="logout-button" class="quiet-button" type="button">ログアウト</button>
+        <button class="install-app-button header-icon-button" type="button" aria-label="ホーム画面に追加" title="ホーム画面に追加">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V21h-6v-6h-4v6H4Z"></path><path d="M18 3v5M15.5 5.5h5"></path></svg>
+        </button>
+        <button id="camera-roll-button" class="header-icon-button" type="button" aria-label="画像まとめ" title="画像まとめ">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m5 17 4-4 3 3 2-2 5 3"></path></svg>
+        </button>
+        <button id="draft-button" class="header-icon-button" type="button" aria-label="下書き" title="下書き" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5Z"></path><path d="M8 9h8M8 13h8M8 17h5"></path></svg>
+          <span id="draft-count" class="header-icon-badge" aria-label="下書き0件" hidden>0</span>
+        </button>
+        <button id="trash-button" class="header-icon-button" type="button" aria-label="ゴミ箱" title="ゴミ箱" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 3h6l1 4H8Z"></path><path d="m6 7 1 14h10l1-14M10 11v6M14 11v6"></path></svg>
+        </button>
+        <button id="new-entry-button" class="header-icon-button is-create" type="button" aria-label="新しい日記" title="新しい日記" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
+        <button id="logout-button" class="header-icon-button is-logout" type="button" aria-label="ログアウト" title="ログアウト">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M9 12h9"></path></svg>
+        </button>
       </div>
     </header>
 
@@ -308,6 +322,7 @@
 
       <input id="entry-id" type="hidden">
       <input id="entry-revision" type="hidden">
+      <input id="entry-status" type="hidden" value="published">
 
       <div class="date-field-head">
         <label for="entry-date">日付</label>
@@ -321,7 +336,7 @@
       </div>
 
       <label for="entry-title">タイトル</label>
-      <input id="entry-title" name="title" type="text" maxlength="200" required>
+      <input id="entry-title" name="title" type="text" maxlength="200">
 
       <label for="entry-content">本文</label>
       <div id="entry-content-shell" class="entry-content-shell">
@@ -375,11 +390,26 @@
       <p class="field-help">読点またはカンマで区切って10個まで入力できます。</p>
 
       <p id="editor-message" class="form-message" role="status" aria-live="polite"></p>
-      <div class="dialog-actions">
-        <button class="quiet-button" type="button" data-close-dialog="editor-dialog">キャンセル</button>
-        <button id="save-entry-button" class="primary-button" type="submit">保存</button>
+      <div class="dialog-actions editor-actions">
+        <button id="cancel-entry-button" class="quiet-button" type="button">キャンセル</button>
+        <button id="save-draft-button" class="secondary-button" type="button">下書き保存</button>
+        <button id="save-entry-button" class="primary-button" type="submit">投稿</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="editor-leave-dialog" class="entry-dialog editor-leave-dialog" aria-labelledby="editor-leave-title">
+    <section class="entry-detail">
+      <div class="dialog-head">
+        <h2 id="editor-leave-title">編集内容をどうしますか？</h2>
+      </div>
+      <p class="field-help">まだ保存していない変更があります。</p>
+      <div class="dialog-actions editor-leave-actions">
+        <button id="editor-leave-cancel" class="quiet-button" type="button">キャンセル</button>
+        <button id="editor-leave-discard" class="danger-button" type="button">破棄</button>
+        <button id="editor-leave-save-draft" class="primary-button" type="button">下書き保存</button>
+      </div>
+    </section>
   </dialog>
 
   <dialog id="camera-roll-dialog" class="camera-roll-dialog">
@@ -471,6 +501,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/assets/pwa-auto-update.js?v=20260812-5" defer></script>
   <script src="/diary/troom-date-picker.js?v=1" defer></script>
-  <script src="/diary/diary.js?v=52" defer></script>
+  <script src="/diary/diary.js?v=53" defer></script>
 </body>
 </html>

@@ -99,10 +99,95 @@ button {
 
 .header-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.header-icon-button {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.header-icon-button:hover {
+  border-color: rgba(15, 118, 110, 0.42);
+  background: #fff;
+  color: var(--teal-dark);
+}
+
+.header-icon-button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.header-icon-button[aria-pressed="true"] {
+  border-color: rgba(15, 118, 110, 0.42);
+  background: #e8f5f1;
+  color: var(--teal-dark);
+}
+
+.header-icon-button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.header-icon-button.is-create {
+  border-color: #067647;
+  background: #067647;
+  color: #fff;
+}
+
+.header-icon-button.is-create:hover,
+.header-icon-button.is-create:focus-visible {
+  background: #05633c;
+  color: #fff;
+}
+
+.header-icon-button.is-logout {
+  border-color: rgba(180, 35, 24, 0.3);
+  color: #b42318;
+}
+
+.header-icon-button.is-logout:hover,
+.header-icon-button.is-logout:focus-visible {
+  border-color: rgba(180, 35, 24, 0.5);
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.header-icon-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  min-width: 19px;
+  height: 19px;
+  place-items: center;
+  border: 2px solid #f8faf9;
+  border-radius: 999px;
+  padding: 0 4px;
+  background: var(--teal-dark);
+  color: #fff;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .role-label {
@@ -113,8 +198,10 @@ button {
 
 .household-switcher {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 800;
@@ -902,6 +989,20 @@ button:disabled {
 
 .header-actions .install-app-button {
   margin-top: 0;
+}
+
+.diary-entry-card.is-draft h3 {
+  margin-bottom: 5px;
+}
+
+.draft-updated-at {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.editor-leave-dialog {
+  width: min(520px, calc(100% - 28px));
 }
 
 .install-app-dialog {
@@ -1855,18 +1956,26 @@ button:disabled {
   }
 
   .header-actions {
-    max-width: 75%;
+    max-width: calc(100% - 52px);
+    overflow-x: auto;
+    justify-content: flex-start;
+    padding: 4px 2px;
+    scrollbar-width: none;
+  }
+
+  .header-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .role-label {
-    width: 100%;
-    text-align: right;
+    display: none;
   }
 
-  .header-actions button {
-    min-height: 36px;
-    padding: 6px 10px;
-    font-size: 0.82rem;
+  .header-actions .header-icon-button {
+    width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
   }
 
   .diary-section-head {
@@ -1970,8 +2079,12 @@ button:disabled {
     gap: 5px;
   }
 
-  #camera-roll-button {
-    order: -1;
+  .household-switcher {
+    order: 10;
+  }
+
+  .household-switcher > span {
+    display: none;
   }
 
   .sub-hero {

@@ -11,7 +11,7 @@ const [html, script, worker, wrangler] = await Promise.all([
 ]);
 
 assert.match(html, /id="camera-roll-button"/);
-assert.match(html, /id="camera-roll-button"[^>]*>画像まとめ<\/button>/);
+assert.match(html, /id="camera-roll-button"[^>]*aria-label="画像まとめ"[^>]*title="画像まとめ"/);
 assert.match(html, /id="photo-input"[^>]*accept="image\/\*"[^>]*multiple/);
 assert.match(html, /id="photo-drop-zone"[^>]*role="button"/);
 assert.match(html, /画像をここへドラッグ＆ドロップ/);

@@ -8,7 +8,7 @@ const [html, script] = await Promise.all([
   readFile(`${root}/public/diary.js`, "utf8")
 ]);
 
-assert.match(html, /diary\.js\?v=52/);
+assert.match(html, /diary\.js\?v=53/);
 assert.match(script, /const ENTRY_HISTORY_KEY = "troomDiaryEntry"/);
 assert.match(script, /elements\.entryDialog\.showModal\(\);\s*pushEntryHistory\(\);/);
 assert.match(script, /window\.history\.pushState\(/);
@@ -17,7 +17,10 @@ assert.doesNotMatch(pushEntryHistoryBody, /searchInput\.value|dateFrom\.value|da
 assert.match(script, /if \(state\.entryClosePending\) return/);
 assert.match(script, /state\.entryClosePending = true;\s*window\.history\.back\(\);/s);
 assert.match(script, /window\.addEventListener\("popstate", handleHistoryNavigation\)/);
-assert.match(script, /function handleHistoryNavigation\(\) \{[^}]*finishEntryClose\(\);/s);
+assert.match(script, /function handleHistoryNavigation\(\)[\s\S]*?if \(state\.entryHistoryToken && elements\.entryDialog\.open\) finishEntryClose\(\);/);
+assert.match(script, /const EDITOR_HISTORY_KEY = "troomDiaryEditor"/);
+assert.match(script, /function requestEditorClose\(\)/);
+assert.match(script, /function discardEditorChanges\(\)/);
 assert.match(script, /elements\.entryDialog\.addEventListener\("cancel", \(event\) => \{\s*event\.preventDefault\(\);\s*closeEntryDialog\(\);/s);
 assert.match(script, /elements\.entryDialog\.addEventListener\("click", closeEntryFromDesktopBackdrop\)/);
 assert.match(script, /function closeEntryFromDesktopBackdrop\(event\) \{\s*if \(event\.target !== elements\.entryDialog\) return;\s*if \(!window\.matchMedia\("\(min-width: 861px\) and \(hover: hover\) and \(pointer: fine\)"\)\.matches\) return;\s*closeEntryDialog\(\);\s*\}/s);

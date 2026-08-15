@@ -9,6 +9,7 @@
     "test:permissions": "node tests/permissions.e2e.mjs",
     "test:households": "node tests/household-isolation.e2e.mjs",
     "test:trash": "node tests/trash-isolation.e2e.mjs",
+    "test:drafts": "node tests/drafts.e2e.mjs && node tests/drafts-ui.mjs",
     "test:initial-password": "node tests/initial-password-ui.mjs",
     "test:search": "node tests/search-ui.mjs",
     "test:monthly": "node tests/monthly-ui.mjs",

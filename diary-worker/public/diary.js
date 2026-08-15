@@ -1,6 +1,7 @@
 (() => {
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
+  const EDITOR_HISTORY_KEY = "troomDiaryEditor";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -29,6 +30,7 @@
     isGlobalOwner: false,
     mustChangePassword: false,
     pendingLoginId: "",
+    canManageEntries: false,
     canViewTrash: false,
     canPermanentlyDelete: false,
     canViewInvestment: false,
@@ -47,8 +49,11 @@
     availableTags: [],
     entryTagSuggestionIndex: -1,
     trash: false,
+    drafts: false,
+    draftCount: 0,
     activeEntry: null,
     editorDirty: false,
+    editorSourceEntry: null,
     editorSelection: null,
     editorSelectionOffsets: null,
     editorToolbarOpen: false,
@@ -74,6 +79,8 @@
     entryHistoryToken: null,
     entryAfterClose: null,
     entryClosePending: false,
+    editorHistoryToken: null,
+    editorClosePending: false,
     deferredInstallPrompt: null,
     lastSessionRefreshAt: 0,
     lastHeaderScrollY: 0,
@@ -110,6 +117,8 @@
     householdSwitcher: document.querySelector("#household-switcher"),
     cameraRollButton: document.querySelector("#camera-roll-button"),
     newEntryButton: document.querySelector("#new-entry-button"),
+    draftButton: document.querySelector("#draft-button"),
+    draftCount: document.querySelector("#draft-count"),
     trashButton: document.querySelector("#trash-button"),
     logoutButton: document.querySelector("#logout-button"),
     investmentSection: document.querySelector("#investment-section"),
@@ -161,6 +170,7 @@
     editorTitle: document.querySelector("#editor-title"),
     entryId: document.querySelector("#entry-id"),
     entryRevision: document.querySelector("#entry-revision"),
+    entryStatus: document.querySelector("#entry-status"),
     entryDate: document.querySelector("#entry-date"),
     todayButton: document.querySelector("#today-button"),
     entryTitle: document.querySelector("#entry-title"),
@@ -176,7 +186,13 @@
     entryTags: document.querySelector("#entry-tags"),
     entryTagSuggestions: document.querySelector("#entry-tag-suggestions"),
     editorMessage: document.querySelector("#editor-message"),
+    cancelEntryButton: document.querySelector("#cancel-entry-button"),
+    saveDraftButton: document.querySelector("#save-draft-button"),
     saveEntryButton: document.querySelector("#save-entry-button"),
+    editorLeaveDialog: document.querySelector("#editor-leave-dialog"),
+    editorLeaveCancel: document.querySelector("#editor-leave-cancel"),
+    editorLeaveDiscard: document.querySelector("#editor-leave-discard"),
+    editorLeaveSaveDraft: document.querySelector("#editor-leave-save-draft"),
     dateWheelDialog: document.querySelector("#date-wheel-dialog"),
     dateWheelCancel: document.querySelector("#date-wheel-cancel"),
     dateWheelDone: document.querySelector("#date-wheel-done"),
@@ -249,6 +265,7 @@
     elements.installButtons.forEach((button) => button.addEventListener("click", requestAppInstall));
     elements.cameraRollButton.addEventListener("click", openCameraRoll);
     elements.newEntryButton.addEventListener("click", () => openEditor());
+    elements.draftButton.addEventListener("click", toggleDrafts);
     elements.trashButton.addEventListener("click", toggleTrash);
     elements.loadMore.addEventListener("click", handleLoadMore);
     elements.currentMonth.addEventListener("click", returnToCurrentMonth);
@@ -301,7 +318,9 @@
       event.preventDefault();
       closeDeleteConfirmation();
     });
-    elements.entryForm.addEventListener("submit", saveEntry);
+    elements.entryForm.addEventListener("submit", postEntry);
+    elements.saveDraftButton.addEventListener("click", () => saveEntryAsDraft());
+    elements.cancelEntryButton.addEventListener("click", requestEditorClose);
     elements.entryContent.addEventListener("input", handleRichEditorInput);
     elements.entryContent.addEventListener("keydown", handleRichEditorKeydown);
     elements.entryContent.addEventListener("beforeinput", handleRichEditorBeforeInput);
@@ -379,12 +398,18 @@
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
     });
     elements.editorDialog.addEventListener("cancel", (event) => {
-      if (state.editorDirty && !window.confirm("入力中の内容を破棄しますか？")) event.preventDefault();
-      else {
-        state.editorDirty = false;
-        clearEditorPhotos();
-        closeEntryFormatToolbar();
-      }
+      event.preventDefault();
+      requestEditorClose();
+    });
+    elements.editorDialog.addEventListener("click", (event) => {
+      if (event.target === elements.editorDialog) requestEditorClose();
+    });
+    elements.editorLeaveCancel.addEventListener("click", cancelEditorLeave);
+    elements.editorLeaveDiscard.addEventListener("click", discardEditorChanges);
+    elements.editorLeaveSaveDraft.addEventListener("click", () => saveEntryAsDraft({ closeAfter: true }));
+    elements.editorLeaveDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      cancelEditorLeave();
     });
     window.addEventListener("beforeunload", (event) => {
       if (!state.editorDirty) return;
@@ -622,6 +647,7 @@
     state.isGlobalOwner = Boolean(session.isGlobalOwner);
     state.mustChangePassword = false;
     state.pendingLoginId = "";
+    state.canManageEntries = Boolean(session.canManageEntries);
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
@@ -632,8 +658,9 @@
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     resetHeaderVisibilityTracking();
-    elements.roleLabel.textContent = `${session.accountName}（管理者）`;
-    elements.newEntryButton.hidden = session.role !== "admin";
+    elements.roleLabel.textContent = `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`;
+    elements.newEntryButton.hidden = !state.canManageEntries;
+    elements.draftButton.hidden = !state.canManageEntries;
     elements.trashButton.hidden = !state.canViewTrash;
     elements.investmentSection.hidden = !state.canViewInvestment || state.tagDirectory;
     updateFilterControls();
@@ -665,6 +692,7 @@
       await api("/households/select", { method: "POST", body: { householdId } });
       state.activeHouseholdId = householdId;
       state.trash = false;
+      state.drafts = false;
       state.query = "";
       state.month = currentJapanMonth();
       state.monthExpanded = false;
@@ -724,6 +752,7 @@
         if (state.dateTo) parameters.set("dateTo", state.dateTo);
         if (state.tag) parameters.set("tag", state.tag);
         if (state.trash) parameters.set("trash", "1");
+        if (state.drafts) parameters.set("draft", "1");
 
         const result = await api(`/entries?${parameters}`);
         if (requestId !== state.requestId) return;
@@ -816,6 +845,7 @@
       tagQuery: state.tagQuery,
       tagQueryInput: elements.tagSearchInput.value,
       trash: state.trash,
+      drafts: state.drafts,
       entryCount: state.entries.length,
       position
     };
@@ -849,6 +879,8 @@
     state.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateTo) ? returnView.dateTo : "";
     state.tagQuery = String(returnView.tagQuery || "").normalize("NFKC").trim().toLocaleLowerCase("ja-JP").slice(0, 100);
     state.trash = Boolean(returnView.trash && state.canViewTrash);
+    state.drafts = Boolean(returnView.drafts && state.canManageEntries);
+    if (state.drafts) state.trash = false;
     elements.searchInput.value = state.query;
     elements.dateFrom.value = state.dateFrom;
     elements.dateTo.value = state.dateTo;
@@ -899,6 +931,11 @@
   async function loadMeta() {
     try {
       const result = await api("/meta");
+      state.draftCount = Number(result.draftCount || 0);
+      elements.draftCount.textContent = String(state.draftCount);
+      elements.draftCount.hidden = state.draftCount < 1;
+      elements.draftCount.setAttribute("aria-label", `下書き${state.draftCount}件`);
+      updateFilterControls();
       renderArchive(result.months || []);
       renderTags(result.tags || []);
     } catch (error) {
@@ -909,7 +946,9 @@
 
   function renderEntries(appendFrom = 0) {
     if (!state.entries.length) {
-      const message = state.trash
+      const message = state.drafts
+        ? "下書きはありません。"
+        : state.trash
         ? "ゴミ箱は空です。"
         : isMonthlyView()
           ? "記事なし"
@@ -926,6 +965,7 @@
     const cards = entriesToRender.map((entry) => {
       const article = document.createElement("article");
       article.className = "diary-entry-card";
+      article.classList.toggle("is-draft", state.drafts);
 
       const button = document.createElement("button");
       button.className = "diary-entry-button";
@@ -949,10 +989,16 @@
         meta.append(deletedBy);
       }
       const title = document.createElement("h3");
-      title.textContent = entry.title;
+      title.textContent = entry.title || "無題の下書き";
       const summary = document.createElement("p");
-      summary.textContent = excerpt(entry.content, 130);
+      summary.textContent = excerpt(entry.content, 130) || (state.drafts ? "本文はまだありません。" : "");
       button.append(meta, title, summary);
+      if (state.drafts) {
+        const updated = document.createElement("span");
+        updated.className = "draft-updated-at";
+        updated.textContent = `最終編集：${formatDateTime(entry.updatedAt)}`;
+        button.append(updated);
+      }
       article.append(button, createTagGroup(entry.tags));
       return article;
     });
@@ -1101,7 +1147,18 @@
   function handleEntryListClick(event) {
     const button = event.target.closest("[data-entry-id]");
     if (!button) return;
-    openEntry(Number(button.dataset.entryId));
+    if (state.drafts) openDraft(Number(button.dataset.entryId));
+    else openEntry(Number(button.dataset.entryId));
+  }
+
+  async function openDraft(id) {
+    try {
+      const result = await api(`/entries/${id}`);
+      if (result.entry.status !== "draft") throw new Error("下書きが見つかりません。");
+      openEditor(result.entry);
+    } catch (error) {
+      showToast(error.message);
+    }
   }
 
   function handleArchiveClick(event) {
@@ -1117,6 +1174,7 @@
     elements.dateTo.value = "";
     elements.searchInput.value = "";
     state.trash = false;
+    state.drafts = false;
     if (window.location.pathname !== `${BASE_PATH}/`) {
       window.history.replaceState({}, "", `${BASE_PATH}/`);
       applyRouteState();
@@ -1147,6 +1205,64 @@
     }, "", window.location.href);
   }
 
+  function pushEditorHistory() {
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    state.editorHistoryToken = token;
+    state.editorClosePending = false;
+    window.history.pushState({
+      ...(window.history.state || {}),
+      [EDITOR_HISTORY_KEY]: token
+    }, "", window.location.href);
+  }
+
+  function requestEditorClose() {
+    if (!elements.editorDialog.open) return;
+    if (state.editorDirty) {
+      if (!elements.editorLeaveDialog.open) elements.editorLeaveDialog.showModal();
+      return;
+    }
+    closeEditorDialog();
+  }
+
+  function cancelEditorLeave() {
+    if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
+    window.setTimeout(() => elements.entryContent.focus(), 0);
+  }
+
+  function discardEditorChanges() {
+    if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
+    state.editorDirty = false;
+    closeEditorDialog();
+  }
+
+  function closeEditorDialog() {
+    if (state.editorClosePending) return;
+    if (!elements.editorDialog.open) {
+      finishEditorClose();
+      return;
+    }
+    if (
+      state.editorHistoryToken
+      && window.history.state?.[EDITOR_HISTORY_KEY] === state.editorHistoryToken
+    ) {
+      state.editorClosePending = true;
+      window.history.back();
+      return;
+    }
+    finishEditorClose();
+  }
+
+  function finishEditorClose() {
+    state.editorHistoryToken = null;
+    state.editorClosePending = false;
+    state.editorDirty = false;
+    state.editorSourceEntry = null;
+    if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
+    if (elements.editorDialog.open) elements.editorDialog.close();
+    clearEditorPhotos();
+    closeEntryFormatToolbar();
+  }
+
   function closeEntryDialog(afterClose = null) {
     if (typeof afterClose === "function") state.entryAfterClose = afterClose;
     if (state.entryClosePending) return;
@@ -1172,8 +1288,16 @@
   }
 
   function handleHistoryNavigation() {
-    if (!state.entryHistoryToken || !elements.entryDialog.open) return;
-    finishEntryClose();
+    if (elements.editorDialog.open && state.editorHistoryToken) {
+      if (state.editorClosePending || !state.editorDirty) {
+        finishEditorClose();
+      } else {
+        pushEditorHistory();
+        if (!elements.editorLeaveDialog.open) elements.editorLeaveDialog.showModal();
+      }
+      return;
+    }
+    if (state.entryHistoryToken && elements.entryDialog.open) finishEntryClose();
   }
 
   function finishEntryClose() {
@@ -1196,7 +1320,7 @@
     renderEntryContent(entry);
     elements.detailTags.replaceChildren(...createTagElements(entry.tags));
     const isDeleted = Boolean(entry.deletedAt);
-    elements.detailActions.hidden = state.role !== "admin" || isDeleted;
+    elements.detailActions.hidden = !state.canManageEntries || isDeleted;
     elements.restoreActions.hidden = !state.canViewTrash || !isDeleted;
     elements.deleteEntryButton.textContent = state.canViewTrash ? "ゴミ箱へ移動" : "削除";
     elements.permanentlyDeleteEntryButton.hidden = !state.canPermanentlyDelete || !isDeleted;
@@ -1988,11 +2112,13 @@
   }
 
   function openEditor(entry = null) {
-    if (state.role !== "admin") return;
+    if (!state.canManageEntries) return;
+    const isDraft = entry?.status === "draft";
     elements.editorMessage.textContent = "";
-    elements.editorTitle.textContent = entry ? "日記を編集" : "新しい日記";
+    elements.editorTitle.textContent = isDraft ? "下書きを編集" : (entry ? "日記を編集" : "新しい日記");
     elements.entryId.value = entry ? String(entry.id) : "";
     elements.entryRevision.value = entry ? String(entry.revision) : "";
+    elements.entryStatus.value = isDraft ? "draft" : "published";
     elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
     state.editorSelectionOffsets = null;
@@ -2000,18 +2126,29 @@
     elements.entryTags.value = entry?.tags?.join("、") || "";
     closeEntryTagSuggestions();
     clearEditorPhotos();
+    state.editorSourceEntry = entry ? structuredClone(entry) : null;
+    state.editorDeletedPhotoIds = new Set(entry?.excludedPhotoIds || []);
     state.editorPhotos = (entry?.photos || []).map((photo) => ({ ...photo, existing: true }));
     elements.photoPreparationStatus.textContent = "";
     renderEditorPhotos();
     state.editorDirty = false;
     closeEntryFormatToolbar();
     elements.editorDialog.showModal();
+    pushEditorHistory();
     updateEditorKeyboardOffset();
-    window.setTimeout(() => (entry ? elements.entryTitle : elements.entryTitle).focus(), 0);
+    window.setTimeout(() => elements.entryTitle.focus(), 0);
   }
 
-  async function saveEntry(event) {
+  function postEntry(event) {
     event.preventDefault();
+    persistEditor("published");
+  }
+
+  function saveEntryAsDraft({ closeAfter = false } = {}) {
+    return persistEditor("draft", { closeAfter });
+  }
+
+  async function persistEditor(targetStatus, { closeAfter = false } = {}) {
     const id = Number(elements.entryId.value || 0);
     const editorDocument = serializeRichEditor(true);
     const body = {
@@ -2019,12 +2156,14 @@
       title: elements.entryTitle.value,
       content: editorDocument.content,
       contentFormat: editorDocument.contentFormat,
-      tags: parseTags(elements.entryTags.value)
+      tags: parseTags(elements.entryTags.value),
+      status: targetStatus,
+      excludedPhotoIds: [...state.editorDeletedPhotoIds]
     };
     if (id) body.revision = Number(elements.entryRevision.value);
 
     elements.editorMessage.textContent = "";
-    setBusy(elements.saveEntryButton, true, "保存中...");
+    setEditorSaveBusy(true, targetStatus === "draft" ? "下書き保存中..." : "投稿中...");
     try {
       const saved = await api(id ? `/entries/${id}` : "/entries", {
         method: id ? "PUT" : "POST",
@@ -2033,9 +2172,16 @@
       const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
       const failures = [];
       const deletedPhotoIds = [...state.editorDeletedPhotoIds];
-      for (let index = 0; index < deletedPhotoIds.length; index += 1) {
-        const photoId = deletedPhotoIds[index];
-        setBusy(elements.saveEntryButton, true, `画像を削除中 ${index + 1}/${deletedPhotoIds.length}`);
+      const promotedEditDraft = targetStatus === "published"
+        && elements.entryStatus.value === "draft"
+        && Boolean(state.editorSourceEntry?.draftOfEntryId);
+      const photoOwners = new Map((state.editorSourceEntry?.photos || []).map((photo) => [photo.id, Number(photo.entryId)]));
+      const deletionsToApply = promotedEditDraft
+        ? []
+        : deletedPhotoIds.filter((photoId) => targetStatus === "published" || photoOwners.get(photoId) === saved.entry.id);
+      for (let index = 0; index < deletionsToApply.length; index += 1) {
+        const photoId = deletionsToApply[index];
+        setEditorSaveBusy(true, `画像を削除中 ${index + 1}/${deletionsToApply.length}`);
         try {
           await deletePhoto(photoId);
           state.editorDeletedPhotoIds.delete(photoId);
@@ -2045,7 +2191,7 @@
       }
       for (let index = 0; index < pendingPhotos.length; index += 1) {
         const photo = pendingPhotos[index];
-        setBusy(elements.saveEntryButton, true, `写真を保存中 ${index + 1}/${pendingPhotos.length}`);
+        setEditorSaveBusy(true, `写真を保存中 ${index + 1}/${pendingPhotos.length}`);
         try {
           const result = await uploadPhoto(saved.entry.id, photo);
           photo.existing = true;
@@ -2057,22 +2203,41 @@
       if (failures.length) {
         elements.entryId.value = String(saved.entry.id);
         elements.entryRevision.value = String(saved.entry.revision);
-        elements.editorMessage.textContent = `日記本文は保存しました。写真を保存できませんでした。${failures.join(" / ")}`;
+        elements.entryStatus.value = saved.entry.status;
+        state.editorSourceEntry = saved.entry;
+        elements.editorMessage.textContent = `${targetStatus === "draft" ? "下書き" : "日記本文"}は保存しました。写真を保存できませんでした。${failures.join(" / ")}`;
         renderEditorPhotos();
-        return;
+        return false;
       }
       state.editorDirty = false;
-      clearEditorPhotos();
-      closeEntryFormatToolbar();
-      elements.editorDialog.close();
-      showToast(id ? "日記を更新しました。" : "日記を保存しました。");
+      if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
+      const promotedDraft = targetStatus === "published" && elements.entryStatus.value === "draft";
+      showToast(targetStatus === "draft" ? "下書きを保存しました。" : (promotedDraft || !id ? "日記を投稿しました。" : "日記を更新しました。"));
       state.trash = false;
+      if (targetStatus === "published") state.drafts = false;
+      else if (!closeAfter) state.drafts = true;
+      updateFilterControls();
+      closeEditorDialog();
       await Promise.all([loadMeta(), loadEntries(true)]);
+      return true;
     } catch (error) {
       elements.editorMessage.textContent = error.message;
+      return false;
     } finally {
-      setBusy(elements.saveEntryButton, false, "保存");
+      setEditorSaveBusy(false);
     }
+  }
+
+  function setEditorSaveBusy(busy, label = "") {
+    elements.saveEntryButton.disabled = busy;
+    elements.saveDraftButton.disabled = busy;
+    elements.cancelEntryButton.disabled = busy;
+    elements.editorLeaveSaveDraft.disabled = busy;
+    if (busy) {
+      if (label) elements.editorMessage.textContent = label;
+    }
+    elements.saveEntryButton.textContent = "投稿";
+    elements.saveDraftButton.textContent = "下書き保存";
   }
 
   async function openCameraRoll() {
@@ -2506,6 +2671,24 @@
   function toggleTrash() {
     if (!state.canViewTrash) return;
     state.trash = !state.trash;
+    state.drafts = false;
+    state.query = "";
+    state.month = currentJapanMonth();
+    state.monthExpanded = false;
+    state.dateFrom = "";
+    state.dateTo = "";
+    state.tag = "";
+    elements.searchInput.value = "";
+    elements.dateFrom.value = "";
+    elements.dateTo.value = "";
+    updateFilterControls();
+    loadEntries(true);
+  }
+
+  function toggleDrafts() {
+    if (!state.canManageEntries) return;
+    state.drafts = !state.drafts;
+    state.trash = false;
     state.query = "";
     state.month = currentJapanMonth();
     state.monthExpanded = false;
@@ -2527,6 +2710,7 @@
     state.dateTo = "";
     state.tag = "";
     state.trash = false;
+    state.drafts = false;
     elements.searchInput.value = "";
     elements.dateFrom.value = "";
     elements.dateTo.value = "";
@@ -2545,11 +2729,17 @@
   }
 
   function updateFilterControls() {
-    const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash);
+    const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash || state.drafts);
     elements.searchClear.hidden = !state.query;
     elements.dateReset.hidden = !state.dateFrom && !state.dateTo;
     elements.clearFilters.hidden = !active;
-    elements.trashButton.textContent = state.trash ? "日記一覧" : "ゴミ箱";
+    elements.trashButton.setAttribute("aria-pressed", String(state.trash));
+    elements.trashButton.setAttribute("aria-label", state.trash ? "日記一覧へ戻る" : "ゴミ箱");
+    elements.trashButton.title = state.trash ? "日記一覧へ戻る" : "ゴミ箱";
+    elements.draftButton.setAttribute("aria-pressed", String(state.drafts));
+    elements.draftButton.setAttribute("aria-label", state.drafts ? "日記一覧へ戻る" : `下書き（${state.draftCount}件）`);
+    elements.draftButton.title = state.drafts ? "日記一覧へ戻る" : `下書き（${state.draftCount}件）`;
+    elements.searchPanel.hidden = state.drafts || state.tagDirectory || Boolean(state.tag);
     elements.monthNavigation.hidden = !isMonthlyView();
     elements.currentMonth.disabled = state.month === currentJapanMonth();
     document.querySelectorAll("[data-month]").forEach((button) => {
@@ -2562,7 +2752,10 @@
   }
 
   function updateListHeading() {
-    if (state.trash) {
+    if (state.drafts) {
+      elements.listKicker.textContent = "Draft";
+      elements.listTitle.textContent = "下書き";
+    } else if (state.trash) {
       elements.listKicker.textContent = "Trash";
       elements.listTitle.textContent = "ゴミ箱";
     } else if (state.tag) {
@@ -2590,7 +2783,9 @@
       conditions.push(from === to ? formatDate(from) : `${formatDate(from)}から${formatDate(to)}`);
     }
     if (state.tag) conditions.push(`#${state.tag}`);
-    if (state.trash) {
+    if (state.drafts) {
+      elements.searchStatus.textContent = `${state.entries.length}件の下書きを表示しています。`;
+    } else if (state.trash) {
       elements.searchStatus.textContent = `${state.entries.length}件を表示しています。`;
     } else if (conditions.length) {
       elements.searchStatus.textContent = `${conditions.join("・")}：${state.entries.length}件を表示しています。`;
@@ -2618,12 +2813,13 @@
     state.dateTo = to;
     state.monthExpanded = false;
     state.trash = false;
+    state.drafts = false;
     updateFilterControls();
     loadEntries(true);
   }
 
   function isMonthlyView() {
-    return !state.trash && !state.query && !state.dateFrom && !state.dateTo && !state.tag;
+    return !state.trash && !state.drafts && !state.query && !state.dateFrom && !state.dateTo && !state.tag;
   }
 
   function changeBrowseMonth(offset) {
@@ -2656,11 +2852,9 @@
       closeEntryDialog();
       return;
     }
-    if (id === "editor-dialog" && state.editorDirty && !window.confirm("入力中の内容を破棄しますか？")) return;
     if (id === "editor-dialog") {
-      state.editorDirty = false;
-      clearEditorPhotos();
-      closeEntryFormatToolbar();
+      requestEditorClose();
+      return;
     }
     dialog.close();
   }
@@ -2767,6 +2961,19 @@
     return year && month ? `${year}年${month}月` : value;
   }
 
+  function formatDateTime(value) {
+    const date = new Date(String(value || "").replace(" ", "T") + (String(value || "").includes("Z") ? "" : "Z"));
+    if (Number.isNaN(date.getTime())) return value || "不明";
+    return new Intl.DateTimeFormat("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(date);
+  }
+
   function formatPostMonth(value) {
     const [year, month] = String(value || "").split("-").map(Number);
     const currentYear = Number(currentJapanMonth().slice(0, 4));
@@ -2817,6 +3024,7 @@
     state.isGlobalOwner = false;
     state.mustChangePassword = false;
     state.pendingLoginId = "";
+    state.canManageEntries = false;
     state.canViewTrash = false;
     state.canPermanentlyDelete = false;
     state.canViewInvestment = false;
@@ -2833,6 +3041,8 @@
     state.tagQuery = "";
     state.availableTags = [];
     state.trash = false;
+    state.drafts = false;
+    state.draftCount = 0;
     state.activeEntry = null;
     state.deleteMode = null;
     clearEditorPhotos();
@@ -2845,11 +3055,14 @@
     state.viewerPhotos = [];
     state.viewerIndex = -1;
     state.editorDirty = false;
+    state.editorSourceEntry = null;
     state.dateDraft = null;
     state.dateWheelTarget = null;
     state.entryAfterClose = null;
     state.entryHistoryToken = null;
     state.entryClosePending = false;
+    state.editorHistoryToken = null;
+    state.editorClosePending = false;
     elements.searchInput.value = "";
     elements.dateFrom.value = "";
     elements.dateTo.value = "";
@@ -2858,6 +3071,7 @@
     state.requestId += 1;
     if (elements.entryDialog.open) elements.entryDialog.close();
     if (elements.editorDialog.open) elements.editorDialog.close();
+    if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
     closeEntryFormatToolbar();
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
