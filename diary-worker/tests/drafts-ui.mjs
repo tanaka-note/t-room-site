@@ -20,6 +20,10 @@ assert.match(html, /id="new-entry-button"[^>]*class="header-icon-button is-creat
 assert.match(html, /id="logout-button"[^>]*class="header-icon-button is-logout"/);
 assert.match(style, /\.header-icon-button:focus-visible/);
 assert.match(style, /\.header-icon-button\.is-create/);
+assert.match(style, /\.header-icon-button\.is-create\s*\{[\s\S]*?flex:\s*0 0 88px;[\s\S]*?width:\s*88px;/);
+assert.match(style, /@media \(max-width: 680px\)[\s\S]*?\.header-actions \.header-icon-button\.is-create\s*\{[\s\S]*?flex:\s*0 0 88px;[\s\S]*?width:\s*88px;/);
+assert.match(style, /@media \(max-width: 430px\)[\s\S]*?\.header-actions \.header-icon-button\.is-create\s*\{[\s\S]*?flex-basis:\s*85px;[\s\S]*?width:\s*85px;/);
+assert.match(style, /\.header-icon-button svg\s*\{[\s\S]*?width:\s*21px;[\s\S]*?height:\s*21px;/);
 assert.match(style, /\.header-icon-button\.is-logout/);
 assert.match(style, /@media \(max-width: 680px\)[\s\S]*?\.header-actions \{[\s\S]*?overflow-x: auto;/);
 

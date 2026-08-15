@@ -149,6 +149,8 @@ button {
 }
 
 .header-icon-button.is-create {
+  flex: 0 0 88px;
+  width: 88px;
   border-color: #067647;
   background: #067647;
   color: #fff;
@@ -1978,6 +1980,11 @@ button:disabled {
     padding: 0;
   }
 
+  .header-actions .header-icon-button.is-create {
+    flex: 0 0 88px;
+    width: 88px;
+  }
+
   .diary-section-head {
     align-items: start;
     flex-direction: column;
@@ -2077,6 +2084,11 @@ button:disabled {
   .header-actions {
     max-width: none;
     gap: 5px;
+  }
+
+  .header-actions .header-icon-button.is-create {
+    flex-basis: 85px;
+    width: 85px;
   }
 
   .household-switcher {
