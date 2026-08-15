@@ -93,14 +93,19 @@ try {
   await waitForServer();
   const wifeCookie = await login("wife@example.test", "wife-test");
   const photoId = randomUUID();
+  const marker = photoId.slice(0, 8);
+  const tagToken = `旅行タグ${marker}`;
+  const titleToken = `京都題名${marker}`;
+  const contentToken = `清水寺本文${marker}`;
+  const fileNameToken = `IMG_${marker}`;
   const created = await jsonRequest("/entries", {
     method: "POST",
     cookie: wifeCookie,
     body: {
       entryDate: "2026-08-10",
-      title: `photo-test-${photoId}`,
-      content: `写真の記録\n[[写真:${photoId}]]`,
-      tags: ["写真"]
+      title: `${titleToken}-photo-test-${photoId}`,
+      content: `${contentToken}の記録\n[[写真:${photoId}]]`,
+      tags: [tagToken, `${tagToken}追加`]
     }
   });
   assert.equal(created.response.status, 200, JSON.stringify(created.result));
@@ -110,7 +115,7 @@ try {
   form.set("id", photoId);
   form.set("width", "1200");
   form.set("height", "800");
-  form.set("original", new File([new Uint8Array([1, 2, 3, 4])], "family-photo.png", { type: "image/png" }));
+  form.set("original", new File([new Uint8Array([1, 2, 3, 4])], `${fileNameToken}.png`, { type: "image/png" }));
   form.set("display", new File([new Uint8Array([5, 6, 7])], "display.webp", { type: "image/webp" }));
   form.set("thumbnail", new File([new Uint8Array([8, 9])], "thumbnail.webp", { type: "image/webp" }));
   const uploadResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
@@ -125,11 +130,32 @@ try {
   const detailed = await jsonRequest(`/entries/${entry.id}`, { cookie: wifeCookie });
   assert.equal(detailed.response.status, 200);
   assert.equal(detailed.result.entry.photos.length, 1);
-  assert.equal(detailed.result.entry.photos[0].fileName, "family-photo.png");
+  assert.equal(detailed.result.entry.photos[0].fileName, `${fileNameToken}.png`);
 
-  const roll = await jsonRequest(`/photos?q=${encodeURIComponent(photoId)}`, { cookie: wifeCookie });
-  assert.equal(roll.response.status, 200);
-  assert.ok(roll.result.photos.some((photo) => photo.id === photoId));
+  async function matchingPhotoIds(parameters) {
+    const result = await jsonRequest(`/photos?${new URLSearchParams(parameters)}`, { cookie: wifeCookie });
+    assert.equal(result.response.status, 200, JSON.stringify(result.result));
+    return result.result.photos.map((photo) => photo.id);
+  }
+
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: tagToken }), [photoId], "tag-only match must find the photo once");
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: titleToken }), [photoId], "title-only match must find the photo");
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: contentToken }), [photoId], "content-only match must find the photo");
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: `該当なし${marker}` }), [], "unmatched entry query must hide the photo");
+  assert.deepEqual(await matchingPhotoIds({ fileName: fileNameToken }), [photoId], "file-name match must find the photo");
+  assert.deepEqual(await matchingPhotoIds({ fileName: titleToken }), [], "title must not match the file-name filter");
+  assert.deepEqual(await matchingPhotoIds({ fileName: contentToken }), [], "content must not match the file-name filter");
+  assert.deepEqual(await matchingPhotoIds({ fileName: tagToken }), [], "tag must not match the file-name filter");
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: tagToken, month: "2026-08" }), [photoId]);
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: titleToken, fileName: fileNameToken }), [photoId]);
+  assert.deepEqual(await matchingPhotoIds({ month: "2026-08", fileName: fileNameToken }), [photoId]);
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: contentToken, month: "2026-08", fileName: fileNameToken }), [photoId]);
+  assert.deepEqual(await matchingPhotoIds({ entryQuery: tagToken, month: "2026-07", fileName: fileNameToken }), []);
+
+  const photoMeta = await jsonRequest("/photos/meta", { cookie: wifeCookie });
+  assert.equal(photoMeta.response.status, 200);
+  assert.ok(photoMeta.result.months.some((item) => item.value === "2026-08"));
+  assert.equal("authors" in photoMeta.result, false, "photo meta must not expose the removed author filter");
   const imageResponse = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: wifeCookie } });
   assert.equal(imageResponse.status, 200);
   assert.equal(imageResponse.headers.get("content-type"), "image/webp");
@@ -139,7 +165,7 @@ try {
   deletableForm.set("id", deletablePhotoId);
   deletableForm.set("width", "640");
   deletableForm.set("height", "480");
-  deletableForm.set("original", new File([new Uint8Array([10, 11, 12])], "delete-me.png", { type: "image/png" }));
+  deletableForm.set("original", new File([new Uint8Array([10, 11, 12])], `delete-${deletablePhotoId}.png`, { type: "image/png" }));
   deletableForm.set("display", new File([new Uint8Array([13, 14])], "delete-me-display.webp", { type: "image/webp" }));
   deletableForm.set("thumbnail", new File([new Uint8Array([15])], "delete-me-thumbnail.webp", { type: "image/webp" }));
   const deletableUploadResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
@@ -159,7 +185,7 @@ try {
   assert.equal(deletedPhotoAsset.status, 404);
   const afterPhotoDelete = await jsonRequest(`/entries/${entry.id}`, { cookie: wifeCookie });
   assert.equal(afterPhotoDelete.result.entry.photos.some((photo) => photo.id === deletablePhotoId), false);
-  const rollAfterPhotoDelete = await jsonRequest(`/photos?q=${encodeURIComponent(deletablePhotoId)}`, { cookie: wifeCookie });
+  const rollAfterPhotoDelete = await jsonRequest(`/photos?fileName=${encodeURIComponent(deletablePhotoId)}`, { cookie: wifeCookie });
   assert.equal(rollAfterPhotoDelete.result.photos.some((photo) => photo.id === deletablePhotoId), false);
 
   const moved = await jsonRequest(`/entries/${entry.id}`, {

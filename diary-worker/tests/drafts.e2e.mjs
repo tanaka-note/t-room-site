@@ -105,7 +105,7 @@ try {
     method: "POST", headers: { Cookie: mainCookie, "X-Diary-Request": "1" }, body: form
   });
   assert.equal(photoResponse.status, 200, await photoResponse.text());
-  const rollBeforePost = await request(`/photos?q=${encodeURIComponent(marker)}`, { cookie: mainCookie });
+  const rollBeforePost = await request(`/photos?entryQuery=${encodeURIComponent(marker)}`, { cookie: mainCookie });
   assert.equal(rollBeforePost.result.photos.length, 0);
 
   const draftUpdated = await request(`/entries/${draftId}`, {
@@ -129,7 +129,7 @@ try {
   assert.equal(promoted.result.entry.id, draftId);
   assert.equal(promoted.result.entry.status, "published");
   assert.equal((await request("/entries?draft=1", { cookie: mainCookie })).result.entries.some((entry) => entry.id === draftId), false);
-  assert.equal((await request(`/photos?q=${encodeURIComponent(marker)}`, { cookie: mainCookie })).result.photos.some((photo) => photo.id === photoId), true);
+  assert.equal((await request(`/photos?entryQuery=${encodeURIComponent(marker)}`, { cookie: mainCookie })).result.photos.some((photo) => photo.id === photoId), true);
   assert.equal((await request("/meta", { cookie: mainCookie })).result.tags.some((tag) => tag.value === hiddenTag), true);
 
   const editDraft = await request(`/entries/${published.result.entry.id}`, {

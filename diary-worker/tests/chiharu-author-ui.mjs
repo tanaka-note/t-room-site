@@ -19,7 +19,7 @@ assert.equal(showAuthor("chiharu-household"), false, "Chiharu diary must not dis
 assert.equal(showAuthor("tanaka-household"), true, "Tanaka diary must retain entry authors");
 assert.match(script, /meta\.append\(time\);\s*if \(shouldShowEntryAuthor\(\)\) meta\.append\(author\);/);
 assert.match(script, /elements\.detailAuthor\.hidden = !shouldShowEntryAuthor\(\);/);
-assert.match(script, /elements\.photoAuthorFilter\.closest\("label"\)\.hidden = hideAuthors;/);
+assert.doesNotMatch(script, /photoAuthorFilter|state\.photoAuthor/);
 assert.doesNotMatch(script, /DELETE FROM diary_entries|UPDATE diary_entries SET author/);
 
 process.stdout.write("Diary Chiharu author visibility test passed.\n");

@@ -476,24 +476,31 @@ async function listEntryPhotos(entryId, env, session, sourceEntryId = 0, exclude
 async function listPhotos(url, env, session) {
   const limit = clampNumber(url.searchParams.get("limit"), 1, 100, 48);
   const offset = clampNumber(url.searchParams.get("offset"), 0, 1000000, 0);
-  const query = normalizeSearch(url.searchParams.get("q") || "", 100);
+  const entryQuery = normalizeSearch(url.searchParams.get("entryQuery") || "", 100);
+  const fileNameQuery = normalizeSearch(url.searchParams.get("fileName") || "", 100);
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("month") || "")
     ? url.searchParams.get("month")
     : "";
-  const author = normalizeSearch(url.searchParams.get("author") || "", 100);
   const conditions = ["e.household_id = ?", "e.deleted_at IS NULL", "e.status = 'published'"];
   const bindings = [session.activeHouseholdId];
-  if (query) {
-    conditions.push("(instr(p.file_name, ?) > 0 OR instr(e.title, ?) > 0 OR instr(e.content, ?) > 0)");
-    bindings.push(query, query, query);
+  if (entryQuery) {
+    conditions.push(`(
+      instr(e.title, ?) > 0
+      OR instr(e.content, ?) > 0
+      OR EXISTS (
+        SELECT 1 FROM diary_tags photo_tag
+        WHERE photo_tag.entry_id = e.id AND instr(photo_tag.tag, ?) > 0
+      )
+    )`);
+    bindings.push(entryQuery, entryQuery, entryQuery);
   }
   if (month) {
     conditions.push("substr(e.entry_date, 1, 7) = ?");
     bindings.push(month);
   }
-  if (author) {
-    conditions.push("e.author_id = ?");
-    bindings.push(author);
+  if (fileNameQuery) {
+    conditions.push("instr(p.file_name, ?) > 0");
+    bindings.push(fileNameQuery);
   }
   bindings.push(limit + 1, offset);
   const result = await env.DB.prepare(`
@@ -516,25 +523,15 @@ async function listPhotos(url, env, session) {
 }
 
 async function listPhotoMeta(env, session) {
-  const [months, authors] = await Promise.all([
-    env.DB.prepare(`
-      SELECT substr(e.entry_date, 1, 7) AS value, COUNT(*) AS count
-      FROM diary_photos p
-      JOIN diary_entries e ON e.id = p.entry_id
-      WHERE e.household_id = ? AND e.deleted_at IS NULL AND e.status = 'published'
-      GROUP BY value
-      ORDER BY value DESC
-    `).bind(session.activeHouseholdId).all(),
-    env.DB.prepare(`
-      SELECT e.author_id AS value, e.author_name AS label, COUNT(*) AS count
-      FROM diary_photos p
-      JOIN diary_entries e ON e.id = p.entry_id
-      WHERE e.household_id = ? AND e.deleted_at IS NULL AND e.status = 'published'
-      GROUP BY e.author_id, e.author_name
-      ORDER BY e.author_name ASC
-    `).bind(session.activeHouseholdId).all()
-  ]);
-  return json({ months: months.results || [], authors: authors.results || [] });
+  const months = await env.DB.prepare(`
+    SELECT substr(e.entry_date, 1, 7) AS value, COUNT(*) AS count
+    FROM diary_photos p
+    JOIN diary_entries e ON e.id = p.entry_id
+    WHERE e.household_id = ? AND e.deleted_at IS NULL AND e.status = 'published'
+    GROUP BY value
+    ORDER BY value DESC
+  `).bind(session.activeHouseholdId).all();
+  return json({ months: months.results || [] });
 }
 
 async function uploadEntryPhoto(entryId, request, env, session) {

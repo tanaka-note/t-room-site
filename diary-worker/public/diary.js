@@ -69,9 +69,9 @@
     photoOffset: 0,
     photos: [],
     photoHasMore: false,
-    photoQuery: "",
+    photoEntryQuery: "",
     photoMonth: "",
-    photoAuthor: "",
+    photoFileNameQuery: "",
     photoRequestId: 0,
     photoSearchTimer: null,
     viewerPhotos: [],
@@ -201,9 +201,9 @@
     dateWheelMonth: document.querySelector("#date-wheel-month"),
     dateWheelDay: document.querySelector("#date-wheel-day"),
     cameraRollDialog: document.querySelector("#camera-roll-dialog"),
-    photoSearch: document.querySelector("#photo-search"),
+    photoEntrySearch: document.querySelector("#photo-entry-search"),
     photoMonthFilter: document.querySelector("#photo-month-filter"),
-    photoAuthorFilter: document.querySelector("#photo-author-filter"),
+    photoFileNameSearch: document.querySelector("#photo-file-name-search"),
     cameraRollStatus: document.querySelector("#camera-roll-status"),
     cameraRollGrid: document.querySelector("#camera-roll-grid"),
     cameraRollMore: document.querySelector("#camera-roll-more"),
@@ -377,13 +377,14 @@
       state.photoMonth = elements.photoMonthFilter.value;
       loadPhotos(true);
     });
-    elements.photoAuthorFilter.addEventListener("change", () => {
-      state.photoAuthor = elements.photoAuthorFilter.value;
-      loadPhotos(true);
-    });
-    elements.photoSearch.addEventListener("input", () => {
+    elements.photoEntrySearch.addEventListener("input", () => {
       window.clearTimeout(state.photoSearchTimer);
-      state.photoQuery = elements.photoSearch.value.trim();
+      state.photoEntryQuery = elements.photoEntrySearch.value.trim();
+      state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
+    });
+    elements.photoFileNameSearch.addEventListener("input", () => {
+      window.clearTimeout(state.photoSearchTimer);
+      state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
     elements.photoPrevious.addEventListener("click", () => movePhotoViewer(-1));
@@ -2241,7 +2242,6 @@
   }
 
   async function openCameraRoll() {
-    syncHouseholdPresentation();
     elements.cameraRollDialog.showModal();
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
@@ -2254,28 +2254,14 @@
   async function loadPhotoMeta() {
     const result = await api("/photos/meta");
     const monthValue = state.photoMonth;
-    const authorValue = state.photoAuthor;
     elements.photoMonthFilter.replaceChildren(createOption("", "すべて"), ...(result.months || []).map((item) => (
       createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
     )));
-    elements.photoAuthorFilter.replaceChildren(createOption("", "すべて"), ...(result.authors || []).map((item) => (
-      createOption(item.value, `${item.label}（${item.count}）`)
-    )));
     elements.photoMonthFilter.value = monthValue;
-    elements.photoAuthorFilter.value = authorValue;
   }
 
   function shouldShowEntryAuthor() {
     return state.activeHouseholdId !== "chiharu-household";
-  }
-
-  function syncHouseholdPresentation() {
-    const hideAuthors = !shouldShowEntryAuthor();
-    elements.photoAuthorFilter.closest("label").hidden = hideAuthors;
-    if (hideAuthors) {
-      state.photoAuthor = "";
-      elements.photoAuthorFilter.value = "";
-    }
   }
 
   function createOption(value, label) {
@@ -2294,9 +2280,9 @@
       elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     }
     const parameters = new URLSearchParams({ limit: "48", offset: String(state.photoOffset) });
-    if (state.photoQuery) parameters.set("q", state.photoQuery);
+    if (state.photoEntryQuery) parameters.set("entryQuery", state.photoEntryQuery);
     if (state.photoMonth) parameters.set("month", state.photoMonth);
-    if (state.photoAuthor) parameters.set("author", state.photoAuthor);
+    if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
     const result = await api(`/photos?${parameters}`);
     if (requestId !== state.photoRequestId) return;
     state.photos.push(...result.photos);
@@ -3049,9 +3035,9 @@
     state.photoOffset = 0;
     state.photos = [];
     state.photoHasMore = false;
-    state.photoQuery = "";
+    state.photoEntryQuery = "";
     state.photoMonth = "";
-    state.photoAuthor = "";
+    state.photoFileNameQuery = "";
     state.viewerPhotos = [];
     state.viewerIndex = -1;
     state.editorDirty = false;

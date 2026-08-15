@@ -38,7 +38,7 @@ for (const args of [
 }
 
 const server = spawn(process.execPath, [wranglerPath, "dev", "--local", "--port", String(port),
-  "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:sub@a-tanaka.jp",
+  "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main-admin@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
   "--var", `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
@@ -84,9 +84,11 @@ try {
   assert.equal(first.result.accountName, "田中宏知");
   assert.equal(first.result.householdId, "tanaka-household");
   assert.equal(first.result.isGlobalOwner, false);
+  assert.equal(first.result.role, "user");
+  assert.equal(first.result.canManageEntries, true);
   assert.equal(first.result.mustChangePassword, true);
-  assert.equal(first.result.canViewTrash, false);
-  assert.equal(first.result.canPermanentlyDelete, false);
+  assert.equal(first.result.canViewTrash, true);
+  assert.equal(first.result.canPermanentlyDelete, true);
   assert.equal(first.result.canViewInvestment, true);
 
   const blockedBeforeChange = await request("/entries", { cookie: first.cookie });
@@ -98,7 +100,7 @@ try {
   });
   assert.equal(changed.response.status, 200, JSON.stringify(changed.result));
   assert.equal(changed.result.mustChangePassword, false);
-  assert.equal(changed.result.canViewTrash, false);
+  assert.equal(changed.result.canViewTrash, true);
 
   const loggedIn = await login("sub@a-tanaka.jp", replacementPassword);
   assert.equal(loggedIn.response.status, 200, JSON.stringify(loggedIn.result));
@@ -112,12 +114,12 @@ try {
   });
   assert.equal(forbiddenSwitch.response.status, 403);
 
-  const forbiddenTrash = await request("/entries?trash=1", { cookie });
-  assert.equal(forbiddenTrash.response.status, 403);
-  const forbiddenPermanent = await request("/entries/1/permanent", {
+  const personalTrash = await request("/entries?trash=1", { cookie });
+  assert.equal(personalTrash.response.status, 200);
+  const missingPermanent = await request("/entries/1/permanent", {
     method: "DELETE", cookie, body: { revision: 1 }
   });
-  assert.equal(forbiddenPermanent.response.status, 403);
+  assert.equal(missingPermanent.response.status, 404);
 
   const investment = await request("/investment-history", { cookie });
   assert.equal(investment.response.status, 200);
@@ -139,8 +141,39 @@ try {
     method: "DELETE", cookie, body: { revision: created.result.entry.revision }
   });
   assert.equal(deletedByUser.response.status, 200);
-  const hiddenAfterDelete = await request(`/entries/${created.result.entry.id}`, { cookie });
-  assert.equal(hiddenAfterDelete.response.status, 404);
+  const visibleInPersonalTrash = await request(`/entries/${created.result.entry.id}`, { cookie });
+  assert.equal(visibleInPersonalTrash.response.status, 200);
+  const personalTrashAfterDelete = await request(`/entries?trash=1&q=${encodeURIComponent(title)}`, { cookie });
+  assert.ok(personalTrashAfterDelete.result.entries.some((entry) => entry.id === created.result.entry.id));
+
+  const mainAdmin = await login("main-admin@example.test", "main-test");
+  assert.equal(mainAdmin.response.status, 200, JSON.stringify(mainAdmin.result));
+  assert.equal(mainAdmin.result.role, "admin");
+  assert.equal(mainAdmin.result.isGlobalOwner, true);
+  const adminTrash = await request(`/entries?trash=1&q=${encodeURIComponent(title)}`, { cookie: mainAdmin.cookie });
+  assert.ok(adminTrash.result.entries.some((entry) => entry.id === created.result.entry.id));
+
+  const removePersonalScope = await request(`/entries/${created.result.entry.id}/permanent`, {
+    method: "DELETE", cookie,
+    body: { revision: visibleInPersonalTrash.result.entry.revision }
+  });
+  assert.equal(removePersonalScope.response.status, 200, JSON.stringify(removePersonalScope.result));
+  assert.equal(removePersonalScope.result.physicallyDeleted, false);
+  const goneFromPersonalTrash = await request(`/entries/${created.result.entry.id}`, { cookie });
+  assert.equal(goneFromPersonalTrash.response.status, 404);
+  const retainedForAdmin = await request(`/entries/${created.result.entry.id}`, { cookie: mainAdmin.cookie });
+  assert.equal(retainedForAdmin.response.status, 200);
+  assert.equal(retainedForAdmin.result.entry.title, title);
+  assert.deepEqual(retainedForAdmin.result.entry.tags, ["一般ユーザー"]);
+
+  const removeAdminRetention = await request(`/entries/${created.result.entry.id}/permanent`, {
+    method: "DELETE", cookie: mainAdmin.cookie,
+    body: { revision: retainedForAdmin.result.entry.revision }
+  });
+  assert.equal(removeAdminRetention.response.status, 200, JSON.stringify(removeAdminRetention.result));
+  assert.equal(removeAdminRetention.result.physicallyDeleted, true);
+  const physicallyGone = await request(`/entries/${created.result.entry.id}`, { cookie: mainAdmin.cookie });
+  assert.equal(physicallyGone.response.status, 404);
 
   const chiharu = await login("giantz3031@gmail.com", "chiharu-test");
   assert.equal(chiharu.response.status, 200);
