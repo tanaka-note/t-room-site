@@ -1,15 +1,15 @@
-const CACHE_NAME = "troom-diary-shell-v51";
+const CACHE_NAME = "troom-diary-shell-v52";
 const STATIC_ASSETS = [
   "/diary/diary.css?v=30",
   "/diary/troom-date-picker.css?v=1",
   "/diary/troom-date-picker.js?v=1",
   "/diary/diary.js?v=56",
   "/diary/manifest.webmanifest",
-  "/diary/icons/icon-192-v4.png",
-  "/diary/icons/icon-512-v4.png",
-  "/diary/icons/icon-maskable-512-v4.png",
-  "/diary/icons/apple-touch-icon-v3.png",
-  "/diary/icons/favicon-64-v4.png"
+  "/diary/icons/icon-192-v5.png",
+  "/diary/icons/icon-512-v5.png",
+  "/diary/icons/icon-maskable-512-v5.png",
+  "/diary/icons/apple-touch-icon-v4.png",
+  "/diary/icons/favicon-64-v5.png"
 ];
 const STATIC_PATHS = new Set(STATIC_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 

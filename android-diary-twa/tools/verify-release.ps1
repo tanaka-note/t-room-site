@@ -38,7 +38,7 @@ $badging = & (Join-Path $buildTools.FullName "aapt.exe") dump badging $apk
 if ($LASTEXITCODE -ne 0) { throw "APK metadata verification failed." }
 $badgingText = $badging -join "`n"
 if ($badgingText -notmatch "package: name='jp\.tanaka\.troom\.diary\.twa'") { throw "Unexpected applicationId in the APK." }
-if ($badgingText -notmatch "versionCode='3' versionName='1\.0\.2'") { throw "Unexpected APK version." }
+if ($badgingText -notmatch "versionCode='4' versionName='1\.0\.3'") { throw "Unexpected APK version." }
 $stringsXml = [xml](Get-Content -Raw -Encoding UTF8 (Join-Path $projectRoot "app\src\main\res\values\strings.xml"))
 $appName = $stringsXml.resources.string | Where-Object { $_.name -eq "app_name" } | Select-Object -First 1
 $expectedAppName = "$([char]0x65E5)$([char]0x8A18)"
