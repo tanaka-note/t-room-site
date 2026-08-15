@@ -1,84 +1,134 @@
 package jp.tanaka.tcloud.transfer
 
 import android.Manifest
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
-import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.work.CoroutineWorker
 import androidx.work.Data
-import androidx.work.ForegroundInfo
-import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import jp.tanaka.tcloud.R
 import jp.tanaka.tcloud.TCloudApplication
 import jp.tanaka.tcloud.data.CloudFile
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
-import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
 class TCloudDownloadWorker(
     appContext: Context,
     parameters: WorkerParameters,
 ) : CoroutineWorker(appContext, parameters) {
-    private val notificationManager =
-        appContext.getSystemService(Service.NOTIFICATION_SERVICE) as NotificationManager
-
     override suspend fun doWork(): Result {
-        val folderId = inputData.getLong(KEY_FOLDER_ID, 0)
-        val fileId = inputData.getLong(KEY_FILE_ID, 0)
-        if (folderId <= 0 || fileId <= 0) return Result.failure(errorData("ファイル情報が不正です。"))
+        val batchId = inputData.getString(KEY_BATCH_ID).orEmpty()
+        if (batchId.isBlank()) return Result.failure(errorData("ダウンロード情報が不正です。"))
+        val application = applicationContext as TCloudApplication
+        val store = application.transferStore
+        val notifications = TCloudTransferNotifications(applicationContext)
+        val original = store.batch(batchId) ?: return Result.failure(errorData("転送情報が見つかりません。"))
+        if (original.direction != TransferDirection.DOWNLOAD) {
+            return Result.failure(errorData("転送の種類が一致しません。"))
+        }
 
-        createNotificationChannel()
-        setForeground(notification("準備しています", 0, indeterminate = true))
+        store.recoverInterrupted(batchId, TransferDirection.DOWNLOAD).forEach(::deleteDestination)
+        store.markBatchRunning(batchId)
+        setForeground(notifications.foreground(checkNotNull(store.batch(batchId)), id))
 
-        var destination: DownloadDestination? = null
         return try {
-            val repository = (applicationContext as TCloudApplication).repository
-            val file = repository.loadFileForBackground(folderId, fileId)
-            destination = createDestination(file)
-            destination.output.use { output ->
-                repository.downloadDecryptedFile(file, output) { downloaded, total ->
-                    val percent = if (total > 0) ((downloaded * 100.0) / total).roundToInt() else 0
-                    setProgress(
-                        Data.Builder()
-                            .putLong(KEY_DOWNLOADED_BYTES, downloaded)
-                            .putLong(KEY_TOTAL_BYTES, total)
-                            .putInt(KEY_PROGRESS_PERCENT, percent)
-                            .build(),
-                    )
-                    setForeground(notification("${file.name} を保存中", percent, indeterminate = false))
+            store.items(batchId)
+                .filter { it.status == TransferStatus.QUEUED }
+                .forEach { item ->
+                    currentCoroutineContext().ensureActive()
+                    downloadOne(application, store, notifications, batchId, item)
                 }
-            }
-            destination.finish()
-            showCompletion("${file.name} を保存しました")
-            val completed = checkNotNull(destination)
-            Result.success(Data.Builder().putString(KEY_RESULT_URI, completed.uri.toString()).build())
+            store.finishBatch(batchId)
+            Result.success()
+        } catch (_: TransferRetryRequested) {
+            Result.retry()
+        } catch (cancelled: CancellationException) {
+            store.items(batchId)
+                .filter { it.status == TransferStatus.RUNNING }
+                .forEach { item ->
+                    if (item.resultUri.isNotBlank()) deleteDestination(item.resultUri)
+                }
+            store.cancelBatch(batchId)
+            throw cancelled
         } catch (error: Throwable) {
-            destination?.delete()
-            if (isStopped) {
-                showCompletion("ダウンロードを中止しました")
-                Result.failure(errorData("中止しました。"))
-            } else {
-                showCompletion("ダウンロードに失敗しました")
-                Result.failure(errorData(error.message ?: "ダウンロードに失敗しました。"))
-            }
+            store.items(batchId)
+                .filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
+                .forEach { item ->
+                    if (item.resultUri.isNotBlank()) deleteDestination(item.resultUri)
+                    store.markItemFailure(batchId, item.index, error.userMessage())
+                }
+            store.finishBatch(batchId)
+            Result.success()
         }
     }
 
-    private suspend fun createDestination(file: CloudFile): DownloadDestination = withContext(Dispatchers.IO) {
+    private suspend fun downloadOne(
+        application: TCloudApplication,
+        store: TCloudTransferStore,
+        notifications: TCloudTransferNotifications,
+        batchId: String,
+        item: TransferItem,
+    ) {
+        store.markItemRunning(batchId, item.index, item.name)
+        updateForeground(store, notifications, batchId)
+        try {
+            val resultUri = retryTransientTransfer {
+                val file = application.repository.loadFileForBackground(item.folderId, item.fileId)
+                val destination = createDestination(file)
+                store.recordDestination(batchId, item.index, destination.uri.toString())
+                var lastReportedProgress = -1
+                try {
+                    destination.output.use { output ->
+                        application.repository.downloadDecryptedFile(file, output) { downloaded, total ->
+                            currentCoroutineContext().ensureActive()
+                            val percent = if (total > 0) {
+                                ((downloaded * 100.0) / total).roundToInt()
+                            } else 0
+                            if (percent != lastReportedProgress) {
+                                lastReportedProgress = percent
+                                store.updateProgress(batchId, file.name, percent)
+                                setProgress(progressData(store, batchId))
+                                updateForeground(store, notifications, batchId)
+                            }
+                        }
+                    }
+                    destination.finish()
+                    destination.uri.toString()
+                } catch (error: Throwable) {
+                    destination.delete()
+                    store.recordDestination(batchId, item.index, "")
+                    throw error
+                }
+            }
+            store.markItemSuccess(batchId, item.index, resultUri)
+        } catch (cancelled: CancellationException) {
+            store.items(batchId).firstOrNull { it.index == item.index }?.resultUri
+                ?.takeIf(String::isNotBlank)
+                ?.let(::deleteDestination)
+            throw cancelled
+        } catch (error: Throwable) {
+            store.items(batchId).firstOrNull { it.index == item.index }?.resultUri
+                ?.takeIf(String::isNotBlank)
+                ?.let(::deleteDestination)
+            if (isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
+                store.deferItem(batchId, item.index)
+                throw TransferRetryRequested(error)
+            }
+            store.markItemFailure(batchId, item.index, error.userMessage())
+        }
+        updateForeground(store, notifications, batchId)
+    }
+
+    private suspend fun createDestination(file: CloudFile): DownloadDestination {
         val safeName = safeFileName(file.name.ifBlank { "T-Cloud-${file.id}" })
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
@@ -88,14 +138,14 @@ class TCloudDownloadWorker(
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val resolver = applicationContext.contentResolver
-            val uri = checkNotNull(
-                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values),
-            ) { "保存先を作成できませんでした。" }
+            val uri = checkNotNull(resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)) {
+                "保存先を作成できませんでした。"
+            }
             val output = checkNotNull(resolver.openOutputStream(uri, "w")) {
                 resolver.delete(uri, null, null)
                 "保存先を開けませんでした。"
             }
-            DownloadDestination(
+            return DownloadDestination(
                 uri = uri,
                 output = output,
                 finish = {
@@ -108,75 +158,42 @@ class TCloudDownloadWorker(
                 },
                 delete = { resolver.delete(uri, null, null) },
             )
-        } else {
-            check(applicationContext.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
-                "ファイル保存の権限を許可してください。"
-            }
-            @Suppress("DEPRECATION")
-            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "T-Cloud")
-            check(directory.exists() || directory.mkdirs()) { "保存フォルダを作成できませんでした。" }
-            val outputFile = uniqueFile(directory, safeName)
-            DownloadDestination(
-                uri = Uri.fromFile(outputFile),
-                output = FileOutputStream(outputFile),
-                finish = {},
-                delete = { outputFile.delete() },
-            )
         }
-    }
 
-    private fun notification(text: String, progress: Int, indeterminate: Boolean): ForegroundInfo {
-        val cancelIntent = WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
-        val notification = Notification.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_cloud_download)
-            .setContentTitle("T-Cloud")
-            .setContentText(text)
-            .setOnlyAlertOnce(true)
-            .setOngoing(true)
-            .setProgress(100, progress.coerceIn(0, 100), indeterminate)
-            .addAction(
-                Notification.Action.Builder(
-                    null,
-                    "中止",
-                    cancelIntent,
-                ).build(),
-            )
-            .build()
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(notificationId(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(notificationId(), notification)
+        check(applicationContext.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            "ファイル保存の権限を許可してください。"
         }
-    }
-
-    private fun showCompletion(text: String) {
-        notificationManager.notify(
-            notificationId() + 1,
-            Notification.Builder(applicationContext, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_stat_cloud_download)
-                .setContentTitle("T-Cloud")
-                .setContentText(text)
-                .setAutoCancel(true)
-                .build(),
+        @Suppress("DEPRECATION")
+        val directory = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "T-Cloud",
+        )
+        check(directory.exists() || directory.mkdirs()) { "保存フォルダを作成できませんでした。" }
+        val outputFile = uniqueFile(directory, safeName)
+        return DownloadDestination(
+            uri = Uri.fromFile(outputFile),
+            output = FileOutputStream(outputFile),
+            finish = {},
+            delete = { outputFile.delete() },
         )
     }
 
-    private fun createNotificationChannel() {
-        notificationManager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID,
-                "T-Cloud 転送",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply {
-                description = "アップロードとダウンロードの進行状況"
-                setShowBadge(false)
-            },
-        )
+    private suspend fun updateForeground(
+        store: TCloudTransferStore,
+        notifications: TCloudTransferNotifications,
+        batchId: String,
+    ) {
+        val batch = store.batch(batchId) ?: return
+        setForeground(notifications.foreground(batch, id))
     }
 
-    private fun errorData(message: String) = Data.Builder().putString(KEY_ERROR, message).build()
-
-    private fun notificationId(): Int = 2_000 + (id.hashCode().absoluteValue % 100_000)
+    private fun deleteDestination(value: String) {
+        runCatching {
+            val uri = Uri.parse(value)
+            if (uri.scheme == "file") File(checkNotNull(uri.path)).delete()
+            else applicationContext.contentResolver.delete(uri, null, null)
+        }
+    }
 
     private fun safeFileName(value: String): String = value
         .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_")
@@ -198,6 +215,21 @@ class TCloudDownloadWorker(
         }
     }
 
+    private fun progressData(store: TCloudTransferStore, batchId: String): Data {
+        val batch = store.batch(batchId) ?: return Data.EMPTY
+        return Data.Builder()
+            .putInt(KEY_TOTAL_COUNT, batch.total)
+            .putInt(KEY_COMPLETED_COUNT, batch.processed)
+            .putInt(KEY_REMAINING_COUNT, batch.remaining)
+            .putInt(KEY_PROGRESS_PERCENT, batch.overallProgress)
+            .build()
+    }
+
+    private fun Throwable.userMessage(): String = message?.takeIf(String::isNotBlank)
+        ?: "ダウンロードに失敗しました。"
+
+    private fun errorData(message: String) = Data.Builder().putString(KEY_ERROR, message).build()
+
     private data class DownloadDestination(
         val uri: Uri,
         val output: OutputStream,
@@ -206,14 +238,12 @@ class TCloudDownloadWorker(
     )
 
     companion object {
-        const val KEY_FOLDER_ID = "folder_id"
-        const val KEY_FILE_ID = "file_id"
-        const val KEY_FILE_NAME = "file_name"
-        const val KEY_DOWNLOADED_BYTES = "downloaded_bytes"
-        const val KEY_TOTAL_BYTES = "total_bytes"
+        const val KEY_BATCH_ID = "batch_id"
+        const val KEY_TOTAL_COUNT = "total_count"
+        const val KEY_COMPLETED_COUNT = "completed_count"
+        const val KEY_REMAINING_COUNT = "remaining_count"
         const val KEY_PROGRESS_PERCENT = "progress_percent"
-        const val KEY_RESULT_URI = "result_uri"
         const val KEY_ERROR = "error"
-        private const val CHANNEL_ID = "tcloud_transfers"
+        private const val MAX_BATCH_RETRIES = 5
     }
 }

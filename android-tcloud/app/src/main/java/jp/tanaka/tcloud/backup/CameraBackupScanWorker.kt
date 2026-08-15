@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import jp.tanaka.tcloud.TCloudApplication
+import jp.tanaka.tcloud.transfer.CameraUploadItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -130,16 +131,20 @@ class CameraBackupScanWorker(
                 queuedItems += QueuedCameraAsset(settings.folderId, Uri.parse(asset.uri), assetKey, kind)
             }
             store.beginBatch(queuedItems.map { it.assetKey })
-            queuedItems.forEach { item ->
-                application.uploadManager.enqueueCameraBackup(
-                    folderId = item.folderId,
-                    uri = item.uri,
-                    assetKey = item.assetKey,
-                    expectedMediaKind = item.expectedMediaKind,
+            if (queuedItems.isNotEmpty()) {
+                val enqueued = application.uploadManager.enqueueCameraBackupBatch(
+                    items = queuedItems.map { item ->
+                        CameraUploadItem(
+                            folderId = item.folderId,
+                            sourceUri = item.uri.toString(),
+                            assetKey = item.assetKey,
+                            expectedMediaKind = item.expectedMediaKind,
+                        )
+                    },
                     wifiOnly = settings.wifiOnly,
                     chargingOnly = settings.chargingOnly,
                 )
-                queued += 1
+                queued = enqueued?.itemCount ?: 0
             }
             if (plan.cursorMediaId > 0) {
                 store.advanceScanCursor(plan.cursorDateAddedSeconds, plan.cursorMediaId)

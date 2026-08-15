@@ -468,6 +468,33 @@ class TCloudApi(
         request("POST", "/uploads/$fileId/complete", body)
     }
 
+    suspend fun putThumbnail(fileId: Long, encryptedBytes: ByteArray) = withContext(Dispatchers.IO) {
+        val connection = (URL("$BASE_URL/files/$fileId/thumbnail").openConnection() as HttpURLConnection).apply {
+            requestMethod = "PUT"
+            connectTimeout = 20_000
+            readTimeout = 60_000
+            doOutput = true
+            instanceFollowRedirects = false
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Content-Type", "application/octet-stream")
+            setRequestProperty("Origin", T_CLOUD_ORIGIN)
+            setRequestProperty("User-Agent", "T-Cloud-Android/0.5")
+            sessionStore.readSessionCookie()?.let { setRequestProperty("Cookie", it) }
+            setFixedLengthStreamingMode(encryptedBytes.size)
+        }
+        try {
+            connection.outputStream.use { it.write(encryptedBytes) }
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val error = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                if (status == HttpURLConnection.HTTP_UNAUTHORIZED) sessionStore.clear()
+                throw TCloudApiException(status, error.ifBlank { "サムネイルを保存できませんでした。" })
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     suspend fun cancelUpload(fileId: Long) {
         runCatching { request("DELETE", "/uploads/$fileId") }
     }

@@ -1,165 +1,206 @@
 package jp.tanaka.tcloud.transfer
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
 import android.content.Context
-import android.content.pm.ServiceInfo
 import android.database.Cursor
 import android.net.Uri
-import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import androidx.work.CoroutineWorker
 import androidx.work.Data
-import androidx.work.ForegroundInfo
-import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import jp.tanaka.tcloud.R
 import jp.tanaka.tcloud.TCloudApplication
 import jp.tanaka.tcloud.data.UploadTicket
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.InputStream
-import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
 class TCloudUploadWorker(
     appContext: Context,
     parameters: WorkerParameters,
 ) : CoroutineWorker(appContext, parameters) {
-    private val notificationManager =
-        appContext.getSystemService(Service.NOTIFICATION_SERVICE) as NotificationManager
-
     override suspend fun doWork(): Result {
-        val folderId = inputData.getLong(KEY_FOLDER_ID, 0)
-        val source = inputData.getString(KEY_SOURCE_URI)?.let(Uri::parse)
-        val cameraAssetKey = inputData.getString(KEY_CAMERA_ASSET_KEY)
-        val expectedCameraKind = inputData.getString(KEY_CAMERA_MEDIA_KIND)
-            ?: cameraAssetKey?.let(::mediaKindFromAssetKey)
-        if (folderId <= 0 || source == null) return Result.failure(errorData("アップロード情報が不正です。"))
-
-        cameraAssetKey?.let {
-            (applicationContext as TCloudApplication).cameraBackupStore.beginBatch(listOf(it))
+        val batchId = inputData.getString(KEY_BATCH_ID).orEmpty()
+        if (batchId.isBlank()) return Result.failure(errorData("アップロード情報が不正です。"))
+        val application = applicationContext as TCloudApplication
+        val store = application.transferStore
+        val notifications = TCloudTransferNotifications(applicationContext)
+        val original = store.batch(batchId) ?: return Result.failure(errorData("転送情報が見つかりません。"))
+        if (original.direction !in setOf(TransferDirection.UPLOAD, TransferDirection.CAMERA_BACKUP)) {
+            return Result.failure(errorData("転送の種類が一致しません。"))
         }
 
-        createNotificationChannel(cameraAssetKey != null)
-        setForeground(
-            if (cameraAssetKey == null) {
-                notification("準備しています", 0, indeterminate = true)
-            } else {
-                cameraNotification(0, indeterminate = true)
-            },
-        )
-        var ticket: UploadTicket? = null
+        store.recoverInterrupted(batchId, original.direction)
+        store.markBatchRunning(batchId)
+        setForeground(notifications.foreground(checkNotNull(store.batch(batchId)), id))
+
         return try {
+            store.items(batchId)
+                .filter { it.status == TransferStatus.QUEUED }
+                .forEach { item ->
+                    currentCoroutineContext().ensureActive()
+                    uploadOne(application, store, notifications, batchId, item)
+                }
+            store.finishBatch(batchId)
+            Result.success()
+        } catch (_: TransferRetryRequested) {
+            Result.retry()
+        } catch (cancelled: CancellationException) {
+            store.cancelBatch(batchId)
+            throw cancelled
+        } catch (error: Throwable) {
+            store.items(batchId)
+                .filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
+                .forEach { store.markItemFailure(batchId, it.index, error.userMessage()) }
+            store.finishBatch(batchId)
+            Result.success()
+        }
+    }
+
+    private suspend fun uploadOne(
+        application: TCloudApplication,
+        store: TCloudTransferStore,
+        notifications: TCloudTransferNotifications,
+        batchId: String,
+        item: TransferItem,
+    ) {
+        val source = Uri.parse(item.sourceUri)
+        var ticket: UploadTicket? = null
+        var completionStarted = false
+        try {
             val sourceInfo = readSourceInfo(source)
-            if (cameraAssetKey != null && sourceInfo.mediaKind != expectedCameraKind) {
-                val store = (applicationContext as TCloudApplication).cameraBackupStore
-                store.markCompleted(cameraAssetKey)
-                finishCameraAsset(cameraAssetKey, failed = false)
-                return Result.success()
+            store.markItemRunning(batchId, item.index, sourceInfo.name)
+            updateForeground(store, notifications, batchId)
+            if (item.cameraAssetKey.isNotBlank() && sourceInfo.mediaKind != item.expectedMediaKind) {
+                application.cameraBackupStore.markCompleted(item.cameraAssetKey)
+                application.cameraBackupStore.finishBatchAsset(item.cameraAssetKey, failed = false)
+                store.markItemSuccess(batchId, item.index)
+                updateForeground(store, notifications, batchId)
+                return
             }
             check(sourceInfo.sizeBytes > 0) { "空ファイルのためスキップしました。" }
-            val repository = (applicationContext as TCloudApplication).repository
-            repository.prepareUpload(
-                folderId = folderId,
-                name = sourceInfo.name,
-                mimeType = sourceInfo.mimeType,
-                mediaKind = sourceInfo.mediaKind,
-                lastModified = sourceInfo.lastModified,
-                sizeBytes = sourceInfo.sizeBytes,
-            ).use { prepared ->
-                val activeTicket = repository.createUpload(prepared.payload)
-                ticket = activeTicket
-                check(activeTicket.chunkSize == prepared.payload.chunkSizeBytes) {
-                    "サーバーと端末の暗号チャンク設定が一致しません。"
-                }
-                val parts = mutableListOf<jp.tanaka.tcloud.data.UploadedPart>()
-                val input = checkNotNull(applicationContext.contentResolver.openInputStream(source)) {
-                    "選択したファイルを開けませんでした。"
-                }
-                input.use {
-                    var uploadedPlainBytes = 0L
-                    for (index in 0 until prepared.payload.chunkCount) {
-                        currentCoroutineContext().ensureActive()
-                        val expected = minOf(
-                            prepared.payload.chunkSizeBytes,
-                            prepared.payload.sizeBytes - uploadedPlainBytes,
-                        ).toInt()
-                        val plain = input.readExactly(expected)
-                        try {
-                            val encrypted = prepared.encryptChunk(plain, index)
-                            try {
-                                parts += repository.uploadPart(activeTicket.id, index + 1, encrypted)
-                            } finally {
-                                encrypted.fill(0)
-                            }
-                        } finally {
-                            plain.fill(0)
+
+            val thumbnail = runCatching {
+                TCloudThumbnailFactory.create(applicationContext, source, sourceInfo.mediaKind)
+            }.getOrNull()
+            try {
+                application.repository.prepareUpload(
+                    folderId = item.folderId,
+                    name = sourceInfo.name,
+                    mimeType = sourceInfo.mimeType,
+                    mediaKind = sourceInfo.mediaKind,
+                    lastModified = sourceInfo.lastModified,
+                    sizeBytes = sourceInfo.sizeBytes,
+                ).use { prepared ->
+                    val encryptedThumbnail = thumbnail?.let(prepared::encryptThumbnail)
+                    try {
+                        val activeTicket = retryTransientTransfer {
+                            application.repository.createUpload(prepared.payload)
                         }
-                        uploadedPlainBytes += expected
-                        val percent = ((uploadedPlainBytes * 100.0) / prepared.payload.sizeBytes).roundToInt()
-                        setProgress(
-                            Data.Builder()
-                                .putLong(KEY_UPLOADED_BYTES, uploadedPlainBytes)
-                                .putLong(KEY_TOTAL_BYTES, prepared.payload.sizeBytes)
-                                .putInt(KEY_PROGRESS_PERCENT, percent)
-                                .build(),
-                        )
-                        setForeground(
-                            if (cameraAssetKey == null) {
-                                notification("${sourceInfo.name} を保存中", percent, indeterminate = false)
-                            } else {
-                                cameraNotification(percent, indeterminate = false)
-                            },
-                        )
+                        ticket = activeTicket
+                        check(activeTicket.chunkSize == prepared.payload.chunkSizeBytes) {
+                            "サーバーと端末の暗号チャンク設定が一致しません。"
+                        }
+                        val parts = mutableListOf<jp.tanaka.tcloud.data.UploadedPart>()
+                        val input = checkNotNull(applicationContext.contentResolver.openInputStream(source)) {
+                            "選択したファイルを開けませんでした。"
+                        }
+                        store.markItemStage(batchId, item.index, TCloudTransferStore.STAGE_UPLOADING)
+                        input.use {
+                            var uploadedPlainBytes = 0L
+                            var lastReportedProgress = -1
+                            for (index in 0 until prepared.payload.chunkCount) {
+                                currentCoroutineContext().ensureActive()
+                                val expected = minOf(
+                                    prepared.payload.chunkSizeBytes,
+                                    prepared.payload.sizeBytes - uploadedPlainBytes,
+                                ).toInt()
+                                val plain = input.readExactly(expected)
+                                try {
+                                    val encrypted = prepared.encryptChunk(plain, index)
+                                    try {
+                                        parts += retryTransientTransfer {
+                                            application.repository.uploadPart(activeTicket.id, index + 1, encrypted)
+                                        }
+                                    } finally {
+                                        encrypted.fill(0)
+                                    }
+                                } finally {
+                                    plain.fill(0)
+                                }
+                                uploadedPlainBytes += expected
+                                val percent = ((uploadedPlainBytes * 100.0) / prepared.payload.sizeBytes).roundToInt()
+                                if (percent != lastReportedProgress) {
+                                    lastReportedProgress = percent
+                                    store.updateProgress(batchId, sourceInfo.name, percent)
+                                    setProgress(progressData(store, batchId))
+                                    updateForeground(store, notifications, batchId)
+                                }
+                            }
+                            check(input.read() == -1) { "選択後にファイル容量が変更されました。" }
+                        }
+                        store.markItemStage(batchId, item.index, TCloudTransferStore.STAGE_COMPLETING)
+                        completionStarted = true
+                        application.repository.completeUpload(activeTicket.id, parts)
+
+                        if (encryptedThumbnail != null) {
+                            runCatching {
+                                retryTransientTransfer {
+                                    application.repository.putThumbnail(activeTicket.id, encryptedThumbnail)
+                                }
+                            }
+                        }
+                        store.markItemSuccess(batchId, item.index)
+                        ticket = null
+                    } finally {
+                        encryptedThumbnail?.fill(0)
                     }
-                    check(input.read() == -1) { "選択後にファイル容量が変更されました。" }
                 }
-                repository.completeUpload(activeTicket.id, parts)
+            } finally {
+                thumbnail?.fill(0)
             }
-            cameraAssetKey?.let {
-                (applicationContext as TCloudApplication).cameraBackupStore.markCompleted(it)
+            if (item.cameraAssetKey.isNotBlank()) {
+                application.cameraBackupStore.markCompleted(item.cameraAssetKey)
+                application.cameraBackupStore.finishBatchAsset(item.cameraAssetKey, failed = false)
             }
-            if (cameraAssetKey == null) {
-                showCompletion("アップロードが完了しました")
-            } else {
-                finishCameraAsset(cameraAssetKey, failed = false)
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                ticket?.let { runCatching { application.repository.cancelUpload(it.id) } }
             }
-            Result.success()
+            throw cancelled
         } catch (error: Throwable) {
             withContext(NonCancellable) {
-                ticket?.let { runCatching { (applicationContext as TCloudApplication).repository.cancelUpload(it.id) } }
+                ticket?.let { runCatching { application.repository.cancelUpload(it.id) } }
             }
-            if (isStopped) {
-                if (cameraAssetKey == null) showCompletion("アップロードを中止しました")
-                Result.failure(errorData("中止しました。"))
-            } else if (cameraAssetKey != null && runAttemptCount < MAX_CAMERA_RETRIES) {
-                notificationManager.notify(
-                    CAMERA_NOTIFICATION_ID,
-                    buildCameraNotification("通信を確認後、自動で再試行します", 0, indeterminate = true),
+            if (!completionStarted && isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
+                store.deferItem(batchId, item.index)
+                throw TransferRetryRequested(error)
+            }
+            if (item.cameraAssetKey.isNotBlank()) {
+                application.cameraBackupStore.markFailed(
+                    assetKey = item.cameraAssetKey,
+                    sourceUri = item.sourceUri,
+                    folderId = item.folderId,
+                    error = error.userMessage(),
                 )
-                Result.retry()
-            } else {
-                if (cameraAssetKey != null) {
-                    (applicationContext as TCloudApplication).cameraBackupStore.markFailed(
-                        assetKey = cameraAssetKey,
-                        sourceUri = source.toString(),
-                        folderId = folderId,
-                        error = error.message ?: "アップロードに失敗しました。",
-                    )
-                    finishCameraAsset(cameraAssetKey, failed = true)
-                } else {
-                    showCompletion("アップロードに失敗しました")
-                }
-                Result.failure(errorData(error.message ?: "アップロードに失敗しました。"))
+                application.cameraBackupStore.finishBatchAsset(item.cameraAssetKey, failed = true)
             }
+            store.markItemFailure(batchId, item.index, error.userMessage())
         }
+        updateForeground(store, notifications, batchId)
+    }
+
+    private suspend fun updateForeground(
+        store: TCloudTransferStore,
+        notifications: TCloudTransferNotifications,
+        batchId: String,
+    ) {
+        val batch = store.batch(batchId) ?: return
+        setForeground(notifications.foreground(batch, id))
     }
 
     private suspend fun readSourceInfo(uri: Uri): SourceInfo = withContext(Dispatchers.IO) {
@@ -168,10 +209,7 @@ class TCloudUploadWorker(
             OpenableColumns.SIZE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
-        val basicProjection = arrayOf(
-            OpenableColumns.DISPLAY_NAME,
-            OpenableColumns.SIZE,
-        )
+        val basicProjection = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
         var name = ""
         var size = -1L
         var modified = 0L
@@ -183,17 +221,13 @@ class TCloudUploadWorker(
                     size = cursor.longValue(OpenableColumns.SIZE) ?: -1L
                     modified = cursor.longValue(DocumentsContract.Document.COLUMN_LAST_MODIFIED) ?: 0L
                     true
-                } else {
-                    false
-                }
+                } else false
             } ?: false
         }.getOrDefault(false)
 
         if (!readMetadata(extendedProjection)) {
             modified = 0L
-            check(readMetadata(basicProjection)) {
-                "選択したファイルの情報を取得できませんでした。"
-            }
+            check(readMetadata(basicProjection)) { "選択したファイルの情報を取得できませんでした。" }
         }
         if (size < 0) {
             size = applicationContext.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
@@ -237,122 +271,20 @@ class TCloudUploadWorker(
         return if (index >= 0 && !isNull(index)) getLong(index) else null
     }
 
-    private fun notification(text: String, progress: Int, indeterminate: Boolean): ForegroundInfo {
-        val cancelIntent = WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
-        val notification = Notification.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_cloud_upload)
-            .setContentTitle("T-Cloud")
-            .setContentText(text)
-            .setOnlyAlertOnce(true)
-            .setOngoing(true)
-            .setProgress(100, progress.coerceIn(0, 100), indeterminate)
-            .addAction(Notification.Action.Builder(null, "中止", cancelIntent).build())
+    private fun progressData(store: TCloudTransferStore, batchId: String): Data {
+        val batch = store.batch(batchId) ?: return Data.EMPTY
+        return Data.Builder()
+            .putInt(KEY_TOTAL_COUNT, batch.total)
+            .putInt(KEY_COMPLETED_COUNT, batch.processed)
+            .putInt(KEY_REMAINING_COUNT, batch.remaining)
+            .putInt(KEY_PROGRESS_PERCENT, batch.overallProgress)
             .build()
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(notificationId(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(notificationId(), notification)
-        }
     }
 
-    private fun cameraNotification(fileProgress: Int, indeterminate: Boolean): ForegroundInfo {
-        val batch = (applicationContext as TCloudApplication).cameraBackupStore.batchProgress()
-        val total = batch.total.coerceAtLeast(1)
-        val overallProgress = if (indeterminate) {
-            0
-        } else {
-            ((batch.processed * 100 + fileProgress.coerceIn(0, 100)) / total).coerceIn(0, 100)
-        }
-        val text = "${batch.processed} / ${batch.total.coerceAtLeast(1)}件完了・バックアップ中"
-        val notification = buildCameraNotification(text, overallProgress, indeterminate)
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(CAMERA_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(CAMERA_NOTIFICATION_ID, notification)
-        }
-    }
-
-    private fun finishCameraAsset(assetKey: String, failed: Boolean) {
-        val batch = (applicationContext as TCloudApplication).cameraBackupStore
-            .finishBatchAsset(assetKey, failed)
-        val text = when {
-            batch.finished && batch.failed > 0 ->
-                "${batch.total}件中${batch.completed}件完了・${batch.failed}件を再確認します"
-            batch.finished -> "${batch.total}件のバックアップが完了しました"
-            else -> "${batch.processed} / ${batch.total}件完了・バックアップ中"
-        }
-        val progress = if (batch.total > 0) ((batch.processed * 100) / batch.total).coerceIn(0, 100) else 0
-        notificationManager.notify(
-            CAMERA_NOTIFICATION_ID,
-            buildCameraNotification(text, progress, indeterminate = false, ongoing = !batch.finished),
-        )
-    }
-
-    private fun buildCameraNotification(
-        text: String,
-        progress: Int,
-        indeterminate: Boolean,
-        ongoing: Boolean = true,
-    ): Notification = Notification.Builder(applicationContext, CAMERA_CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_stat_cloud_upload)
-        .setContentTitle("T-Cloud カメラロール")
-        .setContentText(text)
-        .setOnlyAlertOnce(true)
-        .setOngoing(ongoing)
-        .setAutoCancel(!ongoing)
-        .setProgress(100, progress.coerceIn(0, 100), indeterminate)
-        .build()
-
-    private fun showCompletion(text: String) {
-        notificationManager.notify(
-            notificationId() + 1,
-            Notification.Builder(applicationContext, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_stat_cloud_upload)
-                .setContentTitle("T-Cloud")
-                .setContentText(text)
-                .setAutoCancel(true)
-                .build(),
-        )
-    }
-
-    private fun createNotificationChannel(cameraBackup: Boolean) {
-        if (cameraBackup) {
-            notificationManager.createNotificationChannel(
-                NotificationChannel(
-                    CAMERA_CHANNEL_ID,
-                    "T-Cloud カメラロール",
-                    NotificationManager.IMPORTANCE_LOW,
-                ).apply {
-                    description = "カメラロール自動バックアップの進行状況"
-                    setShowBadge(false)
-                    setSound(null, null)
-                },
-            )
-            return
-        }
-        notificationManager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID,
-                "T-Cloud 転送",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply {
-                description = "アップロードとダウンロードの進行状況"
-                setShowBadge(false)
-            },
-        )
-    }
-
-    private fun notificationId(): Int = 102_000 + (id.hashCode().absoluteValue % 100_000)
+    private fun Throwable.userMessage(): String = message?.takeIf(String::isNotBlank)
+        ?: "アップロードに失敗しました。"
 
     private fun errorData(message: String) = Data.Builder().putString(KEY_ERROR, message).build()
-
-    private fun mediaKindFromAssetKey(assetKey: String): String? = when (
-        assetKey.split(':').getOrNull(1)?.toIntOrNull()
-    ) {
-        1 -> "image"
-        3 -> "video"
-        else -> null
-    }
 
     private data class SourceInfo(
         val name: String,
@@ -363,17 +295,12 @@ class TCloudUploadWorker(
     )
 
     companion object {
-        const val KEY_FOLDER_ID = "folder_id"
-        const val KEY_SOURCE_URI = "source_uri"
-        const val KEY_CAMERA_ASSET_KEY = "camera_asset_key"
-        const val KEY_CAMERA_MEDIA_KIND = "camera_media_kind"
-        const val KEY_UPLOADED_BYTES = "uploaded_bytes"
-        const val KEY_TOTAL_BYTES = "total_bytes"
+        const val KEY_BATCH_ID = "batch_id"
+        const val KEY_TOTAL_COUNT = "total_count"
+        const val KEY_COMPLETED_COUNT = "completed_count"
+        const val KEY_REMAINING_COUNT = "remaining_count"
         const val KEY_PROGRESS_PERCENT = "progress_percent"
         const val KEY_ERROR = "error"
-        private const val CHANNEL_ID = "tcloud_transfers"
-        private const val CAMERA_CHANNEL_ID = "tcloud_camera_backup_v2"
-        private const val CAMERA_NOTIFICATION_ID = 101_500
-        private const val MAX_CAMERA_RETRIES = 5
+        private const val MAX_BATCH_RETRIES = 5
     }
 }

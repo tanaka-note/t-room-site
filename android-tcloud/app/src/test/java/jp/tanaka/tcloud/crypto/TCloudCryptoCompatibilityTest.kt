@@ -200,6 +200,47 @@ class TCloudCryptoCompatibilityTest {
     }
 
     @Test
+    fun encryptedUploadThumbnailRoundTripsWithExistingFormat() {
+        val folderKey = ByteArray(32) { (it + 31).toByte() }
+        val thumbnail = "encrypted thumbnail bytes".toByteArray()
+        val prepared = TCloudCrypto.createFilePackage(
+            folderId = 5,
+            folderKey = folderKey,
+            name = "写真.jpg",
+            mimeType = "image/jpeg",
+            mediaKind = "image",
+            lastModified = 1_786_400_000_000,
+            sizeBytes = 100,
+        )
+        prepared.use {
+            val payload = prepared.payload
+            val file = CloudFile(
+                id = 10,
+                folderId = payload.folderId,
+                name = "写真.jpg",
+                mimeType = "image/jpeg",
+                mediaKind = "image",
+                sizeBytes = payload.sizeBytes,
+                cryptoVersion = payload.cryptoVersion,
+                encryptedMetadata = payload.encryptedMetadata,
+                metadataIv = payload.metadataIv,
+                wrappedFileKey = payload.wrappedFileKey,
+                fileKeyIv = payload.fileKeyIv,
+                chunkSizeBytes = payload.chunkSizeBytes,
+                chunkCount = payload.chunkCount,
+                hasThumbnail = true,
+            )
+            val envelope = prepared.encryptThumbnail(thumbnail)
+            val restored = TCloudCrypto.decryptThumbnail(file, folderKey, envelope)
+            assertArrayEquals(thumbnail, restored)
+            envelope.fill(0)
+            restored.fill(0)
+        }
+        thumbnail.fill(0)
+        folderKey.fill(0)
+    }
+
+    @Test
     fun movingFileRewrapsOnlyTheFileKey() {
         val sourceFolderKey = ByteArray(32) { (it + 1).toByte() }
         val destinationFolderKey = ByteArray(32) { (it + 91).toByte() }

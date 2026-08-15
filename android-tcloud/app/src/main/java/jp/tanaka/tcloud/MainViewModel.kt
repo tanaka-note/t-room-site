@@ -19,6 +19,9 @@ import jp.tanaka.tcloud.data.ShareResult
 import jp.tanaka.tcloud.data.TCloudRepository
 import jp.tanaka.tcloud.transfer.TCloudDownloadManager
 import jp.tanaka.tcloud.transfer.TCloudUploadManager
+import jp.tanaka.tcloud.transfer.TCloudTransferStore
+import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
+import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.media.TCloudDataSource
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import jp.tanaka.tcloud.offline.TCloudOfflineManager
@@ -35,6 +38,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 
 data class MainUiState(
     val restoring: Boolean = true,
@@ -78,6 +82,7 @@ data class MainUiState(
     val searchQuery: String = "",
     val searching: Boolean = false,
     val searchScannedCount: Int = 0,
+    val transferBatches: List<TransferBatchSnapshot> = emptyList(),
     val message: String? = null,
     val error: String? = null,
 )
@@ -98,12 +103,14 @@ class MainViewModel(
     private val offlineManager: TCloudOfflineManager,
     private val cameraBackupManager: CameraBackupManager,
     private val playbackManager: TCloudPlaybackManager,
+    private val transferStore: TCloudTransferStore,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
     private var imageLoadJob: Job? = null
     private var searchJob: Job? = null
     private val thumbnailJobs = mutableMapOf<Long, Job>()
+    private val refreshedUploadBatches = mutableSetOf<String>()
 
     init {
         viewModelScope.launch {
@@ -114,11 +121,27 @@ class MainViewModel(
                         session = session.takeIf { it.authenticated },
                         page = page,
                         cameraBackupSettings = cameraBackupManager.settings(),
+                        transferBatches = transferStore.batches.value,
                     )
                 }
                 .onFailure { error ->
-                    mutableState.value = MainUiState(restoring = false, error = error.userMessage())
+                    mutableState.value = MainUiState(
+                        restoring = false,
+                        transferBatches = transferStore.batches.value,
+                        error = error.userMessage(),
+                    )
                 }
+        }
+        viewModelScope.launch {
+            transferStore.batches.collectLatest { batches ->
+                mutableState.update { it.copy(transferBatches = batches) }
+                val completedUploads = batches.filter { batch ->
+                    !batch.active && batch.succeeded > 0 &&
+                        batch.direction in setOf(TransferDirection.UPLOAD, TransferDirection.CAMERA_BACKUP) &&
+                        refreshedUploadBatches.add(batch.id)
+                }
+                if (completedUploads.isNotEmpty()) refreshVisibleFolderAfterUpload(completedUploads)
+            }
         }
     }
 
@@ -133,6 +156,7 @@ class MainViewModel(
                         session = session,
                         page = page,
                         cameraBackupSettings = cameraBackupManager.settings(),
+                        transferBatches = transferStore.batches.value,
                     )
                 }
                 .onFailure { error ->
@@ -355,6 +379,7 @@ class MainViewModel(
             mutableState.value = MainUiState(
                 restoring = false,
                 cameraBackupSettings = cameraBackupManager.settings(),
+                transferBatches = transferStore.batches.value,
             )
         }
     }
@@ -490,7 +515,7 @@ class MainViewModel(
             return
         }
         if (files.isEmpty()) return
-        files.forEach(downloadManager::enqueue)
+        downloadManager.enqueue(files)
         mutableState.update {
             it.copy(
                 selectedFileIds = emptySet(),
@@ -1178,6 +1203,18 @@ class MainViewModel(
         mutableState.update {
             it.copy(message = "${uris.size}件のアップロードを開始しました。通知欄で進行状況を確認できます。")
         }
+    }
+
+    private suspend fun refreshVisibleFolderAfterUpload(batches: List<TransferBatchSnapshot>) {
+        val current = mutableState.value
+        val folderId = current.page?.currentFolderId ?: return
+        if (batches.none { folderId in it.folderIds }) return
+        runCatching { repository.listItems(folderId) }
+            .onSuccess { refreshed ->
+                mutableState.update { state ->
+                    if (state.page?.currentFolderId == folderId) state.copy(page = refreshed) else state
+                }
+            }
     }
 
     fun openFile(file: CloudFile) = openFile(file, startAtBeginning = false)

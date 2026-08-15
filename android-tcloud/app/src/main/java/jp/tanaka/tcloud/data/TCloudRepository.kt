@@ -375,6 +375,8 @@ class TCloudRepository(
 
     suspend fun completeUpload(fileId: Long, parts: List<UploadedPart>) = api.completeUpload(fileId, parts)
 
+    suspend fun putThumbnail(fileId: Long, encryptedBytes: ByteArray) = api.putThumbnail(fileId, encryptedBytes)
+
     suspend fun cancelUpload(fileId: Long) = api.cancelUpload(fileId)
 
     suspend fun listMoveDestinations(scopeRootId: Long?): List<MoveDestination> =

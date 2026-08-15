@@ -164,6 +164,9 @@ import jp.tanaka.tcloud.backup.CameraBackupSettings
 import jp.tanaka.tcloud.backup.CameraBackupSourceFolder
 import jp.tanaka.tcloud.media.TvCastLauncher
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
+import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
+import jp.tanaka.tcloud.transfer.TransferDirection
+import jp.tanaka.tcloud.transfer.TransferStatus
 import kotlinx.coroutines.delay
 
 private val TCloudBlue = Color(0xFF16756D)
@@ -556,6 +559,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     searching = state.searching,
                     searchScannedCount = state.searchScannedCount,
                     searchTruncated = state.searchResults.truncated,
+                    activeTransfer = state.transferBatches.firstOrNull { it.active },
                     thumbnailBitmaps = state.thumbnailBitmaps,
                     selectedFileIds = state.selectedFileIds,
                     selectedFolderIds = state.selectedFolderIds,
@@ -624,6 +628,7 @@ fun TCloudApp(viewModel: MainViewModel, pictureInPicture: Boolean = false) {
                     isAdmin = state.session?.isAdmin == true,
                     cloudUsage = state.cloudUsage,
                     usageDetails = state.usageDetails,
+                    transferBatches = state.transferBatches,
                     currentFolderName = state.page?.currentFolder?.name,
                     canSetCameraBackupTarget = state.session?.canUpload == true &&
                         state.page?.currentFolder != null,
@@ -935,6 +940,7 @@ private fun FolderScreen(
     searching: Boolean,
     searchScannedCount: Int,
     searchTruncated: Boolean,
+    activeTransfer: TransferBatchSnapshot?,
     thumbnailBitmaps: Map<Long, Bitmap>,
     selectedFileIds: Set<Long>,
     selectedFolderIds: Set<Long>,
@@ -1193,6 +1199,7 @@ private fun FolderScreen(
             ) {
                 item(key = "toolbar") {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        activeTransfer?.let { TransferProgressCard(it) }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1492,6 +1499,89 @@ private fun TCloudSortButton(
 }
 
 @Composable
+private fun TransferProgressCard(batch: TransferBatchSnapshot) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = TCloudSelection,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                when (batch.direction) {
+                    TransferDirection.DOWNLOAD -> "ダウンロード中"
+                    TransferDirection.UPLOAD -> "アップロード中"
+                    TransferDirection.CAMERA_BACKUP -> "バックアップ中"
+                },
+                fontWeight = FontWeight.Bold,
+                color = TCloudBlueDark,
+            )
+            LinearProgressIndicator(
+                progress = { batch.overallProgress / 100f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "${batch.total}件中${batch.processed}件完了・残り${batch.remaining}件",
+                style = MaterialTheme.typography.bodySmall,
+                color = TCloudMuted,
+            )
+            if (batch.currentName.isNotBlank()) {
+                Text(
+                    batch.currentName,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransferHistoryRow(batch: TransferBatchSnapshot) {
+    var failuresExpanded by remember(batch.id) { mutableStateOf(false) }
+    val operation = when (batch.direction) {
+        TransferDirection.DOWNLOAD -> "ダウンロード"
+        TransferDirection.UPLOAD -> "アップロード"
+        TransferDirection.CAMERA_BACKUP -> "バックアップ"
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            if (batch.active) {
+                "$operation：${batch.total}件中${batch.processed}件完了・残り${batch.remaining}件"
+            } else {
+                "$operation：${batch.total}件中${batch.succeeded}件成功・${batch.failed}件失敗"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (batch.active) FontWeight.SemiBold else FontWeight.Normal,
+        )
+        if (batch.status == TransferStatus.CANCELLED) {
+            Text("中止しました。", style = MaterialTheme.typography.bodySmall, color = TCloudMuted)
+        }
+        val visibleFailures = if (failuresExpanded) batch.failures else batch.failures.take(2)
+        visibleFailures.forEach { failure ->
+            Text(
+                "${failure.name} — ${failure.reason}",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFB42318),
+            )
+        }
+        if (batch.failures.size > 2) {
+            TextButton(onClick = { failuresExpanded = !failuresExpanded }) {
+                Text(if (failuresExpanded) "失敗内容を閉じる" else "失敗${batch.failures.size}件を確認")
+            }
+        }
+        Text(
+            formatDateTime(batch.updatedAt),
+            style = MaterialTheme.typography.labelSmall,
+            color = TCloudMuted,
+        )
+    }
+}
+
+@Composable
 private fun AppSettingsDialog(
     batteryOptimizationExcluded: Boolean,
     cameraBackupSettings: CameraBackupSettings,
@@ -1500,6 +1590,7 @@ private fun AppSettingsDialog(
     isAdmin: Boolean,
     cloudUsage: CloudUsage,
     usageDetails: List<CloudUsageFolder>,
+    transferBatches: List<TransferBatchSnapshot>,
     currentFolderName: String?,
     canSetCameraBackupTarget: Boolean,
     onRequestBatteryExclusion: () -> Unit,
@@ -1541,6 +1632,13 @@ private fun AppSettingsDialog(
             ) {
                 Text("正式名称：T-Cloud Storage")
                 Text("対応：Android 8.0 以降")
+                if (transferBatches.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text("転送状況", fontWeight = FontWeight.SemiBold)
+                    transferBatches.take(8).forEach { batch ->
+                        TransferHistoryRow(batch)
+                    }
+                }
                 if (isAdmin) {
                     HorizontalDivider()
                     Text("クラウド使用状況", fontWeight = FontWeight.SemiBold)

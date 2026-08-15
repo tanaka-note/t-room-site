@@ -98,6 +98,24 @@ object TCloudCrypto {
             return envelope
         }
 
+        fun encryptThumbnail(plain: ByteArray): ByteArray {
+            val encrypted = encryptAesGcm(
+                key = fileKey,
+                plain = plain,
+                additionalData = THUMBNAIL_CONTEXT.toByteArray(),
+            )
+            return ByteArray(4 + encrypted.iv.size + encrypted.ciphertext.size).also { envelope ->
+                envelope[0] = 0x54
+                envelope[1] = 0x52
+                envelope[2] = 0x54
+                envelope[3] = 0x48
+                encrypted.iv.copyInto(envelope, 4)
+                encrypted.ciphertext.copyInto(envelope, 16)
+                encrypted.iv.fill(0)
+                encrypted.ciphertext.fill(0)
+            }
+        }
+
         override fun close() {
             fileKey.fill(0)
         }
