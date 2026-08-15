@@ -65,4 +65,11 @@ class CameraBackupPlannerTest {
         assertEquals(1_000, pendingIds.size)
         assertEquals((1L..1_000L).toList(), pendingIds)
     }
+
+    @Test
+    fun `pending and freshly modified media wait for a later scan`() {
+        assertEquals(false, cameraMediaIsStable(true, 100, 100, 200))
+        assertEquals(false, cameraMediaIsStable(false, 195, 195, 200))
+        assertEquals(true, cameraMediaIsStable(false, 190, 190, 200))
+    }
 }

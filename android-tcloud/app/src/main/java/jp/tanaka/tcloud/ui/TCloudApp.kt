@@ -167,6 +167,7 @@ import jp.tanaka.tcloud.backup.CameraBackupSettings
 import jp.tanaka.tcloud.backup.CameraBackupSourceFolder
 import jp.tanaka.tcloud.media.TvCastLauncher
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
+import jp.tanaka.tcloud.media.PlaybackMode
 import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
 import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.transfer.TransferStatus
@@ -2844,13 +2845,9 @@ private fun MediaPlayerScreen(
     val isVideo = file.mediaKind == "video"
     val isAudio = file.mediaKind == "audio"
     var manualFullscreen by remember(file.id) { mutableStateOf(false) }
-    var playbackMode by remember(file.id) {
-        mutableStateOf(
-            if (playbackManager.repeatAllEnabled) {
-                PlaybackMode.REPEAT_ALL
-            } else PlaybackMode.OFF,
-        )
-    }
+    val audioPlaybackMode by playbackManager.playbackMode.collectAsState()
+    var videoPlaybackMode by remember(file.id) { mutableStateOf(PlaybackMode.OFF) }
+    val playbackMode = if (isAudio) audioPlaybackMode else videoPlaybackMode
     val isLandscape = orientation == Configuration.ORIENTATION_LANDSCAPE
     val isVideoFullscreen = isVideo && (isLandscape || manualFullscreen) && !pictureInPicture
     val playbackFactory = remember(file.id) { dataSourceFactory }
@@ -2883,16 +2880,8 @@ private fun MediaPlayerScreen(
             context.savePlaybackPosition(file.id, player.currentPosition, player.duration)
         }
     }
-    LaunchedEffect(player, playbackMode, file.id) {
-        if (isAudio) {
-            playbackManager.setPlaybackStatus(playbackMode == PlaybackMode.REPEAT_ALL)
-        } else {
-            player.repeatMode = Player.REPEAT_MODE_OFF
-            playbackManager.setPlaybackStatus(
-                playbackMode == PlaybackMode.REPEAT_ALL,
-                refreshNotification = false,
-            )
-        }
+    LaunchedEffect(player, file.id) {
+        if (!isAudio) player.repeatMode = Player.REPEAT_MODE_OFF
     }
     LaunchedEffect(player, file.id, isVideo, applicationVisible, pictureInPicture) {
         if (shouldPauseVideoForBackground(
@@ -2961,9 +2950,9 @@ private fun MediaPlayerScreen(
                 title = {
                     Column {
                         Text(file.name, maxLines = 1)
-                        if (playbackMode == PlaybackMode.REPEAT_ALL) {
+                        if (playbackMode != PlaybackMode.OFF) {
                             Text(
-                                "全体リピート中",
+                                if (playbackMode == PlaybackMode.REPEAT_ONE) "1曲リピート中" else "全体リピート中",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TCloudBlue,
                             )
@@ -2986,14 +2975,17 @@ private fun MediaPlayerScreen(
                     }
                     IconButton(
                         onClick = {
-                            playbackMode = nextPlaybackMode(playbackMode, file.mediaKind)
+                            val nextMode = nextPlaybackMode(playbackMode, file.mediaKind)
+                            if (isAudio) playbackManager.setPlaybackMode(nextMode)
+                            else videoPlaybackMode = nextMode
                         },
                     ) {
                         Icon(
-                            Icons.Default.Repeat,
+                            if (playbackMode == PlaybackMode.REPEAT_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
                             contentDescription = when (playbackMode) {
                                 PlaybackMode.OFF -> "再生後に停止"
                                 PlaybackMode.REPEAT_ALL -> "全体リピート"
+                                PlaybackMode.REPEAT_ONE -> "1曲リピート"
                             },
                             tint = if (playbackMode == PlaybackMode.OFF) TCloudMuted else TCloudBlue,
                         )
@@ -3107,13 +3099,16 @@ private fun MediaPlayerScreen(
     }
 }
 
-internal enum class PlaybackMode {
-    OFF,
-    REPEAT_ALL,
-}
-
-internal fun nextPlaybackMode(current: PlaybackMode, @Suppress("UNUSED_PARAMETER") mediaKind: String): PlaybackMode =
-    if (current == PlaybackMode.REPEAT_ALL) PlaybackMode.OFF else PlaybackMode.REPEAT_ALL
+internal fun nextPlaybackMode(current: PlaybackMode, mediaKind: String): PlaybackMode =
+    if (mediaKind == "audio") {
+        when (current) {
+            PlaybackMode.OFF -> PlaybackMode.REPEAT_ALL
+            PlaybackMode.REPEAT_ALL -> PlaybackMode.REPEAT_ONE
+            PlaybackMode.REPEAT_ONE -> PlaybackMode.OFF
+        }
+    } else {
+        if (current == PlaybackMode.OFF) PlaybackMode.REPEAT_ALL else PlaybackMode.OFF
+    }
 
 internal fun shouldPauseVideoForBackground(
     isVideo: Boolean,

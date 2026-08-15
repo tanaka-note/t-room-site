@@ -12,12 +12,22 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import jp.tanaka.tcloud.data.CloudFile
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+enum class PlaybackMode {
+    OFF,
+    REPEAT_ALL,
+    REPEAT_ONE,
+}
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class TCloudPlaybackManager(
     private val context: Context,
 ) {
-    private var repeatAllPlayback = false
+    private val mutablePlaybackMode = MutableStateFlow(PlaybackMode.OFF)
+    val playbackMode: StateFlow<PlaybackMode> = mutablePlaybackMode.asStateFlow()
 
     val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -28,7 +38,9 @@ class TCloudPlaybackManager(
     init {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED && repeatAllPlayback) skipNext(automaticRepeat = true)
+                if (playbackState == Player.STATE_ENDED && playbackMode.value == PlaybackMode.REPEAT_ALL) {
+                    skipNext(automaticRepeat = true)
+                }
             }
         })
     }
@@ -39,8 +51,6 @@ class TCloudPlaybackManager(
         private set
     var statusText: String = "再生中"
         private set
-    val repeatAllEnabled: Boolean
-        get() = repeatAllPlayback
     var stateChanged: (() -> Unit)? = null
     var playPrevious: ((Boolean) -> Unit)? = null
     var playNext: ((Boolean) -> Unit)? = null
@@ -64,7 +74,7 @@ class TCloudPlaybackManager(
         currentFactory = factory
         currentFileId = file.id
         currentTitle = file.name
-        player.repeatMode = Player.REPEAT_MODE_OFF
+        applyPlayerRepeatMode(mutablePlaybackMode.value)
         val item = MediaItem.Builder()
             .setUri("tcloud://file/${file.id}")
             .setMimeType(playbackMimeType(file))
@@ -77,10 +87,10 @@ class TCloudPlaybackManager(
         return player
     }
 
-    fun setPlaybackStatus(repeatAll: Boolean, refreshNotification: Boolean = true) {
-        player.repeatMode = Player.REPEAT_MODE_OFF
-        repeatAllPlayback = repeatAll
-        statusText = playbackStatusText(repeatAll)
+    fun setPlaybackMode(mode: PlaybackMode, refreshNotification: Boolean = true) {
+        applyPlayerRepeatMode(mode)
+        mutablePlaybackMode.value = mode
+        statusText = playbackStatusText(mode)
         if (refreshNotification && currentFileId != null) TCloudPlaybackService.refresh(context)
         stateChanged?.invoke()
     }
@@ -95,7 +105,8 @@ class TCloudPlaybackManager(
         currentFileId = null
         currentTitle = ""
         statusText = "再生中"
-        repeatAllPlayback = false
+        mutablePlaybackMode.value = PlaybackMode.OFF
+        player.repeatMode = Player.REPEAT_MODE_OFF
         closeFactory()
         stateChanged?.invoke()
         context.stopService(Intent(context, TCloudPlaybackService::class.java))
@@ -105,10 +116,20 @@ class TCloudPlaybackManager(
         (currentFactory as? AutoCloseable)?.close()
         currentFactory = null
     }
+
+    private fun applyPlayerRepeatMode(mode: PlaybackMode) {
+        player.repeatMode = playerRepeatMode(mode)
+    }
 }
 
-internal fun playbackStatusText(repeatAll: Boolean): String =
-    if (repeatAll) "全体リピート中" else "再生中"
+internal fun playerRepeatMode(mode: PlaybackMode): Int =
+    if (mode == PlaybackMode.REPEAT_ONE) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+
+internal fun playbackStatusText(mode: PlaybackMode): String = when (mode) {
+    PlaybackMode.OFF -> "再生中"
+    PlaybackMode.REPEAT_ALL -> "全体リピート中"
+    PlaybackMode.REPEAT_ONE -> "1曲リピート中"
+}
 
 @androidx.annotation.OptIn(UnstableApi::class)
 internal fun playbackMimeType(file: CloudFile): String = when (file.name.substringAfterLast('.', "").lowercase()) {

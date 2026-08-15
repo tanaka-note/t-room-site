@@ -1,6 +1,7 @@
 package jp.tanaka.tcloud.backup
 
 import android.content.Context
+import android.provider.MediaStore
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -67,6 +68,18 @@ class CameraBackupManager(
 
     fun restoreSchedule() = applySchedule(store.applyCurrentScanPolicy())
 
+    fun requestForegroundScan() {
+        val settings = store.settings()
+        val now = System.currentTimeMillis()
+        if (!settings.enabled || !settings.hasTarget ||
+            now - lastForegroundScanAtMillis < FOREGROUND_SCAN_THROTTLE_MILLIS
+        ) return
+        lastForegroundScanAtMillis = now
+        enqueueImmediate(settings)
+    }
+
+    fun workUpdates() = workManager.getWorkInfosByTagFlow(TAG_CAMERA_BACKUP)
+
     fun requestRescanAfterCancellation() {
         store.requestFullRescan()
         workManager.cancelUniqueWork(IMMEDIATE_WORK)
@@ -95,12 +108,20 @@ class CameraBackupManager(
         )
     }
 
+    internal fun handleMediaStoreChange() {
+        val settings = store.settings()
+        if (!settings.enabled || !settings.hasTarget) return
+        enqueueImmediate(settings)
+        enqueueMediaChangeTrigger(settings, appendToCurrent = true)
+    }
+
     private fun applySchedule(settings: CameraBackupSettings) {
         if (!settings.enabled || !settings.hasTarget) {
             cancelActiveCameraBatches()
             workManager.cancelUniqueWork(PERIODIC_WORK)
             workManager.cancelUniqueWork(IMMEDIATE_WORK)
             workManager.cancelUniqueWork(CONTINUATION_WORK)
+            workManager.cancelUniqueWork(MEDIA_CHANGE_WORK)
             workManager.cancelAllWorkByTag(TCloudUploadManager.TAG_CAMERA_UPLOAD)
             return
         }
@@ -113,6 +134,7 @@ class CameraBackupManager(
             ExistingPeriodicWorkPolicy.UPDATE,
             periodic,
         )
+        enqueueMediaChangeTrigger(settings, appendToCurrent = false)
         enqueueImmediate(settings)
     }
 
@@ -126,11 +148,36 @@ class CameraBackupManager(
     }
 
     private fun enqueueImmediate(settings: CameraBackupSettings) {
+        val now = System.currentTimeMillis()
+        if (now - lastImmediateEnqueueAtMillis < IMMEDIATE_SCAN_DEBOUNCE_MILLIS) return
+        lastImmediateEnqueueAtMillis = now
         val immediate = OneTimeWorkRequestBuilder<CameraBackupScanWorker>()
             .setConstraints(constraints(settings))
             .addTag(TAG_CAMERA_BACKUP)
             .build()
-        workManager.enqueueUniqueWork(IMMEDIATE_WORK, ExistingWorkPolicy.REPLACE, immediate)
+        workManager.enqueueUniqueWork(IMMEDIATE_WORK, ExistingWorkPolicy.APPEND_OR_REPLACE, immediate)
+    }
+
+    private fun enqueueMediaChangeTrigger(
+        settings: CameraBackupSettings,
+        appendToCurrent: Boolean,
+    ) {
+        if (!settings.includeImages && !settings.includeVideos) return
+        val contentConstraints = Constraints.Builder().apply {
+            if (settings.includeImages) addContentUriTrigger(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true)
+            if (settings.includeVideos) addContentUriTrigger(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true)
+            setTriggerContentUpdateDelay(CONTENT_TRIGGER_UPDATE_DELAY_SECONDS, TimeUnit.SECONDS)
+            setTriggerContentMaxDelay(CONTENT_TRIGGER_MAX_DELAY_SECONDS, TimeUnit.SECONDS)
+        }.build()
+        val request = OneTimeWorkRequestBuilder<CameraBackupMediaChangeWorker>()
+            .setConstraints(contentConstraints)
+            .addTag(TAG_CAMERA_BACKUP)
+            .build()
+        workManager.enqueueUniqueWork(
+            MEDIA_CHANGE_WORK,
+            if (appendToCurrent) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE,
+            request,
+        )
     }
 
     private fun constraints(settings: CameraBackupSettings) = Constraints.Builder()
@@ -143,5 +190,13 @@ class CameraBackupManager(
         private const val PERIODIC_WORK = "tcloud_camera_backup_periodic"
         private const val IMMEDIATE_WORK = "tcloud_camera_backup_now"
         private const val CONTINUATION_WORK = "tcloud_camera_backup_continue"
+        private const val MEDIA_CHANGE_WORK = "tcloud_camera_backup_media_changes"
+        private const val CONTENT_TRIGGER_UPDATE_DELAY_SECONDS = 8L
+        private const val CONTENT_TRIGGER_MAX_DELAY_SECONDS = 45L
+        private const val FOREGROUND_SCAN_THROTTLE_MILLIS = 2 * 60 * 1_000L
+        private const val IMMEDIATE_SCAN_DEBOUNCE_MILLIS = 2_000L
     }
+
+    private var lastForegroundScanAtMillis = 0L
+    private var lastImmediateEnqueueAtMillis = 0L
 }

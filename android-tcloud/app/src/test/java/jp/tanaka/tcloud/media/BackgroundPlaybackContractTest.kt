@@ -59,6 +59,19 @@ class BackgroundPlaybackContractTest {
         assertTrue(ui.contains("if (!isAudio)"))
     }
 
+    @Test
+    fun repeatOneUsesOneExclusiveModeAndDoesNotInvokeAutomaticNext() {
+        val manager = projectFile(
+            "app/src/main/java/jp/tanaka/tcloud/media/TCloudPlaybackManager.kt",
+        ).readText()
+
+        assertTrue(manager.contains("enum class PlaybackMode"))
+        assertTrue(manager.contains("REPEAT_ONE"))
+        assertTrue(manager.contains("Player.REPEAT_MODE_ONE"))
+        assertTrue(manager.contains("playbackMode.value == PlaybackMode.REPEAT_ALL"))
+        assertTrue(manager.contains("playbackStatusText(mode)"))
+    }
+
     private fun projectFile(relativePath: String): File {
         var current = File(checkNotNull(System.getProperty("user.dir"))).canonicalFile
         repeat(6) {

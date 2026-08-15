@@ -47,15 +47,16 @@ class CameraBackupScanWorker(
             }
 
             val collection = MediaStore.Files.getContentUri("external")
-            val projection = arrayOf(
-                MediaStore.Files.FileColumns._ID,
-                MediaStore.Files.FileColumns.MEDIA_TYPE,
-                MediaStore.Files.FileColumns.MIME_TYPE,
-                MediaStore.Files.FileColumns.SIZE,
-                MediaStore.Files.FileColumns.DATE_MODIFIED,
-                MediaStore.Files.FileColumns.DATE_ADDED,
-                MediaStore.Files.FileColumns.BUCKET_ID,
-            )
+            val projection = buildList {
+                add(MediaStore.Files.FileColumns._ID)
+                add(MediaStore.Files.FileColumns.MEDIA_TYPE)
+                add(MediaStore.Files.FileColumns.MIME_TYPE)
+                add(MediaStore.Files.FileColumns.SIZE)
+                add(MediaStore.Files.FileColumns.DATE_MODIFIED)
+                add(MediaStore.Files.FileColumns.DATE_ADDED)
+                add(MediaStore.Files.FileColumns.BUCKET_ID)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) add(MediaStore.Files.FileColumns.IS_PENDING)
+            }.toTypedArray()
             val typePlaceholders = mediaTypes.joinToString(",") { "?" }
             val selectionParts = mutableListOf(
                 "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($typePlaceholders)",
@@ -97,6 +98,8 @@ class CameraBackupScanWorker(
                 val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
                 val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
                 val addedIndex = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_ADDED)
+                val pendingIndex = cursor.getColumnIndex(MediaStore.Files.FileColumns.IS_PENDING)
+                val nowSeconds = System.currentTimeMillis() / 1_000L
                 while (cursor.moveToNext() && assets.size < MAX_SCAN_ITEMS) {
                     val id = cursor.getLong(idIndex)
                     val mediaType = cursor.getInt(typeIndex)
@@ -108,12 +111,18 @@ class CameraBackupScanWorker(
                             settings.includeVideos,
                         ) == null
                     ) continue
+                    val modifiedSeconds = cursor.getLong(modifiedIndex)
+                    val dateAddedSeconds = cursor.getLong(addedIndex)
+                    val isPending = pendingIndex >= 0 && cursor.getInt(pendingIndex) != 0
+                    // Keep the cursor before a file which is still being published. A later
+                    // trigger or periodic scan retries it instead of permanently skipping it.
+                    if (!cameraMediaIsStable(isPending, dateAddedSeconds, modifiedSeconds, nowSeconds)) break
                     assets += CameraMediaAsset(
                         id = id,
                         mediaType = mediaType,
                         sizeBytes = cursor.getLong(sizeIndex),
-                        modifiedSeconds = cursor.getLong(modifiedIndex),
-                        dateAddedSeconds = cursor.getLong(addedIndex),
+                        modifiedSeconds = modifiedSeconds,
+                        dateAddedSeconds = dateAddedSeconds,
                         uri = ContentUris.withAppendedId(collection, id).toString(),
                     )
                 }
@@ -221,4 +230,16 @@ class CameraBackupScanWorker(
         const val MEDIA_VIDEO = MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
         const val MAX_SCAN_ITEMS = 250
     }
+}
+
+internal fun cameraMediaIsStable(
+    isPending: Boolean,
+    dateAddedSeconds: Long,
+    modifiedSeconds: Long,
+    nowSeconds: Long,
+    minimumAgeSeconds: Long = 8L,
+): Boolean {
+    if (isPending) return false
+    val latestTimestamp = maxOf(dateAddedSeconds, modifiedSeconds)
+    return latestTimestamp <= 0L || nowSeconds - latestTimestamp >= minimumAgeSeconds
 }

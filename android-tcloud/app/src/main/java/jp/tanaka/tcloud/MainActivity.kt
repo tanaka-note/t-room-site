@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         applicationVisible = true
+        (application as TCloudApplication).cameraBackupManager.requestForegroundScan()
     }
 
     override fun onStop() {

@@ -154,6 +154,13 @@ class MainViewModel(
                 mutableState.update { it.copy(transferFailureNotices = notices) }
             }
         }
+        viewModelScope.launch {
+            cameraBackupManager.workUpdates().collectLatest {
+                mutableState.update { state ->
+                    state.copy(cameraBackupSettings = cameraBackupManager.settings())
+                }
+            }
+        }
     }
 
     fun login(loginId: String, password: String) {
