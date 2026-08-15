@@ -56,6 +56,8 @@ assert.match(serviceWorker, /icon-maskable-512-v4\.png/);
 assert.match(script, /new PasswordCredential/);
 assert.match(script, /body: \{ loginId, password \}/);
 assert.match(worker, /withRollingSession/);
+assert.match(worker, /\["\/troom-date-picker\.css", "\/troom-date-picker\.css"\]/);
+assert.match(worker, /\["\/troom-date-picker\.js", "\/troom-date-picker\.js"\]/);
 assert.match(worker, /SESSION_TTL_SECONDS = 30 \* 24 \* 60 \* 60/);
 assert.match(worker, /DIARY_MAIN_ADMIN_LOGIN_ID/);
 assert.match(worker, /DIARY_WIFE_ADMIN_LOGIN_ID/);

@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("invoice month field keeps the bottom wheel and uses the shared T-ROOM calendar", async () => {
-  const [html, script, styles, pickerScript, pickerStyles] = await Promise.all([
+  const [html, script, styles, pickerScript, pickerStyles, worker] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/billing.js", import.meta.url), "utf8"),
     readFile(new URL("../public/billing.css", import.meta.url), "utf8"),
     readFile(new URL("../public/troom-date-picker.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/troom-date-picker.css", import.meta.url), "utf8")
+    readFile(new URL("../public/troom-date-picker.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/index.js", import.meta.url), "utf8")
   ]);
 
   assert.match(html, /id="month-input" type="text"[^>]*readonly[^>]*pattern="\\d\{4\}-\\d\{2\}"[^>]*aria-controls="date-wheel-dialog"/);
@@ -35,6 +36,8 @@ test("invoice month field keeps the bottom wheel and uses the shared T-ROOM cale
   assert.doesNotMatch(script, /showPicker|openNativeDatePicker|nativeDatePickerTarget|monthCalendar/);
   assert.doesNotMatch(styles, /calendar-picker-indicator|month-calendar/);
   assert.doesNotMatch(html, /id="month-calendar-dialog"/);
+  assert.match(worker, /\["\/troom-date-picker\.css", "\/troom-date-picker\.css"\]/);
+  assert.match(worker, /\["\/troom-date-picker\.js", "\/troom-date-picker\.js"\]/);
 });
 
 test("entry dates retain the existing year-month-day wheel and YYYY-MM-DD value", async () => {
