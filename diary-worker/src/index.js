@@ -5,9 +5,14 @@ const LOGIN_LIMIT = 5;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const MAIN_ADMIN_ACCOUNT_ID = "main-admin";
+const WIFE_ADMIN_ACCOUNT_ID = "wife-admin";
+const CHIHARU_ADMIN_ACCOUNT_ID = "chiharu-admin";
+const TANAKA_HOUSEHOLD_ID = "tanaka-household";
+const CHIHARU_HOUSEHOLD_ID = "chiharu-household";
 const DIARY_ACCOUNTS = [
-  { id: "main-admin", name: "田中宏知", householdId: "tanaka-household", role: "admin", isGlobalOwner: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH", sessionVersion: 1 },
-  { id: "wife-admin", name: "田中暢美", householdId: "tanaka-household", role: "admin", isGlobalOwner: false, canViewTrash: false, canPermanentlyDelete: false, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH", sessionVersion: 1 }
+  { id: MAIN_ADMIN_ACCOUNT_ID, name: "田中宏知", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH", sessionVersion: 1 },
+  { id: WIFE_ADMIN_ACCOUNT_ID, name: "田中暢美", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: false, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH", sessionVersion: 1 }
 ];
 
 export default {
@@ -356,13 +361,21 @@ async function listEntries(url, env, session) {
   const dateRange = validateDateRange(dateFrom, dateTo);
   const tag = normalizeTag(url.searchParams.get("tag") || "");
   const trashRequested = url.searchParams.get("trash") === "1";
-  if (trashRequested && !session.canViewTrash) {
+  const trashAccess = trashScopeAccess(session, "ts");
+  if (trashRequested && (!session.canViewTrash || !trashAccess)) {
     throw new HttpError(403, "ゴミ箱を閲覧する権限がありません。");
   }
   const trash = trashRequested;
 
   const conditions = ["e.household_id = ?", trash ? "e.deleted_at IS NOT NULL" : "e.deleted_at IS NULL"];
   const bindings = [session.activeHouseholdId];
+  if (trash) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM diary_trash_scopes ts
+      WHERE ts.entry_id = e.id AND ${trashAccess.clause}
+    )`);
+    bindings.push(...trashAccess.bindings);
+  }
   if (query) {
     conditions.push("(instr(e.title, ?) > 0 OR instr(e.content, ?) > 0)");
     bindings.push(query, query);
@@ -407,16 +420,17 @@ async function listEntries(url, env, session) {
 }
 
 async function getEntry(id, env, session) {
-  const deletedClause = session.canViewTrash ? "" : "AND e.deleted_at IS NULL";
   const row = await env.DB.prepare(`
     SELECT
       e.id, e.entry_date, e.title, e.content, e.content_format, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
-    WHERE e.id = ? AND e.household_id = ? ${deletedClause}
+    WHERE e.id = ? AND e.household_id = ?
   `).bind(id, session.activeHouseholdId).first();
-  if (!row) return json({ error: "日記が見つかりません。" }, 404);
+  if (!row || (row.deleted_at && !(await canAccessTrashEntry(id, env, session)))) {
+    return json({ error: "日記が見つかりません。" }, 404);
+  }
   const photos = await listEntryPhotos(id, env, session);
   return json({ entry: { ...serializeEntry(row), photos } });
 }
@@ -575,7 +589,9 @@ async function servePhoto(id, variant, request, env, session, url) {
     JOIN diary_entries e ON e.id = p.entry_id
     WHERE p.id = ? AND e.household_id = ?
   `).bind(id.toLowerCase(), session.activeHouseholdId).first();
-  if (!row || (row.deleted_at && !session.canViewTrash)) return new Response("Not found", { status: 404 });
+  if (!row || (row.deleted_at && !(await canAccessTrashEntryByPhoto(id.toLowerCase(), env, session)))) {
+    return new Response("Not found", { status: 404 });
+  }
   const key = variant === "original" ? row.original_key : (variant === "display" ? row.display_key : row.thumbnail_key);
   const object = await env.MEDIA.get(key);
   if (!object) return new Response("Not found", { status: 404 });
@@ -671,25 +687,82 @@ async function updateEntry(id, request, env, session) {
 async function moveEntryToTrash(id, request, env, session) {
   const body = await readJson(request, 4096);
   const revision = Number(body.revision);
-  const result = await env.DB.prepare(`
+  if (!Number.isInteger(revision) || revision < 1) {
+    return json({ error: "削除情報を確認できませんでした。再読み込みしてください。" }, 400);
+  }
+  const entry = await env.DB.prepare(`
+    SELECT id, author_id, household_id
+    FROM diary_entries
+    WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NULL
+  `).bind(id, session.activeHouseholdId, revision).first();
+  if (!entry) return json({ error: "削除できませんでした。再読み込みしてください。" }, 409);
+
+  const nextRevision = revision + 1;
+  const scopes = trashScopesForDeletion(entry, session);
+  const statements = [env.DB.prepare(`
     UPDATE diary_entries
     SET deleted_at = CURRENT_TIMESTAMP, deleted_by_id = ?, deleted_by_name = ?,
         updated_at = CURRENT_TIMESTAMP, revision = revision + 1
     WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NULL
-  `).bind(session.accountId, session.accountName, id, session.activeHouseholdId, revision).run();
-  return result.meta?.changes
+  `).bind(session.accountId, session.accountName, id, session.activeHouseholdId, revision)];
+  for (const scope of scopes) {
+    statements.push(env.DB.prepare(`
+      INSERT INTO diary_trash_scopes (
+        entry_id, owner_account_id, household_id, scope_type,
+        entry_revision, deleted_by_id, deleted_at
+      )
+      SELECT id, ?, household_id, ?, revision, deleted_by_id, deleted_at
+      FROM diary_entries
+      WHERE id = ? AND household_id = ? AND revision = ?
+        AND deleted_at IS NOT NULL AND deleted_by_id = ?
+      ON CONFLICT(entry_id, owner_account_id, scope_type) DO UPDATE SET
+        household_id = excluded.household_id,
+        entry_revision = excluded.entry_revision,
+        deleted_by_id = excluded.deleted_by_id,
+        deleted_at = excluded.deleted_at
+    `).bind(
+      scope.ownerAccountId,
+      scope.scopeType,
+      id,
+      session.activeHouseholdId,
+      nextRevision,
+      session.accountId
+    ));
+  }
+  const results = await env.DB.batch(statements);
+  return results[0]?.meta?.changes
     ? json({ ok: true })
     : json({ error: "削除できませんでした。再読み込みしてください。" }, 409);
 }
 
 async function restoreEntry(id, env, session) {
-  const result = await env.DB.prepare(`
+  const access = trashScopeAccess(session, "ts");
+  if (!access) throw new HttpError(403, "ゴミ箱を操作する権限がありません。");
+  const entry = await env.DB.prepare(`
+    SELECT e.id, e.revision
+    FROM diary_entries e
+    WHERE e.id = ? AND e.household_id = ? AND e.deleted_at IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM diary_trash_scopes ts
+        WHERE ts.entry_id = e.id AND ${access.clause}
+      )
+  `).bind(id, session.activeHouseholdId, ...access.bindings).first();
+  if (!entry) return json({ error: "復元する日記が見つかりません。" }, 404);
+  const nextRevision = Number(entry.revision) + 1;
+  const results = await env.DB.batch([env.DB.prepare(`
     UPDATE diary_entries
     SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL,
         updated_at = CURRENT_TIMESTAMP, revision = revision + 1
-    WHERE id = ? AND household_id = ? AND deleted_at IS NOT NULL
-  `).bind(id, session.activeHouseholdId).run();
-  return result.meta?.changes
+    WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NOT NULL
+  `).bind(id, session.activeHouseholdId, entry.revision), env.DB.prepare(`
+    DELETE FROM diary_trash_scopes
+    WHERE entry_id = ? AND EXISTS (
+      SELECT 1 FROM diary_entries e
+      WHERE e.id = diary_trash_scopes.entry_id
+        AND e.household_id = ? AND e.deleted_at IS NULL AND e.revision = ?
+    )
+  `).bind(id, session.activeHouseholdId, nextRevision)]);
+  return results[0]?.meta?.changes
     ? getEntry(id, env, session)
     : json({ error: "復元する日記が見つかりません。" }, 404);
 }
@@ -700,34 +773,43 @@ async function permanentlyDeleteEntry(id, request, env, session) {
   if (!Number.isInteger(revision) || revision < 1) {
     return json({ error: "削除情報を確認できませんでした。再読み込みしてください。" }, 400);
   }
+  if (env.MEDIA) await drainMediaDeletionQueue(env);
 
-  const photoResult = await env.DB.prepare(`
-    SELECT original_key, display_key, thumbnail_key
-    FROM diary_photos
-    WHERE entry_id = ? AND EXISTS (
-      SELECT 1 FROM diary_entries e WHERE e.id = diary_photos.entry_id AND e.household_id = ?
-    )
-  `).bind(id, session.activeHouseholdId).all();
-  if ((photoResult.results || []).length && !env.MEDIA) {
+  const access = trashScopeAccess(session, "ts");
+  const deleteAccess = trashScopeAccess(session, "diary_trash_scopes");
+  if (!access) throw new HttpError(403, "完全削除する権限がありません。");
+  const entry = await env.DB.prepare(`
+    SELECT e.id, e.revision,
+      (SELECT COUNT(*) FROM diary_trash_scopes all_scopes WHERE all_scopes.entry_id = e.id) AS total_scopes,
+      (SELECT COUNT(*) FROM diary_trash_scopes ts WHERE ts.entry_id = e.id AND ${access.clause}) AS accessible_scopes,
+      (SELECT COUNT(*) FROM diary_photos p WHERE p.entry_id = e.id) AS photo_count
+    FROM diary_entries e
+    WHERE e.id = ? AND e.household_id = ? AND e.deleted_at IS NOT NULL
+  `).bind(...access.bindings, id, session.activeHouseholdId).first();
+  if (!entry || Number(entry.accessible_scopes || 0) < 1) {
+    return json({ error: "完全削除する日記が見つかりません。" }, 404);
+  }
+  if (Number(entry.revision) !== revision) {
+    return json({ error: "完全削除できませんでした。再読み込みしてください。" }, 409);
+  }
+  const removesLastScope = Number(entry.total_scopes) <= Number(entry.accessible_scopes);
+  if (removesLastScope && Number(entry.photo_count) > 0 && !env.MEDIA) {
     throw new HttpError(503, "画像の保存先を確認できないため、完全削除を中止しました。");
   }
-  if (env.MEDIA) {
-    const keys = (photoResult.results || []).flatMap((photo) => [
-      photo.original_key,
-      photo.display_key,
-      photo.thumbnail_key
-    ]);
-    if (keys.length) await env.MEDIA.delete(keys);
-  }
-
-  const result = await env.DB.prepare(`
+  const results = await env.DB.batch([env.DB.prepare(`
+    DELETE FROM diary_trash_scopes
+    WHERE entry_id = ? AND entry_revision = ? AND ${deleteAccess.clause}
+  `).bind(id, revision, ...deleteAccess.bindings), env.DB.prepare(`
     DELETE FROM diary_entries
     WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NOT NULL
-  `).bind(id, session.activeHouseholdId, revision).run();
-
-  return result.meta?.changes
-    ? json({ ok: true })
-    : json({ error: "完全削除できませんでした。再読み込みしてください。" }, 409);
+      AND NOT EXISTS (SELECT 1 FROM diary_trash_scopes ts WHERE ts.entry_id = diary_entries.id)
+  `).bind(id, session.activeHouseholdId, revision)]);
+  if (!results[0]?.meta?.changes) {
+    return json({ error: "完全削除できませんでした。再読み込みしてください。" }, 409);
+  }
+  const physicallyDeleted = Boolean(results[1]?.meta?.changes);
+  const mediaCleanupComplete = !physicallyDeleted || await drainMediaDeletionQueue(env, id);
+  return json({ ok: true, physicallyDeleted, mediaCleanupPending: physicallyDeleted && !mediaCleanupComplete });
 }
 
 async function replaceTags(env, entryId, tags) {
@@ -1118,11 +1200,116 @@ function requireAdmin(session) {
 }
 
 function requireTrashAccess(session) {
-  if (!session.canViewTrash) throw new HttpError(403, "ゴミ箱を操作する権限がありません。");
+  if (!session.canViewTrash || !trashScopeAccess(session)) {
+    throw new HttpError(403, "ゴミ箱を操作する権限がありません。");
+  }
 }
 
 function requirePermanentDeleteAccess(session) {
-  if (!session.canPermanentlyDelete) throw new HttpError(403, "完全削除する権限がありません。");
+  if (!session.canPermanentlyDelete || !trashScopeAccess(session)) {
+    throw new HttpError(403, "完全削除する権限がありません。");
+  }
+}
+
+function trashScopeAccess(session, alias = "diary_trash_scopes") {
+  if (!session) return null;
+  if (session.isGlobalOwner && session.accountId === MAIN_ADMIN_ACCOUNT_ID) {
+    if (session.activeHouseholdId === TANAKA_HOUSEHOLD_ID) {
+      return {
+        clause: `${alias}.household_id = ? AND ${alias}.owner_account_id = ? AND ${alias}.scope_type = 'admin-retention'`,
+        bindings: [TANAKA_HOUSEHOLD_ID, MAIN_ADMIN_ACCOUNT_ID]
+      };
+    }
+    if (session.activeHouseholdId === CHIHARU_HOUSEHOLD_ID) {
+      return {
+        clause: `${alias}.household_id = ? AND ${alias}.owner_account_id = ? AND ${alias}.scope_type = 'personal'`,
+        bindings: [CHIHARU_HOUSEHOLD_ID, CHIHARU_ADMIN_ACCOUNT_ID]
+      };
+    }
+    return null;
+  }
+  if (session.accountId === WIFE_ADMIN_ACCOUNT_ID && session.activeHouseholdId === TANAKA_HOUSEHOLD_ID) {
+    return {
+      clause: `${alias}.household_id = ? AND ${alias}.owner_account_id = ? AND ${alias}.scope_type = 'personal'
+        AND EXISTS (
+          SELECT 1 FROM diary_entries personal_entry
+          WHERE personal_entry.id = ${alias}.entry_id
+            AND personal_entry.author_id = ? AND personal_entry.deleted_by_id = ?
+        )`,
+      bindings: [TANAKA_HOUSEHOLD_ID, WIFE_ADMIN_ACCOUNT_ID, WIFE_ADMIN_ACCOUNT_ID, WIFE_ADMIN_ACCOUNT_ID]
+    };
+  }
+  if (session.accountId === CHIHARU_ADMIN_ACCOUNT_ID && session.activeHouseholdId === CHIHARU_HOUSEHOLD_ID) {
+    return {
+      clause: `${alias}.household_id = ? AND ${alias}.owner_account_id = ? AND ${alias}.scope_type = 'personal'`,
+      bindings: [CHIHARU_HOUSEHOLD_ID, CHIHARU_ADMIN_ACCOUNT_ID]
+    };
+  }
+  return null;
+}
+
+function trashScopesForDeletion(entry, session) {
+  if (entry.household_id === CHIHARU_HOUSEHOLD_ID) {
+    return [{ ownerAccountId: CHIHARU_ADMIN_ACCOUNT_ID, scopeType: "personal" }];
+  }
+  const scopes = [{ ownerAccountId: MAIN_ADMIN_ACCOUNT_ID, scopeType: "admin-retention" }];
+  if (entry.household_id === TANAKA_HOUSEHOLD_ID
+    && entry.author_id === WIFE_ADMIN_ACCOUNT_ID
+    && session.accountId === WIFE_ADMIN_ACCOUNT_ID) {
+    scopes.unshift({ ownerAccountId: WIFE_ADMIN_ACCOUNT_ID, scopeType: "personal" });
+  }
+  return scopes;
+}
+
+async function canAccessTrashEntry(entryId, env, session) {
+  if (!session.canViewTrash) return false;
+  const access = trashScopeAccess(session, "ts");
+  if (!access) return false;
+  const row = await env.DB.prepare(`
+    SELECT 1 AS allowed
+    FROM diary_trash_scopes ts
+    WHERE ts.entry_id = ? AND ${access.clause}
+    LIMIT 1
+  `).bind(entryId, ...access.bindings).first();
+  return Boolean(row);
+}
+
+async function canAccessTrashEntryByPhoto(photoId, env, session) {
+  if (!session.canViewTrash) return false;
+  const access = trashScopeAccess(session, "ts");
+  if (!access) return false;
+  const row = await env.DB.prepare(`
+    SELECT 1 AS allowed
+    FROM diary_photos p
+    JOIN diary_trash_scopes ts ON ts.entry_id = p.entry_id
+    WHERE p.id = ? AND ${access.clause}
+    LIMIT 1
+  `).bind(photoId, ...access.bindings).first();
+  return Boolean(row);
+}
+
+async function drainMediaDeletionQueue(env, entryId = null) {
+  if (!env.MEDIA) return false;
+  const condition = entryId == null ? "" : "WHERE entry_id = ?";
+  const statement = env.DB.prepare(`
+    SELECT id, object_key FROM diary_media_deletion_queue
+    ${condition}
+    ORDER BY id ASC
+    LIMIT 300
+  `);
+  const result = entryId == null ? await statement.all() : await statement.bind(entryId).all();
+  const rows = result.results || [];
+  if (!rows.length) return true;
+  try {
+    await env.MEDIA.delete(rows.map((row) => row.object_key));
+    const placeholders = rows.map(() => "?").join(", ");
+    await env.DB.prepare(`DELETE FROM diary_media_deletion_queue WHERE id IN (${placeholders})`)
+      .bind(...rows.map((row) => row.id)).run();
+    return true;
+  } catch (error) {
+    console.error("Diary media cleanup deferred", error instanceof Error ? error.message : "unknown error");
+    return false;
+  }
 }
 
 function normalizeSearch(value, maxLength) {

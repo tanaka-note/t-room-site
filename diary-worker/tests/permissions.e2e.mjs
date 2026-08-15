@@ -100,8 +100,8 @@ try {
   }
 
   const wife = await login("wife@example.test", "wife-test");
-  assert.equal(wife.session.canViewTrash, false);
-  assert.equal(wife.session.canPermanentlyDelete, false);
+  assert.equal(wife.session.canViewTrash, true);
+  assert.equal(wife.session.canPermanentlyDelete, true);
   const refreshedSession = await request("/session", { cookie: wife.cookie });
   assert.equal(refreshedSession.response.status, 200);
   assert.equal(refreshedSession.result.authenticated, true);
@@ -136,14 +136,9 @@ try {
   });
   assert.equal(moved.response.status, 200, JSON.stringify(moved.result));
 
-  const wifeTrash = await request("/entries?trash=1", { cookie: wife.cookie });
-  assert.equal(wifeTrash.response.status, 403);
-  const wifePermanent = await request(`/entries/${entry.id}/permanent`, {
-    method: "DELETE",
-    cookie: wife.cookie,
-    body: { revision: entry.revision + 1 }
-  });
-  assert.equal(wifePermanent.response.status, 403);
+  const wifeTrash = await request(`/entries?trash=1&q=${encodeURIComponent(title)}`, { cookie: wife.cookie });
+  assert.equal(wifeTrash.response.status, 200);
+  assert.ok(wifeTrash.result.entries.some((candidate) => candidate.id === entry.id));
 
   const main = await login("main@example.test", "main-test");
   assert.equal(main.session.canViewTrash, true);
@@ -153,6 +148,19 @@ try {
   const deletedEntry = trash.result.entries.find((candidate) => candidate.id === entry.id);
   assert.ok(deletedEntry);
   assert.equal(deletedEntry.deletedByName, "田中暢美");
+
+  const wifePermanent = await request(`/entries/${entry.id}/permanent`, {
+    method: "DELETE",
+    cookie: wife.cookie,
+    body: { revision: deletedEntry.revision }
+  });
+  assert.equal(wifePermanent.response.status, 200);
+  assert.equal(wifePermanent.result.physicallyDeleted, false);
+  const wifeTrashAfterDelete = await request(`/entries?trash=1&q=${encodeURIComponent(title)}`, { cookie: wife.cookie });
+  assert.equal(wifeTrashAfterDelete.result.entries.some((candidate) => candidate.id === entry.id), false);
+
+  const mainTrashAfterWifeDelete = await request(`/entries?trash=1&q=${encodeURIComponent(title)}`, { cookie: main.cookie });
+  assert.ok(mainTrashAfterWifeDelete.result.entries.some((candidate) => candidate.id === entry.id));
 
   const permanentlyDeleted = await request(`/entries/${entry.id}/permanent`, {
     method: "DELETE",
