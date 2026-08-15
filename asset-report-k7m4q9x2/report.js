@@ -9,7 +9,7 @@ const reportData = {
   },
   operatingExpense: {
     name: "運用手数料・雑費",
-    value: 100000
+    value: -100000
   },
   monthlyReport: {
     entries: [
