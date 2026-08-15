@@ -38,10 +38,59 @@ class TCloudUploadWorker(
         if (original.direction !in setOf(TransferDirection.UPLOAD, TransferDirection.CAMERA_BACKUP)) {
             return Result.failure(errorData("転送の種類が一致しません。"))
         }
+        if (original.status == TransferStatus.CANCELLED || original.userCancelRequested) {
+            return Result.success()
+        }
+        val requiresUnmetered = original.direction == TransferDirection.CAMERA_BACKUP &&
+            application.cameraBackupManager.settings().wifiOnly
 
-        store.recoverInterrupted(batchId, original.direction)
+        val recovery = store.recoverInterrupted(batchId, original.direction)
+        for (item in recovery.items) {
+            if (item.uploadTicketId <= 0) continue
+            try {
+                val completed = retryTransientTransfer {
+                    application.repository.isUploadReady(item.uploadTicketId)
+                }
+                if (completed) {
+                    store.markItemSuccess(batchId, item.index)
+                    if (item.cameraAssetKey.isNotBlank()) {
+                        application.cameraBackupStore.markCompleted(item.cameraAssetKey)
+                        application.cameraBackupStore.finishBatchAsset(item.cameraAssetKey, failed = false)
+                    }
+                } else {
+                    if (!cleanupUploadTicket(application, store, batchId, item.index, item.uploadTicketId)) {
+                        store.markBatchRetryPending(
+                            batchId,
+                            waitingForNetwork = !isTransferNetworkAvailable(applicationContext, requiresUnmetered),
+                        )
+                        return Result.retry()
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                if (isTransientTransferFailure(error)) {
+                    store.markBatchRetryPending(
+                        batchId,
+                        waitingForNetwork = !isTransferNetworkAvailable(applicationContext, requiresUnmetered),
+                    )
+                    return Result.retry()
+                }
+                cleanupUploadTicket(application, store, batchId, item.index, item.uploadTicketId)
+                if (item.cameraAssetKey.isNotBlank()) {
+                    application.cameraBackupStore.markFailed(
+                        item.cameraAssetKey,
+                        item.sourceUri,
+                        item.folderId,
+                        error.userMessage(),
+                    )
+                    application.cameraBackupStore.finishBatchAsset(item.cameraAssetKey, failed = true)
+                }
+                store.markItemFailure(batchId, item.index, error.userMessage())
+            }
+        }
         store.markBatchRunning(batchId)
-        setForeground(notifications.foreground(checkNotNull(store.batch(batchId)), id))
+        setForeground(notifications.foreground(checkNotNull(store.batch(batchId))))
 
         return try {
             val outcomes = runFileTransfers(
@@ -51,7 +100,10 @@ class TCloudUploadWorker(
                 uploadOne(application, store, notifications, batchId, item)
             }
             if (outcomes.any { it == TransferItemOutcome.RETRY }) {
-                store.markBatchRetryPending(batchId)
+                store.markBatchRetryPending(
+                    batchId,
+                    waitingForNetwork = !isTransferNetworkAvailable(applicationContext, requiresUnmetered),
+                )
                 publishProgress(store, notifications, batchId, force = true)
                 Result.retry()
             } else {
@@ -59,14 +111,37 @@ class TCloudUploadWorker(
                 Result.success()
             }
         } catch (cancelled: CancellationException) {
-            store.cancelBatch(batchId)
+            if (store.isUserCancellationRequested(batchId)) {
+                store.cancelBatch(batchId)
+            } else {
+                store.prepareForSystemStop(
+                    batchId,
+                    waitingForNetwork = !isTransferNetworkAvailable(applicationContext, requiresUnmetered),
+                )
+            }
             throw cancelled
         } catch (error: Throwable) {
-            store.items(batchId)
-                .filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
-                .forEach { store.markItemFailure(batchId, it.index, error.userMessage()) }
-            store.finishBatch(batchId)
-            Result.success()
+            if (isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
+                store.items(batchId)
+                    .filter { it.status == TransferStatus.RUNNING }
+                    .forEach { store.deferItem(batchId, it.index) }
+                store.markBatchRetryPending(
+                    batchId,
+                    waitingForNetwork = !isTransferNetworkAvailable(applicationContext, requiresUnmetered),
+                )
+                Result.retry()
+            } else {
+                store.items(batchId)
+                    .filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
+                    .forEach { item ->
+                        if (item.uploadTicketId > 0) {
+                            cleanupUploadTicket(application, store, batchId, item.index, item.uploadTicketId)
+                        }
+                        store.markItemFailure(batchId, item.index, error.userMessage())
+                    }
+                store.finishBatch(batchId)
+                Result.success()
+            }
         }
     }
 
@@ -79,7 +154,6 @@ class TCloudUploadWorker(
     ): TransferItemOutcome {
         val source = Uri.parse(item.sourceUri)
         var ticket: UploadTicket? = null
-        var completionStarted = false
         try {
             val sourceInfo = readSourceInfo(source)
             store.markItemRunning(batchId, item.index, sourceInfo.name, sourceInfo.sizeBytes)
@@ -111,6 +185,7 @@ class TCloudUploadWorker(
                             application.repository.createUpload(prepared.payload)
                         }
                         ticket = activeTicket
+                        store.recordUploadTicket(batchId, item.index, activeTicket.id)
                         check(activeTicket.chunkSize == prepared.payload.chunkSizeBytes) {
                             "サーバーと端末の暗号チャンク設定が一致しません。"
                         }
@@ -159,8 +234,7 @@ class TCloudUploadWorker(
                             check(input.read() == -1) { "選択後にファイル容量が変更されました。" }
                         }
                         store.markItemStage(batchId, item.index, TCloudTransferStore.STAGE_COMPLETING)
-                        completionStarted = true
-                        application.repository.completeUpload(activeTicket.id, parts)
+                        completeUploadReliably(application, activeTicket.id, parts)
 
                         if (encryptedThumbnail != null) {
                             runCatching {
@@ -184,14 +258,14 @@ class TCloudUploadWorker(
             }
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                ticket?.let { runCatching { application.repository.cancelUpload(it.id) } }
+                ticket?.let { cleanupUploadTicket(application, store, batchId, item.index, it.id) }
             }
             throw cancelled
         } catch (error: Throwable) {
             withContext(NonCancellable) {
-                ticket?.let { runCatching { application.repository.cancelUpload(it.id) } }
+                ticket?.let { cleanupUploadTicket(application, store, batchId, item.index, it.id) }
             }
-            if (!completionStarted && isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
+            if (isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
                 store.deferItem(batchId, item.index)
                 publishProgress(store, notifications, batchId)
                 return TransferItemOutcome.RETRY
@@ -211,6 +285,20 @@ class TCloudUploadWorker(
         return TransferItemOutcome.FINISHED
     }
 
+    private suspend fun cleanupUploadTicket(
+        application: TCloudApplication,
+        store: TCloudTransferStore,
+        batchId: String,
+        itemIndex: Int,
+        ticketId: Long,
+    ): Boolean {
+        val cleaned = runCatching { application.repository.cancelUpload(ticketId) }.isSuccess
+        if (cleaned) {
+            store.clearUploadTicket(batchId, itemIndex)
+        }
+        return cleaned
+    }
+
     private suspend fun publishProgress(
         store: TCloudTransferStore,
         notifications: TCloudTransferNotifications,
@@ -222,7 +310,24 @@ class TCloudUploadWorker(
         if (!force && signature == lastProgressSignature) return@withLock
         lastProgressSignature = signature
         setProgress(progressData(batch))
-        setForeground(notifications.foreground(batch, id))
+        setForeground(notifications.foreground(batch))
+    }
+
+    private suspend fun completeUploadReliably(
+        application: TCloudApplication,
+        ticketId: Long,
+        parts: List<jp.tanaka.tcloud.data.UploadedPart>,
+    ) {
+        try {
+            application.repository.completeUpload(ticketId, parts)
+        } catch (error: Throwable) {
+            if (!isTransientTransferFailure(error)) throw error
+            repeat(3) { confirmation ->
+                if (retryTransientTransfer { application.repository.isUploadReady(ticketId) }) return
+                if (confirmation < 2) kotlinx.coroutines.delay(1_000L * (confirmation + 1))
+            }
+            throw error
+        }
     }
 
     private suspend fun readSourceInfo(uri: Uri): SourceInfo = withContext(Dispatchers.IO) {

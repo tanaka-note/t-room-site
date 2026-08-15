@@ -25,7 +25,8 @@ class CameraBackupScanWorker(
         val settings = store.settings()
         if (!settings.enabled || !settings.hasTarget) return@withContext Result.success()
 
-        val mediaTypes = permittedMediaTypes(settings)
+        val mediaAccess = permittedMediaAccess(settings)
+        val mediaTypes = mediaAccess.mediaTypes
         if (mediaTypes.isEmpty()) {
             store.recordScan(0, "写真・動画へのアクセスが許可されていません。")
             return@withContext Result.success()
@@ -58,11 +59,9 @@ class CameraBackupScanWorker(
             val typePlaceholders = mediaTypes.joinToString(",") { "?" }
             val selectionParts = mutableListOf(
                 "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($typePlaceholders)",
-                "${MediaStore.Files.FileColumns.DATE_ADDED} >= ?",
                 "${MediaStore.Files.FileColumns.SIZE} > 0",
             )
             val arguments = mediaTypes.map(Int::toString).toMutableList().apply {
-                add((settings.startedAtMillis / 1000).toString())
                 if (settings.scanDateAddedSeconds > 0 || settings.scanMediaId > 0) {
                     selectionParts += "(${MediaStore.Files.FileColumns.DATE_ADDED} > ? OR " +
                         "(${MediaStore.Files.FileColumns.DATE_ADDED} = ? AND " +
@@ -149,7 +148,10 @@ class CameraBackupScanWorker(
             if (plan.cursorMediaId > 0) {
                 store.advanceScanCursor(plan.cursorDateAddedSeconds, plan.cursorMediaId)
             }
-            store.recordScan(queued)
+            store.recordScan(
+                queued,
+                if (mediaAccess.limited) "選択された写真・動画のみバックアップ対象です。" else "",
+            )
             if (plan.reachedBatchLimit) application.cameraBackupManager.enqueueContinuation(store.settings())
             Result.success()
         }.getOrElse { error ->
@@ -158,13 +160,16 @@ class CameraBackupScanWorker(
         }
     }
 
-    private fun permittedMediaTypes(settings: CameraBackupSettings): List<Int> {
+    private fun permittedMediaAccess(settings: CameraBackupSettings): CameraMediaAccess {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             val allowed = ContextCompat.checkSelfPermission(
                 applicationContext,
                 Manifest.permission.READ_EXTERNAL_STORAGE,
             ) == PackageManager.PERMISSION_GRANTED
-            return if (allowed) selectedMediaTypes(settings) else emptyList()
+            return CameraMediaAccess(
+                mediaTypes = if (allowed) selectedMediaTypes(settings) else emptyList(),
+                limited = false,
+            )
         }
         val result = mutableListOf<Int>()
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_MEDIA_IMAGES) ==
@@ -173,13 +178,19 @@ class CameraBackupScanWorker(
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_MEDIA_VIDEO) ==
             PackageManager.PERMISSION_GRANTED
         ) if (settings.includeVideos) result += MEDIA_VIDEO
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && result.isEmpty() &&
+        val selectedTypes = selectedMediaTypes(settings)
+        val selectedAccessGranted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
             ContextCompat.checkSelfPermission(
                 applicationContext,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
             ) == PackageManager.PERMISSION_GRANTED
-        ) result += selectedMediaTypes(settings)
-        return result.distinct()
+        val limited = selectedTypes.any { it !in result }
+        if (selectedAccessGranted) {
+            selectedTypes.forEach { type ->
+                if (type !in result) result += type
+            }
+        }
+        return CameraMediaAccess(result.distinct(), limited)
     }
 
     private fun selectedMediaTypes(settings: CameraBackupSettings) = buildList {
@@ -198,6 +209,11 @@ class CameraBackupScanWorker(
         val uri: Uri,
         val assetKey: String,
         val expectedMediaKind: String,
+    )
+
+    private data class CameraMediaAccess(
+        val mediaTypes: List<Int>,
+        val limited: Boolean,
     )
 
     private companion object {

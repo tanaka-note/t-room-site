@@ -56,6 +56,9 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback"
             android:stopWithTask="false" />
+        <receiver
+            android:name=".transfer.TCloudTransferCancelReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

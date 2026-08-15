@@ -21,6 +21,7 @@ data class CameraBackupSettings(
     val lastScanAtMillis: Long = 0,
     val lastQueuedCount: Int = 0,
     val lastError: String = "",
+    val scanPolicyVersion: Int = 0,
 ) {
     val hasTarget: Boolean get() = folderId > 0
 }
@@ -66,7 +67,27 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
         lastScanAtMillis = preferences.getLong(KEY_LAST_SCAN_AT, 0),
         lastQueuedCount = preferences.getInt(KEY_LAST_QUEUED, 0),
         lastError = preferences.getString(KEY_LAST_ERROR, "").orEmpty(),
+        scanPolicyVersion = preferences.getInt(KEY_SCAN_POLICY_VERSION, 0),
     )
+
+    /** v1.0.0 scans existing media once without discarding completed asset history. */
+    @Synchronized
+    fun applyCurrentScanPolicy(): CameraBackupSettings {
+        val current = settings()
+        if (current.scanPolicyVersion >= CURRENT_SCAN_POLICY_VERSION) return current
+        preferences.edit()
+            .putInt(KEY_SCAN_POLICY_VERSION, CURRENT_SCAN_POLICY_VERSION)
+            .also(::resetCursor)
+            .apply()
+        resetBatch()
+        return settings()
+    }
+
+    @Synchronized
+    fun requestFullRescan() {
+        preferences.edit().also(::resetCursor).apply()
+        resetBatch()
+    }
 
     @Synchronized
     fun setTarget(folderId: Long, folderName: String): CameraBackupSettings {
@@ -299,6 +320,7 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
     private companion object {
         const val DATABASE_NAME = "tcloud_camera_backup.db"
         const val DATABASE_VERSION = 2
+        const val CURRENT_SCAN_POLICY_VERSION = 1
         const val TABLE_COMPLETED = "completed_assets"
         const val TABLE_FAILED = "failed_assets"
         const val COLUMN_ASSET_KEY = "asset_key"
@@ -327,5 +349,6 @@ class CameraBackupStore(context: Context) : SQLiteOpenHelper(
         const val KEY_BATCH_COMPLETED = "batch_completed"
         const val KEY_BATCH_FAILED = "batch_failed"
         const val KEY_BATCH_PENDING = "batch_pending"
+        const val KEY_SCAN_POLICY_VERSION = "scan_policy_version"
     }
 }

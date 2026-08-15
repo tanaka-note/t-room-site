@@ -38,4 +38,31 @@ class CameraBackupPlannerTest {
         assertEquals(null, cameraMediaKind(3, "video/mp4", includeImages = true, includeVideos = false))
         assertEquals("video", cameraMediaKind(3, "video/mp4", includeImages = false, includeVideos = true))
     }
+
+    @Test
+    fun `existing assets are planned regardless of when backup was enabled`() {
+        val oldAsset = CameraMediaAsset(1, 1, 500, 1, 1, "content://media/old")
+
+        val plan = planCameraBackup(10, listOf(oldAsset), emptySet(), 250)
+
+        assertEquals(listOf(1L), plan.pending.map { it.second.id })
+    }
+
+    @Test
+    fun `one thousand assets are processed in four bounded pages`() {
+        val assets = (1L..1_000L).map { id ->
+            CameraMediaAsset(id, 1, 1_000, id, id, "content://media/$id")
+        }
+        val pendingIds = mutableListOf<Long>()
+
+        assets.chunked(250).forEach { page ->
+            val plan = planCameraBackup(10, page, emptySet(), 250)
+            assertTrue(plan.reachedBatchLimit)
+            assertTrue(plan.pending.size <= 250)
+            pendingIds += plan.pending.map { it.second.id }
+        }
+
+        assertEquals(1_000, pendingIds.size)
+        assertEquals((1L..1_000L).toList(), pendingIds)
+    }
 }

@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
                     app.cameraBackupManager,
                     app.playbackManager,
                     app.transferStore,
+                    app.transferCancellation,
                 ) as T
         }
     }

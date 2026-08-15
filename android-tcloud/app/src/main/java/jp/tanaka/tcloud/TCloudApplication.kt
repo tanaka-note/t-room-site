@@ -9,6 +9,7 @@ import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.transfer.TCloudDownloadManager
 import jp.tanaka.tcloud.transfer.TCloudUploadManager
 import jp.tanaka.tcloud.transfer.TCloudTransferStore
+import jp.tanaka.tcloud.transfer.TCloudTransferCancellation
 import jp.tanaka.tcloud.backup.CameraBackupManager
 import jp.tanaka.tcloud.backup.CameraBackupStore
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
@@ -25,7 +26,9 @@ class TCloudApplication : Application() {
     val offlineStore: TCloudOfflineStore by lazy { TCloudOfflineStore(this) }
     val offlineManager: TCloudOfflineManager by lazy { TCloudOfflineManager(this) }
     val cameraBackupStore: CameraBackupStore by lazy { CameraBackupStore(this) }
-    val cameraBackupManager: CameraBackupManager by lazy { CameraBackupManager(this, cameraBackupStore) }
+    val cameraBackupManager: CameraBackupManager by lazy {
+        CameraBackupManager(this, cameraBackupStore, transferStore)
+    }
     val playbackManager: TCloudPlaybackManager by lazy { TCloudPlaybackManager(this) }
 
     val repository: TCloudRepository by lazy {
@@ -36,10 +39,14 @@ class TCloudApplication : Application() {
             offlineStore = offlineStore,
         )
     }
+    val transferCancellation: TCloudTransferCancellation by lazy {
+        TCloudTransferCancellation(this, transferStore, repository, cameraBackupManager)
+    }
 
     override fun onCreate() {
         super.onCreate()
         applicationScope.launch { offlineStore.cleanupExpired() }
         cameraBackupManager.restoreSchedule()
+        transferCancellation.scheduleTerminalTicketCleanup()
     }
 }

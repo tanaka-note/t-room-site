@@ -20,6 +20,8 @@ import jp.tanaka.tcloud.data.TCloudRepository
 import jp.tanaka.tcloud.transfer.TCloudDownloadManager
 import jp.tanaka.tcloud.transfer.TCloudUploadManager
 import jp.tanaka.tcloud.transfer.TCloudTransferStore
+import jp.tanaka.tcloud.transfer.TCloudTransferCancellation
+import jp.tanaka.tcloud.transfer.FolderTransferFailureNotice
 import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
 import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.media.TCloudDataSource
@@ -83,6 +85,7 @@ data class MainUiState(
     val searching: Boolean = false,
     val searchScannedCount: Int = 0,
     val transferBatches: List<TransferBatchSnapshot> = emptyList(),
+    val transferFailureNotices: List<FolderTransferFailureNotice> = emptyList(),
     val message: String? = null,
     val error: String? = null,
 )
@@ -104,6 +107,7 @@ class MainViewModel(
     private val cameraBackupManager: CameraBackupManager,
     private val playbackManager: TCloudPlaybackManager,
     private val transferStore: TCloudTransferStore,
+    private val transferCancellation: TCloudTransferCancellation,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
@@ -122,12 +126,14 @@ class MainViewModel(
                         page = page,
                         cameraBackupSettings = cameraBackupManager.settings(),
                         transferBatches = transferStore.batches.value,
+                        transferFailureNotices = transferStore.failureNotices.value,
                     )
                 }
                 .onFailure { error ->
                     mutableState.value = MainUiState(
                         restoring = false,
                         transferBatches = transferStore.batches.value,
+                        transferFailureNotices = transferStore.failureNotices.value,
                         error = error.userMessage(),
                     )
                 }
@@ -141,6 +147,11 @@ class MainViewModel(
                         refreshedUploadBatches.add(batch.id)
                 }
                 if (completedUploads.isNotEmpty()) refreshVisibleFolderAfterUpload(completedUploads)
+            }
+        }
+        viewModelScope.launch {
+            transferStore.failureNotices.collectLatest { notices ->
+                mutableState.update { it.copy(transferFailureNotices = notices) }
             }
         }
     }
@@ -157,6 +168,7 @@ class MainViewModel(
                         page = page,
                         cameraBackupSettings = cameraBackupManager.settings(),
                         transferBatches = transferStore.batches.value,
+                        transferFailureNotices = transferStore.failureNotices.value,
                     )
                 }
                 .onFailure { error ->
@@ -380,6 +392,7 @@ class MainViewModel(
                 restoring = false,
                 cameraBackupSettings = cameraBackupManager.settings(),
                 transferBatches = transferStore.batches.value,
+                transferFailureNotices = transferStore.failureNotices.value,
             )
         }
     }
@@ -432,7 +445,7 @@ class MainViewModel(
                                 if (includeImages) add("写真")
                                 if (includeVideos) add("動画")
                             }.joinToString("・")
-                            "カメラロール自動バックアップを有効にしました。今後追加される${targets}が対象です。"
+                            "カメラロール自動バックアップを有効にしました。既存および今後追加される${targets}が対象です。"
                         } else {
                             "カメラロール自動バックアップを停止しました。"
                         },
@@ -1203,6 +1216,17 @@ class MainViewModel(
         mutableState.update {
             it.copy(message = "${uris.size}件のアップロードを開始しました。通知欄で進行状況を確認できます。")
         }
+    }
+
+    fun cancelTransfer(batchId: String) {
+        viewModelScope.launch {
+            runCatching { transferCancellation.cancel(batchId) }
+                .onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
+        }
+    }
+
+    fun dismissTransferFailureNotice(noticeId: String) {
+        transferStore.dismissFailureNotice(noticeId)
     }
 
     private suspend fun refreshVisibleFolderAfterUpload(batches: List<TransferBatchSnapshot>) {

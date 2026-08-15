@@ -372,7 +372,11 @@ class TCloudApi(
                         ?.use { it.readText() }
                         .orEmpty()
                     if (status == HttpURLConnection.HTTP_UNAUTHORIZED) sessionStore.clear()
-                    throw TCloudApiException(status, error.ifBlank { "暗号データを取得できませんでした。" })
+                    throw TCloudApiException(
+                        status,
+                        error.ifBlank { "暗号データを取得できませんでした。" },
+                        connection.retryAfterMillis(),
+                    )
                 }
                 val bytes = connection.inputStream.use { it.readBytes() }
                 check(bytes.size.toLong() == encryptedLength) {
@@ -398,7 +402,7 @@ class TCloudApi(
             val status = connection.responseCode
             if (status !in 200..299) {
                 if (status == HttpURLConnection.HTTP_UNAUTHORIZED) sessionStore.clear()
-                throw TCloudApiException(status, "サムネイルを取得できませんでした。")
+                throw TCloudApiException(status, "サムネイルを取得できませんでした。", connection.retryAfterMillis())
             }
             connection.inputStream.use { it.readBytes() }
         } finally {
@@ -448,7 +452,11 @@ class TCloudApi(
                 val json = if (text.isBlank()) JSONObject() else JSONObject(text)
                 if (status !in 200..299) {
                     if (status == HttpURLConnection.HTTP_UNAUTHORIZED) sessionStore.clear()
-                    throw TCloudApiException(status, json.optString("error", "暗号チャンクを保存できませんでした。"))
+                    throw TCloudApiException(
+                        status,
+                        json.optString("error", "暗号チャンクを保存できませんでした。"),
+                        connection.retryAfterMillis(),
+                    )
                 }
                 UploadedPart(json.getInt("partNumber"), json.getString("etag"))
             } finally {
@@ -488,7 +496,11 @@ class TCloudApi(
             if (status !in 200..299) {
                 val error = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
                 if (status == HttpURLConnection.HTTP_UNAUTHORIZED) sessionStore.clear()
-                throw TCloudApiException(status, error.ifBlank { "サムネイルを保存できませんでした。" })
+                throw TCloudApiException(
+                    status,
+                    error.ifBlank { "サムネイルを保存できませんでした。" },
+                    connection.retryAfterMillis(),
+                )
             }
         } finally {
             connection.disconnect()
@@ -496,7 +508,18 @@ class TCloudApi(
     }
 
     suspend fun cancelUpload(fileId: Long) {
-        runCatching { request("DELETE", "/uploads/$fileId") }
+        try {
+            request("DELETE", "/uploads/$fileId")
+        } catch (error: TCloudApiException) {
+            if (error.statusCode != HttpURLConnection.HTTP_NOT_FOUND) throw error
+        }
+    }
+
+    suspend fun isUploadReady(fileId: Long): Boolean = try {
+        request("GET", "/files/$fileId")
+        true
+    } catch (error: TCloudApiException) {
+        if (error.statusCode == HttpURLConnection.HTTP_NOT_FOUND) false else throw error
     }
 
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject =
@@ -531,13 +554,32 @@ class TCloudApi(
                     val isCredentialCheck = path == "/login" ||
                         Regex("^/folders/\\d+/unlock$").matches(path)
                     if (status == 401 && !isCredentialCheck) sessionStore.clear()
-                    throw TCloudApiException(status, json.optString("error", "通信に失敗しました。"))
+                    throw TCloudApiException(
+                        status,
+                        json.optString("error", "通信に失敗しました。"),
+                        connection.retryAfterMillis(),
+                    )
                 }
                 json
             } finally {
                 connection.disconnect()
             }
         }
+
+    private fun HttpURLConnection.retryAfterMillis(): Long? {
+        val value = getHeaderField("Retry-After")?.trim().orEmpty()
+        if (value.isBlank()) return null
+        value.toLongOrNull()?.let { seconds ->
+            return (seconds.coerceAtLeast(0) * 1_000L).coerceAtMost(15 * 60_000L)
+        }
+        return runCatching {
+            val retryAt = java.time.ZonedDateTime.parse(
+                value,
+                java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME,
+            ).toInstant().toEpochMilli()
+            (retryAt - System.currentTimeMillis()).coerceIn(0, 15 * 60_000L)
+        }.getOrNull()
+    }
 
     private fun JSONObject.toSession() = Session(
         authenticated = optBooleanCompat("authenticated"),

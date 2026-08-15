@@ -9,11 +9,14 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import jp.tanaka.tcloud.transfer.TCloudUploadManager
+import jp.tanaka.tcloud.transfer.TCloudTransferStore
+import jp.tanaka.tcloud.transfer.TransferDirection
 import java.util.concurrent.TimeUnit
 
 class CameraBackupManager(
     context: Context,
     private val store: CameraBackupStore,
+    private val transferStore: TCloudTransferStore,
 ) {
     private val applicationContext = context.applicationContext
     private val workManager = WorkManager.getInstance(context)
@@ -24,6 +27,7 @@ class CameraBackupManager(
         val previous = store.settings()
         val updated = store.setTarget(folderId, folderName)
         if (previous.folderId != updated.folderId) {
+            cancelActiveCameraBatches()
             workManager.cancelAllWorkByTag(TCloudUploadManager.TAG_CAMERA_UPLOAD)
         }
         applySchedule(updated)
@@ -54,13 +58,20 @@ class CameraBackupManager(
             previous.allSourceFolders != allSourceFolders ||
             previous.sourceFolderIds != sourceFolderIds
         ) {
+            cancelActiveCameraBatches()
             workManager.cancelAllWorkByTag(TCloudUploadManager.TAG_CAMERA_UPLOAD)
         }
         applySchedule(updated)
         return updated
     }
 
-    fun restoreSchedule() = applySchedule(store.settings())
+    fun restoreSchedule() = applySchedule(store.applyCurrentScanPolicy())
+
+    fun requestRescanAfterCancellation() {
+        store.requestFullRescan()
+        workManager.cancelUniqueWork(IMMEDIATE_WORK)
+        workManager.cancelUniqueWork(CONTINUATION_WORK)
+    }
 
     suspend fun sourceFolders(): List<CameraBackupSourceFolder> =
         queryCameraBackupSourceFolders(applicationContext)
@@ -86,6 +97,7 @@ class CameraBackupManager(
 
     private fun applySchedule(settings: CameraBackupSettings) {
         if (!settings.enabled || !settings.hasTarget) {
+            cancelActiveCameraBatches()
             workManager.cancelUniqueWork(PERIODIC_WORK)
             workManager.cancelUniqueWork(IMMEDIATE_WORK)
             workManager.cancelUniqueWork(CONTINUATION_WORK)
@@ -102,6 +114,15 @@ class CameraBackupManager(
             periodic,
         )
         enqueueImmediate(settings)
+    }
+
+    private fun cancelActiveCameraBatches() {
+        transferStore.batches.value
+            .filter { it.active && it.direction == TransferDirection.CAMERA_BACKUP }
+            .forEach { batch ->
+                transferStore.requestUserCancellation(batch.id)
+                transferStore.cancelBatch(batch.id)
+            }
     }
 
     private fun enqueueImmediate(settings: CameraBackupSettings) {

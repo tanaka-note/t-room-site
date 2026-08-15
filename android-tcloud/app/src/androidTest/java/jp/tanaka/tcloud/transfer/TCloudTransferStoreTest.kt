@@ -136,9 +136,10 @@ class TCloudTransferStoreTest {
         store.markItemRunning(batchId, 1, "interrupted.pdf", 10)
         store.updateProgress(batchId, 1, "interrupted.pdf", 60, 6, 10)
 
-        val abandonedDestinations = store.recoverInterrupted(batchId, TransferDirection.DOWNLOAD)
+        val recovery = store.recoverInterrupted(batchId, TransferDirection.DOWNLOAD)
 
-        assertTrue(abandonedDestinations.isEmpty())
+        assertTrue(recovery.orphanDestinations.isEmpty())
+        assertEquals(listOf("interrupted.pdf"), recovery.items.map(TransferItem::name))
         val items = store.items(batchId)
         assertEquals(TransferStatus.SUCCEEDED, items[0].status)
         assertEquals("content://download/already-saved", items[0].resultUri)
@@ -146,6 +147,138 @@ class TCloudTransferStoreTest {
         assertEquals(0, items[1].progressPercent)
         assertEquals(0L, items[1].transferredBytes)
         assertEquals(1, checkNotNull(store.batch(batchId)).succeeded)
+    }
+
+    @Test
+    fun networkStopWaitsWithoutFailingAndKeepsCompletedItems() {
+        val batchId = store.createDownloadBatch(listOf(file(1, "done.pdf"), file(2, "pending.pdf")))
+        store.markBatchRunning(batchId)
+        store.markItemRunning(batchId, 0, "done.pdf")
+        store.markItemSuccess(batchId, 0, "content://download/done")
+        store.markItemRunning(batchId, 1, "pending.pdf")
+
+        store.prepareForSystemStop(batchId, waitingForNetwork = true)
+
+        val waiting = checkNotNull(store.batch(batchId))
+        assertEquals(TransferStatus.WAITING_NETWORK, waiting.status)
+        assertEquals(1, waiting.succeeded)
+        assertEquals(0, waiting.failed)
+        assertEquals(false, waiting.userCancelRequested)
+        assertEquals(TransferStatus.SUCCEEDED, store.items(batchId)[0].status)
+        assertEquals(TransferStatus.QUEUED, store.items(batchId)[1].status)
+
+        store.markBatchRunning(batchId)
+        store.markItemRunning(batchId, 1, "pending.pdf")
+        store.markItemSuccess(batchId, 1, "content://download/pending")
+        store.finishBatch(batchId)
+
+        val completed = checkNotNull(store.batch(batchId))
+        assertEquals(TransferStatus.SUCCEEDED, completed.status)
+        assertEquals(2, completed.succeeded)
+        assertEquals(0, completed.failed)
+    }
+
+    @Test
+    fun userCancellationIsPersistedAndDoesNotResume() {
+        val batchId = store.createDownloadBatch(listOf(file(1, "pending.pdf")))
+        store.markBatchRunning(batchId)
+        store.markItemRunning(batchId, 0, "pending.pdf")
+
+        store.requestUserCancellation(batchId)
+        store.cancelBatch(batchId)
+
+        val batch = checkNotNull(store.batch(batchId))
+        assertEquals(TransferStatus.CANCELLED, batch.status)
+        assertTrue(batch.userCancelRequested)
+        assertEquals(TransferStatus.CANCELLED, store.items(batchId).single().status)
+    }
+
+    @Test
+    fun finishedHistoryIsPrunedToThreeWithoutDeletingActiveOrWaitingBatches() {
+        val terminalIds = (1L..5L).map { id ->
+            store.createDownloadBatch(listOf(file(id, "finished-$id.pdf"))).also { batchId ->
+                store.markItemRunning(batchId, 0, "finished-$id.pdf")
+                store.markItemSuccess(batchId, 0)
+                store.finishBatch(batchId)
+                Thread.sleep(2)
+            }
+        }
+        val activeId = store.createDownloadBatch(listOf(file(10, "active.pdf")))
+        store.markBatchRunning(activeId)
+        val waitingId = store.createDownloadBatch(listOf(file(11, "waiting.pdf")))
+        store.markBatchRetryPending(waitingId, waitingForNetwork = true)
+
+        store.trimFinishedHistory()
+
+        assertEquals(null, store.batch(terminalIds[0]))
+        assertEquals(null, store.batch(terminalIds[1]))
+        terminalIds.takeLast(3).forEach { assertTrue(store.batch(it) != null) }
+        assertEquals(TransferStatus.RUNNING, checkNotNull(store.batch(activeId)).status)
+        assertEquals(TransferStatus.WAITING_NETWORK, checkNotNull(store.batch(waitingId)).status)
+        assertEquals(3, store.batches.value.take(3).size)
+        assertEquals(
+            listOf(TransferStatus.RUNNING, TransferStatus.WAITING_NETWORK),
+            store.batches.value.take(2).map(TransferBatchSnapshot::status),
+        )
+    }
+
+    @Test
+    fun uploadFailureNoticePersistsUntilDismissedAndNewFailureCanAppear() {
+        val batchId = failedUploadBatch("content://source/problem", "problem.mp4")
+        val notice = store.failureNotices.value.single()
+        assertEquals(batchId, notice.batchId)
+        assertEquals(10L, notice.folderId)
+        assertEquals("problem.mp4", notice.failures.single().name)
+
+        store.close()
+        store = TCloudTransferStore(context)
+        assertEquals(notice.id, store.failureNotices.value.single().id)
+
+        store.dismissFailureNotice(notice.id)
+        store.close()
+        store = TCloudTransferStore(context)
+        assertTrue(store.failureNotices.value.isEmpty())
+
+        val newBatchId = failedUploadBatch("content://source/problem", "problem.mp4")
+        assertEquals(newBatchId, store.failureNotices.value.single().batchId)
+    }
+
+    @Test
+    fun recoveredUploadTicketIsKeptUntilResolvedAndClearedOnSuccess() {
+        val batchId = store.createUploadBatch(10, listOf("content://source/video" to "video.mp4"))
+        store.markBatchRunning(batchId)
+        store.markItemRunning(batchId, 0, "video.mp4")
+        store.recordUploadTicket(batchId, 0, 1234)
+
+        val recovery = store.recoverInterrupted(batchId, TransferDirection.UPLOAD)
+        assertEquals(1234L, recovery.items.single().uploadTicketId)
+        assertEquals(1234L, store.items(batchId).single().uploadTicketId)
+
+        store.markItemSuccess(batchId, 0)
+        assertEquals(0L, store.items(batchId).single().uploadTicketId)
+    }
+
+    @Test
+    fun unresolvedTicketSurvivesTerminalStateForStartupCleanup() {
+        val batchId = store.createUploadBatch(10, listOf("content://source/video" to "video.mp4"))
+        store.markItemRunning(batchId, 0, "video.mp4")
+        store.recordUploadTicket(batchId, 0, 5678)
+        store.markItemFailure(batchId, 0, "保存できませんでした。")
+        store.finishBatch(batchId)
+
+        val pending = store.pendingTerminalUploadTickets().single()
+        assertEquals(batchId, pending.batchId)
+        assertEquals(0, pending.itemIndex)
+        assertEquals(5678L, pending.ticketId)
+    }
+
+    private fun failedUploadBatch(sourceUri: String, name: String): String {
+        val batchId = store.createUploadBatch(10, listOf(sourceUri to name))
+        store.markBatchRunning(batchId)
+        store.markItemRunning(batchId, 0, name)
+        store.markItemFailure(batchId, 0, "通信を再試行しても保存できませんでした。")
+        store.finishBatch(batchId)
+        return batchId
     }
 
     private fun file(id: Long, name: String, sizeBytes: Long = 10) = CloudFile(

@@ -379,6 +379,8 @@ class TCloudRepository(
 
     suspend fun cancelUpload(fileId: Long) = api.cancelUpload(fileId)
 
+    suspend fun isUploadReady(fileId: Long): Boolean = api.isUploadReady(fileId)
+
     suspend fun listMoveDestinations(scopeRootId: Long?): List<MoveDestination> =
         api.listMoveDestinations(scopeRootId)
 

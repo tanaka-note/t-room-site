@@ -241,4 +241,5 @@ data class MoveDestination(
 class TCloudApiException(
     val statusCode: Int,
     override val message: String,
+    val retryAfterMillis: Long? = null,
 ) : Exception(message)

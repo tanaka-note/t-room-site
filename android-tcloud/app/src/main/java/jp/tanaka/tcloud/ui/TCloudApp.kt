@@ -170,6 +170,7 @@ import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
 import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.transfer.TransferStatus
+import jp.tanaka.tcloud.transfer.FolderTransferFailureNotice
 import kotlinx.coroutines.delay
 
 private val TCloudBlue = Color(0xFF16756D)
@@ -567,7 +568,12 @@ fun TCloudApp(
                     searching = state.searching,
                     searchScannedCount = state.searchScannedCount,
                     searchTruncated = state.searchResults.truncated,
-                    activeTransfer = state.transferBatches.firstOrNull { it.active },
+                    activeTransfer = state.transferBatches.firstOrNull { batch ->
+                        batch.active && state.page?.currentFolderId in batch.folderIds
+                    },
+                    transferFailureNotices = state.transferFailureNotices.filter {
+                        it.folderId == state.page?.currentFolderId
+                    },
                     thumbnailBitmaps = state.thumbnailBitmaps,
                     selectedFileIds = state.selectedFileIds,
                     selectedFolderIds = state.selectedFolderIds,
@@ -606,6 +612,8 @@ fun TCloudApp(
                         showAppSettings = true
                     },
                     onSearch = viewModel::search,
+                    onCancelTransfer = viewModel::cancelTransfer,
+                    onDismissTransferFailure = viewModel::dismissTransferFailureNotice,
                 )
             }
 
@@ -656,6 +664,7 @@ fun TCloudApp(
                     onSaveCameraBackup = ::requestCameraBackup,
                     onLoadCameraBackupSourceFolders = ::requestCameraBackupSourceFolders,
                     onRunCameraBackupNow = viewModel::runCameraBackupNow,
+                    onCancelTransfer = viewModel::cancelTransfer,
                     onOpenTrash = {
                         showAppSettings = false
                         viewModel.openTrash()
@@ -949,6 +958,7 @@ private fun FolderScreen(
     searchScannedCount: Int,
     searchTruncated: Boolean,
     activeTransfer: TransferBatchSnapshot?,
+    transferFailureNotices: List<FolderTransferFailureNotice>,
     thumbnailBitmaps: Map<Long, Bitmap>,
     selectedFileIds: Set<Long>,
     selectedFolderIds: Set<Long>,
@@ -982,6 +992,8 @@ private fun FolderScreen(
     onOpenOffline: () -> Unit,
     onOpenSettings: () -> Unit,
     onSearch: (String, String) -> Unit,
+    onCancelTransfer: (String) -> Unit,
+    onDismissTransferFailure: (String) -> Unit,
 ) {
     val selectionCount = selectedFileIds.size + selectedFolderIds.size
     val selectionMode = selectionCount > 0
@@ -1207,7 +1219,10 @@ private fun FolderScreen(
             ) {
                 item(key = "toolbar") {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        activeTransfer?.let { TransferProgressCard(it) }
+                        activeTransfer?.let { TransferProgressCard(it, onCancelTransfer) }
+                        transferFailureNotices.forEach { notice ->
+                            TransferFailureNoticeCard(notice, onDismissTransferFailure)
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1501,7 +1516,7 @@ private fun TCloudSortButton(
 }
 
 @Composable
-private fun TransferProgressCard(batch: TransferBatchSnapshot) {
+private fun TransferProgressCard(batch: TransferBatchSnapshot, onCancel: (String) -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
@@ -1513,9 +1528,9 @@ private fun TransferProgressCard(batch: TransferBatchSnapshot) {
         ) {
             Text(
                 when (batch.direction) {
-                    TransferDirection.DOWNLOAD -> "ダウンロード中"
-                    TransferDirection.UPLOAD -> "アップロード中"
-                    TransferDirection.CAMERA_BACKUP -> "バックアップ中"
+                    TransferDirection.DOWNLOAD -> if (batch.waitingForNetwork) "ダウンロード：再接続待ち" else "ダウンロード中"
+                    TransferDirection.UPLOAD -> if (batch.waitingForNetwork) "アップロード：再接続待ち" else "アップロード中"
+                    TransferDirection.CAMERA_BACKUP -> if (batch.waitingForNetwork) "バックアップ：再接続待ち" else "バックアップ中"
                 },
                 fontWeight = FontWeight.Bold,
                 color = TCloudBlueDark,
@@ -1542,13 +1557,62 @@ private fun TransferProgressCard(batch: TransferBatchSnapshot) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            TextButton(onClick = { onCancel(batch.id) }) { Text("中止") }
         }
     }
 }
 
 @Composable
-private fun TransferHistoryRow(batch: TransferBatchSnapshot) {
-    var failuresExpanded by remember(batch.id) { mutableStateOf(false) }
+private fun TransferFailureNoticeCard(
+    notice: FolderTransferFailureNotice,
+    onDismiss: (String) -> Unit,
+) {
+    var expanded by remember(notice.id) { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFFFFF4ED),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "アップロードできなかったファイルがあります",
+                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFFB42318),
+                )
+                IconButton(onClick = { onDismiss(notice.id) }) {
+                    Icon(Icons.Default.Close, contentDescription = "エラー通知を閉じる")
+                }
+            }
+            Text(
+                "${notice.failedCount}件のアップロードに失敗しました",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "詳細を閉じる" else "詳細")
+            }
+            if (expanded) {
+                notice.failures.forEach { failure ->
+                    Text(
+                        "${failure.name} — ${failure.reason}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB42318),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransferHistoryRow(batch: TransferBatchSnapshot, onCancel: (String) -> Unit) {
     val operation = when (batch.direction) {
         TransferDirection.DOWNLOAD -> "ダウンロード"
         TransferDirection.UPLOAD -> "アップロード"
@@ -1556,7 +1620,9 @@ private fun TransferHistoryRow(batch: TransferBatchSnapshot) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(
-            if (batch.active) {
+            if (batch.waitingForNetwork) {
+                "$operation：ネットワークエラー・再接続待ち（残り${batch.remaining}件）"
+            } else if (batch.active) {
                 "$operation：${batch.total}件中${batch.processed}件完了・残り${batch.remaining}件"
             } else {
                 "$operation：${batch.total}件中${batch.succeeded}件成功・${batch.failed}件失敗"
@@ -1567,19 +1633,7 @@ private fun TransferHistoryRow(batch: TransferBatchSnapshot) {
         if (batch.status == TransferStatus.CANCELLED) {
             Text("中止しました。", style = MaterialTheme.typography.bodySmall, color = TCloudMuted)
         }
-        val visibleFailures = if (failuresExpanded) batch.failures else batch.failures.take(2)
-        visibleFailures.forEach { failure ->
-            Text(
-                "${failure.name} — ${failure.reason}",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFFB42318),
-            )
-        }
-        if (batch.failures.size > 2) {
-            TextButton(onClick = { failuresExpanded = !failuresExpanded }) {
-                Text(if (failuresExpanded) "失敗内容を閉じる" else "失敗${batch.failures.size}件を確認")
-            }
-        }
+        if (batch.active) TextButton(onClick = { onCancel(batch.id) }) { Text("中止") }
         Text(
             formatDateTime(batch.updatedAt),
             style = MaterialTheme.typography.labelSmall,
@@ -1605,6 +1659,7 @@ private fun AppSettingsDialog(
     onSaveCameraBackup: (Boolean, Boolean, Boolean, Boolean, Boolean, Boolean, Set<String>) -> Unit,
     onLoadCameraBackupSourceFolders: (Boolean, Boolean) -> Unit,
     onRunCameraBackupNow: () -> Unit,
+    onCancelTransfer: (String) -> Unit,
     onOpenTrash: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1642,8 +1697,8 @@ private fun AppSettingsDialog(
                 if (transferBatches.isNotEmpty()) {
                     HorizontalDivider()
                     Text("転送状況", fontWeight = FontWeight.SemiBold)
-                    transferBatches.take(8).forEach { batch ->
-                        TransferHistoryRow(batch)
+                    transferBatches.take(3).forEach { batch ->
+                        TransferHistoryRow(batch, onCancelTransfer)
                     }
                 }
                 if (isAdmin) {
@@ -1772,7 +1827,7 @@ private fun AppSettingsDialog(
                     onCheckedChange = { chargingOnly = it },
                 )
                 Text(
-                    "有効にした時点以降に選択した端末フォルダへ追加された写真・動画だけを暗号化して保存します。失敗分は次回自動で再試行します。",
+                    "選択した端末フォルダ内の既存の写真・動画と、今後追加される写真・動画を自動で暗号化して保存します。失敗分は次回自動で再試行します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF667085),
                 )

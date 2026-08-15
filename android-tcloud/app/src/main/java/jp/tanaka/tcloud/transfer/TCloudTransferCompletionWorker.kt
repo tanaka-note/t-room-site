@@ -15,6 +15,8 @@ class TCloudTransferCompletionWorker(
         val application = applicationContext as TCloudApplication
         val batch = application.transferStore.batch(batchId) ?: return Result.failure()
         TCloudTransferNotifications(applicationContext).showFinal(batch)
+        application.transferStore.trimFinishedHistory()
+        application.transferCancellation.scheduleTerminalTicketCleanup()
         return Result.success()
     }
 

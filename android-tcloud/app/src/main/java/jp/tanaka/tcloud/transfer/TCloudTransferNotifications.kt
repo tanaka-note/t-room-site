@@ -3,25 +3,26 @@ package jp.tanaka.tcloud.transfer
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.work.ForegroundInfo
-import androidx.work.WorkManager
 import jp.tanaka.tcloud.R
 
 internal class TCloudTransferNotifications(private val context: Context) {
     private val manager = context.getSystemService(Service.NOTIFICATION_SERVICE) as NotificationManager
 
-    fun foreground(batch: TransferBatchSnapshot, workId: java.util.UUID): ForegroundInfo {
+    fun foreground(batch: TransferBatchSnapshot): ForegroundInfo {
         createChannel()
         val notification = build(
             batch = batch,
             title = title(batch.direction, completed = false),
             text = transferProgressText(batch),
             ongoing = true,
-            cancelAction = WorkManager.getInstance(context).createCancelPendingIntent(workId),
+            cancelAction = cancelPendingIntent(batch.id),
         )
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ForegroundInfo(notificationId(batch.id), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -32,12 +33,13 @@ internal class TCloudTransferNotifications(private val context: Context) {
 
     fun showFinal(batch: TransferBatchSnapshot) {
         createChannel()
+        val cancelled = batch.status == TransferStatus.CANCELLED
         manager.notify(
             notificationId(batch.id),
             build(
                 batch = batch,
-                title = title(batch.direction, completed = true),
-                text = transferResultText(batch),
+                title = if (cancelled) cancelledTitle(batch.direction) else title(batch.direction, completed = true),
+                text = if (cancelled) "${batch.total}件の転送を中止しました" else transferResultText(batch),
                 ongoing = false,
                 cancelAction = null,
             ),
@@ -62,11 +64,7 @@ internal class TCloudTransferNotifications(private val context: Context) {
         .setContentText(text)
         .setStyle(
             Notification.BigTextStyle().bigText(
-                if (batch.failures.isNotEmpty() && !ongoing) {
-                    "$text\n${batch.failures.take(3).joinToString("、") { it.name }}"
-                } else {
-                    text
-                },
+                text,
             ),
         )
         .setOnlyAlertOnce(true)
@@ -88,6 +86,24 @@ internal class TCloudTransferNotifications(private val context: Context) {
         }
         return "T-Cloud $operation${if (completed) "完了" else "中"}"
     }
+
+    private fun cancelledTitle(direction: TransferDirection): String {
+        val operation = when (direction) {
+            TransferDirection.DOWNLOAD -> "ダウンロード"
+            TransferDirection.UPLOAD -> "アップロード"
+            TransferDirection.CAMERA_BACKUP -> "バックアップ"
+        }
+        return "T-Cloud ${operation}中止"
+    }
+
+    private fun cancelPendingIntent(batchId: String): PendingIntent = PendingIntent.getBroadcast(
+        context,
+        notificationId(batchId),
+        Intent(context, TCloudTransferCancelReceiver::class.java)
+            .setAction(TCloudTransferCancelReceiver.ACTION_CANCEL)
+            .putExtra(TCloudTransferCancelReceiver.EXTRA_BATCH_ID, batchId),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
 
     private fun createChannel() {
         manager.createNotificationChannel(

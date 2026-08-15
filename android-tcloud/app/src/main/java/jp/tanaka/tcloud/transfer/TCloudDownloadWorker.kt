@@ -40,10 +40,13 @@ class TCloudDownloadWorker(
         if (original.direction != TransferDirection.DOWNLOAD) {
             return Result.failure(errorData("転送の種類が一致しません。"))
         }
+        if (original.status == TransferStatus.CANCELLED || original.userCancelRequested) {
+            return Result.success()
+        }
 
-        store.recoverInterrupted(batchId, TransferDirection.DOWNLOAD).forEach(::deleteDestination)
+        store.recoverInterrupted(batchId, TransferDirection.DOWNLOAD).orphanDestinations.forEach(::deleteDestination)
         store.markBatchRunning(batchId)
-        setForeground(notifications.foreground(checkNotNull(store.batch(batchId)), id))
+        setForeground(notifications.foreground(checkNotNull(store.batch(batchId))))
 
         return try {
             val outcomes = runFileTransfers(
@@ -53,7 +56,7 @@ class TCloudDownloadWorker(
                 downloadOne(application, store, notifications, batchId, item)
             }
             if (outcomes.any { it == TransferItemOutcome.RETRY }) {
-                store.markBatchRetryPending(batchId)
+                store.markBatchRetryPending(batchId, waitingForNetwork = !isTransferNetworkAvailable(applicationContext))
                 publishProgress(store, notifications, batchId, force = true)
                 Result.retry()
             } else {
@@ -66,17 +69,32 @@ class TCloudDownloadWorker(
                 .forEach { item ->
                     if (item.resultUri.isNotBlank()) deleteDestination(item.resultUri)
                 }
-            store.cancelBatch(batchId)
+            if (store.isUserCancellationRequested(batchId)) {
+                store.cancelBatch(batchId)
+            } else {
+                store.prepareForSystemStop(batchId, waitingForNetwork = !isTransferNetworkAvailable(applicationContext))
+            }
             throw cancelled
         } catch (error: Throwable) {
-            store.items(batchId)
-                .filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
-                .forEach { item ->
-                    if (item.resultUri.isNotBlank()) deleteDestination(item.resultUri)
-                    store.markItemFailure(batchId, item.index, error.userMessage())
-                }
-            store.finishBatch(batchId)
-            Result.success()
+            if (isTransientTransferFailure(error) && runAttemptCount < MAX_BATCH_RETRIES) {
+                store.items(batchId)
+                    .filter { it.status == TransferStatus.RUNNING }
+                    .forEach { item ->
+                        if (item.resultUri.isNotBlank()) deleteDestination(item.resultUri)
+                        store.deferItem(batchId, item.index)
+                    }
+                store.markBatchRetryPending(batchId, waitingForNetwork = !isTransferNetworkAvailable(applicationContext))
+                Result.retry()
+            } else {
+                store.items(batchId)
+                    .filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
+                    .forEach { item ->
+                        if (item.resultUri.isNotBlank()) deleteDestination(item.resultUri)
+                        store.markItemFailure(batchId, item.index, error.userMessage())
+                    }
+                store.finishBatch(batchId)
+                Result.success()
+            }
         }
     }
 
@@ -210,7 +228,7 @@ class TCloudDownloadWorker(
         if (!force && signature == lastProgressSignature) return@withLock
         lastProgressSignature = signature
         setProgress(progressData(batch))
-        setForeground(notifications.foreground(batch, id))
+        setForeground(notifications.foreground(batch))
     }
 
     private fun deleteDestination(value: String) {
