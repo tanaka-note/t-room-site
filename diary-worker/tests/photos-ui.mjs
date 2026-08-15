@@ -51,8 +51,8 @@ assert.match(script, /parameters\.set\("fileName", state\.photoFileNameQuery\)/)
 assert.doesNotMatch(script, /photoAuthorFilter|state\.photoAuthor|parameters\.set\("author"/);
 assert.match(script, /camera-roll-date/);
 assert.match(script, /camera-roll-title/);
-assert.match(script, /elements\.cameraRollDialog\.close\(\);\s*openEntry\(photo\.entryId\);/s);
-assert.doesNotMatch(script, /openPhotoViewer\(state\.photos/);
+assert.match(script, /function handleCameraRollClick\(event\)[\s\S]*?openPhotoViewer\(state\.photos, index\)/);
+assert.doesNotMatch(script, /elements\.cameraRollDialog\.close\(\);\s*openEntry\(photo\.entryId\);/s);
 assert.match(worker, /diary_photos|uploadEntryPhoto/);
 assert.match(worker, /url\.searchParams\.get\("entryQuery"\)/);
 assert.match(worker, /url\.searchParams\.get\("fileName"\)/);

@@ -2,6 +2,8 @@
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
   const EDITOR_HISTORY_KEY = "troomDiaryEditor";
+  const CAMERA_ROLL_HISTORY_KEY = "troomDiaryCameraRoll";
+  const PHOTO_VIEWER_HISTORY_KEY = "troomDiaryPhotoViewer";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -78,6 +80,13 @@
     photoSearchTimer: null,
     viewerPhotos: [],
     viewerIndex: -1,
+    cameraRollHistoryToken: null,
+    cameraRollAfterClose: null,
+    cameraRollClosePending: false,
+    photoViewerHistoryToken: null,
+    photoViewerAfterClose: null,
+    photoViewerClosePending: false,
+    photoPickerActive: false,
     entryHistoryToken: null,
     entryAfterClose: null,
     entryClosePending: false,
@@ -91,6 +100,8 @@
   };
 
   const DESKTOP_DIALOG_BACKDROP_MATCHER = "(min-width: 861px) and (hover: hover) and (pointer: fine)";
+  const desktopBackdropPointers = new WeakMap();
+  let photoPickerReturnHandler = null;
   const elements = {
     bootView: document.querySelector("#boot-view"),
     loginView: document.querySelector("#login-view"),
@@ -311,7 +322,6 @@
       event.preventDefault();
       closeEntryDialog();
     });
-    elements.entryDialog.addEventListener("click", closeEntryFromDesktopBackdrop);
     elements.deleteEntryButton.addEventListener("click", requestEntryDeletion);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
     elements.permanentlyDeleteEntryButton.addEventListener("click", requestPermanentDeletion);
@@ -345,6 +355,7 @@
     }
     elements.addPhotoButton.addEventListener("click", openPhotoPicker);
     elements.photoInput.addEventListener("change", handlePhotoSelection);
+    elements.photoInput.addEventListener("cancel", finishPhotoPickerInteraction);
     elements.photoDropZone.addEventListener("click", () => {
       if (!state.photoPreparing) openPhotoPicker();
     });
@@ -399,6 +410,14 @@
       if (event.key === "ArrowLeft") movePhotoViewer(-1);
       if (event.key === "ArrowRight") movePhotoViewer(1);
     });
+    elements.photoViewerDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closePhotoViewerDialog();
+    });
+    elements.cameraRollDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeCameraRollDialog();
+    });
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
@@ -407,7 +426,8 @@
       event.preventDefault();
       requestEditorClose();
     });
-    elements.editorDialog.addEventListener("click", closeEditorFromDesktopBackdrop);
+    bindDesktopBackdropClose(elements.entryDialog, closeEntryDialog);
+    bindDesktopBackdropClose(elements.editorDialog, requestEditorClose);
     elements.editorLeaveCancel.addEventListener("click", cancelEditorLeave);
     elements.editorLeaveDiscard.addEventListener("click", discardEditorChanges);
     elements.editorLeaveSaveDraft.addEventListener("click", () => saveEntryAsDraft({ closeAfter: true }));
@@ -1219,6 +1239,26 @@
     }, "", window.location.href);
   }
 
+  function pushCameraRollHistory() {
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    state.cameraRollHistoryToken = token;
+    state.cameraRollClosePending = false;
+    window.history.pushState({
+      ...(window.history.state || {}),
+      [CAMERA_ROLL_HISTORY_KEY]: token
+    }, "", window.location.href);
+  }
+
+  function pushPhotoViewerHistory() {
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    state.photoViewerHistoryToken = token;
+    state.photoViewerClosePending = false;
+    window.history.pushState({
+      ...(window.history.state || {}),
+      [PHOTO_VIEWER_HISTORY_KEY]: token
+    }, "", window.location.href);
+  }
+
   function requestEditorClose() {
     if (!elements.editorDialog.open) return;
     if (state.editorDirty) {
@@ -1285,25 +1325,47 @@
     finishEntryClose();
   }
 
-  function closeEntryFromDesktopBackdrop(event) {
-    closeDialogFromBackdrop(event, elements.entryDialog, closeEntryDialog);
-  }
-
-  function closeEditorFromDesktopBackdrop(event) {
-    closeDialogFromBackdrop(event, elements.editorDialog, requestEditorClose);
-  }
-
   function isDesktopDialogBackdropEnabled() {
     return window.matchMedia(DESKTOP_DIALOG_BACKDROP_MATCHER).matches;
   }
 
-  function closeDialogFromBackdrop(event, dialog, onClose) {
-    if (event.target !== dialog) return;
-    if (!isDesktopDialogBackdropEnabled()) return;
-    onClose();
+  function bindDesktopBackdropClose(dialog, onClose) {
+    dialog.addEventListener("pointerdown", (event) => {
+      if (!isDesktopDialogBackdropPointer(event, dialog)) return;
+      desktopBackdropPointers.set(dialog, event.pointerId);
+    });
+    dialog.addEventListener("pointerup", (event) => {
+      const pointerId = desktopBackdropPointers.get(dialog);
+      desktopBackdropPointers.delete(dialog);
+      if (pointerId !== event.pointerId) return;
+      if (!isDesktopDialogBackdropPointer(event, dialog)) return;
+      onClose();
+    });
+    dialog.addEventListener("pointercancel", () => desktopBackdropPointers.delete(dialog));
+  }
+
+  function isDesktopDialogBackdropPointer(event, dialog) {
+    if (state.photoPickerActive) return false;
+    if (!isDesktopDialogBackdropEnabled()) return false;
+    if (event.target !== dialog) return false;
+    const content = dialog.firstElementChild;
+    if (!content) return true;
+    const rect = content.getBoundingClientRect();
+    return event.clientX < rect.left
+      || event.clientX > rect.right
+      || event.clientY < rect.top
+      || event.clientY > rect.bottom;
   }
 
   function handleHistoryNavigation() {
+    if (elements.photoViewerDialog.open && state.photoViewerHistoryToken) {
+      finishPhotoViewerClose();
+      return;
+    }
+    if (elements.cameraRollDialog.open && state.cameraRollHistoryToken) {
+      finishCameraRollClose();
+      return;
+    }
     if (elements.editorDialog.open && state.editorHistoryToken) {
       if (state.editorClosePending || !state.editorDirty) {
         finishEditorClose();
@@ -1399,6 +1461,7 @@
   }
 
   async function handlePhotoSelection() {
+    finishPhotoPickerInteraction();
     const files = [...(elements.photoInput.files || [])];
     elements.photoInput.value = "";
     const insertionOffset = state.photoInsertionOffset ?? getEditorSelectionOffset("end");
@@ -1408,7 +1471,26 @@
 
   function openPhotoPicker() {
     state.photoInsertionOffset = getEditorSelectionOffset("end");
-    elements.photoInput.click();
+    finishPhotoPickerInteraction();
+    state.photoPickerActive = true;
+    photoPickerReturnHandler = () => {
+      window.requestAnimationFrame(finishPhotoPickerInteraction);
+    };
+    window.addEventListener("focus", photoPickerReturnHandler, { once: true });
+    try {
+      elements.photoInput.click();
+    } catch (error) {
+      finishPhotoPickerInteraction();
+      throw error;
+    }
+  }
+
+  function finishPhotoPickerInteraction() {
+    state.photoPickerActive = false;
+    if (photoPickerReturnHandler) {
+      window.removeEventListener("focus", photoPickerReturnHandler);
+      photoPickerReturnHandler = null;
+    }
   }
 
   function handlePhotoDropKeydown(event) {
@@ -2333,6 +2415,7 @@
 
   async function openCameraRoll() {
     elements.cameraRollDialog.showModal();
+    pushCameraRollHistory();
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
       await Promise.all([loadPhotoMeta(), loadPhotos(true)]);
@@ -2390,7 +2473,7 @@
         button.className = "camera-roll-item";
         button.type = "button";
         button.dataset.photoIndex = String(index);
-        button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の日記を開く`);
+        button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の写真を開く`);
         const image = document.createElement("img");
         image.src = photo.thumbnailUrl;
         image.alt = photo.fileName;
@@ -2416,10 +2499,9 @@
   function handleCameraRollClick(event) {
     const button = event.target.closest("[data-photo-index]");
     if (!button) return;
-    const photo = state.photos[Number(button.dataset.photoIndex)];
-    if (!photo) return;
-    elements.cameraRollDialog.close();
-    openEntry(photo.entryId);
+    const index = Number(button.dataset.photoIndex);
+    if (!state.photos[index]) return;
+    openPhotoViewer(state.photos, index);
   }
 
   function openPhotoViewer(photos, index) {
@@ -2428,6 +2510,61 @@
     state.viewerIndex = index;
     renderPhotoViewer();
     elements.photoViewerDialog.showModal();
+    pushPhotoViewerHistory();
+  }
+
+  function closeCameraRollDialog(afterClose = null) {
+    if (typeof afterClose === "function") state.cameraRollAfterClose = afterClose;
+    if (state.cameraRollClosePending) return;
+    if (!elements.cameraRollDialog.open) {
+      finishCameraRollClose();
+      return;
+    }
+    if (
+      state.cameraRollHistoryToken
+      && window.history.state?.[CAMERA_ROLL_HISTORY_KEY] === state.cameraRollHistoryToken
+    ) {
+      state.cameraRollClosePending = true;
+      window.history.back();
+      return;
+    }
+    finishCameraRollClose();
+  }
+
+  function finishCameraRollClose() {
+    const afterClose = state.cameraRollAfterClose;
+    state.cameraRollAfterClose = null;
+    state.cameraRollHistoryToken = null;
+    state.cameraRollClosePending = false;
+    if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
+    if (afterClose) afterClose();
+  }
+
+  function closePhotoViewerDialog(afterClose = null) {
+    if (typeof afterClose === "function") state.photoViewerAfterClose = afterClose;
+    if (state.photoViewerClosePending) return;
+    if (!elements.photoViewerDialog.open) {
+      finishPhotoViewerClose();
+      return;
+    }
+    if (
+      state.photoViewerHistoryToken
+      && window.history.state?.[PHOTO_VIEWER_HISTORY_KEY] === state.photoViewerHistoryToken
+    ) {
+      state.photoViewerClosePending = true;
+      window.history.back();
+      return;
+    }
+    finishPhotoViewerClose();
+  }
+
+  function finishPhotoViewerClose() {
+    const afterClose = state.photoViewerAfterClose;
+    state.photoViewerAfterClose = null;
+    state.photoViewerHistoryToken = null;
+    state.photoViewerClosePending = false;
+    if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
+    if (afterClose) afterClose();
   }
 
   function renderPhotoViewer() {
@@ -2455,9 +2592,13 @@
   function openViewerEntry() {
     const photo = state.viewerPhotos[state.viewerIndex];
     if (!photo) return;
-    elements.photoViewerDialog.close();
-    if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
-    openEntry(photo.entryId);
+    closePhotoViewerDialog(() => {
+      if (elements.cameraRollDialog.open) {
+        closeCameraRollDialog(() => openEntry(photo.entryId));
+        return;
+      }
+      if (!elements.entryDialog.open || state.activeEntry?.id !== photo.entryId) openEntry(photo.entryId);
+    });
   }
 
   function formatShortDate(value) {
@@ -2932,6 +3073,14 @@
       requestEditorClose();
       return;
     }
+    if (id === "camera-roll-dialog") {
+      closeCameraRollDialog();
+      return;
+    }
+    if (id === "photo-viewer-dialog") {
+      closePhotoViewerDialog();
+      return;
+    }
     dialog.close();
   }
 
@@ -3130,6 +3279,13 @@
     state.photoFileNameQuery = "";
     state.viewerPhotos = [];
     state.viewerIndex = -1;
+    state.cameraRollHistoryToken = null;
+    state.cameraRollAfterClose = null;
+    state.cameraRollClosePending = false;
+    state.photoViewerHistoryToken = null;
+    state.photoViewerAfterClose = null;
+    state.photoViewerClosePending = false;
+    finishPhotoPickerInteraction();
     state.editorDirty = false;
     state.editorSourceEntry = null;
     state.dateDraft = null;
