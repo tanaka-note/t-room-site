@@ -107,31 +107,6 @@ dialog::backdrop { background: rgba(24,31,26,.48); backdrop-filter: blur(3px); }
 .today-button { min-height: auto; padding: 4px 8px; border: 0; border-radius: 6px; color: var(--accent-dark); background: transparent; font-size: 13px; font-weight: 800; }
 .today-button:hover, .today-button:focus-visible { background: var(--soft); }
 
-.date-input-shell { position: relative; display: block; width: 100%; }
-.date-input-shell > input { width: 100%; padding-right: 8px; appearance: none; -webkit-appearance: none; background-image: none; color: #7a8490; caret-color: transparent; cursor: pointer; user-select: none; -webkit-user-select: none; }
-@supports selector(input::-webkit-calendar-picker-indicator) { .date-input-shell > input { padding-right: 52px; } }
-.date-input-shell input::-webkit-calendar-picker-indicator { display: none; -webkit-appearance: none; }
-.date-input-shell input::-webkit-datetime-edit,
-.date-input-shell input::-webkit-datetime-edit-fields-wrapper,
-.date-input-shell input::-webkit-datetime-edit-text,
-.date-input-shell input::-webkit-datetime-edit-year-field,
-.date-input-shell input::-webkit-datetime-edit-month-field,
-.date-input-shell input::-webkit-datetime-edit-day-field { color: inherit; background: transparent; user-select: none; -webkit-user-select: none; }
-.date-picker-button { position: absolute; z-index: 1; top: 50%; right: 5px; display: grid; width: 38px; height: 38px; min-height: 0; translate: 0 -50%; place-items: center; border: 0; border-radius: 8px; padding: 0; background: #fffdf9; color: var(--ink); }
-.date-picker-button:hover, .date-picker-button:focus-visible { background: var(--soft); color: var(--accent-dark); }
-.date-picker-button svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
-
-.month-calendar-dialog { width: min(calc(100% - 32px), 380px); padding: 0; border: 0; border-radius: 16px; color: var(--ink); background: #fffdf9; box-shadow: 0 18px 54px rgba(17,24,39,.24); }
-.month-calendar-dialog::backdrop { background: rgba(17,24,39,.42); backdrop-filter: blur(2px); }
-.month-calendar-sheet { padding: 18px; }
-.month-calendar-head { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; margin-bottom: 14px; }
-.month-calendar-head strong { text-align: center; }
-.month-calendar-nav { display: grid; width: 40px; height: 40px; min-height: 0; place-items: center; border: 0; border-radius: 8px; padding: 0; background: transparent; color: var(--ink); font-size: 24px; }
-.month-calendar-nav:hover, .month-calendar-nav:focus-visible { background: var(--soft); color: var(--accent-dark); }
-.month-calendar-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.month-calendar-option { min-height: 44px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); }
-.month-calendar-option:hover, .month-calendar-option:focus-visible, .month-calendar-option[aria-pressed="true"] { border-color: var(--accent); background: var(--soft); color: var(--accent-dark); }
-
 .date-wheel-dialog { position: fixed; inset: auto 0 0; width: min(520px, 100%); max-width: none; max-height: none; margin: auto auto 0; padding: 0; border: 0; border-radius: 18px 18px 0 0; color: var(--ink); background: #fff; box-shadow: 0 -18px 50px rgba(17,24,39,.18); }
 .date-wheel-dialog::backdrop { background: rgba(17,24,39,.42); backdrop-filter: blur(2px); }
 .date-wheel-sheet { padding: 14px 16px max(20px, env(safe-area-inset-bottom)); }

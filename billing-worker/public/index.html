@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=20260815-firefox-calendar">
-  <script src="./billing.js?v=20260815-firefox-calendar" defer></script>
+  <link rel="stylesheet" href="./billing.css?v=20260815-custom-calendar-1">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=1">
+  <script src="./troom-date-picker.js?v=1" defer></script>
+  <script src="./billing.js?v=20260815-custom-calendar-1" defer></script>
 </head>
 <body>
   <main>
@@ -51,8 +53,8 @@
         </label>
         <label for="month-input">表示月
           <span class="date-input-shell">
-            <input id="month-input" type="month" aria-haspopup="dialog" aria-controls="date-wheel-dialog">
-            <button id="month-picker-button" class="date-picker-button" type="button" data-date-picker-target="month-input" aria-label="表示月をカレンダーから選ぶ" title="カレンダーから選ぶ">
+            <input id="month-input" type="text" inputmode="none" readonly pattern="\d{4}-\d{2}" aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+            <button id="month-picker-button" class="date-picker-button" type="button" data-date-picker-target="month-input" data-date-picker-mode="month" aria-label="表示月をカレンダーから選ぶ" title="カレンダーから選ぶ">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
             </button>
           </span>
@@ -120,8 +122,8 @@
           <button id="today-button" class="today-button" type="button">本日</button>
         </div>
         <span class="date-input-shell">
-          <input id="entry-date" type="date" required aria-haspopup="dialog" aria-controls="date-wheel-dialog">
-          <button id="entry-date-picker-button" class="date-picker-button" type="button" data-date-picker-target="entry-date" aria-label="日付をカレンダーから選ぶ" title="カレンダーから選ぶ">
+          <input id="entry-date" type="text" inputmode="none" readonly required pattern="\d{4}-\d{2}-\d{2}" aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+          <button id="entry-date-picker-button" class="date-picker-button" type="button" data-date-picker-target="entry-date" data-date-picker-mode="date" aria-label="日付をカレンダーから選ぶ" title="カレンダーから選ぶ">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
           </button>
         </span>
@@ -182,17 +184,6 @@
           <div id="date-wheel-day" class="date-wheel-column" role="listbox" aria-label="日"></div>
         </div>
       </div>
-    </section>
-  </dialog>
-
-  <dialog id="month-calendar-dialog" class="month-calendar-dialog" aria-labelledby="month-calendar-year">
-    <section class="month-calendar-sheet">
-      <header class="month-calendar-head">
-        <button id="month-calendar-previous" class="month-calendar-nav" type="button" aria-label="前年">‹</button>
-        <strong id="month-calendar-year"></strong>
-        <button id="month-calendar-next" class="month-calendar-nav" type="button" aria-label="翌年">›</button>
-      </header>
-      <div id="month-calendar-grid" class="month-calendar-grid" aria-label="月を選択"></div>
     </section>
   </dialog>
 

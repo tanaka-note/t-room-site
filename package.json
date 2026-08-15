@@ -2,6 +2,8 @@
   "scripts": {
     "build": "pnpm run search:index",
     "search:index": "pagefind --site . --glob \"{learning/sharoushi/logs,diary/entries}/[0-9]*.html\" --force-language ja",
+    "date-picker:sync": "node tools/sync-troom-date-picker.mjs",
+    "date-picker:test": "node tools/test-troom-date-picker.mjs",
     "site:prepare": "node tools/prepare-static-assets.mjs",
     "site:deploy": "pnpm run site:prepare && wrangler deploy"
   },

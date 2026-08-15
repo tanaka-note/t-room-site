@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="20260815-1">
+  <meta name="troom-app-build" content="20260815-2">
   <meta name="troom-service-worker" content="/diary/service-worker.js">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -17,7 +17,8 @@
   <link rel="manifest" href="/diary/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png">
-  <link rel="stylesheet" href="/diary/diary.css?v=25">
+  <link rel="stylesheet" href="/diary/diary.css?v=26">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=1">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -115,8 +116,8 @@
                 <label for="diary-date-from">
                   <span>開始日</span>
                   <span class="date-input-shell">
-                    <input id="diary-date-from" type="date">
-                    <button class="date-picker-button" type="button" data-date-picker-target="diary-date-from" aria-label="開始日をカレンダーから選ぶ" title="カレンダーから選ぶ">
+                    <input id="diary-date-from" type="text" inputmode="none" readonly pattern="\d{4}-\d{2}-\d{2}" aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+                    <button class="date-picker-button" type="button" data-date-picker-target="diary-date-from" data-date-picker-mode="date" aria-label="開始日をカレンダーから選ぶ" title="カレンダーから選ぶ">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
                     </button>
                   </span>
@@ -125,8 +126,8 @@
                 <label for="diary-date-to">
                   <span>終了日</span>
                   <span class="date-input-shell">
-                    <input id="diary-date-to" type="date">
-                    <button class="date-picker-button" type="button" data-date-picker-target="diary-date-to" aria-label="終了日をカレンダーから選ぶ" title="カレンダーから選ぶ">
+                    <input id="diary-date-to" type="text" inputmode="none" readonly pattern="\d{4}-\d{2}-\d{2}" aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+                    <button class="date-picker-button" type="button" data-date-picker-target="diary-date-to" data-date-picker-mode="date" aria-label="終了日をカレンダーから選ぶ" title="カレンダーから選ぶ">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
                     </button>
                   </span>
@@ -313,8 +314,8 @@
         <button id="today-button" class="today-button" type="button">本日</button>
       </div>
       <div class="date-input-shell">
-        <input id="entry-date" name="entryDate" type="date" required>
-        <button class="date-picker-button" type="button" data-date-picker-target="entry-date" aria-label="日記の日付をカレンダーから選ぶ" title="カレンダーから選ぶ">
+        <input id="entry-date" name="entryDate" type="text" inputmode="none" readonly required pattern="\d{4}-\d{2}-\d{2}" aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+        <button class="date-picker-button" type="button" data-date-picker-target="entry-date" data-date-picker-mode="date" aria-label="日記の日付をカレンダーから選ぶ" title="カレンダーから選ぶ">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
         </button>
       </div>
@@ -469,6 +470,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/assets/pwa-auto-update.js?v=20260812-5" defer></script>
-  <script src="/diary/diary.js?v=51" defer></script>
+  <script src="/diary/troom-date-picker.js?v=1" defer></script>
+  <script src="/diary/diary.js?v=52" defer></script>
 </body>
 </html>

@@ -6,10 +6,7 @@
     dateDraft: null,
     dateWheelTarget: null,
     dateWheelMode: "date",
-    dateWheelTimers: {},
-    nativeDatePickerTarget: null,
-    monthCalendarTarget: null,
-    monthCalendarYear: null
+    dateWheelTimers: {}
   };
   const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
   const integerFormat = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 0 });
@@ -48,7 +45,6 @@
     el["logout-button"].addEventListener("click", logout);
     el["password-toggle"].addEventListener("click", togglePassword);
     bindMonthInput(el["month-input"]);
-    el["month-picker-button"].addEventListener("click", openNativeDatePicker);
     el["month-input"].addEventListener("change", loadSummary);
     el["account-select"].addEventListener("change", changeAccount);
     el["document-filter"].addEventListener("change", renderSummary);
@@ -64,7 +60,6 @@
     el["entry-amount"].addEventListener("compositionend", () => formatYenInput(el["entry-amount"], false));
     el["today-button"].addEventListener("click", setEntryDateToToday);
     bindDateInput(el["entry-date"]);
-    el["entry-date-picker-button"].addEventListener("click", openNativeDatePicker);
     el["date-wheel-cancel"].addEventListener("click", closeDateWheel);
     el["date-wheel-done"].addEventListener("click", applyDateWheel);
     el["date-wheel-dialog"].addEventListener("cancel", (event) => {
@@ -75,11 +70,6 @@
     bindDateWheel(el["date-wheel-year"], "year");
     bindDateWheel(el["date-wheel-month"], "month");
     bindDateWheel(el["date-wheel-day"], "day");
-    el["month-calendar-previous"].addEventListener("click", () => changeMonthCalendarYear(-1));
-    el["month-calendar-next"].addEventListener("click", () => changeMonthCalendarYear(1));
-    el["month-calendar-grid"].addEventListener("click", selectMonthFromCalendar);
-    el["month-calendar-dialog"].addEventListener("click", closeMonthCalendarFromBackdrop);
-    el["month-calendar-dialog"].addEventListener("close", resetMonthCalendar);
     el["entry-form"].addEventListener("submit", saveEntry);
     document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => {
       document.getElementById(button.dataset.closeDialog).close();
@@ -520,88 +510,11 @@
     input.addEventListener("selectstart", preventMonthDirectInput);
   }
 
-  function openNativeDatePicker(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    const target = document.getElementById(event.currentTarget.dataset.datePickerTarget);
-    if (!target) return;
-    if (target.getAttribute("type") === "month" && target.type !== "month") {
-      openMonthCalendar(target);
-      return;
-    }
-    state.nativeDatePickerTarget = target;
-    try {
-      if (typeof target.showPicker === "function") target.showPicker();
-      else target.click();
-    } catch {
-      target.click();
-    }
-    window.setTimeout(() => {
-      if (state.nativeDatePickerTarget === target) state.nativeDatePickerTarget = null;
-    }, 500);
-  }
-
-  function openMonthCalendar(target) {
-    const [year, month] = String(target.value || japanToday().slice(0, 7)).split("-").map(Number);
-    state.monthCalendarTarget = target;
-    state.monthCalendarYear = clamp(year || Number(japanToday().slice(0, 4)), 1900, 2100);
-    renderMonthCalendar(month || 1);
-    if (!el["month-calendar-dialog"].open) el["month-calendar-dialog"].showModal();
-  }
-
-  function renderMonthCalendar(selectedMonth = null) {
-    const year = state.monthCalendarYear;
-    const targetValue = String(state.monthCalendarTarget?.value || "");
-    const [targetYear, targetMonth] = targetValue.split("-").map(Number);
-    el["month-calendar-year"].textContent = `${year}年`;
-    el["month-calendar-grid"].replaceChildren(...range(1, 12).map((month) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "month-calendar-option";
-      button.dataset.month = String(month);
-      button.textContent = `${month}月`;
-      const isSelected = year === targetYear && month === (selectedMonth || targetMonth);
-      button.setAttribute("aria-pressed", String(isSelected));
-      return button;
-    }));
-  }
-
-  function changeMonthCalendarYear(delta) {
-    state.monthCalendarYear = clamp(Number(state.monthCalendarYear || japanToday().slice(0, 4)) + delta, 1900, 2100);
-    renderMonthCalendar();
-  }
-
-  function selectMonthFromCalendar(event) {
-    const option = event.target.closest("[data-month]");
-    if (!option || !state.monthCalendarTarget) return;
-    const nextValue = `${state.monthCalendarYear}-${String(option.dataset.month).padStart(2, "0")}`;
-    const target = state.monthCalendarTarget;
-    if (target.value !== nextValue) {
-      target.value = nextValue;
-      target.dispatchEvent(new Event("input", { bubbles: true }));
-      target.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-    el["month-calendar-dialog"].close();
-  }
-
-  function closeMonthCalendarFromBackdrop(event) {
-    if (event.target === el["month-calendar-dialog"]) el["month-calendar-dialog"].close();
-  }
-
-  function resetMonthCalendar() {
-    state.monthCalendarTarget = null;
-    state.monthCalendarYear = null;
-  }
-
   function preventMonthDirectInput(event) {
     event.preventDefault();
   }
 
   function handleMonthClick(event) {
-    if (state.nativeDatePickerTarget === event.currentTarget) {
-      state.nativeDatePickerTarget = null;
-      return;
-    }
     event.preventDefault();
     event.currentTarget.blur();
     openDateWheel(event.currentTarget, "month");
@@ -626,10 +539,6 @@
   }
 
   function handleDateClick(event) {
-    if (state.nativeDatePickerTarget === event.currentTarget) {
-      state.nativeDatePickerTarget = null;
-      return;
-    }
     event.preventDefault();
     event.currentTarget.blur();
     openDateWheel(event.currentTarget, "date");

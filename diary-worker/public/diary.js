@@ -54,7 +54,6 @@
     editorToolbarOpen: false,
     dateDraft: null,
     dateWheelTarget: null,
-    nativeDatePickerTarget: null,
     dateWheelTimers: {},
     searchTimer: null,
     requestId: 0,
@@ -185,7 +184,6 @@
     dateWheelYear: document.querySelector("#date-wheel-year"),
     dateWheelMonth: document.querySelector("#date-wheel-month"),
     dateWheelDay: document.querySelector("#date-wheel-day"),
-    datePickerButtons: [...document.querySelectorAll("[data-date-picker-target]")],
     cameraRollDialog: document.querySelector("#camera-roll-dialog"),
     photoSearch: document.querySelector("#photo-search"),
     photoMonthFilter: document.querySelector("#photo-month-filter"),
@@ -277,7 +275,6 @@
       bindDateInput(input);
       input.addEventListener("change", handleDateSearchChange);
     }
-    elements.datePickerButtons.forEach((button) => button.addEventListener("click", openNativeDatePicker));
     elements.tagSearchInput.addEventListener("input", () => {
       state.tagQuery = elements.tagSearchInput.value.normalize("NFKC").trim().toLocaleLowerCase("ja-JP");
       renderTags(state.availableTags);
@@ -2247,28 +2244,7 @@
     event.preventDefault();
   }
 
-  function openNativeDatePicker(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    const target = document.getElementById(event.currentTarget.dataset.datePickerTarget);
-    if (!target) return;
-    state.nativeDatePickerTarget = target;
-    try {
-      if (typeof target.showPicker === "function") target.showPicker();
-      else target.click();
-    } catch {
-      target.click();
-    }
-    window.setTimeout(() => {
-      if (state.nativeDatePickerTarget === target) state.nativeDatePickerTarget = null;
-    }, 500);
-  }
-
   function handleDateClick(event) {
-    if (state.nativeDatePickerTarget === event.currentTarget) {
-      state.nativeDatePickerTarget = null;
-      return;
-    }
     event.preventDefault();
     event.currentTarget.blur();
     openDateWheel(event.currentTarget);
