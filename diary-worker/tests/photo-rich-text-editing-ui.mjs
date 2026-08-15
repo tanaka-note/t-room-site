@@ -34,9 +34,9 @@ const secondMarker = "[[写真:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb]]";
 const multiple = context.insertText(
   { content: "前後", contentFormat: null },
   1,
-  `\n${firstMarker}\n${secondMarker}\n`
+  `${firstMarker}${secondMarker}`
 );
-assert.equal(multiple.content, `前\n${firstMarker}\n${secondMarker}\n後`);
+assert.equal(multiple.content, `前${firstMarker}${secondMarker}後`);
 assert.ok(multiple.content.indexOf(firstMarker) < multiple.content.indexOf(secondMarker), "複数写真の順番を維持する");
 
 const formatted = context.insertText({
@@ -57,6 +57,8 @@ assert.doesNotMatch(photoInsertion, /deleteContents\(|restoreEditorSelection\(/,
   "写真挿入では保存済みDOM Rangeの復元・選択内容削除を行わない");
 assert.match(photoInsertion, /restoreEditorSelectionFromOffsets\(\{ start: caret, end: caret \}\)/,
   "写真挿入後はcollapsed caretへ復元する");
+assert.match(photoInsertion, /ids\.map\(photoMarker\)\.join\(""\)/,
+  "連続写真は内部マーカーを連結して改行なしで追加する");
 assert.match(script, /openPhotoPicker\(\) \{\s*state\.photoInsertionOffset = getEditorSelectionOffset\("end"\)/s,
   "ファイル選択前に選択末尾の論理オフセットを保存する");
 assert.match(script, /await waitForEditorCompositionEnd\(\);\s*if \(preparedPhotos\.length\)/s,

@@ -1551,7 +1551,7 @@
     const offset = Math.max(0, Math.min(content.length, Number(requestedOffset) || 0));
     const prefix = offset > 0 && content[offset - 1] !== "\n" ? "\n" : "";
     const suffix = offset < content.length && content[offset] !== "\n" ? "\n" : "";
-    const insertedText = `${prefix}${ids.map(photoMarker).join("\n")}${suffix}`;
+    const insertedText = `${prefix}${ids.map(photoMarker).join("")}${suffix}`;
     if (content.length + insertedText.length > 200000) {
       elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
       return false;
