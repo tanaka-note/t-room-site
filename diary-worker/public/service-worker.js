@@ -5,11 +5,11 @@ const STATIC_ASSETS = [
   "/diary/troom-date-picker.js?v=1",
   "/diary/diary.js?v=56",
   "/diary/manifest.webmanifest",
-  "/diary/icons/icon-192-v5.png",
-  "/diary/icons/icon-512-v5.png",
-  "/diary/icons/icon-maskable-512-v5.png",
-  "/diary/icons/apple-touch-icon-v4.png",
-  "/diary/icons/favicon-64-v5.png"
+  "/diary/icons/icon-192-v4.png?v=5",
+  "/diary/icons/icon-512-v4.png?v=5",
+  "/diary/icons/icon-maskable-512-v4.png?v=5",
+  "/diary/icons/apple-touch-icon-v3.png?v=4",
+  "/diary/icons/favicon-64-v4.png?v=5"
 ];
 const STATIC_PATHS = new Set(STATIC_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
