@@ -1428,20 +1428,136 @@
     elements.detailContent.replaceChildren(fragment);
   }
 
+  const ENTRY_TEXT_LINK_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`[\]{}()<>]+/g;
+  const ENTRY_TEXT_LINK_TRIM_TRAILING = /[.,。、!?！？)\]\}"'”』】〉》）]+$/u;
+
+  function findEntryTextLinks(text) {
+    const source = String(text || "");
+    const links = [];
+    ENTRY_TEXT_LINK_PATTERN.lastIndex = 0;
+    let match;
+    while ((match = ENTRY_TEXT_LINK_PATTERN.exec(source)) !== null) {
+      const matched = match[0];
+      let end = matched.length;
+      while (end > 0 && ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[end - 1])) end -= 1;
+      if (end === 0) continue;
+      const textValue = matched.slice(0, end);
+      const href = textValue.startsWith("www.")
+        ? `https://${textValue}`
+        : textValue;
+      if (!href.startsWith("http://") && !href.startsWith("https://")) continue;
+      try {
+        const parsed = new URL(href);
+        if (!["http:", "https:"].includes(parsed.protocol)) continue;
+      } catch (error) {
+        continue;
+      }
+      const valueStart = match.index + (matched.length - textValue.length);
+      links.push({
+        start: valueStart,
+        end: valueStart + textValue.length,
+        text: textValue,
+        href
+      });
+    }
+    return links;
+  }
+
+  function normalizeEntryTextRuns(textLength, runs) {
+    return (Array.isArray(runs) ? runs : []).map((run) => {
+      const start = Math.max(0, Math.min(Number(run.start) || 0, textLength));
+      const end = Math.max(start, Math.min(Number(run.end) || 0, textLength));
+      return { ...run, start, end };
+    }).filter((run) => run.end > run.start).sort((left, right) => left.start - right.start);
+  }
+
+  function resolveEntryTextMarks(runs, start, end) {
+    const marks = {
+      bold: false,
+      italic: false,
+      underline: false,
+      color: null
+    };
+    for (const run of runs) {
+      if (run.end <= start || run.start >= end) continue;
+      if (run.bold) marks.bold = true;
+      if (run.italic) marks.italic = true;
+      if (run.underline) marks.underline = true;
+      if (run.color) marks.color = run.color;
+    }
+    return hasTextMarks(marks) ? marks : null;
+  }
+
+  function tokenizeEntryTextWithLinks(text, runs = []) {
+    const source = String(text || "");
+    if (!source) return [];
+    const linkTokens = findEntryTextLinks(source);
+    const normalizedRuns = normalizeEntryTextRuns(source.length, runs);
+    const boundaries = new Set([0, source.length]);
+    for (const run of normalizedRuns) {
+      boundaries.add(run.start);
+      boundaries.add(run.end);
+    }
+    for (const link of linkTokens) {
+      boundaries.add(link.start);
+      boundaries.add(link.end);
+    }
+    const points = [...boundaries].sort((left, right) => left - right);
+    const tokens = [];
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const start = points[index];
+      const end = points[index + 1];
+      if (start === end) continue;
+      const link = linkTokens.find((candidate) => candidate.start <= start && candidate.end >= end);
+      tokens.push({
+        kind: link ? "link" : "text",
+        text: source.slice(start, end),
+        start,
+        end,
+        marks: resolveEntryTextMarks(normalizedRuns, start, end),
+        href: link?.href,
+        linkText: link?.text
+      });
+    }
+    return tokens;
+  }
+
   function appendEntryText(fragment, text, contentFormat = null, baseOffset = 0) {
     if (!text) return;
-    const runs = Array.isArray(contentFormat?.runs) ? contentFormat.runs : [];
-    const sliceEnd = baseOffset + text.length;
-    let cursor = baseOffset;
-    for (const run of runs) {
-      const start = Math.max(baseOffset, Number(run.start) || 0);
-      const end = Math.min(sliceEnd, Number(run.end) || 0);
-      if (end <= start || end <= cursor) continue;
-      if (start > cursor) fragment.append(createEntryTextSpan(text.slice(cursor - baseOffset, start - baseOffset)));
-      fragment.append(createEntryTextSpan(text.slice(Math.max(cursor, start) - baseOffset, end - baseOffset), run));
-      cursor = end;
+    const relevantRuns = Array.isArray(contentFormat?.runs) ? contentFormat.runs.flatMap((run) => {
+      const start = Math.max(0, Math.min(text.length, Number(run.start) - baseOffset));
+      const end = Math.max(start, Math.min(text.length, Number(run.end) - baseOffset));
+      return end > start ? [{ ...run, start, end }] : [];
+    }) : [];
+    const tokens = tokenizeEntryTextWithLinks(text, relevantRuns);
+    let activeLink = null;
+    for (const token of tokens) {
+      if (token.kind === "link" && token.href && token.linkText) {
+        if (!activeLink || activeLink.href !== token.href) {
+          if (activeLink) fragment.append(activeLink.element);
+          activeLink = createEntryTextLink(token.href);
+        }
+        activeLink.element.append(createEntryTextSpan(token.text, token.marks));
+        continue;
+      }
+      if (activeLink) {
+        fragment.append(activeLink.element);
+        activeLink = null;
+      }
+      fragment.append(createEntryTextSpan(token.text, token.marks));
     }
-    if (cursor < sliceEnd) fragment.append(createEntryTextSpan(text.slice(cursor - baseOffset)));
+    if (activeLink) {
+      fragment.append(activeLink.element);
+    }
+  }
+
+  function createEntryTextLink(href) {
+    const link = document.createElement("a");
+    link.className = "entry-content-link";
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    return { href, element: link };
   }
 
   function createEntryTextSpan(text, marks = null) {

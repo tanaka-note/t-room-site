@@ -31,6 +31,9 @@ assert.match(script, /createFormattedTextSpan/);
 assert.doesNotMatch(script, /document\.execCommand/);
 assert.doesNotMatch(script, /typingMarker|editorTyping|installTypingFormat/);
 assert.match(script, /function captureEditorSelectionOffsets\(\)/);
+assert.match(script, /function findEntryTextLinks\(/);
+assert.match(script, /function tokenizeEntryTextWithLinks\(/);
+assert.match(script, /function createEntryTextLink\(/);
 assert.match(script, /function applyFormatToSelection\(/);
 assert.match(script, /function restoreEditorSelectionFromOffsets\(/);
 assert.match(script, /function preserveEditorSelectionFromToolbar\(\) \{\s*rememberEditorSelection\(\);\s*captureEditorSelectionOffsets\(\);\s*\}/,
@@ -64,32 +67,87 @@ const modelSource = [
 ].join("\n");
 const context = {};
 vm.runInNewContext(`${modelSource}; globalThis.apply = applyFormatToSelection; globalThis.inspect = getSelectionFormatState;`, context);
+const { apply, inspect } = context;
 
-let runs = context.apply(20, [], 2, 10, "color", "red");
+function findEntryTextLinksForTest(text) {
+  const pattern = /(?:https?:\/\/|www\.)[^\s<>"'`[\]{}()<>]+/g;
+  const trimTrailing = /[.,。、!?！？)\]\}"'”』】〉》）]+$/u;
+  const source = String(text || "");
+  const links = [];
+  pattern.lastIndex = 0;
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    const matched = match[0];
+    let end = matched.length;
+    while (end > 0 && trimTrailing.test(matched[end - 1])) end -= 1;
+    if (end === 0) continue;
+    const textValue = matched.slice(0, end);
+    const href = textValue.startsWith("www.") ? `https://${textValue}` : textValue;
+    if (!href.startsWith("http://") && !href.startsWith("https://")) continue;
+    try {
+      const parsed = new URL(href);
+      if (!["http:", "https:"].includes(parsed.protocol)) continue;
+    } catch (error) {
+      continue;
+    }
+    links.push({ text: textValue, href });
+  }
+  return links;
+}
+
+let runs = apply(20, [], 2, 10, "color", "red");
 assert.deepEqual(JSON.parse(JSON.stringify(runs)), [
   { start: 2, end: 10, bold: false, italic: false, underline: false, color: "red" }
 ]);
-runs = context.apply(20, runs, 2, 10, "color", "blue");
+runs = apply(20, runs, 2, 10, "color", "blue");
 assert.equal(runs[0].color, "blue", "a selected color can be replaced without retyping");
-runs = context.apply(20, runs, 2, 10, "bold");
+runs = apply(20, runs, 2, 10, "bold");
 assert.equal(runs[0].bold, true);
-runs = context.apply(20, runs, 2, 10, "italic");
+runs = apply(20, runs, 2, 10, "italic");
 assert.equal(runs[0].italic, true);
-runs = context.apply(20, runs, 2, 10, "underline");
+runs = apply(20, runs, 2, 10, "underline");
 assert.equal(runs[0].underline, true);
-runs = context.apply(20, runs, 2, 10, "bold");
+runs = apply(20, runs, 2, 10, "bold");
 assert.equal(runs[0].bold, false, "the same command toggles only the selected text");
-runs = context.apply(20, runs, 4, 6, "color", "default");
+runs = apply(20, runs, 4, 6, "color", "default");
 assert.equal(runs.some((run) => run.start === 4 && run.end === 6 && !run.color), true,
   "default color removes only the selected color while preserving its other styles");
-const selectedState = context.inspect(20, runs, 2, 4);
+const selectedState = inspect(20, runs, 2, 4);
 assert.equal(selectedState.color, "blue");
 assert.equal(selectedState.italic, true);
 assert.equal(selectedState.underline, true);
 
+let links = findEntryTextLinksForTest("最新情報: https://example.com");
+assert.equal(links.length, 1);
+assert.equal(links[0].text, "https://example.com");
+assert.equal(links[0].href, "https://example.com");
+
+links = findEntryTextLinksForTest("参照: www.example.org/記事");
+assert.equal(links.length, 1);
+assert.equal(links[0].text, "www.example.org/記事");
+assert.equal(links[0].href, "https://www.example.org/記事");
+
+links = findEntryTextLinksForTest("見てください: https://example.com。");
+assert.equal(links.length, 1);
+assert.equal(links[0].text, "https://example.com");
+
+links = findEntryTextLinksForTest("A https://example.com, B https://a.org)");
+assert.equal(links.length, 2);
+assert.equal(links[0].text, "https://example.com");
+assert.equal(links[1].text, "https://a.org");
+assert.equal(links[1].href, "https://a.org");
+
+links = findEntryTextLinksForTest("javascript:alert(1)");
+assert.equal(links.length, 0);
+
+links = findEntryTextLinksForTest("X https://example.com Y");
+assert.equal(links.length, 1);
+assert.equal(links[0].href, "https://example.com");
+
 assert.match(style, /\.entry-format-toggle \{[^}]*position: fixed;[^}]*left:/s);
 assert.match(style, /\.entry-format-colors \{[^}]*grid-template-columns: repeat\(9,/s);
 assert.match(style, /\.entry-format-commands \{[^}]*grid-template-columns: repeat\(3,/s);
+assert.match(style, /\.entry-content a\.entry-content-link/);
 assert.doesNotMatch(style, /\.format-clear/);
 assert.match(style, /\.diary-text-color-light-blue/);
 assert.match(worker, /validateContentFormat/);

@@ -1187,6 +1187,13 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.entry-content a.entry-content-link {
+  color: #1a6ef2;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  word-break: break-word;
+}
+
 .entry-photo {
   display: block;
   width: min(100%, 980px);
