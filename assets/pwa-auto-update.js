@@ -3,6 +3,8 @@
 
   const BUILD_META = "troom-app-build";
   const WORKER_META = "troom-service-worker";
+  const AUTO_UPDATE_META = "troom-auto-update";
+  const AUTO_UPDATE_SCOPE_DIARY = "diary";
   const CHECK_INTERVAL_MS = 5 * 60 * 1000;
   const RETRY_INTERVAL_MS = 15 * 1000;
   const RELOAD_GUARD_MS = 60 * 1000;
@@ -20,6 +22,14 @@
 
   function isInstalledApp() {
     return window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  }
+
+  function isDiaryAutoUpdateEnabled() {
+    return document.querySelector(`meta[name="${AUTO_UPDATE_META}"]`)?.content?.trim() === AUTO_UPDATE_SCOPE_DIARY;
+  }
+
+  function canRunAutoUpdate() {
+    return isInstalledApp() || isDiaryAutoUpdateEnabled();
   }
 
   function hasUnfinishedInput() {
@@ -67,7 +77,7 @@
 
   function reloadAfterControllerChange() {
     if (!controlledAtStartup) return;
-    if (!isInstalledApp() || !appAllowsReload(currentBuild)) {
+    if (!canRunAutoUpdate() || !appAllowsReload(currentBuild)) {
       controllerReloadPending = true;
       scheduleRetry();
       return;
@@ -108,7 +118,7 @@
   }
 
   async function checkForUpdate({ force = false } = {}) {
-    if (!isInstalledApp() || !currentBuild || !navigator.onLine) return false;
+    if (!canRunAutoUpdate() || !currentBuild || !navigator.onLine) return false;
     const now = Date.now();
     if (!force && !pendingBuild && now - lastCheckedAt < CHECK_INTERVAL_MS) return false;
     if (checkPromise) return checkPromise;

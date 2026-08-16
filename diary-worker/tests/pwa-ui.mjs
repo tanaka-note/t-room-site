@@ -3,13 +3,14 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const [html, script, worker, manifest, serviceWorker, wrangler, icon192, icon512, maskable512, appleIcon] = await Promise.all([
+const [html, script, worker, manifest, serviceWorker, wrangler, pwaAutoUpdate, icon192, icon512, maskable512, appleIcon] = await Promise.all([
   readFile(`${root}/public/index.html`, "utf8"),
   readFile(`${root}/public/diary.js`, "utf8"),
   readFile(`${root}/src/index.js`, "utf8"),
   readFile(`${root}/public/manifest.webmanifest`, "utf8"),
   readFile(`${root}/public/service-worker.js`, "utf8"),
   readFile(`${root}/wrangler.jsonc`, "utf8"),
+  readFile(`${root}/../assets/pwa-auto-update.js`, "utf8"),
   readFile(`${root}/public/icons/icon-192-v4.png`),
   readFile(`${root}/public/icons/icon-512-v4.png`),
   readFile(`${root}/public/icons/icon-maskable-512-v4.png`),
@@ -32,13 +33,14 @@ assert.deepEqual(pngSize(appleIcon), { width: 180, height: 180 });
 assert.match(html, /rel="manifest" href="\/diary\/manifest\.webmanifest"/);
 assert.match(html, /apple-mobile-web-app-capable/);
 assert.match(html, /apple-touch-icon/);
-assert.match(html, /name="troom-app-build" content="20260815-11"/);
+assert.match(html, /name="troom-app-build" content="20260816-01"/);
+assert.match(html, /name="troom-auto-update" content="diary"/);
 assert.match(html, /apple-touch-icon-v3\.png\?v=4/);
-assert.match(html, /pwa-auto-update\.js\?v=20260812-5/);
+assert.match(html, /pwa-auto-update\.js\?v=20260816-01/);
 assert.match(html, /diary\.css\?v=31/);
 assert.match(html, /troom-date-picker\.css\?v=1/);
 assert.match(html, /troom-date-picker\.js\?v=1/);
-assert.match(html, /diary\.js\?v=59/);
+assert.match(html, /diary\.js\?v=60/);
 assert.match(html, /ホーム画面に追加/);
 assert.match(html, /id="login-id"[^>]*type="email"/);
 assert.match(html, /id="remember-login"/);
@@ -47,11 +49,15 @@ assert.match(script, /navigator\.serviceWorker\.register/);
 assert.match(script, /beforeinstallprompt/);
 assert.match(script, /visibilitychange/);
 assert.match(script, /troom:before-auto-update/);
-assert.match(serviceWorker, /troom-diary-shell-v55/);
+assert.match(pwaAutoUpdate, /const AUTO_UPDATE_META = "troom-auto-update"/);
+assert.match(pwaAutoUpdate, /const AUTO_UPDATE_SCOPE_DIARY = "diary"/);
+assert.match(pwaAutoUpdate, /function canRunAutoUpdate\(\)/);
+assert.match(pwaAutoUpdate, /!canRunAutoUpdate\(\) \|\| !currentBuild \|\| !navigator\.onLine/);
+assert.match(serviceWorker, /troom-diary-shell-v56/);
 assert.match(serviceWorker, /diary\.css\?v=31/);
 assert.match(serviceWorker, /troom-date-picker\.css\?v=1/);
 assert.match(serviceWorker, /troom-date-picker\.js\?v=1/);
-assert.match(serviceWorker, /diary\.js\?v=59/);
+assert.match(serviceWorker, /diary\.js\?v=60/);
 assert.match(serviceWorker, /icon-maskable-512-v4\.png\?v=5/);
 assert.match(script, /new PasswordCredential/);
 assert.match(script, /body: \{ loginId, password \}/);
