@@ -57,43 +57,25 @@ function extractFunction(name, nextName) {
   return script.slice(start, end);
 }
 
-const modelSource = [
-  extractFunction("hasTextMarks", "sameTextMarks"),
-  extractFunction("sameTextMarks", "mergeRichTextRuns"),
-  extractFunction("mergeRichTextRuns", "setRichEditorDocument"),
-  extractFunction("getSelectionSegments", "getSelectionFormatState"),
-  extractFunction("getSelectionFormatState", "applyFormatToSelection"),
-  extractFunction("applyFormatToSelection", "updateEditorKeyboardOffset")
-].join("\n");
-const context = {};
-vm.runInNewContext(`${modelSource}; globalThis.apply = applyFormatToSelection; globalThis.inspect = getSelectionFormatState;`, context);
-const { apply, inspect } = context;
+const linkModelStart = script.indexOf("const ENTRY_TEXT_LINK_PATTERN");
+const linkModelEnd = script.indexOf("function normalizeEntryTextRuns", linkModelStart);
+assert.ok(linkModelStart >= 0 && linkModelEnd > linkModelStart, "link model source must exist");
+const linkModelSource = script.slice(linkModelStart, linkModelEnd);
 
-function findEntryTextLinksForTest(text) {
-  const pattern = /(?:https?:\/\/|www\.)[^\s<>"'`[\]{}()<>]+/g;
-  const trimTrailing = /[.,。、!?！？)\]\}"'”』】〉》）]+$/u;
-  const source = String(text || "");
-  const links = [];
-  pattern.lastIndex = 0;
-  let match;
-  while ((match = pattern.exec(source)) !== null) {
-    const matched = match[0];
-    let end = matched.length;
-    while (end > 0 && trimTrailing.test(matched[end - 1])) end -= 1;
-    if (end === 0) continue;
-    const textValue = matched.slice(0, end);
-    const href = textValue.startsWith("www.") ? `https://${textValue}` : textValue;
-    if (!href.startsWith("http://") && !href.startsWith("https://")) continue;
-    try {
-      const parsed = new URL(href);
-      if (!["http:", "https:"].includes(parsed.protocol)) continue;
-    } catch (error) {
-      continue;
-    }
-    links.push({ text: textValue, href });
-  }
-  return links;
-}
+const modelSource = [
+  extractFunction("normalizeEntryTextRuns", "resolveEntryTextMarks"),
+  extractFunction("resolveEntryTextMarks", "tokenizeEntryTextWithLinks"),
+  extractFunction("tokenizeEntryTextWithLinks", "appendEntryText"),
+  extractFunction("hasTextMarks", "sameTextMarks"),
+    extractFunction("sameTextMarks", "mergeRichTextRuns"),
+    extractFunction("mergeRichTextRuns", "setRichEditorDocument"),
+    extractFunction("getSelectionSegments", "getSelectionFormatState"),
+    extractFunction("getSelectionFormatState", "applyFormatToSelection"),
+    extractFunction("applyFormatToSelection", "updateEditorKeyboardOffset")
+  ].join("\n");
+const context = { URL };
+vm.runInNewContext(`${linkModelSource}\n${modelSource}; globalThis.apply = applyFormatToSelection; globalThis.inspect = getSelectionFormatState; globalThis.tokenize = tokenizeEntryTextWithLinks; globalThis.findLinks = findEntryTextLinks;`, context);
+const { apply, inspect, tokenize, findLinks } = context;
 
 let runs = apply(20, [], 2, 10, "color", "red");
 assert.deepEqual(JSON.parse(JSON.stringify(runs)), [
@@ -110,39 +92,91 @@ assert.equal(runs[0].underline, true);
 runs = apply(20, runs, 2, 10, "bold");
 assert.equal(runs[0].bold, false, "the same command toggles only the selected text");
 runs = apply(20, runs, 4, 6, "color", "default");
-assert.equal(runs.some((run) => run.start === 4 && run.end === 6 && !run.color), true,
+  assert.equal(runs.some((run) => run.start === 4 && run.end === 6 && !run.color), true,
   "default color removes only the selected color while preserving its other styles");
 const selectedState = inspect(20, runs, 2, 4);
-assert.equal(selectedState.color, "blue");
-assert.equal(selectedState.italic, true);
-assert.equal(selectedState.underline, true);
+  assert.equal(selectedState.color, "blue");
+  assert.equal(selectedState.italic, true);
+  assert.equal(selectedState.underline, true);
 
-let links = findEntryTextLinksForTest("最新情報: https://example.com");
-assert.equal(links.length, 1);
-assert.equal(links[0].text, "https://example.com");
-assert.equal(links[0].href, "https://example.com");
+let links = findLinks("最新情報: https://example.com");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "https://example.com");
+  assert.equal(links[0].href, "https://example.com");
 
-links = findEntryTextLinksForTest("参照: www.example.org/記事");
-assert.equal(links.length, 1);
-assert.equal(links[0].text, "www.example.org/記事");
-assert.equal(links[0].href, "https://www.example.org/記事");
+links = findLinks("参照: www.example.org/記事");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "www.example.org/記事");
+  assert.equal(links[0].href, "https://www.example.org/記事");
 
-links = findEntryTextLinksForTest("見てください: https://example.com。");
-assert.equal(links.length, 1);
-assert.equal(links[0].text, "https://example.com");
+links = findLinks("見てください: https://example.com。");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "https://example.com");
+  assert.equal(links[0].start, "見てください: ".length);
+  assert.equal(links[0].end, "見てください: https://example.com".length);
 
-links = findEntryTextLinksForTest("A https://example.com, B https://a.org)");
-assert.equal(links.length, 2);
-assert.equal(links[0].text, "https://example.com");
-assert.equal(links[1].text, "https://a.org");
-assert.equal(links[1].href, "https://a.org");
+links = findLinks("A https://example.com, B https://a.org)");
+  assert.equal(links.length, 2);
+  assert.equal(links[0].text, "https://example.com");
+  assert.equal(links[1].text, "https://a.org");
+  assert.equal(links[1].href, "https://a.org");
 
-links = findEntryTextLinksForTest("javascript:alert(1)");
-assert.equal(links.length, 0);
+assert.equal(links[0].start, 2);
+  assert.equal(links[0].end, "A https://example.com".length);
 
-links = findEntryTextLinksForTest("X https://example.com Y");
-assert.equal(links.length, 1);
-assert.equal(links[0].href, "https://example.com");
+links = findLinks("https://example.com,");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "https://example.com");
+  assert.equal(links[0].start, 0);
+  assert.equal(links[0].end, "https://example.com".length);
+
+links = findLinks("(https://example.com)");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "https://example.com");
+  assert.equal(links[0].start, 1);
+  assert.equal(links[0].end, "(https://example.com".length);
+
+  links = findLinks("前https://example.com。後");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].start, "前".length);
+  assert.equal(links[0].end, "前https://example.com".length);
+
+links = findLinks("https://example.com/path?a=1&b=2#top。");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "https://example.com/path?a=1&b=2#top");
+  assert.equal(links[0].start, 0);
+  assert.equal(links[0].end, "https://example.com/path?a=1&b=2#top".length);
+
+links = findLinks("A https://example.com。 B https://example.org, C");
+  assert.equal(links.length, 2);
+  assert.equal(links[0].start, 2);
+  assert.equal(links[0].end, "A https://example.com".length);
+  assert.equal(links[1].start, "A https://example.com。 B ".length);
+  assert.equal(links[1].end, "A https://example.com。 B https://example.org".length);
+
+links = findLinks("javascript:alert(1)");
+  assert.equal(links.length, 0);
+
+links = findLinks("X https://example.com Y");
+  assert.equal(links.length, 1);
+  assert.equal(links[0].href, "https://example.com");
+
+const richTextLinks = tokenize("https://example.com。", [{ start: 0, end: "https://".length, bold: true }, { start: "https://".length, end: "https://example.com".length, color: "blue" }]);
+  const richTextLinkTokens = richTextLinks.filter((token) => token.kind === "link");
+  assert.equal(richTextLinkTokens.length, 2);
+  const richTextLinkText = richTextLinkTokens.map((token) => token.text).join("");
+  assert.equal(richTextLinkText, "https://example.com");
+  assert.equal(richTextLinkTokens.every((token) => token.href === "https://example.com"), true);
+
+  const mixedText = "URL: https://example.com。 [[写真:abc]]";
+  links = findLinks(mixedText);
+  assert.equal(links.length, 1);
+  assert.equal(links[0].text, "https://example.com");
+  assert.equal(links[0].start, "URL: ".length);
+  assert.equal(links[0].end, "URL: https://example.com".length);
+  const mixedTokens = tokenize(mixedText);
+  assert.ok(mixedTokens.some((token) => token.kind === "link"), "URL should remain link within mixed content");
+  assert.ok(mixedTokens.some((token) => token.text.includes("[[写真:abc]]")), "Photo marker should remain renderable");
 
 assert.match(style, /\.entry-format-toggle \{[^}]*position: fixed;[^}]*left:/s);
 assert.match(style, /\.entry-format-colors \{[^}]*grid-template-columns: repeat\(9,/s);

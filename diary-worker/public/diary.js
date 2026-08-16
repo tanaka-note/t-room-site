@@ -1430,18 +1430,32 @@
 
   const ENTRY_TEXT_LINK_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`[\]{}()<>]+/g;
   const ENTRY_TEXT_LINK_TRIM_TRAILING = /[.,。、!?！？)\]\}"'”』】〉》）]+$/u;
+  const ENTRY_TEXT_LINK_TEXT_BODY = /[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]/;
 
   function findEntryTextLinks(text) {
-    const source = String(text || "");
-    const links = [];
-    ENTRY_TEXT_LINK_PATTERN.lastIndex = 0;
-    let match;
-    while ((match = ENTRY_TEXT_LINK_PATTERN.exec(source)) !== null) {
-      const matched = match[0];
-      let end = matched.length;
-      while (end > 0 && ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[end - 1])) end -= 1;
-      if (end === 0) continue;
-      const textValue = matched.slice(0, end);
+      const source = String(text || "");
+      const links = [];
+      ENTRY_TEXT_LINK_PATTERN.lastIndex = 0;
+      let match;
+      while ((match = ENTRY_TEXT_LINK_PATTERN.exec(source)) !== null) {
+        const matched = match[0];
+        let end = matched.length;
+        while (end > 0 && ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[end - 1])) end -= 1;
+        if (end === matched.length) {
+          for (let i = end - 1; i > 0; i -= 1) {
+            if (!ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[i])) {
+              continue;
+            }
+            if (ENTRY_TEXT_LINK_TEXT_BODY.test(matched[i + 1])) {
+              break;
+            }
+            end = i + 1;
+            while (end > 0 && ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[end - 1])) end -= 1;
+            break;
+          }
+        }
+        if (end === 0) continue;
+        const textValue = matched.slice(0, end);
       const href = textValue.startsWith("www.")
         ? `https://${textValue}`
         : textValue;
@@ -1452,7 +1466,7 @@
       } catch (error) {
         continue;
       }
-      const valueStart = match.index + (matched.length - textValue.length);
+      const valueStart = match.index;
       links.push({
         start: valueStart,
         end: valueStart + textValue.length,
