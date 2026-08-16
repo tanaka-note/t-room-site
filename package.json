@@ -6,7 +6,7 @@
     "date-picker:test": "node tools/test-troom-date-picker.mjs",
     "asset-report:test": "node tools/test-asset-report-history.mjs",
     "web-apps:sync": "node tools/sync-web-app-builds.mjs",
-    "web-apps:test": "node tools/test-web-app-contract.mjs && node tools/test-pwa-auto-update.mjs && node tools/test-web-update-blockers.mjs",
+    "web-apps:test": "node tools/test-web-app-contract.mjs && node tools/test-service-worker-app-shell.mjs && node tools/test-pwa-auto-update.mjs && node tools/test-web-update-blockers.mjs",
     "web-apps:verify": "node tools/verify-web-app-builds.mjs",
     "site:prepare": "node tools/prepare-static-assets.mjs",
     "site:deploy": "pnpm run web-apps:sync && pnpm run site:prepare && wrangler deploy"

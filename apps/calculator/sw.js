@@ -1,15 +1,17 @@
-const CACHE_NAME = "t-room-calculator-calculator-14085783760e";
+const CACHE_NAME = "t-room-calculator-calculator-b4aa14d3544f";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=20260703-ac-c-swap1",
-  "./calculator.css?v=20260703-ac-c-swap1",
-  "./calculator.js?v=20260621-remake10",
-  "./manifest.webmanifest",
+  "./index.html?v=calculator-b4aa14d3544f",
   "./icon-192.png",
   "./icon-512.png",
-  "./icon.svg"
+  "./icon.svg",
+  "/apps/calculator/calculator.css?v=calculator-b4aa14d3544f",
+  "/apps/calculator/calculator.js?v=calculator-b4aa14d3544f",
+  "/apps/calculator/manifest.webmanifest?v=calculator-b4aa14d3544f",
+  "/assets/pwa-auto-update.js?v=calculator-b4aa14d3544f"
 ];
+const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -37,7 +39,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  const isCalculatorAsset = url.pathname.includes("/apps/calculator/");
+  const isCalculatorAsset = url.pathname.includes("/apps/calculator/") || APP_ASSET_PATHS.has(url.pathname);
   if (!isCalculatorAsset) return;
 
   const isNavigation = event.request.mode === "navigate"

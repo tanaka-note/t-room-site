@@ -1,13 +1,15 @@
-const CACHE_NAME = "t-room-motivation-switch-motivation-switch-238cc350a7fd";
+const CACHE_NAME = "t-room-motivation-switch-motivation-switch-0f6f7d8d8b00";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=20260704-switch2",
-  "./manifest.webmanifest",
+  "./index.html?v=motivation-switch-0f6f7d8d8b00",
   "./icon.svg",
   "../../assets/site-icon-192.png",
-  "../../assets/apple-touch-icon.png"
+  "../../assets/apple-touch-icon.png",
+  "/apps/motivation-switch/manifest.webmanifest?v=motivation-switch-0f6f7d8d8b00",
+  "/assets/pwa-auto-update.js?v=motivation-switch-0f6f7d8d8b00"
 ];
+const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -37,7 +39,8 @@ self.addEventListener("fetch", (event) => {
 
   const isSwitchAsset = url.pathname.includes("/apps/motivation-switch/")
     || url.pathname.endsWith("/assets/site-icon-192.png")
-    || url.pathname.endsWith("/assets/apple-touch-icon.png");
+    || url.pathname.endsWith("/assets/apple-touch-icon.png")
+    || APP_ASSET_PATHS.has(url.pathname);
   if (!isSwitchAsset) return;
 
   const isNavigation = event.request.mode === "navigate"

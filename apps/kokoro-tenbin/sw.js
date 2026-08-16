@@ -1,13 +1,15 @@
-const CACHE_NAME = "t-room-kokoro-tenbin-kokoro-tenbin-8060fbb451a9";
+const CACHE_NAME = "t-room-kokoro-tenbin-kokoro-tenbin-038767b8ecae";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=20260622-tenbin2",
-  "./kokoro-tenbin.css?v=20260622-tenbin2",
-  "./kokoro-tenbin.js?v=20260622-tenbin2",
-  "./manifest.webmanifest",
-  "./icon.svg"
+  "./index.html?v=kokoro-tenbin-038767b8ecae",
+  "./icon.svg",
+  "/apps/kokoro-tenbin/kokoro-tenbin.css?v=kokoro-tenbin-038767b8ecae",
+  "/apps/kokoro-tenbin/kokoro-tenbin.js?v=kokoro-tenbin-038767b8ecae",
+  "/apps/kokoro-tenbin/manifest.webmanifest?v=kokoro-tenbin-038767b8ecae",
+  "/assets/pwa-auto-update.js?v=kokoro-tenbin-038767b8ecae"
 ];
+const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -35,7 +37,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  const isTenbinAsset = url.pathname.includes("/apps/kokoro-tenbin/");
+  const isTenbinAsset = url.pathname.includes("/apps/kokoro-tenbin/") || APP_ASSET_PATHS.has(url.pathname);
   if (!isTenbinAsset) return;
 
   const isNavigation = event.request.mode === "navigate"

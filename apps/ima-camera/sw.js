@@ -1,15 +1,17 @@
-const CACHE_NAME = "t-room-ima-camera-ima-camera-1a6246b1ce18";
+const CACHE_NAME = "t-room-ima-camera-ima-camera-c683e48c7983";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=20260623-ima9",
-  "./ima-camera.css?v=20260623-ima9",
-  "./ima-camera.js?v=20260623-ima9",
-  "./manifest.webmanifest",
+  "./index.html?v=ima-camera-c683e48c7983",
   "./icon-192.png",
   "./icon-512.png",
-  "./icon.svg"
+  "./icon.svg",
+  "/apps/ima-camera/ima-camera.css?v=ima-camera-c683e48c7983",
+  "/apps/ima-camera/ima-camera.js?v=ima-camera-c683e48c7983",
+  "/apps/ima-camera/manifest.webmanifest?v=ima-camera-c683e48c7983",
+  "/assets/pwa-auto-update.js?v=ima-camera-c683e48c7983"
 ];
+const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -37,7 +39,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  const isCameraAsset = url.pathname.includes("/apps/ima-camera/");
+  const isCameraAsset = url.pathname.includes("/apps/ima-camera/") || APP_ASSET_PATHS.has(url.pathname);
   if (!isCameraAsset) return;
 
   const isNavigation = event.request.mode === "navigate"

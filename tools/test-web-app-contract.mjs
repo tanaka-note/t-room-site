@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  collectEntrypointShellAssets,
   ensureHtmlContract,
   expectedBuild,
   loadWebAppRegistry,
@@ -41,9 +42,21 @@ for (const app of registry.apps) {
   if (app.serviceWorker) {
     await access(resolve(workspace, app.serviceWorker));
     assert(app.serviceWorkerUrl, `${app.id}: Service Worker URLがありません`);
-    if (app.cachePrefix) {
-      const worker = await readFile(resolve(workspace, app.serviceWorker), "utf8");
-      assert(worker.includes(`const CACHE_NAME = "${app.cachePrefix}${build}";`), `${app.id}: Service Worker cacheがbuildと不一致`);
+    const worker = await readFile(resolve(workspace, app.serviceWorker), "utf8");
+    const cacheConstant = app.cacheNameConstant || "CACHE_NAME";
+    assert(worker.includes(`const ${cacheConstant} = "${app.cachePrefix}${build}";`), `${app.id}: Service Worker cacheがbuildと不一致`);
+    if (app.serviceWorkerBuildConstant) {
+      assert(worker.includes(`const ${app.serviceWorkerBuildConstant} = "${build}";`), `${app.id}: Service Worker build定数が不一致`);
+    }
+    if (app.precacheMode === "html") {
+      const shellAssets = await collectEntrypointShellAssets(app, registry.contract, build);
+      assert(shellAssets.length, `${app.id}: HTMLからapp shellを抽出できません`);
+      for (const asset of shellAssets) {
+        assert(worker.includes(JSON.stringify(asset)), `${app.id}: precacheに現在のHTML参照がありません (${asset})`);
+      }
+    } else if (app.precacheMode === "existing") {
+      const versions = [...worker.matchAll(/\.(?:html|css|js|webmanifest)\?v=([^"'`\s)]+)/g)].map((match) => match[1]);
+      assert(versions.every((version) => version === build), `${app.id}: 既存app shell内に旧build URLがあります`);
     }
   }
   if (app.manifest) await access(resolve(workspace, app.manifest));

@@ -1,15 +1,18 @@
-const CACHE_NAME = "troom-diary-shell-diary-63128b56eb48";
+const CACHE_NAME = "troom-diary-shell-diary-f8056d505a3f";
 const STATIC_ASSETS = [
-  "/diary/diary.css?v=31",
-  "/diary/troom-date-picker.css?v=1",
-  "/diary/troom-date-picker.js?v=1",
-  "/diary/diary.js?v=60",
-  "/diary/manifest.webmanifest",
   "/diary/icons/icon-192-v4.png?v=5",
   "/diary/icons/icon-512-v4.png?v=5",
   "/diary/icons/icon-maskable-512-v4.png?v=5",
   "/diary/icons/apple-touch-icon-v3.png?v=4",
-  "/diary/icons/favicon-64-v4.png?v=5"
+  "/diary/icons/favicon-64-v4.png?v=5",
+  "/assets/pwa-auto-update.js?v=diary-f8056d505a3f",
+  "/diary/diary.css?v=diary-f8056d505a3f",
+  "/diary/diary.js?v=diary-f8056d505a3f",
+  "/diary/investment.css?v=diary-f8056d505a3f",
+  "/diary/investment.js?v=diary-f8056d505a3f",
+  "/diary/manifest.webmanifest?v=diary-f8056d505a3f",
+  "/diary/troom-date-picker.css?v=diary-f8056d505a3f",
+  "/diary/troom-date-picker.js?v=diary-f8056d505a3f"
 ];
 const STATIC_PATHS = new Set(STATIC_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
