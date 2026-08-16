@@ -187,6 +187,56 @@ function historyMarketValue(entry) {
   return entry.marketValue + (entry.period === reportData.period ? reportData.operatingExpense.value : 0);
 }
 
+function calculateHistoryScale(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return {
+      yMin: 0,
+      yMax: 1,
+      ySpan: 1,
+      tickInterval: 1,
+      minValue: 0,
+      maxValue: 1,
+      adjustedSpread: 1
+    };
+  }
+
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+  if (!finiteValues.length) {
+    return {
+      yMin: 0,
+      yMax: 1,
+      ySpan: 1,
+      tickInterval: 1,
+      minValue: 0,
+      maxValue: 1,
+      adjustedSpread: 1
+    };
+  }
+
+  const minValue = Math.min(...finiteValues);
+  const maxValue = Math.max(...finiteValues);
+  const actualSpread = Math.max(maxValue - minValue, 0);
+  const minimumSpread = Math.max(maxValue * 0.025, 100000);
+  const adjustedSpread = Math.max(actualSpread, minimumSpread);
+  const padding = adjustedSpread * 0.08;
+  const lowerBound = minValue - padding;
+  const upperBound = maxValue + padding;
+  const tickInterval = niceHistoryStep(adjustedSpread / 4);
+  const yMin = Math.floor(lowerBound / tickInterval) * tickInterval;
+  const yMax = Math.ceil(upperBound / tickInterval) * tickInterval;
+  const ySpan = Math.max(yMax - yMin, tickInterval);
+
+  return {
+    yMin,
+    yMax,
+    ySpan,
+    tickInterval,
+    minValue,
+    maxValue,
+    adjustedSpread
+  };
+}
+
 function renderSummary() {
   const total = totalMarketValue(false);
   const adjustedTotal = totalMarketValue(true);
@@ -389,14 +439,8 @@ function drawHistoryChart() {
   const padding = { top: 24, right: compact ? 12 : 22, bottom: 44, left: compact ? 62 : 82 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  const values = historyView.visibleRecords.flatMap((entry) => [entry.principal, historyMarketValue(entry)]);
-  const minValue = Math.min(...values);
-  const maxValue = Math.max(...values);
-  const rawSpread = Math.max(maxValue - minValue, 100000);
-  const tickInterval = niceHistoryStep(rawSpread / 5);
-  const yMin = Math.max(0, Math.floor((minValue - rawSpread * 0.08) / tickInterval) * tickInterval);
-  const yMax = Math.ceil((maxValue + rawSpread * 0.08) / tickInterval) * tickInterval;
-  const ySpan = Math.max(yMax - yMin, tickInterval);
+  const values = historyView.visibleRecords.map(historyMarketValue);
+  const { yMin, yMax, ySpan, tickInterval } = calculateHistoryScale(values);
   const pointCount = historyView.visibleRecords.length;
   const xFor = (index) => padding.left + (pointCount === 1 ? chartWidth / 2 : (index / (pointCount - 1)) * chartWidth);
   const yFor = (value) => padding.top + ((yMax - value) / ySpan) * chartHeight;
@@ -437,7 +481,7 @@ function drawHistoryChart() {
   context.beginPath();
   historyView.visibleRecords.forEach((entry, index) => {
     const x = xFor(index);
-    const y = yFor(entry.marketValue);
+    const y = yFor(historyMarketValue(entry));
     if (index === 0) context.moveTo(x, y);
     else context.lineTo(x, y);
   });
@@ -447,11 +491,11 @@ function drawHistoryChart() {
   context.fillStyle = gradient;
   context.fill();
 
-  const drawSeries = (key, color, options = {}) => {
+  const drawSeries = (resolver, color, options = {}) => {
     context.beginPath();
     historyView.visibleRecords.forEach((entry, index) => {
       const x = xFor(index);
-      const yValue = key === "marketValue" ? historyMarketValue(entry) : entry[key];
+      const yValue = resolver(entry);
       const y = yFor(yValue);
       if (index === 0) context.moveTo(x, y);
       else context.lineTo(x, y);
@@ -465,20 +509,20 @@ function drawHistoryChart() {
     context.setLineDash([]);
   };
 
-  drawSeries("principal", "#8996a8", { lineWidth: 1.8, dash: [7, 7] });
-  drawSeries("marketValue", "#52e6aa", { lineWidth: compact ? 2.2 : 2.8 });
+  drawSeries((entry) => entry.principal, "#8996a8", { lineWidth: 1.8, dash: [7, 7] });
+  drawSeries((entry) => historyMarketValue(entry), "#52e6aa", { lineWidth: compact ? 2.2 : 2.8 });
 
   if (historyView.selectedIndex >= 0 && historyView.visibleRecords[historyView.selectedIndex]) {
     const entry = historyView.visibleRecords[historyView.selectedIndex];
     const x = xFor(historyView.selectedIndex);
-    const marketValue = historyMarketValue(entry);
+    const displayValue = historyMarketValue(entry);
     context.strokeStyle = "rgba(245, 247, 250, 0.25)";
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(x, padding.top);
     context.lineTo(x, padding.top + chartHeight);
     context.stroke();
-    [[marketValue, "#52e6aa"], [entry.principal, "#8996a8"]].forEach(([value, color]) => {
+    [[displayValue, "#52e6aa"], [entry.principal, "#8996a8"]].forEach(([value, color]) => {
       context.beginPath();
       context.arc(x, yFor(value), 5, 0, Math.PI * 2);
       context.fillStyle = "#07090d";
@@ -505,7 +549,7 @@ function showNearestHistoryPoint(event) {
   const entry = historyView.visibleRecords[index];
   historyView.selectedIndex = index;
   drawHistoryChart();
-  renderHistoryTooltip(entry, xFor(index), yFor(entry.marketValue));
+  renderHistoryTooltip(entry, xFor(index), yFor(historyMarketValue(entry)));
 }
 
 function renderHistoryTooltip(entry, x, y) {
@@ -528,6 +572,14 @@ function renderHistoryTooltip(entry, x, y) {
   tooltip.style.left = `${Math.min(frame.clientWidth - tooltipHalf, Math.max(tooltipHalf, relativeX))}px`;
   tooltip.style.top = `${Math.max(92, canvas.offsetTop + y)}px`;
   tooltip.hidden = false;
+}
+
+function exposeTestHooks() {
+  if (typeof window === "undefined") return;
+  window.__assetReportTestHooks = {
+    calculateHistoryScale,
+    historyMarketValue
+  };
 }
 
 function hideHistoryTooltip(redraw = true) {
@@ -609,6 +661,7 @@ function renderReport() {
   renderComment();
   drawAllocationChart(total);
   initializeHistoryChart();
+  exposeTestHooks();
 }
 
 let resizeTimer;
@@ -620,4 +673,7 @@ window.addEventListener("resize", () => {
   }, 120);
 });
 
-renderReport();
+exposeTestHooks();
+if (!window.__assetReportDisableAutoRender) {
+  renderReport();
+}
