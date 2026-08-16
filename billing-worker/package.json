@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "deploy": "node ../tools/sync-web-app-builds.mjs && wrangler deploy",
     "check": "node --check src/index.js && node --check src/finance.js && node --check src/login-limit.js && node --check src/auth-security.js && node --check public/billing.js",
     "test": "node --test test/*.test.js"
   },

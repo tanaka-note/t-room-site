@@ -75,8 +75,8 @@ assert.match(share, /function renderSharedAudioPlayer\(stage, file, url\)/);
 assert.match(shareCss, /\.preview-audio-playback-mode\.is-active/);
 assert.match(share, /seek\.addEventListener\("pointerdown"/);
 assert.match(share, /relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX, event\.clientX/);
-assert.match(mainHtml, /media-client\.js\?v=20260811-12/);
-assert.match(shareHtml, /media-client\.js\?v=20260811-12/);
+assert.match(mainHtml, /media-client\.js\?v=cloud-[a-f0-9]{12}/);
+assert.match(shareHtml, /media-client\.js\?v=cloud-[a-f0-9]{12}/);
 assert.match(mediaClient, /function playbackMimeType\(file\)/);
 assert.match(mediaClient, /mp4: "video\/mp4"/);
 

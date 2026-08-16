@@ -1,4 +1,4 @@
-const CACHE_NAME = "t-room-omikuji-v2";
+const CACHE_NAME = "t-room-omikuji-omikuji-665b2772750f";
 const APP_ASSETS = [
   "./",
   "./index.html",

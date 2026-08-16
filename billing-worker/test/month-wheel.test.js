@@ -14,8 +14,8 @@ test("invoice month field keeps the bottom wheel and uses the shared T-ROOM cale
 
   assert.match(html, /id="month-input" type="text"[^>]*readonly[^>]*pattern="\\d\{4\}-\\d\{2\}"[^>]*aria-controls="date-wheel-dialog"/);
   assert.match(html, /id="month-picker-button"[^>]*data-date-picker-target="month-input"[^>]*data-date-picker-mode="month"/);
-  assert.match(html, /troom-date-picker\.css\?v=1/);
-  assert.match(html, /troom-date-picker\.js\?v=1/);
+  assert.match(html, /troom-date-picker\.css\?v=billing-[a-f0-9]{12}/);
+  assert.match(html, /troom-date-picker\.js\?v=billing-[a-f0-9]{12}/);
   assert.match(html, /id="date-wheel-day-group"/);
   assert.match(script, /bindMonthInput\(el\["month-input"\]\)/);
   assert.match(script, /openDateWheel\(event\.currentTarget, "month"\)/);

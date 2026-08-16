@@ -1,6 +1,7 @@
-import { cp, mkdir, readdir, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureHtmlContract, expectedSiteBuild, loadWebAppRegistry } from "./web-app-registry.mjs";
 
 const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = resolve(workspace, ".site-assets");
@@ -50,6 +51,16 @@ const rootEntries = await readdir(workspace, { withFileTypes: true });
 for (const entry of rootEntries) {
   if (!entry.isFile() || !publicRootExtensions.has(extname(entry.name).toLowerCase())) continue;
   await cp(join(workspace, entry.name), join(output, entry.name));
+}
+
+const webAppRegistry = await loadWebAppRegistry();
+const rootSiteApp = webAppRegistry.apps.find((app) => app.id === "site");
+if (!rootSiteApp) throw new Error("web-apps.jsonにroot site定義がありません。");
+const rootSiteBuild = expectedSiteBuild();
+for (const entrypoint of rootSiteApp.entrypoints) {
+  const target = resolve(output, entrypoint);
+  const html = await readFile(target, "utf8");
+  await writeFile(target, ensureHtmlContract(html, rootSiteApp, webAppRegistry.contract, rootSiteBuild));
 }
 
 const publishedFiles = [];

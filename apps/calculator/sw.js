@@ -1,4 +1,4 @@
-const CACHE_NAME = "t-room-calculator-v17";
+const CACHE_NAME = "t-room-calculator-calculator-14085783760e";
 const APP_ASSETS = [
   "./",
   "./index.html",

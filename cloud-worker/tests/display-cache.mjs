@@ -21,7 +21,7 @@ assert.match(client, /TCloudDisplayCache\?\.getThumbnail/);
 assert.match(client, /TCloudDisplayCache\?\.putThumbnail/);
 assert.match(client, /state\.session\?\.role === "subadmin" && state\.folderId && !state\.crypto\.folderKeys\.has/);
 assert.match(client, /renderedCachedItems && \[401, 403, 404, 423\]/);
-assert.match(html, /display-cache\.js\?v=20260813-1/);
+assert.match(html, /display-cache\.js\?v=cloud-[a-f0-9]{12}/);
 assert.match(worker, /\["\/display-cache\.js", "\/display-cache-20260813-1\.js"\]/);
 assert.match(worker, /if \(Number\(body\.cryptoVersion\) !== 1\).*暗号化されたファイルだけ保存できます/);
 assert.match(worker, /display_media_kind !== "image"/);

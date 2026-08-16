@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local --port 8792",
+    "deploy": "node ../tools/sync-web-app-builds.mjs && wrangler deploy",
     "check": "node --check src/index.js && node --check public/crypto-vault.js && node --check public/file-safety.js && node --check public/media-range.js && node --check public/offline-store.js && node --check public/display-cache.js && node --check public/display-cache-20260813-1.js && node --check public/media-client.js && node --check public/media-worker.js && node --check public/cloud.js && node --check public/share.js",
     "test:crypto": "node tests/crypto-roundtrip.mjs",
     "test:media": "node tests/media-range.mjs && node tests/media-download.mjs && node tests/file-safety.mjs && node tests/media-duration.mjs && node tests/player-stability.mjs && node tests/desktop-seek.mjs && node tests/video-tap-controls.mjs && node tests/video-background-playback.mjs",

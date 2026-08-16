@@ -4,7 +4,7 @@
   const BUILD_META = "troom-app-build";
   const WORKER_META = "troom-service-worker";
   const AUTO_UPDATE_META = "troom-auto-update";
-  const AUTO_UPDATE_SCOPE_DIARY = "diary";
+  const AUTO_UPDATE_ENABLED = "enabled";
   const CHECK_INTERVAL_MS = 5 * 60 * 1000;
   const RETRY_INTERVAL_MS = 15 * 1000;
   const RELOAD_GUARD_MS = 60 * 1000;
@@ -24,19 +24,22 @@
     return window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
   }
 
-  function isDiaryAutoUpdateEnabled() {
-    return document.querySelector(`meta[name="${AUTO_UPDATE_META}"]`)?.content?.trim() === AUTO_UPDATE_SCOPE_DIARY;
+  function isAutoUpdateEnabled() {
+    return document.querySelector(`meta[name="${AUTO_UPDATE_META}"]`)?.content?.trim() === AUTO_UPDATE_ENABLED;
   }
 
   function canRunAutoUpdate() {
-    return isInstalledApp() || isDiaryAutoUpdateEnabled();
+    // installed判定は、共通契約導入前にインストール済みのPWAを安全に移行するために残す。
+    return isAutoUpdateEnabled() || isInstalledApp();
   }
 
   function hasUnfinishedInput() {
+    if (document.querySelector('[data-troom-update-block="true"], form[data-troom-dirty="true"]')) return true;
     if ([...document.querySelectorAll('input[type="file"]')].some((input) => input.files?.length)) return true;
     if ([...document.querySelectorAll('input[type="password"]')].some((input) => Boolean(input.value))) return true;
     if ([...document.querySelectorAll("textarea")].some((input) => input.value !== input.defaultValue)) return true;
-    return Boolean(document.querySelector('[contenteditable="true"]:focus'));
+    if (document.querySelector('[contenteditable="true"]:focus')) return true;
+    return Boolean(document.activeElement?.matches?.('[data-troom-protect-unsaved="true"]'));
   }
 
   function appAllowsReload(publishedBuild) {
@@ -160,9 +163,13 @@
   window.addEventListener("pageshow", () => void checkForUpdate());
   window.addEventListener("focus", () => void checkForUpdate());
   window.addEventListener("online", () => void checkForUpdate({ force: true }));
+  document.addEventListener("troom:auto-update-ready", () => {
+    if (pendingBuild) void checkForUpdate({ force: true });
+  });
   navigator.serviceWorker?.addEventListener("controllerchange", reloadAfterControllerChange);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) void checkForUpdate();
   });
   window.setTimeout(() => void checkForUpdate({ force: true }), 0);
+  window.setInterval(() => void checkForUpdate(), CHECK_INTERVAL_MS);
 })();

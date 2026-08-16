@@ -1,4 +1,4 @@
-const CACHE_NAME = "t-room-motivation-switch-v3";
+const CACHE_NAME = "t-room-motivation-switch-motivation-switch-238cc350a7fd";
 const APP_ASSETS = [
   "./",
   "./index.html",

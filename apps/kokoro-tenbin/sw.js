@@ -1,4 +1,4 @@
-const CACHE_NAME = "t-room-kokoro-tenbin-v3";
+const CACHE_NAME = "t-room-kokoro-tenbin-kokoro-tenbin-8060fbb451a9";
 const APP_ASSETS = [
   "./",
   "./index.html",

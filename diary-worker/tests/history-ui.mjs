@@ -8,7 +8,7 @@ const [html, script] = await Promise.all([
   readFile(`${root}/public/diary.js`, "utf8")
 ]);
 
-assert.match(html, /diary\.js\?v=58/);
+assert.match(html, /diary\.js\?v=diary-[a-f0-9]{12}/);
 assert.match(script, /const ENTRY_HISTORY_KEY = "troomDiaryEntry"/);
 assert.match(script, /elements\.entryDialog\.showModal\(\);\s*pushEntryHistory\(\);/);
 assert.match(script, /window\.history\.pushState\(/);

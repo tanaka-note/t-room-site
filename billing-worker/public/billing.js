@@ -42,6 +42,9 @@
   }
 
   function bindEvents() {
+    document.addEventListener("troom:before-auto-update", (event) => {
+      if (document.querySelector("dialog[open]")) event.preventDefault();
+    });
     el["login-form"].addEventListener("submit", login);
     el["logout-button"].addEventListener("click", logout);
     el["password-toggle"].addEventListener("click", togglePassword);

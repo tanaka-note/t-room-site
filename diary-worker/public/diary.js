@@ -257,7 +257,9 @@
 
   function bindEvents() {
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (state.editorDirty || state.photoPreparing || document.querySelector("dialog[open]")) event.preventDefault();
+      if (state.editorDirty || state.editorComposing || state.photoPreparing || state.photoPickerActive || document.querySelector("dialog[open]")) {
+        event.preventDefault();
+      }
     });
     window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
     document.addEventListener("click", rememberDiaryReturnViewFromNavigation, true);

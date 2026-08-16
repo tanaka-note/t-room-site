@@ -54,7 +54,7 @@ assert.match(html, /value="3221225472">3GB<\/option>/);
 assert.match(html, /id="offline-speed"/);
 assert.match(html, /id="offline-eta"/);
 assert.match(html, /id="offline-wake-lock-status"/);
-assert.match(html, /offline-store\.js\?v=20260811-2/);
+assert.match(html, /offline-store\.js\?v=cloud-[a-f0-9]{12}/);
 assert.match(css, /\.selection-actions[^}]*max-height:[^}]*overflow-y: auto/);
 assert.match(css, /\.offline-button[^}]*background: #e7f2f0/);
 

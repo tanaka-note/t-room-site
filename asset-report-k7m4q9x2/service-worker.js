@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "asset-report-shell-v6";
+const CACHE_NAME = "asset-report-shell-asset-report-991804740410";
 const APP_PATH = "/asset-report-k7m4q9x2/";
 const APP_SHELL = [
   APP_PATH,

@@ -1,4 +1,4 @@
-const CACHE_NAME = "troom-diary-shell-v56";
+const CACHE_NAME = "troom-diary-shell-diary-63128b56eb48";
 const STATIC_ASSETS = [
   "/diary/diary.css?v=31",
   "/diary/troom-date-picker.css?v=1",
