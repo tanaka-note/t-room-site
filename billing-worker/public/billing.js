@@ -36,6 +36,7 @@
     try {
       const session = await api("/session");
       if (session.authenticated) await enterApp(session);
+      else showLogin();
     } catch {
       showLogin();
     }
@@ -127,8 +128,6 @@
 
   async function enterApp(session) {
     state.session = session;
-    el["login-view"].hidden = true;
-    el["app-view"].hidden = false;
     el["account-label"].textContent = `${session.accountName}${session.role === "owner" ? "（管理者）" : ""}`;
     document.body.classList.toggle("is-owner", session.role === "owner");
     document.querySelectorAll(".owner-only").forEach((node) => { node.hidden = session.role !== "owner"; });
@@ -137,9 +136,13 @@
     fillAccountSelects();
     applyPreferredDocumentType();
     await loadSummary();
+    el["boot-view"].hidden = true;
+    el["login-view"].hidden = true;
+    el["app-view"].hidden = false;
   }
 
   function showLogin() {
+    el["boot-view"].hidden = true;
     el["app-view"].hidden = true;
     el["login-view"].hidden = false;
     (el["login-id"].value ? el["login-password"] : el["login-id"]).focus();

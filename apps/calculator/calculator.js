@@ -45,7 +45,6 @@
 
   render();
   updateModeControls();
-  registerServiceWorker();
 
   keypad.addEventListener("click", (event) => {
     const button = event.target.closest("button");
@@ -711,13 +710,4 @@
     return false;
   }
 
-  function registerServiceWorker() {
-    if (!("serviceWorker" in navigator)) return;
-
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {
-        // PWA support is a convenience feature; calculation must remain available.
-      });
-    });
-  }
 })();

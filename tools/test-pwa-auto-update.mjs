@@ -164,6 +164,33 @@ function createRuntime({
 }
 
 {
+  const sameBuild = createRuntime({
+    workerUrl: "/app/sw.js?v=current-build",
+    currentBuild: "current-build",
+    publishedBuild: "current-build"
+  });
+  sameBuild.window.dispatchEvent(new TestEvent("pageshow"));
+  sameBuild.window.dispatchEvent(new TestEvent("focus"));
+  await sameBuild.runTimer();
+  assert.equal(sameBuild.fetchCount, 1, "cold startの更新確認を1回にまとめる");
+  assert.equal(sameBuild.registrations.length, 1, "同一scopeのService Worker登録を1回にまとめる");
+  assert.equal(sameBuild.registrations[0].url, "/app/sw.js?v=current-build", "契約済みbuild URLだけを登録する");
+  assert.equal(sameBuild.registrations[0].updates, 1, "同一buildの更新確認を重複実行しない");
+  assert.deepEqual(sameBuild.replacements, [], "同一buildではreloadしない");
+  sameBuild.navigator.serviceWorker.dispatchEvent(new TestEvent("controllerchange"));
+  assert.deepEqual(sameBuild.replacements, [], "controllerchangeだけではreloadしない");
+}
+
+{
+  const oneUpdate = createRuntime({ workerUrl: "/app/sw.js?v=old-build" });
+  await oneUpdate.runTimer();
+  oneUpdate.navigator.serviceWorker.dispatchEvent(new TestEvent("controllerchange"));
+  oneUpdate.navigator.serviceWorker.dispatchEvent(new TestEvent("controllerchange"));
+  assert.equal(oneUpdate.replacements.length, 1, "新buildへの移行も1回だけ行う");
+  assert.match(oneUpdate.replacements[0], /app-update=new-build/);
+}
+
+{
   const editing = createRuntime({ blockReload: true });
   await editing.runTimer();
   assert.equal(editing.replacements.length, 0, "未保存中はreloadしない");
@@ -189,4 +216,4 @@ function createRuntime({
   assert.equal(guarded.replacements.length, 0, "同じbuildの連続reloadを防ぐ");
 }
 
-process.stdout.write("共通Web自動更新の通常ブラウザ・PWA・TWA・延期・オフライン・reload guardテストに成功しました。\n");
+process.stdout.write("共通Web自動更新のcold start・同一build・通常ブラウザ・PWA・TWA・延期・オフライン・reload guardテストに成功しました。\n");

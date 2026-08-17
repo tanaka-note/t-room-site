@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-c64410ae1af7";
+const APP_BUILD_ID = "cloud-242136956074";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -8,7 +8,6 @@ const INITIAL_ITEM_PAGE_SIZE = 32;
 const BACKGROUND_ITEM_PAGE_SIZE = 64;
 const ITEM_RENDER_BATCH_SIZE = 192;
 const ENCRYPTED_THUMBNAIL_CONCURRENCY = 4;
-const PWA_WORKER_URL = "/cloud/media-worker.js";
 const APP_UPDATE_EXPECTED_BUILD_KEY = "tcloud-app-update-expected-build";
 const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
 const SORT_PREFERENCES_KEY = "tcloud-folder-sort-preferences-v1";
@@ -154,7 +153,6 @@ async function initialize() {
   TCloudOffline?.cleanupExpired?.().catch(() => {});
   window.setInterval(() => TCloudOffline?.cleanupExpired?.().catch(() => {}), 15 * 60 * 1000);
   await restoreInstalledAppPortrait();
-  registerPwaWorker();
   updateInstallButtons();
   await restoreRememberedLogin();
   try {
@@ -464,7 +462,11 @@ function resetUpdateAppButton(button = $("#update-app-button-top")) {
 
 async function ensurePwaWorkerRegistration() {
   if (!("serviceWorker" in navigator)) throw new Error("この端末はアプリ更新に対応していません");
-  return navigator.serviceWorker.register(PWA_WORKER_URL, { scope: "/cloud/", updateViaCache: "none" });
+  const commonRegistration = await window.TRoomPwaUpdater?.ensureServiceWorkerRegistration?.();
+  if (commonRegistration) return commonRegistration;
+  const existingRegistration = await navigator.serviceWorker.getRegistration("/cloud/");
+  if (existingRegistration) return existingRegistration;
+  throw new Error("更新用プログラムを準備できませんでした");
 }
 
 async function refreshPwaWorker(registration) {
@@ -534,16 +536,6 @@ async function installApp() {
       ? "ブラウザ右上のメニューを開き、「ホーム画面に追加」または「アプリをインストール」を選んでください。"
       : "ブラウザのメニューまたはアドレスバーにある「アプリをインストール」「ホーム画面に追加」を選んでください。";
   $("#install-guide-dialog").showModal();
-}
-
-async function registerPwaWorker() {
-  if (!("serviceWorker" in navigator)) return;
-  try {
-    const registration = await ensurePwaWorkerRegistration();
-    await registration.update();
-  } catch (error) {
-    console.warn("T-Cloud app worker registration failed", error);
-  }
 }
 
 function syncLoginAutocomplete() {
@@ -943,9 +935,6 @@ async function enterApp(session, password = "", accountKey = null) {
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
   state.credentialSalt = String(session.credentialSalt || "");
   applyPlaybackCacheLimit();
-  $("#boot-view").hidden = true;
-  $("#login-view").hidden = true;
-  $("#app-view").hidden = false;
   $("#account-name").textContent = session.accountName;
   syncAccountIdentity();
   $("#edit-file-button").hidden = !session.canEditFiles && !session.canRenameUnlockedItems;
@@ -968,6 +957,9 @@ async function enterApp(session, password = "", accountKey = null) {
     await loadItems();
     setNotice("前回開いていたフォルダの再確認が必要なため、フォルダ一覧を表示しました。", true);
   }
+  $("#boot-view").hidden = true;
+  $("#login-view").hidden = true;
+  $("#app-view").hidden = false;
   await restoreNavigationPosition(restoredNavigation);
   if (session.role === "admin") scheduleUsageLoad();
   scheduleLegacyFolderMigration();

@@ -10,14 +10,12 @@
   const RELOAD_GUARD_MS = 60 * 1000;
   const currentBuild = document.querySelector(`meta[name="${BUILD_META}"]`)?.content?.trim() || "";
   const workerUrl = document.querySelector(`meta[name="${WORKER_META}"]`)?.content?.trim() || "";
-  const controlledAtStartup = Boolean(navigator.serviceWorker?.controller);
   const reloadGuardKey = `troom-pwa-update-attempt:${location.pathname}`;
-  const controllerGuardKey = `troom-pwa-controller-reload:${location.pathname}`;
 
   let lastCheckedAt = 0;
   let checkPromise = null;
   let pendingBuild = "";
-  let controllerReloadPending = false;
+  let workerRegistrationPromise = null;
   let retryTimer = 0;
 
   function isInstalledApp() {
@@ -56,8 +54,7 @@
     retryTimer = window.setTimeout(() => {
       retryTimer = 0;
       if (document.hidden) return;
-      if (controllerReloadPending) reloadAfterControllerChange();
-      else if (pendingBuild) void checkForUpdate({ force: true });
+      if (pendingBuild) void checkForUpdate({ force: true });
     }, RETRY_INTERVAL_MS);
   }
 
@@ -78,31 +75,26 @@
     }
   }
 
-  function reloadAfterControllerChange() {
-    if (!controlledAtStartup) return;
-    if (!canRunAutoUpdate() || !appAllowsReload(currentBuild)) {
-      controllerReloadPending = true;
-      scheduleRetry();
-      return;
-    }
-    controllerReloadPending = false;
-    try {
-      const lastReload = Number(sessionStorage.getItem(controllerGuardKey) || 0);
-      if (Date.now() - lastReload < RELOAD_GUARD_MS) return;
-      sessionStorage.setItem(controllerGuardKey, String(Date.now()));
-    } catch {}
-    location.reload();
+  async function ensureServiceWorkerRegistration() {
+    if (!("serviceWorker" in navigator) || !workerUrl) return null;
+    if (workerRegistrationPromise) return workerRegistrationPromise;
+    const resolvedWorkerUrl = new URL(workerUrl, location.href);
+    const workerScope = resolvedWorkerUrl.pathname.replace(/[^/]*$/, "");
+    workerRegistrationPromise = navigator.serviceWorker.register(workerUrl, {
+      scope: workerScope,
+      updateViaCache: "none"
+    }).catch((error) => {
+      workerRegistrationPromise = null;
+      throw error;
+    });
+    return workerRegistrationPromise;
   }
 
   async function refreshServiceWorker() {
-    if (!("serviceWorker" in navigator) || !workerUrl) return;
-    const resolvedWorkerUrl = new URL(workerUrl, location.href);
-    const workerScope = resolvedWorkerUrl.pathname.replace(/[^/]*$/, "");
-    const registration = await navigator.serviceWorker.register(workerUrl, {
-      scope: workerScope,
-      updateViaCache: "none"
-    });
+    const registration = await ensureServiceWorkerRegistration();
+    if (!registration) return null;
     await registration.update();
+    return registration;
   }
 
   async function fetchPublishedBuild() {
@@ -166,10 +158,16 @@
   document.addEventListener("troom:auto-update-ready", () => {
     if (pendingBuild) void checkForUpdate({ force: true });
   });
-  navigator.serviceWorker?.addEventListener("controllerchange", reloadAfterControllerChange);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) void checkForUpdate();
   });
-  window.setTimeout(() => void checkForUpdate({ force: true }), 0);
+  window.TRoomPwaUpdater = Object.freeze({
+    currentBuild,
+    workerUrl,
+    ensureServiceWorkerRegistration,
+    refreshServiceWorker,
+    checkForUpdate
+  });
+  window.setTimeout(() => void checkForUpdate(), 0);
   window.setInterval(() => void checkForUpdate(), CHECK_INTERVAL_MS);
 })();

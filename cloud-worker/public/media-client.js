@@ -72,7 +72,9 @@
 
   async function initializeWorker() {
     if (!("serviceWorker" in navigator)) throw new Error("このブラウザは大容量再生に対応していません。");
-    const registration = await navigator.serviceWorker.register("/cloud/media-worker.js", { scope: "/cloud/", updateViaCache: "none" });
+    const registration = await global.TRoomPwaUpdater?.ensureServiceWorkerRegistration?.()
+      || await navigator.serviceWorker.getRegistration("/cloud/")
+      || await navigator.serviceWorker.ready;
     await navigator.serviceWorker.ready;
     if (!navigator.serviceWorker.controller) {
       await new Promise((resolve, reject) => {

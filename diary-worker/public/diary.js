@@ -240,7 +240,6 @@
     applyRouteState();
     bindEvents();
     restoreRememberedLogin();
-    registerPwa();
     updateInstallButtonVisibility();
     try {
       const session = await api("/session");
@@ -492,16 +491,6 @@
     state.lastHeaderScrollY = currentY;
   }
 
-  function registerPwa() {
-    if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register(`${BASE_PATH}/service-worker.js`, {
-      scope: `${BASE_PATH}/`,
-      updateViaCache: "none"
-    }).then((registration) => registration.update()).catch(() => {
-      // Safariの古い版など、Service Worker非対応環境でも日記本体は利用できます。
-    });
-  }
-
   function isStandaloneApp() {
     return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
   }
@@ -681,22 +670,21 @@
     const returnView = takeDiaryReturnView(state.activeHouseholdId);
     if (returnView) applyDiaryReturnView(returnView);
     state.lastSessionRefreshAt = Date.now();
-    elements.bootView.hidden = true;
-    elements.loginView.hidden = true;
-    elements.appView.hidden = false;
-    resetHeaderVisibilityTracking();
     elements.roleLabel.textContent = `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`;
     elements.newEntryButton.hidden = !state.canManageEntries;
     elements.draftButton.hidden = !state.canManageEntries;
     elements.trashButton.hidden = !state.canViewTrash;
     elements.investmentSection.hidden = !state.canViewInvestment || state.tagDirectory;
     updateFilterControls();
-    await loadHouseholdSwitcher();
-    await Promise.all([loadMeta(), loadEntries(true)]);
+    await Promise.all([loadHouseholdSwitcher(), loadMeta(), loadEntries(true)]);
     if (returnView) {
       await loadEntriesForDiaryReturn(returnView.entryCount);
-      restoreDiaryReturnPosition(returnView.position);
     }
+    elements.bootView.hidden = true;
+    elements.loginView.hidden = true;
+    elements.appView.hidden = false;
+    resetHeaderVisibilityTracking();
+    if (returnView) restoreDiaryReturnPosition(returnView.position);
   }
 
   async function loadHouseholdSwitcher() {
@@ -926,6 +914,7 @@
   function restoreDiaryReturnPosition(position) {
     if (!position) return;
     const scrollY = Math.max(0, Number(position.scrollY) || 0);
+    window.scrollTo({ top: scrollY, left: 0, behavior: "auto" });
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         window.scrollTo({ top: scrollY, left: 0, behavior: "auto" });

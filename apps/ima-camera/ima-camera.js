@@ -532,11 +532,4 @@
   updateMarkButtons();
   startCamera();
 
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {
-        // The camera still works when offline caching is unavailable.
-      });
-    });
-  }
 })();

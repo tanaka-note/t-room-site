@@ -96,11 +96,4 @@
   resetButton.addEventListener("click", reset);
   updateInputState();
 
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {
-        // The app works normally even when offline caching is unavailable.
-      });
-    });
-  }
 })();

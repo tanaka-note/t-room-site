@@ -58,6 +58,26 @@ for (const app of registry.apps) {
       const versions = [...worker.matchAll(/\.(?:html|css|js|webmanifest)\?v=([^"'`\s)]+)/g)].map((match) => match[1]);
       assert(versions.every((version) => version === build), `${app.id}: 既存app shell内に旧build URLがあります`);
     }
+
+    const clientSources = new Set(app.entrypoints);
+    const publicRoot = new URL(app.publicUrls[0]).pathname;
+    const buildRoot = app.buildRoots?.[0];
+    if (buildRoot) {
+      const shellAssets = await collectEntrypointShellAssets(app, registry.contract, build);
+      for (const asset of shellAssets) {
+        const pathname = new URL(asset, app.publicUrls[0]).pathname;
+        if (!pathname.startsWith(publicRoot) || !pathname.endsWith(".js")) continue;
+        clientSources.add(`${buildRoot}/${decodeURIComponent(pathname.slice(publicRoot.length))}`.replaceAll("//", "/"));
+      }
+    }
+    for (const path of clientSources) {
+      const source = await readFile(resolve(workspace, path), "utf8");
+      assert.doesNotMatch(
+        source,
+        /navigator\s*\.\s*serviceWorker\s*\.\s*register\s*\(/,
+        `${app.id}: ${path}が共通Updaterと競合してService Workerを直接登録しています`
+      );
+    }
   }
   if (app.manifest) await access(resolve(workspace, app.manifest));
   if (app.twa) await access(resolve(workspace, app.twa));
@@ -89,5 +109,7 @@ const updater = await readFile(resolve(workspace, "assets/pwa-auto-update.js"), 
 assert(!/AUTO_UPDATE_SCOPE_DIARY|isDiaryAutoUpdateEnabled/.test(updater), "共通Updaterに日記専用分岐が残っています");
 assert.match(updater, /AUTO_UPDATE_ENABLED\s*=\s*"enabled"/);
 assert.match(updater, /setInterval\(\(\) => void checkForUpdate\(\), CHECK_INTERVAL_MS\)/);
+assert.equal((updater.match(/navigator\.serviceWorker\.register\s*\(/g) || []).length, 1, "Service Worker登録は共通Updaterの1か所へ集約します");
+assert.doesNotMatch(updater, /controllerchange[\s\S]*?location\.reload\(/, "controllerchangeだけでreloadしてはいけません");
 
 process.stdout.write(`Web自動更新contract: ${registry.apps.length}アプリ・${registeredHtml.size} HTMLを確認しました。\n`);
