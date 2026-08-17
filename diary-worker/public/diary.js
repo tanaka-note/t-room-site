@@ -1930,11 +1930,9 @@
   function getEditorSelectionOffset(boundary = "start") {
     const range = state.editorSelection;
     if (!range || !elements.entryContent.contains(range.startContainer)) return getRichEditorPlainText().length;
-    const before = document.createRange();
-    before.selectNodeContents(elements.entryContent);
-    const useEnd = boundary === "end" && elements.entryContent.contains(range.endContainer);
-    before.setEnd(useEnd ? range.endContainer : range.startContainer, useEnd ? range.endOffset : range.startOffset);
-    return before.toString().replace(/[\u200b\ufeff]/g, "").length;
+    const offsets = getSerializedEditorRangeOffsets(range);
+    if (!offsets) return getRichEditorPlainText().length;
+    return boundary === "end" ? offsets.end : offsets.start;
   }
 
   function captureEditorSelectionOffsets() {
@@ -1943,35 +1941,68 @@
       state.editorSelectionOffsets = null;
       return null;
     }
-    const startToken = "\ue000";
-    const endToken = "\ue001";
-    const startMarker = document.createElement("span");
-    const endMarker = document.createElement("span");
-    startMarker.dataset.selectionBoundary = "start";
-    endMarker.dataset.selectionBoundary = "end";
-    startMarker.textContent = startToken;
-    endMarker.textContent = endToken;
-    const endBoundary = range.cloneRange();
-    endBoundary.collapse(false);
-    endBoundary.insertNode(endMarker);
-    const startBoundary = range.cloneRange();
-    startBoundary.collapse(true);
-    startBoundary.insertNode(startMarker);
-    const contentWithMarkers = serializeRichEditor(false).content;
-    const startIndex = contentWithMarkers.indexOf(startToken);
-    const endIndex = contentWithMarkers.indexOf(endToken);
-    const startParent = startMarker.parentNode;
-    const endParent = endMarker.parentNode;
-    startMarker.remove();
-    endMarker.remove();
-    startParent?.normalize();
-    if (endParent !== startParent) endParent?.normalize();
-    if (startIndex < 0 || endIndex <= startIndex) {
+    const offsets = getSerializedEditorRangeOffsets(range);
+    if (!offsets || offsets.end <= offsets.start) {
       state.editorSelectionOffsets = null;
       return null;
     }
-    state.editorSelectionOffsets = { start: startIndex, end: endIndex - 1 };
+    state.editorSelectionOffsets = offsets;
     return state.editorSelectionOffsets;
+  }
+
+  function getSerializedEditorRangeOffsets(range) {
+    if (!range || !elements.entryContent.contains(range.startContainer)
+      || !elements.entryContent.contains(range.endContainer)) return null;
+    const startPath = getEditorNodePath(range.startContainer);
+    const endPath = getEditorNodePath(range.endContainer);
+    if (!startPath || !endPath) return null;
+    const editorClone = elements.entryContent.cloneNode(true);
+    const startContainer = getNodeAtPath(editorClone, startPath);
+    const endContainer = getNodeAtPath(editorClone, endPath);
+    if (!startContainer || !endContainer) return null;
+    const nonce = crypto.randomUUID();
+    const startToken = `\ue000${nonce}:start\ue001`;
+    const endToken = `\ue000${nonce}:end\ue001`;
+    const startMarker = document.createElement("span");
+    const endMarker = document.createElement("span");
+    startMarker.textContent = startToken;
+    endMarker.textContent = endToken;
+    const endBoundary = document.createRange();
+    endBoundary.setStart(endContainer, range.endOffset);
+    endBoundary.collapse(true);
+    endBoundary.insertNode(endMarker);
+    const startBoundary = document.createRange();
+    startBoundary.setStart(startContainer, range.startOffset);
+    startBoundary.collapse(true);
+    startBoundary.insertNode(startMarker);
+    const contentWithMarkers = serializeRichEditorRoot(editorClone, false).content;
+    const startIndex = contentWithMarkers.indexOf(startToken);
+    const endIndex = contentWithMarkers.indexOf(endToken);
+    if (startIndex < 0 || endIndex < startIndex + startToken.length) return null;
+    return { start: startIndex, end: endIndex - startToken.length };
+  }
+
+  function getEditorNodePath(node) {
+    const path = [];
+    let current = node;
+    while (current && current !== elements.entryContent) {
+      const parent = current.parentNode;
+      if (!parent) return null;
+      const index = [...parent.childNodes].indexOf(current);
+      if (index < 0) return null;
+      path.unshift(index);
+      current = parent;
+    }
+    return current === elements.entryContent ? path : null;
+  }
+
+  function getNodeAtPath(root, path) {
+    let current = root;
+    for (const index of path) {
+      current = current?.childNodes?.[index];
+      if (!current) return null;
+    }
+    return current;
   }
 
   function hasSelectedEditorText() {
@@ -2141,8 +2172,12 @@
 
 
   function serializeRichEditor(trim = true) {
+    return serializeRichEditorRoot(elements.entryContent, trim);
+  }
+
+  function serializeRichEditorRoot(root, trim = true) {
     const chunks = [];
-    collectRichEditorChunks(elements.entryContent, chunks);
+    collectRichEditorChunks(root, chunks);
     let content = chunks.map((chunk) => chunk.text).join("").replace(/\u00a0/g, " ");
     let offset = 0;
     const runs = [];

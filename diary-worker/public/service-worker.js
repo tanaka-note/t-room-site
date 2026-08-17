@@ -1,18 +1,18 @@
-const CACHE_NAME = "troom-diary-shell-diary-86ebfcb4fac4";
+const CACHE_NAME = "troom-diary-shell-diary-81f4846415ce";
 const STATIC_ASSETS = [
   "/diary/icons/icon-192-v4.png?v=5",
   "/diary/icons/icon-512-v4.png?v=5",
   "/diary/icons/icon-maskable-512-v4.png?v=5",
   "/diary/icons/apple-touch-icon-v3.png?v=4",
   "/diary/icons/favicon-64-v4.png?v=5",
-  "/assets/pwa-auto-update.js?v=diary-86ebfcb4fac4",
-  "/diary/diary.css?v=diary-86ebfcb4fac4",
-  "/diary/diary.js?v=diary-86ebfcb4fac4",
-  "/diary/investment.css?v=diary-86ebfcb4fac4",
-  "/diary/investment.js?v=diary-86ebfcb4fac4",
-  "/diary/manifest.webmanifest?v=diary-86ebfcb4fac4",
-  "/diary/troom-date-picker.css?v=diary-86ebfcb4fac4",
-  "/diary/troom-date-picker.js?v=diary-86ebfcb4fac4"
+  "/assets/pwa-auto-update.js?v=diary-81f4846415ce",
+  "/diary/diary.css?v=diary-81f4846415ce",
+  "/diary/diary.js?v=diary-81f4846415ce",
+  "/diary/investment.css?v=diary-81f4846415ce",
+  "/diary/investment.js?v=diary-81f4846415ce",
+  "/diary/manifest.webmanifest?v=diary-81f4846415ce",
+  "/diary/troom-date-picker.css?v=diary-81f4846415ce",
+  "/diary/troom-date-picker.js?v=diary-81f4846415ce"
 ];
 const STATIC_PATHS = new Set(STATIC_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 

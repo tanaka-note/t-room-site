@@ -61,6 +61,13 @@ assert.match(photoInsertion, /ids\.map\(photoMarker\)\.join\(""\)/,
   "連続写真は内部マーカーを連結して改行なしで追加する");
 assert.match(script, /openPhotoPicker\(\) \{\s*state\.photoInsertionOffset = getEditorSelectionOffset\("end"\)/s,
   "ファイル選択前に選択末尾の論理オフセットを保存する");
+const selectionOffset = extractFunction("getEditorSelectionOffset", "captureEditorSelectionOffsets");
+assert.match(selectionOffset, /getSerializedEditorRangeOffsets\(range\)/,
+  "caret位置はserializerと同じ論理座標へ変換する");
+assert.doesNotMatch(selectionOffset, /\.toString\(\)/,
+  "DOM Range文字数をserialized offsetとして使用しない");
+assert.match(script, /function getSerializedEditorRangeOffsets\(range\)[\s\S]*?cloneNode\(true\)[\s\S]*?serializeRichEditorRoot\(editorClone, false\)/,
+  "live DOMを壊さずcloneへboundary markerを置いてserialized offsetを求める");
 assert.match(script, /await waitForEditorCompositionEnd\(\);\s*if \(preparedPhotos\.length\)/s,
   "IME composition終了前に写真マーカーを挿入しない");
 assert.match(script, /addEventListener\("compositionstart", handleRichEditorCompositionStart\)/);
