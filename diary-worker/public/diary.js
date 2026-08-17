@@ -589,7 +589,7 @@
   }
 
   async function handleLogout() {
-    setBusy(elements.logoutButton, true, "処理中...");
+    setBusyIconButton(elements.logoutButton, true, "ログアウト処理中", "ログアウト");
     try {
       await api("/logout", { method: "POST" });
     } catch {
@@ -597,7 +597,7 @@
     }
     resetState();
     showLogin();
-    setBusy(elements.logoutButton, false, "ログアウト");
+    setBusyIconButton(elements.logoutButton, false, "ログアウト処理中", "ログアウト");
   }
 
   function togglePassword() {
@@ -3367,6 +3367,21 @@
   function setBusy(button, busy, label) {
     button.disabled = busy;
     button.textContent = label;
+  }
+
+  function setBusyIconButton(button, busy, processingLabel, idleLabel) {
+    button.disabled = busy;
+    button.setAttribute("aria-disabled", String(busy));
+    if (busy) {
+      button.setAttribute("aria-label", processingLabel);
+      button.title = processingLabel;
+      return;
+    }
+    if (idleLabel !== undefined) {
+      button.setAttribute("aria-label", idleLabel);
+      button.title = idleLabel;
+    }
+    button.removeAttribute("aria-disabled");
   }
 
   function showToast(message) {

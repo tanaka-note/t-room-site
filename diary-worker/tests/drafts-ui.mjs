@@ -18,6 +18,11 @@ for (const id of ["camera-roll-button", "draft-button", "trash-button", "new-ent
 assert.match(html, /id="draft-count"[^>]*class="header-icon-badge"/);
 assert.match(html, /id="new-entry-button"[^>]*class="header-icon-button is-create"/);
 assert.match(html, /id="logout-button"[^>]*class="header-icon-button is-logout"/);
+assert.match(script, /function setBusyIconButton\(/);
+assert.match(script, /setBusyIconButton\(elements\.logoutButton,\s*true,\s*"ログアウト処理中",\s*"ログアウト"\);/);
+assert.match(script, /setBusyIconButton\(elements\.logoutButton,\s*false,[\s\S]*?"ログアウト"\);/);
+assert.doesNotMatch(script, /setBusy\(elements\.logoutButton,\s*true,\s*"[^"]*"\)/);
+assert.doesNotMatch(script, /setBusy\(elements\.logoutButton,\s*false,\s*"[^"]*"\)/);
 assert.match(style, /\.header-icon-button:focus-visible/);
 assert.match(style, /\.header-icon-button\.is-create/);
 assert.match(style, /\.header-icon-button\.is-create\s*\{[\s\S]*?flex:\s*0 0 88px;[\s\S]*?width:\s*88px;/);
