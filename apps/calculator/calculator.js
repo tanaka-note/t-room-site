@@ -1,4 +1,33 @@
 (() => {
+  const visualViewport = window.visualViewport;
+  let viewportResizeFrame = 0;
+
+  function syncCalculatorViewportHeight() {
+    const visualHeight = visualViewport?.height;
+    const visualScale = visualViewport?.scale;
+    const canUseVisualHeight = Number.isFinite(visualHeight)
+      && visualHeight > 0
+      && (!Number.isFinite(visualScale) || Math.abs(visualScale - 1) < 0.01);
+    const height = canUseVisualHeight
+      ? visualHeight
+      : document.documentElement.clientHeight || window.innerHeight;
+
+    if (!Number.isFinite(height) || height <= 0) return;
+    document.documentElement.style.setProperty("--calculator-viewport-height", `${height}px`);
+  }
+
+  function scheduleCalculatorViewportSync() {
+    if (viewportResizeFrame) return;
+    viewportResizeFrame = window.requestAnimationFrame(() => {
+      viewportResizeFrame = 0;
+      syncCalculatorViewportHeight();
+    });
+  }
+
+  syncCalculatorViewportHeight();
+  visualViewport?.addEventListener("resize", scheduleCalculatorViewportSync, { passive: true });
+  window.addEventListener("resize", scheduleCalculatorViewportSync, { passive: true });
+
   const display = document.querySelector("#calcDisplay");
   const expression = document.querySelector("#calcExpression");
   const modeStatus = document.querySelector("#modeStatus");

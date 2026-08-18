@@ -1,15 +1,15 @@
-const CACHE_NAME = "t-room-calculator-calculator-0392c823262e";
+const CACHE_NAME = "t-room-calculator-calculator-c256ea271360";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=calculator-0392c823262e",
+  "./index.html?v=calculator-c256ea271360",
   "./icon-192.png",
   "./icon-512.png",
   "./icon.svg",
-  "/apps/calculator/calculator.css?v=calculator-0392c823262e",
-  "/apps/calculator/calculator.js?v=calculator-0392c823262e",
-  "/apps/calculator/manifest.webmanifest?v=calculator-0392c823262e",
-  "/assets/pwa-auto-update.js?v=calculator-0392c823262e"
+  "/apps/calculator/calculator.css?v=calculator-c256ea271360",
+  "/apps/calculator/calculator.js?v=calculator-c256ea271360",
+  "/apps/calculator/manifest.webmanifest?v=calculator-c256ea271360",
+  "/assets/pwa-auto-update.js?v=calculator-c256ea271360"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 

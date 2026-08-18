@@ -32,7 +32,7 @@ body {
 }
 
 body {
-  height: 100dvh;
+  height: var(--calculator-viewport-height, 100%);
   color: var(--ink);
   background:
     radial-gradient(circle at 18% 0%, rgba(255, 246, 220, 0.72), transparent 34%),
@@ -49,14 +49,14 @@ a {
 
 .calculator-app {
   width: 100vw;
-  height: 100dvh;
+  height: 100%;
   overflow: hidden;
 }
 
 .calculator-body {
   position: relative;
   width: 100vw;
-  height: 100dvh;
+  height: 100%;
   display: grid;
   grid-template-rows: minmax(148px, 25dvh) 1fr;
   gap: clamp(12px, 2.2dvh, 18px);
