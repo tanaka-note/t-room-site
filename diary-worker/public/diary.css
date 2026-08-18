@@ -1808,6 +1808,14 @@ button:disabled {
 
 .photo-viewer-close {
   border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+}
+
+.photo-viewer-close:hover,
+.photo-viewer-close:focus-visible {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.14);
   color: #fff;
 }
 
