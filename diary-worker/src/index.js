@@ -236,6 +236,12 @@ async function handleApi(request, env, url, path) {
   if (entryMatch && request.method === "GET") {
     return getEntry(Number(entryMatch[1]), env, session);
   }
+
+  const favoriteMatch = path.match(/^\/api\/entries\/(\d+)\/favorite$/);
+  if (favoriteMatch && (request.method === "POST" || request.method === "DELETE")) {
+    return updateFavorite(Number(favoriteMatch[1]), request.method === "POST", env, session);
+  }
+
   if (entryMatch && request.method === "PUT") {
     requireEntryManagementAccess(session);
     return updateEntry(Number(entryMatch[1]), request, env, session);
@@ -296,7 +302,7 @@ async function serveAsset(request, env, url, path) {
     ["/investment.css", "/investment.css"],
     ["/investment.js", "/investment.js"]
   ]);
-  const isDiaryRoute = path === "/" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash";
+  const isDiaryRoute = path === "/" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash" || path === "/favorites" || path === "/favorites/";
   const isInvestmentRoute = path === "/investment" || path === "/investment/";
   const assetPath = assetPaths.get(path) || (isDiaryRoute ? "/" : (isInvestmentRoute ? "/investment.html" : null));
   if (!assetPath) return new Response("Not found", { status: 404 });
@@ -372,7 +378,10 @@ async function listEntries(url, env, session) {
   const tag = normalizeTag(url.searchParams.get("tag") || "");
   const trashRequested = url.searchParams.get("trash") === "1";
   const draftRequested = url.searchParams.get("draft") === "1";
-  if (trashRequested && draftRequested) throw new HttpError(400, "表示する一覧を確認してください。");
+  const favoriteRequested = url.searchParams.get("favorite") === "1";
+  if ((trashRequested && draftRequested) || (favoriteRequested && (trashRequested || draftRequested))) {
+    throw new HttpError(400, "表示する一覧を確認してください。");
+  }
   if (draftRequested && !session.canManageEntries) {
     throw new HttpError(403, "下書きを閲覧する権限がありません。");
   }
@@ -388,7 +397,15 @@ async function listEntries(url, env, session) {
     trash ? "e.deleted_at IS NOT NULL" : "e.deleted_at IS NULL",
     draft ? "e.status = 'draft'" : "e.status = 'published'"
   ];
-  const bindings = [session.activeHouseholdId];
+  if (favoriteRequested) {
+    conditions[1] = "e.deleted_at IS NULL";
+    conditions[2] = "e.status = 'published'";
+  }
+  const bindings = [session.accountId, session.activeHouseholdId];
+  if (favoriteRequested) {
+    conditions.push("EXISTS (SELECT 1 FROM diary_favorites favorite_filter WHERE favorite_filter.entry_id = e.id AND favorite_filter.account_id = ?)");
+    bindings.push(session.accountId);
+  }
   if (trash) {
     conditions.push(`EXISTS (
       SELECT 1 FROM diary_trash_scopes ts
@@ -427,6 +444,7 @@ async function listEntries(url, env, session) {
       e.id, e.entry_date, e.title, e.content, e.content_format, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       e.status, e.draft_of_entry_id, e.draft_of_revision, e.draft_excluded_photo_ids,
+      EXISTS (SELECT 1 FROM diary_favorites current_favorite WHERE current_favorite.entry_id = e.id AND current_favorite.account_id = ?) AS is_favorite,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
     WHERE ${conditions.join(" AND ")}
@@ -446,16 +464,38 @@ async function getEntry(id, env, session) {
       e.id, e.entry_date, e.title, e.content, e.content_format, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       e.status, e.draft_of_entry_id, e.draft_of_revision, e.draft_excluded_photo_ids,
+      EXISTS (SELECT 1 FROM diary_favorites current_favorite WHERE current_favorite.entry_id = e.id AND current_favorite.account_id = ?) AS is_favorite,
       COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
     FROM diary_entries e
     WHERE e.id = ? AND e.household_id = ?
-  `).bind(id, session.activeHouseholdId).first();
+  `).bind(session.accountId, id, session.activeHouseholdId).first();
   if (!row || (row.status === "draft" && !session.canManageEntries) || (row.deleted_at && !(await canAccessTrashEntry(id, env, session)))) {
     return json({ error: "日記が見つかりません。" }, 404);
   }
   const excludedPhotoIds = parsePhotoIdList(row.draft_excluded_photo_ids);
   const photos = await listEntryPhotos(id, env, session, Number(row.draft_of_entry_id || 0), excludedPhotoIds);
   return json({ entry: { ...serializeEntry(row), photos } });
+}
+
+async function updateFavorite(id, shouldFavorite, env, session) {
+  const entry = await env.DB.prepare(`
+    SELECT id
+    FROM diary_entries
+    WHERE id = ? AND household_id = ? AND status = 'published' AND deleted_at IS NULL
+  `).bind(id, session.activeHouseholdId).first();
+  if (!entry) return json({ error: "お気に入り登録できる日記が見つかりません。" }, 404);
+
+  if (shouldFavorite) {
+    await env.DB.prepare(`
+      INSERT INTO diary_favorites (account_id, entry_id)
+      VALUES (?, ?)
+      ON CONFLICT(account_id, entry_id) DO NOTHING
+    `).bind(session.accountId, id).run();
+  } else {
+    await env.DB.prepare("DELETE FROM diary_favorites WHERE account_id = ? AND entry_id = ?")
+      .bind(session.accountId, id).run();
+  }
+  return json({ ok: true, isFavorite: shouldFavorite });
 }
 
 async function listEntryPhotos(entryId, env, session, sourceEntryId = 0, excludedPhotoIds = []) {
@@ -1071,6 +1111,7 @@ function serializeEntry(row) {
     deletedById: row.deleted_by_id || null,
     deletedByName: row.deleted_by_name || null,
     status: row.status || "published",
+    isFavorite: Number(row.is_favorite || 0) === 1,
     draftOfEntryId: row.draft_of_entry_id == null ? null : Number(row.draft_of_entry_id),
     draftOfRevision: row.draft_of_revision == null ? null : Number(row.draft_of_revision),
     excludedPhotoIds: parsePhotoIdList(row.draft_excluded_photo_ids),

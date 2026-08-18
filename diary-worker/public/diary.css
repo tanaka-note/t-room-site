@@ -284,6 +284,42 @@ button {
   top: 96px;
 }
 
+.favorite-panel {
+  padding: 12px;
+}
+
+.favorites-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  border: 1px solid rgba(194, 165, 107, 0.26);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #fffdf7;
+  color: #765d1e;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.favorites-link:hover,
+.favorites-link:focus-visible,
+.favorites-link[aria-current="page"] {
+  border-color: rgba(194, 165, 107, 0.58);
+  background: #fff8df;
+  color: #614b13;
+}
+
+.favorites-link svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
 .diary-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1166,6 +1202,45 @@ button:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
+}
+
+.dialog-head-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.favorite-entry-button {
+  color: #8a6a21;
+}
+
+.favorite-entry-button:hover,
+.favorite-entry-button:focus-visible {
+  border-color: rgba(194, 165, 107, 0.62);
+  background: #fffaf0;
+  color: #765d1e;
+}
+
+.favorite-entry-button[aria-pressed="true"] {
+  border-color: rgba(194, 165, 107, 0.72);
+  background: #fff5cc;
+  color: #a87900;
+}
+
+.favorite-entry-button[aria-pressed="true"] svg path {
+  fill: #e2b52a;
+  stroke: #9b7100;
+}
+
+.favorite-entry-button svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .entry-detail h2,

@@ -6,8 +6,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-a1f608d8b378">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-a1f608d8b378">
+  <meta name="troom-app-build" content="diary-f6940f3af7eb">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-f6940f3af7eb">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -15,11 +15,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-a1f608d8b378">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-f6940f3af7eb">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-a1f608d8b378">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-a1f608d8b378">
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-f6940f3af7eb">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-f6940f3af7eb">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -170,6 +170,15 @@
         </div>
 
         <aside class="diary-side" aria-label="日記をたどる">
+          <section class="diary-panel favorite-panel">
+            <a id="favorites-link" class="favorites-link" href="/diary/favorites/">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 3 2.78 5.63 6.22.9-4.5 4.39 1.06 6.2L12 17.2l-5.56 2.92 1.06-6.2L3 9.53l6.22-.9L12 3Z"></path>
+              </svg>
+              <span>お気に入り</span>
+            </a>
+          </section>
+
           <section id="archive-panel" class="diary-panel">
             <p class="section-kicker">Archive</p>
             <h2>年月から見る</h2>
@@ -254,7 +263,14 @@
     <article class="entry-detail">
       <div class="dialog-head">
         <p id="detail-date" class="entry-date"></p>
-        <button class="icon-button" type="button" data-close-dialog="entry-dialog" aria-label="閉じる">×</button>
+        <div class="dialog-head-actions">
+          <button id="favorite-entry-button" class="icon-button favorite-entry-button" type="button" aria-pressed="false" aria-label="お気に入りに追加" title="お気に入りに追加" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m12 3 2.78 5.63 6.22.9-4.5 4.39 1.06 6.2L12 17.2l-5.56 2.92 1.06-6.2L3 9.53l6.22-.9L12 3Z"></path>
+            </svg>
+          </button>
+          <button class="icon-button" type="button" data-close-dialog="entry-dialog" aria-label="閉じる">×</button>
+        </div>
       </div>
       <h2 id="detail-title"></h2>
       <p id="detail-author" class="entry-author"></p>
@@ -498,8 +514,8 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-a1f608d8b378" defer></script>
-  <script src="/diary/troom-date-picker.js?v=diary-a1f608d8b378" defer></script>
-  <script src="/diary/diary.js?v=diary-a1f608d8b378" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-f6940f3af7eb" defer></script>
+  <script src="/diary/troom-date-picker.js?v=diary-f6940f3af7eb" defer></script>
+  <script src="/diary/diary.js?v=diary-f6940f3af7eb" defer></script>
 </body>
 </html>

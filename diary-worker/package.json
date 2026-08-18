@@ -8,6 +8,8 @@
     "check": "node --check src/index.js && node --check public/diary.js && node --check public/investment.js",
     "test:permissions": "node tests/permissions.e2e.mjs",
     "test:households": "node tests/household-isolation.e2e.mjs",
+    "test:favorites": "node tests/favorites.e2e.mjs && node tests/favorites-ui.mjs",
+    "test:favorite-browser": "node tests/browser/favorites-flow.mjs",
     "test:trash": "node tests/trash-isolation.e2e.mjs",
     "test:drafts": "node tests/drafts.e2e.mjs && node tests/drafts-ui.mjs",
     "test:initial-password": "node tests/initial-password-ui.mjs",

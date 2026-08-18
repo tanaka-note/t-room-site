@@ -48,6 +48,7 @@
     tag: "",
     tagQuery: "",
     tagDirectory: false,
+    favoritePage: false,
     availableTags: [],
     entryTagSuggestionIndex: -1,
     trash: false,
@@ -90,6 +91,7 @@
     entryHistoryToken: null,
     entryAfterClose: null,
     entryClosePending: false,
+    favoriteRequestPending: false,
     editorHistoryToken: null,
     editorClosePending: false,
     deferredInstallPrompt: null,
@@ -123,6 +125,7 @@
     diaryKicker: document.querySelector("#diary-kicker"),
     diaryTitle: document.querySelector("#diary-title"),
     tagPageBack: document.querySelector("#tag-page-back"),
+    favoritesLink: document.querySelector("#favorites-link"),
     searchPanel: document.querySelector("#diary-search-panel"),
     diaryLayout: document.querySelector("#diary-layout"),
     diaryMain: document.querySelector("#diary-main"),
@@ -163,6 +166,7 @@
     tagMore: document.querySelector("#tag-more-button"),
     entryDialog: document.querySelector("#entry-dialog"),
     detailDate: document.querySelector("#detail-date"),
+    favoriteEntryButton: document.querySelector("#favorite-entry-button"),
     detailTitle: document.querySelector("#detail-title"),
     detailAuthor: document.querySelector("#detail-author"),
     detailDeletion: document.querySelector("#detail-deletion"),
@@ -291,6 +295,7 @@
     elements.searchClear.addEventListener("click", () => {
       elements.searchInput.value = "";
       state.query = "";
+      state.favoritePage = false;
       state.monthExpanded = false;
       updateFilterControls();
       loadEntries(true);
@@ -299,6 +304,7 @@
     elements.searchInput.addEventListener("input", () => {
       window.clearTimeout(state.searchTimer);
       state.query = elements.searchInput.value.trim();
+      state.favoritePage = false;
       state.monthExpanded = false;
       updateFilterControls();
       state.searchTimer = window.setTimeout(() => loadEntries(true), 300);
@@ -323,6 +329,7 @@
       event.preventDefault();
       closeEntryDialog();
     });
+    elements.favoriteEntryButton.addEventListener("click", toggleFavorite);
     elements.deleteEntryButton.addEventListener("click", requestEntryDeletion);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
     elements.permanentlyDeleteEntryButton.addEventListener("click", requestPermanentDeletion);
@@ -768,6 +775,7 @@
         if (state.tag) parameters.set("tag", state.tag);
         if (state.trash) parameters.set("trash", "1");
         if (state.drafts) parameters.set("draft", "1");
+        if (state.favoritePage) parameters.set("favorite", "1");
 
         const result = await api(`/entries?${parameters}`);
         if (requestId !== state.requestId) return;
@@ -966,6 +974,8 @@
         ? "下書きはありません。"
         : state.trash
         ? "ゴミ箱は空です。"
+        : state.favoritePage
+          ? "お気に入りの日記はまだありません。"
         : isMonthlyView()
           ? "記事なし"
           : state.query || state.dateFrom || state.dateTo || state.tag
@@ -1191,6 +1201,7 @@
     elements.searchInput.value = "";
     state.trash = false;
     state.drafts = false;
+    state.favoritePage = false;
     if (window.location.pathname !== `${BASE_PATH}/`) {
       window.history.replaceState({}, "", `${BASE_PATH}/`);
       applyRouteState();
@@ -1387,6 +1398,7 @@
     elements.detailAuthor.hidden = !shouldShowEntryAuthor();
     elements.detailDeletion.hidden = !entry.deletedAt || !entry.deletedByName;
     elements.detailDeletion.textContent = entry.deletedByName ? `削除者：${entry.deletedByName}` : "";
+    renderFavoriteButton(entry);
     renderEntryContent(entry);
     elements.detailTags.replaceChildren(...createTagElements(entry.tags));
     const isDeleted = Boolean(entry.deletedAt);
@@ -1394,6 +1406,49 @@
     elements.restoreActions.hidden = !state.canViewTrash || !isDeleted;
     elements.deleteEntryButton.textContent = state.canViewTrash ? "ゴミ箱へ移動" : "削除";
     elements.permanentlyDeleteEntryButton.hidden = !state.canPermanentlyDelete || !isDeleted;
+  }
+
+  function renderFavoriteButton(entry) {
+    const canFavorite = entry.status === "published" && !entry.deletedAt;
+    elements.favoriteEntryButton.hidden = !canFavorite;
+    if (!canFavorite) return;
+    const isFavorite = entry.isFavorite === true;
+    elements.favoriteEntryButton.setAttribute("aria-pressed", String(isFavorite));
+    const label = isFavorite ? "お気に入りから解除" : "お気に入りに追加";
+    elements.favoriteEntryButton.setAttribute("aria-label", label);
+    elements.favoriteEntryButton.title = label;
+    elements.favoriteEntryButton.removeAttribute("aria-busy");
+  }
+
+  async function toggleFavorite() {
+    const entry = state.activeEntry;
+    if (!entry || entry.status !== "published" || entry.deletedAt || state.favoriteRequestPending) return;
+    state.favoriteRequestPending = true;
+    const shouldFavorite = entry.isFavorite !== true;
+    elements.favoriteEntryButton.disabled = true;
+    elements.favoriteEntryButton.setAttribute("aria-busy", "true");
+    try {
+      const result = await api(`/entries/${entry.id}/favorite`, {
+        method: shouldFavorite ? "POST" : "DELETE"
+      });
+      entry.isFavorite = result.isFavorite === true;
+      const listedEntry = state.entryMap.get(entry.id);
+      if (listedEntry) listedEntry.isFavorite = entry.isFavorite;
+      if (state.favoritePage && !entry.isFavorite) {
+        state.entries = state.entries.filter((item) => item.id !== entry.id);
+        state.entryMap.delete(entry.id);
+        renderEntries();
+        updateSearchStatus();
+      }
+      renderFavoriteButton(entry);
+    } catch (error) {
+      showToast(error.message);
+      renderFavoriteButton(entry);
+    } finally {
+      state.favoriteRequestPending = false;
+      elements.favoriteEntryButton.disabled = false;
+      elements.favoriteEntryButton.removeAttribute("aria-busy");
+    }
   }
 
   function renderEntryContent(entry) {
@@ -3051,6 +3106,7 @@
     if (!state.canViewTrash) return;
     state.trash = !state.trash;
     state.drafts = false;
+    state.favoritePage = false;
     state.query = "";
     state.month = currentJapanMonth();
     state.monthExpanded = false;
@@ -3068,6 +3124,7 @@
     if (!state.canManageEntries) return;
     state.drafts = !state.drafts;
     state.trash = false;
+    state.favoritePage = false;
     state.query = "";
     state.month = currentJapanMonth();
     state.monthExpanded = false;
@@ -3090,6 +3147,7 @@
     state.tag = "";
     state.trash = false;
     state.drafts = false;
+    state.favoritePage = false;
     elements.searchInput.value = "";
     elements.dateFrom.value = "";
     elements.dateTo.value = "";
@@ -3108,7 +3166,7 @@
   }
 
   function updateFilterControls() {
-    const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash || state.drafts);
+    const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash || state.drafts || state.favoritePage);
     elements.searchClear.hidden = !state.query;
     elements.dateReset.hidden = !state.dateFrom && !state.dateTo;
     elements.clearFilters.hidden = !active;
@@ -3118,7 +3176,7 @@
     elements.draftButton.setAttribute("aria-pressed", String(state.drafts));
     elements.draftButton.setAttribute("aria-label", state.drafts ? "日記一覧へ戻る" : `下書き（${state.draftCount}件）`);
     elements.draftButton.title = state.drafts ? "日記一覧へ戻る" : `下書き（${state.draftCount}件）`;
-    elements.searchPanel.hidden = state.drafts || state.tagDirectory || Boolean(state.tag);
+    elements.searchPanel.hidden = state.drafts || state.favoritePage || state.tagDirectory || Boolean(state.tag);
     elements.monthNavigation.hidden = !isMonthlyView();
     elements.currentMonth.disabled = state.month === currentJapanMonth();
     document.querySelectorAll("[data-month]").forEach((button) => {
@@ -3128,10 +3186,15 @@
       if (button.dataset.tag === state.tag) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
+    if (state.favoritePage) elements.favoritesLink?.setAttribute("aria-current", "page");
+    else elements.favoritesLink?.removeAttribute("aria-current");
   }
 
   function updateListHeading() {
-    if (state.drafts) {
+    if (state.favoritePage) {
+      elements.listKicker.textContent = "Favorites";
+      elements.listTitle.textContent = "お気に入りの日記";
+    } else if (state.drafts) {
       elements.listKicker.textContent = "Draft";
       elements.listTitle.textContent = "下書き";
     } else if (state.trash) {
@@ -3162,7 +3225,9 @@
       conditions.push(from === to ? formatDate(from) : `${formatDate(from)}から${formatDate(to)}`);
     }
     if (state.tag) conditions.push(`#${state.tag}`);
-    if (state.drafts) {
+    if (state.favoritePage) {
+      elements.searchStatus.textContent = `${state.entries.length}件のお気に入りの日記を表示しています。`;
+    } else if (state.drafts) {
       elements.searchStatus.textContent = `${state.entries.length}件の下書きを表示しています。`;
     } else if (state.trash) {
       elements.searchStatus.textContent = `${state.entries.length}件を表示しています。`;
@@ -3193,12 +3258,13 @@
     state.monthExpanded = false;
     state.trash = false;
     state.drafts = false;
+    state.favoritePage = false;
     updateFilterControls();
     loadEntries(true);
   }
 
   function isMonthlyView() {
-    return !state.trash && !state.drafts && !state.query && !state.dateFrom && !state.dateTo && !state.tag;
+    return !state.trash && !state.drafts && !state.favoritePage && !state.query && !state.dateFrom && !state.dateTo && !state.tag;
   }
 
   function changeBrowseMonth(offset) {
@@ -3301,6 +3367,7 @@
   function applyRouteState() {
     const match = window.location.pathname.match(/^\/diary\/tag\/([^/]+)\/?$/);
     const onTagDirectory = /^\/diary\/tags\/?$/.test(window.location.pathname);
+    const onFavoritePage = /^\/diary\/favorites\/?$/.test(window.location.pathname);
     let tag = "";
     if (match) {
       try {
@@ -3311,8 +3378,10 @@
     }
     state.tag = tag;
     state.tagDirectory = onTagDirectory;
+    state.favoritePage = onFavoritePage;
     const onTagPage = Boolean(tag);
-    elements.tagPageBack.hidden = !onTagPage && !onTagDirectory;
+    elements.tagPageBack.hidden = !onTagPage && !onTagDirectory && !onFavoritePage;
+    elements.tagPageBack.textContent = "← 日記へ戻る";
     elements.searchPanel.hidden = onTagPage;
     elements.diaryMain.hidden = onTagDirectory;
     elements.archivePanel.hidden = onTagDirectory;
@@ -3322,6 +3391,14 @@
     elements.diaryKicker.textContent = onTagPage || onTagDirectory ? "Hashtag" : "Diary";
     elements.diaryTitle.textContent = onTagPage ? `#${tag}の日記一覧` : (onTagDirectory ? "タグ一覧" : "日記");
     document.title = onTagPage ? `#${tag}の日記一覧 | 日記` : (onTagDirectory ? "タグ一覧 | 日記" : "日記");
+    if (onFavoritePage) {
+      elements.searchPanel.hidden = true;
+      elements.diaryKicker.textContent = "Favorites";
+      elements.diaryTitle.textContent = "お気に入り";
+      document.title = "お気に入り";
+    }
+    if (onFavoritePage) elements.favoritesLink?.setAttribute("aria-current", "page");
+    else elements.favoritesLink?.removeAttribute("aria-current");
   }
 
   function createEmpty(message) {
@@ -3441,6 +3518,7 @@
     state.dateTo = "";
     state.tag = "";
     state.tagQuery = "";
+    state.favoritePage = false;
     state.availableTags = [];
     state.trash = false;
     state.drafts = false;
@@ -3470,6 +3548,7 @@
     state.entryAfterClose = null;
     state.entryHistoryToken = null;
     state.entryClosePending = false;
+    state.favoriteRequestPending = false;
     state.editorHistoryToken = null;
     state.editorClosePending = false;
     elements.searchInput.value = "";

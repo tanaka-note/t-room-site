@@ -154,7 +154,7 @@
     {
       "id": "diary",
       "name": "日記",
-      "publicUrls": ["https://tanaka-note.com/diary/", "https://tanaka-note.com/diary/investment/"],
+      "publicUrls": ["https://tanaka-note.com/diary/", "https://tanaka-note.com/diary/investment/", "https://tanaka-note.com/diary/favorites/"],
       "entrypoints": ["diary-worker/public/index.html", "diary-worker/public/investment.html"],
       "buildRoots": ["diary-worker/public"],
       "buildMode": "content-hash",
