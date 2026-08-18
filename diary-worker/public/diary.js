@@ -1437,6 +1437,7 @@
       if (state.favoritePage && !entry.isFavorite) {
         state.entries = state.entries.filter((item) => item.id !== entry.id);
         state.entryMap.delete(entry.id);
+        state.offset = state.entries.length;
         renderEntries();
         updateSearchStatus();
       }

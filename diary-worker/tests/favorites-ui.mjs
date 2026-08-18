@@ -35,6 +35,7 @@ assert.match(worker, /isFavorite: Number\(row\.is_favorite \|\| 0\) === 1/);
 assert.match(script, /\/entries\/\$\{entry\.id\}\/favorite/);
 assert.match(script, /state\.favoriteRequestPending/);
 assert.match(script, /state\.favoritePage/);
+assert.match(script, /state\.entries = state\.entries\.filter\(\(item\) => item\.id !== entry\.id\);[\s\S]{0,220}state\.offset = state\.entries\.length;/);
 assert.match(script, /parameters\.set\("favorite", "1"\)/);
 assert.ok(script.includes("const onFavoritePage = /^\\/diary\\/favorites\\/?$/.test"));
 assert.match(script, /elements\.entryDialog\.showModal\(\);\s*pushEntryHistory\(\);/);
