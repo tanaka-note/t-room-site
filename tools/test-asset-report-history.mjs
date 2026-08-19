@@ -57,13 +57,14 @@ const allScale = calculateHistoryScale([6_221_192, 6_167_574, 6_237_083, 6_345_2
 assert.ok(allScale.ySpan >= weekScale.ySpan, "全期間のY軸幅は週次より小さくならない");
 
 const latest = historyMarketValue({ period: "2026-08-15", marketValue: 6422213 });
-assert.equal(latest, 6422213);
+assert.equal(latest, 6322213);
 const previous = historyMarketValue({ period: "2026-08-14", marketValue: 6423188 });
 assert.equal(previous, 6423188);
 const current = historyMarketValue({ period: "2026-08-16", marketValue: 6424845 });
 assert.equal(current, 6324845);
 
 assert.match(reportSource, /period: "2026-08-16"/);
+assert.match(reportSource, /appliedFrom: "2026-08-15"/);
 assert.match(reportSource, /\{ period: "2026-08-16", principal: 6000000, marketValue: 6424845 \}/);
 assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 1632197/);
 

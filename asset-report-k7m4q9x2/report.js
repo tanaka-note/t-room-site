@@ -9,6 +9,7 @@ const reportData = {
   },
   operatingExpense: {
     name: "運用手数料・雑費",
+    appliedFrom: "2026-08-15",
     value: -100000
   },
   monthlyReport: {
@@ -185,7 +186,8 @@ function totalMarketValue(includeAdjustment = false) {
 }
 
 function historyMarketValue(entry) {
-  return entry.marketValue + (entry.period === reportData.period ? reportData.operatingExpense.value : 0);
+  const expense = reportData.operatingExpense;
+  return entry.period >= expense.appliedFrom ? entry.marketValue + expense.value : entry.marketValue;
 }
 
 function calculateHistoryScale(values) {
