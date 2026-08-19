@@ -112,4 +112,20 @@ assert.match(updater, /setInterval\(\(\) => void checkForUpdate\(\), CHECK_INTER
 assert.equal((updater.match(/navigator\.serviceWorker\.register\s*\(/g) || []).length, 1, "Service Worker登録は共通Updaterの1か所へ集約します");
 assert.doesNotMatch(updater, /controllerchange[\s\S]*?location\.reload\(/, "controllerchangeだけでreloadしてはいけません");
 
+const legacyDiaryPages = ["diary.html", "diary/archive.html", "diary/tags.html"];
+const requiredLegacyDiaryRobots = ["noindex", "nofollow", "noarchive", "nosnippet"];
+for (const path of legacyDiaryPages) {
+  const html = await readFile(resolve(workspace, path), "utf8");
+  const robots = html.match(/<meta\s+name=["']robots["']\s+content=["']([^"']+)["']/i)?.[1] || "";
+  const directives = new Set(robots.toLowerCase().split(",").map((directive) => directive.trim()).filter(Boolean));
+  for (const directive of requiredLegacyDiaryRobots) {
+    assert(directives.has(directive), `${path}: 旧静的日記のrobots指定に${directive}がありません`);
+  }
+}
+
+const currentDiaryHtml = await readFile(resolve(workspace, "diary-worker/public/index.html"), "utf8");
+assert.match(currentDiaryHtml, /<meta\s+name=["']robots["']\s+content=["'][^"']*noindex[^"']*["']/i, "現行日記のnoindexを維持してください");
+const publicHomeHtml = await readFile(resolve(workspace, "index.html"), "utf8");
+assert.doesNotMatch(publicHomeHtml, /<meta\s+name=["']robots["']\s+content=["'][^"']*noindex[^"']*["']/i, "公開トップをnoindexにしてはいけません");
+
 process.stdout.write(`Web自動更新contract: ${registry.apps.length}アプリ・${registeredHtml.size} HTMLを確認しました。\n`);
