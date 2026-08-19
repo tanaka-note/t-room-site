@@ -62,11 +62,13 @@ const previous = historyMarketValue({ period: "2026-08-14", marketValue: 6423188
 assert.equal(previous, 6423188);
 const current = historyMarketValue({ period: "2026-08-16", marketValue: 6424845 });
 assert.equal(current, 6324845);
+const latestCurrent = historyMarketValue({ period: "2026-08-17", marketValue: 6416884 });
+assert.equal(latestCurrent, 6316884);
 
-assert.match(reportSource, /period: "2026-08-16"/);
+assert.match(reportSource, /period: "2026-08-17"/);
 assert.match(reportSource, /appliedFrom: "2026-08-15"/);
-assert.match(reportSource, /\{ period: "2026-08-16", principal: 6000000, marketValue: 6424845 \}/);
-assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 1632197/);
+assert.match(reportSource, /\{ period: "2026-08-17", principal: 6000000, marketValue: 6416884 \}/);
+assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 1640720/);
 
 assert.doesNotMatch(reportSource, /yFor\(entry\.marketValue\)/, "時価総額描画はentry.marketValueを直接使っていない");
 assert.match(reportSource, /yFor\(historyMarketValue\(entry\)\)/, "時価総額描画のy計算はhistoryMarketValueを通る");
