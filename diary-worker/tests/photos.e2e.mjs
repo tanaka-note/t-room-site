@@ -89,6 +89,17 @@ function queryLocalDatabase(command) {
   return JSON.parse(result.stdout)[0].results;
 }
 
+function createPhotoForm({ id, fileName, width = 1200, height = 800 }) {
+  const form = new FormData();
+  form.set("id", id);
+  form.set("width", String(width));
+  form.set("height", String(height));
+  form.set("original", new File([new Uint8Array([1, 2, 3, 4])], fileName, { type: "image/png" }));
+  form.set("display", new File([new Uint8Array([5, 6, 7])], "display.webp", { type: "image/webp" }));
+  form.set("thumbnail", new File([new Uint8Array([8, 9])], "thumbnail.webp", { type: "image/webp" }));
+  return form;
+}
+
 try {
   await waitForServer();
   const wifeCookie = await login("wife@example.test", "wife-test");
@@ -111,13 +122,7 @@ try {
   assert.equal(created.response.status, 200, JSON.stringify(created.result));
   const entry = created.result.entry;
 
-  const form = new FormData();
-  form.set("id", photoId);
-  form.set("width", "1200");
-  form.set("height", "800");
-  form.set("original", new File([new Uint8Array([1, 2, 3, 4])], `${fileNameToken}.png`, { type: "image/png" }));
-  form.set("display", new File([new Uint8Array([5, 6, 7])], "display.webp", { type: "image/webp" }));
-  form.set("thumbnail", new File([new Uint8Array([8, 9])], "thumbnail.webp", { type: "image/webp" }));
+  const form = createPhotoForm({ id: photoId, fileName: `${fileNameToken}.png` });
   const uploadResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
     method: "POST",
     headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
@@ -126,6 +131,64 @@ try {
   const upload = await uploadResponse.json();
   assert.equal(uploadResponse.status, 200, JSON.stringify(upload));
   assert.equal(upload.photo.id, photoId);
+
+  const idempotentRetryResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: photoId, fileName: `${fileNameToken}.png` })
+  });
+  const idempotentRetry = await idempotentRetryResponse.json();
+  assert.equal(idempotentRetryResponse.status, 200, JSON.stringify(idempotentRetry));
+  assert.equal(idempotentRetry.idempotent, true, "lost success response retry must be accepted as already completed");
+  assert.equal(idempotentRetry.photo.id, photoId);
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_photos WHERE id = '${photoId}'`)[0].count), 1,
+    "idempotent retry must retain exactly one photo ledger row");
+
+  const mismatchedPhotoRetryResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: photoId, fileName: `different-${fileNameToken}.png` })
+  });
+  assert.equal(mismatchedPhotoRetryResponse.status, 409, "same photo ID with different metadata must not be accepted");
+
+  const otherEntryCreated = await jsonRequest("/entries", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-10",
+      title: `other-entry-${photoId}`,
+      content: "別の日記",
+      tags: []
+    }
+  });
+  assert.equal(otherEntryCreated.response.status, 200, JSON.stringify(otherEntryCreated.result));
+  const otherEntryRetryResponse = await fetch(`${origin}/diary/api/entries/${otherEntryCreated.result.entry.id}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: photoId, fileName: `${fileNameToken}.png` })
+  });
+  assert.equal(otherEntryRetryResponse.status, 409, "same photo ID must not be accepted for another entry");
+
+  const mainCookie = await login("main@example.test", "main-test");
+  const otherAccountRetryResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
+    method: "POST",
+    headers: { Cookie: mainCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: photoId, fileName: `${fileNameToken}.png` })
+  });
+  assert.equal(otherAccountRetryResponse.status, 409, "another account must not claim an existing photo upload as its retry");
+  const householdSwitch = await jsonRequest("/households/select", {
+    method: "POST",
+    cookie: mainCookie,
+    body: { householdId: "chiharu-household" }
+  });
+  assert.equal(householdSwitch.response.status, 200, JSON.stringify(householdSwitch.result));
+  const chiharuCookie = householdSwitch.response.headers.get("set-cookie").split(";", 1)[0];
+  const otherHouseholdRetryResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
+    method: "POST",
+    headers: { Cookie: chiharuCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: photoId, fileName: `${fileNameToken}.png` })
+  });
+  assert.equal(otherHouseholdRetryResponse.status, 404, "another household must not access the entry or reuse its photo ID");
 
   const detailed = await jsonRequest(`/entries/${entry.id}`, { cookie: wifeCookie });
   assert.equal(detailed.response.status, 200);
@@ -197,7 +260,6 @@ try {
   const visibleInWifeTrash = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: wifeCookie } });
   assert.equal(visibleInWifeTrash.status, 200);
 
-  const mainCookie = await login("main@example.test", "main-test");
   const visibleToMain = await fetch(`${origin}${upload.photo.displayUrl}`, { headers: { Cookie: mainCookie } });
   assert.equal(visibleToMain.status, 200);
   const trash = await jsonRequest(`/entries?trash=1&q=${encodeURIComponent(`photo-test-${photoId}`)}`, { cookie: mainCookie });

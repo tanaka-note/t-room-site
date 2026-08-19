@@ -17,6 +17,7 @@
     "test:monthly": "node tests/monthly-ui.mjs",
     "test:photos": "node tests/photos.e2e.mjs && node tests/photos-ui.mjs",
     "test:photo-editor": "node tests/photo-rich-text-editing-ui.mjs",
+    "test:photo-post": "node tests/browser/photo-post-resilience.mjs",
     "test:tags": "node tests/tags-ui.mjs",
     "test:history": "node tests/history-ui.mjs",
     "test:pwa": "node tests/pwa-ui.mjs",
@@ -29,6 +30,7 @@
     "import:investment": "node scripts/import-investment-data.mjs"
   },
   "devDependencies": {
+    "playwright": "1.56.1",
     "wrangler": "^4.34.0"
   }
 }

@@ -1,0 +1,322 @@
+import assert from "node:assert/strict";
+import { existsSync, readdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
+const { chromium, firefox } = require("playwright");
+const publicRoot = fileURLToPath(new URL("../../public/", import.meta.url));
+const staticFiles = new Map([
+  ["/diary/", ["index.html", "text/html; charset=utf-8"]],
+  ["/diary/diary.js", ["diary.js", "text/javascript; charset=utf-8"]],
+  ["/diary/diary.css", ["diary.css", "text/css; charset=utf-8"]],
+  ["/diary/troom-date-picker.js", ["troom-date-picker.js", "text/javascript; charset=utf-8"]],
+  ["/diary/troom-date-picker.css", ["troom-date-picker.css", "text/css; charset=utf-8"]]
+]);
+const validPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64"
+);
+const photoIdPattern = /name="id"\r\n\r\n([0-9a-f-]{36})/i;
+
+let scenario;
+function resetScenario(mode) {
+  scenario = {
+    mode,
+    nextEntryId: 100,
+    entryRequests: [],
+    createdEntryIds: new Set(),
+    photoRequests: 0,
+    storedPhotoIds: new Set()
+  };
+}
+
+function readRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
+function sendJson(response, status, value) {
+  response.writeHead(status, { "content-type": "application/json" });
+  response.end(JSON.stringify(value));
+}
+
+function savedEntry(id, body, revision = 1) {
+  return {
+    id,
+    entryDate: body.entryDate,
+    title: body.title,
+    content: body.content,
+    contentFormat: body.contentFormat || null,
+    tags: body.tags || [],
+    status: body.status || "published",
+    photos: [],
+    excludedPhotoIds: [],
+    revision
+  };
+}
+
+const server = createServer(async (request, response) => {
+  const url = new URL(request.url, "http://127.0.0.1");
+  if (url.pathname.startsWith("/diary/api/")) {
+    const apiPath = url.pathname.slice("/diary/api".length);
+    if (apiPath === "/session") {
+      sendJson(response, 200, {
+        authenticated: true,
+        role: "admin",
+        accountName: "テスト",
+        householdId: "main-household",
+        activeHouseholdId: "main-household",
+        canManageEntries: true,
+        canViewTrash: true,
+        canPermanentlyDelete: true,
+        canViewInvestment: false
+      });
+      return;
+    }
+    if (apiPath === "/meta") {
+      sendJson(response, 200, { draftCount: 0, months: [], tags: [] });
+      return;
+    }
+    if (apiPath === "/entries" && request.method === "GET") {
+      sendJson(response, 200, { entries: [], hasMore: false });
+      return;
+    }
+    if (apiPath === "/entries" && request.method === "POST") {
+      const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
+      const id = scenario.nextEntryId++;
+      scenario.createdEntryIds.add(id);
+      scenario.entryRequests.push({ method: "POST", id, body });
+      sendJson(response, 200, { entry: savedEntry(id, body) });
+      return;
+    }
+    const entryUpdateMatch = apiPath.match(/^\/entries\/(\d+)$/);
+    if (entryUpdateMatch && request.method === "PUT") {
+      const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
+      const id = Number(entryUpdateMatch[1]);
+      scenario.entryRequests.push({ method: "PUT", id, body });
+      sendJson(response, 200, { entry: savedEntry(id, body, Number(body.revision || 1) + 1) });
+      return;
+    }
+    const photoUploadMatch = apiPath.match(/^\/entries\/(\d+)\/photos$/);
+    if (photoUploadMatch && request.method === "POST") {
+      const multipart = (await readRequestBody(request)).toString("latin1");
+      const photoId = multipart.match(photoIdPattern)?.[1];
+      assert.ok(photoId, "photo upload must contain a UUID");
+      scenario.photoRequests += 1;
+      if (scenario.mode === "http-500-once" && scenario.photoRequests === 1) {
+        sendJson(response, 503, { error: "一時的に画像を保存できません。" });
+        return;
+      }
+      if (scenario.mode === "permanent-400") {
+        sendJson(response, 400, { error: "画像形式を確認してください。" });
+        return;
+      }
+      if (scenario.mode === "lost-response" && scenario.photoRequests === 1) {
+        scenario.storedPhotoIds.add(photoId);
+        request.socket.destroy();
+        return;
+      }
+      const idempotent = scenario.storedPhotoIds.has(photoId);
+      scenario.storedPhotoIds.add(photoId);
+      sendJson(response, 200, {
+        photo: {
+          id: photoId,
+          entryId: Number(photoUploadMatch[1]),
+          fileName: "test.png",
+          contentType: "image/png",
+          originalSize: validPng.length,
+          width: 1,
+          height: 1,
+          createdByName: "テスト",
+          createdAt: "2026-08-19 00:00:00",
+          thumbnailUrl: `/diary/api/photos/${photoId}/thumbnail`,
+          displayUrl: `/diary/api/photos/${photoId}/display`,
+          originalUrl: `/diary/api/photos/${photoId}/original`
+        },
+        idempotent
+      });
+      return;
+    }
+    sendJson(response, 200, {});
+    return;
+  }
+  const route = staticFiles.get(url.pathname);
+  if (route) {
+    response.writeHead(200, { "content-type": route[1], "cache-control": "no-store" });
+    response.end(await readFile(`${publicRoot}/${route[0]}`));
+    return;
+  }
+  response.writeHead(200, { "content-type": "text/javascript" });
+  response.end("");
+});
+
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const origin = `http://127.0.0.1:${server.address().port}`;
+
+function browserExecutable(name) {
+  const configured = process.env[`TROOM_${name.toUpperCase()}_EXECUTABLE`];
+  if (configured) return configured;
+  const playwrightRoot = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "ms-playwright") : "";
+  const playwrightFirefox = name === "firefox" && playwrightRoot && existsSync(playwrightRoot)
+    ? readdirSync(playwrightRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith("firefox-"))
+        .sort((left, right) => right.name.localeCompare(left.name, "en", { numeric: true }))
+        .map((entry) => join(playwrightRoot, entry.name, "firefox", "firefox.exe"))
+    : [];
+  const candidates = name === "firefox"
+    ? [...playwrightFirefox, "C:/Program Files/Mozilla Firefox/firefox.exe", "C:/Program Files (x86)/Mozilla Firefox/firefox.exe"]
+    : ["C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe"];
+  return candidates.find(existsSync) || null;
+}
+
+async function newDiaryPage(browser, contextOptions = {}) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, ...contextOptions });
+  await page.addInitScript(() => {
+    const nativeCreateImageBitmap = window.createImageBitmap.bind(window);
+    let releasePreparation = null;
+    window.__holdPhotoPreparation = false;
+    window.__photoPreparationWaiting = false;
+    window.__startPhotoPreparationHold = () => { window.__holdPhotoPreparation = true; };
+    window.__releasePhotoPreparation = () => {
+      window.__holdPhotoPreparation = false;
+      if (releasePreparation) releasePreparation();
+      releasePreparation = null;
+    };
+    window.createImageBitmap = async (...args) => {
+      if (window.__holdPhotoPreparation) {
+        window.__photoPreparationWaiting = true;
+        await new Promise((resolve) => { releasePreparation = resolve; });
+        window.__photoPreparationWaiting = false;
+      }
+      return nativeCreateImageBitmap(...args);
+    };
+  });
+  await page.goto(`${origin}/diary/`);
+  await page.waitForSelector("#app-view:not([hidden])");
+  await page.click("#new-entry-button");
+  await page.waitForSelector("#editor-dialog[open]");
+  await page.fill("#entry-title", "写真付き投稿テスト");
+  await page.evaluate(() => {
+    const editor = document.querySelector("#entry-content");
+    editor.textContent = "本文";
+    editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "本文" }));
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  return page;
+}
+
+async function choosePhoto(page, name = "test.png") {
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.click("#add-photo-button");
+  const chooser = await chooserPromise;
+  await chooser.setFiles({ name, mimeType: "image/png", buffer: validPng });
+}
+
+async function waitForEditorClosed(page) {
+  await page.waitForFunction(() => !document.querySelector("#editor-dialog")?.open);
+}
+
+async function verifyPreparationRace(browser, name, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await page.evaluate(() => window.__startPhotoPreparationHold());
+    await choosePhoto(page, "race.png");
+    await page.waitForFunction(() => window.__photoPreparationWaiting === true);
+    await page.click("#save-entry-button");
+    await page.waitForTimeout(100);
+    assert.equal(scenario.entryRequests.length, 0, `${name}: photo preparation must finish before entry serialization`);
+    await page.evaluate(() => window.__releasePhotoPreparation());
+    await waitForEditorClosed(page);
+    assert.equal(scenario.entryRequests.length, 1, `${name}: preparation race must create one entry`);
+    assert.equal(scenario.photoRequests, 1, `${name}: prepared photo must upload once`);
+    assert.equal(scenario.storedPhotoIds.size, 1, `${name}: prepared photo must be stored once`);
+    assert.match(scenario.entryRequests[0].body.content, /本文\n\[\[写真:[0-9a-f-]{36}\]\]/,
+      `${name}: serialized content must include the completed photo marker`);
+    const runs = scenario.entryRequests[0].body.contentFormat?.runs || [];
+    assert.ok(runs.every((run) => run.start >= 0 && run.end <= scenario.entryRequests[0].body.content.length),
+      `${name}: contentFormat must remain within serialized content`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyAutomaticRecovery(browser, name, mode, contextOptions) {
+  resetScenario(mode);
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await choosePhoto(page, `${mode}.png`);
+    await page.waitForSelector("#editor-photo-list .editor-photo-card");
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.entryRequests.length, 1, `${name} ${mode}: entry must not be duplicated`);
+    assert.equal(scenario.createdEntryIds.size, 1, `${name} ${mode}: exactly one entry ID must be created`);
+    assert.equal(scenario.photoRequests, 2, `${name} ${mode}: upload must retry exactly once before success`);
+    assert.equal(scenario.storedPhotoIds.size, 1, `${name} ${mode}: retry must retain one logical photo`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyPermanentFailure(browser, name, contextOptions) {
+  resetScenario("permanent-400");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await choosePhoto(page, "permanent.png");
+    await page.waitForSelector("#editor-photo-list .editor-photo-card");
+    await page.click("#save-entry-button");
+    await page.waitForFunction(() => document.querySelector("#editor-message")?.textContent.includes("画像形式を確認してください。"));
+    assert.equal(scenario.photoRequests, 1, `${name}: permanent 4xx must not retry`);
+    assert.equal(scenario.createdEntryIds.size, 1, `${name}: partial success must retain the original entry`);
+    assert.equal(await page.locator("#editor-dialog").evaluate((node) => node.open), true, `${name}: editor must remain open after photo failure`);
+    assert.equal(await page.inputValue("#entry-id"), "100", `${name}: saved entry ID must be retained for recovery`);
+
+    scenario.mode = "success";
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT"],
+      `${name}: retry after partial success must update the same entry`);
+    assert.equal(scenario.createdEntryIds.size, 1, `${name}: manual resubmission must not create another entry`);
+    assert.equal(scenario.storedPhotoIds.size, 1, `${name}: recovered photo must be stored once`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function runBrowser(browserType, name, executablePath, contextOptions = {}) {
+  const browser = await browserType.launch({ headless: true, executablePath });
+  try {
+    await verifyPreparationRace(browser, name, contextOptions);
+    await verifyAutomaticRecovery(browser, name, "http-500-once", contextOptions);
+    await verifyAutomaticRecovery(browser, name, "lost-response", contextOptions);
+    await verifyPermanentFailure(browser, name, contextOptions);
+  } finally {
+    await browser.close();
+  }
+}
+
+try {
+  const chromiumPath = browserExecutable("chromium");
+  const firefoxPath = browserExecutable("firefox");
+  if (!chromiumPath || !firefoxPath) throw new Error("Chromium/Firefox executable is required.");
+  await runBrowser(chromium, "Chromium", chromiumPath);
+  await runBrowser(firefox, "Firefox", firefoxPath);
+  await runBrowser(chromium, "Touch", chromiumPath, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  process.stdout.write("Photo post preparation, transient retry, lost-response recovery, and permanent failure recovery passed in Chromium, Firefox, and touch emulation.\n");
+} finally {
+  await new Promise((resolve) => server.close(resolve));
+}

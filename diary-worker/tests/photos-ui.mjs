@@ -38,6 +38,12 @@ assert.match(html, /低画質で保存/);
 assert.match(script, /resizePhoto\(bitmap, 1800, 320 \* 1024/);
 assert.match(script, /\["dragenter", "dragover", "dragleave", "drop"\]/);
 assert.match(script, /prepareSelectedPhotos\(\[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\], getEditorSelectionOffset\("end"\)\)/);
+assert.match(script, /photoPreparationPromise: null/);
+assert.match(script, /await waitForPhotoPreparation\(\);\s*const id = Number\(elements\.entryId\.value/s,
+  "entry serialization must wait for the active photo preparation task");
+assert.match(script, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[250, 750\]\)/);
+assert.match(script, /response\.status < 500 \|\| response\.status > 599/,
+  "only network failures, invalid success responses, and 5xx responses may be retried");
 assert.match(script, /String\(file\.type\)\.startsWith\("image\/"\)/);
 assert.match(script, /state\.editorPhotos = \(entry\?\.photos \|\| \[\]\)\.map/);
 assert.match(script, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);
@@ -57,6 +63,10 @@ assert.match(script, /camera-roll-title/);
 assert.match(script, /function handleCameraRollClick\(event\)[\s\S]*?openPhotoViewer\(state\.photos, index\)/);
 assert.doesNotMatch(script, /elements\.cameraRollDialog\.close\(\);\s*openEntry\(photo\.entryId\);/s);
 assert.match(worker, /diary_photos|uploadEntryPhoto/);
+assert.match(worker, /function existingPhotoUploadResponse\(row, expected\)/);
+assert.match(worker, /Number\(row\.entry_id\) === Number\(expected\.entryId\)/);
+assert.match(worker, /String\(row\.household_id\) === String\(expected\.householdId\)/);
+assert.match(worker, /String\(row\.created_by_id\) === String\(expected\.createdById\)/);
 assert.match(worker, /url\.searchParams\.get\("entryQuery"\)/);
 assert.match(worker, /url\.searchParams\.get\("fileName"\)/);
 assert.match(worker, /EXISTS \(\s*SELECT 1 FROM diary_tags photo_tag/s);

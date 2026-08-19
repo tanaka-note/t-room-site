@@ -602,9 +602,6 @@ async function uploadEntryPhoto(entryId, request, env, session) {
   if (!original.size || original.size > 60 * 1024 * 1024 || display.size > 3 * 1024 * 1024 || thumbnail.size > 700 * 1024) {
     throw new HttpError(413, "画像の容量を確認してください。");
   }
-  const existing = await env.DB.prepare("SELECT id FROM diary_photos WHERE id = ?").bind(id).first();
-  if (existing) throw new HttpError(409, "同じ画像が既に保存されています。");
-
   const safeName = normalizeFileName(original.name || "photo");
   const width = clampNumber(form.get("width"), 1, 100000, null);
   const height = clampNumber(form.get("height"), 1, 100000, null);
@@ -613,6 +610,23 @@ async function uploadEntryPhoto(entryId, request, env, session) {
   const displayKey = `${baseKey}/display`;
   const thumbnailKey = `${baseKey}/thumbnail`;
   const keys = [originalKey, displayKey, thumbnailKey];
+  const expectedPhoto = {
+    id,
+    entryId,
+    householdId: session.activeHouseholdId,
+    createdById: session.accountId,
+    fileName: safeName,
+    contentType: original.type || "application/octet-stream",
+    originalSize: original.size,
+    originalKey,
+    displayKey,
+    thumbnailKey,
+    width,
+    height
+  };
+  const existing = await findPhotoUpload(id, env);
+  if (existing) return existingPhotoUploadResponse(existing, expectedPhoto);
+
   try {
     await Promise.all([
       env.MEDIA.put(originalKey, original.stream(), { httpMetadata: { contentType: original.type || "application/octet-stream" } }),
@@ -631,16 +645,64 @@ async function uploadEntryPhoto(entryId, request, env, session) {
       session.accountId, session.accountName
     ).run();
   } catch (error) {
+    let recovered;
+    try {
+      recovered = await findPhotoUpload(id, env);
+    } catch (lookupError) {
+      console.error("Diary photo upload recovery lookup failed", {
+        stage: "photo-upload-recovery",
+        entryId,
+        photoId: id,
+        errorType: lookupError instanceof Error ? lookupError.name : "unknown"
+      });
+      throw new HttpError(500, "画像の保存結果を確認できませんでした。");
+    }
+    if (recovered) return existingPhotoUploadResponse(recovered, expectedPhoto);
     await Promise.allSettled(keys.map((key) => env.MEDIA.delete(key)));
-    console.error("Diary photo upload failed", error instanceof Error ? error.message : "unknown error");
+    console.error("Diary photo upload failed", {
+      stage: "photo-upload",
+      entryId,
+      photoId: id,
+      errorType: error instanceof Error ? error.name : "unknown"
+    });
     throw new HttpError(500, "画像を保存できませんでした。");
   }
-  const row = await env.DB.prepare(`
-    SELECT id, entry_id, file_name, content_type, original_size, width, height,
-           created_by_name, created_at
-    FROM diary_photos WHERE id = ?
-  `).bind(id).first();
+  const row = await findPhotoUpload(id, env);
   return json({ photo: serializePhoto(row) });
+}
+
+async function findPhotoUpload(id, env) {
+  return env.DB.prepare(`
+    SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size,
+           p.original_key, p.display_key, p.thumbnail_key, p.width, p.height,
+           p.created_by_id, p.created_by_name, p.created_at,
+           e.household_id
+    FROM diary_photos p
+    JOIN diary_entries e ON e.id = p.entry_id
+    WHERE p.id = ?
+  `).bind(id).first();
+}
+
+function existingPhotoUploadResponse(row, expected) {
+  if (!photoUploadMatches(row, expected)) {
+    throw new HttpError(409, "同じ画像IDを別の画像として保存することはできません。");
+  }
+  return json({ photo: serializePhoto(row), idempotent: true });
+}
+
+function photoUploadMatches(row, expected) {
+  const nullableNumber = (value) => value == null ? null : Number(value);
+  return Number(row.entry_id) === Number(expected.entryId)
+    && String(row.household_id) === String(expected.householdId)
+    && String(row.created_by_id) === String(expected.createdById)
+    && String(row.file_name) === String(expected.fileName)
+    && String(row.content_type) === String(expected.contentType)
+    && Number(row.original_size) === Number(expected.originalSize)
+    && String(row.original_key) === String(expected.originalKey)
+    && String(row.display_key) === String(expected.displayKey)
+    && String(row.thumbnail_key) === String(expected.thumbnailKey)
+    && nullableNumber(row.width) === nullableNumber(expected.width)
+    && nullableNumber(row.height) === nullableNumber(expected.height);
 }
 
 async function servePhoto(id, variant, request, env, session, url) {

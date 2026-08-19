@@ -7,6 +7,7 @@
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+  const PHOTO_UPLOAD_RETRY_DELAYS_MS = Object.freeze([250, 750]);
   const RICH_TEXT_COLORS = Object.freeze({
     default: "#27313b",
     red: "#b42318",
@@ -70,6 +71,7 @@
     editorPhotos: [],
     editorDeletedPhotoIds: new Set(),
     photoPreparing: false,
+    photoPreparationPromise: null,
     photoInsertionOffset: null,
     photoOffset: 0,
     photos: [],
@@ -1704,9 +1706,18 @@
     prepareSelectedPhotos([...(event.dataTransfer?.files || [])], getEditorSelectionOffset("end"));
   }
 
-  async function prepareSelectedPhotos(files, insertionOffset = getEditorSelectionOffset("end")) {
-    if (!files.length) return;
-    if (state.photoPreparing) return;
+  function prepareSelectedPhotos(files, insertionOffset = getEditorSelectionOffset("end")) {
+    if (!files.length) return Promise.resolve();
+    if (state.photoPreparationPromise) return state.photoPreparationPromise;
+    const preparation = runPhotoPreparation(files, insertionOffset);
+    const trackedPreparation = preparation.finally(() => {
+      if (state.photoPreparationPromise === trackedPreparation) state.photoPreparationPromise = null;
+    });
+    state.photoPreparationPromise = trackedPreparation;
+    return trackedPreparation;
+  }
+
+  async function runPhotoPreparation(files, insertionOffset) {
     state.photoPreparing = true;
     elements.photoInput.disabled = true;
     elements.photoDropZone.classList.add("is-busy");
@@ -1744,6 +1755,11 @@
       elements.photoDropZone.removeAttribute("aria-disabled");
       setBusy(elements.addPhotoButton, false, "写真を追加");
     }
+  }
+
+  async function waitForPhotoPreparation() {
+    const preparation = state.photoPreparationPromise;
+    if (preparation) await preparation;
   }
 
   async function preparePhoto(file) {
@@ -2470,7 +2486,7 @@
     elements.editorPhotoList?.replaceChildren();
   }
 
-  async function uploadPhoto(entryId, photo) {
+  function createPhotoUploadForm(photo) {
     const form = new FormData();
     form.set("id", photo.id);
     form.set("width", String(photo.width || ""));
@@ -2478,15 +2494,74 @@
     form.set("original", photo.originalFile, photo.fileName);
     form.set("display", photo.displayBlob, "display.webp");
     form.set("thumbnail", photo.thumbnailBlob, "thumbnail.webp");
-    const response = await fetch(`${BASE_PATH}/api/entries/${entryId}/photos`, {
-      method: "POST",
-      headers: { "X-Diary-Request": "1" },
-      credentials: "same-origin",
-      body: form
+    return form;
+  }
+
+  function waitForPhotoUploadRetry(attemptIndex) {
+    return new Promise((resolve) => window.setTimeout(resolve, PHOTO_UPLOAD_RETRY_DELAYS_MS[attemptIndex]));
+  }
+
+  function logPhotoUploadRetry(entryId, photoId, attempt, details) {
+    console.warn("Diary photo upload retry", {
+      stage: "photo-upload",
+      entryId,
+      photoId,
+      retry: attempt,
+      ...details
     });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "画像を保存できませんでした。");
-    return result;
+  }
+
+  async function uploadPhoto(entryId, photo) {
+    const maxAttempts = PHOTO_UPLOAD_RETRY_DELAYS_MS.length + 1;
+    let lastError = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      let response;
+      try {
+        response = await fetch(`${BASE_PATH}/api/entries/${entryId}/photos`, {
+          method: "POST",
+          headers: { "X-Diary-Request": "1" },
+          credentials: "same-origin",
+          body: createPhotoUploadForm(photo)
+        });
+      } catch {
+        lastError = new Error("画像の通信に失敗しました。");
+        if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
+        logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "network" });
+        await waitForPhotoUploadRetry(attempt);
+        continue;
+      }
+
+      let result;
+      try {
+        result = await response.json();
+      } catch {
+        result = {};
+        if (response.ok) {
+          lastError = new Error("画像の保存結果を確認できませんでした。");
+          if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
+          logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
+          await waitForPhotoUploadRetry(attempt);
+          continue;
+        }
+      }
+
+      if (response.ok && result?.photo?.id === photo.id) return result;
+      if (response.ok) {
+        lastError = new Error("画像の保存結果を確認できませんでした。");
+        if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
+        logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
+        await waitForPhotoUploadRetry(attempt);
+        continue;
+      }
+
+      lastError = new Error(result.error || "画像を保存できませんでした。");
+      if (response.status < 500 || response.status > 599 || attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) {
+        throw lastError;
+      }
+      logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "http", status: response.status });
+      await waitForPhotoUploadRetry(attempt);
+    }
+    throw lastError || new Error("画像を保存できませんでした。");
   }
 
   async function deletePhoto(photoId) {
@@ -2540,22 +2615,23 @@
   }
 
   async function persistEditor(targetStatus, { closeAfter = false } = {}) {
-    const id = Number(elements.entryId.value || 0);
-    const editorDocument = serializeRichEditor(true);
-    const body = {
-      entryDate: elements.entryDate.value,
-      title: elements.entryTitle.value,
-      content: editorDocument.content,
-      contentFormat: editorDocument.contentFormat,
-      tags: parseTags(elements.entryTags.value),
-      status: targetStatus,
-      excludedPhotoIds: [...state.editorDeletedPhotoIds]
-    };
-    if (id) body.revision = Number(elements.entryRevision.value);
-
     elements.editorMessage.textContent = "";
     setEditorSaveBusy(true, targetStatus === "draft" ? "下書き保存中..." : "投稿中...");
     try {
+      await waitForPhotoPreparation();
+      const id = Number(elements.entryId.value || 0);
+      const editorDocument = serializeRichEditor(true);
+      const body = {
+        entryDate: elements.entryDate.value,
+        title: elements.entryTitle.value,
+        content: editorDocument.content,
+        contentFormat: editorDocument.contentFormat,
+        tags: parseTags(elements.entryTags.value),
+        status: targetStatus,
+        excludedPhotoIds: [...state.editorDeletedPhotoIds]
+      };
+      if (id) body.revision = Number(elements.entryRevision.value);
+
       const saved = await api(id ? `/entries/${id}` : "/entries", {
         method: id ? "PUT" : "POST",
         body
