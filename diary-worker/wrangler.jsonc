@@ -26,6 +26,10 @@
     {
       "binding": "MEDIA",
       "bucket_name": "t-room-diary-media"
+    },
+    {
+      "binding": "BACKUP",
+      "bucket_name": "t-room-diary-backups"
     }
   ],
   "triggers": {

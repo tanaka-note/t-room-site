@@ -1,3 +1,5 @@
+import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
+
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -63,8 +65,12 @@ export default {
     }
   },
 
-  async scheduled(_controller, env, context) {
-    context.waitUntil(runScheduledMediaDeletionCleanup(env));
+  async scheduled(controller, env, context) {
+    const scheduledTime = Number(controller?.scheduledTime) || Date.now();
+    scheduleIndependentTasks(context, [
+      () => runScheduledDiaryBackup(env, scheduledTime),
+      () => runScheduledMediaDeletionCleanup(env)
+    ]);
   }
 };
 

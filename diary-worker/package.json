@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "node ../tools/sync-web-app-builds.mjs && wrangler deploy",
-    "check": "node --check src/index.js && node --check public/diary.js && node --check public/investment.js",
+    "check": "node --check src/index.js && node --check src/backup.js && node --check public/diary.js && node --check public/investment.js",
     "test:permissions": "node tests/permissions.e2e.mjs",
     "test:households": "node tests/household-isolation.e2e.mjs",
     "test:favorites": "node tests/favorites.e2e.mjs && node tests/favorites-ui.mjs",
@@ -16,6 +16,7 @@
     "test:search": "node tests/search-ui.mjs",
     "test:monthly": "node tests/monthly-ui.mjs",
     "test:photos": "node tests/photos.e2e.mjs && node tests/photos-ui.mjs",
+    "test:backup": "node tests/backup.mjs",
     "test:photo-editor": "node tests/photo-rich-text-editing-ui.mjs",
     "test:photo-post": "node tests/browser/photo-post-resilience.mjs",
     "test:tags": "node tests/tags-ui.mjs",
