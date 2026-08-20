@@ -94,6 +94,9 @@ async function handleApi(request, env, url, path) {
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
   if (path === "/api/items" && request.method === "GET") return listItems(url, env, session);
+  if (path === "/api/player/media" && request.method === "GET") return listPlayerMedia(url, env, session);
+  if (path === "/api/player/youtube/metadata" && request.method === "GET") return getYouTubeMetadata(url, env);
+  if (path === "/api/player/youtube/search" && request.method === "GET") return searchYouTube(url, env);
   if (path === "/api/move-destinations" && request.method === "GET") return listMoveDestinations(url, env, session);
   if (path === "/api/upload-conflict-candidates" && request.method === "POST") return listUploadConflictCandidates(request, env, session);
   if (path === "/api/conflicts" && request.method === "GET") return listStoredConflictCandidates(url, env, session);
@@ -875,6 +878,158 @@ async function listMoveDestinations(url, env, session) {
     FROM folder_tree JOIN cloud_folders f ON f.id = folder_tree.id
     ORDER BY folder_tree.depth ASC, f.name COLLATE NOCASE ASC, f.id ASC`).bind(...values).all();
   return json({ folders: result.results || [] });
+}
+
+async function listPlayerMedia(url, env, session) {
+  const rootFolderId = optionalId(url.searchParams.get("rootFolderId"));
+  if (!rootFolderId) throw new HttpError(400, "Playerに追加するフォルダを確認してください。");
+  await requireFolder(env, rootFolderId);
+  await requireFolderAccess(env, rootFolderId, session);
+  const offset = Math.min(1000000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
+  const pageSize = Math.min(250, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "200", 10) || 200));
+  // A protected child is a new security boundary. It only enters the library after
+  // the user opens that folder and it is registered as its own root on the device.
+  const result = await env.DB.prepare(`WITH RECURSIVE folder_scope(id, parent_id, depth, path_ids) AS (
+      SELECT folder.id, folder.parent_id, 0, CAST(folder.id AS TEXT)
+      FROM cloud_folders folder
+      WHERE folder.id = ? AND folder.deleted_at IS NULL
+      UNION ALL
+      SELECT child.id, child.parent_id, parent.depth + 1,
+        parent.path_ids || ',' || CAST(child.id AS TEXT)
+      FROM cloud_folders child JOIN folder_scope parent ON child.parent_id = parent.id
+      WHERE child.deleted_at IS NULL AND child.password_hash IS NULL AND parent.depth < 100
+    )
+    SELECT file.id, file.folder_id AS folderId,
+      COALESCE(file.display_name, file.original_name) AS name,
+      COALESCE(file.display_mime_type, file.mime_type) AS mimeType,
+      COALESCE(file.display_media_kind, file.media_kind) AS mediaKind,
+      file.size_bytes AS sizeBytes, file.display_metadata_version AS displayMetadataVersion,
+      file.display_last_modified AS displayLastModified,
+      file.display_duration_seconds AS displayDurationSeconds,
+      file.crypto_version AS cryptoVersion, file.encrypted_metadata AS encryptedMetadata,
+      file.metadata_iv AS metadataIv, file.wrapped_file_key AS wrappedFileKey,
+      file.file_key_iv AS fileKeyIv, file.encrypted_size_bytes AS encryptedSizeBytes,
+      file.chunk_size_bytes AS chunkSizeBytes, file.chunk_count AS chunkCount,
+      (file.thumbnail_key IS NOT NULL OR file.display_thumbnail_key IS NOT NULL) AS hasThumbnail,
+      file.display_thumbnail_key IS NOT NULL AS hasDisplayThumbnail,
+      file.created_at AS createdAt, file.updated_at AS updatedAt,
+      scope.depth AS searchDepth, scope.path_ids AS pathFolderIds
+    FROM folder_scope scope JOIN cloud_files file ON file.folder_id = scope.id
+    WHERE file.deleted_at IS NULL AND file.status = 'ready'
+      AND (file.display_metadata_version = 0
+        OR COALESCE(file.display_media_kind, file.media_kind) IN ('audio', 'video'))
+    ORDER BY file.updated_at DESC, file.id DESC LIMIT ? OFFSET ?`)
+    .bind(rootFolderId, pageSize + 1, offset).all();
+  const rows = result.results || [];
+  const visible = rows.slice(0, pageSize);
+  const folderIds = [...new Set(visible.flatMap((file) => String(file.pathFolderIds || "")
+    .split(",").map(Number).filter(Boolean)))];
+  const folders = await loadConflictFolderRecords(env, folderIds);
+  const byId = new Map(folders.map((folder) => [Number(folder.id), folder]));
+  const depthMemo = new Map();
+  const depth = (folder) => {
+    if (!folder) return 0;
+    if (depthMemo.has(Number(folder.id))) return depthMemo.get(Number(folder.id));
+    const value = folder.parentId ? 1 + depth(byId.get(Number(folder.parentId))) : 0;
+    depthMemo.set(Number(folder.id), value);
+    return value;
+  };
+  return json({
+    files: visible.map((file) => ({
+      ...file,
+      durationMs: Math.max(0, Number(file.displayDurationSeconds || 0) * 1000),
+      pathFolderIds: String(file.pathFolderIds || "").split(",").map(Number).filter(Boolean)
+    })),
+    keyFolders: folders
+      .map((folder) => ({ ...folder, isProtected: Boolean(folder.passwordWrappedKey), isUnlocked: true }))
+      .sort((left, right) => depth(left) - depth(right) || Number(left.id) - Number(right.id)),
+    nextOffset: rows.length > pageSize ? offset + pageSize : null
+  });
+}
+
+async function getYouTubeMetadata(url, env) {
+  const videoId = normalizeYouTubeVideoId(url.searchParams.get("videoId"));
+  const cached = await readYouTubeCache(`metadata/${videoId}`);
+  if (cached) return json(cached);
+  requireYouTubeApiKey(env);
+  const items = await fetchYouTubeVideos(env, [videoId]);
+  const item = items.find((candidate) => candidate.videoId === videoId);
+  if (!item) throw new HttpError(404, "YouTube動画を確認できません。");
+  await writeYouTubeCache(`metadata/${videoId}`, item, 24 * 60 * 60);
+  return json(item);
+}
+
+async function searchYouTube(url, env) {
+  const query = String(url.searchParams.get("q") || "").trim();
+  if (query.length < 2 || query.length > 100) throw new HttpError(400, "YouTube検索語を2〜100文字で指定してください。");
+  const maxResults = Math.min(10, Math.max(1, Number.parseInt(url.searchParams.get("maxResults") || "8", 10) || 8));
+  const cacheId = `search/${await sha256Base64Url(`${query.toLowerCase()}|${maxResults}`)}`;
+  const cached = await readYouTubeCache(cacheId);
+  if (cached) return json(cached);
+  requireYouTubeApiKey(env);
+  const params = new URLSearchParams({
+    part: "snippet", type: "video", q: query, maxResults: String(maxResults),
+    safeSearch: "moderate", regionCode: "JP", relevanceLanguage: "ja", key: env.YOUTUBE_API_KEY
+  });
+  const response = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
+  if (!response.ok) throw new HttpError(response.status === 403 ? 503 : 502, "YouTube検索を利用できません。");
+  const payload = await response.json();
+  const ids = (Array.isArray(payload.items) ? payload.items : [])
+    .map((item) => normalizeYouTubeVideoId(item?.id?.videoId, false)).filter(Boolean);
+  const items = ids.length ? await fetchYouTubeVideos(env, ids) : [];
+  const result = { items };
+  await writeYouTubeCache(cacheId, result, 6 * 60 * 60);
+  return json(result);
+}
+
+async function fetchYouTubeVideos(env, ids) {
+  if (!ids.length) return [];
+  const params = new URLSearchParams({
+    part: "snippet,contentDetails,status", id: ids.join(","), key: env.YOUTUBE_API_KEY
+  });
+  const response = await fetch(`https://www.googleapis.com/youtube/v3/videos?${params}`);
+  if (!response.ok) throw new HttpError(response.status === 403 ? 503 : 502, "YouTube動画情報を取得できません。");
+  const payload = await response.json();
+  return (Array.isArray(payload.items) ? payload.items : []).map((item) => ({
+    videoId: item.id,
+    title: String(item.snippet?.title || "YouTube動画").slice(0, 300),
+    channel: String(item.snippet?.channelTitle || "").slice(0, 200),
+    thumbnailUrl: String(item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || ""),
+    durationMs: parseYouTubeDuration(item.contentDetails?.duration),
+    embeddable: item.status?.embeddable !== false
+  })).filter((item) => item.embeddable);
+}
+
+function normalizeYouTubeVideoId(value, required = true) {
+  const videoId = String(value || "").trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(videoId)) return videoId;
+  if (required) throw new HttpError(400, "YouTube video IDを確認してください。");
+  return null;
+}
+
+function requireYouTubeApiKey(env) {
+  if (!String(env.YOUTUBE_API_KEY || "").trim()) {
+    throw new HttpError(503, "YouTube Data APIの設定が完了していません。");
+  }
+}
+
+function parseYouTubeDuration(value) {
+  const match = String(value || "").match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
+  if (!match) return 0;
+  return (((Number(match[1] || 0) * 24 + Number(match[2] || 0)) * 60
+    + Number(match[3] || 0)) * 60 + Number(match[4] || 0)) * 1000;
+}
+
+async function readYouTubeCache(key) {
+  const response = await caches.default.match(`https://troom-player-cache.invalid/${key}`);
+  return response ? response.json() : null;
+}
+
+async function writeYouTubeCache(key, value, ttlSeconds) {
+  const response = new Response(JSON.stringify(value), {
+    headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${ttlSeconds}` }
+  });
+  await caches.default.put(`https://troom-player-cache.invalid/${key}`, response);
 }
 
 async function loadConflictFolderRecords(env, folderIds) {

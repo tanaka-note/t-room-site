@@ -129,6 +129,72 @@ class TCloudRepository(
 
     suspend fun listItems(folderId: Long?): FolderPage = decryptPage(api.listItems(folderId))
 
+    suspend fun listPlayerMedia(rootFolderId: Long): List<CloudPlayerMedia> {
+        val results = linkedMapOf<Long, CloudPlayerMedia>()
+        var offset: Int? = 0
+        var pages = 0
+        while (offset != null && pages < MAX_PLAYER_MEDIA_PAGES) {
+            currentCoroutineContext().ensureActive()
+            val page = api.listPlayerMedia(rootFolderId, offset)
+            page.keyFolders.forEach { knownFolders[it.id] = it }
+            val visibleFolders = linkedMapOf<Long, CloudFolder>()
+            page.keyFolders.forEach { folder ->
+                val visible = runCatching {
+                    val key = prepareFolderKey(folder)
+                    try {
+                        folder.copy(
+                            name = if (folder.encryptedName.isNotBlank()) {
+                                TCloudCrypto.decryptFolderName(folder, key)
+                            } else {
+                                folder.name
+                            },
+                            isUnlocked = true,
+                        )
+                    } finally {
+                        key.fill(0)
+                    }
+                }.getOrNull() ?: return@forEach
+                knownFolders[folder.id] = visible
+                visibleFolders[folder.id] = visible
+            }
+            page.files.forEach { record ->
+                val folder = visibleFolders[record.file.folderId] ?: knownFolders[record.file.folderId]
+                    ?: return@forEach
+                val key = runCatching { prepareFolderKey(folder) }.getOrNull() ?: return@forEach
+                val metadata = try {
+                    runCatching { TCloudCrypto.decryptFileMetadata(record.file, key) }.getOrNull()
+                } finally {
+                    key.fill(0)
+                } ?: return@forEach
+                val file = record.file.copy(
+                    name = metadata.name,
+                    mimeType = metadata.mimeType,
+                    mediaKind = metadata.mediaKind,
+                    lastModified = metadata.lastModified,
+                    metadataDecrypted = true,
+                    searchPath = record.pathFolderIds.mapNotNull { visibleFolders[it]?.name ?: knownFolders[it]?.name }
+                        .joinToString(" / "),
+                )
+                if (file.mediaKind in setOf("audio", "video")) {
+                    results[file.id] = record.copy(file = file, folder = folder)
+                }
+            }
+            offset = page.nextOffset
+            pages += 1
+        }
+        return results.values.toList()
+    }
+
+    fun prepareCloudPlayback(file: CloudFile, folder: CloudFolder) {
+        knownFolders[folder.id] = folder
+        prepareFolderKey(folder).fill(0)
+    }
+
+    suspend fun youtubeMetadata(videoId: String): YouTubeVideoMetadata = api.youtubeMetadata(videoId)
+
+    suspend fun searchYouTube(query: String, maxResults: Int = 8): List<YouTubeVideoMetadata> =
+        api.searchYouTube(query, maxResults)
+
     suspend fun searchItems(
         folderId: Long?,
         query: String,
@@ -837,6 +903,7 @@ class TCloudRepository(
         const val FOLDER_KEY_TTL_SECONDS = 30L * 24 * 60 * 60
         const val MAX_SEARCH_RESULTS = 2_000
         const val MAX_SEARCH_PAGES = 4_000
+        const val MAX_PLAYER_MEDIA_PAGES = 20_000
     }
 
     class PlaybackSession internal constructor(

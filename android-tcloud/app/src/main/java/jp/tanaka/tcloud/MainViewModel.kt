@@ -26,6 +26,11 @@ import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
 import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.media.TCloudDataSource
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
+import jp.tanaka.tcloud.library.MediaLibraryManager
+import jp.tanaka.tcloud.library.MediaLibraryState
+import jp.tanaka.tcloud.library.PlayableMediaItem
+import jp.tanaka.tcloud.library.LibraryMediaType
+import jp.tanaka.tcloud.library.MediaSourceType
 import jp.tanaka.tcloud.offline.TCloudOfflineManager
 import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupManager
@@ -77,6 +82,8 @@ data class MainUiState(
     val showingOffline: Boolean = false,
     val offlineEntries: List<TCloudOfflineStore.OfflineEntry> = emptyList(),
     val showingTrash: Boolean = false,
+    val showingPlayerLibrary: Boolean = false,
+    val selectedLibraryMedia: PlayableMediaItem? = null,
     val trashPage: TrashPage = TrashPage(emptyList(), emptyList()),
     val cloudUsage: CloudUsage = CloudUsage(),
     val usageDetails: List<CloudUsageFolder> = emptyList(),
@@ -106,11 +113,13 @@ class MainViewModel(
     private val offlineManager: TCloudOfflineManager,
     private val cameraBackupManager: CameraBackupManager,
     private val playbackManager: TCloudPlaybackManager,
+    private val mediaLibraryManager: MediaLibraryManager,
     private val transferStore: TCloudTransferStore,
     private val transferCancellation: TCloudTransferCancellation,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(MainUiState())
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
+    val mediaLibraryState: StateFlow<MediaLibraryState> = mediaLibraryManager.state
     private var imageLoadJob: Job? = null
     private var searchJob: Job? = null
     private val thumbnailJobs = mutableMapOf<Long, Job>()
@@ -120,6 +129,7 @@ class MainViewModel(
         viewModelScope.launch {
             runCatching { repository.restore() }
                 .onSuccess { (session, page) ->
+                    if (!session.authenticated) mediaLibraryManager.clearCloud()
                     mutableState.value = MainUiState(
                         restoring = false,
                         session = session.takeIf { it.authenticated },
@@ -130,6 +140,7 @@ class MainViewModel(
                     )
                 }
                 .onFailure { error ->
+                    mediaLibraryManager.clearCloud()
                     mutableState.value = MainUiState(
                         restoring = false,
                         transferBatches = transferStore.batches.value,
@@ -262,10 +273,74 @@ class MainViewModel(
                 error = null,
             )
         }
+        if (folder.isProtected) mediaLibraryManager.registerCloudRoot(folder.id)
+    }
+
+    fun openPlayerLibrary() {
+        mutableState.update { it.copy(showingPlayerLibrary = true, error = null) }
+        mediaLibraryManager.refreshLocalAsync()
+        mediaLibraryManager.refreshCloudAsync()
+        mediaLibraryManager.refreshRecommendationsAsync()
+    }
+
+    fun closePlayerLibrary() {
+        mutableState.update { it.copy(showingPlayerLibrary = false, selectedLibraryMedia = null) }
+    }
+
+    fun openLibraryMedia(item: PlayableMediaItem) {
+        mediaLibraryManager.ensureStored(item)
+        if (item.mediaType == LibraryMediaType.AUDIO && item.source != MediaSourceType.YOUTUBE) {
+            runCatching {
+                playbackManager.playQueue(
+                    mediaLibraryManager.state.value.items,
+                    item.stableId,
+                    startAtBeginning = false,
+                )
+            }.onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
+        } else {
+            mutableState.update { it.copy(selectedLibraryMedia = item) }
+            mediaLibraryManager.recordPlayback(item.stableId, item.playbackPositionMs, item.durationMs)
+        }
+    }
+
+    fun closeLibraryMedia(positionMs: Long = 0L, durationMs: Long = 0L) {
+        mutableState.value.selectedLibraryMedia?.let { mediaLibraryManager.recordPlayback(it.stableId, positionMs, durationMs) }
+        mutableState.update { it.copy(selectedLibraryMedia = null) }
+    }
+
+    suspend fun saveYouTube(input: String): PlayableMediaItem = mediaLibraryManager.saveYouTube(input)
+
+    suspend fun loadMediaArtwork(item: PlayableMediaItem): Bitmap? = mediaLibraryManager.loadArtwork(item)
+
+    fun setMediaFavorite(item: PlayableMediaItem, enabled: Boolean) =
+        mediaLibraryManager.setFavorite(item, enabled)
+
+    fun setMediaWatchLater(item: PlayableMediaItem, enabled: Boolean) =
+        mediaLibraryManager.setWatchLater(item, enabled)
+
+    fun createMediaPlaylist(name: String): Long = mediaLibraryManager.createPlaylist(name)
+
+    fun addMediaToPlaylist(playlistId: Long, item: PlayableMediaItem) =
+        mediaLibraryManager.addToPlaylist(playlistId, item)
+
+    fun setMediaTags(item: PlayableMediaItem, tags: Set<String>) = mediaLibraryManager.setTags(item, tags)
+
+    fun refreshMediaLibrary() {
+        mediaLibraryManager.refreshLocalAsync()
+        mediaLibraryManager.refreshCloudAsync()
+        mediaLibraryManager.refreshRecommendationsAsync(force = true)
     }
 
     fun goBack(): Boolean {
         val current = mutableState.value
+        if (current.selectedLibraryMedia != null) {
+            closeLibraryMedia()
+            return true
+        }
+        if (current.showingPlayerLibrary) {
+            closePlayerLibrary()
+            return true
+        }
         if (current.selectedFile != null) {
             closeFile()
             return true
@@ -384,6 +459,7 @@ class MainViewModel(
     fun logout() {
         viewModelScope.launch {
             playbackManager.stop()
+            mediaLibraryManager.clearCloud()
             val backup = cameraBackupManager.settings()
             if (backup.enabled) cameraBackupManager.update(
                 false,
@@ -604,6 +680,7 @@ class MainViewModel(
             try {
                 repository.deleteItems(files, folders, scopeRootId)
                 val page = repository.listItems(currentPage.currentFolderId)
+                mediaLibraryManager.refreshCloudAsync()
                 mutableState.update {
                     it.copy(
                         busy = false,
@@ -723,6 +800,7 @@ class MainViewModel(
                 repository.changeFolderPassword(folder, password)
                 repository.listItems(current.page?.currentFolderId)
             }.onSuccess { page ->
+                mediaLibraryManager.refreshCloudAsync()
                 mutableState.update {
                     it.copy(
                         busy = false,
@@ -746,6 +824,7 @@ class MainViewModel(
         viewModelScope.launch {
             runCatching {
                 repository.lockFolder(folder)
+                mediaLibraryManager.removeCloudPath(folder.id)
                 repository.listItems(current.page?.currentFolderId)
             }.onSuccess { page ->
                 mutableState.update {
@@ -885,6 +964,7 @@ class MainViewModel(
                 repository.listItems(current.page?.currentFolderId)
             }
                 .onSuccess { page ->
+                    mediaLibraryManager.refreshCloudAsync()
                     mutableState.update {
                         it.copy(
                             busy = false,
@@ -912,6 +992,7 @@ class MainViewModel(
                 repository.listItems(current.page?.currentFolderId)
             }
                 .onSuccess { page ->
+                    mediaLibraryManager.refreshCloudAsync()
                     mutableState.update {
                         it.copy(
                             busy = false,
@@ -940,6 +1021,7 @@ class MainViewModel(
                 repository.listItems(current.page?.currentFolderId)
             }
                 .onSuccess { page ->
+                    mediaLibraryManager.refreshCloudAsync()
                     mutableState.update {
                         it.copy(
                             busy = false,
@@ -992,6 +1074,7 @@ class MainViewModel(
                 repository.listItems(current.page?.currentFolderId)
             }
                 .onSuccess { page ->
+                    mediaLibraryManager.refreshCloudAsync()
                     mutableState.update {
                         it.copy(
                             busy = false,
@@ -1211,6 +1294,7 @@ class MainViewModel(
                 operation()
                 repository.listTrash()
             }.onSuccess { page ->
+                mediaLibraryManager.refreshCloudAsync()
                 mutableState.update { it.copy(busy = false, trashPage = page, message = message) }
             }.onFailure { error -> mutableState.update { it.copy(busy = false, error = error.userMessage()) } }
         }
@@ -1242,6 +1326,7 @@ class MainViewModel(
         if (batches.none { folderId in it.folderIds }) return
         runCatching { repository.listItems(folderId) }
             .onSuccess { refreshed ->
+                mediaLibraryManager.refreshCloudAsync()
                 mutableState.update { state ->
                     if (state.page?.currentFolderId == folderId) state.copy(page = refreshed) else state
                 }

@@ -57,7 +57,7 @@ class TCloudPlaybackService : Service(), Player.Listener {
                 return START_NOT_STICKY
             }
         }
-        if (manager.currentFileId == null) {
+        if (manager.currentStableId == null) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -87,7 +87,7 @@ class TCloudPlaybackService : Service(), Player.Listener {
     }
 
     private fun updateNotification() {
-        if (manager.currentFileId == null) return
+        if (manager.currentStableId == null) return
         val state = PlaybackState.Builder()
             .setActions(
                 PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or

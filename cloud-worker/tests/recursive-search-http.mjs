@@ -120,7 +120,8 @@ for (let index = 1; index <= 5; index += 1) {
 
 const image = await uploadFile(nested, "月次・検索対象.jpg", "image/jpeg", "image", true);
 const video = await uploadFile(documents, "秘密動画・検索対象.mp4", "video/mp4", "video", false);
-const lockedFile = await uploadFile(locked, "個別ロック・検索対象.jpg", "image/jpeg", "image", true);
+const audio = await uploadFile(nested, "音楽・検索対象.mp3", "audio/mpeg", "audio", false);
+const lockedFile = await uploadFile(locked, "個別ロック・検索対象.mp4", "video/mp4", "video", false);
 const outsideFile = await uploadFile(outside, "別家庭・検索対象.jpg", "image/jpeg", "image", true);
 await uploadFile(nested, "一致しない資料.pdf", "application/pdf", "document", true);
 
@@ -140,6 +141,15 @@ assert.equal(scopedAdmin.canTrashContents, true, "管理者の検索結果で既
 
 const beforeUnlock = await jsonApi("/items?q=検索対象&recursive=1&pageSize=100", "subadmin");
 assert.equal(beforeUnlock.files.length, 0, "未解除の最上位フォルダ内が副管理者へ漏れています。");
+await jsonApi(`/player/media?rootFolderId=${rootA.id}`, "subadmin", {}, 423);
+
+const adminPlayer = await jsonApi(`/player/media?rootFolderId=${rootA.id}&pageSize=1`, "admin");
+assert.equal(adminPlayer.files.length, 1, "Player media indexのページ件数が不正です。");
+assert.notEqual(adminPlayer.nextOffset, null, "Player media indexの続き位置がありません。");
+const adminPlayerNext = await jsonApi(`/player/media?rootFolderId=${rootA.id}&pageSize=1&offset=${adminPlayer.nextOffset}`, "admin");
+assert(adminPlayerNext.files.length > 0, "Player media indexの続きが取得できません。");
+assert(![...adminPlayer.files, ...adminPlayerNext.files].some((item) => Number(item.id) === lockedFile.id), "管理者のPlayerへ未解除の子PW領域が混入しました。");
+assert(adminPlayer.keyFolders.every((folder, index, folders) => !folder.parentId || folders.findIndex((candidate) => Number(candidate.id) === Number(folder.parentId)) < index), "Player鍵フォルダが親子順ではありません。");
 await jsonApi(`/folders/${rootA.id}/unlock`, "subadmin", {
   method: "POST",
   body: JSON.stringify({ authProof: rootA.payload.authProof })
@@ -149,6 +159,11 @@ const afterRootUnlock = await jsonApi("/items?q=検索対象&recursive=1&pageSiz
 assert(afterRootUnlock.files.some((item) => Number(item.id) === image.id), "解除済み範囲の深いファイルが副管理者検索に出ません。");
 assert(!afterRootUnlock.files.some((item) => Number(item.id) === lockedFile.id), "未解除の個別ロック内が副管理者へ漏れています。");
 assert(!afterRootUnlock.files.some((item) => Number(item.id) === outsideFile.id), "別の最上位フォルダが副管理者へ漏れています。");
+const playerAfterRootUnlock = await jsonApi(`/player/media?rootFolderId=${rootA.id}&pageSize=100`, "subadmin");
+assert(playerAfterRootUnlock.files.some((item) => Number(item.id) === video.id), "解除済み範囲の動画がPlayerへ出ません。");
+assert(playerAfterRootUnlock.files.some((item) => Number(item.id) === audio.id), "解除済み範囲の音楽がPlayerへ出ません。");
+assert(!playerAfterRootUnlock.files.some((item) => Number(item.id) === lockedFile.id), "未解除の子PW領域がPlayerへ漏れています。");
+assert(!playerAfterRootUnlock.files.some((item) => Number(item.id) === image.id), "画像がPlayer media indexへ混入しました。");
 
 await jsonApi(`/folders/${locked.id}/unlock`, "subadmin", {
   method: "POST",
@@ -157,6 +172,10 @@ await jsonApi(`/folders/${locked.id}/unlock`, "subadmin", {
 const afterChildUnlock = await jsonApi(`/items?folderId=${rootA.id}&q=検索対象&recursive=1&pageSize=100`, "subadmin");
 assert(afterChildUnlock.files.some((item) => Number(item.id) === lockedFile.id), "個別ロック解除後も検索できません。");
 assert.equal(afterChildUnlock.canTrashContents, true, "副管理者の解除範囲内削除権限が検索時に失われました。");
+const playerRootAfterChildUnlock = await jsonApi(`/player/media?rootFolderId=${rootA.id}&pageSize=100`, "subadmin");
+assert(!playerRootAfterChildUnlock.files.some((item) => Number(item.id) === lockedFile.id), "別PW境界が親ルートのPlayer走査へ混入しました。");
+const playerChildRoot = await jsonApi(`/player/media?rootFolderId=${locked.id}&pageSize=100`, "subadmin");
+assert(playerChildRoot.files.some((item) => Number(item.id) === lockedFile.id), "個別解除した子PWルートがPlayerへ追加されません。");
 
 const imageOnly = await jsonApi(`/items?folderId=${rootA.id}&q=検索対象&kind=image&recursive=1&pageSize=100`, "admin");
 assert(imageOnly.files.some((item) => Number(item.id) === image.id), "写真絞り込みで画像が見つかりません。");
@@ -181,6 +200,10 @@ assert.equal(noMatch.folders.length, 0, "0件検索へフォルダが混入し�
 // 暗号化動画はサーバーで平文名を持たないため候補として返し、端末で復号後に除外する。
 for (const item of noMatch.files) {
   assert.equal(Number(item.displayMetadataVersion || 0), 0, "0件検索へ平文不一致ファイルが混入しました。");
+}
+
+if (!vars.YOUTUBE_API_KEY) {
+  await jsonApi("/player/youtube/metadata?videoId=dQw4w9WgXcQ", "admin", {}, 503);
 }
 
 console.log("recursive search HTTP with nested test data: ok");

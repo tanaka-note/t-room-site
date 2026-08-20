@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
                     app.offlineManager,
                     app.cameraBackupManager,
                     app.playbackManager,
+                    app.mediaLibraryManager,
                     app.transferStore,
                     app.transferCancellation,
                 ) as T

@@ -110,6 +110,28 @@ data class CloudSearchResults(
     val truncated: Boolean = false,
 )
 
+data class CloudPlayerMedia(
+    val file: CloudFile,
+    val pathFolderIds: List<Long>,
+    val durationMs: Long = 0,
+    val folder: CloudFolder? = null,
+)
+
+data class CloudPlayerMediaPage(
+    val files: List<CloudPlayerMedia>,
+    val keyFolders: List<CloudFolder>,
+    val nextOffset: Int?,
+)
+
+data class YouTubeVideoMetadata(
+    val videoId: String,
+    val title: String,
+    val channel: String,
+    val thumbnailUrl: String,
+    val durationMs: Long = 0,
+    val embeddable: Boolean = true,
+)
+
 data class CloudUsage(
     val activeFileCount: Int = 0,
     val activeBytes: Long = 0,

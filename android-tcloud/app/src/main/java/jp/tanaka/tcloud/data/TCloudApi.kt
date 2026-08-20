@@ -149,6 +149,36 @@ class TCloudApi(
         )
     }
 
+    suspend fun listPlayerMedia(
+        rootFolderId: Long,
+        offset: Int,
+        pageSize: Int = 200,
+    ): CloudPlayerMediaPage {
+        val suffix = "?rootFolderId=$rootFolderId&offset=${offset.coerceAtLeast(0)}" +
+            "&pageSize=${pageSize.coerceIn(1, 250)}"
+        val json = request("GET", "/player/media$suffix")
+        return CloudPlayerMediaPage(
+            files = json.optJSONArray("files").orEmpty().mapObjects { item ->
+                CloudPlayerMedia(
+                    file = item.toCloudFile(),
+                    pathFolderIds = item.optJSONArray("pathFolderIds").orEmpty().mapLongs(),
+                    durationMs = item.optLong("durationMs", 0L).coerceAtLeast(0L),
+                )
+            },
+            keyFolders = json.optJSONArray("keyFolders").orEmpty().mapObjects { it.toFolder() },
+            nextOffset = json.optIntOrNull("nextOffset"),
+        )
+    }
+
+    suspend fun youtubeMetadata(videoId: String): YouTubeVideoMetadata =
+        request("GET", "/player/youtube/metadata?videoId=${encode(videoId)}").toYouTubeMetadata()
+
+    suspend fun searchYouTube(query: String, maxResults: Int = 8): List<YouTubeVideoMetadata> =
+        request(
+            "GET",
+            "/player/youtube/search?q=${encode(query)}&maxResults=${maxResults.coerceIn(1, 10)}",
+        ).optJSONArray("items").orEmpty().mapObjects { it.toYouTubeMetadata() }
+
     suspend fun listMoveDestinations(scopeRootId: Long?): List<MoveDestination> {
         val suffix = scopeRootId?.let { "?scopeRootId=$it" }.orEmpty()
         return request("GET", "/move-destinations$suffix")
@@ -635,12 +665,27 @@ class TCloudApi(
         searchDepth = optInt("searchDepth", 0),
     )
 
+    private fun JSONObject.toYouTubeMetadata() = YouTubeVideoMetadata(
+        videoId = getString("videoId"),
+        title = optString("title", "YouTube動画"),
+        channel = optString("channel", ""),
+        thumbnailUrl = optString("thumbnailUrl", ""),
+        durationMs = optLong("durationMs", 0L).coerceAtLeast(0L),
+        embeddable = optBooleanCompat("embeddable"),
+    )
+
     private fun JSONArray?.orEmpty(): JSONArray = this ?: JSONArray()
 
     private inline fun <T> JSONArray.mapObjects(transform: (JSONObject) -> T): List<T> =
         buildList(length()) {
             for (index in 0 until length()) add(transform(getJSONObject(index)))
         }
+
+    private fun JSONArray.mapLongs(): List<Long> = buildList(length()) {
+        for (index in 0 until length()) add(optLong(index))
+    }
+
+    private fun encode(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
 
     private fun JSONObject.optLongOrNull(name: String): Long? =
         if (isNull(name) || !has(name)) null else optLong(name)

@@ -9,6 +9,7 @@
 - パッケージ名: `jp.tanaka.tcloud`
 - 対応OS: Android 8.0（API 26）以降
 - 対象SDK: Android 16（API 36）
+- アプリ版: `1.1.0`（versionCode 28）
 
 Android 8.0まで対応範囲を広げつつ、API 36を対象にして新しいAndroidのセキュリティ要件へ対応します。
 
@@ -54,10 +55,19 @@ Android 8.0まで対応範囲を広げつつ、API 36を対象にして新しい
 - Android KeystoreによるCookie・アカウント鍵・フォルダ鍵の保護
 - HTTPS以外の通信拒否
 - アプリデータのOSバックアップ禁止
+- Storageトップの再生アイコンから開く専用Playerライブラリ
+- MediaStoreの端末音楽・動画と、実際に解除したT-Cloudフォルダ配下の音楽・動画を共通索引へ差分反映
+- 端末SQLite索引の即時表示、端末／T-Cloud／YouTubeの横断検索と保存元絞り込み
+- 曲・アーティスト・アルバム・最近再生・お気に入り・あとで見る・混在プレイリスト
+- 端末とT-Cloudを混在できる音楽キュー、シャッフル、全体リピート、1曲リピート
+- YouTube URL／video IDのリンク保存、公式IFrame Playerによる再生、履歴・お気に入り・プレイリスト
+- 端末内の再生傾向に基づく「T-Cloud Playerのおすすめ」と、TTLキャッシュ付きYouTube候補取得
+
+YouTube動画はダウンロード・録画・R2保存せず、公式埋め込みPlayerだけで再生します。YouTube Data APIキーはAPKやGitHubへ含めず、Cloudflare Worker Secret `YOUTUBE_API_KEY` として設定します。Secret未設定時もYouTube URL保存と公式再生、Local／T-Cloudライブラリは利用できますが、オンラインのタイトル取得と新規おすすめ検索は設定完了まで利用できません。
 
 パスワード、平文ファイル、復号鍵をCloudflareへ送信しません。署名鍵とパスワードもリポジトリへ保存しません。
 
-## 次の開発段階
+## 今後の実機検証・改善候補
 
 - 端末保存の複数選択削除・容量集計・空き容量表示
 - Media3で直接再生できないFLVに限定した端末内MP4変換と変換キャッシュ

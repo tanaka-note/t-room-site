@@ -13,6 +13,7 @@ import jp.tanaka.tcloud.transfer.TCloudTransferCancellation
 import jp.tanaka.tcloud.backup.CameraBackupManager
 import jp.tanaka.tcloud.backup.CameraBackupStore
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
+import jp.tanaka.tcloud.library.MediaLibraryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,8 +30,6 @@ class TCloudApplication : Application() {
     val cameraBackupManager: CameraBackupManager by lazy {
         CameraBackupManager(this, cameraBackupStore, transferStore)
     }
-    val playbackManager: TCloudPlaybackManager by lazy { TCloudPlaybackManager(this) }
-
     val repository: TCloudRepository by lazy {
         val sessionStore = SecureSessionStore(this)
         TCloudRepository(
@@ -38,6 +37,17 @@ class TCloudApplication : Application() {
             sessionStore = sessionStore,
             offlineStore = offlineStore,
         )
+    }
+    val mediaLibraryManager: MediaLibraryManager by lazy { MediaLibraryManager(this, repository) }
+    val playbackManager: TCloudPlaybackManager by lazy {
+        TCloudPlaybackManager(this, repository).also { manager ->
+            manager.playbackRecorded = { item, position, duration ->
+                mediaLibraryManager.recordPlayback(item.stableId, position, duration)
+            }
+            manager.metadataResolved = { item, title, artist, album, track ->
+                mediaLibraryManager.updatePlaybackMetadata(item.stableId, title, artist, album, track)
+            }
+        }
     }
     val transferCancellation: TCloudTransferCancellation by lazy {
         TCloudTransferCancellation(this, transferStore, repository, cameraBackupManager)
@@ -48,5 +58,6 @@ class TCloudApplication : Application() {
         applicationScope.launch { offlineStore.cleanupExpired() }
         cameraBackupManager.restoreSchedule()
         transferCancellation.scheduleTerminalTicketCleanup()
+        mediaLibraryManager.refreshLocalAsync()
     }
 }

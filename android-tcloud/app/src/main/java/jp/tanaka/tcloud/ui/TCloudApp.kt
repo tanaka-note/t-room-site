@@ -74,6 +74,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SelectAll
@@ -168,6 +169,10 @@ import jp.tanaka.tcloud.backup.CameraBackupSourceFolder
 import jp.tanaka.tcloud.media.TvCastLauncher
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import jp.tanaka.tcloud.media.PlaybackMode
+import jp.tanaka.tcloud.library.MediaSourceType
+import jp.tanaka.tcloud.library.LibraryMediaType
+import jp.tanaka.tcloud.library.PlayableMediaItem
+import jp.tanaka.tcloud.library.requiredLocalMediaPermissions
 import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
 import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.transfer.TransferStatus
@@ -180,6 +185,9 @@ private val TCloudBackground = Color(0xFFF4F7F8)
 private val TCloudLine = Color(0xFFDCE2E7)
 private val TCloudMuted = Color(0xFF68737D)
 private val TCloudSelection = Color(0xFFE4F3F0)
+
+internal fun playerEntryVisible(currentFolderId: Long?, selectionMode: Boolean): Boolean =
+    currentFolderId == null && !selectionMode
 
 private data class PendingCameraBackupSettings(
     val enabled: Boolean,
@@ -198,6 +206,7 @@ fun TCloudApp(
     applicationVisible: Boolean = true,
 ) {
     val state by viewModel.state.collectAsState()
+    val mediaLibraryState by viewModel.mediaLibraryState.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val playbackManager = remember {
@@ -226,6 +235,7 @@ fun TCloudApp(
     var pendingCameraBackupSettings by remember { mutableStateOf<PendingCameraBackupSettings?>(null) }
     var pendingCameraFolderScan by remember { mutableStateOf(false) }
     var pendingAudioFile by remember { mutableStateOf<CloudFile?>(null) }
+    var pendingLibraryAudio by remember { mutableStateOf<PlayableMediaItem?>(null) }
 
     fun hasCameraMediaPermission(includeImages: Boolean, includeVideos: Boolean): Boolean = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
@@ -269,6 +279,12 @@ fun TCloudApp(
         pendingAudioFile?.let(viewModel::openFile)
         pendingAudioFile = null
     }
+    val libraryAudioNotificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        pendingLibraryAudio?.let(viewModel::openLibraryMedia)
+        pendingLibraryAudio = null
+    }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { results ->
@@ -308,6 +324,9 @@ fun TCloudApp(
             }
         }
     }
+    val localMediaPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { viewModel.refreshMediaLibrary() }
 
     fun transferPermissions(includeStorage: Boolean): Array<String> = buildList {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -378,6 +397,17 @@ fun TCloudApp(
             audioNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             viewModel.openFile(file)
+        }
+    }
+
+    fun requestOpenLibraryMedia(item: PlayableMediaItem) {
+        if (item.mediaType == LibraryMediaType.AUDIO && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingLibraryAudio = item
+            libraryAudioNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.openLibraryMedia(item)
         }
     }
 
@@ -501,6 +531,32 @@ fun TCloudApp(
                     snackbar = snackbar,
                     onLogin = viewModel::login,
                 )
+                state.selectedLibraryMedia?.source == MediaSourceType.YOUTUBE -> YouTubePlayerScreen(
+                    item = checkNotNull(state.selectedLibraryMedia),
+                    applicationVisible = applicationVisible,
+                    onClose = { viewModel.closeLibraryMedia() },
+                )
+                state.selectedLibraryMedia != null -> LibraryVideoPlayerScreen(
+                    item = checkNotNull(state.selectedLibraryMedia),
+                    playbackManager = playbackManager,
+                    pictureInPicture = pictureInPicture,
+                    onClose = viewModel::closeLibraryMedia,
+                )
+                state.showingPlayerLibrary -> MediaLibraryScreen(
+                    state = mediaLibraryState,
+                    playbackManager = playbackManager,
+                    onBack = viewModel::closePlayerLibrary,
+                    onRefresh = viewModel::refreshMediaLibrary,
+                    onRequestLocalPermission = { localMediaPermissionLauncher.launch(requiredLocalMediaPermissions()) },
+                    onOpen = ::requestOpenLibraryMedia,
+                    onLoadArtwork = viewModel::loadMediaArtwork,
+                    onSaveYouTube = viewModel::saveYouTube,
+                    onFavorite = viewModel::setMediaFavorite,
+                    onWatchLater = viewModel::setMediaWatchLater,
+                    onCreatePlaylist = viewModel::createMediaPlaylist,
+                    onAddToPlaylist = viewModel::addMediaToPlaylist,
+                    onSetTags = viewModel::setMediaTags,
+                )
                 state.selectedFile?.mediaKind == "image" -> ImageViewerScreen(
                     file = checkNotNull(state.selectedFile),
                     bitmap = state.imageBitmap,
@@ -612,6 +668,7 @@ fun TCloudApp(
                         viewModel.refreshUsage()
                         showAppSettings = true
                     },
+                    onOpenPlayer = viewModel::openPlayerLibrary,
                     onSearch = viewModel::search,
                     onCancelTransfer = viewModel::cancelTransfer,
                     onDismissTransferFailure = viewModel::dismissTransferFailureNotice,
@@ -992,6 +1049,7 @@ private fun FolderScreen(
     onLogout: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenPlayer: () -> Unit,
     onSearch: (String, String) -> Unit,
     onCancelTransfer: (String) -> Unit,
     onDismissTransferFailure: (String) -> Unit,
@@ -1189,6 +1247,11 @@ private fun FolderScreen(
                             }
                         }
                     } else {
+                    if (playerEntryVisible(currentFolderId, selectionMode)) {
+                        IconButton(onClick = onOpenPlayer, enabled = !busy) {
+                            Icon(Icons.Default.PlayCircle, contentDescription = "T-Cloud Playerを開く")
+                        }
+                    }
                     IconButton(onClick = onOpenSettings, enabled = !busy) {
                         Icon(Icons.Default.SettingsIcon, contentDescription = "アプリ設定")
                     }
