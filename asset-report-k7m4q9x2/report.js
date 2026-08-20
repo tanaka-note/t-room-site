@@ -8,7 +8,7 @@ const reportData = {
     value: 1058649
   },
   operatingExpense: {
-    name: "運用手数料・雑費",
+    name: "投資信託他売却損",
     appliedFrom: "2026-08-15",
     value: -100000
   },
@@ -318,7 +318,7 @@ function renderHoldings() {
   operatingExpenseRow.innerHTML = `
     <td><span class="asset-name"><strong>${reportData.operatingExpense.name}</strong><small>運用成績調整</small></span></td>
     <td data-label="時価総額" class="unknown-value">—</td>
-    <td data-label="手数料・雑費" class="${operatingExpenseClass}">${formatYen(reportData.operatingExpense.value, true)}</td>
+    <td data-label="投資信託他売却損" class="${operatingExpenseClass}">${formatYen(reportData.operatingExpense.value, true)}</td>
     <td data-label="損益率" class="unknown-value">—</td>
   `;
   fragment.appendChild(operatingExpenseRow);

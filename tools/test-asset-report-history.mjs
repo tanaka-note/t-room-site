@@ -67,6 +67,8 @@ assert.equal(latestCurrent, 6316884);
 
 assert.match(reportSource, /period: "2026-08-19"/);
 assert.match(reportSource, /appliedFrom: "2026-08-15"/);
+assert.match(reportSource, /name: "投資信託他売却損"/);
+assert.doesNotMatch(reportSource, /name: "運用手数料・雑費"/);
 assert.match(reportSource, /\{ period: "2026-08-17", principal: 6000000, marketValue: 6416884 \}/);
 assert.match(reportSource, /\{ period: "2026-08-18", principal: 6000000, marketValue: 6402118 \}/);
 assert.match(reportSource, /\{ period: "2026-08-19", principal: 6000000, marketValue: 6298001 \}/);
