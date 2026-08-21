@@ -1,0 +1,242 @@
+(() => {
+  "use strict";
+  const state = { adminPrf: null, adminCredentialId: null, selectedIdentity: null };
+  const $ = (selector) => document.querySelector(selector);
+  const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+
+  document.addEventListener("DOMContentLoaded", init);
+
+  async function init() {
+    bind();
+    const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+    const inviteToken = params.get("invite");
+    if (inviteToken) {
+      history.replaceState(null, "", "/security/");
+      $("#invite-view").hidden = false;
+      $("#invite-register").onclick = () => registerInvite(inviteToken);
+      return;
+    }
+    await routeStatus();
+  }
+
+  function bind() {
+    document.addEventListener("troom:before-auto-update", (event) => {
+      if (document.querySelector("button:disabled")) event.preventDefault();
+    });
+    $("#bootstrap-form").addEventListener("submit", bootstrap);
+    $("#admin-passkey-login").addEventListener("click", adminLogin);
+    $("#admin-password-recovery").addEventListener("click", () => {
+      $("#admin-login-view").hidden = true;
+      $("#bootstrap-view").hidden = false;
+      $("#bootstrap-view h2").textContent = "第一管理者パスキーの復旧登録";
+    });
+    $("#security-logout").addEventListener("click", logout);
+    $("#invite-form").addEventListener("submit", createInvite);
+    $("#add-link").addEventListener("click", () => addLinkRow());
+    $("#invite-expiry").addEventListener("change", () => { $("#custom-expiry-row").hidden = $("#invite-expiry").value !== "custom"; });
+    $("#audit-filter").addEventListener("submit", (event) => { event.preventDefault(); loadAudit(); });
+    document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => showPanel(button.dataset.panel, button)));
+    addLinkRow("diary", "main-admin");
+  }
+
+  async function routeStatus() {
+    try {
+      const status = await get("/status");
+      if (!status.enabled) return showMessage("パスキー機能は現在停止中です。各サービスのID・パスワードをご利用ください。", true);
+      if (!status.initialized) $("#bootstrap-view").hidden = false;
+      else if (status.adminAuthenticated) await showAdmin();
+      else $("#admin-login-view").hidden = false;
+    } catch (error) { showMessage(error.message, true); }
+  }
+
+  async function bootstrap(event) {
+    event.preventDefault();
+    const button = event.submitter;
+    button.disabled = true;
+    try {
+      const loginId = $("#bootstrap-id").value.trim().toLowerCase();
+      const password = $("#bootstrap-password").value;
+      const mode = await cloudApi("/auth-mode");
+      const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId, mode.credentialSalt);
+      const result = await TRoomPasskeys.bootstrap({ loginId, authProof: credentials.authProof });
+      await cloudApi("/login", { loginId, authProof: credentials.authProof });
+      if (!result.prfOutput) throw new Error("この端末はT-Cloudの安全なパスキー復号に対応していません。管理者PWは維持されています。対応端末で再登録してください。");
+      const [config, detail] = await Promise.all([cloudApi("/crypto-config"), get("/identities/primary-admin")]);
+      if (!config.initialized) throw new Error("T-Cloudの暗号化設定を確認できません。");
+      const link = detail.links.find((item) => item.service === "cloud" && item.service_account_id === "admin");
+      const envelope = await TRoomCrypto.wrapAdminPrivateKeyForPasskey(credentials.accountKey, config, result.prfOutput);
+      await post("/tcloud/envelope", { serviceLinkId: link.id, envelopeType: "admin_private_prf", ...envelope });
+      state.adminPrf = result.prfOutput;
+      state.adminCredentialId = result.credentialId;
+      $("#bootstrap-password").value = "";
+      $("#bootstrap-view").hidden = true;
+      showMessage("第一管理者の端末ロック解除を登録しました。現在の管理者PWは復旧手段として維持されています。");
+      await showAdmin();
+    } catch (error) { showMessage(error.message, true); }
+    finally { button.disabled = false; }
+  }
+
+  async function adminLogin() {
+    try {
+      const result = await TRoomPasskeys.authenticate("security");
+      state.adminPrf = result.prfOutput;
+      state.adminCredentialId = result.credentialId;
+      $("#admin-login-view").hidden = true;
+      await showAdmin();
+    } catch (error) { showMessage(error.message, error.name !== "PasskeyCancelledError"); }
+  }
+
+  async function registerInvite(token) {
+    const button = $("#invite-register");
+    button.disabled = true;
+    try {
+      const result = await TRoomPasskeys.registerInvite(token);
+      if (result.cloudLink) {
+        if (!result.prfOutput) throw new Error("この端末はT-Cloudの安全なパスキー復号に対応していません。T-Cloudでは従来のID・パスワードをご利用ください。");
+        const vault = await TRoomCrypto.createPasskeyClientVault(result.prfOutput);
+        await post("/tcloud/envelope", { serviceLinkId: result.cloudLink.id, envelopeType: "client_private_prf", publicKeyJwk: vault.publicKeyJwk, encryptedPayload: vault.encryptedPayload, payloadIv: vault.payloadIv });
+      }
+      button.hidden = true;
+      showMessage("登録が完了しました。管理者の承認をお待ちください。");
+    } catch (error) { showMessage(error.message, true); }
+    finally { button.disabled = false; }
+  }
+
+  async function showAdmin() {
+    $("#admin-view").hidden = false;
+    await Promise.all([loadDashboard(), loadIdentities(), loadAudit()]);
+  }
+
+  async function loadDashboard() {
+    const data = await get("/dashboard");
+    const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
+    $("#dashboard-panel").innerHTML = `<div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div>`;
+  }
+
+  async function loadIdentities() {
+    const data = await get("/identities");
+    $("#identity-list").innerHTML = data.identities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(statusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終ログイン ${escapeHtml(formatDate(identity.lastLoginAt))}` : "ログイン履歴なし"}</small></div>`).join("") || "<p>Identityはありません。</p>";
+    document.querySelectorAll("[data-view-identity]").forEach((button) => button.addEventListener("click", () => viewIdentity(button.dataset.viewIdentity)));
+  }
+
+  async function viewIdentity(id) {
+    const data = await get(`/identities/${encodeURIComponent(id)}`);
+    state.selectedIdentity = data;
+    const credentials = data.credentials.map((item) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))}</small>${item.status !== "revoked" ? `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>` : ""}</div>`).join("");
+    const links = data.links.map((item) => `<div class="link">${escapeHtml(item.display_label)}<br><small>${escapeHtml(item.service)} / ${escapeHtml(item.service_account_id)}${item.cloud_root_folder_id ? ` / folder #${item.cloud_root_folder_id}` : ""} / ${escapeHtml(item.status)}</small>${data.identity.id !== "primary-admin" ? `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>` : ""}</div>`).join("");
+    $("#identity-detail").innerHTML = `<h2>${escapeHtml(data.identity.displayName)}</h2><p>Identity: ${escapeHtml(data.identity.id)} / ${escapeHtml(statusLabel(data.identity.status))}</p><h3>サービス連携</h3>${links || "<p>なし</p>"}${data.identity.id !== "primary-admin" ? '<div class="link-editor"><select id="detail-link-service"><option value="diary">日記</option><option value="billing">請求書</option><option value="cloud">T-Cloud</option></select><input id="detail-link-account" placeholder="account ID"><input id="detail-link-root" type="number" min="1" placeholder="T-Cloud folder ID"><button id="detail-add-link" class="secondary">連携追加</button></div><p class="hint">追加した連携は、再招待と管理者承認後に有効になります。</p>' : ""}<h3>登録済みパスキー</h3>${credentials || "<p>なし</p>"}<div class="tabs"><button id="reinvite-button">再招待</button>${data.pendingCredentialId ? '<button id="approve-button">この登録を承認</button>' : ""}</div><output id="detail-result"></output>`;
+    $("#identity-detail").hidden = false;
+    $("#reinvite-button").onclick = () => reinvite(id);
+    $("#approve-button")?.addEventListener("click", () => approve(id));
+    document.querySelectorAll("[data-revoke-credential]").forEach((button) => button.addEventListener("click", () => revokeCredential(button.dataset.revokeCredential)));
+    document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink)));
+    $("#detail-add-link")?.addEventListener("click", () => addDetailLink(id));
+  }
+
+  async function addDetailLink(identityId) {
+    try {
+      const service = $("#detail-link-service").value;
+      const accountId = $("#detail-link-account").value.trim();
+      const rootFolderId = $("#detail-link-root").value || null;
+      await post(`/identities/${encodeURIComponent(identityId)}/links`, { links: [{ service, accountId, rootFolderId }] });
+      showMessage("連携を追加しました。利用開始には再招待と承認が必要です。");
+      await viewIdentity(identityId);
+    } catch (error) { showMessage(error.message, true); }
+  }
+
+  async function removeLink(linkId) {
+    if (!confirm("このサービス連携を解除しますか？既存サービス側のアカウントやデータは削除されません。")) return;
+    await post(`/service-links/${encodeURIComponent(linkId)}`, {});
+    showMessage("サービス連携を解除しました。");
+    await viewIdentity(state.selectedIdentity.identity.id);
+  }
+
+  async function approve(id) {
+    try {
+      const detail = state.selectedIdentity;
+      const cloudEnvelopes = [];
+      if (detail.cloudApproval) {
+        if (!state.adminPrf || !state.adminCredentialId) {
+          const auth = await TRoomPasskeys.authenticate("security");
+          state.adminPrf = auth.prfOutput;
+          state.adminCredentialId = auth.credentialId;
+        }
+        if (!state.adminPrf) throw new Error("管理者の端末がT-Cloudパスキー復号に対応していません。管理者PW経路で鍵委譲を準備してください。");
+        const adminDetail = await get("/identities/primary-admin");
+        const envelope = adminDetail.adminKeyEnvelopes.find((item) => item.credentialId === state.adminCredentialId);
+        if (!envelope) throw new Error("この管理者パスキーにはT-Cloud暗号鍵が登録されていません。第一管理者PWで復旧登録してください。");
+        const privateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(state.adminPrf, envelope);
+        for (const item of detail.cloudApproval.folders) {
+          const folderKey = await TRoomCrypto.unlockFolderAsAdmin(item.folder, privateKey);
+          cloudEnvelopes.push({ serviceLinkId: item.serviceLinkId, wrappedKey: await TRoomCrypto.wrapFolderKeyForIdentity(folderKey, detail.cloudApproval.publicKeyJwk) });
+        }
+      }
+      const approved = await post(`/identities/${encodeURIComponent(id)}/approve`, { credentialId: detail.pendingCredentialId, cloudEnvelopes });
+      showMessage(approved.tcloudPasskeyReady === false
+        ? "日記・請求書の利用を承認しました。T-CloudはPRF対応端末で再招待・鍵委譲が完了するまで従来PWをご利用ください。"
+        : "パスキー登録とサービス連携を承認しました。");
+      await Promise.all([loadDashboard(), loadIdentities(), viewIdentity(id)]);
+    } catch (error) { showMessage(error.message, true); }
+  }
+
+  async function reinvite(id) {
+    const seconds = Number($("#invite-expiry").value) || 86400;
+    const result = await post(`/identities/${encodeURIComponent(id)}/reinvite`, { expiresAt: Math.floor(Date.now() / 1000) + seconds });
+    $("#detail-result").textContent = absoluteInviteUrl(result.invitationUrl);
+  }
+
+  async function revokeCredential(id) {
+    if (!confirm("このパスキーを無効化しますか？既存PWは影響を受けません。")) return;
+    await post(`/credentials/${encodeURIComponent(id)}/revoke`, {});
+    await viewIdentity(state.selectedIdentity.identity.id);
+  }
+
+  async function createInvite(event) {
+    event.preventDefault();
+    try {
+      const links = [...document.querySelectorAll(".link-row")].map((row) => ({ service: row.querySelector("[data-link-service]").value, accountId: row.querySelector("[data-link-account]").value.trim(), rootFolderId: row.querySelector("[data-link-root]").value || null }));
+      const expiry = $("#invite-expiry").value === "custom" ? Math.floor(new Date($("#invite-expiry-custom").value).getTime() / 1000) : Math.floor(Date.now() / 1000) + Number($("#invite-expiry").value);
+      const result = await post("/identities", { displayName: $("#invite-name").value, identityId: $("#invite-identity-id").value || undefined, expiresAt: expiry, links });
+      $("#invite-result").textContent = absoluteInviteUrl(result.invitationUrl);
+      await Promise.all([loadDashboard(), loadIdentities()]);
+    } catch (error) { showMessage(error.message, true); }
+  }
+
+  function addLinkRow(service = "diary", account = "") {
+    const row = document.createElement("div");
+    row.className = "link-row";
+    row.innerHTML = `<select data-link-service><option value="diary">日記</option><option value="billing">請求書</option><option value="cloud">T-Cloud</option></select><input data-link-account placeholder="account ID" value="${escapeHtml(account)}" required><input data-link-root type="number" min="1" placeholder="T-Cloud folder ID"><button type="button" class="secondary" aria-label="連携を削除">×</button>`;
+    row.querySelector("[data-link-service]").value = service;
+    row.querySelector("button").onclick = () => row.remove();
+    $("#link-rows").append(row);
+  }
+
+  async function loadAudit() {
+    const params = new URLSearchParams();
+    [["service", "#audit-service"], ["authMethod", "#audit-auth"], ["outcome", "#audit-outcome"], ["eventType", "#audit-event"], ["from", "#audit-from"], ["to", "#audit-to"]].forEach(([key, selector]) => { const value = $(selector).value; if (value) params.set(key, value); });
+    const data = await get(`/audit?${params}`);
+    $("#audit-list").innerHTML = data.events.map((event) => `<article class="audit-row"><strong>${escapeHtml(event.event_type)}</strong><div class="event-meta"><span>${escapeHtml(formatDate(event.occurred_at))}</span><span>${escapeHtml(event.service)}</span><span>${escapeHtml(event.outcome)}</span><span>${escapeHtml(event.auth_method || "-")}</span><span>${escapeHtml(event.identity_id || event.service_account_id || "-")}</span><span>${escapeHtml(event.user_agent || "-")}</span></div></article>`).join("") || "<p>該当する履歴はありません。</p>";
+  }
+
+  async function logout() { await post("/logout", {}); location.reload(); }
+  function showPanel(id, button) { document.querySelectorAll(".panel").forEach((panel) => { panel.hidden = panel.id !== id; }); document.querySelectorAll("[data-panel]").forEach((item) => item.classList.toggle("active", item === button)); }
+  function showMessage(text, error = false) { const box = $("#message"); box.hidden = false; box.classList.toggle("error", error); box.textContent = text; }
+  function statusLabel(value) { return ({ invited: "招待中", pending_approval: "承認待ち", active: "利用可能", disabled: "停止", pending: "承認待ち", revoked: "無効" })[value] || value; }
+  function formatDate(value) { return value ? new Date(value).toLocaleString("ja-JP") : "-"; }
+  function absoluteInviteUrl(path) { return new URL(path, location.origin).href; }
+
+  async function cloudApi(path, body) {
+    const response = await fetch(`/cloud/api${path}`, { method: body ? "POST" : "GET", credentials: "same-origin", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "T-Cloudの管理者確認に失敗しました。");
+    return payload;
+  }
+  async function get(path) { return request(path); }
+  async function post(path, body) { return request(path, body); }
+  async function request(path, body) {
+    const response = await fetch(`/security/api${path}`, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers: body === undefined ? {} : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Security Centerの処理に失敗しました。");
+    return payload;
+  }
+})();

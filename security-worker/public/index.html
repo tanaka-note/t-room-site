@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+  <meta name="referrer" content="no-referrer">
+  <meta name="troom-app-build" content="security-ddd7dcf3afe9">
+  <meta name="troom-auto-update" content="enabled">
+  <title>T-ROOM Security Center</title>
+  <link rel="stylesheet" href="/security/security.css?v=security-ddd7dcf3afe9">
+</head>
+<body>
+  <main class="shell">
+    <header><p class="eyebrow">T-ROOM</p><h1>Security Center</h1><p>端末のロック解除、招待、サービス連携、アクセス履歴を管理します。</p></header>
+    <section id="message" class="message" hidden aria-live="polite"></section>
+
+    <section id="bootstrap-view" class="card" hidden>
+      <h2>第一管理者の初期登録</h2>
+      <p>現在のT-Cloud管理者ID・パスワードで本人確認し、端末のロック解除を登録します。現在の管理者PWは削除されません。</p>
+      <form id="bootstrap-form">
+        <label>管理者ID<input id="bootstrap-id" autocomplete="username" required></label>
+        <label>現在の管理者PW<input id="bootstrap-password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">端末のロック解除を登録</button>
+      </form>
+    </section>
+
+    <section id="admin-login-view" class="card" hidden>
+      <h2>管理者ログイン</h2>
+      <button id="admin-passkey-login" type="button">端末のロック解除でログイン</button>
+      <p class="hint">第一管理者PWによる復旧登録は、登録済みパスキーを失った場合にも利用できます。</p>
+      <button id="admin-password-recovery" class="secondary" type="button">管理者PWでパスキーを復旧登録</button>
+    </section>
+
+    <section id="invite-view" class="card" hidden>
+      <h2>パスキー招待</h2>
+      <p>招待された本人の端末で、標準の画面ロック解除を使用して登録します。</p>
+      <button id="invite-register" type="button">端末のロック解除を登録</button>
+    </section>
+
+    <section id="admin-view" hidden>
+      <nav class="tabs" aria-label="Security Center">
+        <button data-panel="dashboard-panel" class="active">概要</button>
+        <button data-panel="users-panel">ユーザー</button>
+        <button data-panel="audit-panel">履歴</button>
+        <button id="security-logout">ログアウト</button>
+      </nav>
+      <section id="dashboard-panel" class="panel"></section>
+      <section id="users-panel" class="panel" hidden>
+        <div class="split">
+          <form id="invite-form" class="card compact">
+            <h2>Identityを招待</h2>
+            <label>表示名<input id="invite-name" maxlength="100" required></label>
+            <label>Identity ID（任意）<input id="invite-identity-id" maxlength="64" pattern="[A-Za-z0-9_-]+"></label>
+            <fieldset><legend>サービス連携</legend>
+              <div id="link-rows"></div>
+              <button id="add-link" type="button" class="secondary">連携を追加</button>
+            </fieldset>
+            <label>有効期限<select id="invite-expiry"><option value="3600">1時間</option><option value="21600">6時間</option><option value="86400" selected>24時間</option><option value="259200">3日</option><option value="604800">7日</option><option value="custom">日時指定</option></select></label>
+            <label id="custom-expiry-row" hidden>日時<input id="invite-expiry-custom" type="datetime-local"></label>
+            <button type="submit">招待URLを作成</button>
+            <output id="invite-result"></output>
+          </form>
+          <section class="card compact"><h2>ユーザー</h2><div id="identity-list"></div></section>
+        </div>
+        <section id="identity-detail" class="card compact" hidden></section>
+      </section>
+      <section id="audit-panel" class="panel" hidden>
+        <form id="audit-filter" class="filters">
+          <select id="audit-service"><option value="">全サービス</option><option value="security">Security</option><option value="cloud">T-Cloud</option><option value="diary">日記</option><option value="billing">請求書</option></select>
+          <select id="audit-auth"><option value="">全認証方式</option><option value="password">PW</option><option value="passkey">パスキー</option><option value="system">システム</option></select>
+          <select id="audit-outcome"><option value="">全結果</option><option value="success">成功</option><option value="failure">失敗</option><option value="blocked">停止</option><option value="cancelled">キャンセル</option></select>
+          <input id="audit-event" placeholder="イベント種類">
+          <input id="audit-from" type="date"><input id="audit-to" type="date">
+          <button>絞り込む</button>
+        </form>
+        <div id="audit-list" class="card compact"></div>
+      </section>
+    </section>
+  </main>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-ddd7dcf3afe9"></script>
+  <script src="/cloud/crypto-vault.js?v=security-ddd7dcf3afe9"></script>
+  <script src="/security/passkey-client.js?v=security-ddd7dcf3afe9"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-ddd7dcf3afe9" defer></script>
+  <script src="/security/security.js?v=security-ddd7dcf3afe9"></script>
+</body>
+</html>

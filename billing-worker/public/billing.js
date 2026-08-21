@@ -47,6 +47,7 @@
       if (document.querySelector("dialog[open]")) event.preventDefault();
     });
     el["login-form"].addEventListener("submit", login);
+    el["passkey-login"].addEventListener("click", loginWithPasskey);
     el["logout-button"].addEventListener("click", logout);
     el["password-toggle"].addEventListener("click", togglePassword);
     bindMonthInput(el["month-input"]);
@@ -118,6 +119,29 @@
       submit.textContent = submitLabel;
       submit.removeAttribute("aria-busy");
     }
+  }
+
+  async function loginWithPasskey() {
+    const button = el["passkey-login"];
+    el["login-error"].textContent = "";
+    button.disabled = true;
+    try {
+      const authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
+      const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
+      el["login-password"].value = "";
+      await enterApp(session);
+    } catch (error) {
+      el["login-error"].textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function choosePasskeyLink(links) {
+    if (!links?.length) return null;
+    const answer = window.prompt(`利用する請求書アカウントの番号を入力してください。\n${links.map((link, index) => `${index + 1}. ${link.displayLabel}`).join("\n")}`, "1");
+    const index = Number(answer) - 1;
+    return Number.isInteger(index) ? links[index] || null : null;
   }
 
   async function logout() {
@@ -745,7 +769,7 @@
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 401 && path !== "/login") showLogin();
+      if (response.status === 401 && path !== "/login" && path !== "/passkey/handoff") showLogin();
       throw new Error(data.error || "処理に失敗しました。");
     }
     return data;

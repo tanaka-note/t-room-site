@@ -8,6 +8,8 @@ import {
   nextSourceAttempt,
   verifyPasswordRecord
 } from "./auth-security.js";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
 
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
@@ -17,8 +19,16 @@ const LEGACY_OWNER_LOGIN_ID = "sub@a-tanaka.jp";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+export class SecurityIntegration extends WorkerEntrypoint {
+  async describeAccount(input) {
+    const account = await this.env.DB.prepare("SELECT id, display_name, role FROM billing_accounts WHERE id = ? AND is_active = 1")
+      .bind(String(input?.accountId || "")).first();
+    return account ? { valid: true, displayLabel: `請求書 ${account.display_name}（${account.role}）`, role: account.role } : { valid: false };
+  }
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, context) {
     try {
       const url = new URL(request.url);
       if (!isAllowedProtocol(url, env)) return secureResponse(json({ error: "HTTPSでアクセスしてください。" }, 403));
@@ -30,7 +40,7 @@ export default {
         : url.pathname;
 
       if (path.startsWith("/api/")) {
-        const response = await handleApi(request, env, url, path);
+        const response = await handleApi(request, env, url, path, context);
         return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -45,14 +55,15 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path) {
+async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     return json({
       authenticated: Boolean(session),
       role: session?.role || null,
       accountId: session?.accountId || null,
-      accountName: session?.accountName || null
+      accountName: session?.accountName || null,
+      authMethod: session?.authMethod || null
     });
   }
 
@@ -62,7 +73,10 @@ async function handleApi(request, env, url, path) {
     const body = await readJson(request, 4096);
     const loginId = canonicalLoginId(body.loginId);
     const password = typeof body.password === "string" ? body.password : "";
-    if (!loginId || !password || password.length > 256) throw new HttpError(400, "IDとパスワードを確認してください。");
+    if (!loginId || !password || password.length > 256) {
+      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
+      throw new HttpError(400, "IDとパスワードを確認してください。");
+    }
 
     const account = await env.DB.prepare(`
       SELECT id, login_id, display_name, role, password_salt, password_hash,
@@ -82,11 +96,13 @@ async function handleApi(request, env, url, path) {
         attemptedLoginId: loginId,
         details: { scope: "source" }
       });
+      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account?.id, role: account?.role, authMethod: "password" });
       throw loginRejected();
     }
     if (!account?.is_active) {
       await recordSourceLoginFailure(env, fingerprint, sourceAttempt);
       await writeAudit(env, { eventType: "login_failure", attemptedLoginId: loginId });
+      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
       throw loginRejected();
     }
     if (isLoginLocked(account.locked_until)) {
@@ -96,6 +112,7 @@ async function handleApi(request, env, url, path) {
         attemptedLoginId: loginId,
         details: { lockedUntil: account.locked_until }
       });
+      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account.id, role: account.role, authMethod: "password" });
       throw loginRejected();
     }
 
@@ -128,6 +145,7 @@ async function handleApi(request, env, url, path) {
           scope: accountLocked ? "account" : (sourceLocked ? "source" : null)
         }
       });
+      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: accountLocked || sourceLocked ? "login_locked" : "password_login_failure", outcome: accountLocked || sourceLocked ? "blocked" : "failure", serviceAccountId: account.id, role: account.role, authMethod: "password" });
       throw loginRejected();
     }
 
@@ -150,10 +168,27 @@ async function handleApi(request, env, url, path) {
     });
 
     const maxAge = sessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env);
+    const token = await createSessionToken(account, maxAge, env, { authMethod: "password" });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name }, 200, headers);
+    enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password" });
+    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "password" }, 200, headers);
+  }
+
+  if (path === "/api/passkey/handoff" && request.method === "POST") {
+    if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。ID・パスワードでログインしてください。");
+    const body = await readJson(request, 4096);
+    const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "billing");
+    if (!handoff) throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
+    const account = await env.DB.prepare("SELECT id, display_name, role, session_version, is_active FROM billing_accounts WHERE id = ?").bind(handoff.serviceAccountId).first();
+    if (!account?.is_active) throw new HttpError(403, "請求書管理の連携先アカウントを確認できません。");
+    const maxAge = sessionMaxAge(env);
+    const token = await createSessionToken(account, maxAge, env, { identityId: handoff.identityId, authMethod: "passkey" });
+    const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
+    await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
+    enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceAccountId: account.id, role: account.role, authMethod: "passkey" });
+    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "passkey" }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -172,7 +207,14 @@ async function handleApi(request, env, url, path) {
   }
 
   if (path === "/api/accounts" && request.method === "GET") return listAccounts(env, session);
-  if (path === "/api/summary" && request.method === "GET") return getSummary(url, env, session);
+  if (path === "/api/summary" && request.method === "GET") {
+    const response = await getSummary(url, env, session);
+    const targetAccountId = url.searchParams.get("accountId");
+    if (session.role === "owner" && targetAccountId && targetAccountId !== session.accountId) {
+      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceAccountId: session.accountId, role: session.role, authMethod: session.authMethod, targetType: "billing_account", targetId: targetAccountId });
+    }
+    return response;
+  }
   if (path === "/api/entries" && request.method === "POST") {
     requireOwner(session);
     return createEntry(request, env, session);
@@ -524,18 +566,20 @@ async function readSession(request, env) {
       SELECT id, display_name, role, session_version, is_active FROM billing_accounts WHERE id = ?
     `).bind(payload.accountId).first();
     if (!account?.is_active || account.role !== payload.role || Number(account.session_version) !== Number(payload.accountVersion)) return null;
-    return { accountId: account.id, accountName: account.display_name, role: account.role };
+    return { accountId: account.id, accountName: account.display_name, role: account.role, identityId: payload.identityId || null, authMethod: payload.authMethod || "password" };
   } catch {
     return null;
   }
 }
 
-async function createSessionToken(account, maxAge, env) {
+async function createSessionToken(account, maxAge, env, auth = {}) {
   const payload = {
     accountId: account.id,
     role: account.role,
     accountVersion: Number(account.session_version),
     globalVersion: String(env.SESSION_VERSION || "1"),
+    identityId: auth.identityId || null,
+    authMethod: auth.authMethod || "password",
     exp: Math.floor(Date.now() / 1000) + maxAge
   };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
@@ -547,7 +591,7 @@ function sessionMaxAge(env) {
 }
 
 async function refreshAuthenticatedSession(request, response, env, url, path) {
-  if (path === "/api/login" || path === "/api/logout" || response.status === 401) return response;
+  if (path === "/api/login" || path === "/api/passkey/handoff" || path === "/api/logout" || response.status === 401) return response;
   const session = await readSession(request, env);
   if (!session) return response;
 
@@ -557,7 +601,7 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
   if (!account) return response;
 
   const maxAge = sessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env);
+  const token = await createSessionToken(account, maxAge, env, { identityId: session.identityId, authMethod: session.authMethod });
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
   return new Response(response.body, {

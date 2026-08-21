@@ -8,6 +8,8 @@
   const ACCOUNT_AUTH_CONTEXT = "T-ROOM Cloud Storage account authentication v1";
   const ADMIN_WRAP_CONTEXT = "T-ROOM Cloud Storage admin private key v1";
   const RECOVERY_WRAP_CONTEXT = "T-ROOM Cloud Storage emergency recovery v1";
+  const PASSKEY_ADMIN_WRAP_CONTEXT = "T-ROOM Cloud Storage passkey admin private key v1";
+  const PASSKEY_CLIENT_WRAP_CONTEXT = "T-ROOM Cloud Storage passkey client private key v1";
   const FOLDER_AUTH_CONTEXT = "T-ROOM Cloud Storage folder authentication v1";
   const FOLDER_WRAP_CONTEXT = "T-ROOM Cloud Storage folder key v1";
   const PARENT_FOLDER_WRAP_CONTEXT = "T-ROOM Cloud Storage child folder key v1";
@@ -117,6 +119,63 @@
     } finally {
       bytes.fill(0);
     }
+  }
+
+  async function wrapAdminPrivateKeyForPasskey(accountKey, config, prfOutput) {
+    ensurePrf(prfOutput);
+    const privateBytes = await decryptBytes(accountKey, fromBase64Url(config.adminPrivateCipher), fromBase64Url(config.adminPrivateIv), textEncoder.encode(ADMIN_WRAP_CONTEXT));
+    const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_ADMIN_WRAP_CONTEXT);
+    try {
+      const wrapped = await encryptBytes(passkeyKey, privateBytes, textEncoder.encode(PASSKEY_ADMIN_WRAP_CONTEXT));
+      return { encryptedPayload: toBase64Url(wrapped.ciphertext), payloadIv: toBase64Url(wrapped.iv) };
+    } finally {
+      privateBytes.fill(0);
+    }
+  }
+
+  async function unlockAdminPrivateKeyWithPasskey(prfOutput, envelope) {
+    ensurePrf(prfOutput);
+    const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_ADMIN_WRAP_CONTEXT);
+    const bytes = await decryptBytes(passkeyKey, fromBase64Url(envelope.encryptedPayload), fromBase64Url(envelope.payloadIv), textEncoder.encode(PASSKEY_ADMIN_WRAP_CONTEXT));
+    try { return await crypto.subtle.importKey("pkcs8", bytes, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]); }
+    finally { bytes.fill(0); }
+  }
+
+  async function createPasskeyClientVault(prfOutput) {
+    ensurePrf(prfOutput);
+    const pair = await crypto.subtle.generateKey({ name: "RSA-OAEP", modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["encrypt", "decrypt"]);
+    const [publicKeyJwk, privatePkcs8] = await Promise.all([crypto.subtle.exportKey("jwk", pair.publicKey), crypto.subtle.exportKey("pkcs8", pair.privateKey)]);
+    publicKeyJwk.alg = "RSA-OAEP-256";
+    publicKeyJwk.key_ops = ["encrypt"];
+    const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_CLIENT_WRAP_CONTEXT);
+    const privateBytes = new Uint8Array(privatePkcs8);
+    try {
+      const wrapped = await encryptBytes(passkeyKey, privateBytes, textEncoder.encode(PASSKEY_CLIENT_WRAP_CONTEXT));
+      return { publicKeyJwk, privateKey: pair.privateKey, encryptedPayload: toBase64Url(wrapped.ciphertext), payloadIv: toBase64Url(wrapped.iv) };
+    } finally {
+      privateBytes.fill(0);
+    }
+  }
+
+  async function unlockPasskeyClientPrivateKey(prfOutput, envelope) {
+    ensurePrf(prfOutput);
+    const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_CLIENT_WRAP_CONTEXT);
+    const bytes = await decryptBytes(passkeyKey, fromBase64Url(envelope.encryptedPayload), fromBase64Url(envelope.payloadIv), textEncoder.encode(PASSKEY_CLIENT_WRAP_CONTEXT));
+    try { return await crypto.subtle.importKey("pkcs8", bytes, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]); }
+    finally { bytes.fill(0); }
+  }
+
+  async function wrapFolderKeyForIdentity(folderKey, publicKeyJwk) {
+    const publicKey = await crypto.subtle.importKey("jwk", publicKeyJwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", folderKey));
+    try { return toBase64Url(new Uint8Array(await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, raw))); }
+    finally { raw.fill(0); }
+  }
+
+  async function unlockDelegatedFolderKey(privateKey, wrappedKey) {
+    const raw = new Uint8Array(await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, fromBase64Url(wrappedKey)));
+    try { return await importFolderKey(raw); }
+    finally { raw.fill(0); }
   }
 
   async function createFolderPackage(name, password, publicKey, parentFolderKey = null) {
@@ -546,6 +605,10 @@
     if (!globalThis.crypto?.subtle || !globalThis.hashwasm?.argon2id) throw new Error("このブラウザは必要な暗号化機能に対応していません。");
   }
 
+  function ensurePrf(value) {
+    if (!(value instanceof Uint8Array) || value.length < 32) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+  }
+
   function validateFolderName(value) {
     const name = String(value || "").trim().replace(/[\u0000-\u001f\u007f]/g, "");
     if (!name || name.length > 240 || name === "." || name === "..") throw new Error("フォルダ名を確認してください。");
@@ -566,6 +629,12 @@
     createVault,
     unlockAdminPrivateKey,
     recoverAdminPrivateKey,
+    wrapAdminPrivateKeyForPasskey,
+    unlockAdminPrivateKeyWithPasskey,
+    createPasskeyClientVault,
+    unlockPasskeyClientPrivateKey,
+    wrapFolderKeyForIdentity,
+    unlockDelegatedFolderKey,
     createFolderPackage,
     unlockFolderAsAdmin,
     unlockFolderWithPassword,

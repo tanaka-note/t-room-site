@@ -62,5 +62,15 @@ if (source.includes("purgeExpiredTrash(env)")) throw new Error("30日後の自�
 if (!functionBody("listUploadHistory").includes('session.role === "admin"') || !functionBody("listUploadHistory").includes("l.actor_role = ?")) {
   throw new Error("操作履歴の役割別フィルターを確認できません。");
 }
+if (!functionBody("requireFolderAccess").includes("requireMemberFolderScope")
+  || !functionBody("requireFolderAccess").includes("cloud_folder_unlocks")) {
+  throw new Error("パスキー一般Identityのroot境界と配下PWフォルダ境界が維持されていません。");
+}
+if (!functionBody("unlockFolder").includes("requireMemberFolderScope")) {
+  throw new Error("パスキー一般Identityがroot外のフォルダを直接解除できないことを確認できません。");
+}
+if (!source.includes("adminWrappedKey: folder.admin_wrapped_key")) {
+  throw new Error("Security Centerの端末側鍵委譲に必要な暗号化済み管理者wrapを確認できません。");
+}
 
 console.log("permission guards: ok");

@@ -1,5 +1,8 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
+
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-242136956074";
+const APP_BUILD_ID = "cloud-610518c77bbb";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -16,15 +19,59 @@ const ACCOUNTS = [
   { role: "subadmin", label: "副管理者", secretKey: "SUBADMIN_PASSWORD_HASH", proofSecretKey: "SUBADMIN_AUTH_PROOF_HASH", canUpload: true, canDelete: false, canTrashUnlockedFiles: true, canEditFiles: false, canEditFolders: false, canRenameUnlockedItems: true, canViewHistory: true, canRequestDelete: false, canReviewDeletion: false }
 ];
 
+const PASSKEY_MEMBER_ACCOUNT = Object.freeze({
+  role: "member", label: "一般ユーザー", canUpload: true, canDelete: false,
+  canTrashUnlockedFiles: true, canEditFiles: true, canEditFolders: true,
+  canRenameUnlockedItems: true, canViewHistory: false, canRequestDelete: false,
+  canReviewDeletion: false
+});
+
+export class SecurityIntegration extends WorkerEntrypoint {
+  async verifyPrimaryAdmin(input) {
+    const loginId = String(input?.loginId || "").trim().toLowerCase();
+    const authProof = String(input?.authProof || "");
+    if (!this.env.ADMIN_AUTH_PROOF_HASH || loginId !== configuredLoginId(this.env, "admin") || !authProof || authProof.length > 512) {
+      return { verified: false };
+    }
+    return { verified: await verifyPassword(authProof, this.env.ADMIN_AUTH_PROOF_HASH), accountId: "admin", role: "admin" };
+  }
+
+  async describeAccount(input) {
+    const accountId = String(input?.accountId || "");
+    if (accountId === "admin" || accountId === "subadmin") {
+      const account = ACCOUNTS.find((item) => item.role === accountId);
+      return { valid: true, displayLabel: `T-Cloud ${account.label}`, rootFolderId: null, role: account.role };
+    }
+    if (accountId !== "folder-member") return { valid: false };
+    const rootFolderId = optionalId(input?.rootFolderId);
+    if (!rootFolderId) return { valid: false };
+    const folder = await this.env.DB.prepare("SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(rootFolderId).first();
+    return folder ? { valid: true, displayLabel: `T-Cloud フォルダ #${rootFolderId}`, rootFolderId } : { valid: false };
+  }
+
+  async getFolderCryptoRecord(folderId) {
+    const id = optionalId(folderId);
+    if (!id) return null;
+    const folder = await requireFolder(this.env, id);
+    return {
+      ...publicFolderRecord(folder),
+      // This value is already RSA-wrapped for the existing administrator key.
+      // It is returned only through the private Service Binding so Security
+      // Center can delegate the folder key without exposing plaintext keys.
+      adminWrappedKey: folder.admin_wrapped_key
+    };
+  }
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, context) {
     try {
       const url = new URL(request.url);
       if (url.pathname === `${BASE_PATH}.html`) return Response.redirect(`${url.origin}${BASE_PATH}/`, 301);
       if (!url.pathname.startsWith(BASE_PATH)) return new Response("Not found", { status: 404 });
       const path = url.pathname.slice(BASE_PATH.length) || "/";
       if (path.startsWith("/api/")) {
-        const response = await handleApi(request, env, url, path);
+        const response = await handleApi(request, env, url, path, context);
         return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
       }
       return secureResponse(await serveAsset(request, env, url, path));
@@ -40,7 +87,7 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path) {
+async function handleApi(request, env, url, path, context) {
   if (path === "/api/app-version" && request.method === "GET") {
     return json({ buildId: APP_BUILD_ID });
   }
@@ -60,7 +107,12 @@ async function handleApi(request, env, url, path) {
 
   if (path === "/api/login" && request.method === "POST") {
     if (!sameOrigin(request, url)) throw new HttpError(403, "不正なリクエストです。");
-    return login(request, env, url);
+    return login(request, env, url, context);
+  }
+
+  if (path === "/api/passkey/handoff" && request.method === "POST") {
+    if (!sameOrigin(request, url)) throw new HttpError(403, "不正なリクエストです。");
+    return completePasskeyHandoff(request, env, url, context);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -93,7 +145,13 @@ async function handleApi(request, env, url, path) {
   if (!session) throw new HttpError(401, "ログインが必要です。");
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
-  if (path === "/api/items" && request.method === "GET") return listItems(url, env, session);
+  if (path === "/api/items" && request.method === "GET") {
+    const folderId = optionalId(url.searchParams.get("folderId"));
+    if (session.role === "admin" && folderId) {
+      enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceAccountId: "admin", role: "admin", authMethod: session.authMethod, sessionId: session.sessionId, targetType: "folder", targetId: folderId });
+    }
+    return listItems(url, env, session);
+  }
   if (path === "/api/player/media" && request.method === "GET") return listPlayerMedia(url, env, session);
   if (path === "/api/player/youtube/metadata" && request.method === "GET") return getYouTubeMetadata(url, env);
   if (path === "/api/player/youtube/search" && request.method === "GET") return searchYouTube(url, env);
@@ -161,7 +219,7 @@ async function handleApi(request, env, url, path) {
   throw new HttpError(404, "Not found");
 }
 
-async function login(request, env, url) {
+async function login(request, env, url, context) {
   const proofMode = Boolean(env.ADMIN_AUTH_PROOF_HASH && env.SUBADMIN_AUTH_PROOF_HASH);
   const configuredAccounts = ACCOUNTS.map((account) => ({ ...account, loginId: configuredLoginId(env, account.role) }));
   if ((!proofMode && (!env.ADMIN_PASSWORD_HASH || !env.SUBADMIN_PASSWORD_HASH))
@@ -175,13 +233,17 @@ async function login(request, env, url) {
   const authProof = String(body.authProof || "");
   const matchingAccounts = configuredAccounts.filter((account) => account.loginId === loginId);
   if (!matchingAccounts.length || (proofMode ? !authProof || authProof.length > 256 : !password || password.length > 256)) {
+    enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
 
   const fingerprint = await requestFingerprint(request, env);
   const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
   const now = Math.floor(Date.now() / 1000);
-  if (Number(attempt?.locked_until || 0) > now) throw new HttpError(429, "ログインが一時停止されています。しばらくしてからお試しください。");
+  if (Number(attempt?.locked_until || 0) > now) {
+    enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "login_blocked", outcome: "blocked", authMethod: "password" });
+    throw new HttpError(429, "ログインが一時停止されています。しばらくしてからお試しください。");
+  }
 
   let account = null;
   for (const candidate of matchingAccounts) {
@@ -194,6 +256,7 @@ async function login(request, env, url) {
   }
   if (!account) {
     await recordFailedLogin(env, fingerprint, attempt, now);
+    enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
   await env.DB.prepare("DELETE FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
@@ -217,7 +280,48 @@ async function login(request, env, url) {
   const token = await createSessionToken(session, maxAge, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
   await audit(env, "login", session, null, null);
+  enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId });
   return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
+}
+
+async function completePasskeyHandoff(request, env, url, context) {
+  if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。ID・パスワードでログインしてください。");
+  const body = await readJson(request, 4096);
+  const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "cloud");
+  if (!handoff) throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
+  let account;
+  if (["admin", "subadmin"].includes(handoff.serviceAccountId)) {
+    account = ACCOUNTS.find((item) => item.role === handoff.serviceAccountId);
+  } else if (handoff.serviceAccountId === "folder-member" && optionalId(handoff.cloudRootFolderId)) {
+    account = PASSKEY_MEMBER_ACCOUNT;
+  }
+  if (!account) throw new HttpError(403, "T-Cloudの連携先を確認できません。");
+  if (handoff.cloudRootFolderId) await requireFolder(env, Number(handoff.cloudRootFolderId));
+  const maxAge = sessionMaxAge(env, account.role);
+  const session = {
+    role: account.role,
+    canUpload: account.canUpload,
+    canDelete: account.canDelete,
+    canTrashUnlockedFiles: account.canTrashUnlockedFiles,
+    canEditFiles: account.canEditFiles,
+    canEditFolders: account.canEditFolders,
+    canRenameUnlockedItems: account.canRenameUnlockedItems,
+    canViewHistory: account.canViewHistory,
+    canRequestDelete: account.canRequestDelete,
+    canReviewDeletion: account.canReviewDeletion,
+    label: handoff.displayLabel || account.label,
+    loginId: `passkey:${handoff.identityId}`,
+    credentialSalt: await accountCredentialSalt(env),
+    sessionId: crypto.randomUUID(),
+    identityId: handoff.identityId,
+    authMethod: "passkey",
+    rootFolderId: handoff.cloudRootFolderId == null ? null : Number(handoff.cloudRootFolderId)
+  };
+  const token = await createSessionToken(session, maxAge, env);
+  const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
+  await audit(env, "passkey_login", session, null, null);
+  enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId });
+  return json({ authenticated: true, ...publicSession(session) }, 200, headers);
 }
 
 async function getCryptoConfig(env, session) {
@@ -606,6 +710,18 @@ async function listItems(url, env, session) {
     FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first()) : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
   const folderAccessGranted = folderId ? await requireFolderAccess(env, folderId, session) : false;
+  if (!folderId && session.role === "member") {
+    const root = await requireFolder(env, session.rootFolderId);
+    return json({
+      folder: null,
+      canTrashContents: false,
+      breadcrumbs: [],
+      folders: filesOnly ? [] : [{ ...publicFolderRecord(root), parentId: null, isProtected: Boolean(root.password_hash), isUnlocked: true, adminAccess: false }],
+      files: [],
+      nextFolderOffset: null,
+      nextFileOffset: null
+    });
+  }
   if (folderId && !continuation && session.role === "subadmin" && !foldersOnly && !uploadIndex && !filesOnly) {
     const total = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
@@ -709,8 +825,9 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
     folderAccessGranted = await requireFolderAccess(env, folderId, session);
   }
   const now = Math.floor(Date.now() / 1000);
-  const anchor = folderId ? "folder.id = ?" : "folder.parent_id IS NULL";
-  const scopeValues = folderId ? [folderId] : [];
+  const effectiveRootId = folderId || (session.role === "member" ? session.rootFolderId : null);
+  const anchor = effectiveRootId ? "folder.id = ?" : "folder.parent_id IS NULL";
+  const scopeValues = effectiveRootId ? [effectiveRootId] : [];
   const accessAnchor = session.role === "admin" ? "1" : `(folder.password_hash IS NULL OR EXISTS (
     SELECT 1 FROM cloud_folder_unlocks unlock
     WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
@@ -865,6 +982,13 @@ async function listMoveDestinations(url, env, session) {
       WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
     ))`;
     values.push(requestedScopeRootId, session.sessionId, Math.floor(Date.now() / 1000));
+  } else if (session.role === "member") {
+    anchorCondition = "f.id = ?";
+    descendantAccessCondition = `(child.password_hash IS NULL OR EXISTS(
+      SELECT 1 FROM cloud_folder_unlocks unlock
+      WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
+    ))`;
+    values.push(session.rootFolderId, session.sessionId, Math.floor(Date.now() / 1000));
   }
   const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(id, depth) AS (
       SELECT f.id, 0 FROM cloud_folders f WHERE ${anchorCondition} AND f.deleted_at IS NULL
@@ -1128,6 +1252,23 @@ async function listStoredConflictCandidates(url, env, session) {
       WHERE f.deleted_at IS NULL AND f.status = 'ready' AND f.size_bytes > 0
       ORDER BY scope.top_folder_id ASC, f.id ASC LIMIT ? OFFSET ?`;
     values = [pageSize + 1, offset];
+  } else if (session.role === "member") {
+    query = `WITH RECURSIVE folder_access(id, top_folder_id, is_allowed) AS (
+        SELECT id, id, 1 FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+        UNION ALL
+        SELECT child.id, parent.top_folder_id,
+          parent.is_allowed AND (child.password_hash IS NULL OR EXISTS (
+            SELECT 1 FROM cloud_folder_unlocks unlock
+            WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
+          ))
+        FROM cloud_folders child JOIN folder_access parent ON child.parent_id = parent.id
+        WHERE child.deleted_at IS NULL
+      )
+      SELECT ${selectFields("file")}, access.top_folder_id AS topFolderId
+      FROM cloud_files file JOIN folder_access access ON access.id = file.folder_id
+      WHERE access.is_allowed = 1 AND file.deleted_at IS NULL AND file.status = 'ready' AND file.size_bytes > 0
+      ORDER BY access.top_folder_id ASC, file.id ASC LIMIT ? OFFSET ?`;
+    values = [session.rootFolderId, session.sessionId, Math.floor(Date.now() / 1000), pageSize + 1, offset];
   } else {
     const now = Math.floor(Date.now() / 1000);
     query = `WITH RECURSIVE folder_access(id, top_folder_id, is_allowed, has_protected_ancestor) AS (
@@ -1187,6 +1328,7 @@ async function createFolder(request, env, session) {
   const body = await readJson(request, 8192);
   const name = validName(body.name);
   const parentId = optionalId(body.parentId);
+  if (session.role === "member" && !parentId) throw new HttpError(403, "連携されたT-Cloudフォルダの配下だけ作成できます。");
   if (!parentId && !body.authProof) throw new HttpError(400, "最上位フォルダにはパスワードが必要です。");
   if (parentId) {
     await requireFolder(env, parentId);
@@ -1218,6 +1360,7 @@ async function updateFolder(id, request, env, session) {
   const name = validName(body.name);
   const moving = Object.prototype.hasOwnProperty.call(body, "parentId");
   const parentId = moving ? optionalId(body.parentId) : folder.parent_id;
+  if (session.role === "member" && moving && !parentId) throw new HttpError(403, "連携されたT-Cloudフォルダの外へ移動できません。");
   const passwordAction = body.passwordAction === "replace" ? "replace" : "keep";
   if (!session.canEditFolders) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内の名前だけ変更できます。");
@@ -1354,6 +1497,7 @@ async function restoreFolder(id, env, session) {
 }
 
 async function unlockFolder(id, request, env, session) {
+  if (session.role === "member") await requireMemberFolderScope(env, id, session);
   const folder = await env.DB.prepare(`SELECT id, password_hash, crypto_version AS cryptoVersion,
     encrypted_name AS encryptedName, name_iv AS nameIv, password_salt AS passwordSalt,
     password_wrapped_key AS passwordWrappedKey, password_wrap_iv AS passwordWrapIv,
@@ -1434,6 +1578,7 @@ async function uploadPart(id, partNumber, request, env, session) {
   if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) throw new HttpError(400, "分割番号が不正です。");
   const file = await requireUploadingFile(env, id);
   requireUploadOwnership(session, file);
+  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
   const upload = env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id);
   const part = await upload.uploadPart(partNumber, request.body);
   return json({ partNumber: part.partNumber, etag: part.etag });
@@ -1446,6 +1591,7 @@ async function completeUpload(id, request, env, session) {
   const parts = body.parts.map((part) => ({ partNumber: Number(part.partNumber), etag: String(part.etag || "") }));
   const file = await requireUploadingFile(env, id);
   requireUploadOwnership(session, file);
+  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
   const upload = env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id);
   await upload.complete(parts);
   const stored = await env.FILES.head(file.object_key);
@@ -1465,6 +1611,7 @@ async function cancelUpload(id, env, session) {
   requireUpload(session);
   const file = await requireUploadingFile(env, id);
   requireUploadOwnership(session, file);
+  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
   await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort();
   await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).run();
   return json({ ok: true });
@@ -2222,6 +2369,24 @@ async function ensureValidFolderMove(env, folderId, parentId) {
 
 async function requireFolderAccess(env, folderId, session) {
   if (session.role === "admin") return true;
+  if (session.role === "member") {
+    await requireMemberFolderScope(env, folderId, session);
+    let current = folderId;
+    let guard = 0;
+    const now = Math.floor(Date.now() / 1000);
+    while (current && guard++ < 100) {
+      const folder = await env.DB.prepare("SELECT id, parent_id, password_hash FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(current).first();
+      if (!folder) throw new HttpError(404, "フォルダが見つかりません。");
+      if (Number(folder.id) === Number(session.rootFolderId)) return true;
+      if (folder.password_hash) {
+        const unlocked = await env.DB.prepare("SELECT 1 AS ok FROM cloud_folder_unlocks WHERE session_id = ? AND folder_id = ? AND expires_at > ?")
+          .bind(session.sessionId, folder.id, now).first();
+        if (!unlocked) throw new HttpError(423, "フォルダのロックを解除してください。");
+      }
+      current = folder.parent_id;
+    }
+    throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
+  }
   let current = folderId;
   let guard = 0;
   let protectedFolderUnlocked = false;
@@ -2237,6 +2402,13 @@ async function requireFolderAccess(env, folderId, session) {
     current = folder.parent_id;
   }
   return protectedFolderUnlocked;
+}
+
+async function requireMemberFolderScope(env, folderId, session) {
+  if (!session.rootFolderId) throw new HttpError(403, "利用できるT-Cloudフォルダが設定されていません。");
+  if (!(await folderWithinShare(env, folderId, session.rootFolderId))) {
+    throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
+  }
 }
 
 async function requireShareFolderAccess(env, session, folderIds) {
@@ -2312,6 +2484,7 @@ async function breadcrumbs(env, folderId, session) {
       isUnlocked: session.role === "admin" ? true : Boolean(folder.isUnlocked),
       adminAccess: session.role === "admin"
     });
+    if (session.role === "member" && Number(folder.id) === Number(session.rootFolderId)) break;
     current = folder.parent_id;
   }
   return result;
@@ -2376,7 +2549,7 @@ async function createSessionToken(session, maxAge, env) {
 }
 
 async function refreshAuthenticatedSession(request, response, env, url, path) {
-  if (["/api/login", "/api/logout", "/api/auth-mode", "/api/app-version"].includes(path)
+  if (["/api/login", "/api/passkey/handoff", "/api/logout", "/api/auth-mode", "/api/app-version"].includes(path)
     || path.startsWith("/api/public/")) return response;
   const session = await readSession(request, env);
   if (!session) return response;
@@ -2395,7 +2568,7 @@ async function readSession(request, env) {
     if (!encoded || !signature || !(await constantTimeText(signature, await sign(encoded, env.SESSION_SECRET)))) return null;
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded)));
     if (payload.exp <= Math.floor(Date.now() / 1000) || String(payload.version) !== String(env.SESSION_VERSION || "1")) return null;
-    const account = ACCOUNTS.find((item) => item.role === payload.role);
+    const account = payload.role === "member" ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find((item) => item.role === payload.role);
     return account ? {
       role: account.role,
       label: account.label,
@@ -2409,8 +2582,11 @@ async function readSession(request, env) {
       canRequestDelete: account.canRequestDelete,
       canReviewDeletion: account.canReviewDeletion,
       sessionId: payload.sessionId,
-      loginId: configuredLoginId(env, account.role),
-      credentialSalt: await accountCredentialSalt(env)
+      loginId: payload.authMethod === "passkey" ? payload.loginId : configuredLoginId(env, account.role),
+      credentialSalt: await accountCredentialSalt(env),
+      identityId: payload.identityId || null,
+      authMethod: payload.authMethod || "password",
+      rootFolderId: payload.rootFolderId == null ? null : Number(payload.rootFolderId)
     } : null;
   } catch { return null; }
 }
@@ -2584,7 +2760,7 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session) { return { role: session.role, accountName: session.label, loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session) { return { role: session.role, accountName: session.label, loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function configuredLoginId(env, role) {
   const roleSpecific = role === "admin" ? env.ADMIN_LOGIN_ID : env.SUBADMIN_LOGIN_ID;
   return String(roleSpecific || env.LOGIN_ID || "").trim().toLowerCase();

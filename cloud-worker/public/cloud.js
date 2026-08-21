@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-242136956074";
+const APP_BUILD_ID = "cloud-610518c77bbb";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -158,6 +158,15 @@ async function initialize() {
   try {
     const session = await api("/session");
     if (session.authenticated) {
+      state.session = session;
+      if (session.authMethod === "passkey") {
+        const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
+        if (!authentication.prfOutput) throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        const refreshed = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
+        await enterApp(refreshed, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
+        reportCompletedAppUpdate();
+        return;
+      }
       const rememberedId = $("#login-id").value.trim().toLowerCase();
       const rememberedPassword = $("#login-password").value;
       let accountKey = null;
@@ -170,6 +179,8 @@ async function initialize() {
       showLoginView();
     }
   } catch (error) {
+    if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
+    state.session = null;
     showLoginView();
     showLoginError(error.message);
   }
@@ -187,6 +198,7 @@ function bindEvents() {
   window.addEventListener("beforeinstallprompt", handleInstallPrompt);
   window.addEventListener("appinstalled", handleAppInstalled);
   $("#login-form").addEventListener("submit", login);
+  $("#passkey-login").addEventListener("click", loginWithPasskey);
   $("#remember-login").addEventListener("change", syncLoginAutocomplete);
   $("#logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
@@ -930,7 +942,33 @@ async function login(event) {
   }
 }
 
-async function enterApp(session, password = "", accountKey = null) {
+async function loginWithPasskey() {
+  const button = $("#passkey-login");
+  showLoginError("");
+  button.disabled = true;
+  try {
+    const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
+    if (!authentication.prfOutput) throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
+    const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
+    $("#login-password").value = "";
+    await enterApp(session, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
+  } catch (error) {
+    if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
+    state.session = null;
+    showLoginError(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function choosePasskeyLink(links) {
+  if (!links?.length) return null;
+  const answer = window.prompt(`利用するT-Cloudアカウントの番号を入力してください。\n${links.map((link, index) => `${index + 1}. ${link.displayLabel}`).join("\n")}`, "1");
+  const index = Number(answer) - 1;
+  return Number.isInteger(index) ? links[index] || null : null;
+}
+
+async function enterApp(session, password = "", accountKey = null, passkeyContext = null) {
   state.session = session;
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
   state.credentialSalt = String(session.credentialSalt || "");
@@ -949,7 +987,7 @@ async function enterApp(session, password = "", accountKey = null) {
   $("#mobile-storage-summary").hidden = session.role !== "admin";
   $("#mobile-usage-details-action").hidden = session.role !== "admin";
   const restoredNavigation = initializeNavigationHistory();
-  await prepareCryptoSession(password, accountKey);
+  await prepareCryptoSession(password, accountKey, passkeyContext);
   const loaded = await loadItems();
   if (!loaded.ok && restoredNavigation.folderId && [403, 404, 423].includes(Number(loaded.error?.status))) {
     await navigateToFolder(null, "フォルダ", { pushHistory: false, load: false });
@@ -1180,7 +1218,7 @@ async function restoreNavigationPosition(entry) {
   window.setTimeout(restore, 80);
 }
 
-async function prepareCryptoSession(password = "", accountKey = null) {
+async function prepareCryptoSession(password = "", accountKey = null, passkeyContext = null) {
   try {
     const config = await api("/crypto-config");
     state.crypto.config = config;
@@ -1199,6 +1237,25 @@ async function prepareCryptoSession(password = "", accountKey = null) {
     );
     state.crypto.fileEncryptionReady = true;
     syncAvailableActions();
+    if (state.session.authMethod === "passkey") {
+      const keys = passkeyContext?.tcloudKey || {};
+      if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+      if (state.session.role === "admin") {
+        if (!keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
+        state.crypto.adminPrivateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
+        await saveCachedAdminKey(config, state.crypto.adminPrivateKey);
+        setCryptoStatus("暗号化鍵：パスキーで解除済み", true);
+        return;
+      }
+      if (state.session.role === "member") {
+        if (!keys.client_private_prf || !keys.folder_key_rsa || !state.session.rootFolderId) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
+        const privateKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf);
+        const folderKey = await TRoomCrypto.unlockDelegatedFolderKey(privateKey, keys.folder_key_rsa.wrappedKey);
+        state.crypto.folderKeys.set(Number(state.session.rootFolderId), folderKey);
+        setCryptoStatus("暗号化鍵：パスキーで解除済み", true);
+        return;
+      }
+    }
     if (state.session.role !== "admin") {
       if (accountKey) state.crypto.accountKey = accountKey;
       else if (password) state.crypto.accountKey = await TRoomCrypto.deriveAccountKey(password, state.loginId, state.credentialSalt);
@@ -1226,6 +1283,7 @@ async function prepareCryptoSession(password = "", accountKey = null) {
   } catch (error) {
     setCryptoStatus("暗号化鍵：要確認", false);
     setNotice(error.message, true);
+    if (state.session?.authMethod === "passkey") throw error;
     if (state.session?.role === "admin") openVaultDialog(state.crypto.config?.initialized ? "unlock" : "setup");
   }
 }

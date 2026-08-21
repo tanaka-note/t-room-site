@@ -78,3 +78,10 @@
 - 対象アプリ、公開URL、build marker、Service Worker、deploy targetは`web-apps.json`を正とし、追加・変更時はcontract testを通す。
 - GitHub pushだけで公開完了とせず、変更した全サービスをregistry記載の正しいtargetへdeployし、本番build一致まで確認する。
 - 技術的理由で自動更新を適用できないユーザー向けサイトは、勝手に例外化せずユーザーへ説明して確認する。
+
+## 8. 共通Identity・パスキー
+
+- 既存PW認証と各サービス固有のアカウント・role・セッションを正本として維持し、共通Identityと権限を混同しない。第一管理者PWは恒久的な復旧手段として残す。
+- パスキーの新規・追加・再登録は第一管理者の招待と承認を必須とし、端末標準のロック解除、discoverable credential、user verificationを使用する。
+- T-Cloudはパスキーでも端末側だけで既存鍵を解除し、PRF出力、復号鍵、folder key、file keyをCloudflare、GitHub、ログへ渡さない。
+- Security CenterをIdentity・招待・連携・監査の正本とし、失敗だけでなく成功ログインと重要な管理者アクセスも監査する。詳細は`docs/security/passkeys.md`に従う。

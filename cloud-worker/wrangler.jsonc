@@ -28,10 +28,25 @@
       "bucket_name": "t-room-cloud-private"
     }
   ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SECURITY_AUDIT",
+        "queue": "t-room-security-audit"
+      }
+    ]
+  },
   "vars": {
     "SESSION_TTL_SECONDS": "2592000",
     "SUBADMIN_SESSION_TTL_SECONDS": "2592000",
-    "SESSION_VERSION": "5"
+    "SESSION_VERSION": "5",
+    "PASSKEY_ENABLED": "true"
   },
   "triggers": {
     "crons": ["17 18 * * *"]

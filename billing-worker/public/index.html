@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>請求書管理システム</title>
-  <link rel="stylesheet" href="./billing.css?v=billing-aaf3d6009006">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-aaf3d6009006">
-  <script src="./troom-date-picker.js?v=billing-aaf3d6009006" defer></script>
-  <script src="./billing.js?v=billing-aaf3d6009006" defer></script>
-  <meta name="troom-app-build" content="billing-aaf3d6009006">
+  <link rel="stylesheet" href="./billing.css?v=billing-ff8e6b328013">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-ff8e6b328013">
+  <script src="./troom-date-picker.js?v=billing-ff8e6b328013" defer></script>
+  <script src="./billing.js?v=billing-ff8e6b328013" defer></script>
+  <meta name="troom-app-build" content="billing-ff8e6b328013">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -41,6 +41,8 @@
           <label class="remember-login"><input id="remember-login" type="checkbox" checked><span>ログインIDとパスワードを保存する</span></label>
           <p id="login-error" class="error-message" role="alert"></p>
           <button id="login-submit" class="button primary full" type="submit">ログイン</button>
+          <div class="auth-divider"><span>または</span></div>
+          <button id="passkey-login" class="button secondary full" type="button">端末のロック解除でログイン</button>
         </form>
       </div>
     </section>
@@ -207,6 +209,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/assets/pwa-auto-update.js?v=billing-aaf3d6009006" defer></script>
+  <script src="/security/passkey-client.js?v=billing-ff8e6b328013" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-ff8e6b328013" defer></script>
 </body>
 </html>

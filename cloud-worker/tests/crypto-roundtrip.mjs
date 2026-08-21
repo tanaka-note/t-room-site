@@ -33,6 +33,16 @@ const subadminName = await TRoomCrypto.decryptFolderName(record, subadmin.folder
 const recoveredPrivateKey = await TRoomCrypto.recoverAdminPrivateKey(vault.recoveryCode, vault.payload);
 const recoveredFolderKey = await TRoomCrypto.unlockFolderAsAdmin(record, recoveredPrivateKey);
 const recoveredName = await TRoomCrypto.decryptFolderName(record, recoveredFolderKey);
+const passkeyPrf = crypto.getRandomValues(new Uint8Array(32));
+const adminPasskeyEnvelope = await TRoomCrypto.wrapAdminPrivateKeyForPasskey(accountKey, vault.payload, passkeyPrf);
+const passkeyAdminPrivateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyPrf, adminPasskeyEnvelope);
+const passkeyAdminFolderKey = await TRoomCrypto.unlockFolderAsAdmin(record, passkeyAdminPrivateKey);
+const passkeyAdminName = await TRoomCrypto.decryptFolderName(record, passkeyAdminFolderKey);
+const clientVault = await TRoomCrypto.createPasskeyClientVault(passkeyPrf);
+const delegatedFolderEnvelope = await TRoomCrypto.wrapFolderKeyForIdentity(adminKey, clientVault.publicKeyJwk);
+const clientPrivateKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyPrf, clientVault);
+const delegatedFolderKey = await TRoomCrypto.unlockDelegatedFolderKey(clientPrivateKey, delegatedFolderEnvelope);
+const delegatedName = await TRoomCrypto.decryptFolderName(record, delegatedFolderKey);
 
 const fileSource = { name: "家族写真.jpg", type: "image/jpeg", size: 19, lastModified: 1 };
 const filePackage = await TRoomCrypto.createFilePackage(fileSource, adminKey, "image");
@@ -89,7 +99,7 @@ let wrongSharePasswordRejected = false;
 try { await TRoomCrypto.unlockShareKey(sharePackage, "wrong-share-password-9999"); }
 catch { wrongSharePasswordRejected = true; }
 
-if (adminName !== "暗号化テスト" || subadminName !== adminName || recoveredName !== adminName) {
+if (adminName !== "暗号化テスト" || subadminName !== adminName || recoveredName !== adminName || passkeyAdminName !== adminName || delegatedName !== adminName) {
   throw new Error("暗号化の往復テストに失敗しました。");
 }
 if (!vault.recoveryCode.startsWith("TRC1-") || subadmin.authProof.length < 40) {

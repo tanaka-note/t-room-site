@@ -1,0 +1,17 @@
+{
+  "name": "t-room-security-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --port 8790 -c wrangler.jsonc -c ../cloud-worker/wrangler.jsonc -c ../diary-worker/wrangler.jsonc -c ../billing-worker/wrangler.jsonc",
+    "check": "node --check src/index.js && node --check public/passkey-client.js && node --check public/security.js",
+    "test": "node --test test/*.test.js",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "13.3.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.121.0"
+  }
+}

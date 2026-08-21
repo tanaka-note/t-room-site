@@ -185,6 +185,20 @@
       "deployCommand": "pnpm run deploy"
     },
     {
+      "id": "security",
+      "name": "T-ROOM Security Center",
+      "publicUrls": ["https://tanaka-note.com/security/"],
+      "entrypoints": ["security-worker/public/index.html"],
+      "buildRoots": ["security-worker/public"],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "manifest": null,
+      "twa": null,
+      "deployTarget": "t-room-security",
+      "deployCwd": "security-worker",
+      "deployCommand": "pnpm run deploy"
+    },
+    {
       "id": "cloud",
       "name": "T-Cloud Web",
       "publicUrls": ["https://tanaka-note.com/cloud/", "https://tanaka-note.com/cloud/share/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],

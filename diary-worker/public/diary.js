@@ -270,6 +270,7 @@
     document.addEventListener("click", rememberDiaryReturnViewFromNavigation, true);
     window.addEventListener("pageshow", restoreDiaryReturnViewFromPageCache);
     elements.loginForm.addEventListener("submit", handleLogin);
+    document.querySelector("#passkey-login")?.addEventListener("click", handlePasskeyLogin);
     elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
     elements.passwordToggle.addEventListener("click", togglePassword);
     elements.initialPasswordForm.addEventListener("submit", handleInitialPasswordChange);
@@ -559,6 +560,30 @@
     } finally {
       setBusy(submit, false, "開く");
     }
+  }
+
+  async function handlePasskeyLogin() {
+    const button = document.querySelector("#passkey-login");
+    setBusy(button, true, "確認中...");
+    elements.loginMessage.textContent = "";
+    try {
+      const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
+      const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
+      elements.password.value = "";
+      if (session.mustChangePassword) await showInitialPasswordSetup(session);
+      else await enterDiary(session);
+    } catch (error) {
+      elements.loginMessage.textContent = error.message;
+    } finally {
+      setBusy(button, false, "端末のロック解除でログイン");
+    }
+  }
+
+  async function choosePasskeyLink(links) {
+    if (!links?.length) return null;
+    const answer = window.prompt(`利用する日記アカウントの番号を入力してください。\n${links.map((link, index) => `${index + 1}. ${link.displayLabel}`).join("\n")}`, "1");
+    const index = Number(answer) - 1;
+    return Number.isInteger(index) ? links[index] || null : null;
   }
 
   function restoreRememberedLogin() {
@@ -3405,7 +3430,7 @@
     const response = await fetch(`${BASE_PATH}/api${path}`, init);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 401 && path !== "/login") {
+      if (response.status === 401 && path !== "/login" && path !== "/passkey/handoff") {
         resetState();
         showLogin("ログインの有効期限が切れました。");
       }

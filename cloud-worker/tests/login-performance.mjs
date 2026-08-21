@@ -7,7 +7,7 @@ const [client, worker] = await Promise.all([
 ]);
 
 const enterApp = client.match(/async function enterApp[\s\S]*?\r?\n}\r?\n\r?\nasync function logout/)?.[0] || "";
-assert.match(enterApp, /await prepareCryptoSession\(password, accountKey\);\s*const loaded = await loadItems\(\);[\s\S]*?scheduleLegacyFolderMigration\(\);/);
+assert.match(enterApp, /await prepareCryptoSession\(password, accountKey, passkeyContext\);\s*const loaded = await loadItems\(\);[\s\S]*?scheduleLegacyFolderMigration\(\);/);
 assert.doesNotMatch(enterApp, /await migrateLegacyFolderNames/);
 assert.doesNotMatch(client, /migrateLegacyFolderBranch/);
 assert.match(client, /const data = await api\("\/legacy-folders"\)/);

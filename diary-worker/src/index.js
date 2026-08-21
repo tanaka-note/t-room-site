@@ -1,4 +1,6 @@
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
 
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
@@ -21,8 +23,20 @@ const DIARY_ACCOUNTS = [
   { id: WIFE_ADMIN_ACCOUNT_ID, name: "田中暢美", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: false, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH", sessionVersion: 1 }
 ];
 
+export class SecurityIntegration extends WorkerEntrypoint {
+  async describeAccount(input) {
+    const account = await findAccountById(String(input?.accountId || ""), this.env);
+    return account ? {
+      valid: true,
+      displayLabel: `日記 ${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`,
+      role: account.role,
+      householdId: account.householdId
+    } : { valid: false };
+  }
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, context) {
     try {
       const url = new URL(request.url);
       if (url.pathname === `${BASE_PATH}.html`) {
@@ -37,7 +51,7 @@ export default {
       }
 
       if (path.startsWith("/api/")) {
-        const response = await handleApi(request, env, url, path);
+        const response = await handleApi(request, env, url, path, context);
         return secureResponse(await withRollingSession(request, response, env, url, path));
       }
 
@@ -74,7 +88,7 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path) {
+async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     return json({
@@ -89,7 +103,8 @@ async function handleApi(request, env, url, path) {
       canManageEntries: Boolean(session?.canManageEntries),
       canViewTrash: Boolean(session?.canViewTrash),
       canPermanentlyDelete: Boolean(session?.canPermanentlyDelete),
-      canViewInvestment: Boolean(session?.canViewInvestment)
+      canViewInvestment: Boolean(session?.canViewInvestment),
+      authMethod: session?.authMethod || null
     });
   }
 
@@ -103,6 +118,7 @@ async function handleApi(request, env, url, path) {
     const loginId = normalizeLoginId(body.loginId);
     const password = typeof body.password === "string" ? body.password : "";
     if (!loginId || !password || password.length > 256) {
+      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
       return json({ error: "IDまたはパスワードを確認してください。" }, 400);
     }
 
@@ -112,6 +128,7 @@ async function handleApi(request, env, url, path) {
     if (fingerprint) {
       const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
       if (Number(attempt?.locked_until || 0) > now) {
+        enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "login_blocked", outcome: "blocked", serviceAccountId: requestedAccount?.id, role: requestedAccount?.role, authMethod: "password" });
         return json({ error: "ログインが一時停止されています。15分ほど待ってからお試しください。" }, 429);
       }
     }
@@ -123,14 +140,16 @@ async function handleApi(request, env, url, path) {
       : null;
     if (!account) {
       if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
+      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id, role: requestedAccount?.role, authMethod: "password" });
       return json({ error: "IDまたはパスワードが違います。" }, 401);
     }
     await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
 
     const maxAge = getSessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env);
+    const token = await createSessionToken(account, maxAge, env, account.householdId, { authMethod: "password" });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password" });
     return json({
       authenticated: true,
       role: account.role,
@@ -145,6 +164,21 @@ async function handleApi(request, env, url, path) {
       canPermanentlyDelete: account.canPermanentlyDelete,
       canViewInvestment: account.canViewInvestment
     }, 200, headers);
+  }
+
+  if (path === "/api/passkey/handoff" && request.method === "POST") {
+    if (!validMutationRequest(request, url)) return json({ error: "不正なリクエストです。" }, 403);
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) return json({ error: "パスキー機能は一時停止中です。ID・パスワードでログインしてください。" }, 503);
+    const body = await readJson(request, 4096);
+    const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "diary");
+    if (!handoff) return json({ error: "パスキー認証の有効期限が切れています。もう一度お試しください。" }, 401);
+    const account = await findAccountById(handoff.serviceAccountId, env);
+    if (!account) return json({ error: "日記の連携先アカウントを確認できません。" }, 403);
+    const maxAge = getSessionMaxAge(env);
+    const token = await createSessionToken(account, maxAge, env, account.householdId, { identityId: handoff.identityId, authMethod: "passkey" });
+    const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
+    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceAccountId: account.id, role: account.role, authMethod: "passkey" });
+    return json({ authenticated: true, role: account.role, accountName: account.name, loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -185,9 +219,12 @@ async function handleApi(request, env, url, path) {
     }
     const account = await findAccountById(session.accountId, env);
     const maxAge = getSessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env, householdId);
+    const token = await createSessionToken(account, maxAge, env, householdId, { identityId: session.identityId, authMethod: session.authMethod });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+    if (householdId !== session.householdId) {
+      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceAccountId: session.accountId, role: session.role, authMethod: session.authMethod, targetType: "household", targetId: householdId });
+    }
     return json({ ok: true, activeHouseholdId: householdId }, 200, headers);
   }
 
@@ -1240,7 +1277,7 @@ function getSessionMaxAge(env) {
 }
 
 async function withRollingSession(request, response, env, url, path) {
-  if (path === "/api/login" || path === "/api/logout" || path === "/api/password/initial"
+  if (path === "/api/login" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
     || path === "/api/households/select" || response.status === 401) return response;
   const session = await readSession(request, env);
   if (!session) return response;
@@ -1248,7 +1285,7 @@ async function withRollingSession(request, response, env, url, path) {
   if (!account) return response;
 
   const maxAge = getSessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId);
+  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId, { identityId: session.identityId, authMethod: session.authMethod });
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
   return new Response(response.body, {
@@ -1258,12 +1295,14 @@ async function withRollingSession(request, response, env, url, path) {
   });
 }
 
-async function createSessionToken(account, maxAge, env, activeHouseholdId = account.householdId) {
+async function createSessionToken(account, maxAge, env, activeHouseholdId = account.householdId, auth = {}) {
   const payload = {
     role: account.role,
     accountId: account.id,
     activeHouseholdId,
     accountVersion: Number(account.sessionVersion || 1),
+    identityId: auth.identityId || null,
+    authMethod: auth.authMethod || "password",
     exp: Math.floor(Date.now() / 1000) + maxAge,
     version: String(env.SESSION_VERSION || "1")
   };

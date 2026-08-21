@@ -1,0 +1,54 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-security",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-20",
+  "routes": [
+    {
+      "pattern": "tanaka-note.com/security*",
+      "zone_name": "tanaka-note.com"
+    }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "security-db",
+      "database_id": "45c2e1ff-8ee1-4cc8-b8e5-cacc0846e475",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "services": [
+    { "binding": "CLOUD_AUTH", "service": "t-room-cloud", "entrypoint": "SecurityIntegration" },
+    { "binding": "DIARY_AUTH", "service": "t-room-diary", "entrypoint": "SecurityIntegration" },
+    { "binding": "BILLING_AUTH", "service": "t-room-billing", "entrypoint": "SecurityIntegration" }
+  ],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "t-room-security-audit",
+        "max_batch_size": 50,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "t-room-security-audit-dlq"
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["41 18 * * *"]
+  },
+  "vars": {
+    "PASSKEY_ENABLED": "true",
+    "RP_ID": "tanaka-note.com",
+    "RP_NAME": "T-ROOM",
+    "EXPECTED_ORIGIN": "https://tanaka-note.com",
+    "MAX_INVITE_DAYS": "30",
+    "IDENTITY_SESSION_TTL_SECONDS": "600",
+    "ADMIN_SESSION_TTL_SECONDS": "3600",
+    "AUDIT_RETENTION_DAYS": "180"
+  }
+}

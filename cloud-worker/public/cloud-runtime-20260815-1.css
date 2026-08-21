@@ -29,6 +29,7 @@ button { cursor: pointer; }
 .login-card h1 { margin: 0; font-size: clamp(2.3rem, 8vw, 4rem); line-height: .98; letter-spacing: -.055em; }
 .login-lead { margin: 22px 0 32px; color: var(--muted); line-height: 1.8; }
 .login-form { display: grid; gap: 18px; }
+.auth-divider{display:flex;align-items:center;gap:12px;color:#73808a;font-size:.82rem}.auth-divider::before,.auth-divider::after{content:"";height:1px;flex:1;background:#d7e0df}
 .login-form label, .form-dialog label { display: grid; gap: 8px; color: #34414b; font-size: .86rem; font-weight: 700; }
 .login-form .remember-login { display: flex; align-items: center; gap: 9px; cursor: pointer; font-weight: 600; }
 .remember-login input { width: 18px; height: 18px; margin: 0; accent-color: var(--green); }

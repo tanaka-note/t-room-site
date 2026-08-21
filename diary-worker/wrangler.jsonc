@@ -32,11 +32,26 @@
       "bucket_name": "t-room-diary-backups"
     }
   ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SECURITY_AUDIT",
+        "queue": "t-room-security-audit"
+      }
+    ]
+  },
   "triggers": {
     "crons": ["25 18 * * *"]
   },
   "vars": {
     "SESSION_TTL_SECONDS": "2592000",
-    "SESSION_VERSION": "3"
+    "SESSION_VERSION": "3",
+    "PASSKEY_ENABLED": "true"
   }
 }

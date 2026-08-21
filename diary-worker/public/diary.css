@@ -984,6 +984,7 @@ button:disabled {
   display: grid;
   gap: 12px;
 }
+.auth-divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:.82rem}.auth-divider::before,.auth-divider::after{content:"";height:1px;flex:1;background:var(--line)}
 
 .login-field {
   display: grid;
