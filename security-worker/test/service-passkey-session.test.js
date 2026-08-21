@@ -7,7 +7,8 @@ const passkey = {
   identityId: "family_user",
   credentialId: "credential-1",
   serviceLinkId: "link-1",
-  serviceAccountId: "main-user"
+  serviceAccountId: "main-user",
+  passkeySessionEpoch: 4
 };
 
 test("password sessions remain independent from passkey revocation and kill switch", async () => {
@@ -19,8 +20,8 @@ test("password sessions remain independent from passkey revocation and kill swit
 
 test("passkey sessions require all revocation identifiers and an enabled kill switch", async () => {
   const binding = { validatePasskeySession: async () => ({ valid: true }) };
-  assert.equal(await validateServicePasskeySession(passkey, { PASSKEY_ENABLED: "false", SECURITY: binding }, "diary"), false);
-  for (const field of ["identityId", "credentialId", "serviceLinkId", "serviceAccountId"]) {
+  assert.equal(await validateServicePasskeySession(passkey, { PASSKEY_ENABLED: "false", SECURITY: { validatePasskeySession: async () => ({ valid: false }) } }, "diary"), false);
+  for (const field of ["identityId", "credentialId", "serviceLinkId", "serviceAccountId", "passkeySessionEpoch"]) {
     assert.equal(await validateServicePasskeySession({ ...passkey, [field]: null }, { PASSKEY_ENABLED: "true", SECURITY: binding }, "diary"), false, field);
   }
 });
@@ -45,6 +46,8 @@ test("service validation forwards the exact credential, link, account and Cloud 
     credentialId: "credential-1",
     serviceLinkId: "link-1",
     serviceAccountId: "folder-member",
-    cloudRootFolderId: 42
+    cloudRootFolderId: 42,
+    sessionEpoch: 4,
+    servicePasskeyEnabled: true
   });
 });

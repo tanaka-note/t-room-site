@@ -47,6 +47,27 @@
 
   async function routeStatus() {
     try {
+      const setup = await TRoomPasskeys.setupStatus();
+      if (setup.active && !setup.isPrimaryAdmin) {
+        $("#invite-view").hidden = false;
+        if (setup.tcloudReady) {
+          $("#invite-register").hidden = true;
+          showMessage("パスキー登録とT-Cloudの準備は完了しています。管理者の承認をお待ちください。", false);
+        } else if (!setup.prfEnabled) {
+          $("#invite-register").hidden = true;
+          showMessage("パスキー登録は完了しています。日記・請求書では承認後に利用できます。T-Cloudはこの端末がPRF非対応のため従来のID・パスワードをご利用ください。", false);
+        } else {
+          state.pendingInviteCloud = setup;
+          $("#invite-register").textContent = "T-Cloudの準備を再開";
+          $("#invite-register").onclick = () => retryInviteCloud();
+        }
+        return;
+      }
+      if (setup.active && !setup.tcloudReady) {
+        if (setup.isPrimaryAdmin) {
+          showMessage("第一管理者パスキーは登録済みですが、T-Cloudの鍵準備が未完了です。現在の管理者PWで復旧登録を再開してください。", false);
+        }
+      }
       const status = await get("/status");
       if (!status.enabled) return showMessage("パスキー機能は現在停止中です。各サービスのID・パスワードをご利用ください。", true);
       if (!status.initialized) $("#bootstrap-view").hidden = false;
@@ -74,8 +95,7 @@
         if (!result.prfOutput) throw new Error(result.prfPreparationFailed
           ? "T-Cloudの鍵準備を一時的に完了できませんでした。"
           : "この端末はT-Cloudの安全なパスキー復号に対応していません。");
-        await cloudApi("/login", { loginId, authProof: credentials.authProof });
-        const [config, detail] = await Promise.all([cloudApi("/crypto-config"), get("/identities/primary-admin")]);
+        const [config, detail] = await Promise.all([get("/tcloud/admin-config"), get("/identities/primary-admin")]);
         if (!config.initialized) throw new Error("T-Cloudの暗号化設定を確認できません。");
         const link = detail.links.find((item) => item.service === "cloud" && item.service_account_id === "admin");
         if (!link) throw new Error("T-Cloud管理者連携を確認できません。");
@@ -109,7 +129,7 @@
     button.disabled = true;
     try {
       const result = await TRoomPasskeys.registerInvite(token);
-      if (result.cloudLink) {
+      if (result.cloudLinks?.length) {
         const prepared = await prepareInviteCloud(result);
         if (!prepared) return;
       }
@@ -122,8 +142,10 @@
   async function prepareInviteCloud(result) {
     const button = $("#invite-register");
     try {
+      const setup = await TRoomPasskeys.setupStatus();
+      if (setup.tcloudReady) return true;
       let prfOutput = result.prfOutput;
-      if (!prfOutput && result.prfPreparationFailed) {
+      if (!prfOutput && result.credentialId && (result.prfPreparationFailed || result.prfEnabled)) {
         const retried = await TRoomPasskeys.obtainPrf(result.credentialId);
         prfOutput = retried.prfOutput;
         result.prfPreparationFailed = false;
@@ -134,7 +156,8 @@
         return false;
       }
       const vault = await TRoomCrypto.createPasskeyClientVault(prfOutput);
-      await post("/tcloud/envelope", { serviceLinkId: result.cloudLink.id, envelopeType: "client_private_prf", publicKeyJwk: vault.publicKeyJwk, encryptedPayload: vault.encryptedPayload, payloadIv: vault.payloadIv });
+      const cloudLinks = result.cloudLinks || setup.cloudLinks || [];
+      await post("/tcloud/envelope", { serviceLinkId: cloudLinks[0]?.id || null, envelopeType: "client_private_prf", publicKeyJwk: vault.publicKeyJwk, encryptedPayload: vault.encryptedPayload, payloadIv: vault.payloadIv });
       state.pendingInviteCloud = null;
       return true;
     } catch (error) {
@@ -152,6 +175,8 @@
     if (!state.pendingInviteCloud) return;
     button.disabled = true;
     try {
+      const setup = await TRoomPasskeys.setupStatus();
+      state.pendingInviteCloud = { ...state.pendingInviteCloud, ...setup, cloudLinks: setup.cloudLinks || state.pendingInviteCloud.cloudLinks };
       if (await prepareInviteCloud(state.pendingInviteCloud)) {
         button.hidden = true;
         showMessage("T-Cloudの準備が完了しました。管理者の承認をお待ちください。");
@@ -185,13 +210,17 @@
   async function viewIdentity(id) {
     const data = await get(`/identities/${encodeURIComponent(id)}`);
     state.selectedIdentity = data;
-    const credentials = data.credentials.map((item) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))}</small>${item.status !== "revoked" ? `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>` : ""}</div>`).join("");
-    const links = data.links.map((item) => `<div class="link">${escapeHtml(item.display_label)}<br><small>${escapeHtml(item.service)} / ${escapeHtml(item.service_account_id)}${item.cloud_root_folder_id ? ` / folder #${item.cloud_root_folder_id}` : ""} / ${escapeHtml(item.status)}</small>${data.identity.id !== "primary-admin" ? `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>` : ""}</div>`).join("");
+    const credentials = data.credentials.map((item) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))} / ${escapeHtml(item.device_type || "端末種別不明")} / ${item.backed_up ? "同期型" : "端末内"} / PRF ${item.prf_enabled ? "対応" : "未対応"}</small>${item.status !== "revoked" ? `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>` : ""}</div>`).join("");
+    const links = data.links.map((item) => `<div class="link">${escapeHtml(item.display_label)}${item.folderUnavailable ? "（フォルダ取得不能）" : ""}<br><small>${escapeHtml(item.service)} / ${escapeHtml(item.service_account_id)}${item.cloud_root_folder_id ? ` / folder #${item.cloud_root_folder_id}` : ""} / ${escapeHtml(item.status)}</small>${data.identity.id !== "primary-admin" ? `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>` : ""}</div>`).join("");
     const invitations = data.invitations.map((item) => `<div class="invitation"><small>${escapeHtml(formatDate(item.created_at))} / ${escapeHtml(item.status)} / 期限 ${escapeHtml(new Date(Number(item.expires_at) * 1000).toLocaleString("ja-JP"))}</small>${item.status === "active" ? `<button class="danger" data-revoke-invitation="${escapeHtml(item.id)}">招待取消</button>` : ""}</div>`).join("");
-    $("#identity-detail").innerHTML = `<h2>${escapeHtml(data.identity.displayName)}</h2><p>Identity: ${escapeHtml(data.identity.id)} / ${escapeHtml(statusLabel(data.identity.status))}</p><h3>サービス連携</h3>${links || "<p>なし</p>"}${data.identity.id !== "primary-admin" ? '<div class="link-editor"><select id="detail-link-service"><option value="diary">日記</option><option value="billing">請求書</option><option value="cloud">T-Cloud</option></select><input id="detail-link-account" placeholder="account ID"><input id="detail-link-root" type="number" min="1" placeholder="T-Cloud folder ID"><button id="detail-add-link" class="secondary">連携追加</button></div><p class="hint">追加した連携は、再招待と承認後に有効になります。</p>' : ""}<h3>登録済みパスキー</h3>${credentials || "<p>なし</p>"}<h3>招待履歴</h3>${invitations || "<p>なし</p>"}<div class="tabs"><button id="reinvite-button">再招待</button>${data.pendingCredentialId ? '<button id="approve-button">この登録を承認</button>' : ""}</div><output id="detail-result"></output>`;
+    const approvals = (data.approvalCandidates || []).map((item) => {
+      const cloudStatus = !item.hasCloudLinks ? "" : item.cloudClientReady ? "（T-Cloud鍵委譲待ち）" : item.prfEnabled ? "（T-Cloud端末準備未完了）" : "（T-Cloud PRF非対応）";
+      return `<button data-approve-credential="${escapeHtml(item.credentialId)}">${escapeHtml(formatDate(item.registeredAt))}の登録を承認${cloudStatus}</button>`;
+    }).join("");
+    $("#identity-detail").innerHTML = `<h2>${escapeHtml(data.identity.displayName)}</h2><p>Identity: ${escapeHtml(data.identity.id)} / ${escapeHtml(statusLabel(data.identity.status))}</p><h3>サービス連携</h3>${links || "<p>なし</p>"}${data.identity.id !== "primary-admin" ? '<div class="link-editor"><select id="detail-link-service"><option value="diary">日記</option><option value="billing">請求書</option><option value="cloud">T-Cloud</option></select><input id="detail-link-account" placeholder="account ID"><input id="detail-link-root" type="number" min="1" placeholder="T-Cloud folder ID"><button id="detail-add-link" class="secondary">連携追加</button></div><p class="hint">追加した連携は、再招待と承認後に有効になります。</p>' : ""}<h3>登録済みパスキー</h3>${credentials || "<p>なし</p>"}<h3>招待履歴</h3>${invitations || "<p>なし</p>"}<div class="tabs"><button id="reinvite-button">再招待</button>${approvals}</div><output id="detail-result"></output>`;
     $("#identity-detail").hidden = false;
     $("#reinvite-button").onclick = (event) => reinvite(id, event.currentTarget);
-    $("#approve-button")?.addEventListener("click", (event) => approve(id, event.currentTarget));
+    document.querySelectorAll("[data-approve-credential]").forEach((button) => button.addEventListener("click", (event) => approve(id, event.currentTarget, button.dataset.approveCredential)));
     document.querySelectorAll("[data-revoke-credential]").forEach((button) => button.addEventListener("click", () => revokeCredential(button.dataset.revokeCredential, button)));
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));
@@ -222,12 +251,14 @@
     finally { button.disabled = false; }
   }
 
-  async function approve(id, button) {
+  async function approve(id, button, credentialId) {
     button.disabled = true;
     try {
       const detail = state.selectedIdentity;
       const cloudEnvelopes = [];
-      if (detail.cloudApproval) {
+      const candidate = (detail.approvalCandidates || []).find((item) => item.credentialId === credentialId);
+      const cloudApproval = candidate?.cloudApproval || null;
+      if (cloudApproval) {
         if (!state.adminPrf || !state.adminCredentialId) {
           const auth = await TRoomPasskeys.authenticate("security");
           state.adminPrf = auth.prfOutput;
@@ -238,12 +269,13 @@
         const envelope = adminDetail.adminKeyEnvelopes.find((item) => item.credentialId === state.adminCredentialId);
         if (!envelope) throw new Error("この管理者パスキーにはT-Cloud暗号鍵が登録されていません。第一管理者PWで復旧登録してください。");
         const privateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(state.adminPrf, envelope);
-        for (const item of detail.cloudApproval.folders) {
+        for (const item of cloudApproval.folders) {
+          if (item.folderUnavailable || !item.folder) throw new Error("T-Cloudフォルダ情報を取得できない連携があります。連携を解除するか、T-Cloud復旧後に再試行してください。");
           const folderKey = await TRoomCrypto.unlockFolderAsAdmin(item.folder, privateKey);
-          cloudEnvelopes.push({ serviceLinkId: item.serviceLinkId, wrappedKey: await TRoomCrypto.wrapFolderKeyForIdentity(folderKey, detail.cloudApproval.publicKeyJwk) });
+          cloudEnvelopes.push({ serviceLinkId: item.serviceLinkId, wrappedKey: await TRoomCrypto.wrapFolderKeyForIdentity(folderKey, cloudApproval.publicKeyJwk) });
         }
       }
-      const approved = await post(`/identities/${encodeURIComponent(id)}/approve`, { credentialId: detail.pendingCredentialId, cloudEnvelopes });
+      const approved = await post(`/identities/${encodeURIComponent(id)}/approve`, { credentialId, cloudEnvelopes });
       showMessage(approved.tcloudPasskeyReady === false
         ? "日記・請求書の利用を承認しました。T-CloudはPRF対応端末で再招待・鍵委譲が完了するまで従来PWをご利用ください。"
         : "パスキー登録とサービス連携を承認しました。");

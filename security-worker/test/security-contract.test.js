@@ -5,6 +5,9 @@ import { secure, SECURITY_CONTENT_SECURITY_POLICY } from "../src/security-header
 
 const worker = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const migration = await readFile(new URL("../migrations/0001_identity_passkeys.sql", import.meta.url), "utf8");
+const lifecycleMigration = await readFile(new URL("../migrations/0002_passkey_lifecycle_integrity.sql", import.meta.url), "utf8");
+const foreignKeyMigration = await readFile(new URL("../migrations/0003_repair_service_link_foreign_keys.sql", import.meta.url), "utf8");
+const handoffEpochMigration = await readFile(new URL("../migrations/0004_handoff_session_epoch.sql", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/passkey-client.js", import.meta.url), "utf8");
 const securityUi = await readFile(new URL("../public/security.js", import.meta.url), "utf8");
 const securityHtml = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
@@ -35,6 +38,8 @@ test("invite, challenge, and handoff values are hashed, expiring, and one-use", 
   assert.match(worker, /\/security\/#invite=/, "招待tokenはHTTPリクエストやReferrerへ出ないfragmentに置きます");
   assert.doesNotMatch(worker, /\/security\/\?invite=/);
   assert.doesNotMatch(migration, /(?:^|\s)(?:password|password_hash|auth_proof|session_cookie|private_key_pem|private_key_jwk)\s+(?:TEXT|BLOB)/im);
+  assert.match(lifecycleMigration, /registered_via_invitation_id TEXT/);
+  assert.match(lifecycleMigration, /UNIQUE INDEX uq_security_credentials_invitation/);
 });
 
 test("PRF output remains client-side and T-Cloud stores only encrypted envelopes", () => {
@@ -82,7 +87,8 @@ test("first administrator password recovery remains available after initializati
 
 test("reinvite creates a credential-specific T-Cloud envelope without replacing password wraps", () => {
   assert.match(worker, /status IN \('pending', 'active'\)/);
-  assert.match(worker, /ON CONFLICT\(credential_id, service_link_id, envelope_type\) DO UPDATE/);
+  assert.match(worker, /security_tcloud_client_vaults/);
+  assert.match(worker, /public_key_fingerprint/);
   assert.match(cloudClient, /unlockPasskeyClientPrivateKey/);
   assert.match(cloudClient, /unlockDelegatedFolderKey/);
   assert.match(cloudCrypto, /RSA-OAEP/);
@@ -146,6 +152,10 @@ test("Identity routes, audit service and invitation lifecycle share the hardened
   assert.match(worker, /enforceAuthenticationOptionsRateLimit/);
   assert.match(worker, /passkey_authentication_options/);
   assert.match(worker, /Number\(recent\?\.attempts \|\| 0\) >= 20/);
+  assert.match(lifecycleMigration, /COALESCE\(cloud_root_folder_id, -1\)/);
+  assert.match(lifecycleMigration, /WHERE status IN \('pending', 'active'\)/);
+  assert.match(foreignKeyMigration, /REFERENCES security_service_links\(id\)/);
+  assert.doesNotMatch(worker, /status = 'pending'.*WHERE id = \?/, "disabled service-link rows are never reactivated");
 });
 
 test("all service passkey sessions carry revocable Security identifiers and validate on protected access", async () => {
@@ -168,11 +178,41 @@ test("registration partial success remains usable outside T-Cloud and T-Cloud pr
   assert.match(client, /prfPreparationFailed/);
   assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service != 'cloud'/);
   assert.match(worker, /envelopeType === "admin_private_prf"[\s\S]*UPDATE security_service_links SET status = 'active'/);
-  assert.match(worker, /c\.status = 'active'[\s\S]*e\.envelope_type = 'client_private_prf'/,
-    "T-Cloud envelopeが後から保存されたactive credentialも再承認できます");
+  assert.match(worker, /security_setup_sessions/);
+  assert.match(worker, /last_user_verification_at/);
+  assert.match(worker, /security_tcloud_client_vaults/);
   assert.match(securityUi, /パスキー登録は完了しました。日記・請求書では承認後に利用できます/);
   assert.match(securityUi, /T-Cloudの準備を再試行/);
   assert.match(securityUi, /inviteExpiryPayload\(\)/);
   assert.match(securityUi, /日時指定の有効期限を入力してください/);
   assert.match(securityHtml, /端末のロック解除を登録/);
+});
+
+test("kill-switch epochs, atomic local audits, and malformed cookies fail closed", () => {
+  assert.match(lifecycleMigration, /passkey_session_epoch INTEGER NOT NULL/);
+  assert.match(handoffEpochMigration, /ADD COLUMN session_epoch INTEGER/);
+  assert.match(worker, /observePasskeyRuntime/);
+  assert.match(worker, /sessionEpoch: runtime\.epoch/);
+  assert.match(worker, /localAuditStatement/);
+  assert.match(worker, /const parts = token\.split\("\."\)/);
+  assert.match(worker, /if \(parts\.length !== 2\) return null/);
+  for (const source of [cloud, diary, billing]) {
+    assert.match(source, /passkeySessionEpoch/);
+  }
+  assert.match(diary, /passkeySessionEpoch: session\.passkeySessionEpoch/);
+  assert.match(billing, /passkeySessionEpoch: session\.passkeySessionEpoch/);
+});
+
+test("multiple Cloud links share one credential vault and keep per-link folder envelopes", () => {
+  assert.match(lifecycleMigration, /CREATE TABLE security_tcloud_client_vaults/);
+  assert.match(lifecycleMigration, /credential_id TEXT PRIMARY KEY/);
+  assert.match(migration, /UNIQUE \(credential_id, service_link_id, envelope_type\)/);
+  assert.match(worker, /cloudLinks: \(cloudLinks\.results \|\| \[\]\)\.map/);
+  assert.doesNotMatch(worker, /cloud_root_folder_id FROM security_service_links WHERE identity_id = \? AND service = 'cloud' AND status IN \('pending', 'active'\) LIMIT 1/);
+});
+
+test("bootstrap obtains encrypted Cloud config through a private binding without creating a Cloud PW cookie", () => {
+  assert.match(cloud, /getPrimaryAdminCryptoConfig/);
+  assert.match(worker, /CLOUD_AUTH\.getPrimaryAdminCryptoConfig/);
+  assert.doesNotMatch(securityUi, /cloudApi\("\/login"/);
 });

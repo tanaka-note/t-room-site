@@ -29,7 +29,7 @@
     const credential = await navigator.credentials.create({ publicKey: decodeCreationOptions(start.options) });
     const result = await api("/invite/verify", { token, challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
     const prf = await obtainPrfSafely(result.credentialId);
-    return { ...result, ...prf, cloudLink: start.cloudLink };
+    return { ...result, ...prf, cloudLinks: start.cloudLinks || [] };
   }
 
   async function bootstrap(authProof) {
@@ -60,6 +60,13 @@
     const prfOutput = readPrfOutput(credential);
     await api("/prf/verify", { challengeId: start.challengeId, response: serializeCredential(credential), prfAvailable: Boolean(prfOutput) });
     return { prfOutput, prfAvailable: Boolean(prfOutput), prfSalt: start.prfSalt };
+  }
+
+  async function setupStatus() {
+    const response = await fetch(`${API}/setup/status`, { credentials: "same-origin" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "T-Cloudの準備状態を確認できませんでした。");
+    return payload;
   }
 
   async function api(path, body) {
@@ -156,5 +163,5 @@
     constructor() { super("端末のロック解除をキャンセルしました。"); this.name = "PasskeyCancelledError"; }
   }
 
-  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, api, toBase64Url, fromBase64Url, PasskeyCancelledError });
+  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, api, toBase64Url, fromBase64Url, PasskeyCancelledError });
 })();

@@ -3,13 +3,17 @@ import test from "node:test";
 import {
   LOGIN_FAILURE_EVENTS,
   LOGIN_SUCCESS_EVENTS,
+  bootstrapAttemptCutoff,
+  canonicalServiceLinks,
   currentJstDayBounds,
   jstDayBounds,
   normalizeAuditService,
   normalizeIdentityId,
   normalizeLinkedService,
+  normalizeUtcTimestamp,
   passkeySessionStateMatches,
-  resolveInviteExpiry
+  resolveInviteExpiry,
+  validCredentialId
 } from "../src/security-domain.js";
 
 test("Identity ID accepts only A-Z, a-z, 0-9, underscore and hyphen up to 64 characters", () => {
@@ -62,7 +66,8 @@ test("passkey session validation fails closed after credential, link, root or ki
     credentialId: "credential-1",
     serviceLinkId: "link-1",
     serviceAccountId: "folder-member",
-    cloudRootFolderId: 42
+      cloudRootFolderId: 42,
+      sessionEpoch: 7
   };
   const row = {
     service: "cloud",
@@ -70,7 +75,8 @@ test("passkey session validation fails closed after credential, link, root or ki
     credential_id: "credential-1",
     link_id: "link-1",
     service_account_id: "folder-member",
-    cloud_root_folder_id: 42
+    cloud_root_folder_id: 42,
+    session_epoch: 7
   };
   assert.equal(passkeySessionStateMatches(input, row, true), true);
   assert.equal(passkeySessionStateMatches(input, null, true), false, "revoked credential or disabled link produces no active row");
@@ -79,4 +85,36 @@ test("passkey session validation fails closed after credential, link, root or ki
   assert.equal(passkeySessionStateMatches({ ...input, serviceLinkId: "disabled" }, row, true), false);
   assert.equal(passkeySessionStateMatches({ ...input, cloudRootFolderId: 43 }, row, true), false);
   assert.equal(passkeySessionStateMatches({ ...input, serviceAccountId: "other" }, row, true), false, "service account identities must also match exactly");
+  assert.equal(passkeySessionStateMatches({ ...input, sessionEpoch: 6 }, row, true), false, "kill-switch generations cannot revive");
+});
+
+test("service-link hashing is deterministic for numeric roots, NULL roots and mixed services", () => {
+  const rows = [
+    { service: "cloud", accountId: "folder-member", rootFolderId: 10 },
+    { service: "diary", accountId: "main-user", rootFolderId: null },
+    { service: "cloud", accountId: "folder-member", rootFolderId: 2 },
+    { service: "billing", accountId: "owner", rootFolderId: null }
+  ];
+  const expected = canonicalServiceLinks(rows);
+  assert.deepEqual(expected.map((row) => row.cloud_root_folder_id), [null, 2, 10, null]);
+  assert.deepEqual(canonicalServiceLinks([...rows].reverse()), expected);
+  assert.deepEqual(canonicalServiceLinks(expected), expected);
+});
+
+test("SQLite UTC timestamps are normalized before browser display", () => {
+  assert.equal(normalizeUtcTimestamp("2026-08-21 03:04:05"), "2026-08-21T03:04:05.000Z");
+  assert.equal(normalizeUtcTimestamp("2026-08-21T03:04:05Z"), "2026-08-21T03:04:05.000Z");
+  assert.equal(normalizeUtcTimestamp(null), null);
+});
+
+test("credential IDs accept long base64url values but reject malformed and oversized paths", () => {
+  assert.equal(validCredentialId("a".repeat(1500)), "a".repeat(1500));
+  assert.equal(validCredentialId("***"), "");
+  assert.equal(validCredentialId("a".repeat(4097)), "");
+  assert.equal(validCredentialId("a"), "", "invalid base64url length is rejected");
+});
+
+test("bootstrap lockout cutoff is a UTC ISO instant across UTC and JST boundaries", () => {
+  assert.equal(bootstrapAttemptCutoff(Date.parse("2026-08-21T00:05:00.000Z")), "2026-08-20T23:50:00.000Z");
+  assert.equal(bootstrapAttemptCutoff(Date.parse("2026-08-21T15:05:00.000Z")), "2026-08-21T14:50:00.000Z");
 });

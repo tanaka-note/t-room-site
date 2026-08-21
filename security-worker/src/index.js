@@ -9,21 +9,28 @@ import { secure } from "./security-headers.js";
 import {
   LOGIN_FAILURE_EVENTS,
   LOGIN_SUCCESS_EVENTS,
+  bootstrapAttemptCutoff,
+  canonicalServiceLinks,
   currentJstDayBounds,
   jstDayBounds,
   normalizeAuditService,
   normalizeIdentityId,
   normalizeLinkedService,
+  normalizeUtcTimestamp,
   passkeySessionStateMatches,
-  resolveInviteExpiry
+  resolveInviteExpiry,
+  validCredentialId
 } from "./security-domain.js";
 
 const BASE_PATH = "/security";
 const ADMIN_COOKIE = "troom_security_admin";
 const IDENTITY_COOKIE = "troom_security_identity";
+const SETUP_COOKIE = "troom_security_setup";
 const PRIMARY_ADMIN_ID = "primary-admin";
 const CHALLENGE_TTL_SECONDS = 5 * 60;
 const HANDOFF_TTL_SECONDS = 60;
+const SETUP_TTL_SECONDS = 24 * 60 * 60;
+const SETUP_UV_TTL_SECONDS = 5 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -60,6 +67,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
     await this.env.DB.batch([
       this.env.DB.prepare("DELETE FROM security_challenges WHERE expires_at < ?").bind(nowSeconds() - 86400),
       this.env.DB.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").bind(nowSeconds() - 86400),
+      this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
       this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
       this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < datetime('now', ?)").bind(`-${retentionDays} days`)
     ]);
@@ -76,9 +84,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
 
 async function handleApi(request, env, url, path) {
   if (path === "/api/status" && request.method === "GET") {
+    const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
     const initialized = await hasSecurityAdmin(env);
     const admin = await readSecuritySession(request, env, ADMIN_COOKIE, "admin");
-    return json({ enabled: passkeysEnabled(env), initialized, adminAuthenticated: Boolean(admin) });
+    return json({ enabled: runtime.enabled, initialized, adminAuthenticated: Boolean(admin) });
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -89,10 +98,14 @@ async function handleApi(request, env, url, path) {
     const headers = new Headers();
     headers.append("Set-Cookie", clearCookie(ADMIN_COOKIE, url.protocol === "https:"));
     headers.append("Set-Cookie", clearCookie(IDENTITY_COOKIE, url.protocol === "https:"));
+    headers.append("Set-Cookie", clearCookie(SETUP_COOKIE, url.protocol === "https:"));
     return json({ ok: true }, 200, headers);
   }
 
   if (!passkeysEnabled(env)) throw new HttpError(503, "パスキー機能は一時停止中です。従来のID・パスワードでログインしてください。");
+
+  if (path === "/api/setup/status" && request.method === "GET") return setupStatus(request, env);
+  if (path === "/api/tcloud/admin-config" && request.method === "GET") return primaryAdminCryptoConfig(request, env);
 
   if (path === "/api/bootstrap/options" && request.method === "POST") {
     requireMutation(request, url);
@@ -171,7 +184,7 @@ async function handleApi(request, env, url, path) {
     requireMutation(request, url);
     return reinviteIdentity(reinviteMatch[1], request, env, admin);
   }
-  const credentialRevokeMatch = path.match(/^\/api\/credentials\/([A-Za-z0-9_-]{16,1024})\/revoke$/);
+  const credentialRevokeMatch = path.match(/^\/api\/credentials\/([A-Za-z0-9_-]{1,4096})\/revoke$/);
   if (credentialRevokeMatch && request.method === "POST") {
     requireMutation(request, url);
     return revokeCredential(credentialRevokeMatch[1], request, env, admin);
@@ -210,6 +223,7 @@ async function bootstrapVerify(request, env, url) {
   if (!verification.verified || !verification.registrationInfo?.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
   const credential = verification.registrationInfo.credential;
   const prfSalt = randomToken(32);
+  const setup = await prepareSetupSession(env, PRIMARY_ADMIN_ID, credential.id);
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO security_credentials
       (credential_id, identity_id, public_key, counter, transports_json, device_type, backed_up, prf_enabled, prf_salt, status, approved_at)
@@ -218,10 +232,12 @@ async function bootstrapVerify(request, env, url) {
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
     env.DB.prepare("UPDATE security_identities SET status = 'active', is_security_admin = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(PRIMARY_ADMIN_ID),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service != 'cloud'").bind(PRIMARY_ADMIN_ID)
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service != 'cloud'").bind(PRIMARY_ADMIN_ID),
+    insertSetupSessionStatement(env, setup),
+    await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request)
   ]);
-  await writeLocalAudit(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request);
   const headers = await securitySessionHeaders(env, url, PRIMARY_ADMIN_ID, credential.id, true);
+  headers.append("Set-Cookie", setupCookie(setup.token, url.protocol === "https:"));
   return json({ ok: true, identityId: PRIMARY_ADMIN_ID, credentialId: credential.id, prfSalt, prfEnabled: Boolean(body.prfEnabled), needsTCloudEnvelope: true }, 201, headers);
 }
 
@@ -233,8 +249,8 @@ async function invitationOptions(request, env) {
   const existing = await env.DB.prepare("SELECT credential_id AS id, transports_json AS transports FROM security_credentials WHERE identity_id = ? AND status != 'revoked'").bind(identity.id).all();
   const options = await registrationOptions(env, identity.id, identity.display_name, (existing.results || []).map((row) => ({ id: row.id, transports: parseJson(row.transports, []) })));
   const challengeId = await storeChallenge(env, "invite_registration", options.challenge, identity.id, invitation.id, null);
-  const cloudLink = await env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active') LIMIT 1").bind(identity.id).first();
-  return json({ challengeId, identity: { id: identity.id, displayName: identity.display_name }, options, cloudLink: cloudLink ? { id: cloudLink.id, accountId: cloudLink.service_account_id, rootFolderId: cloudLink.cloud_root_folder_id } : null });
+  const cloudLinks = await env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(identity.id).all();
+  return json({ challengeId, identity: { id: identity.id, displayName: identity.display_name }, options, cloudLinks: (cloudLinks.results || []).map((link) => ({ id: link.id, accountId: link.service_account_id, rootFolderId: link.cloud_root_folder_id })) });
 }
 
 async function invitationVerify(request, env, url) {
@@ -249,19 +265,28 @@ async function invitationVerify(request, env, url) {
   if (!verification.verified || !verification.registrationInfo?.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
   const credential = verification.registrationInfo.credential;
   const prfSalt = randomToken(32);
-  await env.DB.batch([
+  const setup = await prepareSetupSession(env, invitation.identity_id, credential.id);
+  try {
+    await env.DB.batch([
     env.DB.prepare(`INSERT INTO security_credentials
-      (credential_id, identity_id, public_key, counter, transports_json, device_type, backed_up, prf_enabled, prf_salt, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`)
+      (credential_id, identity_id, public_key, counter, transports_json, device_type, backed_up, prf_enabled, prf_salt, status, registered_via_invitation_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
       .bind(credential.id, invitation.identity_id, bytesToBase64Url(credential.publicKey), Number(credential.counter || 0),
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
-        verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
+        verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt, invitation.id),
     env.DB.prepare("UPDATE security_invitations SET status = 'used', used_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'").bind(invitation.id),
-    env.DB.prepare("UPDATE security_identities SET status = CASE WHEN status = 'active' THEN 'active' ELSE 'pending_approval' END, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invitation.identity_id)
-  ]);
-  await writeLocalAudit(env, { eventType: "invite_used", outcome: "success", identityId: invitation.identity_id, authMethod: "passkey" }, request);
-  await writeLocalAudit(env, { eventType: "passkey_registration", outcome: "success", identityId: invitation.identity_id, authMethod: "passkey" }, request);
+    env.DB.prepare("UPDATE security_identities SET status = CASE WHEN status = 'active' THEN 'active' ELSE 'pending_approval' END, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invitation.identity_id),
+    insertSetupSessionStatement(env, setup),
+    await localAuditStatement(env, { eventType: "invite_used", outcome: "success", identityId: invitation.identity_id, authMethod: "passkey" }, request),
+    await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: invitation.identity_id, authMethod: "passkey" }, request)
+    ]);
+  } catch (error) {
+    const state = await env.DB.prepare("SELECT status FROM security_invitations WHERE id = ?").bind(invitation.id).first();
+    if (state?.status === "used") throw new HttpError(410, "この招待は既に使用されています。");
+    throw error;
+  }
   const headers = await securitySessionHeaders(env, url, invitation.identity_id, credential.id, false);
+  headers.append("Set-Cookie", setupCookie(setup.token, url.protocol === "https:"));
   return json({ ok: true, pendingApproval: true, identityId: invitation.identity_id, credentialId: credential.id, prfSalt, prfEnabled: Boolean(body.prfEnabled) }, 201, headers);
 }
 
@@ -328,6 +353,8 @@ async function authenticationVerify(request, env, url) {
 
 async function createHandoff(request, env) {
   const identitySession = await requireActiveIdentitySession(request, env);
+  const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+  if (!runtime.enabled) throw new HttpError(503, "パスキー機能は一時停止中です。");
   const body = await readJson(request, 4096);
   const service = normalizeService(body.service);
   const links = await activeLinks(env, identitySession.identityId, service);
@@ -343,14 +370,48 @@ async function createHandoff(request, env) {
   }
   const rawToken = randomToken(32);
   await env.DB.prepare(`INSERT INTO security_handoffs
-    (id, token_hash, identity_id, service_link_id, credential_id, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?)`)
-    .bind(crypto.randomUUID(), await sha256(rawToken), identitySession.identityId, selected.id, identitySession.credentialId, nowSeconds() + HANDOFF_TTL_SECONDS).run();
+    (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .bind(crypto.randomUUID(), await sha256(rawToken), identitySession.identityId, selected.id, identitySession.credentialId, runtime.epoch, nowSeconds() + HANDOFF_TTL_SECONDS).run();
   return json({ handoffToken: rawToken, link: publicLink(selected), tcloudKey: envelopes });
 }
 
+async function setupStatus(request, env) {
+  const setup = await readSetupSession(request, env);
+  if (!setup) return json({ active: false });
+  const [credential, cloudLinks, vault] = await Promise.all([
+    env.DB.prepare("SELECT credential_id, prf_enabled, status FROM security_credentials WHERE credential_id = ? AND identity_id = ?").bind(setup.credential_id, setup.identity_id).first(),
+    env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(setup.identity_id).all(),
+    env.DB.prepare("SELECT public_key_fingerprint FROM security_tcloud_client_vaults WHERE credential_id = ? AND identity_id = ?").bind(setup.credential_id, setup.identity_id).first()
+  ]);
+  if (!credential || credential.status === "revoked") return json({ active: false });
+  const links = cloudLinks.results || [];
+  let ready = Boolean(vault);
+  if (setup.identity_id === PRIMARY_ADMIN_ID) {
+    const envelope = await env.DB.prepare("SELECT 1 AS ok FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ? AND envelope_type = 'admin_private_prf'").bind(setup.credential_id, setup.identity_id).first();
+    ready = Boolean(envelope);
+  }
+  return json({
+    active: true,
+    identityId: setup.identity_id,
+    credentialId: setup.credential_id,
+    isPrimaryAdmin: setup.identity_id === PRIMARY_ADMIN_ID,
+    prfEnabled: Boolean(credential.prf_enabled),
+    tcloudReady: ready,
+    clientKeyFingerprint: vault?.public_key_fingerprint || null,
+    cloudLinks: links.map((link) => ({ id: link.id, accountId: link.service_account_id, rootFolderId: link.cloud_root_folder_id, status: link.status }))
+  });
+}
+
+async function primaryAdminCryptoConfig(request, env) {
+  const setup = await requireSetupSession(request, env);
+  if (setup.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "第一管理者の復旧登録専用です。");
+  const config = await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
+  return json(config || { initialized: false, cryptoVersion: 1 });
+}
+
 async function prfOptions(request, env) {
-  const identitySession = await requireIdentitySession(request, env);
+  const identitySession = await requireSetupOrIdentitySession(request, env);
   const body = await readJson(request, 4096);
   const credentialId = body.credentialId || identitySession.credentialId;
   if (credentialId !== identitySession.credentialId) throw new HttpError(403, "パスキーが一致しません。");
@@ -366,7 +427,7 @@ async function prfOptions(request, env) {
 }
 
 async function prfVerify(request, env) {
-  const identitySession = await requireIdentitySession(request, env);
+  const identitySession = await requireSetupOrIdentitySession(request, env);
   const body = await readJson(request, 100000);
   const challenge = await consumeChallenge(env, body.challengeId, "prf_assertion", identitySession.identityId);
   const credentialId = normalizeSecretText(body.response?.id, 2048);
@@ -374,44 +435,70 @@ async function prfVerify(request, env) {
   const credential = await credentialForIdentity(env, credentialId, identitySession.identityId);
   const verification = await verifyAuthentication(body.response, challenge.challenge, credential, env);
   if (!verification.verified || !verification.authenticationInfo.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
-  await env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP, prf_enabled = ? WHERE credential_id = ?")
-    .bind(verification.authenticationInfo.newCounter, body.prfAvailable ? 1 : 0, credentialId).run();
+  const statements = [env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP, prf_enabled = ? WHERE credential_id = ?")
+    .bind(verification.authenticationInfo.newCounter, body.prfAvailable ? 1 : 0, credentialId)];
+  if (identitySession.setupId) statements.push(env.DB.prepare("UPDATE security_setup_sessions SET last_user_verification_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(nowSeconds(), identitySession.setupId));
+  await env.DB.batch(statements);
   return json({ verified: true });
 }
 
 async function saveOwnTCloudEnvelope(request, env) {
-  const identitySession = await requireIdentitySession(request, env);
+  const identitySession = await requireSetupSession(request, env);
+  if (!identitySession.last_user_verification_at || Number(identitySession.last_user_verification_at) < nowSeconds() - SETUP_UV_TTL_SECONDS) {
+    throw new HttpError(401, "端末のロック解除をもう一度確認してください。");
+  }
   const body = await readJson(request, 100000);
   const link = await env.DB.prepare(`SELECT l.*, i.is_security_admin FROM security_service_links l
     JOIN security_identities i ON i.id = l.identity_id
     WHERE l.id = ? AND l.identity_id = ? AND l.service = 'cloud'`)
     .bind(body.serviceLinkId, identitySession.identityId).first();
-  if (!link) throw new HttpError(404, "T-Cloud連携が見つかりません。");
   const envelopeType = body.envelopeType === "admin_private_prf" ? body.envelopeType : "client_private_prf";
+  if (envelopeType === "admin_private_prf" && !link) throw new HttpError(404, "T-Cloud連携が見つかりません。");
   if (envelopeType === "admin_private_prf" && (link.service_account_id !== "admin" || !link.is_security_admin)) {
     throw new HttpError(403, "管理者用の暗号鍵envelopeは第一管理者だけが登録できます。");
   }
-  if (envelopeType === "client_private_prf" && (link.service_account_id !== "folder-member" || link.cloud_root_folder_id == null)) {
-    throw new HttpError(403, "一般ユーザー用のT-Cloud連携を確認してください。");
+  if (envelopeType === "client_private_prf") {
+    const memberLink = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id IS NOT NULL AND status IN ('pending', 'active') LIMIT 1").bind(identitySession.identityId).first();
+    if (!memberLink) throw new HttpError(403, "一般ユーザー用のT-Cloud連携を確認してください。");
   }
   const publicKeyJwk = body.publicKeyJwk ? validatePublicJwk(body.publicKeyJwk) : null;
   const encryptedPayload = normalizeSecretText(body.encryptedPayload, 24000);
   const payloadIv = normalizeSecretText(body.payloadIv, 128);
   if (!encryptedPayload || !payloadIv || (envelopeType === "client_private_prf" && !publicKeyJwk)) throw new HttpError(400, "暗号鍵envelopeを確認してください。");
-  await env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
-    (id, identity_id, credential_id, service_link_id, envelope_type, public_key_jwk, encrypted_payload, payload_iv)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(credential_id, service_link_id, envelope_type) DO UPDATE SET
-      public_key_jwk = excluded.public_key_jwk, encrypted_payload = excluded.encrypted_payload,
-      payload_iv = excluded.payload_iv, updated_at = CURRENT_TIMESTAMP`)
-    .bind(crypto.randomUUID(), identitySession.identityId, identitySession.credentialId, link.id, envelopeType,
-      publicKeyJwk ? JSON.stringify(publicKeyJwk) : null, encryptedPayload, payloadIv).run();
-  if (envelopeType === "admin_private_prf") {
-    await env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ?")
-      .bind(link.id, identitySession.identityId).run();
+  const statements = [];
+  let alreadyExisting = false;
+  if (envelopeType === "client_private_prf") {
+    const fingerprint = await sha256(canonicalJwk(publicKeyJwk));
+    const existing = await env.DB.prepare("SELECT public_key_fingerprint, public_key_jwk FROM security_tcloud_client_vaults WHERE credential_id = ? AND identity_id = ?").bind(identitySession.credentialId, identitySession.identityId).first();
+    alreadyExisting = Boolean(existing);
+    const existingFingerprint = existing?.public_key_fingerprint || (existing?.public_key_jwk ? await sha256(canonicalJwk(parseJson(existing.public_key_jwk, null))) : null);
+    if (existingFingerprint && existingFingerprint !== fingerprint) {
+      throw new HttpError(409, "このパスキーのT-Cloudクライアント鍵は既に登録されています。鍵ローテーションには再招待が必要です。");
+    }
+    statements.push(env.DB.prepare(`INSERT INTO security_tcloud_client_vaults
+      (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(credential_id) DO UPDATE SET
+        public_key_jwk = excluded.public_key_jwk, public_key_fingerprint = excluded.public_key_fingerprint,
+        encrypted_payload = excluded.encrypted_payload, payload_iv = excluded.payload_iv, updated_at = CURRENT_TIMESTAMP`)
+      .bind(identitySession.credentialId, identitySession.identityId, JSON.stringify(publicKeyJwk), fingerprint, encryptedPayload, payloadIv));
+  } else {
+    statements.push(env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
+      (id, identity_id, credential_id, service_link_id, envelope_type, public_key_jwk, encrypted_payload, payload_iv)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(credential_id, service_link_id, envelope_type) DO UPDATE SET
+        public_key_jwk = excluded.public_key_jwk, encrypted_payload = excluded.encrypted_payload,
+        payload_iv = excluded.payload_iv, updated_at = CURRENT_TIMESTAMP`)
+      .bind(crypto.randomUUID(), identitySession.identityId, identitySession.credentialId, link.id, envelopeType,
+        null, encryptedPayload, payloadIv));
   }
-  await writeLocalAudit(env, { eventType: "tcloud_key_envelope_saved", outcome: "success", identityId: identitySession.identityId, service: "cloud", authMethod: "passkey" }, request);
-  return json({ ok: true });
+  if (envelopeType === "admin_private_prf") {
+    statements.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ?").bind(link.id, identitySession.identityId));
+  }
+  statements.push(env.DB.prepare("UPDATE security_setup_sessions SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identitySession.setupId));
+  statements.push(await localAuditStatement(env, { eventType: "tcloud_key_envelope_saved", outcome: "success", identityId: identitySession.identityId, service: "cloud", authMethod: "passkey" }, request));
+  await env.DB.batch(statements);
+  return json({ ok: true, existing: alreadyExisting });
 }
 
 async function dashboard(env) {
@@ -446,7 +533,7 @@ async function listIdentities(env) {
     LEFT JOIN security_credentials c ON c.identity_id = i.id
     LEFT JOIN security_invitations inv ON inv.identity_id = i.id
     GROUP BY i.id ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all();
-  return json({ identities: (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: row.last_login_at, activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null })) });
+  return json({ identities: (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null })) });
 }
 
 async function identityDetail(id, env) {
@@ -459,22 +546,53 @@ async function identityDetail(id, env) {
     env.DB.prepare("SELECT * FROM security_audit_events WHERE identity_id = ? ORDER BY occurred_at DESC LIMIT 50").bind(id).all()
   ]);
   const linkRows = links.results || [];
-  const pendingCredential = await env.DB.prepare(`SELECT c.credential_id FROM security_credentials c
-    WHERE c.identity_id = ? AND (
-      c.status = 'pending'
-      OR (c.status = 'active'
-        AND EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = c.identity_id AND l.service = 'cloud' AND l.status = 'pending')
-        AND EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.identity_id = c.identity_id AND e.credential_id = c.credential_id AND e.envelope_type = 'client_private_prf')
-      )
-    ) ORDER BY CASE WHEN c.status = 'pending' THEN 0 ELSE 1 END, c.registered_at DESC LIMIT 1`).bind(id).first();
-  const clientEnvelope = pendingCredential ? await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_key_envelopes WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'client_private_prf' LIMIT 1").bind(id, pendingCredential.credential_id).first() : null;
   const adminKeyRows = identity.is_security_admin ? await env.DB.prepare("SELECT credential_id, encrypted_payload, payload_iv FROM security_tcloud_key_envelopes WHERE identity_id = ? AND envelope_type = 'admin_private_prf'").bind(id).all() : { results: [] };
-  const cloudFolders = [];
+  const linkDetails = [];
+  const cloudFolders = new Map();
   for (const link of linkRows.filter((item) => item.service === "cloud" && item.cloud_root_folder_id != null)) {
-    const folder = await env.CLOUD_AUTH.getFolderCryptoRecord(link.cloud_root_folder_id);
-    if (folder) cloudFolders.push({ serviceLinkId: link.id, folder });
+    try {
+      const folder = await env.CLOUD_AUTH.getFolderCryptoRecord(link.cloud_root_folder_id);
+      if (folder) cloudFolders.set(link.id, { serviceLinkId: link.id, folder, folderUnavailable: false });
+      else cloudFolders.set(link.id, { serviceLinkId: link.id, folder: null, folderUnavailable: true });
+    } catch {
+      cloudFolders.set(link.id, { serviceLinkId: link.id, folder: null, folderUnavailable: true });
+    }
   }
-  return json({ identity: { id: identity.id, displayName: identity.display_name, status: identity.status, isSecurityAdmin: Boolean(identity.is_security_admin), lastLoginAt: identity.last_login_at }, links: linkRows, credentials: (credentials.results || []).map((row) => ({ ...row, backed_up: Boolean(row.backed_up), prf_enabled: Boolean(row.prf_enabled) })), pendingCredentialId: pendingCredential?.credential_id || null, invitations: invitations.results || [], audits: audits.results || [], cloudApproval: clientEnvelope ? { credentialId: pendingCredential.credential_id, publicKeyJwk: parseJson(clientEnvelope.public_key_jwk, null), folders: cloudFolders } : null, adminKeyEnvelopes: (adminKeyRows.results || []).map((row) => ({ credentialId: row.credential_id, encryptedPayload: row.encrypted_payload, payloadIv: row.payload_iv })) });
+  for (const link of linkRows) linkDetails.push({ ...withUtcTimes(link), ...(cloudFolders.get(link.id) || {}) });
+  const credentialRows = credentials.results || [];
+  const currentCloudLinks = linkRows.filter((link) => link.service === "cloud" && ["pending", "active"].includes(link.status));
+  const approvalCandidates = [];
+  for (const credential of credentialRows.filter((item) => item.status === "pending" || (item.status === "active" && linkRows.some((link) => link.service === "cloud" && link.status === "pending")))) {
+    const vault = await env.DB.prepare("SELECT public_key_jwk, public_key_fingerprint FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(id, credential.credential_id).first();
+    approvalCandidates.push({
+      credentialId: credential.credential_id,
+      status: credential.status,
+      registeredAt: normalizeUtcTimestamp(credential.registered_at),
+      deviceType: credential.device_type || null,
+      backedUp: Boolean(credential.backed_up),
+      prfEnabled: Boolean(credential.prf_enabled),
+      hasCloudLinks: Boolean(currentCloudLinks.length),
+      cloudClientReady: Boolean(vault),
+      cloudApproval: vault ? {
+        credentialId: credential.credential_id,
+        publicKeyJwk: parseJson(vault.public_key_jwk, null),
+        publicKeyFingerprint: vault.public_key_fingerprint || null,
+        folders: currentCloudLinks.map((link) => cloudFolders.get(link.id) || { serviceLinkId: link.id, folder: null, folderUnavailable: true })
+      } : null
+    });
+  }
+  const firstCandidate = approvalCandidates[0] || null;
+  return json({
+    identity: { id: identity.id, displayName: identity.display_name, status: identity.status, isSecurityAdmin: Boolean(identity.is_security_admin), lastLoginAt: normalizeUtcTimestamp(identity.last_login_at) },
+    links: linkDetails,
+    credentials: credentialRows.map((row) => ({ ...withUtcTimes(row), backed_up: Boolean(row.backed_up), prf_enabled: Boolean(row.prf_enabled) })),
+    pendingCredentialId: firstCandidate?.credentialId || null,
+    approvalCandidates,
+    invitations: (invitations.results || []).map(withUtcTimes),
+    audits: (audits.results || []).map(withUtcTimes),
+    cloudApproval: firstCandidate?.cloudApproval || null,
+    adminKeyEnvelopes: (adminKeyRows.results || []).map((row) => ({ credentialId: row.credential_id, encryptedPayload: row.encrypted_payload, payloadIv: row.payload_iv }))
+  });
 }
 
 async function createIdentityAndInvite(request, env, admin) {
@@ -493,10 +611,10 @@ async function createIdentityAndInvite(request, env, admin) {
   await env.DB.batch([
     env.DB.prepare("INSERT INTO security_identities (id, display_name, status) VALUES (?, ?, 'invited')").bind(identityId, displayName),
     ...links.map((link) => insertServiceLinkStatement(env, identityId, link)),
-    insertInvitationStatement(env, invitation)
+    insertInvitationStatement(env, invitation),
+    await localAuditStatement(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey" }, request),
+    await localAuditStatement(env, { eventType: "invite_created", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request)
   ]);
-  await writeLocalAudit(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey" }, request);
-  await writeLocalAudit(env, { eventType: "invite_created", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request);
   return json({ identityId, invitationUrl: `/security/#invite=${encodeURIComponent(invitation.token)}`, expiresAt: invitation.expiresAt }, 201);
 }
 
@@ -508,18 +626,17 @@ async function addIdentityLinks(identityId, request, env, admin) {
   if (!links.length) throw new HttpError(400, "追加するサービス連携を指定してください。");
   assertUniqueServiceLinks(links);
   const existing = await env.DB.prepare("SELECT id, service, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ?").bind(identityId).all();
-  const byKey = new Map((existing.results || []).map((row) => [serviceLinkKey({ service: row.service, accountId: row.service_account_id, rootFolderId: row.cloud_root_folder_id }), row]));
   const statements = [];
   for (const link of links) {
-    const current = byKey.get(serviceLinkKey(link));
-    if (current && current.status !== "disabled") throw new HttpError(409, "同じサービス連携が既に存在します。");
-    statements.push(current
-      ? env.DB.prepare("UPDATE security_service_links SET display_label = ?, status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(link.displayLabel, current.id)
-      : insertServiceLinkStatement(env, identityId, link));
+    const current = (existing.results || []).find((row) => serviceLinkKey({ service: row.service, accountId: row.service_account_id, rootFolderId: row.cloud_root_folder_id }) === serviceLinkKey(link) && row.status !== "disabled");
+    if (current) throw new HttpError(409, "同じサービス連携が既に存在します。");
+    // A disabled link ID is a permanent revocation marker. Re-adding the same
+    // account always creates a fresh ID so old service cookies can never revive.
+    statements.push(insertServiceLinkStatement(env, identityId, link));
   }
   statements.push(env.DB.prepare("UPDATE security_identities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId));
+  statements.push(await localAuditStatement(env, { eventType: "service_link_added", outcome: "success", identityId, authMethod: "passkey", details: { changedBy: admin.identityId, count: links.length } }, request));
   await env.DB.batch(statements);
-  await writeLocalAudit(env, { eventType: "service_link_added", outcome: "success", identityId, authMethod: "passkey", details: { changedBy: admin.identityId, count: links.length } }, request);
   return json({ ok: true, requiresReinvite: true });
 }
 
@@ -527,8 +644,10 @@ async function removeIdentityLink(linkId, request, env, admin) {
   const link = await env.DB.prepare("SELECT id, identity_id, service, service_account_id FROM security_service_links WHERE id = ?").bind(linkId).first();
   if (!link) throw new HttpError(404, "サービス連携が見つかりません。");
   if (link.identity_id === PRIMARY_ADMIN_ID) throw new HttpError(409, "第一管理者の既定サービス連携は解除できません。");
-  await env.DB.prepare("UPDATE security_service_links SET status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(linkId).run();
-  await writeLocalAudit(env, { eventType: "service_link_removed", outcome: "success", identityId: link.identity_id, service: link.service, serviceAccountId: link.service_account_id, authMethod: "passkey", details: { changedBy: admin.identityId } }, request);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE security_service_links SET status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(linkId),
+    await localAuditStatement(env, { eventType: "service_link_removed", outcome: "success", identityId: link.identity_id, service: link.service, serviceAccountId: link.service_account_id, authMethod: "passkey", details: { changedBy: admin.identityId } }, request)
+  ]);
   return json({ ok: true });
 }
 
@@ -547,7 +666,7 @@ async function approveIdentity(identityId, request, env, admin) {
   let cloudPasskeyReady = !(cloudLinks.results || []).length;
   let validatedCloudEnvelopes = [];
   if ((cloudLinks.results || []).length) {
-    const clientEnvelope = await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_key_envelopes WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'client_private_prf'").bind(identityId, credential?.credential_id || "").first();
+    const clientEnvelope = await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(identityId, credential?.credential_id || "").first();
     if (clientEnvelope) {
       const delegated = Array.isArray(body.cloudEnvelopes) ? body.cloudEnvelopes : [];
       for (const link of cloudLinks.results) {
@@ -572,8 +691,8 @@ async function approveIdentity(identityId, request, env, admin) {
     env.DB.prepare("UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId)
   ];
   if (cloudPasskeyReady) updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud'").bind(identityId));
+  updates.push(await localAuditStatement(env, { eventType: "identity_approved", outcome: "success", identityId, authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: cloudPasskeyReady } }, request));
   await env.DB.batch(updates);
-  await writeLocalAudit(env, { eventType: "identity_approved", outcome: "success", identityId, authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: cloudPasskeyReady } }, request);
   return json({ ok: true, tcloudPasskeyReady });
 }
 
@@ -581,25 +700,36 @@ async function reinviteIdentity(identityId, request, env, admin) {
   const identity = await env.DB.prepare("SELECT id FROM security_identities WHERE id = ? AND status != 'disabled'").bind(identityId).first();
   if (!identity) throw new HttpError(404, "Identityが見つかりません。");
   const body = await readJson(request, 4096);
-  const invitation = await issueInvitation(env, identityId, body, admin.identityId, true);
-  await writeLocalAudit(env, { eventType: "reinvite", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt, revokedPriorInvites: invitation.revokedPriorInvites } }, request);
+  const invitation = await prepareInvitation(env, identityId, body, admin.identityId);
+  const active = await env.DB.prepare("SELECT COUNT(*) AS count FROM security_invitations WHERE identity_id = ? AND status = 'active'").bind(identityId).first();
+  const revokedPriorInvites = Number(active?.count || 0);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'active'").bind(identityId),
+    insertInvitationStatement(env, invitation),
+    await localAuditStatement(env, { eventType: "reinvite", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt, revokedPriorInvites } }, request)
+  ]);
   return json({ invitationUrl: `/security/#invite=${encodeURIComponent(invitation.token)}`, expiresAt: invitation.expiresAt }, 201);
 }
 
 async function revokeCredential(credentialId, request, env, admin) {
+  credentialId = validCredentialId(credentialId);
+  if (!credentialId) throw new HttpError(400, "パスキーIDを確認してください。");
   const credential = await env.DB.prepare("SELECT identity_id FROM security_credentials WHERE credential_id = ? AND status != 'revoked'").bind(credentialId).first();
   if (!credential) throw new HttpError(404, "パスキーが見つかりません。");
-  const result = await env.DB.prepare("UPDATE security_credentials SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE credential_id = ? AND status != 'revoked'").bind(credentialId).run();
-  if (!result.meta?.changes) throw new HttpError(404, "パスキーが見つかりません。");
-  await writeLocalAudit(env, { eventType: "passkey_revoked", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE security_credentials SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE credential_id = ? AND status != 'revoked'").bind(credentialId),
+    await localAuditStatement(env, { eventType: "passkey_revoked", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request)
+  ]);
   return json({ ok: true });
 }
 
 async function revokeInvitation(invitationId, request, env, admin) {
   const row = await env.DB.prepare("SELECT identity_id FROM security_invitations WHERE id = ? AND status = 'active'").bind(invitationId).first();
   if (!row) throw new HttpError(404, "有効な招待が見つかりません。");
-  await env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invitationId).run();
-  await writeLocalAudit(env, { eventType: "invite_revoked", outcome: "success", identityId: row.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invitationId),
+    await localAuditStatement(env, { eventType: "invite_revoked", outcome: "success", identityId: row.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request)
+  ]);
   return json({ ok: true });
 }
 
@@ -620,10 +750,12 @@ async function listAuditEvents(url, env) {
   if (from) { clauses.push("occurred_at >= ?"); values.push(from.start); }
   if (to) { clauses.push("occurred_at < ?"); values.push(to.end); }
   const result = await env.DB.prepare(`SELECT * FROM security_audit_events WHERE ${clauses.join(" AND ")} ORDER BY occurred_at DESC LIMIT 500`).bind(...values).all();
-  return json({ events: result.results || [] });
+  return json({ events: (result.results || []).map(withUtcTimes) });
 }
 
 async function redeemHandoff(env, token, service) {
+  const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+  if (!runtime.enabled) return null;
   const normalizedService = normalizeService(service);
   const tokenHash = await sha256(normalizeSecretText(token, 512));
   if (!normalizedService || !tokenHash) return null;
@@ -634,31 +766,33 @@ async function redeemHandoff(env, token, service) {
     FROM security_handoffs h JOIN security_service_links l ON l.id = h.service_link_id
     JOIN security_identities i ON i.id = h.identity_id
     JOIN security_credentials c ON c.credential_id = h.credential_id AND c.identity_id = h.identity_id
-    WHERE h.token_hash = ? AND h.consumed_at IS NULL AND h.expires_at > ?
+    WHERE h.token_hash = ? AND h.consumed_at IS NULL AND h.expires_at > ? AND h.session_epoch = ?
       AND l.service = ? AND l.status = 'active' AND i.status = 'active' AND c.status = 'active'`)
-    .bind(tokenHash, now, normalizedService).first();
+    .bind(tokenHash, now, runtime.epoch, normalizedService).first();
   if (!row) return null;
   const update = await env.DB.prepare("UPDATE security_handoffs SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(now, row.id).run();
   if (!update.meta?.changes) return null;
-  return { identityId: row.identity_id, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel };
+  return { identityId: row.identity_id, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel, sessionEpoch: runtime.epoch };
 }
 
 async function validatePasskeySession(env, input) {
+  const runtime = await observePasskeyRuntime(env, passkeysEnabled(env) && input?.servicePasskeyEnabled !== false);
   const service = normalizeLinkedService(input?.service);
   const identityId = normalizeIdentityId(input?.identityId);
   const credentialId = normalizeSecretText(input?.credentialId, 2048);
   const serviceLinkId = normalizeId(input?.serviceLinkId);
   const serviceAccountId = normalizeText(input?.serviceAccountId, 100);
-  if (!passkeysEnabled(env) || !service || !identityId || !credentialId || !serviceLinkId || !serviceAccountId) return { valid: false };
+  const sessionEpoch = Number(input?.sessionEpoch);
+  if (!runtime.enabled || !service || !identityId || !credentialId || !serviceLinkId || !serviceAccountId || !Number.isInteger(sessionEpoch)) return { valid: false };
   const row = await env.DB.prepare(`SELECT c.credential_id, c.identity_id, l.id AS link_id, l.service,
-      l.service_account_id, l.cloud_root_folder_id
+      l.service_account_id, l.cloud_root_folder_id, ? AS session_epoch
     FROM security_credentials c
     JOIN security_identities i ON i.id = c.identity_id
     JOIN security_service_links l ON l.identity_id = i.id
     WHERE c.credential_id = ? AND c.identity_id = ? AND c.status = 'active'
       AND i.status = 'active' AND l.id = ? AND l.service = ? AND l.status = 'active'`)
-    .bind(credentialId, identityId, serviceLinkId, service).first();
-  return { valid: passkeySessionStateMatches({ ...input, identityId, credentialId, serviceLinkId, service, serviceAccountId }, row, true) };
+    .bind(runtime.epoch, credentialId, identityId, serviceLinkId, service).first();
+  return { valid: passkeySessionStateMatches({ ...input, identityId, credentialId, serviceLinkId, service, serviceAccountId, sessionEpoch }, row, runtime.enabled) };
 }
 
 async function registrationOptions(env, identityId, displayName, excludeCredentials) {
@@ -764,33 +898,13 @@ function insertInvitationStatement(env, invitation) {
     .bind(invitation.id, invitation.identityId, invitation.tokenHash, invitation.linkSetHash, invitation.expiresAt, invitation.createdBy);
 }
 
-async function issueInvitation(env, identityId, expiryInput, createdBy, revokeExisting = false) {
-  const invitation = await prepareInvitation(env, identityId, expiryInput, createdBy);
-  let revokedPriorInvites = 0;
-  if (revokeExisting) {
-    const active = await env.DB.prepare("SELECT COUNT(*) AS count FROM security_invitations WHERE identity_id = ? AND status = 'active'").bind(identityId).first();
-    revokedPriorInvites = Number(active?.count || 0);
-  }
-  await env.DB.batch([
-    ...(revokeExisting ? [env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'active'").bind(identityId)] : []),
-    insertInvitationStatement(env, invitation)
-  ]);
-  return { ...invitation, revokedPriorInvites };
-}
-
 async function serviceLinkSetHash(env, identityId) {
-  const result = await env.DB.prepare("SELECT service, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ? ORDER BY service, service_account_id, cloud_root_folder_id").bind(identityId).all();
-  return sha256(JSON.stringify(result.results || []));
+  const result = await env.DB.prepare("SELECT service, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ?").bind(identityId).all();
+  return sha256(JSON.stringify(canonicalServiceLinks(result.results || [])));
 }
 
 async function serviceLinkHashFromLinks(links) {
-  const rows = links.map((link) => ({
-    service: link.service,
-    service_account_id: link.accountId,
-    cloud_root_folder_id: link.rootFolderId == null ? null : Number(link.rootFolderId),
-    status: "pending"
-  })).sort((left, right) => `${left.service}\u0000${left.service_account_id}\u0000${left.cloud_root_folder_id ?? ""}`.localeCompare(`${right.service}\u0000${right.service_account_id}\u0000${right.cloud_root_folder_id ?? ""}`));
-  return sha256(JSON.stringify(rows));
+  return sha256(JSON.stringify(canonicalServiceLinks(links)));
 }
 
 async function validateServiceLinks(env, input) {
@@ -857,7 +971,7 @@ async function enforceBootstrapAttemptLimit(request, env) {
   const hash = await sourceHash(request, env);
   const recent = await env.DB.prepare(`SELECT COUNT(*) AS attempts FROM security_audit_events
     WHERE event_type = 'bootstrap_auth_failure' AND source_hash = ?
-      AND occurred_at >= datetime('now', '-15 minutes')`).bind(hash).first();
+      AND occurred_at >= ?`).bind(hash, bootstrapAttemptCutoff()).first();
   if (Number(recent?.attempts || 0) >= 5) {
     await writeLocalAudit(env, { eventType: "bootstrap_login_blocked", outcome: "blocked", authMethod: "password", serviceAccountId: "admin" }, request);
     throw new HttpError(429, "管理者確認が一時停止されています。15分ほど待ってからお試しください。");
@@ -896,6 +1010,45 @@ async function requireIdentitySession(request, env) {
   return session;
 }
 
+async function requireSetupOrIdentitySession(request, env) {
+  const setup = await readSetupSession(request, env);
+  if (setup) return { identityId: setup.identity_id, credentialId: setup.credential_id, setupId: setup.id };
+  return requireIdentitySession(request, env);
+}
+
+async function requireSetupSession(request, env) {
+  const setup = await readSetupSession(request, env);
+  if (!setup) throw new HttpError(401, "T-Cloudの準備セッションが終了しました。パスキー登録または復旧登録をやり直してください。");
+  return { ...setup, identityId: setup.identity_id, credentialId: setup.credential_id, setupId: setup.id };
+}
+
+async function readSetupSession(request, env) {
+  try {
+    const token = parseCookies(request.headers.get("Cookie") || "")[SETUP_COOKIE];
+    if (!token || !/^[A-Za-z0-9_-]{32,256}$/.test(token)) return null;
+    return env.DB.prepare(`SELECT s.* FROM security_setup_sessions s
+      JOIN security_credentials c ON c.credential_id = s.credential_id AND c.identity_id = s.identity_id
+      JOIN security_identities i ON i.id = s.identity_id
+      WHERE s.token_hash = ? AND s.status IN ('active', 'completed') AND s.expires_at > ?
+        AND c.status != 'revoked' AND i.status != 'disabled'`)
+      .bind(await sha256(token), nowSeconds()).first();
+  } catch {
+    return null;
+  }
+}
+
+async function prepareSetupSession(env, identityId, credentialId) {
+  const token = randomToken(32);
+  return { id: crypto.randomUUID(), token, tokenHash: await sha256(token), identityId, credentialId, expiresAt: nowSeconds() + SETUP_TTL_SECONDS };
+}
+
+function insertSetupSessionStatement(env, setup) {
+  return env.DB.prepare(`INSERT INTO security_setup_sessions
+    (id, token_hash, identity_id, credential_id, expires_at)
+    VALUES (?, ?, ?, ?, ?)`)
+    .bind(setup.id, setup.tokenHash, setup.identityId, setup.credentialId, setup.expiresAt);
+}
+
 async function requireActiveIdentitySession(request, env) {
   const session = await requireIdentitySession(request, env);
   const active = await env.DB.prepare(`SELECT 1 AS ok FROM security_credentials c
@@ -925,24 +1078,31 @@ async function signedCookie(env, name, payload, ttl, secureValue) {
 }
 
 async function readSecuritySession(request, env, name, expectedKind) {
-  const token = parseCookies(request.headers.get("Cookie") || "")[name];
-  if (!token || !env.SESSION_SECRET) return null;
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
   try {
+    const token = parseCookies(request.headers.get("Cookie") || "")[name];
+    if (!token || !env.SESSION_SECRET) return null;
+    const parts = token.split(".");
+    if (parts.length !== 2) return null;
+    const [payload, signature] = parts;
+    if (!payload || !signature || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
     const value = JSON.parse(decoder.decode(base64UrlToBytes(payload)));
     return value.kind === expectedKind && value.exp > nowSeconds() ? value : null;
   } catch { return null; }
 }
 
 async function tcloudEnvelopeBundle(env, identityId, credentialId, linkId) {
-  const result = await env.DB.prepare(`SELECT envelope_type, public_key_jwk, encrypted_payload, payload_iv, wrapped_key
+  const [result, vault] = await Promise.all([
+    env.DB.prepare(`SELECT envelope_type, public_key_jwk, encrypted_payload, payload_iv, wrapped_key
     FROM security_tcloud_key_envelopes WHERE identity_id = ? AND credential_id = ? AND service_link_id = ?`)
-    .bind(identityId, credentialId, linkId).all();
-  return Object.fromEntries((result.results || []).map((row) => [row.envelope_type, {
+      .bind(identityId, credentialId, linkId).all(),
+    env.DB.prepare("SELECT public_key_jwk, encrypted_payload, payload_iv FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(identityId, credentialId).first()
+  ]);
+  const bundle = Object.fromEntries((result.results || []).map((row) => [row.envelope_type, {
     publicKeyJwk: row.public_key_jwk ? parseJson(row.public_key_jwk, null) : null,
     encryptedPayload: row.encrypted_payload || null, payloadIv: row.payload_iv || null, wrappedKey: row.wrapped_key || null
   }]));
+  if (vault) bundle.client_private_prf = { publicKeyJwk: parseJson(vault.public_key_jwk, null), encryptedPayload: vault.encrypted_payload, payloadIv: vault.payload_iv, wrappedKey: null };
+  return bundle;
 }
 
 async function storeAuditEvent(env, input) {
@@ -963,13 +1123,25 @@ async function storeAuditEvent(env, input) {
 }
 
 async function writeLocalAudit(env, input, request = null) {
-  await storeAuditEvent(env, {
+  const statement = await localAuditStatement(env, input, request);
+  await statement.run();
+}
+
+async function localAuditStatement(env, input, request = null) {
+  const event = normalizeAuditEvent({
     eventId: crypto.randomUUID(), occurredAt: new Date().toISOString(), service: input.service || "security",
     eventType: input.eventType, outcome: input.outcome || "info", identityId: input.identityId || null,
     serviceAccountId: input.serviceAccountId || null, role: input.role || null,
     authMethod: input.authMethod || "system", sourceHash: request ? await sourceHash(request, env) : null,
     userAgent: request?.headers.get("User-Agent") || null, details: input.details || {}
   });
+  return env.DB.prepare(`INSERT INTO security_audit_events
+    (event_id, occurred_at, service, event_type, outcome, identity_id, service_account_id,
+      role, auth_method, session_id_hash, source_hash, user_agent, target_type, target_id, details_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(event.eventId, event.occurredAt, event.service, event.eventType, event.outcome, event.identityId,
+      event.serviceAccountId, event.role, event.authMethod, event.sessionIdHash, event.sourceHash,
+      event.userAgent, event.targetType, event.targetId, JSON.stringify(event.details));
 }
 
 function normalizeAuditEvent(input) {
@@ -1018,6 +1190,19 @@ function publicLink(row) {
 }
 
 function passkeysEnabled(env) { return String(env.PASSKEY_ENABLED || "true") === "true"; }
+async function observePasskeyRuntime(env, requestedEnabled) {
+  await env.DB.prepare(`INSERT INTO security_runtime_state (id, passkey_session_epoch, switch_observed_enabled)
+    VALUES (1, 1, 1) ON CONFLICT(id) DO NOTHING`).run();
+  if (!requestedEnabled) {
+    await env.DB.prepare(`UPDATE security_runtime_state
+      SET passkey_session_epoch = passkey_session_epoch + 1, switch_observed_enabled = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE id = 1 AND switch_observed_enabled = 1`).run();
+  } else {
+    await env.DB.prepare("UPDATE security_runtime_state SET switch_observed_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND switch_observed_enabled = 0").run();
+  }
+  const state = await env.DB.prepare("SELECT passkey_session_epoch, switch_observed_enabled FROM security_runtime_state WHERE id = 1").first();
+  return { enabled: Boolean(requestedEnabled), epoch: Number(state?.passkey_session_epoch || 1) };
+}
 function rpId(env) { return env.RP_ID || "tanaka-note.com"; }
 function expectedOrigins(env) { return String(env.EXPECTED_ORIGIN || "https://tanaka-note.com").split(",").map((value) => value.trim()).filter(Boolean).concat(env.ALLOW_LOCAL_HTTP === "true" ? ["http://127.0.0.1:8790", "http://localhost:8790"] : []); }
 function normalizeService(value) { return normalizeLinkedService(value); }
@@ -1031,8 +1216,11 @@ function clampNumber(value, min, max, fallback) { const number = Number(value); 
 function randomToken(bytes) { const value = crypto.getRandomValues(new Uint8Array(bytes)); return bytesToBase64Url(value); }
 function parseJson(value, fallback) { try { return JSON.parse(value); } catch { return fallback; } }
 function validatePublicJwk(value) { if (!value || value.kty !== "RSA" || value.alg !== "RSA-OAEP-256" || !value.n || !value.e || "d" in value) throw new HttpError(400, "公開鍵を確認してください。"); return { kty: "RSA", alg: "RSA-OAEP-256", key_ops: ["encrypt"], ext: true, n: value.n, e: value.e }; }
+function canonicalJwk(value) { const jwk = validatePublicJwk(value); return JSON.stringify({ alg: jwk.alg, e: jwk.e, ext: true, key_ops: ["encrypt"], kty: jwk.kty, n: jwk.n }); }
+function withUtcTimes(row) { const result = { ...row }; for (const key of Object.keys(result)) if (key.endsWith("_at") && result[key] != null) result[key] = normalizeUtcTimestamp(result[key]); return result; }
 function parseCookies(header) { return Object.fromEntries(header.split(";").map((part) => part.trim()).filter(Boolean).map((part) => { const index = part.indexOf("="); return index < 0 ? [part, ""] : [part.slice(0, index), part.slice(index + 1)]; })); }
 function clearCookie(name, secureValue) { return `${name}=; Path=${BASE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secureValue ? "; Secure" : ""}`; }
+function setupCookie(token, secureValue) { return `${SETUP_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${SETUP_TTL_SECONDS}; HttpOnly; SameSite=Strict${secureValue ? "; Secure" : ""}`; }
 function json(value, status = 200, inputHeaders) { const headers = new Headers(inputHeaders); headers.set("Content-Type", "application/json; charset=utf-8"); headers.set("Cache-Control", "no-store"); return new Response(JSON.stringify(value), { status, headers }); }
 async function readJson(request, max) { const length = Number(request.headers.get("Content-Length") || 0); if (length > max) throw new HttpError(413, "入力内容が大きすぎます。"); try { const body = await request.json(); return body && typeof body === "object" ? body : {}; } catch { throw new HttpError(400, "入力内容を読み取れませんでした。"); } }
 async function sha256(value) { return bytesToBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(String(value || ""))))); }

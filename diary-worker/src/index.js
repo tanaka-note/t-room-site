@@ -181,6 +181,7 @@ async function handleApi(request, env, url, path, context) {
       credentialId: handoff.credentialId,
       serviceLinkId: handoff.serviceLinkId,
       serviceAccountId: handoff.serviceAccountId,
+      passkeySessionEpoch: handoff.sessionEpoch,
       authMethod: "passkey"
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
@@ -1304,6 +1305,7 @@ async function withRollingSession(request, response, env, url, path) {
     credentialId: session.credentialId,
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
+    passkeySessionEpoch: session.passkeySessionEpoch,
     authMethod: session.authMethod
   });
   const headers = new Headers(response.headers);
@@ -1325,6 +1327,7 @@ async function createSessionToken(account, maxAge, env, activeHouseholdId = acco
     credentialId: auth.credentialId || null,
     serviceLinkId: auth.serviceLinkId || null,
     serviceAccountId: auth.serviceAccountId || null,
+    passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
     exp: Math.floor(Date.now() / 1000) + maxAge,
     version: String(env.SESSION_VERSION || "1")

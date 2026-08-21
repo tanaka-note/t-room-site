@@ -3,7 +3,7 @@ import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-3c435f565a4a";
+const APP_BUILD_ID = "cloud-0b235dd9b046";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -60,6 +60,24 @@ export class SecurityIntegration extends WorkerEntrypoint {
       // It is returned only through the private Service Binding so Security
       // Center can delegate the folder key without exposing plaintext keys.
       adminWrappedKey: folder.admin_wrapped_key
+    };
+  }
+
+  async getPrimaryAdminCryptoConfig() {
+    const row = await this.env.DB.prepare(`SELECT crypto_version AS cryptoVersion, public_key_jwk AS publicKeyJwk,
+      admin_private_cipher AS adminPrivateCipher, admin_private_iv AS adminPrivateIv,
+      recovery_private_cipher AS recoveryPrivateCipher, recovery_private_iv AS recoveryPrivateIv,
+      created_at AS createdAt FROM cloud_crypto_config WHERE id = 1`).first();
+    if (!row) return { initialized: false, cryptoVersion: 1 };
+    return {
+      initialized: true,
+      cryptoVersion: Number(row.cryptoVersion || 1),
+      publicKeyJwk: JSON.parse(row.publicKeyJwk),
+      adminPrivateCipher: row.adminPrivateCipher,
+      adminPrivateIv: row.adminPrivateIv,
+      recoveryPrivateCipher: row.recoveryPrivateCipher,
+      recoveryPrivateIv: row.recoveryPrivateIv,
+      createdAt: row.createdAt
     };
   }
 }
@@ -318,6 +336,7 @@ async function completePasskeyHandoff(request, env, url, context) {
     credentialId: handoff.credentialId,
     serviceLinkId: handoff.serviceLinkId,
     serviceAccountId: handoff.serviceAccountId,
+    passkeySessionEpoch: handoff.sessionEpoch,
     authMethod: "passkey",
     rootFolderId: handoff.cloudRootFolderId == null ? null : Number(handoff.cloudRootFolderId)
   };
@@ -2594,6 +2613,7 @@ async function readSession(request, env) {
       credentialId: payload.credentialId || null,
       serviceLinkId: payload.serviceLinkId || null,
       serviceAccountId: payload.serviceAccountId || null,
+      passkeySessionEpoch: payload.passkeySessionEpoch || null,
       authMethod: payload.authMethod || "password",
       rootFolderId: payload.rootFolderId == null ? null : Number(payload.rootFolderId)
     };

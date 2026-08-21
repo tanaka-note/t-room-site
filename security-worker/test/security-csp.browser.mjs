@@ -14,6 +14,7 @@ const securityPublic = resolve(workspace, "security-worker/public");
 const cloudPublic = resolve(workspace, "cloud-worker/public");
 const dummyPassword = "security-csp-test-password";
 const receivedBootstrapBodies = [];
+let setupStatusBody = { active: false };
 
 const staticFiles = new Map([
   ["/security/", [resolve(securityPublic, "index.html"), "text/html; charset=utf-8"]],
@@ -26,6 +27,7 @@ const staticFiles = new Map([
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
+  if (url.pathname === "/security/api/setup/status") return sendJson(response, 200, setupStatusBody);
   if (url.pathname === "/security/api/status") return sendJson(response, 200, { enabled: true, initialized: false, adminAuthenticated: false });
   if (url.pathname === "/cloud/api/auth-mode") return sendJson(response, 200, { credentialSalt: "AAECAwQFBgcICQoLDA0ODw" });
   if (url.pathname === "/security/api/bootstrap/options") {
@@ -44,9 +46,28 @@ const server = createServer(async (request, response) => {
       }
     });
   }
+  if (url.pathname === "/security/api/prf/options") {
+    return sendJson(response, 200, {
+      challengeId: "resume-prf-challenge",
+      credentialId: "resume-credential",
+      prfSalt: "AAECAwQFBgcICQoLDA0ODw",
+      options: {
+        challenge: "AAECAwQFBgcICQoLDA0ODw",
+        rpId: "127.0.0.1",
+        userVerification: "required",
+        allowCredentials: [{ type: "public-key", id: "cmVzdW1lLWNyZWRlbnRpYWw" }],
+        extensions: { prf: { evalByCredential: { "resume-credential": { first: "AAECAwQFBgcICQoLDA0ODw" } } } }
+      }
+    });
+  }
   if (url.pathname === "/assets/pwa-auto-update.js") {
     response.writeHead(200, responseHeaders("text/javascript; charset=utf-8"));
     response.end("// The CSP browser regression test intentionally disables update traffic.\n");
+    return;
+  }
+  if (url.pathname === "/security/csp-eval-probe.js") {
+    response.writeHead(200, responseHeaders("text/javascript; charset=utf-8"));
+    response.end("try { Function('return 1')(); window.__troomJavascriptEvalAllowed = true; } catch { window.__troomJavascriptEvalAllowed = false; }");
     return;
   }
   const staticFile = staticFiles.get(url.pathname);
@@ -105,13 +126,17 @@ async function verifyBrowser(browserType, name, origin) {
   if (!executablePath) return `${name}: skipped (browser unavailable)`;
   const browser = await browserType.launch({ executablePath, headless: true });
   try {
+    setupStatusBody = { active: false };
     const context = await browser.newContext();
     await context.addInitScript(() => {
       const credentials = navigator.credentials;
       Object.defineProperty(navigator, "credentials", {
         configurable: true,
         value: {
-          get: credentials?.get?.bind(credentials),
+          get: async () => {
+            window.__troomWebAuthnGetCalled = true;
+            throw new DOMException("CSP regression test reached resumed WebAuthn", "NotAllowedError");
+          },
           create: async () => {
             window.__troomWebAuthnCreateCalled = true;
             throw new DOMException("CSP regression test reached WebAuthn", "NotAllowedError");
@@ -131,6 +156,27 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await page.evaluate(() => typeof globalThis.hashwasm?.argon2id), "function");
     assert.equal(await page.evaluate(() => typeof globalThis.TRoomCrypto?.deriveAccountCredentials), "function");
     assert.ok(!consoleErrors.some((message) => /Content Security Policy|WebAssembly\.compile|CompileError/i.test(message)), `${name}: ${consoleErrors.join("\n")}`);
+    await page.evaluate(() => new Promise((resolveProbe) => {
+      const script = document.createElement("script");
+      script.src = "/security/csp-eval-probe.js";
+      script.onload = resolveProbe;
+      script.onerror = resolveProbe;
+      document.head.append(script);
+    }));
+    assert.equal(await page.evaluate(() => window.__troomJavascriptEvalAllowed), false, `${name}: normal JavaScript eval must remain blocked`);
+    setupStatusBody = {
+      active: true, identityId: "resume_user", credentialId: "resume-credential",
+      isPrimaryAdmin: false, prfEnabled: true, tcloudReady: false,
+      cloudLinks: [{ id: "cloud-2", accountId: "folder-member", rootFolderId: 2 }, { id: "cloud-10", accountId: "folder-member", rootFolderId: 10 }]
+    };
+    const resumed = await context.newPage();
+    await resumed.goto(`${origin}/security/`, { waitUntil: "load" });
+    const resumeButton = resumed.getByRole("button", { name: "T-Cloudの準備を再開" });
+    await resumeButton.waitFor();
+    assert.equal(await resumed.locator("#invite-view").isVisible(), true, `${name}: setup session resumes after reload`);
+    await resumeButton.click();
+    await resumed.waitForFunction(() => window.__troomWebAuthnGetCalled === true, null, { timeout: 30000 });
+    setupStatusBody = { active: false };
     return `${name}: pass`;
   } finally {
     await browser.close();

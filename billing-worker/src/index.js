@@ -190,6 +190,7 @@ async function handleApi(request, env, url, path, context) {
       credentialId: handoff.credentialId,
       serviceLinkId: handoff.serviceLinkId,
       serviceAccountId: handoff.serviceAccountId,
+      passkeySessionEpoch: handoff.sessionEpoch,
       authMethod: "passkey"
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
@@ -582,6 +583,7 @@ async function readSession(request, env) {
       credentialId: payload.credentialId || null,
       serviceLinkId: payload.serviceLinkId || null,
       serviceAccountId: payload.serviceAccountId || null,
+      passkeySessionEpoch: payload.passkeySessionEpoch || null,
       authMethod: payload.authMethod || "password"
     };
   } catch {
@@ -599,6 +601,7 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     credentialId: auth.credentialId || null,
     serviceLinkId: auth.serviceLinkId || null,
     serviceAccountId: auth.serviceAccountId || null,
+    passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
     exp: Math.floor(Date.now() / 1000) + maxAge
   };
@@ -626,6 +629,7 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
     credentialId: session.credentialId,
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
+    passkeySessionEpoch: session.passkeySessionEpoch,
     authMethod: session.authMethod
   });
   const headers = new Headers(response.headers);
