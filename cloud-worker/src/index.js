@@ -1,8 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
+import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-610518c77bbb";
+const APP_BUILD_ID = "cloud-3c435f565a4a";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -314,6 +315,9 @@ async function completePasskeyHandoff(request, env, url, context) {
     credentialSalt: await accountCredentialSalt(env),
     sessionId: crypto.randomUUID(),
     identityId: handoff.identityId,
+    credentialId: handoff.credentialId,
+    serviceLinkId: handoff.serviceLinkId,
+    serviceAccountId: handoff.serviceAccountId,
     authMethod: "passkey",
     rootFolderId: handoff.cloudRootFolderId == null ? null : Number(handoff.cloudRootFolderId)
   };
@@ -2569,7 +2573,9 @@ async function readSession(request, env) {
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded)));
     if (payload.exp <= Math.floor(Date.now() / 1000) || String(payload.version) !== String(env.SESSION_VERSION || "1")) return null;
     const account = payload.role === "member" ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find((item) => item.role === payload.role);
-    return account ? {
+    if (!account) return null;
+    if (!(await validateServicePasskeySession(payload, env, "cloud", payload.rootFolderId == null ? null : Number(payload.rootFolderId)))) return null;
+    return {
       role: account.role,
       label: account.label,
       canUpload: account.canUpload,
@@ -2585,9 +2591,12 @@ async function readSession(request, env) {
       loginId: payload.authMethod === "passkey" ? payload.loginId : configuredLoginId(env, account.role),
       credentialSalt: await accountCredentialSalt(env),
       identityId: payload.identityId || null,
+      credentialId: payload.credentialId || null,
+      serviceLinkId: payload.serviceLinkId || null,
+      serviceAccountId: payload.serviceAccountId || null,
       authMethod: payload.authMethod || "password",
       rootFolderId: payload.rootFolderId == null ? null : Number(payload.rootFolderId)
-    } : null;
+    };
   } catch { return null; }
 }
 

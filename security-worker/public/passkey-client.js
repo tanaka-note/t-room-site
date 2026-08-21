@@ -28,7 +28,7 @@
     const start = await api("/invite/options", { token });
     const credential = await navigator.credentials.create({ publicKey: decodeCreationOptions(start.options) });
     const result = await api("/invite/verify", { token, challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
-    const prf = await obtainPrf(result.credentialId);
+    const prf = await obtainPrfSafely(result.credentialId);
     return { ...result, ...prf, cloudLink: start.cloudLink };
   }
 
@@ -37,8 +37,21 @@
     const start = await api("/bootstrap/options", authProof);
     const credential = await navigator.credentials.create({ publicKey: decodeCreationOptions(start.options) });
     const result = await api("/bootstrap/verify", { challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
-    const prf = await obtainPrf(result.credentialId);
+    const prf = await obtainPrfSafely(result.credentialId);
     return { ...result, ...prf };
+  }
+
+  async function obtainPrfSafely(credentialId) {
+    try {
+      return { ...(await obtainPrf(credentialId)), prfPreparationFailed: false };
+    } catch (error) {
+      return {
+        prfOutput: null,
+        prfAvailable: false,
+        prfPreparationFailed: true,
+        prfPreparationError: error instanceof Error ? error.message : "T-Cloudのパスキー復号準備を完了できませんでした。"
+      };
+    }
   }
 
   async function obtainPrf(credentialId) {

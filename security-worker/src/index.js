@@ -5,6 +5,18 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse
 } from "@simplewebauthn/server";
+import { secure } from "./security-headers.js";
+import {
+  LOGIN_FAILURE_EVENTS,
+  LOGIN_SUCCESS_EVENTS,
+  currentJstDayBounds,
+  jstDayBounds,
+  normalizeAuditService,
+  normalizeIdentityId,
+  normalizeLinkedService,
+  passkeySessionStateMatches,
+  resolveInviteExpiry
+} from "./security-domain.js";
 
 const BASE_PATH = "/security";
 const ADMIN_COOKIE = "troom_security_admin";
@@ -12,7 +24,6 @@ const IDENTITY_COOKIE = "troom_security_identity";
 const PRIMARY_ADMIN_ID = "primary-admin";
 const CHALLENGE_TTL_SECONDS = 5 * 60;
 const HANDOFF_TTL_SECONDS = 60;
-const INVITE_DEFAULT_SECONDS = 24 * 60 * 60;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -57,6 +68,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
   async redeemHandoff(token, service) {
     return redeemHandoff(this.env, token, service);
   }
+
+  async validatePasskeySession(input) {
+    return validatePasskeySession(this.env, input);
+  }
 }
 
 async function handleApi(request, env, url, path) {
@@ -64,6 +79,17 @@ async function handleApi(request, env, url, path) {
     const initialized = await hasSecurityAdmin(env);
     const admin = await readSecuritySession(request, env, ADMIN_COOKIE, "admin");
     return json({ enabled: passkeysEnabled(env), initialized, adminAuthenticated: Boolean(admin) });
+  }
+
+  if (path === "/api/logout" && request.method === "POST") {
+    requireMutation(request, url);
+    const session = await readSecuritySession(request, env, ADMIN_COOKIE, "admin")
+      || await readSecuritySession(request, env, IDENTITY_COOKIE, "identity");
+    if (session) await writeLocalAudit(env, { eventType: "logout", outcome: "success", identityId: session.identityId, authMethod: "passkey" }, request);
+    const headers = new Headers();
+    headers.append("Set-Cookie", clearCookie(ADMIN_COOKIE, url.protocol === "https:"));
+    headers.append("Set-Cookie", clearCookie(IDENTITY_COOKIE, url.protocol === "https:"));
+    return json({ ok: true }, 200, headers);
   }
 
   if (!passkeysEnabled(env)) throw new HttpError(503, "パスキー機能は一時停止中です。従来のID・パスワードでログインしてください。");
@@ -114,14 +140,6 @@ async function handleApi(request, env, url, path) {
     requireMutation(request, url);
     return saveOwnTCloudEnvelope(request, env);
   }
-  if (path === "/api/logout" && request.method === "POST") {
-    requireMutation(request, url);
-    const headers = new Headers();
-    headers.append("Set-Cookie", clearCookie(ADMIN_COOKIE, url.protocol === "https:"));
-    headers.append("Set-Cookie", clearCookie(IDENTITY_COOKIE, url.protocol === "https:"));
-    return json({ ok: true }, 200, headers);
-  }
-
   const admin = await requireSecurityAdmin(request, env);
   if (path === "/api/dashboard" && request.method === "GET") return dashboard(env);
   if (path === "/api/identities" && request.method === "GET") return listIdentities(env);
@@ -131,9 +149,9 @@ async function handleApi(request, env, url, path) {
   }
   if (path === "/api/audit" && request.method === "GET") return listAuditEvents(url, env);
 
-  const identityMatch = path.match(/^\/api\/identities\/([a-zA-Z0-9-]{1,64})$/);
+  const identityMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})$/);
   if (identityMatch && request.method === "GET") return identityDetail(identityMatch[1], env);
-  const addLinkMatch = path.match(/^\/api\/identities\/([a-zA-Z0-9-]{1,64})\/links$/);
+  const addLinkMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/links$/);
   if (addLinkMatch && request.method === "POST") {
     requireMutation(request, url);
     return addIdentityLinks(addLinkMatch[1], request, env, admin);
@@ -143,12 +161,12 @@ async function handleApi(request, env, url, path) {
     requireMutation(request, url);
     return removeIdentityLink(removeLinkMatch[1], request, env, admin);
   }
-  const approveMatch = path.match(/^\/api\/identities\/([a-zA-Z0-9-]{1,64})\/approve$/);
+  const approveMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/approve$/);
   if (approveMatch && request.method === "POST") {
     requireMutation(request, url);
     return approveIdentity(approveMatch[1], request, env, admin);
   }
-  const reinviteMatch = path.match(/^\/api\/identities\/([a-zA-Z0-9-]{1,64})\/reinvite$/);
+  const reinviteMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/reinvite$/);
   if (reinviteMatch && request.method === "POST") {
     requireMutation(request, url);
     return reinviteIdentity(reinviteMatch[1], request, env, admin);
@@ -156,12 +174,12 @@ async function handleApi(request, env, url, path) {
   const credentialRevokeMatch = path.match(/^\/api\/credentials\/([A-Za-z0-9_-]{16,1024})\/revoke$/);
   if (credentialRevokeMatch && request.method === "POST") {
     requireMutation(request, url);
-    return revokeCredential(credentialRevokeMatch[1], env, admin);
+    return revokeCredential(credentialRevokeMatch[1], request, env, admin);
   }
-  const inviteRevokeMatch = path.match(/^\/api\/invitations\/([a-zA-Z0-9-]{1,64})\/revoke$/);
+  const inviteRevokeMatch = path.match(/^\/api\/invitations\/([A-Za-z0-9_-]{1,64})\/revoke$/);
   if (inviteRevokeMatch && request.method === "POST") {
     requireMutation(request, url);
-    return revokeInvitation(inviteRevokeMatch[1], env, admin);
+    return revokeInvitation(inviteRevokeMatch[1], request, env, admin);
   }
   throw new HttpError(404, "Not found");
 }
@@ -200,7 +218,7 @@ async function bootstrapVerify(request, env, url) {
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
     env.DB.prepare("UPDATE security_identities SET status = 'active', is_security_admin = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(PRIMARY_ADMIN_ID),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ?").bind(PRIMARY_ADMIN_ID)
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service != 'cloud'").bind(PRIMARY_ADMIN_ID)
   ]);
   await writeLocalAudit(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request);
   const headers = await securitySessionHeaders(env, url, PRIMARY_ADMIN_ID, credential.id, true);
@@ -251,6 +269,7 @@ async function authenticationOptions(request, env) {
   const body = await readJson(request, 4096);
   const service = normalizeAuthService(body.service);
   if (!service) throw new HttpError(400, "ログイン先サービスを確認してください。");
+  await enforceAuthenticationOptionsRateLimit(request, env);
   const servicePredicate = service === "security"
     ? "i.is_security_admin = 1"
     : "EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = i.id AND l.service = ? AND l.status = 'active')";
@@ -269,6 +288,7 @@ async function authenticationOptions(request, env) {
     extensions: { prf: { evalByCredential } }
   });
   const challengeId = await storeChallenge(env, "authentication", options.challenge, null, null, service);
+  await writeLocalAudit(env, { eventType: "passkey_authentication_options", outcome: "info", authMethod: "passkey", service }, request);
   return json({ challengeId, options });
 }
 
@@ -280,7 +300,7 @@ async function authenticationVerify(request, env, url) {
   const credentialId = normalizeSecretText(body.response?.id, 2048);
   const credential = await activeCredential(env, credentialId);
   if (!credential) {
-    await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", authMethod: "passkey" }, request);
+    await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", authMethod: "passkey", service }, request);
     throw new HttpError(401, "パスキーを確認できませんでした。");
   }
   let verification;
@@ -291,7 +311,7 @@ async function authenticationVerify(request, env, url) {
     throw error;
   }
   if (!verification.verified || !verification.authenticationInfo.userVerified) {
-    await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", identityId: credential.identity_id, authMethod: "passkey" }, request);
+    await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", identityId: credential.identity_id, authMethod: "passkey", service }, request);
     throw new HttpError(401, "パスキーを確認できませんでした。");
   }
   await env.DB.batch([
@@ -355,7 +375,7 @@ async function prfVerify(request, env) {
   const verification = await verifyAuthentication(body.response, challenge.challenge, credential, env);
   if (!verification.verified || !verification.authenticationInfo.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
   await env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP, prf_enabled = ? WHERE credential_id = ?")
-    .bind(verification.authenticationInfo.newCounter, body.prfAvailable ? 1 : credential.prf_enabled, credentialId).run();
+    .bind(verification.authenticationInfo.newCounter, body.prfAvailable ? 1 : 0, credentialId).run();
   return json({ verified: true });
 }
 
@@ -386,18 +406,29 @@ async function saveOwnTCloudEnvelope(request, env) {
       payload_iv = excluded.payload_iv, updated_at = CURRENT_TIMESTAMP`)
     .bind(crypto.randomUUID(), identitySession.identityId, identitySession.credentialId, link.id, envelopeType,
       publicKeyJwk ? JSON.stringify(publicKeyJwk) : null, encryptedPayload, payloadIv).run();
+  if (envelopeType === "admin_private_prf") {
+    await env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ?")
+      .bind(link.id, identitySession.identityId).run();
+  }
   await writeLocalAudit(env, { eventType: "tcloud_key_envelope_saved", outcome: "success", identityId: identitySession.identityId, service: "cloud", authMethod: "passkey" }, request);
   return json({ ok: true });
 }
 
 async function dashboard(env) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = currentJstDayBounds();
+  const successPlaceholders = LOGIN_SUCCESS_EVENTS.map(() => "?").join(", ");
+  const failurePlaceholders = LOGIN_FAILURE_EVENTS.map(() => "?").join(", ");
   const counts = await env.DB.prepare(`SELECT
-    SUM(CASE WHEN occurred_at >= ? AND event_type LIKE '%login_success%' THEN 1 ELSE 0 END) AS loginSuccess,
-    SUM(CASE WHEN occurred_at >= ? AND outcome = 'failure' AND event_type LIKE '%login%' THEN 1 ELSE 0 END) AS loginFailure,
-    SUM(CASE WHEN occurred_at >= ? AND outcome = 'blocked' THEN 1 ELSE 0 END) AS lockouts,
-    SUM(CASE WHEN occurred_at >= ? AND event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END) AS critical
-    FROM security_audit_events`).bind(today, today, today, today).first();
+    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND outcome = 'success' AND event_type IN (${successPlaceholders}) THEN 1 ELSE 0 END) AS loginSuccess,
+    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND outcome = 'failure' AND event_type IN (${failurePlaceholders}) THEN 1 ELSE 0 END) AS loginFailure,
+    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND outcome = 'blocked' THEN 1 ELSE 0 END) AS lockouts,
+    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END) AS critical
+    FROM security_audit_events`).bind(
+      today.start, today.end, ...LOGIN_SUCCESS_EVENTS,
+      today.start, today.end, ...LOGIN_FAILURE_EVENTS,
+      today.start, today.end,
+      today.start, today.end
+    ).first();
   const identityCounts = await env.DB.prepare(`SELECT
     SUM(CASE WHEN EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'pending') THEN 1 ELSE 0 END) AS pendingApproval,
     SUM(CASE WHEN status = 'invited' THEN 1 ELSE 0 END) AS invited,
@@ -428,7 +459,14 @@ async function identityDetail(id, env) {
     env.DB.prepare("SELECT * FROM security_audit_events WHERE identity_id = ? ORDER BY occurred_at DESC LIMIT 50").bind(id).all()
   ]);
   const linkRows = links.results || [];
-  const pendingCredential = await env.DB.prepare("SELECT credential_id FROM security_credentials WHERE identity_id = ? AND status = 'pending' ORDER BY registered_at DESC LIMIT 1").bind(id).first();
+  const pendingCredential = await env.DB.prepare(`SELECT c.credential_id FROM security_credentials c
+    WHERE c.identity_id = ? AND (
+      c.status = 'pending'
+      OR (c.status = 'active'
+        AND EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = c.identity_id AND l.service = 'cloud' AND l.status = 'pending')
+        AND EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.identity_id = c.identity_id AND e.credential_id = c.credential_id AND e.envelope_type = 'client_private_prf')
+      )
+    ) ORDER BY CASE WHEN c.status = 'pending' THEN 0 ELSE 1 END, c.registered_at DESC LIMIT 1`).bind(id).first();
   const clientEnvelope = pendingCredential ? await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_key_envelopes WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'client_private_prf' LIMIT 1").bind(id, pendingCredential.credential_id).first() : null;
   const adminKeyRows = identity.is_security_admin ? await env.DB.prepare("SELECT credential_id, encrypted_payload, payload_iv FROM security_tcloud_key_envelopes WHERE identity_id = ? AND envelope_type = 'admin_private_prf'").bind(id).all() : { results: [] };
   const cloudFolders = [];
@@ -442,23 +480,24 @@ async function identityDetail(id, env) {
 async function createIdentityAndInvite(request, env, admin) {
   const body = await readJson(request, 20000);
   const displayName = normalizeText(body.displayName, 100);
-  const identityId = normalizeId(body.identityId) || crypto.randomUUID();
+  const hasIdentityId = Object.hasOwn(body, "identityId");
+  const identityId = hasIdentityId ? normalizeIdentityId(body.identityId) : crypto.randomUUID();
   if (!displayName) throw new HttpError(400, "表示名を入力してください。");
+  if (!identityId) throw new HttpError(400, "Identity IDは英数字・_・-を使い64文字以内で入力してください。");
   const links = await validateServiceLinks(env, body.links);
   if (!links.length) throw new HttpError(400, "少なくとも1つのサービス連携を指定してください。");
+  assertUniqueServiceLinks(links);
   const existing = await env.DB.prepare("SELECT 1 AS ok FROM security_identities WHERE id = ?").bind(identityId).first();
   if (existing) throw new HttpError(409, "同じIdentity IDが既に存在します。");
-  await env.DB.prepare("INSERT INTO security_identities (id, display_name, status) VALUES (?, ?, 'invited')").bind(identityId, displayName).run();
-  try {
-    for (const link of links) await insertServiceLink(env, identityId, link);
-    const invitation = await issueInvitation(env, identityId, body.expiresAt, admin.identityId);
-    await writeLocalAudit(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey" }, request);
-    await writeLocalAudit(env, { eventType: "invite_created", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request);
-    return json({ identityId, invitationUrl: `/security/#invite=${encodeURIComponent(invitation.token)}`, expiresAt: invitation.expiresAt }, 201);
-  } catch (error) {
-    await env.DB.prepare("DELETE FROM security_identities WHERE id = ?").bind(identityId).run();
-    throw error;
-  }
+  const invitation = await prepareInvitation(env, identityId, body, admin.identityId, await serviceLinkHashFromLinks(links));
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO security_identities (id, display_name, status) VALUES (?, ?, 'invited')").bind(identityId, displayName),
+    ...links.map((link) => insertServiceLinkStatement(env, identityId, link)),
+    insertInvitationStatement(env, invitation)
+  ]);
+  await writeLocalAudit(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey" }, request);
+  await writeLocalAudit(env, { eventType: "invite_created", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request);
+  return json({ identityId, invitationUrl: `/security/#invite=${encodeURIComponent(invitation.token)}`, expiresAt: invitation.expiresAt }, 201);
 }
 
 async function addIdentityLinks(identityId, request, env, admin) {
@@ -467,8 +506,19 @@ async function addIdentityLinks(identityId, request, env, admin) {
   const body = await readJson(request, 20000);
   const links = await validateServiceLinks(env, body.links);
   if (!links.length) throw new HttpError(400, "追加するサービス連携を指定してください。");
-  for (const link of links) await insertServiceLink(env, identityId, link);
-  await env.DB.prepare("UPDATE security_identities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId).run();
+  assertUniqueServiceLinks(links);
+  const existing = await env.DB.prepare("SELECT id, service, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ?").bind(identityId).all();
+  const byKey = new Map((existing.results || []).map((row) => [serviceLinkKey({ service: row.service, accountId: row.service_account_id, rootFolderId: row.cloud_root_folder_id }), row]));
+  const statements = [];
+  for (const link of links) {
+    const current = byKey.get(serviceLinkKey(link));
+    if (current && current.status !== "disabled") throw new HttpError(409, "同じサービス連携が既に存在します。");
+    statements.push(current
+      ? env.DB.prepare("UPDATE security_service_links SET display_label = ?, status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(link.displayLabel, current.id)
+      : insertServiceLinkStatement(env, identityId, link));
+  }
+  statements.push(env.DB.prepare("UPDATE security_identities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId));
+  await env.DB.batch(statements);
   await writeLocalAudit(env, { eventType: "service_link_added", outcome: "success", identityId, authMethod: "passkey", details: { changedBy: admin.identityId, count: links.length } }, request);
   return json({ ok: true, requiresReinvite: true });
 }
@@ -487,11 +537,15 @@ async function approveIdentity(identityId, request, env, admin) {
   const identity = await env.DB.prepare("SELECT * FROM security_identities WHERE id = ?").bind(identityId).first();
   if (!identity || !["pending_approval", "active"].includes(identity.status)) throw new HttpError(409, "承認待ちのIdentityではありません。");
   const credentialId = normalizeSecretText(body.credentialId, 2048);
-  const credential = await env.DB.prepare("SELECT credential_id FROM security_credentials WHERE identity_id = ? AND credential_id = ? AND status = 'pending'")
+  const credential = await env.DB.prepare("SELECT credential_id, status FROM security_credentials WHERE identity_id = ? AND credential_id = ? AND status IN ('pending', 'active')")
     .bind(identityId, credentialId).first();
   if (!credential) throw new HttpError(409, "承認待ちのパスキーが見つかりません。");
   const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(identityId).all();
+  if (credential.status === "active" && !(cloudLinks.results || []).some((link) => link.status === "pending")) {
+    throw new HttpError(409, "承認待ちのT-Cloud連携が見つかりません。");
+  }
   let cloudPasskeyReady = !(cloudLinks.results || []).length;
+  let validatedCloudEnvelopes = [];
   if ((cloudLinks.results || []).length) {
     const clientEnvelope = await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_key_envelopes WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'client_private_prf'").bind(identityId, credential?.credential_id || "").first();
     if (clientEnvelope) {
@@ -501,17 +555,18 @@ async function approveIdentity(identityId, request, env, admin) {
         if (!envelope?.wrappedKey) throw new HttpError(400, "T-Cloudフォルダ鍵の安全な委譲が完了していません。");
         const wrappedKey = normalizeSecretText(envelope.wrappedKey, 12000);
         if (!wrappedKey) throw new HttpError(400, "T-Cloudフォルダ鍵の安全な委譲を確認できません。");
-        await env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
-          (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
-          VALUES (?, ?, ?, ?, 'folder_key_rsa', ?)
-          ON CONFLICT(credential_id, service_link_id, envelope_type) DO UPDATE SET
-            wrapped_key = excluded.wrapped_key, updated_at = CURRENT_TIMESTAMP`)
-          .bind(crypto.randomUUID(), identityId, credential.credential_id, link.id, wrappedKey).run();
+        validatedCloudEnvelopes.push({ linkId: link.id, wrappedKey });
       }
       cloudPasskeyReady = true;
     }
   }
   const updates = [
+    ...validatedCloudEnvelopes.map((envelope) => env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
+      (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
+      VALUES (?, ?, ?, ?, 'folder_key_rsa', ?)
+      ON CONFLICT(credential_id, service_link_id, envelope_type) DO UPDATE SET
+        wrapped_key = excluded.wrapped_key, updated_at = CURRENT_TIMESTAMP`)
+      .bind(crypto.randomUUID(), identityId, credential.credential_id, envelope.linkId, envelope.wrappedKey)),
     env.DB.prepare("UPDATE security_credentials SET status = 'active', approved_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND credential_id = ? AND status = 'pending'").bind(identityId, credentialId),
     env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service != 'cloud'").bind(identityId),
     env.DB.prepare("UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId)
@@ -526,25 +581,25 @@ async function reinviteIdentity(identityId, request, env, admin) {
   const identity = await env.DB.prepare("SELECT id FROM security_identities WHERE id = ? AND status != 'disabled'").bind(identityId).first();
   if (!identity) throw new HttpError(404, "Identityが見つかりません。");
   const body = await readJson(request, 4096);
-  const invitation = await issueInvitation(env, identityId, body.expiresAt, admin.identityId);
-  await writeLocalAudit(env, { eventType: "reinvite", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request);
+  const invitation = await issueInvitation(env, identityId, body, admin.identityId, true);
+  await writeLocalAudit(env, { eventType: "reinvite", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt, revokedPriorInvites: invitation.revokedPriorInvites } }, request);
   return json({ invitationUrl: `/security/#invite=${encodeURIComponent(invitation.token)}`, expiresAt: invitation.expiresAt }, 201);
 }
 
-async function revokeCredential(credentialId, env, admin) {
+async function revokeCredential(credentialId, request, env, admin) {
   const credential = await env.DB.prepare("SELECT identity_id FROM security_credentials WHERE credential_id = ? AND status != 'revoked'").bind(credentialId).first();
   if (!credential) throw new HttpError(404, "パスキーが見つかりません。");
   const result = await env.DB.prepare("UPDATE security_credentials SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE credential_id = ? AND status != 'revoked'").bind(credentialId).run();
   if (!result.meta?.changes) throw new HttpError(404, "パスキーが見つかりません。");
-  await writeLocalAudit(env, { eventType: "passkey_revoked", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } });
+  await writeLocalAudit(env, { eventType: "passkey_revoked", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request);
   return json({ ok: true });
 }
 
-async function revokeInvitation(invitationId, env, admin) {
+async function revokeInvitation(invitationId, request, env, admin) {
   const row = await env.DB.prepare("SELECT identity_id FROM security_invitations WHERE id = ? AND status = 'active'").bind(invitationId).first();
   if (!row) throw new HttpError(404, "有効な招待が見つかりません。");
   await env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invitationId).run();
-  await writeLocalAudit(env, { eventType: "invite_revoked", outcome: "success", identityId: row.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } });
+  await writeLocalAudit(env, { eventType: "invite_revoked", outcome: "success", identityId: row.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request);
   return json({ ok: true });
 }
 
@@ -552,7 +607,7 @@ async function listAuditEvents(url, env) {
   const clauses = ["1 = 1"];
   const values = [];
   for (const [parameter, column, normalize] of [
-    ["service", "service", normalizeService], ["identityId", "identity_id", normalizeId],
+    ["service", "service", normalizeAuditService], ["identityId", "identity_id", normalizeIdentityId],
     ["authMethod", "auth_method", (value) => ["password", "passkey", "system"].includes(value) ? value : ""],
     ["outcome", "outcome", (value) => ["success", "failure", "blocked", "cancelled", "info"].includes(value) ? value : ""],
     ["eventType", "event_type", (value) => normalizeText(value, 80)]
@@ -560,10 +615,10 @@ async function listAuditEvents(url, env) {
     const value = normalize(url.searchParams.get(parameter));
     if (value) { clauses.push(`${column} = ?`); values.push(value); }
   }
-  const from = normalizeDate(url.searchParams.get("from"));
-  const to = normalizeDate(url.searchParams.get("to"));
-  if (from) { clauses.push("occurred_at >= ?"); values.push(`${from}T00:00:00.000Z`); }
-  if (to) { clauses.push("occurred_at < datetime(?, '+1 day')"); values.push(`${to}T00:00:00.000Z`); }
+  const from = jstDayBounds(url.searchParams.get("from"));
+  const to = jstDayBounds(url.searchParams.get("to"));
+  if (from) { clauses.push("occurred_at >= ?"); values.push(from.start); }
+  if (to) { clauses.push("occurred_at < ?"); values.push(to.end); }
   const result = await env.DB.prepare(`SELECT * FROM security_audit_events WHERE ${clauses.join(" AND ")} ORDER BY occurred_at DESC LIMIT 500`).bind(...values).all();
   return json({ events: result.results || [] });
 }
@@ -578,7 +633,7 @@ async function redeemHandoff(env, token, service) {
       l.cloud_root_folder_id AS cloudRootFolderId, l.display_label AS displayLabel
     FROM security_handoffs h JOIN security_service_links l ON l.id = h.service_link_id
     JOIN security_identities i ON i.id = h.identity_id
-    JOIN security_credentials c ON c.credential_id = h.credential_id
+    JOIN security_credentials c ON c.credential_id = h.credential_id AND c.identity_id = h.identity_id
     WHERE h.token_hash = ? AND h.consumed_at IS NULL AND h.expires_at > ?
       AND l.service = ? AND l.status = 'active' AND i.status = 'active' AND c.status = 'active'`)
     .bind(tokenHash, now, normalizedService).first();
@@ -586,6 +641,24 @@ async function redeemHandoff(env, token, service) {
   const update = await env.DB.prepare("UPDATE security_handoffs SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(now, row.id).run();
   if (!update.meta?.changes) return null;
   return { identityId: row.identity_id, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel };
+}
+
+async function validatePasskeySession(env, input) {
+  const service = normalizeLinkedService(input?.service);
+  const identityId = normalizeIdentityId(input?.identityId);
+  const credentialId = normalizeSecretText(input?.credentialId, 2048);
+  const serviceLinkId = normalizeId(input?.serviceLinkId);
+  const serviceAccountId = normalizeText(input?.serviceAccountId, 100);
+  if (!passkeysEnabled(env) || !service || !identityId || !credentialId || !serviceLinkId || !serviceAccountId) return { valid: false };
+  const row = await env.DB.prepare(`SELECT c.credential_id, c.identity_id, l.id AS link_id, l.service,
+      l.service_account_id, l.cloud_root_folder_id
+    FROM security_credentials c
+    JOIN security_identities i ON i.id = c.identity_id
+    JOIN security_service_links l ON l.identity_id = i.id
+    WHERE c.credential_id = ? AND c.identity_id = ? AND c.status = 'active'
+      AND i.status = 'active' AND l.id = ? AND l.service = ? AND l.status = 'active'`)
+    .bind(credentialId, identityId, serviceLinkId, service).first();
+  return { valid: passkeySessionStateMatches({ ...input, identityId, credentialId, serviceLinkId, service, serviceAccountId }, row, true) };
 }
 
 async function registrationOptions(env, identityId, displayName, excludeCredentials) {
@@ -668,17 +741,41 @@ async function requireUsableInvitation(env, token) {
   return invitation;
 }
 
-async function issueInvitation(env, identityId, requestedExpiry, createdBy) {
-  const now = nowSeconds();
-  const max = now + clampNumber(env.MAX_INVITE_DAYS, 1, 30, 30) * 86400;
-  const expiresAt = Math.min(max, Math.max(now + 3600, Number(requestedExpiry) || now + INVITE_DEFAULT_SECONDS));
+async function prepareInvitation(env, identityId, expiryInput, createdBy, linkSetHash = null) {
+  let expiresAt;
+  try {
+    expiresAt = resolveInviteExpiry(expiryInput, nowSeconds(), clampNumber(env.MAX_INVITE_DAYS, 1, 30, 30));
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "招待の有効期限を確認してください。");
+  }
   const token = randomToken(32);
   const id = crypto.randomUUID();
-  await env.DB.prepare(`INSERT INTO security_invitations
+  return {
+    id, token, identityId, expiresAt, createdBy,
+    tokenHash: await sha256(token),
+    linkSetHash: linkSetHash || await serviceLinkSetHash(env, identityId)
+  };
+}
+
+function insertInvitationStatement(env, invitation) {
+  return env.DB.prepare(`INSERT INTO security_invitations
     (id, identity_id, token_hash, link_set_hash, expires_at, created_by_identity_id)
     VALUES (?, ?, ?, ?, ?, ?)`)
-    .bind(id, identityId, await sha256(token), await serviceLinkSetHash(env, identityId), expiresAt, createdBy).run();
-  return { id, token, expiresAt };
+    .bind(invitation.id, invitation.identityId, invitation.tokenHash, invitation.linkSetHash, invitation.expiresAt, invitation.createdBy);
+}
+
+async function issueInvitation(env, identityId, expiryInput, createdBy, revokeExisting = false) {
+  const invitation = await prepareInvitation(env, identityId, expiryInput, createdBy);
+  let revokedPriorInvites = 0;
+  if (revokeExisting) {
+    const active = await env.DB.prepare("SELECT COUNT(*) AS count FROM security_invitations WHERE identity_id = ? AND status = 'active'").bind(identityId).first();
+    revokedPriorInvites = Number(active?.count || 0);
+  }
+  await env.DB.batch([
+    ...(revokeExisting ? [env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'active'").bind(identityId)] : []),
+    insertInvitationStatement(env, invitation)
+  ]);
+  return { ...invitation, revokedPriorInvites };
 }
 
 async function serviceLinkSetHash(env, identityId) {
@@ -686,11 +783,21 @@ async function serviceLinkSetHash(env, identityId) {
   return sha256(JSON.stringify(result.results || []));
 }
 
+async function serviceLinkHashFromLinks(links) {
+  const rows = links.map((link) => ({
+    service: link.service,
+    service_account_id: link.accountId,
+    cloud_root_folder_id: link.rootFolderId == null ? null : Number(link.rootFolderId),
+    status: "pending"
+  })).sort((left, right) => `${left.service}\u0000${left.service_account_id}\u0000${left.cloud_root_folder_id ?? ""}`.localeCompare(`${right.service}\u0000${right.service_account_id}\u0000${right.cloud_root_folder_id ?? ""}`));
+  return sha256(JSON.stringify(rows));
+}
+
 async function validateServiceLinks(env, input) {
   const raw = Array.isArray(input) ? input : [];
   const links = [];
   for (const item of raw.slice(0, 12)) {
-    const service = normalizeService(item.service);
+    const service = normalizeLinkedService(item.service);
     const accountId = normalizeText(item.accountId, 100);
     const rootFolderId = item.rootFolderId == null || item.rootFolderId === "" ? null : Number(item.rootFolderId);
     if (!service || !accountId) throw new HttpError(400, "サービス連携を確認してください。");
@@ -705,21 +812,20 @@ async function validateServiceLinks(env, input) {
   return links;
 }
 
-async function insertServiceLink(env, identityId, link) {
-  const existing = await env.DB.prepare(`SELECT id, status FROM security_service_links
-    WHERE identity_id = ? AND service = ? AND service_account_id = ?
-      AND ((cloud_root_folder_id IS NULL AND ? IS NULL) OR cloud_root_folder_id = ?)`)
-    .bind(identityId, link.service, link.accountId, link.rootFolderId, link.rootFolderId).first();
-  if (existing?.status === "disabled") {
-    await env.DB.prepare("UPDATE security_service_links SET display_label = ?, status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(link.displayLabel, existing.id).run();
-    return;
-  }
-  if (existing) throw new HttpError(409, "同じサービス連携が既に存在します。");
-  await env.DB.prepare(`INSERT INTO security_service_links
+function insertServiceLinkStatement(env, identityId, link) {
+  return env.DB.prepare(`INSERT INTO security_service_links
     (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
     VALUES (?, ?, ?, ?, ?, ?, 'pending')`)
-    .bind(crypto.randomUUID(), identityId, link.service, link.accountId, link.rootFolderId, link.displayLabel).run();
+    .bind(crypto.randomUUID(), identityId, link.service, link.accountId, link.rootFolderId, link.displayLabel);
+}
+
+function serviceLinkKey(link) {
+  return `${link.service}\u0000${link.accountId}\u0000${link.rootFolderId == null ? "" : Number(link.rootFolderId)}`;
+}
+
+function assertUniqueServiceLinks(links) {
+  const keys = links.map(serviceLinkKey);
+  if (new Set(keys).size !== keys.length) throw new HttpError(409, "同じサービス連携が重複しています。");
 }
 
 async function ensurePrimaryAdminRecords(env) {
@@ -755,6 +861,17 @@ async function enforceBootstrapAttemptLimit(request, env) {
   if (Number(recent?.attempts || 0) >= 5) {
     await writeLocalAudit(env, { eventType: "bootstrap_login_blocked", outcome: "blocked", authMethod: "password", serviceAccountId: "admin" }, request);
     throw new HttpError(429, "管理者確認が一時停止されています。15分ほど待ってからお試しください。");
+  }
+}
+
+async function enforceAuthenticationOptionsRateLimit(request, env) {
+  const hash = await sourceHash(request, env);
+  const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const recent = await env.DB.prepare(`SELECT COUNT(*) AS attempts FROM security_audit_events
+    WHERE event_type = 'passkey_authentication_options' AND source_hash = ? AND occurred_at >= ?`)
+    .bind(hash, since).first();
+  if (Number(recent?.attempts || 0) >= 20) {
+    throw new HttpError(429, "端末のロック解除の開始回数が多すぎます。5分ほど待ってからお試しください。");
   }
 }
 
@@ -862,7 +979,7 @@ function normalizeAuditEvent(input) {
   return {
     eventId: normalizeId(input?.eventId) || crypto.randomUUID(), occurredAt: validIso(input?.occurredAt) || new Date().toISOString(),
     service, eventType: normalizeText(input?.eventType, 80) || "unknown", outcome,
-    identityId: normalizeId(input?.identityId) || null, serviceAccountId: normalizeText(input?.serviceAccountId, 100) || null,
+    identityId: normalizeIdentityId(input?.identityId) || null, serviceAccountId: normalizeText(input?.serviceAccountId, 100) || null,
     role: normalizeText(input?.role, 80) || null, authMethod,
     sessionIdHash: normalizeSecretText(input?.sessionIdHash, 128) || null, sourceHash: normalizeSecretText(input?.sourceHash, 128) || null,
     userAgent: normalizeText(input?.userAgent, 300) || null, targetType: normalizeText(input?.targetType, 80) || null,
@@ -890,18 +1007,6 @@ async function serveAsset(request, env, url, path) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-function secure(response) {
-  const headers = new Headers(response.headers);
-  headers.set("Cache-Control", headers.get("Cache-Control") || "no-store");
-  headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("X-Frame-Options", "DENY");
-  headers.set("Referrer-Policy", "no-referrer");
-  headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
-  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
-  headers.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
-}
-
 function requireMutation(request, url) {
   if (request.headers.get("Origin") !== url.origin || !String(request.headers.get("Content-Type") || "").startsWith("application/json")) {
     throw new HttpError(403, "不正なリクエストです。");
@@ -915,12 +1020,11 @@ function publicLink(row) {
 function passkeysEnabled(env) { return String(env.PASSKEY_ENABLED || "true") === "true"; }
 function rpId(env) { return env.RP_ID || "tanaka-note.com"; }
 function expectedOrigins(env) { return String(env.EXPECTED_ORIGIN || "https://tanaka-note.com").split(",").map((value) => value.trim()).filter(Boolean).concat(env.ALLOW_LOCAL_HTTP === "true" ? ["http://127.0.0.1:8790", "http://localhost:8790"] : []); }
-function normalizeService(value) { return ["cloud", "diary", "billing"].includes(value) ? value : ""; }
-function normalizeAuthService(value) { return ["security", "cloud", "diary", "billing"].includes(value) ? value : ""; }
+function normalizeService(value) { return normalizeLinkedService(value); }
+function normalizeAuthService(value) { return normalizeAuditService(value); }
 function normalizeId(value) { const text = String(value || "").trim(); return /^[A-Za-z0-9_-]{1,128}$/.test(text) ? text : ""; }
 function normalizeText(value, max) { return typeof value === "string" ? value.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, max) : ""; }
 function normalizeSecretText(value, max) { const text = typeof value === "string" ? value.trim() : ""; return text.length <= max ? text : ""; }
-function normalizeDate(value) { return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : ""; }
 function validIso(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : date.toISOString(); }
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
 function clampNumber(value, min, max, fallback) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback; }

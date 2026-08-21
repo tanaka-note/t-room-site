@@ -1,6 +1,7 @@
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
+import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
@@ -175,7 +176,13 @@ async function handleApi(request, env, url, path, context) {
     const account = await findAccountById(handoff.serviceAccountId, env);
     if (!account) return json({ error: "日記の連携先アカウントを確認できません。" }, 403);
     const maxAge = getSessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env, account.householdId, { identityId: handoff.identityId, authMethod: "passkey" });
+    const token = await createSessionToken(account, maxAge, env, account.householdId, {
+      identityId: handoff.identityId,
+      credentialId: handoff.credentialId,
+      serviceLinkId: handoff.serviceLinkId,
+      serviceAccountId: handoff.serviceAccountId,
+      authMethod: "passkey"
+    });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
     enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceAccountId: account.id, role: account.role, authMethod: "passkey" });
     return json({ authenticated: true, role: account.role, accountName: account.name, loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
@@ -219,7 +226,13 @@ async function handleApi(request, env, url, path, context) {
     }
     const account = await findAccountById(session.accountId, env);
     const maxAge = getSessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env, householdId, { identityId: session.identityId, authMethod: session.authMethod });
+    const token = await createSessionToken(account, maxAge, env, householdId, {
+      identityId: session.identityId,
+      credentialId: session.credentialId,
+      serviceLinkId: session.serviceLinkId,
+      serviceAccountId: session.serviceAccountId,
+      authMethod: session.authMethod
+    });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
     if (householdId !== session.householdId) {
@@ -1250,6 +1263,7 @@ async function readSession(request, env) {
     if (!account || account.role !== payload.role) return null;
     if (String(payload.version || "1") !== String(env.SESSION_VERSION || "1")) return null;
     if (Number(payload.accountVersion || 1) !== Number(account.sessionVersion || 1)) return null;
+    if (!(await validateServicePasskeySession(payload, env, "diary"))) return null;
     const activeHouseholdId = account.isGlobalOwner && payload.activeHouseholdId
       ? payload.activeHouseholdId
       : account.householdId;
@@ -1285,7 +1299,13 @@ async function withRollingSession(request, response, env, url, path) {
   if (!account) return response;
 
   const maxAge = getSessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId, { identityId: session.identityId, authMethod: session.authMethod });
+  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId, {
+    identityId: session.identityId,
+    credentialId: session.credentialId,
+    serviceLinkId: session.serviceLinkId,
+    serviceAccountId: session.serviceAccountId,
+    authMethod: session.authMethod
+  });
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
   return new Response(response.body, {
@@ -1302,6 +1322,9 @@ async function createSessionToken(account, maxAge, env, activeHouseholdId = acco
     activeHouseholdId,
     accountVersion: Number(account.sessionVersion || 1),
     identityId: auth.identityId || null,
+    credentialId: auth.credentialId || null,
+    serviceLinkId: auth.serviceLinkId || null,
+    serviceAccountId: auth.serviceAccountId || null,
     authMethod: auth.authMethod || "password",
     exp: Math.floor(Date.now() / 1000) + maxAge,
     version: String(env.SESSION_VERSION || "1")

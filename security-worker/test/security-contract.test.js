@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { secure, SECURITY_CONTENT_SECURITY_POLICY } from "../src/security-headers.js";
 
 const worker = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const migration = await readFile(new URL("../migrations/0001_identity_passkeys.sql", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/passkey-client.js", import.meta.url), "utf8");
+const securityUi = await readFile(new URL("../public/security.js", import.meta.url), "utf8");
+const securityHtml = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const cloud = await readFile(new URL("../../cloud-worker/src/index.js", import.meta.url), "utf8");
 const cloudClient = await readFile(new URL("../../cloud-worker/public/cloud.js", import.meta.url), "utf8");
 const cloudCrypto = await readFile(new URL("../../cloud-worker/public/crypto-vault.js", import.meta.url), "utf8");
+const argon2 = await readFile(new URL("../../cloud-worker/public/vendor/argon2.umd.min.js", import.meta.url), "utf8");
 const diary = await readFile(new URL("../../diary-worker/src/index.js", import.meta.url), "utf8");
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
 
@@ -96,4 +100,79 @@ test("service-account roles stay authoritative and are not combined in Security 
   assert.match(worker, /service_account_id AS serviceAccountId/);
   assert.match(worker, /T-Cloudの管理者・副管理者パスキーは第一管理者の復旧登録とは分離/);
   assert.doesNotMatch(worker, /mergedRole|combinedPermissions|unionPermissions/);
+});
+
+test("Security Center response permits WebAssembly without allowing JavaScript eval", async () => {
+  const response = secure(new Response("ok"));
+  const csp = response.headers.get("Content-Security-Policy");
+  assert.equal(csp, SECURITY_CONTENT_SECURITY_POLICY);
+
+  const directives = new Map(csp.split(";").map((value) => value.trim().split(/\s+/)).map(([name, ...sources]) => [name, sources]));
+  const scriptSources = directives.get("script-src") || [];
+  assert.deepEqual(scriptSources, ["'self'", "'wasm-unsafe-eval'"]);
+  assert.ok(!scriptSources.includes("'unsafe-eval'"));
+  assert.ok(!scriptSources.includes("'unsafe-inline'"));
+  assert.deepEqual(directives.get("default-src"), ["'self'"]);
+  assert.deepEqual(directives.get("connect-src"), ["'self'"]);
+  assert.deepEqual(directives.get("base-uri"), ["'none'"]);
+  assert.deepEqual(directives.get("form-action"), ["'self'"]);
+  assert.deepEqual(directives.get("frame-ancestors"), ["'none'"]);
+  assert.equal(response.headers.get("X-Frame-Options"), "DENY");
+  assert.equal(response.headers.get("X-Content-Type-Options"), "nosniff");
+  assert.equal(response.headers.get("Referrer-Policy"), "no-referrer");
+});
+
+test("Security Center Argon2/WebAssembly assets and CSP remain consistent", () => {
+  assert.match(securityHtml, /\/cloud\/vendor\/argon2\.umd\.min\.js/);
+  assert.match(securityHtml, /\/cloud\/crypto-vault\.js/);
+  assert.match(cloudCrypto, /deriveAccountCredentials[\s\S]*hashwasm\.argon2id/);
+  assert.match(argon2, /WebAssembly\.compile/);
+  assert.match(argon2, /WebAssembly\.instantiate/);
+  assert.match(SECURITY_CONTENT_SECURITY_POLICY, /script-src 'self' 'wasm-unsafe-eval'/);
+  assert.match(cloud, /script-src 'self' 'wasm-unsafe-eval'/, "T-Cloudの既存WASM CSPも維持します");
+  assert.doesNotMatch(cloud, /script-src[^;]*'unsafe-eval'/);
+});
+
+test("Identity routes, audit service and invitation lifecycle share the hardened contracts", () => {
+  assert.ok(worker.includes("/^\\/api\\/identities\\/([A-Za-z0-9_-]{1,64})$/"));
+  assert.match(worker, /normalizeIdentityId\(body\.identityId\)/);
+  assert.match(worker, /normalizeAuditService/);
+  assert.match(worker, /currentJstDayBounds/);
+  assert.match(worker, /LOGIN_FAILURE_EVENTS/);
+  assert.match(worker, /resolveInviteExpiry/);
+  assert.match(worker, /UPDATE security_invitations SET status = 'revoked'.*identity_id = \?.*status = 'active'/s);
+  assert.match(worker, /assertUniqueServiceLinks/);
+  assert.match(worker, /await env\.DB\.batch\(statements\)/);
+  assert.match(worker, /enforceAuthenticationOptionsRateLimit/);
+  assert.match(worker, /passkey_authentication_options/);
+  assert.match(worker, /Number\(recent\?\.attempts \|\| 0\) >= 20/);
+});
+
+test("all service passkey sessions carry revocable Security identifiers and validate on protected access", async () => {
+  for (const [name, source] of [["cloud", cloud], ["diary", diary], ["billing", billing]]) {
+    assert.match(source, /credentialId: handoff\.credentialId/,
+      `${name} stores the passkey credential in its local session`);
+    assert.match(source, /serviceLinkId: handoff\.serviceLinkId/,
+      `${name} stores the Security link in its local session`);
+    assert.match(source, /validateServicePasskeySession\(payload, env, /,
+      `${name} revalidates service sessions through the shared fail-closed helper`);
+    assert.match(source, /passkey-session-validation\.mjs/,
+      `${name} validates credential, Identity, link and kill switch through Security`);
+  }
+  assert.match(worker, /async validatePasskeySession\(input\)/);
+  assert.match(worker, /c\.status = 'active'[\s\S]*i\.status = 'active'[\s\S]*l\.status = 'active'/);
+});
+
+test("registration partial success remains usable outside T-Cloud and T-Cloud preparation is retryable", () => {
+  assert.match(client, /obtainPrfSafely/);
+  assert.match(client, /prfPreparationFailed/);
+  assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service != 'cloud'/);
+  assert.match(worker, /envelopeType === "admin_private_prf"[\s\S]*UPDATE security_service_links SET status = 'active'/);
+  assert.match(worker, /c\.status = 'active'[\s\S]*e\.envelope_type = 'client_private_prf'/,
+    "T-Cloud envelopeが後から保存されたactive credentialも再承認できます");
+  assert.match(securityUi, /パスキー登録は完了しました。日記・請求書では承認後に利用できます/);
+  assert.match(securityUi, /T-Cloudの準備を再試行/);
+  assert.match(securityUi, /inviteExpiryPayload\(\)/);
+  assert.match(securityUi, /日時指定の有効期限を入力してください/);
+  assert.match(securityHtml, /端末のロック解除を登録/);
 });
