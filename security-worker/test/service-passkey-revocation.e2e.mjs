@@ -230,28 +230,46 @@ try {
   await startServiceWorkers(true);
   stopSecurityWorker();
   await delay(300);
+  advanceGlobalEpoch();
+  const zeroAccessDisabledWorker = startSecurityWorker(false);
+  await waitForWorkerReady(zeroAccessDisabledWorker);
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 2);
+  // Intentionally make zero HTTP/API requests while the Security global switch is off.
+  stopSecurityWorker();
+  await delay(300);
+  startSecurityWorker(true);
+  await waitForUrl("http://127.0.0.1:8810/security/api/status");
+  assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "zero-access disable revokes the old Security admin cookie after re-enable");
+  assert.equal(await securityIdentityHandoff(oldIdentityCookie), 401, "zero-access disable revokes the old Security identity cookie after re-enable");
+  await assertAccess(replacementCookies, false, "zero-access disable revokes every old service passkey cookie after re-enable");
+  const newEpochCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 2, replacementLinks);
+  await assertAccess(newEpochCookies, true, "new passkey login after zero-access kill switch uses the new epoch");
+  const newAdminCookie = signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential", passkeySessionEpoch: 2 });
+  const newIdentityCookie = signSecurityCookie({ kind: "identity", identityId, credentialId, passkeySessionEpoch: 2 });
+  assert.equal(await securityAdminAuthenticated(newAdminCookie), true, "new Security admin cookie uses the new epoch");
+  assert.equal(await securityIdentityHandoff(newIdentityCookie), 200, "new Security identity cookie uses the new epoch");
+
+  stopSecurityWorker();
+  await delay(300);
+  advanceGlobalEpoch();
   startSecurityWorker(false);
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
-  assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "Security global kill switch rejects its admin cookie");
-  await assertAccess(replacementCookies, false, "Security global kill switch rejects every service passkey session");
+  assert.equal(await securityAdminAuthenticated(newAdminCookie), false, "Security global kill switch rejects its admin cookie");
+  await assertAccess(newEpochCookies, false, "Security global kill switch rejects every service passkey session");
   await assertAccess(passwordCookies, true, "password sessions remain valid during the Security global kill switch");
-  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 2);
-  await assertAccess(replacementCookies, false, "repeated OFF access does not restore or repeatedly advance sessions");
-  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 2);
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 3);
+  await assertAccess(newEpochCookies, false, "repeated OFF access does not restore or repeatedly advance sessions");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 3);
 
   stopSecurityWorker();
   await delay(300);
   startSecurityWorker(true);
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
-  assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "old Security admin cookie stays revoked after re-enable");
-  assert.equal(await securityIdentityHandoff(oldIdentityCookie), 401, "old Security identity cookie stays revoked after re-enable");
-  await assertAccess(replacementCookies, false, "old service passkey cookies stay revoked after global re-enable");
-  const newEpochCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 2, replacementLinks);
-  await assertAccess(newEpochCookies, true, "new passkey login after kill switch uses the new epoch");
-  const newAdminCookie = signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential", passkeySessionEpoch: 2 });
-  const newIdentityCookie = signSecurityCookie({ kind: "identity", identityId, credentialId, passkeySessionEpoch: 2 });
-  assert.equal(await securityAdminAuthenticated(newAdminCookie), true, "new Security admin cookie uses the new epoch");
-  assert.equal(await securityIdentityHandoff(newIdentityCookie), 200, "new Security identity cookie uses the new epoch");
+  assert.equal(await securityAdminAuthenticated(newAdminCookie), false, "old Security admin cookie stays revoked after re-enable");
+  assert.equal(await securityIdentityHandoff(newIdentityCookie), 401, "old Security identity cookie stays revoked after re-enable");
+  await assertAccess(newEpochCookies, false, "old service passkey cookies stay revoked after global re-enable");
+  const latestEpochCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 3, replacementLinks);
+  await assertAccess(latestEpochCookies, true, "new passkey login after repeated-access kill switch uses the new epoch");
   await assertAccess(passwordCookies, true, "password sessions remain valid across the kill-switch cycle");
 
   console.log("service passkey revocation HTTP integration: ok");
@@ -279,10 +297,12 @@ async function startServiceWorkers(passkeysEnabled) {
 }
 
 function startSecurityWorker(passkeysEnabled) {
-  processes.push(startWorker("security-worker", 8810, [
+  const child = startWorker("security-worker", 8810, [
     `SESSION_SECRET:${securitySessionSecret}`, "AUDIT_IP_SALT:security-integration-salt",
     `PASSKEY_ENABLED:${String(passkeysEnabled)}`, "ALLOW_LOCAL_HTTP:true", "EXPECTED_ORIGIN:http://127.0.0.1:8810"
-  ]));
+  ]);
+  processes.push(child);
+  return child;
 }
 
 function stopSecurityWorker() {
@@ -485,6 +505,15 @@ async function waitForUrl(url) {
   throw lastError || new Error(`Worker did not start: ${url}`);
 }
 
+async function waitForWorkerReady(child) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (child.exitCode != null) throw new Error(`Worker exited before becoming ready:\n${child.__output}`);
+    if (/http:\/\/127\.0\.0\.1:8810|Ready on|Ready at/i.test(child.__output)) return;
+    await delay(250);
+  }
+  throw new Error(`Worker did not become ready without an HTTP request:\n${child.__output}`);
+}
+
 function stopProcess(child) {
   if (!child || child.exitCode != null) return;
   child.kill();
@@ -492,6 +521,14 @@ function stopProcess(child) {
 
 function runSecuritySql(sql) {
   runWrangler("security-worker", ["d1", "execute", "security-db", "--local", "--command", sql]);
+}
+
+function advanceGlobalEpoch() {
+  runSecuritySql(`UPDATE security_runtime_state
+    SET passkey_session_epoch = passkey_session_epoch + 1,
+        switch_observed_enabled = 0,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = 1`);
 }
 
 function cleanupSecurityFixture() {

@@ -18,6 +18,8 @@ const argon2 = await readFile(new URL("../../cloud-worker/public/vendor/argon2.u
 const diary = await readFile(new URL("../../diary-worker/src/index.js", import.meta.url), "utf8");
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
 const sessionValidator = await readFile(new URL("../../assets/passkey-session-validation.mjs", import.meta.url), "utf8");
+const globalSwitchTool = await readFile(new URL("../tools/global-passkey-switch.mjs", import.meta.url), "utf8");
+const securityConfig = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 
 test("WebAuthn requires a platform discoverable credential and user verification", () => {
   assert.match(worker, /authenticatorAttachment: "platform"/);
@@ -186,6 +188,10 @@ test("registration partial success remains usable outside T-Cloud and T-Cloud pr
   assert.match(securityUi, /T-Cloudの準備を再試行/);
   assert.match(securityUi, /resumePrimaryAdminSetup/);
   assert.match(securityUi, /TRoomPasskeys\.obtainPrf\(setup\.credentialId\)/, "第一管理者の再開は既存credentialをWebAuthn getで再認証します");
+  assert.match(securityUi, /await showAdmin\(setup\)/, "第一管理者のT-Cloud未準備は管理画面をブロックしません");
+  assert.match(securityUi, /この端末ではT-Cloudのパスキー復号に対応していません/);
+  assert.match(securityHtml, /id="tcloud-setup-notice"/);
+  assert.match(securityHtml, /Security Centerを利用する/);
   assert.match(securityUi, /setup\/primary-admin\/verify-password/);
   assert.match(securityUi, /inviteExpiryPayload\(\)/);
   assert.match(securityUi, /日時指定の有効期限を入力してください/);
@@ -199,6 +205,11 @@ test("kill-switch epochs, atomic local audits, and malformed cookies fail closed
   assert.match(worker, /sessionEpoch: runtime\.epoch/);
   assert.match(worker, /passkeySessionEpoch: runtime\.epoch/);
   assert.match(worker, /Number\(value\.passkeySessionEpoch\) === runtime\.epoch/);
+  assert.match(globalSwitchTool, /passkey_session_epoch = passkey_session_epoch \+ 1/);
+  assert.match(globalSwitchTool, /kind: "advance-epoch"[\s\S]*kind: "set-switch"/);
+  assert.match(globalSwitchTool, /secret", "bulk/);
+  assert.doesNotMatch(securityConfig, /"PASSKEY_ENABLED"\s*:/, "global switch state is preserved as a Secret binding across normal deploys");
+  assert.match(worker, /PASSKEY_ENABLED \|\| "false"/, "a missing global switch binding fails closed");
   assert.doesNotMatch(sessionValidator, /servicePasskeyEnabled/);
   assert.match(sessionValidator, /PASSKEY_ENABLED[\s\S]*return false/);
   assert.match(worker, /localAuditStatement/);

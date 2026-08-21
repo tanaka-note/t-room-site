@@ -31,6 +31,15 @@
       $("#bootstrap-view h2").textContent = "第一管理者パスキーの復旧登録";
     });
     $("#security-logout").addEventListener("click", logout);
+    $("#tcloud-setup-resume").addEventListener("click", () => {
+      $("#tcloud-setup-form").hidden = false;
+      $("#tcloud-setup-id").focus();
+    });
+    $("#tcloud-setup-continue").addEventListener("click", () => {
+      showPanel("dashboard-panel", document.querySelector('[data-panel="dashboard-panel"]'));
+      $("#dashboard-panel").scrollIntoView({ block: "start" });
+    });
+    $("#tcloud-setup-form").addEventListener("submit", resumePrimaryAdminSetup);
     $("#invite-form").addEventListener("submit", createInvite);
     $("#add-link").addEventListener("click", () => addLinkRow());
     $("#invite-expiry").addEventListener("change", () => { $("#custom-expiry-row").hidden = $("#invite-expiry").value !== "custom"; });
@@ -63,24 +72,16 @@
         }
         return;
       }
-      if (setup.active && !setup.tcloudReady) {
-        if (setup.isPrimaryAdmin) {
-          configurePrimarySetupResume(setup);
-          showMessage("第一管理者パスキーは登録済みです。同じパスキーと現在の管理者PWで、T-Cloudの鍵準備だけを再開してください。", false);
-          return;
-        }
-      }
       const status = await get("/status");
       if (!status.enabled) return showMessage("パスキー機能は現在停止中です。各サービスのID・パスワードをご利用ください。", true);
       if (!status.initialized) $("#bootstrap-view").hidden = false;
-      else if (status.adminAuthenticated) await showAdmin();
+      else if (status.adminAuthenticated) await showAdmin(setup);
       else $("#admin-login-view").hidden = false;
     } catch (error) { showMessage(error.message, true); }
   }
 
   async function bootstrap(event) {
     event.preventDefault();
-    if (state.pendingPrimarySetup) return resumePrimaryAdminSetup(event);
     const button = event.submitter;
     button.disabled = true;
     try {
@@ -101,8 +102,12 @@
         await preparePrimaryAdminCloud(credentials.accountKey, result.prfOutput);
         tcloudReady = true;
       } catch (preparationError) {
-        configurePrimarySetupResume({ credentialId: result.credentialId, prfEnabled: Boolean(result.prfEnabled) });
+        const setup = await TRoomPasskeys.setupStatus().catch(() => ({
+          active: true, isPrimaryAdmin: true, credentialId: result.credentialId,
+          prfEnabled: Boolean(result.prfEnabled), tcloudReady: false
+        }));
         showMessage(`Security Center・日記・請求書のパスキー登録は完了しました。T-Cloudは未準備のため現在の管理者PWをご利用ください。${preparationError.message || ""}`, false);
+        await showAdmin(setup);
       }
       if (tcloudReady) {
         showMessage("第一管理者の端末ロック解除を登録しました。現在の管理者PWは復旧手段として維持されています。");
@@ -112,21 +117,16 @@
     finally { button.disabled = false; }
   }
 
-  function configurePrimarySetupResume(setup) {
-    state.pendingPrimarySetup = setup;
-    $("#bootstrap-view").hidden = false;
-    $("#bootstrap-view h2").textContent = "第一管理者のT-Cloud準備を再開";
-    $("#bootstrap-form button[type=submit]").textContent = "同じパスキーでT-Cloudの準備を再開";
-  }
-
   async function resumePrimaryAdminSetup(event) {
+    event.preventDefault();
     const button = event.submitter;
     button.disabled = true;
     try {
       const setup = await TRoomPasskeys.setupStatus();
       if (!setup.active || !setup.isPrimaryAdmin || setup.tcloudReady) throw new Error("T-Cloudの準備状態が変わりました。画面を再読み込みしてください。");
-      const loginId = $("#bootstrap-id").value.trim().toLowerCase();
-      const password = $("#bootstrap-password").value;
+      if (!setup.prfEnabled) throw new Error("この端末ではT-Cloudのパスキー復号に対応していません。T-Cloudは現在のID・PWをご利用ください。");
+      const loginId = $("#tcloud-setup-id").value.trim().toLowerCase();
+      const password = $("#tcloud-setup-password").value;
       const mode = await cloudApi("/auth-mode");
       const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId, mode.credentialSalt);
       await post("/setup/primary-admin/verify-password", { loginId, authProof: credentials.authProof });
@@ -135,11 +135,11 @@
       state.adminPrf = prf.prfOutput;
       state.adminCredentialId = setup.credentialId;
       await preparePrimaryAdminCloud(credentials.accountKey, prf.prfOutput);
-      $("#bootstrap-password").value = "";
-      $("#bootstrap-view").hidden = true;
+      $("#tcloud-setup-password").value = "";
+      $("#tcloud-setup-form").hidden = true;
       state.pendingPrimarySetup = null;
       showMessage("同じパスキーでT-Cloudの鍵準備を完了しました。現在の管理者PWは復旧手段として維持されています。");
-      await showAdmin();
+      renderPrimarySetupNotice(await TRoomPasskeys.setupStatus());
     } catch (error) {
       showMessage(error.message, true);
     } finally {
@@ -231,9 +231,27 @@
     }
   }
 
-  async function showAdmin() {
+  async function showAdmin(setup = null) {
+    $("#bootstrap-view").hidden = true;
+    $("#admin-login-view").hidden = true;
     $("#admin-view").hidden = false;
+    const setupResult = setup || await TRoomPasskeys.setupStatus().catch(() => ({ active: false }));
+    renderPrimarySetupNotice(setupResult);
     await Promise.all([loadDashboard(), loadIdentities(), loadAudit()]);
+  }
+
+  function renderPrimarySetupNotice(setup) {
+    const notice = $("#tcloud-setup-notice");
+    const pending = Boolean(setup?.active && setup.isPrimaryAdmin && !setup.tcloudReady);
+    state.pendingPrimarySetup = pending ? setup : null;
+    notice.hidden = !pending;
+    $("#tcloud-setup-form").hidden = true;
+    if (!pending) return;
+    const unsupported = !setup.prfEnabled;
+    $("#tcloud-setup-status").textContent = unsupported
+      ? "この端末ではT-Cloudのパスキー復号に対応していません。T-CloudはID・PWをご利用ください。Security Center・日記・請求書のパスキーはそのまま利用できます。"
+      : "T-Cloudのパスキー利用準備が完了していません。T-Cloudでは現在のID・PWをご利用ください。Security Centerの管理機能は通常どおり利用できます。";
+    $("#tcloud-setup-resume").hidden = unsupported;
   }
 
   async function loadDashboard() {

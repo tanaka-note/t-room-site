@@ -42,7 +42,6 @@
     "crons": ["41 18 * * *"]
   },
   "vars": {
-    "PASSKEY_ENABLED": "true",
     "RP_ID": "tanaka-note.com",
     "RP_NAME": "T-ROOM",
     "EXPECTED_ORIGIN": "https://tanaka-note.com",

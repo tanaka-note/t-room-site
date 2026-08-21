@@ -1279,7 +1279,7 @@ function publicLink(row) {
   return { id: row.id, service: row.service, accountId: row.service_account_id, rootFolderId: row.cloud_root_folder_id == null ? null : Number(row.cloud_root_folder_id), displayLabel: row.display_label };
 }
 
-function passkeysEnabled(env) { return String(env.PASSKEY_ENABLED || "true") === "true"; }
+function passkeysEnabled(env) { return String(env.PASSKEY_ENABLED || "false") === "true"; }
 async function observePasskeyRuntime(env, requestedEnabled) {
   await env.DB.prepare(`INSERT INTO security_runtime_state (id, passkey_session_epoch, switch_observed_enabled)
     VALUES (1, 1, 1) ON CONFLICT(id) DO NOTHING`).run();

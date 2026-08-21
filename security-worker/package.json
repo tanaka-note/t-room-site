@@ -4,9 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local --port 8790 -c wrangler.jsonc -c ../cloud-worker/wrangler.jsonc -c ../diary-worker/wrangler.jsonc -c ../billing-worker/wrangler.jsonc",
-    "check": "node --check src/index.js && node --check src/security-domain.js && node --check src/security-headers.js && node --check ../assets/passkey-session-validation.mjs && node --check public/passkey-client.js && node --check public/security.js",
+    "check": "node --check src/index.js && node --check src/security-domain.js && node --check src/security-headers.js && node --check ../assets/passkey-session-validation.mjs && node --check public/passkey-client.js && node --check public/security.js && node --check tools/global-passkey-switch.mjs",
     "test": "node --test test/*.test.js && node test/service-passkey-revocation.e2e.mjs && node test/security-csp.browser.mjs",
     "test:csp-browser": "node test/security-csp.browser.mjs",
+    "passkeys:disable": "node tools/global-passkey-switch.mjs disable",
+    "passkeys:enable": "node tools/global-passkey-switch.mjs enable",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
