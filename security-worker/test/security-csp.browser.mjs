@@ -14,6 +14,7 @@ const securityPublic = resolve(workspace, "security-worker/public");
 const cloudPublic = resolve(workspace, "cloud-worker/public");
 const dummyPassword = "security-csp-test-password";
 const receivedBootstrapBodies = [];
+const receivedResumeBodies = [];
 let setupStatusBody = { active: false };
 
 const staticFiles = new Map([
@@ -45,6 +46,11 @@ const server = createServer(async (request, response) => {
         excludeCredentials: []
       }
     });
+  }
+  if (url.pathname === "/security/api/setup/primary-admin/verify-password") {
+    const body = JSON.parse(await readBody(request));
+    receivedResumeBodies.push(body);
+    return sendJson(response, 200, { verified: true });
   }
   if (url.pathname === "/security/api/prf/options") {
     return sendJson(response, 200, {
@@ -176,6 +182,20 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await resumed.locator("#invite-view").isVisible(), true, `${name}: setup session resumes after reload`);
     await resumeButton.click();
     await resumed.waitForFunction(() => window.__troomWebAuthnGetCalled === true, null, { timeout: 30000 });
+    setupStatusBody = {
+      active: true, identityId: "primary-admin", credentialId: "resume-credential",
+      isPrimaryAdmin: true, prfEnabled: true, tcloudReady: false,
+      cloudLinks: [{ id: "primary-cloud", accountId: "admin", rootFolderId: null }]
+    };
+    const primaryResume = await context.newPage();
+    await primaryResume.goto(`${origin}/security/`, { waitUntil: "load" });
+    await primaryResume.getByLabel("管理者ID").fill("admin");
+    await primaryResume.getByLabel("現在の管理者PW").fill(dummyPassword);
+    const primaryResumeButton = primaryResume.getByRole("button", { name: "同じパスキーでT-Cloudの準備を再開" });
+    await primaryResumeButton.click();
+    await primaryResume.waitForFunction(() => window.__troomWebAuthnGetCalled === true, null, { timeout: 30000 });
+    assert.notEqual(await primaryResume.evaluate(() => window.__troomWebAuthnCreateCalled), true,
+      `${name}: primary-admin setup resume must not create a second credential`);
     setupStatusBody = { active: false };
     return `${name}: pass`;
   } finally {
@@ -188,6 +208,7 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 try {
   const results = [];
   receivedBootstrapBodies.length = 0;
+  receivedResumeBodies.length = 0;
   results.push(await verifyBrowser(chromium, "chromium", origin));
   results.push(await verifyBrowser(firefox, "firefox", origin));
   assert.equal(receivedBootstrapBodies.length, results.filter((result) => result.endsWith(": pass")).length);
@@ -196,6 +217,13 @@ try {
     assert.match(body.authProof, /^[A-Za-z0-9_-]{40,}$/);
     assert.ok(!Object.hasOwn(body, "password"), "生PWをSecurity Workerへ送信しません");
     assert.ok(!JSON.stringify(body).includes(dummyPassword), "生PWをリクエスト本文へ含めません");
+  }
+  assert.equal(receivedResumeBodies.length, results.filter((result) => result.endsWith(": pass")).length);
+  for (const body of receivedResumeBodies) {
+    assert.equal(body.loginId, "admin");
+    assert.match(body.authProof, /^[A-Za-z0-9_-]{40,}$/);
+    assert.ok(!Object.hasOwn(body, "password"), "resume sends authProof, never the raw password");
+    assert.ok(!JSON.stringify(body).includes(dummyPassword), "resume request never contains the raw password");
   }
   console.log(results.join("\n"));
 } finally {

@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   LOGIN_FAILURE_EVENTS,
   LOGIN_SUCCESS_EVENTS,
+  MAX_CREDENTIAL_ID_BYTES,
+  auditRetentionCutoff,
   bootstrapAttemptCutoff,
   canonicalServiceLinks,
   currentJstDayBounds,
@@ -108,13 +110,21 @@ test("SQLite UTC timestamps are normalized before browser display", () => {
 });
 
 test("credential IDs accept long base64url values but reject malformed and oversized paths", () => {
-  assert.equal(validCredentialId("a".repeat(1500)), "a".repeat(1500));
+  const maximum = Buffer.alloc(MAX_CREDENTIAL_ID_BYTES, 7).toString("base64url");
+  assert.equal(validCredentialId(maximum), maximum);
+  assert.equal(validCredentialId(Buffer.alloc(MAX_CREDENTIAL_ID_BYTES + 1, 7).toString("base64url")), "");
+  assert.equal(validCredentialId(""), "");
   assert.equal(validCredentialId("***"), "");
-  assert.equal(validCredentialId("a".repeat(4097)), "");
   assert.equal(validCredentialId("a"), "", "invalid base64url length is rejected");
+  assert.equal(validCredentialId("AB"), "", "non-canonical trailing bits are rejected");
 });
 
 test("bootstrap lockout cutoff is a UTC ISO instant across UTC and JST boundaries", () => {
   assert.equal(bootstrapAttemptCutoff(Date.parse("2026-08-21T00:05:00.000Z")), "2026-08-20T23:50:00.000Z");
   assert.equal(bootstrapAttemptCutoff(Date.parse("2026-08-21T15:05:00.000Z")), "2026-08-21T14:50:00.000Z");
+});
+
+test("audit retention cutoff uses the same UTC ISO representation across UTC and JST boundaries", () => {
+  assert.equal(auditRetentionCutoff(180, Date.parse("2026-08-21T00:05:00.000Z")), "2026-02-22T00:05:00.000Z");
+  assert.equal(auditRetentionCutoff(30, Date.parse("2026-08-21T15:05:00.000Z")), "2026-07-22T15:05:00.000Z");
 });

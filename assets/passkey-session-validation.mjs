@@ -1,5 +1,6 @@
 export async function validateServicePasskeySession(payload, env, service, cloudRootFolderId = null) {
   if (payload?.authMethod !== "passkey") return true;
+  if (String(env.PASSKEY_ENABLED || "true") !== "true") return false;
   if (!env.SECURITY) return false;
   if (!payload.identityId || !payload.credentialId || !payload.serviceLinkId || !payload.serviceAccountId || !payload.passkeySessionEpoch) return false;
   try {
@@ -10,8 +11,7 @@ export async function validateServicePasskeySession(payload, env, service, cloud
       serviceLinkId: payload.serviceLinkId,
       serviceAccountId: payload.serviceAccountId,
       cloudRootFolderId,
-      sessionEpoch: payload.passkeySessionEpoch,
-      servicePasskeyEnabled: String(env.PASSKEY_ENABLED || "true") === "true"
+      sessionEpoch: payload.passkeySessionEpoch
     });
     return result?.valid === true;
   } catch {

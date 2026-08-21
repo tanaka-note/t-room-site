@@ -4,7 +4,8 @@ export const AUDIT_SERVICES = Object.freeze(["security", ...LINKED_SERVICES]);
 export const INVITE_EXPIRY_PRESETS = Object.freeze([3600, 21600, 86400, 259200, 604800]);
 export const LOGIN_SUCCESS_EVENTS = Object.freeze(["password_login_success", "passkey_login_success"]);
 export const LOGIN_FAILURE_EVENTS = Object.freeze(["password_login_failure", "passkey_authentication_failure", "bootstrap_auth_failure"]);
-export const MAX_CREDENTIAL_ID_BYTES = 3072;
+// WebAuthn Level 3 limits credential IDs to 1023 bytes.
+export const MAX_CREDENTIAL_ID_BYTES = 1023;
 
 export function normalizeIdentityId(value) {
   const text = String(value ?? "").trim();
@@ -103,13 +104,25 @@ export function normalizeUtcTimestamp(value) {
 
 export function validCredentialId(value) {
   const text = String(value || "").trim();
-  if (!/^[A-Za-z0-9_-]{1,4096}$/.test(text) || text.length % 4 === 1) return "";
-  const decodedBytes = Math.floor(text.length * 3 / 4);
-  return decodedBytes > 0 && decodedBytes <= MAX_CREDENTIAL_ID_BYTES ? text : "";
+  if (!/^[A-Za-z0-9_-]+$/.test(text) || text.length % 4 === 1) return "";
+  try {
+    const padded = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "=");
+    const binary = atob(padded);
+    if (!binary.length || binary.length > MAX_CREDENTIAL_ID_BYTES) return "";
+    const canonical = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    return canonical === text ? text : "";
+  } catch {
+    return "";
+  }
 }
 
 export function bootstrapAttemptCutoff(now = Date.now()) {
   return new Date(now - 15 * 60 * 1000).toISOString();
+}
+
+export function auditRetentionCutoff(retentionDays, now = Date.now()) {
+  const days = Math.min(730, Math.max(30, Math.trunc(Number(retentionDays) || 180)));
+  return new Date(now - days * 86400000).toISOString();
 }
 
 function codePointCompare(left, right) {

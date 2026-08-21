@@ -7,7 +7,10 @@ const repository = fileURLToPath(new URL("../../", import.meta.url));
 const sessionSecret = "passkey-session-integration-secret";
 const securitySessionSecret = "security-integration-secret";
 const identityId = "passkey_session_test";
-const credentialId = "passkey-session-credential";
+const credentialId = Buffer.from("passkey-session-credential").toString("base64url");
+const readinessIdentityId = "cloud_readiness_test";
+const readinessCredentialA = Buffer.from("cloud-readiness-credential-a").toString("base64url");
+const readinessCredentialB = Buffer.from("cloud-readiness-credential-b").toString("base64url");
 const services = {
   cloud: {
     directory: "cloud-worker", port: 8811, cookie: "troom_cloud_session", linkId: "passkey-session-cloud-link",
@@ -50,16 +53,48 @@ try {
     INSERT INTO security_credentials
       (credential_id, identity_id, public_key, prf_salt, status, approved_at)
       VALUES ('audit-credential', 'audit_admin', 'test-public-key', 'test-prf-salt', 'active', CURRENT_TIMESTAMP);
+    INSERT INTO security_identities (id, display_name, status)
+      VALUES ('${readinessIdentityId}', 'Cloud Readiness Test', 'active');
+    INSERT INTO security_credentials
+      (credential_id, identity_id, public_key, prf_salt, status, approved_at)
+      VALUES ('${readinessCredentialA}', '${readinessIdentityId}', 'public-a', 'c2FsdC1h', 'active', CURRENT_TIMESTAMP),
+             ('${readinessCredentialB}', '${readinessIdentityId}', 'public-b', 'c2FsdC1i', 'active', CURRENT_TIMESTAMP);
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
+      VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', 42, 'Cloud Readiness', 'active');
+    INSERT INTO security_tcloud_client_vaults
+      (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
+      VALUES ('${readinessCredentialA}', '${readinessIdentityId}', '{"kty":"RSA"}', 'fingerprint-a', 'private-a', 'iv-a'),
+             ('${readinessCredentialB}', '${readinessIdentityId}', '{"kty":"RSA"}', 'fingerprint-b', 'private-b', 'iv-b');
+    INSERT INTO security_tcloud_key_envelopes
+      (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
+      VALUES ('readiness-envelope-a', '${readinessIdentityId}', '${readinessCredentialA}', 'readiness-cloud-link', 'folder_key_rsa', 'wrapped-a');
   `);
 
   const diaryVersion = queryNumber("diary-worker", "diary-db", "SELECT session_version AS value FROM diary_accounts WHERE id = 'main-user'");
   const billingVersion = queryNumber("billing-worker", "billing-db", "SELECT session_version AS value FROM billing_accounts WHERE id = 'owner'");
 
-  processes.push(startWorker("security-worker", 8810, [
-    "SESSION_SECRET:security-integration-secret", "AUDIT_IP_SALT:security-integration-salt",
-    "PASSKEY_ENABLED:true", "ALLOW_LOCAL_HTTP:true", "EXPECTED_ORIGIN:http://127.0.0.1:8810"
-  ]));
+  startSecurityWorker(true);
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
+  const oldAdminCookie = signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential", passkeySessionEpoch: 1 });
+  const oldIdentityCookie = signSecurityCookie({ kind: "identity", identityId, credentialId, passkeySessionEpoch: 1 });
+  assert.equal(await securityAdminAuthenticated(oldAdminCookie), true, "current-epoch Security admin cookie is accepted");
+  assert.equal(await securityIdentityHandoff(oldIdentityCookie), 200, "current-epoch Security identity cookie is accepted");
+  assert.deepEqual(await cloudAuthenticationCredentialIds(), [readinessCredentialA], "only the credential with a folder envelope is a Cloud login candidate");
+  const readinessCookieA = signSecurityCookie({ kind: "identity", identityId: readinessIdentityId, credentialId: readinessCredentialA, passkeySessionEpoch: 1 });
+  const readinessCookieB = signSecurityCookie({ kind: "identity", identityId: readinessIdentityId, credentialId: readinessCredentialB, passkeySessionEpoch: 1 });
+  assert.equal(await securityCloudHandoff(readinessCookieA), 200, "credential A can create a handoff for its delegated folder");
+  assert.equal(await securityCloudHandoff(readinessCookieB), 403, "credential B cannot select an active link without its own envelope");
+  let readinessDetail = await securityIdentityDetail(readinessIdentityId, oldAdminCookie);
+  assert.equal(readinessDetail.approvalCandidates.find((item) => item.credentialId === readinessCredentialB)?.cloudPendingCount, 1,
+    "the second credential is shown as pending Cloud delegation");
+  const delegatedB = await approveCredentialCloudLink(readinessIdentityId, readinessCredentialB, oldAdminCookie);
+  assert.equal(delegatedB.tcloudPasskeyReady, true, "admin delegation activates credential B readiness without replacing the credential");
+  assert.deepEqual((await cloudAuthenticationCredentialIds()).sort(), [readinessCredentialA, readinessCredentialB].sort(),
+    "the second credential becomes a Cloud candidate only after delegation");
+  assert.equal(await securityCloudHandoff(readinessCookieB), 200, "credential B can create a handoff after its own delegation");
+  readinessDetail = await securityIdentityDetail(readinessIdentityId, oldAdminCookie);
+  assert.equal(readinessDetail.approvalCandidates.some((item) => item.credentialId === readinessCredentialB), false);
   for (const malformed of ["%", "***", "a", "a.b.c", "e30.invalid-signature"]) {
     const response = await fetch("http://127.0.0.1:8810/security/api/status", { headers: { Cookie: `troom_security_admin=${malformed}` } });
     assert.equal(response.status, 200, `malformed Security cookie ${malformed} must not cause 500`);
@@ -74,14 +109,14 @@ try {
     headers: {
       Origin: "http://127.0.0.1:8810",
       "Content-Type": "application/json",
-      Cookie: `troom_security_admin=${signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential" })}`
+      Cookie: `troom_security_admin=${oldAdminCookie}`
     }
   });
   assert.equal(failedAtomicRevoke.status, 500, "injected audit failure must fail the operation");
   assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_credentials WHERE credential_id = 'audit-credential'"), "active",
     "D1 batch must roll back credential revoke when its audit INSERT fails");
   runSecuritySql("DROP TRIGGER fail_credential_revoke_audit");
-  const longCredentialId = "A".repeat(4096);
+  const longCredentialId = Buffer.alloc(1023, 23).toString("base64url");
   runSecuritySql(`INSERT INTO security_credentials
     (credential_id, identity_id, public_key, prf_salt, status, approved_at)
     VALUES ('${longCredentialId}', 'audit_admin', 'long-public-key', 'long-prf-salt', 'active', CURRENT_TIMESTAMP)`);
@@ -90,10 +125,16 @@ try {
     headers: {
       Origin: "http://127.0.0.1:8810",
       "Content-Type": "application/json",
-      Cookie: `troom_security_admin=${signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential" })}`
+      Cookie: `troom_security_admin=${oldAdminCookie}`
     }
   });
-  assert.equal(longCredentialRevoke.status, 200, "a valid 3072-byte WebAuthn credential ID can be revoked");
+  assert.equal(longCredentialRevoke.status, 200, "a valid 1023-byte WebAuthn credential ID can be revoked");
+  const oversizedCredentialId = Buffer.alloc(1024, 23).toString("base64url");
+  const oversizedCredentialRevoke = await fetch(`http://127.0.0.1:8810/security/api/credentials/${oversizedCredentialId}/revoke`, {
+    method: "POST",
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_admin=${oldAdminCookie}` }
+  });
+  assert.equal(oversizedCredentialRevoke.status, 400, "a credential ID above the WebAuthn 1023-byte limit is rejected");
   const setupToken = "setup-session-token-for-retry-test-1234567890";
   const setupTokenHash = createHash("sha256").update(setupToken).digest("base64url");
   runSecuritySql(`INSERT INTO security_setup_sessions
@@ -104,24 +145,39 @@ try {
     publicKeyJwk: { kty: "RSA", alg: "RSA-OAEP-256", key_ops: ["encrypt"], ext: true, n: "AQIDBA", e: "AQAB" },
     encryptedPayload: "encrypted-private-key", payloadIv: "encrypted-private-key-iv"
   };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
-      method: "POST",
-      headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${setupToken}` },
-      body: JSON.stringify(vaultBody)
-    });
-    assert.equal(response.status, 200, `idempotent client-vault attempt ${attempt + 1}: ${await response.text()}`);
-  }
+  const firstVaultSave = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
+    method: "POST",
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${setupToken}` },
+    body: JSON.stringify(vaultBody)
+  });
+  assert.equal(firstVaultSave.status, 200, `initial client-vault save: ${await firstVaultSave.text()}`);
+  const repeatedVaultSave = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
+    method: "POST",
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${setupToken}` },
+    body: JSON.stringify(vaultBody)
+  });
+  assert.equal(repeatedVaultSave.status, 401, "a completed setup session cannot register an envelope again");
   assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_tcloud_client_vaults WHERE credential_id = '${credentialId}'`), 1);
   const changedKey = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
     method: "POST",
     headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${setupToken}` },
     body: JSON.stringify({ ...vaultBody, publicKeyJwk: { ...vaultBody.publicKeyJwk, n: "BQYHCA" } })
   });
-  assert.equal(changedKey.status, 409, "normal retry must not rotate the credential RSA key");
+  assert.equal(changedKey.status, 401, "completed setup authority cannot rotate the credential RSA key");
   const resumedSetup = await fetch("http://127.0.0.1:8810/security/api/setup/status", { headers: { Cookie: `troom_security_setup=${setupToken}` } });
   assert.equal(resumedSetup.status, 200);
-  assert.equal((await resumedSetup.json()).tcloudReady, true, "setup cookie resumes after a page/browser restart");
+  const resumedSetupBody = await resumedSetup.json();
+  assert.equal(resumedSetupBody.active, false);
+  assert.equal(resumedSetupBody.completed, true);
+  assert.equal(resumedSetupBody.tcloudReady, true, "a lost success response is recoverable as a read-only completed state");
+  runSecuritySql("UPDATE security_setup_sessions SET status = 'active', expires_at = 1 WHERE id = 'setup-retry'");
+  assert.equal((await readSetupStatus(setupToken)).active, false, "expired setup session is rejected");
+  runSecuritySql(`UPDATE security_setup_sessions SET expires_at = ${Math.floor(Date.now() / 1000) + 3600} WHERE id = 'setup-retry'; UPDATE security_credentials SET status = 'revoked' WHERE credential_id = '${credentialId}'`);
+  assert.equal((await readSetupStatus(setupToken)).active, false, "revoked credential invalidates setup session");
+  runSecuritySql(`UPDATE security_credentials SET status = 'active' WHERE credential_id = '${credentialId}'; UPDATE security_identities SET status = 'disabled' WHERE id = '${identityId}'`);
+  assert.equal((await readSetupStatus(setupToken)).active, false, "disabled Identity invalidates setup session");
+  runSecuritySql(`UPDATE security_identities SET status = 'active' WHERE id = '${identityId}'; UPDATE security_setup_sessions SET status = 'completed' WHERE id = 'setup-retry'`);
+  assert.equal((await readSetupStatus(setupToken)).completed, true, "completed setup remains visible only as read-only completion state");
   await startServiceWorkers(true);
 
   const passkeyCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 1);
@@ -156,16 +212,46 @@ try {
   const replacementCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 1, replacementLinks);
   await assertAccess(replacementCookies, true, "newly authenticated cookies use fresh service-link IDs");
 
-  stopServiceWorkers();
-  await startServiceWorkers(false);
-  await assertAccess(passkeyCookies, false, "PASSKEY_ENABLED=false");
-  await assertAccess(passwordCookies, true, "password sessions while passkeys are disabled");
+  for (const disabledService of Object.keys(services)) {
+    stopServiceWorkers();
+    await delay(300);
+    await startServiceWorkers(Object.fromEntries(Object.keys(services).map((name) => [name, name !== disabledService])));
+    await assertSingleAccess(disabledService, replacementCookies[disabledService], false, `${disabledService} local kill switch`);
+    for (const activeService of Object.keys(services).filter((name) => name !== disabledService)) {
+      await assertSingleAccess(activeService, replacementCookies[activeService], true, `${disabledService} local kill switch must not affect ${activeService}`);
+    }
+    await assertAccess(passwordCookies, true, `password sessions while only ${disabledService} passkeys are disabled`);
+    assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 1,
+      "service-local kill switches must not change the global epoch");
+  }
 
   stopServiceWorkers();
+  await delay(300);
   await startServiceWorkers(true);
-  await assertAccess(replacementCookies, false, "old passkey cookies stay revoked after kill switch is re-enabled");
+  stopSecurityWorker();
+  await delay(300);
+  startSecurityWorker(false);
+  await waitForUrl("http://127.0.0.1:8810/security/api/status");
+  assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "Security global kill switch rejects its admin cookie");
+  await assertAccess(replacementCookies, false, "Security global kill switch rejects every service passkey session");
+  await assertAccess(passwordCookies, true, "password sessions remain valid during the Security global kill switch");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 2);
+  await assertAccess(replacementCookies, false, "repeated OFF access does not restore or repeatedly advance sessions");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 2);
+
+  stopSecurityWorker();
+  await delay(300);
+  startSecurityWorker(true);
+  await waitForUrl("http://127.0.0.1:8810/security/api/status");
+  assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "old Security admin cookie stays revoked after re-enable");
+  assert.equal(await securityIdentityHandoff(oldIdentityCookie), 401, "old Security identity cookie stays revoked after re-enable");
+  await assertAccess(replacementCookies, false, "old service passkey cookies stay revoked after global re-enable");
   const newEpochCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 2, replacementLinks);
   await assertAccess(newEpochCookies, true, "new passkey login after kill switch uses the new epoch");
+  const newAdminCookie = signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential", passkeySessionEpoch: 2 });
+  const newIdentityCookie = signSecurityCookie({ kind: "identity", identityId, credentialId, passkeySessionEpoch: 2 });
+  assert.equal(await securityAdminAuthenticated(newAdminCookie), true, "new Security admin cookie uses the new epoch");
+  assert.equal(await securityIdentityHandoff(newIdentityCookie), 200, "new Security identity cookie uses the new epoch");
   await assertAccess(passwordCookies, true, "password sessions remain valid across the kill-switch cycle");
 
   console.log("service passkey revocation HTTP integration: ok");
@@ -175,19 +261,35 @@ try {
 }
 
 async function startServiceWorkers(passkeysEnabled) {
-  const enabled = passkeysEnabled ? "true" : "false";
+  const enabledByService = typeof passkeysEnabled === "object"
+    ? passkeysEnabled
+    : Object.fromEntries(Object.keys(services).map((name) => [name, Boolean(passkeysEnabled)]));
   processes.push(startWorker("cloud-worker", services.cloud.port, [
     `SESSION_SECRET:${sessionSecret}`, "LOGIN_ID:integration@example.test", "ACCOUNT_KDF_ID:integration-account",
-    `PASSKEY_ENABLED:${enabled}`, "ALLOW_LOCAL_HTTP:true"
+    `PASSKEY_ENABLED:${String(enabledByService.cloud)}`, "ALLOW_LOCAL_HTTP:true"
   ]));
   processes.push(startWorker("diary-worker", services.diary.port, [
-    `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${enabled}`, "ALLOW_LOCAL_HTTP:true"
+    `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${String(enabledByService.diary)}`, "ALLOW_LOCAL_HTTP:true"
   ]));
   processes.push(startWorker("billing-worker", services.billing.port, [
-    `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${enabled}`, "ALLOW_LOCAL_HTTP:true"
+    `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${String(enabledByService.billing)}`, "ALLOW_LOCAL_HTTP:true"
   ]));
   await Promise.all(Object.entries(services).map(([name, service]) =>
     waitForUrl(`http://127.0.0.1:${service.port}${sessionPath(name)}`)));
+}
+
+function startSecurityWorker(passkeysEnabled) {
+  processes.push(startWorker("security-worker", 8810, [
+    `SESSION_SECRET:${securitySessionSecret}`, "AUDIT_IP_SALT:security-integration-salt",
+    `PASSKEY_ENABLED:${String(passkeysEnabled)}`, "ALLOW_LOCAL_HTTP:true", "EXPECTED_ORIGIN:http://127.0.0.1:8810"
+  ]));
+}
+
+function stopSecurityWorker() {
+  const index = processes.findIndex((child) => child.__directory === "security-worker");
+  if (index < 0) return;
+  stopProcess(processes[index]);
+  processes.splice(index, 1);
 }
 
 function stopServiceWorkers() {
@@ -215,6 +317,87 @@ async function waitForServiceBindings(cookies) {
 
 async function assertAccess(cookies, expected, label) {
   for (const name of Object.keys(services)) await assertSingleAccess(name, cookies[name], expected, label);
+}
+
+async function securityAdminAuthenticated(cookie) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/status", {
+    headers: { Cookie: `troom_security_admin=${cookie}` }
+  });
+  assert.equal(response.status, 200);
+  return Boolean((await response.json()).adminAuthenticated);
+}
+
+async function securityIdentityHandoff(cookie) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/auth/handoff", {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:8810",
+      "Content-Type": "application/json",
+      Cookie: `troom_security_identity=${cookie}`
+    },
+    body: JSON.stringify({ service: "diary" })
+  });
+  return response.status;
+}
+
+async function securityCloudHandoff(cookie) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/auth/handoff", {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:8810",
+      "Content-Type": "application/json",
+      Cookie: `troom_security_identity=${cookie}`
+    },
+    body: JSON.stringify({ service: "cloud", linkId: "readiness-cloud-link" })
+  });
+  return response.status;
+}
+
+async function cloudAuthenticationCredentialIds() {
+  const response = await fetch("http://127.0.0.1:8810/security/api/auth/options", {
+    method: "POST",
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json" },
+    body: JSON.stringify({ service: "cloud" })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body.options.allowCredentials.map((item) => item.id);
+}
+
+async function securityIdentityDetail(identity, cookie) {
+  const response = await fetch(`http://127.0.0.1:8810/security/api/identities/${identity}`, {
+    headers: { Cookie: `troom_security_admin=${cookie}` }
+  });
+  const body = await response.json();
+  if (response.status !== 200) await delay(300);
+  const workerOutput = processes.find((child) => child.__directory === "security-worker")?.__output || "";
+  assert.equal(response.status, 200, `${JSON.stringify(body)}\n${workerOutput.slice(-3000)}`);
+  return body;
+}
+
+async function approveCredentialCloudLink(identity, credential, cookie) {
+  const response = await fetch(`http://127.0.0.1:8810/security/api/identities/${identity}/approve`, {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:8810",
+      "Content-Type": "application/json",
+      Cookie: `troom_security_admin=${cookie}`
+    },
+    body: JSON.stringify({ credentialId: credential, cloudEnvelopes: [{ serviceLinkId: "readiness-cloud-link", wrappedKey: "wrapped-b" }] })
+  });
+  const body = await response.json();
+  if (response.status !== 200) await delay(300);
+  const workerOutput = processes.find((child) => child.__directory === "security-worker")?.__output || "";
+  assert.equal(response.status, 200, `${JSON.stringify(body)}\n${workerOutput.slice(-3000)}`);
+  return body;
+}
+
+async function readSetupStatus(token) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/setup/status", {
+    headers: { Cookie: `troom_security_setup=${token}` }
+  });
+  assert.equal(response.status, 200);
+  return response.json();
 }
 
 async function assertRollingPasskeySessions(cookies) {
@@ -325,6 +508,14 @@ function cleanupSecurityFixture() {
     DELETE FROM security_identities WHERE id = '${identityId}';
     DELETE FROM security_credentials WHERE identity_id = 'audit_admin';
     DELETE FROM security_identities WHERE id = 'audit_admin';
+    DELETE FROM security_tcloud_key_envelopes WHERE identity_id = '${readinessIdentityId}';
+    DELETE FROM security_tcloud_client_vaults WHERE identity_id = '${readinessIdentityId}';
+    DELETE FROM security_handoffs WHERE identity_id = '${readinessIdentityId}';
+    DELETE FROM security_challenges WHERE identity_id = '${readinessIdentityId}';
+    DELETE FROM security_invitations WHERE identity_id = '${readinessIdentityId}';
+    DELETE FROM security_service_links WHERE identity_id = '${readinessIdentityId}';
+    DELETE FROM security_credentials WHERE identity_id = '${readinessIdentityId}';
+    DELETE FROM security_identities WHERE id = '${readinessIdentityId}';
   `);
 }
 

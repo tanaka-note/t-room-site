@@ -9,6 +9,7 @@ import { secure } from "./security-headers.js";
 import {
   LOGIN_FAILURE_EVENTS,
   LOGIN_SUCCESS_EVENTS,
+  auditRetentionCutoff,
   bootstrapAttemptCutoff,
   canonicalServiceLinks,
   currentJstDayBounds,
@@ -64,12 +65,13 @@ export default class SecurityWorker extends WorkerEntrypoint {
 
   async scheduled() {
     const retentionDays = clampNumber(this.env.AUDIT_RETENTION_DAYS, 30, 730, 180);
+    const retentionCutoff = auditRetentionCutoff(retentionDays);
     await this.env.DB.batch([
       this.env.DB.prepare("DELETE FROM security_challenges WHERE expires_at < ?").bind(nowSeconds() - 86400),
       this.env.DB.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").bind(nowSeconds() - 86400),
       this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
       this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
-      this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < datetime('now', ?)").bind(`-${retentionDays} days`)
+      this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < ?").bind(retentionCutoff)
     ]);
   }
 
@@ -106,6 +108,10 @@ async function handleApi(request, env, url, path) {
 
   if (path === "/api/setup/status" && request.method === "GET") return setupStatus(request, env);
   if (path === "/api/tcloud/admin-config" && request.method === "GET") return primaryAdminCryptoConfig(request, env);
+  if (path === "/api/setup/primary-admin/verify-password" && request.method === "POST") {
+    requireMutation(request, url);
+    return verifyPrimaryAdminSetupPassword(request, env);
+  }
 
   if (path === "/api/bootstrap/options" && request.method === "POST") {
     requireMutation(request, url);
@@ -147,7 +153,7 @@ async function handleApi(request, env, url, path) {
   }
   if (path === "/api/prf/verify" && request.method === "POST") {
     requireMutation(request, url);
-    return prfVerify(request, env);
+    return prfVerify(request, env, url);
   }
   if (path === "/api/tcloud/envelope" && request.method === "POST") {
     requireMutation(request, url);
@@ -222,13 +228,15 @@ async function bootstrapVerify(request, env, url) {
   const verification = await verifyRegistration(body.response, challenge.challenge, env);
   if (!verification.verified || !verification.registrationInfo?.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
   const credential = verification.registrationInfo.credential;
+  const credentialId = validCredentialId(credential.id);
+  if (!credentialId) throw new HttpError(400, "パスキーIDがWebAuthnの許容範囲を超えています。");
   const prfSalt = randomToken(32);
-  const setup = await prepareSetupSession(env, PRIMARY_ADMIN_ID, credential.id);
+  const setup = await prepareSetupSession(env, PRIMARY_ADMIN_ID, credentialId);
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO security_credentials
       (credential_id, identity_id, public_key, counter, transports_json, device_type, backed_up, prf_enabled, prf_salt, status, approved_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP)`)
-      .bind(credential.id, PRIMARY_ADMIN_ID, bytesToBase64Url(credential.publicKey), Number(credential.counter || 0),
+      .bind(credentialId, PRIMARY_ADMIN_ID, bytesToBase64Url(credential.publicKey), Number(credential.counter || 0),
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
     env.DB.prepare("UPDATE security_identities SET status = 'active', is_security_admin = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(PRIMARY_ADMIN_ID),
@@ -236,9 +244,9 @@ async function bootstrapVerify(request, env, url) {
     insertSetupSessionStatement(env, setup),
     await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request)
   ]);
-  const headers = await securitySessionHeaders(env, url, PRIMARY_ADMIN_ID, credential.id, true);
+  const headers = await securitySessionHeaders(env, url, PRIMARY_ADMIN_ID, credentialId, true);
   headers.append("Set-Cookie", setupCookie(setup.token, url.protocol === "https:"));
-  return json({ ok: true, identityId: PRIMARY_ADMIN_ID, credentialId: credential.id, prfSalt, prfEnabled: Boolean(body.prfEnabled), needsTCloudEnvelope: true }, 201, headers);
+  return json({ ok: true, identityId: PRIMARY_ADMIN_ID, credentialId, prfSalt, prfEnabled: Boolean(body.prfEnabled), needsTCloudEnvelope: true }, 201, headers);
 }
 
 async function invitationOptions(request, env) {
@@ -264,14 +272,16 @@ async function invitationVerify(request, env, url) {
   const verification = await verifyRegistration(body.response, challenge.challenge, env);
   if (!verification.verified || !verification.registrationInfo?.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
   const credential = verification.registrationInfo.credential;
+  const credentialId = validCredentialId(credential.id);
+  if (!credentialId) throw new HttpError(400, "パスキーIDがWebAuthnの許容範囲を超えています。");
   const prfSalt = randomToken(32);
-  const setup = await prepareSetupSession(env, invitation.identity_id, credential.id);
+  const setup = await prepareSetupSession(env, invitation.identity_id, credentialId);
   try {
     await env.DB.batch([
     env.DB.prepare(`INSERT INTO security_credentials
       (credential_id, identity_id, public_key, counter, transports_json, device_type, backed_up, prf_enabled, prf_salt, status, registered_via_invitation_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
-      .bind(credential.id, invitation.identity_id, bytesToBase64Url(credential.publicKey), Number(credential.counter || 0),
+      .bind(credentialId, invitation.identity_id, bytesToBase64Url(credential.publicKey), Number(credential.counter || 0),
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt, invitation.id),
     env.DB.prepare("UPDATE security_invitations SET status = 'used', used_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'").bind(invitation.id),
@@ -285,9 +295,9 @@ async function invitationVerify(request, env, url) {
     if (state?.status === "used") throw new HttpError(410, "この招待は既に使用されています。");
     throw error;
   }
-  const headers = await securitySessionHeaders(env, url, invitation.identity_id, credential.id, false);
+  const headers = await securitySessionHeaders(env, url, invitation.identity_id, credentialId, false);
   headers.append("Set-Cookie", setupCookie(setup.token, url.protocol === "https:"));
-  return json({ ok: true, pendingApproval: true, identityId: invitation.identity_id, credentialId: credential.id, prfSalt, prfEnabled: Boolean(body.prfEnabled) }, 201, headers);
+  return json({ ok: true, pendingApproval: true, identityId: invitation.identity_id, credentialId, prfSalt, prfEnabled: Boolean(body.prfEnabled) }, 201, headers);
 }
 
 async function authenticationOptions(request, env) {
@@ -297,14 +307,34 @@ async function authenticationOptions(request, env) {
   await enforceAuthenticationOptionsRateLimit(request, env);
   const servicePredicate = service === "security"
     ? "i.is_security_admin = 1"
-    : "EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = i.id AND l.service = ? AND l.status = 'active')";
+    : service === "cloud"
+      ? `EXISTS (
+          SELECT 1 FROM security_service_links l
+          WHERE l.identity_id = i.id AND l.service = 'cloud' AND l.status = 'active'
+            AND (
+              (l.service_account_id = 'admin' AND EXISTS (
+                SELECT 1 FROM security_tcloud_key_envelopes e
+                WHERE e.identity_id = i.id AND e.credential_id = c.credential_id
+                  AND e.service_link_id = l.id AND e.envelope_type = 'admin_private_prf'
+              ))
+              OR
+              (l.service_account_id = 'folder-member'
+                AND EXISTS (SELECT 1 FROM security_tcloud_client_vaults v WHERE v.identity_id = i.id AND v.credential_id = c.credential_id)
+                AND EXISTS (
+                  SELECT 1 FROM security_tcloud_key_envelopes e
+                  WHERE e.identity_id = i.id AND e.credential_id = c.credential_id
+                    AND e.service_link_id = l.id AND e.envelope_type = 'folder_key_rsa'
+                ))
+            )
+        )`
+      : "EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = i.id AND l.service = ? AND l.status = 'active')";
   const statement = env.DB.prepare(`SELECT c.credential_id, c.transports_json, c.prf_salt
     FROM security_credentials c
     JOIN security_identities i ON i.id = c.identity_id
     WHERE c.status = 'active' AND i.status = 'active'
       AND ${servicePredicate}
     ORDER BY c.registered_at ASC`);
-  const rows = await (service === "security" ? statement.all() : statement.bind(service).all());
+  const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
   const evalByCredential = Object.fromEntries(rows.results.map((row) => [row.credential_id, { first: base64UrlToBytes(row.prf_salt) }]));
   const options = await generateAuthenticationOptions({
@@ -322,7 +352,7 @@ async function authenticationVerify(request, env, url) {
   const service = normalizeAuthService(body.service);
   const challenge = await consumeChallenge(env, body.challengeId, "authentication", null);
   if (!service || challenge.service !== service) throw new HttpError(401, "認証先サービスが一致しません。");
-  const credentialId = normalizeSecretText(body.response?.id, 2048);
+  const credentialId = validCredentialId(body.response?.id);
   const credential = await activeCredential(env, credentialId);
   if (!credential) {
     await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", authMethod: "passkey", service }, request);
@@ -343,7 +373,7 @@ async function authenticationVerify(request, env, url) {
     env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ?").bind(verification.authenticationInfo.newCounter, credentialId),
     env.DB.prepare("UPDATE security_identities SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?").bind(credential.identity_id)
   ]);
-  const links = service === "security" ? [] : await activeLinks(env, credential.identity_id, service);
+  const links = service === "security" ? [] : await activeLinks(env, credential.identity_id, service, credentialId);
   if (service === "security" && !credential.is_security_admin) throw new HttpError(403, "Security Centerを管理する権限がありません。");
   if (service !== "security" && !links.length) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
   await writeLocalAudit(env, { eventType: "passkey_login_success", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", service }, request);
@@ -357,7 +387,7 @@ async function createHandoff(request, env) {
   if (!runtime.enabled) throw new HttpError(503, "パスキー機能は一時停止中です。");
   const body = await readJson(request, 4096);
   const service = normalizeService(body.service);
-  const links = await activeLinks(env, identitySession.identityId, service);
+  const links = await activeLinks(env, identitySession.identityId, service, identitySession.credentialId);
   if (!links.length) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
   const selected = body.linkId ? links.find((link) => link.id === body.linkId) : (links.length === 1 ? links[0] : null);
   if (!selected) throw new HttpError(409, "利用するアカウントを選択してください。");
@@ -377,7 +407,7 @@ async function createHandoff(request, env) {
 }
 
 async function setupStatus(request, env) {
-  const setup = await readSetupSession(request, env);
+  const setup = await readSetupSession(request, env, ["active", "completed"]);
   if (!setup) return json({ active: false });
   const [credential, cloudLinks, vault] = await Promise.all([
     env.DB.prepare("SELECT credential_id, prf_enabled, status FROM security_credentials WHERE credential_id = ? AND identity_id = ?").bind(setup.credential_id, setup.identity_id).first(),
@@ -392,7 +422,8 @@ async function setupStatus(request, env) {
     ready = Boolean(envelope);
   }
   return json({
-    active: true,
+    active: setup.status === "active",
+    completed: setup.status === "completed",
     identityId: setup.identity_id,
     credentialId: setup.credential_id,
     isPrimaryAdmin: setup.identity_id === PRIMARY_ADMIN_ID,
@@ -408,6 +439,23 @@ async function primaryAdminCryptoConfig(request, env) {
   if (setup.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "第一管理者の復旧登録専用です。");
   const config = await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
   return json(config || { initialized: false, cryptoVersion: 1 });
+}
+
+async function verifyPrimaryAdminSetupPassword(request, env) {
+  const setup = await requireSetupSession(request, env);
+  if (setup.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "第一管理者の復旧登録専用です。");
+  const body = await readJson(request, 8192);
+  const loginId = normalizeText(body.loginId, 254).toLowerCase();
+  const authProof = normalizeSecretText(body.authProof, 512);
+  if (!loginId || !authProof) throw new HttpError(400, "現在のT-Cloud管理者ID・パスワードを確認してください。");
+  await enforceBootstrapAttemptLimit(request, env);
+  const verifiedAdmin = await env.CLOUD_AUTH.verifyPrimaryAdmin({ loginId, authProof });
+  if (!verifiedAdmin?.verified || verifiedAdmin.accountId !== "admin") {
+    await writeLocalAudit(env, { eventType: "bootstrap_auth_failure", outcome: "failure", identityId: PRIMARY_ADMIN_ID, authMethod: "password", serviceAccountId: "admin" }, request);
+    throw new HttpError(401, "現在のT-Cloud管理者ID・パスワードを確認してください。");
+  }
+  await writeLocalAudit(env, { eventType: "bootstrap_auth_success", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "password", serviceAccountId: "admin", details: { setupResume: true } }, request);
+  return json({ verified: true });
 }
 
 async function prfOptions(request, env) {
@@ -426,11 +474,11 @@ async function prfOptions(request, env) {
   return json({ challengeId, options, credentialId: credential.credential_id, prfSalt: credential.prf_salt });
 }
 
-async function prfVerify(request, env) {
+async function prfVerify(request, env, url) {
   const identitySession = await requireSetupOrIdentitySession(request, env);
   const body = await readJson(request, 100000);
   const challenge = await consumeChallenge(env, body.challengeId, "prf_assertion", identitySession.identityId);
-  const credentialId = normalizeSecretText(body.response?.id, 2048);
+  const credentialId = validCredentialId(body.response?.id);
   if (credentialId !== identitySession.credentialId) throw new HttpError(403, "パスキーが一致しません。");
   const credential = await credentialForIdentity(env, credentialId, identitySession.identityId);
   const verification = await verifyAuthentication(body.response, challenge.challenge, credential, env);
@@ -439,7 +487,9 @@ async function prfVerify(request, env) {
     .bind(verification.authenticationInfo.newCounter, body.prfAvailable ? 1 : 0, credentialId)];
   if (identitySession.setupId) statements.push(env.DB.prepare("UPDATE security_setup_sessions SET last_user_verification_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(nowSeconds(), identitySession.setupId));
   await env.DB.batch(statements);
-  return json({ verified: true });
+  const identity = await env.DB.prepare("SELECT is_security_admin FROM security_identities WHERE id = ?").bind(identitySession.identityId).first();
+  const headers = await securitySessionHeaders(env, url, identitySession.identityId, credentialId, Boolean(identity?.is_security_admin));
+  return json({ verified: true }, 200, headers);
 }
 
 async function saveOwnTCloudEnvelope(request, env) {
@@ -560,10 +610,16 @@ async function identityDetail(id, env) {
   }
   for (const link of linkRows) linkDetails.push({ ...withUtcTimes(link), ...(cloudFolders.get(link.id) || {}) });
   const credentialRows = credentials.results || [];
-  const currentCloudLinks = linkRows.filter((link) => link.service === "cloud" && ["pending", "active"].includes(link.status));
+  const currentCloudLinks = linkRows.filter((link) => link.service === "cloud" && link.service_account_id === "folder-member" && ["pending", "active"].includes(link.status));
   const approvalCandidates = [];
-  for (const credential of credentialRows.filter((item) => item.status === "pending" || (item.status === "active" && linkRows.some((link) => link.service === "cloud" && link.status === "pending")))) {
+  for (const credential of credentialRows.filter((item) => ["pending", "active"].includes(item.status))) {
     const vault = await env.DB.prepare("SELECT public_key_jwk, public_key_fingerprint FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(id, credential.credential_id).first();
+    const envelopeRows = await env.DB.prepare(`SELECT service_link_id FROM security_tcloud_key_envelopes
+      WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'folder_key_rsa'`)
+      .bind(id, credential.credential_id).all();
+    const readyLinkIds = new Set((envelopeRows.results || []).map((row) => row.service_link_id));
+    const missingCloudLinks = currentCloudLinks.filter((link) => !readyLinkIds.has(link.id));
+    if (credential.status !== "pending" && !missingCloudLinks.length) continue;
     approvalCandidates.push({
       credentialId: credential.credential_id,
       status: credential.status,
@@ -573,11 +629,13 @@ async function identityDetail(id, env) {
       prfEnabled: Boolean(credential.prf_enabled),
       hasCloudLinks: Boolean(currentCloudLinks.length),
       cloudClientReady: Boolean(vault),
-      cloudApproval: vault ? {
+      cloudReadyCount: currentCloudLinks.length - missingCloudLinks.length,
+      cloudPendingCount: missingCloudLinks.length,
+      cloudApproval: vault && missingCloudLinks.length ? {
         credentialId: credential.credential_id,
         publicKeyJwk: parseJson(vault.public_key_jwk, null),
         publicKeyFingerprint: vault.public_key_fingerprint || null,
-        folders: currentCloudLinks.map((link) => cloudFolders.get(link.id) || { serviceLinkId: link.id, folder: null, folderUnavailable: true })
+        folders: missingCloudLinks.map((link) => cloudFolders.get(link.id) || { serviceLinkId: link.id, folder: null, folderUnavailable: true })
       } : null
     });
   }
@@ -659,17 +717,21 @@ async function approveIdentity(identityId, request, env, admin) {
   const credential = await env.DB.prepare("SELECT credential_id, status FROM security_credentials WHERE identity_id = ? AND credential_id = ? AND status IN ('pending', 'active')")
     .bind(identityId, credentialId).first();
   if (!credential) throw new HttpError(409, "承認待ちのパスキーが見つかりません。");
-  const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(identityId).all();
-  if (credential.status === "active" && !(cloudLinks.results || []).some((link) => link.status === "pending")) {
-    throw new HttpError(409, "承認待ちのT-Cloud連携が見つかりません。");
-  }
+  const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND status IN ('pending', 'active')").bind(identityId).all();
+  const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' LIMIT 1").bind(identityId).first();
+  const existingFolderEnvelopes = await env.DB.prepare(`SELECT service_link_id FROM security_tcloud_key_envelopes
+    WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'folder_key_rsa'`)
+    .bind(identityId, credentialId).all();
+  const existingFolderLinkIds = new Set((existingFolderEnvelopes.results || []).map((row) => row.service_link_id));
+  const missingCloudLinks = (cloudLinks.results || []).filter((link) => !existingFolderLinkIds.has(link.id));
+  if (credential.status === "active" && !pendingLinks && !missingCloudLinks.length) throw new HttpError(409, "承認待ちの連携が見つかりません。");
   let cloudPasskeyReady = !(cloudLinks.results || []).length;
   let validatedCloudEnvelopes = [];
   if ((cloudLinks.results || []).length) {
     const clientEnvelope = await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(identityId, credential?.credential_id || "").first();
     if (clientEnvelope) {
       const delegated = Array.isArray(body.cloudEnvelopes) ? body.cloudEnvelopes : [];
-      for (const link of cloudLinks.results) {
+      for (const link of missingCloudLinks) {
         const envelope = delegated.find((item) => item.serviceLinkId === link.id);
         if (!envelope?.wrappedKey) throw new HttpError(400, "T-Cloudフォルダ鍵の安全な委譲が完了していません。");
         const wrappedKey = normalizeSecretText(envelope.wrappedKey, 12000);
@@ -693,7 +755,7 @@ async function approveIdentity(identityId, request, env, admin) {
   if (cloudPasskeyReady) updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud'").bind(identityId));
   updates.push(await localAuditStatement(env, { eventType: "identity_approved", outcome: "success", identityId, authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: cloudPasskeyReady } }, request));
   await env.DB.batch(updates);
-  return json({ ok: true, tcloudPasskeyReady });
+  return json({ ok: true, tcloudPasskeyReady: cloudPasskeyReady });
 }
 
 async function reinviteIdentity(identityId, request, env, admin) {
@@ -776,10 +838,10 @@ async function redeemHandoff(env, token, service) {
 }
 
 async function validatePasskeySession(env, input) {
-  const runtime = await observePasskeyRuntime(env, passkeysEnabled(env) && input?.servicePasskeyEnabled !== false);
+  const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
   const service = normalizeLinkedService(input?.service);
   const identityId = normalizeIdentityId(input?.identityId);
-  const credentialId = normalizeSecretText(input?.credentialId, 2048);
+  const credentialId = validCredentialId(input?.credentialId);
   const serviceLinkId = normalizeId(input?.serviceLinkId);
   const serviceAccountId = normalizeText(input?.serviceAccountId, 100);
   const sessionEpoch = Number(input?.sessionEpoch);
@@ -857,8 +919,27 @@ async function credentialForIdentity(env, credentialId, identityId) {
   return env.DB.prepare("SELECT * FROM security_credentials WHERE credential_id = ? AND identity_id = ? AND status != 'revoked'").bind(credentialId, identityId).first();
 }
 
-async function activeLinks(env, identityId, service) {
-  const result = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = ? AND status = 'active' ORDER BY created_at").bind(identityId, service).all();
+async function activeLinks(env, identityId, service, credentialId) {
+  const readiness = service === "cloud" ? ` AND (
+      (service_account_id = 'admin' AND EXISTS (
+        SELECT 1 FROM security_tcloud_key_envelopes e
+        WHERE e.identity_id = security_service_links.identity_id AND e.credential_id = ?
+          AND e.service_link_id = security_service_links.id AND e.envelope_type = 'admin_private_prf'
+      ))
+      OR
+      (service_account_id = 'folder-member'
+        AND EXISTS (SELECT 1 FROM security_tcloud_client_vaults v WHERE v.identity_id = security_service_links.identity_id AND v.credential_id = ?)
+        AND EXISTS (
+          SELECT 1 FROM security_tcloud_key_envelopes e
+          WHERE e.identity_id = security_service_links.identity_id AND e.credential_id = ?
+            AND e.service_link_id = security_service_links.id AND e.envelope_type = 'folder_key_rsa'
+        ))
+    )` : "";
+  const statement = env.DB.prepare(`SELECT * FROM security_service_links
+    WHERE identity_id = ? AND service = ? AND status = 'active'${readiness} ORDER BY created_at`);
+  const result = service === "cloud"
+    ? await statement.bind(identityId, service, credentialId, credentialId, credentialId).all()
+    : await statement.bind(identityId, service).all();
   return result.results || [];
 }
 
@@ -1022,16 +1103,19 @@ async function requireSetupSession(request, env) {
   return { ...setup, identityId: setup.identity_id, credentialId: setup.credential_id, setupId: setup.id };
 }
 
-async function readSetupSession(request, env) {
+async function readSetupSession(request, env, allowedStatuses = ["active"]) {
   try {
     const token = parseCookies(request.headers.get("Cookie") || "")[SETUP_COOKIE];
     if (!token || !/^[A-Za-z0-9_-]{32,256}$/.test(token)) return null;
+    const statuses = allowedStatuses.filter((status) => ["active", "completed"].includes(status));
+    if (!statuses.length) return null;
+    const placeholders = statuses.map(() => "?").join(", ");
     return env.DB.prepare(`SELECT s.* FROM security_setup_sessions s
       JOIN security_credentials c ON c.credential_id = s.credential_id AND c.identity_id = s.identity_id
       JOIN security_identities i ON i.id = s.identity_id
-      WHERE s.token_hash = ? AND s.status IN ('active', 'completed') AND s.expires_at > ?
+      WHERE s.token_hash = ? AND s.status IN (${placeholders}) AND s.expires_at > ?
         AND c.status != 'revoked' AND i.status != 'disabled'`)
-      .bind(await sha256(token), nowSeconds()).first();
+      .bind(await sha256(token), ...statuses, nowSeconds()).first();
   } catch {
     return null;
   }
@@ -1060,12 +1144,14 @@ async function requireActiveIdentitySession(request, env) {
 }
 
 async function securitySessionHeaders(env, url, identityId, credentialId, admin) {
+  const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+  if (!runtime.enabled) throw new HttpError(503, "パスキー機能は一時停止中です。");
   const headers = new Headers();
   const identityTtl = clampNumber(env.IDENTITY_SESSION_TTL_SECONDS, 60, 900, 600);
-  headers.append("Set-Cookie", await signedCookie(env, IDENTITY_COOKIE, { kind: "identity", identityId, credentialId }, identityTtl, url.protocol === "https:"));
+  headers.append("Set-Cookie", await signedCookie(env, IDENTITY_COOKIE, { kind: "identity", identityId, credentialId, passkeySessionEpoch: runtime.epoch }, identityTtl, url.protocol === "https:"));
   if (admin) {
     const adminTtl = clampNumber(env.ADMIN_SESSION_TTL_SECONDS, 300, 7200, 3600);
-    headers.append("Set-Cookie", await signedCookie(env, ADMIN_COOKIE, { kind: "admin", identityId, credentialId }, adminTtl, url.protocol === "https:"));
+    headers.append("Set-Cookie", await signedCookie(env, ADMIN_COOKIE, { kind: "admin", identityId, credentialId, passkeySessionEpoch: runtime.epoch }, adminTtl, url.protocol === "https:"));
   }
   return headers;
 }
@@ -1079,6 +1165,8 @@ async function signedCookie(env, name, payload, ttl, secureValue) {
 
 async function readSecuritySession(request, env, name, expectedKind) {
   try {
+    const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+    if (!runtime.enabled) return null;
     const token = parseCookies(request.headers.get("Cookie") || "")[name];
     if (!token || !env.SESSION_SECRET) return null;
     const parts = token.split(".");
@@ -1086,7 +1174,9 @@ async function readSecuritySession(request, env, name, expectedKind) {
     const [payload, signature] = parts;
     if (!payload || !signature || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
     const value = JSON.parse(decoder.decode(base64UrlToBytes(payload)));
-    return value.kind === expectedKind && value.exp > nowSeconds() ? value : null;
+    return value.kind === expectedKind && value.exp > nowSeconds()
+      && Number.isInteger(Number(value.passkeySessionEpoch))
+      && Number(value.passkeySessionEpoch) === runtime.epoch ? value : null;
   } catch { return null; }
 }
 

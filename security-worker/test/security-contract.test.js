@@ -17,6 +17,7 @@ const cloudCrypto = await readFile(new URL("../../cloud-worker/public/crypto-vau
 const argon2 = await readFile(new URL("../../cloud-worker/public/vendor/argon2.umd.min.js", import.meta.url), "utf8");
 const diary = await readFile(new URL("../../diary-worker/src/index.js", import.meta.url), "utf8");
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
+const sessionValidator = await readFile(new URL("../../assets/passkey-session-validation.mjs", import.meta.url), "utf8");
 
 test("WebAuthn requires a platform discoverable credential and user verification", () => {
   assert.match(worker, /authenticatorAttachment: "platform"/);
@@ -183,6 +184,9 @@ test("registration partial success remains usable outside T-Cloud and T-Cloud pr
   assert.match(worker, /security_tcloud_client_vaults/);
   assert.match(securityUi, /パスキー登録は完了しました。日記・請求書では承認後に利用できます/);
   assert.match(securityUi, /T-Cloudの準備を再試行/);
+  assert.match(securityUi, /resumePrimaryAdminSetup/);
+  assert.match(securityUi, /TRoomPasskeys\.obtainPrf\(setup\.credentialId\)/, "第一管理者の再開は既存credentialをWebAuthn getで再認証します");
+  assert.match(securityUi, /setup\/primary-admin\/verify-password/);
   assert.match(securityUi, /inviteExpiryPayload\(\)/);
   assert.match(securityUi, /日時指定の有効期限を入力してください/);
   assert.match(securityHtml, /端末のロック解除を登録/);
@@ -193,6 +197,10 @@ test("kill-switch epochs, atomic local audits, and malformed cookies fail closed
   assert.match(handoffEpochMigration, /ADD COLUMN session_epoch INTEGER/);
   assert.match(worker, /observePasskeyRuntime/);
   assert.match(worker, /sessionEpoch: runtime\.epoch/);
+  assert.match(worker, /passkeySessionEpoch: runtime\.epoch/);
+  assert.match(worker, /Number\(value\.passkeySessionEpoch\) === runtime\.epoch/);
+  assert.doesNotMatch(sessionValidator, /servicePasskeyEnabled/);
+  assert.match(sessionValidator, /PASSKEY_ENABLED[\s\S]*return false/);
   assert.match(worker, /localAuditStatement/);
   assert.match(worker, /const parts = token\.split\("\."\)/);
   assert.match(worker, /if \(parts\.length !== 2\) return null/);
@@ -209,6 +217,22 @@ test("multiple Cloud links share one credential vault and keep per-link folder e
   assert.match(migration, /UNIQUE \(credential_id, service_link_id, envelope_type\)/);
   assert.match(worker, /cloudLinks: \(cloudLinks\.results \|\| \[\]\)\.map/);
   assert.doesNotMatch(worker, /cloud_root_folder_id FROM security_service_links WHERE identity_id = \? AND service = 'cloud' AND status IN \('pending', 'active'\) LIMIT 1/);
+});
+
+test("Cloud authentication candidates are credential-ready, while completed setup sessions are read-only", () => {
+  assert.match(worker, /security_tcloud_client_vaults v[\s\S]*folder_key_rsa/);
+  assert.match(worker, /activeLinks\(env, credential\.identity_id, service, credentialId\)/);
+  assert.match(worker, /missingCloudLinks/);
+  assert.match(worker, /cloudPendingCount/);
+  assert.match(worker, /readSetupSession\(request, env, \["active", "completed"\]\)/);
+  assert.match(worker, /async function readSetupSession\(request, env, allowedStatuses = \["active"\]\)/);
+  assert.match(worker, /active: setup\.status === "active"/);
+});
+
+test("WebAuthn credential IDs and audit retention use standards-aligned boundaries", () => {
+  assert.match(worker, /DELETE FROM security_audit_events WHERE occurred_at < \?/);
+  assert.doesNotMatch(worker, /security_audit_events WHERE occurred_at < datetime/);
+  assert.match(worker, /auditRetentionCutoff/);
 });
 
 test("bootstrap obtains encrypted Cloud config through a private binding without creating a Cloud PW cookie", () => {

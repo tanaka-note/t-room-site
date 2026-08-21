@@ -20,7 +20,9 @@ test("password sessions remain independent from passkey revocation and kill swit
 
 test("passkey sessions require all revocation identifiers and an enabled kill switch", async () => {
   const binding = { validatePasskeySession: async () => ({ valid: true }) };
-  assert.equal(await validateServicePasskeySession(passkey, { PASSKEY_ENABLED: "false", SECURITY: { validatePasskeySession: async () => ({ valid: false }) } }, "diary"), false);
+  let called = false;
+  assert.equal(await validateServicePasskeySession(passkey, { PASSKEY_ENABLED: "false", SECURITY: { validatePasskeySession: async () => { called = true; return { valid: true }; } } }, "diary"), false);
+  assert.equal(called, false, "a service-local kill switch fails closed without mutating Security global runtime state");
   for (const field of ["identityId", "credentialId", "serviceLinkId", "serviceAccountId", "passkeySessionEpoch"]) {
     assert.equal(await validateServicePasskeySession({ ...passkey, [field]: null }, { PASSKEY_ENABLED: "true", SECURITY: binding }, "diary"), false, field);
   }
@@ -47,7 +49,19 @@ test("service validation forwards the exact credential, link, account and Cloud 
     serviceLinkId: "link-1",
     serviceAccountId: "folder-member",
     cloudRootFolderId: 42,
-    sessionEpoch: 4,
-    servicePasskeyEnabled: true
+    sessionEpoch: 4
   });
+});
+
+test("each service-local kill switch is isolated from other services", async () => {
+  const calls = [];
+  const binding = { validatePasskeySession: async (input) => { calls.push(input.service); return { valid: true }; } };
+  for (const disabled of ["cloud", "diary", "billing"]) {
+    for (const service of ["cloud", "diary", "billing"]) {
+      const enabled = service !== disabled;
+      const result = await validateServicePasskeySession(passkey, { PASSKEY_ENABLED: String(enabled), SECURITY: binding }, service, service === "cloud" ? 42 : null);
+      assert.equal(result, enabled, `${disabled}=off must only disable ${disabled}`);
+    }
+  }
+  assert.deepEqual(calls, ["diary", "billing", "cloud", "billing", "cloud", "diary"]);
 });
