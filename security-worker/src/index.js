@@ -104,7 +104,8 @@ async function handleApi(request, env, url, path) {
     return json({ ok: true }, 200, headers);
   }
 
-  if (!passkeysEnabled(env)) throw new HttpError(503, "パスキー機能は一時停止中です。従来のID・パスワードでログインしてください。");
+  const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+  if (!runtime.enabled) throw new HttpError(503, "パスキー機能は一時停止中です。従来のID・パスワードでログインしてください。");
 
   if (path === "/api/setup/status" && request.method === "GET") return setupStatus(request, env);
   if (path === "/api/tcloud/admin-config" && request.method === "GET") return primaryAdminCryptoConfig(request, env);
@@ -1287,11 +1288,12 @@ async function observePasskeyRuntime(env, requestedEnabled) {
     await env.DB.prepare(`UPDATE security_runtime_state
       SET passkey_session_epoch = passkey_session_epoch + 1, switch_observed_enabled = 0, updated_at = CURRENT_TIMESTAMP
       WHERE id = 1 AND switch_observed_enabled = 1`).run();
-  } else {
-    await env.DB.prepare("UPDATE security_runtime_state SET switch_observed_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND switch_observed_enabled = 0").run();
   }
   const state = await env.DB.prepare("SELECT passkey_session_epoch, switch_observed_enabled FROM security_runtime_state WHERE id = 1").first();
-  return { enabled: Boolean(requestedEnabled), epoch: Number(state?.passkey_session_epoch || 1) };
+  return {
+    enabled: Boolean(requestedEnabled) && Number(state?.switch_observed_enabled) === 1,
+    epoch: Number(state?.passkey_session_epoch || 1)
+  };
 }
 function rpId(env) { return env.RP_ID || "tanaka-note.com"; }
 function expectedOrigins(env) { return String(env.EXPECTED_ORIGIN || "https://tanaka-note.com").split(",").map((value) => value.trim()).filter(Boolean).concat(env.ALLOW_LOCAL_HTTP === "true" ? ["http://127.0.0.1:8790", "http://localhost:8790"] : []); }

@@ -206,7 +206,12 @@ test("kill-switch epochs, atomic local audits, and malformed cookies fail closed
   assert.match(worker, /passkeySessionEpoch: runtime\.epoch/);
   assert.match(worker, /Number\(value\.passkeySessionEpoch\) === runtime\.epoch/);
   assert.match(globalSwitchTool, /passkey_session_epoch = passkey_session_epoch \+ 1/);
-  assert.match(globalSwitchTool, /kind: "advance-epoch"[\s\S]*kind: "set-switch"/);
+  assert.match(globalSwitchTool, /d1Step\("disable-runtime"[\s\S]*switchStep\("false"\)/);
+  assert.match(globalSwitchTool, /switchStep\("false"\)[\s\S]*switchStep\("true"\)[\s\S]*d1Step\("enable-runtime"/);
+  assert.match(worker, /Boolean\(requestedEnabled\) && Number\(state\?\.switch_observed_enabled\) === 1/,
+    "the persistent runtime gate blocks issuance while the Secret deployment is in flight");
+  assert.doesNotMatch(worker, /observePasskeyRuntime[\s\S]{0,1000}SET switch_observed_enabled = 1/,
+    "a request cannot implicitly reopen a globally disabled runtime gate");
   assert.match(globalSwitchTool, /secret", "bulk/);
   assert.doesNotMatch(securityConfig, /"PASSKEY_ENABLED"\s*:/, "global switch state is preserved as a Secret binding across normal deploys");
   assert.match(worker, /PASSKEY_ENABLED \|\| "false"/, "a missing global switch binding fails closed");

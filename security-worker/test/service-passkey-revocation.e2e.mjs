@@ -228,16 +228,37 @@ try {
   stopServiceWorkers();
   await delay(300);
   await startServiceWorkers(true);
+
+  // Start the global transition while the currently deployed Worker still has
+  // PASSKEY_ENABLED=true. The persistent gate must close atomically with the
+  // epoch change, so this former race window cannot issue a new session.
+  disableGlobalRuntime();
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 2);
+  const transitionChallenges = queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_challenges");
+  const transitionAuthentication = await fetch("http://127.0.0.1:8810/security/api/auth/options", {
+    method: "POST",
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json" },
+    body: JSON.stringify({ service: "security" })
+  });
+  assert.equal(transitionAuthentication.status, 503, "disable transition stops authentication before the false Secret is deployed");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_challenges"), transitionChallenges,
+    "the transition does not create a WebAuthn challenge");
+  assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "disable transition immediately rejects the old Security admin cookie");
+  assert.equal(await securityIdentityHandoff(oldIdentityCookie), 503, "disable transition cannot issue a handoff while the Secret is still true");
+  await assertAccess(replacementCookies, false, "disable transition rejects every service passkey cookie before the false Secret is deployed");
+  await assertAccess(passwordCookies, true, "password sessions remain valid while the global runtime gate is closed");
+
   stopSecurityWorker();
   await delay(300);
-  advanceGlobalEpoch();
   const zeroAccessDisabledWorker = startSecurityWorker(false);
   await waitForWorkerReady(zeroAccessDisabledWorker);
   assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 2);
   // Intentionally make zero HTTP/API requests while the Security global switch is off.
   stopSecurityWorker();
   await delay(300);
-  startSecurityWorker(true);
+  const zeroAccessEnabledWorker = startSecurityWorker(true);
+  await waitForWorkerReady(zeroAccessEnabledWorker);
+  enableGlobalRuntime();
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
   assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "zero-access disable revokes the old Security admin cookie after re-enable");
   assert.equal(await securityIdentityHandoff(oldIdentityCookie), 401, "zero-access disable revokes the old Security identity cookie after re-enable");
@@ -249,9 +270,9 @@ try {
   assert.equal(await securityAdminAuthenticated(newAdminCookie), true, "new Security admin cookie uses the new epoch");
   assert.equal(await securityIdentityHandoff(newIdentityCookie), 200, "new Security identity cookie uses the new epoch");
 
+  disableGlobalRuntime();
   stopSecurityWorker();
   await delay(300);
-  advanceGlobalEpoch();
   startSecurityWorker(false);
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
   assert.equal(await securityAdminAuthenticated(newAdminCookie), false, "Security global kill switch rejects its admin cookie");
@@ -263,7 +284,9 @@ try {
 
   stopSecurityWorker();
   await delay(300);
-  startSecurityWorker(true);
+  const repeatedAccessEnabledWorker = startSecurityWorker(true);
+  await waitForWorkerReady(repeatedAccessEnabledWorker);
+  enableGlobalRuntime();
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
   assert.equal(await securityAdminAuthenticated(newAdminCookie), false, "old Security admin cookie stays revoked after re-enable");
   assert.equal(await securityIdentityHandoff(newIdentityCookie), 401, "old Security identity cookie stays revoked after re-enable");
@@ -523,12 +546,19 @@ function runSecuritySql(sql) {
   runWrangler("security-worker", ["d1", "execute", "security-db", "--local", "--command", sql]);
 }
 
-function advanceGlobalEpoch() {
+function disableGlobalRuntime() {
   runSecuritySql(`UPDATE security_runtime_state
     SET passkey_session_epoch = passkey_session_epoch + 1,
         switch_observed_enabled = 0,
         updated_at = CURRENT_TIMESTAMP
-    WHERE id = 1`);
+    WHERE id = 1 AND switch_observed_enabled = 1`);
+}
+
+function enableGlobalRuntime() {
+  runSecuritySql(`UPDATE security_runtime_state
+    SET switch_observed_enabled = 1,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = 1 AND switch_observed_enabled = 0`);
 }
 
 function cleanupSecurityFixture() {
