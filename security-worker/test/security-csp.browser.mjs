@@ -29,8 +29,13 @@ const auditEventsBody = {
   events: [
     {
       event_type: "passkey_login_success", service: "security", outcome: "success", auth_method: "passkey",
-      identity_id: "primary-admin", service_account_id: "admin", role: "admin", occurred_at: "2026-08-22T01:02:03.000Z",
+      identity_id: "primary-admin", service_account_id: "admin", service_account_label: "第一管理者", role: "admin", occurred_at: "2026-08-22T01:02:03.000Z",
       user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
+    },
+    {
+      event_type: "session_resume", service: "diary", outcome: "success", auth_method: "password",
+      identity_id: "primary-admin", service_account_id: "main-user", service_account_label: "田中宏知（一般ユーザー）", role: "user",
+      occurred_at: "2026-08-22T00:58:00.000Z", user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/151.0.0.0"
     },
     {
       event_type: "new_event_<img id=xss-marker src=x onerror=alert(1)>", service: "future-service", outcome: "future-outcome", auth_method: "future-auth",
@@ -59,7 +64,12 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, setupStatusBody);
   }
   if (url.pathname === "/security/api/status") return sendJson(response, 200, securityStatusBody);
-  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, lockouts: 0, invited: 0, pendingApproval: 0, noPasskey: 0, critical: 0 });
+  if (url.pathname === "/security/api/services") return sendJson(response, 200, { services: [
+    { id: "diary", displayName: "日記", targets: [{ service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）", role: "user", roleLabel: "一般ユーザー", privileged: false }] },
+    { id: "billing", displayName: "請求書", targets: [{ service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "田中宏知（管理者）", role: "owner", roleLabel: "管理者", privileged: true }] },
+    { id: "cloud", displayName: "T-Cloud", targets: [{ service: "cloud", accountId: "folder-member", rootFolderId: 2, displayLabel: "家族写真 / 千晴", role: "member", roleLabel: "フォルダ利用者", privileged: false }] }
+  ] });
+  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: 0, pendingApproval: 0, noPasskey: 0, critical: 0 });
   if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [{ id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" }] });
   if (url.pathname === "/security/api/audit") {
     receivedAuditQueries.push(url.search);
@@ -75,7 +85,7 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/security/api/identities/primary-admin") return sendJson(response, 200, {
     identity: { id: "primary-admin", displayName: "第一管理者", status: "active", isSecurityAdmin: true },
-    links: [{ id: "primary-cloud", service: "cloud", service_account_id: "admin", status: "pending" }],
+    links: [{ id: "primary-cloud", service: "cloud", service_account_id: "admin", display_label: "T-Cloud 管理者", role: "admin", role_label: "管理者", status: "pending", protected: true }],
     credentials: [], invitations: [], approvalCandidates: [], adminKeyEnvelopes: []
   });
   if (url.pathname === "/security/api/tcloud/admin-config") return sendJson(response, 200, { initialized: true, cryptoVersion: 1 });
@@ -375,17 +385,21 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(auditText, /Security Center/);
     assert.match(auditText, /第一管理者/);
     assert.match(auditText, /ユーザーID: primary-admin/, `${name}: technical identity ID is subordinate detail text`);
+    assert.equal(await unsupported.locator("#audit-list details.technical-detail:not([open])").count() >= 1, true,
+      `${name}: internal IDs stay inside collapsed technical details`);
     assert.match(auditText, /パスキー/);
     assert.match(auditText, /成功/);
     assert.match(auditText, /Windows \/ Edge 151/, `${name}: full User-Agent is summarized`);
+    assert.match(auditText, /保存済みセッションでアクセス/, `${name}: session reuse is distinct from a new login`);
+    assert.match(auditText, /日記 \/ 田中宏知（一般ユーザー）/, `${name}: audit uses the provider-resolved human account label`);
     assert.match(auditText, /未定義の操作（new_event_/, `${name}: unknown events use an explicit fallback`);
     assert.equal(await unsupported.locator("#xss-marker").count(), 0, `${name}: arbitrary audit strings remain HTML escaped`);
     assert.equal(await unsupported.locator("#audit-event option[value='passkey_registration']").textContent(), "パスキーを登録");
     const moreButton = unsupported.getByRole("button", { name: "もっと見る" });
     assert.equal(await moreButton.isVisible(), true, `${name}: audit next page is offered only when a cursor exists`);
     await moreButton.click();
-    await unsupported.waitForFunction(() => document.querySelectorAll("#audit-list .audit-row").length === 3);
-    assert.equal(await unsupported.locator("#audit-list .audit-row").count(), 3, `${name}: next audit page appends below the current rows`);
+    await unsupported.waitForFunction(() => document.querySelectorAll("#audit-list .audit-row").length === 4);
+    assert.equal(await unsupported.locator("#audit-list .audit-row").count(), 4, `${name}: next audit page appends below the current rows`);
     assert.equal(await moreButton.isVisible(), false, `${name}: audit button hides on the final page`);
     assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: the opaque audit cursor is sent for the next page`);
     await unsupported.locator("#audit-event").selectOption("passkey_registration");
@@ -398,6 +412,24 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.getByRole("button", { name: "ユーザー" }).click();
     assert.match(await unsupported.locator("#users-panel").textContent(), /ユーザーを招待/);
     assert.doesNotMatch(await unsupported.locator("#users-panel").textContent(), /Identity/);
+    assert.equal(await unsupported.locator("#invite-name").count(), 1, `${name}: invite UI asks for the human display name`);
+    assert.equal(await unsupported.locator("#invite-form input:not(#invite-name):not([type='datetime-local'])").count(), 0,
+      `${name}: invite UI has no free-form internal identifier fields`);
+    const inviteService = unsupported.locator("#link-rows [data-link-service]").first();
+    const inviteTarget = unsupported.locator("#link-rows [data-link-target]").first();
+    assert.deepEqual(await inviteService.locator("option").allTextContents(), ["サービスを選択", "日記", "請求書", "T-Cloud"]);
+    await inviteService.selectOption("diary");
+    assert.deepEqual(await inviteTarget.locator("option").allTextContents(), ["連携先を選択", "田中宏知（一般ユーザー） / 一般ユーザー"]);
+    assert.doesNotMatch(await unsupported.locator("#invite-form").textContent(), /main-user|folder-member|フォルダID/,
+      `${name}: internal account and numeric folder identifiers are not shown`);
+    const queryCountBeforeRefresh = receivedAuditQueries.length;
+    await unsupported.getByRole("button", { name: "履歴", exact: true }).click();
+    await unsupported.waitForTimeout(100);
+    assert.ok(receivedAuditQueries.length >= queryCountBeforeRefresh + 1, `${name}: opening history fetches current events`);
+    const queryCountAfterTab = receivedAuditQueries.length;
+    await unsupported.getByRole("button", { name: "最新に更新" }).click();
+    await unsupported.waitForTimeout(100);
+    assert.ok(receivedAuditQueries.length >= queryCountAfterTab + 1, `${name}: refresh button fetches current events again`);
 
     setupStatusBody = { active: false };
     securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };

@@ -34,6 +34,8 @@ try {
   for (const directory of ["security-worker", "cloud-worker", "diary-worker", "billing-worker"]) {
     runWrangler(directory, ["d1", "migrations", "apply", databaseName(directory), "--local"]);
   }
+  runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command",
+    "INSERT OR IGNORE INTO cloud_folders (id, parent_id, name, created_by) VALUES (424242, NULL, 'Security連携テスト', 'admin')"]);
   cleanupSecurityFixture();
   runSecuritySql(`
     UPDATE security_runtime_state SET passkey_session_epoch = 1, switch_observed_enabled = 1 WHERE id = 1;
@@ -67,10 +69,6 @@ try {
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', 42, 'Cloud Readiness', 'active');
-    INSERT INTO security_service_links
-      (id, identity_id, service, service_account_id, display_label, status)
-      VALUES ('readiness-diary-link', '${readinessIdentityId}', 'diary', 'main-user', 'Diary Readiness', 'active'),
-             ('readiness-billing-link', '${readinessIdentityId}', 'billing', 'owner', 'Billing Readiness', 'active');
     INSERT INTO security_tcloud_client_vaults
       (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
       VALUES ('${readinessCredentialA}', '${readinessIdentityId}', '{"kty":"RSA"}', 'fingerprint-a', 'private-a', 'iv-a'),
@@ -86,6 +84,11 @@ try {
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, display_label, status)
       VALUES ('primary-admin-cloud-link', 'primary-admin', 'cloud', 'admin', 'Primary Admin Cloud', 'pending');
+    INSERT INTO security_identities (id, display_name, status)
+      VALUES ('shared_cloud_test', 'Shared Cloud Test', 'active');
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
+      VALUES ('shared-provider-cloud-link', 'shared_cloud_test', 'cloud', 'folder-member', 424242, 'Security連携テスト', 'active');
   `);
 
   const diaryVersion = queryNumber("diary-worker", "diary-db", "SELECT session_version AS value FROM diary_accounts WHERE id = 'main-user'");
@@ -131,6 +134,59 @@ try {
     assert.equal(response.status, 200, `malformed Security cookie ${malformed} must not cause 500`);
     assert.equal((await response.json()).adminAuthenticated, false);
   }
+  await startServiceWorkers(true);
+  const freshAdminCookie = signSecurityCookie({
+    kind: "admin", identityId: "audit_admin", credentialId: "audit-credential",
+    passkeySessionEpoch: 1, authenticatedAt: Math.floor(Date.now() / 1000)
+  });
+  const serviceRegistryResponse = await securityAdminRequest("/security/api/services", freshAdminCookie);
+  assert.equal(serviceRegistryResponse.response.status, 200, JSON.stringify(serviceRegistryResponse.body));
+  const diaryTargets = serviceRegistryResponse.body.services.find((service) => service.id === "diary")?.targets || [];
+  assert.ok(diaryTargets.some((target) => target.accountId === "main-admin" && /田中宏知.*管理者/.test(target.displayLabel)),
+    "Diary provider returns the existing administrator with a human label and role");
+  assert.ok(diaryTargets.some((target) => target.accountId === "main-user" && /田中宏知.*一般ユーザー/.test(target.displayLabel)),
+    "Diary provider distinguishes the existing ordinary account with a human label and role");
+  const billingTargets = serviceRegistryResponse.body.services.find((service) => service.id === "billing")?.targets || [];
+  assert.ok(billingTargets.some((target) => target.accountId === "owner" && target.privileged === true),
+    "Billing provider returns the active owner as a privileged human-labelled candidate");
+  const cloudTargets = serviceRegistryResponse.body.services.find((service) => service.id === "cloud")?.targets || [];
+  assert.ok(cloudTargets.some((target) => target.rootFolderId === 424242 && target.displayLabel === "Security連携テスト"),
+    "T-Cloud provider returns a live folder name instead of requiring a numeric ID");
+  assert.ok(cloudTargets.every((target) => target.accountId === "folder-member"),
+    "T-Cloud admin and subadmin never appear in ordinary service-link candidates");
+
+  for (const accountId of ["admin", "subadmin"]) {
+    const tampered = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
+      links: [{ service: "cloud", accountId, rootFolderId: null }]
+    });
+    assert.equal(tampered.response.status, 403, `direct API tampering cannot grant T-Cloud ${accountId}`);
+  }
+  const nonCloudRoot = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
+    links: [{ service: "diary", accountId: "main-user", rootFolderId: 424242 }]
+  });
+  assert.equal(nonCloudRoot.response.status, 400, "a non-Cloud link cannot carry a T-Cloud folder ID");
+  const protectedCore = await securityAdminRequest("/security/api/service-links/primary-admin-cloud-link", freshAdminCookie, {});
+  assert.equal(protectedCore.response.status, 409, "the primary administrator core T-Cloud link cannot be removed");
+  const stalePrivileged = await securityAdminRequest("/security/api/identities/primary-admin/links", oldAdminCookie, {
+    links: [{ service: "diary", accountId: "chiharu-admin", rootFolderId: null }]
+  });
+  assert.equal(stalePrivileged.response.status, 428, "a privileged Diary account requires a fresh administrator passkey");
+  const freshPrivileged = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
+    links: [{ service: "diary", accountId: "chiharu-admin", rootFolderId: null }]
+  });
+  assert.equal(freshPrivileged.response.status, 200, JSON.stringify(freshPrivileged.body));
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id = 'chiharu-admin' AND status != 'disabled'"), "active",
+    "a fresh administrator passkey can add a validated privileged account");
+  const exclusiveConflict = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
+    links: [{ service: "diary", accountId: "main-user", rootFolderId: null }]
+  });
+  assert.equal(exclusiveConflict.response.status, 409, "an exclusive Diary account cannot be linked to two Identities");
+  const sharedCloud = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
+    links: [{ service: "cloud", accountId: "folder-member", rootFolderId: 424242 }]
+  });
+  assert.equal(sharedCloud.response.status, 200, JSON.stringify(sharedCloud.body));
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_service_links WHERE service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id = 424242 AND status IN ('pending', 'active')"), 2,
+    "a validated Cloud folder link is accepted in pending state and remains shareable");
   runSecuritySql(`CREATE TRIGGER fail_credential_revoke_audit
     BEFORE INSERT ON security_audit_events
     WHEN NEW.event_type = 'passkey_revoked'
@@ -318,7 +374,6 @@ try {
     headers: { Cookie: `troom_security_admin=${oldAdminCookie}` }
   });
   assert.equal(invalidCursor.status, 400, "malformed audit cursors fail closed");
-  await startServiceWorkers(true);
 
   const passkeyCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 1);
   const passwordCookies = createServiceCookies("password", diaryVersion, billingVersion);
@@ -471,10 +526,28 @@ try {
   await assertAccess(latestEpochCookies, true, "new passkey login after repeated-access kill switch uses the new epoch");
   await assertAccess(passwordCookies, true, "password sessions remain valid across the kill-switch cycle");
 
+  const latestFreshAdminCookie = signSecurityCookie({
+    kind: "admin", identityId: "audit_admin", credentialId: "audit-credential",
+    passkeySessionEpoch: 3, authenticatedAt: Math.floor(Date.now() / 1000)
+  });
+  const removedOldDiary = await securityAdminRequest(`/security/api/service-links/${replacementLinks.diary}`, latestFreshAdminCookie, {});
+  assert.equal(removedOldDiary.response.status, 200, JSON.stringify(removedOldDiary.body));
+  const primaryCredentialCount = queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_credentials WHERE identity_id = 'primary-admin'");
+  const addPrimaryOrdinaryDiary = await securityAdminRequest("/security/api/identities/primary-admin/links", latestFreshAdminCookie, {
+    links: [{ service: "diary", accountId: "main-user", rootFolderId: null }]
+  });
+  assert.equal(addPrimaryOrdinaryDiary.response.status, 200, JSON.stringify(addPrimaryOrdinaryDiary.body));
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id = 'main-user' AND status != 'disabled'"), "active",
+    "the first administrator can add the ordinary Diary account to the same Identity");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_credentials WHERE identity_id = 'primary-admin'"), primaryCredentialCount,
+    "adding an ordinary non-Cloud link does not register another passkey");
+
   console.log("service passkey revocation HTTP integration: ok");
 } finally {
   for (const child of processes.splice(0).reverse()) stopProcess(child);
   cleanupSecurityFixture();
+  runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command",
+    "DELETE FROM cloud_folders WHERE id = 424242"]);
 }
 
 async function startServiceWorkers(passkeysEnabled) {
@@ -557,6 +630,18 @@ async function securityIdentityHandoff(cookie, linkId = services.diary.linkId) {
     body: JSON.stringify({ service: "diary", linkId })
   });
   return response.status;
+}
+
+async function securityAdminRequest(path, cookie, body) {
+  const response = await fetch(`http://127.0.0.1:8810${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: {
+      ...(body === undefined ? {} : { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json" }),
+      Cookie: `troom_security_admin=${cookie}`
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  return { response, body: await response.json().catch(() => ({})) };
 }
 
 async function securityCloudHandoff(cookie) {
@@ -847,7 +932,9 @@ function cleanupSecurityFixture() {
     DELETE FROM security_service_links WHERE identity_id = 'primary-admin';
     DELETE FROM security_credentials WHERE identity_id = 'primary-admin';
     DELETE FROM security_identities WHERE id = 'primary-admin';
-    DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${readinessIdentityId}');
+    DELETE FROM security_service_links WHERE identity_id = 'shared_cloud_test';
+    DELETE FROM security_identities WHERE id = 'shared_cloud_test';
+    DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${readinessIdentityId}', 'shared_cloud_test');
   `);
 }
 

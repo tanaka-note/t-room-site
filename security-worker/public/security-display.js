@@ -8,6 +8,7 @@
     ["password_login_success", "パスワードでログイン成功", "ログイン"],
     ["password_login_failure", "パスワードでログイン失敗", "ログイン"],
     ["passkey_login_success", "パスキーでログイン成功", "ログイン"],
+    ["session_resume", "保存済みセッションでアクセス", "ログイン"],
     ["passkey_authentication_options", "パスキー認証を開始", "ログイン"],
     ["passkey_authentication_failure", "パスキー認証に失敗", "ログイン"],
     ["passkey_dialog_cancelled", "パスキー認証をキャンセル", "ログイン"],
@@ -49,7 +50,7 @@
   const SERVICE_LABELS = Object.freeze({ security: "Security Center", cloud: "T-Cloud", diary: "日記", billing: "請求書" });
   const OUTCOME_LABELS = Object.freeze({ success: "成功", failure: "失敗", blocked: "停止", cancelled: "キャンセル", info: "情報" });
   const AUTH_METHOD_LABELS = Object.freeze({ password: "パスワード", passkey: "パスキー", system: "システム" });
-  const ROLE_LABELS = Object.freeze({ admin: "管理者", subadmin: "副管理者", owner: "管理者", member: "一般ユーザー", user: "一般ユーザー", global_owner: "全体管理者" });
+  const ROLE_LABELS = Object.freeze({ admin: "管理者", "security-admin": "管理者", identity: "ユーザー", subadmin: "副管理者", owner: "管理者", member: "一般ユーザー", user: "一般ユーザー", global_owner: "全体管理者" });
   const STATUS_LABELS = Object.freeze({
     invited: "招待中", pending_approval: "承認待ち", active: "利用可能", disabled: "停止",
     pending: "承認待ち", revoked: "無効", used: "使用済み", expired: "期限切れ",

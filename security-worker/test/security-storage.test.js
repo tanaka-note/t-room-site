@@ -41,6 +41,36 @@ test("one invitation can register only one credential even under concurrent inse
   assert.equal(queryText("SELECT status AS value FROM security_invitations WHERE id = 'one-invite'"), "used");
 });
 
+test("exclusive account links cannot cross Identities while Cloud folders remain shareable", () => {
+  sql("INSERT INTO security_identities (id, display_name, status) VALUES ('exclusive-a', 'A', 'active'), ('exclusive-b', 'B', 'active')");
+  sql(`INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+    VALUES ('exclusive-link-a', 'exclusive-a', 'billing', 'exclusive-account', 'Account', 'active')`);
+  const duplicate = run(["d1", "execute", "security-db", "--local", "--persist-to", persistence, "--command",
+    `INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+     VALUES ('exclusive-link-b', 'exclusive-b', 'billing', 'exclusive-account', 'Account', 'pending')`], false);
+  assert.notEqual(duplicate.status, 0);
+  sql("UPDATE security_service_links SET status = 'disabled' WHERE id = 'exclusive-link-a'");
+  sql(`INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+    VALUES ('exclusive-link-b', 'exclusive-b', 'billing', 'exclusive-account', 'Account', 'active')`);
+  sql(`INSERT INTO security_service_links (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
+    VALUES ('shared-cloud-a', 'exclusive-a', 'cloud', 'folder-member', 42, 'Shared', 'active'),
+           ('shared-cloud-b', 'exclusive-b', 'cloud', 'folder-member', 42, 'Shared', 'active')`);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE service = 'cloud' AND cloud_root_folder_id = 42"), 2);
+});
+
+test("session resume audit suppresses a duplicate minute and last access is separate from login", () => {
+  sql("INSERT INTO security_identities (id, display_name, status, last_login_at) VALUES ('resume-test', 'Resume', 'active', '2026-08-23T00:00:00.000Z')");
+  for (const [id, time] of [["resume-a", "2026-08-23T01:02:03.000Z"], ["resume-b", "2026-08-23T01:02:44.000Z"]]) {
+    sql(`INSERT OR IGNORE INTO security_audit_events
+      (event_id, occurred_at, service, event_type, outcome, identity_id, session_id_hash)
+      VALUES ('${id}', '${time}', 'diary', 'session_resume', 'success', 'resume-test', 'hashed-session')`);
+  }
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_audit_events WHERE identity_id = 'resume-test' AND event_type = 'session_resume'"), 1);
+  sql("UPDATE security_identities SET last_seen_at = '2026-08-23T01:02:44.000Z' WHERE id = 'resume-test'");
+  assert.equal(queryText("SELECT last_login_at AS value FROM security_identities WHERE id = 'resume-test'"), "2026-08-23T00:00:00.000Z");
+  assert.equal(queryText("SELECT last_seen_at AS value FROM security_identities WHERE id = 'resume-test'"), "2026-08-23T01:02:44.000Z");
+});
+
 test("one credential vault serves multiple Cloud links while folder envelopes stay link-specific", () => {
   sql("INSERT INTO security_identities (id, display_name, status) VALUES ('cloud_test', 'Cloud Test', 'active')");
   sql(`INSERT INTO security_credentials (credential_id, identity_id, public_key, prf_salt, status)

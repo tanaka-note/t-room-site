@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-a8f9938fc5bd";
+const APP_BUILD_ID = "cloud-c1296d481792";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -962,10 +962,7 @@ async function loginWithPasskey() {
 }
 
 async function choosePasskeyLink(links) {
-  if (!links?.length) return null;
-  const answer = window.prompt(`利用するT-Cloudアカウントの番号を入力してください。\n${links.map((link, index) => `${index + 1}. ${link.displayLabel}`).join("\n")}`, "1");
-  const index = Number(answer) - 1;
-  return Number.isInteger(index) ? links[index] || null : null;
+  return TRoomPasskeys.chooseLinkDialog(links, "cloud");
 }
 
 async function enterApp(session, password = "", accountKey = null, passkeyContext = null) {

@@ -17,6 +17,7 @@ export async function buildSecurityAuditEvent(request, input, auditSalt = "local
     eventType: input.eventType,
     outcome: input.outcome,
     identityId: input.identityId || null,
+    serviceLinkId: input.serviceLinkId || null,
     serviceAccountId: input.serviceAccountId || null,
     role: input.role || null,
     authMethod: input.authMethod || null,

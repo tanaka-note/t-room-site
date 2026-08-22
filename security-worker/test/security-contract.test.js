@@ -8,6 +8,7 @@ const migration = await readFile(new URL("../migrations/0001_identity_passkeys.s
 const lifecycleMigration = await readFile(new URL("../migrations/0002_passkey_lifecycle_integrity.sql", import.meta.url), "utf8");
 const foreignKeyMigration = await readFile(new URL("../migrations/0003_repair_service_link_foreign_keys.sql", import.meta.url), "utf8");
 const handoffEpochMigration = await readFile(new URL("../migrations/0004_handoff_session_epoch.sql", import.meta.url), "utf8");
+const serviceAuditMigration = await readFile(new URL("../migrations/0005_service_links_and_session_audit.sql", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/passkey-client.js", import.meta.url), "utf8");
 const securityUi = await readFile(new URL("../public/security.js", import.meta.url), "utf8");
 const securityDisplay = await readFile(new URL("../public/security-display.js", import.meta.url), "utf8");
@@ -120,8 +121,56 @@ test("reinvite creates a credential-specific T-Cloud envelope without replacing 
 test("service-account roles stay authoritative and are not combined in Security Center", () => {
   assert.match(worker, /redeemHandoff/);
   assert.match(worker, /service_account_id AS serviceAccountId/);
-  assert.match(worker, /T-Cloudの管理者・副管理者パスキーは第一管理者の復旧登録とは分離/);
+  assert.match(worker, /T-Cloud管理者・副管理者は通常のサービス連携から付与できません/);
   assert.doesNotMatch(worker, /mergedRole|combinedPermissions|unionPermissions/);
+});
+
+test("service links come from an explicit provider registry and never from free-form UI", () => {
+  assert.match(worker, /const SERVICE_REGISTRY = Object\.freeze/);
+  assert.match(worker, /CLOUD_AUTH/);
+  assert.match(worker, /DIARY_AUTH/);
+  assert.match(worker, /BILLING_AUTH/);
+  for (const source of [cloud, diary, billing]) {
+    assert.match(source, /async listLinkTargets\(\)/);
+    assert.match(source, /async describeAccount\(input\)/);
+  }
+  assert.match(cloud, /targets: await listSecurityFolderTargets/);
+  const cloudTargetsMethod = cloud.match(/async listLinkTargets\(\) \{([\s\S]*?)\n  \}\n\n  async getFolderCryptoRecord/)?.[1] || "";
+  assert.ok(cloudTargetsMethod, "T-Cloudの候補取得メソッドを検出できます");
+  assert.doesNotMatch(cloudTargetsMethod, /adminWrappedKey|folder_key|file_key|password_hash/);
+  assert.doesNotMatch(securityHtml, /invite-identity-id|サービス内アカウントID|T-CloudフォルダID/);
+  assert.doesNotMatch(securityUi, /window\.prompt/);
+  assert.match(securityUi, /data-link-target/);
+  assert.match(client, /chooseLinkDialog/);
+});
+
+test("privileged, exclusive, Cloud-admin and root-folder policies are server enforced", () => {
+  assert.match(worker, /requireFreshSecurityAdmin/);
+  assert.match(worker, /PRIVILEGED_LINK_REAUTH_SECONDS = 5 \* 60/);
+  assert.match(worker, /service !== "cloud" && rootFolderId !== null/);
+  assert.match(worker, /accountId !== "folder-member"/);
+  assert.match(worker, /assertExclusiveServiceLinksAvailable/);
+  assert.match(serviceAuditMigration, /uq_security_service_links_exclusive_current/);
+  assert.match(serviceAuditMigration, /service IN \('diary', 'billing'\)/);
+  assert.match(worker, /PRIMARY_ADMIN_CORE_LINKS/);
+  assert.match(worker, /identity\.status === "active" && link\.service !== "cloud" \? "active" : "pending"/);
+});
+
+test("session resume audit is distinct, deduplicated, human-labelled, and tracks last access", () => {
+  for (const source of [cloud, diary, billing]) {
+    assert.match(source, /eventType: "session_resume"/);
+    assert.match(source, /serviceLinkId: session\.serviceLinkId/);
+    assert.match(source, /sessionId: session\.sessionId/);
+  }
+  assert.match(worker, /recordSecuritySessionResume/);
+  assert.match(worker, /event_type = 'session_resume'/);
+  assert.match(worker, /service_account_label/);
+  assert.match(worker, /last_seen_at/);
+  assert.match(serviceAuditMigration, /uq_security_audit_session_resume_minute/);
+  assert.match(securityDisplay, /session_resume/);
+  assert.match(securityUi, /sessionResume/);
+  assert.match(securityHtml, /audit-refresh/);
+  assert.doesNotMatch(worker, /LOGIN_SUCCESS_EVENTS[^\n]*session_resume/);
 });
 
 test("Security Center response permits WebAssembly without allowing JavaScript eval", async () => {

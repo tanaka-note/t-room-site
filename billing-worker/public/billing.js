@@ -138,10 +138,7 @@
   }
 
   async function choosePasskeyLink(links) {
-    if (!links?.length) return null;
-    const answer = window.prompt(`利用する請求書アカウントの番号を入力してください。\n${links.map((link, index) => `${index + 1}. ${link.displayLabel}`).join("\n")}`, "1");
-    const index = Number(answer) - 1;
-    return Number.isInteger(index) ? links[index] || null : null;
+    return TRoomPasskeys.chooseLinkDialog(links, "billing");
   }
 
   async function logout() {

@@ -3,7 +3,7 @@ import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-a8f9938fc5bd";
+const APP_BUILD_ID = "cloud-c1296d481792";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -46,8 +46,16 @@ export class SecurityIntegration extends WorkerEntrypoint {
     if (accountId !== "folder-member") return { valid: false };
     const rootFolderId = optionalId(input?.rootFolderId);
     if (!rootFolderId) return { valid: false };
-    const folder = await this.env.DB.prepare("SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(rootFolderId).first();
-    return folder ? { valid: true, displayLabel: `T-Cloud フォルダ #${rootFolderId}`, rootFolderId } : { valid: false };
+    const target = (await listSecurityFolderTargets(this.env)).find((item) => item.rootFolderId === rootFolderId);
+    return target ? { valid: true, ...target } : { valid: false };
+  }
+
+  async listLinkTargets() {
+    return {
+      service: "cloud",
+      displayName: "T-Cloud",
+      targets: await listSecurityFolderTargets(this.env)
+    };
   }
 
   async getFolderCryptoRecord(folderId) {
@@ -82,6 +90,29 @@ export class SecurityIntegration extends WorkerEntrypoint {
   }
 }
 
+async function listSecurityFolderTargets(env) {
+  const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(id, parent_id, name, path) AS (
+      SELECT id, parent_id, name, name FROM cloud_folders
+      WHERE parent_id IS NULL AND deleted_at IS NULL
+      UNION ALL
+      SELECT child.id, child.parent_id, child.name, folder_tree.path || ' / ' || child.name
+      FROM cloud_folders child JOIN folder_tree ON child.parent_id = folder_tree.id
+      WHERE child.deleted_at IS NULL
+    )
+    SELECT id, path FROM folder_tree ORDER BY path COLLATE NOCASE, id`).all();
+  return (result.results || []).map((folder) => ({
+    accountId: "folder-member",
+    rootFolderId: Number(folder.id),
+    displayLabel: String(folder.path || "T-Cloudフォルダ"),
+    scopeLabel: String(folder.path || "T-Cloudフォルダ"),
+    role: "member",
+    roleLabel: "フォルダ利用者",
+    privileged: false,
+    exclusive: false,
+    shared: true
+  }));
+}
+
 export default {
   async fetch(request, env, context) {
     try {
@@ -114,6 +145,13 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (!session) return json({ authenticated: false });
+    enqueueSecurityAudit(env, context, request, {
+      service: "cloud", eventType: "session_resume", outcome: "success",
+      identityId: session.identityId, serviceLinkId: session.serviceLinkId,
+      serviceAccountId: session.serviceAccountId || session.role, role: session.role,
+      authMethod: session.authMethod, sessionId: session.sessionId,
+      details: { rootFolderId: session.rootFolderId }
+    });
     return json({ authenticated: true, ...publicSession(session, env) });
   }
 
@@ -166,8 +204,8 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/items" && request.method === "GET") {
     const folderId = optionalId(url.searchParams.get("folderId"));
-    if (session.role === "admin" && folderId) {
-      enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceAccountId: "admin", role: "admin", authMethod: session.authMethod, sessionId: session.sessionId, targetType: "folder", targetId: folderId });
+    if (session.role === "admin") {
+      enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: "admin", role: "admin", authMethod: session.authMethod, sessionId: session.sessionId, targetType: "folder", targetId: folderId || "root" });
     }
     return listItems(url, env, session);
   }
@@ -343,7 +381,7 @@ async function completePasskeyHandoff(request, env, url, context) {
   const token = await createSessionToken(session, maxAge, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
   await audit(env, "passkey_login", session, null, null);
-  enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId });
+  enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId });
   return json({ authenticated: true, ...publicSession(session) }, 200, headers);
 }
 

@@ -166,3 +166,34 @@ dialog::backdrop { background: rgba(24,31,26,.48); backdrop-filter: blur(3px); }
   td::before { display: none; }
   .carry-row { break-inside: avoid; }
 }
+
++.troom-passkey-account-dialog {
++  width: min(92vw, 34rem);
++  max-height: min(80vh, 42rem);
++  padding: 1.25rem;
++  border: 0;
++  border-radius: 1rem;
++  color: #172033;
++  background: #fff;
++  box-shadow: 0 1rem 3rem rgb(0 0 0 / 28%);
++}
++.troom-passkey-account-dialog::backdrop { background: rgb(8 15 28 / 58%); }
++.troom-passkey-account-dialog h2 { margin: 0 0 .4rem; font-size: 1.2rem; }
++.troom-passkey-account-dialog p { margin: 0 0 1rem; color: #556176; }
++.troom-passkey-account-list { display: grid; gap: .65rem; max-height: 52vh; overflow: auto; }
++.troom-passkey-account-option {
++  display: grid;
++  gap: .25rem;
++  width: 100%;
++  min-height: 3.5rem;
++  padding: .8rem 1rem;
++  border: 1px solid #cbd3e0;
++  border-radius: .75rem;
++  color: #172033;
++  background: #f7f9fc;
++  text-align: left;
++}
++.troom-passkey-account-option:hover { background: #eef4ff; border-color: #5c78c9; }
++.troom-passkey-account-option:focus-visible { outline: 3px solid #6f8fe8; outline-offset: 2px; }
++.troom-passkey-account-option small { color: #58657a; }
++.troom-passkey-account-cancel { margin-top: 1rem; }

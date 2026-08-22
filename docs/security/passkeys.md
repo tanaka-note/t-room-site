@@ -42,6 +42,16 @@ WebAuthn credential登録とT-Cloud鍵準備は別状態として扱う。PRF非
 
 各サービスの既存監査ログを維持したまま、Queue経由でSecurity D1へ共通イベントを非同期送信する。監査障害だけで通常ログインを停止しない。成功・失敗・停止・キャンセル、PW/パスキー、Identity、サービスaccount、role、時刻、salt/hash化したアクセス元、User-Agent、安全なsession識別子、重要な管理操作を記録する。
 
+`password_login_success`と`passkey_login_success`は新しい本人認証、`session_resume`は保存済みの有効なサービスsessionでアプリを起動したアクセスとして分離する。`session_resume`はログイン成功件数へ混ぜず、同じserviceとhash化済みsession IDについてUTCの同一分に1件だけ保存する。Identityの`last_login_at`は新しい認証、`last_seen_at`はsession再開を表す。サービス内アカウント表示名は、Queue送信元の任意文字列ではなくservice linkまたは各サービスのproviderで解決した値をスナップショット保存する。
+
 PW、authProof、cookie、session token、生の招待token、PRF出力、秘密鍵、復号鍵、folder/file key、日記・請求書・ファイル本文は記録しない。
 
 ダッシュボードと監査の日付境界は日本時間（Asia/Tokyo）を使用し、保存時刻はUTC ISOを維持する。ログイン成功・失敗は定義済みイベント種別で集計し、文字列の部分一致には依存しない。
+
+## Identityとサービス連携
+
+Identityはサービスaccountではなく一人の人を表し、同じIdentityへ同一サービスを含む複数のservice linkを持てる。日記の管理者用・一般利用用accountを使い分ける場合もIdentityやパスキーを分けない。日記・請求書accountは有効なlinkを一人だけに限定し、T-Cloudのfolder-memberは複数Identityとの共有を許可する。
+
+連携候補の正本は各サービスの`SecurityIntegration`である。Security Workerは明示的なservice registry、Service Binding、providerの候補取得・再検証を通じてだけlinkを作成する。Security Centerの通常UIでは内部account ID、role値、T-Cloudの数値folder IDを自由入力させず、人間向け表示名・role・folder pathから選択させる。候補取得失敗時に自由入力へフォールバックしない。将来サービスを追加する場合も、registry allowlist、Service Binding、provider実装、DB migrationの要否、契約テストを明示的に追加し、自動発見したサービスを信頼しない。
+
+T-Cloudの`admin`は`primary-admin`の既定linkだけに限定し、通常の追加APIは`folder-member`だけを受け付ける。`subadmin`も通常のIdentity管理では付与しない。第一管理者のT-Cloud admin・日記main-admin・請求書ownerは解除不能な基幹linkだが、同じIdentityへ通常の追加linkを付けられる。日記管理者や請求書owner等の特権accountを追加する場合は、直近5分以内のSecurity管理者パスキー認証をサーバー側で要求する。日記・請求書のactive Identityへのlinkは検証後すぐ有効化できるが、T-Cloud folder linkはcredential単位の鍵委譲が完了するまでpendingとする。

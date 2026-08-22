@@ -11,6 +11,7 @@ const { chromium, firefox } = require("playwright");
 const publicRoot = resolve(fileURLToPath(new URL("../../public/", import.meta.url)));
 const workspace = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const updaterPath = resolve(workspace, "assets/pwa-auto-update.js");
+const passkeyClientPath = resolve(workspace, "security-worker/public/passkey-client.js");
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -69,6 +70,11 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/assets/pwa-auto-update.js") {
     response.writeHead(200, { "content-type": contentTypes[".js"], "cache-control": "no-store" });
     response.end(await readFile(updaterPath));
+    return;
+  }
+  if (url.pathname === "/security/passkey-client.js") {
+    response.writeHead(200, { "content-type": contentTypes[".js"], "cache-control": "no-store" });
+    response.end(await readFile(passkeyClientPath));
     return;
   }
 

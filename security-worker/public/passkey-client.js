@@ -10,7 +10,7 @@
       const credential = await navigator.credentials.get({ publicKey: decodeRequestOptions(start.options) });
       const prfOutput = readPrfOutput(credential);
       const verified = await api("/auth/verify", { service, challengeId: start.challengeId, response: serializeCredential(credential) });
-      const link = verified.links.length === 1 ? verified.links[0] : await chooseLink?.(verified.links);
+      const link = verified.links.length === 1 ? verified.links[0] : await (chooseLink || chooseLinkDialog)(verified.links, service);
       if (service !== "security" && !link) throw new Error("利用するアカウントを選択してください。");
       const handoff = service === "security" ? null : await api("/auth/handoff", { service, linkId: link.id });
       return { verified, link, handoff, credentialId: verified.credentialId, prfOutput };
@@ -71,6 +71,58 @@
 
   async function resumeSetup() {
     return api("/setup/resume", {});
+  }
+
+  function chooseLinkDialog(links, service = "") {
+    if (!Array.isArray(links) || !links.length) return Promise.resolve(null);
+    if (links.length === 1) return Promise.resolve(links[0]);
+    return new Promise((resolve) => {
+      const dialog = document.createElement("dialog");
+      dialog.className = "troom-passkey-account-dialog";
+      dialog.setAttribute("aria-labelledby", "troom-passkey-account-title");
+      const title = document.createElement("h2");
+      title.id = "troom-passkey-account-title";
+      title.textContent = "利用するアカウントを選択";
+      const help = document.createElement("p");
+      help.textContent = service === "cloud" ? "利用するT-Cloudの範囲を選んでください。" : "利用するアカウントを選んでください。";
+      const list = document.createElement("div");
+      list.className = "troom-passkey-account-list";
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        dialog.close?.();
+        dialog.remove();
+        resolve(value);
+      };
+      for (const link of links) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "troom-passkey-account-option";
+        const name = document.createElement("strong");
+        name.textContent = String(link.displayLabel || "アカウント");
+        button.append(name);
+        const details = [link.roleLabel, link.scopeLabel].filter(Boolean);
+        if (details.length) {
+          const small = document.createElement("small");
+          small.textContent = details.join(" / ");
+          button.append(small);
+        }
+        button.addEventListener("click", () => finish(link));
+        list.append(button);
+      }
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "secondary troom-passkey-account-cancel";
+      cancel.textContent = "キャンセル";
+      cancel.addEventListener("click", () => finish(null));
+      dialog.addEventListener("cancel", (event) => { event.preventDefault(); finish(null); });
+      dialog.append(title, help, list, cancel);
+      document.body.append(dialog);
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+      list.querySelector("button")?.focus();
+    });
   }
 
   async function api(path, body) {
@@ -197,5 +249,5 @@
     constructor() { super("端末のロック解除をキャンセルしました。"); this.name = "PasskeyCancelledError"; }
   }
 
-  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, resumeSetup, api, toBase64Url, fromBase64Url, PasskeyCancelledError, PasskeyOptionsError });
+  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, resumeSetup, chooseLinkDialog, api, toBase64Url, fromBase64Url, PasskeyCancelledError, PasskeyOptionsError });
 })();

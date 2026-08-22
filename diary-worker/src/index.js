@@ -25,15 +25,49 @@ const DIARY_ACCOUNTS = [
 ];
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async listLinkTargets() {
+    const rows = await this.env.DB.prepare(`
+      SELECT id, household_id, display_name, role, can_manage_entries
+      FROM diary_accounts WHERE active = 1 ORDER BY display_name COLLATE NOCASE, id
+    `).all();
+    const accounts = new Map();
+    for (const account of DIARY_ACCOUNTS) accounts.set(account.id, account);
+    for (const row of rows.results || []) accounts.set(row.id, databaseAccount(row));
+    return {
+      service: "diary",
+      displayName: "日記",
+      targets: [...accounts.values()].map(securityLinkTarget)
+    };
+  }
+
   async describeAccount(input) {
     const account = await findAccountById(String(input?.accountId || ""), this.env);
-    return account ? {
-      valid: true,
-      displayLabel: `日記 ${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`,
-      role: account.role,
-      householdId: account.householdId
-    } : { valid: false };
+    return account ? { valid: true, ...securityLinkTarget(account) } : { valid: false };
   }
+}
+
+function securityLinkTarget(account) {
+  const ordinaryUser = account.id === MAIN_USER_ACCOUNT_ID || !account.canManageEntries;
+  const roleLabel = ordinaryUser ? "一般ユーザー" : (account.isGlobalOwner ? "管理者・全体管理" : "管理者");
+  return {
+    accountId: account.id,
+    displayLabel: `${account.name}（${roleLabel}）`,
+    role: ordinaryUser ? "user" : account.role,
+    roleLabel,
+    householdId: account.householdId,
+    privileged: !ordinaryUser,
+    exclusive: true,
+    shared: false,
+    rootFolderId: null
+  };
+}
+
+function securityAuditRole(account) {
+  if (!account) return null;
+  const accountId = account.id || account.accountId;
+  if (accountId === MAIN_USER_ACCOUNT_ID || !account.canManageEntries) return "user";
+  if (account.isGlobalOwner) return "global_owner";
+  return account.role || null;
 }
 
 export default {
@@ -92,6 +126,12 @@ export default {
 async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
+    if (session) enqueueSecurityAudit(env, context, request, {
+      service: "diary", eventType: "session_resume", outcome: "success",
+      identityId: session.identityId, serviceLinkId: session.serviceLinkId,
+      serviceAccountId: session.accountId, role: securityAuditRole(session),
+      authMethod: session.authMethod, sessionId: session.sessionId
+    });
     return json({
       authenticated: Boolean(session),
       role: session?.role || null,
@@ -129,7 +169,7 @@ async function handleApi(request, env, url, path, context) {
     if (fingerprint) {
       const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
       if (Number(attempt?.locked_until || 0) > now) {
-        enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "login_blocked", outcome: "blocked", serviceAccountId: requestedAccount?.id, role: requestedAccount?.role, authMethod: "password" });
+        enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "login_blocked", outcome: "blocked", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password" });
         return json({ error: "ログインが一時停止されています。15分ほど待ってからお試しください。" }, 429);
       }
     }
@@ -141,7 +181,7 @@ async function handleApi(request, env, url, path, context) {
       : null;
     if (!account) {
       if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id, role: requestedAccount?.role, authMethod: "password" });
+      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password" });
       return json({ error: "IDまたはパスワードが違います。" }, 401);
     }
     await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
@@ -150,7 +190,7 @@ async function handleApi(request, env, url, path, context) {
     const token = await createSessionToken(account, maxAge, env, account.householdId, { authMethod: "password" });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password" });
+    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password" });
     return json({
       authenticated: true,
       role: account.role,
@@ -185,7 +225,7 @@ async function handleApi(request, env, url, path, context) {
       authMethod: "passkey"
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
-    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceAccountId: account.id, role: account.role, authMethod: "passkey" });
+    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "passkey" });
     return json({ authenticated: true, role: account.role, accountName: account.name, loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
   }
 
@@ -233,12 +273,13 @@ async function handleApi(request, env, url, path, context) {
       serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.serviceAccountId,
       passkeySessionEpoch: session.passkeySessionEpoch,
-      authMethod: session.authMethod
+      authMethod: session.authMethod,
+      sessionId: session.sessionId
     });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
     if (householdId !== session.householdId) {
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceAccountId: session.accountId, role: session.role, authMethod: session.authMethod, targetType: "household", targetId: householdId });
+      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: securityAuditRole(session), authMethod: session.authMethod, sessionId: session.sessionId, targetType: "household", targetId: householdId });
     }
     return json({ ok: true, activeHouseholdId: householdId }, 200, headers);
   }
@@ -1307,7 +1348,8 @@ async function withRollingSession(request, response, env, url, path) {
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
-    authMethod: session.authMethod
+    authMethod: session.authMethod,
+    sessionId: session.sessionId
   });
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
@@ -1330,6 +1372,7 @@ async function createSessionToken(account, maxAge, env, activeHouseholdId = acco
     serviceAccountId: auth.serviceAccountId || null,
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
+    sessionId: auth.sessionId || crypto.randomUUID(),
     exp: Math.floor(Date.now() / 1000) + maxAge,
     version: String(env.SESSION_VERSION || "1")
   };
@@ -1416,7 +1459,8 @@ async function changeInitialPassword(request, env, session, url) {
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
-    authMethod: session.authMethod
+    authMethod: session.authMethod,
+    sessionId: session.sessionId
   });
   const headers = new Headers();
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));

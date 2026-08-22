@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta name="troom-app-build" content="security-e04b1da51e66">
+  <meta name="troom-app-build" content="security-c9c8f8ade8f5">
   <meta name="troom-auto-update" content="enabled">
   <title>T-ROOM セキュリティセンター</title>
-  <link rel="stylesheet" href="/security/security.css?v=security-e04b1da51e66">
+  <link rel="stylesheet" href="/security/security.css?v=security-c9c8f8ade8f5">
 </head>
 <body>
   <main class="shell">
@@ -64,7 +64,6 @@
           <form id="invite-form" class="card compact">
             <h2>ユーザーを招待</h2>
             <label>表示名<input id="invite-name" maxlength="100" required></label>
-            <label>ユーザーID（任意）<input id="invite-identity-id" maxlength="64" pattern="[A-Za-z0-9_-]+"></label>
             <fieldset><legend>サービス連携</legend>
               <div id="link-rows"></div>
               <button id="add-link" type="button" class="secondary">連携を追加</button>
@@ -87,17 +86,18 @@
           <label class="filter-field"><span>開始日</span><input id="audit-from" type="date"></label>
           <label class="filter-field"><span>終了日</span><input id="audit-to" type="date"></label>
           <button>履歴を絞り込む</button>
+          <button id="audit-refresh" class="secondary" type="button">最新に更新</button>
         </form>
         <div id="audit-list" class="card compact"></div>
         <button id="audit-load-more" class="secondary" type="button" hidden>もっと見る</button>
       </section>
     </section>
   </main>
-  <script src="/cloud/vendor/argon2.umd.min.js?v=security-e04b1da51e66"></script>
-  <script src="/cloud/crypto-vault.js?v=security-e04b1da51e66"></script>
-  <script src="/security/passkey-client.js?v=security-e04b1da51e66"></script>
-  <script src="/security/security-display.js?v=security-e04b1da51e66"></script>
-  <script src="/assets/pwa-auto-update.js?v=security-e04b1da51e66" defer></script>
-  <script src="/security/security.js?v=security-e04b1da51e66"></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-c9c8f8ade8f5"></script>
+  <script src="/cloud/crypto-vault.js?v=security-c9c8f8ade8f5"></script>
+  <script src="/security/passkey-client.js?v=security-c9c8f8ade8f5"></script>
+  <script src="/security/security-display.js?v=security-c9c8f8ade8f5"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-c9c8f8ade8f5" defer></script>
+  <script src="/security/security.js?v=security-c9c8f8ade8f5"></script>
 </body>
 </html>

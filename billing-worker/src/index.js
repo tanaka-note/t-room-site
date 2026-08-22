@@ -21,11 +21,37 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async listLinkTargets() {
+    const rows = await this.env.DB.prepare(`
+      SELECT id, display_name, role FROM billing_accounts
+      WHERE is_active = 1 ORDER BY display_name COLLATE NOCASE, id
+    `).all();
+    return {
+      service: "billing",
+      displayName: "請求書",
+      targets: (rows.results || []).map(billingLinkTarget)
+    };
+  }
+
   async describeAccount(input) {
     const account = await this.env.DB.prepare("SELECT id, display_name, role FROM billing_accounts WHERE id = ? AND is_active = 1")
       .bind(String(input?.accountId || "")).first();
-    return account ? { valid: true, displayLabel: `請求書 ${account.display_name}（${account.role}）`, role: account.role } : { valid: false };
+    return account ? { valid: true, ...billingLinkTarget(account) } : { valid: false };
   }
+}
+
+function billingLinkTarget(account) {
+  const roleLabel = account.role === "owner" ? "管理者" : "一般ユーザー";
+  return {
+    accountId: account.id,
+    displayLabel: `${account.display_name}（${roleLabel}）`,
+    role: account.role,
+    roleLabel,
+    privileged: account.role === "owner",
+    exclusive: true,
+    shared: false,
+    rootFolderId: null
+  };
 }
 
 export default {
@@ -59,6 +85,12 @@ export default {
 async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
+    if (session) enqueueSecurityAudit(env, context, request, {
+      service: "billing", eventType: "session_resume", outcome: "success",
+      identityId: session.identityId, serviceLinkId: session.serviceLinkId,
+      serviceAccountId: session.accountId, role: session.role,
+      authMethod: session.authMethod, sessionId: session.sessionId
+    });
     return json({
       authenticated: Boolean(session),
       role: session?.role || null,
@@ -195,7 +227,7 @@ async function handleApi(request, env, url, path, context) {
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
     await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
-    enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceAccountId: account.id, role: account.role, authMethod: "passkey" });
+    enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey" });
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "passkey" }, 200, headers);
   }
 
@@ -584,7 +616,8 @@ async function readSession(request, env) {
       serviceLinkId: payload.serviceLinkId || null,
       serviceAccountId: payload.serviceAccountId || null,
       passkeySessionEpoch: payload.passkeySessionEpoch || null,
-      authMethod: payload.authMethod || "password"
+      authMethod: payload.authMethod || "password",
+      sessionId: payload.sessionId || null
     };
   } catch {
     return null;
@@ -603,6 +636,7 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     serviceAccountId: auth.serviceAccountId || null,
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
+    sessionId: auth.sessionId || crypto.randomUUID(),
     exp: Math.floor(Date.now() / 1000) + maxAge
   };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
@@ -630,7 +664,8 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
-    authMethod: session.authMethod
+    authMethod: session.authMethod,
+    sessionId: session.sessionId
   });
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));

@@ -5,7 +5,7 @@
   const state = {
     adminPrf: null, adminCredentialId: null, selectedIdentity: null,
     pendingInviteCloud: null, pendingPrimarySetup: null, identityNames: new Map(),
-    auditCursor: null, auditLoading: false
+    auditCursor: null, auditLoading: false, services: []
   };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -66,9 +66,16 @@
       finally { if (button) button.disabled = false; }
     });
     $("#audit-load-more").addEventListener("click", () => loadAudit({ append: true }).catch((error) => showMessage(error.message, true)));
-    document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => showPanel(button.dataset.panel, button)));
+    $("#audit-refresh").addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try { await loadAudit({ append: false }); } catch (error) { showMessage(error.message, true); }
+      finally { event.currentTarget.disabled = false; }
+    });
+    document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => {
+      showPanel(button.dataset.panel, button);
+      if (button.dataset.panel === "audit-panel") loadAudit({ append: false }).catch((error) => showMessage(error.message, true));
+    }));
     populateAuditEventFilter();
-    addLinkRow("diary", "main-admin");
   }
 
   async function routeStatus() {
@@ -264,8 +271,16 @@
     $("#admin-view").hidden = false;
     const setupResult = setup || await TRoomPasskeys.setupStatus().catch(() => ({ active: false }));
     renderPrimarySetupNotice(setupResult);
+    await loadServices();
+    if (!$("#link-rows .link-row")) addLinkRow();
     await Promise.all([loadDashboard(), loadIdentities()]);
     await loadAudit({ append: false });
+  }
+
+  async function loadServices() {
+    const data = await get("/services");
+    state.services = Array.isArray(data.services) ? data.services : [];
+    if (!state.services.length) throw new Error("サービス連携候補を取得できません。");
   }
 
   function renderPrimarySetupNotice(setup) {
@@ -284,14 +299,14 @@
 
   async function loadDashboard() {
     const data = await get("/dashboard");
-    const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
+    const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
     $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div>`;
   }
 
   async function loadIdentities() {
     const data = await get("/identities");
     state.identityNames = new Map(data.identities.map((identity) => [identity.id, identity.displayName]));
-    $("#identity-list").innerHTML = data.identities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(statusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終ログイン ${escapeHtml(formatDate(identity.lastLoginAt))}` : "ログイン履歴なし"}</small></div>`).join("") || "<p>ユーザーはまだ登録されていません。</p>";
+    $("#identity-list").innerHTML = data.identities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(statusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`).join("") || "<p>ユーザーはまだ登録されていません。</p>";
     document.querySelectorAll("[data-view-identity]").forEach((button) => button.addEventListener("click", async () => {
       button.disabled = true;
       try { await viewIdentity(button.dataset.viewIdentity); } catch (error) { showMessage(error.message, true); }
@@ -303,7 +318,7 @@
     const data = await get(`/identities/${encodeURIComponent(id)}`);
     state.selectedIdentity = data;
     const credentials = data.credentials.map((item) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))} / ${escapeHtml(item.device_type || "端末種別不明")} / ${item.backed_up ? "複数端末で利用可能" : "この端末に保存"} / T-Cloudのパスキー利用: ${item.prf_enabled ? "対応" : "この端末では非対応"}</small>${item.status !== "revoked" ? `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>` : ""}</div>`).join("");
-    const links = data.links.map((item) => `<div class="link"><strong>${escapeHtml(item.display_label)}</strong>${item.folderUnavailable ? '<span class="warning-text">（フォルダ情報を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(display.serviceAccountLabel(item.service, item.service_account_id))}${item.cloud_root_folder_id ? ` / T-Cloudフォルダ #${Number(item.cloud_root_folder_id)}` : ""} / ${escapeHtml(statusLabel(item.status))}</small><span class="technical-detail">サービス内ID: ${escapeHtml(item.service_account_id)}</span>${data.identity.id !== "primary-admin" ? `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>` : ""}</div>`).join("");
+    const links = data.links.map((item) => `<div class="link"><strong>${escapeHtml(item.display_label)}</strong>${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(statusLabel(item.status))}</small>${item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`).join("");
     const invitations = data.invitations.map((item) => `<div class="invitation"><small>${escapeHtml(formatDate(item.created_at))} / ${escapeHtml(statusLabel(item.status))} / 期限 ${escapeHtml(new Date(Number(item.expires_at) * 1000).toLocaleString("ja-JP"))}</small>${item.status === "active" ? `<button class="danger" data-revoke-invitation="${escapeHtml(item.id)}">招待取消</button>` : ""}</div>`).join("");
     const approvals = (data.approvalCandidates || []).map((item) => {
       const cloudStatus = !item.hasCloudLinks ? ""
@@ -312,7 +327,7 @@
           : item.prfEnabled ? "（T-Cloudの端末準備が未完了）" : "（この端末ではT-Cloudのパスキー利用に非対応）";
       return `<button data-approve-credential="${escapeHtml(item.credentialId)}">${escapeHtml(formatDate(item.registeredAt))}の登録を承認${cloudStatus}</button>`;
     }).join("");
-    $("#identity-detail").innerHTML = `<h2>${escapeHtml(data.identity.displayName)}</h2><p>ユーザーID: ${escapeHtml(data.identity.id)} / ${escapeHtml(statusLabel(data.identity.status))}</p><h3>サービス連携</h3>${links || "<p>なし</p>"}${data.identity.id !== "primary-admin" ? '<div class="link-editor"><select id="detail-link-service"><option value="diary">日記</option><option value="billing">請求書</option><option value="cloud">T-Cloud</option></select><input id="detail-link-account" placeholder="サービス内アカウントID"><input id="detail-link-root" type="number" min="1" placeholder="T-CloudフォルダID"><button id="detail-add-link" class="secondary">連携追加</button></div><p class="hint">追加した連携は、再招待と承認後に有効になります。</p>' : ""}<h3>登録済みパスキー</h3>${credentials || "<p>なし</p>"}<h3>招待履歴</h3>${invitations || "<p>なし</p>"}<div class="tabs"><button id="reinvite-button">再招待</button>${approvals}</div><output id="detail-result"></output>`;
+    $("#identity-detail").innerHTML = `<h2>${escapeHtml(data.identity.displayName)}</h2><p>${escapeHtml(statusLabel(data.identity.status))}</p><small>${data.identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(data.identity.lastLoginAt))}` : "認証履歴なし"}${data.identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(data.identity.lastSeenAt))}` : ""}</small><h3>サービス連携</h3>${links || "<p>なし</p>"}<div class="link-editor"><div id="detail-link-row"></div><button id="detail-add-link" class="secondary">サービスを追加</button></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloudは安全な鍵委譲が完了するまで承認待ちになります。</p><h3>登録済みパスキー</h3>${credentials || "<p>なし</p>"}<h3>招待履歴</h3>${invitations || "<p>なし</p>"}<div class="tabs"><button id="reinvite-button">再招待</button>${approvals}</div><output id="detail-result"></output>`;
     $("#identity-detail").hidden = false;
     $("#reinvite-button").onclick = (event) => reinvite(id, event.currentTarget);
     document.querySelectorAll("[data-approve-credential]").forEach((button) => button.addEventListener("click", (event) => approve(id, event.currentTarget, button.dataset.approveCredential)));
@@ -320,16 +335,18 @@
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));
     $("#detail-add-link")?.addEventListener("click", (event) => addDetailLink(id, event.currentTarget));
+    addLinkRow(null, "#detail-link-row", false);
   }
 
   async function addDetailLink(identityId, button) {
     button.disabled = true;
     try {
-      const service = $("#detail-link-service").value;
-      const accountId = $("#detail-link-account").value.trim();
-      const rootFolderId = $("#detail-link-root").value || null;
-      await post(`/identities/${encodeURIComponent(identityId)}/links`, { links: [{ service, accountId, rootFolderId }] });
-      showMessage("連携を追加しました。利用開始には再招待と承認が必要です。");
+      const row = $("#detail-link-row .link-row");
+      const link = selectedLink(row);
+      if (!link) throw new Error("追加するサービスと連携先を選択してください。");
+      if (link.privileged) await freshAdminAuthentication();
+      const result = await post(`/identities/${encodeURIComponent(identityId)}/links`, { links: [linkPayload(link)] });
+      showMessage(result.requiresApproval ? "T-Cloud連携を追加しました。鍵委譲が完了するまで承認待ちです。" : "サービス連携を追加しました。既存のパスキーで利用できます。");
       await viewIdentity(identityId);
     } catch (error) { showMessage(error.message, true); }
     finally { button.disabled = false; }
@@ -416,8 +433,10 @@
     const button = event.submitter;
     button.disabled = true;
     try {
-      const links = [...document.querySelectorAll(".link-row")].map((row) => ({ service: row.querySelector("[data-link-service]").value, accountId: row.querySelector("[data-link-account]").value.trim(), rootFolderId: row.querySelector("[data-link-root]").value || null }));
-      const result = await post("/identities", { displayName: $("#invite-name").value, identityId: $("#invite-identity-id").value || undefined, ...inviteExpiryPayload(), links });
+      const links = [...$("#link-rows").querySelectorAll(".link-row")].map(selectedLink);
+      if (!links.length || links.some((link) => !link)) throw new Error("利用するサービスと連携先を選択してください。");
+      if (links.some((link) => link.privileged)) await freshAdminAuthentication();
+      const result = await post("/identities", { displayName: $("#invite-name").value, ...inviteExpiryPayload(), links: links.map(linkPayload) });
       $("#invite-result").textContent = absoluteInviteUrl(result.invitationUrl);
       await Promise.all([loadDashboard(), loadIdentities()]);
     } catch (error) { showMessage(error.message, true); }
@@ -434,13 +453,54 @@
     return { expiresAt };
   }
 
-  function addLinkRow(service = "diary", account = "") {
+  function addLinkRow(service = null, containerSelector = "#link-rows", removable = true) {
     const row = document.createElement("div");
     row.className = "link-row";
-    row.innerHTML = `<select data-link-service aria-label="サービス"><option value="diary">日記</option><option value="billing">請求書</option><option value="cloud">T-Cloud</option></select><input data-link-account aria-label="サービス内アカウントID" placeholder="サービス内アカウントID" value="${escapeHtml(account)}" required><input data-link-root aria-label="T-CloudフォルダID" type="number" min="1" placeholder="T-CloudフォルダID"><button type="button" class="secondary" aria-label="連携を削除">×</button>`;
-    row.querySelector("[data-link-service]").value = service;
-    row.querySelector("button").onclick = () => row.remove();
-    $("#link-rows").append(row);
+    const serviceSelect = document.createElement("select");
+    serviceSelect.dataset.linkService = "";
+    serviceSelect.setAttribute("aria-label", "サービス");
+    serviceSelect.append(new Option("サービスを選択", ""), ...state.services.map((item) => new Option(item.displayName, item.id)));
+    const targetSelect = document.createElement("select");
+    targetSelect.dataset.linkTarget = "";
+    targetSelect.setAttribute("aria-label", "利用するアカウントまたはフォルダ");
+    targetSelect.disabled = true;
+    targetSelect.append(new Option("先にサービスを選択してください", ""));
+    const updateTargets = () => {
+      const selectedService = state.services.find((item) => item.id === serviceSelect.value);
+      row._targets = selectedService?.targets || [];
+      targetSelect.replaceChildren(new Option(selectedService ? "連携先を選択" : "先にサービスを選択してください", ""));
+      row._targets.forEach((target, index) => targetSelect.append(new Option(`${target.displayLabel}${target.roleLabel ? ` / ${target.roleLabel}` : ""}`, String(index))));
+      targetSelect.disabled = !selectedService || !row._targets.length;
+    };
+    serviceSelect.addEventListener("change", updateTargets);
+    row.append(serviceSelect, targetSelect);
+    if (removable) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary";
+      remove.setAttribute("aria-label", "連携を削除");
+      remove.textContent = "×";
+      remove.onclick = () => row.remove();
+      row.append(remove);
+    }
+    $(containerSelector).append(row);
+    if (service) { serviceSelect.value = service; updateTargets(); }
+  }
+
+  function selectedLink(row) {
+    if (!row) return null;
+    const value = row.querySelector("[data-link-target]")?.value;
+    if (value == null || value === "") return null;
+    const index = Number(value);
+    return Number.isInteger(index) ? row._targets?.[index] || null : null;
+  }
+
+  function linkPayload(link) {
+    return { service: link.service, accountId: link.accountId, rootFolderId: link.rootFolderId ?? null };
+  }
+
+  async function freshAdminAuthentication() {
+    await TRoomPasskeys.authenticate("security");
   }
 
   async function loadAudit({ append = false } = {}) {
@@ -491,7 +551,9 @@
     const outcomeClass = ["success", "failure", "blocked", "cancelled", "info"].includes(outcome) ? outcome : "unknown";
     const userAgent = String(event.user_agent || "");
     const role = event.role ? `<span class="audit-chip">${escapeHtml(display.roleLabel(event.role))}</span>` : "";
-    const idDetail = technicalId ? `<span class="technical-detail">${identityId ? "ユーザーID" : "サービス内ID"}: ${escapeHtml(technicalId)}</span>` : "";
+    const serviceAccount = event.service_account_label ? `<span class="audit-account">${escapeHtml(display.serviceLabel(event.service))} / ${escapeHtml(event.service_account_label)}</span>` : "";
+    const technicalValues = [identityId ? `ユーザーID: ${identityId}` : "", serviceAccountId ? `サービス内ID: ${serviceAccountId}` : ""].filter(Boolean);
+    const idDetail = technicalId ? `<details class="technical-detail"><summary>技術情報</summary><span>${technicalValues.map(escapeHtml).join(" / ")}</span></details>` : "";
     return `<article class="audit-row audit-${outcomeClass}">
       <div class="audit-heading"><strong>${escapeHtml(display.eventLabel(event.event_type))}</strong><time datetime="${escapeHtml(event.occurred_at || "")}">${escapeHtml(formatDate(event.occurred_at))}</time></div>
       <div class="event-meta" aria-label="操作の概要">
@@ -501,6 +563,7 @@
         <span class="audit-chip">${escapeHtml(display.authMethodLabel(event.auth_method))}</span>
         <span class="audit-chip outcome-${outcomeClass}">${escapeHtml(display.outcomeLabel(outcome))}</span>
       </div>
+      ${serviceAccount}
       ${idDetail}
       <div class="audit-device" title="${escapeHtml(userAgent)}">利用端末: ${escapeHtml(display.formatUserAgent(userAgent))}</div>
     </article>`;
