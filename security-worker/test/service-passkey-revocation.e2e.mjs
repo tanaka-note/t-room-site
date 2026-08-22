@@ -12,6 +12,8 @@ const readinessIdentityId = "cloud_readiness_test";
 const readinessCredentialA = Buffer.from("cloud-readiness-credential-a").toString("base64url");
 const readinessCredentialB = Buffer.from("cloud-readiness-credential-b").toString("base64url");
 const primaryCredentialId = Buffer.from("primary-admin-setup-credential").toString("base64url");
+const statusAdminIdentityId = "status_admin_test";
+const statusAdminCredentialId = Buffer.from("status-admin-credential").toString("base64url");
 const diaryAdminLinkId = "passkey-session-diary-admin-link";
 const services = {
   cloud: {
@@ -68,7 +70,7 @@ try {
              ('${readinessCredentialB}', '${readinessIdentityId}', 'public-b', 'c2FsdC1i', 'active', CURRENT_TIMESTAMP);
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
-      VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', 42, 'Cloud Readiness', 'active');
+      VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', 424242, 'Cloud Readiness', 'active');
     INSERT INTO security_tcloud_client_vaults
       (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
       VALUES ('${readinessCredentialA}', '${readinessIdentityId}', '{"kty":"RSA"}', 'fingerprint-a', 'private-a', 'iv-a'),
@@ -89,6 +91,11 @@ try {
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES ('shared-provider-cloud-link', 'shared_cloud_test', 'cloud', 'folder-member', 424242, 'Security連携テスト', 'active');
+    INSERT INTO security_identities (id, display_name, status, is_security_admin)
+      VALUES ('${statusAdminIdentityId}', 'Status Admin Test', 'active', 1);
+    INSERT INTO security_credentials
+      (credential_id, identity_id, public_key, prf_salt, status, approved_at)
+      VALUES ('${statusAdminCredentialId}', '${statusAdminIdentityId}', 'status-public-key', 'c3RhdHVzLXNhbHQ', 'active', CURRENT_TIMESTAMP);
   `);
 
   const diaryVersion = queryNumber("diary-worker", "diary-db", "SELECT session_version AS value FROM diary_accounts WHERE id = 'main-user'");
@@ -98,7 +105,34 @@ try {
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
   const oldAdminCookie = signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential", passkeySessionEpoch: 1 });
   const oldIdentityCookie = signSecurityCookie({ kind: "identity", identityId, credentialId, passkeySessionEpoch: 1 });
+  const statusAdminCookie = signSecurityCookie({ kind: "admin", identityId: statusAdminIdentityId, credentialId: statusAdminCredentialId, passkeySessionEpoch: 1 });
   assert.equal(await securityAdminAuthenticated(oldAdminCookie), true, "current-epoch Security admin cookie is accepted");
+  assert.equal(await securityAdminAuthenticated(statusAdminCookie), true, "a live Security administrator cookie is accepted by status");
+  await waitForAuditCount(statusAdminIdentityId, "session_resume", 1);
+  const validStatusResumeCount = auditCount(statusAdminIdentityId, "session_resume");
+  const statusCredentialRevoke = await securityAdminRequest(`/security/api/credentials/${statusAdminCredentialId}/revoke`, oldAdminCookie, {});
+  assert.equal(statusCredentialRevoke.response.status, 200, "a live administrator can revoke the status-test credential through the HTTP API");
+  assert.equal(await securityAdminAuthenticated(statusAdminCookie), false, "status rejects a revoked administrator credential");
+  const revokedAdminApi = await securityAdminRequest("/security/api/credentials/missing-credential/revoke", statusAdminCookie, {});
+  assert.equal(revokedAdminApi.response.status, 401, "a revoked administrator credential cannot use management APIs");
+  await delay(200);
+  assert.equal(auditCount(statusAdminIdentityId, "session_resume"), validStatusResumeCount,
+    "status does not audit a revoked administrator cookie as a successful resume");
+  runSecuritySql(`UPDATE security_credentials SET status = 'active', revoked_at = NULL WHERE credential_id = '${statusAdminCredentialId}';
+    UPDATE security_identities SET status = 'disabled' WHERE id = '${statusAdminIdentityId}'`);
+  assert.equal(await securityAdminAuthenticated(statusAdminCookie), false, "status rejects a disabled administrator Identity");
+  const disabledAdminApi = await securityAdminRequest("/security/api/credentials/missing-credential/revoke", statusAdminCookie, {});
+  assert.equal(disabledAdminApi.response.status, 401, "a disabled administrator Identity cannot use management APIs");
+  await delay(200);
+  assert.equal(auditCount(statusAdminIdentityId, "session_resume"), validStatusResumeCount,
+    "status does not audit a disabled administrator cookie as a successful resume");
+  runSecuritySql(`UPDATE security_identities SET status = 'active' WHERE id = '${statusAdminIdentityId}'`);
+  runSecuritySql(`UPDATE security_identities SET is_security_admin = 0 WHERE id = '${statusAdminIdentityId}'`);
+  assert.equal(await securityAdminAuthenticated(statusAdminCookie), false, "status rejects a live Identity after Security administrator privilege is removed");
+  await delay(200);
+  assert.equal(auditCount(statusAdminIdentityId, "session_resume"), validStatusResumeCount,
+    "status does not audit a non-administrator cookie as a successful resume");
+  runSecuritySql(`UPDATE security_identities SET is_security_admin = 1 WHERE id = '${statusAdminIdentityId}'`);
   assert.equal(await securityIdentityHandoff(oldIdentityCookie), 200, "current-epoch Security identity cookie is accepted");
   assert.deepEqual(await cloudAuthenticationCredentialIds(), [readinessCredentialA], "only the credential with a folder envelope is a Cloud login candidate");
   const securityOptions = await readAuthenticationOptions("security");
@@ -135,6 +169,51 @@ try {
     assert.equal((await response.json()).adminAuthenticated, false);
   }
   await startServiceWorkers(true);
+  const handoffCases = [
+    { service: "diary", cookie: oldIdentityCookie, linkId: services.diary.linkId, accountId: services.diary.accountId, role: "user" },
+    { service: "billing", cookie: oldIdentityCookie, linkId: services.billing.linkId, accountId: services.billing.accountId, role: "owner" },
+    { service: "cloud", cookie: readinessCookieA, linkId: "readiness-cloud-link", accountId: "folder-member", role: "member", rootFolderId: 424242 }
+  ];
+  for (const expected of handoffCases) {
+    const created = await createSecurityHandoff(expected.cookie, expected.service, expected.linkId);
+    assert.equal(created.response.status, 200, `${expected.service} handoff creation: ${JSON.stringify(created.body)}`);
+    assert.ok(typeof created.body.handoffToken === "string" && created.body.handoffToken.length >= 32,
+      `${expected.service} returns a non-empty one-time handoff token`);
+    assertPlainPublicLink(created.body.link, expected);
+    assert.equal(containsThenable(created.body), false, `${expected.service} handoff JSON contains no Promise or thenable`);
+    assertNoPlaintextSecrets(created.body.link);
+    if (expected.service === "cloud") {
+      assert.equal(created.body.link.rootFolderId, expected.rootFolderId);
+      assert.match(created.body.link.scopeLabel, /Security連携テスト/);
+      assert.equal(JSON.stringify(created.body).includes("prfOutput"), false);
+      assert.equal(JSON.stringify(created.body).includes("privateKey"), false);
+      assert.equal(JSON.stringify(created.body).includes("folderKey"), false);
+      assert.equal(JSON.stringify(created.body).includes("fileKey"), false);
+    }
+    const redeemed = await redeemServiceHandoff(expected.service, created.body.handoffToken);
+    assert.equal(redeemed.response.status, 200, `${expected.service} redeems the handoff once: ${JSON.stringify(redeemed.body)}`);
+    assert.ok(redeemed.cookie, `${expected.service} issues a service session cookie`);
+    assert.equal(decodeSignedPayload(redeemed.cookie).serviceLinkId, expected.linkId,
+      `${expected.service} session keeps the selected service link ID`);
+    const replay = await redeemServiceHandoff(expected.service, created.body.handoffToken);
+    assert.equal(replay.response.status, 401, `${expected.service} rejects a second handoff redemption`);
+  }
+  await waitForServiceAudit(identityId, "diary", "passkey_login_success", 1);
+  await waitForServiceAudit(identityId, "billing", "passkey_login_success", 1);
+  await waitForServiceAudit(readinessIdentityId, "cloud", "passkey_login_success", 1);
+  assert.equal(serviceAuditCount(identityId, "diary", "passkey_login_success"), 1,
+    "Diary emits one service login completion event for one redeemed handoff");
+  assert.equal(serviceAuditCount(identityId, "billing", "passkey_login_success"), 1,
+    "Billing emits one service login completion event for one redeemed handoff");
+  assert.equal(serviceAuditCount(readinessIdentityId, "cloud", "passkey_login_success"), 1,
+    "T-Cloud emits one service login completion event for one redeemed handoff");
+  const handoffLastLogin = queryText("security-worker", "security-db",
+    `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`);
+  const handoffLastSeen = queryText("security-worker", "security-db",
+    `SELECT last_seen_at AS value FROM security_identities WHERE id = '${identityId}'`);
+  assert.ok(handoffLastLogin.endsWith("Z"), "a completed service login records the latest Identity login as UTC ISO");
+  assert.ok(handoffLastSeen >= handoffLastLogin,
+    "a completed service login also records a normal Identity access without moving last_seen_at backwards");
   const freshAdminCookie = signSecurityCookie({
     kind: "admin", identityId: "audit_admin", credentialId: "audit-credential",
     passkeySessionEpoch: 1, authenticatedAt: Math.floor(Date.now() / 1000)
@@ -185,7 +264,7 @@ try {
     links: [{ service: "cloud", accountId: "folder-member", rootFolderId: 424242 }]
   });
   assert.equal(sharedCloud.response.status, 200, JSON.stringify(sharedCloud.body));
-  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_service_links WHERE service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id = 424242 AND status IN ('pending', 'active')"), 2,
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_service_links WHERE service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id = 424242 AND status IN ('pending', 'active')"), 3,
     "a validated Cloud folder link is accepted in pending state and remains shareable");
   runSecuritySql(`CREATE TRIGGER fail_credential_revoke_audit
     BEFORE INSERT ON security_audit_events
@@ -323,6 +402,24 @@ try {
   assert.equal((await readSetupStatus(guardSetupToken)).active, false, "disabled Identity invalidates setup session");
   runSecuritySql(`UPDATE security_identities SET status = 'active' WHERE id = '${identityId}'; UPDATE security_setup_sessions SET status = 'completed' WHERE id = 'setup-guard'`);
   assert.equal((await readSetupStatus(guardSetupToken)).completed, true, "completed setup remains visible only as read-only completion state");
+
+  const dashboardBefore = (await securityAdminRequest("/security/api/dashboard", oldAdminCookie)).body;
+  const dashboardTimestamp = new Date().toISOString();
+  runSecuritySql(`INSERT INTO security_audit_events
+    (event_id, occurred_at, service, event_type, outcome, identity_id, auth_method)
+    VALUES
+    ('dashboard-security-login', '${dashboardTimestamp}', 'security', 'passkey_login_success', 'success', '${identityId}', 'passkey'),
+    ('dashboard-diary-auth', '${dashboardTimestamp}', 'diary', 'passkey_authentication_success', 'success', '${identityId}', 'passkey'),
+    ('dashboard-diary-login', '${dashboardTimestamp}', 'diary', 'passkey_login_success', 'success', '${identityId}', 'passkey'),
+    ('dashboard-billing-password', '${dashboardTimestamp}', 'billing', 'password_login_success', 'success', '${identityId}', 'password'),
+    ('dashboard-resume', '${dashboardTimestamp}', 'diary', 'session_resume', 'success', '${identityId}', 'passkey')`);
+  const dashboardAfter = (await securityAdminRequest("/security/api/dashboard", oldAdminCookie)).body;
+  assert.equal(dashboardAfter.loginSuccess - dashboardBefore.loginSuccess, 3,
+    "dashboard counts only completed Security, service passkey, and password logins");
+  assert.equal(dashboardAfter.sessionResume - dashboardBefore.sessionResume, 1,
+    "dashboard reports resumed sessions separately");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_audit_events WHERE event_id = 'dashboard-diary-auth'"), 1,
+    "the intermediate WebAuthn authentication event remains stored for audit inspection");
 
   runSecuritySql(`WITH RECURSIVE fixture(n) AS (
       SELECT 0 UNION ALL SELECT n + 1 FROM fixture WHERE n < 749
@@ -632,6 +729,69 @@ async function securityIdentityHandoff(cookie, linkId = services.diary.linkId) {
   return response.status;
 }
 
+async function createSecurityHandoff(cookie, service, linkId) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/auth/handoff", {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:8810",
+      "Content-Type": "application/json",
+      Cookie: `troom_security_identity=${cookie}`
+    },
+    body: JSON.stringify({ service, linkId })
+  });
+  return { response, body: await response.json().catch(() => ({})) };
+}
+
+async function redeemServiceHandoff(name, handoffToken) {
+  const service = services[name];
+  const response = await fetch(`http://127.0.0.1:${service.port}/${name}/api/passkey/handoff`, {
+    method: "POST",
+    headers: {
+      Origin: `http://127.0.0.1:${service.port}`,
+      "Content-Type": "application/json",
+      ...(name === "diary" ? { "X-Diary-Request": "1" } : {})
+    },
+    body: JSON.stringify({ handoffToken })
+  });
+  const body = await response.json().catch(() => ({}));
+  const cookie = response.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1] || null;
+  return { response, body, cookie };
+}
+
+function assertPlainPublicLink(link, expected) {
+  assert.ok(link && typeof link === "object" && !Array.isArray(link), `${expected.service} handoff contains a plain link object`);
+  assert.equal(link.id, expected.linkId);
+  assert.equal(link.service, expected.service);
+  assert.equal(link.accountId, expected.accountId);
+  assert.equal(link.role, expected.role);
+  assert.ok(typeof link.displayLabel === "string" && link.displayLabel.length > 0,
+    `${expected.service} handoff contains a human display label`);
+  assert.ok(typeof link.roleLabel === "string" && link.roleLabel.length > 0,
+    `${expected.service} handoff contains a human role label`);
+  assert.equal(Object.hasOwn(link, "rootFolderId"), true);
+  assert.equal(Object.hasOwn(link, "scopeLabel"), true);
+}
+
+function containsThenable(value, seen = new Set()) {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
+  if (typeof value.then === "function") return true;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value).some((item) => containsThenable(item, seen));
+}
+
+function assertNoPlaintextSecrets(value) {
+  const forbidden = /^(?:password|authProof|session|cookie|prfOutput|privateKey|folderKey|fileKey|secret)$/i;
+  const inspect = (item) => {
+    if (!item || typeof item !== "object") return;
+    for (const [key, nested] of Object.entries(item)) {
+      assert.equal(forbidden.test(key), false, `handoff link must not expose ${key}`);
+      inspect(nested);
+    }
+  };
+  inspect(value);
+}
+
 async function securityAdminRequest(path, cookie, body) {
   const response = await fetch(`http://127.0.0.1:8810${path}`, {
     method: body === undefined ? "GET" : "POST",
@@ -785,16 +945,26 @@ function decodeSignedPayload(cookie) {
 
 async function assertRollingPasskeySessions(cookies) {
   for (const [name, service] of Object.entries(services)) {
+    const legacyPayload = decodeSignedPayload(cookies[name]);
+    delete legacyPayload.sessionId;
+    const legacyCookie = signCookie(legacyPayload);
     const first = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
-      headers: { Cookie: `${service.cookie}=${cookies[name]}` }
+      headers: { Cookie: `${service.cookie}=${legacyCookie}` }
     });
     assert.equal(first.status, 200, `${name} rolling session first access`);
     const refreshed = first.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1];
     assert.ok(refreshed, `${name} must refresh its authenticated session`);
+    const firstPayload = decodeSignedPayload(refreshed);
+    assert.ok(typeof firstPayload.sessionId === "string" && firstPayload.sessionId.length >= 32,
+      `${name} assigns a stable session ID when refreshing a legacy cookie`);
     const second = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
       headers: { Cookie: `${service.cookie}=${refreshed}` }
     });
     assert.equal(second.status, 200, `${name} refreshed passkey session must retain the epoch`);
+    const secondRefreshed = second.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1];
+    assert.ok(secondRefreshed, `${name} refreshes the session a second time`);
+    assert.equal(decodeSignedPayload(secondRefreshed).sessionId, firstPayload.sessionId,
+      `${name} keeps one session ID across rolling refreshes`);
   }
 }
 
@@ -915,6 +1085,8 @@ function cleanupSecurityFixture() {
     DELETE FROM security_identities WHERE id = '${identityId}';
     DELETE FROM security_credentials WHERE identity_id = 'audit_admin';
     DELETE FROM security_identities WHERE id = 'audit_admin';
+    DELETE FROM security_credentials WHERE identity_id = '${statusAdminIdentityId}';
+    DELETE FROM security_identities WHERE id = '${statusAdminIdentityId}';
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id = '${readinessIdentityId}';
     DELETE FROM security_tcloud_client_vaults WHERE identity_id = '${readinessIdentityId}';
     DELETE FROM security_handoffs WHERE identity_id = '${readinessIdentityId}';
@@ -934,8 +1106,34 @@ function cleanupSecurityFixture() {
     DELETE FROM security_identities WHERE id = 'primary-admin';
     DELETE FROM security_service_links WHERE identity_id = 'shared_cloud_test';
     DELETE FROM security_identities WHERE id = 'shared_cloud_test';
-    DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${readinessIdentityId}', 'shared_cloud_test');
+    DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${statusAdminIdentityId}', '${readinessIdentityId}', 'shared_cloud_test');
   `);
+}
+
+function auditCount(identity, eventType) {
+  return queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
+    WHERE identity_id = '${identity}' AND event_type = '${eventType}'`);
+}
+
+async function waitForAuditCount(identity, eventType, minimum) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (auditCount(identity, eventType) >= minimum) return;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for ${eventType} audit event for ${identity}.`);
+}
+
+function serviceAuditCount(identity, service, eventType) {
+  return queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
+    WHERE identity_id = '${identity}' AND service = '${service}' AND event_type = '${eventType}'`);
+}
+
+async function waitForServiceAudit(identity, service, eventType, minimum) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (serviceAuditCount(identity, service, eventType) >= minimum) return;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for ${service} ${eventType} audit event for ${identity}.`);
 }
 
 function queryNumber(directory, database, sql) {

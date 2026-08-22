@@ -59,16 +59,37 @@ test("exclusive account links cannot cross Identities while Cloud folders remain
 });
 
 test("session resume audit suppresses a duplicate minute and last access is separate from login", () => {
-  sql("INSERT INTO security_identities (id, display_name, status, last_login_at) VALUES ('resume-test', 'Resume', 'active', '2026-08-23T00:00:00.000Z')");
+  sql("INSERT INTO security_identities (id, display_name, status) VALUES ('resume-test', 'Resume', 'active')");
+  applyLoginActivity("resume-test", "2026-08-23T01:00:00.000Z");
+  assert.equal(queryText("SELECT last_login_at AS value FROM security_identities WHERE id = 'resume-test'"), "2026-08-23T01:00:00.000Z");
+  assert.equal(queryText("SELECT last_seen_at AS value FROM security_identities WHERE id = 'resume-test'"), "2026-08-23T01:00:00.000Z");
   for (const [id, time] of [["resume-a", "2026-08-23T01:02:03.000Z"], ["resume-b", "2026-08-23T01:02:44.000Z"]]) {
-    sql(`INSERT OR IGNORE INTO security_audit_events
+    sql(`INSERT INTO security_audit_events
       (event_id, occurred_at, service, event_type, outcome, identity_id, session_id_hash)
-      VALUES ('${id}', '${time}', 'diary', 'session_resume', 'success', 'resume-test', 'hashed-session')`);
+      VALUES ('${id}', '${time}', 'diary', 'session_resume', 'success', 'resume-test', 'hashed-session')
+      ON CONFLICT DO NOTHING`);
   }
   assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_audit_events WHERE identity_id = 'resume-test' AND event_type = 'session_resume'"), 1);
-  sql("UPDATE security_identities SET last_seen_at = '2026-08-23T01:02:44.000Z' WHERE id = 'resume-test'");
-  assert.equal(queryText("SELECT last_login_at AS value FROM security_identities WHERE id = 'resume-test'"), "2026-08-23T00:00:00.000Z");
+  applyResumeActivity("resume-test", "2026-08-23T01:02:44.000Z");
+  assert.equal(queryText("SELECT last_login_at AS value FROM security_identities WHERE id = 'resume-test'"), "2026-08-23T01:00:00.000Z");
   assert.equal(queryText("SELECT last_seen_at AS value FROM security_identities WHERE id = 'resume-test'"), "2026-08-23T01:02:44.000Z");
+});
+
+test("out-of-order audit delivery never rolls back Identity activity timestamps", () => {
+  sql("INSERT INTO security_identities (id, display_name, status) VALUES ('activity-order', 'Activity Order', 'active')");
+  applyLoginActivity("activity-order", "2026-08-23T03:00:00.000Z");
+  applyLoginActivity("activity-order", "2026-08-23T02:00:00.000Z");
+  assert.equal(queryText("SELECT last_login_at AS value FROM security_identities WHERE id = 'activity-order'"), "2026-08-23T03:00:00.000Z");
+  assert.equal(queryText("SELECT last_seen_at AS value FROM security_identities WHERE id = 'activity-order'"), "2026-08-23T03:00:00.000Z");
+
+  applyResumeActivity("activity-order", "2026-08-23T04:00:00.000Z");
+  applyResumeActivity("activity-order", "2026-08-23T01:00:00.000Z");
+  assert.equal(queryText("SELECT last_login_at AS value FROM security_identities WHERE id = 'activity-order'"), "2026-08-23T03:00:00.000Z");
+  assert.equal(queryText("SELECT last_seen_at AS value FROM security_identities WHERE id = 'activity-order'"), "2026-08-23T04:00:00.000Z");
+
+  applyLoginActivity("activity-order", "2026-08-23T05:00:00.000Z");
+  assert.equal(queryText("SELECT last_login_at AS value FROM security_identities WHERE id = 'activity-order'"), "2026-08-23T05:00:00.000Z");
+  assert.equal(queryText("SELECT last_seen_at AS value FROM security_identities WHERE id = 'activity-order'"), "2026-08-23T05:00:00.000Z");
 });
 
 test("one credential vault serves multiple Cloud links while folder envelopes stay link-specific", () => {
@@ -131,6 +152,21 @@ function queryText(statement) {
   const match = sql(statement).match(/"value"\s*:\s*"([^"]*)"/);
   assert.ok(match, `No text result for ${statement}`);
   return match[1];
+}
+
+function applyLoginActivity(identityId, occurredAt) {
+  sql(`UPDATE security_identities SET
+    last_login_at = CASE WHEN last_login_at IS NULL OR last_login_at < '${occurredAt}' THEN '${occurredAt}' ELSE last_login_at END,
+    last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < '${occurredAt}' THEN '${occurredAt}' ELSE last_seen_at END,
+    updated_at = CURRENT_TIMESTAMP
+    WHERE id = '${identityId}' AND (
+      last_login_at IS NULL OR last_login_at < '${occurredAt}' OR last_seen_at IS NULL OR last_seen_at < '${occurredAt}'
+    )`);
+}
+
+function applyResumeActivity(identityId, occurredAt) {
+  sql(`UPDATE security_identities SET last_seen_at = '${occurredAt}', updated_at = CURRENT_TIMESTAMP
+    WHERE id = '${identityId}' AND (last_seen_at IS NULL OR last_seen_at < '${occurredAt}')`);
 }
 
 function runAsync(statement) {

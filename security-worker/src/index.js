@@ -102,7 +102,7 @@ async function handleApi(request, env, url, path, context = null) {
   if (path === "/api/status" && request.method === "GET") {
     const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
     const initialized = await hasSecurityAdmin(env);
-    const admin = await readSecuritySession(request, env, ADMIN_COOKIE, "admin");
+    const admin = await activeSecurityAdminSession(request, env);
     if (admin) scheduleAudit(context, recordSecuritySessionResume(env, request, admin));
     return json({ enabled: runtime.enabled, initialized, adminAuthenticated: Boolean(admin) });
   }
@@ -392,14 +392,15 @@ async function authenticationVerify(request, env, url) {
     await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", identityId: credential.identity_id, authMethod: "passkey", service }, request);
     throw new HttpError(401, "パスキーを確認できませんでした。");
   }
-  await env.DB.batch([
-    env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ?").bind(verification.authenticationInfo.newCounter, credentialId),
-    env.DB.prepare("UPDATE security_identities SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?").bind(credential.identity_id)
-  ]);
+  await env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ?")
+    .bind(verification.authenticationInfo.newCounter, credentialId).run();
   const links = service === "security" ? [] : await activeLinks(env, credential.identity_id, service, credentialId);
   if (service === "security" && !credential.is_security_admin) throw new HttpError(403, "Security Centerを管理する権限がありません。");
   if (service !== "security" && !links.length) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
-  await writeLocalAudit(env, { eventType: "passkey_login_success", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", service }, request);
+  await writeLocalAudit(env, {
+    eventType: service === "security" ? "passkey_login_success" : "passkey_authentication_success",
+    outcome: "success", identityId: credential.identity_id, authMethod: "passkey", service
+  }, request);
   const headers = await securitySessionHeaders(env, url, credential.identity_id, credentialId, Boolean(credential.is_security_admin));
   return json({ authenticated: true, credentialId, prfSalt: credential.prf_salt, links: await Promise.all(links.map((link) => publicLink(env, link))) }, 200, headers);
 }
@@ -426,7 +427,7 @@ async function createHandoff(request, env) {
     (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .bind(crypto.randomUUID(), await sha256(rawToken), identitySession.identityId, selected.id, identitySession.credentialId, runtime.epoch, nowSeconds() + HANDOFF_TTL_SECONDS).run();
-  return json({ handoffToken: rawToken, link: publicLink(selected), tcloudKey: envelopes });
+  return json({ handoffToken: rawToken, link: await publicLink(env, selected), tcloudKey: envelopes });
 }
 
 async function setupStatus(request, env) {
@@ -1277,14 +1278,19 @@ async function enforceAuthenticationOptionsRateLimit(request, env) {
 }
 
 async function requireSecurityAdmin(request, env) {
-  const session = await readSecuritySession(request, env, ADMIN_COOKIE, "admin");
+  const session = await activeSecurityAdminSession(request, env);
   if (!session) throw new HttpError(401, "Security Centerの管理者認証が必要です。");
+  return session;
+}
+
+async function activeSecurityAdminSession(request, env) {
+  const session = await readSecuritySession(request, env, ADMIN_COOKIE, "admin");
+  if (!session) return null;
   const identity = await env.DB.prepare(`SELECT i.id FROM security_identities i
     JOIN security_credentials c ON c.identity_id = i.id
     WHERE i.id = ? AND i.is_security_admin = 1 AND i.status = 'active'
       AND c.credential_id = ? AND c.status = 'active'`).bind(session.identityId, session.credentialId).first();
-  if (!identity) throw new HttpError(403, "Security Centerを管理する権限がありません。");
-  return session;
+  return identity ? session : null;
 }
 
 async function requireIdentitySession(request, env) {
@@ -1441,25 +1447,13 @@ async function storeAuditEvent(env, input) {
       if (described?.valid) event.serviceAccountLabel = normalizeText(described.displayLabel, 160) || null;
     } catch { /* audit ingestion must not fail solely because a provider is unavailable */ }
   }
-  const statements = [env.DB.prepare(`INSERT OR IGNORE INTO security_audit_events
-    (event_id, occurred_at, service, event_type, outcome, identity_id, service_link_id, service_account_id,
-      service_account_label, role, auth_method, session_id_hash, source_hash, user_agent, target_type, target_id, details_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(event.eventId, event.occurredAt, event.service, event.eventType, event.outcome, event.identityId,
-      event.serviceLinkId, event.serviceAccountId, event.serviceAccountLabel, event.role, event.authMethod,
-      event.sessionIdHash, event.sourceHash, event.userAgent, event.targetType, event.targetId, JSON.stringify(event.details))];
-  if (event.identityId && LOGIN_SUCCESS_EVENTS.includes(event.eventType) && event.outcome === "success") {
-    statements.push(env.DB.prepare("UPDATE security_identities SET last_login_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(event.occurredAt, event.identityId));
-  }
-  if (event.identityId && event.eventType === "session_resume" && event.outcome === "success") {
-    statements.push(env.DB.prepare("UPDATE security_identities SET last_seen_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(event.occurredAt, event.identityId));
-  }
+  const statements = [auditInsertStatement(env, event), ...identityActivityStatements(env, event)];
   await env.DB.batch(statements);
 }
 
 async function writeLocalAudit(env, input, request = null) {
-  const statement = await localAuditStatement(env, input, request);
-  await statement.run();
+  const event = await localAuditEvent(env, input, request);
+  await env.DB.batch([auditInsertStatement(env, event), ...identityActivityStatements(env, event)]);
 }
 
 async function recordSecuritySessionResume(env, request, session) {
@@ -1486,7 +1480,11 @@ function scheduleAudit(context, promise) {
 }
 
 async function localAuditStatement(env, input, request = null) {
-  const event = normalizeAuditEvent({
+  return auditInsertStatement(env, await localAuditEvent(env, input, request));
+}
+
+async function localAuditEvent(env, input, request = null) {
+  return normalizeAuditEvent({
     eventId: crypto.randomUUID(), occurredAt: new Date().toISOString(), service: input.service || "security",
     eventType: input.eventType, outcome: input.outcome || "info", identityId: input.identityId || null,
     serviceLinkId: input.serviceLinkId || null, serviceAccountId: input.serviceAccountId || null,
@@ -1494,13 +1492,40 @@ async function localAuditStatement(env, input, request = null) {
     authMethod: input.authMethod || "system", sourceHash: request ? await sourceHash(request, env) : null,
     userAgent: request?.headers.get("User-Agent") || null, details: input.details || {}
   });
+}
+
+function auditInsertStatement(env, event) {
+  const conflict = event.eventType === "session_resume"
+    ? "ON CONFLICT DO NOTHING"
+    : "ON CONFLICT(event_id) DO NOTHING";
   return env.DB.prepare(`INSERT INTO security_audit_events
     (event_id, occurred_at, service, event_type, outcome, identity_id, service_link_id, service_account_id,
       service_account_label, role, auth_method, session_id_hash, source_hash, user_agent, target_type, target_id, details_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ${conflict}`)
     .bind(event.eventId, event.occurredAt, event.service, event.eventType, event.outcome, event.identityId,
       event.serviceLinkId, event.serviceAccountId, event.serviceAccountLabel, event.role, event.authMethod,
       event.sessionIdHash, event.sourceHash, event.userAgent, event.targetType, event.targetId, JSON.stringify(event.details));
+}
+
+function identityActivityStatements(env, event) {
+  if (!event.identityId || event.outcome !== "success") return [];
+  if (LOGIN_SUCCESS_EVENTS.includes(event.eventType)) {
+    return [env.DB.prepare(`UPDATE security_identities SET
+      last_login_at = CASE WHEN last_login_at IS NULL OR last_login_at < ? THEN ? ELSE last_login_at END,
+      last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < ? THEN ? ELSE last_seen_at END,
+      updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND (
+        last_login_at IS NULL OR last_login_at < ? OR last_seen_at IS NULL OR last_seen_at < ?
+      )`).bind(event.occurredAt, event.occurredAt, event.occurredAt, event.occurredAt,
+        event.identityId, event.occurredAt, event.occurredAt)];
+  }
+  if (event.eventType === "session_resume") {
+    return [env.DB.prepare(`UPDATE security_identities SET last_seen_at = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`)
+      .bind(event.occurredAt, event.identityId, event.occurredAt)];
+  }
+  return [];
 }
 
 function normalizeAuditEvent(input) {

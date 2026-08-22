@@ -8,6 +8,7 @@
     ["password_login_success", "パスワードでログイン成功", "ログイン"],
     ["password_login_failure", "パスワードでログイン失敗", "ログイン"],
     ["passkey_login_success", "パスキーでログイン成功", "ログイン"],
+    ["passkey_authentication_success", "パスキーの本人確認に成功", "ログイン"],
     ["session_resume", "保存済みセッションでアクセス", "ログイン"],
     ["passkey_authentication_options", "パスキー認証を開始", "ログイン"],
     ["passkey_authentication_failure", "パスキー認証に失敗", "ログイン"],

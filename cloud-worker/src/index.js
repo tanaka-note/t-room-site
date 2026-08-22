@@ -3,7 +3,7 @@ import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-c1296d481792";
+const APP_BUILD_ID = "cloud-2305009d1564";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2615,7 +2615,7 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
   const session = await readSession(request, env);
   if (!session) return response;
   const maxAge = sessionMaxAge(env, session.role);
-  const token = await createSessionToken(session, maxAge, env);
+  const token = await createSessionToken({ ...session, sessionId: session.sessionId || crypto.randomUUID() }, maxAge, env);
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
@@ -2644,7 +2644,11 @@ async function readSession(request, env) {
       canViewHistory: account.canViewHistory,
       canRequestDelete: account.canRequestDelete,
       canReviewDeletion: account.canReviewDeletion,
-      sessionId: payload.sessionId,
+      // Sessions issued before audit session IDs were introduced must remain
+      // usable long enough to receive a refreshed cookie.  Generate the ID
+      // before handlers use it for folder-scope queries, then preserve it in
+      // every rolling refresh.
+      sessionId: payload.sessionId || crypto.randomUUID(),
       loginId: payload.authMethod === "passkey" ? payload.loginId : configuredLoginId(env, account.role),
       credentialSalt: await accountCredentialSalt(env),
       identityId: payload.identityId || null,

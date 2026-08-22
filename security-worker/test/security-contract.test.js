@@ -89,6 +89,7 @@ test("a T-Cloud member is constrained to the linked root on direct ID access", (
 test("Security Center is first-admin-only and audits success and failure", () => {
   assert.match(worker, /is_security_admin = 1/);
   assert.match(worker, /passkey_login_success/);
+  assert.match(worker, /passkey_authentication_success/);
   assert.match(worker, /passkey_authentication_failure/);
   assert.match(cloud, /password_login_success/);
   assert.match(diary, /password_login_success/);
@@ -171,6 +172,30 @@ test("session resume audit is distinct, deduplicated, human-labelled, and tracks
   assert.match(securityUi, /sessionResume/);
   assert.match(securityHtml, /audit-refresh/);
   assert.doesNotMatch(worker, /LOGIN_SUCCESS_EVENTS[^\n]*session_resume/);
+  assert.match(worker, /last_login_at = CASE WHEN last_login_at IS NULL OR last_login_at < \?/);
+  assert.match(worker, /last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < \?/);
+  assert.match(worker, /WHERE id = \? AND \(last_seen_at IS NULL OR last_seen_at < \?\)/);
+  assert.match(cloud, /sessionId: session\.sessionId \|\| crypto\.randomUUID\(\)/,
+    "legacy Cloud sessions gain one stable random session ID on rolling refresh");
+});
+
+test("async service-link labels are resolved before every JSON response", () => {
+  assert.match(worker, /links: await Promise\.all\(links\.map\(\(link\) => publicLink\(env, link\)\)\)/);
+  assert.match(worker, /link: await publicLink\(env, selected\)/);
+  assert.doesNotMatch(worker, /link:\s*publicLink\(/);
+});
+
+test("service WebAuthn verification and completed service login use distinct audit events", () => {
+  assert.match(worker, /service === "security" \? "passkey_login_success" : "passkey_authentication_success"/);
+  assert.doesNotMatch(worker, /LOGIN_SUCCESS_EVENTS[^\n]*passkey_authentication_success/);
+  assert.match(securityDisplay, /passkey_authentication_success/);
+  for (const source of [cloud, diary, billing]) assert.match(source, /eventType: "passkey_login_success"/);
+});
+
+test("Security status validates the live administrator identity and credential before session resume", () => {
+  assert.match(worker, /const admin = await activeSecurityAdminSession\(request, env\)/);
+  assert.match(worker, /activeSecurityAdminSession[\s\S]*i\.is_security_admin = 1[\s\S]*i\.status = 'active'[\s\S]*c\.status = 'active'/);
+  assert.doesNotMatch(worker, /\/api\/status[\s\S]{0,400}readSecuritySession\(request, env, ADMIN_COOKIE/);
 });
 
 test("Security Center response permits WebAssembly without allowing JavaScript eval", async () => {

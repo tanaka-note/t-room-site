@@ -33,6 +33,11 @@ const auditEventsBody = {
       user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
     },
     {
+      event_type: "passkey_authentication_success", service: "diary", outcome: "success", auth_method: "passkey",
+      identity_id: "primary-admin", service_account_id: "main-user", service_account_label: "田中宏知（一般ユーザー）", role: "user",
+      occurred_at: "2026-08-22T01:00:00.000Z", user_agent: "Mozilla/5.0 Firefox/142.0"
+    },
+    {
       event_type: "session_resume", service: "diary", outcome: "success", auth_method: "password",
       identity_id: "primary-admin", service_account_id: "main-user", service_account_label: "田中宏知（一般ユーザー）", role: "user",
       occurred_at: "2026-08-22T00:58:00.000Z", user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/151.0.0.0"
@@ -381,7 +386,9 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#audit-list .audit-row").first().waitFor();
     const auditText = await unsupported.locator("#audit-list").textContent();
     assert.match(auditText, /パスキーでログイン成功/, `${name}: known audit event is shown in Japanese`);
+    assert.match(auditText, /パスキーの本人確認に成功/, `${name}: intermediate WebAuthn success is distinct from a completed login`);
     assert.doesNotMatch(auditText, /passkey_login_success/, `${name}: known internal event name is not the primary display`);
+    assert.doesNotMatch(auditText, /passkey_authentication_success/, `${name}: intermediate internal event name is not the primary display`);
     assert.match(auditText, /Security Center/);
     assert.match(auditText, /第一管理者/);
     assert.match(auditText, /ユーザーID: primary-admin/, `${name}: technical identity ID is subordinate detail text`);
@@ -398,8 +405,8 @@ async function verifyBrowser(browserType, name, origin) {
     const moreButton = unsupported.getByRole("button", { name: "もっと見る" });
     assert.equal(await moreButton.isVisible(), true, `${name}: audit next page is offered only when a cursor exists`);
     await moreButton.click();
-    await unsupported.waitForFunction(() => document.querySelectorAll("#audit-list .audit-row").length === 4);
-    assert.equal(await unsupported.locator("#audit-list .audit-row").count(), 4, `${name}: next audit page appends below the current rows`);
+    await unsupported.waitForFunction(() => document.querySelectorAll("#audit-list .audit-row").length === 5);
+    assert.equal(await unsupported.locator("#audit-list .audit-row").count(), 5, `${name}: next audit page appends below the current rows`);
     assert.equal(await moreButton.isVisible(), false, `${name}: audit button hides on the final page`);
     assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: the opaque audit cursor is sent for the next page`);
     await unsupported.locator("#audit-event").selectOption("passkey_registration");

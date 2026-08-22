@@ -12,6 +12,7 @@ const currentAuditEvents = {
   bootstrap_login_blocked: "第一管理者の本人確認を一時停止",
   passkey_registration: "パスキーを登録",
   passkey_login_success: "パスキーでログイン成功",
+  passkey_authentication_success: "パスキーの本人確認に成功",
   passkey_authentication_failure: "パスキー認証に失敗",
   passkey_authentication_options: "パスキー認証を開始",
   passkey_dialog_cancelled: "パスキー認証をキャンセル",
