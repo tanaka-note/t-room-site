@@ -92,12 +92,28 @@
 
   function decodeRequestOptions(options) {
     const extensions = options.extensions?.prf?.evalByCredential
-      ? { ...options.extensions, prf: { evalByCredential: Object.fromEntries(Object.entries(options.extensions.prf.evalByCredential).map(([id, value]) => [id, { first: fromBase64Url(value.first) }])) } }
+      ? {
+          ...options.extensions,
+          prf: {
+            ...options.extensions.prf,
+            evalByCredential: Object.fromEntries(Object.entries(options.extensions.prf.evalByCredential).map(([id, value]) => {
+              fromBase64Url(id);
+              return [id, decodePrfValues(value)];
+            }))
+          }
+        }
       : options.extensions;
     return { ...options, challenge: fromBase64Url(options.challenge), allowCredentials: (options.allowCredentials || []).map(decodeDescriptor), extensions };
   }
 
   function decodeDescriptor(value) { return { ...value, id: fromBase64Url(value.id) }; }
+
+  function decodePrfValues(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new PasskeyOptionsError();
+    const decoded = { first: fromBase64Url(value.first) };
+    if (value.second !== undefined) decoded.second = fromBase64Url(value.second);
+    return decoded;
+  }
 
   function serializeCredential(credential) {
     const response = credential.response;
@@ -153,15 +169,29 @@
   }
 
   function fromBase64Url(value) {
-    if (value instanceof ArrayBuffer) return value;
-    if (ArrayBuffer.isView(value)) return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-    const base64 = String(value || "").replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(value || "").length / 4) * 4, "=");
-    return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)).buffer;
+    if (typeof value !== "string" || !value || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) {
+      throw new PasskeyOptionsError();
+    }
+    try {
+      const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+      const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+      if (!bytes.length || toBase64Url(bytes) !== value) throw new Error("non-canonical Base64URL");
+      return bytes.buffer;
+    } catch {
+      throw new PasskeyOptionsError();
+    }
+  }
+
+  class PasskeyOptionsError extends Error {
+    constructor() {
+      super("パスキーの認証情報を読み取れませんでした。画面を再読み込みしてください。改善しない場合はID・パスワードをご利用ください。");
+      this.name = "PasskeyOptionsError";
+    }
   }
 
   class PasskeyCancelledError extends Error {
     constructor() { super("端末のロック解除をキャンセルしました。"); this.name = "PasskeyCancelledError"; }
   }
 
-  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, api, toBase64Url, fromBase64Url, PasskeyCancelledError });
+  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, api, toBase64Url, fromBase64Url, PasskeyCancelledError, PasskeyOptionsError });
 })();

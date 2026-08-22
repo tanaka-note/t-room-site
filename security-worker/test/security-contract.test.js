@@ -54,6 +54,18 @@ test("PRF output remains client-side and T-Cloud stores only encrypted envelopes
   assert.doesNotMatch(migration, /plaintext|folder_key TEXT|file_key TEXT/);
 });
 
+test("PRF request options use the WebAuthn JSON Base64URL representation", () => {
+  assert.match(worker, /prfAuthenticationExtensions\(rows\.results\)/);
+  assert.match(worker, /extensions: prfAuthenticationExtensions\(\[credential\]\)/);
+  assert.match(worker, /\{ first: canonicalBase64Url\(credential\.prf_salt\) \}/);
+  assert.doesNotMatch(worker, /first: base64UrlToBytes\(credential\.prf_salt\)/);
+  assert.match(worker, /\["security", "cloud"\]\.includes\(service\)/,
+    "Diary and Billing authentication do not request the T-Cloud-only PRF extension");
+  assert.match(client, /class PasskeyOptionsError extends Error/);
+  assert.match(client, /typeof value !== "string"/);
+  assert.match(client, /toBase64Url\(bytes\) !== value/);
+});
+
 test("all three services keep password login and add one-time handoff", () => {
   for (const source of [cloud, diary, billing]) {
     assert.match(source, /\/api\/login/);

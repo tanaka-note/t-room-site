@@ -38,7 +38,7 @@ try {
     INSERT INTO security_identities (id, display_name, status) VALUES ('${identityId}', 'Passkey Session Test', 'active');
     INSERT INTO security_credentials
       (credential_id, identity_id, public_key, prf_salt, status, approved_at)
-      VALUES ('${credentialId}', '${identityId}', 'test-public-key', 'test-prf-salt', 'active', CURRENT_TIMESTAMP);
+      VALUES ('${credentialId}', '${identityId}', 'test-public-key', 'dGVzdC1wcmYtc2FsdA', 'active', CURRENT_TIMESTAMP);
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, display_label, status)
       VALUES
@@ -52,7 +52,7 @@ try {
       VALUES ('audit_admin', 'Audit Failure Admin', 'active', 1);
     INSERT INTO security_credentials
       (credential_id, identity_id, public_key, prf_salt, status, approved_at)
-      VALUES ('audit-credential', 'audit_admin', 'test-public-key', 'test-prf-salt', 'active', CURRENT_TIMESTAMP);
+      VALUES ('audit-credential', 'audit_admin', 'test-public-key', 'dGVzdC1wcmYtc2FsdA', 'active', CURRENT_TIMESTAMP);
     INSERT INTO security_identities (id, display_name, status)
       VALUES ('${readinessIdentityId}', 'Cloud Readiness Test', 'active');
     INSERT INTO security_credentials
@@ -62,6 +62,10 @@ try {
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', 42, 'Cloud Readiness', 'active');
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, display_label, status)
+      VALUES ('readiness-diary-link', '${readinessIdentityId}', 'diary', 'main-user', 'Diary Readiness', 'active'),
+             ('readiness-billing-link', '${readinessIdentityId}', 'billing', 'owner', 'Billing Readiness', 'active');
     INSERT INTO security_tcloud_client_vaults
       (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
       VALUES ('${readinessCredentialA}', '${readinessIdentityId}', '{"kty":"RSA"}', 'fingerprint-a', 'private-a', 'iv-a'),
@@ -81,6 +85,20 @@ try {
   assert.equal(await securityAdminAuthenticated(oldAdminCookie), true, "current-epoch Security admin cookie is accepted");
   assert.equal(await securityIdentityHandoff(oldIdentityCookie), 200, "current-epoch Security identity cookie is accepted");
   assert.deepEqual(await cloudAuthenticationCredentialIds(), [readinessCredentialA], "only the credential with a folder envelope is a Cloud login candidate");
+  const securityOptions = await readAuthenticationOptions("security");
+  assert.equal(typeof securityOptions.extensions?.prf?.evalByCredential?.["audit-credential"]?.first, "string",
+    "Security authentication PRF input crosses HTTP as Base64URL text");
+  assert.equal(securityOptions.extensions.prf.evalByCredential["audit-credential"].first, "dGVzdC1wcmYtc2FsdA",
+    "Security authentication preserves the stored PRF salt bytes");
+  const cloudOptions = await readAuthenticationOptions("cloud");
+  assert.equal(typeof cloudOptions.extensions?.prf?.evalByCredential?.[readinessCredentialA]?.first, "string",
+    "T-Cloud authentication PRF input crosses HTTP as Base64URL text");
+  assert.equal(cloudOptions.extensions.prf.evalByCredential[readinessCredentialA].first, "c2FsdC1h",
+    "T-Cloud authentication preserves the credential PRF salt bytes");
+  assert.equal((await readAuthenticationOptions("diary")).extensions?.prf, undefined,
+    "Diary authentication does not request a T-Cloud-only PRF evaluation");
+  assert.equal((await readAuthenticationOptions("billing")).extensions?.prf, undefined,
+    "Billing authentication does not request a T-Cloud-only PRF evaluation");
   const readinessCookieA = signSecurityCookie({ kind: "identity", identityId: readinessIdentityId, credentialId: readinessCredentialA, passkeySessionEpoch: 1 });
   const readinessCookieB = signSecurityCookie({ kind: "identity", identityId: readinessIdentityId, credentialId: readinessCredentialB, passkeySessionEpoch: 1 });
   assert.equal(await securityCloudHandoff(readinessCookieA), 200, "credential A can create a handoff for its delegated folder");
@@ -140,6 +158,11 @@ try {
   runSecuritySql(`INSERT INTO security_setup_sessions
     (id, token_hash, identity_id, credential_id, expires_at, last_user_verification_at)
     VALUES ('setup-retry', '${setupTokenHash}', '${identityId}', '${credentialId}', ${Math.floor(Date.now() / 1000) + 3600}, ${Math.floor(Date.now() / 1000)})`);
+  const setupPrfOptions = await readPrfOptions(setupToken, credentialId);
+  assert.equal(typeof setupPrfOptions.extensions?.prf?.evalByCredential?.[credentialId]?.first, "string",
+    "setup PRF input crosses HTTP as Base64URL text");
+  assert.equal(setupPrfOptions.extensions.prf.evalByCredential[credentialId].first, "dGVzdC1wcmYtc2FsdA",
+    "setup retry preserves the same credential PRF salt bytes");
   const vaultBody = {
     serviceLinkId: "setup-cloud-member", envelopeType: "client_private_prf",
     publicKeyJwk: { kty: "RSA", alg: "RSA-OAEP-256", key_ops: ["encrypt"], ext: true, n: "AQIDBA", e: "AQAB" },
@@ -397,14 +420,34 @@ async function securityCloudHandoff(cookie) {
 }
 
 async function cloudAuthenticationCredentialIds() {
+  const options = await readAuthenticationOptions("cloud");
+  return options.allowCredentials.map((item) => item.id);
+}
+
+async function readAuthenticationOptions(service) {
   const response = await fetch("http://127.0.0.1:8810/security/api/auth/options", {
     method: "POST",
     headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json" },
-    body: JSON.stringify({ service: "cloud" })
+    body: JSON.stringify({ service })
   });
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
-  return body.options.allowCredentials.map((item) => item.id);
+  return body.options;
+}
+
+async function readPrfOptions(setupToken, requestedCredentialId) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/prf/options", {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:8810",
+      "Content-Type": "application/json",
+      Cookie: `troom_security_setup=${setupToken}`
+    },
+    body: JSON.stringify({ credentialId: requestedCredentialId })
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body.options;
 }
 
 async function securityIdentityDetail(identity, cookie) {

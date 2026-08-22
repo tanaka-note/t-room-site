@@ -26,6 +26,7 @@ CloudflareのSecret変更とD1更新は単一トランザクションにでき�
 - 登録後は`pending_approval`となり、第一管理者の承認までログイン不可
 - Identity IDは英大文字・英小文字・数字・`_`・`-`のみ、最大64文字
 - 再招待時は同じIdentityの以前の未使用招待を取り消し、新しい招待だけを有効にする
+- WebAuthnのHTTP JSON境界ではchallenge、credential ID、PRF inputを標準のBase64URL文字列で返し、`ArrayBuffer`への変換はブラウザで`navigator.credentials.create/get`を呼ぶ直前だけに行う。日記・請求書のログインではT-Cloud専用のPRF評価を要求しない
 
 ## T-Cloud鍵解除
 

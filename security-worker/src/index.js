@@ -337,11 +337,13 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const evalByCredential = Object.fromEntries(rows.results.map((row) => [row.credential_id, { first: base64UrlToBytes(row.prf_salt) }]));
+  const extensions = ["security", "cloud"].includes(service)
+    ? prfAuthenticationExtensions(rows.results)
+    : undefined;
   const options = await generateAuthenticationOptions({
     rpID: rpId(env), timeout: 60000, userVerification: "required",
     allowCredentials: rows.results.map((row) => ({ id: row.credential_id, transports: parseJson(row.transports_json, []) })),
-    extensions: { prf: { evalByCredential } }
+    extensions
   });
   const challengeId = await storeChallenge(env, "authentication", options.challenge, null, null, service);
   await writeLocalAudit(env, { eventType: "passkey_authentication_options", outcome: "info", authMethod: "passkey", service }, request);
@@ -469,7 +471,7 @@ async function prfOptions(request, env) {
   const options = await generateAuthenticationOptions({
     rpID: rpId(env), timeout: 60000, userVerification: "required",
     allowCredentials: [{ id: credential.credential_id, transports: parseJson(credential.transports_json, []) }],
-    extensions: { prf: { evalByCredential: { [credential.credential_id]: { first: base64UrlToBytes(credential.prf_salt) } } } }
+    extensions: prfAuthenticationExtensions([credential])
   });
   const challengeId = await storeChallenge(env, "prf_assertion", options.challenge, identitySession.identityId, null, null);
   return json({ challengeId, options, credentialId: credential.credential_id, prfSalt: credential.prf_salt });
@@ -1320,6 +1322,32 @@ async function hmac(value, secret) { const key = await crypto.subtle.importKey("
 async function safeEqual(left, right) { const a = base64UrlToBytes(left); const b = base64UrlToBytes(right); if (a.length !== b.length) return false; let result = 0; for (let index = 0; index < a.length; index += 1) result |= a[index] ^ b[index]; return result === 0; }
 function bytesToBase64Url(bytes) { let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, ""); }
 function base64UrlToBytes(value) { const base64 = String(value).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(value).length / 4) * 4, "="); return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)); }
+
+function prfAuthenticationExtensions(credentials) {
+  return {
+    prf: {
+      evalByCredential: Object.fromEntries(credentials.map((credential) => [
+        credential.credential_id,
+        { first: canonicalBase64Url(credential.prf_salt) }
+      ]))
+    }
+  };
+}
+
+function canonicalBase64Url(value) {
+  const text = typeof value === "string" ? value : "";
+  if (!text || !/^[A-Za-z0-9_-]+$/.test(text) || text.length % 4 === 1) {
+    throw new Error("Stored WebAuthn PRF salt is invalid");
+  }
+  try {
+    const bytes = base64UrlToBytes(text);
+    const canonical = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    if (!bytes.length || canonical !== text) throw new Error("non-canonical");
+    return text;
+  } catch {
+    throw new Error("Stored WebAuthn PRF salt is invalid");
+  }
+}
 function safeErrorName(error) { return error instanceof Error ? `${error.name}:${String(error.message || "").slice(0, 160)}` : "unknown"; }
 
 class HttpError extends Error {

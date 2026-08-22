@@ -16,7 +16,9 @@ const dummyPassword = "security-csp-test-password";
 const receivedBootstrapBodies = [];
 const receivedResumeBodies = [];
 const receivedPrfOptionBodies = [];
+const receivedPrfVerifyBodies = [];
 const receivedEnvelopeBodies = [];
+const malformedPrfCredentialId = "bWFsZm9ybWVkLXByZi1vcHRpb25z";
 let setupStatusBody = { active: false };
 let securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
 let failEnvelopeSave = false;
@@ -65,13 +67,13 @@ const server = createServer(async (request, response) => {
     const body = JSON.parse(await readBody(request));
     registeredCredentialCount += 1;
     setupStatusBody = {
-      active: true, completed: false, identityId: "primary-admin", credentialId: "resume-credential",
+      active: true, completed: false, identityId: "primary-admin", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
       isPrimaryAdmin: true, prfEnabled: Boolean(body.prfEnabled), tcloudReady: false,
       cloudLinks: [{ id: "primary-cloud", accountId: "admin", rootFolderId: null }]
     };
     securityStatusBody = { enabled: true, initialized: true, adminAuthenticated: true };
     return sendJson(response, 201, {
-      ok: true, identityId: "primary-admin", credentialId: "resume-credential",
+      ok: true, identityId: "primary-admin", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
       prfSalt: "AAECAwQFBgcICQoLDA0ODw", prfEnabled: setupStatusBody.prfEnabled, needsTCloudEnvelope: true
     });
   }
@@ -81,21 +83,27 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, { verified: true });
   }
   if (url.pathname === "/security/api/prf/options") {
-    receivedPrfOptionBodies.push(JSON.parse(await readBody(request)));
+    const body = JSON.parse(await readBody(request));
+    receivedPrfOptionBodies.push(body);
+    const requestedCredentialId = body.credentialId || "cmVzdW1lLWNyZWRlbnRpYWw";
+    const malformed = requestedCredentialId === malformedPrfCredentialId;
     return sendJson(response, 200, {
       challengeId: "resume-prf-challenge",
-      credentialId: "resume-credential",
+      credentialId: requestedCredentialId,
       prfSalt: "AAECAwQFBgcICQoLDA0ODw",
       options: {
         challenge: "AAECAwQFBgcICQoLDA0ODw",
         rpId: "127.0.0.1",
         userVerification: "required",
-        allowCredentials: [{ type: "public-key", id: "cmVzdW1lLWNyZWRlbnRpYWw" }],
-        extensions: { prf: { evalByCredential: { "resume-credential": { first: "AAECAwQFBgcICQoLDA0ODw" } } } }
+        allowCredentials: [{ type: "public-key", id: requestedCredentialId }],
+        extensions: { prf: { evalByCredential: { [requestedCredentialId]: { first: malformed ? { 0: 0, 1: 1 } : "AAECAwQFBgcICQoLDA0ODw" } } } }
       }
     });
   }
-  if (url.pathname === "/security/api/prf/verify") return sendJson(response, 200, { verified: true });
+  if (url.pathname === "/security/api/prf/verify") {
+    receivedPrfVerifyBodies.push(JSON.parse(await readBody(request)));
+    return sendJson(response, 200, { verified: true });
+  }
   if (url.pathname === "/security/api/tcloud/envelope") {
     receivedEnvelopeBodies.push(JSON.parse(await readBody(request)));
     if (failEnvelopeSave) return sendJson(response, 503, { error: "一時的なT-Cloud障害" });
@@ -173,7 +181,7 @@ async function verifyBrowser(browserType, name, origin) {
     failEnvelopeSave = false;
     const context = await browser.newContext();
     await context.addInitScript(() => {
-      const credentialId = "resume-credential";
+      const credentialId = "cmVzdW1lLWNyZWRlbnRpYWw";
       const bytes = new TextEncoder().encode(credentialId);
       const scenario = () => new URL(location.href).searchParams.get("scenario") || "csp";
       const assertion = (prfAvailable) => ({
@@ -242,6 +250,41 @@ async function verifyBrowser(browserType, name, origin) {
     });
     const page = await context.newPage();
     await page.goto(`${origin}/security/`, { waitUntil: "load" });
+    const base64UrlValidation = await page.evaluate(() => {
+      const invalidValues = [{ 0: 1 }, "", "a", "AA=", "AB", "***"];
+      return {
+        validLength: TRoomPasskeys.fromBase64Url("AA").byteLength,
+        invalid: invalidValues.map((value) => {
+          try {
+            TRoomPasskeys.fromBase64Url(value);
+            return { rejected: false };
+          } catch (error) {
+            return { rejected: true, name: error.name, message: error.message };
+          }
+        })
+      };
+    });
+    assert.equal(base64UrlValidation.validLength, 1, `${name}: canonical Base64URL is decoded`);
+    for (const result of base64UrlValidation.invalid) {
+      assert.equal(result.rejected, true, `${name}: malformed WebAuthn JSON/Base64URL is rejected`);
+      assert.equal(result.name, "PasskeyOptionsError");
+      assert.match(result.message, /パスキーの認証情報を読み取れませんでした/);
+    }
+    const verifyCountBeforeMalformed = receivedPrfVerifyBodies.length;
+    const malformedPrfResult = await page.evaluate(async (credentialId) => {
+      try {
+        await TRoomPasskeys.obtainPrf(credentialId);
+        return { rejected: false };
+      } catch (error) {
+        return { rejected: true, name: error.name, message: error.message, getCalled: Boolean(window.__troomWebAuthnGetCalled) };
+      }
+    }, malformedPrfCredentialId);
+    assert.equal(malformedPrfResult.rejected, true, `${name}: malformed PRF JSON is rejected before WebAuthn`);
+    assert.equal(malformedPrfResult.name, "PasskeyOptionsError");
+    assert.match(malformedPrfResult.message, /パスキーの認証情報を読み取れませんでした/);
+    assert.equal(malformedPrfResult.getCalled, false, `${name}: malformed options never reach navigator.credentials.get`);
+    assert.equal(receivedPrfVerifyBodies.length, verifyCountBeforeMalformed,
+      `${name}: malformed option decoding never reports PRF unsupported to the server`);
     await page.locator("#bootstrap-id").fill("admin");
     await page.locator("#bootstrap-password").fill(dummyPassword);
     await page.getByRole("button", { name: "端末のロック解除を登録" }).click();
@@ -258,7 +301,7 @@ async function verifyBrowser(browserType, name, origin) {
     }));
     assert.equal(await page.evaluate(() => window.__troomJavascriptEvalAllowed), false, `${name}: normal JavaScript eval must remain blocked`);
     setupStatusBody = {
-      active: true, identityId: "resume_user", credentialId: "resume-credential",
+      active: true, identityId: "resume_user", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
       isPrimaryAdmin: false, prfEnabled: true, tcloudReady: false,
       cloudLinks: [{ id: "cloud-2", accountId: "folder-member", rootFolderId: 2 }, { id: "cloud-10", accountId: "folder-member", rootFolderId: 10 }]
     };
@@ -316,7 +359,7 @@ async function verifyBrowser(browserType, name, origin) {
     assert.notEqual(await transient.evaluate(() => window.__troomWebAuthnCreateCalled), true,
       `${name}: primary-admin setup resume must not create a second credential`);
     assert.equal(registeredCredentialCount, 1, `${name}: setup retry keeps exactly one credential`);
-    assert.equal(receivedPrfOptionBodies.at(-1).credentialId, "resume-credential", `${name}: retry uses the same credential ID`);
+    assert.equal(receivedPrfOptionBodies.at(-1).credentialId, "cmVzdW1lLWNyZWRlbnRpYWw", `${name}: retry uses the same credential ID`);
     assert.equal(setupStatusBody.completed, true);
     assert.equal(setupStatusBody.tcloudReady, true);
     assert.ok(!consoleErrors.some((message) => /Content Security Policy|WebAssembly\.compile|Unhandled|TypeError/i.test(message)), `${name}: ${consoleErrors.join("\n")}`);
@@ -334,6 +377,7 @@ try {
   receivedBootstrapBodies.length = 0;
   receivedResumeBodies.length = 0;
   receivedPrfOptionBodies.length = 0;
+  receivedPrfVerifyBodies.length = 0;
   receivedEnvelopeBodies.length = 0;
   results.push(await verifyBrowser(chromium, "chromium", origin));
   results.push(await verifyBrowser(firefox, "firefox", origin));
@@ -353,7 +397,11 @@ try {
     assert.ok(!JSON.stringify(body).includes(dummyPassword), "resume request never contains the raw password");
   }
   assert.ok(receivedPrfOptionBodies.length >= passedBrowsers * 3, "PRF preparation and retry use WebAuthn get options");
-  for (const body of receivedPrfOptionBodies) assert.equal(body.credentialId, "resume-credential");
+  assert.equal(receivedPrfOptionBodies.filter((body) => body.credentialId === malformedPrfCredentialId).length, passedBrowsers,
+    "each browser rejects one deliberately malformed PRF options response");
+  for (const body of receivedPrfOptionBodies.filter((body) => body.credentialId !== malformedPrfCredentialId)) {
+    assert.equal(body.credentialId, "cmVzdW1lLWNyZWRlbnRpYWw");
+  }
   assert.equal(receivedEnvelopeBodies.length, passedBrowsers * 2, "each transient flow has one failed and one successful envelope request");
   console.log(results.join("\n"));
 } finally {
