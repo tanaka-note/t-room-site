@@ -4,6 +4,7 @@ export const AUDIT_SERVICES = Object.freeze(["security", ...LINKED_SERVICES]);
 export const INVITE_EXPIRY_PRESETS = Object.freeze([3600, 21600, 86400, 259200, 604800]);
 export const LOGIN_SUCCESS_EVENTS = Object.freeze(["password_login_success", "passkey_login_success"]);
 export const LOGIN_FAILURE_EVENTS = Object.freeze(["password_login_failure", "passkey_authentication_failure", "bootstrap_auth_failure"]);
+export const AUDIT_PAGE_SIZE = 100;
 // WebAuthn Level 3 limits credential IDs to 1023 bytes.
 export const MAX_CREDENTIAL_ID_BYTES = 1023;
 
@@ -123,6 +124,37 @@ export function bootstrapAttemptCutoff(now = Date.now()) {
 export function auditRetentionCutoff(retentionDays, now = Date.now()) {
   const days = Math.min(730, Math.max(30, Math.trunc(Number(retentionDays) || 180)));
   return new Date(now - days * 86400000).toISOString();
+}
+
+export function encodeAuditCursor(row) {
+  const occurredAt = String(row?.occurred_at || "");
+  const eventId = String(row?.event_id || "");
+  if (!normalizeUtcTimestamp(occurredAt) || !/^[A-Za-z0-9_-]{1,128}$/.test(eventId)) {
+    throw new RangeError("監査履歴のcursorを作成できません。");
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, t: occurredAt, id: eventId }));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+export function decodeAuditCursor(value) {
+  const text = String(value || "").trim();
+  if (!text || text.length > 512 || !/^[A-Za-z0-9_-]+$/.test(text) || text.length % 4 === 1) {
+    throw new RangeError("監査履歴のcursorが不正です。");
+  }
+  try {
+    const padded = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    if (payload?.v !== 1 || !normalizeUtcTimestamp(payload.t) || !/^[A-Za-z0-9_-]{1,128}$/.test(String(payload.id || ""))) {
+      throw new Error("invalid payload");
+    }
+    return { occurredAt: String(payload.t), eventId: String(payload.id) };
+  } catch {
+    throw new RangeError("監査履歴のcursorが不正です。");
+  }
 }
 
 function codePointCompare(left, right) {

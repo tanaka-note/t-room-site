@@ -8,6 +8,8 @@ import {
   bootstrapAttemptCutoff,
   canonicalServiceLinks,
   currentJstDayBounds,
+  decodeAuditCursor,
+  encodeAuditCursor,
   jstDayBounds,
   normalizeAuditService,
   normalizeIdentityId,
@@ -127,4 +129,14 @@ test("bootstrap lockout cutoff is a UTC ISO instant across UTC and JST boundarie
 test("audit retention cutoff uses the same UTC ISO representation across UTC and JST boundaries", () => {
   assert.equal(auditRetentionCutoff(180, Date.parse("2026-08-21T00:05:00.000Z")), "2026-02-22T00:05:00.000Z");
   assert.equal(auditRetentionCutoff(30, Date.parse("2026-08-21T15:05:00.000Z")), "2026-07-22T15:05:00.000Z");
+});
+
+test("audit cursor preserves the exact composite ordering key and rejects malformed input", () => {
+  for (const occurredAt of ["2026-08-21T03:04:05.000Z", "2026-08-21 03:04:05"]) {
+    const cursor = encodeAuditCursor({ occurred_at: occurredAt, event_id: "event_10-a" });
+    assert.deepEqual(decodeAuditCursor(cursor), { occurredAt, eventId: "event_10-a" });
+  }
+  for (const invalid of ["", "***", "a", Buffer.from('{"v":1,"t":"bad","id":"event"}').toString("base64url")]) {
+    assert.throws(() => decodeAuditCursor(invalid), /cursor/);
+  }
 });

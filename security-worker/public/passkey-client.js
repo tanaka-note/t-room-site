@@ -69,6 +69,10 @@
     return payload;
   }
 
+  async function resumeSetup() {
+    return api("/setup/resume", {});
+  }
+
   async function api(path, body) {
     const response = await fetch(`${API}${path}`, {
       method: "POST",
@@ -193,5 +197,5 @@
     constructor() { super("端末のロック解除をキャンセルしました。"); this.name = "PasskeyCancelledError"; }
   }
 
-  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, api, toBase64Url, fromBase64Url, PasskeyCancelledError, PasskeyOptionsError });
+  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, resumeSetup, api, toBase64Url, fromBase64Url, PasskeyCancelledError, PasskeyOptionsError });
 })();

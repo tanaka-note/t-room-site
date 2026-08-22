@@ -11,6 +11,8 @@ const credentialId = Buffer.from("passkey-session-credential").toString("base64u
 const readinessIdentityId = "cloud_readiness_test";
 const readinessCredentialA = Buffer.from("cloud-readiness-credential-a").toString("base64url");
 const readinessCredentialB = Buffer.from("cloud-readiness-credential-b").toString("base64url");
+const primaryCredentialId = Buffer.from("primary-admin-setup-credential").toString("base64url");
+const diaryAdminLinkId = "passkey-session-diary-admin-link";
 const services = {
   cloud: {
     directory: "cloud-worker", port: 8811, cookie: "troom_cloud_session", linkId: "passkey-session-cloud-link",
@@ -37,14 +39,17 @@ try {
     UPDATE security_runtime_state SET passkey_session_epoch = 1, switch_observed_enabled = 1 WHERE id = 1;
     INSERT INTO security_identities (id, display_name, status) VALUES ('${identityId}', 'Passkey Session Test', 'active');
     INSERT INTO security_credentials
-      (credential_id, identity_id, public_key, prf_salt, status, approved_at)
-      VALUES ('${credentialId}', '${identityId}', 'test-public-key', 'dGVzdC1wcmYtc2FsdA', 'active', CURRENT_TIMESTAMP);
+      (credential_id, identity_id, public_key, prf_enabled, prf_salt, status, approved_at)
+      VALUES ('${credentialId}', '${identityId}', 'test-public-key', 1, 'dGVzdC1wcmYtc2FsdA', 'active', CURRENT_TIMESTAMP);
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, display_label, status)
       VALUES
       ('${services.cloud.linkId}', '${identityId}', 'cloud', '${services.cloud.accountId}', 'Cloud Test', 'active'),
       ('${services.diary.linkId}', '${identityId}', 'diary', '${services.diary.accountId}', 'Diary Test', 'active'),
       ('${services.billing.linkId}', '${identityId}', 'billing', '${services.billing.accountId}', 'Billing Test', 'active');
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, display_label, status)
+      VALUES ('${diaryAdminLinkId}', '${identityId}', 'diary', 'main-admin', 'Diary Admin Switch Test', 'active');
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES ('setup-cloud-member', '${identityId}', 'cloud', 'folder-member', 42, 'Setup Cloud', 'pending');
@@ -73,6 +78,14 @@ try {
     INSERT INTO security_tcloud_key_envelopes
       (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
       VALUES ('readiness-envelope-a', '${readinessIdentityId}', '${readinessCredentialA}', 'readiness-cloud-link', 'folder_key_rsa', 'wrapped-a');
+    INSERT INTO security_identities (id, display_name, status, is_security_admin)
+      VALUES ('primary-admin', 'Primary Setup Test', 'active', 1);
+    INSERT INTO security_credentials
+      (credential_id, identity_id, public_key, prf_enabled, prf_salt, status, approved_at)
+      VALUES ('${primaryCredentialId}', 'primary-admin', 'primary-public-key', 1, 'cHJpbWFyeS1zYWx0', 'active', CURRENT_TIMESTAMP);
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, display_label, status)
+      VALUES ('primary-admin-cloud-link', 'primary-admin', 'cloud', 'admin', 'Primary Admin Cloud', 'pending');
   `);
 
   const diaryVersion = queryNumber("diary-worker", "diary-db", "SELECT session_version AS value FROM diary_accounts WHERE id = 'main-user'");
@@ -153,12 +166,56 @@ try {
     headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_admin=${oldAdminCookie}` }
   });
   assert.equal(oversizedCredentialRevoke.status, 400, "a credential ID above the WebAuthn 1023-byte limit is rejected");
+
+  const lostPrimarySetupToken = "lost-primary-setup-token-12345678901234567890";
+  const lostPrimarySetupHash = createHash("sha256").update(lostPrimarySetupToken).digest("base64url");
+  runSecuritySql(`INSERT INTO security_setup_sessions
+    (id, token_hash, identity_id, credential_id, expires_at)
+    VALUES ('lost-primary-setup', '${lostPrimarySetupHash}', 'primary-admin', '${primaryCredentialId}', ${Math.floor(Date.now() / 1000) + 3600})`);
+  const primaryAdminCookie = signSecurityCookie({ kind: "admin", identityId: "primary-admin", credentialId: primaryCredentialId, passkeySessionEpoch: 1 });
+  const primaryBeforeResume = await readSetupStatusWithCookies(`troom_security_admin=${primaryAdminCookie}`);
+  assert.equal(primaryBeforeResume.active, false, "a missing setup cookie does not silently grant setup authority");
+  assert.equal(primaryBeforeResume.resumable, true, "the current primary-admin passkey session can discover unfinished setup");
+  const primaryResume = await resumeSetupWithCookie(`troom_security_admin=${primaryAdminCookie}`);
+  assert.equal(primaryResume.response.status, 200, JSON.stringify(primaryResume.body));
+  assert.equal(primaryResume.body.active, true);
+  assert.equal(primaryResume.body.credentialId, primaryCredentialId, "resume is pinned to the signed admin credential");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_credentials WHERE identity_id = 'primary-admin'"), 1,
+    "resuming setup does not register another credential");
+  assert.equal((await readSetupStatus(lostPrimarySetupToken)).active, false, "the old setup token is expired atomically");
+  const primarySetupToken = primaryResume.setupToken;
+  assert.ok(primarySetupToken);
+  runSecuritySql(`UPDATE security_setup_sessions SET last_user_verification_at = ${Math.floor(Date.now() / 1000)}
+    WHERE identity_id = 'primary-admin' AND credential_id = '${primaryCredentialId}' AND status = 'active'`);
+  const primaryEnvelope = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
+    method: "POST",
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${primarySetupToken}` },
+    body: JSON.stringify({ serviceLinkId: "primary-admin-cloud-link", envelopeType: "admin_private_prf", encryptedPayload: "primary-encrypted", payloadIv: "primary-iv" })
+  });
+  assert.equal(primaryEnvelope.status, 200, `primary-admin resumed envelope: ${await primaryEnvelope.text()}`);
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_service_links WHERE id = 'primary-admin-cloud-link'"), "active");
+  const completedPrimaryResume = await resumeSetupWithCookie(`troom_security_admin=${primaryAdminCookie}`);
+  assert.equal(completedPrimaryResume.response.status, 409, "completed primary-admin setup cannot be elevated again");
+
   const setupToken = "setup-session-token-for-retry-test-1234567890";
   const setupTokenHash = createHash("sha256").update(setupToken).digest("base64url");
   runSecuritySql(`INSERT INTO security_setup_sessions
     (id, token_hash, identity_id, credential_id, expires_at, last_user_verification_at)
     VALUES ('setup-retry', '${setupTokenHash}', '${identityId}', '${credentialId}', ${Math.floor(Date.now() / 1000) + 3600}, ${Math.floor(Date.now() / 1000)})`);
-  const setupPrfOptions = await readPrfOptions(setupToken, credentialId);
+  const generalResumeState = await readSetupStatusWithCookies(`troom_security_identity=${oldIdentityCookie}`);
+  assert.equal(generalResumeState.resumable, true, "an active general Identity credential can resume lost setup authority");
+  const credentialCountBeforeResume = queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_credentials WHERE identity_id = '${identityId}'`);
+  const generalResume = await resumeSetupWithCookie(`troom_security_identity=${oldIdentityCookie}`, { credentialId: readinessCredentialB });
+  assert.equal(generalResume.response.status, 200, JSON.stringify(generalResume.body));
+  assert.equal(generalResume.body.credentialId, credentialId, "the server pins resume to the signed Identity credential");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_credentials WHERE identity_id = '${identityId}'`), credentialCountBeforeResume,
+    "general setup resume never creates another credential");
+  assert.equal((await readSetupStatus(setupToken)).active, false, "the prior general setup token is no longer accepted");
+  const resumedGeneralToken = generalResume.setupToken;
+  assert.ok(resumedGeneralToken);
+  runSecuritySql(`UPDATE security_setup_sessions SET last_user_verification_at = ${Math.floor(Date.now() / 1000)}
+    WHERE identity_id = '${identityId}' AND credential_id = '${credentialId}' AND status = 'active'`);
+  const setupPrfOptions = await readPrfOptions(resumedGeneralToken, credentialId);
   assert.equal(typeof setupPrfOptions.extensions?.prf?.evalByCredential?.[credentialId]?.first, "string",
     "setup PRF input crosses HTTP as Base64URL text");
   assert.equal(setupPrfOptions.extensions.prf.evalByCredential[credentialId].first, "dGVzdC1wcmYtc2FsdA",
@@ -170,37 +227,97 @@ try {
   };
   const firstVaultSave = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
     method: "POST",
-    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${setupToken}` },
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${resumedGeneralToken}` },
     body: JSON.stringify(vaultBody)
   });
   assert.equal(firstVaultSave.status, 200, `initial client-vault save: ${await firstVaultSave.text()}`);
   const repeatedVaultSave = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
     method: "POST",
-    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${setupToken}` },
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${resumedGeneralToken}` },
     body: JSON.stringify(vaultBody)
   });
   assert.equal(repeatedVaultSave.status, 401, "a completed setup session cannot register an envelope again");
   assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_tcloud_client_vaults WHERE credential_id = '${credentialId}'`), 1);
   const changedKey = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
     method: "POST",
-    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${setupToken}` },
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${resumedGeneralToken}` },
     body: JSON.stringify({ ...vaultBody, publicKeyJwk: { ...vaultBody.publicKeyJwk, n: "BQYHCA" } })
   });
   assert.equal(changedKey.status, 401, "completed setup authority cannot rotate the credential RSA key");
-  const resumedSetup = await fetch("http://127.0.0.1:8810/security/api/setup/status", { headers: { Cookie: `troom_security_setup=${setupToken}` } });
+  const resumedSetup = await fetch("http://127.0.0.1:8810/security/api/setup/status", { headers: { Cookie: `troom_security_setup=${resumedGeneralToken}` } });
   assert.equal(resumedSetup.status, 200);
   const resumedSetupBody = await resumedSetup.json();
   assert.equal(resumedSetupBody.active, false);
   assert.equal(resumedSetupBody.completed, true);
   assert.equal(resumedSetupBody.tcloudReady, true, "a lost success response is recoverable as a read-only completed state");
-  runSecuritySql("UPDATE security_setup_sessions SET status = 'active', expires_at = 1 WHERE id = 'setup-retry'");
-  assert.equal((await readSetupStatus(setupToken)).active, false, "expired setup session is rejected");
-  runSecuritySql(`UPDATE security_setup_sessions SET expires_at = ${Math.floor(Date.now() / 1000) + 3600} WHERE id = 'setup-retry'; UPDATE security_credentials SET status = 'revoked' WHERE credential_id = '${credentialId}'`);
-  assert.equal((await readSetupStatus(setupToken)).active, false, "revoked credential invalidates setup session");
+  const repeatedGeneralResume = await resumeSetupWithCookie(`troom_security_identity=${oldIdentityCookie}`);
+  assert.equal(repeatedGeneralResume.response.status, 409, "completed general setup cannot be elevated again");
+
+  const guardSetupToken = "setup-guard-token-123456789012345678901234";
+  const guardSetupHash = createHash("sha256").update(guardSetupToken).digest("base64url");
+  runSecuritySql(`INSERT INTO security_setup_sessions
+    (id, token_hash, identity_id, credential_id, expires_at)
+    VALUES ('setup-guard', '${guardSetupHash}', '${identityId}', '${credentialId}', 1)`);
+  assert.equal((await readSetupStatus(guardSetupToken)).active, false, "expired setup session is rejected");
+  runSecuritySql(`UPDATE security_setup_sessions SET expires_at = ${Math.floor(Date.now() / 1000) + 3600} WHERE id = 'setup-guard'; UPDATE security_credentials SET status = 'revoked' WHERE credential_id = '${credentialId}'`);
+  assert.equal((await readSetupStatus(guardSetupToken)).active, false, "revoked credential invalidates setup session");
+  const revokedResume = await resumeSetupWithCookie(`troom_security_identity=${oldIdentityCookie}`);
+  assert.equal(revokedResume.response.status, 401, "a revoked credential cannot regain setup authority");
   runSecuritySql(`UPDATE security_credentials SET status = 'active' WHERE credential_id = '${credentialId}'; UPDATE security_identities SET status = 'disabled' WHERE id = '${identityId}'`);
-  assert.equal((await readSetupStatus(setupToken)).active, false, "disabled Identity invalidates setup session");
-  runSecuritySql(`UPDATE security_identities SET status = 'active' WHERE id = '${identityId}'; UPDATE security_setup_sessions SET status = 'completed' WHERE id = 'setup-retry'`);
-  assert.equal((await readSetupStatus(setupToken)).completed, true, "completed setup remains visible only as read-only completion state");
+  assert.equal((await readSetupStatus(guardSetupToken)).active, false, "disabled Identity invalidates setup session");
+  runSecuritySql(`UPDATE security_identities SET status = 'active' WHERE id = '${identityId}'; UPDATE security_setup_sessions SET status = 'completed' WHERE id = 'setup-guard'`);
+  assert.equal((await readSetupStatus(guardSetupToken)).completed, true, "completed setup remains visible only as read-only completion state");
+
+  runSecuritySql(`WITH RECURSIVE fixture(n) AS (
+      SELECT 0 UNION ALL SELECT n + 1 FROM fixture WHERE n < 749
+    )
+    INSERT INTO security_audit_events
+      (event_id, occurred_at, service, event_type, outcome, identity_id, auth_method, source_hash)
+    SELECT printf('audit-page-%04d', n),
+      strftime('%Y-%m-%dT%H:%M:%fZ', '2026-08-22T00:00:00Z', printf('-%d seconds', CAST(n / 5 AS INTEGER))),
+      CASE n % 4 WHEN 0 THEN 'security' WHEN 1 THEN 'cloud' WHEN 2 THEN 'diary' ELSE 'billing' END,
+      'audit_pagination_fixture',
+      CASE n % 5 WHEN 0 THEN 'success' WHEN 1 THEN 'failure' WHEN 2 THEN 'blocked' WHEN 3 THEN 'cancelled' ELSE 'info' END,
+      '${identityId}',
+      CASE n % 3 WHEN 0 THEN 'password' WHEN 1 THEN 'passkey' ELSE 'system' END,
+      'pagination-fixture'
+    FROM fixture`);
+  const pagedAudit = await fetchAllAudit(oldAdminCookie, { eventType: "audit_pagination_fixture" });
+  assert.equal(pagedAudit.pages, 8, "750 audit events are delivered in bounded pages");
+  assert.equal(pagedAudit.events.length, 750);
+  assert.equal(new Set(pagedAudit.events.map((event) => event.event_id)).size, 750, "cursor pagination has no duplicates or gaps");
+  for (let index = 1; index < pagedAudit.events.length; index += 1) {
+    const previous = pagedAudit.events[index - 1];
+    const current = pagedAudit.events[index];
+    assert.ok(previous.occurred_at > current.occurred_at
+      || (previous.occurred_at === current.occurred_at && previous.event_id < current.event_id),
+    "same-timestamp events use event_id as a stable tie-breaker");
+  }
+  for (const filters of [
+    { eventType: "audit_pagination_fixture", service: "cloud" },
+    { eventType: "audit_pagination_fixture", outcome: "failure" },
+    { eventType: "audit_pagination_fixture", authMethod: "password" },
+    { eventType: "audit_pagination_fixture", service: "diary", outcome: "blocked", authMethod: "system" },
+    { eventType: "audit_pagination_fixture", from: "2026-08-22", to: "2026-08-22" }
+  ]) {
+    const filtered = await fetchAllAudit(oldAdminCookie, filters);
+    const expected = pagedAudit.events.filter((event) => {
+      if (filters.service && event.service !== filters.service) return false;
+      if (filters.outcome && event.outcome !== filters.outcome) return false;
+      if (filters.authMethod && event.auth_method !== filters.authMethod) return false;
+      if (filters.eventType && event.event_type !== filters.eventType) return false;
+      if (filters.from && event.occurred_at < "2026-08-21T15:00:00.000Z") return false;
+      if (filters.to && event.occurred_at >= "2026-08-22T15:00:00.000Z") return false;
+      return true;
+    });
+    assert.equal(filtered.events.length, expected.length, `filtered pagination is complete for ${JSON.stringify(filters)}`);
+    assert.equal(new Set(filtered.events.map((event) => event.event_id)).size, filtered.events.length,
+      `filtered pagination has no duplicates for ${JSON.stringify(filters)}`);
+  }
+  const invalidCursor = await fetch("http://127.0.0.1:8810/security/api/audit?cursor=***", {
+    headers: { Cookie: `troom_security_admin=${oldAdminCookie}` }
+  });
+  assert.equal(invalidCursor.status, 400, "malformed audit cursors fail closed");
   await startServiceWorkers(true);
 
   const passkeyCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 1);
@@ -209,11 +326,43 @@ try {
   await assertAccess(passkeyCookies, true, "active passkey sessions");
   await assertRollingPasskeySessions(passkeyCookies);
 
+  const handoffDiaryCookie = await redeemDiaryAdminHandoff();
+  const handoffPayload = decodeSignedPayload(handoffDiaryCookie);
+  assert.equal(handoffPayload.passkeySessionEpoch, 1, "Diary handoff session starts with the Security epoch");
+  const handoffAccess = await fetch(`http://127.0.0.1:${services.diary.port}${services.diary.path}`, {
+    headers: { Cookie: `${services.diary.cookie}=${handoffDiaryCookie}` }
+  });
+  assert.equal(handoffAccess.status, 200, "valid Diary handoff cookie can access the protected API");
+  const switchedDiary = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/households/select`, {
+    method: "POST",
+    headers: {
+      Origin: `http://127.0.0.1:${services.diary.port}`,
+      "Content-Type": "application/json",
+      "X-Diary-Request": "1",
+      Cookie: `${services.diary.cookie}=${handoffDiaryCookie}`
+    },
+    body: JSON.stringify({ householdId: "chiharu-household" })
+  });
+  assert.equal(switchedDiary.status, 200, `Diary household switch: ${await switchedDiary.text()}`);
+  const switchedDiaryCookie = switchedDiary.headers.get("set-cookie")?.match(/troom_diary_session=([^;]+)/)?.[1];
+  assert.ok(switchedDiaryCookie, "Diary household switch reissues its session cookie");
+  const switchedPayload = decodeSignedPayload(switchedDiaryCookie);
+  for (const key of ["identityId", "credentialId", "serviceLinkId", "serviceAccountId", "passkeySessionEpoch", "authMethod"]) {
+    assert.equal(switchedPayload[key], handoffPayload[key], `Diary household switch preserves ${key}`);
+  }
+  assert.equal(switchedPayload.activeHouseholdId, "chiharu-household");
+  const switchedAccess = await fetch(`http://127.0.0.1:${services.diary.port}${services.diary.path}`, {
+    headers: { Cookie: `${services.diary.cookie}=${switchedDiaryCookie}` }
+  });
+  assert.equal(switchedAccess.status, 200, "the switched Diary passkey cookie remains valid on the next API request");
+
   runSecuritySql(`UPDATE security_credentials SET status = 'revoked' WHERE credential_id = '${credentialId}'`);
   await assertAccess(passkeyCookies, false, "credential revoke");
+  await assertSingleAccess("diary", switchedDiaryCookie, false, "credential revoke rejects the household-switched Diary cookie");
   await assertAccess(passwordCookies, true, "password sessions after credential revoke");
 
   runSecuritySql(`UPDATE security_credentials SET status = 'active', revoked_at = NULL WHERE credential_id = '${credentialId}'`);
+  await assertSingleAccess("diary", switchedDiaryCookie, true, "the fixture can continue to the epoch and local-switch checks after credential restoration");
   const replacementLinks = {};
   for (const [name, service] of Object.entries(services)) {
     runSecuritySql(`UPDATE security_service_links SET status = 'disabled' WHERE id = '${service.linkId}'`);
@@ -240,6 +389,9 @@ try {
     await delay(300);
     await startServiceWorkers(Object.fromEntries(Object.keys(services).map((name) => [name, name !== disabledService])));
     await assertSingleAccess(disabledService, replacementCookies[disabledService], false, `${disabledService} local kill switch`);
+    if (disabledService === "diary") {
+      await assertSingleAccess("diary", switchedDiaryCookie, false, "Diary local kill switch rejects the household-switched passkey cookie");
+    }
     for (const activeService of Object.keys(services).filter((name) => name !== disabledService)) {
       await assertSingleAccess(activeService, replacementCookies[activeService], true, `${disabledService} local kill switch must not affect ${activeService}`);
     }
@@ -269,6 +421,7 @@ try {
   assert.equal(await securityAdminAuthenticated(oldAdminCookie), false, "disable transition immediately rejects the old Security admin cookie");
   assert.equal(await securityIdentityHandoff(oldIdentityCookie), 503, "disable transition cannot issue a handoff while the Secret is still true");
   await assertAccess(replacementCookies, false, "disable transition rejects every service passkey cookie before the false Secret is deployed");
+  await assertSingleAccess("diary", switchedDiaryCookie, false, "global epoch transition rejects the household-switched Diary cookie");
   await assertAccess(passwordCookies, true, "password sessions remain valid while the global runtime gate is closed");
 
   stopSecurityWorker();
@@ -291,7 +444,7 @@ try {
   const newAdminCookie = signSecurityCookie({ kind: "admin", identityId: "audit_admin", credentialId: "audit-credential", passkeySessionEpoch: 2 });
   const newIdentityCookie = signSecurityCookie({ kind: "identity", identityId, credentialId, passkeySessionEpoch: 2 });
   assert.equal(await securityAdminAuthenticated(newAdminCookie), true, "new Security admin cookie uses the new epoch");
-  assert.equal(await securityIdentityHandoff(newIdentityCookie), 200, "new Security identity cookie uses the new epoch");
+  assert.equal(await securityIdentityHandoff(newIdentityCookie, replacementLinks.diary), 200, "new Security identity cookie uses the new epoch");
 
   disableGlobalRuntime();
   stopSecurityWorker();
@@ -393,7 +546,7 @@ async function securityAdminAuthenticated(cookie) {
   return Boolean((await response.json()).adminAuthenticated);
 }
 
-async function securityIdentityHandoff(cookie) {
+async function securityIdentityHandoff(cookie, linkId = services.diary.linkId) {
   const response = await fetch("http://127.0.0.1:8810/security/api/auth/handoff", {
     method: "POST",
     headers: {
@@ -401,7 +554,7 @@ async function securityIdentityHandoff(cookie) {
       "Content-Type": "application/json",
       Cookie: `troom_security_identity=${cookie}`
     },
-    body: JSON.stringify({ service: "diary" })
+    body: JSON.stringify({ service: "diary", linkId })
   });
   return response.status;
 }
@@ -484,6 +637,65 @@ async function readSetupStatus(token) {
   });
   assert.equal(response.status, 200);
   return response.json();
+}
+
+async function readSetupStatusWithCookies(cookie) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/setup/status", { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  return response.json();
+}
+
+async function resumeSetupWithCookie(cookie, body = {}) {
+  const response = await fetch("http://127.0.0.1:8810/security/api/setup/resume", {
+    method: "POST",
+    headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify(body)
+  });
+  const payload = await response.json();
+  const setupToken = response.headers.get("set-cookie")?.match(/troom_security_setup=([^;]+)/)?.[1] || null;
+  return { response, body: payload, setupToken };
+}
+
+async function fetchAllAudit(adminCookie, filters) {
+  const events = [];
+  let cursor = null;
+  let pages = 0;
+  do {
+    const params = new URLSearchParams(filters);
+    if (cursor) params.set("cursor", cursor);
+    const response = await fetch(`http://127.0.0.1:8810/security/api/audit?${params}`, {
+      headers: { Cookie: `troom_security_admin=${adminCookie}` }
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    events.push(...body.events);
+    cursor = body.nextCursor || null;
+    pages += 1;
+    assert.ok(pages < 20, "audit cursor must terminate");
+  } while (cursor);
+  return { events, pages };
+}
+
+async function redeemDiaryAdminHandoff() {
+  const rawToken = `diary-handoff-${randomUUID()}`;
+  const tokenHash = createHash("sha256").update(rawToken).digest("base64url");
+  runSecuritySql(`INSERT INTO security_handoffs
+    (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at)
+    VALUES ('${randomUUID()}', '${tokenHash}', '${identityId}', '${diaryAdminLinkId}', '${credentialId}', 1, ${Math.floor(Date.now() / 1000) + 60})`);
+  const response = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/passkey/handoff`, {
+    method: "POST",
+    headers: { Origin: `http://127.0.0.1:${services.diary.port}`, "Content-Type": "application/json", "X-Diary-Request": "1" },
+    body: JSON.stringify({ handoffToken: rawToken })
+  });
+  const body = await response.text();
+  assert.equal(response.status, 200, `valid Diary handoff redeem: ${body}`);
+  const cookie = response.headers.get("set-cookie")?.match(/troom_diary_session=([^;]+)/)?.[1];
+  assert.ok(cookie, "Diary handoff issues a session cookie");
+  return cookie;
+}
+
+function decodeSignedPayload(cookie) {
+  return JSON.parse(Buffer.from(String(cookie).split(".")[0], "base64url").toString("utf8"));
 }
 
 async function assertRollingPasskeySessions(cookies) {
@@ -626,6 +838,16 @@ function cleanupSecurityFixture() {
     DELETE FROM security_service_links WHERE identity_id = '${readinessIdentityId}';
     DELETE FROM security_credentials WHERE identity_id = '${readinessIdentityId}';
     DELETE FROM security_identities WHERE id = '${readinessIdentityId}';
+    DELETE FROM security_tcloud_key_envelopes WHERE identity_id = 'primary-admin';
+    DELETE FROM security_tcloud_client_vaults WHERE identity_id = 'primary-admin';
+    DELETE FROM security_setup_sessions WHERE identity_id = 'primary-admin';
+    DELETE FROM security_handoffs WHERE identity_id = 'primary-admin';
+    DELETE FROM security_challenges WHERE identity_id = 'primary-admin';
+    DELETE FROM security_invitations WHERE identity_id = 'primary-admin';
+    DELETE FROM security_service_links WHERE identity_id = 'primary-admin';
+    DELETE FROM security_credentials WHERE identity_id = 'primary-admin';
+    DELETE FROM security_identities WHERE id = 'primary-admin';
+    DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${readinessIdentityId}');
   `);
 }
 

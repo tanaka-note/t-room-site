@@ -7,12 +7,15 @@ import {
 } from "@simplewebauthn/server";
 import { secure } from "./security-headers.js";
 import {
+  AUDIT_PAGE_SIZE,
   LOGIN_FAILURE_EVENTS,
   LOGIN_SUCCESS_EVENTS,
   auditRetentionCutoff,
   bootstrapAttemptCutoff,
   canonicalServiceLinks,
   currentJstDayBounds,
+  decodeAuditCursor,
+  encodeAuditCursor,
   jstDayBounds,
   normalizeAuditService,
   normalizeIdentityId,
@@ -108,6 +111,10 @@ async function handleApi(request, env, url, path) {
   if (!runtime.enabled) throw new HttpError(503, "パスキー機能は一時停止中です。従来のID・パスワードでログインしてください。");
 
   if (path === "/api/setup/status" && request.method === "GET") return setupStatus(request, env);
+  if (path === "/api/setup/resume" && request.method === "POST") {
+    requireMutation(request, url);
+    return resumeSetup(request, env, url);
+  }
   if (path === "/api/tcloud/admin-config" && request.method === "GET") return primaryAdminCryptoConfig(request, env);
   if (path === "/api/setup/primary-admin/verify-password" && request.method === "POST") {
     requireMutation(request, url);
@@ -411,30 +418,107 @@ async function createHandoff(request, env) {
 
 async function setupStatus(request, env) {
   const setup = await readSetupSession(request, env, ["active", "completed"]);
-  if (!setup) return json({ active: false });
-  const [credential, cloudLinks, vault] = await Promise.all([
-    env.DB.prepare("SELECT credential_id, prf_enabled, status FROM security_credentials WHERE credential_id = ? AND identity_id = ?").bind(setup.credential_id, setup.identity_id).first(),
-    env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(setup.identity_id).all(),
-    env.DB.prepare("SELECT public_key_fingerprint FROM security_tcloud_client_vaults WHERE credential_id = ? AND identity_id = ?").bind(setup.credential_id, setup.identity_id).first()
-  ]);
-  if (!credential || credential.status === "revoked") return json({ active: false });
-  const links = cloudLinks.results || [];
-  let ready = Boolean(vault);
-  if (setup.identity_id === PRIMARY_ADMIN_ID) {
-    const envelope = await env.DB.prepare("SELECT 1 AS ok FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ? AND envelope_type = 'admin_private_prf'").bind(setup.credential_id, setup.identity_id).first();
-    ready = Boolean(envelope);
-  }
-  return json({
+  if (setup) return json(await tcloudSetupStatus(env, setup.identity_id, setup.credential_id, {
     active: setup.status === "active",
     completed: setup.status === "completed",
-    identityId: setup.identity_id,
-    credentialId: setup.credential_id,
-    isPrimaryAdmin: setup.identity_id === PRIMARY_ADMIN_ID,
+    resumable: false
+  }));
+  const actor = await currentSetupActor(request, env);
+  if (!actor) return json({ active: false, resumable: false });
+  const completed = await env.DB.prepare(`SELECT 1 AS ok FROM security_setup_sessions
+    WHERE identity_id = ? AND credential_id = ? AND status = 'completed' LIMIT 1`)
+    .bind(actor.identityId, actor.credentialId).first();
+  const status = await tcloudSetupStatus(env, actor.identityId, actor.credentialId, {
+    active: false,
+    completed: Boolean(completed),
+    resumable: !completed
+  });
+  status.resumable = Boolean(status.resumable && status.needsTCloudSetup && status.prfEnabled);
+  return json(status);
+}
+
+async function resumeSetup(request, env, url) {
+  const actor = await currentSetupActor(request, env);
+  if (!actor) throw new HttpError(401, "現在のパスキーでログインしてからT-Cloudの準備を再開してください。");
+  const completed = await env.DB.prepare(`SELECT 1 AS ok FROM security_setup_sessions
+    WHERE identity_id = ? AND credential_id = ? AND status = 'completed' LIMIT 1`)
+    .bind(actor.identityId, actor.credentialId).first();
+  if (completed) throw new HttpError(409, "このパスキーのT-Cloud準備は完了済みです。");
+  const status = await tcloudSetupStatus(env, actor.identityId, actor.credentialId, {
+    active: false,
+    completed: false,
+    resumable: true
+  });
+  if (!status.cloudLinks.length) throw new HttpError(409, "T-Cloud連携が見つかりません。");
+  if (!status.needsTCloudSetup || status.tcloudReady) throw new HttpError(409, "このパスキーのT-Cloud準備は完了済みです。");
+  if (!status.prfEnabled) throw new HttpError(409, "このパスキーはT-Cloudの端末側復号に対応していません。ID・パスワードをご利用ください。");
+
+  const setup = await prepareSetupSession(env, actor.identityId, actor.credentialId);
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE security_setup_sessions SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+      WHERE identity_id = ? AND credential_id = ? AND status = 'active'`)
+      .bind(actor.identityId, actor.credentialId),
+    insertSetupSessionStatement(env, setup),
+    await localAuditStatement(env, {
+      eventType: "tcloud_setup_resumed", outcome: "success", identityId: actor.identityId,
+      service: "cloud", authMethod: "passkey"
+    }, request)
+  ]);
+  const headers = new Headers();
+  headers.append("Set-Cookie", setupCookie(setup.token, url.protocol === "https:"));
+  return json(await tcloudSetupStatus(env, actor.identityId, actor.credentialId, {
+    active: true,
+    completed: false,
+    resumable: false
+  }), 200, headers);
+}
+
+async function tcloudSetupStatus(env, identityId, credentialId, flags) {
+  const [credential, cloudLinks, vault] = await Promise.all([
+    env.DB.prepare("SELECT credential_id, prf_enabled, status FROM security_credentials WHERE credential_id = ? AND identity_id = ?").bind(credentialId, identityId).first(),
+    env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(identityId).all(),
+    env.DB.prepare("SELECT public_key_fingerprint FROM security_tcloud_client_vaults WHERE credential_id = ? AND identity_id = ?").bind(credentialId, identityId).first()
+  ]);
+  if (!credential || credential.status === "revoked") return { active: false, resumable: false };
+  const links = cloudLinks.results || [];
+  let ready = Boolean(vault);
+  if (identityId === PRIMARY_ADMIN_ID) {
+    const envelope = await env.DB.prepare("SELECT 1 AS ok FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ? AND envelope_type = 'admin_private_prf'").bind(credentialId, identityId).first();
+    ready = Boolean(envelope);
+  }
+  return {
+    ...flags,
+    identityId,
+    credentialId,
+    isPrimaryAdmin: identityId === PRIMARY_ADMIN_ID,
     prfEnabled: Boolean(credential.prf_enabled),
     tcloudReady: ready,
+    needsTCloudSetup: Boolean(links.length && !ready),
     clientKeyFingerprint: vault?.public_key_fingerprint || null,
     cloudLinks: links.map((link) => ({ id: link.id, accountId: link.service_account_id, rootFolderId: link.cloud_root_folder_id, status: link.status }))
-  });
+  };
+}
+
+async function currentSetupActor(request, env) {
+  const [identitySession, adminSession] = await Promise.all([
+    readSecuritySession(request, env, IDENTITY_COOKIE, "identity"),
+    readSecuritySession(request, env, ADMIN_COOKIE, "admin")
+  ]);
+  const session = identitySession || adminSession;
+  if (!session) return null;
+  if (session.identityId === PRIMARY_ADMIN_ID) {
+    if (!adminSession || adminSession.identityId !== session.identityId || adminSession.credentialId !== session.credentialId) return null;
+  } else if (!identitySession) {
+    return null;
+  }
+  const row = await env.DB.prepare(`SELECT c.status AS credential_status, i.status AS identity_status, i.is_security_admin
+    FROM security_credentials c JOIN security_identities i ON i.id = c.identity_id
+    WHERE c.credential_id = ? AND c.identity_id = ? AND c.status IN ('pending', 'active') AND i.status != 'disabled'`)
+    .bind(session.credentialId, session.identityId).first();
+  if (!row) return null;
+  if (session.identityId === PRIMARY_ADMIN_ID
+    && (row.credential_status !== "active" || row.identity_status !== "active" || !row.is_security_admin)) return null;
+  return session;
 }
 
 async function primaryAdminCryptoConfig(request, env) {
@@ -486,13 +570,15 @@ async function prfVerify(request, env, url) {
   const credential = await credentialForIdentity(env, credentialId, identitySession.identityId);
   const verification = await verifyAuthentication(body.response, challenge.challenge, credential, env);
   if (!verification.verified || !verification.authenticationInfo.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
-  const statements = [env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP, prf_enabled = ? WHERE credential_id = ?")
-    .bind(verification.authenticationInfo.newCounter, body.prfAvailable ? 1 : 0, credentialId)];
+  // `prf_enabled` records registration-time credential capability. An assertion
+  // without a PRF result is a per-attempt outcome and must not downgrade it.
+  const statements = [env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ?")
+    .bind(verification.authenticationInfo.newCounter, credentialId)];
   if (identitySession.setupId) statements.push(env.DB.prepare("UPDATE security_setup_sessions SET last_user_verification_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(nowSeconds(), identitySession.setupId));
   await env.DB.batch(statements);
   const identity = await env.DB.prepare("SELECT is_security_admin FROM security_identities WHERE id = ?").bind(identitySession.identityId).first();
   const headers = await securitySessionHeaders(env, url, identitySession.identityId, credentialId, Boolean(identity?.is_security_admin));
-  return json({ verified: true }, 200, headers);
+  return json({ verified: true, prfAvailable: Boolean(body.prfAvailable) }, 200, headers);
 }
 
 async function saveOwnTCloudEnvelope(request, env) {
@@ -814,8 +900,25 @@ async function listAuditEvents(url, env) {
   const to = jstDayBounds(url.searchParams.get("to"));
   if (from) { clauses.push("occurred_at >= ?"); values.push(from.start); }
   if (to) { clauses.push("occurred_at < ?"); values.push(to.end); }
-  const result = await env.DB.prepare(`SELECT * FROM security_audit_events WHERE ${clauses.join(" AND ")} ORDER BY occurred_at DESC LIMIT 500`).bind(...values).all();
-  return json({ events: (result.results || []).map(withUtcTimes) });
+  const rawCursor = url.searchParams.get("cursor");
+  if (rawCursor) {
+    let cursor;
+    try { cursor = decodeAuditCursor(rawCursor); }
+    catch { throw new HttpError(400, "監査履歴のcursorが不正です。"); }
+    clauses.push("(occurred_at < ? OR (occurred_at = ? AND event_id > ?))");
+    values.push(cursor.occurredAt, cursor.occurredAt, cursor.eventId);
+  }
+  const result = await env.DB.prepare(`SELECT * FROM security_audit_events
+    WHERE ${clauses.join(" AND ")}
+    ORDER BY occurred_at DESC, event_id ASC LIMIT ?`)
+    .bind(...values, AUDIT_PAGE_SIZE + 1).all();
+  const rows = result.results || [];
+  const hasMore = rows.length > AUDIT_PAGE_SIZE;
+  const page = rows.slice(0, AUDIT_PAGE_SIZE);
+  return json({
+    events: page.map(withUtcTimes),
+    nextCursor: hasMore && page.length ? encodeAuditCursor(page.at(-1)) : null
+  });
 }
 
 async function redeemHandoff(env, token, service) {

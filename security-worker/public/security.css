@@ -65,6 +65,8 @@ fieldset { border: 1px solid var(--line); border-radius: 12px; }
 .outcome-info { border-color: #b2ddff; background: #eff8ff; color: #175cd3; }
 .technical-detail { display: block; margin-top: 7px; color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
 .audit-device { margin-top: 5px; color: var(--muted); font-size: .82rem; }
+#audit-load-more { display: block; width: min(100%, 320px); margin: 14px auto 0; }
+#audit-load-more[hidden] { display: none; }
 .warning-text { color: #b54708; }
 .danger { background: var(--danger); border-color: var(--danger); }
 output { overflow-wrap: anywhere; }

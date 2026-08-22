@@ -2,7 +2,11 @@
   "use strict";
   const display = globalThis.TRoomSecurityDisplay;
   if (!display) throw new Error("セキュリティ画面の表示設定を読み込めませんでした。");
-  const state = { adminPrf: null, adminCredentialId: null, selectedIdentity: null, pendingInviteCloud: null, pendingPrimarySetup: null, identityNames: new Map() };
+  const state = {
+    adminPrf: null, adminCredentialId: null, selectedIdentity: null,
+    pendingInviteCloud: null, pendingPrimarySetup: null, identityNames: new Map(),
+    auditCursor: null, auditLoading: false
+  };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 
@@ -33,9 +37,18 @@
       $("#bootstrap-view h2").textContent = "第一管理者パスキーの復旧登録";
     });
     $("#security-logout").addEventListener("click", logout);
-    $("#tcloud-setup-resume").addEventListener("click", () => {
-      $("#tcloud-setup-form").hidden = false;
-      $("#tcloud-setup-id").focus();
+    $("#tcloud-setup-resume").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        if (state.pendingPrimarySetup?.resumable) {
+          state.pendingPrimarySetup = await TRoomPasskeys.resumeSetup();
+          renderPrimarySetupNotice(state.pendingPrimarySetup);
+        }
+        $("#tcloud-setup-form").hidden = false;
+        $("#tcloud-setup-id").focus();
+      } catch (error) { showMessage(error.message, true); }
+      finally { button.disabled = false; }
     });
     $("#tcloud-setup-continue").addEventListener("click", () => {
       showPanel("dashboard-panel", document.querySelector('[data-panel="dashboard-panel"]'));
@@ -48,10 +61,11 @@
     $("#audit-filter").addEventListener("submit", async (event) => {
       event.preventDefault();
       const button = event.submitter;
-      button.disabled = true;
-      try { await loadAudit(); } catch (error) { showMessage(error.message, true); }
-      finally { button.disabled = false; }
+      if (button) button.disabled = true;
+      try { await loadAudit({ append: false }); } catch (error) { showMessage(error.message, true); }
+      finally { if (button) button.disabled = false; }
     });
+    $("#audit-load-more").addEventListener("click", () => loadAudit({ append: true }).catch((error) => showMessage(error.message, true)));
     document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => showPanel(button.dataset.panel, button)));
     populateAuditEventFilter();
     addLinkRow("diary", "main-admin");
@@ -60,7 +74,7 @@
   async function routeStatus() {
     try {
       const setup = await TRoomPasskeys.setupStatus();
-      if (setup.active && !setup.isPrimaryAdmin) {
+      if ((setup.active || setup.resumable || setup.needsTCloudSetup) && !setup.isPrimaryAdmin) {
         $("#invite-view").hidden = false;
         if (setup.tcloudReady) {
           $("#invite-register").hidden = true;
@@ -100,6 +114,7 @@
       let tcloudReady = false;
       try {
         if (!result.prfOutput) throw new Error(result.prfPreparationFailed
+          || result.prfEnabled
           ? "T-Cloudのパスキー利用準備を一時的に完了できませんでした。"
           : "この端末ではT-Cloudのパスキー利用に対応していません。");
         await preparePrimaryAdminCloud(credentials.accountKey, result.prfOutput);
@@ -199,6 +214,14 @@
         result.prfPreparationFailed = false;
       }
       if (!prfOutput) {
+        if (result.prfEnabled) {
+          state.pendingInviteCloud = result;
+          button.hidden = false;
+          button.textContent = "T-Cloudの準備を再試行";
+          button.onclick = () => retryInviteCloud();
+          showMessage("パスキー登録は完了しました。今回はPRF結果を取得できなかったため、T-Cloudの準備だけ完了していません。日記・請求書は承認後に利用できます。", true);
+          return false;
+        }
         button.hidden = true;
         showMessage("パスキー登録は完了しました。日記・請求書では承認後に利用できます。この端末ではT-Cloudのパスキー利用に対応していないため、T-Cloudは従来のID・パスワードをご利用ください。");
         return false;
@@ -223,7 +246,8 @@
     if (!state.pendingInviteCloud) return;
     button.disabled = true;
     try {
-      const setup = await TRoomPasskeys.setupStatus();
+      let setup = await TRoomPasskeys.setupStatus();
+      if (!setup.active && setup.resumable) setup = await TRoomPasskeys.resumeSetup();
       state.pendingInviteCloud = { ...state.pendingInviteCloud, ...setup, cloudLinks: setup.cloudLinks || state.pendingInviteCloud.cloudLinks };
       if (await prepareInviteCloud(state.pendingInviteCloud)) {
         button.hidden = true;
@@ -241,12 +265,12 @@
     const setupResult = setup || await TRoomPasskeys.setupStatus().catch(() => ({ active: false }));
     renderPrimarySetupNotice(setupResult);
     await Promise.all([loadDashboard(), loadIdentities()]);
-    await loadAudit();
+    await loadAudit({ append: false });
   }
 
   function renderPrimarySetupNotice(setup) {
     const notice = $("#tcloud-setup-notice");
-    const pending = Boolean(setup?.active && setup.isPrimaryAdmin && !setup.tcloudReady);
+    const pending = Boolean((setup?.active || setup?.resumable) && setup.isPrimaryAdmin && !setup.tcloudReady);
     state.pendingPrimarySetup = pending ? setup : null;
     notice.hidden = !pending;
     $("#tcloud-setup-form").hidden = true;
@@ -419,11 +443,28 @@
     $("#link-rows").append(row);
   }
 
-  async function loadAudit() {
+  async function loadAudit({ append = false } = {}) {
+    if (state.auditLoading || (append && !state.auditCursor)) return;
+    state.auditLoading = true;
+    const more = $("#audit-load-more");
+    more.disabled = true;
     const params = new URLSearchParams();
     [["service", "#audit-service"], ["authMethod", "#audit-auth"], ["outcome", "#audit-outcome"], ["eventType", "#audit-event"], ["from", "#audit-from"], ["to", "#audit-to"]].forEach(([key, selector]) => { const value = $(selector).value; if (value) params.set(key, value); });
-    const data = await get(`/audit?${params}`);
-    $("#audit-list").innerHTML = data.events.map(renderAuditEvent).join("") || "<p>該当する履歴はありません。</p>";
+    if (append) params.set("cursor", state.auditCursor);
+    try {
+      const data = await get(`/audit?${params}`);
+      const html = data.events.map(renderAuditEvent).join("");
+      if (append) {
+        if (html) $("#audit-list").insertAdjacentHTML("beforeend", html);
+      } else {
+        $("#audit-list").innerHTML = html || "<p>該当する履歴はありません。</p>";
+      }
+      state.auditCursor = data.nextCursor || null;
+      more.hidden = !state.auditCursor;
+    } finally {
+      state.auditLoading = false;
+      more.disabled = false;
+    }
   }
 
   function populateAuditEventFilter() {

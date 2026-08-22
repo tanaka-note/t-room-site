@@ -232,6 +232,7 @@ async function handleApi(request, env, url, path, context) {
       credentialId: session.credentialId,
       serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.serviceAccountId,
+      passkeySessionEpoch: session.passkeySessionEpoch,
       authMethod: session.authMethod
     });
     const headers = new Headers();
@@ -1409,7 +1410,14 @@ async function changeInitialPassword(request, env, session, url) {
   if (!result.meta?.changes) return json({ error: "パスワードを更新できませんでした。再度ログインしてください。" }, 409);
   const account = await findAccountById(session.accountId, env);
   const maxAge = getSessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env, account.householdId);
+  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId, {
+    identityId: session.identityId,
+    credentialId: session.credentialId,
+    serviceLinkId: session.serviceLinkId,
+    serviceAccountId: session.serviceAccountId,
+    passkeySessionEpoch: session.passkeySessionEpoch,
+    authMethod: session.authMethod
+  });
   const headers = new Headers();
   headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
   return json({

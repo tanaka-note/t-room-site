@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 await import("../public/security-display.js");
@@ -30,6 +32,7 @@ const currentAuditEvents = {
   service_link_added: "サービス連携を追加",
   service_link_removed: "サービス連携を解除",
   tcloud_key_envelope_saved: "T-Cloudのパスキー利用準備を完了",
+  tcloud_setup_resumed: "T-Cloudのパスキー利用準備を再開",
   logout: "ログアウト",
   credential_compromise: "パスキーの安全上の問題を検知",
   entry_created: "請求情報を作成",
@@ -45,6 +48,23 @@ test("all current Security audit event types have natural Japanese labels", () =
     assert.equal(display.eventLabel(value), expected, value);
     assert.ok(!display.eventLabel(value).includes(value), `${value} must not expose its internal name`);
   }
+});
+
+test("every audit event literal emitted by Security, Cloud, Diary and Billing has a display definition", async () => {
+  const sources = [
+    "../src/index.js",
+    "../../assets/security-audit-worker.js",
+    "../../cloud-worker/src/index.js",
+    "../../diary-worker/src/index.js",
+    "../../billing-worker/src/index.js"
+  ];
+  const emitted = new Set();
+  for (const relative of sources) {
+    const source = await readFile(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+    for (const match of source.matchAll(/eventType\s*:\s*["']([^"']+)["']/g)) emitted.add(match[1]);
+  }
+  const defined = new Set(display.EVENT_DEFINITIONS.map((item) => item.value));
+  assert.deepEqual([...emitted].filter((value) => !defined.has(value)), []);
 });
 
 test("unknown audit event types use an explicit fallback", () => {

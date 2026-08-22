@@ -248,6 +248,8 @@ test("kill-switch epochs, atomic local audits, and malformed cookies fail closed
     assert.match(source, /passkeySessionEpoch/);
   }
   assert.match(diary, /passkeySessionEpoch: session\.passkeySessionEpoch/);
+  assert.match(diary, /path === "\/api\/households\/select"[\s\S]*passkeySessionEpoch: session\.passkeySessionEpoch/,
+    "Diary household switching preserves the Security epoch when reissuing a passkey cookie");
   assert.match(billing, /passkeySessionEpoch: session\.passkeySessionEpoch/);
 });
 
@@ -266,7 +268,33 @@ test("Cloud authentication candidates are credential-ready, while completed setu
   assert.match(worker, /cloudPendingCount/);
   assert.match(worker, /readSetupSession\(request, env, \["active", "completed"\]\)/);
   assert.match(worker, /async function readSetupSession\(request, env, allowedStatuses = \["active"\]\)/);
-  assert.match(worker, /active: setup\.status === "active"/);
+  assert.match(worker, /completed: setup\.status === "completed"/);
+});
+
+test("lost setup cookies can only be resumed from the current signed passkey session", () => {
+  assert.match(worker, /path === "\/api\/setup\/resume"/);
+  assert.match(worker, /currentSetupActor\(request, env\)/);
+  assert.match(worker, /adminSession\.credentialId !== session\.credentialId/);
+  assert.match(worker, /SET status = 'expired'[\s\S]*status = 'active'/);
+  assert.match(worker, /WHERE identity_id = \? AND credential_id = \? AND status = 'completed'/);
+  assert.match(client, /resumeSetup/);
+  assert.doesNotMatch(securityUi, /navigator\.credentials\.create/,
+    "setup resume delegates to obtainPrf(), which uses the existing credential with get()");
+});
+
+test("authentication-time PRF absence never downgrades registration-time capability", () => {
+  assert.match(worker, /UPDATE security_credentials SET counter = \?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = \?/);
+  assert.doesNotMatch(worker, /last_used_at = CURRENT_TIMESTAMP, prf_enabled = \?/);
+  assert.match(worker, /prfAvailable: Boolean\(body\.prfAvailable\)/);
+});
+
+test("audit history uses stable composite cursor pagination", () => {
+  assert.match(worker, /ORDER BY occurred_at DESC, event_id ASC LIMIT \?/);
+  assert.match(worker, /occurred_at < \? OR \(occurred_at = \? AND event_id > \?\)/);
+  assert.match(worker, /nextCursor/);
+  assert.match(securityHtml, /id="audit-load-more"[\s\S]*もっと見る/);
+  assert.match(securityUi, /params\.set\("cursor", state\.auditCursor\)/);
+  assert.match(securityUi, /insertAdjacentHTML\("beforeend"/);
 });
 
 test("WebAuthn credential IDs and audit retention use standards-aligned boundaries", () => {

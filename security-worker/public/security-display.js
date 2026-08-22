@@ -33,6 +33,7 @@
     ["service_link_removed", "サービス連携を解除", "サービス連携"],
     ["service_link_changed", "サービス連携を変更", "サービス連携"],
     ["tcloud_key_envelope_saved", "T-Cloudのパスキー利用準備を完了", "T-Cloud"],
+    ["tcloud_setup_resumed", "T-Cloudのパスキー利用準備を再開", "T-Cloud"],
     ["tcloud_key_delegated", "T-Cloudのフォルダ利用を許可", "T-Cloud"],
     ["entry_created", "請求情報を作成", "請求書"],
     ["entry_updated", "請求情報を更新", "請求書"],

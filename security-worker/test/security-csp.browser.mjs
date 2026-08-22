@@ -19,6 +19,7 @@ const receivedPrfOptionBodies = [];
 const receivedPrfVerifyBodies = [];
 const receivedEnvelopeBodies = [];
 const receivedAuditQueries = [];
+const receivedSetupResumeBodies = [];
 const malformedPrfCredentialId = "bWFsZm9ybWVkLXByZi1vcHRpb25z";
 let setupStatusBody = { active: false };
 let securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
@@ -35,7 +36,8 @@ const auditEventsBody = {
       event_type: "new_event_<img id=xss-marker src=x onerror=alert(1)>", service: "future-service", outcome: "future-outcome", auth_method: "future-auth",
       identity_id: "unknown_user", occurred_at: "2026-08-21T15:00:00.000Z", user_agent: "unknown-agent-<script>alert(1)</script>"
     }
-  ]
+  ],
+  nextCursor: "browser-page-2"
 };
 
 const staticFiles = new Map([
@@ -51,11 +53,24 @@ const staticFiles = new Map([
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
   if (url.pathname === "/security/api/setup/status") return sendJson(response, 200, setupStatusBody);
+  if (url.pathname === "/security/api/setup/resume") {
+    receivedSetupResumeBodies.push(JSON.parse(await readBody(request)));
+    setupStatusBody = { ...setupStatusBody, active: true, resumable: false };
+    return sendJson(response, 200, setupStatusBody);
+  }
   if (url.pathname === "/security/api/status") return sendJson(response, 200, securityStatusBody);
   if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, lockouts: 0, invited: 0, pendingApproval: 0, noPasskey: 0, critical: 0 });
   if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [{ id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" }] });
   if (url.pathname === "/security/api/audit") {
     receivedAuditQueries.push(url.search);
+    if (url.searchParams.get("cursor") === "browser-page-2") return sendJson(response, 200, {
+      events: [{
+        event_type: "entry_created", service: "billing", outcome: "success", auth_method: "password",
+        identity_id: "primary-admin", service_account_id: "owner", occurred_at: "2026-08-20T15:00:00.000Z",
+        user_agent: "Mozilla/5.0 Firefox/142.0"
+      }],
+      nextCursor: null
+    });
     return sendJson(response, 200, auditEventsBody);
   }
   if (url.pathname === "/security/api/identities/primary-admin") return sendJson(response, 200, {
@@ -234,8 +249,8 @@ async function verifyBrowser(browserType, name, origin) {
           get: async () => {
             window.__troomWebAuthnGetCalled = true;
             window.__troomWebAuthnGetCount = Number(window.__troomWebAuthnGetCount || 0) + 1;
-            if (["bootstrap-prf-unsupported", "bootstrap-transient", "primary-retry"].includes(scenario())) {
-              return assertion(scenario() !== "bootstrap-prf-unsupported");
+            if (["bootstrap-prf-unsupported", "bootstrap-prf-temporary-missing", "bootstrap-transient", "primary-retry", "general-retry"].includes(scenario())) {
+              return assertion(!["bootstrap-prf-unsupported", "bootstrap-prf-temporary-missing"].includes(scenario()));
             }
             throw new DOMException("CSP regression test reached resumed WebAuthn", "NotAllowedError");
           },
@@ -243,7 +258,7 @@ async function verifyBrowser(browserType, name, origin) {
             window.__troomWebAuthnCreateCalled = true;
             window.__troomWebAuthnCreateCount = Number(window.__troomWebAuthnCreateCount || 0) + 1;
             if (scenario() === "bootstrap-prf-unsupported") return registration(false);
-            if (scenario() === "bootstrap-transient") return registration(true);
+            if (["bootstrap-prf-temporary-missing", "bootstrap-transient"].includes(scenario())) return registration(true);
             throw new DOMException("CSP regression test reached WebAuthn", "NotAllowedError");
           }
         }
@@ -319,17 +334,20 @@ async function verifyBrowser(browserType, name, origin) {
     }));
     assert.equal(await page.evaluate(() => window.__troomJavascriptEvalAllowed), false, `${name}: normal JavaScript eval must remain blocked`);
     setupStatusBody = {
-      active: true, identityId: "resume_user", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
+      active: false, resumable: true, needsTCloudSetup: true, identityId: "resume_user", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
       isPrimaryAdmin: false, prfEnabled: true, tcloudReady: false,
       cloudLinks: [{ id: "cloud-2", accountId: "folder-member", rootFolderId: 2 }, { id: "cloud-10", accountId: "folder-member", rootFolderId: 10 }]
     };
     const resumed = await context.newPage();
-    await resumed.goto(`${origin}/security/`, { waitUntil: "load" });
+    await resumed.goto(`${origin}/security/?scenario=general-retry`, { waitUntil: "load" });
     const resumeButton = resumed.getByRole("button", { name: "T-Cloudの準備を再開" });
     await resumeButton.waitFor();
     assert.equal(await resumed.locator("#invite-view").isVisible(), true, `${name}: setup session resumes after reload`);
     await resumeButton.click();
     await resumed.waitForFunction(() => window.__troomWebAuthnGetCalled === true, null, { timeout: 30000 });
+    assert.notEqual(await resumed.evaluate(() => window.__troomWebAuthnCreateCalled), true,
+      `${name}: lost general setup authority resumes with get(), never create()`);
+    await resumed.close();
     setupStatusBody = { active: false };
     securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
     registeredCredentialCount = 0;
@@ -363,15 +381,39 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(auditText, /未定義の操作（new_event_/, `${name}: unknown events use an explicit fallback`);
     assert.equal(await unsupported.locator("#xss-marker").count(), 0, `${name}: arbitrary audit strings remain HTML escaped`);
     assert.equal(await unsupported.locator("#audit-event option[value='passkey_registration']").textContent(), "パスキーを登録");
+    const moreButton = unsupported.getByRole("button", { name: "もっと見る" });
+    assert.equal(await moreButton.isVisible(), true, `${name}: audit next page is offered only when a cursor exists`);
+    await moreButton.click();
+    await unsupported.waitForFunction(() => document.querySelectorAll("#audit-list .audit-row").length === 3);
+    assert.equal(await unsupported.locator("#audit-list .audit-row").count(), 3, `${name}: next audit page appends below the current rows`);
+    assert.equal(await moreButton.isVisible(), false, `${name}: audit button hides on the final page`);
+    assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: the opaque audit cursor is sent for the next page`);
     await unsupported.locator("#audit-event").selectOption("passkey_registration");
     await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
     assert.match(receivedAuditQueries.at(-1), /eventType=passkey_registration/, `${name}: Japanese filter preserves canonical API value`);
+    assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: changing filters resets the prior cursor`);
     assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${name}: desktop layout has no horizontal overflow`);
     await unsupported.setViewportSize({ width: 390, height: 844 });
     assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${name}: mobile layout has no horizontal overflow`);
     await unsupported.getByRole("button", { name: "ユーザー" }).click();
     assert.match(await unsupported.locator("#users-panel").textContent(), /ユーザーを招待/);
     assert.doesNotMatch(await unsupported.locator("#users-panel").textContent(), /Identity/);
+
+    setupStatusBody = { active: false };
+    securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
+    registeredCredentialCount = 0;
+    const temporaryPrf = await context.newPage();
+    await temporaryPrf.goto(`${origin}/security/?scenario=bootstrap-prf-temporary-missing`, { waitUntil: "load" });
+    await temporaryPrf.locator("#bootstrap-id").fill("admin");
+    await temporaryPrf.locator("#bootstrap-password").fill(dummyPassword);
+    await temporaryPrf.getByRole("button", { name: "端末のロック解除を登録" }).click();
+    await temporaryPrf.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
+    assert.equal(await temporaryPrf.locator("#admin-view").isVisible(), true, `${name}: a temporary PRF result miss does not block Security Center`);
+    assert.equal(await temporaryPrf.locator("#tcloud-setup-resume").isVisible(), true,
+      `${name}: registration-time PRF capability remains enabled after one missing assertion result`);
+    assert.match(await temporaryPrf.locator("#message").textContent(), /一時的に完了できませんでした/);
+    assert.doesNotMatch(await temporaryPrf.locator("#tcloud-setup-status").textContent(), /この端末では.*対応していません/);
+    assert.equal(registeredCredentialCount, 1);
 
     setupStatusBody = { active: false };
     securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
@@ -387,6 +429,7 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await transient.locator("#tcloud-setup-resume").isVisible(), true);
     assert.equal(registeredCredentialCount, 1);
 
+    setupStatusBody = { ...setupStatusBody, active: false, resumable: true, needsTCloudSetup: true };
     await transient.goto(`${origin}/security/?scenario=primary-retry`, { waitUntil: "load" });
     await transient.locator("#dashboard-panel .stats").waitFor();
     assert.equal(await transient.locator("#admin-view").isVisible(), true, `${name}: transient setup reload opens the normal admin UI`);
@@ -395,7 +438,11 @@ async function verifyBrowser(browserType, name, origin) {
     await transient.locator("#tcloud-setup-password").fill(dummyPassword);
     failEnvelopeSave = false;
     await transient.getByRole("button", { name: "同じパスキーでT-Cloudの準備を再開" }).click();
-    await transient.waitForFunction(() => window.__troomWebAuthnGetCalled === true, null, { timeout: 30000 });
+    try {
+      await transient.waitForFunction(() => window.__troomWebAuthnGetCalled === true, null, { timeout: 30000 });
+    } catch (error) {
+      throw new Error(`${error.message}; message=${await transient.locator("#message").textContent()}; setup=${JSON.stringify(setupStatusBody)}`);
+    }
     await transient.locator("#tcloud-setup-notice").waitFor({ state: "hidden", timeout: 30000 });
     assert.notEqual(await transient.evaluate(() => window.__troomWebAuthnCreateCalled), true,
       `${name}: primary-admin setup resume must not create a second credential`);
@@ -420,10 +467,11 @@ try {
   receivedPrfOptionBodies.length = 0;
   receivedPrfVerifyBodies.length = 0;
   receivedEnvelopeBodies.length = 0;
+  receivedSetupResumeBodies.length = 0;
   results.push(await verifyBrowser(chromium, "chromium", origin));
   results.push(await verifyBrowser(firefox, "firefox", origin));
   const passedBrowsers = results.filter((result) => result.endsWith(": pass")).length;
-  assert.equal(receivedBootstrapBodies.length, passedBrowsers * 3);
+  assert.equal(receivedBootstrapBodies.length, passedBrowsers * 4);
   for (const body of receivedBootstrapBodies) {
     assert.equal(body.loginId, "admin");
     assert.match(body.authProof, /^[A-Za-z0-9_-]{40,}$/);
@@ -443,7 +491,10 @@ try {
   for (const body of receivedPrfOptionBodies.filter((body) => body.credentialId !== malformedPrfCredentialId)) {
     assert.equal(body.credentialId, "cmVzdW1lLWNyZWRlbnRpYWw");
   }
-  assert.equal(receivedEnvelopeBodies.length, passedBrowsers * 2, "each transient flow has one failed and one successful envelope request");
+  assert.equal(receivedSetupResumeBodies.length, passedBrowsers * 2, "lost general and primary setup cookies are resumed explicitly");
+  for (const body of receivedSetupResumeBodies) assert.deepEqual(body, {}, "setup resume never trusts a client credential ID");
+  assert.equal(receivedEnvelopeBodies.length, passedBrowsers * 2,
+    "each browser performs one failed and one successful primary-admin envelope request");
   console.log(results.join("\n"));
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));
