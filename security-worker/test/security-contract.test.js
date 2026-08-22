@@ -10,6 +10,7 @@ const foreignKeyMigration = await readFile(new URL("../migrations/0003_repair_se
 const handoffEpochMigration = await readFile(new URL("../migrations/0004_handoff_session_epoch.sql", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/passkey-client.js", import.meta.url), "utf8");
 const securityUi = await readFile(new URL("../public/security.js", import.meta.url), "utf8");
+const securityDisplay = await readFile(new URL("../public/security-display.js", import.meta.url), "utf8");
 const securityHtml = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const cloud = await readFile(new URL("../../cloud-worker/src/index.js", import.meta.url), "utf8");
 const cloudClient = await readFile(new URL("../../cloud-worker/public/cloud.js", import.meta.url), "utf8");
@@ -146,12 +147,23 @@ test("Security Center response permits WebAssembly without allowing JavaScript e
 test("Security Center Argon2/WebAssembly assets and CSP remain consistent", () => {
   assert.match(securityHtml, /\/cloud\/vendor\/argon2\.umd\.min\.js/);
   assert.match(securityHtml, /\/cloud\/crypto-vault\.js/);
+  assert.match(securityHtml, /\/security\/security-display\.js/);
   assert.match(cloudCrypto, /deriveAccountCredentials[\s\S]*hashwasm\.argon2id/);
   assert.match(argon2, /WebAssembly\.compile/);
   assert.match(argon2, /WebAssembly\.instantiate/);
   assert.match(SECURITY_CONTENT_SECURITY_POLICY, /script-src 'self' 'wasm-unsafe-eval'/);
   assert.match(cloud, /script-src 'self' 'wasm-unsafe-eval'/, "T-Cloudの既存WASM CSPも維持します");
   assert.doesNotMatch(cloud, /script-src[^;]*'unsafe-eval'/);
+});
+
+test("Security Center keeps audit localization in a reusable escaped display layer", () => {
+  assert.match(securityDisplay, /bootstrap_auth_success/);
+  assert.match(securityDisplay, /第一管理者の本人確認に成功/);
+  assert.match(securityDisplay, /未定義の操作/);
+  assert.match(securityDisplay, /formatUserAgent/);
+  assert.match(securityUi, /data\.events\.map\(renderAuditEvent\)/);
+  assert.match(securityUi, /escapeHtml\(display\.eventLabel\(event\.event_type\)\)/);
+  assert.match(securityUi, /escapeHtml\(userAgent\)/);
 });
 
 test("Identity routes, audit service and invitation lifecycle share the hardened contracts", () => {
@@ -201,9 +213,9 @@ test("registration partial success remains usable outside T-Cloud and T-Cloud pr
   assert.match(securityUi, /resumePrimaryAdminSetup/);
   assert.match(securityUi, /TRoomPasskeys\.obtainPrf\(setup\.credentialId\)/, "第一管理者の再開は既存credentialをWebAuthn getで再認証します");
   assert.match(securityUi, /await showAdmin\(setup\)/, "第一管理者のT-Cloud未準備は管理画面をブロックしません");
-  assert.match(securityUi, /この端末ではT-Cloudのパスキー復号に対応していません/);
+  assert.match(securityUi, /この端末ではT-Cloudのパスキー利用に対応していません/);
   assert.match(securityHtml, /id="tcloud-setup-notice"/);
-  assert.match(securityHtml, /Security Centerを利用する/);
+  assert.match(securityHtml, /セキュリティセンターを利用する/);
   assert.match(securityUi, /setup\/primary-admin\/verify-password/);
   assert.match(securityUi, /inviteExpiryPayload\(\)/);
   assert.match(securityUi, /日時指定の有効期限を入力してください/);

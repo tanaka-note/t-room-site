@@ -18,16 +18,31 @@ const receivedResumeBodies = [];
 const receivedPrfOptionBodies = [];
 const receivedPrfVerifyBodies = [];
 const receivedEnvelopeBodies = [];
+const receivedAuditQueries = [];
 const malformedPrfCredentialId = "bWFsZm9ybWVkLXByZi1vcHRpb25z";
 let setupStatusBody = { active: false };
 let securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
 let failEnvelopeSave = false;
 let registeredCredentialCount = 0;
+const auditEventsBody = {
+  events: [
+    {
+      event_type: "passkey_login_success", service: "security", outcome: "success", auth_method: "passkey",
+      identity_id: "primary-admin", service_account_id: "admin", role: "admin", occurred_at: "2026-08-22T01:02:03.000Z",
+      user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
+    },
+    {
+      event_type: "new_event_<img id=xss-marker src=x onerror=alert(1)>", service: "future-service", outcome: "future-outcome", auth_method: "future-auth",
+      identity_id: "unknown_user", occurred_at: "2026-08-21T15:00:00.000Z", user_agent: "unknown-agent-<script>alert(1)</script>"
+    }
+  ]
+};
 
 const staticFiles = new Map([
   ["/security/", [resolve(securityPublic, "index.html"), "text/html; charset=utf-8"]],
   ["/security/security.css", [resolve(securityPublic, "security.css"), "text/css; charset=utf-8"]],
   ["/security/security.js", [resolve(securityPublic, "security.js"), "text/javascript; charset=utf-8"]],
+  ["/security/security-display.js", [resolve(securityPublic, "security-display.js"), "text/javascript; charset=utf-8"]],
   ["/security/passkey-client.js", [resolve(securityPublic, "passkey-client.js"), "text/javascript; charset=utf-8"]],
   ["/cloud/crypto-vault.js", [resolve(cloudPublic, "crypto-vault.js"), "text/javascript; charset=utf-8"]],
   ["/cloud/vendor/argon2.umd.min.js", [resolve(cloudPublic, "vendor/argon2.umd.min.js"), "text/javascript; charset=utf-8"]]
@@ -38,8 +53,11 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/security/api/setup/status") return sendJson(response, 200, setupStatusBody);
   if (url.pathname === "/security/api/status") return sendJson(response, 200, securityStatusBody);
   if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, lockouts: 0, invited: 0, pendingApproval: 0, noPasskey: 0, critical: 0 });
-  if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [] });
-  if (url.pathname === "/security/api/audit") return sendJson(response, 200, { events: [] });
+  if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [{ id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" }] });
+  if (url.pathname === "/security/api/audit") {
+    receivedAuditQueries.push(url.search);
+    return sendJson(response, 200, auditEventsBody);
+  }
   if (url.pathname === "/security/api/identities/primary-admin") return sendJson(response, 200, {
     identity: { id: "primary-admin", displayName: "第一管理者", status: "active", isSecurityAdmin: true },
     links: [{ id: "primary-cloud", service: "cloud", service_account_id: "admin", status: "pending" }],
@@ -323,14 +341,37 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
     assert.equal(await unsupported.locator("#admin-view").isVisible(), true, `${name}: PRF unsupported must not block Security Center`);
     assert.equal(await unsupported.locator("#tcloud-setup-notice").isVisible(), true);
-    assert.match(await unsupported.locator("#tcloud-setup-status").textContent(), /この端末ではT-Cloudのパスキー復号に対応していません/);
+    assert.match(await unsupported.locator("#tcloud-setup-status").textContent(), /この端末ではT-Cloudのパスキー利用に対応していません/);
     assert.equal(await unsupported.locator("#tcloud-setup-resume").isVisible(), false, `${name}: PRF unsupported must not promise a retry`);
-    assert.match(await unsupported.locator("#message").textContent(), /Security Center・日記・請求書のパスキー登録は完了しました/);
+    assert.match(await unsupported.locator("#message").textContent(), /セキュリティセンター・日記・請求書のパスキー登録は完了しました/);
     assert.equal(registeredCredentialCount, 1);
     await unsupported.reload({ waitUntil: "load" });
     await unsupported.locator("#dashboard-panel .stats").waitFor();
     assert.equal(await unsupported.locator("#tcloud-setup-notice").isVisible(), true, `${name}: warning survives reload without blocking admin UI`);
     assert.equal(registeredCredentialCount, 1, `${name}: reload must not create a second credential`);
+    await unsupported.getByRole("button", { name: "履歴", exact: true }).click();
+    await unsupported.locator("#audit-list .audit-row").first().waitFor();
+    const auditText = await unsupported.locator("#audit-list").textContent();
+    assert.match(auditText, /パスキーでログイン成功/, `${name}: known audit event is shown in Japanese`);
+    assert.doesNotMatch(auditText, /passkey_login_success/, `${name}: known internal event name is not the primary display`);
+    assert.match(auditText, /Security Center/);
+    assert.match(auditText, /第一管理者/);
+    assert.match(auditText, /ユーザーID: primary-admin/, `${name}: technical identity ID is subordinate detail text`);
+    assert.match(auditText, /パスキー/);
+    assert.match(auditText, /成功/);
+    assert.match(auditText, /Windows \/ Edge 151/, `${name}: full User-Agent is summarized`);
+    assert.match(auditText, /未定義の操作（new_event_/, `${name}: unknown events use an explicit fallback`);
+    assert.equal(await unsupported.locator("#xss-marker").count(), 0, `${name}: arbitrary audit strings remain HTML escaped`);
+    assert.equal(await unsupported.locator("#audit-event option[value='passkey_registration']").textContent(), "パスキーを登録");
+    await unsupported.locator("#audit-event").selectOption("passkey_registration");
+    await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
+    assert.match(receivedAuditQueries.at(-1), /eventType=passkey_registration/, `${name}: Japanese filter preserves canonical API value`);
+    assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${name}: desktop layout has no horizontal overflow`);
+    await unsupported.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${name}: mobile layout has no horizontal overflow`);
+    await unsupported.getByRole("button", { name: "ユーザー" }).click();
+    assert.match(await unsupported.locator("#users-panel").textContent(), /ユーザーを招待/);
+    assert.doesNotMatch(await unsupported.locator("#users-panel").textContent(), /Identity/);
 
     setupStatusBody = { active: false };
     securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
