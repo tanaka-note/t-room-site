@@ -54,14 +54,14 @@ export default class SecurityWorker extends WorkerEntrypoint {
     try {
       const url = new URL(request.url);
       if (url.pathname === BASE_PATH) return secure(Response.redirect(`${url.origin}${BASE_PATH}/`, 308));
-      if (!url.pathname.startsWith(BASE_PATH)) return secure(new Response("Not found", { status: 404 }));
+      if (!url.pathname.startsWith(BASE_PATH)) return secure(new Response("ページが見つかりません。", { status: 404 }));
       const path = url.pathname.slice(BASE_PATH.length) || "/";
       if (path.startsWith("/api/")) return secure(await handleApi(request, this.env, url, path, this.ctx));
       return secure(await serveAsset(request, this.env, url, path));
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       if (status === 500) console.error("Security Center request failed", safeErrorName(error));
-      return secure(json({ error: status === 500 ? "Security Centerで処理を完了できませんでした。" : error.message }, status));
+      return secure(json({ error: status === 500 ? "Security Centerで処理を完了できませんでした。" : safeClientErrorMessage(error.message, status) }, status));
     }
   }
 
@@ -226,7 +226,7 @@ async function handleApi(request, env, url, path, context = null) {
     requireMutation(request, url);
     return revokeInvitation(inviteRevokeMatch[1], request, env, admin);
   }
-  throw new HttpError(404, "Not found");
+  throw new HttpError(404, "指定された情報が見つかりません。");
 }
 
 async function bootstrapOptions(request, env) {
@@ -1662,6 +1662,13 @@ function canonicalBase64Url(value) {
   }
 }
 function safeErrorName(error) { return error instanceof Error ? `${error.name}:${String(error.message || "").slice(0, 160)}` : "unknown"; }
+function safeClientErrorMessage(value, status = 400) {
+  const text = String(value || "").trim();
+  if (text && /[\u3040-\u30ff\u3400-\u9fff]/.test(text)
+    && !/\b(?:InvalidStateError|NotAllowedError|AbortError|NotSupportedError|SecurityError|ConstraintError|UnknownError|OperationError|DataError|TypeError|DOMException|WebAssembly|non-canonical)\b/i.test(text)) return text;
+  if (status === 404) return "指定された情報が見つかりません。";
+  return "リクエストを処理できませんでした。入力内容を確認して、もう一度お試しください。";
+}
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }

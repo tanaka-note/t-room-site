@@ -25,11 +25,13 @@ for (const app of registry.apps) {
   const wrangler = JSON.parse(await readFile(resolve(workspace, app.deployCwd, "wrangler.jsonc"), "utf8"));
   assert.equal(wrangler.name, app.deployTarget, `${app.id}: deploy targetがwranglerと一致しません`);
   const build = await expectedBuild(app, registry.contract);
+  let usesSharedPasskeyClient = false;
 
   for (const entrypoint of app.entrypoints) {
     assert(!registeredHtml.has(entrypoint), `entrypointが重複しています: ${entrypoint}`);
     registeredHtml.add(entrypoint);
     const source = await readFile(resolve(workspace, entrypoint), "utf8");
+    if (/\/security\/passkey-client\.js\?v=/.test(source)) usesSharedPasskeyClient = true;
     const contracted = app.buildMode === "prepared-commit"
       ? ensureHtmlContract(source, app, registry.contract, build)
       : source;
@@ -37,6 +39,10 @@ for (const app of registry.apps) {
     assert.match(contracted, new RegExp(`<meta name="${registry.contract.autoUpdateMeta}" content="enabled">`), `${app.id}: auto-update契約不足`);
     assert.match(contracted, /\/assets\/pwa-auto-update\.js\?v=[^"']+/, `${app.id}: 共通updater不足`);
     assert(!contracted.includes('content="diary"'), `${app.id}: 日記専用契約が残っています`);
+  }
+  if (usesSharedPasskeyClient && !app.buildRoots?.includes("security-worker/public")) {
+    assert(app.buildFiles?.includes("security-worker/public/passkey-client.js"),
+      `${app.id}: 共通passkey-client.jsをcontent-hash入力へ含めてください`);
   }
 
   if (app.serviceWorker) {

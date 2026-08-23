@@ -68,6 +68,20 @@ test("PRF request options use the WebAuthn JSON Base64URL representation", () =>
   assert.match(client, /toBase64Url\(bytes\) !== value/);
 });
 
+test("WebAuthn and API errors have a Japanese-only user boundary", () => {
+  for (const name of ["InvalidStateError", "NotAllowedError", "AbortError", "NotSupportedError", "SecurityError", "ConstraintError", "UnknownError", "OperationError", "DataError", "TypeError"]) {
+    assert.match(client, new RegExp(`(?:=== \\"${name}\\"|\\[.*\\"${name}\\")`), `${name} is handled explicitly`);
+  }
+  assert.match(client, /registration === "primary-admin"/);
+  assert.match(client, /第一管理者のパスキーが既に登録されています/);
+  assert.match(client, /このユーザーのパスキーが既に登録されています/);
+  assert.match(client, /safeJapaneseMessage/);
+  assert.doesNotMatch(securityUi, /preparationError\.message|再試行してください。\$\{error\.message/,
+    "PRF and crypto errors are not concatenated into user-visible text");
+  assert.doesNotMatch(worker, /new Response\("Not found"/);
+  assert.doesNotMatch(worker, /new HttpError\(404, "Not found"\)/);
+});
+
 test("all three services keep password login and add one-time handoff", () => {
   for (const source of [cloud, diary, billing]) {
     assert.match(source, /\/api\/login/);

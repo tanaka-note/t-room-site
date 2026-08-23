@@ -131,7 +131,8 @@
           active: true, isPrimaryAdmin: true, credentialId: result.credentialId,
           prfEnabled: Boolean(result.prfEnabled), tcloudReady: false
         }));
-        showMessage(`セキュリティセンター・日記・請求書のパスキー登録は完了しました。T-Cloudは未準備のため現在の管理者パスワードをご利用ください。${preparationError.message || ""}`, false);
+        const preparationMessage = TRoomPasskeys.userMessage(preparationError, {}, "T-Cloudのパスキー利用準備を一時的に完了できませんでした。");
+        showMessage(`セキュリティセンター・日記・請求書のパスキー登録は完了しました。T-Cloudは未準備のため現在の管理者パスワードをご利用ください。${preparationMessage}`, false);
         await showAdmin(setup);
       }
       if (tcloudReady) {
@@ -243,7 +244,8 @@
       button.hidden = false;
       button.textContent = "T-Cloudの準備を再試行";
       button.onclick = () => retryInviteCloud();
-      showMessage(`パスキー登録は完了しました。T-Cloudの準備だけ完了していません。再試行してください。${error.message || ""}`, true);
+      const preparationMessage = TRoomPasskeys.userMessage(error, {}, "T-Cloudのパスキー利用準備を一時的に完了できませんでした。");
+      showMessage(`パスキー登録は完了しました。T-Cloudの準備だけ完了していません。再試行してください。${preparationMessage}`, true);
       return false;
     }
   }
@@ -582,7 +584,12 @@
     catch (error) { showMessage(error.message, true); button.disabled = false; }
   }
   function showPanel(id, button) { document.querySelectorAll(".panel").forEach((panel) => { panel.hidden = panel.id !== id; }); document.querySelectorAll("[data-panel]").forEach((item) => item.classList.toggle("active", item === button)); }
-  function showMessage(text, error = false) { const box = $("#message"); box.hidden = false; box.classList.toggle("error", error); box.textContent = text; }
+  function showMessage(text, error = false) {
+    const box = $("#message");
+    box.hidden = false;
+    box.classList.toggle("error", error);
+    box.textContent = error ? TRoomPasskeys.safeJapaneseMessage(text) : text;
+  }
   function statusLabel(value) { return display.statusLabel(value); }
   function formatDate(value) { return value ? new Date(value).toLocaleString("ja-JP") : "-"; }
   function absoluteInviteUrl(path) { return new URL(path, location.origin).href; }
@@ -590,7 +597,7 @@
   async function cloudApi(path, body) {
     const response = await fetch(`/cloud/api${path}`, { method: body ? "POST" : "GET", credentials: "same-origin", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "T-Cloudの管理者確認に失敗しました。");
+    if (!response.ok) throw new Error(TRoomPasskeys.safeJapaneseMessage(payload.error, "T-Cloudの管理者確認に失敗しました。"));
     return payload;
   }
   async function get(path) { return request(path); }
@@ -598,7 +605,7 @@
   async function request(path, body) {
     const response = await fetch(`/security/api${path}`, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers: body === undefined ? {} : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Security Centerの処理に失敗しました。");
+    if (!response.ok) throw new Error(TRoomPasskeys.safeJapaneseMessage(payload.error, "Security Centerの処理に失敗しました。"));
     return payload;
   }
 })();

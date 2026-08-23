@@ -7,7 +7,7 @@
     ensureSupport();
     try {
       const start = await api("/auth/options", { service });
-      const credential = await navigator.credentials.get({ publicKey: decodeRequestOptions(start.options) });
+      const credential = await runWebAuthn("get", decodeRequestOptions(start.options), { operation: "authentication" });
       const prfOutput = readPrfOutput(credential);
       const verified = await api("/auth/verify", { service, challengeId: start.challengeId, response: serializeCredential(credential) });
       const link = verified.links.length === 1 ? verified.links[0] : await (chooseLink || chooseLinkDialog)(verified.links, service);
@@ -15,9 +15,8 @@
       const handoff = service === "security" ? null : await api("/auth/handoff", { service, linkId: link.id });
       return { verified, link, handoff, credentialId: verified.credentialId, prfOutput };
     } catch (error) {
-      if (error?.name === "NotAllowedError" || error?.name === "AbortError") {
+      if (error?.name === "PasskeyCancelledError") {
         api("/auth/cancelled", { service }).catch(() => {});
-        throw new PasskeyCancelledError();
       }
       throw error;
     }
@@ -26,7 +25,7 @@
   async function registerInvite(token) {
     ensureSupport();
     const start = await api("/invite/options", { token });
-    const credential = await navigator.credentials.create({ publicKey: decodeCreationOptions(start.options) });
+    const credential = await runWebAuthn("create", decodeCreationOptions(start.options), { operation: "registration", registration: "invite" });
     const result = await api("/invite/verify", { token, challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
     const prf = await obtainPrfSafely(result.credentialId);
     return { ...result, ...prf, cloudLinks: start.cloudLinks || [] };
@@ -35,7 +34,7 @@
   async function bootstrap(authProof) {
     ensureSupport();
     const start = await api("/bootstrap/options", authProof);
-    const credential = await navigator.credentials.create({ publicKey: decodeCreationOptions(start.options) });
+    const credential = await runWebAuthn("create", decodeCreationOptions(start.options), { operation: "registration", registration: "primary-admin" });
     const result = await api("/bootstrap/verify", { challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
     const prf = await obtainPrfSafely(result.credentialId);
     return { ...result, ...prf };
@@ -49,14 +48,14 @@
         prfOutput: null,
         prfAvailable: false,
         prfPreparationFailed: true,
-        prfPreparationError: error instanceof Error ? error.message : "T-Cloudのパスキー復号準備を完了できませんでした。"
+        prfPreparationError: userMessage(error, { operation: "verification" }, "T-Cloudのパスキー復号準備を完了できませんでした。")
       };
     }
   }
 
   async function obtainPrf(credentialId) {
     const start = await api("/prf/options", { credentialId });
-    const credential = await navigator.credentials.get({ publicKey: decodeRequestOptions(start.options) });
+    const credential = await runWebAuthn("get", decodeRequestOptions(start.options), { operation: "verification" });
     const prfOutput = readPrfOutput(credential);
     await api("/prf/verify", { challengeId: start.challengeId, response: serializeCredential(credential), prfAvailable: Boolean(prfOutput) });
     return { prfOutput, prfAvailable: Boolean(prfOutput), prfSalt: start.prfSalt };
@@ -65,7 +64,7 @@
   async function setupStatus() {
     const response = await fetch(`${API}/setup/status`, { credentials: "same-origin" });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "T-Cloudの準備状態を確認できませんでした。");
+    if (!response.ok) throw new Error(safeJapaneseMessage(payload.error, "T-Cloudの準備状態を確認できませんでした。"));
     return payload;
   }
 
@@ -133,8 +132,63 @@
       body: JSON.stringify(body || {})
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "端末のロック解除を確認できませんでした。");
+    if (!response.ok) throw new Error(safeJapaneseMessage(payload.error, "端末のロック解除を確認できませんでした。"));
     return payload;
+  }
+
+  async function runWebAuthn(method, publicKey, context) {
+    try {
+      return await navigator.credentials[method]({ publicKey });
+    } catch (error) {
+      throw localizedWebAuthnError(error, context);
+    }
+  }
+
+  function localizedWebAuthnError(error, context = {}) {
+    if (error instanceof PasskeyUserError || error instanceof PasskeyOptionsError) return error;
+    const name = String(error?.name || "");
+    if (name === "InvalidStateError") {
+      if (context.operation !== "registration") {
+        return new PasskeyUserError("パスキーの認証データを確認できませんでした。画面を再読み込みして、もう一度お試しください。", "data");
+      }
+      return new PasskeyUserError(context.registration === "primary-admin"
+        ? "この端末またはパスワード管理サービスには、第一管理者のパスキーが既に登録されています。復旧登録ではなく、登録済みのパスキーでログインしてください。"
+        : "この端末またはパスワード管理サービスには、このユーザーのパスキーが既に登録されています。新しく登録せず、管理者に現在の登録状態を確認してください。", "duplicate");
+    }
+    if (name === "NotAllowedError" || name === "AbortError") return new PasskeyCancelledError();
+    if (name === "NotSupportedError") {
+      return new PasskeyUserError("この端末またはブラウザは、必要なパスキー方式に対応していません。", "unsupported");
+    }
+    if (name === "SecurityError") {
+      return new PasskeyUserError("このサイトではパスキーを使用できません。URLとブラウザの状態を確認してください。", "security");
+    }
+    if (name === "ConstraintError") {
+      return new PasskeyUserError("必要な画面ロック方式を使用できません。端末の画面ロック設定を確認してください。", "constraint");
+    }
+    if (name === "DataError" || name === "TypeError") {
+      return new PasskeyUserError("パスキーの認証データを確認できませんでした。画面を再読み込みして、もう一度お試しください。", "data");
+    }
+    if (name === "UnknownError" || name === "OperationError") {
+      return new PasskeyUserError("端末でパスキー処理を完了できませんでした。もう一度お試しください。", "operation");
+    }
+    return new PasskeyUserError("端末でパスキー処理を完了できませんでした。もう一度お試しください。", "unexpected");
+  }
+
+  function userMessage(error, context = {}, fallback = "処理を完了できませんでした。もう一度お試しください。") {
+    if (error instanceof PasskeyUserError || error instanceof PasskeyOptionsError) return error.message;
+    if (isWebAuthnError(error)) return localizedWebAuthnError(error, context).message;
+    return safeJapaneseMessage(error instanceof Error ? error.message : error, fallback);
+  }
+
+  function safeJapaneseMessage(value, fallback = "処理を完了できませんでした。もう一度お試しください。") {
+    const text = String(value || "").trim();
+    if (!text || !/[\u3040-\u30ff\u3400-\u9fff]/.test(text)) return fallback;
+    if (/\b(?:InvalidStateError|NotAllowedError|AbortError|NotSupportedError|SecurityError|ConstraintError|UnknownError|OperationError|DataError|TypeError|DOMException|WebAssembly|non-canonical)\b/i.test(text)) return fallback;
+    return text;
+  }
+
+  function isWebAuthnError(error) {
+    return new Set(["InvalidStateError", "NotAllowedError", "AbortError", "NotSupportedError", "SecurityError", "ConstraintError", "UnknownError", "OperationError", "DataError", "TypeError"]).has(String(error?.name || ""));
   }
 
   function decodeCreationOptions(options) {
@@ -246,8 +300,24 @@
   }
 
   class PasskeyCancelledError extends Error {
-    constructor() { super("端末のロック解除をキャンセルしました。"); this.name = "PasskeyCancelledError"; }
+    constructor() {
+      super("端末のロック解除がキャンセルされたか、操作の有効期限が切れました。もう一度お試しください。");
+      this.name = "PasskeyCancelledError";
+      this.code = "cancelled";
+    }
   }
 
-  window.TRoomPasskeys = Object.freeze({ authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, resumeSetup, chooseLinkDialog, api, toBase64Url, fromBase64Url, PasskeyCancelledError, PasskeyOptionsError });
+  class PasskeyUserError extends Error {
+    constructor(message, code) {
+      super(message);
+      this.name = "PasskeyUserError";
+      this.code = code;
+    }
+  }
+
+  window.TRoomPasskeys = Object.freeze({
+    authenticate, registerInvite, bootstrap, obtainPrf, setupStatus, resumeSetup, chooseLinkDialog, api,
+    toBase64Url, fromBase64Url, userMessage, safeJapaneseMessage,
+    PasskeyCancelledError, PasskeyOptionsError, PasskeyUserError
+  });
 })();

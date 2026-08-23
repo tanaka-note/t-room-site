@@ -3,7 +3,7 @@ import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-e4e0e33a7721";
+const APP_BUILD_ID = "cloud-29e6ebc16f9f";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";

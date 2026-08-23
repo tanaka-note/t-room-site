@@ -69,6 +69,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, setupStatusBody);
   }
   if (url.pathname === "/security/api/status") return sendJson(response, 200, securityStatusBody);
+  if (url.pathname === "/security/api/test-english-error") return sendJson(response, 400, { error: "Not found" });
   if (url.pathname === "/security/api/services") return sendJson(response, 200, { services: [
     { id: "diary", displayName: "日記", targets: [{ service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）", role: "user", roleLabel: "一般ユーザー", privileged: false }] },
     { id: "billing", displayName: "請求書", targets: [{ service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "田中宏知（管理者）", role: "owner", roleLabel: "管理者", privileged: true }] },
@@ -111,6 +112,21 @@ const server = createServer(async (request, response) => {
         authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", requireResidentKey: true, userVerification: "required" },
         timeout: 300000,
         excludeCredentials: []
+      }
+    });
+  }
+  if (url.pathname === "/security/api/invite/options") {
+    return sendJson(response, 200, {
+      challengeId: "invite-duplicate-challenge",
+      cloudLinks: [],
+      options: {
+        challenge: "AAECAwQFBgcICQoLDA0ODw",
+        rp: { id: "127.0.0.1", name: "T-ROOM" },
+        user: { id: "aW52aXRlZC11c2Vy", name: "invited-user", displayName: "招待ユーザー" },
+        pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+        authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", requireResidentKey: true, userVerification: "required" },
+        timeout: 300000,
+        excludeCredentials: [{ type: "public-key", id: "cmVzdW1lLWNyZWRlbnRpYWw" }]
       }
     });
   }
@@ -234,7 +250,8 @@ async function verifyBrowser(browserType, name, origin) {
     await context.addInitScript(() => {
       const credentialId = "cmVzdW1lLWNyZWRlbnRpYWw";
       const bytes = new TextEncoder().encode(credentialId);
-      const scenario = () => new URL(location.href).searchParams.get("scenario") || "csp";
+      const initialScenario = new URL(location.href).searchParams.get("scenario") || "csp";
+      const scenario = () => initialScenario;
       const assertion = (prfAvailable) => ({
         id: credentialId,
         rawId: bytes.buffer,
@@ -275,6 +292,9 @@ async function verifyBrowser(browserType, name, origin) {
           create: async () => {
             window.__troomWebAuthnCreateCalled = true;
             window.__troomWebAuthnCreateCount = Number(window.__troomWebAuthnCreateCount || 0) + 1;
+            if (["bootstrap-duplicate", "invite-duplicate"].includes(scenario())) {
+              throw new DOMException("The user attempted to register an authenticator that contains one of the credentials already registered with the relying party.", "InvalidStateError");
+            }
             if (scenario() === "bootstrap-prf-unsupported") return registration(false);
             if (["bootstrap-prf-temporary-missing", "bootstrap-transient"].includes(scenario())) return registration(true);
             throw new DOMException("CSP regression test reached WebAuthn", "NotAllowedError");
@@ -357,6 +377,11 @@ async function verifyBrowser(browserType, name, origin) {
     await page.locator("#bootstrap-password").fill(dummyPassword);
     await page.getByRole("button", { name: "端末のロック解除を登録" }).click();
     await page.waitForFunction(() => window.__troomWebAuthnCreateCalled === true, null, { timeout: 30000 });
+    await page.locator("#message").waitFor();
+    assert.match(await page.locator("#message").textContent(), /キャンセルされたか、操作の有効期限が切れました/,
+      `${name}: WebAuthn cancellation is shown in Japanese`);
+    assert.doesNotMatch(await page.locator("#message").textContent(), /NotAllowedError|CSP regression test/i,
+      `${name}: browser cancellation text is never exposed`);
     assert.equal(await page.evaluate(() => typeof globalThis.hashwasm?.argon2id), "function");
     assert.equal(await page.evaluate(() => typeof globalThis.TRoomCrypto?.deriveAccountCredentials), "function");
     assert.ok(!consoleErrors.some((message) => /Content Security Policy|WebAssembly\.compile|CompileError/i.test(message)), `${name}: ${consoleErrors.join("\n")}`);
@@ -368,6 +393,57 @@ async function verifyBrowser(browserType, name, origin) {
       document.head.append(script);
     }));
     assert.equal(await page.evaluate(() => window.__troomJavascriptEvalAllowed), false, `${name}: normal JavaScript eval must remain blocked`);
+    const localizedErrors = await page.evaluate(() => {
+      const names = ["InvalidStateError", "NotAllowedError", "AbortError", "NotSupportedError", "SecurityError", "ConstraintError", "UnknownError", "OperationError", "DataError"];
+      return names.map((errorName) => ({
+        errorName,
+        message: TRoomPasskeys.userMessage(new DOMException("Browser English error", errorName), {
+          operation: "registration", registration: "primary-admin"
+        })
+      })).concat({
+        errorName: "TypeError",
+        message: TRoomPasskeys.userMessage(new TypeError("Browser English type error"), { operation: "authentication" })
+      });
+    });
+    for (const result of localizedErrors) {
+      assert.match(result.message, /[ぁ-んァ-ヶ一-龠]/, `${name}: ${result.errorName} has a Japanese user message`);
+      assert.doesNotMatch(result.message, /Browser English|Error\b/, `${name}: ${result.errorName} does not expose technical text`);
+    }
+    assert.equal(await page.evaluate(() => TRoomPasskeys.safeJapaneseMessage("一時的なT-Cloud障害", "代替メッセージ")), "一時的なT-Cloud障害",
+      `${name}: an existing safe Japanese API error remains unchanged`);
+    const sanitizedApiError = await page.evaluate(async () => {
+      try { await TRoomPasskeys.api("/test-english-error", {}); }
+      catch (error) { return error.message; }
+      return "";
+    });
+    assert.equal(sanitizedApiError, "端末のロック解除を確認できませんでした。", `${name}: an English API error uses a Japanese fallback`);
+
+    setupStatusBody = { active: false };
+    securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
+    const primaryDuplicate = await context.newPage();
+    await primaryDuplicate.goto(`${origin}/security/?scenario=bootstrap-duplicate`, { waitUntil: "load" });
+    await primaryDuplicate.locator("#bootstrap-id").fill("admin");
+    await primaryDuplicate.locator("#bootstrap-password").fill(dummyPassword);
+    await primaryDuplicate.getByRole("button", { name: "端末のロック解除を登録" }).click();
+    await primaryDuplicate.locator("#message").waitFor();
+    const primaryDuplicateMessage = await primaryDuplicate.locator("#message").textContent();
+    assert.equal(primaryDuplicateMessage,
+      "この端末またはパスワード管理サービスには、第一管理者のパスキーが既に登録されています。復旧登録ではなく、登録済みのパスキーでログインしてください。",
+      `${name}: primary administrator duplicate registration has dedicated guidance`);
+    assert.doesNotMatch(primaryDuplicateMessage, /The user attempted|InvalidStateError|relying party/i);
+    await primaryDuplicate.close();
+
+    setupStatusBody = { active: false };
+    const inviteDuplicate = await context.newPage();
+    await inviteDuplicate.goto(`${origin}/security/?scenario=invite-duplicate#invite=test-token`, { waitUntil: "load" });
+    await inviteDuplicate.getByRole("button", { name: "端末のロック解除を登録" }).click();
+    await inviteDuplicate.locator("#message").waitFor();
+    const inviteDuplicateMessage = await inviteDuplicate.locator("#message").textContent();
+    assert.equal(inviteDuplicateMessage,
+      "この端末またはパスワード管理サービスには、このユーザーのパスキーが既に登録されています。新しく登録せず、管理者に現在の登録状態を確認してください。",
+      `${name}: invited user duplicate registration has dedicated guidance`);
+    assert.doesNotMatch(inviteDuplicateMessage, /The user attempted|InvalidStateError|relying party/i);
+    await inviteDuplicate.close();
     setupStatusBody = {
       active: false, resumable: true, needsTCloudSetup: true, identityId: "resume_user", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
       isPrimaryAdmin: false, prfEnabled: true, tcloudReady: false,
@@ -539,7 +615,8 @@ try {
   results.push(await verifyBrowser(chromium, "chromium", origin));
   results.push(await verifyBrowser(firefox, "firefox", origin));
   const passedBrowsers = results.filter((result) => result.endsWith(": pass")).length;
-  assert.equal(receivedBootstrapBodies.length, passedBrowsers * 4);
+  assert.equal(receivedBootstrapBodies.length, passedBrowsers * 5,
+    "each browser includes the duplicate-registration recovery attempt");
   for (const body of receivedBootstrapBodies) {
     assert.equal(body.loginId, "admin");
     assert.match(body.authProof, /^[A-Za-z0-9_-]{40,}$/);
