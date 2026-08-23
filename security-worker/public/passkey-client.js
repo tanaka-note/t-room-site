@@ -81,9 +81,23 @@
       dialog.setAttribute("aria-labelledby", "troom-passkey-account-title");
       const title = document.createElement("h2");
       title.id = "troom-passkey-account-title";
-      title.textContent = service === "cloud" ? "利用するT-Cloudの範囲を選択" : "利用するアカウントを選択";
+      const cloudAccounts = service === "cloud" && links.every((link) => ["admin", "subadmin"].includes(link.accountId));
+      const cloudFolders = service === "cloud" && links.every((link) => link.accountId === "folder-member");
+      title.textContent = cloudAccounts
+        ? "利用するT-Cloudアカウントを選択"
+        : cloudFolders
+          ? "利用するT-Cloudの範囲を選択"
+          : service === "cloud"
+            ? "利用するT-Cloudのアカウントまたは範囲を選択"
+            : "利用するアカウントを選択";
       const help = document.createElement("p");
-      help.textContent = service === "cloud" ? "利用するT-Cloudの範囲を選んでください。" : "利用するアカウントを選んでください。";
+      help.textContent = cloudAccounts
+        ? "管理者または副管理者を選んでください。選択した権限でログインします。"
+        : cloudFolders
+          ? "利用するT-Cloudの範囲を選んでください。"
+          : service === "cloud"
+            ? "利用するT-Cloudのアカウントまたは範囲を選んでください。"
+            : "利用するアカウントを選んでください。";
       const list = document.createElement("div");
       list.className = "troom-passkey-account-list";
       let settled = false;

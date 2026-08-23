@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-29e6ebc16f9f";
+const APP_BUILD_ID = "cloud-7e56274a7e58";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -948,7 +948,9 @@ async function loginWithPasskey() {
   button.disabled = true;
   try {
     const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
-    if (!authentication.prfOutput) throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
+    if (authentication.link?.accountId !== "subadmin" && !authentication.prfOutput) {
+      throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
+    }
     const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
     $("#login-password").value = "";
     await enterApp(session, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
@@ -1236,8 +1238,8 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
     syncAvailableActions();
     if (state.session.authMethod === "passkey") {
       const keys = passkeyContext?.tcloudKey || {};
-      if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
       if (state.session.role === "admin") {
+        if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
         if (!keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
         state.crypto.adminPrivateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
         await saveCachedAdminKey(config, state.crypto.adminPrivateKey);
@@ -1245,6 +1247,7 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
         return;
       }
       if (state.session.role === "member") {
+        if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
         if (!keys.client_private_prf || !keys.folder_key_rsa || !state.session.rootFolderId) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
         const privateKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf);
         const folderKey = await TRoomCrypto.unlockDelegatedFolderKey(privateKey, keys.folder_key_rsa.wrappedKey);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,20 @@ test("disabled service links are historical and current NULL-root links are DB-u
      VALUES ('duplicate-link', 'link_test', 'diary', 'main-user', 'duplicate', 'active')`], false);
   assert.notEqual(duplicate.status, 0);
   assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE identity_id = 'link_test'"), 2);
+});
+
+test("primary administrator Cloud subadmin migration is idempotent and preserves existing links", () => {
+  sql("INSERT INTO security_identities (id, display_name, status, is_security_admin) VALUES ('primary-admin', '第一管理者', 'active', 1)");
+  sql(`INSERT INTO security_credentials (credential_id, identity_id, public_key, prf_salt, status)
+    VALUES ('primary-migration-credential', 'primary-admin', 'public', 'salt', 'active')`);
+  sql(`INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+    VALUES ('existing-primary-admin-link', 'primary-admin', 'cloud', 'admin', 'T-Cloud 管理者', 'active')`);
+  const migration = readFileSync(join(directory, "migrations", "0006_primary_admin_cloud_subadmin.sql"), "utf8")
+    .replace(/^\s*--.*$/gm, "");
+  sql(migration);
+  sql(migration);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'cloud' AND service_account_id = 'subadmin' AND status = 'active'"), 1);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE id = 'existing-primary-admin-link' AND service_account_id = 'admin' AND status = 'active'"), 1);
 });
 
 test("one invitation can register only one credential even under concurrent inserts", async () => {

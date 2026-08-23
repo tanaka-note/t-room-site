@@ -3,7 +3,7 @@ import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-29e6ebc16f9f";
+const APP_BUILD_ID = "cloud-7e56274a7e58";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -41,7 +41,14 @@ export class SecurityIntegration extends WorkerEntrypoint {
     const accountId = String(input?.accountId || "");
     if (accountId === "admin" || accountId === "subadmin") {
       const account = ACCOUNTS.find((item) => item.role === accountId);
-      return { valid: true, displayLabel: `T-Cloud ${account.label}`, rootFolderId: null, role: account.role };
+      return {
+        valid: true,
+        displayLabel: `T-Cloud ${account.label}`,
+        rootFolderId: null,
+        role: account.role,
+        roleLabel: account.label,
+        scopeLabel: "T-Cloud全体"
+      };
     }
     if (accountId !== "folder-member") return { valid: false };
     const rootFolderId = optionalId(input?.rootFolderId);

@@ -9,6 +9,7 @@ const lifecycleMigration = await readFile(new URL("../migrations/0002_passkey_li
 const foreignKeyMigration = await readFile(new URL("../migrations/0003_repair_service_link_foreign_keys.sql", import.meta.url), "utf8");
 const handoffEpochMigration = await readFile(new URL("../migrations/0004_handoff_session_epoch.sql", import.meta.url), "utf8");
 const serviceAuditMigration = await readFile(new URL("../migrations/0005_service_links_and_session_audit.sql", import.meta.url), "utf8");
+const primaryCloudAccountsMigration = await readFile(new URL("../migrations/0006_primary_admin_cloud_subadmin.sql", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/passkey-client.js", import.meta.url), "utf8");
 const securityUi = await readFile(new URL("../public/security.js", import.meta.url), "utf8");
 const securityDisplay = await readFile(new URL("../public/security-display.js", import.meta.url), "utf8");
@@ -138,6 +139,23 @@ test("service-account roles stay authoritative and are not combined in Security 
   assert.match(worker, /service_account_id AS serviceAccountId/);
   assert.match(worker, /T-Cloud管理者・副管理者は通常のサービス連携から付与できません/);
   assert.doesNotMatch(worker, /mergedRole|combinedPermissions|unionPermissions/);
+});
+
+test("the primary administrator can select Cloud admin or subadmin without sharing administrator keys", () => {
+  assert.match(primaryCloudAccountsMigration, /service_account_id[\s\S]*'subadmin'/);
+  assert.match(primaryCloudAccountsMigration, /identity\.id = 'primary-admin'/);
+  assert.match(primaryCloudAccountsMigration, /status IN \('pending', 'active'\)/);
+  assert.match(worker, /"cloud\\u0000subadmin\\u0000"/);
+  assert.match(worker, /service_account_id = 'subadmin'/);
+  assert.match(worker, /selected\.service_account_id === "subadmin"[\s\S]*\? true/);
+  assert.match(worker, /if \(accountId === "subadmin"\) return \{\};/,
+    "subadmin handoff intentionally contains no administrator or client key envelope");
+  assert.match(cloud, /\["admin", "subadmin"\]\.includes\(handoff\.serviceAccountId\)/);
+  assert.match(cloud, /role: account\.role/);
+  assert.match(cloudClient, /authentication\.link\?\.accountId !== "subadmin"/);
+  assert.match(client, /利用するT-Cloudアカウントを選択/);
+  assert.match(client, /\["admin", "subadmin"\]\.includes\(link\.accountId\)/);
+  assert.doesNotMatch(primaryCloudAccountsMigration, /admin_private_prf|recovery_private|client_private_prf|folder_key_rsa/);
 });
 
 test("service links come from an explicit provider registry and never from free-form UI", () => {

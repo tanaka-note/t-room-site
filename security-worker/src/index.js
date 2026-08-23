@@ -43,6 +43,7 @@ const SERVICE_REGISTRY = Object.freeze({
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
+  "cloud\u0000subadmin\u0000",
   "diary\u0000main-admin\u0000",
   "billing\u0000owner\u0000"
 ]);
@@ -266,7 +267,7 @@ async function bootstrapVerify(request, env, url) {
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
     env.DB.prepare("UPDATE security_identities SET status = 'active', is_security_admin = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(PRIMARY_ADMIN_ID),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service != 'cloud'").bind(PRIMARY_ADMIN_ID),
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND (service != 'cloud' OR service_account_id = 'subadmin')").bind(PRIMARY_ADMIN_ID),
     insertSetupSessionStatement(env, setup),
     await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request)
   ]);
@@ -344,6 +345,8 @@ async function authenticationOptions(request, env) {
                   AND e.service_link_id = l.id AND e.envelope_type = 'admin_private_prf'
               ))
               OR
+              l.service_account_id = 'subadmin'
+              OR
               (l.service_account_id = 'folder-member'
                 AND EXISTS (SELECT 1 FROM security_tcloud_client_vaults v WHERE v.identity_id = i.id AND v.credential_id = c.credential_id)
                 AND EXISTS (
@@ -420,11 +423,15 @@ async function createHandoff(request, env) {
   if (!links.length) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
   const selected = body.linkId ? links.find((link) => link.id === body.linkId) : (links.length === 1 ? links[0] : null);
   if (!selected) throw new HttpError(409, "利用するアカウントを選択してください。");
-  const envelopes = service === "cloud" ? await tcloudEnvelopeBundle(env, identitySession.identityId, identitySession.credentialId, selected.id) : null;
+  const envelopes = service === "cloud"
+    ? await tcloudEnvelopeBundle(env, identitySession.identityId, identitySession.credentialId, selected.id, selected.service_account_id)
+    : null;
   if (service === "cloud") {
     const ready = selected.service_account_id === "admin"
       ? Boolean(envelopes.admin_private_prf)
-      : Boolean(envelopes.client_private_prf && envelopes.folder_key_rsa);
+      : selected.service_account_id === "subadmin"
+        ? true
+        : Boolean(envelopes.client_private_prf && envelopes.folder_key_rsa);
     if (!ready) throw new HttpError(409, "この端末ではT-Cloudのパスキー復号準備が完了していません。従来のID・パスワードをご利用ください。");
   }
   const rawToken = randomToken(32);
@@ -1086,6 +1093,8 @@ async function activeLinks(env, identityId, service, credentialId) {
           AND e.service_link_id = security_service_links.id AND e.envelope_type = 'admin_private_prf'
       ))
       OR
+      service_account_id = 'subadmin'
+      OR
       (service_account_id = 'folder-member'
         AND EXISTS (SELECT 1 FROM security_tcloud_client_vaults v WHERE v.identity_id = security_service_links.identity_id AND v.credential_id = ?)
         AND EXISTS (
@@ -1240,13 +1249,14 @@ async function ensurePrimaryAdminRecords(env) {
     VALUES (?, '第一管理者', 'invited', 1) ON CONFLICT(id) DO NOTHING`).bind(PRIMARY_ADMIN_ID).run();
   const defaults = [
     { service: "cloud", accountId: "admin", rootFolderId: null, displayLabel: "T-Cloud 管理者" },
+    { service: "cloud", accountId: "subadmin", rootFolderId: null, displayLabel: "T-Cloud 副管理者" },
     { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: "日記 管理者" },
     { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" }
   ];
   for (const link of defaults) {
     const existing = await env.DB.prepare(`SELECT id FROM security_service_links
       WHERE identity_id = ? AND service = ? AND service_account_id = ?
-        AND cloud_root_folder_id IS NULL LIMIT 1`).bind(PRIMARY_ADMIN_ID, link.service, link.accountId).first();
+        AND cloud_root_folder_id IS NULL AND status IN ('pending', 'active') LIMIT 1`).bind(PRIMARY_ADMIN_ID, link.service, link.accountId).first();
     if (existing) continue;
     await env.DB.prepare(`INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
@@ -1399,12 +1409,16 @@ async function readSecuritySession(request, env, name, expectedKind) {
   } catch { return null; }
 }
 
-async function tcloudEnvelopeBundle(env, identityId, credentialId, linkId) {
+async function tcloudEnvelopeBundle(env, identityId, credentialId, linkId, accountId) {
+  if (accountId === "subadmin") return {};
   const [result, vault] = await Promise.all([
     env.DB.prepare(`SELECT envelope_type, public_key_jwk, encrypted_payload, payload_iv, wrapped_key
-    FROM security_tcloud_key_envelopes WHERE identity_id = ? AND credential_id = ? AND service_link_id = ?`)
-      .bind(identityId, credentialId, linkId).all(),
-    env.DB.prepare("SELECT public_key_jwk, encrypted_payload, payload_iv FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(identityId, credentialId).first()
+      FROM security_tcloud_key_envelopes
+      WHERE identity_id = ? AND credential_id = ? AND service_link_id = ? AND envelope_type = ?`)
+      .bind(identityId, credentialId, linkId, accountId === "admin" ? "admin_private_prf" : "folder_key_rsa").all(),
+    accountId === "folder-member"
+      ? env.DB.prepare("SELECT public_key_jwk, encrypted_payload, payload_iv FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(identityId, credentialId).first()
+      : null
   ]);
   const bundle = Object.fromEntries((result.results || []).map((row) => [row.envelope_type, {
     publicKeyJwk: row.public_key_jwk ? parseJson(row.public_key_jwk, null) : null,

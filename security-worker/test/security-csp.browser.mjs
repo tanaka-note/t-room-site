@@ -348,14 +348,27 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await page.locator(".troom-passkey-account-dialog").count(), 0,
       `${name}: one Cloud link does not add an account-selection dialog`);
     await page.evaluate(() => {
+      window.__troomCloudAccountChoice = null;
+      TRoomPasskeys.chooseLinkDialog([
+        { id: "cloud-admin", accountId: "admin", displayLabel: "T-Cloud 管理者", roleLabel: "管理者", scopeLabel: "T-Cloud全体" },
+        { id: "cloud-subadmin", accountId: "subadmin", displayLabel: "T-Cloud 副管理者", roleLabel: "副管理者", scopeLabel: "T-Cloud全体" }
+      ], "cloud").then((link) => { window.__troomCloudAccountChoice = link?.id || null; });
+    });
+    assert.equal(await page.getByRole("heading", { name: "利用するT-Cloudアカウントを選択" }).count(), 1,
+      `${name}: administrator and subadministrator links require an account choice`);
+    assert.equal(await page.getByRole("button", { name: /T-Cloud 副管理者/ }).count(), 1,
+      `${name}: subadministrator is visibly distinct from administrator`);
+    await page.getByRole("button", { name: /T-Cloud 副管理者/ }).click();
+    await page.waitForFunction(() => window.__troomCloudAccountChoice === "cloud-subadmin");
+    await page.evaluate(() => {
       window.__troomCloudLinkChoice = null;
       TRoomPasskeys.chooseLinkDialog([
-        { id: "cloud-admin", displayLabel: "T-Cloud 管理者", roleLabel: "管理者", scopeLabel: "T-Cloud全体" },
-        { id: "personal-cloud", displayLabel: "本人フォルダ", roleLabel: "フォルダ利用者", scopeLabel: "本人フォルダ" }
+        { id: "cloud-admin", accountId: "admin", displayLabel: "T-Cloud 管理者", roleLabel: "管理者", scopeLabel: "T-Cloud全体" },
+        { id: "personal-cloud", accountId: "folder-member", displayLabel: "本人フォルダ", roleLabel: "フォルダ利用者", scopeLabel: "本人フォルダ" }
       ], "cloud").then((link) => { window.__troomCloudLinkChoice = link?.id || null; });
     });
-    assert.equal(await page.getByRole("heading", { name: "利用するT-Cloudの範囲を選択" }).count(), 1,
-      `${name}: multiple Cloud links use a scope-specific choice title`);
+    assert.equal(await page.getByRole("heading", { name: "利用するT-Cloudのアカウントまたは範囲を選択" }).count(), 1,
+      `${name}: mixed Cloud account and folder links use an accurate choice title`);
     await page.getByRole("button", { name: /本人フォルダ/ }).click();
     await page.waitForFunction(() => window.__troomCloudLinkChoice === "personal-cloud");
     const verifyCountBeforeMalformed = receivedPrfVerifyBodies.length;
