@@ -27,6 +27,9 @@ const cloudProtectedPassword = `child-password-${cloudFixtureTag}`;
 const cloudRootFileName = `本人検索-${cloudFixtureTag}.txt`;
 const cloudProtectedFileName = `保護配下-${cloudFixtureTag}.txt`;
 const cloudUnselectedFileName = `他人検索-${cloudFixtureTag}.txt`;
+const diaryAdminPassword = "audit-main-admin-password";
+const diaryUserPassword = "audit-main-user-password";
+const diaryWifePassword = "audit-wife-password";
 let cloudSelectedRootId = null;
 let cloudChildId = null;
 let cloudGrandchildId = null;
@@ -58,6 +61,9 @@ try {
   for (const directory of ["security-worker", "cloud-worker", "diary-worker", "billing-worker"]) {
     runWrangler(directory, ["d1", "migrations", "apply", databaseName(directory), "--local"]);
   }
+  runWrangler("diary-worker", ["d1", "execute", "diary-db", "--local", "--command", `
+    UPDATE diary_accounts SET password_hash = '${sha256PasswordHash(diaryUserPassword)}', must_change_password = 0
+      WHERE id = 'main-user'`]);
   runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command", `
     INSERT INTO cloud_folders (parent_id, name, created_by) VALUES (NULL, '${cloudSelectedRootName}', 'admin');
     INSERT INTO cloud_folders (parent_id, name, created_by)
@@ -237,6 +243,67 @@ try {
     assert.equal((await response.json()).adminAuthenticated, false);
   }
   await startServiceWorkers(true);
+  const identityCountBeforeUnlinkedLogin = queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_identities");
+  const adminPasswordAuditBefore = serviceAuditCount(identityId, "diary", "password_login_success");
+  const adminPasswordLogin = await loginDiary("main-admin@example.test", diaryAdminPassword);
+  assert.equal(adminPasswordLogin.response.status, 200, JSON.stringify(adminPasswordLogin.body));
+  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), adminPasswordAuditBefore + 1,
+    "Diary main-admin password login is present in Security D1 before the response is observed");
+  assert.ok(adminPasswordLogin.cookie);
+
+  const userPasswordAuditBefore = serviceAuditCount(identityId, "diary", "password_login_success");
+  const userPasswordLogin = await loginDiary("sub@a-tanaka.jp", diaryUserPassword);
+  assert.equal(userPasswordLogin.response.status, 200, JSON.stringify(userPasswordLogin.body));
+  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), userPasswordAuditBefore + 1,
+    "a second Diary account linked to the same Identity updates that same Identity synchronously");
+  assert.ok(userPasswordLogin.cookie);
+  const loginAtBeforeResume = queryText("security-worker", "security-db",
+    `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`);
+  const seenAtBeforeResume = queryText("security-worker", "security-db",
+    `SELECT last_seen_at AS value FROM security_identities WHERE id = '${identityId}'`);
+  const resumeAuditBefore = serviceAuditCount(identityId, "diary", "session_resume");
+  await delay(5);
+  const resumed = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/session`, {
+    headers: { Cookie: `${services.diary.cookie}=${userPasswordLogin.cookie}` }
+  });
+  assert.equal(resumed.status, 200);
+  assert.equal((await resumed.json()).authenticated, true);
+  assert.equal(serviceAuditCount(identityId, "diary", "session_resume"), resumeAuditBefore + 1,
+    "saved Diary session resume is stored synchronously");
+  assert.equal(queryText("security-worker", "security-db",
+    `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`), loginAtBeforeResume,
+  "session resume never changes last_login_at");
+  assert.ok(queryText("security-worker", "security-db",
+    `SELECT last_seen_at AS value FROM security_identities WHERE id = '${identityId}'`) >= seenAtBeforeResume,
+  "session resume advances only last_seen_at");
+
+  const unlinkedAuditBefore = queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
+    WHERE service = 'diary' AND service_account_id = 'wife-admin' AND event_type = 'password_login_success'`);
+  const unlinkedLogin = await loginDiary("wife@example.test", diaryWifePassword);
+  assert.equal(unlinkedLogin.response.status, 200, JSON.stringify(unlinkedLogin.body));
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
+    WHERE service = 'diary' AND service_account_id = 'wife-admin' AND event_type = 'password_login_success'`), unlinkedAuditBefore + 1,
+  "an unlinked account audit is retained without inventing an Identity");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
+    WHERE service = 'diary' AND service_account_id = 'wife-admin' AND event_type = 'password_login_success' AND identity_id IS NOT NULL`), 0,
+  "an unlinked password account is not attached to the wrong Identity");
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_identities"), identityCountBeforeUnlinkedLogin,
+    "password audit resolution never auto-creates an Identity");
+
+  const fallbackAuditBefore = serviceAuditCount(identityId, "diary", "password_login_success");
+  runSecuritySql(`CREATE TRIGGER fail_synchronous_login_audit
+    BEFORE INSERT ON security_audit_events
+    WHEN NEW.event_type = 'password_login_success'
+    BEGIN SELECT RAISE(ABORT, 'injected synchronous audit failure'); END`);
+  const fallbackLogin = await loginDiary("main-admin@example.test", diaryAdminPassword);
+  assert.equal(fallbackLogin.response.status, 200, "Security RPC failure must not reject a valid service login");
+  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), fallbackAuditBefore,
+    "the injected Security D1 failure prevents the synchronous insert before Queue recovery");
+  runSecuritySql("DROP TRIGGER fail_synchronous_login_audit");
+  await waitForServiceAudit(identityId, "diary", "password_login_success", fallbackAuditBefore + 1);
+  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), fallbackAuditBefore + 1,
+    "the same login event is recovered later through SECURITY_AUDIT Queue");
+
   const handoffCases = [
     { service: "diary", cookie: oldIdentityCookie, linkId: services.diary.linkId, accountId: services.diary.accountId, role: "user" },
     { service: "billing", cookie: oldIdentityCookie, linkId: services.billing.linkId, accountId: services.billing.accountId, role: "owner" },
@@ -259,8 +326,12 @@ try {
       assert.equal(JSON.stringify(created.body).includes("folderKey"), false);
       assert.equal(JSON.stringify(created.body).includes("fileKey"), false);
     }
+    const auditIdentity = expected.service === "cloud" ? readinessIdentityId : identityId;
+    const auditBefore = serviceAuditCount(auditIdentity, expected.service, "passkey_login_success");
     const redeemed = await redeemServiceHandoff(expected.service, created.body.handoffToken);
     assert.equal(redeemed.response.status, 200, `${expected.service} redeems the handoff once: ${JSON.stringify(redeemed.body)}`);
+    assert.equal(serviceAuditCount(auditIdentity, expected.service, "passkey_login_success"), auditBefore + 1,
+      `${expected.service} passkey login is stored synchronously before its response is observed`);
     assert.ok(redeemed.cookie, `${expected.service} issues a service session cookie`);
     assert.equal(decodeSignedPayload(redeemed.cookie).serviceLinkId, expected.linkId,
       `${expected.service} session keeps the selected service link ID`);
@@ -779,6 +850,10 @@ function fixturePasswordHash(password) {
   return `pbkdf2-sha256$100000$${salt.toString("base64url")}$${hash.toString("base64url")}`;
 }
 
+function sha256PasswordHash(password) {
+  return `sha256$${createHash("sha256").update(password).digest("base64url")}`;
+}
+
 async function startServiceWorkers(passkeysEnabled) {
   const enabledByService = typeof passkeysEnabled === "object"
     ? passkeysEnabled
@@ -788,7 +863,10 @@ async function startServiceWorkers(passkeysEnabled) {
     `PASSKEY_ENABLED:${String(enabledByService.cloud)}`, "ALLOW_LOCAL_HTTP:true"
   ]));
   processes.push(startWorker("diary-worker", services.diary.port, [
-    `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${String(enabledByService.diary)}`, "ALLOW_LOCAL_HTTP:true"
+    `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${String(enabledByService.diary)}`, "ALLOW_LOCAL_HTTP:true",
+    "DIARY_MAIN_ADMIN_LOGIN_ID:main-admin@example.test", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
+    `DIARY_MAIN_ADMIN_PASSWORD_HASH:${sha256PasswordHash(diaryAdminPassword)}`,
+    `DIARY_WIFE_ADMIN_PASSWORD_HASH:${sha256PasswordHash(diaryWifePassword)}`
   ]));
   processes.push(startWorker("billing-worker", services.billing.port, [
     `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${String(enabledByService.billing)}`, "ALLOW_LOCAL_HTTP:true"
@@ -887,6 +965,21 @@ async function redeemServiceHandoff(name, handoffToken) {
   });
   const body = await response.json().catch(() => ({}));
   const cookie = response.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1] || null;
+  return { response, body, cookie };
+}
+
+async function loginDiary(loginId, password) {
+  const response = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/login`, {
+    method: "POST",
+    headers: {
+      Origin: `http://127.0.0.1:${services.diary.port}`,
+      "Content-Type": "application/json",
+      "X-Diary-Request": "1"
+    },
+    body: JSON.stringify({ loginId, password })
+  });
+  const body = await response.json().catch(() => ({}));
+  const cookie = response.headers.get("set-cookie")?.match(/troom_diary_session=([^;]+)/)?.[1] || null;
   return { response, body, cookie };
 }
 
@@ -1333,6 +1426,7 @@ function enableGlobalRuntime() {
 function cleanupSecurityFixture() {
   runSecuritySql(`
     DROP TRIGGER IF EXISTS fail_credential_revoke_audit;
+    DROP TRIGGER IF EXISTS fail_synchronous_login_audit;
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id = '${identityId}';
     DELETE FROM security_tcloud_client_vaults WHERE identity_id = '${identityId}';
     DELETE FROM security_setup_sessions WHERE identity_id = '${identityId}';

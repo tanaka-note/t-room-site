@@ -1,9 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
+import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-f7cd5c979124";
+const APP_BUILD_ID = "cloud-e4e0e33a7721";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -146,7 +146,7 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (!session) return json({ authenticated: false });
-    enqueueSecurityAudit(env, context, request, {
+    await recordSecurityAudit(env, request, {
       service: "cloud", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.serviceAccountId || session.role, role: session.role,
@@ -338,7 +338,7 @@ async function login(request, env, url, context) {
   const token = await createSessionToken(session, maxAge, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
   await audit(env, "login", session, null, null);
-  enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId });
+  await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId });
   return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
 }
 
@@ -382,7 +382,7 @@ async function completePasskeyHandoff(request, env, url, context) {
   const token = await createSessionToken(session, maxAge, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
   await audit(env, "passkey_login", session, null, null);
-  enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId });
+  await recordSecurityAudit(env, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId });
   return json({ authenticated: true, ...publicSession(session) }, 200, headers);
 }
 

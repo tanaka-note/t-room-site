@@ -8,6 +8,33 @@ export function enqueueSecurityAudit(env, context, request, input) {
   context.waitUntil(task);
 }
 
+export async function recordSecurityAudit(env, request, input) {
+  let event;
+  try {
+    event = await buildSecurityAuditEvent(request, input, env.AUDIT_IP_SALT || env.SESSION_SECRET || "local-audit");
+  } catch (error) {
+    console.error("Security audit event build failed", error instanceof Error ? error.name : "unknown");
+    return { delivered: false, mode: "none", eventId: null };
+  }
+
+  try {
+    if (typeof env.SECURITY?.recordAuditEvent !== "function") throw new Error("SecurityAuditBindingUnavailable");
+    await env.SECURITY.recordAuditEvent(event);
+    return { delivered: true, mode: "synchronous", eventId: event.eventId };
+  } catch (error) {
+    console.error("Security audit synchronous delivery failed", error instanceof Error ? error.name : "unknown");
+  }
+
+  try {
+    if (typeof env.SECURITY_AUDIT?.send !== "function") throw new Error("SecurityAuditQueueUnavailable");
+    await env.SECURITY_AUDIT.send(event);
+    return { delivered: true, mode: "queue", eventId: event.eventId };
+  } catch (error) {
+    console.error("Security audit fallback enqueue failed", error instanceof Error ? error.name : "unknown");
+    return { delivered: false, mode: "none", eventId: event.eventId };
+  }
+}
+
 export async function buildSecurityAuditEvent(request, input, auditSalt = "local-audit") {
   const ip = request?.headers?.get("CF-Connecting-IP") || "local";
   return {

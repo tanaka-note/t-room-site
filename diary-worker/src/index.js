@@ -1,6 +1,6 @@
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
+import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/diary";
@@ -126,7 +126,7 @@ export default {
 async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
-    if (session) enqueueSecurityAudit(env, context, request, {
+    if (session) await recordSecurityAudit(env, request, {
       service: "diary", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.accountId, role: securityAuditRole(session),
@@ -187,10 +187,11 @@ async function handleApi(request, env, url, path, context) {
     await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
 
     const maxAge = getSessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env, account.householdId, { authMethod: "password" });
+    const sessionId = crypto.randomUUID();
+    const token = await createSessionToken(account, maxAge, env, account.householdId, { authMethod: "password", sessionId });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password" });
+    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId });
     return json({
       authenticated: true,
       role: account.role,
@@ -216,16 +217,18 @@ async function handleApi(request, env, url, path, context) {
     const account = await findAccountById(handoff.serviceAccountId, env);
     if (!account) return json({ error: "日記の連携先アカウントを確認できません。" }, 403);
     const maxAge = getSessionMaxAge(env);
+    const sessionId = crypto.randomUUID();
     const token = await createSessionToken(account, maxAge, env, account.householdId, {
       identityId: handoff.identityId,
       credentialId: handoff.credentialId,
       serviceLinkId: handoff.serviceLinkId,
       serviceAccountId: handoff.serviceAccountId,
       passkeySessionEpoch: handoff.sessionEpoch,
-      authMethod: "passkey"
+      authMethod: "passkey",
+      sessionId
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
-    enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "passkey" });
+    await recordSecurityAudit(env, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "passkey", sessionId });
     return json({ authenticated: true, role: account.role, accountName: account.name, loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
   }
 

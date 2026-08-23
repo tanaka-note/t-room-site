@@ -9,7 +9,7 @@ import {
   verifyPasswordRecord
 } from "./auth-security.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
+import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/billing";
@@ -85,7 +85,7 @@ export default {
 async function handleApi(request, env, url, path, context) {
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
-    if (session) enqueueSecurityAudit(env, context, request, {
+    if (session) await recordSecurityAudit(env, request, {
       service: "billing", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.accountId, role: session.role,
@@ -201,10 +201,11 @@ async function handleApi(request, env, url, path, context) {
     });
 
     const maxAge = sessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env, { authMethod: "password" });
+    const sessionId = crypto.randomUUID();
+    const token = await createSessionToken(account, maxAge, env, { authMethod: "password", sessionId });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password" });
+    await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId });
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "password" }, 200, headers);
   }
 
@@ -217,17 +218,19 @@ async function handleApi(request, env, url, path, context) {
     const account = await env.DB.prepare("SELECT id, display_name, role, session_version, is_active FROM billing_accounts WHERE id = ?").bind(handoff.serviceAccountId).first();
     if (!account?.is_active) throw new HttpError(403, "請求書管理の連携先アカウントを確認できません。");
     const maxAge = sessionMaxAge(env);
+    const sessionId = crypto.randomUUID();
     const token = await createSessionToken(account, maxAge, env, {
       identityId: handoff.identityId,
       credentialId: handoff.credentialId,
       serviceLinkId: handoff.serviceLinkId,
       serviceAccountId: handoff.serviceAccountId,
       passkeySessionEpoch: handoff.sessionEpoch,
-      authMethod: "passkey"
+      authMethod: "passkey",
+      sessionId
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
     await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
-    enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey" });
+    await recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId });
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "passkey" }, 200, headers);
   }
 

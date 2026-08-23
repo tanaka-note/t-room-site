@@ -96,6 +96,11 @@ export default class SecurityWorker extends WorkerEntrypoint {
   async validatePasskeySession(input) {
     return validatePasskeySession(this.env, input);
   }
+
+  async recordAuditEvent(input) {
+    await storeAuditEvent(this.env, input);
+    return { stored: true };
+  }
 }
 
 async function handleApi(request, env, url, path, context = null) {
@@ -1425,11 +1430,14 @@ async function storeAuditEvent(env, input) {
     }
   }
   if (!event.identityId && event.serviceAccountId && event.service !== "security") {
-    const linked = await env.DB.prepare(`SELECT id, identity_id, display_label, cloud_root_folder_id FROM security_service_links
+    const identities = await env.DB.prepare(`SELECT identity_id FROM security_service_links
       WHERE service = ? AND service_account_id = ? AND status = 'active'
-      ORDER BY created_at LIMIT 2`).bind(event.service, event.serviceAccountId).all();
-    if ((linked.results || []).length === 1) {
-      link = linked.results[0];
+      GROUP BY identity_id ORDER BY identity_id LIMIT 2`).bind(event.service, event.serviceAccountId).all();
+    if ((identities.results || []).length === 1) {
+      link = await env.DB.prepare(`SELECT id, identity_id, display_label, cloud_root_folder_id FROM security_service_links
+        WHERE identity_id = ? AND service = ? AND service_account_id = ? AND status = 'active'
+        ORDER BY created_at, id LIMIT 1`)
+        .bind(identities.results[0].identity_id, event.service, event.serviceAccountId).first();
       event.identityId = link.identity_id;
       event.serviceLinkId ||= link.id;
       event.serviceAccountLabel = link.display_label;
