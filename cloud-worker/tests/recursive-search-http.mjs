@@ -106,6 +106,17 @@ async function uploadFile(folder, name, mimeType, mediaKind, fastDisplay = false
   return { id: Number(upload.id), ...bundle };
 }
 
+async function allFilePages(path, role) {
+  const result = await jsonApi(path, role);
+  let nextOffset = result.nextFileOffset;
+  while (nextOffset != null) {
+    const page = await jsonApi(`${path}&filesOnly=1&fileOffset=${nextOffset}`, role);
+    result.files.push(...page.files);
+    nextOffset = page.nextFileOffset;
+  }
+  return result;
+}
+
 const rootA = await createFolder("検索テスト家A", "root-a-password", null, null);
 const rootB = await createFolder("検索テスト家B", "root-b-password", null, null);
 const documents = await createFolder("資料", "", rootA.id, rootA.folderKey);
@@ -125,7 +136,7 @@ const lockedFile = await uploadFile(locked, "個別ロック・検索対象.mp4"
 const outsideFile = await uploadFile(outside, "別家庭・検索対象.jpg", "image/jpeg", "image", true);
 await uploadFile(nested, "一致しない資料.pdf", "application/pdf", "document", true);
 
-const adminRoot = await jsonApi("/items?q=検索対象&recursive=1&pageSize=100", "admin");
+const adminRoot = await allFilePages("/items?q=検索対象&recursive=1&pageSize=100", "admin");
 assert(adminRoot.folders.some((item) => Number(item.id) === nested.id), "管理者の全体検索で深い階層が見つかりません。");
 assert(adminRoot.files.some((item) => Number(item.id) === image.id), "管理者の全体検索で深い階層の画像が見つかりません。");
 assert(adminRoot.files.some((item) => Number(item.id) === video.id), "暗号化動画が検索候補へ含まれていません。");
