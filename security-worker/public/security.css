@@ -34,6 +34,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .split { display: grid; grid-template-columns: minmax(280px, .9fr) minmax(320px, 1.1fr); gap: 16px; }
 fieldset { border: 1px solid var(--line); border-radius: 12px; }
 .link-row { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(14rem, 2fr) auto; gap: 8px; margin: 8px 0; }
+.link-target-hint { grid-column: 1 / -1; margin-top: -2px; }
 .protected-link { display: inline-block; margin-left: 8px; color: #52606d; font-size: .82rem; font-weight: 700; }
 .audit-account { display: block; margin-top: 8px; font-weight: 700; }
 .identity-row { border-bottom: 1px solid var(--line); padding: 12px 4px; }

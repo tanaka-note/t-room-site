@@ -14,6 +14,16 @@ const readinessCredentialB = Buffer.from("cloud-readiness-credential-b").toStrin
 const primaryCredentialId = Buffer.from("primary-admin-setup-credential").toString("base64url");
 const statusAdminIdentityId = "status_admin_test";
 const statusAdminCredentialId = Buffer.from("status-admin-credential").toString("base64url");
+const legacyNestedIdentityId = "legacy_nested_cloud_test";
+const cloudFixtureTag = randomUUID();
+const cloudSelectedRootName = `Security連携テスト-${cloudFixtureTag}`;
+const cloudChildName = `子フォルダ-${cloudFixtureTag}`;
+const cloudGrandchildName = `孫フォルダ-${cloudFixtureTag}`;
+const cloudUnselectedRootName = `未選択トップ-${cloudFixtureTag}`;
+let cloudSelectedRootId = null;
+let cloudChildId = null;
+let cloudGrandchildId = null;
+let cloudUnselectedRootId = null;
 const diaryAdminLinkId = "passkey-session-diary-admin-link";
 const services = {
   cloud: {
@@ -36,8 +46,17 @@ try {
   for (const directory of ["security-worker", "cloud-worker", "diary-worker", "billing-worker"]) {
     runWrangler(directory, ["d1", "migrations", "apply", databaseName(directory), "--local"]);
   }
-  runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command",
-    "INSERT OR IGNORE INTO cloud_folders (id, parent_id, name, created_by) VALUES (424242, NULL, 'Security連携テスト', 'admin')"]);
+  runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command", `
+    INSERT INTO cloud_folders (parent_id, name, created_by) VALUES (NULL, '${cloudSelectedRootName}', 'admin');
+    INSERT INTO cloud_folders (parent_id, name, created_by)
+      VALUES ((SELECT id FROM cloud_folders WHERE name = '${cloudSelectedRootName}' ORDER BY id DESC LIMIT 1), '${cloudChildName}', 'admin');
+    INSERT INTO cloud_folders (parent_id, name, created_by)
+      VALUES ((SELECT id FROM cloud_folders WHERE name = '${cloudChildName}' ORDER BY id DESC LIMIT 1), '${cloudGrandchildName}', 'admin');
+    INSERT INTO cloud_folders (parent_id, name, created_by) VALUES (NULL, '${cloudUnselectedRootName}', 'admin')`]);
+  cloudSelectedRootId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudSelectedRootName}' ORDER BY id DESC LIMIT 1`);
+  cloudChildId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudChildName}' ORDER BY id DESC LIMIT 1`);
+  cloudGrandchildId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudGrandchildName}' ORDER BY id DESC LIMIT 1`);
+  cloudUnselectedRootId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudUnselectedRootName}' ORDER BY id DESC LIMIT 1`);
   cleanupSecurityFixture();
   runSecuritySql(`
     UPDATE security_runtime_state SET passkey_session_epoch = 1, switch_observed_enabled = 1 WHERE id = 1;
@@ -70,7 +89,7 @@ try {
              ('${readinessCredentialB}', '${readinessIdentityId}', 'public-b', 'c2FsdC1i', 'active', CURRENT_TIMESTAMP);
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
-      VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', 424242, 'Cloud Readiness', 'active');
+      VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', ${cloudSelectedRootId}, 'Cloud Readiness', 'active');
     INSERT INTO security_tcloud_client_vaults
       (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
       VALUES ('${readinessCredentialA}', '${readinessIdentityId}', '{"kty":"RSA"}', 'fingerprint-a', 'private-a', 'iv-a'),
@@ -90,7 +109,12 @@ try {
       VALUES ('shared_cloud_test', 'Shared Cloud Test', 'active');
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
-      VALUES ('shared-provider-cloud-link', 'shared_cloud_test', 'cloud', 'folder-member', 424242, 'Security連携テスト', 'active');
+      VALUES ('shared-provider-cloud-link', 'shared_cloud_test', 'cloud', 'folder-member', ${cloudSelectedRootId}, 'Security連携テスト', 'active');
+    INSERT INTO security_identities (id, display_name, status)
+      VALUES ('${legacyNestedIdentityId}', 'Legacy Nested Cloud Test', 'active');
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
+      VALUES ('legacy-nested-cloud-link', '${legacyNestedIdentityId}', 'cloud', 'folder-member', ${cloudChildId}, 'Legacy Child Snapshot', 'active');
     INSERT INTO security_identities (id, display_name, status, is_security_admin)
       VALUES ('${statusAdminIdentityId}', 'Status Admin Test', 'active', 1);
     INSERT INTO security_credentials
@@ -172,7 +196,7 @@ try {
   const handoffCases = [
     { service: "diary", cookie: oldIdentityCookie, linkId: services.diary.linkId, accountId: services.diary.accountId, role: "user" },
     { service: "billing", cookie: oldIdentityCookie, linkId: services.billing.linkId, accountId: services.billing.accountId, role: "owner" },
-    { service: "cloud", cookie: readinessCookieA, linkId: "readiness-cloud-link", accountId: "folder-member", role: "member", rootFolderId: 424242 }
+    { service: "cloud", cookie: readinessCookieA, linkId: "readiness-cloud-link", accountId: "folder-member", role: "member", rootFolderId: cloudSelectedRootId }
   ];
   for (const expected of handoffCases) {
     const created = await createSecurityHandoff(expected.cookie, expected.service, expected.linkId);
@@ -195,6 +219,14 @@ try {
     assert.ok(redeemed.cookie, `${expected.service} issues a service session cookie`);
     assert.equal(decodeSignedPayload(redeemed.cookie).serviceLinkId, expected.linkId,
       `${expected.service} session keeps the selected service link ID`);
+    if (expected.service === "cloud") {
+      await assertCloudFolderAccess(redeemed.cookie, cloudChildId, 200,
+        "selecting a top folder includes its child folder");
+      await assertCloudFolderAccess(redeemed.cookie, cloudGrandchildId, 200,
+        "selecting a top folder includes its grandchild folder");
+      await assertCloudFolderAccess(redeemed.cookie, cloudUnselectedRootId, 403,
+        "an unselected top folder stays outside the linked scope");
+    }
     const replay = await redeemServiceHandoff(expected.service, created.body.handoffToken);
     assert.equal(replay.response.status, 401, `${expected.service} rejects a second handoff redemption`);
   }
@@ -229,10 +261,19 @@ try {
   assert.ok(billingTargets.some((target) => target.accountId === "owner" && target.privileged === true),
     "Billing provider returns the active owner as a privileged human-labelled candidate");
   const cloudTargets = serviceRegistryResponse.body.services.find((service) => service.id === "cloud")?.targets || [];
-  assert.ok(cloudTargets.some((target) => target.rootFolderId === 424242 && target.displayLabel === "Security連携テスト"),
-    "T-Cloud provider returns a live folder name instead of requiring a numeric ID");
+  assert.ok(cloudTargets.some((target) => target.rootFolderId === cloudSelectedRootId && target.displayLabel === cloudSelectedRootName),
+    "T-Cloud provider returns a live top-folder name instead of requiring a numeric ID");
+  assert.ok(cloudTargets.some((target) => target.rootFolderId === cloudUnselectedRootId && target.displayLabel === cloudUnselectedRootName),
+    "T-Cloud provider returns each selectable top-level folder");
+  assert.equal(cloudTargets.some((target) => [cloudChildId, cloudGrandchildId].includes(target.rootFolderId)), false,
+    "T-Cloud provider excludes child and grandchild folders from new link choices");
   assert.ok(cloudTargets.every((target) => target.accountId === "folder-member"),
     "T-Cloud admin and subadmin never appear in ordinary service-link candidates");
+  const legacyNestedDetail = await securityIdentityDetail(legacyNestedIdentityId, oldAdminCookie);
+  const legacyNestedLink = legacyNestedDetail.links.find((link) => link.id === "legacy-nested-cloud-link");
+  assert.equal(legacyNestedLink.folderUnavailable, false, "an existing nested-folder link remains manageable");
+  assert.equal(legacyNestedLink.display_label, `${cloudSelectedRootName} / ${cloudChildName}`,
+    "an existing nested-folder link keeps its original scope and resolves its live path");
 
   for (const accountId of ["admin", "subadmin"]) {
     const tampered = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
@@ -241,9 +282,14 @@ try {
     assert.equal(tampered.response.status, 403, `direct API tampering cannot grant T-Cloud ${accountId}`);
   }
   const nonCloudRoot = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
-    links: [{ service: "diary", accountId: "main-user", rootFolderId: 424242 }]
+    links: [{ service: "diary", accountId: "main-user", rootFolderId: cloudSelectedRootId }]
   });
   assert.equal(nonCloudRoot.response.status, 400, "a non-Cloud link cannot carry a T-Cloud folder ID");
+  const nestedCloudRoot = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
+    links: [{ service: "cloud", accountId: "folder-member", rootFolderId: cloudChildId }]
+  });
+  assert.equal(nestedCloudRoot.response.status, 400,
+    "direct API tampering cannot create a new link from a non-top-level Cloud folder");
   const protectedCore = await securityAdminRequest("/security/api/service-links/primary-admin-cloud-link", freshAdminCookie, {});
   assert.equal(protectedCore.response.status, 409, "the primary administrator core T-Cloud link cannot be removed");
   const stalePrivileged = await securityAdminRequest("/security/api/identities/primary-admin/links", oldAdminCookie, {
@@ -261,11 +307,16 @@ try {
   });
   assert.equal(exclusiveConflict.response.status, 409, "an exclusive Diary account cannot be linked to two Identities");
   const sharedCloud = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
-    links: [{ service: "cloud", accountId: "folder-member", rootFolderId: 424242 }]
+    links: [
+      { service: "cloud", accountId: "folder-member", rootFolderId: cloudSelectedRootId },
+      { service: "cloud", accountId: "folder-member", rootFolderId: cloudUnselectedRootId }
+    ]
   });
   assert.equal(sharedCloud.response.status, 200, JSON.stringify(sharedCloud.body));
-  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_service_links WHERE service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id = 424242 AND status IN ('pending', 'active')"), 3,
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_service_links WHERE service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id = ${cloudSelectedRootId} AND status IN ('pending', 'active')`), 3,
     "a validated Cloud folder link is accepted in pending state and remains shareable");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id IN (${cloudSelectedRootId}, ${cloudUnselectedRootId}) AND status IN ('pending', 'active')`), 2,
+    "multiple top-level Cloud folders can be linked in one operation");
   runSecuritySql(`CREATE TRIGGER fail_credential_revoke_audit
     BEFORE INSERT ON security_audit_events
     WHEN NEW.event_type = 'passkey_revoked'
@@ -643,8 +694,10 @@ try {
 } finally {
   for (const child of processes.splice(0).reverse()) stopProcess(child);
   cleanupSecurityFixture();
-  runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command",
-    "DELETE FROM cloud_folders WHERE id = 424242"]);
+  if (cloudSelectedRootId && cloudChildId && cloudGrandchildId && cloudUnselectedRootId) {
+    runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command",
+      `DELETE FROM cloud_folders WHERE id = ${cloudGrandchildId}; DELETE FROM cloud_folders WHERE id = ${cloudChildId}; DELETE FROM cloud_folders WHERE id = ${cloudUnselectedRootId}; DELETE FROM cloud_folders WHERE id = ${cloudSelectedRootId}`]);
+  }
 }
 
 async function startServiceWorkers(passkeysEnabled) {
@@ -756,6 +809,14 @@ async function redeemServiceHandoff(name, handoffToken) {
   const body = await response.json().catch(() => ({}));
   const cookie = response.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1] || null;
   return { response, body, cookie };
+}
+
+async function assertCloudFolderAccess(cookie, folderId, expectedStatus, label) {
+  const response = await fetch(`http://127.0.0.1:${services.cloud.port}/cloud/api/items?folderId=${folderId}`, {
+    headers: { Cookie: `${services.cloud.cookie}=${cookie}` }
+  });
+  const body = await response.text();
+  assert.equal(response.status, expectedStatus, `${label}: ${body.slice(0, 300)}`);
 }
 
 function assertPlainPublicLink(link, expected) {
@@ -1106,7 +1167,9 @@ function cleanupSecurityFixture() {
     DELETE FROM security_identities WHERE id = 'primary-admin';
     DELETE FROM security_service_links WHERE identity_id = 'shared_cloud_test';
     DELETE FROM security_identities WHERE id = 'shared_cloud_test';
-    DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${statusAdminIdentityId}', '${readinessIdentityId}', 'shared_cloud_test');
+    DELETE FROM security_service_links WHERE identity_id = '${legacyNestedIdentityId}';
+    DELETE FROM security_identities WHERE id = '${legacyNestedIdentityId}';
+    DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${statusAdminIdentityId}', '${readinessIdentityId}', 'shared_cloud_test', '${legacyNestedIdentityId}');
   `);
 }
 

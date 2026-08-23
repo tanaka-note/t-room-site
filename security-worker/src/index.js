@@ -1153,7 +1153,7 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
     if (!service || !accountId) throw new HttpError(400, "サービス連携を確認してください。");
     if (service !== "cloud" && rootFolderId !== null) throw new HttpError(400, "日記・請求書の連携にT-Cloudフォルダは指定できません。");
     const integration = serviceProvider(env, service);
-    const description = await integration.describeAccount({ accountId, rootFolderId });
+    const description = await integration.describeAccount({ accountId, rootFolderId, selectableOnly: true });
     if (!description?.valid) throw new HttpError(400, `${service}の連携先を確認できません。`);
     if (service === "cloud" && accountId !== "folder-member") throw new HttpError(403, "T-Cloud管理者・副管理者は通常のサービス連携から付与できません。");
     const target = publicServiceTarget(service, description);

@@ -72,7 +72,10 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/security/api/services") return sendJson(response, 200, { services: [
     { id: "diary", displayName: "日記", targets: [{ service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）", role: "user", roleLabel: "一般ユーザー", privileged: false }] },
     { id: "billing", displayName: "請求書", targets: [{ service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "田中宏知（管理者）", role: "owner", roleLabel: "管理者", privileged: true }] },
-    { id: "cloud", displayName: "T-Cloud", targets: [{ service: "cloud", accountId: "folder-member", rootFolderId: 2, displayLabel: "家族写真 / 千晴", role: "member", roleLabel: "フォルダ利用者", privileged: false }] }
+    { id: "cloud", displayName: "T-Cloud", targets: [
+      { service: "cloud", accountId: "folder-member", rootFolderId: 2, displayLabel: "家族写真", role: "member", roleLabel: "フォルダ利用者", privileged: false },
+      { service: "cloud", accountId: "folder-member", rootFolderId: 10, displayLabel: "動画", role: "member", roleLabel: "フォルダ利用者", privileged: false }
+    ] }
   ] });
   if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: 0, pendingApproval: 0, noPasskey: 0, critical: 0 });
   if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [{ id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" }] });
@@ -427,6 +430,14 @@ async function verifyBrowser(browserType, name, origin) {
     assert.deepEqual(await inviteService.locator("option").allTextContents(), ["サービスを選択", "日記", "請求書", "T-Cloud"]);
     await inviteService.selectOption("diary");
     assert.deepEqual(await inviteTarget.locator("option").allTextContents(), ["連携先を選択", "田中宏知（一般ユーザー） / 一般ユーザー"]);
+    assert.equal(await unsupported.locator("#link-rows .link-target-hint").first().isVisible(), false,
+      `${name}: the top-folder explanation is hidden for non-Cloud services`);
+    await inviteService.selectOption("cloud");
+    assert.deepEqual(await inviteTarget.locator("option").allTextContents(),
+      ["連携先を選択", "家族写真 / フォルダ利用者", "動画 / フォルダ利用者"]);
+    assert.equal(await unsupported.locator("#link-rows .link-target-hint").first().isVisible(), true,
+      `${name}: Cloud selection explains that a top folder includes all descendants`);
+    assert.match(await unsupported.locator("#link-rows .link-target-hint").first().textContent(), /トップフォルダ.*配下はすべて/);
     assert.doesNotMatch(await unsupported.locator("#invite-form").textContent(), /main-user|folder-member|フォルダID/,
       `${name}: internal account and numeric folder identifiers are not shown`);
     const queryCountBeforeRefresh = receivedAuditQueries.length;

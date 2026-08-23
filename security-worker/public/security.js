@@ -465,12 +465,17 @@
     targetSelect.setAttribute("aria-label", "利用するアカウントまたはフォルダ");
     targetSelect.disabled = true;
     targetSelect.append(new Option("先にサービスを選択してください", ""));
+    const targetHint = document.createElement("small");
+    targetHint.className = "hint link-target-hint";
+    targetHint.hidden = true;
+    targetHint.textContent = "トップフォルダを選択してください。選択したフォルダの配下はすべて自動的に連携対象となります。";
     const updateTargets = () => {
       const selectedService = state.services.find((item) => item.id === serviceSelect.value);
       row._targets = selectedService?.targets || [];
       targetSelect.replaceChildren(new Option(selectedService ? "連携先を選択" : "先にサービスを選択してください", ""));
       row._targets.forEach((target, index) => targetSelect.append(new Option(`${target.displayLabel}${target.roleLabel ? ` / ${target.roleLabel}` : ""}`, String(index))));
       targetSelect.disabled = !selectedService || !row._targets.length;
+      targetHint.hidden = selectedService?.id !== "cloud";
     };
     serviceSelect.addEventListener("change", updateTargets);
     row.append(serviceSelect, targetSelect);
@@ -483,6 +488,7 @@
       remove.onclick = () => row.remove();
       row.append(remove);
     }
+    row.append(targetHint);
     $(containerSelector).append(row);
     if (service) { serviceSelect.value = service; updateTargets(); }
   }

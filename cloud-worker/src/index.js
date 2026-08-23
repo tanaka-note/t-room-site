@@ -3,7 +3,7 @@ import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-2305009d1564";
+const APP_BUILD_ID = "cloud-0f1c00d64112";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -46,7 +46,8 @@ export class SecurityIntegration extends WorkerEntrypoint {
     if (accountId !== "folder-member") return { valid: false };
     const rootFolderId = optionalId(input?.rootFolderId);
     if (!rootFolderId) return { valid: false };
-    const target = (await listSecurityFolderTargets(this.env)).find((item) => item.rootFolderId === rootFolderId);
+    const target = (await listSecurityFolderTargets(this.env, { topLevelOnly: Boolean(input?.selectableOnly) }))
+      .find((item) => item.rootFolderId === rootFolderId);
     return target ? { valid: true, ...target } : { valid: false };
   }
 
@@ -54,7 +55,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
     return {
       service: "cloud",
       displayName: "T-Cloud",
-      targets: await listSecurityFolderTargets(this.env)
+      targets: await listSecurityFolderTargets(this.env, { topLevelOnly: true })
     };
   }
 
@@ -90,7 +91,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
   }
 }
 
-async function listSecurityFolderTargets(env) {
+async function listSecurityFolderTargets(env, { topLevelOnly = false } = {}) {
   const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(id, parent_id, name, path) AS (
       SELECT id, parent_id, name, name FROM cloud_folders
       WHERE parent_id IS NULL AND deleted_at IS NULL
@@ -99,8 +100,8 @@ async function listSecurityFolderTargets(env) {
       FROM cloud_folders child JOIN folder_tree ON child.parent_id = folder_tree.id
       WHERE child.deleted_at IS NULL
     )
-    SELECT id, path FROM folder_tree ORDER BY path COLLATE NOCASE, id`).all();
-  return (result.results || []).map((folder) => ({
+    SELECT id, parent_id AS parentId, path FROM folder_tree ORDER BY path COLLATE NOCASE, id`).all();
+  return (result.results || []).filter((folder) => !topLevelOnly || folder.parentId == null).map((folder) => ({
     accountId: "folder-member",
     rootFolderId: Number(folder.id),
     displayLabel: String(folder.path || "T-Cloudフォルダ"),
