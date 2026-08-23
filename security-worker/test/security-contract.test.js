@@ -11,6 +11,7 @@ const handoffEpochMigration = await readFile(new URL("../migrations/0004_handoff
 const serviceAuditMigration = await readFile(new URL("../migrations/0005_service_links_and_session_audit.sql", import.meta.url), "utf8");
 const primaryCloudAccountsMigration = await readFile(new URL("../migrations/0006_primary_admin_cloud_subadmin.sql", import.meta.url), "utf8");
 const primaryDiaryAccountsMigration = await readFile(new URL("../migrations/0007_primary_admin_diary_main_user.sql", import.meta.url), "utf8");
+const cancelledInviteCleanupMigration = await readFile(new URL("../migrations/0008_cleanup_cancelled_unregistered_identities.sql", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/passkey-client.js", import.meta.url), "utf8");
 const securityUi = await readFile(new URL("../public/security.js", import.meta.url), "utf8");
 const securityDisplay = await readFile(new URL("../public/security-display.js", import.meta.url), "utf8");
@@ -171,6 +172,26 @@ test("the primary administrator keeps both Diary administrator and ordinary-user
   assert.match(worker, /identityId === PRIMARY_ADMIN_ID && link\.service === "diary" && link\.accountId === "main-user"/);
   assert.doesNotMatch(primaryDiaryAccountsMigration, /UPDATE\s+security_credentials|DELETE\s+FROM\s+security_credentials/i,
     "the existing primary passkey credential is neither replaced nor recreated");
+});
+
+test("revoking the last unused invitation retires only a never-registered invited Identity", () => {
+  assert.match(worker, /retireUnregisteredInvitedIdentityIfOrphaned/);
+  assert.match(worker, /identity\.status = 'invited'/);
+  assert.match(worker, /NOT EXISTS \(SELECT 1 FROM security_credentials credential WHERE credential\.identity_id = identity\.id\)/);
+  assert.match(worker, /NOT EXISTS \(SELECT 1 FROM security_invitations active_invite[\s\S]*active_invite\.status = 'active'/);
+  assert.match(worker, /identity\.id != '\$\{PRIMARY_ADMIN_ID\}'/);
+  assert.match(worker, /eventType: "invited_identity_retired"/);
+  assert.match(worker, /identityRetired/);
+  assert.match(worker, /WHERE i\.status != 'disabled'/);
+  assert.match(securityUi, /未登録のユーザーを一覧から削除しました/);
+  assert.match(securityUi, /state\.selectedIdentity = null/);
+  assert.match(securityDisplay, /invited_identity_retired/);
+  assert.match(cancelledInviteCleanupMigration, /identity\.status = 'invited'/);
+  assert.match(cancelledInviteCleanupMigration, /revoked\.status = 'revoked'/);
+  assert.match(cancelledInviteCleanupMigration, /active_invite\.status = 'active'/);
+  assert.match(cancelledInviteCleanupMigration, /UPDATE security_service_links[\s\S]*status = 'disabled'/);
+  assert.match(cancelledInviteCleanupMigration, /UPDATE security_identities AS identity[\s\S]*status = 'disabled'/);
+  assert.doesNotMatch(cancelledInviteCleanupMigration, /DELETE\s+FROM\s+security_(?:identities|service_links|invitations)/i);
 });
 
 test("service links come from an explicit provider registry and never from free-form UI", () => {

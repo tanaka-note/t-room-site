@@ -459,6 +459,91 @@ try {
   assert.equal(legacyNestedLink.display_label, `${cloudSelectedRootName} / ${cloudChildName}`,
     "an existing nested-folder link keeps its original scope and resolves its live path");
 
+  const dashboardBeforeCancelledInvite = (await securityAdminRequest("/security/api/dashboard", freshAdminCookie)).body;
+  const cancelledInvite = await securityAdminRequest("/security/api/identities", freshAdminCookie, {
+    displayName: "Cancelled Invitation Test",
+    expiresIn: 86400,
+    links: [{ service: "diary", accountId: "chiharu-admin", rootFolderId: null }]
+  });
+  assert.equal(cancelledInvite.response.status, 201, JSON.stringify(cancelledInvite.body));
+  const cancelledIdentityId = cancelledInvite.body.identityId;
+  const cancelledInvitationId = queryText("security-worker", "security-db",
+    `SELECT id AS value FROM security_invitations WHERE identity_id = '${cancelledIdentityId}' AND status = 'active'`);
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_identities WHERE id = '${cancelledIdentityId}'`), "invited");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_service_links WHERE identity_id = '${cancelledIdentityId}'`), "pending");
+  const revokeUnusedInvite = await securityAdminRequest(`/security/api/invitations/${cancelledInvitationId}/revoke`, freshAdminCookie, {});
+  assert.equal(revokeUnusedInvite.response.status, 200, JSON.stringify(revokeUnusedInvite.body));
+  assert.equal(revokeUnusedInvite.body.identityRetired, true, "the final unused invitation retires its never-registered Identity");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_invitations WHERE id = '${cancelledInvitationId}'`), "revoked");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_identities WHERE id = '${cancelledIdentityId}'`), "disabled");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_service_links WHERE identity_id = '${cancelledIdentityId}'`), "disabled");
+  const identitiesAfterCancelledInvite = await securityAdminRequest("/security/api/identities", freshAdminCookie);
+  assert.equal(identitiesAfterCancelledInvite.response.status, 200, JSON.stringify(identitiesAfterCancelledInvite.body));
+  assert.equal(identitiesAfterCancelledInvite.body.identities.some((identity) => identity.id === cancelledIdentityId), false,
+    "disabled invitation-only Identities are absent from the normal user list");
+  const dashboardAfterCancelledInvite = (await securityAdminRequest("/security/api/dashboard", freshAdminCookie)).body;
+  assert.equal(dashboardAfterCancelledInvite.invited, dashboardBeforeCancelledInvite.invited,
+    "revoking the new invitation removes the retired Identity from the invited count");
+  assert.equal(dashboardAfterCancelledInvite.noPasskey, dashboardBeforeCancelledInvite.noPasskey,
+    "revoking the new invitation removes the retired Identity from the no-passkey count");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events WHERE identity_id = '${cancelledIdentityId}' AND event_type = 'invite_revoked'`), 1);
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events WHERE identity_id = '${cancelledIdentityId}' AND event_type = 'invited_identity_retired'`), 1);
+
+  const multipleInvite = await securityAdminRequest("/security/api/identities", freshAdminCookie, {
+    displayName: "Multiple Invitation Test",
+    expiresIn: 86400,
+    links: [{ service: "cloud", accountId: "folder-member", rootFolderId: cloudUnselectedRootId }]
+  });
+  assert.equal(multipleInvite.response.status, 201, JSON.stringify(multipleInvite.body));
+  const multipleIdentityId = multipleInvite.body.identityId;
+  const firstMultipleInvitationId = queryText("security-worker", "security-db",
+    `SELECT id AS value FROM security_invitations WHERE identity_id = '${multipleIdentityId}' AND status = 'active'`);
+  runSecuritySql(`INSERT INTO security_invitations
+    (id, identity_id, token_hash, link_set_hash, expires_at, status, created_by_identity_id)
+    SELECT 'second-multiple-invite', identity_id, 'second-multiple-token', link_set_hash, expires_at, 'active', created_by_identity_id
+    FROM security_invitations WHERE id = '${firstMultipleInvitationId}'`);
+  const revokeOneOfMultiple = await securityAdminRequest(`/security/api/invitations/${firstMultipleInvitationId}/revoke`, freshAdminCookie, {});
+  assert.equal(revokeOneOfMultiple.response.status, 200, JSON.stringify(revokeOneOfMultiple.body));
+  assert.equal(revokeOneOfMultiple.body.identityRetired, false, "another active invitation keeps the invited Identity visible");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_identities WHERE id = '${multipleIdentityId}'`), "invited");
+  const revokeLastMultiple = await securityAdminRequest("/security/api/invitations/second-multiple-invite/revoke", freshAdminCookie, {});
+  assert.equal(revokeLastMultiple.response.status, 200, JSON.stringify(revokeLastMultiple.body));
+  assert.equal(revokeLastMultiple.body.identityRetired, true, "the last active invitation retires the untouched Identity");
+
+  runSecuritySql(`INSERT INTO security_identities (id, display_name, status) VALUES ('pending-invite-cancel', 'Pending Approval', 'pending_approval');
+    INSERT INTO security_credentials (credential_id, identity_id, public_key, prf_salt, status)
+      VALUES ('pending-invite-credential', 'pending-invite-cancel', 'public', 'salt', 'pending');
+    INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+      VALUES ('pending-invite-link', 'pending-invite-cancel', 'cloud', 'folder-member', 'Pending Cloud', 'pending');
+    INSERT INTO security_invitations (id, identity_id, token_hash, link_set_hash, expires_at, status)
+      VALUES ('pending-invite', 'pending-invite-cancel', 'pending-invite-token', 'pending-invite-hash', 4102444800, 'active')`);
+  const revokePendingApproval = await securityAdminRequest("/security/api/invitations/pending-invite/revoke", freshAdminCookie, {});
+  assert.equal(revokePendingApproval.response.status, 200, JSON.stringify(revokePendingApproval.body));
+  assert.equal(revokePendingApproval.body.identityRetired, false);
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_identities WHERE id = 'pending-invite-cancel'"), "pending_approval");
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_credentials WHERE credential_id = 'pending-invite-credential'"), "pending");
+
+  const activeReinvite = await securityAdminRequest(`/security/api/identities/${identityId}/reinvite`, freshAdminCookie, { expiresIn: 86400 });
+  assert.equal(activeReinvite.response.status, 201, JSON.stringify(activeReinvite.body));
+  const activeReinviteId = queryText("security-worker", "security-db",
+    `SELECT id AS value FROM security_invitations WHERE identity_id = '${identityId}' AND status = 'active'`);
+  const revokeActiveReinvite = await securityAdminRequest(`/security/api/invitations/${activeReinviteId}/revoke`, freshAdminCookie, {});
+  assert.equal(revokeActiveReinvite.response.status, 200, JSON.stringify(revokeActiveReinvite.body));
+  assert.equal(revokeActiveReinvite.body.identityRetired, false, "cancelling a reinvite never retires an active user");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_identities WHERE id = '${identityId}'`), "active");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_credentials WHERE credential_id = '${credentialId}'`), "active");
+  const activeAfterReinviteCancellation = await createSecurityHandoff(oldIdentityCookie, "billing", services.billing.linkId);
+  assert.equal(activeAfterReinviteCancellation.response.status, 200, JSON.stringify(activeAfterReinviteCancellation.body));
+
+  const primaryReinvite = await securityAdminRequest("/security/api/identities/primary-admin/reinvite", freshAdminCookie, { expiresIn: 86400 });
+  assert.equal(primaryReinvite.response.status, 201, JSON.stringify(primaryReinvite.body));
+  const primaryReinviteId = queryText("security-worker", "security-db",
+    "SELECT id AS value FROM security_invitations WHERE identity_id = 'primary-admin' AND status = 'active'");
+  const revokePrimaryReinvite = await securityAdminRequest(`/security/api/invitations/${primaryReinviteId}/revoke`, freshAdminCookie, {});
+  assert.equal(revokePrimaryReinvite.response.status, 200, JSON.stringify(revokePrimaryReinvite.body));
+  assert.equal(revokePrimaryReinvite.body.identityRetired, false, "the primary administrator is never auto-retired");
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_identities WHERE id = 'primary-admin'"), "active");
+
   for (const accountId of ["admin", "subadmin"]) {
     const tampered = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
       links: [{ service: "cloud", accountId, rootFolderId: null }]
@@ -487,7 +572,12 @@ try {
   });
   assert.equal(freshPrivileged.response.status, 200, JSON.stringify(freshPrivileged.body));
   assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id = 'chiharu-admin' AND status != 'disabled'"), "active",
-    "a fresh administrator passkey can add a validated privileged account");
+    "the exclusive Diary account can be linked again after the unused invitation was retired");
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_service_links WHERE identity_id = '${cancelledIdentityId}' AND service = 'diary' AND service_account_id = 'chiharu-admin'`), "disabled",
+    "the old link remains as a permanent disabled marker");
+  assert.notEqual(queryText("security-worker", "security-db", "SELECT id AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id = 'chiharu-admin' AND status = 'active'"),
+    queryText("security-worker", "security-db", `SELECT id AS value FROM security_service_links WHERE identity_id = '${cancelledIdentityId}' AND service = 'diary' AND service_account_id = 'chiharu-admin'`),
+    "relinking uses a fresh service-link ID instead of reviving the disabled marker");
   const exclusiveConflict = await securityAdminRequest(`/security/api/identities/${readinessIdentityId}/links`, freshAdminCookie, {
     links: [{ service: "diary", accountId: "main-user", rootFolderId: null }]
   });
@@ -1542,6 +1632,44 @@ function cleanupSecurityFixture() {
   runSecuritySql(`
     DROP TRIGGER IF EXISTS fail_credential_revoke_audit;
     DROP TRIGGER IF EXISTS fail_synchronous_login_audit;
+    DELETE FROM security_audit_events WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_tcloud_key_envelopes WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_tcloud_client_vaults WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_setup_sessions WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_handoffs WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_challenges WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_invitations WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_service_links WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_credentials WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+    );
+    DELETE FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval');
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id = '${identityId}';
     DELETE FROM security_tcloud_client_vaults WHERE identity_id = '${identityId}';
     DELETE FROM security_setup_sessions WHERE identity_id = '${identityId}';
@@ -1552,7 +1680,6 @@ function cleanupSecurityFixture() {
     DELETE FROM security_credentials WHERE identity_id = '${identityId}';
     DELETE FROM security_identities WHERE id = '${identityId}';
     DELETE FROM security_credentials WHERE identity_id = 'audit_admin';
-    DELETE FROM security_identities WHERE id = 'audit_admin';
     DELETE FROM security_credentials WHERE identity_id = '${statusAdminIdentityId}';
     DELETE FROM security_identities WHERE id = '${statusAdminIdentityId}';
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id = '${readinessIdentityId}';
@@ -1576,6 +1703,7 @@ function cleanupSecurityFixture() {
     DELETE FROM security_identities WHERE id = 'shared_cloud_test';
     DELETE FROM security_service_links WHERE identity_id = '${legacyNestedIdentityId}';
     DELETE FROM security_identities WHERE id = '${legacyNestedIdentityId}';
+    DELETE FROM security_identities WHERE id = 'audit_admin';
     DELETE FROM security_audit_events WHERE event_type = 'audit_pagination_fixture' OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${statusAdminIdentityId}', '${readinessIdentityId}', 'shared_cloud_test', '${legacyNestedIdentityId}');
   `);
 }

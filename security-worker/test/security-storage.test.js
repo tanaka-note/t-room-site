@@ -63,6 +63,46 @@ test("primary administrator Diary ordinary-user migration is idempotent without 
   assert.notEqual(duplicate.status, 0, "the narrow primary-admin alias must not weaken exclusivity for other Identities");
 });
 
+test("cancelled never-registered Identities are retired without touching active or used users", () => {
+  sql(`INSERT INTO security_identities (id, display_name, status) VALUES
+    ('cancelled-orphan', 'Cancelled Orphan', 'invited'),
+    ('still-invited', 'Still Invited', 'invited'),
+    ('pending-registration', 'Pending Registration', 'pending_approval'),
+    ('active-reinvite', 'Active Reinvite', 'active'),
+    ('used-inconsistency', 'Used Inconsistency', 'invited')`);
+  sql(`INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status) VALUES
+    ('cancelled-diary-link', 'cancelled-orphan', 'diary', 'cancelled-account', 'Cancelled Diary', 'pending'),
+    ('cancelled-cloud-link', 'cancelled-orphan', 'cloud', 'folder-member', 'Cancelled Cloud', 'active'),
+    ('still-invited-link', 'still-invited', 'billing', 'still-invited-account', 'Still Invited', 'pending'),
+    ('pending-registration-link', 'pending-registration', 'billing', 'pending-registration-account', 'Pending', 'pending'),
+    ('active-reinvite-link', 'active-reinvite', 'billing', 'active-reinvite-account', 'Active', 'active'),
+    ('used-inconsistency-link', 'used-inconsistency', 'billing', 'used-inconsistency-account', 'Used', 'pending')`);
+  sql(`INSERT INTO security_invitations (id, identity_id, token_hash, link_set_hash, expires_at, status) VALUES
+    ('cancelled-invite', 'cancelled-orphan', 'cancelled-token', 'cancelled-hash', 4102444800, 'revoked'),
+    ('still-active-invite', 'still-invited', 'still-token', 'still-hash', 4102444800, 'active'),
+    ('pending-revoked-invite', 'pending-registration', 'pending-token', 'pending-hash', 4102444800, 'revoked'),
+    ('active-revoked-invite', 'active-reinvite', 'active-token', 'active-hash', 4102444800, 'revoked'),
+    ('used-revoked-invite', 'used-inconsistency', 'used-token', 'used-hash', 4102444800, 'revoked')`);
+  sql(`INSERT INTO security_credentials (credential_id, identity_id, public_key, prf_salt, status)
+    VALUES ('pending-registration-credential', 'pending-registration', 'public', 'salt', 'pending'),
+           ('active-reinvite-credential', 'active-reinvite', 'public', 'salt', 'active')`);
+  sql(`INSERT INTO security_audit_events
+    (event_id, occurred_at, service, event_type, outcome, identity_id, auth_method)
+    VALUES ('used-proof-event', '2026-08-23T01:00:00.000Z', 'security', 'invite_used', 'success', 'used-inconsistency', 'passkey')`);
+  const migration = readFileSync(join(directory, "migrations", "0008_cleanup_cancelled_unregistered_identities.sql"), "utf8")
+    .replace(/^\s*--.*$/gm, "");
+  sql(migration);
+  sql(migration);
+  assert.equal(queryText("SELECT status AS value FROM security_identities WHERE id = 'cancelled-orphan'"), "disabled");
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE identity_id = 'cancelled-orphan' AND status = 'disabled'"), 2);
+  assert.equal(queryText("SELECT status AS value FROM security_invitations WHERE id = 'cancelled-invite'"), "revoked");
+  assert.equal(queryText("SELECT status AS value FROM security_identities WHERE id = 'still-invited'"), "invited");
+  assert.equal(queryText("SELECT status AS value FROM security_service_links WHERE id = 'still-invited-link'"), "pending");
+  assert.equal(queryText("SELECT status AS value FROM security_identities WHERE id = 'pending-registration'"), "pending_approval");
+  assert.equal(queryText("SELECT status AS value FROM security_identities WHERE id = 'active-reinvite'"), "active");
+  assert.equal(queryText("SELECT status AS value FROM security_identities WHERE id = 'used-inconsistency'"), "invited");
+});
+
 test("one invitation can register only one credential even under concurrent inserts", async () => {
   sql("INSERT INTO security_identities (id, display_name, status) VALUES ('invite_test', 'Invite Test', 'invited')");
   sql(`INSERT INTO security_invitations (id, identity_id, token_hash, link_set_hash, expires_at)

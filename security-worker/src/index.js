@@ -48,6 +48,17 @@ const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "diary\u0000main-user\u0000",
   "billing\u0000owner\u0000"
 ]);
+const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
+  "invite_used",
+  "passkey_registration",
+  "identity_approved",
+  "passkey_login_success",
+  "passkey_authentication_success",
+  "password_login_success",
+  "session_resume",
+  "tcloud_key_envelope_saved",
+  "tcloud_key_delegated"
+]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -308,10 +319,13 @@ async function invitationVerify(request, env, url) {
     await env.DB.batch([
     env.DB.prepare(`INSERT INTO security_credentials
       (credential_id, identity_id, public_key, counter, transports_json, device_type, backed_up, prf_enabled, prf_salt, status, registered_via_invitation_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?
+      FROM security_invitations invitation
+      JOIN security_identities identity ON identity.id = invitation.identity_id
+      WHERE invitation.id = ? AND invitation.status = 'active' AND identity.status != 'disabled'`)
       .bind(credentialId, invitation.identity_id, bytesToBase64Url(credential.publicKey), Number(credential.counter || 0),
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
-        verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt, invitation.id),
+        verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt, invitation.id, invitation.id),
     env.DB.prepare("UPDATE security_invitations SET status = 'used', used_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'").bind(invitation.id),
     env.DB.prepare("UPDATE security_identities SET status = CASE WHEN status = 'active' THEN 'active' ELSE 'pending_approval' END, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invitation.identity_id),
     insertSetupSessionStatement(env, setup),
@@ -319,8 +333,12 @@ async function invitationVerify(request, env, url) {
     await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: invitation.identity_id, authMethod: "passkey" }, request)
     ]);
   } catch (error) {
-    const state = await env.DB.prepare("SELECT status FROM security_invitations WHERE id = ?").bind(invitation.id).first();
+    const state = await env.DB.prepare(`SELECT invitation.status, identity.status AS identity_status
+      FROM security_invitations invitation
+      JOIN security_identities identity ON identity.id = invitation.identity_id
+      WHERE invitation.id = ?`).bind(invitation.id).first();
     if (state?.status === "used") throw new HttpError(410, "この招待は既に使用されています。");
+    if (state?.status === "revoked" || state?.identity_status === "disabled") throw new HttpError(410, "この招待は取り消されています。");
     throw error;
   }
   const headers = await securitySessionHeaders(env, url, invitation.identity_id, credentialId, false);
@@ -688,7 +706,8 @@ async function dashboard(env) {
     SUM(CASE WHEN EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'pending') THEN 1 ELSE 0 END) AS pendingApproval,
     SUM(CASE WHEN status = 'invited' THEN 1 ELSE 0 END) AS invited,
     SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'active') THEN 1 ELSE 0 END) AS noPasskey
-    FROM security_identities i`).first();
+    FROM security_identities i
+    WHERE i.status != 'disabled'`).first();
   return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0) });
 }
 
@@ -719,6 +738,7 @@ async function listIdentities(env) {
     FROM security_identities i
     LEFT JOIN security_credentials c ON c.identity_id = i.id
     LEFT JOIN security_invitations inv ON inv.identity_id = i.id
+    WHERE i.status != 'disabled'
     GROUP BY i.id ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all();
   return json({ identities: (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null })) });
 }
@@ -938,11 +958,65 @@ async function revokeCredential(credentialId, request, env, admin) {
 async function revokeInvitation(invitationId, request, env, admin) {
   const row = await env.DB.prepare("SELECT identity_id FROM security_invitations WHERE id = ? AND status = 'active'").bind(invitationId).first();
   if (!row) throw new HttpError(404, "有効な招待が見つかりません。");
-  await env.DB.batch([
-    env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invitationId),
-    await localAuditStatement(env, { eventType: "invite_revoked", outcome: "success", identityId: row.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request)
+  const revokedAt = new Date().toISOString();
+  const retiredAt = new Date(Date.now() + 1).toISOString();
+  const inviteAudit = await localAuditEvent(env, {
+    eventType: "invite_revoked", outcome: "success", identityId: row.identity_id,
+    authMethod: "passkey", details: { revokedBy: admin.identityId }
+  }, request);
+  const retirementAudit = await localAuditEvent(env, {
+    eventType: "invited_identity_retired", outcome: "success", identityId: row.identity_id,
+    authMethod: "passkey", details: { retiredBy: admin.identityId }
+  }, request);
+  const retirement = retireUnregisteredInvitedIdentityIfOrphaned(env, row.identity_id, invitationId, revokedAt, retiredAt);
+  const results = await env.DB.batch([
+    env.DB.prepare("UPDATE security_invitations SET status = 'revoked', revoked_at = ? WHERE id = ? AND status = 'active'")
+      .bind(revokedAt, invitationId),
+    ...retirement,
+    auditInsertStatement(env, inviteAudit, {
+      sql: "EXISTS (SELECT 1 FROM security_invitations WHERE id = ? AND status = 'revoked' AND revoked_at = ?)",
+      bindings: [invitationId, revokedAt]
+    }),
+    auditInsertStatement(env, retirementAudit, {
+      sql: "EXISTS (SELECT 1 FROM security_identities WHERE id = ? AND status = 'disabled' AND updated_at = ?)",
+      bindings: [row.identity_id, retiredAt]
+    })
   ]);
-  return json({ ok: true });
+  if (!Number(results[0]?.meta?.changes || 0)) throw new HttpError(409, "この招待は既に使用または取り消されています。");
+  return json({ ok: true, identityRetired: Boolean(Number(results[2]?.meta?.changes || 0)) });
+}
+
+function retireUnregisteredInvitedIdentityIfOrphaned(env, identityId, invitationId, revokedAt, retiredAt) {
+  const auditEvents = REGISTERED_IDENTITY_AUDIT_EVENTS.map(() => "?").join(", ");
+  const guard = `identity.id = ?
+    AND identity.id != '${PRIMARY_ADMIN_ID}'
+    AND identity.status = 'invited'
+    AND identity.last_login_at IS NULL
+    AND identity.last_seen_at IS NULL
+    AND EXISTS (
+      SELECT 1 FROM security_invitations revoked
+      WHERE revoked.id = ? AND revoked.identity_id = identity.id
+        AND revoked.status = 'revoked' AND revoked.revoked_at = ?
+    )
+    AND NOT EXISTS (SELECT 1 FROM security_invitations active_invite WHERE active_invite.identity_id = identity.id AND active_invite.status = 'active')
+    AND NOT EXISTS (SELECT 1 FROM security_credentials credential WHERE credential.identity_id = identity.id)
+    AND NOT EXISTS (SELECT 1 FROM security_setup_sessions setup WHERE setup.identity_id = identity.id)
+    AND NOT EXISTS (SELECT 1 FROM security_tcloud_client_vaults vault WHERE vault.identity_id = identity.id)
+    AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes envelope WHERE envelope.identity_id = identity.id)
+    AND NOT EXISTS (SELECT 1 FROM security_handoffs handoff WHERE handoff.identity_id = identity.id)
+    AND NOT EXISTS (
+      SELECT 1 FROM security_audit_events audit
+      WHERE audit.identity_id = identity.id AND audit.event_type IN (${auditEvents})
+    )`;
+  const bindings = [identityId, invitationId, revokedAt, ...REGISTERED_IDENTITY_AUDIT_EVENTS];
+  return [
+    env.DB.prepare(`UPDATE security_service_links SET status = 'disabled', updated_at = ?
+      WHERE identity_id = ? AND status IN ('pending', 'active')
+        AND EXISTS (SELECT 1 FROM security_identities identity WHERE ${guard})`)
+      .bind(retiredAt, identityId, ...bindings),
+    env.DB.prepare(`UPDATE security_identities AS identity SET status = 'disabled', updated_at = ? WHERE ${guard}`)
+      .bind(retiredAt, ...bindings)
+  ];
 }
 
 async function listAuditEvents(url, env) {
@@ -1519,18 +1593,22 @@ async function localAuditEvent(env, input, request = null) {
   });
 }
 
-function auditInsertStatement(env, event) {
+function auditInsertStatement(env, event, guard = null) {
   const conflict = event.eventType === "session_resume"
     ? "ON CONFLICT DO NOTHING"
     : "ON CONFLICT(event_id) DO NOTHING";
+  const values = [event.eventId, event.occurredAt, event.service, event.eventType, event.outcome, event.identityId,
+    event.serviceLinkId, event.serviceAccountId, event.serviceAccountLabel, event.role, event.authMethod,
+    event.sessionIdHash, event.sourceHash, event.userAgent, event.targetType, event.targetId, JSON.stringify(event.details)];
+  const insertion = guard
+    ? `SELECT ${values.map(() => "?").join(", ")} WHERE ${guard.sql}`
+    : `VALUES (${values.map(() => "?").join(", ")})`;
   return env.DB.prepare(`INSERT INTO security_audit_events
     (event_id, occurred_at, service, event_type, outcome, identity_id, service_link_id, service_account_id,
       service_account_label, role, auth_method, session_id_hash, source_hash, user_agent, target_type, target_id, details_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ${insertion}
     ${conflict}`)
-    .bind(event.eventId, event.occurredAt, event.service, event.eventType, event.outcome, event.identityId,
-      event.serviceLinkId, event.serviceAccountId, event.serviceAccountLabel, event.role, event.authMethod,
-      event.sessionIdHash, event.sourceHash, event.userAgent, event.targetType, event.targetId, JSON.stringify(event.details));
+    .bind(...values, ...(guard?.bindings || []));
 }
 
 function identityActivityStatements(env, event) {

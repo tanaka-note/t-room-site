@@ -25,6 +25,7 @@ let setupStatusBody = { active: false };
 let securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
 let failEnvelopeSave = false;
 let registeredCredentialCount = 0;
+let cancelledInviteIdentityVisible = true;
 const auditEventsBody = {
   events: [
     {
@@ -78,8 +79,11 @@ const server = createServer(async (request, response) => {
       { service: "cloud", accountId: "folder-member", rootFolderId: 10, displayLabel: "動画", role: "member", roleLabel: "フォルダ利用者", privileged: false }
     ] }
   ] });
-  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: 0, pendingApproval: 0, noPasskey: 0, critical: 0 });
-  if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [{ id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" }] });
+  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: cancelledInviteIdentityVisible ? 1 : 0, pendingApproval: 0, noPasskey: cancelledInviteIdentityVisible ? 1 : 0, critical: 0 });
+  if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [
+    { id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" },
+    ...(cancelledInviteIdentityVisible ? [{ id: "cancelled-invite-user", displayName: "取消テストユーザー", status: "invited", activeCredentials: 0, pendingCredentials: 0 }] : [])
+  ] });
   if (url.pathname === "/security/api/audit") {
     receivedAuditQueries.push(url.search);
     if (url.searchParams.get("cursor") === "browser-page-2") return sendJson(response, 200, {
@@ -97,6 +101,17 @@ const server = createServer(async (request, response) => {
     links: [{ id: "primary-cloud", service: "cloud", service_account_id: "admin", display_label: "T-Cloud 管理者", role: "admin", role_label: "管理者", status: "pending", protected: true }],
     credentials: [], invitations: [], approvalCandidates: [], adminKeyEnvelopes: []
   });
+  if (url.pathname === "/security/api/identities/cancelled-invite-user") return sendJson(response, 200, {
+    identity: { id: "cancelled-invite-user", displayName: "取消テストユーザー", status: "invited", isSecurityAdmin: false },
+    links: [{ id: "cancelled-link", service: "diary", service_account_id: "main-user", display_label: "田中宏知（一般ユーザー）", role: "user", role_label: "一般ユーザー", status: "pending", protected: false }],
+    credentials: [], invitations: [{ id: "cancelled-invitation", status: "active", created_at: "2026-08-23T00:00:00.000Z", expires_at: 4102444800 }],
+    approvalCandidates: [], adminKeyEnvelopes: []
+  });
+  if (url.pathname === "/security/api/invitations/cancelled-invitation/revoke") {
+    await readBody(request);
+    cancelledInviteIdentityVisible = false;
+    return sendJson(response, 200, { ok: true, identityRetired: true });
+  }
   if (url.pathname === "/security/api/tcloud/admin-config") return sendJson(response, 200, { initialized: true, cryptoVersion: 1 });
   if (url.pathname === "/cloud/api/auth-mode") return sendJson(response, 200, { credentialSalt: "AAECAwQFBgcICQoLDA0ODw" });
   if (url.pathname === "/security/api/bootstrap/options") {
@@ -246,6 +261,7 @@ async function verifyBrowser(browserType, name, origin) {
     setupStatusBody = { active: false };
     securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
     failEnvelopeSave = false;
+    cancelledInviteIdentityVisible = true;
     const context = await browser.newContext();
     await context.addInitScript(() => {
       const credentialId = "cmVzdW1lLWNyZWRlbnRpYWw";
@@ -568,6 +584,17 @@ async function verifyBrowser(browserType, name, origin) {
       /本人のパスキー.*配下をすべて.*他のT-Cloudフォルダは表示されません/);
     assert.doesNotMatch(await unsupported.locator("#invite-form").textContent(), /main-user|folder-member|フォルダID/,
       `${name}: internal account and numeric folder identifiers are not shown`);
+    const cancelledUserRow = unsupported.locator("#identity-list .identity-row").filter({ hasText: "取消テストユーザー" });
+    assert.equal(await cancelledUserRow.count(), 1, `${name}: an active invitation is visible before revocation`);
+    await cancelledUserRow.getByRole("button", { name: "詳細" }).click();
+    await unsupported.locator("#identity-detail [data-revoke-invitation='cancelled-invitation']").waitFor();
+    unsupported.once("dialog", (dialog) => dialog.accept());
+    await unsupported.locator("#identity-detail [data-revoke-invitation='cancelled-invitation']").click();
+    await unsupported.waitForFunction(() => document.querySelector("#message")?.textContent?.includes("未登録のユーザーを一覧から削除しました"));
+    assert.equal(await unsupported.locator("#identity-detail").isVisible(), false, `${name}: retired Identity detail closes after revocation`);
+    assert.equal(await unsupported.locator("#identity-list").getByText("取消テストユーザー").count(), 0,
+      `${name}: the retired unregistered Identity disappears from the user list`);
+    assert.match(await unsupported.locator("#message").textContent(), /招待を取り消しました。未登録のユーザーを一覧から削除しました。/);
     const queryCountBeforeRefresh = receivedAuditQueries.length;
     await unsupported.getByRole("button", { name: "履歴", exact: true }).click();
     await unsupported.waitForTimeout(100);

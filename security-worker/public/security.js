@@ -423,9 +423,17 @@
     if (!confirm("この招待を取り消しますか？")) return;
     button.disabled = true;
     try {
-      await post(`/invitations/${encodeURIComponent(id)}/revoke`, {});
-      showMessage("招待を取り消しました。");
-      await viewIdentity(state.selectedIdentity.identity.id);
+      const result = await post(`/invitations/${encodeURIComponent(id)}/revoke`, {});
+      if (result.identityRetired) {
+        state.selectedIdentity = null;
+        $("#identity-detail").hidden = true;
+        $("#identity-detail").innerHTML = "";
+        showMessage("招待を取り消しました。未登録のユーザーを一覧から削除しました。");
+        await Promise.all([loadDashboard(), loadIdentities()]);
+      } else {
+        showMessage("招待を取り消しました。");
+        await Promise.all([loadDashboard(), loadIdentities(), viewIdentity(state.selectedIdentity.identity.id)]);
+      }
     } catch (error) { showMessage(error.message, true); }
     finally { button.disabled = false; }
   }

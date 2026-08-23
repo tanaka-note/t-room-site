@@ -25,6 +25,7 @@
     ["identity_created", "ユーザーを作成", "ユーザー管理"],
     ["identity_approved", "ユーザー利用を承認", "ユーザー管理"],
     ["identity_disabled", "ユーザーを停止", "ユーザー管理"],
+    ["invited_identity_retired", "未登録ユーザーを一覧から削除", "ユーザー管理"],
     ["admin_access", "管理者としてアクセス", "ユーザー管理"],
     ["invite_created", "招待URLを作成", "招待"],
     ["invite_used", "招待からパスキーを登録", "招待"],
