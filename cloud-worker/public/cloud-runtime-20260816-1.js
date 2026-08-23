@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-7e56274a7e58";
+const APP_BUILD_ID = "cloud-72ef995c9a2e";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -161,7 +161,7 @@ async function initialize() {
       state.session = session;
       if (session.authMethod === "passkey") {
         const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
-        if (!authentication.prfOutput) throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        requirePasskeyPrf(authentication);
         const refreshed = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
         await enterApp(refreshed, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
         reportCompletedAppUpdate();
@@ -948,9 +948,7 @@ async function loginWithPasskey() {
   button.disabled = true;
   try {
     const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
-    if (authentication.link?.accountId !== "subadmin" && !authentication.prfOutput) {
-      throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
-    }
+    requirePasskeyPrf(authentication);
     const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
     $("#login-password").value = "";
     await enterApp(session, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
@@ -960,6 +958,12 @@ async function loginWithPasskey() {
     showLoginError(error.message);
   } finally {
     button.disabled = false;
+  }
+}
+
+function requirePasskeyPrf(authentication) {
+  if (authentication.link?.accountId !== "subadmin" && !authentication.prfOutput) {
+    throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
   }
 }
 
