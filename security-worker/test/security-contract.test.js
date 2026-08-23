@@ -10,6 +10,7 @@ const foreignKeyMigration = await readFile(new URL("../migrations/0003_repair_se
 const handoffEpochMigration = await readFile(new URL("../migrations/0004_handoff_session_epoch.sql", import.meta.url), "utf8");
 const serviceAuditMigration = await readFile(new URL("../migrations/0005_service_links_and_session_audit.sql", import.meta.url), "utf8");
 const primaryCloudAccountsMigration = await readFile(new URL("../migrations/0006_primary_admin_cloud_subadmin.sql", import.meta.url), "utf8");
+const primaryDiaryAccountsMigration = await readFile(new URL("../migrations/0007_primary_admin_diary_main_user.sql", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/passkey-client.js", import.meta.url), "utf8");
 const securityUi = await readFile(new URL("../public/security.js", import.meta.url), "utf8");
 const securityDisplay = await readFile(new URL("../public/security-display.js", import.meta.url), "utf8");
@@ -158,6 +159,20 @@ test("the primary administrator can select Cloud admin or subadmin without shari
   assert.doesNotMatch(primaryCloudAccountsMigration, /admin_private_prf|recovery_private|client_private_prf|folder_key_rsa/);
 });
 
+test("the primary administrator keeps both Diary administrator and ordinary-user links", () => {
+  assert.match(primaryDiaryAccountsMigration, /service_account_id[\s\S]*'main-user'/);
+  assert.match(primaryDiaryAccountsMigration, /identity\.id = 'primary-admin'/);
+  assert.match(primaryDiaryAccountsMigration, /status IN \('pending', 'active'\)/);
+  assert.match(primaryDiaryAccountsMigration, /DROP INDEX IF EXISTS uq_security_service_links_exclusive_current/);
+  assert.match(primaryDiaryAccountsMigration, /identity_id = 'primary-admin'[\s\S]*service = 'diary'[\s\S]*service_account_id = 'main-user'/);
+  assert.match(worker, /"diary\\u0000main-admin\\u0000"/);
+  assert.match(worker, /"diary\\u0000main-user\\u0000"/);
+  assert.match(worker, /accountId: "main-user"[\s\S]*displayLabel: "田中宏知（一般ユーザー）"/);
+  assert.match(worker, /identityId === PRIMARY_ADMIN_ID && link\.service === "diary" && link\.accountId === "main-user"/);
+  assert.doesNotMatch(primaryDiaryAccountsMigration, /UPDATE\s+security_credentials|DELETE\s+FROM\s+security_credentials/i,
+    "the existing primary passkey credential is neither replaced nor recreated");
+});
+
 test("service links come from an explicit provider registry and never from free-form UI", () => {
   assert.match(worker, /const SERVICE_REGISTRY = Object\.freeze/);
   assert.match(worker, /CLOUD_AUTH/);
@@ -195,6 +210,7 @@ test("privileged, exclusive, Cloud-admin and root-folder policies are server enf
   assert.match(worker, /assertExclusiveServiceLinksAvailable/);
   assert.match(serviceAuditMigration, /uq_security_service_links_exclusive_current/);
   assert.match(serviceAuditMigration, /service IN \('diary', 'billing'\)/);
+  assert.match(primaryDiaryAccountsMigration, /CREATE UNIQUE INDEX IF NOT EXISTS uq_security_service_links_exclusive_current/);
   assert.match(worker, /PRIMARY_ADMIN_CORE_LINKS/);
   assert.match(worker, /identity\.status === "active" && link\.service !== "cloud" \? "active" : "pending"/);
 });

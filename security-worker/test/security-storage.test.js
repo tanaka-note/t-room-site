@@ -41,6 +41,28 @@ test("primary administrator Cloud subadmin migration is idempotent and preserves
   assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE id = 'existing-primary-admin-link' AND service_account_id = 'admin' AND status = 'active'"), 1);
 });
 
+test("primary administrator Diary ordinary-user migration is idempotent without taking the existing Identity link", () => {
+  sql("UPDATE security_service_links SET status = 'disabled' WHERE id = 'new-link'");
+  sql("INSERT INTO security_identities (id, display_name, status) VALUES ('diary-main-user-owner', '田中宏知一般', 'active')");
+  sql(`INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+    VALUES ('existing-diary-main-user-link', 'diary-main-user-owner', 'diary', 'main-user', '田中宏知（一般ユーザー）', 'active'),
+           ('existing-primary-diary-admin-link', 'primary-admin', 'diary', 'main-admin', '田中宏知（管理者・全体管理）', 'active'),
+           ('old-disabled-primary-diary-user', 'primary-admin', 'diary', 'main-user', '過去の連携', 'disabled')`);
+  const migration = readFileSync(join(directory, "migrations", "0007_primary_admin_diary_main_user.sql"), "utf8")
+    .replace(/^\s*--.*$/gm, "");
+  sql(migration);
+  sql(migration);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id = 'main-user' AND status = 'active'"), 1);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id IN ('main-admin', 'main-user') AND status = 'active'"), 2);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE id = 'existing-diary-main-user-link' AND status = 'active'"), 1);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_service_links WHERE id = 'old-disabled-primary-diary-user' AND status = 'disabled'"), 1);
+  sql("INSERT INTO security_identities (id, display_name, status) VALUES ('diary-main-user-conflict', '別Identity', 'active')");
+  const duplicate = run(["d1", "execute", "security-db", "--local", "--persist-to", persistence, "--command",
+    `INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+     VALUES ('third-diary-main-user-link', 'diary-main-user-conflict', 'diary', 'main-user', '重複', 'active')`], false);
+  assert.notEqual(duplicate.status, 0, "the narrow primary-admin alias must not weaken exclusivity for other Identities");
+});
+
 test("one invitation can register only one credential even under concurrent inserts", async () => {
   sql("INSERT INTO security_identities (id, display_name, status) VALUES ('invite_test', 'Invite Test', 'invited')");
   sql(`INSERT INTO security_invitations (id, identity_id, token_hash, link_set_hash, expires_at)

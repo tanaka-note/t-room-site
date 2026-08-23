@@ -371,6 +371,27 @@ async function verifyBrowser(browserType, name, origin) {
       `${name}: mixed Cloud account and folder links use an accurate choice title`);
     await page.getByRole("button", { name: /本人フォルダ/ }).click();
     await page.waitForFunction(() => window.__troomCloudLinkChoice === "personal-cloud");
+    const singleDiaryLink = await page.evaluate(() => TRoomPasskeys.chooseLinkDialog([
+      { id: "diary-only", accountId: "main-user", displayLabel: "田中宏知（一般ユーザー）", roleLabel: "一般ユーザー" }
+    ], "diary"));
+    assert.equal(singleDiaryLink.id, "diary-only", `${name}: one Diary link is selected without showing a dialog`);
+    assert.equal(await page.locator(".troom-passkey-account-dialog").count(), 0,
+      `${name}: one Diary link keeps the existing direct-login behavior`);
+    await page.evaluate(() => {
+      window.__troomDiaryAccountChoice = null;
+      TRoomPasskeys.chooseLinkDialog([
+        { id: "diary-admin", accountId: "main-admin", displayLabel: "田中宏知（管理者・全体管理）", roleLabel: "管理者・全体管理" },
+        { id: "diary-user", accountId: "main-user", displayLabel: "田中宏知（一般ユーザー）", roleLabel: "一般ユーザー" }
+      ], "diary").then((link) => { window.__troomDiaryAccountChoice = link?.id || null; });
+    });
+    assert.equal(await page.getByRole("heading", { name: "利用するアカウントを選択" }).count(), 1,
+      `${name}: two Diary links require an account choice`);
+    assert.equal(await page.getByRole("button", { name: /田中宏知（管理者・全体管理）/ }).count(), 1,
+      `${name}: the Diary administrator choice is visibly labelled`);
+    assert.equal(await page.getByRole("button", { name: /田中宏知（一般ユーザー）/ }).count(), 1,
+      `${name}: the Diary ordinary-user choice is visibly labelled`);
+    await page.getByRole("button", { name: /田中宏知（一般ユーザー）/ }).click();
+    await page.waitForFunction(() => window.__troomDiaryAccountChoice === "diary-user");
     const verifyCountBeforeMalformed = receivedPrfVerifyBodies.length;
     const malformedPrfResult = await page.evaluate(async (credentialId) => {
       try {

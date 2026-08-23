@@ -45,6 +45,7 @@ const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
   "cloud\u0000subadmin\u0000",
   "diary\u0000main-admin\u0000",
+  "diary\u0000main-user\u0000",
   "billing\u0000owner\u0000"
 ]);
 const encoder = new TextEncoder();
@@ -1213,6 +1214,7 @@ function publicServiceTarget(service, input) {
 
 async function assertExclusiveServiceLinksAvailable(env, identityId, links) {
   for (const link of links.filter((item) => item.exclusive)) {
+    if (identityId === PRIMARY_ADMIN_ID && link.service === "diary" && link.accountId === "main-user") continue;
     const existing = await env.DB.prepare(`SELECT identity_id FROM security_service_links
       WHERE service = ? AND service_account_id = ? AND status IN ('pending', 'active')
         AND (? IS NULL OR identity_id != ?) LIMIT 1`)
@@ -1251,6 +1253,7 @@ async function ensurePrimaryAdminRecords(env) {
     { service: "cloud", accountId: "admin", rootFolderId: null, displayLabel: "T-Cloud 管理者" },
     { service: "cloud", accountId: "subadmin", rootFolderId: null, displayLabel: "T-Cloud 副管理者" },
     { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: "日記 管理者" },
+    { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
     { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" }
   ];
   for (const link of defaults) {

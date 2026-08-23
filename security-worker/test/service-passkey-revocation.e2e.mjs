@@ -354,6 +354,49 @@ try {
   assert.ok(memberCloudCookie, "the folder-member handoff issues a Cloud session");
   await assertFolderMemberApiScope(memberCloudCookie);
 
+  const diaryChoiceRequired = await createSecurityHandoff(oldIdentityCookie, "diary", null);
+  assert.equal(diaryChoiceRequired.response.status, 409,
+    "two active Diary links require an explicit administrator or ordinary-user choice");
+  const diaryAdminChoice = await createSecurityHandoff(oldIdentityCookie, "diary", diaryAdminLinkId);
+  const diaryUserChoice = await createSecurityHandoff(oldIdentityCookie, "diary", services.diary.linkId);
+  assert.equal(diaryAdminChoice.response.status, 200, JSON.stringify(diaryAdminChoice.body));
+  assert.equal(diaryUserChoice.response.status, 200, JSON.stringify(diaryUserChoice.body));
+  assert.equal(diaryAdminChoice.body.link.accountId, "main-admin");
+  assert.equal(diaryAdminChoice.body.link.roleLabel, "管理者・全体管理");
+  assert.equal(diaryUserChoice.body.link.accountId, "main-user");
+  assert.equal(diaryUserChoice.body.link.roleLabel, "一般ユーザー");
+  assert.match(diaryAdminChoice.body.link.displayLabel, /田中宏知.*管理者・全体管理/);
+  assert.match(diaryUserChoice.body.link.displayLabel, /田中宏知.*一般ユーザー/);
+  const redeemedDiaryAdminChoice = await redeemServiceHandoff("diary", diaryAdminChoice.body.handoffToken);
+  const redeemedDiaryUserChoice = await redeemServiceHandoff("diary", diaryUserChoice.body.handoffToken);
+  assert.equal(redeemedDiaryAdminChoice.response.status, 200, JSON.stringify(redeemedDiaryAdminChoice.body));
+  assert.equal(redeemedDiaryUserChoice.response.status, 200, JSON.stringify(redeemedDiaryUserChoice.body));
+  const diaryAdminChoicePayload = decodeSignedPayload(redeemedDiaryAdminChoice.cookie);
+  const diaryUserChoicePayload = decodeSignedPayload(redeemedDiaryUserChoice.cookie);
+  assert.equal(diaryAdminChoicePayload.serviceAccountId, "main-admin");
+  assert.equal(diaryAdminChoicePayload.role, "admin");
+  assert.equal(redeemedDiaryAdminChoice.body.isGlobalOwner, true);
+  assert.equal(diaryUserChoicePayload.serviceAccountId, "main-user");
+  assert.equal(diaryUserChoicePayload.role, "user");
+  assert.equal(redeemedDiaryUserChoice.body.isGlobalOwner, false);
+  assert.equal(redeemedDiaryUserChoice.body.activeHouseholdId, "tanaka-household");
+  for (const permission of ["canManageEntries", "canViewTrash", "canPermanentlyDelete", "canViewInvestment"]) {
+    assert.equal(redeemedDiaryUserChoice.body[permission], true,
+      `main-user handoff preserves the existing ${permission} permission`);
+  }
+  const ordinaryUserHouseholdSwitch = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/households/select`, {
+    method: "POST",
+    headers: {
+      Origin: `http://127.0.0.1:${services.diary.port}`,
+      "Content-Type": "application/json",
+      "X-Diary-Request": "1",
+      Cookie: `${services.diary.cookie}=${redeemedDiaryUserChoice.cookie}`
+    },
+    body: JSON.stringify({ householdId: "chiharu-household" })
+  });
+  assert.equal(ordinaryUserHouseholdSwitch.status, 403,
+    "selecting main-user keeps the existing personal household boundary instead of inheriting global-owner scope");
+
   const adminHandoff = await createSecurityHandoff(readinessCookieA, "cloud", "readiness-cloud-admin-link");
   assert.equal(adminHandoff.response.status, 200, JSON.stringify(adminHandoff.body));
   assert.equal(adminHandoff.body.link.role, "admin", "the same Identity may explicitly select its Cloud administrator link");
@@ -371,11 +414,11 @@ try {
     "the explicitly selected administrator link retains full Cloud scope");
   await assertCloudFolderAccess(memberCloudCookie, cloudUnselectedRootId, 403,
     "selecting folder-member never inherits administrator scope from the same Identity");
-  await waitForServiceAudit(identityId, "diary", "passkey_login_success", 1);
+  await waitForServiceAudit(identityId, "diary", "passkey_login_success", 3);
   await waitForServiceAudit(identityId, "billing", "passkey_login_success", 1);
   await waitForServiceAudit(readinessIdentityId, "cloud", "passkey_login_success", 2);
-  assert.equal(serviceAuditCount(identityId, "diary", "passkey_login_success"), 1,
-    "Diary emits one service login completion event for one redeemed handoff");
+  assert.equal(serviceAuditCount(identityId, "diary", "passkey_login_success"), 3,
+    "Diary emits one service login completion event for each redeemed account choice");
   assert.equal(serviceAuditCount(identityId, "billing", "passkey_login_success"), 1,
     "Billing emits one service login completion event for one redeemed handoff");
   assert.equal(serviceAuditCount(readinessIdentityId, "cloud", "passkey_login_success"), 2,
@@ -445,10 +488,11 @@ try {
   assert.equal(freshPrivileged.response.status, 200, JSON.stringify(freshPrivileged.body));
   assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id = 'chiharu-admin' AND status != 'disabled'"), "active",
     "a fresh administrator passkey can add a validated privileged account");
-  const exclusiveConflict = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
+  const exclusiveConflict = await securityAdminRequest(`/security/api/identities/${readinessIdentityId}/links`, freshAdminCookie, {
     links: [{ service: "diary", accountId: "main-user", rootFolderId: null }]
   });
-  assert.equal(exclusiveConflict.response.status, 409, "an exclusive Diary account cannot be linked to two Identities");
+  assert.equal(exclusiveConflict.response.status, 409,
+    "the narrow primary-admin alias does not allow a third Identity to claim the exclusive Diary account");
   const sharedCloud = await securityAdminRequest("/security/api/identities/primary-admin/links", freshAdminCookie, {
     links: [
       { service: "cloud", accountId: "folder-member", rootFolderId: cloudSelectedRootId },
@@ -878,16 +922,6 @@ try {
   });
   const removedOldDiary = await securityAdminRequest(`/security/api/service-links/${replacementLinks.diary}`, latestFreshAdminCookie, {});
   assert.equal(removedOldDiary.response.status, 200, JSON.stringify(removedOldDiary.body));
-  const primaryCredentialCount = queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_credentials WHERE identity_id = 'primary-admin'");
-  const addPrimaryOrdinaryDiary = await securityAdminRequest("/security/api/identities/primary-admin/links", latestFreshAdminCookie, {
-    links: [{ service: "diary", accountId: "main-user", rootFolderId: null }]
-  });
-  assert.equal(addPrimaryOrdinaryDiary.response.status, 200, JSON.stringify(addPrimaryOrdinaryDiary.body));
-  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_service_links WHERE identity_id = 'primary-admin' AND service = 'diary' AND service_account_id = 'main-user' AND status != 'disabled'"), "active",
-    "the first administrator can add the ordinary Diary account to the same Identity");
-  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_credentials WHERE identity_id = 'primary-admin'"), primaryCredentialCount,
-    "adding an ordinary non-Cloud link does not register another passkey");
-
   console.log("service passkey revocation HTTP integration: ok");
 } finally {
   for (const child of processes.splice(0).reverse()) stopProcess(child);
