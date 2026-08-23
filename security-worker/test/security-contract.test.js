@@ -148,8 +148,11 @@ test("service links come from an explicit provider registry and never from free-
   assert.doesNotMatch(securityHtml, /invite-identity-id|サービス内アカウントID|T-CloudフォルダID/);
   assert.doesNotMatch(securityUi, /window\.prompt/);
   assert.match(securityUi, /data-link-target/);
-  assert.match(securityUi, /トップフォルダを選択してください。選択したフォルダの配下はすべて自動的に連携対象となります。/);
+  assert.match(securityUi, /トップフォルダを選択してください。このフォルダを本人のパスキーで利用できるようにし、配下をすべて連携対象とします。他のT-Cloudフォルダは表示されません。/);
+  assert.match(client, /verified\.links\.length === 1 \? verified\.links\[0\]/,
+    "a single T-Cloud link is selected automatically without combining scopes");
   assert.match(client, /chooseLinkDialog/);
+  assert.match(client, /利用するT-Cloudの範囲を選択/);
 });
 
 test("privileged, exclusive, Cloud-admin and root-folder policies are server enforced", () => {

@@ -82,7 +82,7 @@
       dialog.setAttribute("aria-labelledby", "troom-passkey-account-title");
       const title = document.createElement("h2");
       title.id = "troom-passkey-account-title";
-      title.textContent = "利用するアカウントを選択";
+      title.textContent = service === "cloud" ? "利用するT-Cloudの範囲を選択" : "利用するアカウントを選択";
       const help = document.createElement("p");
       help.textContent = service === "cloud" ? "利用するT-Cloudの範囲を選んでください。" : "利用するアカウントを選んでください。";
       const list = document.createElement("div");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, pbkdf2Sync, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -19,11 +19,23 @@ const cloudFixtureTag = randomUUID();
 const cloudSelectedRootName = `Security連携テスト-${cloudFixtureTag}`;
 const cloudChildName = `子フォルダ-${cloudFixtureTag}`;
 const cloudGrandchildName = `孫フォルダ-${cloudFixtureTag}`;
+const cloudProtectedChildName = `追加保護-${cloudFixtureTag}`;
+const cloudProtectedGrandchildName = `追加保護配下-${cloudFixtureTag}`;
 const cloudUnselectedRootName = `未選択トップ-${cloudFixtureTag}`;
+const cloudRootAuthProof = `root-proof-${cloudFixtureTag}`;
+const cloudProtectedPassword = `child-password-${cloudFixtureTag}`;
+const cloudRootFileName = `本人検索-${cloudFixtureTag}.txt`;
+const cloudProtectedFileName = `保護配下-${cloudFixtureTag}.txt`;
+const cloudUnselectedFileName = `他人検索-${cloudFixtureTag}.txt`;
 let cloudSelectedRootId = null;
 let cloudChildId = null;
 let cloudGrandchildId = null;
+let cloudProtectedChildId = null;
+let cloudProtectedGrandchildId = null;
 let cloudUnselectedRootId = null;
+let cloudRootFileId = null;
+let cloudProtectedFileId = null;
+let cloudUnselectedFileId = null;
 const diaryAdminLinkId = "passkey-session-diary-admin-link";
 const services = {
   cloud: {
@@ -52,11 +64,37 @@ try {
       VALUES ((SELECT id FROM cloud_folders WHERE name = '${cloudSelectedRootName}' ORDER BY id DESC LIMIT 1), '${cloudChildName}', 'admin');
     INSERT INTO cloud_folders (parent_id, name, created_by)
       VALUES ((SELECT id FROM cloud_folders WHERE name = '${cloudChildName}' ORDER BY id DESC LIMIT 1), '${cloudGrandchildName}', 'admin');
-    INSERT INTO cloud_folders (parent_id, name, created_by) VALUES (NULL, '${cloudUnselectedRootName}', 'admin')`]);
+    INSERT INTO cloud_folders (parent_id, name, created_by)
+      VALUES ((SELECT id FROM cloud_folders WHERE name = '${cloudSelectedRootName}' ORDER BY id DESC LIMIT 1), '${cloudProtectedChildName}', 'admin');
+    INSERT INTO cloud_folders (parent_id, name, created_by)
+      VALUES ((SELECT id FROM cloud_folders WHERE name = '${cloudProtectedChildName}' ORDER BY id DESC LIMIT 1), '${cloudProtectedGrandchildName}', 'admin');
+    INSERT INTO cloud_folders (parent_id, name, created_by) VALUES (NULL, '${cloudUnselectedRootName}', 'admin');
+    UPDATE cloud_folders SET password_hash = '${fixturePasswordHash(cloudRootAuthProof)}'
+      WHERE name = '${cloudSelectedRootName}';
+    UPDATE cloud_folders SET password_hash = '${fixturePasswordHash(cloudProtectedPassword)}'
+      WHERE name = '${cloudProtectedChildName}';
+    INSERT INTO cloud_files
+      (folder_id, object_key, original_name, mime_type, media_kind, size_bytes, status, created_by,
+       display_metadata_version, display_name, display_mime_type, display_media_kind)
+      VALUES
+      ((SELECT id FROM cloud_folders WHERE name = '${cloudSelectedRootName}' ORDER BY id DESC LIMIT 1),
+       'fixtures/${cloudFixtureTag}/root', '${cloudRootFileName}', 'audio/mpeg', 'audio', 10, 'ready', 'admin', 1,
+       '${cloudRootFileName}', 'audio/mpeg', 'audio'),
+      ((SELECT id FROM cloud_folders WHERE name = '${cloudProtectedGrandchildName}' ORDER BY id DESC LIMIT 1),
+       'fixtures/${cloudFixtureTag}/protected', '${cloudProtectedFileName}', 'audio/mpeg', 'audio', 11, 'ready', 'admin', 1,
+       '${cloudProtectedFileName}', 'audio/mpeg', 'audio'),
+      ((SELECT id FROM cloud_folders WHERE name = '${cloudUnselectedRootName}' ORDER BY id DESC LIMIT 1),
+       'fixtures/${cloudFixtureTag}/outside', '${cloudUnselectedFileName}', 'audio/mpeg', 'audio', 12, 'ready', 'admin', 1,
+       '${cloudUnselectedFileName}', 'audio/mpeg', 'audio')`]);
   cloudSelectedRootId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudSelectedRootName}' ORDER BY id DESC LIMIT 1`);
   cloudChildId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudChildName}' ORDER BY id DESC LIMIT 1`);
   cloudGrandchildId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudGrandchildName}' ORDER BY id DESC LIMIT 1`);
+  cloudProtectedChildId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudProtectedChildName}' ORDER BY id DESC LIMIT 1`);
+  cloudProtectedGrandchildId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudProtectedGrandchildName}' ORDER BY id DESC LIMIT 1`);
   cloudUnselectedRootId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_folders WHERE name = '${cloudUnselectedRootName}' ORDER BY id DESC LIMIT 1`);
+  cloudRootFileId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_files WHERE object_key = 'fixtures/${cloudFixtureTag}/root'`);
+  cloudProtectedFileId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_files WHERE object_key = 'fixtures/${cloudFixtureTag}/protected'`);
+  cloudUnselectedFileId = queryNumber("cloud-worker", "cloud-db", `SELECT id AS value FROM cloud_files WHERE object_key = 'fixtures/${cloudFixtureTag}/outside'`);
   cleanupSecurityFixture();
   runSecuritySql(`
     UPDATE security_runtime_state SET passkey_session_epoch = 1, switch_observed_enabled = 1 WHERE id = 1;
@@ -90,6 +128,9 @@ try {
     INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES ('readiness-cloud-link', '${readinessIdentityId}', 'cloud', 'folder-member', ${cloudSelectedRootId}, 'Cloud Readiness', 'active');
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, display_label, status)
+      VALUES ('readiness-cloud-admin-link', '${readinessIdentityId}', 'cloud', 'admin', 'T-Cloud 管理者', 'active');
     INSERT INTO security_tcloud_client_vaults
       (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
       VALUES ('${readinessCredentialA}', '${readinessIdentityId}', '{"kty":"RSA"}', 'fingerprint-a', 'private-a', 'iv-a'),
@@ -97,6 +138,9 @@ try {
     INSERT INTO security_tcloud_key_envelopes
       (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
       VALUES ('readiness-envelope-a', '${readinessIdentityId}', '${readinessCredentialA}', 'readiness-cloud-link', 'folder_key_rsa', 'wrapped-a');
+    INSERT INTO security_tcloud_key_envelopes
+      (id, identity_id, credential_id, service_link_id, envelope_type, encrypted_payload, payload_iv)
+      VALUES ('readiness-admin-envelope-a', '${readinessIdentityId}', '${readinessCredentialA}', 'readiness-cloud-admin-link', 'admin_private_prf', 'admin-private-a', 'admin-iv-a');
     INSERT INTO security_identities (id, display_name, status, is_security_admin)
       VALUES ('primary-admin', 'Primary Setup Test', 'active', 1);
     INSERT INTO security_credentials
@@ -198,6 +242,7 @@ try {
     { service: "billing", cookie: oldIdentityCookie, linkId: services.billing.linkId, accountId: services.billing.accountId, role: "owner" },
     { service: "cloud", cookie: readinessCookieA, linkId: "readiness-cloud-link", accountId: "folder-member", role: "member", rootFolderId: cloudSelectedRootId }
   ];
+  let memberCloudCookie = null;
   for (const expected of handoffCases) {
     const created = await createSecurityHandoff(expected.cookie, expected.service, expected.linkId);
     assert.equal(created.response.status, 200, `${expected.service} handoff creation: ${JSON.stringify(created.body)}`);
@@ -220,6 +265,7 @@ try {
     assert.equal(decodeSignedPayload(redeemed.cookie).serviceLinkId, expected.linkId,
       `${expected.service} session keeps the selected service link ID`);
     if (expected.service === "cloud") {
+      memberCloudCookie = redeemed.cookie;
       await assertCloudFolderAccess(redeemed.cookie, cloudChildId, 200,
         "selecting a top folder includes its child folder");
       await assertCloudFolderAccess(redeemed.cookie, cloudGrandchildId, 200,
@@ -230,15 +276,35 @@ try {
     const replay = await redeemServiceHandoff(expected.service, created.body.handoffToken);
     assert.equal(replay.response.status, 401, `${expected.service} rejects a second handoff redemption`);
   }
+  assert.ok(memberCloudCookie, "the folder-member handoff issues a Cloud session");
+  await assertFolderMemberApiScope(memberCloudCookie);
+
+  const adminHandoff = await createSecurityHandoff(readinessCookieA, "cloud", "readiness-cloud-admin-link");
+  assert.equal(adminHandoff.response.status, 200, JSON.stringify(adminHandoff.body));
+  assert.equal(adminHandoff.body.link.role, "admin", "the same Identity may explicitly select its Cloud administrator link");
+  assert.equal(adminHandoff.body.link.rootFolderId, null);
+  assert.ok(adminHandoff.body.tcloudKey?.admin_private_prf, "the administrator link returns only its credential-specific encrypted envelope");
+  const redeemedAdmin = await redeemServiceHandoff("cloud", adminHandoff.body.handoffToken);
+  assert.equal(redeemedAdmin.response.status, 200, JSON.stringify(redeemedAdmin.body));
+  const adminCloudPayload = decodeSignedPayload(redeemedAdmin.cookie);
+  const memberCloudPayload = decodeSignedPayload(memberCloudCookie);
+  assert.equal(adminCloudPayload.role, "admin");
+  assert.equal(adminCloudPayload.rootFolderId, null);
+  assert.equal(memberCloudPayload.role, "member");
+  assert.equal(memberCloudPayload.rootFolderId, cloudSelectedRootId);
+  await assertCloudFolderAccess(redeemedAdmin.cookie, cloudUnselectedRootId, 200,
+    "the explicitly selected administrator link retains full Cloud scope");
+  await assertCloudFolderAccess(memberCloudCookie, cloudUnselectedRootId, 403,
+    "selecting folder-member never inherits administrator scope from the same Identity");
   await waitForServiceAudit(identityId, "diary", "passkey_login_success", 1);
   await waitForServiceAudit(identityId, "billing", "passkey_login_success", 1);
-  await waitForServiceAudit(readinessIdentityId, "cloud", "passkey_login_success", 1);
+  await waitForServiceAudit(readinessIdentityId, "cloud", "passkey_login_success", 2);
   assert.equal(serviceAuditCount(identityId, "diary", "passkey_login_success"), 1,
     "Diary emits one service login completion event for one redeemed handoff");
   assert.equal(serviceAuditCount(identityId, "billing", "passkey_login_success"), 1,
     "Billing emits one service login completion event for one redeemed handoff");
-  assert.equal(serviceAuditCount(readinessIdentityId, "cloud", "passkey_login_success"), 1,
-    "T-Cloud emits one service login completion event for one redeemed handoff");
+  assert.equal(serviceAuditCount(readinessIdentityId, "cloud", "passkey_login_success"), 2,
+    "T-Cloud audits the independently selected member and administrator handoffs");
   const handoffLastLogin = queryText("security-worker", "security-db",
     `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`);
   const handoffLastSeen = queryText("security-worker", "security-db",
@@ -694,10 +760,23 @@ try {
 } finally {
   for (const child of processes.splice(0).reverse()) stopProcess(child);
   cleanupSecurityFixture();
-  if (cloudSelectedRootId && cloudChildId && cloudGrandchildId && cloudUnselectedRootId) {
+  if (cloudSelectedRootId && cloudChildId && cloudGrandchildId && cloudProtectedChildId
+    && cloudProtectedGrandchildId && cloudUnselectedRootId) {
     runWrangler("cloud-worker", ["d1", "execute", "cloud-db", "--local", "--command",
-      `DELETE FROM cloud_folders WHERE id = ${cloudGrandchildId}; DELETE FROM cloud_folders WHERE id = ${cloudChildId}; DELETE FROM cloud_folders WHERE id = ${cloudUnselectedRootId}; DELETE FROM cloud_folders WHERE id = ${cloudSelectedRootId}`]);
+      `DELETE FROM cloud_files WHERE object_key LIKE 'fixtures/${cloudFixtureTag}/%';
+       DELETE FROM cloud_folders WHERE id = ${cloudProtectedGrandchildId};
+       DELETE FROM cloud_folders WHERE id = ${cloudProtectedChildId};
+       DELETE FROM cloud_folders WHERE id = ${cloudGrandchildId};
+       DELETE FROM cloud_folders WHERE id = ${cloudChildId};
+       DELETE FROM cloud_folders WHERE id = ${cloudUnselectedRootId};
+       DELETE FROM cloud_folders WHERE id = ${cloudSelectedRootId}`]);
   }
+}
+
+function fixturePasswordHash(password) {
+  const salt = Buffer.from("folder-member-fixture-salt");
+  const hash = pbkdf2Sync(password, salt, 100000, 32, "sha256");
+  return `pbkdf2-sha256$100000$${salt.toString("base64url")}$${hash.toString("base64url")}`;
 }
 
 async function startServiceWorkers(passkeysEnabled) {
@@ -817,6 +896,125 @@ async function assertCloudFolderAccess(cookie, folderId, expectedStatus, label) 
   });
   const body = await response.text();
   assert.equal(response.status, expectedStatus, `${label}: ${body.slice(0, 300)}`);
+}
+
+async function assertFolderMemberApiScope(cookie) {
+  const payload = decodeSignedPayload(cookie);
+  assert.equal(payload.role, "member");
+  assert.equal(payload.rootFolderId, cloudSelectedRootId);
+  assert.equal(payload.serviceAccountId, "folder-member");
+  assert.equal(queryNumber("cloud-worker", "cloud-db",
+    `SELECT COUNT(*) AS value FROM cloud_folder_unlocks WHERE session_id = '${payload.sessionId}' AND folder_id = ${cloudSelectedRootId}`), 0,
+  "the delegated root is usable without creating a legacy folder-password unlock");
+
+  const top = await cloudRequest(cookie, "/cloud/api/items");
+  assert.equal(top.response.status, 200, JSON.stringify(top.body));
+  assert.deepEqual(top.body.folders.map((folder) => Number(folder.id)), [cloudSelectedRootId],
+    "the T-Cloud top shows only the assigned root folder");
+  assert.equal(top.body.folders[0].isUnlocked, true, "the assigned root is represented as passkey-unlocked");
+
+  const root = await cloudRequest(cookie, `/cloud/api/items?folderId=${cloudSelectedRootId}`);
+  assert.equal(root.response.status, 200, JSON.stringify(root.body));
+  assert.equal(root.body.breadcrumbs.length, 1, "member breadcrumbs stop at the assigned root");
+  assert.equal(root.body.breadcrumbs[0].isUnlocked, true,
+    "the linked root stays unlocked even though its legacy password hash is retained");
+  assert.ok(root.body.files.some((file) => Number(file.id) === cloudRootFileId));
+  assert.ok(root.body.folders.some((folder) => Number(folder.id) === cloudProtectedChildId && !folder.isUnlocked),
+    "a separately protected child remains visibly locked");
+
+  const rootSearch = await cloudRequest(cookie,
+    `/cloud/api/items?q=${encodeURIComponent("本人検索")}&recursive=1`);
+  assert.equal(rootSearch.response.status, 200, `${JSON.stringify(rootSearch.body)}\n${workerOutput("cloud-worker")}`);
+  assert.ok(rootSearch.body.files.some((file) => Number(file.id) === cloudRootFileId),
+    "recursive search uses the passkey-unlocked root as its anchor");
+  const outsideSearch = await cloudRequest(cookie,
+    `/cloud/api/items?q=${encodeURIComponent("他人検索")}&recursive=1`);
+  assert.equal(outsideSearch.response.status, 200, JSON.stringify(outsideSearch.body));
+  assert.equal(outsideSearch.body.files.some((file) => Number(file.id) === cloudUnselectedFileId), false,
+    "recursive search cannot reveal files outside the linked root");
+  assert.equal(outsideSearch.body.folders.some((folder) => Number(folder.id) === cloudUnselectedRootId), false,
+    "recursive search cannot reveal folder names outside the linked root");
+
+  const ownFile = await cloudRequest(cookie, `/cloud/api/files/${cloudRootFileId}`);
+  assert.equal(ownFile.response.status, 200, JSON.stringify(ownFile.body));
+  for (const suffix of ["", "/thumbnail", "/display-thumbnail", "/view", "/download"]) {
+    const outside = await cloudRequest(cookie, `/cloud/api/files/${cloudUnselectedFileId}${suffix}`);
+    assert.equal(outside.response.status, 403, `outside direct file API ${suffix || "metadata"}: ${JSON.stringify(outside.body)}`);
+  }
+  const outsideRename = await cloudRequest(cookie, `/cloud/api/files/${cloudUnselectedFileId}`, {
+    method: "PATCH", body: { name: "unauthorized.txt" }
+  });
+  assert.equal(outsideRename.response.status, 403, JSON.stringify(outsideRename.body));
+  const outsideMove = await cloudRequest(cookie, `/cloud/api/files/${cloudRootFileId}`, {
+    method: "PATCH", body: { name: cloudRootFileName, folderId: cloudUnselectedRootId }
+  });
+  assert.equal(outsideMove.response.status, 403, JSON.stringify(outsideMove.body));
+  const outsideTrash = await cloudRequest(cookie, `/cloud/api/files/${cloudUnselectedFileId}`, { method: "DELETE" });
+  assert.equal(outsideTrash.response.status, 403, JSON.stringify(outsideTrash.body));
+  const outsideDownloadEvent = await cloudRequest(cookie, "/cloud/api/download-events", {
+    method: "POST", body: { fileId: cloudUnselectedFileId, eventType: "download_started" }
+  });
+  assert.equal(outsideDownloadEvent.response.status, 403, JSON.stringify(outsideDownloadEvent.body));
+  const outsideUpload = await cloudRequest(cookie, "/cloud/api/uploads", {
+    method: "POST",
+    body: {
+      folderId: cloudUnselectedRootId, sizeBytes: 1, cryptoVersion: 1,
+      encryptedMetadata: "AA", metadataIv: "AA", wrappedFileKey: "AA", fileKeyIv: "AA",
+      encryptedSizeBytes: 33, chunkSizeBytes: 8 * 1024 * 1024, chunkCount: 1
+    }
+  });
+  assert.equal(outsideUpload.response.status, 403, JSON.stringify(outsideUpload.body));
+  const outsidePlayer = await cloudRequest(cookie, `/cloud/api/player/media?rootFolderId=${cloudUnselectedRootId}`);
+  assert.equal(outsidePlayer.response.status, 403, JSON.stringify(outsidePlayer.body));
+
+  const destinations = await cloudRequest(cookie, `/cloud/api/move-destinations?rootFolderId=${cloudSelectedRootId}`);
+  assert.equal(destinations.response.status, 200, JSON.stringify(destinations.body));
+  assert.equal(destinations.body.folders.some((folder) => Number(folder.id) === cloudUnselectedRootId), false,
+    "move destinations stay inside the selected root");
+  const player = await cloudRequest(cookie, `/cloud/api/player/media?rootFolderId=${cloudSelectedRootId}`);
+  assert.equal(player.response.status, 200, JSON.stringify(player.body));
+  assert.ok(player.body.files.some((file) => Number(file.id) === cloudRootFileId));
+  assert.equal(player.body.files.some((file) => Number(file.id) === cloudProtectedFileId), false,
+    "Player does not cross an independently protected child boundary");
+  assert.equal(player.body.files.some((file) => Number(file.id) === cloudUnselectedFileId), false,
+    "Player never returns another root's media");
+
+  await assertCloudFolderAccess(cookie, cloudProtectedChildId, 423,
+    "an independently protected child requires its own password");
+  await assertCloudFolderAccess(cookie, cloudProtectedGrandchildId, 423,
+    "a locked protected child also blocks direct descendant IDs");
+  const protectedFileBeforeUnlock = await cloudRequest(cookie, `/cloud/api/files/${cloudProtectedFileId}`);
+  assert.equal(protectedFileBeforeUnlock.response.status, 423, JSON.stringify(protectedFileBeforeUnlock.body));
+  const wrongUnlock = await cloudRequest(cookie, `/cloud/api/folders/${cloudProtectedChildId}/unlock`, {
+    method: "POST", body: { password: `${cloudProtectedPassword}-wrong` }
+  });
+  assert.equal(wrongUnlock.response.status, 401, JSON.stringify(wrongUnlock.body));
+  const correctUnlock = await cloudRequest(cookie, `/cloud/api/folders/${cloudProtectedChildId}/unlock`, {
+    method: "POST", body: { password: cloudProtectedPassword }
+  });
+  assert.equal(correctUnlock.response.status, 200, JSON.stringify(correctUnlock.body));
+  await assertCloudFolderAccess(cookie, cloudProtectedGrandchildId, 200,
+    "the protected child and its descendants work after the existing password flow succeeds");
+  const protectedFileAfterUnlock = await cloudRequest(cookie, `/cloud/api/files/${cloudProtectedFileId}`);
+  assert.equal(protectedFileAfterUnlock.response.status, 200, JSON.stringify(protectedFileAfterUnlock.body));
+}
+
+async function cloudRequest(cookie, path, { method = "GET", body } = {}) {
+  const response = await fetch(`http://127.0.0.1:${services.cloud.port}${path}`, {
+    method,
+    headers: {
+      Cookie: `${services.cloud.cookie}=${cookie}`,
+      ...(method === "GET" ? {} : { Origin: `http://127.0.0.1:${services.cloud.port}`, "Content-Type": "application/json" })
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.status >= 500) await delay(250);
+  return { response, body: payload };
+}
+
+function workerOutput(directory) {
+  return processes.find((child) => child.__directory === directory)?.__output?.slice(-4000) || "";
 }
 
 function assertPlainPublicLink(link, expected) {

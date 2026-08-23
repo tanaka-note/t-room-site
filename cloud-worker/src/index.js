@@ -3,7 +3,7 @@ import { enqueueSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-0f1c00d64112";
+const APP_BUILD_ID = "cloud-f7cd5c979124";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -890,7 +890,11 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
   const effectiveRootId = folderId || (session.role === "member" ? session.rootFolderId : null);
   const anchor = effectiveRootId ? "folder.id = ?" : "folder.parent_id IS NULL";
   const scopeValues = effectiveRootId ? [effectiveRootId] : [];
-  const accessAnchor = session.role === "admin" ? "1" : `(folder.password_hash IS NULL OR EXISTS (
+  // A folder-member has already proved possession of the delegated root key via
+  // WebAuthn PRF. The linked root is therefore the recursive search anchor even
+  // when that folder also retains its legacy password wrap. Protected children
+  // remain independent boundaries through accessChild below.
+  const accessAnchor = ["admin", "member"].includes(session.role) ? "1" : `(folder.password_hash IS NULL OR EXISTS (
     SELECT 1 FROM cloud_folder_unlocks unlock
     WHERE unlock.folder_id = folder.id AND unlock.session_id = ? AND unlock.expires_at > ?
   ))`;
@@ -912,7 +916,9 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
   )`;
   const bindPrefix = session.role === "admin"
     ? scopeValues
-    : [session.sessionId, now, ...scopeValues, session.sessionId, now];
+    : session.role === "member"
+      ? [...scopeValues, session.sessionId, now]
+      : [session.sessionId, now, ...scopeValues, session.sessionId, now];
   let folderRows = [];
   if (!filesOnly) {
     const rootExclusion = folderId ? "scope.depth > 0" : "1 = 1";
@@ -2543,7 +2549,10 @@ async function breadcrumbs(env, folderId, session) {
       parentWrappedKey: folder.parentWrappedKey,
       parentWrapIv: folder.parentWrapIv,
       isProtected: Boolean(folder.isProtected),
-      isUnlocked: session.role === "admin" ? true : Boolean(folder.isUnlocked),
+      isUnlocked: session.role === "admin"
+        || (session.role === "member" && Number(folder.id) === Number(session.rootFolderId))
+        ? true
+        : Boolean(folder.isUnlocked),
       adminAccess: session.role === "admin"
     });
     if (session.role === "member" && Number(folder.id) === Number(session.rootFolderId)) break;

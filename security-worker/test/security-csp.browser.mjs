@@ -321,6 +321,23 @@ async function verifyBrowser(browserType, name, origin) {
       assert.equal(result.name, "PasskeyOptionsError");
       assert.match(result.message, /パスキーの認証情報を読み取れませんでした/);
     }
+    const singleCloudLink = await page.evaluate(() => TRoomPasskeys.chooseLinkDialog([
+      { id: "personal-cloud", displayLabel: "本人フォルダ", roleLabel: "フォルダ利用者", scopeLabel: "本人フォルダ" }
+    ], "cloud"));
+    assert.equal(singleCloudLink.id, "personal-cloud", `${name}: one Cloud link is selected without showing a dialog`);
+    assert.equal(await page.locator(".troom-passkey-account-dialog").count(), 0,
+      `${name}: one Cloud link does not add an account-selection dialog`);
+    await page.evaluate(() => {
+      window.__troomCloudLinkChoice = null;
+      TRoomPasskeys.chooseLinkDialog([
+        { id: "cloud-admin", displayLabel: "T-Cloud 管理者", roleLabel: "管理者", scopeLabel: "T-Cloud全体" },
+        { id: "personal-cloud", displayLabel: "本人フォルダ", roleLabel: "フォルダ利用者", scopeLabel: "本人フォルダ" }
+      ], "cloud").then((link) => { window.__troomCloudLinkChoice = link?.id || null; });
+    });
+    assert.equal(await page.getByRole("heading", { name: "利用するT-Cloudの範囲を選択" }).count(), 1,
+      `${name}: multiple Cloud links use a scope-specific choice title`);
+    await page.getByRole("button", { name: /本人フォルダ/ }).click();
+    await page.waitForFunction(() => window.__troomCloudLinkChoice === "personal-cloud");
     const verifyCountBeforeMalformed = receivedPrfVerifyBodies.length;
     const malformedPrfResult = await page.evaluate(async (credentialId) => {
       try {
@@ -437,7 +454,8 @@ async function verifyBrowser(browserType, name, origin) {
       ["連携先を選択", "家族写真 / フォルダ利用者", "動画 / フォルダ利用者"]);
     assert.equal(await unsupported.locator("#link-rows .link-target-hint").first().isVisible(), true,
       `${name}: Cloud selection explains that a top folder includes all descendants`);
-    assert.match(await unsupported.locator("#link-rows .link-target-hint").first().textContent(), /トップフォルダ.*配下はすべて/);
+    assert.match(await unsupported.locator("#link-rows .link-target-hint").first().textContent(),
+      /本人のパスキー.*配下をすべて.*他のT-Cloudフォルダは表示されません/);
     assert.doesNotMatch(await unsupported.locator("#invite-form").textContent(), /main-user|folder-member|フォルダID/,
       `${name}: internal account and numeric folder identifiers are not shown`);
     const queryCountBeforeRefresh = receivedAuditQueries.length;

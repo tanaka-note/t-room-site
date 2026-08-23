@@ -468,7 +468,7 @@
     const targetHint = document.createElement("small");
     targetHint.className = "hint link-target-hint";
     targetHint.hidden = true;
-    targetHint.textContent = "トップフォルダを選択してください。選択したフォルダの配下はすべて自動的に連携対象となります。";
+    targetHint.textContent = "トップフォルダを選択してください。このフォルダを本人のパスキーで利用できるようにし、配下をすべて連携対象とします。他のT-Cloudフォルダは表示されません。";
     const updateTargets = () => {
       const selectedService = state.services.find((item) => item.id === serviceSelect.value);
       row._targets = selectedService?.targets || [];
