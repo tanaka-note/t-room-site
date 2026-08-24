@@ -1719,7 +1719,20 @@ function randomToken(bytes) { const value = crypto.getRandomValues(new Uint8Arra
 function parseJson(value, fallback) { try { return JSON.parse(value); } catch { return fallback; } }
 function validatePublicJwk(value) { if (!value || value.kty !== "RSA" || value.alg !== "RSA-OAEP-256" || !value.n || !value.e || "d" in value) throw new HttpError(400, "公開鍵を確認してください。"); return { kty: "RSA", alg: "RSA-OAEP-256", key_ops: ["encrypt"], ext: true, n: value.n, e: value.e }; }
 function canonicalJwk(value) { const jwk = validatePublicJwk(value); return JSON.stringify({ alg: jwk.alg, e: jwk.e, ext: true, key_ops: ["encrypt"], kty: jwk.kty, n: jwk.n }); }
-function withUtcTimes(row) { const result = { ...row }; for (const key of Object.keys(result)) if (key.endsWith("_at") && result[key] != null) result[key] = normalizeUtcTimestamp(result[key]); return result; }
+const UNIX_SECONDS_FIELDS = new Set(["expires_at", "consumed_at"]);
+function withUtcTimes(row) {
+  const result = { ...row };
+  for (const key of Object.keys(result)) {
+    if (!key.endsWith("_at") || result[key] == null) continue;
+    if (UNIX_SECONDS_FIELDS.has(key)) {
+      const value = Number(result[key]);
+      result[key] = Number.isSafeInteger(value) ? value : null;
+      continue;
+    }
+    result[key] = normalizeUtcTimestamp(result[key]);
+  }
+  return result;
+}
 function parseCookies(header) { return Object.fromEntries(header.split(";").map((part) => part.trim()).filter(Boolean).map((part) => { const index = part.indexOf("="); return index < 0 ? [part, ""] : [part.slice(0, index), part.slice(index + 1)]; })); }
 function clearCookie(name, secureValue) { return `${name}=; Path=${BASE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secureValue ? "; Secure" : ""}`; }
 function setupCookie(token, secureValue) { return `${SETUP_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${SETUP_TTL_SECONDS}; HttpOnly; SameSite=Strict${secureValue ? "; Secure" : ""}`; }

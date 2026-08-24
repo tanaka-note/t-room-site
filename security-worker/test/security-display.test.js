@@ -88,6 +88,37 @@ test("primary administrator and common account IDs use human-friendly primary la
   assert.equal(display.identityLabel("", "", "main-user"), "一般ユーザー");
 });
 
+test("Identity, invitation and service-link lifecycle labels are entity specific", () => {
+  assert.deepEqual(
+    ["invited", "pending_approval", "active", "disabled"].map(display.identityStatusLabel),
+    ["招待中", "管理者承認待ち", "利用可能", "停止"]
+  );
+  assert.deepEqual(
+    ["active", "used", "revoked", "expired"].map(display.invitationStatusLabel),
+    ["有効", "使用済み", "取消済み", "期限切れ"]
+  );
+  assert.equal(display.serviceLinkStatusLabel("pending", { identityStatus: "invited", service: "diary" }), "登録待ち");
+  assert.equal(display.serviceLinkStatusLabel("active", { identityStatus: "invited", service: "cloud" }), "登録待ち");
+  assert.equal(display.serviceLinkStatusLabel("pending", { identityStatus: "pending_approval", service: "billing", hasCredential: true }), "管理者承認待ち");
+  assert.equal(display.serviceLinkStatusLabel("pending", { identityStatus: "pending_approval", service: "cloud", hasCredential: false }), "端末準備待ち");
+  assert.equal(display.serviceLinkStatusLabel("pending", { identityStatus: "pending_approval", service: "cloud", hasCredential: true }), "鍵委譲待ち");
+  assert.equal(display.serviceLinkStatusLabel("active", { identityStatus: "active", service: "cloud" }), "利用可能");
+});
+
+test("invitation Unix seconds remain safe to format and expired active invitations are effective-expired", () => {
+  const valid = 1_800_000_000;
+  assert.match(display.formatInvitationExpiry(valid), /2027/);
+  for (const value of [null, undefined, Number.NaN, 0, -1, "invalid", 1]) {
+    const formatted = display.formatInvitationExpiry(value);
+    assert.equal(formatted, "期限情報を取得できません");
+    assert.ok(!formatted.includes("1970"));
+    assert.ok(!formatted.includes("Invalid Date"));
+  }
+  assert.equal(display.invitationEffectiveStatus({ status: "active", expires_at: 100 }, 101), "expired");
+  assert.equal(display.invitationEffectiveStatus({ status: "active", expires_at: 102 }, 101), "active");
+  assert.equal(display.invitationEffectiveStatus({ status: "revoked", expires_at: 100 }, 101), "revoked");
+});
+
 test("full User-Agent strings are summarized without a heavy parser", () => {
   const cases = [
     ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36", "Windows / Chrome 151"],

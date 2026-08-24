@@ -20,12 +20,16 @@ const receivedPrfVerifyBodies = [];
 const receivedEnvelopeBodies = [];
 const receivedAuditQueries = [];
 const receivedSetupResumeBodies = [];
+const receivedReinviteBodies = [];
+const receivedCreateInviteBodies = [];
+const receivedAddedLinkBodies = [];
 const malformedPrfCredentialId = "bWFsZm9ybWVkLXByZi1vcHRpb25z";
 let setupStatusBody = { active: false };
 let securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
 let failEnvelopeSave = false;
 let registeredCredentialCount = 0;
 let cancelledInviteIdentityVisible = true;
+let detailUiCloudLinked = false;
 const auditEventsBody = {
   events: [
     {
@@ -80,8 +84,13 @@ const server = createServer(async (request, response) => {
     ] }
   ] });
   if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: cancelledInviteIdentityVisible ? 1 : 0, pendingApproval: 0, noPasskey: cancelledInviteIdentityVisible ? 1 : 0, critical: 0 });
+  if (url.pathname === "/security/api/identities" && request.method === "POST") {
+    receivedCreateInviteBodies.push(JSON.parse(await readBody(request)));
+    return sendJson(response, 201, { identityId: "browser-created-invite", invitationUrl: "/security/#invite=browser-new-token", expiresAt: 4102444800 });
+  }
   if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [
     { id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" },
+    { id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", activeCredentials: 0, pendingCredentials: 1 },
     ...(cancelledInviteIdentityVisible ? [{ id: "cancelled-invite-user", displayName: "取消テストユーザー", status: "invited", activeCredentials: 0, pendingCredentials: 0 }] : [])
   ] });
   if (url.pathname === "/security/api/audit") {
@@ -107,6 +116,33 @@ const server = createServer(async (request, response) => {
     credentials: [], invitations: [{ id: "cancelled-invitation", status: "active", created_at: "2026-08-23T00:00:00.000Z", expires_at: 4102444800 }],
     approvalCandidates: [], adminKeyEnvelopes: []
   });
+  if (url.pathname === "/security/api/identities/detail-ui-user") return sendJson(response, 200, {
+    identity: { id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", isSecurityAdmin: false },
+    links: [
+      { id: "detail-diary", service: "diary", service_account_id: "main-user", cloud_root_folder_id: null, display_label: "田中宏知（一般ユーザー）", role: "user", role_label: "一般ユーザー", status: "active", protected: false },
+      { id: "detail-billing", service: "billing", service_account_id: "owner", cloud_root_folder_id: null, display_label: "田中宏知（管理者）", role: "owner", role_label: "管理者", status: "active", protected: false },
+      { id: "detail-cloud-old", service: "cloud", service_account_id: "folder-member", cloud_root_folder_id: 2, display_label: "家族写真", role: "member", role_label: "フォルダ利用者", status: "disabled", protected: false },
+      { id: "detail-cloud-current", service: "cloud", service_account_id: "folder-member", cloud_root_folder_id: 10, display_label: "動画", role: "member", role_label: "フォルダ利用者", status: "active", protected: false },
+      ...(detailUiCloudLinked ? [{ id: "detail-cloud-new", service: "cloud", service_account_id: "folder-member", cloud_root_folder_id: 2, display_label: "家族写真", role: "member", role_label: "フォルダ利用者", status: "pending", protected: false }] : [])
+    ],
+    credentials: [],
+    invitations: [
+      { id: "detail-future", status: "active", created_at: "2026-08-23T02:00:00.000Z", expires_at: 4102444800 },
+      { id: "detail-expired-active", status: "active", created_at: "2026-08-23T01:00:00.000Z", expires_at: 1 },
+      { id: "detail-invalid", status: "revoked", created_at: "2026-08-23T00:00:00.000Z", expires_at: null },
+      { id: "detail-used", status: "used", created_at: "2026-08-22T23:00:00.000Z", expires_at: 4102444700 }
+    ],
+    approvalCandidates: [], adminKeyEnvelopes: []
+  });
+  if (url.pathname === "/security/api/identities/detail-ui-user/links") {
+    receivedAddedLinkBodies.push(JSON.parse(await readBody(request)));
+    detailUiCloudLinked = true;
+    return sendJson(response, 201, { ok: true, requiresApproval: true });
+  }
+  if (url.pathname === "/security/api/identities/detail-ui-user/reinvite") {
+    receivedReinviteBodies.push(JSON.parse(await readBody(request)));
+    return sendJson(response, 201, { invitationUrl: "/security/#invite=browser-reinvite-token", expiresAt: 4102444800 });
+  }
   if (url.pathname === "/security/api/invitations/cancelled-invitation/revoke") {
     await readBody(request);
     cancelledInviteIdentityVisible = false;
@@ -262,8 +298,13 @@ async function verifyBrowser(browserType, name, origin) {
     securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };
     failEnvelopeSave = false;
     cancelledInviteIdentityVisible = true;
+    detailUiCloudLinked = false;
     const context = await browser.newContext();
     await context.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (value) => { window.__copiedInviteUrl = value; } }
+      });
       const credentialId = "cmVzdW1lLWNyZWRlbnRpYWw";
       const bytes = new TextEncoder().encode(credentialId);
       const initialScenario = new URL(location.href).searchParams.get("scenario") || "csp";
@@ -584,6 +625,67 @@ async function verifyBrowser(browserType, name, origin) {
       /本人のパスキー.*配下をすべて.*他のT-Cloudフォルダは表示されません/);
     assert.doesNotMatch(await unsupported.locator("#invite-form").textContent(), /main-user|folder-member|フォルダID/,
       `${name}: internal account and numeric folder identifiers are not shown`);
+    await inviteTarget.selectOption("0");
+    await unsupported.locator("#invite-name").fill("ブラウザ招待テスト");
+    await unsupported.locator("#invite-expiry").selectOption("3600");
+    await unsupported.locator("#invite-form").getByRole("button", { name: "招待URLを作成" }).click();
+    await unsupported.locator("#invite-result [data-copy-invite]").waitFor();
+    assert.equal(receivedCreateInviteBodies.at(-1).expiresIn, 3600, `${name}: new-invite expiry uses its own form`);
+    assert.match(await unsupported.locator("#invite-result").textContent(), /招待URL.*有効期限.*URLをコピー/);
+    await unsupported.locator("#invite-result [data-copy-invite]").click();
+    assert.match(await unsupported.locator("#invite-result .copy-status").textContent(), /コピーしました/);
+
+    const detailUiRow = unsupported.locator("#identity-list .identity-row").filter({ hasText: "詳細UIテスト" });
+    await detailUiRow.getByRole("button", { name: "詳細" }).click();
+    await unsupported.locator("#identity-detail").getByRole("heading", { name: "サービス連携" }).waitFor();
+    assert.equal(await unsupported.locator("#identity-detail #detail-link-row select").count(), 0,
+      `${name}: service-link selects stay hidden in read-only detail mode`);
+    assert.equal(await unsupported.locator("#identity-detail #reinvite-expiry").isVisible(), false,
+      `${name}: reinvite expiry stays hidden until requested`);
+    const detailText = await unsupported.locator("#identity-detail").textContent();
+    assert.match(detailText, /管理者承認待ち/);
+    assert.match(detailText, /まだパスキーは登録されていません/);
+    assert.match(detailText, /期限切れ/);
+    assert.match(detailText, /期限情報を取得できません/);
+    assert.doesNotMatch(detailText, /1970|Invalid Date/);
+    assert.match(await unsupported.locator("#identity-detail .invitation").first().textContent(), /有効/,
+      `${name}: currently active invitations are listed before history`);
+
+    await unsupported.locator("#detail-open-link").click();
+    assert.deepEqual(await unsupported.locator("#detail-link-row [data-link-service] option").allTextContents(), ["サービスを選択", "T-Cloud"],
+      `${name}: current pending/active Diary, Billing and Cloud targets are excluded`);
+    await unsupported.locator("#detail-link-row [data-link-service]").selectOption("cloud");
+    assert.deepEqual(await unsupported.locator("#detail-link-row [data-link-target] option").allTextContents(), ["連携先を選択", "家族写真 / フォルダ利用者"],
+      `${name}: a disabled Cloud link can be re-added with a fresh link ID while the active target stays excluded`);
+    await unsupported.locator("#detail-cancel-link").click();
+    assert.equal(await unsupported.locator("#detail-link-editor").isVisible(), false, `${name}: service editor closes on cancel`);
+
+    await unsupported.locator("#reinvite-button").click();
+    assert.equal(await unsupported.locator("#reinvite-expiry").inputValue(), "86400", `${name}: reinvite has an independent 24-hour default`);
+    await unsupported.locator("#reinvite-expiry").selectOption("21600");
+    await unsupported.locator("#reinvite-submit").click();
+    await unsupported.locator("#detail-result [data-copy-invite]").waitFor();
+    assert.deepEqual(receivedReinviteBodies.at(-1), { expiresIn: 21600 }, `${name}: reinvite sends only its dedicated expiry value`);
+    assert.notEqual(receivedReinviteBodies.at(-1).expiresIn, receivedCreateInviteBodies.at(-1).expiresIn,
+      `${name}: the new-invite expiry cannot leak into reinvite`);
+    assert.match(await unsupported.locator("#detail-result").textContent(), /招待URL.*有効期限.*URLをコピー/);
+    await unsupported.locator("#detail-result [data-copy-invite]").click();
+    assert.match(await unsupported.locator("#detail-result .copy-status").textContent(), /コピーしました/);
+
+    await unsupported.locator("#detail-open-link").click();
+    await unsupported.locator("#detail-link-row [data-link-service]").selectOption("cloud");
+    await unsupported.locator("#detail-link-row [data-link-target]").selectOption("0");
+    await unsupported.locator("#detail-add-link").click();
+    await unsupported.locator("#detail-link-editor").waitFor({ state: "hidden" });
+    assert.deepEqual(receivedAddedLinkBodies.at(-1), { links: [{ service: "cloud", accountId: "folder-member", rootFolderId: 2 }] });
+    assert.equal(await unsupported.locator("#detail-link-editor").isVisible(), false, `${name}: successful link addition returns to read-only detail mode`);
+    await unsupported.locator("#detail-open-link").click();
+    assert.equal(await unsupported.locator("#detail-link-empty").isVisible(), true, `${name}: no remaining target has an explicit empty message`);
+    assert.equal(await unsupported.locator("#detail-add-link").isVisible(), false);
+    await unsupported.locator("#detail-cancel-link").click();
+    assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true,
+      `${name}: detail editors do not overflow the narrow viewport`);
+
     const cancelledUserRow = unsupported.locator("#identity-list .identity-row").filter({ hasText: "取消テストユーザー" });
     assert.equal(await cancelledUserRow.count(), 1, `${name}: an active invitation is visible before revocation`);
     await cancelledUserRow.getByRole("button", { name: "詳細" }).click();

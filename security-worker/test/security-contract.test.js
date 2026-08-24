@@ -338,6 +338,18 @@ test("Identity routes, audit service and invitation lifecycle share the hardened
   assert.doesNotMatch(worker, /status = 'pending'.*WHERE id = \?/, "disabled service-link rows are never reactivated");
 });
 
+test("invitation expiry keeps its Unix-seconds API contract and detail controls are independent", () => {
+  assert.match(worker, /UNIX_SECONDS_FIELDS = new Set\(\["expires_at", "consumed_at"\]\)/);
+  assert.match(worker, /UNIX_SECONDS_FIELDS\.has\(key\)[\s\S]*Number\.isSafeInteger\(value\)/);
+  assert.match(securityUi, /formatInvitationExpiry\(item\.expires_at\)/);
+  assert.match(securityUi, /invitationEffectiveStatus\(item\)/);
+  assert.match(securityUi, /expiryPayload\(\$\("#reinvite-expiry"\), \$\("#reinvite-expiry-custom"\)\)/);
+  assert.match(securityUi, /＋ サービス連携を追加/);
+  assert.match(securityUi, /追加できるサービス連携はありません/);
+  assert.match(securityUi, /\["pending", "active"\]\.includes\(link\.status\)/);
+  assert.match(securityDisplay, /期限情報を取得できません/);
+});
+
 test("all service passkey sessions carry revocable Security identifiers and validate on protected access", async () => {
   for (const [name, source] of [["cloud", cloud], ["diary", diary], ["billing", billing]]) {
     assert.match(source, /credentialId: handoff\.credentialId/,

@@ -58,6 +58,12 @@
     pending: "承認待ち", revoked: "無効", used: "使用済み", expired: "期限切れ",
     completed: "完了", cancelled: "取消済み"
   });
+  const IDENTITY_STATUS_LABELS = Object.freeze({
+    invited: "招待中", pending_approval: "管理者承認待ち", active: "利用可能", disabled: "停止"
+  });
+  const INVITATION_STATUS_LABELS = Object.freeze({
+    active: "有効", used: "使用済み", revoked: "取消済み", expired: "期限切れ"
+  });
 
   function mappedLabel(labels, value, fallback) {
     const normalized = String(value || "").trim();
@@ -87,6 +93,44 @@
 
   function statusLabel(value) {
     return mappedLabel(STATUS_LABELS, value, (item) => item ? `状態: ${item}` : "状態不明");
+  }
+
+  function identityStatusLabel(value) {
+    return mappedLabel(IDENTITY_STATUS_LABELS, value, (item) => item ? `状態: ${item}` : "状態不明");
+  }
+
+  function invitationStatusLabel(value) {
+    return mappedLabel(INVITATION_STATUS_LABELS, value, (item) => item ? `状態: ${item}` : "状態不明");
+  }
+
+  function invitationEffectiveStatus(invitation, currentSeconds = Math.floor(Date.now() / 1000)) {
+    const status = String(invitation?.status || "").trim();
+    const expiresAt = Number(invitation?.expires_at);
+    return status === "active" && Number.isSafeInteger(expiresAt) && expiresAt > 0 && expiresAt <= currentSeconds
+      ? "expired"
+      : status;
+  }
+
+  function formatInvitationExpiry(value) {
+    const seconds = Number(value);
+    if (!Number.isSafeInteger(seconds) || seconds <= 0) return "期限情報を取得できません";
+    const date = new Date(seconds * 1000);
+    if (Number.isNaN(date.getTime()) || date.getUTCFullYear() < 2000 || date.getUTCFullYear() > 9999) return "期限情報を取得できません";
+    return date.toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
+  }
+
+  function serviceLinkStatusLabel(value, { identityStatus = "", service = "", hasCredential = false } = {}) {
+    const status = String(value || "").trim();
+    if (identityStatus === "invited" && ["pending", "active"].includes(status)) return "登録待ち";
+    if (status === "active") return "利用可能";
+    if (status === "disabled") return "停止";
+    if (status === "pending") {
+      if (identityStatus === "pending_approval") {
+        if (service === "cloud") return hasCredential ? "鍵委譲待ち" : "端末準備待ち";
+        return "管理者承認待ち";
+      }
+    }
+    return statusLabel(status);
   }
 
   function serviceAccountLabel(service, accountId) {
@@ -141,6 +185,8 @@
 
   globalThis.TRoomSecurityDisplay = Object.freeze({
     EVENT_DEFINITIONS, eventLabel, serviceLabel, outcomeLabel, authMethodLabel, roleLabel,
-    statusLabel, serviceAccountLabel, identityLabel, formatUserAgent, eventGroups
+    statusLabel, identityStatusLabel, invitationStatusLabel, invitationEffectiveStatus,
+    formatInvitationExpiry, serviceLinkStatusLabel, serviceAccountLabel, identityLabel,
+    formatUserAgent, eventGroups
   });
 })();

@@ -75,7 +75,20 @@ fieldset { border: 1px solid var(--line); border-radius: 12px; }
 .warning-text { color: #b54708; }
 .danger { background: var(--danger); border-color: var(--danger); }
 output { overflow-wrap: anywhere; }
-.credential, .link { background: #f8fafc; border-radius: 10px; padding: 10px; margin: 8px 0; }
+.credential, .link, .invitation { background: #f8fafc; border-radius: 10px; padding: 10px; margin: 8px 0; }
+.detail-section { padding: 18px 0; border-top: 1px solid var(--line); }
+.detail-section:first-child { padding-top: 0; border-top: 0; }
+.detail-section:last-child { padding-bottom: 0; }
+.detail-section h3 { margin: 0 0 10px; }
+.detail-summary p { margin: 4px 0; font-weight: 750; }
+.detail-item button { margin-top: 8px; }
+.detail-editor { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; }
+.editor-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.invite-result { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid #b2ddff; border-radius: 10px; background: #eff8ff; }
+.invite-result[hidden] { display: none; }
+.invite-result-label { font-weight: 750; }
+.invite-result a { overflow-wrap: anywhere; }
+.copy-status { color: var(--ok); font-weight: 650; }
 .setup-notice { margin: 0 0 18px; border-color: #f5c26b; background: #fffbeb; }
 .setup-notice h2 { font-size: 1.15rem; }
 .setup-notice p { margin: .35rem 0 1rem; }
@@ -85,6 +98,7 @@ output { overflow-wrap: anywhere; }
   .split { grid-template-columns: 1fr; }
   .filters { grid-template-columns: 1fr 1fr; }
   .link-row { grid-template-columns: 1fr; }
+  .editor-actions { display: grid; grid-template-columns: 1fr; }
   .shell { width: min(100% - 20px, 1180px); padding-top: 18px; }
   .card { padding: 16px; }
   .audit-heading { display: grid; gap: 3px; }

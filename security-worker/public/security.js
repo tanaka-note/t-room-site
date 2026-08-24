@@ -308,7 +308,7 @@
   async function loadIdentities() {
     const data = await get("/identities");
     state.identityNames = new Map(data.identities.map((identity) => [identity.id, identity.displayName]));
-    $("#identity-list").innerHTML = data.identities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(statusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`).join("") || "<p>ユーザーはまだ登録されていません。</p>";
+    $("#identity-list").innerHTML = data.identities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(display.identityStatusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`).join("") || "<p>ユーザーはまだ登録されていません。</p>";
     document.querySelectorAll("[data-view-identity]").forEach((button) => button.addEventListener("click", async () => {
       button.disabled = true;
       try { await viewIdentity(button.dataset.viewIdentity); } catch (error) { showMessage(error.message, true); }
@@ -320,8 +320,11 @@
     const data = await get(`/identities/${encodeURIComponent(id)}`);
     state.selectedIdentity = data;
     const credentials = data.credentials.map((item) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))} / ${escapeHtml(item.device_type || "端末種別不明")} / ${item.backed_up ? "複数端末で利用可能" : "この端末に保存"} / T-Cloudのパスキー利用: ${item.prf_enabled ? "対応" : "この端末では非対応"}</small>${item.status !== "revoked" ? `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>` : ""}</div>`).join("");
-    const links = data.links.map((item) => `<div class="link"><strong>${escapeHtml(item.display_label)}</strong>${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(statusLabel(item.status))}</small>${item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`).join("");
-    const invitations = data.invitations.map((item) => `<div class="invitation"><small>${escapeHtml(formatDate(item.created_at))} / ${escapeHtml(statusLabel(item.status))} / 期限 ${escapeHtml(new Date(Number(item.expires_at) * 1000).toLocaleString("ja-JP"))}</small>${item.status === "active" ? `<button class="danger" data-revoke-invitation="${escapeHtml(item.id)}">招待取消</button>` : ""}</div>`).join("");
+    const hasCredential = data.credentials.some((item) => ["pending", "active"].includes(item.status));
+    const links = data.links.map((item) => `<div class="link detail-item"><strong>${escapeHtml(item.display_label)}</strong>${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(display.serviceLinkStatusLabel(item.status, { identityStatus: data.identity.status, service: item.service, hasCredential }))}</small>${item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`).join("");
+    const invitationRows = data.invitations.map((item) => ({ ...item, effectiveStatus: display.invitationEffectiveStatus(item) }))
+      .sort((left, right) => Number(right.effectiveStatus === "active") - Number(left.effectiveStatus === "active"));
+    const invitations = invitationRows.map((item) => `<div class="invitation detail-item"><small>${escapeHtml(formatDate(item.created_at))} / ${escapeHtml(display.invitationStatusLabel(item.effectiveStatus))} / 期限 ${escapeHtml(display.formatInvitationExpiry(item.expires_at))}</small>${item.effectiveStatus === "active" ? `<button class="danger" data-revoke-invitation="${escapeHtml(item.id)}">招待取消</button>` : ""}</div>`).join("");
     const approvals = (data.approvalCandidates || []).map((item) => {
       const cloudStatus = !item.hasCloudLinks ? ""
         : item.cloudClientReady
@@ -329,15 +332,60 @@
           : item.prfEnabled ? "（T-Cloudの端末準備が未完了）" : "（この端末ではT-Cloudのパスキー利用に非対応）";
       return `<button data-approve-credential="${escapeHtml(item.credentialId)}">${escapeHtml(formatDate(item.registeredAt))}の登録を承認${cloudStatus}</button>`;
     }).join("");
-    $("#identity-detail").innerHTML = `<h2>${escapeHtml(data.identity.displayName)}</h2><p>${escapeHtml(statusLabel(data.identity.status))}</p><small>${data.identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(data.identity.lastLoginAt))}` : "認証履歴なし"}${data.identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(data.identity.lastSeenAt))}` : ""}</small><h3>サービス連携</h3>${links || "<p>なし</p>"}<div class="link-editor"><div id="detail-link-row"></div><button id="detail-add-link" class="secondary">サービスを追加</button></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloudは安全な鍵委譲が完了するまで承認待ちになります。</p><h3>登録済みパスキー</h3>${credentials || "<p>なし</p>"}<h3>招待履歴</h3>${invitations || "<p>なし</p>"}<div class="tabs"><button id="reinvite-button">再招待</button>${approvals}</div><output id="detail-result"></output>`;
+    $("#identity-detail").innerHTML = `
+      <section class="detail-section detail-summary"><h2>${escapeHtml(data.identity.displayName)}</h2><p class="status-${escapeHtml(data.identity.status)}">${escapeHtml(display.identityStatusLabel(data.identity.status))}</p><small>${data.identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(data.identity.lastLoginAt))}` : "認証履歴なし"}${data.identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(data.identity.lastSeenAt))}` : ""}</small></section>
+      <section class="detail-section"><h3>サービス連携</h3>${links || "<p>サービス連携はありません。</p>"}<button id="detail-open-link" type="button" class="secondary">＋ サービス連携を追加</button><div id="detail-link-editor" class="detail-editor" hidden><div id="detail-link-row"></div><p id="detail-link-empty" class="muted" hidden>追加できるサービス連携はありません</p><div class="editor-actions"><button id="detail-add-link" type="button">追加</button><button id="detail-cancel-link" type="button" class="secondary">キャンセル</button></div></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloudは安全な鍵委譲が完了するまで承認待ちになります。</p></section>
+      <section class="detail-section"><h3>パスキー</h3>${credentials || "<p>まだパスキーは登録されていません</p>"}</section>
+      <section class="detail-section"><h3>招待</h3>${invitations || "<p>招待履歴はありません。</p>"}</section>
+      <section class="detail-section"><h3>管理操作</h3><div class="tabs"><button id="reinvite-button" type="button">再招待</button>${approvals}</div><div id="reinvite-editor" class="detail-editor" hidden><label>有効期限<select id="reinvite-expiry"><option value="3600">1時間</option><option value="21600">6時間</option><option value="86400" selected>24時間</option><option value="259200">3日</option><option value="604800">7日</option><option value="custom">日時指定</option></select></label><label id="reinvite-custom-row" hidden>日時<input id="reinvite-expiry-custom" type="datetime-local"></label><div class="editor-actions"><button id="reinvite-submit" type="button">招待URLを再発行</button><button id="reinvite-cancel" type="button" class="secondary">キャンセル</button></div></div><output id="detail-result" class="invite-result" hidden></output></section>`;
     $("#identity-detail").hidden = false;
-    $("#reinvite-button").onclick = (event) => reinvite(id, event.currentTarget);
+    $("#reinvite-button").onclick = () => toggleReinviteEditor(true);
+    $("#reinvite-cancel").onclick = () => toggleReinviteEditor(false);
+    $("#reinvite-expiry").onchange = () => { $("#reinvite-custom-row").hidden = $("#reinvite-expiry").value !== "custom"; };
+    $("#reinvite-submit").onclick = (event) => reinvite(id, event.currentTarget);
     document.querySelectorAll("[data-approve-credential]").forEach((button) => button.addEventListener("click", (event) => approve(id, event.currentTarget, button.dataset.approveCredential)));
     document.querySelectorAll("[data-revoke-credential]").forEach((button) => button.addEventListener("click", () => revokeCredential(button.dataset.revokeCredential, button)));
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));
-    $("#detail-add-link")?.addEventListener("click", (event) => addDetailLink(id, event.currentTarget));
-    addLinkRow(null, "#detail-link-row", false);
+    $("#detail-open-link").onclick = () => openDetailLinkEditor();
+    $("#detail-cancel-link").onclick = () => closeDetailLinkEditor();
+    $("#detail-add-link").onclick = (event) => addDetailLink(id, event.currentTarget);
+  }
+
+  function toggleReinviteEditor(open) {
+    $("#reinvite-editor").hidden = !open;
+    $("#reinvite-button").hidden = open;
+    if (open) $("#reinvite-expiry").focus();
+  }
+
+  function currentServiceLinkKeys() {
+    return new Set((state.selectedIdentity?.links || [])
+      .filter((link) => ["pending", "active"].includes(link.status))
+      .map((link) => serviceLinkKey(link.service, link.service_account_id, link.cloud_root_folder_id)));
+  }
+
+  function serviceLinkKey(service, accountId, rootFolderId) {
+    return `${service}\u0000${accountId}\u0000${rootFolderId ?? ""}`;
+  }
+
+  function openDetailLinkEditor() {
+    const editor = $("#detail-link-editor");
+    const rowContainer = $("#detail-link-row");
+    const excluded = currentServiceLinkKeys();
+    editor.hidden = false;
+    $("#detail-open-link").hidden = true;
+    rowContainer.replaceChildren();
+    const added = addLinkRow(null, "#detail-link-row", false, excluded);
+    $("#detail-link-empty").hidden = added;
+    $("#detail-add-link").hidden = !added;
+    (rowContainer.querySelector("select") || $("#detail-cancel-link")).focus();
+  }
+
+  function closeDetailLinkEditor() {
+    $("#detail-link-editor").hidden = true;
+    $("#detail-link-row").replaceChildren();
+    $("#detail-open-link").hidden = false;
+    $("#detail-open-link").focus();
   }
 
   async function addDetailLink(identityId, button) {
@@ -401,8 +449,9 @@
   async function reinvite(id, button) {
     button.disabled = true;
     try {
-      const result = await post(`/identities/${encodeURIComponent(id)}/reinvite`, inviteExpiryPayload());
-      $("#detail-result").textContent = absoluteInviteUrl(result.invitationUrl);
+      const result = await post(`/identities/${encodeURIComponent(id)}/reinvite`, expiryPayload($("#reinvite-expiry"), $("#reinvite-expiry-custom")));
+      renderInvitationResult($("#detail-result"), result);
+      toggleReinviteEditor(false);
       showMessage("新しい招待URLを発行し、以前の未使用招待を無効化しました。");
     } catch (error) { showMessage(error.message, true); }
     finally { button.disabled = false; }
@@ -447,29 +496,38 @@
       if (!links.length || links.some((link) => !link)) throw new Error("利用するサービスと連携先を選択してください。");
       if (links.some((link) => link.privileged)) await freshAdminAuthentication();
       const result = await post("/identities", { displayName: $("#invite-name").value, ...inviteExpiryPayload(), links: links.map(linkPayload) });
-      $("#invite-result").textContent = absoluteInviteUrl(result.invitationUrl);
+      renderInvitationResult($("#invite-result"), result);
       await Promise.all([loadDashboard(), loadIdentities()]);
     } catch (error) { showMessage(error.message, true); }
     finally { button.disabled = false; }
   }
 
   function inviteExpiryPayload() {
-    const value = $("#invite-expiry").value;
+    return expiryPayload($("#invite-expiry"), $("#invite-expiry-custom"));
+  }
+
+  function expiryPayload(expirySelect, customInput) {
+    const value = expirySelect.value;
     if (value !== "custom") return { expiresIn: Number(value) };
-    const customValue = $("#invite-expiry-custom").value;
+    const customValue = customInput.value;
     if (!customValue) throw new Error("日時指定の有効期限を入力してください。");
     const expiresAt = Math.floor(new Date(customValue).getTime() / 1000);
     if (!Number.isFinite(expiresAt)) throw new Error("日時指定の有効期限を確認してください。");
     return { expiresAt };
   }
 
-  function addLinkRow(service = null, containerSelector = "#link-rows", removable = true) {
+  function addLinkRow(service = null, containerSelector = "#link-rows", removable = true, excludedKeys = new Set()) {
+    const availableServices = state.services.map((item) => ({
+      ...item,
+      targets: (item.targets || []).filter((target) => !excludedKeys.has(serviceLinkKey(target.service, target.accountId, target.rootFolderId)))
+    })).filter((item) => item.targets.length);
+    if (!availableServices.length) return false;
     const row = document.createElement("div");
     row.className = "link-row";
     const serviceSelect = document.createElement("select");
     serviceSelect.dataset.linkService = "";
     serviceSelect.setAttribute("aria-label", "サービス");
-    serviceSelect.append(new Option("サービスを選択", ""), ...state.services.map((item) => new Option(item.displayName, item.id)));
+    serviceSelect.append(new Option("サービスを選択", ""), ...availableServices.map((item) => new Option(item.displayName, item.id)));
     const targetSelect = document.createElement("select");
     targetSelect.dataset.linkTarget = "";
     targetSelect.setAttribute("aria-label", "利用するアカウントまたはフォルダ");
@@ -480,7 +538,7 @@
     targetHint.hidden = true;
     targetHint.textContent = "トップフォルダを選択してください。このフォルダを本人のパスキーで利用できるようにし、配下をすべて連携対象とします。他のT-Cloudフォルダは表示されません。";
     const updateTargets = () => {
-      const selectedService = state.services.find((item) => item.id === serviceSelect.value);
+      const selectedService = availableServices.find((item) => item.id === serviceSelect.value);
       row._targets = selectedService?.targets || [];
       targetSelect.replaceChildren(new Option(selectedService ? "連携先を選択" : "先にサービスを選択してください", ""));
       row._targets.forEach((target, index) => targetSelect.append(new Option(`${target.displayLabel}${target.roleLabel ? ` / ${target.roleLabel}` : ""}`, String(index))));
@@ -501,6 +559,7 @@
     row.append(targetHint);
     $(containerSelector).append(row);
     if (service) { serviceSelect.value = service; updateTargets(); }
+    return true;
   }
 
   function selectedLink(row) {
@@ -583,6 +642,25 @@
       ${idDetail}
       <div class="audit-device" title="${escapeHtml(userAgent)}">利用端末: ${escapeHtml(display.formatUserAgent(userAgent))}</div>
     </article>`;
+  }
+
+  function renderInvitationResult(container, result) {
+    const invitationUrl = absoluteInviteUrl(result.invitationUrl);
+    container.hidden = false;
+    container.innerHTML = `<span class="invite-result-label">招待URL</span><a href="${escapeHtml(invitationUrl)}">${escapeHtml(invitationUrl)}</a><span>有効期限: ${escapeHtml(display.formatInvitationExpiry(result.expiresAt))}</span><button type="button" class="secondary" data-copy-invite>URLをコピー</button><span class="copy-status" aria-live="polite"></span>`;
+    container.querySelector("[data-copy-invite]").onclick = async (event) => {
+      const button = event.currentTarget;
+      const status = container.querySelector(".copy-status");
+      button.disabled = true;
+      try {
+        await navigator.clipboard.writeText(invitationUrl);
+        status.textContent = "コピーしました";
+      } catch {
+        status.textContent = "コピーできませんでした。URLを選択してコピーしてください。";
+      } finally {
+        button.disabled = false;
+      }
+    };
   }
 
   async function logout(event) {

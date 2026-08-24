@@ -459,6 +459,36 @@ try {
   assert.equal(legacyNestedLink.display_label, `${cloudSelectedRootName} / ${cloudChildName}`,
     "an existing nested-folder link keeps its original scope and resolves its live path");
 
+  const invitationExpiryCases = [
+    { label: "1 hour", body: { expiresIn: 3600 }, expectedSeconds: 3600 },
+    { label: "6 hours", body: { expiresIn: 21600 }, expectedSeconds: 21600 },
+    { label: "24 hours", body: { expiresIn: 86400 }, expectedSeconds: 86400 },
+    { label: "3 days", body: { expiresIn: 259200 }, expectedSeconds: 259200 },
+    { label: "7 days", body: { expiresIn: 604800 }, expectedSeconds: 604800 },
+    { label: "custom", body: { expiresAt: Math.floor(Date.now() / 1000) + 172923 }, expectedSeconds: null }
+  ];
+  for (const [index, expiryCase] of invitationExpiryCases.entries()) {
+    const requestedAt = Math.floor(Date.now() / 1000);
+    const created = await securityAdminRequest("/security/api/identities", freshAdminCookie, {
+      displayName: `Invitation Expiry Contract ${index + 1}`,
+      ...expiryCase.body,
+      links: [{ service: "cloud", accountId: "folder-member", rootFolderId: cloudUnselectedRootId }]
+    });
+    assert.equal(created.response.status, 201, `${expiryCase.label}: ${JSON.stringify(created.body)}`);
+    assert.equal(typeof created.body.expiresAt, "number", `${expiryCase.label}: create response keeps Unix seconds numeric`);
+    if (expiryCase.expectedSeconds) {
+      assert.ok(created.body.expiresAt >= requestedAt + expiryCase.expectedSeconds
+        && created.body.expiresAt <= Math.floor(Date.now() / 1000) + expiryCase.expectedSeconds + 1,
+      `${expiryCase.label}: preset expiry is calculated from the request time`);
+    } else {
+      assert.equal(created.body.expiresAt, expiryCase.body.expiresAt, "custom expiry is preserved exactly");
+    }
+    const detail = await securityAdminRequest(`/security/api/identities/${created.body.identityId}`, freshAdminCookie);
+    assert.equal(detail.response.status, 200, `${expiryCase.label}: ${JSON.stringify(detail.body)}`);
+    assert.equal(typeof detail.body.invitations[0].expires_at, "number", `${expiryCase.label}: detail API keeps Unix seconds numeric`);
+    assert.equal(detail.body.invitations[0].expires_at, created.body.expiresAt, `${expiryCase.label}: detail expiry equals create response`);
+  }
+
   const dashboardBeforeCancelledInvite = (await securityAdminRequest("/security/api/dashboard", freshAdminCookie)).body;
   const cancelledInvite = await securityAdminRequest("/security/api/identities", freshAdminCookie, {
     displayName: "Cancelled Invitation Test",
@@ -1634,42 +1664,42 @@ function cleanupSecurityFixture() {
     DROP TRIGGER IF EXISTS fail_synchronous_login_audit;
     DELETE FROM security_audit_events WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_tcloud_client_vaults WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_setup_sessions WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_handoffs WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_challenges WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_invitations WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_service_links WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_credentials WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval')
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval');
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %';
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id = '${identityId}';
     DELETE FROM security_tcloud_client_vaults WHERE identity_id = '${identityId}';
     DELETE FROM security_setup_sessions WHERE identity_id = '${identityId}';
