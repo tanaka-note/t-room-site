@@ -1208,8 +1208,7 @@
       .sort((left, right) => {
         return Number(right.count || 0) - Number(left.count || 0)
           || tagCollator.compare(tagSortKey(left.value), tagSortKey(right.value));
-      })
-      .slice(0, 6);
+      });
     if (!suggestions.length || !elements.editorDialog.open) return closeEntryTagSuggestions();
     state.entryTagSuggestionIndex = -1;
     elements.entryTagSuggestions.replaceChildren(...suggestions.map((item, index) => {
@@ -1271,7 +1270,9 @@
     const direction = event.key === "ArrowDown" ? 1 : -1;
     state.entryTagSuggestionIndex = (state.entryTagSuggestionIndex + direction + options.length) % options.length;
     options.forEach((option, index) => option.setAttribute("aria-selected", String(index === state.entryTagSuggestionIndex)));
-    elements.entryTags.setAttribute("aria-activedescendant", options[state.entryTagSuggestionIndex].id);
+    const activeOption = options[state.entryTagSuggestionIndex];
+    elements.entryTags.setAttribute("aria-activedescendant", activeOption.id);
+    activeOption.scrollIntoView({ block: "nearest" });
   }
 
   function applyEntryTagSuggestion(tag) {

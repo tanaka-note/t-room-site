@@ -19,7 +19,7 @@
     "test:backup": "node tests/backup.mjs",
     "test:photo-editor": "node tests/photo-rich-text-editing-ui.mjs",
     "test:photo-post": "node tests/browser/photo-post-resilience.mjs",
-    "test:tags": "node tests/tags-ui.mjs",
+    "test:tags": "node tests/tags-ui.mjs && node tests/browser/tag-suggestions.mjs",
     "test:history": "node tests/history-ui.mjs",
     "test:investment": "node tests/investment-ui.mjs && node tests/browser/investment-ranges.mjs",
     "test:navigation-return": "node tests/navigation-return-ui.mjs && node tests/browser/navigation-return.mjs",
