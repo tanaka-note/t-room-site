@@ -1,18 +1,21 @@
 (() => {
   "use strict";
 
-  const RANGE_DEFINITIONS = {
-    "1m": { label: "1ヶ月", months: 1 },
-    "3m": { label: "3ヶ月", months: 3 },
-    "6m": { label: "6ヶ月", months: 6 },
-    "1y": { label: "1年", months: 12 },
-    "2y": { label: "2年", months: 24 },
-    "3y": { label: "3年", months: 36 },
-    "5y": { label: "5年", months: 60 },
-    "7y": { label: "7年", months: 84 },
-    "10y": { label: "10年", months: 120 },
-    max: { label: "最長", months: null }
-  };
+  const RANGE_DEFINITIONS = Object.freeze([
+    { key: "1m", label: "1ヶ月", months: 1, unlockMonths: 0, axis: "short" },
+    { key: "3m", label: "3ヶ月", months: 3, unlockMonths: 0, axis: "short" },
+    { key: "6m", label: "6ヶ月", months: 6, unlockMonths: 3, axis: "short" },
+    { key: "1y", label: "1年", months: 12, unlockMonths: 6, axis: "long" },
+    { key: "2y", label: "2年", months: 24, unlockMonths: 12, axis: "long" },
+    { key: "3y", label: "3年", months: 36, unlockMonths: 24, axis: "long" },
+    { key: "5y", label: "5年", months: 60, unlockMonths: 36, axis: "long" },
+    { key: "7y", label: "7年", months: 84, unlockMonths: 60, axis: "long" },
+    { key: "10y", label: "10年", months: 120, unlockMonths: 84, axis: "long" },
+    { key: "max", label: "最長", months: null, unlockMonths: 0, axis: "auto" }
+  ]);
+  const RANGE_DEFINITION_BY_KEY = Object.freeze(Object.fromEntries(
+    RANGE_DEFINITIONS.map((definition) => [definition.key, definition])
+  ));
 
   const COMPOSITION = [
     { key: "funds", label: "投資信託", color: "#9bd5a9" },
@@ -59,7 +62,8 @@
   const integer = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 0 });
   const percent = new Intl.NumberFormat("ja-JP", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  init();
+  exposeTestHooks();
+  if (!window.__investmentDisableAutoInit) init();
 
   async function init() {
     bindEvents();
@@ -75,6 +79,7 @@
         ? payload.records.filter(isValidRecord).sort((a, b) => a.date.localeCompare(b.date))
         : [];
       if (!state.records.length) throw new Error("表示できる資産データがありません。");
+      renderRangeControls();
       renderAsOf(state.records.at(-1).date);
       renderComposition(state.records.at(-1));
       applyRange("max");
@@ -99,36 +104,33 @@
   }
 
   function applyRange(rangeKey) {
-    const definition = RANGE_DEFINITIONS[rangeKey] || RANGE_DEFINITIONS.max;
-    state.range = RANGE_DEFINITIONS[rangeKey] ? rangeKey : "max";
-    const latest = parseDate(state.records.at(-1).date);
-    let threshold = null;
-    if (definition.months) {
-      threshold = new Date(latest);
-      threshold.setMonth(threshold.getMonth() - definition.months);
-    }
-    state.visibleRecords = threshold
-      ? state.records.filter((record) => parseDate(record.date) >= threshold)
-      : [...state.records];
+    const definition = RANGE_DEFINITION_BY_KEY[rangeKey] || RANGE_DEFINITION_BY_KEY.max;
+    state.range = RANGE_DEFINITION_BY_KEY[rangeKey] ? rangeKey : "max";
+    const threshold = definition.months
+      ? subtractCalendarMonths(state.records.at(-1).date, definition.months)
+      : null;
+    state.visibleRecords = recordsInRange(state.records, definition);
     if (!state.visibleRecords.length) state.visibleRecords = [state.records.at(-1)];
     state.selectedIndex = -1;
     hideTooltip();
     updateRangeButtons();
-    renderKpis(definition);
+    renderKpis(definition, threshold);
     if (!elements.dashboard.hidden) renderAssetChart();
   }
 
-  function renderKpis(definition) {
+  function renderKpis(definition, threshold) {
     const first = state.visibleRecords[0];
     const latest = state.visibleRecords.at(-1);
     const change = latest.total - first.total;
     const rate = first.total ? (change / first.total) * 100 : 0;
     const peak = state.records.reduce((best, record) => record.total > best.total ? record : best, state.records[0]);
+    const coversRequestedRange = !threshold || state.records[0].date <= threshold;
+    const changeLabel = definition.months && !coversRequestedRange ? "表示期間" : definition.label;
 
     elements.currentTotal.textContent = yen.format(latest.total);
-    elements.changeLabel.textContent = `${definition.label}の増減`;
+    elements.changeLabel.textContent = `${changeLabel}の増減`;
     elements.periodChange.textContent = signedYen(change);
-    elements.rateLabel.textContent = `${definition.label}の増減率`;
+    elements.rateLabel.textContent = `${changeLabel}の増減率`;
     elements.periodRate.textContent = `${rate > 0 ? "+" : ""}${percent.format(rate)}%`;
     setTrendClass(elements.periodChange, change);
     setTrendClass(elements.periodRate, rate);
@@ -139,10 +141,23 @@
   }
 
   function renderAsOf(dateText) {
-    const date = parseDate(dateText);
-    const label = `${date.getFullYear()}年${date.getMonth() + 1}月末時点`;
+    const label = `${formatDateLong(dateText)}時点`;
     elements.headerAsOf.textContent = label;
     elements.compositionAsOf.textContent = label;
+  }
+
+  function renderRangeControls() {
+    const definitions = availableRangeDefinitions(state.records);
+    elements.rangeControls.replaceChildren(...definitions.map((definition) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.range = definition.key;
+      button.textContent = definition.label;
+      const active = definition.key === state.range;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+      return button;
+    }));
   }
 
   function renderAllCharts() {
@@ -166,13 +181,7 @@
     const width = rect.width - padding.left - padding.right;
     const height = rect.height - padding.top - padding.bottom;
     const values = state.visibleRecords.map((record) => record.total);
-    const minValue = Math.min(...values);
-    const maxValue = Math.max(...values);
-    const rawSpread = Math.max(maxValue - minValue, Math.max(maxValue * 0.025, 100000));
-    const step = niceStep(rawSpread / 4);
-    const yMin = Math.max(0, Math.floor((minValue - rawSpread * 0.12) / step) * step);
-    const yMax = Math.ceil((maxValue + rawSpread * 0.12) / step) * step;
-    const ySpan = Math.max(yMax - yMin, step);
+    const { yMin, yMax, ySpan, step } = calculateChartScale(values);
     const pointCount = state.visibleRecords.length;
     const xFor = (index) => padding.left + (pointCount === 1 ? width / 2 : (index / (pointCount - 1)) * width);
     const yFor = (value) => padding.top + ((yMax - value) / ySpan) * height;
@@ -203,7 +212,7 @@
     [...labelIndexes].forEach((index, position, indexes) => {
       const x = xFor(index);
       ctx.textAlign = position === 0 ? "left" : (position === indexes.length - 1 ? "right" : "center");
-      ctx.fillText(formatDateAxis(state.visibleRecords[index].date, state.range), x, padding.top + height + 14);
+      ctx.fillText(formatDateAxis(state.visibleRecords[index].date, state.range, state.visibleRecords), x, padding.top + height + 14);
     });
 
     const gradient = ctx.createLinearGradient(0, padding.top, 0, padding.top + height);
@@ -338,28 +347,71 @@
     });
   }
 
+  function availableRangeDefinitions(records) {
+    if (!records.length) return RANGE_DEFINITIONS.filter((definition) => ["1m", "3m", "max"].includes(definition.key));
+    const oldest = records[0].date;
+    const latest = records.at(-1).date;
+    return RANGE_DEFINITIONS.filter((definition) => (
+      definition.key === "max"
+      || definition.unlockMonths === 0
+      || spansAtLeastCalendarMonths(oldest, latest, definition.unlockMonths)
+    ));
+  }
+
+  function recordsInRange(records, definition) {
+    if (!records.length || !definition.months) return [...records];
+    const threshold = subtractCalendarMonths(records.at(-1).date, definition.months);
+    return records.filter((record) => record.date >= threshold);
+  }
+
+  function spansAtLeastCalendarMonths(oldestDate, latestDate, months) {
+    return oldestDate <= subtractCalendarMonths(latestDate, months);
+  }
+
+  function subtractCalendarMonths(value, months) {
+    const { year, month, day } = parseDateParts(value);
+    const targetMonthIndex = (year * 12) + month - 1 - months;
+    const targetYear = Math.floor(targetMonthIndex / 12);
+    const targetMonth = ((targetMonthIndex % 12) + 12) % 12 + 1;
+    const targetDay = Math.min(day, daysInMonth(targetYear, targetMonth));
+    return `${String(targetYear).padStart(4, "0")}-${String(targetMonth).padStart(2, "0")}-${String(targetDay).padStart(2, "0")}`;
+  }
+
+  function daysInMonth(year, month) {
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+
+  function parseDateParts(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) throw new Error("日付を確認できませんでした。");
+    return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+  }
+
   function isValidRecord(record) {
     return record && /^\d{4}-\d{2}-\d{2}$/.test(record.date) && Number.isFinite(Number(record.total));
   }
 
-  function parseDate(value) {
-    return new Date(`${value}T00:00:00+09:00`);
-  }
-
   function formatDateLong(value) {
-    const date = parseDate(value);
-    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+    const { year, month, day } = parseDateParts(value);
+    return `${year}年${month}月${day}日`;
   }
 
   function formatDateShort(value) {
-    const date = parseDate(value);
-    return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
+    const { year, month, day } = parseDateParts(value);
+    return `${year}.${String(month).padStart(2, "0")}.${String(day).padStart(2, "0")}`;
   }
 
-  function formatDateAxis(value, rangeKey) {
-    const date = parseDate(value);
-    if (["1m", "3m", "6m"].includes(rangeKey)) return `${date.getMonth() + 1}/${date.getDate()}`;
-    return `${String(date.getFullYear()).slice(2)}.${date.getMonth() + 1}`;
+  function formatDateAxis(value, rangeKey, visibleRecords = []) {
+    const { year, month, day } = parseDateParts(value);
+    const definition = RANGE_DEFINITION_BY_KEY[rangeKey] || RANGE_DEFINITION_BY_KEY.max;
+    const shortAxis = definition.axis === "short"
+      || (definition.axis === "auto" && !visibleRecordsSpanAtLeastMonths(visibleRecords, 12));
+    if (shortAxis) return `${month}/${day}`;
+    return `${String(year).slice(2)}.${month}`;
+  }
+
+  function visibleRecordsSpanAtLeastMonths(records, months) {
+    return records.length > 1 && spansAtLeastCalendarMonths(records[0].date, records.at(-1).date, months);
   }
 
   function formatAxisValue(value) {
@@ -388,6 +440,29 @@
     const fraction = value / (10 ** exponent);
     const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
     return niceFraction * (10 ** exponent);
+  }
+
+  function calculateChartScale(values) {
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values);
+    const rawSpread = Math.max(maxValue - minValue, Math.max(maxValue * 0.025, 100000));
+    const step = niceStep(rawSpread / 4);
+    const yMin = Math.max(0, Math.floor((minValue - rawSpread * 0.12) / step) * step);
+    const yMax = Math.ceil((maxValue + rawSpread * 0.12) / step) * step;
+    return { minValue, maxValue, rawSpread, step, yMin, yMax, ySpan: Math.max(yMax - yMin, step) };
+  }
+
+  function exposeTestHooks() {
+    window.__investmentTestHooks = {
+      RANGE_DEFINITIONS,
+      availableRangeDefinitions,
+      recordsInRange,
+      spansAtLeastCalendarMonths,
+      subtractCalendarMonths,
+      formatDateAxis,
+      formatDateLong,
+      calculateChartScale
+    };
   }
 
   function debounce(callback, delay) {
