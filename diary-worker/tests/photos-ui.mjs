@@ -93,7 +93,7 @@ assert.match(wrangler, /t-room-diary-media/);
 assert.match(stagingMigration, /CREATE TABLE IF NOT EXISTS diary_photo_upload_sessions/);
 assert.match(stagingMigration, /CREATE TABLE IF NOT EXISTS diary_staged_photos/);
 assert.match(stagingMigration, /FOREIGN KEY \(upload_session_id\).*ON DELETE CASCADE/);
-assert.match(stagingMigration, /CREATE TRIGGER diary_validate_photo_upload_session_commit/);
-assert.match(stagingMigration, /json_each\(NEW\.committed_photo_ids\)/);
+assert.match(worker, /INSERT OR IGNORE INTO diary_photos/);
+assert.match(worker, /SELECT COUNT\(\*\) FROM diary_photos[\s\S]*?WHERE entry_id = \? AND id IN/);
 
 process.stdout.write("Diary camera roll UI contract test passed.\n");

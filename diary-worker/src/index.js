@@ -947,17 +947,28 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
   }
   if (photoIds.length) {
     const placeholders = photoIds.map(() => "?").join(", ");
+    const stagingKeyPrefix = `diary/staging/${session.activeHouseholdId}/${uploadSession.id}/`;
     const count = await env.DB.prepare(`
-      SELECT COUNT(*) AS count FROM diary_staged_photos
-      WHERE upload_session_id = ? AND household_id = ? AND account_id = ?
-        AND id IN (${placeholders})
-    `).bind(uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds).first();
+      SELECT COUNT(*) AS count FROM (
+        SELECT id FROM diary_staged_photos
+        WHERE upload_session_id = ? AND household_id = ? AND account_id = ?
+          AND id IN (${placeholders})
+        UNION
+        SELECT id FROM diary_photos
+        WHERE entry_id = ? AND created_by_id = ?
+          AND substr(original_key, 1, ?) = ?
+          AND id IN (${placeholders})
+      )
+    `).bind(
+      uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds,
+      entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, ...photoIds
+    ).first();
     if (Number(count?.count || 0) !== photoIds.length) {
       throw new HttpError(409, "一部の画像アップロードが完了していません。");
     }
-    await env.DB.batch([
+    const batch = await env.DB.batch([
       env.DB.prepare(`
-        INSERT INTO diary_photos (
+        INSERT OR IGNORE INTO diary_photos (
           id, entry_id, file_name, content_type, original_size,
           original_key, display_key, thumbnail_key, width, height,
           created_by_id, created_by_name, created_at
@@ -979,9 +990,24 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
         SET status = 'committed', committed_entry_id = ?, committed_photo_ids = ?,
             updated_at = ?, expires_at = ?
         WHERE id = ? AND status = 'active'
-      `).bind(entryId, JSON.stringify(photoIds), new Date().toISOString(),
-        new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id)
+          AND (
+            SELECT COUNT(*) FROM diary_photos
+            WHERE entry_id = ? AND id IN (${placeholders})
+          ) = ?
+      `).bind(
+        entryId, JSON.stringify(photoIds), new Date().toISOString(),
+        new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id,
+        entryId, ...photoIds, photoIds.length
+      )
     ]);
+    if (!batch.at(-1)?.meta?.changes) {
+      const current = await readOwnedPhotoUploadSession(uploadSession.id, env, session);
+      if (current.status !== "committed"
+        || Number(current.committed_entry_id) !== entryId
+        || current.committed_photo_ids !== JSON.stringify(photoIds)) {
+        throw new HttpError(409, "一部の画像を日記へ反映できませんでした。もう一度お試しください。");
+      }
+    }
   } else {
     await env.DB.prepare(`
       UPDATE diary_photo_upload_sessions

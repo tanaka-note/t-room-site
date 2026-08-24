@@ -37,26 +37,3 @@ CREATE TABLE IF NOT EXISTS diary_staged_photos (
 
 CREATE INDEX IF NOT EXISTS idx_diary_staged_photos_session
 ON diary_staged_photos(upload_session_id, created_at, id);
-
-DROP TRIGGER IF EXISTS diary_validate_photo_upload_session_commit;
-
-CREATE TRIGGER diary_validate_photo_upload_session_commit
-BEFORE UPDATE OF status
-ON diary_photo_upload_sessions
-WHEN OLD.status != 'committed' AND NEW.status = 'committed'
-BEGIN
-  SELECT CASE WHEN
-    NEW.committed_entry_id IS NULL
-    OR NEW.committed_photo_ids IS NULL
-    OR json_valid(NEW.committed_photo_ids) = 0
-    OR json_type(NEW.committed_photo_ids) != 'array'
-    OR EXISTS (
-      SELECT 1
-      FROM json_each(NEW.committed_photo_ids) selected
-      LEFT JOIN diary_photos photo
-        ON photo.id = selected.value
-       AND photo.entry_id = NEW.committed_entry_id
-      WHERE photo.id IS NULL
-    )
-  THEN RAISE(ABORT, 'staged photo commit is incomplete') END;
-END;
