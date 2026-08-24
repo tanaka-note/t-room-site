@@ -6,6 +6,7 @@
   const PHOTO_VIEWER_HISTORY_KEY = "troomDiaryPhotoViewer";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
+  const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const PHOTO_UPLOAD_RETRY_DELAYS_MS = Object.freeze([250, 750]);
   const RICH_TEXT_COLORS = Object.freeze({
@@ -715,7 +716,7 @@
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     resetHeaderVisibilityTracking();
-    if (returnView) restoreDiaryReturnPosition(returnView.position);
+    if (returnView) restoreDiaryReturnPosition(returnView);
   }
 
   async function loadHouseholdSwitcher() {
@@ -864,7 +865,7 @@
 
   function rememberDiaryReturnViewFromNavigation(event) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (!isDiaryHomeRoute() || elements.appView.hidden) return;
+    if (!isDiaryListRoute() || elements.appView.hidden) return;
     const link = event.target.closest("a[href]");
     if (!link) return;
     let destination;
@@ -874,15 +875,23 @@
       return;
     }
     if (destination.origin !== window.location.origin) return;
-    if (!destination.pathname.startsWith(`${BASE_PATH}/`) || /^\/diary\/?$/.test(destination.pathname)) return;
-    storeDiaryReturnView();
+    if (!destination.pathname.startsWith(`${BASE_PATH}/`)) return;
+    if (link === elements.tagPageBack && hasDiaryReturnNavigation(destination.pathname)) {
+      event.preventDefault();
+      window.history.back();
+      return;
+    }
+    if (destination.pathname === window.location.pathname) return;
+    storeDiaryReturnView(destination.pathname);
   }
 
-  function storeDiaryReturnView() {
+  function storeDiaryReturnView(destinationPath = "") {
     const position = captureEntryListPosition();
     const returnView = {
-      version: 1,
+      version: 2,
       savedAt: Date.now(),
+      routePath: window.location.pathname,
+      destinationPath,
       householdId: state.activeHouseholdId || "",
       query: state.query,
       month: state.month,
@@ -894,8 +903,17 @@
       trash: state.trash,
       drafts: state.drafts,
       entryCount: state.entries.length,
-      position
+      position,
+      tagListPosition: captureTagListPosition()
     };
+    try {
+      window.history.replaceState({
+        ...(window.history.state || {}),
+        [RETURN_VIEW_HISTORY_KEY]: returnView
+      }, "", window.location.href);
+    } catch {
+      // History APIを利用できない場合もsessionStorageのfallbackを維持します。
+    }
     try {
       window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
     } catch {
@@ -904,18 +922,42 @@
   }
 
   function takeDiaryReturnView(householdId) {
-    if (!isDiaryHomeRoute()) return null;
+    const historyView = window.history.state?.[RETURN_VIEW_HISTORY_KEY];
+    if (isUsableDiaryReturnView(historyView, householdId, window.location.pathname)) {
+      return historyView;
+    }
     let returnView = null;
     try {
       returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
-      window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
     } catch {
       return null;
     }
-    if (!returnView || returnView.version !== 1) return null;
-    if (!Number.isFinite(returnView.savedAt) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return null;
-    if (returnView.householdId && householdId && returnView.householdId !== householdId) return null;
+    const expectedRoute = returnView?.version === 1 ? `${BASE_PATH}/` : returnView?.routePath;
+    if (!isUsableDiaryReturnView(returnView, householdId, expectedRoute)) return null;
+    if (returnView.version === 2 && !isDiaryReturnReferrer(returnView.destinationPath)) return null;
+    try {
+      window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+    } catch {
+      // 読み取り済み状態を消せなくても、期限とrouteで誤適用を防ぎます。
+    }
     return returnView;
+  }
+
+  function isUsableDiaryReturnView(returnView, householdId, expectedRoute) {
+    if (!returnView || ![1, 2].includes(returnView.version)) return false;
+    if (!Number.isFinite(returnView.savedAt) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return false;
+    if (returnView.householdId && householdId && returnView.householdId !== householdId) return false;
+    const routePath = returnView.version === 1 ? `${BASE_PATH}/` : returnView.routePath;
+    return routePath === expectedRoute && expectedRoute === window.location.pathname;
+  }
+
+  function isDiaryReturnReferrer(destinationPath) {
+    try {
+      const referrer = new URL(document.referrer);
+      return referrer.origin === window.location.origin && referrer.pathname === destinationPath;
+    } catch {
+      return false;
+    }
   }
 
   function applyDiaryReturnView(returnView) {
@@ -943,25 +985,79 @@
     }
   }
 
-  function restoreDiaryReturnPosition(position) {
+  function captureTagListPosition() {
+    const containerRect = elements.tagList.getBoundingClientRect();
+    const visibleTag = [...elements.tagList.querySelectorAll("[data-tag]")]
+      .find((tag) => {
+        const rect = tag.getBoundingClientRect();
+        return rect.bottom > containerRect.top && rect.top < containerRect.bottom;
+      });
+    return {
+      tag: visibleTag?.dataset.tag || "",
+      top: visibleTag ? visibleTag.getBoundingClientRect().top - containerRect.top : 0,
+      scrollTop: elements.tagList.scrollTop,
+      scrollLeft: elements.tagList.scrollLeft
+    };
+  }
+
+  function restoreTagListPosition(position) {
     if (!position) return;
-    const scrollY = Math.max(0, Number(position.scrollY) || 0);
-    window.scrollTo({ top: scrollY, left: 0, behavior: "auto" });
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        window.scrollTo({ top: scrollY, left: 0, behavior: "auto" });
+        elements.tagList.scrollTo({
+          top: Math.max(0, Number(position.scrollTop) || 0),
+          left: Math.max(0, Number(position.scrollLeft) || 0),
+          behavior: "auto"
+        });
+        const anchor = position.tag
+          ? [...elements.tagList.querySelectorAll("[data-tag]")].find((tag) => tag.dataset.tag === position.tag)
+          : null;
+        if (!anchor) return;
+        elements.tagList.scrollBy({
+          top: anchor.getBoundingClientRect().top - elements.tagList.getBoundingClientRect().top - (Number(position.top) || 0),
+          left: 0,
+          behavior: "auto"
+        });
       });
     });
   }
 
+  function restoreDiaryReturnPosition(returnView) {
+    if (!returnView) return;
+    const restore = () => {
+      restoreEntryListPosition(returnView.position);
+      restoreTagListPosition(returnView.tagListPosition);
+    };
+    restore();
+    window.setTimeout(restore, 120);
+    window.setTimeout(restore, 400);
+  }
+
   function restoreDiaryReturnViewFromPageCache(event) {
-    if (!event.persisted || !isDiaryHomeRoute()) return;
+    if (!event.persisted || !isDiaryListRoute()) return;
     const returnView = takeDiaryReturnView(state.activeHouseholdId);
-    if (returnView) restoreDiaryReturnPosition(returnView.position);
+    if (returnView) restoreDiaryReturnPosition(returnView);
   }
 
   function isDiaryHomeRoute() {
     return /^\/diary\/?$/.test(window.location.pathname);
+  }
+
+  function isDiaryListRoute() {
+    return isDiaryListPath(window.location.pathname);
+  }
+
+  function hasDiaryReturnNavigation(destinationPath) {
+    let returnView = null;
+    try {
+      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+    } catch {
+      return false;
+    }
+    return returnView?.version === 2
+      && returnView.destinationPath === window.location.pathname
+      && returnView.routePath === destinationPath
+      && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
   }
 
   async function handleLoadMore() {
@@ -3498,6 +3594,27 @@
     }
     if (onFavoritePage) elements.favoritesLink?.setAttribute("aria-current", "page");
     else elements.favoritesLink?.removeAttribute("aria-current");
+    configureDiaryReturnNavigation();
+  }
+
+  function configureDiaryReturnNavigation() {
+    if (elements.tagPageBack.hidden) return;
+    let returnView = null;
+    try {
+      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+    } catch {
+      return;
+    }
+    if (returnView?.version !== 2 || returnView.destinationPath !== window.location.pathname) return;
+    if (!isDiaryListPath(returnView.routePath) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
+    elements.tagPageBack.href = returnView.routePath;
+    elements.tagPageBack.textContent = "← 前の画面へ戻る";
+  }
+
+  function isDiaryListPath(pathname) {
+    return /^\/diary\/?$/.test(pathname)
+      || /^\/diary\/(?:tags|favorites)\/?$/.test(pathname)
+      || /^\/diary\/tag\/[^/]+\/?$/.test(pathname);
   }
 
   function createEmpty(message) {

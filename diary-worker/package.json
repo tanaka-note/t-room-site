@@ -21,6 +21,7 @@
     "test:photo-post": "node tests/browser/photo-post-resilience.mjs",
     "test:tags": "node tests/tags-ui.mjs",
     "test:history": "node tests/history-ui.mjs",
+    "test:navigation-return": "node tests/navigation-return-ui.mjs && node tests/browser/navigation-return.mjs",
     "test:pwa": "node tests/pwa-ui.mjs",
     "test:startup": "node tests/startup-view.mjs",
     "test:scroll-header": "node tests/scroll-header-ui.mjs",
