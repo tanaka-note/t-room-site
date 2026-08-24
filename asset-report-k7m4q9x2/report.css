@@ -443,7 +443,6 @@ td {
 }
 
 .history-dot-market { background: var(--accent); }
-.history-dot-principal { background: var(--muted); }
 
 .monthly-report {
   max-width: 820px;

@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const reportSource = await readFile(resolve(root, "asset-report-k7m4q9x2/report.js"), "utf8");
+const reportHtml = await readFile(resolve(root, "asset-report-k7m4q9x2/index.html"), "utf8");
+const reportCss = await readFile(resolve(root, "asset-report-k7m4q9x2/report.css"), "utf8");
 
 const context = {
   window: {
@@ -35,6 +37,23 @@ assert.equal(typeof hooks.calculateHistoryScale, "function");
 assert.equal(typeof hooks.historyMarketValue, "function");
 
 const { calculateHistoryScale, historyMarketValue } = hooks;
+
+const summaryElements = new Map([
+  ["#principal-value", { textContent: "" }],
+  ["#market-value", { textContent: "" }],
+  ["#profit-value", { textContent: "", className: "" }],
+  ["#return-value", { textContent: "", className: "" }],
+  ["#donut-total", { textContent: "" }]
+]);
+context.document.querySelector = (selector) => summaryElements.get(selector);
+const portfolioTotal = vm.runInContext("renderSummary()", context);
+assert.equal(summaryElements.get("#market-value").textContent, summaryElements.get("#donut-total").textContent,
+  "上部の時価総額と資産構成中央は同一の調整後金額を表示する");
+assert.equal(summaryElements.get("#principal-value").textContent, "￥6,000,000", "上部の元本は維持する");
+assert.equal(summaryElements.get("#profit-value").textContent, "+￥446,459", "調整後の損益計算を維持する");
+assert.equal(summaryElements.get("#return-value").textContent, "+7.44%", "調整後の損益率計算を維持する");
+assert.equal(summaryElements.get("#market-value").textContent, "￥6,446,459", "投資信託他売却損を反映した時価総額を表示する");
+assert.equal(portfolioTotal, 6_666_459, "資産構成のセグメント・構成比には従来の保有資産合計を使う");
 
 const small = calculateHistoryScale([6380000, 6400000, 6420000, 6390000, 6410000]);
 assert.equal(small.minValue, 6380000);
@@ -81,5 +100,15 @@ assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 19976
 assert.doesNotMatch(reportSource, /yFor\(entry\.marketValue\)/, "時価総額描画はentry.marketValueを直接使っていない");
 assert.match(reportSource, /yFor\(historyMarketValue\(entry\)\)/, "時価総額描画のy計算はhistoryMarketValueを通る");
 assert.match(reportSource, /renderHistoryTooltip\(entry, xFor\(index\), yFor\(historyMarketValue\(entry\)\)\);/, "tooltipYはdisplay値と同じ計算");
+assert.doesNotMatch(reportSource, /drawSeries\(\(entry\) => entry\.principal/, "元本の破線を描画しない");
+assert.doesNotMatch(reportSource, /\[entry\.principal, "#8996a8"\]/, "選択位置に元本のポイントを描画しない");
+assert.match(reportSource, /drawSeries\(\(entry\) => historyMarketValue\(entry\), "#52e6aa"/, "時価総額の緑色ラインを維持する");
+assert.match(reportSource, /createLinearGradient[\s\S]*?context\.fill\(\);/, "時価総額の緑色の塗りを維持する");
+
+const historySection = reportHtml.match(/<section id="history-section"[\s\S]*?<\/section>/)?.[0] || "";
+assert.match(historySection, /aria-label="時価総額の日次推移"/, "チャートARIAは時価総額のみを表す");
+assert.doesNotMatch(historySection, /元本/, "資産推移チャートの凡例・ARIAに元本を表示しない");
+assert.match(historySection, /history-dot-market[\s\S]*?時価総額/, "時価総額の凡例を維持する");
+assert.doesNotMatch(reportCss, /history-dot-principal/, "不要になった元本凡例スタイルを残さない");
 
 process.stdout.write("asset report history scale tests passed.\n");

@@ -263,7 +263,7 @@ function renderSummary() {
   returnElement.textContent = formatPercent(returnRate, true);
   returnElement.className = valueClass(returnRate);
 
-  document.querySelector("#donut-total").textContent = formatYen(total);
+  document.querySelector("#donut-total").textContent = formatYen(adjustedTotal);
   return total;
 }
 
@@ -518,7 +518,6 @@ function drawHistoryChart() {
     context.setLineDash([]);
   };
 
-  drawSeries((entry) => entry.principal, "#8996a8", { lineWidth: 1.8, dash: [7, 7] });
   drawSeries((entry) => historyMarketValue(entry), "#52e6aa", { lineWidth: compact ? 2.2 : 2.8 });
 
   if (historyView.selectedIndex >= 0 && historyView.visibleRecords[historyView.selectedIndex]) {
@@ -531,7 +530,7 @@ function drawHistoryChart() {
     context.moveTo(x, padding.top);
     context.lineTo(x, padding.top + chartHeight);
     context.stroke();
-    [[displayValue, "#52e6aa"], [entry.principal, "#8996a8"]].forEach(([value, color]) => {
+    [[displayValue, "#52e6aa"]].forEach(([value, color]) => {
       context.beginPath();
       context.arc(x, yFor(value), 5, 0, Math.PI * 2);
       context.fillStyle = "#07090d";
