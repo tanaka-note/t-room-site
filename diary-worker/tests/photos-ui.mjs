@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const [html, css, script, worker, wrangler] = await Promise.all([
+const [html, css, script, worker, wrangler, stagingMigration] = await Promise.all([
   readFile(`${root}/public/index.html`, "utf8"),
   readFile(`${root}/public/diary.css`, "utf8"),
   readFile(`${root}/public/diary.js`, "utf8"),
   readFile(`${root}/src/index.js`, "utf8"),
-  readFile(`${root}/wrangler.jsonc`, "utf8")
+  readFile(`${root}/wrangler.jsonc`, "utf8"),
+  readFile(`${root}/migrations/0015_photo_upload_staging.sql`, "utf8")
 ]);
 
 assert.match(html, /id="camera-roll-button"/);
@@ -39,6 +40,15 @@ assert.match(script, /resizePhoto\(bitmap, 1800, 320 \* 1024/);
 assert.match(script, /\["dragenter", "dragover", "dragleave", "drop"\]/);
 assert.match(script, /prepareSelectedPhotos\(\[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\], getEditorSelectionOffset\("end"\)\)/);
 assert.match(script, /photoPreparationPromise: null/);
+assert.match(script, /photoUploading: false/);
+assert.match(script, /PHOTO_UPLOAD_CONCURRENCY = 2/);
+assert.match(script, /queueBackgroundPhotoUpload\(photo\)/,
+  "each prepared photo must be queued before posting");
+assert.match(script, /\/api\/photo-upload-sessions/);
+assert.match(script, /await ensurePhotosUploaded\(pendingPhotos\)/,
+  "posting must wait for any remaining staged uploads");
+assert.match(script, /commitStagedPhotos\(saved\.entry\.id, pendingPhotos\)/,
+  "posting must promote staged photos without uploading them again");
 assert.match(script, /await waitForPhotoPreparation\(\);\s*const id = Number\(elements\.entryId\.value/s,
   "entry serialization must wait for the active photo preparation task");
 assert.match(script, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[250, 750\]\)/);
@@ -63,6 +73,9 @@ assert.match(script, /camera-roll-title/);
 assert.match(script, /function handleCameraRollClick\(event\)[\s\S]*?openPhotoViewer\(state\.photos, index\)/);
 assert.doesNotMatch(script, /elements\.cameraRollDialog\.close\(\);\s*openEntry\(photo\.entryId\);/s);
 assert.match(worker, /diary_photos|uploadEntryPhoto/);
+assert.match(worker, /diary_photo_upload_sessions|uploadStagedPhoto/);
+assert.match(worker, /diary_staged_photos|commitPhotoUploadSession/);
+assert.match(worker, /runScheduledStagedPhotoCleanup/);
 assert.match(worker, /function existingPhotoUploadResponse\(row, expected\)/);
 assert.match(worker, /Number\(row\.entry_id\) === Number\(expected\.entryId\)/);
 assert.match(worker, /String\(row\.household_id\) === String\(expected\.householdId\)/);
@@ -77,5 +90,10 @@ assert.match(worker, /async function deleteEntryPhoto/);
 assert.match(worker, /env\.MEDIA\.delete\(\[row\.original_key, row\.display_key, row\.thumbnail_key\]\)/);
 assert.match(worker, /img-src 'self' data: blob:/);
 assert.match(wrangler, /t-room-diary-media/);
+assert.match(stagingMigration, /CREATE TABLE IF NOT EXISTS diary_photo_upload_sessions/);
+assert.match(stagingMigration, /CREATE TABLE IF NOT EXISTS diary_staged_photos/);
+assert.match(stagingMigration, /FOREIGN KEY \(upload_session_id\).*ON DELETE CASCADE/);
+assert.match(stagingMigration, /CREATE TRIGGER diary_validate_photo_upload_session_commit/);
+assert.match(stagingMigration, /json_each\(NEW\.committed_photo_ids\)/);
 
 process.stdout.write("Diary camera roll UI contract test passed.\n");

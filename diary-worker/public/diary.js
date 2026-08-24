@@ -9,6 +9,7 @@
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const PHOTO_UPLOAD_RETRY_DELAYS_MS = Object.freeze([250, 750]);
+  const PHOTO_UPLOAD_CONCURRENCY = 2;
   const RICH_TEXT_COLORS = Object.freeze({
     default: "#27313b",
     red: "#b42318",
@@ -73,6 +74,13 @@
     editorDeletedPhotoIds: new Set(),
     photoPreparing: false,
     photoPreparationPromise: null,
+    photoUploading: false,
+    photoUploadPendingCount: 0,
+    photoUploadActiveTasks: new Set(),
+    photoUploadSessionId: null,
+    photoUploadSessionPromise: null,
+    photoUploadTargetEntryId: null,
+    photoUploadCommitted: false,
     photoInsertionOffset: null,
     photoOffset: 0,
     photos: [],
@@ -263,7 +271,7 @@
 
   function bindEvents() {
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (state.editorDirty || state.editorComposing || state.photoPreparing || state.photoPickerActive || document.querySelector("dialog[open]")) {
+      if (state.editorDirty || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || document.querySelector("dialog[open]")) {
         event.preventDefault();
       }
     });
@@ -1397,8 +1405,9 @@
     window.setTimeout(() => elements.entryContent.focus(), 0);
   }
 
-  function discardEditorChanges() {
+  async function discardEditorChanges() {
     if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
+    await cancelEditorPhotoUploadSession();
     state.editorDirty = false;
     closeEditorDialog();
   }
@@ -1855,6 +1864,7 @@
           state.editorPhotos.push(photo);
           preparedPhotos.push(photo);
           preparedCount += 1;
+          queueBackgroundPhotoUpload(photo);
         } catch (error) {
           failures.push(`${file.name}：${error.message}`);
         }
@@ -1907,7 +1917,11 @@
         width: bitmap.width,
         height: bitmap.height,
         previewUrl: URL.createObjectURL(thumbnailBlob),
-        existing: false
+        existing: false,
+        uploadState: "preparing",
+        uploadPromise: null,
+        uploadError: null,
+        removed: false
       };
     } finally {
       bitmap.close();
@@ -2590,6 +2604,9 @@
       removePhotoMarkerFromEditor(photoMarker(photo.id));
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
       if (photo.existing) state.editorDeletedPhotoIds.add(photo.id);
+      else void deleteStagedPhotoUpload(photo).catch(() => {
+        elements.photoPreparationStatus.textContent = "一時保存した画像は後ほど自動的に削除されます。";
+      });
       state.editorPhotos = state.editorPhotos.filter((candidate) => candidate.id !== photo.id);
       state.editorDirty = true;
       renderEditorPhotos();
@@ -2602,6 +2619,13 @@
     }
     state.editorPhotos = [];
     state.editorDeletedPhotoIds.clear();
+    state.photoUploadSessionId = null;
+    state.photoUploadSessionPromise = null;
+    state.photoUploadTargetEntryId = null;
+    state.photoUploadCommitted = false;
+    state.photoUploadPendingCount = 0;
+    state.photoUploading = false;
+    state.photoUploadActiveTasks.clear();
     elements.editorPhotoList?.replaceChildren();
   }
 
@@ -2620,23 +2644,78 @@
     return new Promise((resolve) => window.setTimeout(resolve, PHOTO_UPLOAD_RETRY_DELAYS_MS[attemptIndex]));
   }
 
-  function logPhotoUploadRetry(entryId, photoId, attempt, details) {
+  function logPhotoUploadRetry(uploadTarget, photoId, attempt, details) {
     console.warn("Diary photo upload retry", {
       stage: "photo-upload",
-      entryId,
+      uploadTarget,
       photoId,
       retry: attempt,
       ...details
     });
   }
 
-  async function uploadPhoto(entryId, photo) {
+  async function ensurePhotoUploadSession() {
+    if (state.photoUploadSessionId) return state.photoUploadSessionId;
+    if (state.photoUploadSessionPromise) return state.photoUploadSessionPromise;
+    const targetEntryId = Number(elements.entryId.value || 0) || null;
+    state.photoUploadTargetEntryId = targetEntryId;
+    state.photoUploadSessionPromise = api("/photo-upload-sessions", {
+      method: "POST",
+      body: { targetEntryId }
+    }).then((result) => {
+      state.photoUploadSessionId = result.uploadSession.id;
+      return state.photoUploadSessionId;
+    }).finally(() => {
+      state.photoUploadSessionPromise = null;
+    });
+    return state.photoUploadSessionPromise;
+  }
+
+  function queueBackgroundPhotoUpload(photo) {
+    if (photo.existing || photo.removed || photo.uploadState === "uploaded") return Promise.resolve(photo);
+    if (photo.uploadPromise) return photo.uploadPromise;
+    photo.uploadState = "uploading";
+    photo.uploadError = null;
+    state.photoUploadPendingCount += 1;
+    state.photoUploading = true;
+    const queued = (async () => {
+      while (state.photoUploadActiveTasks.size >= PHOTO_UPLOAD_CONCURRENCY) {
+        await Promise.race(state.photoUploadActiveTasks);
+      }
+      if (photo.removed) return null;
+      const activeTask = uploadPhotoToStaging(photo);
+      const settledTask = activeTask.catch(() => null);
+      state.photoUploadActiveTasks.add(settledTask);
+      try {
+        const result = await activeTask;
+        photo.uploadState = "uploaded";
+        photo.uploadError = null;
+        if (photo.removed) await deleteStagedPhotoUpload(photo, { waitForUpload: false });
+        return result;
+      } catch (error) {
+        photo.uploadState = "failed";
+        photo.uploadError = error;
+        return null;
+      } finally {
+        state.photoUploadActiveTasks.delete(settledTask);
+      }
+    })();
+    photo.uploadPromise = queued.finally(() => {
+      photo.uploadPromise = null;
+      state.photoUploadPendingCount = Math.max(0, state.photoUploadPendingCount - 1);
+      state.photoUploading = state.photoUploadPendingCount > 0;
+    });
+    return photo.uploadPromise;
+  }
+
+  async function uploadPhotoToStaging(photo) {
+    const uploadSessionId = await ensurePhotoUploadSession();
     const maxAttempts = PHOTO_UPLOAD_RETRY_DELAYS_MS.length + 1;
     let lastError = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       let response;
       try {
-        response = await fetch(`${BASE_PATH}/api/entries/${entryId}/photos`, {
+        response = await fetch(`${BASE_PATH}/api/photo-upload-sessions/${uploadSessionId}/photos`, {
           method: "POST",
           headers: { "X-Diary-Request": "1" },
           credentials: "same-origin",
@@ -2645,7 +2724,7 @@
       } catch {
         lastError = new Error("画像の通信に失敗しました。");
         if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
-        logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "network" });
+        logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "network" });
         await waitForPhotoUploadRetry(attempt);
         continue;
       }
@@ -2658,7 +2737,7 @@
         if (response.ok) {
           lastError = new Error("画像の保存結果を確認できませんでした。");
           if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
-          logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
+          logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
           await waitForPhotoUploadRetry(attempt);
           continue;
         }
@@ -2668,7 +2747,7 @@
       if (response.ok) {
         lastError = new Error("画像の保存結果を確認できませんでした。");
         if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
-        logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
+        logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
         await waitForPhotoUploadRetry(attempt);
         continue;
       }
@@ -2677,10 +2756,75 @@
       if (response.status < 500 || response.status > 599 || attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) {
         throw lastError;
       }
-      logPhotoUploadRetry(entryId, photo.id, attempt + 1, { errorType: "http", status: response.status });
+      logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "http", status: response.status });
       await waitForPhotoUploadRetry(attempt);
     }
     throw lastError || new Error("画像を保存できませんでした。");
+  }
+
+  async function ensurePhotosUploaded(photos) {
+    await Promise.all(photos.map((photo) => photo.uploadPromise || Promise.resolve()));
+    const failed = photos.filter((photo) => photo.uploadState !== "uploaded");
+    if (failed.length) {
+      await Promise.all(failed.map((photo) => queueBackgroundPhotoUpload(photo)));
+    }
+    const remaining = photos.filter((photo) => photo.uploadState !== "uploaded");
+    if (remaining.length) {
+      throw new Error(remaining.map((photo) => `${photo.fileName}：${photo.uploadError?.message || "画像を保存できませんでした。"}`).join(" / "));
+    }
+  }
+
+  async function deleteStagedPhotoUpload(photo, { waitForUpload = true } = {}) {
+    photo.removed = true;
+    if (waitForUpload && photo.uploadPromise) await photo.uploadPromise;
+    if (photo.uploadState !== "uploaded" || !state.photoUploadSessionId) return;
+    state.photoUploadPendingCount += 1;
+    state.photoUploading = true;
+    try {
+      const response = await fetch(`${BASE_PATH}/api/photo-upload-sessions/${state.photoUploadSessionId}/photos/${photo.id}`, {
+        method: "DELETE",
+        headers: { "X-Diary-Request": "1" },
+        credentials: "same-origin",
+        keepalive: true
+      });
+      if (!response.ok) throw new Error("一時保存した画像を削除できませんでした。");
+      photo.uploadState = "removed";
+    } finally {
+      state.photoUploadPendingCount = Math.max(0, state.photoUploadPendingCount - 1);
+      state.photoUploading = state.photoUploadPendingCount > 0;
+    }
+  }
+
+  async function commitStagedPhotos(entryId, photos) {
+    if (!state.photoUploadSessionId) return [];
+    const result = await api(`/photo-upload-sessions/${state.photoUploadSessionId}/commit`, {
+      method: "POST",
+      body: { entryId, photoIds: photos.map((photo) => photo.id) }
+    });
+    state.photoUploadCommitted = true;
+    return result.photos || [];
+  }
+
+  async function cancelEditorPhotoUploadSession() {
+    if (!state.photoUploadSessionId && state.photoUploadSessionPromise) {
+      await state.photoUploadSessionPromise.catch(() => null);
+    }
+    const uploadSessionId = state.photoUploadSessionId;
+    if (!uploadSessionId || state.photoUploadCommitted) return;
+    await Promise.allSettled([
+      ...state.photoUploadActiveTasks,
+      ...state.editorPhotos.map((photo) => photo.uploadPromise).filter(Boolean)
+    ]);
+    try {
+      await fetch(`${BASE_PATH}/api/photo-upload-sessions/${uploadSessionId}`, {
+        method: "DELETE",
+        headers: { "X-Diary-Request": "1" },
+        credentials: "same-origin",
+        keepalive: true
+      });
+    } catch {
+      // The server-side expiry cleanup removes abandoned staging data.
+    }
   }
 
   async function deletePhoto(photoId) {
@@ -2751,11 +2895,16 @@
       };
       if (id) body.revision = Number(elements.entryRevision.value);
 
+      const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
+      if (pendingPhotos.length) {
+        setEditorSaveBusy(true, "写真の保存完了を待っています...");
+        await ensurePhotosUploaded(pendingPhotos);
+      }
+
       const saved = await api(id ? `/entries/${id}` : "/entries", {
         method: id ? "PUT" : "POST",
         body
       });
-      const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
       const failures = [];
       const deletedPhotoIds = [...state.editorDeletedPhotoIds];
       const promotedEditDraft = targetStatus === "published"
@@ -2775,15 +2924,17 @@
           failures.push(`画像の削除：${error.message}`);
         }
       }
-      for (let index = 0; index < pendingPhotos.length; index += 1) {
-        const photo = pendingPhotos[index];
-        setEditorSaveBusy(true, `写真を保存中 ${index + 1}/${pendingPhotos.length}`);
+      if (state.photoUploadSessionId) {
+        setEditorSaveBusy(true, "写真を日記へ反映しています...");
         try {
-          const result = await uploadPhoto(saved.entry.id, photo);
-          photo.existing = true;
-          Object.assign(photo, result.photo);
+          const committedPhotos = await commitStagedPhotos(saved.entry.id, pendingPhotos);
+          const committedById = new Map(committedPhotos.map((photo) => [photo.id, photo]));
+          for (const photo of pendingPhotos) {
+            photo.existing = true;
+            Object.assign(photo, committedById.get(photo.id) || {});
+          }
         } catch (error) {
-          failures.push(`${photo.fileName}：${error.message}`);
+          failures.push(`写真の反映：${error.message}`);
         }
       }
       if (failures.length) {

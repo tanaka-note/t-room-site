@@ -52,6 +52,7 @@ assert.match(pwaAutoUpdate, /navigator\.serviceWorker\.register\(workerUrl/);
 assert.match(script, /beforeinstallprompt/);
 assert.match(script, /visibilitychange/);
 assert.match(script, /troom:before-auto-update/);
+assert.match(script, /state\.photoUploading/);
 assert.match(pwaAutoUpdate, /const AUTO_UPDATE_META = "troom-auto-update"/);
 assert.match(pwaAutoUpdate, /const AUTO_UPDATE_ENABLED = "enabled"/);
 assert.match(pwaAutoUpdate, /function canRunAutoUpdate\(\)/);

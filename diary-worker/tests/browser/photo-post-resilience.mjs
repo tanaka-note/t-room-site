@@ -30,7 +30,11 @@ function resetScenario(mode) {
     entryRequests: [],
     createdEntryIds: new Set(),
     photoRequests: 0,
-    storedPhotoIds: new Set()
+    storedPhotoIds: new Set(),
+    uploadSessions: new Set(),
+    commitRequests: [],
+    cancelRequests: [],
+    photoUploadStartedBeforeEntry: false
   };
 }
 
@@ -97,6 +101,12 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, { entry: savedEntry(id, body) });
       return;
     }
+    if (apiPath === "/photo-upload-sessions" && request.method === "POST") {
+      const id = crypto.randomUUID();
+      scenario.uploadSessions.add(id);
+      sendJson(response, 200, { uploadSession: { id, expiresAt: "2026-08-20T00:00:00.000Z" } });
+      return;
+    }
     const entryUpdateMatch = apiPath.match(/^\/entries\/(\d+)$/);
     if (entryUpdateMatch && request.method === "PUT") {
       const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
@@ -105,12 +115,13 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, { entry: savedEntry(id, body, Number(body.revision || 1) + 1) });
       return;
     }
-    const photoUploadMatch = apiPath.match(/^\/entries\/(\d+)\/photos$/);
+    const photoUploadMatch = apiPath.match(/^\/photo-upload-sessions\/([0-9a-f-]{36})\/photos$/);
     if (photoUploadMatch && request.method === "POST") {
       const multipart = (await readRequestBody(request)).toString("latin1");
       const photoId = multipart.match(photoIdPattern)?.[1];
       assert.ok(photoId, "photo upload must contain a UUID");
       scenario.photoRequests += 1;
+      if (scenario.entryRequests.length === 0) scenario.photoUploadStartedBeforeEntry = true;
       if (scenario.mode === "http-500-once" && scenario.photoRequests === 1) {
         sendJson(response, 503, { error: "一時的に画像を保存できません。" });
         return;
@@ -129,7 +140,6 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         photo: {
           id: photoId,
-          entryId: Number(photoUploadMatch[1]),
           fileName: "test.png",
           contentType: "image/png",
           originalSize: validPng.length,
@@ -143,6 +153,33 @@ const server = createServer(async (request, response) => {
         },
         idempotent
       });
+      return;
+    }
+    const photoCommitMatch = apiPath.match(/^\/photo-upload-sessions\/([0-9a-f-]{36})\/commit$/);
+    if (photoCommitMatch && request.method === "POST") {
+      const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
+      scenario.commitRequests.push(body);
+      sendJson(response, 200, {
+        photos: body.photoIds.map((photoId) => ({
+          id: photoId,
+          entryId: body.entryId,
+          fileName: "test.png",
+          contentType: "image/png",
+          originalSize: validPng.length,
+          width: 1,
+          height: 1,
+          createdByName: "テスト",
+          createdAt: "2026-08-19T00:00:00.000Z",
+          thumbnailUrl: `/diary/api/photos/${photoId}/thumbnail`,
+          displayUrl: `/diary/api/photos/${photoId}/display`,
+          originalUrl: `/diary/api/photos/${photoId}/original`
+        }))
+      });
+      return;
+    }
+    if (/^\/photo-upload-sessions\/[0-9a-f-]{36}(?:\/photos\/[0-9a-f-]{36})?$/.test(apiPath) && request.method === "DELETE") {
+      scenario.cancelRequests.push(apiPath);
+      sendJson(response, 200, { ok: true });
       return;
     }
     sendJson(response, 200, {});
@@ -241,10 +278,13 @@ async function verifyPreparationRace(browser, name, contextOptions) {
     await page.waitForTimeout(100);
     assert.equal(scenario.entryRequests.length, 0, `${name}: photo preparation must finish before entry serialization`);
     await page.evaluate(() => window.__releasePhotoPreparation());
+    await page.waitForFunction(() => document.querySelector("#editor-photo-list .editor-photo-card"));
     await waitForEditorClosed(page);
     assert.equal(scenario.entryRequests.length, 1, `${name}: preparation race must create one entry`);
     assert.equal(scenario.photoRequests, 1, `${name}: prepared photo must upload once`);
     assert.equal(scenario.storedPhotoIds.size, 1, `${name}: prepared photo must be stored once`);
+    assert.equal(scenario.photoUploadStartedBeforeEntry, true, `${name}: photo upload must start before the entry is posted`);
+    assert.equal(scenario.commitRequests.length, 1, `${name}: staged photo must be committed once`);
     assert.match(scenario.entryRequests[0].body.content, /本文\n\[\[写真:[0-9a-f-]{36}\]\]/,
       `${name}: serialized content must include the completed photo marker`);
     const runs = scenario.entryRequests[0].body.contentFormat?.runs || [];
@@ -261,12 +301,15 @@ async function verifyAutomaticRecovery(browser, name, mode, contextOptions) {
   try {
     await choosePhoto(page, `${mode}.png`);
     await page.waitForSelector("#editor-photo-list .editor-photo-card");
+    await page.waitForFunction(() => document.querySelector("#photo-preparation-status")?.textContent.includes("本文へ追加"));
     await page.click("#save-entry-button");
     await waitForEditorClosed(page);
     assert.equal(scenario.entryRequests.length, 1, `${name} ${mode}: entry must not be duplicated`);
     assert.equal(scenario.createdEntryIds.size, 1, `${name} ${mode}: exactly one entry ID must be created`);
     assert.equal(scenario.photoRequests, 2, `${name} ${mode}: upload must retry exactly once before success`);
     assert.equal(scenario.storedPhotoIds.size, 1, `${name} ${mode}: retry must retain one logical photo`);
+    assert.equal(scenario.photoUploadStartedBeforeEntry, true, `${name} ${mode}: retries must run while editing`);
+    assert.equal(scenario.commitRequests.length, 1, `${name} ${mode}: posting must promote without another upload`);
   } finally {
     await page.close();
   }
@@ -280,18 +323,38 @@ async function verifyPermanentFailure(browser, name, contextOptions) {
     await page.waitForSelector("#editor-photo-list .editor-photo-card");
     await page.click("#save-entry-button");
     await page.waitForFunction(() => document.querySelector("#editor-message")?.textContent.includes("画像形式を確認してください。"));
-    assert.equal(scenario.photoRequests, 1, `${name}: permanent 4xx must not retry`);
-    assert.equal(scenario.createdEntryIds.size, 1, `${name}: partial success must retain the original entry`);
+    assert.equal(scenario.photoRequests, 2, `${name}: background failure must be retried once when posting`);
+    assert.equal(scenario.createdEntryIds.size, 0, `${name}: entry must not be created before required photos are ready`);
     assert.equal(await page.locator("#editor-dialog").evaluate((node) => node.open), true, `${name}: editor must remain open after photo failure`);
-    assert.equal(await page.inputValue("#entry-id"), "100", `${name}: saved entry ID must be retained for recovery`);
+    assert.equal(await page.inputValue("#entry-id"), "", `${name}: failed preupload must not create a partial entry`);
 
     scenario.mode = "success";
     await page.click("#save-entry-button");
     await waitForEditorClosed(page);
-    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT"],
-      `${name}: retry after partial success must update the same entry`);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST"],
+      `${name}: retry after preupload recovery must create the entry once`);
     assert.equal(scenario.createdEntryIds.size, 1, `${name}: manual resubmission must not create another entry`);
     assert.equal(scenario.storedPhotoIds.size, 1, `${name}: recovered photo must be stored once`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyDiscardCleanup(browser, name, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await choosePhoto(page, "discard.png");
+    await page.waitForFunction(() => window.document.querySelector("#editor-photo-list .editor-photo-card") && window.document.querySelector("#photo-preparation-status")?.textContent.includes("本文へ追加"));
+    await page.waitForFunction(() => window.document.querySelector("#editor-message")?.textContent !== "写真の保存完了を待っています...");
+    await page.waitForTimeout(100);
+    await page.click("#cancel-entry-button");
+    await page.waitForSelector("#editor-leave-dialog[open]");
+    await page.click("#editor-leave-discard");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.entryRequests.length, 0, `${name}: discarding must not create an entry`);
+    assert.ok(scenario.cancelRequests.some((path) => /^\/photo-upload-sessions\/[0-9a-f-]{36}$/.test(path)),
+      `${name}: discarding must cancel the staging session`);
   } finally {
     await page.close();
   }
@@ -304,6 +367,7 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
     await verifyAutomaticRecovery(browser, name, "http-500-once", contextOptions);
     await verifyAutomaticRecovery(browser, name, "lost-response", contextOptions);
     await verifyPermanentFailure(browser, name, contextOptions);
+    await verifyDiscardCleanup(browser, name, contextOptions);
   } finally {
     await browser.close();
   }

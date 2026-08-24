@@ -23,6 +23,7 @@ const server = spawn(process.execPath, [
   wranglerPath,
   "dev",
   "--local",
+  "--test-scheduled",
   "--port",
   String(port),
   "--var",
@@ -103,6 +104,182 @@ function createPhotoForm({ id, fileName, width = 1200, height = 800 }) {
 try {
   await waitForServer();
   const wifeCookie = await login("wife@example.test", "wife-test");
+  const mainCookie = await login("main@example.test", "main-test");
+
+  const stagedPhotoId = randomUUID();
+  const uploadSessionCreated = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: null }
+  });
+  assert.equal(uploadSessionCreated.response.status, 200, JSON.stringify(uploadSessionCreated.result));
+  const uploadSessionId = uploadSessionCreated.result.uploadSession.id;
+  const stagedUploadResponse = await fetch(`${origin}/diary/api/photo-upload-sessions/${uploadSessionId}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: stagedPhotoId, fileName: "preuploaded.png" })
+  });
+  const stagedUpload = await stagedUploadResponse.json();
+  assert.equal(stagedUploadResponse.status, 200, JSON.stringify(stagedUpload));
+  assert.equal(stagedUpload.photo.id, stagedPhotoId);
+  assert.deepEqual(queryLocalDatabase(`
+    SELECT
+      (SELECT COUNT(*) FROM diary_staged_photos WHERE id = '${stagedPhotoId}') AS staged_count,
+      (SELECT COUNT(*) FROM diary_photos WHERE id = '${stagedPhotoId}') AS final_count
+  `).map((row) => ({ staged: Number(row.staged_count), final: Number(row.final_count) })), [{ staged: 1, final: 0 }],
+  "preuploaded photo must remain outside the formal photo library");
+  const stagedRoll = await jsonRequest(`/photos?fileName=preuploaded`, { cookie: wifeCookie });
+  assert.equal(stagedRoll.result.photos.some((photo) => photo.id === stagedPhotoId), false,
+    "staged photo must not appear in the camera roll");
+
+  const stagedEntry = await jsonRequest("/entries", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: "先行アップロード確認",
+      content: `本文\n[[写真:${stagedPhotoId}]]`,
+      tags: ["先行アップロード"]
+    }
+  });
+  assert.equal(stagedEntry.response.status, 200, JSON.stringify(stagedEntry.result));
+  const unauthorizedCommit = await jsonRequest(`/photo-upload-sessions/${uploadSessionId}/commit`, {
+    method: "POST",
+    cookie: mainCookie,
+    body: { entryId: stagedEntry.result.entry.id, photoIds: [stagedPhotoId] }
+  });
+  assert.equal(unauthorizedCommit.response.status, 404, "another account in the same household must not commit staged photos");
+  const stagedCommit = await jsonRequest(`/photo-upload-sessions/${uploadSessionId}/commit`, {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { entryId: stagedEntry.result.entry.id, photoIds: [stagedPhotoId] }
+  });
+  assert.equal(stagedCommit.response.status, 200, JSON.stringify(stagedCommit.result));
+  assert.equal(stagedCommit.result.photos[0].entryId, stagedEntry.result.entry.id);
+  const stagedCommitRetry = await jsonRequest(`/photo-upload-sessions/${uploadSessionId}/commit`, {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { entryId: stagedEntry.result.entry.id, photoIds: [stagedPhotoId] }
+  });
+  assert.equal(stagedCommitRetry.response.status, 200, JSON.stringify(stagedCommitRetry.result));
+  assert.equal(stagedCommitRetry.result.idempotent, true, "lost commit response retry must remain idempotent");
+  assert.deepEqual(queryLocalDatabase(`
+    SELECT
+      (SELECT COUNT(*) FROM diary_staged_photos WHERE id = '${stagedPhotoId}') AS staged_count,
+      (SELECT COUNT(*) FROM diary_photos WHERE id = '${stagedPhotoId}' AND entry_id = ${stagedEntry.result.entry.id}) AS final_count
+  `).map((row) => ({ staged: Number(row.staged_count), final: Number(row.final_count) })), [{ staged: 0, final: 1 }],
+  "commit must promote exactly one photo ledger row");
+
+  const editDraftPhotoId = randomUUID();
+  const editSource = await jsonRequest("/entries", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: "編集下書き写真確認",
+      content: "公開本文",
+      tags: ["編集下書き"]
+    }
+  });
+  assert.equal(editSource.response.status, 200, JSON.stringify(editSource.result));
+  const editUploadSession = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: editSource.result.entry.id }
+  });
+  const editUploadSessionId = editUploadSession.result.uploadSession.id;
+  const editStagedResponse = await fetch(`${origin}/diary/api/photo-upload-sessions/${editUploadSessionId}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: editDraftPhotoId, fileName: "edit-draft.png" })
+  });
+  assert.equal(editStagedResponse.status, 200, await editStagedResponse.text());
+  const editDraft = await jsonRequest(`/entries/${editSource.result.entry.id}`, {
+    method: "PUT",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: "編集下書き写真確認",
+      content: `編集本文\n[[写真:${editDraftPhotoId}]]`,
+      tags: ["編集下書き"],
+      status: "draft",
+      revision: editSource.result.entry.revision,
+      excludedPhotoIds: []
+    }
+  });
+  assert.equal(editDraft.response.status, 200, JSON.stringify(editDraft.result));
+  assert.notEqual(editDraft.result.entry.id, editSource.result.entry.id);
+  const editDraftCommit = await jsonRequest(`/photo-upload-sessions/${editUploadSessionId}/commit`, {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { entryId: editDraft.result.entry.id, photoIds: [editDraftPhotoId] }
+  });
+  assert.equal(editDraftCommit.response.status, 200, JSON.stringify(editDraftCommit.result));
+  const publishedEditDraft = await jsonRequest(`/entries/${editDraft.result.entry.id}`, {
+    method: "PUT",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: "編集下書き写真確認",
+      content: `編集本文\n[[写真:${editDraftPhotoId}]]`,
+      tags: ["編集下書き"],
+      status: "published",
+      revision: editDraft.result.entry.revision,
+      excludedPhotoIds: []
+    }
+  });
+  assert.equal(publishedEditDraft.response.status, 200, JSON.stringify(publishedEditDraft.result));
+  assert.equal(publishedEditDraft.result.entry.id, editSource.result.entry.id);
+  assert.equal(publishedEditDraft.result.entry.photos.some((photo) => photo.id === editDraftPhotoId), true,
+    "staged photo committed to an edit draft must move to the published source");
+
+  const cancelledPhotoId = randomUUID();
+  const cancelledSession = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: null }
+  });
+  const cancelledSessionId = cancelledSession.result.uploadSession.id;
+  const cancelledUploadResponse = await fetch(`${origin}/diary/api/photo-upload-sessions/${cancelledSessionId}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: cancelledPhotoId, fileName: "cancelled.png" })
+  });
+  assert.equal(cancelledUploadResponse.status, 200, await cancelledUploadResponse.text());
+  const cancelled = await jsonRequest(`/photo-upload-sessions/${cancelledSessionId}`, {
+    method: "DELETE",
+    cookie: wifeCookie
+  });
+  assert.equal(cancelled.response.status, 200, JSON.stringify(cancelled.result));
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_staged_photos WHERE upload_session_id = '${cancelledSessionId}'`)[0].count), 0,
+    "discarded editor photos must be removed from staging");
+
+  const expiredPhotoId = randomUUID();
+  const expiredSession = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: null }
+  });
+  const expiredSessionId = expiredSession.result.uploadSession.id;
+  const expiredUploadResponse = await fetch(`${origin}/diary/api/photo-upload-sessions/${expiredSessionId}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: expiredPhotoId, fileName: "expired.png" })
+  });
+  assert.equal(expiredUploadResponse.status, 200, await expiredUploadResponse.text());
+  queryLocalDatabase(`UPDATE diary_photo_upload_sessions SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = '${expiredSessionId}'`);
+  const scheduled = await fetch(`${origin}/__scheduled?cron=25+18+*+*+*`);
+  assert.equal(scheduled.status, 200, await scheduled.text());
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const remaining = Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_staged_photos WHERE upload_session_id = '${expiredSessionId}'`)[0].count);
+    if (!remaining) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_staged_photos WHERE upload_session_id = '${expiredSessionId}'`)[0].count), 0,
+    "scheduled cleanup must remove expired uncommitted photos");
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_photo_upload_sessions WHERE id = '${expiredSessionId}'`)[0].count), 0,
+    "scheduled cleanup must remove the expired upload session");
+
   const photoId = randomUUID();
   const marker = photoId.slice(0, 8);
   const tagToken = `旅行タグ${marker}`;
@@ -169,7 +346,6 @@ try {
   });
   assert.equal(otherEntryRetryResponse.status, 409, "same photo ID must not be accepted for another entry");
 
-  const mainCookie = await login("main@example.test", "main-test");
   const otherAccountRetryResponse = await fetch(`${origin}/diary/api/entries/${entry.id}/photos`, {
     method: "POST",
     headers: { Cookie: mainCookie, "X-Diary-Request": "1" },
