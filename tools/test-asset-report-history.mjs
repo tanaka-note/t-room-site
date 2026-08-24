@@ -54,6 +54,9 @@ assert.equal(summaryElements.get("#profit-value").textContent, "+￥431,675", "�
 assert.equal(summaryElements.get("#return-value").textContent, "+7.19%", "調整後の損益率計算を維持する");
 assert.equal(summaryElements.get("#market-value").textContent, "￥6,431,675", "投資信託他売却損を反映した時価総額を表示する");
 assert.equal(portfolioTotal, 6_651_675, "資産構成のセグメント・構成比には従来の保有資産合計を使う");
+assert.match(reportHtml, /<time datetime="2026-08-24">2026\.08\.24<\/time>/);
+assert.match(reportHtml, /2026年8月24日時点/);
+assert.match(reportHtml, /datetime="2026-08-24">2026年8月24日<\/time>/);
 
 const small = calculateHistoryScale([6380000, 6400000, 6420000, 6390000, 6410000]);
 assert.equal(small.minValue, 6380000);
