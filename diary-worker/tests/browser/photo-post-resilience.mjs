@@ -31,6 +31,7 @@ function resetScenario(mode) {
     entryGets: 0,
     finalPutAttempts: 0,
     entries: new Map(),
+    entryRequestIds: new Map(),
     createdEntryIds: new Set(),
     photoRequests: 0,
     storedPhotoIds: new Set(),
@@ -99,11 +100,22 @@ const server = createServer(async (request, response) => {
     }
     if (apiPath === "/entries" && request.method === "POST") {
       const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
+      const knownId = scenario.entryRequestIds.get(body.requestId);
+      if (knownId) {
+        scenario.entryRequests.push({ method: "POST", id: knownId, body });
+        sendJson(response, 200, { entry: scenario.entries.get(knownId) });
+        return;
+      }
       const id = scenario.nextEntryId++;
       scenario.createdEntryIds.add(id);
+      scenario.entryRequestIds.set(body.requestId, id);
       scenario.entryRequests.push({ method: "POST", id, body });
       const entry = savedEntry(id, body);
       scenario.entries.set(id, entry);
+      if (scenario.mode === "entry-post-lost-response") {
+        request.socket.destroy();
+        return;
+      }
       sendJson(response, 200, { entry });
       return;
     }
@@ -341,6 +353,26 @@ async function verifyPreparationRace(browser, name, contextOptions) {
   }
 }
 
+async function verifyEntryPostResponseLoss(browser, name, contextOptions) {
+  resetScenario("entry-post-lost-response");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.createdEntryIds.size, 1, `${name}: a lost POST response must create only one entry`);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "POST"],
+      `${name}: the retry must reuse the create endpoint exactly once`);
+    assert.equal(scenario.entryRequests[0].body.requestId, scenario.entryRequests[1].body.requestId,
+      `${name}: the retry must preserve the same request ID`);
+    assert.match(scenario.entryRequests[0].body.requestId, /^[0-9a-f-]{36}$/,
+      `${name}: new posts must include a stable UUID request ID`);
+    assert.equal(scenario.entryRequests[0].id, scenario.entryRequests[1].id,
+      `${name}: the replay must return the original entry ID`);
+  } finally {
+    await page.close();
+  }
+}
+
 async function verifyAutomaticRecovery(browser, name, mode, contextOptions) {
   resetScenario(mode);
   const page = await newDiaryPage(browser, contextOptions);
@@ -548,6 +580,7 @@ async function verifyNewDraft(browser, name, contextOptions) {
 async function runBrowser(browserType, name, executablePath, contextOptions = {}) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
+    await verifyEntryPostResponseLoss(browser, name, contextOptions);
     await verifyPreparationRace(browser, name, contextOptions);
     await verifyAutomaticRecovery(browser, name, "http-500-once", contextOptions);
     await verifyAutomaticRecovery(browser, name, "lost-response", contextOptions);

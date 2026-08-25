@@ -157,7 +157,7 @@
       "publicUrls": ["https://tanaka-note.com/diary/", "https://tanaka-note.com/diary/investment/", "https://tanaka-note.com/diary/favorites/"],
       "entrypoints": ["diary-worker/public/index.html", "diary-worker/public/investment.html"],
       "buildRoots": ["diary-worker/public"],
-      "buildFiles": ["diary-worker/src/index.js", "assets/passkey-session-validation.mjs", "security-worker/public/passkey-client.js"],
+      "buildFiles": ["diary-worker/src/index.js", "diary-worker/src/backup.js", "assets/passkey-session-validation.mjs", "security-worker/public/passkey-client.js"],
       "buildMode": "content-hash",
       "serviceWorker": "diary-worker/public/service-worker.js",
       "serviceWorkerUrl": "/diary/service-worker.js",

@@ -13,6 +13,11 @@ const MEDIA_DELETION_REQUEST_MAX_BATCHES = 4;
 const MEDIA_DELETION_SCHEDULED_MAX_BATCHES = 10;
 const PHOTO_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const STAGED_PHOTO_CLEANUP_BATCH_SIZE = 100;
+const PHOTO_REQUEST_MAX_BYTES = 80 * 1024 * 1024;
+const PHOTO_PARTS_MAX_BYTES = 64 * 1024 * 1024;
+const PASSWORD_PBKDF2_ITERATIONS = 600000;
+const PASSWORD_HASH_BYTES = 32;
+const PASSWORD_SALT_BYTES = 16;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAIN_ADMIN_ACCOUNT_ID = "main-admin";
@@ -186,6 +191,21 @@ async function handleApi(request, env, url, path, context) {
       if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
       enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password" });
       return json({ error: "IDまたはパスワードが違います。" }, 401);
+    }
+    if (requestedAccount.passwordHash && passwordHashNeedsUpgrade(passwordHash)) {
+      try {
+        const upgradedHash = await createPasswordHash(password, env);
+        await env.DB.prepare(`
+          UPDATE diary_accounts
+          SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND password_hash = ? AND active = 1
+        `).bind(upgradedHash, requestedAccount.id, passwordHash).run();
+      } catch (error) {
+        console.error("Diary password hash upgrade failed", {
+          stage: "password-hash-upgrade",
+          errorType: error instanceof Error ? error.name : "unknown"
+        });
+      }
     }
     await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
 
@@ -774,8 +794,6 @@ async function readOwnedPhotoUploadSession(id, env, session) {
 
 async function uploadStagedPhoto(uploadSessionId, request, env, session) {
   if (!env.MEDIA) throw new HttpError(503, "画像の保存先が設定されていません。");
-  const contentLength = Number(request.headers.get("Content-Length") || 0);
-  if (contentLength > 80 * 1024 * 1024) throw new HttpError(413, "画像の容量が大きすぎます。");
   const uploadSession = await readOwnedPhotoUploadSession(uploadSessionId, env, session);
   if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
     throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
@@ -783,8 +801,9 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
 
   let form;
   try {
-    form = await request.formData();
-  } catch {
+    form = await readMultipartForm(request, PHOTO_REQUEST_MAX_BYTES);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
     throw new HttpError(400, "画像を読み取れませんでした。");
   }
   const id = String(form.get("id") || "").toLowerCase();
@@ -800,6 +819,9 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
   }
   if (!original.size || original.size > 60 * 1024 * 1024 || display.size > 3 * 1024 * 1024 || thumbnail.size > 700 * 1024) {
     throw new HttpError(413, "画像の容量を確認してください。");
+  }
+  if (original.size + display.size + thumbnail.size > PHOTO_PARTS_MAX_BYTES) {
+    throw new HttpError(413, "画像の合計容量が大きすぎます。");
   }
 
   const finalPhoto = await env.DB.prepare("SELECT id FROM diary_photos WHERE id = ?").bind(id).first();
@@ -1254,16 +1276,15 @@ async function committedPhotoUploadResponse(entryId, photoIds, env, idempotent) 
 
 async function uploadEntryPhoto(entryId, request, env, session) {
   if (!env.MEDIA) throw new HttpError(503, "画像の保存先が設定されていません。");
-  const contentLength = Number(request.headers.get("Content-Length") || 0);
-  if (contentLength > 80 * 1024 * 1024) throw new HttpError(413, "画像の容量が大きすぎます。");
   const entry = await env.DB.prepare("SELECT id FROM diary_entries WHERE id = ? AND household_id = ? AND deleted_at IS NULL AND status IN ('published', 'draft')")
     .bind(entryId, session.activeHouseholdId).first();
   if (!entry) throw new HttpError(404, "画像を追加する日記が見つかりません。");
 
   let form;
   try {
-    form = await request.formData();
-  } catch {
+    form = await readMultipartForm(request, PHOTO_REQUEST_MAX_BYTES);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
     throw new HttpError(400, "画像を読み取れませんでした。");
   }
   const id = String(form.get("id") || "").toLowerCase();
@@ -1279,6 +1300,9 @@ async function uploadEntryPhoto(entryId, request, env, session) {
   }
   if (!original.size || original.size > 60 * 1024 * 1024 || display.size > 3 * 1024 * 1024 || thumbnail.size > 700 * 1024) {
     throw new HttpError(413, "画像の容量を確認してください。");
+  }
+  if (original.size + display.size + thumbnail.size > PHOTO_PARTS_MAX_BYTES) {
+    throw new HttpError(413, "画像の合計容量が大きすぎます。");
   }
   const safeName = normalizeFileName(original.name || "photo");
   const width = clampNumber(form.get("width"), 1, 100000, null);
@@ -1427,16 +1451,29 @@ async function deleteEntryPhotoRecord(id, env, session, expectedEntryId = null) 
   `).bind(normalizedId, session.activeHouseholdId).first();
   if (!row || (expectedEntryId && Number(row.entry_id) !== Number(expectedEntryId))) return false;
 
-  await env.MEDIA.delete([row.original_key, row.display_key, row.thumbnail_key]);
-  const result = await env.DB.prepare(`
+  const statements = ["original_key", "display_key", "thumbnail_key"].map((keyColumn) => env.DB.prepare(`
+    INSERT OR IGNORE INTO diary_media_deletion_queue (entry_id, object_key)
+    SELECT p.entry_id, p.${keyColumn}
+    FROM diary_photos p
+    JOIN diary_entries e ON e.id = p.entry_id
+    WHERE p.id = ? AND e.household_id = ? AND e.deleted_at IS NULL
+      AND e.status IN ('published', 'draft')
+      ${expectedEntryId ? "AND p.entry_id = ?" : ""}
+  `).bind(normalizedId, session.activeHouseholdId, ...(expectedEntryId ? [expectedEntryId] : [])));
+  statements.push(env.DB.prepare(`
     DELETE FROM diary_photos
     WHERE id = ? AND EXISTS (
       SELECT 1 FROM diary_entries e
       WHERE e.id = diary_photos.entry_id AND e.household_id = ? AND e.deleted_at IS NULL
         AND e.status IN ('published', 'draft')
+        ${expectedEntryId ? "AND e.id = ?" : ""}
     )
-  `).bind(normalizedId, session.activeHouseholdId).run();
-  if (!result.meta?.changes) throw new HttpError(409, "画像を削除できませんでした。日記を読み込み直してください。");
+  `).bind(normalizedId, session.activeHouseholdId, ...(expectedEntryId ? [expectedEntryId] : [])));
+  const results = await env.DB.batch(statements);
+  if (Number(results.at(-1)?.meta?.changes || 0) !== 1) {
+    throw new HttpError(409, "画像を削除できませんでした。日記を読み込み直してください。");
+  }
+  await drainMediaDeletionQueue(env, Number(row.entry_id), { maxBatches: MEDIA_DELETION_REQUEST_MAX_BATCHES });
   return true;
 }
 
@@ -1474,19 +1511,39 @@ async function createEntry(request, env, session) {
     draft: status === "draft",
     allowEmptyContent: pendingPhotoSave
   });
-  const result = await env.DB.prepare(`
+  const suppliedRequestId = body.requestId == null || body.requestId === ""
+    ? null
+    : normalizeEntryRequestId(body.requestId);
+  const requestId = suppliedRequestId || crypto.randomUUID().toLowerCase();
+  const requestHash = await entryCreateRequestHash(status, input, body);
+  const existing = await findEntryByCreateRequest(env, session, requestId);
+  if (existing) return replayCreatedEntry(existing, requestHash, env, session);
+
+  const mutationId = crypto.randomUUID().toLowerCase();
+  const statements = [env.DB.prepare(`
     INSERT INTO diary_entries (
       entry_date, title, content, content_format, author_id, author_name, household_id,
-      status, draft_excluded_photo_ids
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      status, draft_excluded_photo_ids, client_request_id, client_request_hash, last_mutation_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     input.entryDate, input.title, input.content, input.contentFormat,
     session.accountId, session.accountName, session.activeHouseholdId,
-    status, JSON.stringify(input.excludedPhotoIds)
-  ).run();
-  const id = Number(result.meta?.last_row_id);
-  await replaceTags(env, id, input.tags);
-  return getEntry(id, env, session);
+    status, JSON.stringify(input.excludedPhotoIds), requestId, requestHash, mutationId
+  ), ...entryCreateTagStatements(env, session, requestId, requestHash, input.tags)];
+  appendAtomicityTestFailure(statements, request, env, "create");
+
+  let results;
+  try {
+    results = await env.DB.batch(statements);
+  } catch (error) {
+    const raced = await findEntryByCreateRequest(env, session, requestId).catch(() => null);
+    if (raced) return replayCreatedEntry(raced, requestHash, env, session);
+    throw error;
+  }
+  if (Number(results[0]?.meta?.changes || 0) !== 1) {
+    throw new HttpError(500, "日記を保存できませんでした。");
+  }
+  return getEntry(Number(results[0]?.meta?.last_row_id), env, session);
 }
 
 async function updateEntry(id, request, env, session) {
@@ -1512,100 +1569,137 @@ async function updateEntry(id, request, env, session) {
   }
 
   if (current.status === "published" && targetStatus === "draft") {
-    return savePublishedEditDraft(current, input, env, session);
+    return savePublishedEditDraft(current, input, request, env, session);
   }
   if (current.status === "draft" && targetStatus === "published" && current.draft_of_entry_id) {
-    return publishEditDraft(current, input, env, session);
+    return publishEditDraft(current, input, request, env, session);
   }
 
-  const result = await env.DB.prepare(`
+  const mutationId = crypto.randomUUID().toLowerCase();
+  const statements = [env.DB.prepare(`
     UPDATE diary_entries
     SET entry_date = ?, title = ?, content = ?, content_format = ?, status = ?,
-        draft_excluded_photo_ids = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1
+        draft_excluded_photo_ids = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1,
+        last_mutation_id = ?
     WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NULL
   `).bind(
     input.entryDate, input.title, input.content, input.contentFormat, targetStatus,
-    JSON.stringify(input.excludedPhotoIds), id, session.activeHouseholdId, revision
-  ).run();
+    JSON.stringify(input.excludedPhotoIds), mutationId, id, session.activeHouseholdId, revision
+  ), ...entryMutationTagStatements(env, id, mutationId, input.tags)];
+  appendAtomicityTestFailure(statements, request, env, "update");
+  const results = await env.DB.batch(statements);
 
-  if (!result.meta?.changes) {
+  if (Number(results[0]?.meta?.changes || 0) !== 1) {
     return json({ error: "別の端末で更新された可能性があります。再読み込みしてください。" }, 409);
   }
-  await replaceTags(env, id, input.tags);
   return getEntry(id, env, session);
 }
 
-async function savePublishedEditDraft(source, input, env, session) {
+async function savePublishedEditDraft(source, input, request, env, session) {
   const existing = await env.DB.prepare(`
     SELECT id, revision
     FROM diary_entries
     WHERE household_id = ? AND status = 'draft' AND deleted_at IS NULL AND draft_of_entry_id = ?
   `).bind(session.activeHouseholdId, source.id).first();
+  const mutationId = crypto.randomUUID().toLowerCase();
   let draftId;
   if (existing) {
-    const result = await env.DB.prepare(`
+    const statements = [env.DB.prepare(`
       UPDATE diary_entries
       SET entry_date = ?, title = ?, content = ?, content_format = ?,
           draft_of_revision = ?, draft_excluded_photo_ids = ?,
-          author_id = ?, author_name = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1
+          author_id = ?, author_name = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1,
+          last_mutation_id = ?
       WHERE id = ? AND household_id = ? AND status = 'draft' AND revision = ? AND deleted_at IS NULL
     `).bind(
       input.entryDate, input.title, input.content, input.contentFormat,
       source.revision, JSON.stringify(input.excludedPhotoIds), session.accountId, session.accountName,
-      existing.id, session.activeHouseholdId, existing.revision
-    ).run();
-    if (!result.meta?.changes) return json({ error: "下書きが別の端末で更新されました。再読み込みしてください。" }, 409);
+      mutationId, existing.id, session.activeHouseholdId, existing.revision
+    ), ...entryMutationTagStatements(env, Number(existing.id), mutationId, input.tags)];
+    appendAtomicityTestFailure(statements, request, env, "draft-save");
+    const results = await env.DB.batch(statements);
+    if (Number(results[0]?.meta?.changes || 0) !== 1) return json({ error: "下書きが別の端末で更新されました。再読み込みしてください。" }, 409);
     draftId = Number(existing.id);
   } else {
-    const result = await env.DB.prepare(`
+    const statements = [env.DB.prepare(`
       INSERT INTO diary_entries (
         entry_date, title, content, content_format, author_id, author_name, household_id,
-        status, draft_of_entry_id, draft_of_revision, draft_excluded_photo_ids
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+        status, draft_of_entry_id, draft_of_revision, draft_excluded_photo_ids, last_mutation_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)
     `).bind(
       input.entryDate, input.title, input.content, input.contentFormat,
       session.accountId, session.accountName, session.activeHouseholdId,
-      source.id, source.revision, JSON.stringify(input.excludedPhotoIds)
-    ).run();
-    draftId = Number(result.meta?.last_row_id);
+      source.id, source.revision, JSON.stringify(input.excludedPhotoIds), mutationId
+    ), ...entryMutationTagStatements(env, null, mutationId, input.tags, session.activeHouseholdId)];
+    appendAtomicityTestFailure(statements, request, env, "draft-create");
+    const results = await env.DB.batch(statements);
+    if (Number(results[0]?.meta?.changes || 0) !== 1) throw new HttpError(500, "下書きを保存できませんでした。");
+    draftId = Number(results[0]?.meta?.last_row_id);
   }
-  await replaceTags(env, draftId, input.tags);
   return getEntry(draftId, env, session);
 }
 
-async function publishEditDraft(draft, input, env, session) {
+async function publishEditDraft(draft, input, request, env, session) {
   const sourceId = Number(draft.draft_of_entry_id);
   const sourceRevision = Number(draft.draft_of_revision);
-  const result = await env.DB.prepare(`
+  const mutationId = crypto.randomUUID().toLowerCase();
+  const statements = [env.DB.prepare(`
     UPDATE diary_entries
     SET entry_date = ?, title = ?, content = ?, content_format = ?,
-        updated_at = CURRENT_TIMESTAMP, revision = revision + 1
+        updated_at = CURRENT_TIMESTAMP, revision = revision + 1, last_mutation_id = ?
     WHERE id = ? AND household_id = ? AND status = 'published'
       AND deleted_at IS NULL AND revision = ?
+      AND EXISTS (
+        SELECT 1 FROM diary_entries draft
+        WHERE draft.id = ? AND draft.household_id = ? AND draft.status = 'draft'
+          AND draft.deleted_at IS NULL AND draft.revision = ? AND draft.draft_of_entry_id = diary_entries.id
+      )
   `).bind(
     input.entryDate, input.title, input.content, input.contentFormat,
-    sourceId, session.activeHouseholdId, sourceRevision
-  ).run();
-  if (!result.meta?.changes) {
+    mutationId, sourceId, session.activeHouseholdId, sourceRevision,
+    draft.id, session.activeHouseholdId, draft.revision
+  ), ...entryMutationTagStatements(env, sourceId, mutationId, input.tags)];
+  for (const photoId of input.excludedPhotoIds) {
+    for (const keyColumn of ["original_key", "display_key", "thumbnail_key"]) {
+      statements.push(env.DB.prepare(`
+        INSERT OR IGNORE INTO diary_media_deletion_queue (entry_id, object_key)
+        SELECT p.entry_id, p.${keyColumn}
+        FROM diary_photos p
+        JOIN diary_entries e ON e.id = p.entry_id
+        WHERE p.id = ? AND p.entry_id = ? AND e.last_mutation_id = ?
+      `).bind(photoId, sourceId, mutationId));
+    }
+  }
+  if (input.excludedPhotoIds.length) {
+    const placeholders = input.excludedPhotoIds.map(() => "?").join(", ");
+    statements.push(env.DB.prepare(`
+      DELETE FROM diary_photos
+      WHERE entry_id = ? AND id IN (${placeholders})
+        AND EXISTS (SELECT 1 FROM diary_entries e WHERE e.id = ? AND e.last_mutation_id = ?)
+    `).bind(sourceId, ...input.excludedPhotoIds, sourceId, mutationId));
+  }
+  statements.push(env.DB.prepare(`
+    UPDATE diary_photos SET entry_id = ?
+    WHERE entry_id = ? AND EXISTS (
+      SELECT 1 FROM diary_entries source
+      WHERE source.id = ? AND source.last_mutation_id = ?
+    ) AND EXISTS (
+      SELECT 1 FROM diary_entries draft
+      WHERE draft.id = ? AND draft.household_id = ? AND draft.status = 'draft' AND draft.revision = ?
+    )
+  `).bind(sourceId, draft.id, sourceId, mutationId, draft.id, session.activeHouseholdId, draft.revision));
+  statements.push(env.DB.prepare(`
+    DELETE FROM diary_entries
+    WHERE id = ? AND household_id = ? AND status = 'draft' AND revision = ?
+      AND EXISTS (SELECT 1 FROM diary_entries source WHERE source.id = ? AND source.last_mutation_id = ?)
+  `).bind(draft.id, session.activeHouseholdId, draft.revision, sourceId, mutationId));
+  appendAtomicityTestFailure(statements, request, env, "draft-publish");
+  const results = await env.DB.batch(statements);
+  if (Number(results[0]?.meta?.changes || 0) !== 1) {
     return json({ error: "元の日記が別の端末で更新されました。元の日記を確認してから下書きを編集してください。" }, 409);
   }
-
-  await replaceTags(env, sourceId, input.tags);
-  await env.DB.batch([
-    env.DB.prepare(`
-      UPDATE diary_photos SET entry_id = ?
-      WHERE entry_id = ? AND EXISTS (
-        SELECT 1 FROM diary_entries e
-        WHERE e.id = ? AND e.household_id = ? AND e.status = 'draft'
-      )
-    `).bind(sourceId, draft.id, draft.id, session.activeHouseholdId),
-    env.DB.prepare(`
-      DELETE FROM diary_entries
-      WHERE id = ? AND household_id = ? AND status = 'draft' AND revision = ?
-    `).bind(draft.id, session.activeHouseholdId, draft.revision)
-  ]);
-  for (const photoId of input.excludedPhotoIds) {
-    await deleteEntryPhotoRecord(photoId, env, session, sourceId);
+  if (input.excludedPhotoIds.length && env.MEDIA) {
+    await drainMediaDeletionQueue(env, sourceId, { maxBatches: MEDIA_DELETION_REQUEST_MAX_BATCHES });
   }
   return getEntry(sourceId, env, session);
 }
@@ -1740,12 +1834,77 @@ async function permanentlyDeleteEntry(id, request, env, session) {
   return json({ ok: true, physicallyDeleted, mediaCleanupPending: physicallyDeleted && mediaCleanup.remaining > 0 });
 }
 
-async function replaceTags(env, entryId, tags) {
-  const statements = [env.DB.prepare("DELETE FROM diary_tags WHERE entry_id = ?").bind(entryId)];
+function entryMutationTagStatements(env, entryId, mutationId, tags, householdId = null) {
+  const selector = entryId == null
+    ? { sql: "household_id = ? AND last_mutation_id = ?", bindings: [householdId, mutationId] }
+    : { sql: "id = ? AND last_mutation_id = ?", bindings: [entryId, mutationId] };
+  const statements = [env.DB.prepare(`
+    DELETE FROM diary_tags
+    WHERE entry_id IN (SELECT id FROM diary_entries WHERE ${selector.sql})
+  `).bind(...selector.bindings)];
   for (const tag of tags) {
-    statements.push(env.DB.prepare("INSERT INTO diary_tags (entry_id, tag) VALUES (?, ?)").bind(entryId, tag));
+    statements.push(env.DB.prepare(`
+      INSERT INTO diary_tags (entry_id, tag)
+      SELECT id, ? FROM diary_entries WHERE ${selector.sql}
+    `).bind(tag, ...selector.bindings));
   }
-  await env.DB.batch(statements);
+  return statements;
+}
+
+function entryCreateTagStatements(env, session, requestId, requestHash, tags) {
+  const statements = [];
+  for (const tag of tags) {
+    statements.push(env.DB.prepare(`
+      INSERT INTO diary_tags (entry_id, tag)
+      SELECT id, ? FROM diary_entries
+      WHERE household_id = ? AND author_id = ?
+        AND client_request_id = ? AND client_request_hash = ?
+    `).bind(tag, session.activeHouseholdId, session.accountId, requestId, requestHash));
+  }
+  return statements;
+}
+
+async function findEntryByCreateRequest(env, session, requestId) {
+  return env.DB.prepare(`
+    SELECT id, client_request_hash
+    FROM diary_entries
+    WHERE household_id = ? AND author_id = ? AND client_request_id = ?
+  `).bind(session.activeHouseholdId, session.accountId, requestId).first();
+}
+
+function replayCreatedEntry(existing, requestHash, env, session) {
+  if (String(existing.client_request_hash || "") !== requestHash) {
+    throw new HttpError(409, "同じ送信IDで異なる日記を保存することはできません。画面を開き直してください。");
+  }
+  return getEntry(Number(existing.id), env, session);
+}
+
+function normalizeEntryRequestId(value) {
+  const requestId = String(value || "").toLowerCase();
+  if (!isUuid(requestId)) throw new HttpError(400, "日記の送信IDを確認できませんでした。画面を開き直してください。");
+  return requestId;
+}
+
+async function entryCreateRequestHash(status, input, body) {
+  const payload = {
+    entryDate: input.entryDate,
+    title: input.title,
+    content: input.content,
+    contentFormat: input.contentFormat,
+    tags: [...input.tags].sort((left, right) => left.localeCompare(right, "en")),
+    status,
+    excludedPhotoIds: [...input.excludedPhotoIds].sort(),
+    pendingPhotoIds: parsePhotoIdList(body.pendingPhotoIds).sort(),
+    photoUploadSessionId: body.photoUploadSessionId == null ? null : String(body.photoUploadSessionId).toLowerCase()
+  };
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(JSON.stringify(payload)));
+  return bytesToBase64Url(new Uint8Array(digest));
+}
+
+function appendAtomicityTestFailure(statements, request, env, stage) {
+  if (String(env.DIARY_ATOMICITY_TESTS || "") !== "true") return;
+  if (request.headers.get("X-Diary-Test-Atomic-Failure") !== stage) return;
+  statements.push(env.DB.prepare("INSERT INTO diary_tags (entry_id, tag) VALUES (NULL, NULL)"));
 }
 
 async function validatePendingPhotoSave(body, env, session) {
@@ -2097,10 +2256,28 @@ function isStrongPassword(password) {
   return password.length >= 6 && password.length <= 128;
 }
 
-async function createPasswordHash(password, env) {
-  const pepper = env.DIARY_PASSWORD_PEPPER || env.SESSION_SECRET;
-  if (!pepper) throw new HttpError(503, "パスワード設定を完了できません。管理者へご連絡ください。");
-  return `hmac-sha256$${await sign(password, pepper)}`;
+async function createPasswordHash(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(PASSWORD_SALT_BYTES));
+  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const derived = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations: PASSWORD_PBKDF2_ITERATIONS },
+    key,
+    PASSWORD_HASH_BYTES * 8
+  ));
+  return `pbkdf2-sha256$${PASSWORD_PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${bytesToBase64Url(derived)}`;
+}
+
+function passwordHashNeedsUpgrade(encodedHash) {
+  const value = String(encodedHash || "");
+  if (!value.startsWith("pbkdf2-sha256$")) return true;
+  try {
+    const [, iterationsText, saltText, hashText] = value.split("$");
+    return Number(iterationsText) < PASSWORD_PBKDF2_ITERATIONS
+      || base64UrlToBytes(saltText).length < PASSWORD_SALT_BYTES
+      || base64UrlToBytes(hashText).length < PASSWORD_HASH_BYTES;
+  } catch {
+    return true;
+  }
 }
 
 async function loginFingerprint(request, account, env) {
@@ -2186,13 +2363,47 @@ function validMutationRequest(request, url) {
 }
 
 async function readJson(request, maxBytes) {
-  const length = Number(request.headers.get("Content-Length") || 0);
-  if (length > maxBytes) throw new HttpError(413, "送信内容が大きすぎます。");
   try {
-    return await request.json();
-  } catch {
+    return await limitedRequestBodyResponse(request, maxBytes).then((response) => response.json());
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
     throw new HttpError(400, "入力内容を読み取れませんでした。");
   }
+}
+
+async function readMultipartForm(request, maxBytes) {
+  const contentType = request.headers.get("Content-Type") || "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
+    throw new HttpError(400, "画像の送信形式を確認できませんでした。");
+  }
+  return limitedRequestBodyResponse(request, maxBytes).then((response) => response.formData());
+}
+
+function limitedRequestBodyResponse(request, maxBytes) {
+  const rawLength = request.headers.get("Content-Length");
+  if (rawLength !== null) {
+    const normalizedLength = rawLength.trim();
+    if (!/^(0|[1-9]\d*)$/.test(normalizedLength)) {
+      throw new HttpError(400, "送信容量を確認できませんでした。");
+    }
+    const length = Number(normalizedLength);
+    if (!Number.isSafeInteger(length)) throw new HttpError(413, "送信内容が大きすぎます。");
+    if (length > maxBytes) throw new HttpError(413, "送信内容が大きすぎます。");
+  }
+  let total = 0;
+  const limitedBody = request.body?.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      const size = chunk?.byteLength;
+      if (!Number.isInteger(size) || size < 0) throw new HttpError(400, "送信内容を読み取れませんでした。");
+      total += size;
+      if (total > maxBytes) throw new HttpError(413, "送信内容が大きすぎます。");
+      controller.enqueue(chunk);
+    }
+  })) || null;
+  const headers = new Headers();
+  const contentType = request.headers.get("Content-Type");
+  if (contentType) headers.set("Content-Type", contentType);
+  return Promise.resolve(new Response(limitedBody, { headers }));
 }
 
 function requireEntryManagementAccess(session) {
@@ -2594,4 +2805,15 @@ class HttpError extends Error {
   }
 }
 
-export { cleanupStagedPhotoSession, drainMediaDeletionQueue, runScheduledMediaDeletionCleanup, runScheduledStagedPhotoCleanup };
+export {
+  cleanupStagedPhotoSession,
+  createPasswordHash,
+  drainMediaDeletionQueue,
+  limitedRequestBodyResponse,
+  passwordHashNeedsUpgrade,
+  readJson,
+  readMultipartForm,
+  runScheduledMediaDeletionCleanup,
+  runScheduledStagedPhotoCleanup,
+  verifyPassword
+};

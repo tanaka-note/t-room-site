@@ -105,6 +105,7 @@
     favoriteRequestPending: false,
     editorHistoryToken: null,
     editorClosePending: false,
+    entryCreateRequestId: null,
     deferredInstallPrompt: null,
     lastSessionRefreshAt: 0,
     lastHeaderScrollY: 0,
@@ -2885,6 +2886,7 @@
     closeEntryTagSuggestions();
     clearEditorPhotos();
     state.editorSourceEntry = entry ? structuredClone(entry) : null;
+    state.entryCreateRequestId = entry ? null : crypto.randomUUID().toLowerCase();
     state.editorDeletedPhotoIds = new Set(entry?.excludedPhotoIds || []);
     state.editorPhotos = (entry?.photos || []).map((photo) => ({ ...photo, existing: true }));
     elements.photoPreparationStatus.textContent = "";
@@ -2923,6 +2925,7 @@
         excludedPhotoIds: [...state.editorDeletedPhotoIds]
       };
       if (id) body.revision = Number(elements.entryRevision.value);
+      else body.requestId = state.entryCreateRequestId || (state.entryCreateRequestId = crypto.randomUUID().toLowerCase());
 
       const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
       if (pendingPhotos.length) {
@@ -2941,10 +2944,9 @@
         pendingPhotoIds: pendingPhotos.map((photo) => photo.id),
         photoUploadSessionId: state.photoUploadSessionId
       } : body;
-      let saved = await api(id ? `/entries/${id}` : "/entries", {
-        method: id ? "PUT" : "POST",
-        body: provisionalBody
-      });
+      let saved = id
+        ? await api(`/entries/${id}`, { method: "PUT", body: provisionalBody })
+        : await createEntryIdempotently(provisionalBody);
       const failures = [];
       const deletedPhotoIds = [...state.editorDeletedPhotoIds];
       const promotedEditDraft = targetStatus === "published"
@@ -3009,6 +3011,15 @@
       return false;
     } finally {
       setEditorSaveBusy(false);
+    }
+  }
+
+  async function createEntryIdempotently(body) {
+    try {
+      return await api("/entries", { method: "POST", body });
+    } catch (error) {
+      if (!error?.transportOutcomeUnknown) throw error;
+      return api("/entries", { method: "POST", body });
     }
   }
 
@@ -4037,6 +4048,7 @@
     finishPhotoPickerInteraction();
     state.editorDirty = false;
     state.editorSourceEntry = null;
+    state.entryCreateRequestId = null;
     state.dateDraft = null;
     state.dateWheelTarget = null;
     state.entryAfterClose = null;
