@@ -39,7 +39,7 @@ const server = spawn(process.execPath, [
   "--var",
   "STAGED_PHOTO_CLEANUP_TEST_PAUSE_MS:2000",
   "--var",
-  "STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS:4000"
+  "STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS:8000"
 ], {
   cwd: projectDirectory,
   stdio: ["ignore", "pipe", "pipe"]
@@ -313,6 +313,72 @@ try {
   assert.equal(cleanupRaceCommit.response.status, 200, JSON.stringify(cleanupRaceCommit.result));
   const cleanupRaceImage = await fetch(`${origin}${cleanupRaceCommit.result.photos[0].displayUrl}`, { headers: { Cookie: wifeCookie } });
   assert.equal(cleanupRaceImage.status, 200, "the preserved race candidate must remain committable with its R2 object");
+
+  const leasedUploadPhotoId = randomUUID();
+  const leasedUploadSession = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: null }
+  });
+  assert.equal(leasedUploadSession.response.status, 200, JSON.stringify(leasedUploadSession.result));
+  const leasedUploadSessionId = leasedUploadSession.result.uploadSession.id;
+  const originalLeaseExpiry = new Date(Date.now() + 5000).toISOString();
+  queryLocalDatabase(`UPDATE diary_photo_upload_sessions SET expires_at = '${originalLeaseExpiry}' WHERE id = '${leasedUploadSessionId}'`);
+  const leaseUploadPauseCount = countServerOutput(/Diary staged photo upload test pause/g);
+  const leasedUploadPromise = fetch(`${origin}/diary/api/photo-upload-sessions/${leasedUploadSessionId}/photos`, {
+    method: "POST",
+    headers: {
+      Cookie: wifeCookie,
+      "X-Diary-Request": "1",
+      "X-Diary-Test-Pause": "before-r2"
+    },
+    body: createPhotoForm({ id: leasedUploadPhotoId, fileName: "leased-upload-race.png" })
+  });
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (countServerOutput(/Diary staged photo upload test pause/g) > leaseUploadPauseCount) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.ok(countServerOutput(/Diary staged photo upload test pause/g) > leaseUploadPauseCount,
+    "the real upload path must acquire its TTL lease before pausing ahead of R2 writes");
+  const leasedExpiry = queryLocalDatabase(`SELECT expires_at FROM diary_photo_upload_sessions WHERE id = '${leasedUploadSessionId}'`)[0].expires_at;
+  assert.ok(Date.parse(leasedExpiry) > Date.parse(originalLeaseExpiry), "upload start must extend the session before any R2 write");
+  const waitPastOriginalExpiry = Math.max(0, Date.parse(originalLeaseExpiry) - Date.now() + 100);
+  if (waitPastOriginalExpiry) await new Promise((resolve) => setTimeout(resolve, waitPastOriginalExpiry));
+  const leasedUploadCleanup = await fetch(`${origin}/__scheduled?cron=25+18+*+*+*`);
+  assert.equal(leasedUploadCleanup.status, 200, await leasedUploadCleanup.text());
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(Number(queryLocalDatabase(`
+    SELECT COUNT(*) AS count FROM diary_photo_upload_sessions
+    WHERE id = '${leasedUploadSessionId}' AND status = 'active'
+  `)[0].count), 1, "cleanup after the original TTL boundary must not claim a session protected by the upload lease");
+  const leasedUploadResponse = await leasedUploadPromise;
+  const leasedUploadResult = await leasedUploadResponse.json().catch(() => ({}));
+  assert.equal(leasedUploadResponse.status, 200, JSON.stringify(leasedUploadResult));
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_staged_photos WHERE id = '${leasedUploadPhotoId}'`)[0].count), 1,
+    "the leased real upload must retain its staged ledger");
+  const leasedUploadStorage = await jsonRequest(`/photo-upload-sessions/${leasedUploadSessionId}/test-storage/${leasedUploadPhotoId}`, {
+    cookie: wifeCookie
+  });
+  assert.equal(leasedUploadStorage.response.status, 200, JSON.stringify(leasedUploadStorage.result));
+  assert.equal(leasedUploadStorage.result.objectCount, 3, "the leased upload must retain original/display/thumbnail in R2");
+  const leasedUploadEntry = await jsonRequest("/entries", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: "upload lease競合確認",
+      content: `[[写真:${leasedUploadPhotoId}]]`,
+      tags: []
+    }
+  });
+  const leasedUploadCommit = await jsonRequest(`/photo-upload-sessions/${leasedUploadSessionId}/commit`, {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { entryId: leasedUploadEntry.result.entry.id, photoIds: [leasedUploadPhotoId] }
+  });
+  assert.equal(leasedUploadCommit.response.status, 200, JSON.stringify(leasedUploadCommit.result));
+  const leasedUploadImage = await fetch(`${origin}${leasedUploadCommit.result.photos[0].displayUrl}`, { headers: { Cookie: wifeCookie } });
+  assert.equal(leasedUploadImage.status, 200, "the real upload protected at the TTL boundary must remain committable");
 
   const claimedUploadPhotoId = randomUUID();
   const claimedUploadSession = await jsonRequest("/photo-upload-sessions", {

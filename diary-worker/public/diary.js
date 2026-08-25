@@ -2979,10 +2979,7 @@
           }
           if (pendingPhotos.length) {
             setEditorSaveBusy(true, "写真を本文へ反映しています...");
-            saved = await api(`/entries/${saved.entry.id}`, {
-              method: "PUT",
-              body: { ...body, revision: saved.entry.revision }
-            });
+            saved = await finalizeCommittedPhotoEntry(saved.entry.id, body, saved.entry);
             elements.entryRevision.value = String(saved.entry.revision);
             elements.entryStatus.value = saved.entry.status;
             state.editorSourceEntry = saved.entry;
@@ -3013,6 +3010,64 @@
     } finally {
       setEditorSaveBusy(false);
     }
+  }
+
+  async function finalizeCommittedPhotoEntry(entryId, finalBody, provisionalEntry) {
+    try {
+      return await api(`/entries/${entryId}`, {
+        method: "PUT",
+        body: { ...finalBody, revision: provisionalEntry.revision }
+      });
+    } catch (error) {
+      if (!error?.transportOutcomeUnknown && error?.status !== 409) throw error;
+      return reconcileCommittedPhotoEntry(entryId, finalBody, provisionalEntry);
+    }
+  }
+
+  async function reconcileCommittedPhotoEntry(entryId, finalBody, provisionalEntry) {
+    const current = (await api(`/entries/${entryId}`)).entry;
+    if (entryMatchesEditorPayload(current, finalBody)) return { entry: current };
+    if (!entryMatchesEditorPayload(current, provisionalEntry)) {
+      throw new Error("別の端末で更新された可能性があります。再読み込みしてください。");
+    }
+
+    try {
+      return await api(`/entries/${entryId}`, {
+        method: "PUT",
+        body: { ...finalBody, revision: current.revision }
+      });
+    } catch (error) {
+      if (!error?.transportOutcomeUnknown && error?.status !== 409) throw error;
+      const confirmed = (await api(`/entries/${entryId}`)).entry;
+      if (entryMatchesEditorPayload(confirmed, finalBody)) return { entry: confirmed };
+      if (!entryMatchesEditorPayload(confirmed, current)) {
+        throw new Error("別の端末で更新された可能性があります。再読み込みしてください。");
+      }
+      throw new Error("通信結果を確認できませんでした。通信が安定してから、もう一度保存してください。");
+    }
+  }
+
+  function entryMatchesEditorPayload(entry, payload) {
+    if (!entry || !payload) return false;
+    return String(entry.entryDate || "") === String(payload.entryDate || "")
+      && String(entry.title || "") === String(payload.title || "")
+      && String(entry.content || "") === String(payload.content || "")
+      && canonicalJson(entry.contentFormat || null) === canonicalJson(payload.contentFormat || null)
+      && canonicalStringList(entry.tags) === canonicalStringList(payload.tags)
+      && String(entry.status || "published") === String(payload.status || "published")
+      && canonicalStringList(entry.excludedPhotoIds) === canonicalStringList(payload.excludedPhotoIds);
+  }
+
+  function canonicalStringList(values) {
+    return JSON.stringify((Array.isArray(values) ? values : []).map(String).sort((left, right) => left.localeCompare(right, "en")));
+  }
+
+  function canonicalJson(value) {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    if (value && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
   }
 
   function setEditorSaveBusy(busy, label = "") {
@@ -3722,14 +3777,35 @@
     }
     if (init.method !== "GET") headers.set("X-Diary-Request", "1");
 
-    const response = await fetch(`${BASE_PATH}/api${path}`, init);
-    const result = await response.json().catch(() => ({}));
+    let response;
+    try {
+      response = await fetch(`${BASE_PATH}/api${path}`, init);
+    } catch (cause) {
+      const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
+      error.transportOutcomeUnknown = true;
+      error.cause = cause;
+      throw error;
+    }
+    let result;
+    try {
+      result = await response.json();
+    } catch (cause) {
+      if (!response.ok) result = {};
+      else {
+        const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
+        error.transportOutcomeUnknown = true;
+        error.cause = cause;
+        throw error;
+      }
+    }
     if (!response.ok) {
       if (response.status === 401 && path !== "/login" && path !== "/passkey/handoff") {
         resetState();
         showLogin("ログインの有効期限が切れました。");
       }
-      throw new Error(result.error || "処理を完了できませんでした。");
+      const error = new Error(result.error || "処理を完了できませんでした。");
+      error.status = response.status;
+      throw error;
     }
     return result;
   }

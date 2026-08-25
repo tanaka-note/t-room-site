@@ -28,6 +28,8 @@ function resetScenario(mode) {
     mode,
     nextEntryId: 100,
     entryRequests: [],
+    entryGets: 0,
+    finalPutAttempts: 0,
     entries: new Map(),
     createdEntryIds: new Set(),
     photoRequests: 0,
@@ -112,10 +114,27 @@ const server = createServer(async (request, response) => {
       return;
     }
     const entryUpdateMatch = apiPath.match(/^\/entries\/(\d+)$/);
+    if (entryUpdateMatch && request.method === "GET") {
+      const id = Number(entryUpdateMatch[1]);
+      scenario.entryGets += 1;
+      const entry = scenario.entries.get(id);
+      if (!entry) sendJson(response, 404, { error: "日記が見つかりません。" });
+      else sendJson(response, 200, { entry });
+      return;
+    }
     if (entryUpdateMatch && request.method === "PUT") {
       const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
       const id = Number(entryUpdateMatch[1]);
       scenario.entryRequests.push({ method: "PUT", id, body });
+      const current = scenario.entries.get(id);
+      if (!current || Number(body.revision) !== Number(current.revision)) {
+        sendJson(response, 409, { error: "別の端末で更新された可能性があります。再読み込みしてください。" });
+        return;
+      }
+      const isFinalPhotoPut = /\[\[写真:[0-9a-f-]{36}\]\]/.test(body.content || "");
+      if (isFinalPhotoPut) {
+        scenario.finalPutAttempts += 1;
+      }
       const entry = savedEntry(id, body, Number(body.revision || 1) + 1);
       scenario.entries.set(id, entry);
       sendJson(response, 200, { entry });
@@ -405,6 +424,62 @@ async function verifyCommitRetry(browser, name, mode, contextOptions) {
   }
 }
 
+async function verifyFinalPutRecovery(browser, name, mode, contextOptions) {
+  resetScenario(mode);
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await page.evaluate((failureMode) => {
+      const nativeFetch = window.fetch.bind(window);
+      let injected = false;
+      window.__finalPutFailureCount = 0;
+      window.fetch = async (resource, init = {}) => {
+        const url = new URL(typeof resource === "string" ? resource : resource.url, window.location.href);
+        const body = typeof init.body === "string" ? JSON.parse(init.body) : null;
+        const isFinalPhotoPut = init.method === "PUT"
+          && /^\/diary\/api\/entries\/\d+$/.test(url.pathname)
+          && /\[\[写真:[0-9a-f-]{36}\]\]/.test(body?.content || "");
+        if (!injected && isFinalPhotoPut) {
+          injected = true;
+          window.__finalPutFailureCount += 1;
+          if (failureMode === "final-put-lost-response") await nativeFetch(resource, init);
+          throw new TypeError("simulated final PUT transport failure");
+        }
+        return nativeFetch(resource, init);
+      };
+    }, mode);
+    await choosePhoto(page, `${mode}.png`);
+    await page.waitForSelector("#editor-photo-list .editor-photo-card");
+    await page.click("#save-entry-button");
+    try {
+      await waitForEditorClosed(page);
+    } catch (error) {
+      const message = await page.locator("#editor-message").textContent();
+      throw new Error(`${name} ${mode}: editor did not close (${message}); ${JSON.stringify({
+        entryGets: scenario.entryGets,
+        finalPutAttempts: scenario.finalPutAttempts,
+        entryRequests: scenario.entryRequests
+      })}`, { cause: error });
+    }
+
+    assert.equal(scenario.createdEntryIds.size, 1, `${name} ${mode}: reconciliation must not create another entry`);
+    assert.equal(scenario.commitRequests.length, 1, `${name} ${mode}: reconciliation must not commit the photo twice`);
+    assert.ok(scenario.entryGets >= 1, `${name} ${mode}: an ambiguous final PUT must re-read the entry`);
+    assert.equal(scenario.finalPutAttempts, 1, `${name} ${mode}: the server must apply the marker exactly once`);
+    assert.equal(await page.evaluate(() => window.__finalPutFailureCount), 1,
+      `${name} ${mode}: the response-loss boundary must be injected exactly once`);
+    const entryId = [...scenario.createdEntryIds][0];
+    const entry = scenario.entries.get(entryId);
+    assert.equal((entry.content.match(/\[\[写真:[0-9a-f-]{36}\]\]/g) || []).length, 1,
+      `${name} ${mode}: the committed marker must exist exactly once`);
+    assert.equal(Number(await page.inputValue("#entry-revision")), entry.revision,
+      `${name} ${mode}: the client revision must match the reconciled server revision`);
+    assert.equal(scenario.entryRequests.filter((item) => item.method === "POST").length, 1,
+      `${name} ${mode}: recovery must retain the original entry ID`);
+  } finally {
+    await page.close();
+  }
+}
+
 async function verifyPermanentFailure(browser, name, contextOptions) {
   resetScenario("permanent-400");
   const page = await newDiaryPage(browser, contextOptions);
@@ -482,6 +557,8 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
     await verifyCommitFailureDiscard(browser, name, contextOptions);
     await verifyCommitRetry(browser, name, "commit-500-once", contextOptions);
     await verifyCommitRetry(browser, name, "commit-lost-response", contextOptions);
+    await verifyFinalPutRecovery(browser, name, "final-put-lost-response", contextOptions);
+    await verifyFinalPutRecovery(browser, name, "final-put-unapplied", contextOptions);
   } finally {
     await browser.close();
   }

@@ -826,6 +826,9 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
     return response;
   }
 
+  const leased = await extendActivePhotoUploadSession(env, uploadSession, session);
+  if (!leased) throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
+
   // Each write attempt owns unique R2 keys. If its D1 claim loses a race, a
   // deferred deletion can never remove objects created by a successful retry.
   const attemptId = crypto.randomUUID().toLowerCase();
@@ -842,6 +845,11 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
   });
 
   try {
+    const testPauseMs = clampNumber(env.STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS, 0, 10000, 0);
+    if (testPauseMs > 0 && testHook === "before-r2") {
+      console.log("Diary staged photo upload test pause", { uploadSessionId: uploadSession.id, photoId: id });
+      await new Promise((resolve) => setTimeout(resolve, testPauseMs));
+    }
     const writes = await Promise.allSettled([
       env.MEDIA.put(originalKey, original.stream(), { httpMetadata: { contentType: original.type || "application/octet-stream" } }),
       env.MEDIA.put(displayKey, display.stream(), { httpMetadata: { contentType: display.type || "image/webp" } }),
@@ -849,7 +857,6 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
     ]);
     const failedWrite = writes.find((result) => result.status === "rejected");
     if (failedWrite) throw failedWrite.reason;
-    const testPauseMs = clampNumber(env.STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS, 0, 10000, 0);
     if (testPauseMs > 0 && ["after-r2", "after-r2-delete-failure"].includes(testHook)) {
       console.log("Diary staged photo upload test pause", { uploadSessionId: uploadSession.id, photoId: id });
       await new Promise((resolve) => setTimeout(resolve, testPauseMs));
