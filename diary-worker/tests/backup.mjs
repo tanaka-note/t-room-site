@@ -206,8 +206,23 @@ for (const key of ["daily/not-a-date.json.gz", "monthly/2026-99.json.gz", "other
   assert.ok(retentionBucket.objects.has(key), `unexpected keys must remain untouched: ${key}`);
 }
 
-const scheduledFailure = await runScheduledDiaryBackup({ DB: createDb({ fail: true }), BACKUP: new MemoryBucket() }, nearUtcMidnight);
+const originalConsoleError = console.error;
+const backupFailureLogs = [];
+console.error = (...values) => backupFailureLogs.push(values.join(" "));
+let scheduledFailure;
+try {
+  scheduledFailure = await runScheduledDiaryBackup({
+    DB: createDb({ fail: true }),
+    BACKUP: new MemoryBucket()
+  }, nearUtcMidnight);
+} finally {
+  console.error = originalConsoleError;
+}
 assert.equal(scheduledFailure.complete, false);
+assert.match(backupFailureLogs.join("\n"), /"event":"diary_backup_failed"/);
+assert.match(backupFailureLogs.join("\n"), /"errorType":"Error"/);
+assert.doesNotMatch(backupFailureLogs.join("\n"), /temporary D1 failure/,
+  "scheduled errors must not log database messages that could contain diary or secret data");
 
 const scheduled = [];
 let backupRan = false;

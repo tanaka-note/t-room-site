@@ -149,7 +149,7 @@ async function runScheduledDiaryBackup(env, nowMs = Date.now()) {
   } catch (error) {
     console.error(JSON.stringify({
       event: "diary_backup_failed",
-      error: backupErrorMessage(error)
+      errorType: backupErrorType(error)
     }));
     return { complete: false, error: true };
   }
@@ -196,12 +196,10 @@ function isManagedBackupKey(key, prefix) {
   return false;
 }
 
-function backupErrorMessage(error) {
-  const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error || "unknown error");
-  return raw
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\b(Bearer|Basic)\s+[^\s]+/gi, "$1 [redacted]")
-    .slice(0, 300);
+function backupErrorType(error) {
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  return error instanceof Error ? "Error" : "UnknownError";
 }
 
 export {
