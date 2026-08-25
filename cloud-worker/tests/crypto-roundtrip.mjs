@@ -56,6 +56,24 @@ const selectedFileWrap = await TRoomCrypto.wrapFileForShare(selectedFileKey, fil
 const selectedFileUnlocked = await TRoomCrypto.unlockFileFromShare(selectedFileWrap, filePackage.fileKey);
 const selectedFileRaw = new Uint8Array(await crypto.subtle.exportKey("raw", selectedFileKey));
 const selectedFileUnlockedRaw = new Uint8Array(await crypto.subtle.exportKey("raw", selectedFileUnlocked));
+const secondSharedFolder = await TRoomCrypto.createFolderPackage("共有対象2", "folder-share-test-2468", publicKey);
+const selectedFolderWrap = await TRoomCrypto.wrapFolderForShare(secondSharedFolder.folderKey, adminKey);
+const selectedFolderUnlocked = await TRoomCrypto.unlockFolderFromShare(selectedFolderWrap, adminKey);
+const selectedFolderName = await TRoomCrypto.decryptFolderName(
+  { cryptoVersion: 1, ...secondSharedFolder.payload },
+  selectedFolderUnlocked
+);
+const wrongFolderShareKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+let wrongFolderShareKeyRejected = false;
+let fileContextForFolderRejected = false;
+try { await TRoomCrypto.unlockFolderFromShare(selectedFolderWrap, wrongFolderShareKey); }
+catch { wrongFolderShareKeyRejected = true; }
+try {
+  await TRoomCrypto.unlockFileFromShare({
+    shareWrappedFileKey: selectedFolderWrap.shareWrappedFolderKey,
+    shareFileKeyIv: selectedFolderWrap.shareFolderKeyIv
+  }, adminKey);
+} catch { fileContextForFolderRejected = true; }
 const unlockedFileKey = await TRoomCrypto.unlockFileKey(fileRecord, recoveredFolderKey);
 const fileMetadata = await TRoomCrypto.decryptFileMetadata(fileRecord, unlockedFileKey);
 const renamedMetadataPackage = await TRoomCrypto.encryptFileMetadata({ ...fileMetadata, name: "家族写真・変更後.jpg" }, unlockedFileKey);
@@ -114,7 +132,7 @@ if (credentials.authProof !== renamedLoginCredentials.authProof) {
 if (fileMetadata.name !== fileSource.name || renamedMetadata.name !== "家族写真・変更後.jpg" || new TextDecoder().decode(decryptedChunk) !== "encrypted file body" || decryptedThumbnail.join(",") !== "1,2,3,4") {
   throw new Error("ファイル暗号化の往復テストに失敗しました。");
 }
-if (childFolder.payload.passwordWrappedKey || childFolder.payload.authProof || !childFolder.payload.inheritsProtection || sharedChildName !== "共有対象の子フォルダ" || unprotectedRootFolder.payload.passwordWrappedKey || unprotectedRootFolder.payload.authProof || unprotectedRootName !== "PWなし最上位" || !protectedChildFolder.payload.passwordWrappedKey || protectedChildFolder.payload.inheritsProtection || protectedChildName !== "個別PW付き子フォルダ" || movedChildName !== sharedChildName || movedFileMetadata.name !== fileSource.name || shareFolderName !== adminName || decryptedShareToken !== shareToken || derivedShareProof !== sharePackage.authProof || sharedFileMetadata.name !== "家族写真.jpg" || selectedFileRaw.join(",") !== selectedFileUnlockedRaw.join(",") || !wrongSharePasswordRejected) {
+if (childFolder.payload.passwordWrappedKey || childFolder.payload.authProof || !childFolder.payload.inheritsProtection || sharedChildName !== "共有対象の子フォルダ" || unprotectedRootFolder.payload.passwordWrappedKey || unprotectedRootFolder.payload.authProof || unprotectedRootName !== "PWなし最上位" || !protectedChildFolder.payload.passwordWrappedKey || protectedChildFolder.payload.inheritsProtection || protectedChildName !== "個別PW付き子フォルダ" || movedChildName !== sharedChildName || movedFileMetadata.name !== fileSource.name || shareFolderName !== adminName || decryptedShareToken !== shareToken || derivedShareProof !== sharePackage.authProof || sharedFileMetadata.name !== "家族写真.jpg" || selectedFileRaw.join(",") !== selectedFileUnlockedRaw.join(",") || selectedFolderName !== "共有対象2" || !wrongFolderShareKeyRejected || !fileContextForFolderRejected || !wrongSharePasswordRejected) {
   throw new Error("共有暗号化の往復テストに失敗しました。");
 }
 

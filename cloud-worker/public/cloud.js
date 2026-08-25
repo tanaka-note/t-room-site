@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-72ef995c9a2e";
+const APP_BUILD_ID = "cloud-8877c2711b79";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -326,11 +326,18 @@ function bindEvents() {
   $("#selection-share").addEventListener("click", () => {
     const files = [...state.selectedFiles.values()];
     const folders = [...state.selectedFolders.values()];
+    if (files.length && folders.length) {
+      setNotice("ファイルとフォルダは同時に共有できません。", true);
+      return;
+    }
     if (folders.length === 1 && !files.length) {
       openShareDialog("folder", folders[0]);
       return;
     }
-    if (folders.length) return;
+    if (folders.length > 1) {
+      openShareDialog("folder-selection", folders);
+      return;
+    }
     if (files.length === 1) openShareDialog("file", files[0]);
     else if (files.length > 1) openShareDialog("selection", files);
   });
@@ -2258,6 +2265,7 @@ function canShareFolder(folder) {
 
 function canShareTarget(type, target) {
   if (type === "folder") return canShareFolder(target);
+  if (type === "folder-selection") return Array.isArray(target) && target.length > 1 && target.every(canShareFolder);
   if (type === "selection") return Array.isArray(target) && target.length > 1 && target.every(canShareFile);
   return canShareFile(target);
 }
@@ -2523,10 +2531,10 @@ async function hydrateShareRecords(records) {
   for (const original of records) {
     const share = { ...original, targetName: "利用できない対象", shareUrl: "", targetKey: null };
     try {
-      if (share.targetType === "folder" && share.folder) {
+      if (["folder", "folder-selection"].includes(share.targetType) && share.folder) {
         const [folder] = await hydrateFolderRecords([share.folder]);
         share.folder = folder;
-        share.targetName = folder.name;
+        share.targetName = share.targetType === "folder-selection" ? `${Number(share.folderCount || 0)}件のフォルダ` : folder.name;
         share.targetKey = state.crypto.folderKeys.get(Number(folder.id)) || await ensureAdminFolderKey(folder);
       } else if (["file", "selection"].includes(share.targetType) && share.file) {
         const [file] = await hydrateFileRecords([share.file]);
@@ -2550,9 +2558,9 @@ function shareCard(share) {
   const card = document.createElement("article");
   card.className = "share-card";
   const status = ({ active: "有効", expired: "期限終了", stopped: "停止済み", unavailable: "対象なし" })[share.status] || "確認中";
-  const type = share.targetType === "folder" ? "フォルダ" : share.targetType === "selection" ? "選択したファイル" : "ファイル";
+  const type = share.targetType === "folder-selection" ? "共有フォルダ" : share.targetType === "folder" ? "フォルダ" : share.targetType === "selection" ? "選択したファイル" : "ファイル";
   card.innerHTML = `
-    <span class="share-kind">${share.targetType === "folder" ? "▰" : share.targetType === "selection" ? "▦" : kindSymbol(share.file?.mediaKind)}</span>
+    <span class="share-kind">${["folder", "folder-selection"].includes(share.targetType) ? "▰" : share.targetType === "selection" ? "▦" : kindSymbol(share.file?.mediaKind)}</span>
     <span class="share-main"><strong>${escapeHtml(share.targetName)}</strong><small>${type} · ${formatDateTime(share.createdAt)}に発行</small></span>
     <span class="share-meta"><strong class="share-status ${share.status}">${status}</strong><small>期限 ${formatEpoch(share.expiresAt)}</small><small>DL ${share.downloadCount}件 / エラー ${share.errorCount}件</small></span>`;
   const actions = document.createElement("div");
@@ -2582,18 +2590,29 @@ async function openShareDialog(type, target) {
   }
   try {
     let targetKey = null;
+    let folders = null;
     if (type === "folder") {
       targetKey = state.crypto.folderKeys.get(Number(target.id));
       if (!targetKey && state.session?.role === "admin") targetKey = await ensureAdminFolderKey(target);
+    }
+    else if (type === "folder-selection") {
+      folders = target;
+      for (const folder of folders) {
+        let key = state.crypto.folderKeys.get(Number(folder.id));
+        if (!key && state.session?.role === "admin") key = await ensureAdminFolderKey(folder);
+        if (!key) throw new Error("共有するフォルダの暗号化鍵を解除できません。");
+      }
+      targetKey = state.crypto.folderKeys.get(Number(folders[0].id));
     }
     else if (type === "selection") targetKey = target[0]?.fileKey;
     else targetKey = target.fileKey;
     if (!targetKey) throw new Error("共有対象の暗号化鍵を解除できません。");
     const files = type === "selection" ? target : null;
-    const id = type === "selection" ? Number(files[0].id) : Number(target.id);
-    const name = type === "selection" ? `${files.length}件のファイル` : target.name;
-    state.shareTarget = { type, id, name, targetKey, files };
-    $("#share-target").textContent = `共有対象：${name}（${type === "folder" ? "フォルダ" : type === "selection" ? "選択したファイル" : "ファイル"}）`;
+    const id = type === "selection" ? Number(files[0].id) : type === "folder-selection" ? Number(folders[0].id) : Number(target.id);
+    const name = type === "selection" ? `${files.length}件のファイル` : type === "folder-selection" ? `${folders.length}件のフォルダ` : target.name;
+    state.shareTarget = { type, id, name, targetKey, files, folders };
+    const typeLabel = type === "folder-selection" ? "共有フォルダ" : type === "folder" ? "フォルダ" : type === "selection" ? "選択したファイル" : "ファイル";
+    $("#share-target").textContent = `共有対象：${name}（${typeLabel}）`;
     $("#share-expires").value = localDateTimeValue(Date.now() + 7 * 24 * 60 * 60 * 1000);
     $("#share-password").value = "";
     $("#share-password").type = "password";
@@ -2642,6 +2661,16 @@ async function createShare(event) {
           ...(index === 0 ? {} : await TRoomCrypto.wrapFileForShare(file.fileKey, target.targetKey))
         })))
       : undefined;
+    const selectedFolders = target.type === "folder-selection"
+      ? await Promise.all(target.folders.map(async (folder, index) => ({
+          id: Number(folder.id),
+          position: index,
+          ...(index === 0 ? {} : await TRoomCrypto.wrapFolderForShare(
+            state.crypto.folderKeys.get(Number(folder.id)),
+            target.targetKey
+          ))
+        })))
+      : undefined;
     const result = await api("/shares", {
       method: "POST",
       body: JSON.stringify({
@@ -2649,6 +2678,7 @@ async function createShare(event) {
         targetType: target.type,
         targetId: target.id,
         selectedFiles,
+        selectedFolders,
         expiresAt: Math.floor(expiresMs / 1000),
         ...passwordPackage,
         ...tokenPackage
@@ -3446,7 +3476,8 @@ function syncSelectionBar() {
   $("#selection-offline").disabled = !canSaveOffline || state.offlineActive;
   $("#selection-offline").textContent = state.offlineActive ? "オフライン保存中…" : "オフライン";
   const canShareSelection = (fileCount >= 1 && folderCount === 0 && files.every(canShareFile))
-    || (folderCount === 1 && fileCount === 0 && canShareFolder(folders[0]));
+    || (folderCount >= 1 && fileCount === 0 && folders.every(canShareFolder))
+    || (fileCount >= 1 && folderCount >= 1 && files.every(canShareFile) && folders.every(canShareFolder));
   $("#selection-share").hidden = !canShareSelection;
   const canMoveSelection = Boolean(count && files.every(canMoveFile) && folders.every(canMoveFolder));
   $("#selection-move").hidden = !canMoveSelection;

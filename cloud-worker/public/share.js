@@ -2,7 +2,7 @@ const token = location.pathname.match(/\/cloud\/share\/([A-Za-z0-9_-]{43})\/?$/)
 const API = `/cloud/api/public/shares/${token}`;
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
-const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewPlaybackMode: "off", previewGeneration: 0, previewOrientationGeneration: 0, previewVideoFullscreenActive: false, previewHistoryActive: false, previewTapCandidate: null, previewLastPointerType: "mouse", previewDoubleTapSeekTimer: 0, previewDoubleTapSeekSequence: 0, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderSelectionCount: 0, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewPlaybackMode: "off", previewGeneration: 0, previewOrientationGeneration: 0, previewVideoFullscreenActive: false, previewHistoryActive: false, previewTapCandidate: null, previewLastPointerType: "mouse", previewDoubleTapSeekTimer: 0, previewDoubleTapSeekSequence: 0, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 const $ = (selector) => document.querySelector(selector);
 const PASSWORD_VISIBILITY_ICONS = `
   <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
@@ -143,21 +143,39 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
       renderBreadcrumbs();
       renderSortedItems();
       $("#share-toolbar").hidden = false;
+    } else if (data.targetType === "folder-selection" && !folderId) {
+      const folders = [];
+      for (const record of data.folders || []) {
+        const folderKey = Number(record.id) === Number(data.rootFolderId)
+          ? state.targetKey
+          : await TRoomCrypto.unlockFolderFromShare(record, state.targetKey);
+        state.folderKeys.set(Number(record.id), folderKey);
+        folders.push({ ...record, name: record.name });
+      }
+      state.rootId = null;
+      state.folderId = null;
+      state.folderSelectionCount = folders.length;
+      state.path = [];
+      state.folders = folders;
+      state.files = [];
+      $("#target-title").textContent = `共有フォルダ（${folders.length}件）`;
+      renderBreadcrumbs();
+      renderSortedItems();
+      $("#share-toolbar").hidden = false;
     } else {
       state.rootId = Number(data.rootFolderId);
       const folder = data.folder;
-      let folderKey;
-      if (Number(folder.id) === state.rootId) {
+      let folderKey = state.folderKeys.get(Number(folder.id));
+      if (!folderKey && Number(folder.id) === state.rootId && state.targetType === "folder") {
         folderKey = state.targetKey;
         state.folderKeys.set(Number(folder.id), folderKey);
-      } else {
-        folderKey = state.folderKeys.get(Number(folder.id));
-        if (!folderKey) {
-          const parentKey = state.folderKeys.get(Number(folder.parentId));
-          if (!parentKey) throw new Error("共有フォルダの移動情報を確認できません。");
-          folderKey = await TRoomCrypto.unlockFolderFromParent(folder, parentKey);
-          state.folderKeys.set(Number(folder.id), folderKey);
-        }
+      }
+      if (!folderKey) {
+        if (Number(folder.id) === state.rootId) throw new Error("共有フォルダの暗号化鍵を確認できません。");
+        const parentKey = state.folderKeys.get(Number(folder.parentId));
+        if (!parentKey) throw new Error("共有フォルダの移動情報を確認できません。");
+        folderKey = await TRoomCrypto.unlockFolderFromParent(folder, parentKey);
+        state.folderKeys.set(Number(folder.id), folderKey);
       }
       const folderName = folder.name;
       if (Array.isArray(options.historyPath)) state.path = options.historyPath.map((item) => ({ id: Number(item.id), name: String(item.name) }));
@@ -261,7 +279,7 @@ function fileCard(file) {
       article.dataset.longPressed = "false";
       return;
     }
-    if (["folder", "selection"].includes(state.targetType) && (state.selectedFiles.size || event.ctrlKey || event.metaKey || event.shiftKey)) {
+    if (["folder", "folder-selection", "selection"].includes(state.targetType) && (state.selectedFiles.size || event.ctrlKey || event.metaKey || event.shiftKey)) {
       if (event.shiftKey && state.selectionAnchorId) selectSharedRange(file.id);
       else toggleFileSelection(file, article);
       return;
@@ -269,7 +287,7 @@ function fileCard(file) {
     openPreview(file);
   });
   article.append(button);
-  if (["folder", "selection"].includes(state.targetType)) {
+  if (["folder", "folder-selection", "selection"].includes(state.targetType)) {
     button.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       selectSharedFile(file, article, true);
@@ -484,6 +502,14 @@ async function loadThumbnail(file, stage) {
 
 function renderBreadcrumbs() {
   const nav = $("#breadcrumbs"); nav.innerHTML = "";
+  if (state.targetType === "folder-selection") {
+    const root = document.createElement("button");
+    root.type = "button";
+    root.textContent = `共有フォルダ（${state.folderSelectionCount}件）`;
+    root.disabled = state.folderId == null;
+    root.addEventListener("click", () => loadItems(null));
+    nav.append(root);
+  }
   for (const [index, item] of state.path.entries()) {
     const button = document.createElement("button"); button.type = "button"; button.textContent = item.name;
     button.addEventListener("click", () => loadItems(item.id, index));
@@ -1267,7 +1293,7 @@ function handlePreviewClosed() {
 function updateShareHistory(replace, previewId) {
   const entry = {
     tcloudShare: true,
-    folderId: state.targetType === "folder" ? state.folderId : null,
+    folderId: ["folder", "folder-selection"].includes(state.targetType) ? state.folderId : null,
     path: state.path.map((item) => ({ id: Number(item.id), name: String(item.name) })),
     previewId: previewId ? Number(previewId) : null
   };
@@ -1298,7 +1324,7 @@ async function handleShareHistoryNavigation(event) {
       state.previewHistoryActive = false;
       $("#preview-dialog").close();
     }
-    const folderChanged = state.targetType === "folder" && Number(entry.folderId) !== Number(state.folderId);
+    const folderChanged = ["folder", "folder-selection"].includes(state.targetType) && Number(entry.folderId || 0) !== Number(state.folderId || 0);
     if (folderChanged) {
       await loadItems(entry.folderId, null, { historyMode: "none", historyPath: entry.path || [] });
     }

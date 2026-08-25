@@ -18,6 +18,7 @@
   const SHARE_WRAP_CONTEXT = "T-ROOM Cloud Storage share key v1";
   const SHARE_TOKEN_CONTEXT = "T-ROOM Cloud Storage share token v1";
   const SHARE_FILE_KEY_CONTEXT = "T-ROOM Cloud Storage selected file key v1";
+  const SHARE_FOLDER_KEY_CONTEXT = "T-ROOM Cloud Storage selected folder key v1";
   const FILE_KEY_CONTEXT = "T-ROOM Cloud Storage file key v1";
   const FILE_METADATA_CONTEXT = "T-ROOM Cloud Storage file metadata v1";
   const FILE_CHUNK_CONTEXT = "T-ROOM Cloud Storage file chunk v1";
@@ -307,6 +308,26 @@
       textEncoder.encode(SHARE_FILE_KEY_CONTEXT)
     );
     try { return await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]); }
+    finally { raw.fill(0); }
+  }
+
+  async function wrapFolderForShare(folderKey, shareKey) {
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", folderKey));
+    try {
+      return await wrapRawKey(raw, shareKey, SHARE_FOLDER_KEY_CONTEXT, "shareWrappedFolderKey", "shareFolderKeyIv");
+    } finally {
+      raw.fill(0);
+    }
+  }
+
+  async function unlockFolderFromShare(folder, shareKey) {
+    const raw = await decryptBytes(
+      shareKey,
+      fromBase64Url(folder.shareWrappedFolderKey),
+      fromBase64Url(folder.shareFolderKeyIv),
+      textEncoder.encode(SHARE_FOLDER_KEY_CONTEXT)
+    );
+    try { return await importFolderKey(raw); }
     finally { raw.fill(0); }
   }
 
@@ -653,6 +674,8 @@
     rewrapFileForFolder,
     wrapFileForShare,
     unlockFileFromShare,
+    wrapFolderForShare,
+    unlockFolderFromShare,
     decryptFileMetadata,
     encryptFileMetadata,
     encryptFileChunk,
