@@ -102,11 +102,36 @@ import jp.tanaka.tcloud.library.MediaPlaylist
 import jp.tanaka.tcloud.library.MediaSourceType
 import jp.tanaka.tcloud.library.PlayableMediaItem
 import jp.tanaka.tcloud.library.mediaMatchesQuery
+import jp.tanaka.tcloud.library.onlineYouTubeResultsFor
 import jp.tanaka.tcloud.media.PlaybackMode
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import kotlinx.coroutines.delay
 
 private enum class LibrarySection { RECENT, ALL, ARTIST, ALBUM, PLAYLIST, FAVORITE, WATCH_LATER, YOUTUBE, RECOMMENDED }
+
+internal data class MediaSearchGroup(val label: String, val items: List<PlayableMediaItem>)
+
+internal fun videoSearchGroups(
+    state: MediaLibraryState,
+    source: MediaSourceType?,
+    query: String,
+): List<MediaSearchGroup> {
+    val saved = state.items.filter { item ->
+        item.mediaType == LibraryMediaType.VIDEO && mediaMatchesQuery(item, query)
+    }
+    val online = onlineYouTubeResultsFor(state, LibraryMediaType.VIDEO, source, query)
+    val youtube = (saved.filter { it.source == MediaSourceType.YOUTUBE } + online)
+        .distinctBy(PlayableMediaItem::stableId)
+    return when (source) {
+        MediaSourceType.LOCAL -> listOf(MediaSearchGroup("端末", saved.filter { it.source == source }))
+        MediaSourceType.CLOUD -> listOf(MediaSearchGroup("T-Cloud", saved.filter { it.source == source }))
+        MediaSourceType.YOUTUBE -> listOf(MediaSearchGroup("YouTube", youtube))
+        null -> listOf(
+            MediaSearchGroup("端末・T-Cloud", saved.filter { it.source != MediaSourceType.YOUTUBE }),
+            MediaSearchGroup("YouTube", youtube),
+        )
+    }
+}
 
 @Composable
 internal fun MediaLibraryScreen(
@@ -118,6 +143,7 @@ internal fun MediaLibraryScreen(
     onOpen: (PlayableMediaItem) -> Unit,
     onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
     onSaveYouTube: suspend (String) -> PlayableMediaItem,
+    onSearchYouTube: (String) -> Unit,
     onFavorite: (PlayableMediaItem, Boolean) -> Unit,
     onWatchLater: (PlayableMediaItem, Boolean) -> Unit,
     onCreatePlaylist: (String) -> Long,
@@ -131,6 +157,9 @@ internal fun MediaLibraryScreen(
     var youtubeDialog by remember { mutableStateOf(false) }
     var playlistItem by remember { mutableStateOf<PlayableMediaItem?>(null) }
     var tagItem by remember { mutableStateOf<PlayableMediaItem?>(null) }
+    LaunchedEffect(mediaType) {
+        onSearchYouTube(if (mediaType == LibraryMediaType.VIDEO) query else "")
+    }
     val sections = if (mediaType == LibraryMediaType.AUDIO) {
         listOf(
             LibrarySection.RECENT to "最近再生", LibrarySection.ALL to "曲",
@@ -155,6 +184,11 @@ internal fun MediaLibraryScreen(
         LibrarySection.RECOMMENDED -> state.recommendations.map { it.item }.filter { it.mediaType == mediaType && mediaMatchesQuery(it, query) }
         else -> base.sortedBy { it.title.lowercase() }
     }
+    val searchGroups = if (mediaType == LibraryMediaType.VIDEO && query.isNotBlank()) {
+        videoSearchGroups(state, source, query)
+    } else {
+        emptyList()
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -176,7 +210,10 @@ internal fun MediaLibraryScreen(
             }
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = {
+                    query = it
+                    if (mediaType == LibraryMediaType.VIDEO) onSearchYouTube(it)
+                },
                 label = { Text("端末・T-Cloud・YouTubeを検索") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -194,7 +231,7 @@ internal fun MediaLibraryScreen(
                     })
                 }
             }
-            if (state.refreshingLocal || state.refreshingCloud || state.refreshingYouTube) {
+            if (state.refreshingLocal || state.refreshingCloud || state.refreshingYouTube || state.searchingYouTube) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
             if (!state.localPermissionGranted) {
@@ -207,15 +244,46 @@ internal fun MediaLibraryScreen(
                     TextButton(onClick = onRequestLocalPermission) { Text("許可") }
                 }
             }
-            if (!state.youtubeOnlineAvailable && mediaType == LibraryMediaType.VIDEO) {
+            if (state.youtubeSearchError != null && mediaType == LibraryMediaType.VIDEO && query.trim().length >= 2 &&
+                (source == null || source == MediaSourceType.YOUTUBE)
+            ) {
                 Text(
-                    "YouTubeオンライン情報はAPI設定後に利用できます。保存済みURLの公式再生は利用できます。",
+                    state.youtubeSearchError,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (!state.youtubeOnlineAvailable && mediaType == LibraryMediaType.VIDEO) {
+                Text(
+                    "YouTubeオンライン検索はAPI設定後に利用できます。保存済みURLの公式再生は利用できます。",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (mediaType == LibraryMediaType.VIDEO && query.isNotEmpty() && query.trim().length < 2 &&
+                (source == null || source == MediaSourceType.YOUTUBE)
+            ) {
+                Text(
+                    "YouTubeを検索するには2文字以上入力してください。",
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            if (section == LibrarySection.PLAYLIST) {
+            if (searchGroups.isNotEmpty()) {
+                SearchMediaItemsList(
+                    searchGroups,
+                    onOpen,
+                    onLoadArtwork,
+                    onFavorite,
+                    onWatchLater,
+                    { playlistItem = it },
+                    { tagItem = it },
+                    searchingYouTube = state.searchingYouTube,
+                    youtubeQueryReady = query.trim().length >= 2,
+                    youtubeSearchFailed = state.youtubeSearchError != null,
+                )
+            } else if (section == LibrarySection.PLAYLIST) {
                 PlaylistList(state.playlists, onOpen, onLoadArtwork)
             } else if (section == LibrarySection.ARTIST || section == LibrarySection.ALBUM) {
                 GroupedMediaList(displayed, section, onOpen, onLoadArtwork, onFavorite, onWatchLater, { playlistItem = it }, { tagItem = it })
@@ -254,6 +322,55 @@ internal fun MediaLibraryScreen(
 }
 
 @Composable
+private fun ColumnScope.SearchMediaItemsList(
+    groups: List<MediaSearchGroup>,
+    onOpen: (PlayableMediaItem) -> Unit,
+    onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
+    onFavorite: (PlayableMediaItem, Boolean) -> Unit,
+    onWatchLater: (PlayableMediaItem, Boolean) -> Unit,
+    onPlaylist: (PlayableMediaItem) -> Unit,
+    onTags: (PlayableMediaItem) -> Unit,
+    searchingYouTube: Boolean,
+    youtubeQueryReady: Boolean,
+    youtubeSearchFailed: Boolean,
+) {
+    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+        groups.forEach { group ->
+            item(key = "search-header:${group.label}") {
+                Text(
+                    group.label,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
+            if (group.items.isEmpty()) {
+                item(key = "search-empty:${group.label}") {
+                    val message = if (group.label == "YouTube" && searchingYouTube) {
+                        "YouTubeを検索しています…"
+                    } else if (group.label == "YouTube" && youtubeSearchFailed) {
+                        "YouTubeの検索結果を取得できませんでした。"
+                    } else if (group.label == "YouTube" && youtubeQueryReady) {
+                        "YouTubeの検索結果はありません。"
+                    } else {
+                        "一致するメディアはありません。"
+                    }
+                    Text(
+                        message,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            items(group.items, key = { "${group.label}:${it.stableId}" }) { item ->
+                MediaItemRow(item, onOpen, onLoadArtwork, onFavorite, onWatchLater, onPlaylist, onTags)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ColumnScope.MediaItemsList(
     items: List<PlayableMediaItem>,
     onOpen: (PlayableMediaItem) -> Unit,
@@ -270,40 +387,72 @@ private fun ColumnScope.MediaItemsList(
     }
     LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
         items(items, key = PlayableMediaItem::stableId) { item ->
-            Row(
-                Modifier.fillMaxWidth().clickable { onOpen(item) }.padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                MediaArtwork(item, onLoadArtwork)
-                Spacer(Modifier.size(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        listOf(item.artist.ifBlank { item.channel }, item.album, item.source.sourceLabel())
-                            .filter(String::isNotBlank).joinToString(" ・ "),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    recommendationReasons[item.stableId]?.let { reason ->
-                        Text(reason, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-                IconButton(onClick = { onFavorite(item, !item.favorite) }) {
-                    Icon(if (item.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "お気に入り", tint = if (item.favorite) Color(0xFFE53935) else Color.Unspecified)
-                }
-                if (item.mediaType == LibraryMediaType.VIDEO) {
-                    IconButton(onClick = { onWatchLater(item, !item.watchLater) }) {
-                        Icon(if (item.watchLater) Icons.Default.WatchLater else Icons.Outlined.WatchLater, "あとで見る")
-                    }
-                }
-                IconButton(onClick = { onPlaylist(item) }) { Icon(Icons.Default.PlaylistAdd, "プレイリストへ追加") }
-                IconButton(onClick = { onTags(item) }) { Icon(Icons.Default.MoreVert, "タグを編集") }
-            }
-            HorizontalDivider()
+            MediaItemRow(
+                item,
+                onOpen,
+                onLoadArtwork,
+                onFavorite,
+                onWatchLater,
+                onPlaylist,
+                onTags,
+                recommendationReasons[item.stableId],
+            )
         }
     }
+}
+
+@Composable
+private fun MediaItemRow(
+    item: PlayableMediaItem,
+    onOpen: (PlayableMediaItem) -> Unit,
+    onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
+    onFavorite: (PlayableMediaItem, Boolean) -> Unit,
+    onWatchLater: (PlayableMediaItem, Boolean) -> Unit,
+    onPlaylist: (PlayableMediaItem) -> Unit,
+    onTags: (PlayableMediaItem) -> Unit,
+    recommendationReason: String? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onOpen(item) }.padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MediaArtwork(item, onLoadArtwork)
+        Spacer(Modifier.size(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Text(
+                listOf(item.artist.ifBlank { item.channel }, item.album, item.source.sourceLabel(), formatMediaDuration(item.durationMs))
+                    .filter(String::isNotBlank).joinToString(" ・ "),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            recommendationReason?.let { reason ->
+                Text(reason, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        IconButton(onClick = { onFavorite(item, !item.favorite) }) {
+            Icon(if (item.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "お気に入り", tint = if (item.favorite) Color(0xFFE53935) else Color.Unspecified)
+        }
+        if (item.mediaType == LibraryMediaType.VIDEO) {
+            IconButton(onClick = { onWatchLater(item, !item.watchLater) }) {
+                Icon(if (item.watchLater) Icons.Default.WatchLater else Icons.Outlined.WatchLater, "あとで見る")
+            }
+        }
+        IconButton(onClick = { onPlaylist(item) }) { Icon(Icons.Default.PlaylistAdd, "プレイリストへ追加") }
+        IconButton(onClick = { onTags(item) }) { Icon(Icons.Default.MoreVert, "タグを編集") }
+    }
+    HorizontalDivider()
+}
+
+internal fun formatMediaDuration(durationMs: Long): String {
+    if (durationMs <= 0) return ""
+    val totalSeconds = durationMs / 1_000
+    val hours = totalSeconds / 3_600
+    val minutes = (totalSeconds % 3_600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds) else "%d:%02d".format(minutes, seconds)
 }
 
 @Composable

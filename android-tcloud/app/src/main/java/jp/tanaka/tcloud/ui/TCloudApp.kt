@@ -551,6 +551,7 @@ fun TCloudApp(
                     onOpen = ::requestOpenLibraryMedia,
                     onLoadArtwork = viewModel::loadMediaArtwork,
                     onSaveYouTube = viewModel::saveYouTube,
+                    onSearchYouTube = viewModel::searchYouTube,
                     onFavorite = viewModel::setMediaFavorite,
                     onWatchLater = viewModel::setMediaWatchLater,
                     onCreatePlaylist = viewModel::createMediaPlaylist,

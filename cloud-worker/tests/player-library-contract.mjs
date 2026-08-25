@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+const youtubeSearch = await readFile(new URL("../src/youtube-search.js", import.meta.url), "utf8");
 const wrangler = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 const developmentVars = await readFile(new URL("../.dev.vars.example", import.meta.url), "utf8");
 
@@ -12,10 +13,13 @@ assert.match(source, /LIMIT \? OFFSET \?/);
 assert.match(source, /requireYouTubeApiKey\(env\)/);
 assert.match(source, /env\.YOUTUBE_API_KEY/);
 assert.match(source, /youtube\/v3\/videos/);
-assert.match(source, /youtube\/v3\/search/);
-assert.match(source, /6 \* 60 \* 60/);
-assert.doesNotMatch(source, /yt-dlp|youtube-dl|videoplayback|googlevideo\.com/i);
-assert.doesNotMatch(source, /YOUTUBE_API_KEY\s*=\s*["'][^"']+["']/);
+assert.match(source, /handleYouTubeSearchRequest\(url, env\)/);
+assert.match(youtubeSearch, /youtube\/v3\/search/);
+assert.match(youtubeSearch, /videoEmbeddable: "true"/);
+assert.match(youtubeSearch, /videoSyndicated: "true"/);
+assert.match(youtubeSearch, /max-age=21600/);
+assert.doesNotMatch(source + youtubeSearch, /yt-dlp|youtube-dl|videoplayback|googlevideo\.com/i);
+assert.doesNotMatch(source + youtubeSearch, /YOUTUBE_API_KEY\s*=\s*["'][^"']+["']/);
 assert.doesNotMatch(wrangler, /YOUTUBE_API_KEY/);
 assert.match(developmentVars, /YOUTUBE_API_KEY="replace-with-a-YouTube-Data-API-v3-server-key"/);
 

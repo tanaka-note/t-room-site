@@ -35,10 +35,38 @@ class MediaLibraryContractTest {
     }
 
     @Test
-    fun versionIs110AndCredentialsAreNotEmbedded() {
+    fun versionIs120AndCredentialsAreNotEmbedded() {
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionCode = 28"))
-        assertTrue(gradle.contains("versionName = \"1.1.0\""))
+        assertTrue(gradle.contains("versionCode = 29"))
+        assertTrue(gradle.contains("versionName = \"1.2.0\""))
         assertFalse(gradle.contains("YOUTUBE_API_KEY"))
+    }
+
+    @Test
+    fun launcherUsesClassicTCloudArtworkWithoutHeadphones() {
+        val foreground = File("src/main/res/drawable/tcloud_launcher_foreground.xml").readText()
+        val monochrome = File("src/main/res/drawable/tcloud_launcher_monochrome.xml").readText()
+        val artwork = File("src/main/res/drawable/tcloud_launcher_artwork.xml").readText()
+
+        assertFalse(foreground.contains("M34,50 C34,32 43,22 54,22 C65,22 74,32 74,50"))
+        assertFalse(monochrome.contains("M34,50 C34,32 43,22 54,22 C65,22 74,32 74,50"))
+        assertTrue(artwork.contains("@drawable/tcloud_logo"))
+    }
+
+    @Test
+    fun onlineSearchIsWiredThroughViewModelAndOnlyExplicitActionsPersistResults() {
+        val manager = File("src/main/java/jp/tanaka/tcloud/library/MediaLibraryManager.kt").readText()
+        val viewModel = File("src/main/java/jp/tanaka/tcloud/MainViewModel.kt").readText()
+        val app = File("src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt").readText()
+        val searchBody = manager.substringAfter("fun searchYouTube(query: String)")
+            .substringBefore("fun clearYouTubeSearch")
+
+        assertTrue(searchBody.contains("youtubeSearchRunner.submit(query)"))
+        assertFalse(searchBody.contains("upsertYouTube"))
+        assertTrue(manager.substringAfter("fun setFavorite").substringBefore("fun setWatchLater").contains("ensureStored(item)"))
+        assertTrue(manager.substringAfter("fun setWatchLater").substringBefore("fun setTags").contains("ensureStored(item)"))
+        assertTrue(manager.substringAfter("fun addToPlaylist").substringBefore("fun refreshRecommendationsAsync").contains("ensureStored(item)"))
+        assertTrue(viewModel.contains("fun searchYouTube(query: String)"))
+        assertTrue(app.contains("onSearchYouTube = viewModel::searchYouTube"))
     }
 }

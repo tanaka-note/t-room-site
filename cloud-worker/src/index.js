@@ -1,9 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
+import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-8877c2711b79";
+const APP_BUILD_ID = "cloud-c606e3b3e94f";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -219,7 +220,7 @@ async function handleApi(request, env, url, path, context) {
   }
   if (path === "/api/player/media" && request.method === "GET") return listPlayerMedia(url, env, session);
   if (path === "/api/player/youtube/metadata" && request.method === "GET") return getYouTubeMetadata(url, env);
-  if (path === "/api/player/youtube/search" && request.method === "GET") return searchYouTube(url, env);
+  if (path === "/api/player/youtube/search" && request.method === "GET") return handleYouTubeSearchRequest(url, env);
   if (path === "/api/move-destinations" && request.method === "GET") return listMoveDestinations(url, env, session);
   if (path === "/api/upload-conflict-candidates" && request.method === "POST") return listUploadConflictCandidates(request, env, session);
   if (path === "/api/conflicts" && request.method === "GET") return listStoredConflictCandidates(url, env, session);
@@ -1232,29 +1233,6 @@ async function getYouTubeMetadata(url, env) {
   if (!item) throw new HttpError(404, "YouTube動画を確認できません。");
   await writeYouTubeCache(`metadata/${videoId}`, item, 24 * 60 * 60);
   return json(item);
-}
-
-async function searchYouTube(url, env) {
-  const query = String(url.searchParams.get("q") || "").trim();
-  if (query.length < 2 || query.length > 100) throw new HttpError(400, "YouTube検索語を2〜100文字で指定してください。");
-  const maxResults = Math.min(10, Math.max(1, Number.parseInt(url.searchParams.get("maxResults") || "8", 10) || 8));
-  const cacheId = `search/${await sha256Base64Url(`${query.toLowerCase()}|${maxResults}`)}`;
-  const cached = await readYouTubeCache(cacheId);
-  if (cached) return json(cached);
-  requireYouTubeApiKey(env);
-  const params = new URLSearchParams({
-    part: "snippet", type: "video", q: query, maxResults: String(maxResults),
-    safeSearch: "moderate", regionCode: "JP", relevanceLanguage: "ja", key: env.YOUTUBE_API_KEY
-  });
-  const response = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
-  if (!response.ok) throw new HttpError(response.status === 403 ? 503 : 502, "YouTube検索を利用できません。");
-  const payload = await response.json();
-  const ids = (Array.isArray(payload.items) ? payload.items : [])
-    .map((item) => normalizeYouTubeVideoId(item?.id?.videoId, false)).filter(Boolean);
-  const items = ids.length ? await fetchYouTubeVideos(env, ids) : [];
-  const result = { items };
-  await writeYouTubeCache(cacheId, result, 6 * 60 * 60);
-  return json(result);
 }
 
 async function fetchYouTubeVideos(env, ids) {

@@ -284,6 +284,7 @@ class MainViewModel(
     }
 
     fun closePlayerLibrary() {
+        mediaLibraryManager.clearYouTubeSearch()
         mutableState.update { it.copy(showingPlayerLibrary = false, selectedLibraryMedia = null) }
     }
 
@@ -309,6 +310,8 @@ class MainViewModel(
     }
 
     suspend fun saveYouTube(input: String): PlayableMediaItem = mediaLibraryManager.saveYouTube(input)
+
+    fun searchYouTube(query: String) = mediaLibraryManager.searchYouTube(query)
 
     suspend fun loadMediaArtwork(item: PlayableMediaItem): Bitmap? = mediaLibraryManager.loadArtwork(item)
 

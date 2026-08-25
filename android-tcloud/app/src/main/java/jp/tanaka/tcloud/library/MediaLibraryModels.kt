@@ -2,6 +2,7 @@ package jp.tanaka.tcloud.library
 
 import jp.tanaka.tcloud.data.CloudFile
 import jp.tanaka.tcloud.data.CloudFolder
+import jp.tanaka.tcloud.data.YouTubeVideoMetadata
 
 enum class MediaSourceType {
     LOCAL,
@@ -63,8 +64,38 @@ data class MediaLibraryState(
     val refreshingYouTube: Boolean = false,
     val localPermissionGranted: Boolean = false,
     val youtubeOnlineAvailable: Boolean = true,
+    val youtubeSearchQuery: String = "",
+    val youtubeSearchResults: List<PlayableMediaItem> = emptyList(),
+    val searchingYouTube: Boolean = false,
+    val youtubeSearchError: String? = null,
     val message: String? = null,
 )
+
+internal fun YouTubeVideoMetadata.toPlayableMediaItem(): PlayableMediaItem = PlayableMediaItem(
+    stableId = "youtube:$videoId",
+    source = MediaSourceType.YOUTUBE,
+    mediaType = LibraryMediaType.VIDEO,
+    title = title,
+    channel = channel,
+    durationMs = durationMs,
+    artworkUri = thumbnailUrl.ifBlank { youtubeThumbnailUrl(videoId) },
+    location = "YouTube",
+    playbackUri = youtubeWatchUrl(videoId),
+    youtubeVideoId = videoId,
+)
+
+internal fun onlineYouTubeResultsFor(
+    state: MediaLibraryState,
+    mediaType: LibraryMediaType,
+    source: MediaSourceType?,
+    query: String,
+): List<PlayableMediaItem> {
+    val normalized = query.trim()
+    if (mediaType != LibraryMediaType.VIDEO || normalized.length < 2) return emptyList()
+    if (source != null && source != MediaSourceType.YOUTUBE) return emptyList()
+    if (state.youtubeSearchQuery != normalized) return emptyList()
+    return state.youtubeSearchResults
+}
 
 internal fun parseYouTubeVideoId(input: String): String? {
     val value = input.trim()

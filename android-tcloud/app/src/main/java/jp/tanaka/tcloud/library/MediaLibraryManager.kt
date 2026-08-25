@@ -35,6 +35,52 @@ class MediaLibraryManager(
     private val mutableState = MutableStateFlow(loadState())
     val state: StateFlow<MediaLibraryState> = mutableState.asStateFlow()
     private var mediaRefreshJob: Job? = null
+    private val youtubeSearchRunner = YouTubeSearchRunner(
+        scope = scope,
+        search = repository::searchYouTube,
+        onCleared = { query ->
+            mutableState.update {
+                it.copy(
+                    youtubeSearchQuery = query,
+                    youtubeSearchResults = emptyList(),
+                    searchingYouTube = false,
+                    youtubeSearchError = null,
+                )
+            }
+        },
+        onStarted = { query ->
+            mutableState.update {
+                it.copy(
+                    youtubeSearchQuery = query,
+                    youtubeSearchResults = emptyList(),
+                    searchingYouTube = true,
+                    youtubeSearchError = null,
+                )
+            }
+        },
+        onSuccess = { query, items ->
+            mutableState.update {
+                it.copy(
+                    youtubeSearchQuery = query,
+                    youtubeSearchResults = items,
+                    searchingYouTube = false,
+                    youtubeSearchError = null,
+                    youtubeOnlineAvailable = true,
+                )
+            }
+        },
+        onFailure = { query, message, apiMissing ->
+            mutableState.update {
+                it.copy(
+                    youtubeSearchQuery = query,
+                    youtubeSearchResults = emptyList(),
+                    searchingYouTube = false,
+                    youtubeSearchError = message,
+                    youtubeOnlineAvailable = !apiMissing,
+                )
+            }
+        },
+    )
 
     private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
@@ -187,6 +233,14 @@ class MediaLibraryManager(
             .getOrDefault(placeholder)
     }
 
+    fun searchYouTube(query: String) {
+        youtubeSearchRunner.submit(query)
+    }
+
+    fun clearYouTubeSearch() {
+        youtubeSearchRunner.cancel()
+    }
+
     fun setFavorite(item: PlayableMediaItem, enabled: Boolean) {
         ensureStored(item)
         store.setFavorite(item.stableId, enabled)
@@ -246,20 +300,7 @@ class MediaLibraryManager(
         if (terms.isNotEmpty() && (force || online.isEmpty() || now - lastFetch >= RECOMMENDATION_TTL_MS)) {
             val fetched = runCatching { repository.searchYouTube(terms.joinToString(" "), 8) }
             fetched.onSuccess { metadata ->
-                online = metadata.map { item ->
-                    PlayableMediaItem(
-                        stableId = "youtube:${item.videoId}",
-                        source = MediaSourceType.YOUTUBE,
-                        mediaType = LibraryMediaType.VIDEO,
-                        title = item.title,
-                        channel = item.channel,
-                        durationMs = item.durationMs,
-                        artworkUri = item.thumbnailUrl,
-                        location = "YouTube",
-                        playbackUri = youtubeWatchUrl(item.videoId),
-                        youtubeVideoId = item.videoId,
-                    )
-                }
+                online = metadata.map { it.toPlayableMediaItem() }
                 writeCachedYouTubeRecommendations(online)
                 store.writeSetting(YOUTUBE_RECOMMENDATION_FETCHED_KEY, now.toString())
                 onlineAvailable = true

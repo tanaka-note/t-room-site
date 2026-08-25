@@ -207,7 +207,7 @@
       "publicUrls": ["https://tanaka-note.com/cloud/", "https://tanaka-note.com/cloud/share/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
       "entrypoints": ["cloud-worker/public/index.html", "cloud-worker/public/share.html"],
       "buildRoots": ["cloud-worker/public"],
-      "buildFiles": ["cloud-worker/src/index.js", "assets/passkey-session-validation.mjs", "security-worker/public/passkey-client.js"],
+      "buildFiles": ["cloud-worker/src/index.js", "cloud-worker/src/youtube-search.js", "assets/passkey-session-validation.mjs", "security-worker/public/passkey-client.js"],
       "buildConstants": [
         "cloud-worker/public/cloud.js",
         "cloud-worker/public/cloud-runtime-20260816-1.js",
