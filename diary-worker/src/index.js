@@ -325,6 +325,19 @@ async function handleApi(request, env, url, path, context) {
     return createPhotoUploadSession(request, env, session);
   }
 
+  const stagedPhotoTestExtendMatch = path.match(/^\/api\/photo-upload-sessions\/([0-9a-f-]{36})\/test-extend$/i);
+  if (stagedPhotoTestExtendMatch && request.method === "POST" && env.STAGED_PHOTO_CLEANUP_TEST_PAUSE_MS) {
+    requireEntryManagementAccess(session);
+    const uploadSession = await readOwnedPhotoUploadSession(stagedPhotoTestExtendMatch[1], env, session);
+    const now = new Date().toISOString();
+    await env.DB.prepare(`
+      UPDATE diary_photo_upload_sessions
+      SET updated_at = ?, expires_at = ?
+      WHERE id = ? AND status = 'active'
+    `).bind(now, new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id).run();
+    return json({ ok: true });
+  }
+
   const stagedPhotoMatch = path.match(/^\/api\/photo-upload-sessions\/([0-9a-f-]{36})\/photos\/([0-9a-f-]{36})$/i);
   if (stagedPhotoMatch && request.method === "DELETE") {
     requireEntryManagementAccess(session);
@@ -932,6 +945,7 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
     if (Number(uploadSession.committed_entry_id) !== entryId || JSON.stringify(committedIds) !== JSON.stringify(photoIds)) {
       throw new HttpError(409, "画像の一時保存情報は別の日記へ確定済みです。");
     }
+    await cleanupStagedPhotoSession(env, uploadSession.id);
     return committedPhotoUploadResponse(entryId, photoIds, env, true);
   }
   if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
@@ -966,41 +980,53 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
     if (Number(count?.count || 0) !== photoIds.length) {
       throw new HttpError(409, "一部の画像アップロードが完了していません。");
     }
-    const batch = await env.DB.batch([
-      env.DB.prepare(`
-        INSERT OR IGNORE INTO diary_photos (
-          id, entry_id, file_name, content_type, original_size,
-          original_key, display_key, thumbnail_key, width, height,
-          created_by_id, created_by_name, created_at
-        )
-        SELECT id, ?, file_name, content_type, original_size,
-               original_key, display_key, thumbnail_key, width, height,
-               account_id, created_by_name, created_at
-        FROM diary_staged_photos
-        WHERE upload_session_id = ? AND household_id = ? AND account_id = ?
-          AND id IN (${placeholders})
-      `).bind(entryId, uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds),
-      env.DB.prepare(`
-        DELETE FROM diary_staged_photos
-        WHERE upload_session_id = ? AND household_id = ? AND account_id = ?
-          AND id IN (${placeholders})
-      `).bind(uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds),
-      env.DB.prepare(`
-        UPDATE diary_photo_upload_sessions
-        SET status = 'committed', committed_entry_id = ?, committed_photo_ids = ?,
-            updated_at = ?, expires_at = ?
-        WHERE id = ? AND status = 'active'
-          AND (
-            SELECT COUNT(*) FROM diary_photos
-            WHERE entry_id = ? AND id IN (${placeholders})
-          ) = ?
-      `).bind(
-        entryId, JSON.stringify(photoIds), new Date().toISOString(),
-        new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id,
-        entryId, ...photoIds, photoIds.length
+    const now = new Date().toISOString();
+    await env.DB.prepare(`
+      INSERT OR IGNORE INTO diary_photos (
+        id, entry_id, file_name, content_type, original_size,
+        original_key, display_key, thumbnail_key, width, height,
+        created_by_id, created_by_name, created_at
       )
-    ]);
-    if (!batch.at(-1)?.meta?.changes) {
+      SELECT photo.id, ?, photo.file_name, photo.content_type, photo.original_size,
+             photo.original_key, photo.display_key, photo.thumbnail_key, photo.width, photo.height,
+             photo.account_id, photo.created_by_name, photo.created_at
+      FROM diary_staged_photos photo
+      WHERE photo.upload_session_id = ? AND photo.household_id = ? AND photo.account_id = ?
+        AND photo.id IN (${placeholders})
+        AND EXISTS (
+          SELECT 1 FROM diary_photo_upload_sessions upload_session
+          WHERE upload_session.id = photo.upload_session_id
+            AND upload_session.status = 'active' AND upload_session.expires_at > ?
+        )
+    `).bind(entryId, uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds, now).run();
+
+    const promoted = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM diary_photos
+      WHERE entry_id = ? AND created_by_id = ?
+        AND substr(original_key, 1, ?) = ?
+        AND id IN (${placeholders})
+    `).bind(entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, ...photoIds).first();
+    if (Number(promoted?.count || 0) !== photoIds.length) {
+      throw new HttpError(409, "一部の画像を日記へ反映できませんでした。もう一度お試しください。");
+    }
+
+    const committed = await env.DB.prepare(`
+      UPDATE diary_photo_upload_sessions
+      SET status = 'committed', committed_entry_id = ?, committed_photo_ids = ?,
+          updated_at = ?, expires_at = ?
+      WHERE id = ? AND status = 'active' AND expires_at > ?
+        AND (
+          SELECT COUNT(*) FROM diary_photos
+          WHERE entry_id = ? AND created_by_id = ?
+            AND substr(original_key, 1, ?) = ?
+            AND id IN (${placeholders})
+        ) = ?
+    `).bind(
+      entryId, JSON.stringify(photoIds), now,
+      new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id, now,
+      entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, ...photoIds, photoIds.length
+    ).run();
+    if (!committed.meta?.changes) {
       const current = await readOwnedPhotoUploadSession(uploadSession.id, env, session);
       if (current.status !== "committed"
         || Number(current.committed_entry_id) !== entryId
@@ -1009,13 +1035,22 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
       }
     }
   } else {
-    await env.DB.prepare(`
+    const now = new Date().toISOString();
+    const committed = await env.DB.prepare(`
       UPDATE diary_photo_upload_sessions
       SET status = 'committed', committed_entry_id = ?, committed_photo_ids = '[]',
           updated_at = ?, expires_at = ?
-      WHERE id = ? AND status = 'active'
-    `).bind(entryId, new Date().toISOString(),
-      new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id).run();
+      WHERE id = ? AND status = 'active' AND expires_at > ?
+    `).bind(entryId, now,
+      new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id, now).run();
+    if (!committed.meta?.changes) {
+      const current = await readOwnedPhotoUploadSession(uploadSession.id, env, session);
+      if (current.status !== "committed"
+        || Number(current.committed_entry_id) !== entryId
+        || current.committed_photo_ids !== "[]") {
+        throw new HttpError(409, "画像の一時保存情報を確定できませんでした。もう一度お試しください。");
+      }
+    }
   }
   await cleanupStagedPhotoSession(env, uploadSession.id);
   return committedPhotoUploadResponse(entryId, photoIds, env, false);
@@ -1260,7 +1295,11 @@ async function listMeta(env, session) {
 async function createEntry(request, env, session) {
   const body = await readJson(request, 1500000);
   const status = normalizeEntryStatus(body.status);
-  const input = validateEntryInput(body, { draft: status === "draft" });
+  const pendingPhotoSave = await validatePendingPhotoSave(body, env, session);
+  const input = validateEntryInput(body, {
+    draft: status === "draft",
+    allowEmptyContent: pendingPhotoSave
+  });
   const result = await env.DB.prepare(`
     INSERT INTO diary_entries (
       entry_date, title, content, content_format, author_id, author_name, household_id,
@@ -1279,7 +1318,11 @@ async function createEntry(request, env, session) {
 async function updateEntry(id, request, env, session) {
   const body = await readJson(request, 1500000);
   const targetStatus = normalizeEntryStatus(body.status);
-  const input = validateEntryInput(body, { draft: targetStatus === "draft" });
+  const pendingPhotoSave = await validatePendingPhotoSave(body, env, session);
+  const input = validateEntryInput(body, {
+    draft: targetStatus === "draft",
+    allowEmptyContent: pendingPhotoSave
+  });
   const revision = Number(body.revision);
   if (!Number.isInteger(revision) || revision < 1) {
     return json({ error: "編集情報が不足しています。再読み込みしてください。" }, 400);
@@ -1531,13 +1574,39 @@ async function replaceTags(env, entryId, tags) {
   await env.DB.batch(statements);
 }
 
-function validateEntryInput(body, { draft = false } = {}) {
+async function validatePendingPhotoSave(body, env, session) {
+  const photoIds = parsePhotoIdList(body.pendingPhotoIds);
+  if (!photoIds.length) return false;
+  const uploadSessionId = String(body.photoUploadSessionId || "").toLowerCase();
+  if (!isUuid(uploadSessionId)) throw new HttpError(400, "画像の一時保存情報を確認できませんでした。");
+  const uploadSession = await readOwnedPhotoUploadSession(uploadSessionId, env, session);
+  if (uploadSession.status === "committed") {
+    const committedIds = parsePhotoIdList(uploadSession.committed_photo_ids);
+    if (JSON.stringify(committedIds) === JSON.stringify(photoIds)) return true;
+    throw new HttpError(409, "画像の一時保存情報は別の内容で確定済みです。");
+  }
+  if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
+    throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
+  }
+  const placeholders = photoIds.map(() => "?").join(", ");
+  const staged = await env.DB.prepare(`
+    SELECT COUNT(*) AS count FROM diary_staged_photos
+    WHERE upload_session_id = ? AND household_id = ? AND account_id = ?
+      AND id IN (${placeholders})
+  `).bind(uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds).first();
+  if (Number(staged?.count || 0) !== photoIds.length) {
+    throw new HttpError(409, "一部の画像アップロードが完了していません。");
+  }
+  return true;
+}
+
+function validateEntryInput(body, { draft = false, allowEmptyContent = false } = {}) {
   const entryDate = typeof body.entryDate === "string" ? body.entryDate.trim() : "";
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const content = typeof body.content === "string" ? body.content.trim() : "";
   if (!isValidDate(entryDate)) throw new HttpError(400, "日付を確認してください。");
   if ((!draft && !title) || title.length > 200) throw new HttpError(400, "タイトルは1文字以上200文字以内で入力してください。");
-  if ((!draft && !content) || content.length > 200000) throw new HttpError(400, "本文は1文字以上20万文字以内で入力してください。");
+  if ((!draft && !allowEmptyContent && !content) || content.length > 200000) throw new HttpError(400, "本文は1文字以上20万文字以内で入力してください。");
   const rawTags = Array.isArray(body.tags) ? body.tags : [];
   const tags = [...new Set(rawTags.map(normalizeTag).filter(Boolean))];
   if (tags.length > 10 || tags.some((tag) => tag.length > 30)) {
@@ -2096,9 +2165,29 @@ async function runScheduledStagedPhotoCleanup(env) {
       ORDER BY expires_at ASC, id ASC
       LIMIT ?
     `).bind(cutoff, STAGED_PHOTO_CLEANUP_BATCH_SIZE).all();
+    const testPauseMs = clampNumber(env.STAGED_PHOTO_CLEANUP_TEST_PAUSE_MS, 0, 5000, 0);
+    if (testPauseMs > 0 && (result.results || []).length) {
+      console.log("Diary staged photo cleanup test pause", testPauseMs);
+      await new Promise((resolve) => setTimeout(resolve, testPauseMs));
+    }
     let cleaned = 0;
     let pending = 0;
     for (const row of result.results || []) {
+      const uploadSession = await env.DB.prepare(`
+        SELECT status, expires_at FROM diary_photo_upload_sessions WHERE id = ?
+      `).bind(row.id).first();
+      if (!uploadSession) {
+        cleaned += 1;
+        continue;
+      }
+      if (uploadSession.status === "active") {
+        const claimed = await env.DB.prepare(`
+          UPDATE diary_photo_upload_sessions
+          SET status = 'cancelled', updated_at = ?, expires_at = ?
+          WHERE id = ? AND status = 'active' AND expires_at <= ?
+        `).bind(cutoff, cutoff, row.id, cutoff).run();
+        if (!claimed.meta?.changes) continue;
+      }
       const cleanup = await cleanupStagedPhotoSession(env, row.id);
       if (cleanup.complete) cleaned += 1;
       else pending += 1;
@@ -2111,26 +2200,38 @@ async function runScheduledStagedPhotoCleanup(env) {
 }
 
 async function cleanupStagedPhotoSession(env, uploadSessionId) {
-  if (!env.MEDIA) return { complete: false };
+  const session = await env.DB.prepare(`
+    SELECT status, expires_at FROM diary_photo_upload_sessions WHERE id = ?
+  `).bind(uploadSessionId).first();
+  if (!session) return { complete: true };
+  if (session.status === "active") return { complete: true, skipped: true };
   const result = await env.DB.prepare(`
-    SELECT id, original_key, display_key, thumbnail_key
-    FROM diary_staged_photos WHERE upload_session_id = ?
-    ORDER BY created_at ASC, id ASC
+    SELECT staged.id, staged.original_key, staged.display_key, staged.thumbnail_key,
+           CASE WHEN final.id IS NULL THEN 0 ELSE 1 END AS promoted
+    FROM diary_staged_photos staged
+    LEFT JOIN diary_photos final
+      ON final.id = staged.id
+     AND final.original_key = staged.original_key
+     AND final.display_key = staged.display_key
+     AND final.thumbnail_key = staged.thumbnail_key
+    WHERE staged.upload_session_id = ?
+    ORDER BY staged.created_at ASC, staged.id ASC
   `).bind(uploadSessionId).all();
   const rows = result.results || [];
   try {
     if (rows.length) {
-      await env.MEDIA.delete(rows.flatMap((row) => [row.original_key, row.display_key, row.thumbnail_key]));
+      const unpromoted = rows.filter((row) => !Number(row.promoted));
+      if (unpromoted.length) {
+        if (!env.MEDIA) return { complete: false };
+        await env.MEDIA.delete(unpromoted.flatMap((row) => [row.original_key, row.display_key, row.thumbnail_key]));
+      }
       await env.DB.prepare("DELETE FROM diary_staged_photos WHERE upload_session_id = ?")
         .bind(uploadSessionId).run();
     }
-    const session = await env.DB.prepare(`
-      SELECT status, expires_at FROM diary_photo_upload_sessions WHERE id = ?
-    `).bind(uploadSessionId).first();
-    if (session && session.status !== "committed") {
+    if (session.status === "cancelled") {
       await env.DB.prepare("DELETE FROM diary_photo_upload_sessions WHERE id = ?")
         .bind(uploadSessionId).run();
-    } else if (session && Date.parse(session.expires_at) <= Date.now()) {
+    } else if (session.status === "committed" && Date.parse(session.expires_at) <= Date.now()) {
       await env.DB.prepare("DELETE FROM diary_photo_upload_sessions WHERE id = ?")
         .bind(uploadSessionId).run();
     }
@@ -2319,4 +2420,4 @@ class HttpError extends Error {
   }
 }
 
-export { drainMediaDeletionQueue, runScheduledMediaDeletionCleanup, runScheduledStagedPhotoCleanup };
+export { cleanupStagedPhotoSession, drainMediaDeletionQueue, runScheduledMediaDeletionCleanup, runScheduledStagedPhotoCleanup };

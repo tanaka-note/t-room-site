@@ -35,7 +35,9 @@ const server = spawn(process.execPath, [
   "--var",
   `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
   "--var",
-  "SESSION_SECRET:diary-photo-integration-test-session-secret"
+  "SESSION_SECRET:diary-photo-integration-test-session-secret",
+  "--var",
+  "STAGED_PHOTO_CLEANUP_TEST_PAUSE_MS:2000"
 ], {
   cwd: projectDirectory,
   stdio: ["ignore", "pipe", "pipe"]
@@ -99,6 +101,10 @@ function createPhotoForm({ id, fileName, width = 1200, height = 800 }) {
   form.set("display", new File([new Uint8Array([5, 6, 7])], "display.webp", { type: "image/webp" }));
   form.set("thumbnail", new File([new Uint8Array([8, 9])], "thumbnail.webp", { type: "image/webp" }));
   return form;
+}
+
+function countServerOutput(pattern) {
+  return [...serverOutput.matchAll(pattern)].length;
 }
 
 try {
@@ -169,6 +175,142 @@ try {
       (SELECT COUNT(*) FROM diary_photos WHERE id = '${stagedPhotoId}' AND entry_id = ${stagedEntry.result.entry.id}) AS final_count
   `).map((row) => ({ staged: Number(row.staged_count), final: Number(row.final_count) })), [{ staged: 0, final: 1 }],
   "commit must promote exactly one photo ledger row");
+
+  const partialSession = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: null }
+  });
+  const partialSessionId = partialSession.result.uploadSession.id;
+  const partialPhotoIds = [randomUUID(), randomUUID()];
+  for (const [index, partialPhotoId] of partialPhotoIds.entries()) {
+    const response = await fetch(`${origin}/diary/api/photo-upload-sessions/${partialSessionId}/photos`, {
+      method: "POST",
+      headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+      body: createPhotoForm({ id: partialPhotoId, fileName: `partial-${index}.png` })
+    });
+    assert.equal(response.status, 200, await response.text());
+  }
+  const partialEntry = await jsonRequest("/entries", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: "部分成功復旧確認",
+      content: partialPhotoIds.map((id) => `[[写真:${id}]]`).join("\n"),
+      tags: []
+    }
+  });
+  queryLocalDatabase(`
+    INSERT INTO diary_photos (
+      id, entry_id, file_name, content_type, original_size,
+      original_key, display_key, thumbnail_key, width, height,
+      created_by_id, created_by_name, created_at
+    )
+    SELECT id, ${partialEntry.result.entry.id}, file_name, content_type, original_size,
+           original_key, display_key, thumbnail_key, width, height,
+           account_id, created_by_name, created_at
+    FROM diary_staged_photos
+    WHERE upload_session_id = '${partialSessionId}' AND id = '${partialPhotoIds[0]}'
+  `);
+  const recoveredPartialCommit = await jsonRequest(`/photo-upload-sessions/${partialSessionId}/commit`, {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { entryId: partialEntry.result.entry.id, photoIds: partialPhotoIds }
+  });
+  assert.equal(recoveredPartialCommit.response.status, 200, JSON.stringify(recoveredPartialCommit.result));
+  const recoveredPartialState = queryLocalDatabase(`
+    SELECT
+      (SELECT COUNT(*) FROM diary_photos WHERE entry_id = ${partialEntry.result.entry.id}
+        AND id IN ('${partialPhotoIds.join("', '")}')) AS final_count,
+      (SELECT COUNT(*) FROM diary_staged_photos WHERE upload_session_id = '${partialSessionId}') AS staged_count,
+      (SELECT status FROM diary_photo_upload_sessions WHERE id = '${partialSessionId}') AS session_status,
+      (SELECT committed_photo_ids FROM diary_photo_upload_sessions WHERE id = '${partialSessionId}') AS committed_photo_ids
+  `)[0];
+  assert.equal(Number(recoveredPartialState.final_count), 2, "partial promotion retry must produce every final photo exactly once");
+  assert.equal(Number(recoveredPartialState.staged_count), 0, "staging ledger must be removed only after commit is established");
+  assert.equal(recoveredPartialState.session_status, "committed");
+  assert.equal(recoveredPartialState.committed_photo_ids, JSON.stringify(partialPhotoIds));
+  for (const photo of recoveredPartialCommit.result.photos) {
+    const image = await fetch(`${origin}${photo.displayUrl}`, { headers: { Cookie: wifeCookie } });
+    assert.equal(image.status, 200, "promoted R2 object must remain readable");
+  }
+
+  queryLocalDatabase(`
+    INSERT INTO diary_staged_photos (
+      id, upload_session_id, household_id, account_id, file_name, content_type, original_size,
+      original_key, display_key, thumbnail_key, width, height, created_by_name, created_at
+    )
+    SELECT photo.id, '${partialSessionId}', upload_session.household_id, upload_session.account_id,
+           photo.file_name, photo.content_type, photo.original_size,
+           photo.original_key, photo.display_key, photo.thumbnail_key, photo.width, photo.height,
+           photo.created_by_name, photo.created_at
+    FROM diary_photos photo
+    JOIN diary_photo_upload_sessions upload_session ON upload_session.id = '${partialSessionId}'
+    WHERE photo.id = '${partialPhotoIds[0]}'
+  `);
+  const promotedLedgerCleanup = await fetch(`${origin}/__scheduled?cron=25+18+*+*+*`);
+  assert.equal(promotedLedgerCleanup.status, 200, await promotedLedgerCleanup.text());
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_staged_photos WHERE upload_session_id = '${partialSessionId}'`)[0].count), 0,
+    "scheduled cleanup must remove a leftover promoted staging ledger");
+  const promotedObjectAfterCleanup = await fetch(`${origin}${recoveredPartialCommit.result.photos[0].displayUrl}`, { headers: { Cookie: wifeCookie } });
+  assert.equal(promotedObjectAfterCleanup.status, 200, "staging cleanup must never delete an object owned by diary_photos");
+
+  const cleanupRacePhotoId = randomUUID();
+  const cleanupRaceSession = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: null }
+  });
+  const cleanupRaceSessionId = cleanupRaceSession.result.uploadSession.id;
+  const cleanupRaceUpload = await fetch(`${origin}/diary/api/photo-upload-sessions/${cleanupRaceSessionId}/photos`, {
+    method: "POST",
+    headers: { Cookie: wifeCookie, "X-Diary-Request": "1" },
+    body: createPhotoForm({ id: cleanupRacePhotoId, fileName: "cleanup-race.png" })
+  });
+  assert.equal(cleanupRaceUpload.status, 200, await cleanupRaceUpload.text());
+  queryLocalDatabase(`UPDATE diary_photo_upload_sessions SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = '${cleanupRaceSessionId}'`);
+  const cleanupPauseCount = countServerOutput(/Diary staged photo cleanup test pause/g);
+  const cleanupRaceScheduled = await fetch(`${origin}/__scheduled?cron=25+18+*+*+*`);
+  assert.equal(cleanupRaceScheduled.status, 200, await cleanupRaceScheduled.text());
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (countServerOutput(/Diary staged photo cleanup test pause/g) > cleanupPauseCount) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.ok(countServerOutput(/Diary staged photo cleanup test pause/g) > cleanupPauseCount,
+    "scheduled cleanup must select the expired candidate before its simulated upload extends TTL");
+  const cleanupRaceExtension = await jsonRequest(`/photo-upload-sessions/${cleanupRaceSessionId}/test-extend`, {
+    method: "POST",
+    cookie: wifeCookie
+  });
+  assert.equal(cleanupRaceExtension.response.status, 200, JSON.stringify(cleanupRaceExtension.result));
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  const cleanupRaceState = queryLocalDatabase(`
+    SELECT
+      (SELECT COUNT(*) FROM diary_photo_upload_sessions WHERE id = '${cleanupRaceSessionId}' AND status = 'active') AS session_count,
+      (SELECT COUNT(*) FROM diary_staged_photos WHERE id = '${cleanupRacePhotoId}') AS staged_count
+  `)[0];
+  assert.equal(Number(cleanupRaceState.session_count), 1, "a TTL extension after candidate selection must preserve the active session");
+  assert.equal(Number(cleanupRaceState.staged_count), 1, "a TTL extension after candidate selection must preserve the staged ledger and R2 ownership");
+  const cleanupRaceEntry = await jsonRequest("/entries", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: {
+      entryDate: "2026-08-09",
+      title: "cleanup競合確認",
+      content: `[[写真:${cleanupRacePhotoId}]]`,
+      tags: []
+    }
+  });
+  const cleanupRaceCommit = await jsonRequest(`/photo-upload-sessions/${cleanupRaceSessionId}/commit`, {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { entryId: cleanupRaceEntry.result.entry.id, photoIds: [cleanupRacePhotoId] }
+  });
+  assert.equal(cleanupRaceCommit.response.status, 200, JSON.stringify(cleanupRaceCommit.result));
+  const cleanupRaceImage = await fetch(`${origin}${cleanupRaceCommit.result.photos[0].displayUrl}`, { headers: { Cookie: wifeCookie } });
+  assert.equal(cleanupRaceImage.status, 200, "the preserved race candidate must remain committable with its R2 object");
 
   const editDraftPhotoId = randomUUID();
   const editSource = await jsonRequest("/entries", {

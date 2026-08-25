@@ -2530,23 +2530,52 @@
   }
 
   function removePhotoMarkerFromEditor(marker) {
-    const documentValue = serializeRichEditor(false);
+    const documentValue = removeTextFromRichDocument(serializeRichEditor(false), marker);
+    setRichEditorDocument(documentValue.content, documentValue.contentFormat);
+  }
+
+  function removeTextFromRichDocument(documentValue, textToRemove) {
     let content = documentValue.content;
     let runs = documentValue.contentFormat?.runs || [];
-    let index = content.lastIndexOf(marker);
+    let index = content.lastIndexOf(textToRemove);
     while (index >= 0) {
-      const end = index + marker.length;
+      const end = index + textToRemove.length;
       content = content.slice(0, index) + content.slice(end);
       runs = runs.flatMap((run) => {
         if (run.end <= index) return [run];
-        if (run.start >= end) return [{ ...run, start: run.start - marker.length, end: run.end - marker.length }];
+        if (run.start >= end) return [{ ...run, start: run.start - textToRemove.length, end: run.end - textToRemove.length }];
         const newStart = run.start < index ? run.start : index;
-        const newEnd = run.end > end ? run.end - marker.length : index;
+        const newEnd = run.end > end ? run.end - textToRemove.length : index;
         return newEnd > newStart ? [{ ...run, start: newStart, end: newEnd }] : [];
       });
-      index = content.lastIndexOf(marker, index - 1);
+      index = content.lastIndexOf(textToRemove, index - 1);
     }
-    setRichEditorDocument(content, runs.length ? { version: 1, runs: mergeRichTextRuns(runs) } : null);
+    return {
+      content,
+      contentFormat: runs.length ? { version: 1, runs: mergeRichTextRuns(runs) } : null
+    };
+  }
+
+  function withoutPhotoMarkers(documentValue, photoIds) {
+    const withoutMarkers = photoIds.reduce(
+      (current, photoId) => removeTextFromRichDocument(current, photoMarker(photoId)),
+      documentValue
+    );
+    const content = withoutMarkers.content;
+    if (!content) return withoutMarkers;
+    const leading = content.search(/\S/);
+    const trailing = content.length - content.trimEnd().length;
+    const start = leading < 0 ? content.length : leading;
+    const end = content.length - trailing;
+    const runs = (withoutMarkers.contentFormat?.runs || []).flatMap((run) => {
+      const runStart = Math.max(run.start, start);
+      const runEnd = Math.min(run.end, end);
+      return runEnd > runStart ? [{ ...run, start: runStart - start, end: runEnd - start }] : [];
+    });
+    return {
+      content: content.slice(start, end),
+      contentFormat: runs.length ? { version: 1, runs: mergeRichTextRuns(runs) } : null
+    };
   }
 
   function photoMarker(id) {
@@ -2901,16 +2930,31 @@
         await ensurePhotosUploaded(pendingPhotos);
       }
 
-      const saved = await api(id ? `/entries/${id}` : "/entries", {
+      const sourceEntry = state.editorSourceEntry;
+      const provisionalDocument = pendingPhotos.length
+        ? withoutPhotoMarkers(editorDocument, pendingPhotos.map((photo) => photo.id))
+        : editorDocument;
+      const provisionalBody = pendingPhotos.length ? {
+        ...body,
+        content: provisionalDocument.content,
+        contentFormat: provisionalDocument.contentFormat,
+        pendingPhotoIds: pendingPhotos.map((photo) => photo.id),
+        photoUploadSessionId: state.photoUploadSessionId
+      } : body;
+      let saved = await api(id ? `/entries/${id}` : "/entries", {
         method: id ? "PUT" : "POST",
-        body
+        body: provisionalBody
       });
       const failures = [];
       const deletedPhotoIds = [...state.editorDeletedPhotoIds];
       const promotedEditDraft = targetStatus === "published"
         && elements.entryStatus.value === "draft"
-        && Boolean(state.editorSourceEntry?.draftOfEntryId);
-      const photoOwners = new Map((state.editorSourceEntry?.photos || []).map((photo) => [photo.id, Number(photo.entryId)]));
+        && Boolean(sourceEntry?.draftOfEntryId);
+      const photoOwners = new Map((sourceEntry?.photos || []).map((photo) => [photo.id, Number(photo.entryId)]));
+      elements.entryId.value = String(saved.entry.id);
+      elements.entryRevision.value = String(saved.entry.revision);
+      elements.entryStatus.value = saved.entry.status;
+      state.editorSourceEntry = saved.entry;
       const deletionsToApply = promotedEditDraft
         ? []
         : deletedPhotoIds.filter((photoId) => targetStatus === "published" || photoOwners.get(photoId) === saved.entry.id);
@@ -2924,7 +2968,7 @@
           failures.push(`画像の削除：${error.message}`);
         }
       }
-      if (state.photoUploadSessionId) {
+      if (state.photoUploadSessionId && !state.photoUploadCommitted) {
         setEditorSaveBusy(true, "写真を日記へ反映しています...");
         try {
           const committedPhotos = await commitStagedPhotos(saved.entry.id, pendingPhotos);
@@ -2933,15 +2977,21 @@
             photo.existing = true;
             Object.assign(photo, committedById.get(photo.id) || {});
           }
+          if (pendingPhotos.length) {
+            setEditorSaveBusy(true, "写真を本文へ反映しています...");
+            saved = await api(`/entries/${saved.entry.id}`, {
+              method: "PUT",
+              body: { ...body, revision: saved.entry.revision }
+            });
+            elements.entryRevision.value = String(saved.entry.revision);
+            elements.entryStatus.value = saved.entry.status;
+            state.editorSourceEntry = saved.entry;
+          }
         } catch (error) {
           failures.push(`写真の反映：${error.message}`);
         }
       }
       if (failures.length) {
-        elements.entryId.value = String(saved.entry.id);
-        elements.entryRevision.value = String(saved.entry.revision);
-        elements.entryStatus.value = saved.entry.status;
-        state.editorSourceEntry = saved.entry;
         elements.editorMessage.textContent = `${targetStatus === "draft" ? "下書き" : "日記本文"}は保存しました。写真を保存できませんでした。${failures.join(" / ")}`;
         renderEditorPhotos();
         return false;

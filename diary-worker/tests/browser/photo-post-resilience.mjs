@@ -28,11 +28,13 @@ function resetScenario(mode) {
     mode,
     nextEntryId: 100,
     entryRequests: [],
+    entries: new Map(),
     createdEntryIds: new Set(),
     photoRequests: 0,
     storedPhotoIds: new Set(),
     uploadSessions: new Set(),
     commitRequests: [],
+    committedSessions: new Set(),
     cancelRequests: [],
     photoUploadStartedBeforeEntry: false
   };
@@ -98,7 +100,9 @@ const server = createServer(async (request, response) => {
       const id = scenario.nextEntryId++;
       scenario.createdEntryIds.add(id);
       scenario.entryRequests.push({ method: "POST", id, body });
-      sendJson(response, 200, { entry: savedEntry(id, body) });
+      const entry = savedEntry(id, body);
+      scenario.entries.set(id, entry);
+      sendJson(response, 200, { entry });
       return;
     }
     if (apiPath === "/photo-upload-sessions" && request.method === "POST") {
@@ -112,7 +116,9 @@ const server = createServer(async (request, response) => {
       const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
       const id = Number(entryUpdateMatch[1]);
       scenario.entryRequests.push({ method: "PUT", id, body });
-      sendJson(response, 200, { entry: savedEntry(id, body, Number(body.revision || 1) + 1) });
+      const entry = savedEntry(id, body, Number(body.revision || 1) + 1);
+      scenario.entries.set(id, entry);
+      sendJson(response, 200, { entry });
       return;
     }
     const photoUploadMatch = apiPath.match(/^\/photo-upload-sessions\/([0-9a-f-]{36})\/photos$/);
@@ -159,6 +165,20 @@ const server = createServer(async (request, response) => {
     if (photoCommitMatch && request.method === "POST") {
       const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
       scenario.commitRequests.push(body);
+      if (scenario.mode === "commit-500-once" && scenario.commitRequests.length === 1) {
+        sendJson(response, 500, { error: "一時的に写真を反映できません。" });
+        return;
+      }
+      if (scenario.mode === "commit-permanent-409") {
+        sendJson(response, 409, { error: "写真を日記へ反映できませんでした。" });
+        return;
+      }
+      const alreadyCommitted = scenario.committedSessions.has(photoCommitMatch[1]);
+      scenario.committedSessions.add(photoCommitMatch[1]);
+      if (scenario.mode === "commit-lost-response" && scenario.commitRequests.length === 1) {
+        request.socket.destroy();
+        return;
+      }
       sendJson(response, 200, {
         photos: body.photoIds.map((photoId) => ({
           id: photoId,
@@ -173,7 +193,8 @@ const server = createServer(async (request, response) => {
           thumbnailUrl: `/diary/api/photos/${photoId}/thumbnail`,
           displayUrl: `/diary/api/photos/${photoId}/display`,
           originalUrl: `/diary/api/photos/${photoId}/original`
-        }))
+        })),
+        idempotent: alreadyCommitted
       });
       return;
     }
@@ -280,15 +301,21 @@ async function verifyPreparationRace(browser, name, contextOptions) {
     await page.evaluate(() => window.__releasePhotoPreparation());
     await page.waitForFunction(() => document.querySelector("#editor-photo-list .editor-photo-card"));
     await waitForEditorClosed(page);
-    assert.equal(scenario.entryRequests.length, 1, `${name}: preparation race must create one entry`);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT"],
+      `${name}: preparation race must create once and finalize its marker once`);
     assert.equal(scenario.photoRequests, 1, `${name}: prepared photo must upload once`);
     assert.equal(scenario.storedPhotoIds.size, 1, `${name}: prepared photo must be stored once`);
     assert.equal(scenario.photoUploadStartedBeforeEntry, true, `${name}: photo upload must start before the entry is posted`);
     assert.equal(scenario.commitRequests.length, 1, `${name}: staged photo must be committed once`);
-    assert.match(scenario.entryRequests[0].body.content, /本文\n\[\[写真:[0-9a-f-]{36}\]\]/,
-      `${name}: serialized content must include the completed photo marker`);
-    const runs = scenario.entryRequests[0].body.contentFormat?.runs || [];
-    assert.ok(runs.every((run) => run.start >= 0 && run.end <= scenario.entryRequests[0].body.content.length),
+    assert.doesNotMatch(scenario.entryRequests[0].body.content, /\[\[写真:/,
+      `${name}: provisional entry must not persist an uncommitted marker`);
+    const provisionalRuns = scenario.entryRequests[0].body.contentFormat?.runs || [];
+    assert.ok(provisionalRuns.every((run) => run.start >= 0 && run.end <= scenario.entryRequests[0].body.content.length),
+      `${name}: provisional contentFormat must remain within marker-free content`);
+    assert.match(scenario.entryRequests[1].body.content, /本文\n\[\[写真:[0-9a-f-]{36}\]\]/,
+      `${name}: finalized content must include the committed photo marker`);
+    const runs = scenario.entryRequests[1].body.contentFormat?.runs || [];
+    assert.ok(runs.every((run) => run.start >= 0 && run.end <= scenario.entryRequests[1].body.content.length),
       `${name}: contentFormat must remain within serialized content`);
   } finally {
     await page.close();
@@ -304,12 +331,75 @@ async function verifyAutomaticRecovery(browser, name, mode, contextOptions) {
     await page.waitForFunction(() => document.querySelector("#photo-preparation-status")?.textContent.includes("本文へ追加"));
     await page.click("#save-entry-button");
     await waitForEditorClosed(page);
-    assert.equal(scenario.entryRequests.length, 1, `${name} ${mode}: entry must not be duplicated`);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT"],
+      `${name} ${mode}: entry must be created once and finalized in place`);
     assert.equal(scenario.createdEntryIds.size, 1, `${name} ${mode}: exactly one entry ID must be created`);
     assert.equal(scenario.photoRequests, 2, `${name} ${mode}: upload must retry exactly once before success`);
     assert.equal(scenario.storedPhotoIds.size, 1, `${name} ${mode}: retry must retain one logical photo`);
     assert.equal(scenario.photoUploadStartedBeforeEntry, true, `${name} ${mode}: retries must run while editing`);
     assert.equal(scenario.commitRequests.length, 1, `${name} ${mode}: posting must promote without another upload`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyCommitFailureDiscard(browser, name, contextOptions) {
+  resetScenario("commit-permanent-409");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await choosePhoto(page, "commit-failure.png");
+    await page.waitForSelector("#editor-photo-list .editor-photo-card");
+    await page.click("#save-entry-button");
+    await page.waitForFunction(() => document.querySelector("#editor-message")?.textContent.includes("写真を日記へ反映できませんでした。"));
+    assert.equal(scenario.createdEntryIds.size, 1, `${name}: body save must create exactly one entry`);
+    const entryId = [...scenario.createdEntryIds][0];
+    assert.doesNotMatch(scenario.entries.get(entryId).content, /\[\[写真:/,
+      `${name}: failed commit must never persist an orphan marker`);
+    await page.click("#cancel-entry-button");
+    await page.waitForSelector("#editor-leave-dialog[open]");
+    await page.click("#editor-leave-discard");
+    await waitForEditorClosed(page);
+    assert.doesNotMatch(scenario.entries.get(entryId).content, /\[\[写真:/,
+      `${name}: discard after commit failure must retain marker-free body`);
+    assert.ok(scenario.cancelRequests.some((path) => /^\/photo-upload-sessions\/[0-9a-f-]{36}$/.test(path)),
+      `${name}: discard after commit failure must cancel staging`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyCommitRetry(browser, name, mode, contextOptions) {
+  resetScenario(mode);
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await choosePhoto(page, `${mode}.png`);
+    await page.waitForSelector("#editor-photo-list .editor-photo-card");
+    await page.click("#save-entry-button");
+    await page.waitForFunction(() => {
+      const editor = document.querySelector("#editor-dialog");
+      return !editor?.open || document.querySelector("#editor-message")?.textContent.includes("写真を保存できませんでした。");
+    });
+    const entryId = [...scenario.createdEntryIds][0];
+    const editorOpen = await page.locator("#editor-dialog").evaluate((node) => node.open);
+    if (!editorOpen) {
+      assert.equal(mode, "commit-lost-response", `${name}: only a transport-level retry may finish without manual resubmission`);
+      assert.equal(scenario.createdEntryIds.size, 1, `${name} ${mode}: transparent retry must not duplicate the entry`);
+      assert.equal(scenario.commitRequests.length, 2, `${name} ${mode}: browser transport retry must remain idempotent`);
+      assert.match(scenario.entries.get(entryId).content, /\[\[写真:[0-9a-f-]{36}\]\]/,
+        `${name} ${mode}: transparent retry must finalize the marker`);
+      return;
+    }
+    assert.doesNotMatch(scenario.entries.get(entryId).content, /\[\[写真:/,
+      `${name} ${mode}: failed/lost commit response must leave a marker-free saved body`);
+    if (mode === "commit-500-once") scenario.mode = "success";
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.createdEntryIds.size, 1, `${name} ${mode}: retry must not duplicate the entry`);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT", "PUT"],
+      `${name} ${mode}: retry must update the provisional entry and then finalize it`);
+    assert.equal(scenario.commitRequests.length, 2, `${name} ${mode}: commit must be retried once`);
+    assert.match(scenario.entries.get(entryId).content, /\[\[写真:[0-9a-f-]{36}\]\]/,
+      `${name} ${mode}: successful retry must persist the marker`);
   } finally {
     await page.close();
   }
@@ -331,8 +421,8 @@ async function verifyPermanentFailure(browser, name, contextOptions) {
     scenario.mode = "success";
     await page.click("#save-entry-button");
     await waitForEditorClosed(page);
-    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST"],
-      `${name}: retry after preupload recovery must create the entry once`);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT"],
+      `${name}: retry after preupload recovery must create once and finalize the marker in place`);
     assert.equal(scenario.createdEntryIds.size, 1, `${name}: manual resubmission must not create another entry`);
     assert.equal(scenario.storedPhotoIds.size, 1, `${name}: recovered photo must be stored once`);
   } finally {
@@ -360,6 +450,26 @@ async function verifyDiscardCleanup(browser, name, contextOptions) {
   }
 }
 
+async function verifyNewDraft(browser, name, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await choosePhoto(page, "draft.png");
+    await page.waitForSelector("#editor-photo-list .editor-photo-card");
+    await page.click("#save-draft-button");
+    await waitForEditorClosed(page);
+    assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT"],
+      `${name}: a photo draft must save provisionally and finalize in place`);
+    assert.ok(scenario.entryRequests.every((item) => item.body.status === "draft"),
+      `${name}: both provisional and final saves must remain drafts`);
+    const entryId = [...scenario.createdEntryIds][0];
+    assert.match(scenario.entries.get(entryId).content, /\[\[写真:[0-9a-f-]{36}\]\]/,
+      `${name}: a successfully committed draft must contain its marker`);
+  } finally {
+    await page.close();
+  }
+}
+
 async function runBrowser(browserType, name, executablePath, contextOptions = {}) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
@@ -368,6 +478,10 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
     await verifyAutomaticRecovery(browser, name, "lost-response", contextOptions);
     await verifyPermanentFailure(browser, name, contextOptions);
     await verifyDiscardCleanup(browser, name, contextOptions);
+    await verifyNewDraft(browser, name, contextOptions);
+    await verifyCommitFailureDiscard(browser, name, contextOptions);
+    await verifyCommitRetry(browser, name, "commit-500-once", contextOptions);
+    await verifyCommitRetry(browser, name, "commit-lost-response", contextOptions);
   } finally {
     await browser.close();
   }
