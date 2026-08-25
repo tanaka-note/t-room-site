@@ -959,30 +959,59 @@ async function extendActivePhotoUploadSession(env, uploadSession, session) {
 async function deleteOrQueueUnclaimedStagedObjects(env, keys, { forceQueue = false } = {}) {
   const objectKeys = [...new Set(keys.filter(Boolean))];
   if (!objectKeys.length) return { deleted: true, queued: false };
-  if (!forceQueue) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        await env.MEDIA.delete(objectKeys);
-        return { deleted: true, queued: false };
-      } catch {
-        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
-      }
-    }
-  }
+  let queued = false;
   try {
     await env.DB.batch(objectKeys.map((key) => env.DB.prepare(`
       INSERT OR IGNORE INTO diary_media_deletion_queue (entry_id, object_key)
       VALUES (0, ?)
     `).bind(key)));
-    return { deleted: false, queued: true };
+    queued = true;
   } catch (error) {
-    console.error("Diary unclaimed staged photo cleanup could not be queued", {
-      stage: "staged-photo-upload-cleanup",
+    console.error("Diary unclaimed staged photo cleanup marker failed", {
+      stage: "staged-photo-upload-cleanup-marker",
       objectCount: objectKeys.length,
       errorType: error instanceof Error ? error.name : "unknown"
     });
-    return { deleted: false, queued: false };
   }
+  if (!forceQueue) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await env.MEDIA.delete(objectKeys);
+        if (queued) {
+          try {
+            const placeholders = objectKeys.map(() => "?").join(", ");
+            await env.DB.prepare(`
+              DELETE FROM diary_media_deletion_queue
+              WHERE object_key IN (${placeholders})
+            `).bind(...objectKeys).run();
+            queued = false;
+          } catch {
+            // A retained queue marker is safe: R2 deletion is idempotent and the
+            // scheduled cleanup will remove the stale marker on its next run.
+          }
+        }
+        return { deleted: true, queued };
+      } catch {
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+      }
+    }
+  }
+  if (!queued) {
+    try {
+      await env.DB.batch(objectKeys.map((key) => env.DB.prepare(`
+        INSERT OR IGNORE INTO diary_media_deletion_queue (entry_id, object_key)
+        VALUES (0, ?)
+      `).bind(key)));
+      queued = true;
+    } catch (error) {
+      console.error("Diary unclaimed staged photo cleanup could not be queued", {
+        stage: "staged-photo-upload-cleanup",
+        objectCount: objectKeys.length,
+        errorType: error instanceof Error ? error.name : "unknown"
+      });
+    }
+  }
+  return { deleted: false, queued };
 }
 
 async function findStagedPhoto(id, env) {
