@@ -338,6 +338,15 @@ async function handleApi(request, env, url, path, context) {
     return json({ ok: true });
   }
 
+  const stagedPhotoTestStorageMatch = path.match(/^\/api\/photo-upload-sessions\/([0-9a-f-]{36})\/test-storage\/([0-9a-f-]{36})$/i);
+  if (stagedPhotoTestStorageMatch && request.method === "GET" && env.STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS) {
+    requireEntryManagementAccess(session);
+    if (!env.MEDIA) throw new HttpError(503, "画像の保存先が設定されていません。");
+    const prefix = `diary/staging/${session.activeHouseholdId}/${stagedPhotoTestStorageMatch[1].toLowerCase()}/${stagedPhotoTestStorageMatch[2].toLowerCase()}/`;
+    const objects = await env.MEDIA.list({ prefix, limit: 100 });
+    return json({ objectCount: objects.objects.length });
+  }
+
   const stagedPhotoMatch = path.match(/^\/api\/photo-upload-sessions\/([0-9a-f-]{36})\/photos\/([0-9a-f-]{36})$/i);
   if (stagedPhotoMatch && request.method === "DELETE") {
     requireEntryManagementAccess(session);
@@ -798,12 +807,7 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
   const safeName = normalizeFileName(original.name || "photo");
   const width = clampNumber(form.get("width"), 1, 100000, null);
   const height = clampNumber(form.get("height"), 1, 100000, null);
-  const baseKey = `diary/staging/${session.activeHouseholdId}/${uploadSession.id}/${id}`;
-  const originalKey = `${baseKey}/original`;
-  const displayKey = `${baseKey}/display`;
-  const thumbnailKey = `${baseKey}/thumbnail`;
-  const keys = [originalKey, displayKey, thumbnailKey];
-  const expected = {
+  const expectedBase = {
     id,
     uploadSessionId: uploadSession.id,
     householdId: session.activeHouseholdId,
@@ -811,55 +815,174 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
     fileName: safeName,
     contentType: original.type || "application/octet-stream",
     originalSize: original.size,
-    originalKey,
-    displayKey,
-    thumbnailKey,
     width,
     height
   };
   const existing = await findStagedPhoto(id, env);
-  if (existing) return existingStagedPhotoUploadResponse(existing, expected);
+  if (existing) {
+    const response = existingStagedPhotoUploadResponse(existing, expectedStagedPhoto(existing, expectedBase));
+    const extended = await extendActivePhotoUploadSession(env, uploadSession, session);
+    if (!extended) throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
+    return response;
+  }
+
+  // Each write attempt owns unique R2 keys. If its D1 claim loses a race, a
+  // deferred deletion can never remove objects created by a successful retry.
+  const attemptId = crypto.randomUUID().toLowerCase();
+  const baseKey = `diary/staging/${session.activeHouseholdId}/${uploadSession.id}/${id}/${attemptId}`;
+  const originalKey = `${baseKey}/original`;
+  const displayKey = `${baseKey}/display`;
+  const thumbnailKey = `${baseKey}/thumbnail`;
+  const keys = [originalKey, displayKey, thumbnailKey];
+  const testHook = env.STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS
+    ? request.headers.get("X-Diary-Test-Pause")
+    : "";
+  const cleanupCurrentAttempt = () => deleteOrQueueUnclaimedStagedObjects(env, keys, {
+    forceQueue: testHook === "after-r2-delete-failure"
+  });
 
   try {
-    await Promise.all([
+    const writes = await Promise.allSettled([
       env.MEDIA.put(originalKey, original.stream(), { httpMetadata: { contentType: original.type || "application/octet-stream" } }),
       env.MEDIA.put(displayKey, display.stream(), { httpMetadata: { contentType: display.type || "image/webp" } }),
       env.MEDIA.put(thumbnailKey, thumbnail.stream(), { httpMetadata: { contentType: thumbnail.type || "image/webp" } })
     ]);
+    const failedWrite = writes.find((result) => result.status === "rejected");
+    if (failedWrite) throw failedWrite.reason;
+    const testPauseMs = clampNumber(env.STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS, 0, 10000, 0);
+    if (testPauseMs > 0 && ["after-r2", "after-r2-delete-failure"].includes(testHook)) {
+      console.log("Diary staged photo upload test pause", { uploadSessionId: uploadSession.id, photoId: id });
+      await new Promise((resolve) => setTimeout(resolve, testPauseMs));
+    }
     const now = new Date();
+    const nowIso = now.toISOString();
     const expiresAt = new Date(now.getTime() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString();
-    await env.DB.batch([
+    const [insertResult, updateResult] = await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO diary_staged_photos (
           id, upload_session_id, household_id, account_id, file_name, content_type,
           original_size, original_key, display_key, thumbnail_key, width, height,
           created_by_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )
+        SELECT ?, upload_session.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        FROM diary_photo_upload_sessions upload_session
+        WHERE upload_session.id = ?
+          AND upload_session.household_id = ?
+          AND upload_session.account_id = ?
+          AND upload_session.status = 'active'
+          AND upload_session.expires_at > ?
       `).bind(
-        id, uploadSession.id, session.activeHouseholdId, session.accountId,
+        id, session.activeHouseholdId, session.accountId,
         safeName, original.type || "application/octet-stream", original.size,
-        originalKey, displayKey, thumbnailKey, width, height, session.accountName
+        originalKey, displayKey, thumbnailKey, width, height, session.accountName,
+        uploadSession.id, session.activeHouseholdId, session.accountId, nowIso
       ),
       env.DB.prepare(`
         UPDATE diary_photo_upload_sessions
         SET updated_at = ?, expires_at = ?
-        WHERE id = ? AND status = 'active'
-      `).bind(now.toISOString(), expiresAt, uploadSession.id)
+        WHERE id = ?
+          AND household_id = ?
+          AND account_id = ?
+          AND status = 'active'
+          AND expires_at > ?
+      `).bind(
+        nowIso, expiresAt, uploadSession.id,
+        session.activeHouseholdId, session.accountId, nowIso
+      )
     ]);
+    if (Number(insertResult?.meta?.changes || 0) !== 1 || Number(updateResult?.meta?.changes || 0) !== 1) {
+      throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
+    }
   } catch (error) {
     const recovered = await findStagedPhoto(id, env).catch(() => null);
-    if (recovered) return existingStagedPhotoUploadResponse(recovered, expected);
-    await Promise.allSettled(keys.map((key) => env.MEDIA.delete(key)));
+    if (recovered) {
+      const ownsCurrentKeys = recovered.original_key === originalKey
+        && recovered.display_key === displayKey
+        && recovered.thumbnail_key === thumbnailKey;
+      let response;
+      try {
+        response = existingStagedPhotoUploadResponse(recovered, expectedStagedPhoto(recovered, expectedBase));
+      } catch (recoveryError) {
+        if (!ownsCurrentKeys) await cleanupCurrentAttempt();
+        throw recoveryError;
+      }
+      if (!ownsCurrentKeys) await cleanupCurrentAttempt();
+      const extended = await extendActivePhotoUploadSession(env, uploadSession, session);
+      if (!extended) throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
+      return response;
+    }
+    await cleanupCurrentAttempt();
     console.error("Diary staged photo upload failed", {
       stage: "staged-photo-upload",
       uploadSessionId: uploadSession.id,
       photoId: id,
       errorType: error instanceof Error ? error.name : "unknown"
     });
+    if (error instanceof HttpError) throw error;
     throw new HttpError(500, "画像を保存できませんでした。");
   }
   const row = await findStagedPhoto(id, env);
+  if (!row) {
+    await cleanupCurrentAttempt();
+    throw new HttpError(500, "画像を保存できませんでした。");
+  }
   return json({ photo: serializeStagedPhoto(row) });
+}
+
+function expectedStagedPhoto(row, expectedBase) {
+  return {
+    ...expectedBase,
+    originalKey: row.original_key,
+    displayKey: row.display_key,
+    thumbnailKey: row.thumbnail_key
+  };
+}
+
+async function extendActivePhotoUploadSession(env, uploadSession, session) {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const result = await env.DB.prepare(`
+    UPDATE diary_photo_upload_sessions
+    SET updated_at = ?, expires_at = ?
+    WHERE id = ?
+      AND household_id = ?
+      AND account_id = ?
+      AND status = 'active'
+      AND expires_at > ?
+  `).bind(
+    nowIso, new Date(now.getTime() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(),
+    uploadSession.id, session.activeHouseholdId, session.accountId, nowIso
+  ).run();
+  return Number(result.meta?.changes || 0) === 1;
+}
+
+async function deleteOrQueueUnclaimedStagedObjects(env, keys, { forceQueue = false } = {}) {
+  const objectKeys = [...new Set(keys.filter(Boolean))];
+  if (!objectKeys.length) return { deleted: true, queued: false };
+  if (!forceQueue) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await env.MEDIA.delete(objectKeys);
+        return { deleted: true, queued: false };
+      } catch {
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+      }
+    }
+  }
+  try {
+    await env.DB.batch(objectKeys.map((key) => env.DB.prepare(`
+      INSERT OR IGNORE INTO diary_media_deletion_queue (entry_id, object_key)
+      VALUES (0, ?)
+    `).bind(key)));
+    return { deleted: false, queued: true };
+  } catch (error) {
+    console.error("Diary unclaimed staged photo cleanup could not be queued", {
+      stage: "staged-photo-upload-cleanup",
+      objectCount: objectKeys.length,
+      errorType: error instanceof Error ? error.name : "unknown"
+    });
+    return { deleted: false, queued: false };
+  }
 }
 
 async function findStagedPhoto(id, env) {
@@ -883,9 +1006,24 @@ function existingStagedPhotoUploadResponse(row, expected) {
     && String(row.display_key) === String(expected.displayKey)
     && String(row.thumbnail_key) === String(expected.thumbnailKey)
     && nullableNumber(row.width) === nullableNumber(expected.width)
-    && nullableNumber(row.height) === nullableNumber(expected.height);
+    && nullableNumber(row.height) === nullableNumber(expected.height)
+    && stagedPhotoObjectKeysMatch(row, expected);
   if (!matches) throw new HttpError(409, "同じ画像IDを別の画像として保存することはできません。");
   return json({ photo: serializeStagedPhoto(row), idempotent: true });
+}
+
+function stagedPhotoObjectKeysMatch(row, expected) {
+  const prefix = `diary/staging/${expected.householdId}/${expected.uploadSessionId}/${expected.id}/`;
+  const matchesVariant = (key, variant) => {
+    if (!String(key).startsWith(prefix)) return false;
+    const remainder = String(key).slice(prefix.length);
+    if (remainder === variant) return true;
+    const [attemptId, objectVariant, extra] = remainder.split("/");
+    return extra === undefined && isUuid(attemptId) && objectVariant === variant;
+  };
+  return matchesVariant(row.original_key, "original")
+    && matchesVariant(row.display_key, "display")
+    && matchesVariant(row.thumbnail_key, "thumbnail");
 }
 
 function serializeStagedPhoto(row) {

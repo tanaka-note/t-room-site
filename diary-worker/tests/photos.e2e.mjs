@@ -37,7 +37,9 @@ const server = spawn(process.execPath, [
   "--var",
   "SESSION_SECRET:diary-photo-integration-test-session-secret",
   "--var",
-  "STAGED_PHOTO_CLEANUP_TEST_PAUSE_MS:2000"
+  "STAGED_PHOTO_CLEANUP_TEST_PAUSE_MS:2000",
+  "--var",
+  "STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS:4000"
 ], {
   cwd: projectDirectory,
   stdio: ["ignore", "pipe", "pipe"]
@@ -311,6 +313,84 @@ try {
   assert.equal(cleanupRaceCommit.response.status, 200, JSON.stringify(cleanupRaceCommit.result));
   const cleanupRaceImage = await fetch(`${origin}${cleanupRaceCommit.result.photos[0].displayUrl}`, { headers: { Cookie: wifeCookie } });
   assert.equal(cleanupRaceImage.status, 200, "the preserved race candidate must remain committable with its R2 object");
+
+  const claimedUploadPhotoId = randomUUID();
+  const claimedUploadSession = await jsonRequest("/photo-upload-sessions", {
+    method: "POST",
+    cookie: wifeCookie,
+    body: { targetEntryId: null }
+  });
+  assert.equal(claimedUploadSession.response.status, 200, JSON.stringify(claimedUploadSession.result));
+  const claimedUploadSessionId = claimedUploadSession.result.uploadSession.id;
+  const formalPhotoCountBeforeClaimRace = Number(queryLocalDatabase("SELECT COUNT(*) AS count FROM diary_photos")[0].count);
+  const uploadPauseCount = countServerOutput(/Diary staged photo upload test pause/g);
+  const claimedUploadPromise = fetch(`${origin}/diary/api/photo-upload-sessions/${claimedUploadSessionId}/photos`, {
+    method: "POST",
+    headers: {
+      Cookie: wifeCookie,
+      "X-Diary-Request": "1",
+      "X-Diary-Test-Pause": "after-r2-delete-failure"
+    },
+    body: createPhotoForm({ id: claimedUploadPhotoId, fileName: "claimed-upload-race.png" })
+  });
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (countServerOutput(/Diary staged photo upload test pause/g) > uploadPauseCount) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.ok(countServerOutput(/Diary staged photo upload test pause/g) > uploadPauseCount,
+    "upload must pause after all R2 writes and before its D1 staging claim");
+  queryLocalDatabase(`UPDATE diary_photo_upload_sessions SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = '${claimedUploadSessionId}'`);
+  const claimedUploadCleanup = await fetch(`${origin}/__scheduled?cron=25+18+*+*+*`);
+  assert.equal(claimedUploadCleanup.status, 200, await claimedUploadCleanup.text());
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    const sessionCount = Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_photo_upload_sessions WHERE id = '${claimedUploadSessionId}'`)[0].count);
+    if (sessionCount === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_photo_upload_sessions WHERE id = '${claimedUploadSessionId}'`)[0].count), 0,
+    "scheduled cleanup must claim and remove the expired session while the upload is paused");
+  const claimedUploadResponse = await claimedUploadPromise;
+  const claimedUploadResult = await claimedUploadResponse.json().catch(() => ({}));
+  assert.equal(claimedUploadResponse.status, 409, JSON.stringify(claimedUploadResult));
+  const claimedUploadState = queryLocalDatabase(`
+    SELECT
+      (SELECT COUNT(*) FROM diary_staged_photos WHERE id = '${claimedUploadPhotoId}') AS staged_count,
+      (SELECT COUNT(*) FROM diary_photos WHERE id = '${claimedUploadPhotoId}') AS final_count,
+      (SELECT COUNT(*) FROM diary_media_deletion_queue
+       WHERE instr(object_key, '/${claimedUploadSessionId}/${claimedUploadPhotoId}/') > 0) AS queued_count
+  `)[0];
+  assert.equal(Number(claimedUploadState.staged_count), 0, "a cancelled or deleted session must never gain a staged photo row");
+  assert.equal(Number(claimedUploadState.final_count), 0, "the losing upload must not create a formal photo");
+  assert.equal(Number(claimedUploadState.queued_count), 3,
+    "a simulated R2 deletion failure must queue original/display/thumbnail for the existing scheduled cleanup");
+  const queuedUploadStorage = await jsonRequest(`/photo-upload-sessions/${claimedUploadSessionId}/test-storage/${claimedUploadPhotoId}`, {
+    cookie: wifeCookie
+  });
+  assert.equal(queuedUploadStorage.response.status, 200, JSON.stringify(queuedUploadStorage.result));
+  assert.equal(queuedUploadStorage.result.objectCount, 3, "the failed immediate delete must leave only the three queued attempt objects");
+  const queuedUploadCleanup = await fetch(`${origin}/__scheduled?cron=25+18+*+*+*`);
+  assert.equal(queuedUploadCleanup.status, 200, await queuedUploadCleanup.text());
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const queuedCount = Number(queryLocalDatabase(`
+      SELECT COUNT(*) AS count FROM diary_media_deletion_queue
+      WHERE instr(object_key, '/${claimedUploadSessionId}/${claimedUploadPhotoId}/') > 0
+    `)[0].count);
+    if (queuedCount === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(Number(queryLocalDatabase(`
+    SELECT COUNT(*) AS count FROM diary_media_deletion_queue
+    WHERE instr(object_key, '/${claimedUploadSessionId}/${claimedUploadPhotoId}/') > 0
+  `)[0].count), 0, "the existing scheduled media cleanup must drain the orphan queue");
+  const claimedUploadStorage = await jsonRequest(`/photo-upload-sessions/${claimedUploadSessionId}/test-storage/${claimedUploadPhotoId}`, {
+    cookie: wifeCookie
+  });
+  assert.equal(claimedUploadStorage.response.status, 200, JSON.stringify(claimedUploadStorage.result));
+  assert.equal(claimedUploadStorage.result.objectCount, 0, "scheduled cleanup must remove all losing attempt objects from R2");
+  assert.equal(Number(queryLocalDatabase("SELECT COUNT(*) AS count FROM diary_photos")[0].count), formalPhotoCountBeforeClaimRace,
+    "the cleanup race must not remove or add any formal photo ledger rows");
+  const promotedObjectAfterClaimRace = await fetch(`${origin}${recoveredPartialCommit.result.photos[0].displayUrl}`, { headers: { Cookie: wifeCookie } });
+  assert.equal(promotedObjectAfterClaimRace.status, 200, "formal photos must remain readable after the upload/cleanup race");
 
   const editDraftPhotoId = randomUUID();
   const editSource = await jsonRequest("/entries", {
