@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+const wrangler = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+const developmentVars = await readFile(new URL("../.dev.vars.example", import.meta.url), "utf8");
 
 assert.match(source, /path === "\/api\/player\/media"/);
 assert.match(source, /child\.password_hash IS NULL/);
@@ -14,5 +16,7 @@ assert.match(source, /youtube\/v3\/search/);
 assert.match(source, /6 \* 60 \* 60/);
 assert.doesNotMatch(source, /yt-dlp|youtube-dl|videoplayback|googlevideo\.com/i);
 assert.doesNotMatch(source, /YOUTUBE_API_KEY\s*=\s*["'][^"']+["']/);
+assert.doesNotMatch(wrangler, /YOUTUBE_API_KEY/);
+assert.match(developmentVars, /YOUTUBE_API_KEY="replace-with-a-YouTube-Data-API-v3-server-key"/);
 
 console.log("Player media index and official YouTube API contract: ok");

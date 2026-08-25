@@ -65,6 +65,8 @@ Android 8.0まで対応範囲を広げつつ、API 36を対象にして新しい
 
 YouTube動画はダウンロード・録画・R2保存せず、公式埋め込みPlayerだけで再生します。YouTube Data APIキーはAPKやGitHubへ含めず、Cloudflare Worker Secret `YOUTUBE_API_KEY` として設定します。Secret未設定時もYouTube URL保存と公式再生、Local／T-Cloudライブラリは利用できますが、オンラインのタイトル取得と新規おすすめ検索は設定完了まで利用できません。
 
+本番のAPIキーはGoogle CloudでYouTube Data API v3だけを利用可能に制限したサーバー用キーを作成し、リポジトリへ書かずに`cloud-worker`で`pnpm exec wrangler secret put YOUTUBE_API_KEY`を実行して登録します。埋め込み再生はAndroid標準WebView内の公式IFrame Player APIを使い、ホストページの`origin`を`https://tanaka-note.com`へ固定します。
+
 パスワード、平文ファイル、復号鍵をCloudflareへ送信しません。署名鍵とパスワードもリポジトリへ保存しません。
 
 ## 今後の実機検証・改善候補

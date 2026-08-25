@@ -13,7 +13,8 @@ const vars = Object.fromEntries(varsText
   .map((line) => line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/))
   .filter(Boolean)
   .map((match) => [match[1], match[2].replace(/^['"]|['"]$/g, "")]));
-if (!vars.SESSION_SECRET) throw new Error("ローカル用SESSION_SECRETがありません。");
+const sessionSecret = process.env.TEST_SESSION_SECRET || vars.SESSION_SECRET;
+if (!sessionSecret) throw new Error("ローカル用SESSION_SECRETがありません。");
 
 const encoder = new TextEncoder();
 const b64 = (bytes) => Buffer.from(bytes).toString("base64url");
@@ -33,7 +34,7 @@ async function cookie(role) {
   const encoded = b64(encoder.encode(JSON.stringify(payload)));
   const key = await webcrypto.subtle.importKey(
     "raw",
-    encoder.encode(vars.SESSION_SECRET),
+    encoder.encode(sessionSecret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]

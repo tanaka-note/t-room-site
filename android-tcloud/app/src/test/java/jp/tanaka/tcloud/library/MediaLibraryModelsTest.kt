@@ -15,6 +15,7 @@ class MediaLibraryModelsTest {
         assertEquals(id, parseYouTubeVideoId("https://youtu.be/$id"))
         assertEquals(id, parseYouTubeVideoId("https://youtube.com/shorts/$id"))
         assertEquals(id, parseYouTubeVideoId("https://youtube.com/embed/$id"))
+        assertEquals(id, parseYouTubeVideoId("https://youtube.com/live/$id"))
         assertNull(parseYouTubeVideoId("https://example.com/$id"))
         assertNull(parseYouTubeVideoId("invalid"))
     }

@@ -514,6 +514,9 @@ internal fun YouTubePlayerScreen(item: PlayableMediaItem, applicationVisible: Bo
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webChromeClient = WebChromeClient()
             loadDataWithBaseURL(
                 "https://tanaka-note.com/",
@@ -538,7 +541,7 @@ internal fun YouTubePlayerScreen(item: PlayableMediaItem, applicationVisible: Bo
 private fun youtubeEmbedHtml(videoId: String): String = """
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>html,body,#player{width:100%;height:100%;margin:0;background:#000}</style></head>
 <body><div id="player"></div><script src="https://www.youtube.com/iframe_api"></script><script>
-var player; function onYouTubeIframeAPIReady(){ player=new YT.Player('player',{videoId:'$videoId',playerVars:{playsinline:1,autoplay:0,controls:1,rel:0},events:{}}); }
+var player; function onYouTubeIframeAPIReady(){ player=new YT.Player('player',{videoId:'$videoId',playerVars:{playsinline:1,autoplay:0,controls:1,rel:0,origin:'https://tanaka-note.com'},events:{}}); }
 window.tcloudPause=function(){ if(player&&player.pauseVideo)player.pauseVideo(); };
 </script></body></html>
 """.trimIndent()
