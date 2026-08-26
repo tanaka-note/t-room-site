@@ -621,7 +621,15 @@ async function listEntries(url, env, session) {
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       e.status, e.draft_of_entry_id, e.draft_of_revision, e.draft_excluded_photo_ids,
       EXISTS (SELECT 1 FROM diary_favorites current_favorite WHERE current_favorite.entry_id = e.id AND current_favorite.account_id = ?) AS is_favorite,
-      COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
+      COALESCE((
+        SELECT json_group_array(ordered_tags.tag)
+        FROM (
+          SELECT dt.tag
+          FROM diary_tags dt
+          WHERE dt.entry_id = e.id
+          ORDER BY dt.sort_order ASC, dt.rowid ASC
+        ) ordered_tags
+      ), '[]') AS tags
     FROM diary_entries e
     WHERE ${conditions.join(" AND ")}
     ORDER BY ${draft ? "e.updated_at DESC, e.id DESC" : "e.entry_date DESC, e.id DESC"}
@@ -641,7 +649,15 @@ async function getEntry(id, env, session) {
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       e.status, e.draft_of_entry_id, e.draft_of_revision, e.draft_excluded_photo_ids,
       EXISTS (SELECT 1 FROM diary_favorites current_favorite WHERE current_favorite.entry_id = e.id AND current_favorite.account_id = ?) AS is_favorite,
-      COALESCE((SELECT json_group_array(tag) FROM diary_tags dt WHERE dt.entry_id = e.id), '[]') AS tags
+      COALESCE((
+        SELECT json_group_array(ordered_tags.tag)
+        FROM (
+          SELECT dt.tag
+          FROM diary_tags dt
+          WHERE dt.entry_id = e.id
+          ORDER BY dt.sort_order ASC, dt.rowid ASC
+        ) ordered_tags
+      ), '[]') AS tags
     FROM diary_entries e
     WHERE e.id = ? AND e.household_id = ?
   `).bind(session.accountId, id, session.activeHouseholdId).first();
@@ -1842,24 +1858,24 @@ function entryMutationTagStatements(env, entryId, mutationId, tags, householdId 
     DELETE FROM diary_tags
     WHERE entry_id IN (SELECT id FROM diary_entries WHERE ${selector.sql})
   `).bind(...selector.bindings)];
-  for (const tag of tags) {
+  for (const [sortOrder, tag] of tags.entries()) {
     statements.push(env.DB.prepare(`
-      INSERT INTO diary_tags (entry_id, tag)
-      SELECT id, ? FROM diary_entries WHERE ${selector.sql}
-    `).bind(tag, ...selector.bindings));
+      INSERT INTO diary_tags (entry_id, tag, sort_order)
+      SELECT id, ?, ? FROM diary_entries WHERE ${selector.sql}
+    `).bind(tag, sortOrder, ...selector.bindings));
   }
   return statements;
 }
 
 function entryCreateTagStatements(env, session, requestId, requestHash, tags) {
   const statements = [];
-  for (const tag of tags) {
+  for (const [sortOrder, tag] of tags.entries()) {
     statements.push(env.DB.prepare(`
-      INSERT INTO diary_tags (entry_id, tag)
-      SELECT id, ? FROM diary_entries
+      INSERT INTO diary_tags (entry_id, tag, sort_order)
+      SELECT id, ?, ? FROM diary_entries
       WHERE household_id = ? AND author_id = ?
         AND client_request_id = ? AND client_request_hash = ?
-    `).bind(tag, session.activeHouseholdId, session.accountId, requestId, requestHash));
+    `).bind(tag, sortOrder, session.activeHouseholdId, session.accountId, requestId, requestHash));
   }
   return statements;
 }
@@ -1891,7 +1907,7 @@ async function entryCreateRequestHash(status, input, body) {
     title: input.title,
     content: input.content,
     contentFormat: input.contentFormat,
-    tags: [...input.tags].sort((left, right) => left.localeCompare(right, "en")),
+    tags: [...input.tags],
     status,
     excludedPhotoIds: [...input.excludedPhotoIds].sort(),
     pendingPhotoIds: parsePhotoIdList(body.pendingPhotoIds).sort(),

@@ -3113,13 +3113,17 @@
       && String(entry.title || "") === String(payload.title || "")
       && String(entry.content || "") === String(payload.content || "")
       && canonicalJson(entry.contentFormat || null) === canonicalJson(payload.contentFormat || null)
-      && canonicalStringList(entry.tags) === canonicalStringList(payload.tags)
+      && orderedStringList(entry.tags) === orderedStringList(payload.tags)
       && String(entry.status || "published") === String(payload.status || "published")
       && canonicalStringList(entry.excludedPhotoIds) === canonicalStringList(payload.excludedPhotoIds);
   }
 
   function canonicalStringList(values) {
     return JSON.stringify((Array.isArray(values) ? values : []).map(String).sort((left, right) => left.localeCompare(right, "en")));
+  }
+
+  function orderedStringList(values) {
+    return JSON.stringify((Array.isArray(values) ? values : []).map(String));
   }
 
   function canonicalJson(value) {

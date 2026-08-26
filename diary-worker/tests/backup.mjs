@@ -44,7 +44,11 @@ const tableRows = {
     client_request_hash: "request-hash",
     last_mutation_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
   }],
-  diary_tags: [{ entry_id: 1, tag: "記録", created_at: "2026-08-20 00:00:00" }],
+  diary_tags: [
+    { entry_id: 1, tag: "Z", created_at: "2026-08-20 00:00:00", sort_order: 0 },
+    { entry_id: 1, tag: "A", created_at: "2026-08-20 00:00:01", sort_order: 1 },
+    { entry_id: 1, tag: "ふゆ", created_at: "2026-08-20 00:00:02", sort_order: 2 }
+  ],
   diary_photos: [{
     id: "11111111-1111-4111-8111-111111111111",
     entry_id: 1,
@@ -241,7 +245,7 @@ async function migratedEmptyDatabase() {
     "0005_diary_photos.sql", "0006_login_attempts.sql", "0007_household_isolation.sql", "0008_chiharu_login_reset.sql",
     "0009_main_user.sql", "0010_entry_rich_text.sql", "0011_trash_scopes.sql", "0012_entry_drafts.sql",
     "0013_main_user_trash_and_media_retry.sql", "0014_diary_favorites.sql", "0015_photo_upload_staging.sql",
-    "0016_entry_write_integrity.sql"
+    "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql"
   ];
   for (const migration of migrations) database.exec(await readFile(new URL(migration, migrationDirectory), "utf8"));
   database.exec(`
@@ -275,7 +279,9 @@ assert.equal(payload.japanDate, "2026-08-20");
 assert.equal(payload.source.database, "diary-db");
 assert.equal(payload.tables.diary_entries.rows[0].content, "本文");
 assert.equal(payload.tables.diary_entries.rows[0].status, "draft");
-assert.equal(payload.tables.diary_tags.rows[0].tag, "記録");
+assert.deepEqual(payload.tables.diary_tags.rows.map((row) => [row.tag, row.sort_order]), [
+  ["Z", 0], ["A", 1], ["ふゆ", 2]
+]);
 assert.equal(payload.tables.diary_photos.rows[0].original_key, "entries/1/photos/1/original.jpg");
 assert.equal(payload.tables.diary_trash_scopes.rows[0].scope_type, "personal");
 assert.equal(payload.tables.diary_favorites.rowCount, 1);
@@ -343,6 +349,24 @@ await assert.rejects(
   () => restoreDiaryBackup(new SqliteD1(restoredDatabase), readBackup(bucket, first.dailyKey)),
   /Restore target must be empty/,
   "restore must fail closed instead of merging into a non-empty target"
+);
+
+const version2Payload = structuredClone(readBackup(bucket, first.dailyKey));
+version2Payload.formatVersion = 2;
+version2Payload.tables.diary_tags.columns = ["entry_id", "tag", "created_at"];
+version2Payload.tables.diary_tags.rows = version2Payload.tables.diary_tags.rows.map(({ sort_order: _sortOrder, ...row }) => row);
+const version2RestoredDatabase = await migratedEmptyDatabase();
+const version2Restore = await restoreDiaryBackup(new SqliteD1(version2RestoredDatabase), version2Payload);
+assert.equal(version2Restore.complete, true);
+assert.deepEqual(
+  version2RestoredDatabase.prepare("SELECT tag, sort_order FROM diary_tags WHERE entry_id = 1 ORDER BY sort_order ASC").all()
+    .map((row) => ({ ...row })),
+  [
+    { tag: "Z", sort_order: 0 },
+    { tag: "A", sort_order: 1 },
+    { tag: "ふゆ", sort_order: 2 }
+  ],
+  "v2 backups must restore every tag and assign stable order values from their stored row order"
 );
 
 const restoredMedia = new MemoryBucket();

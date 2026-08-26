@@ -50,6 +50,9 @@ assert.match(script, /availableBelow/);
 assert.match(script, /availableAbove/);
 assert.match(script, /elements\.editorDialog\.addEventListener\("scroll", positionEntryTagSuggestions/);
 assert.match(worker, /ORDER BY count DESC, dt\.tag ASC/);
+assert.match(worker, /INSERT INTO diary_tags \(entry_id, tag, sort_order\)/);
+assert.match(worker, /ORDER BY dt\.sort_order ASC, dt\.rowid ASC/);
+assert.match(script, /orderedStringList\(entry\.tags\) === orderedStringList\(payload\.tags\)/);
 assert.match(worker, /path\.startsWith\("\/tag\/"\)/);
 assert.match(worker, /path === "\/tags\/"/);
 

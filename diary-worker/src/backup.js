@@ -1,4 +1,5 @@
-const BACKUP_FORMAT_VERSION = 2;
+const BACKUP_FORMAT_VERSION = 3;
+const LEGACY_BACKUP_FORMAT_VERSION = 2;
 const DAILY_RETENTION = 30;
 const MONTHLY_RETENTION = 12;
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -28,8 +29,8 @@ const BACKUP_TABLES = [
   },
   {
     name: "diary_tags",
-    columns: ["entry_id", "tag", "created_at"],
-    orderBy: "entry_id ASC, tag ASC"
+    columns: ["entry_id", "tag", "created_at", "sort_order"],
+    orderBy: "entry_id ASC, sort_order ASC"
   },
   {
     name: "diary_photos",
@@ -305,11 +306,7 @@ async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
   const restored = {};
   for (const name of RESTORE_TABLE_ORDER) {
     const expected = configuredTables.get(name);
-    const table = payload.tables[name];
-    if (!table) throw new Error(`Backup table is missing: ${name}`);
-    if (JSON.stringify(table.columns) !== JSON.stringify(expected.columns)) {
-      throw new Error(`Backup columns do not match: ${name}`);
-    }
+    const table = restoreTable(payload, name, expected);
     const restoreColumns = name === "diary_accounts"
       ? [...expected.columns, "login_id", "password_hash", "must_change_password", "session_version"]
       : expected.columns;
@@ -333,9 +330,38 @@ async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
 }
 
 function validateBackupPayload(payload) {
-  if (!payload || Number(payload.formatVersion) !== BACKUP_FORMAT_VERSION || !payload.tables) {
+  const formatVersion = Number(payload?.formatVersion);
+  if (!payload || ![LEGACY_BACKUP_FORMAT_VERSION, BACKUP_FORMAT_VERSION].includes(formatVersion) || !payload.tables) {
     throw new Error("Unsupported diary backup format");
   }
+}
+
+function restoreTable(payload, name, expected) {
+  const table = payload.tables[name];
+  if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)) {
+    throw new Error(`Backup table is missing: ${name}`);
+  }
+  if (Number(payload.formatVersion) === LEGACY_BACKUP_FORMAT_VERSION && name === "diary_tags") {
+    const legacyColumns = ["entry_id", "tag", "created_at"];
+    if (JSON.stringify(table.columns) !== JSON.stringify(legacyColumns)) {
+      throw new Error(`Backup columns do not match: ${name}`);
+    }
+    const nextSortOrder = new Map();
+    return {
+      ...table,
+      columns: expected.columns,
+      rows: table.rows.map((row) => {
+        const entryId = String(row.entry_id);
+        const sortOrder = nextSortOrder.get(entryId) || 0;
+        nextSortOrder.set(entryId, sortOrder + 1);
+        return { ...row, sort_order: sortOrder };
+      })
+    };
+  }
+  if (JSON.stringify(table.columns) !== JSON.stringify(expected.columns)) {
+    throw new Error(`Backup columns do not match: ${name}`);
+  }
+  return table;
 }
 
 function scheduleIndependentTasks(context, tasks) {

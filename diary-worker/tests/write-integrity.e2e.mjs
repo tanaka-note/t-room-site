@@ -179,7 +179,7 @@ try {
   const replayCreate = await request("/entries", { method: "POST", cookie: mainCookie, body: idempotentBody });
   assert.equal(replayCreate.response.status, 200, JSON.stringify(replayCreate.result));
   assert.equal(replayCreate.result.entry.id, firstCreate.result.entry.id);
-  assert.deepEqual(replayCreate.result.entry.tags.sort(), ["alpha", "beta"]);
+  assert.deepEqual(replayCreate.result.entry.tags, ["alpha", "beta"]);
   const idempotentCounts = query(`
     SELECT
       (SELECT COUNT(*) FROM diary_entries WHERE household_id = 'tanaka-household' AND author_id = 'main-admin' AND client_request_id = '${idempotencyKey}') AS entry_count,
@@ -187,6 +187,14 @@ try {
   `)[0];
   assert.equal(Number(idempotentCounts.entry_count), 1);
   assert.equal(Number(idempotentCounts.tag_count), 2);
+
+  const reorderedTags = await request("/entries", {
+    method: "POST",
+    cookie: mainCookie,
+    body: { ...idempotentBody, tags: ["beta", "alpha"] }
+  });
+  assert.equal(reorderedTags.response.status, 409, "tag order is part of the idempotent create payload");
+  assert.match(reorderedTags.result.error, /同じ送信ID/);
 
   const mismatch = await request("/entries", {
     method: "POST",
