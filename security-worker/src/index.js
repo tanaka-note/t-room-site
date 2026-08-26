@@ -816,7 +816,8 @@ async function listServiceRegistry(env) {
 }
 
 async function listIdentities(env) {
-  const result = await env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin, i.last_login_at, i.last_seen_at,
+  const [result, auditIdentityResult] = await Promise.all([
+    env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin, i.last_login_at, i.last_seen_at,
     COUNT(DISTINCT CASE WHEN c.status = 'active' THEN c.credential_id END) AS activeCredentials,
     COUNT(DISTINCT CASE WHEN c.status = 'pending' THEN c.credential_id END) AS pendingCredentials,
     MAX(CASE WHEN inv.status = 'active' THEN inv.expires_at END) AS inviteExpiresAt
@@ -824,8 +825,17 @@ async function listIdentities(env) {
     LEFT JOIN security_credentials c ON c.identity_id = i.id
     LEFT JOIN security_invitations inv ON inv.identity_id = i.id
     WHERE i.status != 'disabled'
-    GROUP BY i.id ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all();
-  return json({ identities: (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null })) });
+    GROUP BY i.id ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all(),
+    env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin
+      FROM security_identities i
+      WHERE i.status = 'disabled'
+        AND EXISTS (SELECT 1 FROM security_audit_events audit WHERE audit.identity_id = i.id)
+      ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all()
+  ]);
+  return json({
+    identities: (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null })),
+    auditIdentities: (auditIdentityResult.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin) }))
+  });
 }
 
 async function identityDetail(id, env) {

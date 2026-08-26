@@ -572,6 +572,8 @@ try {
   const disabledIdentityList = await securityAdminRequest("/security/api/identities", freshAdminCookie);
   assert.equal(disabledIdentityList.body.identities.some((identity) => identity.id === disabledLifecycleIdentityId), false,
     "disabled Identities disappear from the normal user list");
+  assert.equal(disabledIdentityList.body.auditIdentities.some((identity) => identity.id === disabledLifecycleIdentityId), true,
+    "a disabled Identity with retained audit history remains available to the audit filter");
   assert.equal((await createSecurityHandoff(disabledLifecycleIdentityCookie, "cloud", disabledLifecycleCloudLinkId)).response.status, 401,
     "the old Security Identity cookie is rejected on its next access");
   await assertSingleAccess("cloud", disabledLifecycleCloudLogin.cookie, false, "disabled Identity service session");
@@ -992,15 +994,17 @@ try {
     "same-timestamp events use event_id as a stable tie-breaker");
   }
   for (const filters of [
+    { eventType: "audit_pagination_fixture", identityId },
     { eventType: "audit_pagination_fixture", service: "cloud" },
     { eventType: "audit_pagination_fixture", outcome: "failure" },
     { eventType: "audit_pagination_fixture", authMethod: "password" },
-    { eventType: "audit_pagination_fixture", service: "diary", outcome: "blocked", authMethod: "system" },
+    { eventType: "audit_pagination_fixture", identityId, service: "diary", outcome: "blocked", authMethod: "system" },
     { eventType: "audit_pagination_fixture", from: "2026-08-22", to: "2026-08-22" }
   ]) {
     const filtered = await fetchAllAudit(oldAdminCookie, filters);
     const expected = pagedAudit.events.filter((event) => {
       if (filters.service && event.service !== filters.service) return false;
+      if (filters.identityId && event.identity_id !== filters.identityId) return false;
       if (filters.outcome && event.outcome !== filters.outcome) return false;
       if (filters.authMethod && event.auth_method !== filters.authMethod) return false;
       if (filters.eventType && event.event_type !== filters.eventType) return false;

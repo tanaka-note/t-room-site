@@ -93,7 +93,7 @@ const server = createServer(async (request, response) => {
     { id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" },
     ...(detailUiIdentityVisible ? [{ id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", activeCredentials: 0, pendingCredentials: 1 }] : []),
     ...(cancelledInviteIdentityVisible ? [{ id: "cancelled-invite-user", displayName: "取消テストユーザー", status: "invited", activeCredentials: 0, pendingCredentials: 0 }] : [])
-  ] });
+  ], auditIdentities: [{ id: "retired-audit-user", displayName: "過去利用者", status: "disabled", isSecurityAdmin: false }] });
   if (url.pathname === "/security/api/audit") {
     receivedAuditQueries.push(url.search);
     if (url.searchParams.get("cursor") === "browser-page-2") return sendJson(response, 200, {
@@ -583,6 +583,10 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(registeredCredentialCount, 1, `${name}: reload must not create a second credential`);
     await unsupported.getByRole("button", { name: "履歴", exact: true }).click();
     await unsupported.locator("#audit-list .audit-row").first().waitFor();
+    assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=/, `${name}: all users remains the default audit filter`);
+    assert.deepEqual(await unsupported.locator("#audit-identity option").allTextContents(),
+      ["すべて", "第一管理者", "詳細UIテスト", "取消テストユーザー", "過去利用者（停止済み）"],
+      `${name}: current and retired audited users are exposed with human-readable labels`);
     const auditText = await unsupported.locator("#audit-list").textContent();
     assert.match(auditText, /パスキーでログイン成功/, `${name}: known audit event is shown in Japanese`);
     assert.match(auditText, /パスキーの本人確認に成功/, `${name}: intermediate WebAuthn success is distinct from a completed login`);
@@ -608,9 +612,29 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await unsupported.locator("#audit-list .audit-row").count(), 5, `${name}: next audit page appends below the current rows`);
     assert.equal(await moreButton.isVisible(), false, `${name}: audit button hides on the final page`);
     assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: the opaque audit cursor is sent for the next page`);
+    await unsupported.locator("#audit-identity").selectOption("primary-admin");
+    await unsupported.locator("#audit-service").selectOption("cloud");
+    await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
+    assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: the primary administrator filter sends its Identity ID`);
+    assert.match(receivedAuditQueries.at(-1), /service=cloud/, `${name}: user and service filters are combined`);
+    assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: a new user search does not reuse the prior cursor`);
+    await unsupported.locator("#audit-identity").selectOption("detail-ui-user");
+    await unsupported.getByRole("button", { name: "もっと見る" }).click();
+    assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: paging keeps the submitted user filter`);
+    assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=detail-ui-user/, `${name}: an unsubmitted filter change cannot mix cursor pages`);
+    assert.match(receivedAuditQueries.at(-1), /service=cloud/, `${name}: paging keeps every submitted compound filter`);
+    assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: paging appends the cursor to the submitted query`);
+    await unsupported.locator("#audit-service").selectOption("diary");
+    await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
+    assert.match(receivedAuditQueries.at(-1), /identityId=detail-ui-user/, `${name}: a registered user can be filtered independently`);
+    assert.match(receivedAuditQueries.at(-1), /service=diary/, `${name}: the registered user filter combines with another service`);
+    assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: changing to another user resets pagination`);
+    await unsupported.locator("#audit-identity").selectOption("");
+    await unsupported.locator("#audit-service").selectOption("");
     await unsupported.locator("#audit-event").selectOption("passkey_registration");
     await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
     assert.match(receivedAuditQueries.at(-1), /eventType=passkey_registration/, `${name}: Japanese filter preserves canonical API value`);
+    assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=/, `${name}: selecting all users omits identityId and restores the full history`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: changing filters resets the prior cursor`);
     assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${name}: desktop layout has no horizontal overflow`);
     await unsupported.setViewportSize({ width: 390, height: 844 });

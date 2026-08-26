@@ -502,8 +502,22 @@ test("audit history uses stable composite cursor pagination", () => {
   assert.match(worker, /occurred_at < \? OR \(occurred_at = \? AND event_id > \?\)/);
   assert.match(worker, /nextCursor/);
   assert.match(securityHtml, /id="audit-load-more"[\s\S]*もっと見る/);
+  assert.match(securityHtml, /id="audit-identity"[\s\S]*すべて/);
+  assert.match(securityUi, /\["identityId", "#audit-identity"\]/);
+  assert.match(securityUi, /append \? new URLSearchParams\(state\.auditQuery\) : currentAuditQuery\(\)/);
+  assert.match(securityUi, /if \(!append\) state\.auditQuery = params\.toString\(\)/);
   assert.match(securityUi, /params\.set\("cursor", state\.auditCursor\)/);
   assert.match(securityUi, /insertAdjacentHTML\("beforeend"/);
+});
+
+test("audit user options reuse current identities and retain disabled audited identities", () => {
+  assert.match(worker, /auditIdentities/);
+  assert.match(worker, /i\.status = 'disabled'[\s\S]*security_audit_events audit[\s\S]*audit\.identity_id = i\.id/);
+  assert.match(securityUi, /populateAuditIdentityFilter\(\[\.\.\.currentIdentities, \.\.\.auditIdentities\]\)/);
+  assert.match(securityUi, /display\.identityLabel\(identity\.id, identity\.displayName\)/);
+  assert.match(securityUi, /identity\.status === "disabled" \? "（停止済み）"/);
+  assert.match(securityUi, /option\.textContent =/,
+    "identity labels are assigned as text rather than interpolated HTML");
 });
 
 test("WebAuthn credential IDs and audit retention use standards-aligned boundaries", () => {

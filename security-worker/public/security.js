@@ -5,7 +5,7 @@
   const state = {
     adminPrf: null, adminCredentialId: null, selectedIdentity: null,
     pendingInviteCloud: null, pendingPrimarySetup: null, identityNames: new Map(),
-    auditCursor: null, auditLoading: false, services: []
+    auditCursor: null, auditQuery: "", auditLoading: false, services: []
   };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -344,8 +344,11 @@
 
   async function loadIdentities() {
     const data = await get("/identities");
-    state.identityNames = new Map(data.identities.map((identity) => [identity.id, identity.displayName]));
-    $("#identity-list").innerHTML = data.identities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(display.identityStatusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`).join("") || "<p>ユーザーはまだ登録されていません。</p>";
+    const currentIdentities = Array.isArray(data.identities) ? data.identities : [];
+    const auditIdentities = Array.isArray(data.auditIdentities) ? data.auditIdentities : [];
+    state.identityNames = new Map([...currentIdentities, ...auditIdentities].map((identity) => [identity.id, identity.displayName]));
+    populateAuditIdentityFilter([...currentIdentities, ...auditIdentities]);
+    $("#identity-list").innerHTML = currentIdentities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(display.identityStatusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`).join("") || "<p>ユーザーはまだ登録されていません。</p>";
     document.querySelectorAll("[data-view-identity]").forEach((button) => button.addEventListener("click", async () => {
       button.disabled = true;
       try { await viewIdentity(button.dataset.viewIdentity); } catch (error) { showMessage(error.message, true); }
@@ -652,9 +655,12 @@
     state.auditLoading = true;
     const more = $("#audit-load-more");
     more.disabled = true;
-    const params = new URLSearchParams();
-    [["service", "#audit-service"], ["authMethod", "#audit-auth"], ["outcome", "#audit-outcome"], ["eventType", "#audit-event"], ["from", "#audit-from"], ["to", "#audit-to"]].forEach(([key, selector]) => { const value = $(selector).value; if (value) params.set(key, value); });
+    const params = append ? new URLSearchParams(state.auditQuery) : currentAuditQuery();
     if (append) params.set("cursor", state.auditCursor);
+    else {
+      state.auditCursor = null;
+      more.hidden = true;
+    }
     try {
       const data = await get(`/audit?${params}`);
       const html = data.events.map(renderAuditEvent).join("");
@@ -663,12 +669,39 @@
       } else {
         $("#audit-list").innerHTML = html || "<p>該当する履歴はありません。</p>";
       }
+      if (!append) state.auditQuery = params.toString();
       state.auditCursor = data.nextCursor || null;
       more.hidden = !state.auditCursor;
     } finally {
       state.auditLoading = false;
       more.disabled = false;
     }
+  }
+
+  function currentAuditQuery() {
+    const params = new URLSearchParams();
+    [["identityId", "#audit-identity"], ["service", "#audit-service"], ["authMethod", "#audit-auth"], ["outcome", "#audit-outcome"], ["eventType", "#audit-event"], ["from", "#audit-from"], ["to", "#audit-to"]].forEach(([key, selector]) => {
+      const value = $(selector).value;
+      if (value) params.set(key, value);
+    });
+    return params;
+  }
+
+  function populateAuditIdentityFilter(identities) {
+    const select = $("#audit-identity");
+    const selected = select.value;
+    const unique = new Map();
+    for (const identity of identities) {
+      if (identity?.id && !unique.has(identity.id)) unique.set(identity.id, identity);
+    }
+    select.replaceChildren(new Option("すべて", ""));
+    for (const identity of unique.values()) {
+      const option = document.createElement("option");
+      option.value = identity.id;
+      option.textContent = `${display.identityLabel(identity.id, identity.displayName)}${identity.status === "disabled" ? "（停止済み）" : ""}`;
+      select.append(option);
+    }
+    if ([...select.options].some((option) => option.value === selected)) select.value = selected;
   }
 
   function populateAuditEventFilter() {
