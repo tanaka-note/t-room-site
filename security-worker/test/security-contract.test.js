@@ -257,6 +257,9 @@ test("AI Chat is a Passkey-only Security service with server-owned budget policy
   assert.match(worker, /getAiBudgetPolicy/);
   assert.match(aiServiceMigration, /security_ai_budget_policies/);
   assert.match(aiServiceMigration, /3000, 2700, 2850/);
+  assert.doesNotMatch(aiServiceMigration, /PRAGMA foreign_keys\s*=\s*OFF/i);
+  assert.match(aiServiceMigration, /CREATE TABLE security_handoffs_next[\s\S]*REFERENCES security_service_links_next/);
+  assert.match(aiServiceMigration, /CREATE TABLE security_tcloud_key_envelopes_next[\s\S]*REFERENCES security_service_links_next/);
   assert.match(worker, /insertDefaultAiBudgetPolicyStatement/);
   assert.match(worker, /links\.some\(\(link\) => link\.service === "ai"\)/);
   assert.match(ai, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), "ai"\)/);

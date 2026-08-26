@@ -1,5 +1,3 @@
-PRAGMA foreign_keys = OFF;
-
 CREATE TABLE security_service_links_next (
   id TEXT PRIMARY KEY,
   identity_id TEXT NOT NULL,
@@ -18,11 +16,67 @@ INSERT INTO security_service_links_next
 SELECT id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status, created_at, updated_at
 FROM security_service_links;
 
+-- D1 keeps foreign-key enforcement enabled during migrations. Rebuild both
+-- dependent tables against the new parent before removing the old parent, so
+-- no handoff or encrypted envelope is cascaded or orphaned.
+CREATE TABLE security_handoffs_next (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  identity_id TEXT NOT NULL,
+  service_link_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  session_epoch INTEGER NOT NULL DEFAULT 1,
+  FOREIGN KEY (identity_id) REFERENCES security_identities(id) ON DELETE CASCADE,
+  FOREIGN KEY (service_link_id) REFERENCES security_service_links_next(id),
+  FOREIGN KEY (credential_id) REFERENCES security_credentials(credential_id)
+);
+
+INSERT INTO security_handoffs_next
+  (id, token_hash, identity_id, service_link_id, credential_id, expires_at, consumed_at, created_at, session_epoch)
+SELECT id, token_hash, identity_id, service_link_id, credential_id, expires_at, consumed_at, created_at, session_epoch
+FROM security_handoffs;
+
+CREATE TABLE security_tcloud_key_envelopes_next (
+  id TEXT PRIMARY KEY,
+  identity_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  service_link_id TEXT NOT NULL,
+  envelope_type TEXT NOT NULL CHECK (envelope_type IN ('admin_private_prf', 'client_private_prf', 'folder_key_rsa')),
+  public_key_jwk TEXT,
+  encrypted_payload TEXT,
+  payload_iv TEXT,
+  wrapped_key TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (credential_id, service_link_id, envelope_type),
+  FOREIGN KEY (identity_id) REFERENCES security_identities(id) ON DELETE CASCADE,
+  FOREIGN KEY (credential_id) REFERENCES security_credentials(credential_id) ON DELETE CASCADE,
+  FOREIGN KEY (service_link_id) REFERENCES security_service_links_next(id) ON DELETE CASCADE
+);
+
+INSERT INTO security_tcloud_key_envelopes_next
+  (id, identity_id, credential_id, service_link_id, envelope_type, public_key_jwk,
+   encrypted_payload, payload_iv, wrapped_key, created_at, updated_at)
+SELECT id, identity_id, credential_id, service_link_id, envelope_type, public_key_jwk,
+       encrypted_payload, payload_iv, wrapped_key, created_at, updated_at
+FROM security_tcloud_key_envelopes;
+
+DROP TABLE security_handoffs;
+DROP TABLE security_tcloud_key_envelopes;
 DROP TABLE security_service_links;
+
 ALTER TABLE security_service_links_next RENAME TO security_service_links;
+ALTER TABLE security_handoffs_next RENAME TO security_handoffs;
+ALTER TABLE security_tcloud_key_envelopes_next RENAME TO security_tcloud_key_envelopes;
 
 CREATE INDEX idx_security_service_links_identity
 ON security_service_links(identity_id, service, status);
+
+CREATE INDEX idx_security_handoffs_expiry
+ON security_handoffs(expires_at, consumed_at);
 
 CREATE UNIQUE INDEX uq_security_service_links_current
 ON security_service_links(identity_id, service, service_account_id, COALESCE(cloud_root_folder_id, -1))
@@ -30,7 +84,13 @@ WHERE status IN ('pending', 'active');
 
 CREATE UNIQUE INDEX uq_security_service_links_exclusive_current
 ON security_service_links(service, service_account_id)
-WHERE service IN ('diary', 'billing') AND status IN ('pending', 'active');
+WHERE service IN ('diary', 'billing')
+  AND status IN ('pending', 'active')
+  AND NOT (
+    identity_id = 'primary-admin'
+    AND service = 'diary'
+    AND service_account_id = 'main-user'
+  );
 
 CREATE TABLE security_audit_events_next (
   event_id TEXT PRIMARY KEY,
@@ -104,5 +164,3 @@ WHERE identity.id = 'primary-admin'
     WHERE link.identity_id = identity.id AND link.service = 'ai'
       AND link.service_account_id = 'owner' AND link.status IN ('pending', 'active')
   );
-
-PRAGMA foreign_keys = ON;
