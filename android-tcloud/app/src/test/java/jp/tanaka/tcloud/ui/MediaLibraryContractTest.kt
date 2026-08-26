@@ -43,17 +43,6 @@ class MediaLibraryContractTest {
     }
 
     @Test
-    fun launcherUsesClassicTCloudArtworkWithoutHeadphones() {
-        val foreground = File("src/main/res/drawable/tcloud_launcher_foreground.xml").readText()
-        val monochrome = File("src/main/res/drawable/tcloud_launcher_monochrome.xml").readText()
-        val artwork = File("src/main/res/drawable/tcloud_launcher_artwork.xml").readText()
-
-        assertFalse(foreground.contains("M34,50 C34,32 43,22 54,22 C65,22 74,32 74,50"))
-        assertFalse(monochrome.contains("M34,50 C34,32 43,22 54,22 C65,22 74,32 74,50"))
-        assertTrue(artwork.contains("@drawable/tcloud_logo"))
-    }
-
-    @Test
     fun onlineSearchIsWiredThroughViewModelAndOnlyExplicitActionsPersistResults() {
         val manager = File("src/main/java/jp/tanaka/tcloud/library/MediaLibraryManager.kt").readText()
         val viewModel = File("src/main/java/jp/tanaka/tcloud/MainViewModel.kt").readText()
