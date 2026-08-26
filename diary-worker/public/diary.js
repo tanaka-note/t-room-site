@@ -10,6 +10,7 @@
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const PHOTO_UPLOAD_RETRY_DELAYS_MS = Object.freeze([250, 750]);
   const PHOTO_UPLOAD_CONCURRENCY = 2;
+  const TAG_SUGGESTION_MAX_HEIGHT = 246;
   const RICH_TEXT_COLORS = Object.freeze({
     default: "#27313b",
     red: "#b42318",
@@ -370,9 +371,11 @@
     elements.entryFormatToolbar.addEventListener("pointerdown", preserveEditorSelectionFromToolbar);
     elements.entryFormatToolbar.addEventListener("click", handleEntryFormatAction);
     document.addEventListener("selectionchange", rememberEditorSelection);
+    window.addEventListener("resize", positionEntryTagSuggestions, { passive: true });
+    elements.editorDialog.addEventListener("scroll", positionEntryTagSuggestions, { passive: true });
     if (window.visualViewport) {
-      window.visualViewport.addEventListener("resize", updateEditorKeyboardOffset);
-      window.visualViewport.addEventListener("scroll", updateEditorKeyboardOffset);
+      window.visualViewport.addEventListener("resize", handleEditorViewportChange);
+      window.visualViewport.addEventListener("scroll", handleEditorViewportChange);
     }
     elements.addPhotoButton.addEventListener("click", openPhotoPicker);
     elements.photoInput.addEventListener("change", handlePhotoSelection);
@@ -1237,6 +1240,43 @@
     }));
     elements.entryTagSuggestions.hidden = false;
     elements.entryTags.setAttribute("aria-expanded", "true");
+    positionEntryTagSuggestions();
+  }
+
+  function positionEntryTagSuggestions() {
+    const suggestionList = elements.entryTagSuggestions;
+    if (suggestionList.hidden || !elements.editorDialog.open) return;
+    const inputRect = elements.entryTags.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const viewportLeft = viewport?.offsetLeft || 0;
+    const viewportTop = viewport?.offsetTop || 0;
+    const viewportWidth = viewport?.width || window.innerWidth;
+    const viewportHeight = viewport?.height || window.innerHeight;
+    const viewportRight = viewportLeft + viewportWidth;
+    const viewportBottom = viewportTop + viewportHeight;
+    const edge = 8;
+    const gap = 4;
+    const availableBelow = Math.max(0, viewportBottom - inputRect.bottom - gap - edge);
+    const availableAbove = Math.max(0, inputRect.top - viewportTop - gap - edge);
+    const placeAbove = availableBelow < Math.min(160, TAG_SUGGESTION_MAX_HEIGHT) && availableAbove > availableBelow;
+    const availableHeight = placeAbove ? availableAbove : availableBelow;
+    const maxHeight = Math.min(TAG_SUGGESTION_MAX_HEIGHT, availableHeight);
+    const width = Math.min(inputRect.width, Math.max(0, viewportWidth - (edge * 2)));
+    const left = Math.min(
+      Math.max(inputRect.left, viewportLeft + edge),
+      Math.max(viewportLeft + edge, viewportRight - edge - width)
+    );
+
+    suggestionList.style.left = `${Math.round(left)}px`;
+    suggestionList.style.width = `${Math.round(width)}px`;
+    suggestionList.style.maxHeight = `${Math.floor(maxHeight)}px`;
+    suggestionList.dataset.placement = placeAbove ? "above" : "below";
+
+    const renderedHeight = Math.min(suggestionList.getBoundingClientRect().height, maxHeight);
+    const top = placeAbove
+      ? Math.max(viewportTop + edge, inputRect.top - gap - renderedHeight)
+      : inputRect.bottom + gap;
+    suggestionList.style.top = `${Math.round(top)}px`;
   }
 
   function currentEntryTagContext() {
@@ -1296,6 +1336,10 @@
     state.entryTagSuggestionIndex = -1;
     elements.entryTagSuggestions.hidden = true;
     elements.entryTagSuggestions.replaceChildren();
+    elements.entryTagSuggestions.removeAttribute("data-placement");
+    for (const property of ["left", "top", "width", "max-height"]) {
+      elements.entryTagSuggestions.style.removeProperty(property);
+    }
     elements.entryTags.setAttribute("aria-expanded", "false");
     elements.entryTags.removeAttribute("aria-activedescendant");
   }
@@ -2344,6 +2388,11 @@
     const viewport = window.visualViewport;
     const offset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
     elements.entryContentShell?.style.setProperty("--editor-keyboard-offset", `${Math.round(offset)}px`);
+  }
+
+  function handleEditorViewportChange() {
+    updateEditorKeyboardOffset();
+    positionEntryTagSuggestions();
   }
 
   function richColorKey(value) {

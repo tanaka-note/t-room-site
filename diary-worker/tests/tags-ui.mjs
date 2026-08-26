@@ -43,7 +43,12 @@ assert.match(style, /\.diary-tag-cloud \{[^}]*max-height:[^}]*overflow-y: auto;/
 assert.match(style, /overscroll-behavior-y: auto/);
 assert.match(style, /\.tag-directory-link \{/);
 assert.match(style, /\.tag-more-button \{/);
-assert.match(style, /\.entry-tag-suggestions \{[^}]*position: absolute;[^}]*overflow-y: auto;[^}]*max-height: 246px;/s);
+assert.match(style, /\.entry-tag-suggestions \{[^}]*position: fixed;[^}]*overflow-y: auto;[^}]*max-height: 246px;/s);
+assert.match(script, /function positionEntryTagSuggestions\(\)/);
+assert.match(script, /window\.visualViewport/);
+assert.match(script, /availableBelow/);
+assert.match(script, /availableAbove/);
+assert.match(script, /elements\.editorDialog\.addEventListener\("scroll", positionEntryTagSuggestions/);
 assert.match(worker, /ORDER BY count DESC, dt\.tag ASC/);
 assert.match(worker, /path\.startsWith\("\/tag\/"\)/);
 assert.match(worker, /path === "\/tags\/"/);

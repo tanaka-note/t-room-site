@@ -30,6 +30,7 @@ const tags = [
   { value: "同点2", count: 20 },
   { value: "ＡＬＰＨＡ", count: 12 },
   { value: "alphaBeta", count: 11 },
+  { value: "ふゆ", count: 10 },
   { value: "末尾", count: 1 }
 ];
 
@@ -111,6 +112,39 @@ async function suggestionValues(page) {
   return page.locator("#entry-tag-suggestions [data-tag]").evaluateAll((options) => options.map((option) => option.dataset.tag));
 }
 
+async function settleTagSuggestions(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
+async function tagEditorGeometry(page) {
+  return page.evaluate(() => {
+    const editorDialog = document.querySelector("#editor-dialog");
+    const entryTags = document.querySelector("#entry-tags");
+    const suggestions = document.querySelector("#entry-tag-suggestions");
+    const inputRect = entryTags.getBoundingClientRect();
+    const suggestionRect = suggestions.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    return {
+      scrollTop: editorDialog.scrollTop,
+      scrollHeight: editorDialog.scrollHeight,
+      inputTop: inputRect.top,
+      suggestionTop: suggestionRect.top,
+      suggestionBottom: suggestionRect.bottom,
+      suggestionHidden: suggestions.hidden,
+      suggestionPosition: getComputedStyle(suggestions).position,
+      suggestionPlacement: suggestions.dataset.placement || "",
+      viewportTop: viewport?.offsetTop || 0,
+      viewportBottom: (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight)
+    };
+  });
+}
+
+function assertStableEditorGeometry(actual, expected, name, label) {
+  assert.equal(actual.scrollHeight, expected.scrollHeight, `${name}: ${label}でもeditorのscrollHeightが変化しない`);
+  assert.ok(Math.abs(actual.scrollTop - expected.scrollTop) <= 1, `${name}: ${label}でもeditorのscrollTopが変化しない`);
+  assert.ok(Math.abs(actual.inputTop - expected.inputTop) <= 1, `${name}: ${label}でもタグ入力欄のY座標が変化しない`);
+}
+
 async function run(browserType, name, executablePath) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
@@ -120,6 +154,60 @@ async function run(browserType, name, executablePath) {
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await openEditor(page);
 
+    await page.locator("#editor-dialog").evaluate((dialog) => {
+      dialog.scrollTop = dialog.scrollHeight;
+    });
+    await page.fill("#entry-tags", "alz");
+    await settleTagSuggestions(page);
+    const noMatchGeometry = await tagEditorGeometry(page);
+    assert.equal(noMatchGeometry.suggestionHidden, true, `${name}: 0件では候補欄を閉じる`);
+
+    await page.fill("#entry-tags", "a");
+    await settleTagSuggestions(page);
+    const englishMatchGeometry = await tagEditorGeometry(page);
+    assertStableEditorGeometry(englishMatchGeometry, noMatchGeometry, name, "英字候補の表示");
+    assert.equal(englishMatchGeometry.suggestionPosition, "fixed", `${name}: 候補欄をeditorのscrollable overflowから分離`);
+
+    await page.fill("#entry-tags", "alz");
+    await settleTagSuggestions(page);
+    const englishNoMatchAgainGeometry = await tagEditorGeometry(page);
+    assertStableEditorGeometry(englishNoMatchAgainGeometry, noMatchGeometry, name, "英字候補の再非表示");
+
+    await page.fill("#entry-tags", "alpha");
+    await settleTagSuggestions(page);
+    const englishMatchAgainGeometry = await tagEditorGeometry(page);
+    assertStableEditorGeometry(englishMatchAgainGeometry, noMatchGeometry, name, "英字候補の再表示");
+
+    await page.fill("#entry-tags", "ふｙ");
+    await settleTagSuggestions(page);
+    const japaneseNoMatchGeometry = await tagEditorGeometry(page);
+    assertStableEditorGeometry(japaneseNoMatchGeometry, noMatchGeometry, name, "日本語入力途中の候補非表示");
+
+    await page.fill("#entry-tags", "ふゆ");
+    await settleTagSuggestions(page);
+    const japaneseMatchGeometry = await tagEditorGeometry(page);
+    assertStableEditorGeometry(japaneseMatchGeometry, noMatchGeometry, name, "日本語候補の表示");
+    assert.ok(japaneseMatchGeometry.suggestionTop >= japaneseMatchGeometry.viewportTop, `${name}: 候補欄は可視viewport上端からはみ出さない`);
+    assert.ok(japaneseMatchGeometry.suggestionBottom <= japaneseMatchGeometry.viewportBottom, `${name}: 候補欄は可視viewport下端からはみ出さない`);
+
+    await page.fill("#entry-tags", "alz");
+    await page.locator("#editor-dialog").evaluate((dialog) => {
+      dialog.scrollTop = Math.max(0, dialog.scrollHeight - dialog.clientHeight - 280);
+    });
+    await page.locator("#entry-tags").evaluate((input) => {
+      input.value = "候補";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settleTagSuggestions(page);
+    const aboveGeometry = await tagEditorGeometry(page);
+    assert.equal(aboveGeometry.suggestionPlacement, "above", `${name}: 下側が狭いときは入力欄の上へ表示`);
+    assert.ok(aboveGeometry.suggestionBottom <= aboveGeometry.inputTop, `${name}: 上側候補欄が入力欄へ重ならない`);
+    assert.ok(aboveGeometry.suggestionTop >= aboveGeometry.viewportTop, `${name}: 上側候補欄も可視viewport内`);
+
+    await page.locator("#editor-dialog").evaluate((dialog) => {
+      dialog.scrollTop = dialog.scrollHeight;
+    });
+    await page.fill("#entry-tags", "");
     await page.focus("#entry-tags");
     const allValues = await suggestionValues(page);
     assert.equal(allValues.length, tags.length, `${name}: 未入力時に全タグを表示`);
