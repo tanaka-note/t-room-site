@@ -30,6 +30,7 @@ let failEnvelopeSave = false;
 let registeredCredentialCount = 0;
 let cancelledInviteIdentityVisible = true;
 let detailUiCloudLinked = false;
+let detailUiIdentityVisible = true;
 const auditEventsBody = {
   events: [
     {
@@ -90,7 +91,7 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [
     { id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" },
-    { id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", activeCredentials: 0, pendingCredentials: 1 },
+    ...(detailUiIdentityVisible ? [{ id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", activeCredentials: 0, pendingCredentials: 1 }] : []),
     ...(cancelledInviteIdentityVisible ? [{ id: "cancelled-invite-user", displayName: "取消テストユーザー", status: "invited", activeCredentials: 0, pendingCredentials: 0 }] : [])
   ] });
   if (url.pathname === "/security/api/audit") {
@@ -116,6 +117,11 @@ const server = createServer(async (request, response) => {
     credentials: [], invitations: [{ id: "cancelled-invitation", status: "active", created_at: "2026-08-23T00:00:00.000Z", expires_at: 4102444800 }],
     approvalCandidates: [], adminKeyEnvelopes: []
   });
+  if (url.pathname === "/security/api/identities/detail-ui-user/disable" && request.method === "POST") {
+    await readBody(request);
+    detailUiIdentityVisible = false;
+    return sendJson(response, 200, { ok: true, identityDisabled: true });
+  }
   if (url.pathname === "/security/api/identities/detail-ui-user") return sendJson(response, 200, {
     identity: { id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", isSecurityAdmin: false },
     links: [
@@ -125,7 +131,10 @@ const server = createServer(async (request, response) => {
       { id: "detail-cloud-current", service: "cloud", service_account_id: "folder-member", cloud_root_folder_id: 10, display_label: "動画", role: "member", role_label: "フォルダ利用者", status: "active", protected: false },
       ...(detailUiCloudLinked ? [{ id: "detail-cloud-new", service: "cloud", service_account_id: "folder-member", cloud_root_folder_id: 2, display_label: "家族写真", role: "member", role_label: "フォルダ利用者", status: "pending", protected: false }] : [])
     ],
-    credentials: [],
+    credentials: [
+      { credential_id: "detail-current-credential", status: "pending", label: "現在のパスキー", registered_at: "2026-08-23T03:00:00.000Z", last_used_at: null, device_type: "singleDevice", backed_up: false, prf_enabled: true },
+      { credential_id: "detail-old-credential", status: "revoked", label: "過去のパスキー", registered_at: "2026-08-22T03:00:00.000Z", revoked_at: "2026-08-23T00:00:00.000Z", last_used_at: null, device_type: "singleDevice", backed_up: false, prf_enabled: false }
+    ],
     invitations: [
       { id: "detail-future", status: "active", created_at: "2026-08-23T02:00:00.000Z", expires_at: 4102444800 },
       { id: "detail-expired-active", status: "active", created_at: "2026-08-23T01:00:00.000Z", expires_at: 1 },
@@ -290,6 +299,9 @@ function browserExecutable(name) {
 }
 
 async function verifyBrowser(browserType, name, origin) {
+  cancelledInviteIdentityVisible = true;
+  detailUiCloudLinked = false;
+  detailUiIdentityVisible = true;
   const executablePath = browserExecutable(name);
   if (!executablePath) return `${name}: skipped (browser unavailable)`;
   const browser = await browserType.launch({ executablePath, headless: true });
@@ -644,12 +656,22 @@ async function verifyBrowser(browserType, name, origin) {
       `${name}: reinvite expiry stays hidden until requested`);
     const detailText = await unsupported.locator("#identity-detail").textContent();
     assert.match(detailText, /管理者承認待ち/);
-    assert.match(detailText, /まだパスキーは登録されていません/);
+    assert.match(detailText, /現在のパスキー/);
     assert.match(detailText, /期限切れ/);
     assert.match(detailText, /期限情報を取得できません/);
     assert.doesNotMatch(detailText, /1970|Invalid Date/);
     assert.match(await unsupported.locator("#identity-detail .invitation").first().textContent(), /有効/,
       `${name}: currently active invitations are listed before history`);
+    const identityHistory = unsupported.locator("#identity-detail details.identity-history");
+    assert.equal(await identityHistory.count(), 1, `${name}: revoked credentials, disabled links and old invitations share a history section`);
+    assert.equal(await identityHistory.locator(".identity-history-rows").isVisible(), false,
+      `${name}: historical records do not crowd the current state by default`);
+    assert.doesNotMatch(await unsupported.locator("#identity-detail .detail-section").filter({ hasText: "サービス連携" }).first().textContent(), /家族写真/,
+      `${name}: disabled links are absent from the current service-link section`);
+    await identityHistory.locator("summary").click();
+    assert.equal(await identityHistory.locator(".identity-history-rows").isVisible(), true);
+    assert.match(await identityHistory.textContent(), /過去のパスキー.*家族写真.*期限切れ/s,
+      `${name}: historical credentials, links and invitations remain inspectable`);
 
     await unsupported.locator("#detail-open-link").click();
     assert.deepEqual(await unsupported.locator("#detail-link-row [data-link-service] option").allTextContents(), ["サービスを選択", "T-Cloud"],
@@ -685,6 +707,13 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#detail-cancel-link").click();
     assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true,
       `${name}: detail editors do not overflow the narrow viewport`);
+
+    unsupported.once("dialog", (dialog) => dialog.accept());
+    await unsupported.locator("#disable-identity-button").click();
+    await unsupported.waitForFunction(() => document.querySelector("#message")?.textContent?.includes("ユーザーを停止しました"));
+    assert.equal(await unsupported.locator("#identity-detail").isVisible(), false, `${name}: disabled Identity detail closes immediately`);
+    assert.equal(await unsupported.locator("#identity-list").getByText("詳細UIテスト").count(), 0,
+      `${name}: disabled Identity disappears from the normal list without a page reload`);
 
     const cancelledUserRow = unsupported.locator("#identity-list .identity-row").filter({ hasText: "取消テストユーザー" });
     assert.equal(await cancelledUserRow.count(), 1, `${name}: an active invitation is visible before revocation`);

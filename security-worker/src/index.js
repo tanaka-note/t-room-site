@@ -224,6 +224,11 @@ async function handleApi(request, env, url, path, context = null) {
     requireMutation(request, url);
     return approveIdentity(approveMatch[1], request, env, admin);
   }
+  const disableIdentityMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/disable$/);
+  if (disableIdentityMatch && request.method === "POST") {
+    requireMutation(request, url);
+    return disableIdentity(disableIdentityMatch[1], request, env, admin);
+  }
   const reinviteMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/reinvite$/);
   if (reinviteMatch && request.method === "POST") {
     requireMutation(request, url);
@@ -926,6 +931,59 @@ async function approveIdentity(identityId, request, env, admin) {
   updates.push(await localAuditStatement(env, { eventType: "identity_approved", outcome: "success", identityId, authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: cloudPasskeyReady } }, request));
   await env.DB.batch(updates);
   return json({ ok: true, tcloudPasskeyReady: cloudPasskeyReady });
+}
+
+async function disableIdentity(identityId, request, env, admin) {
+  const identity = await env.DB.prepare("SELECT id, status, is_security_admin FROM security_identities WHERE id = ?").bind(identityId).first();
+  if (!identity) throw new HttpError(404, "ユーザーが見つかりません。");
+  if (identity.id === PRIMARY_ADMIN_ID || identity.is_security_admin) throw new HttpError(409, "第一管理者は停止できません。");
+  if (identity.status === "disabled") return json({ ok: true, identityDisabled: true, alreadyDisabled: true });
+
+  const disabledAt = new Date().toISOString();
+  const invalidatedAt = nowSeconds();
+  const guardSql = "id = ? AND id != ? AND is_security_admin = 0 AND status != 'disabled'";
+  const disabledGuardSql = "id = ? AND id != ? AND is_security_admin = 0 AND status = 'disabled' AND updated_at = ?";
+  const audit = await localAuditEvent(env, {
+    eventType: "identity_disabled", outcome: "success", identityId,
+    authMethod: "passkey", details: { disabledBy: admin.identityId }
+  }, request);
+  const results = await env.DB.batch([
+    env.DB.prepare(`UPDATE security_identities SET status = 'disabled', updated_at = ? WHERE ${guardSql}`)
+      .bind(disabledAt, identityId, PRIMARY_ADMIN_ID),
+    env.DB.prepare(`UPDATE security_credentials SET status = 'revoked', revoked_at = COALESCE(revoked_at, ?)
+      WHERE identity_id = ? AND status IN ('pending', 'active')
+        AND EXISTS (SELECT 1 FROM security_identities identity WHERE identity.${disabledGuardSql})`)
+      .bind(disabledAt, identityId, identityId, PRIMARY_ADMIN_ID, disabledAt),
+    env.DB.prepare(`UPDATE security_service_links SET status = 'disabled', updated_at = ?
+      WHERE identity_id = ? AND status IN ('pending', 'active')
+        AND EXISTS (SELECT 1 FROM security_identities identity WHERE identity.${disabledGuardSql})`)
+      .bind(disabledAt, identityId, identityId, PRIMARY_ADMIN_ID, disabledAt),
+    env.DB.prepare(`UPDATE security_invitations SET status = 'revoked', revoked_at = COALESCE(revoked_at, ?)
+      WHERE identity_id = ? AND status = 'active'
+        AND EXISTS (SELECT 1 FROM security_identities identity WHERE identity.${disabledGuardSql})`)
+      .bind(disabledAt, identityId, identityId, PRIMARY_ADMIN_ID, disabledAt),
+    env.DB.prepare(`UPDATE security_setup_sessions SET status = 'expired', updated_at = ?
+      WHERE identity_id = ? AND status = 'active'
+        AND EXISTS (SELECT 1 FROM security_identities identity WHERE identity.${disabledGuardSql})`)
+      .bind(disabledAt, identityId, identityId, PRIMARY_ADMIN_ID, disabledAt),
+    env.DB.prepare(`UPDATE security_challenges SET consumed_at = ?
+      WHERE identity_id = ? AND consumed_at IS NULL
+        AND EXISTS (SELECT 1 FROM security_identities identity WHERE identity.${disabledGuardSql})`)
+      .bind(invalidatedAt, identityId, identityId, PRIMARY_ADMIN_ID, disabledAt),
+    env.DB.prepare(`UPDATE security_handoffs SET consumed_at = ?
+      WHERE identity_id = ? AND consumed_at IS NULL
+        AND EXISTS (SELECT 1 FROM security_identities identity WHERE identity.${disabledGuardSql})`)
+      .bind(invalidatedAt, identityId, identityId, PRIMARY_ADMIN_ID, disabledAt),
+    auditInsertStatement(env, audit, {
+      sql: "EXISTS (SELECT 1 FROM security_identities WHERE id = ? AND status = 'disabled' AND updated_at = ?)",
+      bindings: [identityId, disabledAt]
+    })
+  ]);
+  if (Number(results[0]?.meta?.changes || 0) !== 1) {
+    const current = await env.DB.prepare("SELECT status FROM security_identities WHERE id = ?").bind(identityId).first();
+    if (current?.status !== "disabled") throw new HttpError(409, "ユーザーの状態が変更されたため、停止処理を完了できませんでした。");
+  }
+  return json({ ok: true, identityDisabled: true, alreadyDisabled: false });
 }
 
 async function reinviteIdentity(identityId, request, env, admin) {

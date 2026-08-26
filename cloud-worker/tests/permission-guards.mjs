@@ -69,8 +69,8 @@ if (!functionBody("requireFolderAccess").includes("requireMemberFolderScope")
 if (!functionBody("unlockFolder").includes("requireMemberFolderScope")) {
   throw new Error("パスキー一般Identityがroot外のフォルダを直接解除できないことを確認できません。");
 }
-if (!source.includes("adminWrappedKey: folder.admin_wrapped_key")) {
-  throw new Error("Security Centerの端末側鍵委譲に必要な暗号化済み管理者wrapを確認できません。");
+if (!source.includes("adminWrappedKey: folder.adminWrappedKey") || source.includes("adminWrappedKey: folder.admin_wrapped_key")) {
+  throw new Error("Security CenterのService BindingがrequireFolderのcamelCase暗号化済み管理者wrapを返していません。");
 }
 
 console.log("permission guards: ok");

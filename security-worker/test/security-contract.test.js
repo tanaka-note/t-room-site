@@ -100,7 +100,7 @@ test("a T-Cloud member is constrained to the linked root on direct ID access", (
   assert.match(cloud, /effectiveRootId = folderId \|\| \(session\.role === "member" \? session\.rootFolderId : null\)/);
   assert.match(cloud, /requireMemberFolderScope/);
   assert.match(cloud, /cloud_folder_unlocks WHERE session_id = \? AND folder_id = \? AND expires_at > \?/);
-  assert.match(cloud, /adminWrappedKey: folder\.admin_wrapped_key/, "管理者端末でのみフォルダ鍵を委譲できる暗号化済みkeyを内部bindingへ返します");
+  assert.match(cloud, /adminWrappedKey: folder\.adminWrappedKey/, "管理者端末でのみフォルダ鍵を委譲できる暗号化済みkeyを内部bindingへ返します");
 });
 
 test("Security Center is first-admin-only and audits success and failure", () => {
@@ -192,6 +192,31 @@ test("revoking the last unused invitation retires only a never-registered invite
   assert.match(cancelledInviteCleanupMigration, /UPDATE security_service_links[\s\S]*status = 'disabled'/);
   assert.match(cancelledInviteCleanupMigration, /UPDATE security_identities AS identity[\s\S]*status = 'disabled'/);
   assert.doesNotMatch(cancelledInviteCleanupMigration, /DELETE\s+FROM\s+security_(?:identities|service_links|invitations)/i);
+});
+
+test("administrator Identity disable is atomic, fail-closed, and keeps historical crypto records", () => {
+  assert.match(worker, /disableIdentityMatch = path\.match/);
+  assert.match(worker, /async function disableIdentity/);
+  assert.match(worker, /UPDATE security_credentials SET status = 'revoked'/);
+  assert.match(worker, /UPDATE security_service_links SET status = 'disabled'/);
+  assert.match(worker, /UPDATE security_invitations SET status = 'revoked'/);
+  assert.match(worker, /UPDATE security_setup_sessions SET status = 'expired'/);
+  assert.match(worker, /UPDATE security_handoffs SET consumed_at/);
+  assert.match(worker, /eventType: "identity_disabled"/);
+  assert.match(worker, /identity\.id === PRIMARY_ADMIN_ID \|\| identity\.is_security_admin/);
+  assert.doesNotMatch(worker.match(/async function disableIdentity[\s\S]*?\n}\n\nasync function reinviteIdentity/)?.[0] || "", /DELETE FROM security_tcloud/,
+    "client vaults and key envelopes remain immutable history");
+  assert.match(securityUi, /過去の履歴を表示/);
+  assert.match(securityUi, /data\.credentials\.filter\(\(item\) => \["pending", "active"\]\.includes\(item\.status\)\)/);
+  assert.match(securityUi, /data\.links\.filter\(\(item\) => \["pending", "active"\]\.includes\(item\.status\)\)/);
+  assert.match(securityUi, /ユーザーを停止/);
+});
+
+test("Cloud Service Binding returns the aliased administrator wrap used by browser delegation", () => {
+  assert.match(cloud, /admin_wrapped_key AS adminWrappedKey/);
+  assert.match(cloud, /adminWrappedKey: folder\.adminWrappedKey/);
+  assert.doesNotMatch(cloud, /adminWrappedKey: folder\.admin_wrapped_key/);
+  assert.match(securityUi, /T-Cloudのフォルダ暗号鍵を読み込めませんでした。データを変更せず処理を中止しました。/);
 });
 
 test("service links come from an explicit provider registry and never from free-form UI", () => {

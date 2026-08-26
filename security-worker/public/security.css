@@ -74,6 +74,7 @@ fieldset { border: 1px solid var(--line); border-radius: 12px; }
 #audit-load-more[hidden] { display: none; }
 .warning-text { color: #b54708; }
 .danger { background: var(--danger); border-color: var(--danger); }
+.tabs button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 output { overflow-wrap: anywhere; }
 .credential, .link, .invitation { background: #f8fafc; border-radius: 10px; padding: 10px; margin: 8px 0; }
 .detail-section { padding: 18px 0; border-top: 1px solid var(--line); }
@@ -82,6 +83,8 @@ output { overflow-wrap: anywhere; }
 .detail-section h3 { margin: 0 0 10px; }
 .detail-summary p { margin: 4px 0; font-weight: 750; }
 .detail-item button { margin-top: 8px; }
+.identity-history summary { width: fit-content; cursor: pointer; color: var(--muted); font-weight: 750; }
+.identity-history-rows { margin-top: 10px; }
 .detail-editor { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; }
 .editor-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .invite-result { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid #b2ddff; border-radius: 10px; background: #eff8ff; }

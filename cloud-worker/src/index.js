@@ -4,7 +4,7 @@ import { validateServicePasskeySession } from "../../assets/passkey-session-vali
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-c606e3b3e94f";
+const APP_BUILD_ID = "cloud-b14ae4f4dab1";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -76,7 +76,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
       // This value is already RSA-wrapped for the existing administrator key.
       // It is returned only through the private Service Binding so Security
       // Center can delegate the folder key without exposing plaintext keys.
-      adminWrappedKey: folder.admin_wrapped_key
+      adminWrappedKey: folder.adminWrappedKey
     };
   }
 

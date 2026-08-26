@@ -3,6 +3,10 @@ import { createHash, createHmac, pbkdf2Sync, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+globalThis.window = globalThis;
+await import("../../cloud-worker/public/vendor/argon2.umd.min.js");
+await import("../../cloud-worker/public/crypto-vault.js");
+
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const sessionSecret = "passkey-session-integration-secret";
 const securitySessionSecret = "security-integration-secret";
@@ -15,6 +19,10 @@ const primaryCredentialId = Buffer.from("primary-admin-setup-credential").toStri
 const statusAdminIdentityId = "status_admin_test";
 const statusAdminCredentialId = Buffer.from("status-admin-credential").toString("base64url");
 const legacyNestedIdentityId = "legacy_nested_cloud_test";
+const disabledLifecycleIdentityId = "identity_disable_test";
+const disabledLifecycleCredentialId = Buffer.from("identity-disable-credential").toString("base64url");
+const disabledLifecycleCloudLinkId = "identity-disable-cloud-link";
+const disabledLifecycleDiaryLinkId = "identity-disable-diary-link";
 const cloudFixtureTag = randomUUID();
 const cloudSelectedRootName = `Security連携テスト-${cloudFixtureTag}`;
 const cloudChildName = `子フォルダ-${cloudFixtureTag}`;
@@ -60,6 +68,22 @@ const services = {
 const processes = [];
 
 try {
+  const serviceBindingAdminKeys = await crypto.subtle.generateKey(
+    { name: "RSA-OAEP", modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["encrypt", "decrypt"]
+  );
+  const serviceBindingRecipientKeys = await crypto.subtle.generateKey(
+    { name: "RSA-OAEP", modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["encrypt", "decrypt"]
+  );
+  const serviceBindingRecipientPublicJwk = await crypto.subtle.exportKey("jwk", serviceBindingRecipientKeys.publicKey);
+  const serviceBindingFolderPackage = await TRoomCrypto.createFolderPackage(
+    cloudSelectedRootName,
+    "service-binding-folder-password",
+    serviceBindingAdminKeys.publicKey
+  );
   for (const directory of ["security-worker", "cloud-worker", "diary-worker", "billing-worker"]) {
     runWrangler(directory, ["d1", "migrations", "apply", databaseName(directory), "--local"]);
   }
@@ -78,6 +102,14 @@ try {
       VALUES ((SELECT id FROM cloud_folders WHERE name = '${cloudProtectedChildName}' ORDER BY id DESC LIMIT 1), '${cloudProtectedGrandchildName}', 'admin');
     INSERT INTO cloud_folders (parent_id, name, created_by) VALUES (NULL, '${cloudUnselectedRootName}', 'admin');
     UPDATE cloud_folders SET password_hash = '${fixturePasswordHash(cloudRootAuthProof)}'
+      WHERE name = '${cloudSelectedRootName}';
+    UPDATE cloud_folders SET crypto_version = 1,
+      encrypted_name = '${serviceBindingFolderPackage.payload.encryptedName}',
+      name_iv = '${serviceBindingFolderPackage.payload.nameIv}',
+      password_salt = '${serviceBindingFolderPackage.payload.passwordSalt}',
+      password_wrapped_key = '${serviceBindingFolderPackage.payload.passwordWrappedKey}',
+      password_wrap_iv = '${serviceBindingFolderPackage.payload.passwordWrapIv}',
+      admin_wrapped_key = '${serviceBindingFolderPackage.payload.adminWrappedKey}'
       WHERE name = '${cloudSelectedRootName}';
     UPDATE cloud_folders SET password_hash = '${fixturePasswordHash(cloudProtectedPassword)}'
       WHERE name = '${cloudProtectedChildName}';
@@ -231,11 +263,27 @@ try {
   const readinessCookieB = signSecurityCookie({ kind: "identity", identityId: readinessIdentityId, credentialId: readinessCredentialB, passkeySessionEpoch: 1 });
   assert.equal(await securityCloudHandoff(readinessCookieA), 200, "credential A can create a handoff for its delegated folder");
   assert.equal(await securityCloudHandoff(readinessCookieB), 403, "credential B cannot select an active link without its own envelope");
+  await startServiceWorkers(true);
+  stopSecurityWorker();
+  startSecurityWorker(true);
+  await waitForUrl("http://127.0.0.1:8810/security/api/status");
   let readinessDetail = await securityIdentityDetail(readinessIdentityId, oldAdminCookie);
-  assert.equal(readinessDetail.approvalCandidates.find((item) => item.credentialId === readinessCredentialB)?.cloudPendingCount, 1,
+  const readinessCandidateB = readinessDetail.approvalCandidates.find((item) => item.credentialId === readinessCredentialB);
+  assert.equal(readinessCandidateB?.cloudPendingCount, 1,
     "the second credential is shown as pending Cloud delegation");
-  const delegatedB = await approveCredentialCloudLink(readinessIdentityId, readinessCredentialB, oldAdminCookie);
+  const serviceBindingFolder = readinessCandidateB.cloudApproval.folders[0].folder;
+  assert.equal(serviceBindingFolder.adminWrappedKey, serviceBindingFolderPackage.payload.adminWrappedKey,
+    "the Cloud Service Binding returns requireFolder's camelCase administrator wrap without dropping it");
+  const serviceBindingFolderKey = await TRoomCrypto.unlockFolderAsAdmin(serviceBindingFolder, serviceBindingAdminKeys.privateKey);
+  const serviceBindingDelegatedWrap = await TRoomCrypto.wrapFolderKeyForIdentity(serviceBindingFolderKey, serviceBindingRecipientPublicJwk);
+  const serviceBindingDelegatedKey = await TRoomCrypto.unlockDelegatedFolderKey(serviceBindingRecipientKeys.privateKey, serviceBindingDelegatedWrap);
+  assert.equal(await TRoomCrypto.decryptFolderName(serviceBindingFolder, serviceBindingDelegatedKey), cloudSelectedRootName,
+    "the actual Service Binding record can be unwrapped by the administrator and rewrapped for the invited credential");
+  const delegatedB = await approveCredentialCloudLink(readinessIdentityId, readinessCredentialB, oldAdminCookie, serviceBindingDelegatedWrap);
   assert.equal(delegatedB.tcloudPasskeyReady, true, "admin delegation activates credential B readiness without replacing the credential");
+  assert.equal(queryText("security-worker", "security-db", `SELECT wrapped_key AS value FROM security_tcloud_key_envelopes
+    WHERE credential_id = '${readinessCredentialB}' AND service_link_id = 'readiness-cloud-link' AND envelope_type = 'folder_key_rsa'`),
+    serviceBindingDelegatedWrap, "approval persists the real delegated envelope returned by the browser crypto path");
   assert.deepEqual((await cloudAuthenticationCredentialIds()).sort(), [readinessCredentialA, readinessCredentialB, primaryCredentialId].sort(),
     "the second credential becomes a Cloud candidate only after delegation");
   assert.equal(await securityCloudHandoff(readinessCookieB), 200, "credential B can create a handoff after its own delegation");
@@ -246,7 +294,6 @@ try {
     assert.equal(response.status, 200, `malformed Security cookie ${malformed} must not cause 500`);
     assert.equal((await response.json()).adminAuthenticated, false);
   }
-  await startServiceWorkers(true);
   const identityCountBeforeUnlinkedLogin = queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_identities");
   const adminPasswordAuditBefore = serviceAuditCount(identityId, "diary", "password_login_success");
   const adminPasswordLogin = await loginDiary("main-admin@example.test", diaryAdminPassword);
@@ -458,6 +505,91 @@ try {
   assert.equal(legacyNestedLink.folderUnavailable, false, "an existing nested-folder link remains manageable");
   assert.equal(legacyNestedLink.display_label, `${cloudSelectedRootName} / ${cloudChildName}`,
     "an existing nested-folder link keeps its original scope and resolves its live path");
+
+  const lifecycleExpiry = Math.floor(Date.now() / 1000) + 3600;
+  runSecuritySql(`
+    INSERT INTO security_identities (id, display_name, status) VALUES ('${disabledLifecycleIdentityId}', 'Identity Disable Test', 'active');
+    INSERT INTO security_credentials
+      (credential_id, identity_id, public_key, prf_enabled, prf_salt, status, approved_at)
+      VALUES ('${disabledLifecycleCredentialId}', '${disabledLifecycleIdentityId}', 'disable-public-key', 1, 'ZGlzYWJsZS1wcmYtc2FsdA', 'active', CURRENT_TIMESTAMP);
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
+      VALUES ('${disabledLifecycleCloudLinkId}', '${disabledLifecycleIdentityId}', 'cloud', 'folder-member', ${cloudSelectedRootId}, 'Disable Cloud', 'active');
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, display_label, status)
+      VALUES ('${disabledLifecycleDiaryLinkId}', '${disabledLifecycleIdentityId}', 'diary', 'disable-exclusive-account', 'Disable Diary', 'pending');
+    INSERT INTO security_invitations
+      (id, identity_id, token_hash, link_set_hash, expires_at, status)
+      VALUES ('identity-disable-invite', '${disabledLifecycleIdentityId}', 'identity-disable-invite-hash', 'identity-disable-links', ${lifecycleExpiry}, 'active');
+    INSERT INTO security_setup_sessions
+      (id, token_hash, identity_id, credential_id, status, expires_at)
+      VALUES ('identity-disable-setup', 'identity-disable-setup-hash', '${disabledLifecycleIdentityId}', '${disabledLifecycleCredentialId}', 'active', ${lifecycleExpiry});
+    INSERT INTO security_challenges
+      (id, purpose, challenge_hash, identity_id, expires_at)
+      VALUES ('identity-disable-challenge', 'authentication', 'identity-disable-challenge-hash', '${disabledLifecycleIdentityId}', ${lifecycleExpiry});
+    INSERT INTO security_handoffs
+      (id, token_hash, identity_id, service_link_id, credential_id, expires_at, session_epoch)
+      VALUES ('identity-disable-handoff', 'identity-disable-handoff-hash', '${disabledLifecycleIdentityId}', '${disabledLifecycleCloudLinkId}', '${disabledLifecycleCredentialId}', ${lifecycleExpiry}, 1);
+    INSERT INTO security_tcloud_client_vaults
+      (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
+      VALUES ('${disabledLifecycleCredentialId}', '${disabledLifecycleIdentityId}', '{"kty":"RSA"}', 'identity-disable-fingerprint', 'identity-disable-private', 'identity-disable-iv');
+    INSERT INTO security_tcloud_key_envelopes
+      (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
+      VALUES ('identity-disable-folder-envelope', '${disabledLifecycleIdentityId}', '${disabledLifecycleCredentialId}', '${disabledLifecycleCloudLinkId}', 'folder_key_rsa', 'identity-disable-wrapped');
+  `);
+  const disabledLifecycleIdentityCookie = signSecurityCookie({
+    kind: "identity", identityId: disabledLifecycleIdentityId, credentialId: disabledLifecycleCredentialId, passkeySessionEpoch: 1
+  });
+  const disabledLifecycleHandoff = await createSecurityHandoff(disabledLifecycleIdentityCookie, "cloud", disabledLifecycleCloudLinkId);
+  assert.equal(disabledLifecycleHandoff.response.status, 200,
+    "the lifecycle fixture can issue a handoff before Identity disable");
+  const disabledLifecycleCloudLogin = await redeemServiceHandoff("cloud", disabledLifecycleHandoff.body.handoffToken);
+  assert.equal(disabledLifecycleCloudLogin.response.status, 200, JSON.stringify(disabledLifecycleCloudLogin.body));
+  assert.ok(disabledLifecycleCloudLogin.cookie, "the lifecycle fixture receives a real Cloud passkey session");
+  await assertSingleAccess("cloud", disabledLifecycleCloudLogin.cookie, true, "Identity session before disable");
+  const disableLifecycle = await securityAdminRequest(`/security/api/identities/${disabledLifecycleIdentityId}/disable`, freshAdminCookie, {});
+  assert.equal(disableLifecycle.response.status, 200, JSON.stringify(disableLifecycle.body));
+  assert.equal(disableLifecycle.body.identityDisabled, true);
+  assert.equal(queryText("security-worker", "security-db", `SELECT status AS value FROM security_identities WHERE id = '${disabledLifecycleIdentityId}'`), "disabled");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_credentials
+    WHERE identity_id = '${disabledLifecycleIdentityId}' AND status = 'revoked' AND revoked_at IS NOT NULL`), 1,
+    "active and pending credentials are revoked with a timestamp");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_service_links
+    WHERE identity_id = '${disabledLifecycleIdentityId}' AND status = 'disabled'`), 2,
+    "active and pending service links are disabled");
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_invitations WHERE id = 'identity-disable-invite'"), "revoked");
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_setup_sessions WHERE id = 'identity-disable-setup'"), "expired");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_challenges
+    WHERE identity_id = '${disabledLifecycleIdentityId}' AND consumed_at IS NOT NULL`), 1);
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_handoffs
+    WHERE identity_id = '${disabledLifecycleIdentityId}' AND consumed_at IS NOT NULL`), 2,
+    "pre-existing and just-issued handoffs are invalidated");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_tcloud_client_vaults
+    WHERE identity_id = '${disabledLifecycleIdentityId}'`), 1, "client vault history is retained");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_tcloud_key_envelopes
+    WHERE identity_id = '${disabledLifecycleIdentityId}'`), 1, "folder envelope history is retained");
+  assert.equal(auditCount(disabledLifecycleIdentityId, "identity_disabled"), 1, "Identity disable is audited atomically");
+  const disabledIdentityList = await securityAdminRequest("/security/api/identities", freshAdminCookie);
+  assert.equal(disabledIdentityList.body.identities.some((identity) => identity.id === disabledLifecycleIdentityId), false,
+    "disabled Identities disappear from the normal user list");
+  assert.equal((await createSecurityHandoff(disabledLifecycleIdentityCookie, "cloud", disabledLifecycleCloudLinkId)).response.status, 401,
+    "the old Security Identity cookie is rejected on its next access");
+  await assertSingleAccess("cloud", disabledLifecycleCloudLogin.cookie, false, "disabled Identity service session");
+  const passwordSessionAfterDisable = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/session`, {
+    headers: { Cookie: `${services.diary.cookie}=${userPasswordLogin.cookie}` }
+  });
+  assert.equal(passwordSessionAfterDisable.status, 200, "Identity disable does not affect an existing password session");
+  assert.equal((await passwordSessionAfterDisable.json()).authenticated, true);
+  const disablePrimary = await securityAdminRequest("/security/api/identities/primary-admin/disable", freshAdminCookie, {});
+  assert.equal(disablePrimary.response.status, 409, "the primary administrator cannot be disabled");
+  runSecuritySql(`
+    INSERT INTO security_identities (id, display_name, status) VALUES ('identity_disable_replacement', 'Identity Disable Replacement', 'invited');
+    INSERT INTO security_service_links
+      (id, identity_id, service, service_account_id, display_label, status)
+      VALUES ('identity-disable-diary-replacement', 'identity_disable_replacement', 'diary', 'disable-exclusive-account', 'Disable Diary Replacement', 'pending');
+  `);
+  assert.equal(queryText("security-worker", "security-db", "SELECT status AS value FROM security_service_links WHERE id = 'identity-disable-diary-replacement'"), "pending",
+    "a disabled exclusive service link does not block a fresh Identity link");
 
   const invitationExpiryCases = [
     { label: "1 hour", body: { expiresIn: 3600 }, expectedSeconds: 3600 },
@@ -1446,7 +1578,7 @@ async function securityIdentityDetail(identity, cookie) {
   return body;
 }
 
-async function approveCredentialCloudLink(identity, credential, cookie) {
+async function approveCredentialCloudLink(identity, credential, cookie, wrappedKey = "wrapped-b") {
   const response = await fetch(`http://127.0.0.1:8810/security/api/identities/${identity}/approve`, {
     method: "POST",
     headers: {
@@ -1454,7 +1586,7 @@ async function approveCredentialCloudLink(identity, credential, cookie) {
       "Content-Type": "application/json",
       Cookie: `troom_security_admin=${cookie}`
     },
-    body: JSON.stringify({ credentialId: credential, cloudEnvelopes: [{ serviceLinkId: "readiness-cloud-link", wrappedKey: "wrapped-b" }] })
+    body: JSON.stringify({ credentialId: credential, cloudEnvelopes: [{ serviceLinkId: "readiness-cloud-link", wrappedKey }] })
   });
   const body = await response.json();
   if (response.status !== 200) await delay(300);
@@ -1664,42 +1796,42 @@ function cleanupSecurityFixture() {
     DROP TRIGGER IF EXISTS fail_synchronous_login_audit;
     DELETE FROM security_audit_events WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_tcloud_client_vaults WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_setup_sessions WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_handoffs WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_challenges WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_invitations WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_service_links WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_credentials WHERE identity_id IN (
       SELECT id FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %'
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
     );
     DELETE FROM security_identities
-      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval') OR display_name LIKE 'Invitation Expiry Contract %';
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %';
     DELETE FROM security_tcloud_key_envelopes WHERE identity_id = '${identityId}';
     DELETE FROM security_tcloud_client_vaults WHERE identity_id = '${identityId}';
     DELETE FROM security_setup_sessions WHERE identity_id = '${identityId}';
