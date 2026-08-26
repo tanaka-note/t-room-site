@@ -39,14 +39,16 @@ const PRIVILEGED_LINK_REAUTH_SECONDS = 5 * 60;
 const SERVICE_REGISTRY = Object.freeze({
   cloud: Object.freeze({ displayName: "T-Cloud", binding: "CLOUD_AUTH" }),
   diary: Object.freeze({ displayName: "日記", binding: "DIARY_AUTH" }),
-  billing: Object.freeze({ displayName: "請求書", binding: "BILLING_AUTH" })
+  billing: Object.freeze({ displayName: "請求書", binding: "BILLING_AUTH" }),
+  ai: Object.freeze({ displayName: "AI Chat", binding: "AI_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
   "cloud\u0000subadmin\u0000",
   "diary\u0000main-admin\u0000",
   "diary\u0000main-user\u0000",
-  "billing\u0000owner\u0000"
+  "billing\u0000owner\u0000",
+  "ai\u0000owner\u0000"
 ]);
 const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "invite_used",
@@ -113,6 +115,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
   async recordAuditEvent(input) {
     await storeAuditEvent(this.env, input);
     return { stored: true };
+  }
+
+  async getAiBudgetPolicy(identityId) {
+    return aiBudgetPolicy(this.env, normalizeIdentityId(identityId));
   }
 }
 
@@ -206,6 +212,12 @@ async function handleApi(request, env, url, path, context = null) {
     return createIdentityAndInvite(request, env, admin);
   }
   if (path === "/api/audit" && request.method === "GET") return listAuditEvents(url, env);
+  if (path === "/api/ai/budgets" && request.method === "GET") return listAiBudgets(env);
+  const aiBudgetMatch = path.match(/^\/api\/ai\/budgets\/([A-Za-z0-9_-]{1,64})$/);
+  if (aiBudgetMatch && request.method === "POST") {
+    requireMutation(request, url);
+    return updateAiBudget(aiBudgetMatch[1], request, env, admin);
+  }
 
   const identityMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})$/);
   if (identityMatch && request.method === "GET") return identityDetail(identityMatch[1], env);
@@ -716,6 +728,74 @@ async function dashboard(env) {
   return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0) });
 }
 
+async function listAiBudgets(env) {
+  const rows = await env.DB.prepare(`SELECT p.identity_id, i.display_name, i.status,
+      p.monthly_budget_jpy, p.soft_stop_jpy, p.hard_stop_jpy, p.reserve_enabled, p.reserve_period, p.updated_at
+    FROM security_ai_budget_policies p JOIN security_identities i ON i.id = p.identity_id
+    WHERE i.status != 'disabled' ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all();
+  const policies = [];
+  for (const row of rows.results || []) {
+    let usage = null;
+    try { usage = await env.AI_AUTH?.getUsageSummary(row.identity_id); } catch { /* policy remains manageable during an AI outage */ }
+    policies.push({ ...publicAiBudgetPolicy(row), displayName: row.display_name, identityStatus: row.status, usage });
+  }
+  return json({ policies });
+}
+
+async function updateAiBudget(identityId, request, env, admin) {
+  requireFreshSecurityAdmin(admin);
+  const body = await readJson(request, 8192);
+  const monthlyBudgetJpy = integerRange(body.monthlyBudgetJpy, 100, 1_000_000);
+  const softStopJpy = integerRange(body.softStopJpy, 1, monthlyBudgetJpy || 0);
+  const hardStopJpy = integerRange(body.hardStopJpy, softStopJpy || 0, monthlyBudgetJpy || 0);
+  const reserveEnabled = body.reserveEnabled === true;
+  if (!monthlyBudgetJpy || !softStopJpy || !hardStopJpy) throw new HttpError(400, "AI利用予算の金額を確認してください。");
+  const identity = await env.DB.prepare("SELECT id FROM security_identities WHERE id = ? AND status != 'disabled'").bind(identityId).first();
+  if (!identity) throw new HttpError(404, "対象ユーザーが見つかりません。");
+  const current = await env.DB.prepare("SELECT * FROM security_ai_budget_policies WHERE identity_id = ?").bind(identityId).first();
+  const period = currentJstMonth();
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO security_ai_budget_policies
+      (identity_id, monthly_budget_jpy, soft_stop_jpy, hard_stop_jpy, reserve_enabled, reserve_period)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(identity_id) DO UPDATE SET monthly_budget_jpy = excluded.monthly_budget_jpy,
+        soft_stop_jpy = excluded.soft_stop_jpy, hard_stop_jpy = excluded.hard_stop_jpy,
+        reserve_enabled = excluded.reserve_enabled, reserve_period = excluded.reserve_period,
+        updated_at = CURRENT_TIMESTAMP`)
+      .bind(identityId, monthlyBudgetJpy, softStopJpy, hardStopJpy, reserveEnabled ? 1 : 0, reserveEnabled ? period : null),
+    await localAuditStatement(env, {
+      eventType: "ai_budget_policy_updated", outcome: "success", identityId,
+      authMethod: "passkey", service: "security", details: {
+        changedBy: admin.identityId,
+        previousMonthlyBudgetJpy: Number(current?.monthly_budget_jpy || 0), monthlyBudgetJpy,
+        previousSoftStopJpy: Number(current?.soft_stop_jpy || 0), softStopJpy,
+        previousHardStopJpy: Number(current?.hard_stop_jpy || 0), hardStopJpy,
+        previousReserveEnabled: Boolean(current?.reserve_enabled && current?.reserve_period === period), reserveEnabled
+      }
+    }, request)
+  ]);
+  return json({ ok: true, policy: await aiBudgetPolicy(env, identityId) });
+}
+
+async function aiBudgetPolicy(env, identityId) {
+  if (!identityId) return null;
+  const row = await env.DB.prepare("SELECT * FROM security_ai_budget_policies WHERE identity_id = ?").bind(identityId).first();
+  return row ? publicAiBudgetPolicy(row) : null;
+}
+
+function publicAiBudgetPolicy(row) {
+  const period = currentJstMonth();
+  return {
+    identityId: row.identity_id,
+    monthlyBudgetJpy: Number(row.monthly_budget_jpy),
+    softStopJpy: Number(row.soft_stop_jpy),
+    hardStopJpy: Number(row.hard_stop_jpy),
+    reserveEnabled: Boolean(row.reserve_enabled) && row.reserve_period === period,
+    reservePeriod: row.reserve_period || null,
+    updatedAt: normalizeUtcTimestamp(row.updated_at)
+  };
+}
+
 async function listServiceRegistry(env) {
   const services = [];
   for (const [id, descriptor] of Object.entries(SERVICE_REGISTRY)) {
@@ -843,6 +923,7 @@ async function createIdentityAndInvite(request, env, admin) {
   await env.DB.batch([
     env.DB.prepare("INSERT INTO security_identities (id, display_name, status) VALUES (?, ?, 'invited')").bind(identityId, displayName),
     ...links.map((link) => insertServiceLinkStatement(env, identityId, link)),
+    ...(links.some((link) => link.service === "ai") ? [insertDefaultAiBudgetPolicyStatement(env, identityId)] : []),
     insertInvitationStatement(env, invitation),
     await localAuditStatement(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey" }, request),
     await localAuditStatement(env, { eventType: "invite_created", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request)
@@ -867,6 +948,7 @@ async function addIdentityLinks(identityId, request, env, admin) {
     const status = identity.status === "active" && link.service !== "cloud" ? "active" : "pending";
     statements.push(insertServiceLinkStatement(env, identityId, link, status));
   }
+  if (links.some((link) => link.service === "ai")) statements.push(insertDefaultAiBudgetPolicyStatement(env, identityId));
   statements.push(env.DB.prepare("UPDATE security_identities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId));
   statements.push(await localAuditStatement(env, { eventType: "service_link_added", outcome: "success", identityId, authMethod: "passkey", details: { changedBy: admin.identityId, count: links.length } }, request));
   await env.DB.batch(statements);
@@ -1121,7 +1203,7 @@ async function redeemHandoff(env, token, service) {
   const tokenHash = await sha256(normalizeSecretText(token, 512));
   if (!normalizedService || !tokenHash) return null;
   const now = nowSeconds();
-  const row = await env.DB.prepare(`SELECT h.id, h.identity_id, h.credential_id,
+  const row = await env.DB.prepare(`SELECT h.id, h.identity_id, h.credential_id, i.display_name AS identityDisplayName,
       l.id AS serviceLinkId, l.service, l.service_account_id AS serviceAccountId,
       l.cloud_root_folder_id AS cloudRootFolderId, l.display_label AS displayLabel
     FROM security_handoffs h JOIN security_service_links l ON l.id = h.service_link_id
@@ -1133,7 +1215,7 @@ async function redeemHandoff(env, token, service) {
   if (!row) return null;
   const update = await env.DB.prepare("UPDATE security_handoffs SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(now, row.id).run();
   if (!update.meta?.changes) return null;
-  return { identityId: row.identity_id, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel, sessionEpoch: runtime.epoch };
+  return { identityId: row.identity_id, identityDisplayName: row.identityDisplayName, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel, sessionEpoch: runtime.epoch };
 }
 
 async function validatePasskeySession(env, input) {
@@ -1357,7 +1439,7 @@ async function assertExclusiveServiceLinksAvailable(env, identityId, links) {
 
 function requireFreshSecurityAdmin(admin) {
   if (!admin || !Number.isInteger(Number(admin.authenticatedAt)) || nowSeconds() - Number(admin.authenticatedAt) > PRIVILEGED_LINK_REAUTH_SECONDS) {
-    throw new HttpError(428, "特権アカウントを追加する前に、管理者の端末ロック解除をもう一度行ってください。");
+    throw new HttpError(428, "重要な設定を変更する前に、管理者の端末ロック解除をもう一度行ってください。");
   }
 }
 
@@ -1386,18 +1468,31 @@ async function ensurePrimaryAdminRecords(env) {
     { service: "cloud", accountId: "subadmin", rootFolderId: null, displayLabel: "T-Cloud 副管理者" },
     { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: "日記 管理者" },
     { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
-    { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" }
+    { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" },
+    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: "AI Chat By T-ROOM" }
   ];
   for (const link of defaults) {
     const existing = await env.DB.prepare(`SELECT id FROM security_service_links
       WHERE identity_id = ? AND service = ? AND service_account_id = ?
         AND cloud_root_folder_id IS NULL AND status IN ('pending', 'active') LIMIT 1`).bind(PRIMARY_ADMIN_ID, link.service, link.accountId).first();
     if (existing) continue;
+    const defaultStatus = link.service === "ai" && await hasActiveCredential(env, PRIMARY_ADMIN_ID) ? "active" : "pending";
     await env.DB.prepare(`INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
-      VALUES (?, ?, ?, ?, ?, ?, 'pending')`)
-      .bind(crypto.randomUUID(), PRIMARY_ADMIN_ID, link.service, link.accountId, link.rootFolderId, link.displayLabel).run();
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), PRIMARY_ADMIN_ID, link.service, link.accountId, link.rootFolderId, link.displayLabel, defaultStatus).run();
   }
+}
+
+async function hasActiveCredential(env, identityId) {
+  const row = await env.DB.prepare("SELECT 1 AS ok FROM security_credentials WHERE identity_id = ? AND status = 'active' LIMIT 1").bind(identityId).first();
+  return Boolean(row);
+}
+
+function insertDefaultAiBudgetPolicyStatement(env, identityId) {
+  return env.DB.prepare(`INSERT INTO security_ai_budget_policies
+    (identity_id, monthly_budget_jpy, soft_stop_jpy, hard_stop_jpy, reserve_enabled, reserve_period)
+    VALUES (?, 3000, 2700, 2850, 0, NULL) ON CONFLICT(identity_id) DO NOTHING`).bind(identityId);
 }
 
 async function hasSecurityAdmin(env) {
@@ -1690,7 +1785,7 @@ function identityActivityStatements(env, event) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {
@@ -1773,6 +1868,8 @@ function normalizeSecretText(value, max) { const text = typeof value === "string
 function validIso(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : date.toISOString(); }
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
 function clampNumber(value, min, max, fallback) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback; }
+function integerRange(value, min, max) { const number = Number(value); return Number.isInteger(number) && number >= min && number <= max ? number : 0; }
+function currentJstMonth(now = Date.now()) { return new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 7); }
 function randomToken(bytes) { const value = crypto.getRandomValues(new Uint8Array(bytes)); return bytesToBase64Url(value); }
 function parseJson(value, fallback) { try { return JSON.parse(value); } catch { return fallback; } }
 function validatePublicJwk(value) { if (!value || value.kty !== "RSA" || value.alg !== "RSA-OAEP-256" || !value.n || !value.e || "d" in value) throw new HttpError(400, "公開鍵を確認してください。"); return { kty: "RSA", alg: "RSA-OAEP-256", key_ops: ["encrypt"], ext: true, n: value.n, e: value.e }; }

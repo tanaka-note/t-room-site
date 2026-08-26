@@ -22,6 +22,8 @@ const cloudCrypto = await readFile(new URL("../../cloud-worker/public/crypto-vau
 const argon2 = await readFile(new URL("../../cloud-worker/public/vendor/argon2.umd.min.js", import.meta.url), "utf8");
 const diary = await readFile(new URL("../../diary-worker/src/index.js", import.meta.url), "utf8");
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
+const ai = await readFile(new URL("../../ai-worker/src/index.js", import.meta.url), "utf8");
+const aiServiceMigration = await readFile(new URL("../migrations/0009_ai_chat_service_and_budgets.sql", import.meta.url), "utf8");
 const sessionValidator = await readFile(new URL("../../assets/passkey-session-validation.mjs", import.meta.url), "utf8");
 const globalSwitchTool = await readFile(new URL("../tools/global-passkey-switch.mjs", import.meta.url), "utf8");
 const securityConfig = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
@@ -224,6 +226,7 @@ test("service links come from an explicit provider registry and never from free-
   assert.match(worker, /CLOUD_AUTH/);
   assert.match(worker, /DIARY_AUTH/);
   assert.match(worker, /BILLING_AUTH/);
+  assert.match(worker, /AI_AUTH/);
   for (const source of [cloud, diary, billing]) {
     assert.match(source, /async listLinkTargets\(\)/);
     assert.match(source, /async describeAccount\(input\)/);
@@ -246,6 +249,19 @@ test("service links come from an explicit provider registry and never from free-
     "a single T-Cloud link is selected automatically without combining scopes");
   assert.match(client, /chooseLinkDialog/);
   assert.match(client, /利用するT-Cloudの範囲を選択/);
+});
+
+test("AI Chat is a Passkey-only Security service with server-owned budget policy", () => {
+  assert.match(worker, /ai: Object\.freeze\(\{ displayName: "AI Chat", binding: "AI_AUTH" \}\)/);
+  assert.match(worker, /"ai\\u0000owner\\u0000"/);
+  assert.match(worker, /getAiBudgetPolicy/);
+  assert.match(aiServiceMigration, /security_ai_budget_policies/);
+  assert.match(aiServiceMigration, /3000, 2700, 2850/);
+  assert.match(worker, /insertDefaultAiBudgetPolicyStatement/);
+  assert.match(worker, /links\.some\(\(link\) => link\.service === "ai"\)/);
+  assert.match(ai, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), "ai"\)/);
+  assert.match(ai, /validatePasskeySession\(\{/);
+  assert.doesNotMatch(ai, /password_login|PASSWORD_HASH/);
 });
 
 test("privileged, exclusive, Cloud-admin and root-folder policies are server enforced", () => {

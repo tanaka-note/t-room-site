@@ -22,5 +22,18 @@
         "34:C8:E9:61:CB:1D:35:31:66:7E:57:1C:C2:02:5A:3B:2E:1A:FC:48:1A:8C:74:12:DE:DE:12:88:FF:E5:05:56"
       ]
     }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "jp.tanaka.troom.ai",
+      "sha256_cert_fingerprints": [
+        "34:C8:E9:61:CB:1D:35:31:66:7E:57:1C:C2:02:5A:3B:2E:1A:FC:48:1A:8C:74:12:DE:DE:12:88:FF:E5:05:56"
+      ]
+    }
   }
 ]

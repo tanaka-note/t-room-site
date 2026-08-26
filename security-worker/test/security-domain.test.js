@@ -26,10 +26,10 @@ test("Identity ID accepts only A-Z, a-z, 0-9, underscore and hyphen up to 64 cha
   for (const invalid of ["", "a b", "a/b", "あ", "A".repeat(65)]) assert.equal(normalizeIdentityId(invalid), "");
 });
 
-test("audit service accepts Security while service links remain limited to three services", () => {
-  for (const service of ["security", "cloud", "diary", "billing"]) assert.equal(normalizeAuditService(service), service);
+test("audit and service-link normalization include the Passkey-only AI service", () => {
+  for (const service of ["security", "cloud", "diary", "billing", "ai"]) assert.equal(normalizeAuditService(service), service);
   assert.equal(normalizeLinkedService("security"), "");
-  for (const service of ["cloud", "diary", "billing"]) assert.equal(normalizeLinkedService(service), service);
+  for (const service of ["cloud", "diary", "billing", "ai"]) assert.equal(normalizeLinkedService(service), service);
 });
 
 test("new invitations and reinvitations share strict preset and custom expiry rules", () => {

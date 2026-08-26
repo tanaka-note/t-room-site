@@ -74,6 +74,7 @@
     document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => {
       showPanel(button.dataset.panel, button);
       if (button.dataset.panel === "audit-panel") loadAudit({ append: false }).catch((error) => showMessage(error.message, true));
+      if (button.dataset.panel === "ai-panel") loadAiBudgets().catch((error) => showMessage(error.message, true));
     }));
     populateAuditEventFilter();
   }
@@ -303,6 +304,42 @@
     const data = await get("/dashboard");
     const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
     $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div>`;
+  }
+
+  async function loadAiBudgets() {
+    const data = await get("/ai/budgets");
+    const container = $("#ai-budget-list");
+    container.innerHTML = (data.policies || []).map((policy) => {
+      const usage = policy.usage || {};
+      const spent = Number(usage.totalCostJpy || 0);
+      const stop = Number(policy.reserveEnabled ? policy.hardStopJpy : policy.softStopJpy);
+      const remaining = Math.max(0, stop - spent);
+      return `<form class="card compact ai-budget-card" data-ai-budget="${escapeHtml(policy.identityId)}">
+        <div class="section-heading"><h3>${escapeHtml(policy.displayName)}</h3><p>${escapeHtml(usage.period || "当月")} 利用額 ${spent.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}円 / 残り安全枠 ${remaining.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}円</p></div>
+        <div class="stats"><div class="stat"><span>input token</span><strong>${Number(usage.inputTokens || 0).toLocaleString()}</strong></div><div class="stat"><span>output token</span><strong>${Number(usage.outputTokens || 0).toLocaleString()}</strong></div><div class="stat"><span>cached token</span><strong>${Number(usage.cachedInputTokens || 0).toLocaleString()}</strong></div><div class="stat"><span>audio token</span><strong>${(Number(usage.audioInputTokens || 0) + Number(usage.audioOutputTokens || 0)).toLocaleString()}</strong></div></div>
+        <div class="budget-fields"><label>月額上限<input name="monthlyBudgetJpy" type="number" min="100" max="1000000" value="${Number(policy.monthlyBudgetJpy)}" required></label><label>通常安全停止<input name="softStopJpy" type="number" min="1" value="${Number(policy.softStopJpy)}" required></label><label>最終安全停止<input name="hardStopJpy" type="number" min="1" value="${Number(policy.hardStopJpy)}" required></label><label class="checkbox-row"><input name="reserveEnabled" type="checkbox" ${policy.reserveEnabled ? "checked" : ""}> 今月の予備枠を有効にする</label></div>
+        <p class="hint">予算変更・予備枠の解放はこのSecurity Centerだけで行えます。</p><button>安全設定を保存</button>
+      </form>`;
+    }).join("") || "<p>AI Chatの予算設定はありません。</p>";
+    container.querySelectorAll("[data-ai-budget]").forEach((form) => form.addEventListener("submit", saveAiBudget));
+  }
+
+  async function saveAiBudget(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = event.submitter || form.querySelector("button");
+    button.disabled = true;
+    try {
+      await post(`/ai/budgets/${encodeURIComponent(form.dataset.aiBudget)}`, {
+        monthlyBudgetJpy: Number(form.elements.monthlyBudgetJpy.value),
+        softStopJpy: Number(form.elements.softStopJpy.value),
+        hardStopJpy: Number(form.elements.hardStopJpy.value),
+        reserveEnabled: form.elements.reserveEnabled.checked
+      });
+      showMessage("AI Chatの安全設定を更新しました。", false);
+      await loadAiBudgets();
+    } catch (error) { showMessage(error.message, true); }
+    finally { button.disabled = false; }
   }
 
   async function loadIdentities() {

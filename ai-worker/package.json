@@ -1,0 +1,14 @@
+{
+  "name": "t-room-ai-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/ai-domain.js",
+    "test": "node --test test/*.test.js",
+    "dev": "wrangler dev --local --port 8793 -c wrangler.jsonc -c ../security-worker/wrangler.jsonc",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.121.0"
+  }
+}

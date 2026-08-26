@@ -73,7 +73,7 @@ test("unknown audit event types use an explicit fallback", () => {
 });
 
 test("service, outcome and authentication values keep canonical values behind Japanese labels", () => {
-  assert.deepEqual(["security", "cloud", "diary", "billing"].map(display.serviceLabel), ["Security Center", "T-Cloud", "日記", "請求書"]);
+  assert.deepEqual(["security", "cloud", "diary", "billing", "ai"].map(display.serviceLabel), ["Security Center", "T-Cloud", "日記", "請求書", "AI Chat"]);
   assert.deepEqual(["success", "failure", "blocked", "cancelled", "info"].map(display.outcomeLabel), ["成功", "失敗", "停止", "キャンセル", "情報"]);
   assert.deepEqual(["password", "passkey", "system"].map(display.authMethodLabel), ["パスワード", "パスキー", "システム"]);
   const filterValues = display.eventGroups().flatMap((group) => group.options.map((item) => item.value));

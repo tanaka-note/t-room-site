@@ -25,7 +25,8 @@
   "services": [
     { "binding": "CLOUD_AUTH", "service": "t-room-cloud", "entrypoint": "SecurityIntegration" },
     { "binding": "DIARY_AUTH", "service": "t-room-diary", "entrypoint": "SecurityIntegration" },
-    { "binding": "BILLING_AUTH", "service": "t-room-billing", "entrypoint": "SecurityIntegration" }
+    { "binding": "BILLING_AUTH", "service": "t-room-billing", "entrypoint": "SecurityIntegration" },
+    { "binding": "AI_AUTH", "service": "t-room-ai", "entrypoint": "SecurityIntegration" }
   ],
   "queues": {
     "consumers": [
@@ -44,7 +45,7 @@
   "vars": {
     "RP_ID": "tanaka-note.com",
     "RP_NAME": "T-ROOM",
-    "EXPECTED_ORIGIN": "https://tanaka-note.com",
+    "EXPECTED_ORIGIN": "https://tanaka-note.com,android:apk-key-hash:NMjpYcsdNTFmflccwgJaOy4a_EgajHQS3t4SiP_lBVY",
     "MAX_INVITE_DAYS": "30",
     "IDENTITY_SESSION_TTL_SECONDS": "600",
     "ADMIN_SESSION_TTL_SECONDS": "3600",

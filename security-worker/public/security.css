@@ -97,6 +97,10 @@ output { overflow-wrap: anywhere; }
 .setup-notice p { margin: .35rem 0 1rem; }
 .setup-actions { margin-bottom: 0; }
 .setup-notice form { margin-top: 14px; max-width: 560px; }
+.ai-budget-card { margin-top: 16px; }
+.budget-fields { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+.checkbox-row { grid-column: 1 / -1; display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.checkbox-row input { width: auto; }
 @media (max-width: 760px) {
   .split { grid-template-columns: 1fr; }
   .filters { grid-template-columns: 1fr 1fr; }
@@ -106,6 +110,7 @@ output { overflow-wrap: anywhere; }
   .card { padding: 16px; }
   .audit-heading { display: grid; gap: 3px; }
   .audit-heading time { order: -1; }
+  .budget-fields { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .filters { grid-template-columns: 1fr; }
