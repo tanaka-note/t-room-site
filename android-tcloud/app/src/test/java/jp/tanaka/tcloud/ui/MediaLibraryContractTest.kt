@@ -35,10 +35,10 @@ class MediaLibraryContractTest {
     }
 
     @Test
-    fun versionIs120AndCredentialsAreNotEmbedded() {
+    fun versionIs130AndCredentialsAreNotEmbedded() {
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionCode = 29"))
-        assertTrue(gradle.contains("versionName = \"1.2.0\""))
+        assertTrue(gradle.contains("versionCode = 30"))
+        assertTrue(gradle.contains("versionName = \"1.3.0\""))
         assertFalse(gradle.contains("YOUTUBE_API_KEY"))
     }
 

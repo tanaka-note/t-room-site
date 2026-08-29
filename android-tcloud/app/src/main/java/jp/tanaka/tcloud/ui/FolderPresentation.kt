@@ -9,6 +9,12 @@ internal data class FolderSortState(
     val usesTypeDefaults: Boolean,
 )
 
+internal fun folderNavigationDirection(previousDepth: Int, currentDepth: Int): Int = when {
+    currentDepth > previousDepth -> 1
+    currentDepth < previousDepth -> -1
+    else -> 0
+}
+
 internal fun defaultFolderSort(folderId: Long?): FolderSortState = if (folderId == null) {
     FolderSortState(mode = "name-asc", usesTypeDefaults = true)
 } else {
@@ -62,22 +68,26 @@ internal fun sortFiles(
 internal fun usesSquareFileCard(file: CloudFile): Boolean =
     file.mediaKind == "image" || file.mediaKind == "video"
 
-internal fun groupFilesForGridDisplay(files: List<CloudFile>): List<List<CloudFile>> {
+internal fun groupFilesForGridDisplay(files: List<CloudFile>, columns: Int = 2): List<List<CloudFile>> {
+    require(columns >= 2)
     val rows = mutableListOf<List<CloudFile>>()
-    var pendingMedia: CloudFile? = null
+    val pendingMedia = mutableListOf<CloudFile>()
     files.forEach { file ->
         if (!usesSquareFileCard(file)) {
-            pendingMedia?.let { rows += listOf(it) }
-            pendingMedia = null
+            if (pendingMedia.isNotEmpty()) {
+                rows += pendingMedia.toList()
+                pendingMedia.clear()
+            }
             rows += listOf(file)
-        } else if (pendingMedia == null) {
-            pendingMedia = file
         } else {
-            rows += listOf(pendingMedia, file)
-            pendingMedia = null
+            pendingMedia += file
+            if (pendingMedia.size == columns) {
+                rows += pendingMedia.toList()
+                pendingMedia.clear()
+            }
         }
     }
-    pendingMedia?.let { rows += listOf(it) }
+    if (pendingMedia.isNotEmpty()) rows += pendingMedia.toList()
     return rows
 }
 

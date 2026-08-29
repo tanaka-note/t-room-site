@@ -9,9 +9,18 @@
 - パッケージ名: `jp.tanaka.tcloud`
 - 対応OS: Android 8.0（API 26）以降
 - 対象SDK: Android 16（API 36）
-- アプリ版: `1.2.0`（versionCode 29）
+- アプリ版: `1.3.0`（versionCode 30）
 
 Android 8.0まで対応範囲を広げつつ、API 36を対象にして新しいAndroidのセキュリティ要件へ対応します。
+
+### 1.3.0 Visual / Motion refresh
+
+- StorageとPlayerで共通の色・余白・角丸・タイポグラフィ・モーション規則を採用
+- フォルダ／ファイル一覧を、強い枠線ではなく余白とtonal surfaceで整理する表示へ刷新
+- フォルダ階層の前進／後退、Storage／Player切り替え、選択・並び替え・絞り込みへ短い自然なモーションを追加
+- 検索、フィルター、Empty State、ローディング、メディアキューの視覚階層を統一
+
+暗号化・復号、認証、通信、データモデル、T-Cloud／YouTube／端末メディアの機能仕様は1.2.0から変更していません。
 
 ## 実装済みの基盤
 

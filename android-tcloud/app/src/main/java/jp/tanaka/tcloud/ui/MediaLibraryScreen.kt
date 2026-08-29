@@ -18,8 +18,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,22 +27,24 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
@@ -52,10 +54,10 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -65,10 +67,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -79,6 +82,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -190,10 +197,11 @@ internal fun MediaLibraryScreen(
         emptyList()
     }
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = { Text("T-Cloud Player") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Storageへ戻る") } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Storageへ戻る") } },
                 actions = {
                     if (mediaType == LibraryMediaType.VIDEO) {
                         IconButton(onClick = { youtubeDialog = true }) { Icon(Icons.Default.Add, "YouTube URLを登録") }
@@ -203,47 +211,78 @@ internal fun MediaLibraryScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            TabRow(selectedTabIndex = if (mediaType == LibraryMediaType.AUDIO) 0 else 1) {
-                Tab(mediaType == LibraryMediaType.AUDIO, { mediaType = LibraryMediaType.AUDIO }, text = { Text("音楽") })
-                Tab(mediaType == LibraryMediaType.VIDEO, { mediaType = LibraryMediaType.VIDEO }, text = { Text("動画") })
-            }
-            OutlinedTextField(
-                value = query,
-                onValueChange = {
-                    query = it
-                    if (mediaType == LibraryMediaType.VIDEO) onSearchYouTube(it)
-                },
-                label = { Text("端末・T-Cloud・YouTubeを検索") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            )
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 12.dp)) {
-                item { FilterChip(source == null, { source = null }, label = { Text("すべて") }) }
-                items(MediaSourceType.entries) { item ->
-                    FilterChip(source == item, { source = item }, label = { Text(item.sourceLabel()) })
-                }
-            }
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 12.dp)) {
-                items(sections) { (value, label) ->
-                    AssistChip(onClick = { section = value }, label = {
-                        Text(label, fontWeight = if (section == value) FontWeight.Bold else FontWeight.Normal)
-                    })
-                }
-            }
-            if (state.refreshingLocal || state.refreshingCloud || state.refreshingYouTube || state.searchingYouTube) {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-            if (!state.localPermissionGranted) {
-                Row(
-                    Modifier.fillMaxWidth().padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+        BoxWithConstraints(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+            Column(
+                Modifier
+                    .widthIn(max = TCloudDimens.ContentMaxWidth)
+                    .fillMaxSize()
+                    .padding(horizontal = if (maxWidth < 600.dp) 12.dp else TCloudDimens.ScreenPadding),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 ) {
-                    Text("端末メディア権限なし（T-Cloud / YouTubeは利用できます）", modifier = Modifier.weight(1f))
-                    TextButton(onClick = onRequestLocalPermission) { Text("許可") }
+                    PrimaryTabRow(
+                        selectedTabIndex = if (mediaType == LibraryMediaType.AUDIO) 0 else 1,
+                        containerColor = Color.Transparent,
+                        divider = {},
+                    ) {
+                        Tab(mediaType == LibraryMediaType.AUDIO, { mediaType = LibraryMediaType.AUDIO }, text = { Text("音楽") })
+                        Tab(mediaType == LibraryMediaType.VIDEO, { mediaType = LibraryMediaType.VIDEO }, text = { Text("動画") })
+                    }
                 }
-            }
+                TCloudSearchField(
+                    value = query,
+                    onValueChange = {
+                        query = it
+                        if (mediaType == LibraryMediaType.VIDEO) onSearchYouTube(it)
+                    },
+                    placeholder = "端末・T-Cloud・YouTubeを検索",
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) {
+                    item { FilterChip(source == null, { source = null }, label = { Text("すべて") }) }
+                    items(MediaSourceType.entries) { item ->
+                        FilterChip(source == item, { source = item }, label = { Text(item.sourceLabel()) })
+                    }
+                }
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                ) {
+                    items(sections) { (value, label) ->
+                        FilterChip(
+                            selected = section == value,
+                            onClick = { section = value },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                AnimatedVisibility(
+                    visible = state.refreshingLocal || state.refreshingCloud || state.refreshingYouTube || state.searchingYouTube,
+                ) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                AnimatedVisibility(visible = !state.localPermissionGranted) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text("端末メディア権限なし（T-Cloud / YouTubeは利用できます）", modifier = Modifier.weight(1f))
+                            TextButton(onClick = onRequestLocalPermission) { Text("許可") }
+                        }
+                    }
+                }
             if (state.youtubeSearchError != null && mediaType == LibraryMediaType.VIDEO && query.trim().length >= 2 &&
                 (source == null || source == MediaSourceType.YOUTUBE)
             ) {
@@ -270,37 +309,44 @@ internal fun MediaLibraryScreen(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            if (searchGroups.isNotEmpty()) {
-                SearchMediaItemsList(
-                    searchGroups,
-                    onOpen,
-                    onLoadArtwork,
-                    onFavorite,
-                    onWatchLater,
-                    { playlistItem = it },
-                    { tagItem = it },
-                    searchingYouTube = state.searchingYouTube,
-                    youtubeQueryReady = query.trim().length >= 2,
-                    youtubeSearchFailed = state.youtubeSearchError != null,
-                )
-            } else if (section == LibrarySection.PLAYLIST) {
-                PlaylistList(state.playlists, onOpen, onLoadArtwork)
-            } else if (section == LibrarySection.ARTIST || section == LibrarySection.ALBUM) {
-                GroupedMediaList(displayed, section, onOpen, onLoadArtwork, onFavorite, onWatchLater, { playlistItem = it }, { tagItem = it })
-            } else {
-                MediaItemsList(
-                    displayed,
-                    onOpen,
-                    onLoadArtwork,
-                    onFavorite,
-                    onWatchLater,
-                    { playlistItem = it },
-                    { tagItem = it },
-                    if (section == LibrarySection.RECOMMENDED) state.recommendations.associate { it.item.stableId to it.reason } else emptyMap(),
-                )
-            }
-            if (mediaType == LibraryMediaType.AUDIO) {
-                AudioQueueControls(playbackManager)
+                key(mediaType, source, section, query.isNotBlank()) {
+                    TCloudEntrance(
+                        direction = if (mediaType == LibraryMediaType.VIDEO) 1 else -1,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        when {
+                            searchGroups.isNotEmpty() -> SearchMediaItemsList(
+                                searchGroups,
+                                onOpen,
+                                onLoadArtwork,
+                                onFavorite,
+                                onWatchLater,
+                                { playlistItem = it },
+                                { tagItem = it },
+                                searchingYouTube = state.searchingYouTube,
+                                youtubeQueryReady = query.trim().length >= 2,
+                                youtubeSearchFailed = state.youtubeSearchError != null,
+                            )
+                            section == LibrarySection.PLAYLIST ->
+                                PlaylistList(state.playlists, onOpen, onLoadArtwork)
+                            section == LibrarySection.ARTIST || section == LibrarySection.ALBUM ->
+                                GroupedMediaList(displayed, section, onOpen, onLoadArtwork, onFavorite, onWatchLater, { playlistItem = it }, { tagItem = it })
+                            else -> MediaItemsList(
+                                displayed,
+                                onOpen,
+                                onLoadArtwork,
+                                onFavorite,
+                                onWatchLater,
+                                { playlistItem = it },
+                                { tagItem = it },
+                                if (section == LibrarySection.RECOMMENDED) state.recommendations.associate { it.item.stableId to it.reason } else emptyMap(),
+                            )
+                        }
+                    }
+                }
+                if (mediaType == LibraryMediaType.AUDIO) {
+                    AudioQueueControls(playbackManager)
+                }
             }
         }
     }
@@ -322,7 +368,7 @@ internal fun MediaLibraryScreen(
 }
 
 @Composable
-private fun ColumnScope.SearchMediaItemsList(
+private fun SearchMediaItemsList(
     groups: List<MediaSearchGroup>,
     onOpen: (PlayableMediaItem) -> Unit,
     onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
@@ -334,7 +380,7 @@ private fun ColumnScope.SearchMediaItemsList(
     youtubeQueryReady: Boolean,
     youtubeSearchFailed: Boolean,
 ) {
-    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+    LazyColumn(Modifier.fillMaxSize()) {
         groups.forEach { group ->
             item(key = "search-header:${group.label}") {
                 Text(
@@ -364,14 +410,23 @@ private fun ColumnScope.SearchMediaItemsList(
                 }
             }
             items(group.items, key = { "${group.label}:${it.stableId}" }) { item ->
-                MediaItemRow(item, onOpen, onLoadArtwork, onFavorite, onWatchLater, onPlaylist, onTags)
+                MediaItemRow(
+                    item,
+                    onOpen,
+                    onLoadArtwork,
+                    onFavorite,
+                    onWatchLater,
+                    onPlaylist,
+                    onTags,
+                    modifier = Modifier.animateItem(),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ColumnScope.MediaItemsList(
+private fun MediaItemsList(
     items: List<PlayableMediaItem>,
     onOpen: (PlayableMediaItem) -> Unit,
     onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
@@ -382,10 +437,14 @@ private fun ColumnScope.MediaItemsList(
     recommendationReasons: Map<String, String> = emptyMap(),
 ) {
     if (items.isEmpty()) {
-        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Text("該当するメディアはありません") }
+        TCloudEmptyState(
+            icon = Icons.Default.LibraryMusic,
+            title = "メディアはありません",
+            description = "保存元やカテゴリを変えてお試しください。",
+        )
         return
     }
-    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+    LazyColumn(Modifier.fillMaxSize()) {
         items(items, key = PlayableMediaItem::stableId) { item ->
             MediaItemRow(
                 item,
@@ -395,6 +454,7 @@ private fun ColumnScope.MediaItemsList(
                 onWatchLater,
                 onPlaylist,
                 onTags,
+                Modifier.animateItem(),
                 recommendationReasons[item.stableId],
             )
         }
@@ -410,40 +470,71 @@ private fun MediaItemRow(
     onWatchLater: (PlayableMediaItem, Boolean) -> Unit,
     onPlaylist: (PlayableMediaItem) -> Unit,
     onTags: (PlayableMediaItem) -> Unit,
+    modifier: Modifier = Modifier,
     recommendationReason: String? = null,
 ) {
-    Row(
-        Modifier.fillMaxWidth().clickable { onOpen(item) }.padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    var menuExpanded by remember(item.stableId) { mutableStateOf(false) }
+    Surface(
+        modifier = modifier.fillMaxWidth().animateContentSize(
+            tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
+        ),
+        color = Color.Transparent,
+        shape = RoundedCornerShape(TCloudDimens.ItemRadius),
     ) {
-        MediaArtwork(item, onLoadArtwork)
-        Spacer(Modifier.size(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-            Text(
-                listOf(item.artist.ifBlank { item.channel }, item.album, item.source.sourceLabel(), formatMediaDuration(item.durationMs))
-                    .filter(String::isNotBlank).joinToString(" ・ "),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            recommendationReason?.let { reason ->
-                Text(reason, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        Row(
+            Modifier.fillMaxWidth().clickable { onOpen(item) }.padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MediaArtwork(item, onLoadArtwork)
+            Spacer(Modifier.size(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(
+                    listOf(item.artist.ifBlank { item.channel }, item.album, item.source.sourceLabel(), formatMediaDuration(item.durationMs))
+                        .filter(String::isNotBlank).joinToString(" ・ "),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                recommendationReason?.let { reason ->
+                    Text(reason, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            IconButton(onClick = { onFavorite(item, !item.favorite) }) {
+                Icon(
+                    if (item.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    "お気に入り",
+                    tint = if (item.favorite) Color(0xFFD9344B) else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (item.mediaType == LibraryMediaType.VIDEO) {
+                IconButton(onClick = { onWatchLater(item, !item.watchLater) }) {
+                    Icon(
+                        if (item.watchLater) Icons.Default.WatchLater else Icons.Outlined.WatchLater,
+                        "あとで見る",
+                    )
+                }
+            }
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(Icons.Default.MoreVert, "その他の操作")
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("プレイリストへ追加") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
+                        onClick = { menuExpanded = false; onPlaylist(item) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("タグを編集") },
+                        leadingIcon = { Icon(Icons.Default.MoreVert, contentDescription = null) },
+                        onClick = { menuExpanded = false; onTags(item) },
+                    )
+                }
             }
         }
-        IconButton(onClick = { onFavorite(item, !item.favorite) }) {
-            Icon(if (item.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "お気に入り", tint = if (item.favorite) Color(0xFFE53935) else Color.Unspecified)
-        }
-        if (item.mediaType == LibraryMediaType.VIDEO) {
-            IconButton(onClick = { onWatchLater(item, !item.watchLater) }) {
-                Icon(if (item.watchLater) Icons.Default.WatchLater else Icons.Outlined.WatchLater, "あとで見る")
-            }
-        }
-        IconButton(onClick = { onPlaylist(item) }) { Icon(Icons.Default.PlaylistAdd, "プレイリストへ追加") }
-        IconButton(onClick = { onTags(item) }) { Icon(Icons.Default.MoreVert, "タグを編集") }
     }
-    HorizontalDivider()
 }
 
 internal fun formatMediaDuration(durationMs: Long): String {
@@ -456,7 +547,7 @@ internal fun formatMediaDuration(durationMs: Long): String {
 }
 
 @Composable
-private fun ColumnScope.GroupedMediaList(
+private fun GroupedMediaList(
     items: List<PlayableMediaItem>,
     section: LibrarySection,
     onOpen: (PlayableMediaItem) -> Unit,
@@ -467,7 +558,7 @@ private fun ColumnScope.GroupedMediaList(
     onTags: (PlayableMediaItem) -> Unit,
 ) {
     val groups = items.groupBy { if (section == LibrarySection.ARTIST) it.artist.ifBlank { "不明なアーティスト" } else it.album.ifBlank { "不明なアルバム" } }
-    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+    LazyColumn(Modifier.fillMaxSize()) {
         groups.toSortedMap().forEach { (name, group) ->
             item { Text(name, fontWeight = FontWeight.Bold, modifier = Modifier.padding(12.dp)) }
             items(group, key = PlayableMediaItem::stableId) { item ->
@@ -476,7 +567,7 @@ private fun ColumnScope.GroupedMediaList(
                     Spacer(Modifier.size(10.dp))
                     Text(item.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     IconButton(onClick = { onFavorite(item, !item.favorite) }) { Icon(if (item.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "お気に入り") }
-                    IconButton(onClick = { onPlaylist(item) }) { Icon(Icons.Default.PlaylistAdd, "プレイリストへ追加") }
+                    IconButton(onClick = { onPlaylist(item) }) { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "プレイリストへ追加") }
                     IconButton(onClick = { onTags(item) }) { Icon(Icons.Default.MoreVert, "タグを編集") }
                 }
             }
@@ -485,8 +576,8 @@ private fun ColumnScope.GroupedMediaList(
 }
 
 @Composable
-private fun ColumnScope.PlaylistList(playlists: List<MediaPlaylist>, onOpen: (PlayableMediaItem) -> Unit, onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?) {
-    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+private fun PlaylistList(playlists: List<MediaPlaylist>, onOpen: (PlayableMediaItem) -> Unit, onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?) {
+    LazyColumn(Modifier.fillMaxSize()) {
         playlists.forEach { playlist ->
             item { Text(playlist.name, fontWeight = FontWeight.Bold, modifier = Modifier.padding(12.dp)) }
             items(playlist.items, key = { "${playlist.id}:${it.stableId}" }) { item ->
@@ -534,7 +625,12 @@ private fun AudioQueueControls(manager: TCloudPlaybackManager) {
         }
     }
     if (manager.currentStableId == null) return
-    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Text(manager.currentTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
         Slider(
             value = position.coerceIn(0f, duration),
@@ -555,6 +651,7 @@ private fun AudioQueueControls(manager: TCloudPlaybackManager) {
                 manager.setPlaybackMode(when (mode) { PlaybackMode.OFF -> PlaybackMode.REPEAT_ALL; PlaybackMode.REPEAT_ALL -> PlaybackMode.REPEAT_ONE; PlaybackMode.REPEAT_ONE -> PlaybackMode.OFF })
             }) { Icon(if (mode == PlaybackMode.REPEAT_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat, "リピート", tint = if (mode == PlaybackMode.OFF) Color.Unspecified else MaterialTheme.colorScheme.primary) }
         }
+    }
     }
 }
 
@@ -636,7 +733,7 @@ internal fun LibraryVideoPlayerScreen(
     Column(Modifier.fillMaxSize()) {
         if (!fullscreen && !pictureInPicture) TopAppBar(
             title = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            navigationIcon = { IconButton(onClick = { onClose(player.currentPosition, player.duration) }) { Icon(Icons.Default.ArrowBack, "戻る") } },
+            navigationIcon = { IconButton(onClick = { onClose(player.currentPosition, player.duration) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
             actions = {
                 IconButton(onClick = {
                     fullscreen = true
@@ -682,7 +779,7 @@ internal fun YouTubePlayerScreen(item: PlayableMediaItem, applicationVisible: Bo
     DisposableEffect(webView) { onDispose { webView.loadUrl("about:blank"); webView.stopLoading(); webView.destroy() } }
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Default.ArrowBack, "戻る") } })
+        TopAppBar(title = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } })
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
     }
 }

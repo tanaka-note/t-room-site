@@ -7,6 +7,13 @@ import org.junit.Test
 
 class FolderPresentationTest {
     @Test
+    fun `folder navigation motion follows hierarchy direction`() {
+        assertEquals(1, folderNavigationDirection(previousDepth = 1, currentDepth = 2))
+        assertEquals(-1, folderNavigationDirection(previousDepth = 3, currentDepth = 2))
+        assertEquals(0, folderNavigationDirection(previousDepth = 2, currentDepth = 2))
+    }
+
+    @Test
     fun `root defaults to folder name ascending`() {
         val sorted = sortFolders(
             listOf(folder(2, "Zoo"), folder(1, "Alpha")),
@@ -66,6 +73,19 @@ class FolderPresentationTest {
 
         assertEquals(listOf(listOf(1L), listOf(2L), listOf(3L, 4L), listOf(5L)), rows.map { row -> row.map { it.id } })
         assertEquals(files.map { it.id }, rows.flatten().map { it.id })
+    }
+
+    @Test
+    fun `wide grid can group three media cards without changing order`() {
+        val files = listOf(
+            file(1, "one.jpg", 1, "image/jpeg", "image"),
+            file(2, "two.mp4", 1, "video/mp4", "video"),
+            file(3, "three.jpg", 1, "image/jpeg", "image"),
+            file(4, "four.txt", 1, "text/plain", "document"),
+        )
+        val rows = groupFilesForGridDisplay(files, columns = 3)
+
+        assertEquals(listOf(listOf(1L, 2L, 3L), listOf(4L)), rows.map { row -> row.map { it.id } })
     }
 
     private fun folder(id: Long, name: String) = CloudFolder(

@@ -35,6 +35,7 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -46,6 +47,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadForOffline
@@ -75,6 +78,7 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.SelectAll
@@ -97,6 +101,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -116,6 +121,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -127,6 +133,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
@@ -178,13 +185,18 @@ import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.transfer.TransferStatus
 import jp.tanaka.tcloud.transfer.FolderTransferFailureNotice
 import kotlinx.coroutines.delay
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 
-private val TCloudBlue = Color(0xFF16756D)
-private val TCloudBlueDark = Color(0xFF0F5B55)
-private val TCloudBackground = Color(0xFFF4F7F8)
+private val TCloudBlue = TCloudColors.Primary
+private val TCloudBlueDark = TCloudColors.PrimaryStrong
+private val TCloudBackground = TCloudColors.AppBackground
 private val TCloudLine = Color(0xFFDCE2E7)
-private val TCloudMuted = Color(0xFF68737D)
-private val TCloudSelection = Color(0xFFE4F3F0)
+private val TCloudMuted = TCloudColors.MutedText
+private val TCloudSelection = TCloudColors.Selection
 
 internal fun playerEntryVisible(currentFolderId: Long?, selectionMode: Boolean): Boolean =
     currentFolderId == null && !selectionMode
@@ -516,13 +528,7 @@ fun TCloudApp(
         }
     }
 
-    MaterialTheme(
-        colorScheme = MaterialTheme.colorScheme.copy(
-            primary = TCloudBlue,
-            background = TCloudBackground,
-            surface = Color.White,
-        ),
-    ) {
+    TCloudTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = TCloudBackground) {
             when {
                 state.restoring -> LoadingScreen("ログイン状態を確認しています")
@@ -542,22 +548,24 @@ fun TCloudApp(
                     pictureInPicture = pictureInPicture,
                     onClose = viewModel::closeLibraryMedia,
                 )
-                state.showingPlayerLibrary -> MediaLibraryScreen(
-                    state = mediaLibraryState,
-                    playbackManager = playbackManager,
-                    onBack = viewModel::closePlayerLibrary,
-                    onRefresh = viewModel::refreshMediaLibrary,
-                    onRequestLocalPermission = { localMediaPermissionLauncher.launch(requiredLocalMediaPermissions()) },
-                    onOpen = ::requestOpenLibraryMedia,
-                    onLoadArtwork = viewModel::loadMediaArtwork,
-                    onSaveYouTube = viewModel::saveYouTube,
-                    onSearchYouTube = viewModel::searchYouTube,
-                    onFavorite = viewModel::setMediaFavorite,
-                    onWatchLater = viewModel::setMediaWatchLater,
-                    onCreatePlaylist = viewModel::createMediaPlaylist,
-                    onAddToPlaylist = viewModel::addMediaToPlaylist,
-                    onSetTags = viewModel::setMediaTags,
-                )
+                state.showingPlayerLibrary -> TCloudEntrance(direction = 1) {
+                    MediaLibraryScreen(
+                        state = mediaLibraryState,
+                        playbackManager = playbackManager,
+                        onBack = viewModel::closePlayerLibrary,
+                        onRefresh = viewModel::refreshMediaLibrary,
+                        onRequestLocalPermission = { localMediaPermissionLauncher.launch(requiredLocalMediaPermissions()) },
+                        onOpen = ::requestOpenLibraryMedia,
+                        onLoadArtwork = viewModel::loadMediaArtwork,
+                        onSaveYouTube = viewModel::saveYouTube,
+                        onSearchYouTube = viewModel::searchYouTube,
+                        onFavorite = viewModel::setMediaFavorite,
+                        onWatchLater = viewModel::setMediaWatchLater,
+                        onCreatePlaylist = viewModel::createMediaPlaylist,
+                        onAddToPlaylist = viewModel::addMediaToPlaylist,
+                        onSetTags = viewModel::setMediaTags,
+                    )
+                }
                 state.selectedFile?.mediaKind == "image" -> ImageViewerScreen(
                     file = checkNotNull(state.selectedFile),
                     bitmap = state.imageBitmap,
@@ -610,10 +618,11 @@ fun TCloudApp(
                     onDeleteSelection = viewModel::deleteOfflineSelection,
                     onBack = { viewModel.goBack() },
                 )
-                else -> FolderScreen(
+                else -> TCloudEntrance(direction = -1) { FolderScreen(
                     accountName = state.session?.accountName.orEmpty(),
                     currentName = state.page?.currentFolder?.name ?: "ファイル",
                     currentFolderId = state.page?.currentFolder?.id,
+                    navigationDepth = state.folderStack.size,
                     canGoBack = state.folderStack.isNotEmpty(),
                     canUpload = state.session?.canUpload == true && state.page?.currentFolder != null,
                     canManageItems = state.session?.isAdmin == true ||
@@ -673,7 +682,7 @@ fun TCloudApp(
                     onSearch = viewModel::search,
                     onCancelTransfer = viewModel::cancelTransfer,
                     onDismissTransferFailure = viewModel::dismissTransferFailureNotice,
-                )
+                ) }
             }
 
             state.pendingUnlock?.let { folder ->
@@ -1005,6 +1014,7 @@ private fun FolderScreen(
     accountName: String,
     currentName: String,
     currentFolderId: Long?,
+    navigationDepth: Int,
     canGoBack: Boolean,
     canUpload: Boolean,
     canManageItems: Boolean,
@@ -1058,6 +1068,7 @@ private fun FolderScreen(
     val selectionCount = selectedFileIds.size + selectedFolderIds.size
     val selectionMode = selectionCount > 0
     var selectionActionsExpanded by remember { mutableStateOf(false) }
+    var storageActionsExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember(currentFolderId) { mutableStateOf("") }
     var kindFilter by remember(currentFolderId) { mutableStateOf("all") }
     LaunchedEffect(searchQuery, kindFilter, currentFolderId) {
@@ -1136,8 +1147,24 @@ private fun FolderScreen(
             kindFilter == "all" || file.mediaKind == kindFilter
         }
     }
+    var previousDepth by remember { mutableIntStateOf(navigationDepth) }
+    var transitionDirection by remember { mutableIntStateOf(0) }
+    val transitionProgress = remember { Animatable(1f) }
+    val transitionShift = with(LocalDensity.current) { 28.dp.toPx() }
+    LaunchedEffect(currentFolderId, navigationDepth) {
+        val direction = folderNavigationDirection(previousDepth, navigationDepth)
+        previousDepth = navigationDepth
+        if (direction != 0) {
+            transitionDirection = direction
+            transitionProgress.snapTo(0f)
+            transitionProgress.animateTo(
+                1f,
+                tween(TCloudMotion.Standard, easing = TCloudMotion.NaturalEasing),
+            )
+        }
+    }
     Scaffold(
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
@@ -1248,39 +1275,72 @@ private fun FolderScreen(
                             }
                         }
                     } else {
-                    if (playerEntryVisible(currentFolderId, selectionMode)) {
-                        IconButton(onClick = onOpenPlayer, enabled = !busy) {
-                            Icon(Icons.Default.PlayCircle, contentDescription = "T-Cloud Playerを開く")
+                        if (playerEntryVisible(currentFolderId, selectionMode)) {
+                            IconButton(onClick = onOpenPlayer, enabled = !busy) {
+                                Icon(Icons.Default.PlayCircle, contentDescription = "T-Cloud Playerを開く")
+                            }
                         }
-                    }
-                    IconButton(onClick = onOpenSettings, enabled = !busy) {
-                        Icon(Icons.Default.SettingsIcon, contentDescription = "アプリ設定")
-                    }
-                    IconButton(onClick = onOpenOffline, enabled = !busy) {
-                        Icon(Icons.Default.OfflinePin, contentDescription = "端末保存")
-                    }
-                    if (canUpload) {
-                        IconButton(onClick = onCreateFolder, enabled = !busy) {
-                            Icon(Icons.Default.CreateNewFolder, contentDescription = "新しいフォルダ")
+                        if (canUpload) {
+                            IconButton(onClick = onUpload, enabled = !busy) {
+                                Icon(Icons.Default.Add, contentDescription = "ファイルをアップロード")
+                            }
                         }
-                        IconButton(onClick = onUpload, enabled = !busy) {
-                            Icon(Icons.Default.Add, contentDescription = "ファイルをアップロード")
+                        IconButton(onClick = onOpenSettings, enabled = !busy) {
+                            Icon(Icons.Default.SettingsIcon, contentDescription = "アプリ設定")
                         }
-                    }
-                    IconButton(onClick = onLogout, enabled = !busy) {
-                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "ログアウト")
-                    }
+                        Box {
+                            IconButton(onClick = { storageActionsExpanded = true }, enabled = !busy) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "その他の操作")
+                            }
+                            DropdownMenu(
+                                expanded = storageActionsExpanded,
+                                onDismissRequest = { storageActionsExpanded = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("端末保存") },
+                                    leadingIcon = { Icon(Icons.Default.OfflinePin, contentDescription = null) },
+                                    onClick = { storageActionsExpanded = false; onOpenOffline() },
+                                )
+                                if (canUpload) {
+                                    DropdownMenuItem(
+                                        text = { Text("新しいフォルダ") },
+                                        leadingIcon = { Icon(Icons.Default.CreateNewFolder, contentDescription = null) },
+                                        onClick = { storageActionsExpanded = false; onCreateFolder() },
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("ログアウト") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
+                                    onClick = { storageActionsExpanded = false; onLogout() },
+                                )
+                            }
+                        }
                     }
                 },
             )
         },
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
+            val gridColumnCount = when {
+                maxWidth >= 900.dp -> 4
+                maxWidth >= 680.dp -> 3
+                else -> 2
+            }
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .widthIn(max = TCloudDimens.ContentMaxWidth)
+                    .fillMaxSize()
+                    .align(Alignment.TopCenter)
+                    .graphicsLayer {
+                        translationX = transitionDirection * transitionShift * (1f - transitionProgress.value)
+                        alpha = 0.84f + (0.16f * transitionProgress.value)
+                    },
+                contentPadding = PaddingValues(
+                    horizontal = if (maxWidth < 600.dp) TCloudDimens.CompactScreenPadding else TCloudDimens.ScreenPadding,
+                    vertical = 12.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(TCloudDimens.ItemSpacing),
             ) {
                 item(key = "toolbar") {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1288,35 +1348,27 @@ private fun FolderScreen(
                         transferFailureNotices.forEach { notice ->
                             TransferFailureNoticeCard(notice, onDismissTransferFailure)
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                        ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf(
                                 "all" to "すべて",
                                 "image" to "写真",
                                 "video" to "動画",
                                 "audio" to "音楽",
                             ).forEach { (kind, label) ->
-                                TextButton(onClick = { kindFilter = kind }, enabled = !busy) {
-                                    Text(
-                                        label,
-                                        color = if (kindFilter == kind) TCloudBlueDark else TCloudMuted,
-                                        fontWeight = if (kindFilter == kind) FontWeight.Bold else FontWeight.Normal,
-                                    )
-                                }
+                                FilterChip(
+                                    selected = kindFilter == kind,
+                                    onClick = { kindFilter = kind },
+                                    enabled = !busy,
+                                    label = { Text(label) },
+                                    modifier = Modifier.weight(1f),
+                                )
                             }
                         }
-                        OutlinedTextField(
+                        TCloudSearchField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            leadingIcon = { Text("⌕", color = TCloudMuted) },
-                            placeholder = {
-                                Text(if (currentFolderId == null) "すべてのフォルダを検索" else "このフォルダ以下を検索")
-                            },
-                            shape = RoundedCornerShape(10.dp),
+                            placeholder = if (currentFolderId == null) "すべてのフォルダを検索" else "このフォルダ以下を検索",
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1383,10 +1435,14 @@ private fun FolderScreen(
                 }
                 if (filteredFolders.isEmpty() && filteredFiles.isEmpty()) {
                     item {
-                        Text(
-                            if (searchQuery.isBlank()) "表示できるデータはありません。" else "検索結果はありません。",
-                            modifier = Modifier.padding(24.dp),
-                            color = TCloudMuted,
+                        TCloudEmptyState(
+                            icon = if (searchQuery.isBlank()) Icons.Default.FolderOpen else Icons.Default.SearchOff,
+                            title = if (searchQuery.isBlank()) "フォルダは空です" else "検索結果はありません",
+                            description = if (searchQuery.isBlank()) {
+                                "新しいフォルダを作成するか、ファイルをアップロードできます。"
+                            } else {
+                                "検索語やファイル種別を変えてお試しください。"
+                            },
                         )
                     }
                 }
@@ -1402,6 +1458,7 @@ private fun FolderScreen(
                             onRename = onRenameFolder,
                             onMove = onMoveFolder,
                             onShare = onShareFolder,
+                            modifier = Modifier.animateItem(),
                         )
                     }
                     items(filteredFiles, key = { "file-${it.id}" }) { file ->
@@ -1419,6 +1476,7 @@ private fun FolderScreen(
                             onMove = onMove,
                             onRename = onRenameFile,
                             onShare = onShareFile,
+                            modifier = Modifier.animateItem(),
                         )
                     }
                 } else {
@@ -1433,15 +1491,16 @@ private fun FolderScreen(
                             onRename = onRenameFolder,
                             onMove = onMoveFolder,
                             onShare = onShareFolder,
+                            modifier = Modifier.animateItem(),
                         )
                     }
                     items(
-                        groupFilesForGridDisplay(filteredFiles),
+                        groupFilesForGridDisplay(filteredFiles, columns = gridColumnCount),
                         key = { row -> "file-grid-${row.joinToString("-") { it.id.toString() }}" },
                     ) { row ->
                         if (usesSquareFileCard(row.first())) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().animateItem(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 row.forEach { file ->
@@ -1457,7 +1516,7 @@ private fun FolderScreen(
                                         modifier = Modifier.weight(1f),
                                     )
                                 }
-                                if (row.size == 1) Spacer(Modifier.weight(1f))
+                                repeat(gridColumnCount - row.size) { Spacer(Modifier.weight(1f)) }
                             }
                         } else {
                             val file = row.single()
@@ -1475,15 +1534,17 @@ private fun FolderScreen(
                                 onMove = onMove,
                                 onRename = onRenameFile,
                                 onShare = onShareFile,
+                                modifier = Modifier.animateItem(),
                             )
                         }
                     }
                 }
             }
             if (busy) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = TCloudBlue)
-                }
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+                    color = TCloudBlue,
+                )
             }
         }
     }
@@ -1561,15 +1622,19 @@ private fun TCloudSortButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val containerColor by animateColorAsState(
+        if (selected) TCloudSelection else MaterialTheme.colorScheme.surfaceVariant,
+        tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
+        label = "sort-selection",
+    )
     Surface(
         onClick = onClick,
         modifier = modifier,
-        shape = RoundedCornerShape(9.dp),
-        color = if (selected) TCloudSelection else Color.White,
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) Color(0xFF9BCBC5) else TCloudLine),
+        shape = RoundedCornerShape(20.dp),
+        color = containerColor,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 9.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -2221,14 +2286,15 @@ private fun FolderGridCard(
     onToggleSelection: (CloudFolder) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val containerColor by animateColorAsState(
+        if (selected) TCloudSelection else MaterialTheme.colorScheme.surface,
+        tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
+        label = "folder-grid-selection",
+    )
     Surface(
-        color = if (selected) TCloudSelection else Color.White,
-        shape = RoundedCornerShape(14.dp),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (selected) Color(0xFF8FBAB5) else TCloudLine,
-        ),
-        shadowElevation = if (selected) 0.dp else 1.dp,
+        color = containerColor,
+        shape = RoundedCornerShape(TCloudDimens.ItemRadius),
+        tonalElevation = if (selected) 2.dp else 0.dp,
         modifier = modifier
             .aspectRatio(1f)
             .combinedClickable(
@@ -2240,14 +2306,14 @@ private fun FolderGridCard(
     ) {
         Box(Modifier.fillMaxSize()) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xFFFFF4D8),
+                shape = RoundedCornerShape(18.dp),
+                color = TCloudColors.FolderContainer,
                 modifier = Modifier.align(Alignment.Center).size(78.dp),
             ) {
                 Icon(
                     Icons.Default.Folder,
                     contentDescription = null,
-                    tint = Color(0xFFD79A22),
+                    tint = TCloudColors.FolderIcon,
                     modifier = Modifier.padding(17.dp),
                 )
             }
@@ -2275,11 +2341,14 @@ private fun FolderGridCard(
                     color = TCloudMuted,
                 )
             }
-            if (canManage) {
+            AnimatedVisibility(
+                visible = selectionMode || selected,
+                modifier = Modifier.align(Alignment.TopEnd),
+            ) {
                 Checkbox(
                     checked = selected,
                     onCheckedChange = { onToggleSelection(folder) },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(5.dp).size(34.dp),
+                    modifier = Modifier.padding(5.dp).size(34.dp),
                 )
             }
             if (folder.isProtected) {
@@ -2310,14 +2379,15 @@ private fun FileGridCard(
     LaunchedEffect(file.id, file.hasThumbnail, thumbnailBitmap) {
         if (file.hasThumbnail && thumbnailBitmap == null) onRequestThumbnail(file)
     }
+    val containerColor by animateColorAsState(
+        if (selected) TCloudSelection else MaterialTheme.colorScheme.surface,
+        tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
+        label = "file-grid-selection",
+    )
     Surface(
-        color = if (selected) TCloudSelection else Color.White,
-        shape = RoundedCornerShape(14.dp),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (selected) Color(0xFF8FBAB5) else TCloudLine,
-        ),
-        shadowElevation = if (selected) 0.dp else 1.dp,
+        color = containerColor,
+        shape = RoundedCornerShape(TCloudDimens.ItemRadius),
+        tonalElevation = if (selected) 2.dp else 0.dp,
         modifier = modifier
             .aspectRatio(1f)
             .combinedClickable(
@@ -2332,7 +2402,7 @@ private fun FileGridCard(
                 Image(
                     bitmap = thumbnailBitmap.asImageBitmap(),
                     contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(TCloudDimens.ItemRadius)),
                     contentScale = ContentScale.Crop,
                 )
             } else {
@@ -2376,11 +2446,14 @@ private fun FileGridCard(
                     )
                 }
             }
-            if (canManage && file.metadataDecrypted) {
+            AnimatedVisibility(
+                visible = (selectionMode || selected) && canManage && file.metadataDecrypted,
+                modifier = Modifier.align(Alignment.TopEnd),
+            ) {
                 Checkbox(
                     checked = selected,
                     onCheckedChange = { onToggleSelection(file) },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(5.dp).size(34.dp),
+                    modifier = Modifier.padding(5.dp).size(34.dp),
                 )
             }
             if (!file.metadataDecrypted) {
@@ -2407,18 +2480,20 @@ private fun FolderRow(
     onRename: (CloudFolder) -> Unit,
     onMove: (CloudFolder) -> Unit,
     onShare: (CloudFolder) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(folder.id) { mutableStateOf(false) }
+    val containerColor by animateColorAsState(
+        if (selected) TCloudSelection else Color.Transparent,
+        tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
+        label = "folder-selection",
+    )
     Surface(
-        color = if (selected) TCloudSelection else Color.White,
-        shape = RoundedCornerShape(13.dp),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (selected) Color(0xFF8FBAB5) else TCloudLine,
-        ),
-        shadowElevation = if (selected) 0.dp else 1.dp,
-        modifier = Modifier
+        color = containerColor,
+        shape = RoundedCornerShape(TCloudDimens.ItemRadius),
+        modifier = modifier
             .fillMaxWidth()
+            .animateContentSize(tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing))
             .combinedClickable(
                 onClick = {
                     if (selectionMode) onToggleSelection(folder) else onOpenFolder(folder)
@@ -2427,24 +2502,25 @@ private fun FolderRow(
             ),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp, horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(
+                vertical = TCloudDimens.ItemVerticalPadding,
+                horizontal = TCloudDimens.ItemHorizontalPadding,
+            ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (selectionMode) {
+            AnimatedVisibility(visible = selectionMode) {
                 Checkbox(
                     checked = selected,
                     onCheckedChange = { onToggleSelection(folder) },
                 )
             }
-            Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFFFF4D8)) {
-                Icon(
-                    Icons.Default.Folder,
-                    contentDescription = null,
-                    tint = Color(0xFFD79A22),
-                    modifier = Modifier.padding(9.dp).size(25.dp),
-                )
-            }
+            TCloudIconContainer(
+                icon = Icons.Default.Folder,
+                contentDescription = null,
+                containerColor = TCloudColors.FolderContainer,
+                iconColor = TCloudColors.FolderIcon,
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     folder.name.ifBlank { "フォルダ" },
@@ -2516,21 +2592,23 @@ private fun FileRow(
     onMove: (CloudFile) -> Unit,
     onRename: (CloudFile) -> Unit,
     onShare: (CloudFile) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(file.id) { mutableStateOf(false) }
     LaunchedEffect(file.id, file.hasThumbnail, thumbnailBitmap) {
         if (file.hasThumbnail && thumbnailBitmap == null) onRequestThumbnail(file)
     }
+    val containerColor by animateColorAsState(
+        if (selected) TCloudSelection else Color.Transparent,
+        tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
+        label = "file-selection",
+    )
     Surface(
-        color = if (selected) TCloudSelection else Color.White,
-        shape = RoundedCornerShape(13.dp),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (selected) Color(0xFF8FBAB5) else TCloudLine,
-        ),
-        shadowElevation = if (selected) 0.dp else 1.dp,
-        modifier = Modifier
+        color = containerColor,
+        shape = RoundedCornerShape(TCloudDimens.ItemRadius),
+        modifier = modifier
             .fillMaxWidth()
+            .animateContentSize(tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing))
             .combinedClickable(
                 onClick = {
                     if (selectionMode) onToggleSelection(file) else onOpenFile(file)
@@ -2539,41 +2617,39 @@ private fun FileRow(
             ),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp, horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(
+                vertical = TCloudDimens.ItemVerticalPadding,
+                horizontal = TCloudDimens.ItemHorizontalPadding,
+            ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (selectionMode) {
+            AnimatedVisibility(visible = selectionMode) {
                 Checkbox(
                     checked = selected,
                     onCheckedChange = { onToggleSelection(file) },
                     enabled = file.metadataDecrypted,
                 )
             }
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = when (file.mediaKind) {
-                    "image" -> Color(0xFFE7F4EF)
-                    "video" -> Color(0xFFE8ECF8)
-                    "audio" -> Color(0xFFF3EAF7)
-                    else -> Color(0xFFF1F3F5)
-                },
-            ) {
-                if (thumbnailBitmap != null) {
-                    Image(
-                        bitmap = thumbnailBitmap.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier.size(44.dp),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Icon(
-                        fileIcon(file.mediaKind),
-                        contentDescription = null,
-                        tint = TCloudBlue,
-                        modifier = Modifier.padding(9.dp).size(25.dp),
-                    )
-                }
+            if (thumbnailBitmap != null) {
+                Image(
+                    bitmap = thumbnailBitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.size(TCloudDimens.IconContainer).clip(RoundedCornerShape(TCloudDimens.ThumbnailRadius)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                TCloudIconContainer(
+                    icon = fileIcon(file.mediaKind),
+                    contentDescription = null,
+                    containerColor = when (file.mediaKind) {
+                        "image" -> TCloudColors.ImageContainer
+                        "video" -> TCloudColors.VideoContainer
+                        "audio" -> TCloudColors.AudioContainer
+                        else -> TCloudColors.FileContainer
+                    },
+                    iconColor = TCloudBlue,
+                )
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
