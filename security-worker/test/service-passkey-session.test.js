@@ -15,6 +15,8 @@ test("password sessions remain independent from passkey revocation and kill swit
   let called = false;
   const env = { PASSKEY_ENABLED: "false", SECURITY: { validatePasskeySession: async () => { called = true; return { valid: false }; } } };
   assert.equal(await validateServicePasskeySession({ authMethod: "password" }, env, "diary"), true);
+  assert.equal(await validateServicePasskeySession({ authMethod: "password", identityId: "unexpected-passkey-binding" }, env, "diary"), false);
+  assert.equal(await validateServicePasskeySession({ identityId: "legacy-passkey", credentialId: "credential" }, env, "diary"), false);
   assert.equal(called, false);
 });
 

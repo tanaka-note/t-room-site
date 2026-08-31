@@ -303,7 +303,8 @@
   async function loadDashboard() {
     const data = await get("/dashboard");
     const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
-    $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div>`;
+    const activeUsers = (data.activeUsers || []).map((user) => `<div class="active-user-row"><strong>${escapeHtml(display.identityLabel(user.identityId, user.displayName))}</strong><span>${user.services.map((service) => escapeHtml(display.serviceLabel(service))).join(" / ")}</span></div>`).join("");
+    $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div><section class="card compact active-users"><h3>現在ログイン中のユーザー</h3>${activeUsers || "<p>現在ログイン中のユーザーはいません。</p>"}</section>`;
   }
 
   async function loadAiBudgets() {
@@ -345,10 +346,14 @@
   async function loadIdentities() {
     const data = await get("/identities");
     const currentIdentities = Array.isArray(data.identities) ? data.identities : [];
+    const pendingIdentities = Array.isArray(data.pendingIdentities) ? data.pendingIdentities : [];
     const auditIdentities = Array.isArray(data.auditIdentities) ? data.auditIdentities : [];
-    state.identityNames = new Map([...currentIdentities, ...auditIdentities].map((identity) => [identity.id, identity.displayName]));
+    state.identityNames = new Map([...currentIdentities, ...pendingIdentities, ...auditIdentities].map((identity) => [identity.id, identity.displayName]));
     populateAuditIdentityFilter([...currentIdentities, ...auditIdentities]);
-    $("#identity-list").innerHTML = currentIdentities.map((identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(display.identityStatusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`).join("") || "<p>ユーザーはまだ登録されていません。</p>";
+    const identityRow = (identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(display.identityStatusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`;
+    const registered = currentIdentities.map(identityRow).join("") || "<p>登録済みユーザーはいません。</p>";
+    const pending = pendingIdentities.map(identityRow).join("");
+    $("#identity-list").innerHTML = `<h3>登録済みユーザー</h3>${registered}${pending ? `<section class="pending-identities"><h3>招待・承認待ち</h3>${pending}</section>` : ""}`;
     document.querySelectorAll("[data-view-identity]").forEach((button) => button.addEventListener("click", async () => {
       button.disabled = true;
       try { await viewIdentity(button.dataset.viewIdentity); } catch (error) { showMessage(error.message, true); }
@@ -379,6 +384,11 @@
       ...linkHistory.map((item) => linkRow(item, true)),
       ...invitationHistory.map((item) => invitationRow(item, true))
     ].join("");
+    const loginStates = (data.sessions || []).map((item) => {
+      const latest = item.sessions?.[0];
+      const stateLabel = item.available === false ? "状態を確認できません" : item.loggedIn ? "ログイン中" : "未ログイン";
+      return `<div class="session-status ${item.loggedIn ? "session-active" : ""}"><div><strong>${escapeHtml(display.serviceLabel(item.service))}</strong><span>${escapeHtml(stateLabel)}</span></div>${latest ? `<small>ログイン開始 ${escapeHtml(formatDate(latest.startedAt))}<br>最終アクセス ${escapeHtml(formatDate(latest.lastSeenAt))}<br>有効期限 ${escapeHtml(formatDate(latest.expiresAt))}</small>` : ""}</div>`;
+    }).join("");
     const approvals = (data.approvalCandidates || []).map((item) => {
       const cloudStatus = !item.hasCloudLinks ? ""
         : item.cloudClientReady
@@ -388,6 +398,7 @@
     }).join("");
     $("#identity-detail").innerHTML = `
       <section class="detail-section detail-summary"><h2>${escapeHtml(data.identity.displayName)}</h2><p class="status-${escapeHtml(data.identity.status)}">${escapeHtml(display.identityStatusLabel(data.identity.status))}</p><small>${data.identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(data.identity.lastLoginAt))}` : "認証履歴なし"}${data.identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(data.identity.lastSeenAt))}` : ""}</small></section>
+      <section class="detail-section"><h3>現在のログイン状況</h3><div class="session-status-grid">${loginStates}</div></section>
       <section class="detail-section"><h3>サービス連携</h3>${links || "<p>サービス連携はありません。</p>"}<button id="detail-open-link" type="button" class="secondary">＋ サービス連携を追加</button><div id="detail-link-editor" class="detail-editor" hidden><div id="detail-link-row"></div><p id="detail-link-empty" class="muted" hidden>追加できるサービス連携はありません</p><div class="editor-actions"><button id="detail-add-link" type="button">追加</button><button id="detail-cancel-link" type="button" class="secondary">キャンセル</button></div></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloudは安全な鍵委譲が完了するまで承認待ちになります。</p></section>
       <section class="detail-section"><h3>パスキー</h3>${credentials || "<p>まだパスキーは登録されていません</p>"}</section>
       <section class="detail-section"><h3>招待</h3>${invitations || "<p>有効な招待はありません。</p>"}</section>

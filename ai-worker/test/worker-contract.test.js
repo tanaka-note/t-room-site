@@ -5,6 +5,7 @@ import fs from "node:fs";
 const source = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const migration = fs.readFileSync(new URL("../migrations/0001_ai_chat_foundation.sql", import.meta.url), "utf8");
 const ownerGuards = fs.readFileSync(new URL("../migrations/0002_conversation_owner_guards.sql", import.meta.url), "utf8");
+const config = fs.readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 
 test("Androidから送られたidentityやbudgetを認可の正本にしない", () => {
   assert.match(source, /redeemHandoff\([\s\S]*"ai"/);
@@ -16,6 +17,12 @@ test("Passkey sessionは毎回Securityで失効検証する", () => {
   assert.match(source, /validatePasskeySession\(\{/);
   assert.match(source, /service: "ai"/);
   assert.match(source, /passkeySessionEpoch/);
+  assert.match(source, /sessionPolicyForAuthMethod\(env, "passkey"\)/);
+  assert.match(source, /sessionCookieValue/);
+  assert.match(source, /getSessionRuntimeState/);
+  assert.match(config, /"PASSKEY_ENABLED": "true"/);
+  assert.match(config, /"PASSKEY_SESSION_TTL_SECONDS": "43200"/);
+  assert.doesNotMatch(config, /"SESSION_TTL_SECONDS": "2592000"/);
 });
 
 test("会話とMemoryはIdentityかつCharacterで分離する", () => {

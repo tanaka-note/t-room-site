@@ -1,10 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
+import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-b14ae4f4dab1";
+const APP_BUILD_ID = "cloud-15387c6ed35d";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -29,6 +30,10 @@ const PASSKEY_MEMBER_ACCOUNT = Object.freeze({
 });
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async getSessionRuntimeState() {
+    return { sessionVersion: String(this.env.SESSION_VERSION || "1"), passkeyEnabled: String(this.env.PASSKEY_ENABLED || "false") === "true" };
+  }
+
   async verifyPrimaryAdmin(input) {
     const loginId = String(input?.loginId || "").trim().toLowerCase();
     const authProof = String(input?.authProof || "");
@@ -159,6 +164,12 @@ async function handleApi(request, env, url, path, context) {
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.serviceAccountId || session.role, role: session.role,
       authMethod: session.authMethod, sessionId: session.sessionId,
+      credentialId: session.credentialId,
+      expiresAt: session.authMethod === "password"
+        ? Math.floor(Date.now() / 1000) + cloudSessionPolicy(env, "password", session.role).ttlSeconds
+        : session.exp,
+      startedAt: session.startedAt,
+      sessionVersion: cloudSessionVersion(env), passkeySessionEpoch: session.passkeySessionEpoch,
       details: { rootFolderId: session.rootFolderId }
     });
     return json({ authenticated: true, ...publicSession(session, env) });
@@ -183,6 +194,12 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) throw new HttpError(403, "不正なリクエストです。");
+    const session = await readSession(request, env);
+    if (session) await recordSecurityAudit(env, request, {
+      service: "cloud", eventType: "logout", outcome: "success", identityId: session.identityId,
+      serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId || session.role,
+      role: session.role, authMethod: session.authMethod, sessionId: session.sessionId
+    });
     const headers = new Headers({ "Set-Cookie": clearCookie(url.protocol === "https:") });
     return json({ ok: true }, 200, headers);
   }
@@ -326,7 +343,7 @@ async function login(request, env, url, context) {
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
   await env.DB.prepare("DELETE FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
-  const maxAge = sessionMaxAge(env, account.role);
+  const policy = cloudSessionPolicy(env, "password", account.role);
   const session = {
     role: account.role,
     label: account.label,
@@ -341,12 +358,13 @@ async function login(request, env, url, context) {
     canViewHistory: account.canViewHistory,
     canRequestDelete: account.canRequestDelete,
     canReviewDeletion: account.canReviewDeletion,
-    sessionId: crypto.randomUUID()
+    sessionId: crypto.randomUUID(),
+    startedAt: new Date().toISOString()
   };
-  const token = await createSessionToken(session, maxAge, env);
-  const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
+  const token = await createSessionToken(session, policy.ttlSeconds, env);
+  const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
   await audit(env, "login", session, null, null);
-  await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId });
+  await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: session.startedAt, sessionVersion: cloudSessionVersion(env) });
   return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
 }
 
@@ -363,7 +381,7 @@ async function completePasskeyHandoff(request, env, url, context) {
   }
   if (!account) throw new HttpError(403, "T-Cloudの連携先を確認できません。");
   if (handoff.cloudRootFolderId) await requireFolder(env, Number(handoff.cloudRootFolderId));
-  const maxAge = sessionMaxAge(env, account.role);
+  const policy = cloudSessionPolicy(env, "passkey", account.role);
   const session = {
     role: account.role,
     canUpload: account.canUpload,
@@ -385,12 +403,13 @@ async function completePasskeyHandoff(request, env, url, context) {
     serviceAccountId: handoff.serviceAccountId,
     passkeySessionEpoch: handoff.sessionEpoch,
     authMethod: "passkey",
-    rootFolderId: handoff.cloudRootFolderId == null ? null : Number(handoff.cloudRootFolderId)
+    rootFolderId: handoff.cloudRootFolderId == null ? null : Number(handoff.cloudRootFolderId),
+    startedAt: new Date().toISOString()
   };
-  const token = await createSessionToken(session, maxAge, env);
-  const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
+  const token = await createSessionToken(session, policy.ttlSeconds, env);
+  const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
   await audit(env, "passkey_login", session, null, null);
-  await recordSecurityAudit(env, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId });
+  await recordSecurityAudit(env, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: session.startedAt, sessionVersion: cloudSessionVersion(env), passkeySessionEpoch: handoff.sessionEpoch });
   return json({ authenticated: true, ...publicSession(session) }, 200, headers);
 }
 
@@ -2715,11 +2734,11 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
   if (["/api/login", "/api/passkey/handoff", "/api/logout", "/api/auth-mode", "/api/app-version"].includes(path)
     || path.startsWith("/api/public/")) return response;
   const session = await readSession(request, env);
-  if (!session) return response;
-  const maxAge = sessionMaxAge(env, session.role);
-  const token = await createSessionToken({ ...session, sessionId: session.sessionId || crypto.randomUUID() }, maxAge, env);
+  if (!session || !shouldRefreshSession(session)) return response;
+  const policy = cloudSessionPolicy(env, session.authMethod, session.role);
+  const token = await createSessionToken({ ...session, sessionId: session.sessionId || crypto.randomUUID() }, policy.ttlSeconds, env);
   const headers = new Headers(response.headers);
-  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -2759,6 +2778,8 @@ async function readSession(request, env) {
       serviceAccountId: payload.serviceAccountId || null,
       passkeySessionEpoch: payload.passkeySessionEpoch || null,
       authMethod: payload.authMethod || "password",
+      startedAt: payload.startedAt || null,
+      exp: Number(payload.exp),
       rootFolderId: payload.rootFolderId == null ? null : Number(payload.rootFolderId)
     };
   } catch { return null; }
@@ -2949,6 +2970,8 @@ function sessionMaxAge(env, role) {
   const configured = role === "subadmin" ? env.SUBADMIN_SESSION_TTL_SECONDS : env.SESSION_TTL_SECONDS;
   return clampNumber(configured, 3600, 2592000, 2592000);
 }
+function cloudSessionVersion(env) { return String(env.SESSION_VERSION || "1"); }
+function cloudSessionPolicy(env, authMethod, role) { return sessionPolicyForAuthMethod(env, authMethod, sessionMaxAge(env, role)); }
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireShareCreation(session) { if (!["admin", "subadmin"].includes(session.role)) throw new HttpError(403, "共有URLを発行できません。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }
@@ -2962,7 +2985,7 @@ function requireDeletionReview(session) { if (!session.canReviewDeletion) throw 
 function requireTrashVisibility(session, file) { if (file.deleted_at && !session.canDelete) throw new HttpError(404, "ファイルが見つかりません。"); }
 function sameOrigin(request, url) { return !request.headers.get("Origin") || request.headers.get("Origin") === url.origin; }
 function validMutationRequest(request, url) { return sameOrigin(request, url) && (request.headers.get("Content-Type") || "").toLowerCase() !== "application/x-www-form-urlencoded"; }
-function sessionCookie(token, maxAge, secure) { return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
+function sessionCookie(token, policy, secure) { return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, policy, secure); }
 function clearCookie(secure) { return `${SESSION_COOKIE}=; Path=${BASE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
 function shareSessionCookie(token, maxAge, secure) { return `${SHARE_SESSION_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
 function readCookie(request, name) { const match = (request.headers.get("Cookie") || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`)); return match ? match[1] : ""; }

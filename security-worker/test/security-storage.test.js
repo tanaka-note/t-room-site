@@ -168,6 +168,29 @@ test("out-of-order audit delivery never rolls back Identity activity timestamps"
   assert.equal(queryText("SELECT last_seen_at AS value FROM security_identities WHERE id = 'activity-order'"), "2026-08-23T05:00:00.000Z");
 });
 
+test("active sessions keep only a hash and track independent service logout and expiry", () => {
+  sql("INSERT INTO security_identities (id, display_name, status) VALUES ('active-session-user', 'Active Session', 'active')");
+  sql(`INSERT INTO security_credentials (credential_id, identity_id, public_key, prf_salt, status)
+    VALUES ('active-session-credential', 'active-session-user', 'public', 'salt', 'active')`);
+  sql(`INSERT INTO security_service_links (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status) VALUES
+    ('active-cloud-link', 'active-session-user', 'cloud', 'folder-member', 999, 'Cloud', 'active'),
+    ('active-diary-link', 'active-session-user', 'diary', 'active-session-account', NULL, 'Diary', 'active')`);
+  sql(`INSERT INTO security_active_sessions
+    (session_id_hash, identity_id, service, service_link_id, service_account_id, credential_id, role,
+      auth_method, session_version, passkey_session_epoch, started_at, last_seen_at, expires_at)
+    VALUES
+    ('hash-cloud', 'active-session-user', 'cloud', 'active-cloud-link', 'folder-member', 'active-session-credential', 'member', 'passkey', '1', 7, '2026-08-30T00:00:00.000Z', '2026-08-30T00:05:00.000Z', 4102444800),
+    ('hash-diary', 'active-session-user', 'diary', 'active-diary-link', 'active-session-account', 'active-session-credential', 'user', 'passkey', '1', 7, '2026-08-30T00:01:00.000Z', '2026-08-30T00:06:00.000Z', 4102444800)`);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_active_sessions WHERE identity_id = 'active-session-user' AND ended_at IS NULL"), 2);
+  sql("UPDATE security_active_sessions SET ended_at = '2026-08-30T00:10:00.000Z', end_reason = 'logout' WHERE session_id_hash = 'hash-cloud'");
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_active_sessions WHERE service = 'cloud' AND ended_at IS NULL"), 0);
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM security_active_sessions WHERE service = 'diary' AND ended_at IS NULL"), 1);
+  sql("UPDATE security_active_sessions SET expires_at = 1 WHERE session_id_hash = 'hash-diary'");
+  sql("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, '2026-08-30T00:20:00.000Z'), end_reason = COALESCE(end_reason, 'expired') WHERE ended_at IS NULL AND expires_at <= 2");
+  assert.equal(queryText("SELECT end_reason AS value FROM security_active_sessions WHERE session_id_hash = 'hash-diary'"), "expired");
+  assert.equal(queryNumber("SELECT COUNT(*) AS value FROM pragma_table_info('security_active_sessions') WHERE name IN ('cookie', 'token', 'raw_session_id')"), 0);
+});
+
 test("one credential vault serves multiple Cloud links while folder envelopes stay link-specific", () => {
   sql("INSERT INTO security_identities (id, display_name, status) VALUES ('cloud_test', 'Cloud Test', 'active')");
   sql(`INSERT INTO security_credentials (credential_id, identity_id, public_key, prf_salt, status)

@@ -42,6 +42,17 @@ fieldset { border: 1px solid var(--line); border-radius: 12px; }
 .identity-row button { float: right; min-height: 36px; padding: 5px 10px; }
 .section-heading h2 { margin-bottom: .2rem; }
 .section-heading p { margin: 0; color: var(--muted); }
+.pending-identities { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.active-users { margin-top: 16px; }
+.active-user-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.active-user-row span { color: var(--muted); text-align: right; }
+.session-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.session-status { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafc; }
+.session-status > div { display: flex; justify-content: space-between; gap: 8px; }
+.session-status > div span { color: var(--muted); font-weight: 700; }
+.session-status.session-active { border-color: #abefc6; background: #ecfdf3; }
+.session-status.session-active > div span { color: var(--ok); }
+.session-status small { display: block; margin-top: 8px; color: var(--muted); }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .stat { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
 .stat strong { display: block; font-size: 2rem; }
@@ -111,6 +122,7 @@ output { overflow-wrap: anywhere; }
   .audit-heading { display: grid; gap: 3px; }
   .audit-heading time { order: -1; }
   .budget-fields { grid-template-columns: 1fr; }
+  .session-status-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .filters { grid-template-columns: 1fr; }

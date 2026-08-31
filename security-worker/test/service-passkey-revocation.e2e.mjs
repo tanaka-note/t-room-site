@@ -321,12 +321,29 @@ try {
   assert.equal((await resumed.json()).authenticated, true);
   assert.equal(serviceAuditCount(identityId, "diary", "session_resume"), resumeAuditBefore + 1,
     "saved Diary session resume is stored synchronously");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_active_sessions
+    WHERE identity_id = '${identityId}' AND service = 'diary' AND service_account_id = 'main-user'
+      AND auth_method = 'password' AND ended_at IS NULL`), 1,
+  "a uniquely linked password session is tracked by its one-way identifier");
   assert.equal(queryText("security-worker", "security-db",
     `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`), loginAtBeforeResume,
   "session resume never changes last_login_at");
   assert.ok(queryText("security-worker", "security-db",
     `SELECT last_seen_at AS value FROM security_identities WHERE id = '${identityId}'`) >= seenAtBeforeResume,
   "session resume advances only last_seen_at");
+  const diaryLogout = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/logout`, {
+    method: "POST",
+    headers: { Origin: `http://127.0.0.1:${services.diary.port}`, "Content-Type": "application/json", Cookie: `${services.diary.cookie}=${userPasswordLogin.cookie}` },
+    body: "{}"
+  });
+  assert.equal(diaryLogout.status, 200);
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_active_sessions
+    WHERE identity_id = '${identityId}' AND service = 'diary' AND service_account_id = 'main-user'
+      AND auth_method = 'password' AND ended_at IS NULL`), 0,
+  "explicit logout ends only the matching service session");
+  assert.equal(queryText("security-worker", "security-db", `SELECT end_reason AS value FROM security_active_sessions
+    WHERE identity_id = '${identityId}' AND service = 'diary' AND service_account_id = 'main-user'
+      AND auth_method = 'password' ORDER BY updated_at DESC LIMIT 1`), "logout");
 
   const unlinkedAuditBefore = queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
     WHERE service = 'diary' AND service_account_id = 'wife-admin' AND event_type = 'password_login_success'`);
@@ -470,6 +487,9 @@ try {
     "Billing emits one service login completion event for one redeemed handoff");
   assert.equal(serviceAuditCount(readinessIdentityId, "cloud", "passkey_login_success"), 2,
     "T-Cloud audits the independently selected member and administrator handoffs");
+  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(DISTINCT service) AS value FROM security_active_sessions
+    WHERE identity_id = '${identityId}' AND service IN ('diary', 'billing') AND auth_method = 'passkey' AND ended_at IS NULL`), 2,
+  "one Identity can remain logged in to multiple services independently");
   const handoffLastLogin = queryText("security-worker", "security-db",
     `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`);
   const handoffLastSeen = queryText("security-worker", "security-db",
@@ -1025,7 +1045,12 @@ try {
   const passwordCookies = createServiceCookies("password", diaryVersion, billingVersion);
   await waitForServiceBindings(passkeyCookies);
   await assertAccess(passkeyCookies, true, "active passkey sessions");
-  await assertRollingPasskeySessions(passkeyCookies);
+  await assertSessionRefreshPolicies(passkeyCookies, passwordCookies);
+  const expiredPasskeyCookies = Object.fromEntries(Object.entries(passkeyCookies).map(([name, cookie]) => {
+    const payload = decodeSignedPayload(cookie);
+    return [name, signCookie({ ...payload, exp: Math.floor(Date.now() / 1000) - 1 })];
+  }));
+  await assertAccess(expiredPasskeyCookies, false, "expired passkey sessions cannot be resumed or rolled");
 
   const handoffDiaryCookie = await redeemDiaryAdminHandoff();
   const handoffPayload = decodeSignedPayload(handoffDiaryCookie);
@@ -1052,6 +1077,9 @@ try {
     assert.equal(switchedPayload[key], handoffPayload[key], `Diary household switch preserves ${key}`);
   }
   assert.equal(switchedPayload.activeHouseholdId, "chiharu-household");
+  assert.equal(switchedPayload.exp, handoffPayload.exp, "Diary household switch preserves the passkey absolute expiry");
+  assert.doesNotMatch(switchedDiary.headers.get("set-cookie") || "", /Max-Age|Expires=/i,
+    "Diary household switch keeps a non-persistent passkey cookie");
   const switchedAccess = await fetch(`http://127.0.0.1:${services.diary.port}${services.diary.path}`, {
     headers: { Cookie: `${services.diary.cookie}=${switchedDiaryCookie}` }
   });
@@ -1661,8 +1689,12 @@ async function redeemDiaryAdminHandoff() {
   });
   const body = await response.text();
   assert.equal(response.status, 200, `valid Diary handoff redeem: ${body}`);
-  const cookie = response.headers.get("set-cookie")?.match(/troom_diary_session=([^;]+)/)?.[1];
+  const setCookie = response.headers.get("set-cookie") || "";
+  assert.doesNotMatch(setCookie, /Max-Age|Expires=/i, "Diary passkey handoff does not issue a persistent cookie");
+  const cookie = setCookie.match(/troom_diary_session=([^;]+)/)?.[1];
   assert.ok(cookie, "Diary handoff issues a session cookie");
+  const lifetime = decodeSignedPayload(cookie).exp - Math.floor(Date.now() / 1000);
+  assert.ok(lifetime > 43190 && lifetime <= 43200, `Diary passkey session lifetime is twelve hours: ${lifetime}`);
   return cookie;
 }
 
@@ -1670,28 +1702,26 @@ function decodeSignedPayload(cookie) {
   return JSON.parse(Buffer.from(String(cookie).split(".")[0], "base64url").toString("utf8"));
 }
 
-async function assertRollingPasskeySessions(cookies) {
+async function assertSessionRefreshPolicies(passkeyCookies, passwordCookies) {
   for (const [name, service] of Object.entries(services)) {
-    const legacyPayload = decodeSignedPayload(cookies[name]);
-    delete legacyPayload.sessionId;
-    const legacyCookie = signCookie(legacyPayload);
-    const first = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
-      headers: { Cookie: `${service.cookie}=${legacyCookie}` }
+    const passkeyPayload = decodeSignedPayload(passkeyCookies[name]);
+    const passkeyResponse = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
+      headers: { Cookie: `${service.cookie}=${passkeyCookies[name]}` }
     });
-    assert.equal(first.status, 200, `${name} rolling session first access`);
-    const refreshed = first.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1];
-    assert.ok(refreshed, `${name} must refresh its authenticated session`);
-    const firstPayload = decodeSignedPayload(refreshed);
-    assert.ok(typeof firstPayload.sessionId === "string" && firstPayload.sessionId.length >= 32,
-      `${name} assigns a stable session ID when refreshing a legacy cookie`);
-    const second = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
-      headers: { Cookie: `${service.cookie}=${refreshed}` }
+    assert.equal(passkeyResponse.status, 200, `${name} passkey session remains usable inside its absolute TTL`);
+    assert.equal(passkeyResponse.headers.get("set-cookie"), null, `${name} does not roll or reissue a passkey session`);
+    assert.equal(decodeSignedPayload(passkeyCookies[name]).exp, passkeyPayload.exp);
+
+    const passwordPayload = decodeSignedPayload(passwordCookies[name]);
+    const passwordResponse = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
+      headers: { Cookie: `${service.cookie}=${passwordCookies[name]}` }
     });
-    assert.equal(second.status, 200, `${name} refreshed passkey session must retain the epoch`);
-    const secondRefreshed = second.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1];
-    assert.ok(secondRefreshed, `${name} refreshes the session a second time`);
-    assert.equal(decodeSignedPayload(secondRefreshed).sessionId, firstPayload.sessionId,
-      `${name} keeps one session ID across rolling refreshes`);
+    assert.equal(passwordResponse.status, 200, `${name} password session remains usable`);
+    const refreshedHeader = passwordResponse.headers.get("set-cookie") || "";
+    assert.match(refreshedHeader, /Max-Age=2592000/, `${name} keeps the 30-day password cookie`);
+    const refreshed = refreshedHeader.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1];
+    assert.ok(refreshed, `${name} rolls the password session`);
+    assert.ok(decodeSignedPayload(refreshed).exp > passwordPayload.exp, `${name} extends only the password expiry`);
   }
 }
 
@@ -1735,7 +1765,7 @@ function signCookie(payload) {
 }
 
 function signSecurityCookie(payload) {
-  const encoded = Buffer.from(JSON.stringify({ ...payload, exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+  const encoded = Buffer.from(JSON.stringify({ authMethod: "passkey", ...payload, exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
   const signature = createHmac("sha256", securitySessionSecret).update(encoded).digest("base64url");
   return `${encoded}.${signature}`;
 }
@@ -1755,7 +1785,7 @@ function startWorker(directory, port, vars) {
 
 async function waitForUrl(url) {
   let lastError;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.status < 500) return;
@@ -1766,7 +1796,7 @@ async function waitForUrl(url) {
 }
 
 async function waitForWorkerReady(child) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
     if (child.exitCode != null) throw new Error(`Worker exited before becoming ready:\n${child.__output}`);
     if (/http:\/\/127\.0\.0\.1:8810|Ready on|Ready at/i.test(child.__output)) return;
     await delay(250);
@@ -1802,6 +1832,10 @@ function cleanupSecurityFixture() {
   runSecuritySql(`
     DROP TRIGGER IF EXISTS fail_credential_revoke_audit;
     DROP TRIGGER IF EXISTS fail_synchronous_login_audit;
+    DELETE FROM security_active_sessions WHERE identity_id IN (
+      SELECT id FROM security_identities
+      WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'
+    ) OR identity_id IN ('${identityId}', 'primary-admin', 'audit_admin', '${statusAdminIdentityId}', '${readinessIdentityId}', 'shared_cloud_test', '${legacyNestedIdentityId}');
     DELETE FROM security_audit_events WHERE identity_id IN (
       SELECT id FROM security_identities
       WHERE display_name IN ('Cancelled Invitation Test', 'Multiple Invitation Test', 'Pending Approval', 'Identity Disable Test', 'Identity Disable Replacement') OR display_name LIKE 'Invitation Expiry Contract %'

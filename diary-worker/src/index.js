@@ -2,10 +2,10 @@ import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
-const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const LOGIN_LIMIT = 5;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const MEDIA_DELETION_BATCH_SIZE = 300;
@@ -32,6 +32,14 @@ const DIARY_ACCOUNTS = [
 ];
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async getSessionRuntimeState(input) {
+    const account = await findAccountById(String(input?.serviceAccountId || ""), this.env);
+    return account ? {
+      sessionVersion: `${String(this.env.SESSION_VERSION || "1")}:${Number(account.sessionVersion || 1)}`,
+      passkeyEnabled: String(this.env.PASSKEY_ENABLED || "false") === "true"
+    } : null;
+  }
+
   async listLinkTargets() {
     const rows = await this.env.DB.prepare(`
       SELECT id, household_id, display_name, role, can_manage_entries
@@ -138,7 +146,12 @@ async function handleApi(request, env, url, path, context) {
       service: "diary", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.accountId, role: securityAuditRole(session),
-      authMethod: session.authMethod, sessionId: session.sessionId
+      authMethod: session.authMethod, sessionId: session.sessionId, credentialId: session.credentialId,
+      expiresAt: session.authMethod === "password"
+        ? Math.floor(Date.now() / 1000) + getSessionPolicy(env, "password").ttlSeconds
+        : session.exp,
+      startedAt: session.startedAt,
+      sessionVersion: diarySessionVersion(env, session.accountVersion), passkeySessionEpoch: session.passkeySessionEpoch
     });
     return json({
       authenticated: Boolean(session),
@@ -209,12 +222,13 @@ async function handleApi(request, env, url, path, context) {
     }
     await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
 
-    const maxAge = getSessionMaxAge(env);
+    const policy = getSessionPolicy(env, "password");
     const sessionId = crypto.randomUUID();
-    const token = await createSessionToken(account, maxAge, env, account.householdId, { authMethod: "password", sessionId });
+    const startedAt = new Date().toISOString();
+    const token = await createSessionToken(account, policy, env, account.householdId, { authMethod: "password", sessionId, startedAt });
     const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId });
+    headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
+    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt, sessionVersion: diarySessionVersion(env, account.sessionVersion) });
     return json({
       authenticated: true,
       role: account.role,
@@ -239,24 +253,27 @@ async function handleApi(request, env, url, path, context) {
     if (!handoff) return json({ error: "パスキー認証の有効期限が切れています。もう一度お試しください。" }, 401);
     const account = await findAccountById(handoff.serviceAccountId, env);
     if (!account) return json({ error: "日記の連携先アカウントを確認できません。" }, 403);
-    const maxAge = getSessionMaxAge(env);
+    const policy = getSessionPolicy(env, "passkey");
     const sessionId = crypto.randomUUID();
-    const token = await createSessionToken(account, maxAge, env, account.householdId, {
+    const token = await createSessionToken(account, policy, env, account.householdId, {
       identityId: handoff.identityId,
       credentialId: handoff.credentialId,
       serviceLinkId: handoff.serviceLinkId,
       serviceAccountId: handoff.serviceAccountId,
       passkeySessionEpoch: handoff.sessionEpoch,
       authMethod: "passkey",
-      sessionId
+      sessionId,
+      startedAt: new Date().toISOString()
     });
-    const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
-    await recordSecurityAudit(env, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "passkey", sessionId });
+    const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
+    await recordSecurityAudit(env, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: diarySessionVersion(env, account.sessionVersion), passkeySessionEpoch: handoff.sessionEpoch });
     return json({ authenticated: true, role: account.role, accountName: account.name, loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
+    const session = await readSession(request, env);
+    if (session) await recordSecurityAudit(env, request, { service: "diary", eventType: "logout", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: securityAuditRole(session), authMethod: session.authMethod, sessionId: session.sessionId });
     const headers = new Headers();
     headers.set("Set-Cookie", clearSessionCookie(url.protocol === "https:"));
     return json({ ok: true }, 200, headers);
@@ -292,18 +309,20 @@ async function handleApi(request, env, url, path, context) {
       return json({ error: "日記の管理対象を確認できませんでした。" }, 400);
     }
     const account = await findAccountById(session.accountId, env);
-    const maxAge = getSessionMaxAge(env);
-    const token = await createSessionToken(account, maxAge, env, householdId, {
+    const policy = getSessionPolicy(env, session.authMethod);
+    const token = await createSessionToken(account, policy, env, householdId, {
       identityId: session.identityId,
       credentialId: session.credentialId,
       serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.serviceAccountId,
       passkeySessionEpoch: session.passkeySessionEpoch,
       authMethod: session.authMethod,
-      sessionId: session.sessionId
+      sessionId: session.sessionId,
+      startedAt: session.startedAt,
+      expiresAt: session.exp
     });
     const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+    headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
     if (householdId !== session.householdId) {
       enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: securityAuditRole(session), authMethod: session.authMethod, sessionId: session.sessionId, targetType: "household", targetId: householdId });
     }
@@ -2117,30 +2136,31 @@ async function readSession(request, env) {
   }
 }
 
-function getSessionMaxAge(env) {
-  return clampNumber(env.SESSION_TTL_SECONDS, 3600, SESSION_TTL_SECONDS, SESSION_TTL_SECONDS);
+function getSessionPolicy(env, authMethod) {
+  return sessionPolicyForAuthMethod(env, authMethod, clampNumber(env.SESSION_TTL_SECONDS, 3600, PASSWORD_SESSION_TTL_SECONDS, PASSWORD_SESSION_TTL_SECONDS));
 }
 
 async function withRollingSession(request, response, env, url, path) {
   if (path === "/api/login" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
     || path === "/api/households/select" || response.status === 401) return response;
   const session = await readSession(request, env);
-  if (!session) return response;
+  if (!session || !shouldRefreshSession(session)) return response;
   const account = await findAccountById(session.accountId, env);
   if (!account) return response;
 
-  const maxAge = getSessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId, {
+  const policy = getSessionPolicy(env, session.authMethod);
+  const token = await createSessionToken(account, policy, env, session.activeHouseholdId, {
     identityId: session.identityId,
     credentialId: session.credentialId,
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
     authMethod: session.authMethod,
-    sessionId: session.sessionId
+    sessionId: session.sessionId,
+    startedAt: session.startedAt
   });
   const headers = new Headers(response.headers);
-  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -2148,7 +2168,7 @@ async function withRollingSession(request, response, env, url, path) {
   });
 }
 
-async function createSessionToken(account, maxAge, env, activeHouseholdId = account.householdId, auth = {}) {
+async function createSessionToken(account, policy, env, activeHouseholdId = account.householdId, auth = {}) {
   const payload = {
     role: account.role,
     accountId: account.id,
@@ -2161,12 +2181,15 @@ async function createSessionToken(account, maxAge, env, activeHouseholdId = acco
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
-    exp: Math.floor(Date.now() / 1000) + maxAge,
+    startedAt: auth.startedAt || new Date().toISOString(),
+    exp: sessionExpiresAt(Math.floor(Date.now() / 1000), policy, auth.expiresAt),
     version: String(env.SESSION_VERSION || "1")
   };
   const encodedPayload = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encodedPayload}.${await sign(encodedPayload, env.SESSION_SECRET)}`;
 }
+
+function diarySessionVersion(env, accountVersion) { return `${String(env.SESSION_VERSION || "1")}:${Number(accountVersion || 1)}`; }
 
 function normalizeLoginId(value) {
   const loginId = String(value || "").trim().toLowerCase();
@@ -2240,18 +2263,20 @@ async function changeInitialPassword(request, env, session, url) {
   `).bind(passwordHash, session.accountId).run();
   if (!result.meta?.changes) return json({ error: "パスワードを更新できませんでした。再度ログインしてください。" }, 409);
   const account = await findAccountById(session.accountId, env);
-  const maxAge = getSessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env, session.activeHouseholdId, {
+  const policy = getSessionPolicy(env, session.authMethod);
+  const token = await createSessionToken(account, policy, env, session.activeHouseholdId, {
     identityId: session.identityId,
     credentialId: session.credentialId,
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
     authMethod: session.authMethod,
-    sessionId: session.sessionId
+    sessionId: session.sessionId,
+    startedAt: session.startedAt,
+    expiresAt: session.exp
   });
   const headers = new Headers();
-  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
   return json({
     authenticated: true,
     role: account.role,
@@ -2354,8 +2379,8 @@ async function verifyPassword(password, encodedHash, env = {}) {
   }
 }
 
-function sessionCookie(token, maxAge, secure) {
-  return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+function sessionCookie(token, policy, secure) {
+  return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, policy, secure);
 }
 
 function clearSessionCookie(secure) {

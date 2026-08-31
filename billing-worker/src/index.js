@@ -11,16 +11,26 @@ import {
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
-const MAX_SESSION_SECONDS = 30 * 24 * 60 * 60;
+const MAX_SESSION_SECONDS = PASSWORD_SESSION_TTL_SECONDS;
 const CURRENT_OWNER_LOGIN_ID = "contact@a-tanaka.jp";
 const LEGACY_OWNER_LOGIN_ID = "sub@a-tanaka.jp";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async getSessionRuntimeState(input) {
+    const account = await this.env.DB.prepare("SELECT session_version, is_active FROM billing_accounts WHERE id = ?")
+      .bind(String(input?.serviceAccountId || "")).first();
+    return account?.is_active ? {
+      sessionVersion: `${String(this.env.SESSION_VERSION || "1")}:${Number(account.session_version || 1)}`,
+      passkeyEnabled: String(this.env.PASSKEY_ENABLED || "false") === "true"
+    } : null;
+  }
+
   async listLinkTargets() {
     const rows = await this.env.DB.prepare(`
       SELECT id, display_name, role FROM billing_accounts
@@ -89,7 +99,12 @@ async function handleApi(request, env, url, path, context) {
       service: "billing", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.accountId, role: session.role,
-      authMethod: session.authMethod, sessionId: session.sessionId
+      authMethod: session.authMethod, sessionId: session.sessionId, credentialId: session.credentialId,
+      expiresAt: session.authMethod === "password"
+        ? Math.floor(Date.now() / 1000) + sessionPolicy(env, "password").ttlSeconds
+        : session.exp,
+      startedAt: session.startedAt,
+      sessionVersion: billingSessionVersion(env, session.accountVersion), passkeySessionEpoch: session.passkeySessionEpoch
     });
     return json({
       authenticated: Boolean(session),
@@ -200,12 +215,13 @@ async function handleApi(request, env, url, path, context) {
       attemptedLoginId: loginId
     });
 
-    const maxAge = sessionMaxAge(env);
+    const policy = sessionPolicy(env, "password");
     const sessionId = crypto.randomUUID();
-    const token = await createSessionToken(account, maxAge, env, { authMethod: "password", sessionId });
+    const startedAt = new Date().toISOString();
+    const token = await createSessionToken(account, policy.ttlSeconds, env, { authMethod: "password", sessionId, startedAt });
     const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
-    await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId });
+    headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
+    await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt, sessionVersion: billingSessionVersion(env, account.session_version) });
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "password" }, 200, headers);
   }
 
@@ -217,27 +233,31 @@ async function handleApi(request, env, url, path, context) {
     if (!handoff) throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
     const account = await env.DB.prepare("SELECT id, display_name, role, session_version, is_active FROM billing_accounts WHERE id = ?").bind(handoff.serviceAccountId).first();
     if (!account?.is_active) throw new HttpError(403, "請求書管理の連携先アカウントを確認できません。");
-    const maxAge = sessionMaxAge(env);
+    const policy = sessionPolicy(env, "passkey");
     const sessionId = crypto.randomUUID();
-    const token = await createSessionToken(account, maxAge, env, {
+    const token = await createSessionToken(account, policy.ttlSeconds, env, {
       identityId: handoff.identityId,
       credentialId: handoff.credentialId,
       serviceLinkId: handoff.serviceLinkId,
       serviceAccountId: handoff.serviceAccountId,
       passkeySessionEpoch: handoff.sessionEpoch,
       authMethod: "passkey",
-      sessionId
+      sessionId,
+      startedAt: new Date().toISOString()
     });
-    const headers = new Headers({ "Set-Cookie": sessionCookie(token, maxAge, url.protocol === "https:") });
+    const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
     await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
-    await recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId });
+    await recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: billingSessionVersion(env, account.session_version), passkeySessionEpoch: handoff.sessionEpoch });
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "passkey" }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
     const session = await readSession(request, env);
-    if (session) await writeAudit(env, { eventType: "logout", actorAccountId: session.accountId });
+    if (session) {
+      await writeAudit(env, { eventType: "logout", actorAccountId: session.accountId });
+      await recordSecurityAudit(env, request, { service: "billing", eventType: "logout", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: session.role, authMethod: session.authMethod, sessionId: session.sessionId });
+    }
     const headers = new Headers();
     headers.set("Set-Cookie", clearSessionCookie(url.protocol === "https:"));
     return json({ ok: true }, 200, headers);
@@ -620,7 +640,10 @@ async function readSession(request, env) {
       serviceAccountId: payload.serviceAccountId || null,
       passkeySessionEpoch: payload.passkeySessionEpoch || null,
       authMethod: payload.authMethod || "password",
-      sessionId: payload.sessionId || null
+      sessionId: payload.sessionId || null,
+      startedAt: payload.startedAt || null,
+      exp: Number(payload.exp),
+      accountVersion: Number(payload.accountVersion || 1)
     };
   } catch {
     return null;
@@ -640,6 +663,7 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
+    startedAt: auth.startedAt || new Date().toISOString(),
     exp: Math.floor(Date.now() / 1000) + maxAge
   };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
@@ -650,28 +674,35 @@ function sessionMaxAge(env) {
   return clampNumber(env.SESSION_TTL_SECONDS, 3600, MAX_SESSION_SECONDS, MAX_SESSION_SECONDS);
 }
 
+function sessionPolicy(env, authMethod) {
+  return sessionPolicyForAuthMethod(env, authMethod, sessionMaxAge(env));
+}
+
+function billingSessionVersion(env, accountVersion) { return `${String(env.SESSION_VERSION || "1")}:${Number(accountVersion || 1)}`; }
+
 async function refreshAuthenticatedSession(request, response, env, url, path) {
   if (path === "/api/login" || path === "/api/passkey/handoff" || path === "/api/logout" || response.status === 401) return response;
   const session = await readSession(request, env);
-  if (!session) return response;
+  if (!session || !shouldRefreshSession(session)) return response;
 
   const account = await env.DB.prepare(`
     SELECT id, role, session_version FROM billing_accounts WHERE id = ? AND is_active = 1
   `).bind(session.accountId).first();
   if (!account) return response;
 
-  const maxAge = sessionMaxAge(env);
-  const token = await createSessionToken(account, maxAge, env, {
+  const policy = sessionPolicy(env, session.authMethod);
+  const token = await createSessionToken(account, policy.ttlSeconds, env, {
     identityId: session.identityId,
     credentialId: session.credentialId,
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
     authMethod: session.authMethod,
-    sessionId: session.sessionId
+    sessionId: session.sessionId,
+    startedAt: session.startedAt
   });
   const headers = new Headers(response.headers);
-  headers.set("Set-Cookie", sessionCookie(token, maxAge, url.protocol === "https:"));
+  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -837,8 +868,8 @@ function sameOrigin(request, url) {
   return request.headers.get("Origin") === url.origin;
 }
 
-function sessionCookie(token, maxAge, secure) {
-  return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+function sessionCookie(token, policy, secure) {
+  return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, policy, secure);
 }
 
 function clearSessionCookie(secure) {

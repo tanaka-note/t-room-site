@@ -15,12 +15,20 @@ test("session resume carries a hashed session identifier and never the raw cooki
     serviceAccountId: "main-user",
     role: "user",
     authMethod: "password",
-    sessionId: "raw-session-id"
+    sessionId: "raw-session-id",
+    credentialId: "credential-1",
+    expiresAt: 4102444800,
+    sessionVersion: "3:1",
+    passkeySessionEpoch: 7
   }, "audit-test-salt");
   assert.equal(event.eventType, "session_resume");
   assert.equal(event.serviceLinkId, "link-1");
   assert.notEqual(event.sessionIdHash, "raw-session-id");
   assert.ok(event.sessionIdHash);
+  assert.equal(event.credentialId, "credential-1");
+  assert.equal(event.expiresAt, 4102444800);
+  assert.equal(event.sessionVersion, "3:1");
+  assert.equal(event.passkeySessionEpoch, 7);
   assert.doesNotMatch(JSON.stringify(event), /raw-session-id|cookie|password_hash|private_key/);
 });
 

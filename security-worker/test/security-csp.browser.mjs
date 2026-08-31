@@ -84,13 +84,14 @@ const server = createServer(async (request, response) => {
       { service: "cloud", accountId: "folder-member", rootFolderId: 10, displayLabel: "動画", role: "member", roleLabel: "フォルダ利用者", privileged: false }
     ] }
   ] });
-  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: cancelledInviteIdentityVisible ? 1 : 0, pendingApproval: 0, noPasskey: cancelledInviteIdentityVisible ? 1 : 0, critical: 0 });
+  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: cancelledInviteIdentityVisible ? 1 : 0, pendingApproval: 0, noPasskey: cancelledInviteIdentityVisible ? 1 : 0, critical: 0, activeUsers: [{ identityId: "primary-admin", displayName: "第一管理者", services: ["cloud", "diary"] }] });
   if (url.pathname === "/security/api/identities" && request.method === "POST") {
     receivedCreateInviteBodies.push(JSON.parse(await readBody(request)));
     return sendJson(response, 201, { identityId: "browser-created-invite", invitationUrl: "/security/#invite=browser-new-token", expiresAt: 4102444800 });
   }
   if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [
     { id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" },
+  ], pendingIdentities: [
     ...(detailUiIdentityVisible ? [{ id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", activeCredentials: 0, pendingCredentials: 1 }] : []),
     ...(cancelledInviteIdentityVisible ? [{ id: "cancelled-invite-user", displayName: "取消テストユーザー", status: "invited", activeCredentials: 0, pendingCredentials: 0 }] : [])
   ], auditIdentities: [{ id: "retired-audit-user", displayName: "過去利用者", status: "disabled", isSecurityAdmin: false }] });
@@ -108,6 +109,12 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/security/api/identities/primary-admin") return sendJson(response, 200, {
     identity: { id: "primary-admin", displayName: "第一管理者", status: "active", isSecurityAdmin: true },
+    sessions: [
+      { service: "cloud", available: true, loggedIn: true, sessions: [{ authMethod: "passkey", serviceAccountId: "admin", role: "admin", startedAt: "2026-08-30T00:00:00.000Z", lastSeenAt: "2026-08-30T00:05:00.000Z", expiresAt: "2026-08-30T12:00:00.000Z" }] },
+      { service: "diary", available: true, loggedIn: false, sessions: [] },
+      { service: "billing", available: true, loggedIn: false, sessions: [] },
+      { service: "ai", available: true, loggedIn: false, sessions: [] }
+    ],
     links: [{ id: "primary-cloud", service: "cloud", service_account_id: "admin", display_label: "T-Cloud 管理者", role: "admin", role_label: "管理者", status: "pending", protected: true }],
     credentials: [], invitations: [], approvalCandidates: [], adminKeyEnvelopes: []
   });
@@ -124,6 +131,12 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/security/api/identities/detail-ui-user") return sendJson(response, 200, {
     identity: { id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", isSecurityAdmin: false },
+    sessions: [
+      { service: "cloud", available: true, loggedIn: false, sessions: [] },
+      { service: "diary", available: true, loggedIn: true, sessions: [{ authMethod: "passkey", serviceAccountId: "main-user", role: "user", startedAt: "2026-08-30T01:00:00.000Z", lastSeenAt: "2026-08-30T01:05:00.000Z", expiresAt: "2026-08-30T13:00:00.000Z" }] },
+      { service: "billing", available: true, loggedIn: false, sessions: [] },
+      { service: "ai", available: true, loggedIn: false, sessions: [] }
+    ],
     links: [
       { id: "detail-diary", service: "diary", service_account_id: "main-user", cloud_root_folder_id: null, display_label: "田中宏知（一般ユーザー）", role: "user", role_label: "一般ユーザー", status: "active", protected: false },
       { id: "detail-billing", service: "billing", service_account_id: "owner", cloud_root_folder_id: null, display_label: "田中宏知（管理者）", role: "owner", role_label: "管理者", status: "active", protected: false },
@@ -572,6 +585,8 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.getByRole("button", { name: "端末のロック解除を登録" }).click();
     await unsupported.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
     assert.equal(await unsupported.locator("#admin-view").isVisible(), true, `${name}: PRF unsupported must not block Security Center`);
+    assert.match(await unsupported.locator("#dashboard-panel .active-users").textContent(), /第一管理者.*T-Cloud.*日記/s,
+      `${name}: dashboard summarizes the services with currently valid sessions`);
     assert.equal(await unsupported.locator("#tcloud-setup-notice").isVisible(), true);
     assert.match(await unsupported.locator("#tcloud-setup-status").textContent(), /この端末ではT-Cloudのパスキー利用に対応していません/);
     assert.equal(await unsupported.locator("#tcloud-setup-resume").isVisible(), false, `${name}: PRF unsupported must not promise a retry`);
@@ -585,8 +600,8 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#audit-list .audit-row").first().waitFor();
     assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=/, `${name}: all users remains the default audit filter`);
     assert.deepEqual(await unsupported.locator("#audit-identity option").allTextContents(),
-      ["すべて", "第一管理者", "詳細UIテスト", "取消テストユーザー", "過去利用者（停止済み）"],
-      `${name}: current and retired audited users are exposed with human-readable labels`);
+      ["すべて", "第一管理者", "過去利用者（停止済み）"],
+      `${name}: registered users remain selectable while invitation-only identities are excluded`);
     const auditText = await unsupported.locator("#audit-list").textContent();
     assert.match(auditText, /パスキーでログイン成功/, `${name}: known audit event is shown in Japanese`);
     assert.match(auditText, /パスキーの本人確認に成功/, `${name}: intermediate WebAuthn success is distinct from a completed login`);
@@ -618,16 +633,16 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: the primary administrator filter sends its Identity ID`);
     assert.match(receivedAuditQueries.at(-1), /service=cloud/, `${name}: user and service filters are combined`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: a new user search does not reuse the prior cursor`);
-    await unsupported.locator("#audit-identity").selectOption("detail-ui-user");
+    await unsupported.locator("#audit-identity").selectOption("retired-audit-user");
     await unsupported.getByRole("button", { name: "もっと見る" }).click();
     assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: paging keeps the submitted user filter`);
-    assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=detail-ui-user/, `${name}: an unsubmitted filter change cannot mix cursor pages`);
+    assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=retired-audit-user/, `${name}: an unsubmitted filter change cannot mix cursor pages`);
     assert.match(receivedAuditQueries.at(-1), /service=cloud/, `${name}: paging keeps every submitted compound filter`);
     assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: paging appends the cursor to the submitted query`);
     await unsupported.locator("#audit-service").selectOption("diary");
     await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
-    assert.match(receivedAuditQueries.at(-1), /identityId=detail-ui-user/, `${name}: a registered user can be filtered independently`);
-    assert.match(receivedAuditQueries.at(-1), /service=diary/, `${name}: the registered user filter combines with another service`);
+    assert.match(receivedAuditQueries.at(-1), /identityId=retired-audit-user/, `${name}: a previously registered stopped user can be filtered independently`);
+    assert.match(receivedAuditQueries.at(-1), /service=diary/, `${name}: the historical registered-user filter combines with another service`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: changing to another user resets pagination`);
     await unsupported.locator("#audit-identity").selectOption("");
     await unsupported.locator("#audit-service").selectOption("");
@@ -680,6 +695,8 @@ async function verifyBrowser(browserType, name, origin) {
       `${name}: reinvite expiry stays hidden until requested`);
     const detailText = await unsupported.locator("#identity-detail").textContent();
     assert.match(detailText, /管理者承認待ち/);
+    assert.match(detailText, /現在のログイン状況.*T-Cloud未ログイン.*日記ログイン中/s,
+      `${name}: Identity detail distinguishes live service sessions from historical last-access timestamps`);
     assert.match(detailText, /現在のパスキー/);
     assert.match(detailText, /期限切れ/);
     assert.match(detailText, /期限情報を取得できません/);

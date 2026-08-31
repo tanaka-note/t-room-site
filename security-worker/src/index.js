@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { sessionCookieValue } from "../../assets/session-policy.mjs";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -51,16 +52,14 @@ const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "ai\u0000owner\u0000"
 ]);
 const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
-  "invite_used",
-  "passkey_registration",
   "identity_approved",
   "passkey_login_success",
   "passkey_authentication_success",
   "password_login_success",
-  "session_resume",
-  "tcloud_key_envelope_saved",
-  "tcloud_key_delegated"
+  "session_resume"
 ]);
+const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -100,6 +99,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
       this.env.DB.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").bind(nowSeconds() - 86400),
       this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
       this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
+      this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
       this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < ?").bind(retentionCutoff)
     ]);
   }
@@ -135,7 +135,10 @@ async function handleApi(request, env, url, path, context = null) {
     requireMutation(request, url);
     const session = await readSecuritySession(request, env, ADMIN_COOKIE, "admin")
       || await readSecuritySession(request, env, IDENTITY_COOKIE, "identity");
-    if (session) await writeLocalAudit(env, { eventType: "logout", outcome: "success", identityId: session.identityId, authMethod: "passkey" }, request);
+    if (session) await writeLocalAudit(env, {
+      eventType: "logout", outcome: "success", identityId: session.identityId, authMethod: "passkey",
+      sessionIdHash: await hmac(session.sessionId || `${session.kind}:${session.identityId}:${session.credentialId}:${session.exp}`, env.AUDIT_IP_SALT || env.SESSION_SECRET || "local-audit")
+    }, request);
     const headers = new Headers();
     headers.append("Set-Cookie", clearCookie(ADMIN_COOKIE, url.protocol === "https:"));
     headers.append("Set-Cookie", clearCookie(IDENTITY_COOKIE, url.protocol === "https:"));
@@ -725,14 +728,80 @@ async function dashboard(env) {
     SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'active') THEN 1 ELSE 0 END) AS noPasskey
     FROM security_identities i
     WHERE i.status != 'disabled'`).first();
-  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0) });
+  const sessionState = await activeSessionState(env);
+  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0), activeUsers: sessionState.users });
+}
+
+async function activeSessionState(env, identityId = null) {
+  const now = nowSeconds();
+  const bindings = [now];
+  const identityClause = identityId ? "AND session.identity_id = ?" : "";
+  if (identityId) bindings.push(identityId);
+  const rows = await env.DB.prepare(`SELECT session.*, identity.display_name,
+      credential.status AS credential_status, link.status AS link_status
+    FROM security_active_sessions session
+    JOIN security_identities identity ON identity.id = session.identity_id AND identity.status = 'active'
+    LEFT JOIN security_credentials credential ON credential.credential_id = session.credential_id
+    LEFT JOIN security_service_links link ON link.id = session.service_link_id
+    WHERE session.ended_at IS NULL AND session.expires_at > ? ${identityClause}
+    ORDER BY session.last_seen_at DESC`).bind(...bindings).all();
+  const globalRuntime = await observePasskeyRuntime(env, passkeysEnabled(env));
+  const runtimeCache = new Map();
+  const validRows = [];
+  const serviceAvailability = new Map();
+  for (const row of rows.results || []) {
+    if (!ACTIVE_SESSION_SERVICE_IDS.includes(row.service)) continue;
+    const runtimeKey = `${row.service}\u0000${row.service_account_id || ""}`;
+    if (!runtimeCache.has(runtimeKey)) {
+      try {
+        const runtime = await serviceProvider(env, row.service).getSessionRuntimeState({ serviceAccountId: row.service_account_id });
+        runtimeCache.set(runtimeKey, runtime && typeof runtime === "object" ? runtime : null);
+      } catch { runtimeCache.set(runtimeKey, null); }
+    }
+    const runtime = runtimeCache.get(runtimeKey);
+    if (runtime) serviceAvailability.set(row.service, true);
+    else if (!serviceAvailability.has(row.service)) serviceAvailability.set(row.service, false);
+    if (!runtime) continue;
+    if (String(row.session_version) !== String(runtime.sessionVersion || "")) continue;
+    if (row.auth_method === "passkey") {
+      if (!globalRuntime.enabled || runtime.passkeyEnabled !== true) continue;
+      if (Number(row.passkey_session_epoch) !== Number(globalRuntime.epoch)) continue;
+      if (row.credential_status !== "active" || row.link_status !== "active") continue;
+    }
+    validRows.push(row);
+  }
+  const services = ACTIVE_SESSION_SERVICE_IDS.map((service) => {
+    const sessions = validRows.filter((row) => row.service === service).map(publicActiveSession);
+    return { service, available: serviceAvailability.get(service) !== false, loggedIn: sessions.length > 0, sessions };
+  });
+  const users = [];
+  for (const row of validRows) {
+    let user = users.find((item) => item.identityId === row.identity_id);
+    if (!user) {
+      user = { identityId: row.identity_id, displayName: row.display_name, services: [] };
+      users.push(user);
+    }
+    if (!user.services.includes(row.service)) user.services.push(row.service);
+  }
+  return { services, users };
+}
+
+function publicActiveSession(row) {
+  return {
+    authMethod: row.auth_method,
+    serviceAccountId: row.service_account_id || null,
+    role: row.role || null,
+    startedAt: normalizeUtcTimestamp(row.started_at),
+    lastSeenAt: normalizeUtcTimestamp(row.last_seen_at),
+    expiresAt: new Date(Number(row.expires_at) * 1000).toISOString()
+  };
 }
 
 async function listAiBudgets(env) {
   const rows = await env.DB.prepare(`SELECT p.identity_id, i.display_name, i.status,
       p.monthly_budget_jpy, p.soft_stop_jpy, p.hard_stop_jpy, p.reserve_enabled, p.reserve_period, p.updated_at
     FROM security_ai_budget_policies p JOIN security_identities i ON i.id = p.identity_id
-    WHERE i.status != 'disabled' ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all();
+    WHERE i.status = 'active' ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all();
   const policies = [];
   for (const row of rows.results || []) {
     let usage = null;
@@ -750,7 +819,7 @@ async function updateAiBudget(identityId, request, env, admin) {
   const hardStopJpy = integerRange(body.hardStopJpy, softStopJpy || 0, monthlyBudgetJpy || 0);
   const reserveEnabled = body.reserveEnabled === true;
   if (!monthlyBudgetJpy || !softStopJpy || !hardStopJpy) throw new HttpError(400, "AI利用予算の金額を確認してください。");
-  const identity = await env.DB.prepare("SELECT id FROM security_identities WHERE id = ? AND status != 'disabled'").bind(identityId).first();
+  const identity = await env.DB.prepare("SELECT id FROM security_identities WHERE id = ? AND status = 'active'").bind(identityId).first();
   if (!identity) throw new HttpError(404, "対象ユーザーが見つかりません。");
   const current = await env.DB.prepare("SELECT * FROM security_ai_budget_policies WHERE identity_id = ?").bind(identityId).first();
   const period = currentJstMonth();
@@ -816,7 +885,7 @@ async function listServiceRegistry(env) {
 }
 
 async function listIdentities(env) {
-  const [result, auditIdentityResult] = await Promise.all([
+  const [result, pendingResult, auditIdentityResult] = await Promise.all([
     env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin, i.last_login_at, i.last_seen_at,
     COUNT(DISTINCT CASE WHEN c.status = 'active' THEN c.credential_id END) AS activeCredentials,
     COUNT(DISTINCT CASE WHEN c.status = 'pending' THEN c.credential_id END) AS pendingCredentials,
@@ -824,16 +893,31 @@ async function listIdentities(env) {
     FROM security_identities i
     LEFT JOIN security_credentials c ON c.identity_id = i.id
     LEFT JOIN security_invitations inv ON inv.identity_id = i.id
-    WHERE i.status != 'disabled'
+    WHERE i.status = 'active'
     GROUP BY i.id ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all(),
+    env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin, i.last_login_at, i.last_seen_at,
+      COUNT(DISTINCT CASE WHEN c.status = 'active' THEN c.credential_id END) AS activeCredentials,
+      COUNT(DISTINCT CASE WHEN c.status = 'pending' THEN c.credential_id END) AS pendingCredentials,
+      MAX(CASE WHEN inv.status = 'active' THEN inv.expires_at END) AS inviteExpiresAt
+      FROM security_identities i
+      LEFT JOIN security_credentials c ON c.identity_id = i.id
+      LEFT JOIN security_invitations inv ON inv.identity_id = i.id
+      WHERE i.status IN ('invited', 'pending_approval')
+      GROUP BY i.id ORDER BY i.display_name COLLATE NOCASE`).all(),
     env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin
       FROM security_identities i
       WHERE i.status = 'disabled'
-        AND EXISTS (SELECT 1 FROM security_audit_events audit WHERE audit.identity_id = i.id)
-      ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all()
+        AND (
+          EXISTS (SELECT 1 FROM security_credentials credential WHERE credential.identity_id = i.id AND credential.approved_at IS NOT NULL)
+          OR EXISTS (SELECT 1 FROM security_audit_events audit WHERE audit.identity_id = i.id
+            AND audit.event_type IN (${REGISTERED_IDENTITY_AUDIT_EVENTS.map(() => "?").join(", ")}))
+        )
+      ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).bind(...REGISTERED_IDENTITY_AUDIT_EVENTS).all()
   ]);
+  const mapIdentity = (row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null });
   return json({
-    identities: (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null })),
+    identities: (result.results || []).map(mapIdentity),
+    pendingIdentities: (pendingResult.results || []).map(mapIdentity),
     auditIdentities: (auditIdentityResult.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin) }))
   });
 }
@@ -904,6 +988,7 @@ async function identityDetail(id, env) {
     });
   }
   const firstCandidate = approvalCandidates[0] || null;
+  const sessionState = await activeSessionState(env, id);
   return json({
     identity: { id: identity.id, displayName: identity.display_name, status: identity.status, isSecurityAdmin: Boolean(identity.is_security_admin), lastLoginAt: normalizeUtcTimestamp(identity.last_login_at), lastSeenAt: normalizeUtcTimestamp(identity.last_seen_at) },
     links: linkDetails,
@@ -912,6 +997,7 @@ async function identityDetail(id, env) {
     approvalCandidates,
     invitations: (invitations.results || []).map(withUtcTimes),
     audits: (audits.results || []).map(withUtcTimes),
+    sessions: sessionState.services,
     cloudApproval: firstCandidate?.cloudApproval || null,
     adminKeyEnvelopes: (adminKeyRows.results || []).map((row) => ({ credentialId: row.credential_id, encryptedPayload: row.encrypted_payload, payloadIv: row.payload_iv }))
   });
@@ -971,6 +1057,7 @@ async function removeIdentityLink(linkId, request, env, admin) {
   if (link.identity_id === PRIMARY_ADMIN_ID && isPrimaryAdminCoreLink(link)) throw new HttpError(409, "第一管理者の既定サービス連携は解除できません。");
   await env.DB.batch([
     env.DB.prepare("UPDATE security_service_links SET status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(linkId),
+    endActiveSessionsStatement(env, "service_link_disabled", { serviceLinkId: linkId, authMethod: "passkey" }),
     await localAuditStatement(env, { eventType: "service_link_removed", outcome: "success", identityId: link.identity_id, service: link.service, serviceAccountId: link.service_account_id, authMethod: "passkey", details: { changedBy: admin.identityId } }, request)
   ]);
   return json({ ok: true });
@@ -1066,6 +1153,7 @@ async function disableIdentity(identityId, request, env, admin) {
       WHERE identity_id = ? AND consumed_at IS NULL
         AND EXISTS (SELECT 1 FROM security_identities identity WHERE identity.${disabledGuardSql})`)
       .bind(invalidatedAt, identityId, identityId, PRIMARY_ADMIN_ID, disabledAt),
+    endActiveSessionsStatement(env, "identity_disabled", { identityId }),
     auditInsertStatement(env, audit, {
       sql: "EXISTS (SELECT 1 FROM security_identities WHERE id = ? AND status = 'disabled' AND updated_at = ?)",
       bindings: [identityId, disabledAt]
@@ -1100,6 +1188,7 @@ async function revokeCredential(credentialId, request, env, admin) {
   if (!credential) throw new HttpError(404, "パスキーが見つかりません。");
   await env.DB.batch([
     env.DB.prepare("UPDATE security_credentials SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE credential_id = ? AND status != 'revoked'").bind(credentialId),
+    endActiveSessionsStatement(env, "credential_revoked", { credentialId, authMethod: "passkey" }),
     await localAuditStatement(env, { eventType: "passkey_revoked", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request)
   ]);
   return json({ ok: true });
@@ -1617,10 +1706,10 @@ async function securitySessionHeaders(env, url, identityId, credentialId, admin)
   const authenticatedAt = nowSeconds();
   const sessionId = crypto.randomUUID();
   const identityTtl = clampNumber(env.IDENTITY_SESSION_TTL_SECONDS, 60, 900, 600);
-  headers.append("Set-Cookie", await signedCookie(env, IDENTITY_COOKIE, { kind: "identity", identityId, credentialId, passkeySessionEpoch: runtime.epoch, authenticatedAt, sessionId }, identityTtl, url.protocol === "https:"));
+  headers.append("Set-Cookie", await signedCookie(env, IDENTITY_COOKIE, { kind: "identity", identityId, credentialId, passkeySessionEpoch: runtime.epoch, authenticatedAt, authMethod: "passkey", sessionId }, identityTtl, url.protocol === "https:"));
   if (admin) {
     const adminTtl = clampNumber(env.ADMIN_SESSION_TTL_SECONDS, 300, 7200, 3600);
-    headers.append("Set-Cookie", await signedCookie(env, ADMIN_COOKIE, { kind: "admin", identityId, credentialId, passkeySessionEpoch: runtime.epoch, authenticatedAt, sessionId }, adminTtl, url.protocol === "https:"));
+    headers.append("Set-Cookie", await signedCookie(env, ADMIN_COOKIE, { kind: "admin", identityId, credentialId, passkeySessionEpoch: runtime.epoch, authenticatedAt, authMethod: "passkey", sessionId }, adminTtl, url.protocol === "https:"));
   }
   return headers;
 }
@@ -1629,7 +1718,7 @@ async function signedCookie(env, name, payload, ttl, secureValue) {
   if (!env.SESSION_SECRET) throw new HttpError(503, "Security Centerのセッション設定が完了していません。");
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify({ ...payload, exp: nowSeconds() + ttl })));
   const token = `${encoded}.${await hmac(encoded, env.SESSION_SECRET)}`;
-  return `${name}=${token}; Path=${BASE_PATH}; Max-Age=${ttl}; HttpOnly; SameSite=Strict${secureValue ? "; Secure" : ""}`;
+  return sessionCookieValue(name, token, BASE_PATH, { persistent: false, ttlSeconds: ttl }, secureValue);
 }
 
 async function readSecuritySession(request, env, name, expectedKind) {
@@ -1643,7 +1732,7 @@ async function readSecuritySession(request, env, name, expectedKind) {
     const [payload, signature] = parts;
     if (!payload || !signature || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
     const value = JSON.parse(decoder.decode(base64UrlToBytes(payload)));
-    return value.kind === expectedKind && value.exp > nowSeconds()
+    return value.kind === expectedKind && value.authMethod === "passkey" && value.exp > nowSeconds()
       && Number.isInteger(Number(value.passkeySessionEpoch))
       && Number(value.passkeySessionEpoch) === runtime.epoch ? value : null;
   } catch { return null; }
@@ -1709,13 +1798,13 @@ async function storeAuditEvent(env, input) {
       if (described?.valid) event.serviceAccountLabel = normalizeText(described.displayLabel, 160) || null;
     } catch { /* audit ingestion must not fail solely because a provider is unavailable */ }
   }
-  const statements = [auditInsertStatement(env, event), ...identityActivityStatements(env, event)];
+  const statements = [auditInsertStatement(env, event), ...identityActivityStatements(env, event), ...activeSessionStatements(env, event)];
   await env.DB.batch(statements);
 }
 
 async function writeLocalAudit(env, input, request = null) {
   const event = await localAuditEvent(env, input, request);
-  await env.DB.batch([auditInsertStatement(env, event), ...identityActivityStatements(env, event)]);
+  await env.DB.batch([auditInsertStatement(env, event), ...identityActivityStatements(env, event), ...activeSessionStatements(env, event)]);
 }
 
 async function recordSecuritySessionResume(env, request, session) {
@@ -1730,6 +1819,11 @@ async function recordSecuritySessionResume(env, request, session) {
     serviceAccountId: session.kind === "admin" ? "security-admin" : "security-identity",
     role: session.kind === "admin" ? "security-admin" : "identity",
     authMethod: "passkey",
+    credentialId: session.credentialId,
+    expiresAt: Number(session.exp),
+    startedAt: new Date(Number(session.authenticatedAt || nowSeconds()) * 1000).toISOString(),
+    sessionVersion: "security-1",
+    passkeySessionEpoch: Number(session.passkeySessionEpoch),
     sessionIdHash: await hmac(identifier, env.AUDIT_IP_SALT || env.SESSION_SECRET || "local-audit"),
     sourceHash: await sourceHash(request, env),
     userAgent: request.headers.get("User-Agent") || null
@@ -1751,7 +1845,10 @@ async function localAuditEvent(env, input, request = null) {
     eventType: input.eventType, outcome: input.outcome || "info", identityId: input.identityId || null,
     serviceLinkId: input.serviceLinkId || null, serviceAccountId: input.serviceAccountId || null,
     serviceAccountLabel: input.serviceAccountLabel || null, role: input.role || null,
-    authMethod: input.authMethod || "system", sourceHash: request ? await sourceHash(request, env) : null,
+    authMethod: input.authMethod || "system", credentialId: input.credentialId || null,
+    expiresAt: input.expiresAt ?? null, startedAt: input.startedAt || null,
+    sessionVersion: input.sessionVersion || null, passkeySessionEpoch: input.passkeySessionEpoch ?? null,
+    sessionIdHash: input.sessionIdHash || null, sourceHash: request ? await sourceHash(request, env) : null,
     userAgent: request?.headers.get("User-Agent") || null, details: input.details || {}
   });
 }
@@ -1794,6 +1891,43 @@ function identityActivityStatements(env, event) {
   return [];
 }
 
+function activeSessionStatements(env, event) {
+  if (!event.sessionIdHash || event.outcome !== "success") return [];
+  if (event.eventType === "logout") return [endActiveSessionsStatement(env, "logout", { sessionIdHash: event.sessionIdHash })];
+  if (!ACTIVE_SESSION_START_EVENTS.has(event.eventType) && event.eventType !== "session_resume") return [];
+  if (!event.identityId || !event.authMethod || !Number.isSafeInteger(event.expiresAt) || event.expiresAt <= nowSeconds() || !event.sessionVersion) return [];
+  const startedAt = validIso(event.startedAt) || event.occurredAt;
+  return [env.DB.prepare(`INSERT INTO security_active_sessions
+    (session_id_hash, identity_id, service, service_link_id, service_account_id, credential_id, role,
+      auth_method, session_version, passkey_session_epoch, started_at, last_seen_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(session_id_hash) DO UPDATE SET
+      identity_id = excluded.identity_id, service = excluded.service,
+      service_link_id = COALESCE(excluded.service_link_id, security_active_sessions.service_link_id),
+      service_account_id = COALESCE(excluded.service_account_id, security_active_sessions.service_account_id),
+      credential_id = COALESCE(excluded.credential_id, security_active_sessions.credential_id),
+      role = COALESCE(excluded.role, security_active_sessions.role), auth_method = excluded.auth_method,
+      session_version = excluded.session_version,
+      passkey_session_epoch = COALESCE(excluded.passkey_session_epoch, security_active_sessions.passkey_session_epoch),
+      last_seen_at = excluded.last_seen_at, expires_at = excluded.expires_at,
+      ended_at = NULL, end_reason = NULL, updated_at = CURRENT_TIMESTAMP`)
+    .bind(event.sessionIdHash, event.identityId, event.service, event.serviceLinkId, event.serviceAccountId,
+      event.credentialId, event.role, event.authMethod, event.sessionVersion, event.passkeySessionEpoch,
+      startedAt, event.occurredAt, event.expiresAt)];
+}
+
+function endActiveSessionsStatement(env, reason, filter) {
+  const clauses = ["ended_at IS NULL"];
+  const bindings = [new Date().toISOString(), normalizeText(reason, 80) || "invalidated"];
+  const columns = { sessionIdHash: "session_id_hash", identityId: "identity_id", serviceLinkId: "service_link_id", credentialId: "credential_id", authMethod: "auth_method" };
+  for (const [key, column] of Object.entries(columns)) {
+    if (filter?.[key] == null) continue;
+    clauses.push(`${column} = ?`);
+    bindings.push(filter[key]);
+  }
+  return env.DB.prepare(`UPDATE security_active_sessions SET ended_at = ?, end_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE ${clauses.join(" AND ")}`).bind(...bindings);
+}
+
 function normalizeAuditEvent(input) {
   const service = ["security", "cloud", "diary", "billing", "ai"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
@@ -1805,6 +1939,11 @@ function normalizeAuditEvent(input) {
     serviceAccountId: normalizeText(input?.serviceAccountId, 100) || null,
     serviceAccountLabel: normalizeText(input?.serviceAccountLabel, 160) || null,
     role: normalizeText(input?.role, 80) || null, authMethod,
+    credentialId: validCredentialId(input?.credentialId) || null,
+    expiresAt: Number.isSafeInteger(Number(input?.expiresAt)) ? Number(input.expiresAt) : null,
+    startedAt: validIso(input?.startedAt) || null,
+    sessionVersion: normalizeText(input?.sessionVersion, 80) || null,
+    passkeySessionEpoch: Number.isSafeInteger(Number(input?.passkeySessionEpoch)) ? Number(input.passkeySessionEpoch) : null,
     sessionIdHash: normalizeSecretText(input?.sessionIdHash, 128) || null, sourceHash: normalizeSecretText(input?.sourceHash, 128) || null,
     userAgent: normalizeText(input?.userAgent, 300) || null, targetType: normalizeText(input?.targetType, 80) || null,
     targetId: normalizeText(input?.targetId, 160) || null, details: sanitizeDetails(input?.details)

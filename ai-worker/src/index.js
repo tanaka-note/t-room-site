@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
   currentJstPeriod,
   effectiveBudgetLimitMicros,
@@ -32,6 +33,10 @@ export default class AiWorker extends WorkerEntrypoint {
 }
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async getSessionRuntimeState() {
+    return { sessionVersion: String(this.env.SESSION_VERSION || "1"), passkeyEnabled: String(this.env.PASSKEY_ENABLED || "false") === "true" };
+  }
+
   async listLinkTargets() {
     return {
       service: "ai",
@@ -68,7 +73,10 @@ async function handleApi(request, env, url, path, context) {
     return completePasskeyHandoff(request, env, url);
   }
   const session = await requireSession(request, env);
-  if (path === "/api/session" && request.method === "GET") return sessionResponse(env, session);
+  if (path === "/api/session" && request.method === "GET") {
+    await audit(env, request, session, "session_resume", "success");
+    return sessionResponse(env, session);
+  }
   if (path === "/api/logout" && request.method === "POST") {
     requireMutation(request, url);
     scheduleAudit(context, audit(env, request, session, "logout", "success"));
@@ -107,6 +115,7 @@ async function completePasskeyHandoff(request, env, url) {
       VALUES (?, 'zundamon', ?) ON CONFLICT(identity_id, character_id) DO NOTHING`)
       .bind(handoff.identityId, memoryNamespace(handoff.identityId, "zundamon"))
   ]);
+  const policy = sessionPolicyForAuthMethod(env, "passkey");
   const payload = {
     identityId: handoff.identityId,
     credentialId: handoff.credentialId,
@@ -115,12 +124,14 @@ async function completePasskeyHandoff(request, env, url) {
     passkeySessionEpoch: handoff.sessionEpoch,
     authMethod: "passkey",
     sessionId: crypto.randomUUID(),
-    expiresAt: nowSeconds() + sessionTtl(env)
+    startedAt: new Date().toISOString(),
+    sessionVersion: String(env.SESSION_VERSION || "1"),
+    expiresAt: nowSeconds() + policy.ttlSeconds
   };
   const token = await signSession(payload, env);
   await audit(env, request, payload, "passkey_login_success", "success");
   return json({ authenticated: true, displayName, identityId: handoff.identityId }, 200, {
-    "Set-Cookie": sessionCookie(token, sessionTtl(env), url.protocol === "https:")
+    "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:")
   });
 }
 
@@ -420,6 +431,8 @@ async function audit(env, request, session, eventType, outcome, details = {}) {
       service: "ai", eventType, outcome, identityId: session.identityId,
       serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId,
       role: session.identityId === "primary-admin" ? "admin" : "user", authMethod: "passkey", sessionId: session.sessionId,
+      credentialId: session.credentialId, expiresAt: session.expiresAt, startedAt: session.startedAt,
+      sessionVersion: session.sessionVersion || "1", passkeySessionEpoch: session.passkeySessionEpoch,
       userAgent: request.headers.get("User-Agent"), details
     });
   } catch { /* audit transport is best effort; usage accounting remains in AI D1 */ }
@@ -427,11 +440,10 @@ async function audit(env, request, session, eventType, outcome, details = {}) {
 
 function scheduleAudit(context, promise) { if (context?.waitUntil) context.waitUntil(promise); else void promise.catch(() => {}); }
 function requireMutation(request, url) { if (request.headers.get("Origin") !== url.origin || !String(request.headers.get("Content-Type") || "").startsWith("application/json")) throw new HttpError(403, "不正なリクエストです。"); }
-function sessionTtl(env) { return clampNumber(env.SESSION_TTL_SECONDS, 300, 2592000, 2592000); }
-function sessionCookie(token, maxAge, secure) { return `${SESSION_COOKIE}=${token}; Path=${BASE_PATH}; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
+function sessionCookie(token, policy, secure) { return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, policy, secure); }
 function clearCookie(secure) { return `${SESSION_COOKIE}=; Path=${BASE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
 async function signSession(payload, env) { if (!env.SESSION_SECRET) throw new HttpError(503, "AI Chatのセッション設定が未完了です。"); const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload))); return `${encoded}.${await hmac(encoded, env.SESSION_SECRET)}`; }
-async function verifySession(token, env) { if (!token || !env.SESSION_SECRET || token.split(".").length !== 2) return null; try { const [payload, signature] = token.split("."); if (!(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null; const value = JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload))); return value.authMethod === "passkey" && Number(value.expiresAt) > nowSeconds() ? value : null; } catch { return null; } }
+async function verifySession(token, env) { if (!token || !env.SESSION_SECRET || token.split(".").length !== 2) return null; try { const [payload, signature] = token.split("."); if (!(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null; const value = JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload))); return value.authMethod === "passkey" && Number(value.expiresAt) > nowSeconds() && String(value.sessionVersion || "1") === String(env.SESSION_VERSION || "1") ? value : null; } catch { return null; } }
 async function hmac(value, secret) { const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)))); }
 async function safeEqual(left, right) { let a; let b; try { a = base64UrlToBytes(left); b = base64UrlToBytes(right); } catch { return false; } if (a.length !== b.length) return false; let result = 0; for (let i = 0; i < a.length; i += 1) result |= a[i] ^ b[i]; return result === 0; }
 function bytesToBase64Url(bytes) { let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, ""); }

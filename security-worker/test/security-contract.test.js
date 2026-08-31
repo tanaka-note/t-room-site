@@ -24,6 +24,7 @@ const diary = await readFile(new URL("../../diary-worker/src/index.js", import.m
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
 const ai = await readFile(new URL("../../ai-worker/src/index.js", import.meta.url), "utf8");
 const aiServiceMigration = await readFile(new URL("../migrations/0009_ai_chat_service_and_budgets.sql", import.meta.url), "utf8");
+const activeSessionMigration = await readFile(new URL("../migrations/0010_active_service_sessions.sql", import.meta.url), "utf8");
 const sessionValidator = await readFile(new URL("../../assets/passkey-session-validation.mjs", import.meta.url), "utf8");
 const globalSwitchTool = await readFile(new URL("../tools/global-passkey-switch.mjs", import.meta.url), "utf8");
 const securityConfig = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
@@ -510,14 +511,40 @@ test("audit history uses stable composite cursor pagination", () => {
   assert.match(securityUi, /insertAdjacentHTML\("beforeend"/);
 });
 
-test("audit user options reuse current identities and retain disabled audited identities", () => {
+test("user choices separate registered identities from invitation-only history", () => {
   assert.match(worker, /auditIdentities/);
-  assert.match(worker, /i\.status = 'disabled'[\s\S]*security_audit_events audit[\s\S]*audit\.identity_id = i\.id/);
+  assert.match(worker, /i\.status = 'disabled'[\s\S]*credential\.approved_at IS NOT NULL[\s\S]*REGISTERED_IDENTITY_AUDIT_EVENTS/);
+  assert.match(worker, /pendingIdentities/);
+  assert.match(worker, /WHERE i\.status = 'active'/);
   assert.match(securityUi, /populateAuditIdentityFilter\(\[\.\.\.currentIdentities, \.\.\.auditIdentities\]\)/);
+  assert.doesNotMatch(securityUi, /populateAuditIdentityFilter\(\[\.\.\.currentIdentities, \.\.\.pendingIdentities/);
   assert.match(securityUi, /display\.identityLabel\(identity\.id, identity\.displayName\)/);
   assert.match(securityUi, /identity\.status === "disabled" \? "（停止済み）"/);
   assert.match(securityUi, /option\.textContent =/,
     "identity labels are assigned as text rather than interpolated HTML");
+});
+
+test("active service sessions use hashed identifiers and runtime validity instead of audit recency", () => {
+  assert.match(activeSessionMigration, /session_id_hash TEXT PRIMARY KEY/);
+  assert.match(activeSessionMigration, /expires_at INTEGER NOT NULL/);
+  assert.doesNotMatch(activeSessionMigration, /cookie|raw_session|token TEXT/i);
+  assert.match(worker, /activeSessionStatements/);
+  assert.match(worker, /ACTIVE_SESSION_START_EVENTS/);
+  assert.match(worker, /event\.eventType === "logout"/);
+  assert.match(worker, /getSessionRuntimeState/);
+  assert.match(worker, /row\.credential_status !== "active" \|\| row\.link_status !== "active"/);
+  assert.match(worker, /Number\(row\.passkey_session_epoch\) !== Number\(globalRuntime\.epoch\)/);
+  assert.match(worker, /endActiveSessionsStatement\(env, "identity_disabled"/);
+  assert.match(worker, /endActiveSessionsStatement\(env, "credential_revoked"/);
+  assert.match(worker, /endActiveSessionsStatement\(env, "service_link_disabled"/);
+  for (const source of [cloud, diary, billing, ai]) {
+    assert.match(source, /getSessionRuntimeState/);
+    assert.match(source, /eventType: "logout"|audit\(env, request, session, "logout", "success"\)/);
+    assert.match(source, /sessionVersion:/);
+    assert.match(source, /expiresAt:/);
+  }
+  assert.match(securityUi, /現在のログイン状況/);
+  assert.match(securityUi, /現在ログイン中のユーザー/);
 });
 
 test("WebAuthn credential IDs and audit retention use standards-aligned boundaries", () => {

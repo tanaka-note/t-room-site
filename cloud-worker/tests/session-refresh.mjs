@@ -9,10 +9,12 @@ const [client, worker, config] = await Promise.all([
 
 assert.match(config, /"SESSION_TTL_SECONDS"\s*:\s*"2592000"/, "管理者のログイン期限が30日ではありません。");
 assert.match(config, /"SUBADMIN_SESSION_TTL_SECONDS"\s*:\s*"2592000"/, "副管理者のログイン期限が30日ではありません。");
+assert.match(config, /"PASSKEY_SESSION_TTL_SECONDS"\s*:\s*"43200"/, "パスキーの絶対期限が12時間ではありません。");
 assert.match(config, /"SESSION_VERSION"\s*:\s*"5"/, "旧共通IDセッションを無効化する世代更新がありません。");
-assert.match(worker, /Max-Age=\$\{maxAge\}/, "永続セッションCookieのMax-Ageがありません。");
 assert.match(worker, /refreshAuthenticatedSession\(request, response, env, url, path\)/, "認証済みAPI利用時の期限更新がありません。");
-assert.match(worker, /headers\.set\("Set-Cookie", sessionCookie\(token, maxAge/, "スライディング更新Cookieがありません。");
+assert.match(worker, /!shouldRefreshSession\(session\)/, "パスキーsessionをrolling更新から除外していません。");
+assert.match(worker, /cloudSessionPolicy\(env, "password"/, "PW session policyがありません。");
+assert.match(worker, /cloudSessionPolicy\(env, "passkey"/, "passkey session policyがありません。");
 assert.match(worker, /clampNumber\(configured, 3600, 2592000, 2592000\)/, "セッション上限が30日に固定されていません。");
 assert.match(worker, /sessionCacheId:\s*session\.sessionId/, "解除済み鍵をログインセッションへ関連付けていません。");
 assert.match(client, /history\.state\?\.tcloud/, "再読み込み時のフォルダ履歴を復元していません。");
@@ -21,4 +23,4 @@ assert.match(client, /await loadCachedFolderKeys\(\)/, "副管理者の解除済
 assert.match(client, /await saveCachedFolderKey\(id, unlocked\.folderKey\)/, "フォルダ解除後の鍵をセッションへ保存していません。");
 assert.match(client, /await clearCachedAdminKeys\(\)/, "ログアウト時に端末内の鍵を削除していません。");
 
-console.log("persistent login and folder refresh restoration: ok");
+console.log("password rolling and passkey absolute session policy: ok");

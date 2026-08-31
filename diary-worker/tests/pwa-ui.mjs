@@ -69,12 +69,14 @@ assert.match(script, /body: \{ loginId, password \}/);
 assert.match(worker, /withRollingSession/);
 assert.match(worker, /\["\/troom-date-picker\.css", "\/troom-date-picker\.css"\]/);
 assert.match(worker, /\["\/troom-date-picker\.js", "\/troom-date-picker\.js"\]/);
-assert.match(worker, /SESSION_TTL_SECONDS = 30 \* 24 \* 60 \* 60/);
+assert.match(worker, /PASSWORD_SESSION_TTL_SECONDS/);
+assert.match(worker, /!shouldRefreshSession\(session\)/);
 assert.match(worker, /DIARY_MAIN_ADMIN_LOGIN_ID/);
 assert.match(worker, /DIARY_WIFE_ADMIN_LOGIN_ID/);
 assert.doesNotMatch(worker, /DIARY_VIEW_PASSWORD_HASH/);
 assert.match(worker, /LOGIN_LIMIT = 5/);
 assert.match(wrangler, /"SESSION_TTL_SECONDS": "2592000"/);
+assert.match(wrangler, /"PASSKEY_SESSION_TTL_SECONDS": "43200"/);
 assert.doesNotMatch(serviceWorker, /\/diary\/api\//);
 assert.doesNotMatch(serviceWorker, /\/diary\/photos/);
 
