@@ -237,7 +237,7 @@ def draw_article(article_id, spec):
     for y in range(0, HEIGHT, 40):
         draw.line((0, y, WIDTH, y), fill="#ecefea", width=1)
 
-    draw.text((54, 32), "T-ROOM", font=get_font(30, True), fill=NAVY)
+    draw.text((54, 32), "T-lain", font=get_font(30, True), fill=NAVY)
     draw.text((54, 74), f"Learning Log #5-{article_id}", font=get_font(19, True), fill=MUTED)
     draw_center(draw, (300, 16, 1295, 116), spec["title"], get_font(50, True), NAVY)
     draw.text((1340, 38), "労働保険徴収法", font=get_font(19, True), fill=GREEN)

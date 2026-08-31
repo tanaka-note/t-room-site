@@ -11,7 +11,7 @@ assert.match(html, /id="initial-password-cancel"/);
 assert.match(html, /ログイン画面へ戻る/);
 assert.match(html, /初回設定後は、登録したパスワードを確認し、安全な場所に保管してください。/);
 assert.match(html, /パスワードを紛失するとログインできません。/);
-assert.match(html, /T-ROOM管理者へ再発行をご依頼ください。/);
+assert.match(html, /T-lain管理者へ再発行をご依頼ください。/);
 assert.match(html, /minlength="6"/);
 assert.match(html, /パスワードは6文字以上で設定してください。/);
 assert.match(html, /data-password-toggle="initial-password"/);

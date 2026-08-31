@@ -1,4 +1,4 @@
-# T-ROOM 共通Identity・パスキー仕様
+# T-lain 共通Identity・パスキー仕様
 
 ## 境界
 

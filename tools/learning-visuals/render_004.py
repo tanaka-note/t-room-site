@@ -65,7 +65,7 @@ def build_image():
     for y in range(0, HEIGHT, 32):
         draw.line((0, y, WIDTH, y), fill="#edf0eb", width=1)
 
-    draw.text((54, 38), "T-ROOM", font=font(28, True), fill=NAVY)
+    draw.text((54, 38), "T-lain", font=font(28, True), fill=NAVY)
     draw.text((54, 78), "Learning Log #5-004", font=font(19, True), fill=MUTED)
     draw_center(draw, (320, 22, 1280, 116), "概算保険料の追加徴収", font(53, True), NAVY)
     draw.text((1335, 34), "労働保険徴収法", font=font(20, True), fill=GREEN)
