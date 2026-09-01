@@ -1256,9 +1256,13 @@ async function startServiceWorkers(passkeysEnabled) {
   processes.push(startWorker("ai-worker", 8814, [
     `SESSION_SECRET:${sessionSecret}`, "AI_SAFETY_SALT:ai-integration-safety-salt", "AI_PROVIDER_MODE:mock"
   ]));
+  processes.push(startWorker("security-worker", 8815, [], [
+    "--config", "test/downloader-service-fixture.wrangler.jsonc"
+  ], "downloader-fixture"));
   await Promise.all(Object.entries(services).map(([name, service]) =>
     waitForUrl(`http://127.0.0.1:${service.port}${sessionPath(name)}`)));
   await waitForUrl("http://127.0.0.1:8814/ai/api/session");
+  await waitForUrl("http://127.0.0.1:8815/");
 }
 
 function startSecurityWorker(passkeysEnabled) {
@@ -1770,13 +1774,14 @@ function signSecurityCookie(payload) {
   return `${encoded}.${signature}`;
 }
 
-function startWorker(directory, port, vars) {
+function startWorker(directory, port, vars, extraArgs = [], marker = directory) {
   const child = spawn(process.execPath, [wranglerPath(directory), "dev", "--local", "--port", String(port),
     "--compatibility-date", "2026-08-06",
+    ...extraArgs,
     ...vars.flatMap((value) => ["--var", value])], {
     cwd: `${repository}${directory}`, stdio: ["ignore", "pipe", "pipe"]
   });
-  child.__directory = directory;
+  child.__directory = marker;
   child.__output = "";
   child.stdout.on("data", (chunk) => { child.__output += chunk; });
   child.stderr.on("data", (chunk) => { child.__output += chunk; });

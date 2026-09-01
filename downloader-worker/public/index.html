@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#090c18">
+  <meta name="troom-app-build" content="downloader-18720b1b4afe">
+  <meta name="troom-auto-update" content="enabled">
+  <title>T-lain Downloader</title>
+  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-18720b1b4afe">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <p class="eyebrow">T-lain · PRIVATE TOOL</p>
+      <div class="title-row">
+        <div><h1>Downloader</h1><p>権利を持つメディアを、解析・検査して一時保存します。</p></div>
+        <button id="logout" class="text-button" type="button" hidden>ログアウト</button>
+      </div>
+    </header>
+
+    <section id="message" class="message" role="status" aria-live="polite" hidden></section>
+
+    <section id="login-view" class="login-panel" hidden>
+      <p class="step-label">PRIVATE ACCESS</p>
+      <h2>パスキーで本人確認</h2>
+      <p>許可されたT-lain Identityだけが利用できます。</p>
+      <button id="passkey-login" class="primary" type="button">端末のロック解除でログイン</button>
+    </section>
+
+    <section id="app-view" hidden>
+      <form id="analyze-form" class="source-form">
+        <label for="source-url">メディアのURL</label>
+        <div class="url-row">
+          <input id="source-url" name="url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+            placeholder="https://example.com/media" required>
+          <button id="analyze-button" class="primary" type="submit">解析</button>
+        </div>
+        <p>URL入力だけでは本体を保存しません。解析結果を確認してから取得を開始します。</p>
+      </form>
+
+      <section id="analysis-view" class="result" hidden aria-labelledby="analysis-title">
+        <div class="result-head">
+          <div><p class="step-label">ANALYSIS</p><h2 id="analysis-title">解析結果</h2></div>
+          <span id="analysis-method" class="badge"></span>
+        </div>
+        <dl id="source-details" class="details"></dl>
+        <p id="analysis-warning" class="warning" hidden></p>
+        <form id="download-form">
+          <fieldset id="media-list"><legend>取得するメディア</legend></fieldset>
+          <label class="confirm"><input id="rights-confirmed" type="checkbox" required><span>このコンテンツを保存する権利があります</span></label>
+          <button id="download-button" class="primary" type="submit">取得する</button>
+        </form>
+      </section>
+
+      <section id="progress-view" class="progress-panel" hidden aria-live="polite">
+        <span class="activity" aria-hidden="true"></span>
+        <div><p id="progress-label">取得準備中</p><p>隔離環境で取得とファイル検査を行っています。</p></div>
+      </section>
+
+      <section id="ready-view" class="ready-panel" hidden>
+        <p class="step-label">READY</p>
+        <h2>ダウンロード可能</h2>
+        <p>既知の脅威は検出されませんでした。安全性を完全に保証するものではありません。</p>
+        <dl id="file-details" class="details"></dl>
+        <a id="file-download" class="primary download-link" download>ファイルをダウンロード</a>
+        <p id="expiry-note" class="expiry"></p>
+      </section>
+
+      <section class="history-section" aria-labelledby="history-title">
+        <div class="result-head"><div><p class="step-label">RECENT</p><h2 id="history-title">最近の処理</h2></div><button id="refresh-jobs" class="text-button" type="button">更新</button></div>
+        <div id="job-list" class="job-list"><p class="empty">処理履歴はありません。</p></div>
+      </section>
+    </section>
+  </main>
+  <script src="/security/passkey-client.js?v=downloader-18720b1b4afe"></script>
+  <script src="/downloader/downloader.js?v=downloader-18720b1b4afe"></script>
+  <script src="/assets/pwa-auto-update.js?v=downloader-18720b1b4afe" defer></script>
+</body>
+</html>

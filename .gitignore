@@ -3,6 +3,8 @@ node_modules/
 **/.dev.vars
 **/.wrangler/
 **/tmp/
+**/__pycache__/
+*.py[cod]
 *.log
 
 # T-Cloud Android (local build/signing state)

@@ -1,0 +1,94 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-downloader",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    {
+      "pattern": "tanaka-note.com/downloader*",
+      "zone_name": "tanaka-note.com"
+    }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "downloader-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "DOWNLOADS",
+      "bucket_name": "t-room-downloader-temp"
+    }
+  ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "JOBS",
+        "queue": "t-room-downloader-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "t-room-downloader-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "max_concurrency": 2,
+        "dead_letter_queue": "t-room-downloader-jobs-dlq"
+      }
+    ]
+  },
+  "containers": [
+    {
+      "class_name": "DownloaderContainer",
+      "image": "./container/Dockerfile",
+      "instance_type": "standard-2",
+      "max_instances": 2
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DOWNLOADER_CONTAINER",
+        "class_name": "DownloaderContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DownloaderContainer"]
+    }
+  ],
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  },
+  "vars": {
+    "SESSION_VERSION": "1",
+    "PASSKEY_ENABLED": "true",
+    "PASSKEY_SESSION_TTL_SECONDS": "43200",
+    "MAX_FILE_BYTES": "2147483648",
+    "MAX_SPACE_BYTES": "536870912",
+    "PROCESS_TIMEOUT_SECONDS": "720",
+    "DOWNLOAD_TTL_SECONDS": "1800"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

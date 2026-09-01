@@ -1,0 +1,23 @@
+{
+  "rules": [
+    {
+      "id": "downloader-final-failsafe",
+      "enabled": true,
+      "conditions": {
+        "prefix": "downloads/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "maxAge": 86400,
+          "type": "Age"
+        }
+      },
+      "abortMultipartUploadsTransition": {
+        "condition": {
+          "maxAge": 86400,
+          "type": "Age"
+        }
+      }
+    }
+  ]
+}

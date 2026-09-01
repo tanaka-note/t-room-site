@@ -133,5 +133,9 @@ const currentDiaryHtml = await readFile(resolve(workspace, "diary-worker/public/
 assert.match(currentDiaryHtml, /<meta\s+name=["']robots["']\s+content=["'][^"']*noindex[^"']*["']/i, "現行日記のnoindexを維持してください");
 const publicHomeHtml = await readFile(resolve(workspace, "index.html"), "utf8");
 assert.doesNotMatch(publicHomeHtml, /<meta\s+name=["']robots["']\s+content=["'][^"']*noindex[^"']*["']/i, "公開トップをnoindexにしてはいけません");
+const rootRobots = await readFile(resolve(workspace, "robots.txt"), "utf8");
+assert.match(rootRobots, /^Disallow:\s*\/downloader\/$/m, "非公開Downloaderをrobots.txtから除外してください");
+const staticAssetsBuilder = await readFile(resolve(workspace, "tools/prepare-static-assets.mjs"), "utf8");
+assert.match(staticAssetsBuilder, /publicRootFiles\s*=\s*new Set\(\["robots\.txt"\]\)/, "robots.txtを静的公開成果物へ含めてください");
 
 process.stdout.write(`Web自動更新contract: ${registry.apps.length}アプリ・${registeredHtml.size} HTMLを確認しました。\n`);

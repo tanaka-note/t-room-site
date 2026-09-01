@@ -23,8 +23,10 @@ const argon2 = await readFile(new URL("../../cloud-worker/public/vendor/argon2.u
 const diary = await readFile(new URL("../../diary-worker/src/index.js", import.meta.url), "utf8");
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
 const ai = await readFile(new URL("../../ai-worker/src/index.js", import.meta.url), "utf8");
+const downloader = await readFile(new URL("../../downloader-worker/src/index.js", import.meta.url), "utf8");
 const aiServiceMigration = await readFile(new URL("../migrations/0009_ai_chat_service_and_budgets.sql", import.meta.url), "utf8");
 const activeSessionMigration = await readFile(new URL("../migrations/0010_active_service_sessions.sql", import.meta.url), "utf8");
+const downloaderServiceMigration = await readFile(new URL("../migrations/0011_downloader_service.sql", import.meta.url), "utf8");
 const sessionValidator = await readFile(new URL("../../assets/passkey-session-validation.mjs", import.meta.url), "utf8");
 const globalSwitchTool = await readFile(new URL("../tools/global-passkey-switch.mjs", import.meta.url), "utf8");
 const securityConfig = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
@@ -88,12 +90,15 @@ test("WebAuthn and API errors have a Japanese-only user boundary", () => {
   assert.doesNotMatch(worker, /new HttpError\(404, "Not found"\)/);
 });
 
-test("all three services keep password login and add one-time handoff", () => {
+test("existing services keep password login while every service uses one-time handoff", () => {
   for (const source of [cloud, diary, billing]) {
     assert.match(source, /\/api\/login/);
     assert.match(source, /\/api\/passkey\/handoff/);
     assert.match(source, /redeemHandoff/);
   }
+  assert.doesNotMatch(downloader, /\/api\/login/);
+  assert.match(downloader, /\/api\/passkey\/handoff/);
+  assert.match(downloader, /redeemHandoff/);
 });
 
 test("a T-Cloud member is constrained to the linked root on direct ID access", () => {
@@ -228,6 +233,7 @@ test("service links come from an explicit provider registry and never from free-
   assert.match(worker, /DIARY_AUTH/);
   assert.match(worker, /BILLING_AUTH/);
   assert.match(worker, /AI_AUTH/);
+  assert.match(worker, /DOWNLOADER_AUTH/);
   for (const source of [cloud, diary, billing]) {
     assert.match(source, /async listLinkTargets\(\)/);
     assert.match(source, /async describeAccount\(input\)/);
@@ -254,6 +260,7 @@ test("service links come from an explicit provider registry and never from free-
 
 test("AI Chat is a Passkey-only Security service with server-owned budget policy", () => {
   assert.match(worker, /ai: Object\.freeze\(\{ displayName: "AI Chat", binding: "AI_AUTH" \}\)/);
+  assert.match(worker, /downloader: Object\.freeze\(\{ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" \}\)/);
   assert.match(worker, /"ai\\u0000owner\\u0000"/);
   assert.match(worker, /getAiBudgetPolicy/);
   assert.match(aiServiceMigration, /security_ai_budget_policies/);
@@ -266,6 +273,17 @@ test("AI Chat is a Passkey-only Security service with server-owned budget policy
   assert.match(ai, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), "ai"\)/);
   assert.match(ai, /validatePasskeySession\(\{/);
   assert.doesNotMatch(ai, /password_login|PASSWORD_HASH/);
+});
+
+test("Downloader is a Passkey-only service with an idempotent primary-admin link", () => {
+  assert.match(worker, /downloader: Object\.freeze\(\{ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" \}\)/);
+  assert.match(worker, /"downloader\\u0000owner\\u0000"/);
+  assert.match(downloader, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), "downloader"\)/);
+  assert.match(downloader, /validatePasskeySession\(\{/);
+  assert.doesNotMatch(downloader, /password_login|PASSWORD_HASH/);
+  assert.match(downloaderServiceMigration, /service IN \('cloud', 'diary', 'billing', 'ai', 'downloader'\)/);
+  assert.match(downloaderServiceMigration, /NOT EXISTS \([\s\S]*link\.service = 'downloader'/);
+  assert.doesNotMatch(downloaderServiceMigration, /PRAGMA foreign_keys\s*=\s*OFF/i);
 });
 
 test("privileged, exclusive, Cloud-admin and root-folder policies are server enforced", () => {
@@ -537,7 +555,7 @@ test("active service sessions use hashed identifiers and runtime validity instea
   assert.match(worker, /endActiveSessionsStatement\(env, "identity_disabled"/);
   assert.match(worker, /endActiveSessionsStatement\(env, "credential_revoked"/);
   assert.match(worker, /endActiveSessionsStatement\(env, "service_link_disabled"/);
-  for (const source of [cloud, diary, billing, ai]) {
+  for (const source of [cloud, diary, billing, ai, downloader]) {
     assert.match(source, /getSessionRuntimeState/);
     assert.match(source, /eventType: "logout"|audit\(env, request, session, "logout", "success"\)/);
     assert.match(source, /sessionVersion:/);

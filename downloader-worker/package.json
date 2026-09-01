@@ -1,0 +1,20 @@
+{
+  "name": "t-room-downloader-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/downloader-domain.js && node --check public/downloader.js && node test/run-python.mjs -m py_compile container/server.py container/resolver.py container/scanner.py container/ssrf.py container/media_pipeline.py container/adapters/__init__.py",
+    "test": "node --test test/*.test.js && node test/run-python.mjs -m unittest discover -s container -p test_*.py",
+    "test:browser": "node test/downloader.browser.mjs",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "r2:lifecycle": "wrangler r2 bucket lifecycle set t-room-downloader-temp --file r2-lifecycle.json"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260831.1",
+    "wrangler": "4.121.0"
+  }
+}

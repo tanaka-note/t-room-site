@@ -18,6 +18,7 @@ const publicDirectories = [
   "transfer"
 ];
 const publicRootExtensions = new Set([".css", ".html", ".ico", ".js", ".png", ".webmanifest"]);
+const publicRootFiles = new Set(["robots.txt"]);
 const forbiddenNames = new Set([".dev.vars", ".env", ".git", ".wrangler", "node_modules", "tmp"]);
 const forbiddenExtensions = new Set([".jks", ".keystore", ".log", ".map", ".py"]);
 
@@ -49,7 +50,7 @@ for (const directory of publicDirectories) {
 
 const rootEntries = await readdir(workspace, { withFileTypes: true });
 for (const entry of rootEntries) {
-  if (!entry.isFile() || !publicRootExtensions.has(extname(entry.name).toLowerCase())) continue;
+  if (!entry.isFile() || (!publicRootExtensions.has(extname(entry.name).toLowerCase()) && !publicRootFiles.has(entry.name))) continue;
   await cp(join(workspace, entry.name), join(output, entry.name));
 }
 

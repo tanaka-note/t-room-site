@@ -26,7 +26,8 @@
     { "binding": "CLOUD_AUTH", "service": "t-room-cloud", "entrypoint": "SecurityIntegration" },
     { "binding": "DIARY_AUTH", "service": "t-room-diary", "entrypoint": "SecurityIntegration" },
     { "binding": "BILLING_AUTH", "service": "t-room-billing", "entrypoint": "SecurityIntegration" },
-    { "binding": "AI_AUTH", "service": "t-room-ai", "entrypoint": "SecurityIntegration" }
+    { "binding": "AI_AUTH", "service": "t-room-ai", "entrypoint": "SecurityIntegration" },
+    { "binding": "DOWNLOADER_AUTH", "service": "t-room-downloader", "entrypoint": "SecurityIntegration" }
   ],
   "queues": {
     "consumers": [

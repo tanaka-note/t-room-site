@@ -46,12 +46,22 @@
     ["settlement_deleted", "精算情報を削除", "請求書"],
     ["ai_response_completed", "AI回答を完了", "AI Chat"],
     ["ai_budget_policy_updated", "AI利用予算を変更", "AI Chat"],
+    ["downloader_analyze_requested", "メディア解析を開始", "Downloader"],
+    ["downloader_analyze_completed", "メディア解析を完了", "Downloader"],
+    ["downloader_analyze_failed", "メディア解析に失敗", "Downloader"],
+    ["downloader_ssrf_blocked", "安全でないURLへのアクセスを拒否", "Downloader"],
+    ["downloader_download_requested", "メディア取得を開始", "Downloader"],
+    ["downloader_download_started", "隔離環境でメディア取得を開始", "Downloader"],
+    ["downloader_scan_passed", "メディアの安全性検査を完了", "Downloader"],
+    ["downloader_download_completed", "メディア取得と検査を完了", "Downloader"],
+    ["downloader_download_failed", "メディア取得または検査に失敗", "Downloader"],
+    ["downloader_deleted", "一時ファイルを削除", "Downloader"],
     ["security_settings_changed", "セキュリティ設定を変更", "システム"],
     ["crypto_initialized", "T-Cloudの暗号化を初期設定", "システム"]
   ].map(([value, label, group]) => Object.freeze({ value, label, group })));
 
   const EVENT_LABELS = new Map(EVENT_DEFINITIONS.map((item) => [item.value, item.label]));
-  const SERVICE_LABELS = Object.freeze({ security: "Security Center", cloud: "T-Cloud", diary: "日記", billing: "請求書", ai: "AI Chat" });
+  const SERVICE_LABELS = Object.freeze({ security: "Security Center", cloud: "T-Cloud", diary: "日記", billing: "請求書", ai: "AI Chat", downloader: "T-lain Downloader" });
   const OUTCOME_LABELS = Object.freeze({ success: "成功", failure: "失敗", blocked: "停止", cancelled: "キャンセル", info: "情報" });
   const AUTH_METHOD_LABELS = Object.freeze({ password: "パスワード", passkey: "パスキー", system: "システム" });
   const ROLE_LABELS = Object.freeze({ admin: "管理者", "security-admin": "管理者", identity: "ユーザー", subadmin: "副管理者", owner: "管理者", member: "一般ユーザー", user: "一般ユーザー", global_owner: "全体管理者" });
@@ -141,7 +151,7 @@
       "cloud:admin": "管理者", "cloud:subadmin": "副管理者", "cloud:folder-member": "フォルダ利用者",
       "diary:main-admin": "管理者アカウント", "diary:main-user": "一般ユーザーアカウント",
       "billing:owner": "管理者アカウント", "billing:member": "一般ユーザーアカウント",
-      "ai:owner": "AI利用者"
+      "ai:owner": "AI利用者", "downloader:owner": "Downloader管理者"
     })[key] || "サービス内アカウント";
   }
 

@@ -41,7 +41,8 @@ const SERVICE_REGISTRY = Object.freeze({
   cloud: Object.freeze({ displayName: "T-Cloud", binding: "CLOUD_AUTH" }),
   diary: Object.freeze({ displayName: "日記", binding: "DIARY_AUTH" }),
   billing: Object.freeze({ displayName: "請求書", binding: "BILLING_AUTH" }),
-  ai: Object.freeze({ displayName: "AI Chat", binding: "AI_AUTH" })
+  ai: Object.freeze({ displayName: "AI Chat", binding: "AI_AUTH" }),
+  downloader: Object.freeze({ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
@@ -49,7 +50,8 @@ const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "diary\u0000main-admin\u0000",
   "diary\u0000main-user\u0000",
   "billing\u0000owner\u0000",
-  "ai\u0000owner\u0000"
+  "ai\u0000owner\u0000",
+  "downloader\u0000owner\u0000"
 ]);
 const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "identity_approved",
@@ -59,7 +61,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -1568,14 +1570,15 @@ async function ensurePrimaryAdminRecords(env) {
     { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: "日記 管理者" },
     { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
     { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" },
-    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: "AI Chat By T-ROOM" }
+    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: "AI Chat By T-ROOM" },
+    { service: "downloader", accountId: "owner", rootFolderId: null, displayLabel: "T-lain Downloader 管理者" }
   ];
   for (const link of defaults) {
     const existing = await env.DB.prepare(`SELECT id FROM security_service_links
       WHERE identity_id = ? AND service = ? AND service_account_id = ?
         AND cloud_root_folder_id IS NULL AND status IN ('pending', 'active') LIMIT 1`).bind(PRIMARY_ADMIN_ID, link.service, link.accountId).first();
     if (existing) continue;
-    const defaultStatus = link.service === "ai" && await hasActiveCredential(env, PRIMARY_ADMIN_ID) ? "active" : "pending";
+    const defaultStatus = ["ai", "downloader"].includes(link.service) && await hasActiveCredential(env, PRIMARY_ADMIN_ID) ? "active" : "pending";
     await env.DB.prepare(`INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
@@ -1929,7 +1932,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing", "ai"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai", "downloader"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {

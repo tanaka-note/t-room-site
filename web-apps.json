@@ -230,6 +230,32 @@
       "deployTarget": "t-room-cloud",
       "deployCwd": "cloud-worker",
       "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "downloader",
+      "name": "T-lain Downloader（非公開）",
+      "publicUrls": ["https://tanaka-note.com/downloader/"],
+      "entrypoints": ["downloader-worker/public/index.html"],
+      "buildRoots": ["downloader-worker/public"],
+      "buildFiles": [
+        "downloader-worker/src/index.js",
+        "downloader-worker/src/downloader-domain.js",
+        "downloader-worker/container/Dockerfile",
+        "downloader-worker/container/server.py",
+        "downloader-worker/container/resolver.py",
+        "downloader-worker/container/scanner.py",
+        "downloader-worker/container/ssrf.py",
+        "downloader-worker/container/media_pipeline.py",
+        "downloader-worker/container/adapters/__init__.py",
+        "security-worker/public/passkey-client.js"
+      ],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "manifest": null,
+      "twa": null,
+      "deployTarget": "t-room-downloader",
+      "deployCwd": "downloader-worker",
+      "deployCommand": "pnpm run deploy"
     }
   ],
   "excludedHtml": [

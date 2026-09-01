@@ -1,0 +1,173 @@
+const HTTP_PROTOCOLS = new Set(["http:", "https:"]);
+const BLOCKED_HOSTS = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+  "metadata.aws.internal",
+  "instance-data.ec2.internal"
+]);
+
+export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_SPACE_BYTES = 512 * 1024 * 1024;
+export const DOWNLOAD_TTL_SECONDS = 30 * 60;
+
+export class DomainError extends Error {
+  constructor(status, message, code = "invalid_request") {
+    super(message);
+    this.name = "DomainError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function normalizeSourceUrl(input) {
+  let url;
+  try {
+    url = new URL(String(input || "").trim());
+  } catch {
+    throw new DomainError(400, "URLを確認してください。", "invalid_url");
+  }
+  if (!HTTP_PROTOCOLS.has(url.protocol) || url.username || url.password) {
+    throw new DomainError(400, "HTTPまたはHTTPSのURLを入力してください。", "unsupported_scheme");
+  }
+  url.hash = "";
+  const hostname = normalizeHostname(url.hostname);
+  if (!hostname || isBlockedHostname(hostname) || isBlockedIpLiteral(hostname)) {
+    throw new DomainError(403, "このURLは安全上の理由でアクセスできません。", "ssrf_blocked");
+  }
+  if (url.port && !["80", "443"].includes(url.port)) {
+    throw new DomainError(403, "このURLのポートにはアクセスできません。", "blocked_port");
+  }
+  if (url.href.length > 4096) throw new DomainError(413, "URLが長すぎます。", "url_too_long");
+  return url;
+}
+
+export function normalizeHostname(value) {
+  return String(value || "").trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+}
+
+export function isBlockedHostname(hostname) {
+  const value = normalizeHostname(hostname);
+  return !value || BLOCKED_HOSTS.has(value) || value.endsWith(".localhost") || value.endsWith(".local") || value.endsWith(".internal");
+}
+
+export function isBlockedIpLiteral(hostname) {
+  const value = normalizeHostname(hostname);
+  if (value.includes(":")) return isBlockedIpv6(value);
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return false;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => part < 0 || part > 255)) return true;
+  const [a, b] = parts;
+  return a === 0 || a === 10 || a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && (b === 0 || b === 168)) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224;
+}
+
+function isBlockedIpv6(value) {
+  const text = value.toLowerCase().split("%")[0];
+  if (text === "::" || text === "::1") return true;
+  if (text.startsWith("fc") || text.startsWith("fd") || /^fe[89ab]/.test(text) || text.startsWith("ff")) return true;
+  if (text.startsWith("2001:db8:")) return true;
+  const mapped = text.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  return mapped ? isBlockedIpLiteral(mapped[1]) : false;
+}
+
+export function sourcePathHint(url) {
+  const segments = url.pathname.split("/").filter(Boolean).slice(0, 3)
+    .map((segment) => segment.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 48));
+  return `/${segments.join("/")}`.slice(0, 160) || "/";
+}
+
+export function sanitizeFilename(input, mimeType = "application/octet-stream") {
+  const fallback = fallbackFilename(mimeType);
+  const decoded = String(input || fallback).normalize("NFKC")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\.\.+/g, ".")
+    .replace(/^\.+/, "")
+    .trim();
+  const value = decoded || fallback;
+  const extension = value.match(/\.[A-Za-z0-9]{1,10}$/)?.[0] || "";
+  const base = value.slice(0, extension ? -extension.length : undefined).trim() || "download";
+  return `${base.slice(0, Math.max(1, 120 - extension.length))}${extension.toLowerCase()}`;
+}
+
+function fallbackFilename(mimeType) {
+  if (String(mimeType).startsWith("video/")) return "download.mp4";
+  if (String(mimeType).startsWith("audio/")) return "download.m4a";
+  if (String(mimeType).startsWith("image/")) return "download.jpg";
+  return "download.bin";
+}
+
+export function normalizeClientRequestId(value) {
+  const text = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{8,128}$/.test(text) ? text : "";
+}
+
+export function normalizeMediaId(value) {
+  const text = String(value || "").trim();
+  return /^[A-Za-z0-9_.:@+-]{1,180}$/.test(text) ? text : "";
+}
+
+export function publicJob(row) {
+  return {
+    id: row.id,
+    status: row.status,
+    sourceHostname: row.source_hostname,
+    sourcePathHint: row.source_path_hint || "/",
+    extractor: row.extractor || null,
+    mediaType: row.media_type || null,
+    normalizationMode: row.normalization_mode || null,
+    expectedSize: numberOrNull(row.expected_size),
+    actualSize: numberOrNull(row.actual_size),
+    mimeType: row.mime_type || null,
+    sha256: row.sha256 || null,
+    filename: row.safe_filename || null,
+    analysis: parseJson(row.analysis_json, {}),
+    error: row.error_reason || null,
+    createdAt: utc(row.created_at),
+    analyzedAt: utc(row.analyzed_at),
+    downloadedAt: utc(row.downloaded_at),
+    expiresAt: row.expires_at ? new Date(Number(row.expires_at) * 1000).toISOString() : null
+  };
+}
+
+export async function sha256Text(value) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value))));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function isPolicyRestrictedHost(hostname) {
+  const value = normalizeHostname(hostname);
+  return value === "youtu.be" || value === "youtube.com" || value.endsWith(".youtube.com") ||
+    value === "youtube-nocookie.com" || value.endsWith(".youtube-nocookie.com") ||
+    value === "googlevideo.com" || value.endsWith(".googlevideo.com");
+}
+
+export function isPolicyRestrictedAnalysis(analysis) {
+  const value = analysis && typeof analysis === "object" ? analysis : {};
+  if ([value.hostname, value.finalHostname].some((hostname) => isPolicyRestrictedHost(hostname))) return true;
+  const descriptor = `${String(value.site || "")} ${String(value.extractor || "")}`.toLowerCase();
+  return descriptor.includes("youtube");
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function parseJson(value, fallback) {
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
+function utc(value) {
+  if (!value) return null;
+  const text = String(value);
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text) ? `${text.replace(" ", "T")}Z` : text;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
