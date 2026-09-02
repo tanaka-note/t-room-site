@@ -50,12 +50,12 @@ const portfolioTotal = vm.runInContext("renderSummary()", context);
 assert.equal(summaryElements.get("#market-value").textContent, summaryElements.get("#donut-total").textContent,
   "上部の時価総額と資産構成中央は同一の調整後金額を表示する");
 assert.equal(summaryElements.get("#principal-value").textContent, "￥6,000,000", "上部の元本は維持する");
-assert.equal(summaryElements.get("#profit-value").textContent, "+￥520,149", "調整後の損益計算を維持する");
-assert.equal(summaryElements.get("#return-value").textContent, "+8.67%", "調整後の損益率計算を維持する");
-assert.equal(summaryElements.get("#market-value").textContent, "￥6,520,149", "投資信託他売却損を反映した時価総額を表示する");
-assert.equal(portfolioTotal, 6_740_149, "資産構成のセグメント・構成比には従来の保有資産合計を使う");
+assert.equal(summaryElements.get("#profit-value").textContent, "+￥545,347", "調整後の損益計算を維持する");
+assert.equal(summaryElements.get("#return-value").textContent, "+9.09%", "調整後の損益率計算を維持する");
+assert.equal(summaryElements.get("#market-value").textContent, "￥6,545,347", "投資信託他売却損を反映した時価総額を表示する");
+assert.equal(portfolioTotal, 6_765_347, "資産構成のセグメント・構成比には従来の保有資産合計を使う");
 assert.match(reportHtml, /<span>更新日<\/span>/);
-assert.match(reportHtml, /<time id="report-updated" datetime="2026-08-26">2026\.08\.26<\/time>/);
+assert.match(reportHtml, /<time id="report-updated" datetime="2026-08-28">2026\.08\.28<\/time>/);
 assert.doesNotMatch(reportHtml, /AS OF|日時点|8月17日/);
 assert.equal((reportHtml.match(/id="report-updated"/g) || []).length, 1, "更新日の表示箇所は1つに統一する");
 
@@ -88,7 +88,7 @@ assert.equal(current, 6204845);
 const latestCurrent = historyMarketValue({ period: "2026-08-17", marketValue: 6416884 });
 assert.equal(latestCurrent, 6196884);
 
-assert.match(reportSource, /period: "2026-08-26"/);
+assert.match(reportSource, /period: "2026-08-28"/);
 assert.match(reportSource, /appliedFrom: "2026-08-15"/);
 assert.match(reportSource, /name: "投資信託他売却損"/);
 assert.doesNotMatch(reportSource, /name: "運用手数料・雑費"/);
@@ -102,7 +102,8 @@ assert.match(reportSource, /\{ period: "2026-08-22", principal: 6000000, marketV
 assert.match(reportSource, /\{ period: "2026-08-24", principal: 6000000, marketValue: 6651675 \}/);
 assert.match(reportSource, /\{ period: "2026-08-25", principal: 6000000, marketValue: 6740149 \}/);
 assert.match(reportSource, /\{ period: "2026-08-26", principal: 6000000, marketValue: 6740149 \}/);
-assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 2066560/);
+assert.match(reportSource, /\{ period: "2026-08-28", principal: 6000000, marketValue: 6765347 \}/);
+assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 2060060/);
 
 assert.doesNotMatch(reportSource, /yFor\(entry\.marketValue\)/, "時価総額描画はentry.marketValueを直接使っていない");
 assert.match(reportSource, /yFor\(historyMarketValue\(entry\)\)/, "時価総額描画のy計算はhistoryMarketValueを通る");
