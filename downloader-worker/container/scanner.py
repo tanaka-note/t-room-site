@@ -21,10 +21,28 @@ BLOCKED_EXTENSIONS = {
     ".vbs", ".zip",
 }
 MEDIA_EXTENSIONS = {
-    ".3g2", ".3gp", ".aac", ".asf", ".avi", ".avif", ".f4v", ".flac", ".flv",
-    ".gif", ".jpeg", ".jpg", ".m2ts", ".m2v", ".m4a", ".m4v", ".mkv", ".mov",
-    ".mp3", ".mp4", ".mpeg", ".mpg", ".mts", ".oga", ".ogg", ".ogv", ".opus",
-    ".png", ".ts", ".vob", ".webm", ".webp", ".wmv",
+    ".264", ".265", ".3g2", ".3gp", ".aac", ".ac3", ".aif", ".aifc", ".aiff",
+    ".apng", ".asf", ".au", ".avi", ".avif", ".bmp", ".eac3",
+    ".f4v", ".flac", ".flv", ".gif", ".h264", ".h265", ".hevc", ".ivf", ".jpeg",
+    ".jpg", ".m1v", ".m2ts", ".m2v", ".m4a", ".m4v", ".mka", ".mjpeg", ".mjpg",
+    ".mkv", ".mov", ".mp2", ".mp3", ".mp4", ".mpeg", ".mpg", ".mts", ".mxf",
+    ".oga", ".ogg", ".ogv", ".opus", ".png", ".tif", ".tiff", ".ts", ".vob",
+    ".wav", ".wave", ".webm", ".webp", ".wma", ".wmv", ".wtv", ".wv",
+}
+EXTENSION_FAMILIES = {
+    **{suffix: "audio" for suffix in {
+        ".aac", ".ac3", ".aif", ".aifc", ".aiff", ".au", ".eac3",
+        ".flac", ".m4a", ".mka", ".mp2", ".mp3", ".oga", ".ogg", ".opus", ".wav",
+        ".wave", ".wma", ".wv",
+    }},
+    **{suffix: "image" for suffix in {
+        ".apng", ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp",
+    }},
+    **{suffix: "video" for suffix in MEDIA_EXTENSIONS if suffix not in {
+        ".aac", ".ac3", ".aif", ".aifc", ".aiff", ".apng", ".au", ".avif",
+        ".bmp", ".eac3", ".flac", ".gif", ".jpeg", ".jpg", ".m4a", ".mka", ".mp2", ".mp3",
+        ".oga", ".ogg", ".opus", ".png", ".tif", ".tiff", ".wav", ".wave", ".webp", ".wma", ".wv",
+    }},
 }
 EXECUTABLE_MAGIC = (
     b"MZ", b"\x7fELF", b"#!", b"\xca\xfe\xba\xbe", b"PK\x03\x04",
@@ -55,7 +73,7 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
 
     detected = _detect_mime(path)
     if _mime_family(detected) not in {"audio", "image", "video"} and detected not in {
-        "application/octet-stream", "application/ogg", "application/x-matroska",
+        "application/mxf", "application/octet-stream", "application/ogg", "application/x-matroska",
     }:
         raise UnsafeFile("unsupported_mime")
     # Keep complex media parsers behind the malware gate. libmagic performs the
@@ -63,14 +81,19 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
     _scan_malware(path)
     probe = probe_file(path)
     media_kind = _media_kind(detected, probe)
+    if Path(filename).suffix.lower() in {".mjpeg", ".mjpg"} and any(_is_playable_video_stream(stream) for stream in probe.get("streams", [])):
+        # libmagic reports a raw MJPEG stream as image/jpeg; ffprobe proves that
+        # the complete payload is a video stream rather than a single JPEG.
+        media_kind = "video"
     if media_kind is None:
         raise UnsafeFile("unsupported_mime")
     declared = (declared_mime or "").split(";", 1)[0].strip().lower()
     if declared and declared != "application/octet-stream" and _mime_family(declared) in {"audio", "image", "video"} and _mime_family(declared) != media_kind:
         raise UnsafeFile("mime_mismatch")
     expected, _ = mimetypes.guess_type(filename)
+    expected_family = EXTENSION_FAMILIES.get(Path(filename).suffix.lower()) or (_mime_family(expected) if expected else "")
     ambiguous_ogg = Path(filename).suffix.lower() == ".ogg" and detected in {"application/ogg", "audio/ogg", "video/ogg"}
-    if expected and _mime_family(expected) in {"audio", "image", "video"} and _mime_family(expected) != media_kind and not ambiguous_ogg:
+    if expected_family in {"audio", "image", "video"} and expected_family != media_kind and not ambiguous_ogg:
         raise UnsafeFile("extension_mismatch")
 
     _validate_media(path, probe)
@@ -84,14 +107,16 @@ def clamav_database_status(database_dir: Path | None = None, now: float | None =
         for path in root.glob(pattern)
         if path.is_file()
     ]
-    newest = max((path.stat().st_mtime for path in definitions), default=None)
     current = time.time() if now is None else float(now)
+    build_times = [_clamav_database_build_time(path) for path in definitions]
+    newest = max((value for value in build_times if value is not None), default=None)
     max_age = _clamav_max_definition_age_seconds()
     age = None if newest is None else max(0, int(current - newest))
     return {
         "available": newest is not None,
         "healthy": newest is not None and age <= max_age,
         "latestDefinitionUnix": int(newest) if newest is not None else None,
+        "freshnessSource": "database_build_time",
         "ageSeconds": age,
         "maxAgeSeconds": max_age,
     }
@@ -139,7 +164,7 @@ def _media_kind(detected: str, probe: dict) -> str | None:
     if detected.startswith("image/"):
         return "image"
     streams = probe.get("streams", [])
-    if any(stream.get("codec_type") == "video" for stream in streams):
+    if any(_is_playable_video_stream(stream) for stream in streams):
         return "video"
     if any(stream.get("codec_type") == "audio" for stream in streams):
         return "audio"
@@ -153,7 +178,7 @@ def _mime_family(value: str) -> str:
 def probe_file(path: Path) -> dict:
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
-         "format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,profile,level,pix_fmt,width,height,r_frame_rate,duration,bit_rate,sample_rate,channels:stream_tags=rotate:stream_side_data=rotation",
+         "format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,profile,level,pix_fmt,width,height,r_frame_rate,duration,bit_rate,sample_rate,channels:stream_disposition=attached_pic:stream_tags=rotate:stream_side_data=rotation",
          "-of", "json", "--", str(path)],
         capture_output=True, text=True, timeout=90, check=False,
     )
@@ -167,7 +192,10 @@ def probe_file(path: Path) -> dict:
 
 def _validate_media(path: Path, probe: dict) -> None:
     streams = probe.get("streams", [])
-    if not streams or any(stream.get("codec_type") not in {"audio", "video"} for stream in streams):
+    stream_types = {stream.get("codec_type") for stream in streams}
+    if "attachment" in stream_types or "data" in stream_types:
+        raise UnsafeFile("unsafe_embedded_stream")
+    if not streams or any(kind not in {"audio", "video", "subtitle"} for kind in stream_types):
         # Still images are accepted through libmagic and decoded by Chromium/OS,
         # but ffprobe must validate every audio/video container.
         mime = _detect_mime(path)
@@ -194,6 +222,25 @@ def _clamav_max_definition_age_seconds() -> int:
     except (TypeError, ValueError):
         return DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS
     return value if 3600 <= value <= 30 * 24 * 60 * 60 else DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS
+
+
+def _clamav_database_build_time(path: Path) -> int | None:
+    """Read the signed CVD/CLD header timestamp instead of mutable file mtime."""
+    try:
+        with path.open("rb") as source:
+            header = source.read(512).split(b"\x00", 1)[0].decode("ascii", "strict")
+        fields = header.split(":")
+        if fields[0] != "ClamAV-VDB" or len(fields) < 9:
+            return None
+        value = int(fields[8].strip().split()[0])
+        return value if value >= 946_684_800 else None
+    except (OSError, UnicodeDecodeError, ValueError, IndexError):
+        return None
+
+
+def _is_playable_video_stream(stream: dict) -> bool:
+    disposition = stream.get("disposition") or {}
+    return stream.get("codec_type") == "video" and str(disposition.get("attached_pic") or "0") != "1"
 
 
 def _sha256(path: Path) -> str:

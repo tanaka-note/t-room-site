@@ -8,18 +8,33 @@ from unittest.mock import patch
 from scanner import UnsafeFile, _reject_filename, clamav_database_status, inspect_file, require_fresh_clamav_definitions, safe_filename
 
 
+def clamav_header(build_time: int) -> bytes:
+    return f"ClamAV-VDB:01 Jan 2026 00-00 +0000:1:1:90:md5:sig:test:{build_time}".encode().ljust(512, b" ")
+
+
 class ScannerPolicyTests(unittest.TestCase):
     def test_clamav_definitions_are_required_and_must_be_fresh(self):
+        built_at = 1_800_000_000
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with self.assertRaisesRegex(UnsafeFile, "malware_definitions_missing"):
-                require_fresh_clamav_definitions(root, now=10_000)
+                require_fresh_clamav_definitions(root, now=built_at)
             definition = root / "daily.cvd"
-            definition.write_bytes(b"fixture")
-            os.utime(definition, (10_000, 10_000))
-            self.assertTrue(clamav_database_status(root, now=10_001)["healthy"])
+            definition.write_bytes(clamav_header(built_at))
+            os.utime(definition, (1, 1))
+            self.assertTrue(clamav_database_status(root, now=built_at + 1)["healthy"])
+            self.assertEqual(clamav_database_status(root, now=built_at + 1)["latestDefinitionUnix"], built_at)
+            self.assertEqual(clamav_database_status(root, now=built_at + 1)["freshnessSource"], "database_build_time")
             with self.assertRaisesRegex(UnsafeFile, "malware_definitions_stale"):
-                require_fresh_clamav_definitions(root, now=10_000 + 8 * 24 * 60 * 60)
+                require_fresh_clamav_definitions(root, now=built_at + 8 * 24 * 60 * 60)
+
+    def test_invalid_database_header_fails_closed_even_with_fresh_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            definition = Path(directory) / "daily.cvd"
+            definition.write_bytes(b"not-a-clamav-database")
+            os.utime(definition, (time.time(), time.time()))
+            with self.assertRaisesRegex(UnsafeFile, "malware_definitions_missing"):
+                require_fresh_clamav_definitions(Path(directory))
 
     def test_malware_scan_runs_before_ffprobe(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -89,6 +104,40 @@ class ScannerPolicyTests(unittest.TestCase):
                  patch("scanner._sha256", return_value="0" * 64):
                 result = inspect_file(path, "cover.png", "image/png", 1024)
             self.assertEqual(result.media_kind, "image")
+
+    def test_audio_cover_art_is_not_classified_as_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "song.m4a"
+            path.write_bytes(b"media")
+            probe = {"streams": [
+                {"codec_type": "audio", "codec_name": "aac"},
+                {"codec_type": "video", "codec_name": "mjpeg", "disposition": {"attached_pic": 1}},
+            ]}
+            with patch("scanner._detect_mime", return_value="audio/mp4"), \
+                 patch("scanner.probe_file", return_value=probe), \
+                 patch("scanner._scan_malware"), \
+                 patch("scanner._sha256", return_value="0" * 64):
+                result = inspect_file(path, "song.m4a", "audio/mp4", 1024)
+            self.assertEqual(result.media_kind, "audio")
+
+    def test_subtitle_is_allowed_but_attachment_and_data_are_rejected(self):
+        base = [{"codec_type": "video", "codec_name": "h264", "index": 0}]
+        for allowed in [base + [{"codec_type": "subtitle", "codec_name": "subrip"}]]:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "movie.mkv"
+                path.write_bytes(b"media")
+                with patch("scanner._detect_mime", return_value="video/x-matroska"), \
+                     patch("scanner.probe_file", return_value={"streams": allowed}), \
+                     patch("scanner._scan_malware"), patch("scanner._sha256", return_value="0" * 64):
+                    self.assertEqual(inspect_file(path, path.name, None, 1024).media_kind, "video")
+        for stream_type in ["attachment", "data"]:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "movie.mkv"
+                path.write_bytes(b"media")
+                with patch("scanner._detect_mime", return_value="video/x-matroska"), \
+                     patch("scanner.probe_file", return_value={"streams": base + [{"codec_type": stream_type}]}), \
+                     patch("scanner._scan_malware"), self.assertRaisesRegex(UnsafeFile, "unsafe_embedded_stream"):
+                    inspect_file(path, path.name, None, 1024)
 
 
 if __name__ == "__main__":

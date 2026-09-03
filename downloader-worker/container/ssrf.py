@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -40,8 +41,18 @@ def validate_url(value: str, *, resolver=socket.getaddrinfo) -> SafeUrl:
     hostname = parsed.hostname.rstrip(".").lower()
     if hostname in BLOCKED_HOSTS or hostname.endswith(BLOCKED_HOST_SUFFIXES):
         raise UnsafeUrl("blocked_hostname")
+    try:
+        literal_address = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_address = None
+    if literal_address is not None and not literal_address.is_global:
+        raise UnsafeUrl("blocked_address")
     addresses = _resolve(hostname, port or (443 if parsed.scheme == "https" else 80), resolver)
-    if not addresses or any(not address.is_global for address in addresses):
+    intercepted_dns = literal_address is None and (
+        bool(os.environ.get("CLOUDFLARE_APPLICATION_ID"))
+        or os.path.exists("/etc/cloudflare/certs/cloudflare-containers-ca.crt")
+    )
+    if not addresses or (any(not address.is_global for address in addresses) and not intercepted_dns):
         raise UnsafeUrl("blocked_address")
     clean = urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, ""))
     if len(clean) > 4096:

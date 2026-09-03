@@ -87,3 +87,19 @@ class MediaPipelineIntegrationTests(unittest.TestCase):
             source = Path(directory) / "legacy.ogv"
             self._generate(source, "libtheora", "libvorbis")
             self._normalize(source, PlanKind.FULL_TRANSCODE)
+
+    def test_subtitle_stream_is_safely_dropped_during_mp4_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subtitle = root / "caption.srt"
+            subtitle.write_text("1\n00:00:00,000 --> 00:00:00,800\ncaption\n", encoding="utf-8")
+            source = root / "subtitled.mkv"
+            result = subprocess.run([
+                FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=1",
+                "-f", "lavfi", "-i", "sine=duration=1", "-i", str(subtitle),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-c:s", "srt", str(source),
+            ], capture_output=True, text=True, check=False, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output, _name, _mime, _plan = normalize_video(source, source.name, 64 * 1024 * 1024, 120)
+            self.assertFalse(any(stream.get("codec_type") == "subtitle" for stream in probe_file(output)["streams"]))

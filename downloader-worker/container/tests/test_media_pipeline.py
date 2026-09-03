@@ -44,6 +44,23 @@ class MediaPlannerTests(unittest.TestCase):
         value["streams"][0]["tags"] = {"rotate": "90"}
         self.assertEqual(plan_mp4(value).kind, PlanKind.REMUX)
 
+    def test_cover_art_and_subtitles_do_not_replace_the_playable_video(self):
+        value = probe()
+        value["streams"] = [
+            {"index": 0, "codec_type": "video", "codec_name": "mjpeg", "disposition": {"attached_pic": 1}},
+            {"index": 1, "codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p", "width": 320, "height": 240, "duration": "60"},
+            {"index": 2, "codec_type": "audio", "codec_name": "aac", "duration": "60"},
+            {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "duration": "60"},
+        ]
+        self.assertEqual(plan_mp4(value).kind, PlanKind.REMUX)
+
+    def test_attachment_and_data_streams_are_rejected(self):
+        for stream_type in ["attachment", "data"]:
+            value = probe()
+            value["streams"].append({"codec_type": stream_type})
+            with self.subTest(stream_type=stream_type):
+                self.assertEqual(plan_mp4(value).reason, "unsafe_embedded_stream")
+
     def test_limits_are_fail_closed(self):
         too_long = probe(duration=str(4 * 60 * 60))
         self.assertEqual(plan_mp4(too_long).kind, PlanKind.REJECT)

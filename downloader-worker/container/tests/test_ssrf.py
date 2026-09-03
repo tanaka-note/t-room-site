@@ -1,5 +1,6 @@
 import socket
 import unittest
+from unittest.mock import patch
 
 from ssrf import UnsafeUrl, validate_redirect, validate_url
 
@@ -25,6 +26,20 @@ class SsrfTests(unittest.TestCase):
             ]
         with self.assertRaises(UnsafeUrl):
             validate_url("https://example.com/video", resolver=rebinding)
+
+    def test_cloudflare_interception_dns_is_delegated_but_literal_private_ip_stays_blocked(self):
+        with patch.dict("os.environ", {"CLOUDFLARE_APPLICATION_ID": "staging"}):
+            self.assertEqual(
+                validate_url("https://example.com/video", resolver=resolver_for("198.18.0.1")).hostname,
+                "example.com",
+            )
+            with self.assertRaises(UnsafeUrl):
+                validate_url("http://169.254.169.254/latest", resolver=resolver_for("198.18.0.1"))
+        with patch("ssrf.os.path.exists", return_value=True):
+            self.assertEqual(
+                validate_url("https://example.com/video", resolver=resolver_for("198.18.0.1")).hostname,
+                "example.com",
+            )
 
     def test_redirect_is_revalidated(self):
         with self.assertRaises(UnsafeUrl):

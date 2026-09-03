@@ -38,6 +38,65 @@ class ScannerIntegrationTests(unittest.TestCase):
                     result = inspect_file(path, name, declared, 8 * 1024 * 1024)
                     self.assertEqual(result.media_kind, expected_kind)
 
+    def test_expanded_audio_video_and_image_fixtures_are_scanned(self):
+        audio_input = ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2"]
+        video_input = ["-f", "lavfi", "-i", "testsrc2=size=64x64:rate=5:duration=0.4", "-an"]
+        fixtures = [
+            ("tone.wav", audio_input + ["-c:a", "pcm_s16le"], "audio"),
+            ("tone.wave", audio_input + ["-c:a", "pcm_s16le", "-f", "wav"], "audio"),
+            ("tone.aiff", audio_input + ["-c:a", "pcm_s16be"], "audio"),
+            ("tone.aif", audio_input + ["-c:a", "pcm_s16be", "-f", "aiff"], "audio"),
+            ("tone.aifc", audio_input + ["-c:a", "pcm_s16be", "-f", "aiff"], "audio"),
+            ("tone.ac3", audio_input + ["-c:a", "ac3"], "audio"),
+            ("tone.eac3", audio_input + ["-c:a", "eac3"], "audio"),
+            ("tone.wma", audio_input + ["-c:a", "wmav2", "-f", "asf"], "audio"),
+            ("tone.mka", audio_input + ["-c:a", "flac", "-f", "matroska"], "audio"),
+            ("tone.wv", audio_input + ["-c:a", "wavpack"], "audio"),
+            ("tone.au", audio_input + ["-c:a", "pcm_s16be"], "audio"),
+            ("tone.mp2", audio_input + ["-c:a", "mp2"], "audio"),
+            ("video.h264", video_input + ["-c:v", "libx264", "-f", "h264"], "video"),
+            ("video.264", video_input + ["-c:v", "libx264", "-f", "h264"], "video"),
+            ("video.h265", video_input + ["-c:v", "libx265", "-x265-params", "log-level=error", "-f", "hevc"], "video"),
+            ("video.hevc", video_input + ["-c:v", "libx265", "-x265-params", "log-level=error", "-f", "hevc"], "video"),
+            ("video.265", video_input + ["-c:v", "libx265", "-x265-params", "log-level=error", "-f", "hevc"], "video"),
+            ("video.m1v", ["-f", "lavfi", "-i", "testsrc2=size=64x64:rate=25:duration=0.4", "-an", "-c:v", "mpeg1video", "-f", "mpeg1video"], "video"),
+            ("video.ivf", video_input + ["-c:v", "libvpx-vp9", "-f", "ivf"], "video"),
+            ("video.mxf", ["-f", "lavfi", "-i", "testsrc2=size=64x64:rate=25:duration=0.4", "-an", "-c:v", "mpeg2video", "-pix_fmt", "yuv422p", "-f", "mxf"], "video"),
+            ("video.mjpeg", video_input + ["-c:v", "mjpeg", "-f", "mjpeg"], "video"),
+            ("video.mjpg", video_input + ["-c:v", "mjpeg", "-f", "mjpeg"], "video"),
+            ("video.wtv", ["-f", "lavfi", "-i", "testsrc2=size=64x64:rate=25:duration=0.4", "-f", "lavfi", "-i", "sine=duration=0.4", "-c:v", "mpeg2video", "-c:a", "mp2", "-f", "wtv"], "video"),
+            ("image.bmp", ["-f", "lavfi", "-i", "color=green:size=32x32", "-frames:v", "1", "-c:v", "bmp"], "image"),
+            ("image.tiff", ["-f", "lavfi", "-i", "color=blue:size=32x32", "-frames:v", "1", "-c:v", "tiff"], "image"),
+            ("image.tif", ["-f", "lavfi", "-i", "color=red:size=32x32", "-frames:v", "1", "-c:v", "tiff", "-f", "image2"], "image"),
+            ("image.apng", ["-f", "lavfi", "-i", "testsrc2=size=32x32:rate=5:duration=0.4", "-plays", "0", "-f", "apng"], "image"),
+            ("image.avif", ["-f", "lavfi", "-i", "color=yellow:size=32x32", "-frames:v", "1", "-c:v", "libaom-av1", "-still-picture", "1"], "image"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, arguments, expected_kind in fixtures:
+                with self.subTest(name=name):
+                    path = root / name
+                    self._run(FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *arguments, str(path))
+                    result = inspect_file(path, name, None, 32 * 1024 * 1024)
+                    self.assertEqual(result.media_kind, expected_kind)
+
+    def test_embedded_cover_art_remains_audio_and_subtitle_mkv_is_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio = root / "audio.mp3"
+            cover = root / "cover.jpg"
+            song = root / "song-with-cover.mp3"
+            self._run(FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=duration=0.3", "-c:a", "libmp3lame", str(audio))
+            self._run(FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=blue:size=32x32", "-frames:v", "1", str(cover))
+            self._run(FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(audio), "-i", str(cover), "-map", "0:a", "-map", "1:v", "-c", "copy", "-disposition:v", "attached_pic", str(song))
+            self.assertEqual(inspect_file(song, song.name, "audio/mpeg", 8 * 1024 * 1024).media_kind, "audio")
+
+            subtitle = root / "caption.srt"
+            subtitle.write_text("1\n00:00:00,000 --> 00:00:00,300\ncaption\n", encoding="utf-8")
+            movie = root / "subtitled.mkv"
+            self._run(FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=5:duration=0.4", "-i", str(subtitle), "-c:v", "libx264", "-c:s", "srt", str(movie))
+            self.assertEqual(inspect_file(movie, movie.name, "video/x-matroska", 8 * 1024 * 1024).media_kind, "video")
+
     def test_reject_fixtures_cover_corruption_spoofing_limits_and_archives(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

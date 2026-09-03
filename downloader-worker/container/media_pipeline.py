@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from scanner import UnsafeFile, probe_file, safe_filename
+from scanner import UnsafeFile, _is_playable_video_stream, probe_file, safe_filename
 
 
 class PlanKind(str, Enum):
@@ -39,10 +39,12 @@ H264_PIXEL_FORMATS = {"yuv420p", "yuvj420p"}
 
 def plan_mp4(probe: dict) -> MediaPlan:
     streams = probe.get("streams") if isinstance(probe.get("streams"), list) else []
-    videos = [stream for stream in streams if stream.get("codec_type") == "video"]
+    videos = [stream for stream in streams if _is_playable_video_stream(stream)]
     audios = [stream for stream in streams if stream.get("codec_type") == "audio"]
     if not videos:
         return MediaPlan(PlanKind.REJECT, "none", "none", "video_stream_missing")
+    if any(stream.get("codec_type") in {"attachment", "data"} for stream in streams):
+        return MediaPlan(PlanKind.REJECT, "unknown", "unknown", "unsafe_embedded_stream")
     if len(streams) > MAX_STREAMS or len(videos) != 1:
         return MediaPlan(PlanKind.REJECT, "unknown", "unknown", "stream_limit")
     video = videos[0]
@@ -80,10 +82,11 @@ def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_sec
         return path, output_name, "video/mp4", plan
 
     output = path.parent / "output.mp4"
+    playable_video = next(stream for stream in source_probe.get("streams", []) if _is_playable_video_stream(stream))
     command = [
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
         "-protocol_whitelist", "file,pipe", "-i", str(path),
-        "-map", "0:v:0", "-map", "0:a?", "-sn", "-dn",
+        "-map", f"0:{int(playable_video.get('index') or 0)}", "-map", "0:a?", "-sn", "-dn",
         "-map_metadata", "0", "-map_chapters", "0",
         "-c:v", plan.video_codec,
     ]
@@ -108,7 +111,7 @@ def _validate_output(source: dict, output: dict, path: Path, max_bytes: int) -> 
     if path.stat().st_size <= 0 or path.stat().st_size > max_bytes:
         raise UnsafeFile("normalized_size_limit")
     streams = output.get("streams", [])
-    videos = [stream for stream in streams if stream.get("codec_type") == "video"]
+    videos = [stream for stream in streams if _is_playable_video_stream(stream)]
     if len(videos) != 1 or videos[0].get("codec_name") != "h264" or videos[0].get("pix_fmt") not in H264_PIXEL_FORMATS:
         raise UnsafeFile("normalized_video_incompatible")
     if any(stream.get("codec_name") != "aac" for stream in streams if stream.get("codec_type") == "audio"):

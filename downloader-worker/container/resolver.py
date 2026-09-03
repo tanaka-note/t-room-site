@@ -28,10 +28,26 @@ class ResolverError(ValueError):
 
 MEDIA_MIMES = ("audio/", "image/", "video/", "application/vnd.apple.mpegurl", "application/dash+xml")
 MEDIA_SUFFIXES = (
-    ".3g2", ".3gp", ".aac", ".asf", ".avi", ".f4v", ".flac", ".flv", ".gif", ".jpeg", ".jpg",
-    ".m2ts", ".m2v", ".m3u8", ".m4a", ".m4v", ".mkv", ".mov", ".mp3", ".mp4", ".mpd",
-    ".mpeg", ".mpg", ".mts", ".ogg", ".ogv", ".opus", ".png", ".ts", ".vob", ".webm",
-    ".webp", ".wmv",
+    ".264", ".265", ".3g2", ".3gp", ".aac", ".ac3", ".aif", ".aifc", ".aiff",
+    ".apng", ".asf", ".au", ".avi", ".avif", ".bmp", ".eac3", ".f4v", ".flac",
+    ".flv", ".gif", ".h264", ".h265", ".hevc", ".ivf", ".jpeg", ".jpg", ".m1v", ".m2ts",
+    ".m2v", ".m3u8", ".m4a", ".m4v", ".mka", ".mjpeg", ".mjpg", ".mkv", ".mov", ".mp2",
+    ".mp3", ".mp4", ".mpd", ".mpeg", ".mpg", ".mts", ".mxf", ".oga", ".ogg", ".ogv",
+    ".opus", ".png", ".tif", ".tiff", ".ts", ".vob", ".wav", ".wave", ".webm", ".webp",
+    ".wma", ".wmv", ".wtv", ".wv",
+)
+
+YT_DLP_BLOCKING_FAILURES = (
+    ("drm", ("drm protected", "drm-protected", "this video is drm", "digital rights management")),
+    ("encrypted_stream", ("encrypted stream", "unsupported encryption", "encrypted media")),
+    ("login_required", ("login required", "log in to", "sign in to", "use --cookies", "cookies are needed", "age verification")),
+    ("premium_required", ("premium", "subscriber only", "subscription required", "members-only", "private video")),
+    ("geo_restricted", ("geo-restricted", "not available in your country", "not available from your location", "geographic restriction")),
+    ("live_stream_not_supported", ("is live", "live stream", "upcoming premiere", "not yet started")),
+    ("extractor_intentionally_unsupported", (
+        "not supported due to legal reasons", "disabled for legal reasons",
+        "intentionally not supported", "extractor is disabled by policy",
+    )),
 )
 
 
@@ -127,7 +143,7 @@ def download(source_url: str, media_id: str, workdir: Path, max_bytes: int, time
         raise ResolverError("media_choice_missing")
     output = str(workdir / "media.%(ext)s")
     command = [
-        "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser", "--no-netrc",
+        "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser",
         "--no-playlist" if choice["playlistIndex"] is None else "--yes-playlist",
         "--no-write-info-json", "--no-write-thumbnail", "--no-write-subs", "--no-write-comments",
         "--restrict-filenames", "--no-part", "--max-filesize", str(max_bytes),
@@ -165,6 +181,7 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
             return None
     try:
         content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+        declared_content_type = content_type
         length = _safe_int(response.headers.get("Content-Length"))
         path_suffix = Path(urlsplit(final_url).path).suffix.lower()
         suffix = path_suffix
@@ -173,13 +190,13 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
             detected = _signature_type(signature)
             if not detected:
                 return None
-            content_type, suffix = _refine_signature_type(detected, path_suffix)
+            content_type, suffix = _refine_direct_type(detected, path_suffix, declared_content_type)
         else:
             signature = signature or _read_signature(final_url)
             detected = _signature_type(signature)
             if not detected:
                 return None
-            content_type, suffix = _refine_signature_type(detected, path_suffix)
+            content_type, suffix = _refine_direct_type(detected, path_suffix, declared_content_type)
         media_type = _media_type(content_type, suffix)
         delivery = "hls" if suffix == ".m3u8" or "mpegurl" in content_type else "dash" if suffix == ".mpd" or "dash+xml" in content_type else "direct"
         encrypted = (delivery == "hls" and _encrypted_hls(signature)) or (delivery == "dash" and _drm_dash(signature))
@@ -220,12 +237,20 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
                 "XDG_CACHE_HOME": str(Path(browser_home) / "cache"),
                 "XDG_CONFIG_HOME": str(Path(browser_home) / "config"),
             })
+            browser_command = [
+                "chromium", "--headless", "--no-sandbox", "--disable-gpu",
+                "--disable-dev-shm-usage", "--disable-features=Crashpad",
+                f"--user-data-dir={Path(browser_home) / 'profile'}",
+                "--disable-extensions", "--disable-sync", "--disable-background-networking",
+            ]
+            if os.path.exists("/etc/cloudflare/certs/cloudflare-containers-ca.crt"):
+                # Chromium does not consume SSL_CERT_FILE. In the Cloudflare
+                # sandbox only, TLS is terminated by the trusted outbound
+                # interceptor and re-established by Worker fetch to the origin.
+                browser_command.append("--ignore-certificate-errors")
+            browser_command += ["--dump-dom", url]
             result = subprocess.run(
-                ["chromium", "--headless", "--no-sandbox", "--disable-gpu",
-                 "--disable-dev-shm-usage", "--disable-features=Crashpad",
-                 f"--user-data-dir={Path(browser_home) / 'profile'}",
-                 "--disable-extensions", "--disable-sync", "--disable-background-networking",
-                 "--dump-dom", url],
+                browser_command,
                 capture_output=True, text=True, timeout=60, check=False,
                 env=browser_environment,
             )
@@ -260,12 +285,17 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
 
 def _yt_dlp_metadata(url: str, timeout: int) -> dict | None:
     command = [
-        "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser", "--no-netrc",
+        "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser",
         "--dump-single-json", "--skip-download", "--no-warnings", "--socket-timeout", "20",
         "--retries", "1", "--extractor-retries", "1", url,
     ]
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=_subprocess_environment())
-    if result.returncode != 0 or len(result.stdout) > 10_000_000:
+    if len(result.stdout) > 10_000_000:
+        raise ResolverError("metadata_too_large")
+    if result.returncode != 0:
+        failure = _classify_ytdlp_failure(result.stderr)
+        if failure:
+            raise ResolverError(failure)
         return None
     try:
         return json.loads(result.stdout)
@@ -276,7 +306,12 @@ def _yt_dlp_metadata(url: str, timeout: int) -> dict | None:
 def _normalize_ytdlp(metadata: dict, hostname: str, policy_restricted: bool) -> dict:
     entries = metadata.get("entries") if isinstance(metadata.get("entries"), list) else [metadata]
     choices = _ytdlp_choices(metadata)
-    downloadable = not policy_restricted
+    live = _yt_dlp_is_live(metadata)
+    downloadable = not policy_restricted and not live
+    unavailable_reason = (
+        "このサイトは利用規約上、本体を取得できません。" if policy_restricted else
+        "ライブ配信または配信開始前のため取得できません。" if live else None
+    )
     return {
         "site": _text(metadata.get("extractor_key") or metadata.get("extractor") or hostname, 120),
         "hostname": hostname,
@@ -290,7 +325,7 @@ def _normalize_ytdlp(metadata: dict, hostname: str, policy_restricted: bool) -> 
         "media": [{
             **choice,
             "downloadable": downloadable and not choice["drm"] and not choice["loginRequired"],
-            "unavailableReason": "このサイトは利用規約上、本体を取得できません。" if policy_restricted else None,
+            "unavailableReason": unavailable_reason,
         } for choice in choices[:50]],
     }
 
@@ -383,6 +418,8 @@ def _signature_type(value: bytes) -> tuple[str, str] | None:
     if upper.startswith(b"<?XML") or upper.startswith(b"<MPD"):
         if b"<MPD" in upper:
             return "application/dash+xml", ".mpd"
+    if len(value) >= 16 and value[4:8] == b"ftyp" and value[8:12] in {b"avif", b"avis"}:
+        return "image/avif", ".avif"
     if len(value) >= 12 and value[4:8] == b"ftyp":
         return "video/mp4", ".mp4"
     if value.startswith(b"\x1aE\xdf\xa3"):
@@ -391,6 +428,10 @@ def _signature_type(value: bytes) -> tuple[str, str] | None:
         return "video/x-ms-wmv", ".wmv"
     if value.startswith(b"RIFF") and value[8:12] == b"AVI ":
         return "video/x-msvideo", ".avi"
+    if value.startswith(b"RIFF") and value[8:12] == b"WAVE":
+        return "audio/wav", ".wav"
+    if value.startswith(b"FORM") and value[8:12] in {b"AIFF", b"AIFC"}:
+        return "audio/aiff", ".aiff"
     if value.startswith(b"FLV"):
         return "video/x-flv", ".flv"
     if len(value) > 188 and value[0] == 0x47 and value[188] == 0x47:
@@ -399,34 +440,61 @@ def _signature_type(value: bytes) -> tuple[str, str] | None:
         return "video/mpeg", ".mpeg"
     if value.startswith(b"\x00\x00\x01\xb3"):
         return "video/mpeg", ".mpeg"
+    if value.startswith((b"\x00\x00\x00\x01", b"\x00\x00\x01")):
+        offset = 4 if value.startswith(b"\x00\x00\x00\x01") else 3
+        if len(value) > offset:
+            h264_type = value[offset] & 0x1F
+            h265_type = (value[offset] >> 1) & 0x3F
+            if h264_type in {7, 8}:
+                return "video/h264", ".h264"
+            if h265_type in {32, 33, 34}:
+                return "video/h265", ".h265"
     if len(value) > 196 and value[4] == 0x47 and value[196] == 0x47:
         return "video/mp2t", ".m2ts"
     if value.startswith(b"OggS"):
         return "application/ogg", ".ogg"
     if value.startswith(b"fLaC"):
         return "audio/flac", ".flac"
+    if value.startswith(b"wvpk"):
+        return "audio/wavpack", ".wv"
+    if value.startswith(b".snd"):
+        return "audio/basic", ".au"
+    if value.startswith(b"\x0b\x77"):
+        return "audio/ac3", ".ac3"
+    if value.startswith(b"DKIF"):
+        return "video/x-ivf", ".ivf"
+    if value.startswith(b"\x06\x0e\x2b\x34"):
+        return "application/mxf", ".mxf"
+    if value.startswith(b"\xb7\xd8\x00\x20\x37\x49\xda\x11\xa6\x4e\x00\x07\xe9\x5e\xad\x8d"):
+        return "video/x-ms-wtv", ".wtv"
     if value.startswith(b"ID3") or (len(value) >= 2 and value[0] == 0xFF and value[1] & 0xE0 == 0xE0):
         return "audio/mpeg", ".mp3"
     if value.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png", ".png"
+        return ("image/apng", ".apng") if b"acTL" in value[:65_536] else ("image/png", ".png")
     if value.startswith(b"\xff\xd8\xff"):
         return "image/jpeg", ".jpg"
     if value.startswith((b"GIF87a", b"GIF89a")):
         return "image/gif", ".gif"
     if value.startswith(b"RIFF") and value[8:12] == b"WEBP":
         return "image/webp", ".webp"
+    if value.startswith(b"BM"):
+        return "image/bmp", ".bmp"
+    if value.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff", ".tiff"
     return None
 
 
 def _refine_signature_type(detected: tuple[str, str], path_suffix: str) -> tuple[str, str]:
     mime, detected_suffix = detected
     suffix = str(path_suffix or "").lower()
-    if detected_suffix == ".mp4" and suffix in {".3g2", ".3gp", ".m4v", ".mov", ".mp4"}:
+    if detected_suffix == ".mp4" and suffix in {".3g2", ".3gp", ".m4a", ".m4v", ".mov", ".mp4"}:
+        if suffix == ".m4a":
+            return "audio/mp4", suffix
         return ("video/quicktime" if suffix == ".mov" else "video/mp4", suffix)
-    if detected_suffix == ".mkv" and suffix == ".webm":
-        return "video/webm", suffix
-    if detected_suffix == ".wmv" and suffix == ".asf":
-        return "video/x-ms-asf", suffix
+    if detected_suffix == ".mkv" and suffix in {".mka", ".webm"}:
+        return ("audio/x-matroska" if suffix == ".mka" else "video/webm"), suffix
+    if detected_suffix == ".wmv" and suffix in {".asf", ".wma"}:
+        return ("audio/x-ms-wma" if suffix == ".wma" else "video/x-ms-asf"), suffix
     if detected_suffix == ".ogg" and suffix == ".ogv":
         return "video/ogg", suffix
     if detected_suffix == ".ogg" and suffix in {".oga", ".ogg", ".opus"}:
@@ -435,7 +503,26 @@ def _refine_signature_type(detected: tuple[str, str], path_suffix: str) -> tuple
         return "video/mp2t", suffix
     if detected_suffix == ".mpeg" and suffix in {".m2v", ".mpeg", ".mpg", ".vob"}:
         return "video/mpeg", suffix
+    if detected_suffix == ".mpeg" and suffix == ".m1v":
+        return "video/mpeg", suffix
+    if detected_suffix == ".mp3" and suffix == ".mp2":
+        return "audio/mpeg", suffix
+    if detected_suffix == ".ac3" and suffix == ".eac3":
+        return "audio/eac3", suffix
+    if detected_suffix == ".jpg" and suffix in {".mjpeg", ".mjpg"}:
+        return "video/x-mjpeg", suffix
+    if detected_suffix == ".png" and suffix == ".apng":
+        return "image/apng", suffix
+    if detected_suffix == ".tiff" and suffix in {".tif", ".tiff"}:
+        return "image/tiff", suffix
     return mime, detected_suffix
+
+
+def _refine_direct_type(detected: tuple[str, str], path_suffix: str, declared_mime: str) -> tuple[str, str]:
+    mime, suffix = _refine_signature_type(detected, path_suffix)
+    if detected[1] == ".ogg" and declared_mime in {"audio/ogg", "video/ogg"}:
+        return declared_mime, suffix
+    return mime, suffix
 
 
 def _validate_adaptive_source(url: str, delivery: str) -> None:
@@ -583,9 +670,15 @@ def _name_from_url(url: str, mime: str | None) -> str:
 
 
 def _media_type(mime: str, suffix: str) -> str:
-    if mime.startswith("audio/") or suffix in {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus"}:
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("audio/"):
         return "audio"
-    if mime.startswith("image/") or suffix in {".gif", ".jpeg", ".jpg", ".png", ".webp"}:
+    if mime.startswith("image/"):
+        return "image"
+    if suffix in {".aac", ".ac3", ".aif", ".aifc", ".aiff", ".au", ".eac3", ".flac", ".m4a", ".mka", ".mp2", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".wave", ".wma", ".wv"}:
+        return "audio"
+    if suffix in {".apng", ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}:
         return "image"
     return "video"
 
@@ -610,3 +703,21 @@ def _safe_int(value):
 def _text(value, maximum: int) -> str | None:
     text = re.sub(r"[\x00-\x1f\x7f]", "", str(value or "")).strip()
     return text[:maximum] or None
+
+
+def _classify_ytdlp_failure(stderr: str) -> str | None:
+    message = str(stderr or "").lower()
+    for code, markers in YT_DLP_BLOCKING_FAILURES:
+        if any(marker in message for marker in markers):
+            return code
+    return None
+
+
+def _yt_dlp_is_live(metadata: dict) -> bool:
+    entries = metadata.get("entries") if isinstance(metadata.get("entries"), list) else [metadata]
+    return any(
+        isinstance(entry, dict) and (
+            bool(entry.get("is_live")) or str(entry.get("live_status") or "").lower() in {"is_live", "is_upcoming"}
+        )
+        for entry in entries
+    )

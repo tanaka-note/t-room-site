@@ -1,8 +1,9 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ssrf import SafeUrl, UnsafeUrl
-from resolver import MEDIA_SUFFIXES, ResolverError, _drm_dash, _encrypted_hls, _live_media_playlist, _refine_signature_type, _signature_type, _validate_dash_manifest, _validate_hls_tree, analyze
+from resolver import MEDIA_SUFFIXES, ResolverError, _classify_ytdlp_failure, _drm_dash, _encrypted_hls, _live_media_playlist, _media_type, _normalize_ytdlp, _refine_direct_type, _refine_signature_type, _signature_type, _validate_dash_manifest, _validate_hls_tree, _yt_dlp_metadata, analyze
 
 
 class ResolverSignatureTests(unittest.TestCase):
@@ -16,6 +17,14 @@ class ResolverSignatureTests(unittest.TestCase):
     def test_declared_generic_video_inputs_are_all_routed_to_inspection(self):
         for extension in (".mov", ".mp4", ".m4v", ".mkv", ".webm", ".avi", ".flv", ".mpeg", ".mpg", ".ts", ".mts", ".m2ts", ".wmv", ".asf", ".ogv", ".3gp", ".3g2", ".vob"):
             self.assertIn(extension, MEDIA_SUFFIXES)
+
+    def test_expanded_safe_media_suffixes_are_routed_to_inspection(self):
+        extensions = {
+            ".wav", ".wave", ".aiff", ".aif", ".aifc", ".ac3", ".eac3", ".wma", ".mka",
+            ".wv", ".au", ".mp2", ".h264", ".264", ".h265", ".hevc", ".265", ".m1v",
+            ".ivf", ".mxf", ".mjpeg", ".mjpg", ".wtv", ".bmp", ".tiff", ".tif", ".avif", ".apng",
+        }
+        self.assertTrue(extensions.issubset(set(MEDIA_SUFFIXES)))
 
     def test_extensionless_hls_and_dash_signatures(self):
         self.assertEqual(_signature_type(b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nchild.m3u8")[1], ".m3u8")
@@ -36,12 +45,68 @@ class ResolverSignatureTests(unittest.TestCase):
         self.assertEqual(_signature_type(b"ID3\x04\x00"), ("audio/mpeg", ".mp3"))
         self.assertEqual(_signature_type(b"fLaC\x00\x00"), ("audio/flac", ".flac"))
         self.assertEqual(_signature_type(b"\x89PNG\r\n\x1a\n"), ("image/png", ".png"))
+        self.assertEqual(_signature_type(b"RIFF\x00\x00\x00\x00WAVE"), ("audio/wav", ".wav"))
+        self.assertEqual(_signature_type(b"FORM\x00\x00\x00\x00AIFF"), ("audio/aiff", ".aiff"))
+        self.assertEqual(_signature_type(b"BM" + b"\x00" * 20), ("image/bmp", ".bmp"))
+        self.assertEqual(_signature_type(b"II*\x00" + b"\x00" * 20), ("image/tiff", ".tiff"))
+
+    def test_m4a_mka_wma_avif_signature_refinement(self):
+        self.assertEqual(_refine_signature_type(("video/mp4", ".mp4"), ".m4a"), ("audio/mp4", ".m4a"))
+        self.assertEqual(_refine_signature_type(("video/x-matroska", ".mkv"), ".mka"), ("audio/x-matroska", ".mka"))
+        self.assertEqual(_refine_signature_type(("video/x-ms-wmv", ".wmv"), ".wma"), ("audio/x-ms-wma", ".wma"))
+        self.assertEqual(_signature_type(b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00"), ("image/avif", ".avif"))
+
+    def test_live_metadata_is_non_downloadable_before_queueing(self):
+        result = _normalize_ytdlp({
+            "id": "live", "title": "live", "is_live": True,
+            "formats": [{"format_id": "1", "url": "https://media.example/live", "ext": "mp4", "vcodec": "h264", "acodec": "aac"}],
+        }, "media.example", False)
+        self.assertTrue(result["media"])
+        self.assertTrue(all(not item["downloadable"] for item in result["media"]))
+        self.assertTrue(all("ライブ" in item["unavailableReason"] for item in result["media"]))
+
+    def test_ytdlp_policy_failures_do_not_fall_through_to_generic_extractors(self):
+        cases = {
+            "DRM protected": "drm",
+            "Please log in to continue": "login_required",
+            "This video is not available in your country": "geo_restricted",
+            "Extractor is disabled by policy": "extractor_intentionally_unsupported",
+            "Upcoming premiere has not yet started": "live_stream_not_supported",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(_classify_ytdlp_failure(message), expected)
+        self.assertIsNone(_classify_ytdlp_failure("Unable to parse an ordinary public page"))
+        self.assertIsNone(_classify_ytdlp_failure("This URL is not supported"))
+
+    @patch("resolver.subprocess.run")
+    def test_ytdlp_blocking_failure_is_raised_but_ordinary_failure_can_fallback(self, run):
+        run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="Please log in to continue")
+        with self.assertRaisesRegex(ResolverError, "login_required"):
+            _yt_dlp_metadata("https://media.example/private", 5)
+        command = run.call_args.args[0]
+        self.assertIn("--ignore-config", command)
+        self.assertIn("--no-cookies-from-browser", command)
+        self.assertNotIn("--netrc", command)
+        self.assertNotIn("--netrc-cmd", command)
+
+        run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="Unable to parse an ordinary public page")
+        self.assertIsNone(_yt_dlp_metadata("https://media.example/public", 5))
 
     def test_container_magic_keeps_a_compatible_url_format_hint(self):
         self.assertEqual(_refine_signature_type(("video/x-matroska", ".mkv"), ".webm"), ("video/webm", ".webm"))
         self.assertEqual(_refine_signature_type(("application/ogg", ".ogg"), ".ogv"), ("video/ogg", ".ogv"))
         self.assertEqual(_refine_signature_type(("video/mp4", ".mp4"), ".mov"), ("video/quicktime", ".mov"))
         self.assertEqual(_refine_signature_type(("video/mp2t", ".ts"), ".mts"), ("video/mp2t", ".mts"))
+
+    def test_explicit_ogg_mime_wins_over_ambiguous_extension(self):
+        self.assertEqual(_media_type("video/ogg", ".ogg"), "video")
+        self.assertEqual(_media_type("audio/ogg", ".ogg"), "audio")
+        self.assertEqual(_media_type("application/ogg", ".ogg"), "audio")
+        self.assertEqual(
+            _refine_direct_type(("application/ogg", ".ogg"), ".ogg", "video/ogg"),
+            ("video/ogg", ".ogg"),
+        )
 
     def test_encrypted_and_live_playlists_are_detected(self):
         self.assertTrue(_encrypted_hls(b"#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI='key'"))

@@ -38,8 +38,10 @@ const PRIVATE_DESTINATIONS = Object.freeze([
 export class DownloaderContainer extends Container {
   defaultPort = 8080;
   sleepAfter = "2m";
+  enableInternet = false;
   interceptHttps = true;
   deniedHosts = [...PRIVATE_DESTINATIONS];
+  pingEndpoint = "localhost/health";
 
   async fetch(request) {
     const longRunning = new URL(request.url).pathname === "/download";
@@ -286,7 +288,14 @@ async function analyzeSource(request, env, session) {
       signal: AbortSignal.timeout(120_000)
     }));
     const analysis = await response.json().catch(() => ({}));
-    if (!response.ok) throw new HttpError(response.status >= 500 ? 503 : response.status, safeContainerMessage(analysis.error));
+    if (!response.ok) {
+      console.error(JSON.stringify({
+        event: "downloader_container_analyze_failed",
+        errorCode: cleanText(analysis.errorCode, 80) || "unknown",
+        status: response.status
+      }));
+      throw new HttpError(response.status >= 500 ? 503 : response.status, safeContainerMessage(analysis.error));
+    }
     const normalized = normalizeAnalysis(analysis, sourceUrl.hostname);
     const extractor = String(normalized.extractor || "unknown").slice(0, 80);
     const mediaType = String(normalized.media?.[0]?.mediaType || "unknown").slice(0, 40);

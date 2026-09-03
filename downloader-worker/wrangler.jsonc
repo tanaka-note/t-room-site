@@ -57,6 +57,9 @@
     {
       "class_name": "DownloaderContainer",
       "image": "./container/Dockerfile",
+      "image_vars": {
+        "CLAMAV_DEFINITION_REFRESH": "2026-W36"
+      },
       "instance_type": "standard-2",
       "max_instances": 2,
       "rollout_active_grace_period": 900

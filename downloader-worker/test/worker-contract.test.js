@@ -89,6 +89,11 @@ test("ContainerはClamAV鮮度をfail-closedで確認してからffprobeへ渡�
   assert.match(server, /signal\.SIGTERM/);
   assert.match(server, /DRAINING\.set\(\)/);
   assert.equal(config.containers[0].rollout_active_grace_period, 900);
+  assert.equal(config.containers[0].image_vars.CLAMAV_DEFINITION_REFRESH, "2026-W36");
+  assert.match(worker, /enableInternet = false/);
+  assert.match(worker, /pingEndpoint = "localhost\/health"/);
+  assert.match(worker, /DownloaderContainer\.outbound = async/);
+  assert.match(worker, /DownloaderContainer\.outboundByHost/);
   assert.match(worker, /pathname === "\/download"/);
   assert.match(worker, /renewActivityTimeout\(\)/);
   assert.match(worker, /setTimeout\(renewActivity, 60_000\)/);

@@ -28,9 +28,9 @@ Cloudflare ContainersはWorkers Paid契約とDockerが必要です。Container�
 
 ## ClamAVとContainer更新
 
-ClamAV定義はContainer起動時に外部更新せず、image build時の`freshclam`を必須にしてimageへ固定します。定義ファイルの最新mtimeが7日を超えたContainerは`/health`と実スキャンの両方でfail closedとなり、更新失敗をcleanとして扱いません。少なくとも週1回、または脅威定義の緊急更新時にimageを再buildし、依存関係・EICAR fixture・stagingを通過してからrolloutしてください。
+ClamAV定義はContainer起動時に外部更新せず、image build時の`freshclam`を必須にしてimageへ固定します。週次または緊急更新時は`wrangler.jsonc`の`containers[0].image_vars.CLAMAV_DEFINITION_REFRESH`を現在のJST ISO週（例: `2026-W36`）へ進めてください。この値が定義更新layerだけを確実にcache bustします。同じ値での再buildは意図的にcacheを再利用します。鮮度は`.cvd/.cld`内部の署名DB build timestampを正本とし、7日超・欠落・解析不能・scanner異常は`/health`と実スキャンの両方でfail closedです。変更後はContainerをstagingでbuildし、`/health`、EICAR、実メディアfixtureを通過してから本番rolloutしてください。
 
-Containerは非root UID `10001`で実行し、`/app`とClamAV定義は読み取り専用、作業データは`/work`だけへ置きます。HTTPS outbound interception用CAは起動時だけ注入されるため、非root entrypointが公開CA束と結合し、Python・yt-dlp・ffmpeg・Chromiumへ同じ信頼束を渡します。CAや外部credentialをimageへ焼き込みません。
+Containerは非root UID `10001`で実行し、`/app`とClamAV定義は読み取り専用、作業データは`/work`だけへ置きます。`enableInternet=false`を既定にし、HTTP/HTTPSはWorker側の検証済みoutbound handler、R2 uploadは`outboundByHost`だけを経由します。80/443以外の任意TCPは許可しません。Python側でもscheme・credential・port・禁止host・IP literalを拒否し、Cloudflareの透過interception DNS利用時は公開hostnameの最終送信をWorker側で再検証します。HTTPS outbound interception用CAは起動時だけ注入されるため、非root entrypointが公開CA束と結合し、Python・yt-dlp（必要なextractorのみcurl-cffi impersonation）・ffmpeg・Chromiumへ同じ信頼束を渡します。CAや外部credentialをimageへ焼き込みません。
 
 最大12分の処理に対し、Container rolloutはactive instanceを15分保護する`rollout_active_grace_period`を設定しています。さらにSIGTERM後は新規HTTP処理を503で拒否し、実行中のffmpeg・ClamAV・R2 uploadが終了するまでdrainします。失敗したQueue deliveryはprocessing leaseの失効後に再取得されます。
 

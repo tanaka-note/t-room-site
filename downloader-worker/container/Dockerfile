@@ -16,12 +16,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && wget -q "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" -O /tmp/deno.zip \
     && echo "${DENO_SHA256}  /tmp/deno.zip" | sha256sum -c - \
     && unzip -q /tmp/deno.zip -d /opt/deno/bin \
-    && rm /tmp/deno.zip \
+    && rm /tmp/deno.zip
+
+# Wrangler passes this deliberately rotated value as a build argument. Updating
+# it invalidates only the definition layer, so scheduled rebuilds cannot reuse a
+# previously cached freshclam result while the large OS dependency layer remains
+# cacheable. Definitions are never updated at container startup.
+ARG CLAMAV_DEFINITION_REFRESH=unset
+RUN test "${CLAMAV_DEFINITION_REFRESH}" != "unset" \
+    && printf 'ClamAV definition refresh: %s\n' "${CLAMAV_DEFINITION_REFRESH}" \
     && freshclam --stdout \
     && clamscan --version
 
 RUN python -m pip install --no-cache-dir \
-      "yt-dlp[default]==2026.8.19"
+      "yt-dlp[default,curl-cffi]==2026.8.19"
 
 RUN groupadd --system --gid 10001 downloader \
     && useradd --system --uid 10001 --gid downloader --home-dir /nonexistent --shell /usr/sbin/nologin downloader \
