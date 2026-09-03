@@ -12,7 +12,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from resolver import ResolverError, analyze, download
-from scanner import UnsafeFile, clamav_database_status, inspect_file
+from scanner import UnsafeFile, clamav_daemon_ready, clamav_database_status, inspect_file, start_clamav_daemon, stop_clamav_daemon
 from ssrf import UnsafeUrl
 from media_pipeline import normalize_video
 
@@ -50,10 +50,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             return self._json(404, {"error": "not_found"})
         status = clamav_database_status()
-        return self._json(200 if status["healthy"] and not DRAINING.is_set() else 503, {
-            "ok": status["healthy"] and not DRAINING.is_set(),
+        daemon_ready = clamav_daemon_ready()
+        healthy = status["healthy"] and daemon_ready and not DRAINING.is_set()
+        return self._json(200 if healthy else 503, {
+            "ok": healthy,
             "draining": DRAINING.is_set(),
-            "clamav": status,
+            "clamav": {**status, "daemonReady": daemon_ready},
         })
 
     def _download(self, body):
@@ -62,9 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         job_id = _safe_job_id(body.get("jobId"))
         _event("download_started", job_id)
         with tempfile.TemporaryDirectory(prefix="tlain-", dir="/work") as directory:
-            path, name, declared_mime = download(
-                str(body.get("url") or ""), str(body.get("mediaId") or ""), Path(directory), max_bytes, timeout,
-            )
+            path, name, declared_mime = download(body.get("route"), Path(directory), max_bytes, timeout)
             _event("download_fetched", job_id)
             initial_scan = inspect_file(path, name, declared_mime, max_bytes)
             _event("download_initial_scan_passed", job_id)
@@ -159,6 +159,7 @@ def _event(event: str, job_id: str, **details) -> None:
 
 
 if __name__ == "__main__":
+    start_clamav_daemon()
     server = ThreadingHTTPServer(("0.0.0.0", 8080), Handler)
     server.daemon_threads = False
     server.block_on_close = True
@@ -179,3 +180,4 @@ if __name__ == "__main__":
     finally:
         DRAINING.set()
         server.server_close()
+        stop_clamav_daemon()

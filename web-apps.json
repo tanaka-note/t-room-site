@@ -244,6 +244,7 @@
         "downloader-worker/container/server.py",
         "downloader-worker/container/resolver.py",
         "downloader-worker/container/scanner.py",
+        "downloader-worker/container/clamd.conf",
         "downloader-worker/container/ssrf.py",
         "downloader-worker/container/media_pipeline.py",
         "downloader-worker/container/adapters/__init__.py",

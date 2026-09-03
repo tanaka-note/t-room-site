@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import mimetypes
 import os
 import re
+import socket
+import struct
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +53,17 @@ EXECUTABLE_MAGIC = (
 )
 CLAMAV_DATABASE_DIR = Path(os.environ.get("CLAMAV_DATABASE_DIR", "/var/lib/clamav"))
 DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_CLAMAV_SCAN_TIMEOUT_SECONDS = 600
+REQUIRED_CLAMAV_DATABASES = ("main", "daily", "bytecode")
+CLAMD_CONFIG = Path(os.environ.get("CLAMD_CONFIG", "/app/clamd.conf"))
+CLAMD_SOCKET = Path(os.environ.get("CLAMD_SOCKET", "/work/clamd.sock"))
+CLAMD_WINDOW_BYTES = 64 * 1024 * 1024
+CLAMD_WINDOW_OVERLAP_BYTES = 1024 * 1024
+_DATABASE_VERIFY_CACHE: dict[tuple[str, int, int], bool] = {}
+_DATABASE_VERIFY_LOCK = threading.Lock()
+_CLAMD_LOCK = threading.Lock()
+_CLAMD_PROCESS: subprocess.Popen | None = None
+_CLAMD_ATEXIT_REGISTERED = False
 
 
 @dataclass(frozen=True)
@@ -102,23 +117,31 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
 
 def clamav_database_status(database_dir: Path | None = None, now: float | None = None) -> dict:
     root = database_dir or CLAMAV_DATABASE_DIR
-    definitions = [
-        path for pattern in ("*.cvd", "*.cld")
-        for path in root.glob(pattern)
-        if path.is_file()
-    ]
     current = time.time() if now is None else float(now)
-    build_times = [_clamav_database_build_time(path) for path in definitions]
-    newest = max((value for value in build_times if value is not None), default=None)
     max_age = _clamav_max_definition_age_seconds()
-    age = None if newest is None else max(0, int(current - newest))
+    databases = {}
+    for name in REQUIRED_CLAMAV_DATABASES:
+        path = _clamav_database_path(root, name)
+        built_at = _clamav_database_build_time(path) if path else None
+        verified = bool(path and built_at is not None and _clamav_database_signature_is_valid(path))
+        databases[name] = {
+            "available": path is not None,
+            "verified": verified,
+            "buildUnix": int(built_at) if built_at is not None else None,
+            "ageSeconds": max(0, int(current - built_at)) if built_at is not None else None,
+        }
+    daily = databases["daily"]
+    available = all(value["available"] for value in databases.values())
+    verified = all(value["verified"] for value in databases.values())
+    daily_fresh = daily["ageSeconds"] is not None and daily["ageSeconds"] <= max_age
     return {
-        "available": newest is not None,
-        "healthy": newest is not None and age <= max_age,
-        "latestDefinitionUnix": int(newest) if newest is not None else None,
-        "freshnessSource": "database_build_time",
-        "ageSeconds": age,
+        "available": available,
+        "healthy": available and verified and daily_fresh,
+        "freshnessSource": "daily_database_build_time",
+        "dailyDefinitionUnix": daily["buildUnix"],
+        "dailyAgeSeconds": daily["ageSeconds"],
         "maxAgeSeconds": max_age,
+        "databases": databases,
     }
 
 
@@ -126,6 +149,8 @@ def require_fresh_clamav_definitions(database_dir: Path | None = None, now: floa
     status = clamav_database_status(database_dir, now)
     if not status["available"]:
         raise UnsafeFile("malware_definitions_missing")
+    if not all(value["verified"] for value in status["databases"].values()):
+        raise UnsafeFile("malware_definitions_invalid")
     if not status["healthy"]:
         raise UnsafeFile("malware_definitions_stale")
     return status
@@ -205,15 +230,147 @@ def _validate_media(path: Path, probe: dict) -> None:
 
 def _scan_malware(path: Path) -> None:
     require_fresh_clamav_definitions()
-    result = subprocess.run(
-        ["clamscan", "--no-summary", "--infected", "--", str(path)],
-        capture_output=True, text=True, timeout=180, check=False,
-    )
+    start_clamav_daemon()
+    deadline = time.monotonic() + _clamav_scan_timeout_seconds()
+    command = [
+        "clamdscan", f"--config-file={CLAMD_CONFIG}", "--fdpass", "--no-summary", "--", str(path),
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=max(1, deadline - time.monotonic()), check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise UnsafeFile("malware_scan_timeout") from error
     if result.returncode == 1:
         raise UnsafeFile("malware_detected")
     if result.returncode != 0:
         # A scanner/configuration failure is not treated as a clean result.
         raise UnsafeFile("malware_scan_failed")
+    if path.stat().st_size > CLAMD_WINDOW_BYTES:
+        _scan_large_file_windows(path, deadline)
+
+
+def start_clamav_daemon() -> None:
+    global _CLAMD_PROCESS, _CLAMD_ATEXIT_REGISTERED
+    if clamav_daemon_ready():
+        return
+    with _CLAMD_LOCK:
+        if clamav_daemon_ready():
+            return
+        if _CLAMD_PROCESS is not None and _CLAMD_PROCESS.poll() is None:
+            stop_clamav_daemon()
+        try:
+            CLAMD_SOCKET.unlink(missing_ok=True)
+            _CLAMD_PROCESS = subprocess.Popen(
+                ["clamd", f"--config-file={CLAMD_CONFIG}"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise UnsafeFile("malware_scanner_unavailable") from error
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            if _CLAMD_PROCESS.poll() is not None:
+                break
+            if clamav_daemon_ready():
+                if not _CLAMD_ATEXIT_REGISTERED:
+                    atexit.register(stop_clamav_daemon)
+                    _CLAMD_ATEXIT_REGISTERED = True
+                return
+            time.sleep(0.1)
+        stop_clamav_daemon()
+        raise UnsafeFile("malware_scanner_unavailable")
+
+
+def stop_clamav_daemon() -> None:
+    global _CLAMD_PROCESS
+    process = _CLAMD_PROCESS
+    _CLAMD_PROCESS = None
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    try:
+        CLAMD_SOCKET.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def clamav_daemon_ready() -> bool:
+    if not hasattr(socket, "AF_UNIX"):
+        return False
+    try:
+        response = _clamd_command(b"zPING\0", timeout=2)
+        return response.rstrip(b"\0") == b"PONG"
+    except (OSError, TimeoutError, UnsafeFile):
+        return False
+
+
+def _scan_large_file_windows(path: Path, deadline: float | None = None) -> None:
+    scan_deadline = deadline if deadline is not None else time.monotonic() + _clamav_scan_timeout_seconds()
+    size = path.stat().st_size
+    offset = 0
+    with path.open("rb") as source:
+        while offset < size:
+            remaining_time = scan_deadline - time.monotonic()
+            if remaining_time <= 0:
+                raise UnsafeFile("malware_scan_timeout")
+            source.seek(offset)
+            length = min(CLAMD_WINDOW_BYTES, size - offset)
+            result = _clamd_stream(source, length, remaining_time)
+            if b"FOUND" in result:
+                raise UnsafeFile("malware_detected")
+            if not result.rstrip(b"\0").endswith(b"OK"):
+                raise UnsafeFile("malware_scan_failed")
+            if offset + length >= size:
+                break
+            offset += CLAMD_WINDOW_BYTES - CLAMD_WINDOW_OVERLAP_BYTES
+
+
+def _clamd_stream(source, length: int, timeout: float | None = None) -> bytes:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(max(1, timeout if timeout is not None else _clamav_scan_timeout_seconds()))
+            connection.connect(str(CLAMD_SOCKET))
+            connection.sendall(b"zINSTREAM\0")
+            remaining = length
+            while remaining > 0:
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise UnsafeFile("malware_scan_incomplete")
+                connection.sendall(struct.pack("!I", len(chunk)))
+                connection.sendall(chunk)
+                remaining -= len(chunk)
+            connection.sendall(struct.pack("!I", 0))
+            return _receive_clamd_response(connection)
+    except socket.timeout as error:
+        raise UnsafeFile("malware_scan_timeout") from error
+    except OSError as error:
+        raise UnsafeFile("malware_scan_failed") from error
+
+
+def _clamd_command(command: bytes, timeout: int) -> bytes:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(timeout)
+        connection.connect(str(CLAMD_SOCKET))
+        connection.sendall(command)
+        return _receive_clamd_response(connection)
+
+
+def _receive_clamd_response(connection: socket.socket) -> bytes:
+    output = bytearray()
+    while len(output) <= 8192:
+        chunk = connection.recv(4096)
+        if not chunk:
+            break
+        output.extend(chunk)
+        if b"\0" in chunk:
+            break
+    if not output or len(output) > 8192:
+        raise UnsafeFile("malware_scan_failed")
+    return bytes(output)
 
 
 def _clamav_max_definition_age_seconds() -> int:
@@ -224,9 +381,51 @@ def _clamav_max_definition_age_seconds() -> int:
     return value if 3600 <= value <= 30 * 24 * 60 * 60 else DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS
 
 
-def _clamav_database_build_time(path: Path) -> int | None:
+def _clamav_scan_timeout_seconds() -> int:
+    try:
+        value = int(os.environ.get("CLAMAV_SCAN_TIMEOUT_SECONDS", DEFAULT_CLAMAV_SCAN_TIMEOUT_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_CLAMAV_SCAN_TIMEOUT_SECONDS
+    return value if 30 <= value <= 1800 else DEFAULT_CLAMAV_SCAN_TIMEOUT_SECONDS
+
+
+def _clamav_database_path(root: Path, name: str) -> Path | None:
+    for suffix in ("cld", "cvd"):
+        candidate = root / f"{name}.{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _clamav_database_signature_is_valid(path: Path) -> bool:
+    try:
+        stat = path.stat()
+        key = (str(path.resolve()), int(stat.st_size), int(stat.st_mtime_ns))
+    except OSError:
+        return False
+    with _DATABASE_VERIFY_LOCK:
+        if key in _DATABASE_VERIFY_CACHE:
+            return _DATABASE_VERIFY_CACHE[key]
+    try:
+        result = subprocess.run(
+            ["sigtool", "--info", str(path)], capture_output=True, text=True, timeout=120, check=False,
+        )
+        output = f"{result.stdout}\n{result.stderr}".lower()
+        valid = result.returncode == 0 and re.search(r"verification\s*:?\s*ok", output) is not None
+    except (OSError, subprocess.TimeoutExpired):
+        valid = False
+    with _DATABASE_VERIFY_LOCK:
+        if len(_DATABASE_VERIFY_CACHE) >= 16:
+            _DATABASE_VERIFY_CACHE.clear()
+        _DATABASE_VERIFY_CACHE[key] = valid
+    return valid
+
+
+def _clamav_database_build_time(path: Path | None) -> int | None:
     """Read the signed CVD/CLD header timestamp instead of mutable file mtime."""
     try:
+        if path is None:
+            return None
         with path.open("rb") as source:
             header = source.read(512).split(b"\x00", 1)[0].decode("ascii", "strict")
         fields = header.split(":")

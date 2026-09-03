@@ -9,6 +9,7 @@ const resolver = await readFile(new URL("../container/resolver.py", import.meta.
 const config = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
 const migration = await readFile(new URL("../migrations/0001_downloader_foundation.sql", import.meta.url), "utf8");
 const scanner = await readFile(new URL("../container/scanner.py", import.meta.url), "utf8");
+const clamd = await readFile(new URL("../container/clamd.conf", import.meta.url), "utf8");
 const server = await readFile(new URL("../container/server.py", import.meta.url), "utf8");
 const entrypoint = await readFile(new URL("../container/entrypoint.sh", import.meta.url), "utf8");
 
@@ -19,6 +20,8 @@ test("二段階解析と明示的な権利確認を分離する", () => {
   assert.match(worker, /status = 'queued'/);
   assert.match(client, /分析|解析/);
   assert.match(html, /保存する権利があります/);
+  assert.match(worker, /type: "analyze"/);
+  assert.match(client, /status === "analyzing"/);
 });
 
 test("URL全文をD1と監査へ保存しない", () => {
@@ -26,6 +29,9 @@ test("URL全文をD1と監査へ保存しない", () => {
   assert.match(migration, /url_hash/);
   assert.match(worker, /sourceCiphertext/);
   assert.doesNotMatch(worker, /details[^\n]*sourceUrl/);
+  assert.match(worker, /urlFingerprint/);
+  assert.doesNotMatch(worker, /sha256Text\(sourceUrl\.href\)/);
+  assert.match(worker, /source_path_hint, url_hash[\s\S]*\.bind\([^\n]*null, hash\)/);
 });
 
 test("Private R2・Queue・Container・Securityを独立bindingにする", () => {
@@ -50,6 +56,8 @@ test("YouTubeは解析と本体取得を分離して規約上拒否する", () =
   assert.match(worker, /status: 451|new HttpError\(451/);
   assert.match(worker, /YouTubeの利用規約/);
   assert.match(resolver, /policy_restricted[\s\S]*item\["downloadable"\] = False/);
+  assert.match(html, /自分が投稿した動画、または保存する権利を持つ動画のみ利用可能/);
+  assert.match(worker, /youtubeRightsConfirmed !== true/);
 });
 
 test("ユーザー分離と一回限りhandoffを既存Security境界へ委譲する", () => {
@@ -85,6 +93,13 @@ test("ContainerはClamAV鮮度をfail-closedで確認してからffprobeへ渡�
   assert.match(scanner, /CLAMAV_MAX_DEFINITION_AGE_SECONDS/);
   assert.match(scanner, /malware_definitions_missing/);
   assert.match(scanner, /malware_definitions_stale/);
+  assert.match(scanner, /REQUIRED_CLAMAV_DATABASES = \("main", "daily", "bytecode"\)/);
+  assert.match(clamd, /^AlertExceedsMax yes$/m);
+  assert.match(clamd, /^MaxFileSize 2G$/m);
+  assert.match(clamd, /^MaxScanSize 2G$/m);
+  assert.match(clamd, /^PCREMaxFileSize 2G$/m);
+  assert.match(scanner, /_scan_large_file_windows/);
+  assert.match(scanner, /CLAMD_WINDOW_OVERLAP_BYTES/);
   assert.ok(scanner.indexOf("_scan_malware(path)") < scanner.indexOf("probe = probe_file(path)"));
   assert.match(server, /signal\.SIGTERM/);
   assert.match(server, /DRAINING\.set\(\)/);
@@ -100,6 +115,26 @@ test("ContainerはClamAV鮮度をfail-closedで確認してからffprobeへ渡�
   assert.match(worker, /clearTimeout\(activityTimer\)/);
   assert.match(worker, /async release\(\)[\s\S]*await this\.stop\(\)/);
   assert.match(worker, /finally \{[\s\S]*await releaseContainer\(container\)/);
+});
+
+test("外向き通信はallowlist headerと制限POSTだけを利用する", () => {
+  assert.match(worker, /OUTBOUND_REQUEST_HEADERS/);
+  assert.match(worker, /isAllowedExtractorPost/);
+  assert.match(worker, /X-Real-IP/);
+  assert.match(worker, /setAllowedHosts/);
+  assert.match(worker, /configureContainerEgress/);
+  assert.doesNotMatch(worker, /const headers = new Headers\(request\.headers\)/);
+  assert.equal(config.observability.redact_query_string, true);
+  assert.doesNotMatch(resolver, /T-lain-Downloader\/1\.0/);
+});
+
+test("解析時に確定した暗号化routeだけで実取得する", () => {
+  assert.match(resolver, /Execute the exact SSRF-validated route selected during analysis/);
+  assert.match(resolver, /"_downloadRoute"/);
+  assert.match(worker, /_sealedRoutes/);
+  assert.match(worker, /capability\.sourceHash !== row\.url_hash/);
+  const downloadHandler = server.slice(server.indexOf("def _download(self, body):"), server.indexOf("def _json_body", server.indexOf("def _download(self, body):")));
+  assert.doesNotMatch(downloadHandler, /body\.get\("url"\)/);
 });
 
 test("Chromiumはjobごとの一時profileを使い終了後に残さない", () => {

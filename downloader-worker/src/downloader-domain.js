@@ -89,12 +89,6 @@ function isBlockedIpv6(value) {
   return mapped ? isBlockedIpLiteral(mapped[1]) : false;
 }
 
-export function sourcePathHint(url) {
-  const segments = url.pathname.split("/").filter(Boolean).slice(0, 3)
-    .map((segment) => segment.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 48));
-  return `/${segments.join("/")}`.slice(0, 160) || "/";
-}
-
 export function sanitizeFilename(input, mimeType = "application/octet-stream") {
   const fallback = fallbackFilename(mimeType);
   const decoded = String(input || fallback).normalize("NFKC")
@@ -131,7 +125,7 @@ export function publicJob(row) {
     id: row.id,
     status: row.status,
     sourceHostname: row.source_hostname,
-    sourcePathHint: row.source_path_hint || "/",
+    sourcePathHint: null,
     extractor: row.extractor || null,
     mediaType: row.media_type || null,
     normalizationMode: row.normalization_mode || null,
@@ -140,7 +134,7 @@ export function publicJob(row) {
     mimeType: row.mime_type || null,
     sha256: row.sha256 || null,
     filename: row.safe_filename || null,
-    analysis: parseJson(row.analysis_json, {}),
+    analysis: publicAnalysis(parseJson(row.analysis_json, {})),
     error: row.error_reason || null,
     createdAt: utc(row.created_at),
     analyzedAt: utc(row.analyzed_at),
@@ -149,9 +143,26 @@ export function publicJob(row) {
   };
 }
 
-export async function sha256Text(value) {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value))));
-  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+export function publicAnalysis(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const { _sealedRoutes: _ignored, ...publicValue } = value;
+  return publicValue;
+}
+
+export function exceedsFullTranscodeBudget(media, budgetSeconds = 240) {
+  const value = media && typeof media === "object" ? media : {};
+  const videoCodec = String(value.videoCodec || "").toLowerCase();
+  const audioCodec = String(value.audioCodec || "").toLowerCase();
+  const needsVideo = Boolean(videoCodec) && !["avc1", "h264"].includes(videoCodec);
+  const needsAudio = Boolean(audioCodec) && !["aac", "mp4a"].includes(audioCodec);
+  if (!needsVideo || !needsAudio) return false;
+  const duration = Number(value.duration);
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  const width = Math.max(320, Number(value.width) || 1920);
+  const height = Math.max(240, Number(value.height) || 1080);
+  const fps = Math.max(1, Number(value.fps) || 30);
+  const equivalent1080p30Seconds = duration * ((width * height * fps) / (1920 * 1080 * 30));
+  return equivalent1080p30Seconds > Math.max(30, Number(budgetSeconds) || 240);
 }
 
 export function isPolicyRestrictedHost(hostname) {

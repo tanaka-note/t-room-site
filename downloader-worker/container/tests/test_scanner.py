@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from scanner import UnsafeFile, _reject_filename, clamav_database_status, inspect_file, require_fresh_clamav_definitions, safe_filename
+from scanner import UnsafeFile, _reject_filename, _scan_large_file_windows, _scan_malware, clamav_database_status, inspect_file, require_fresh_clamav_definitions, safe_filename
 
 
 def clamav_header(build_time: int) -> bytes:
@@ -19,14 +19,30 @@ class ScannerPolicyTests(unittest.TestCase):
             root = Path(directory)
             with self.assertRaisesRegex(UnsafeFile, "malware_definitions_missing"):
                 require_fresh_clamav_definitions(root, now=built_at)
-            definition = root / "daily.cvd"
-            definition.write_bytes(clamav_header(built_at))
-            os.utime(definition, (1, 1))
-            self.assertTrue(clamav_database_status(root, now=built_at + 1)["healthy"])
-            self.assertEqual(clamav_database_status(root, now=built_at + 1)["latestDefinitionUnix"], built_at)
-            self.assertEqual(clamav_database_status(root, now=built_at + 1)["freshnessSource"], "database_build_time")
-            with self.assertRaisesRegex(UnsafeFile, "malware_definitions_stale"):
-                require_fresh_clamav_definitions(root, now=built_at + 8 * 24 * 60 * 60)
+            for name in ("main", "daily", "bytecode"):
+                definition = root / f"{name}.cvd"
+                definition.write_bytes(clamav_header(built_at))
+                os.utime(definition, (1, 1))
+            with patch("scanner._clamav_database_signature_is_valid", return_value=True):
+                status = clamav_database_status(root, now=built_at + 1)
+                self.assertTrue(status["healthy"])
+                self.assertEqual(status["dailyDefinitionUnix"], built_at)
+                self.assertEqual(status["freshnessSource"], "daily_database_build_time")
+                self.assertEqual(set(status["databases"]), {"main", "daily", "bytecode"})
+                with self.assertRaisesRegex(UnsafeFile, "malware_definitions_stale"):
+                    require_fresh_clamav_definitions(root, now=built_at + 8 * 24 * 60 * 60)
+
+    def test_missing_or_invalid_individual_database_fails_closed(self):
+        built_at = 1_800_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("main", "daily"):
+                (root / f"{name}.cvd").write_bytes(clamav_header(built_at))
+            with patch("scanner._clamav_database_signature_is_valid", return_value=True), self.assertRaisesRegex(UnsafeFile, "malware_definitions_missing"):
+                require_fresh_clamav_definitions(root, now=built_at)
+            (root / "bytecode.cvd").write_bytes(clamav_header(built_at))
+            with patch("scanner._clamav_database_signature_is_valid", side_effect=lambda path: path.name != "main.cvd"), self.assertRaisesRegex(UnsafeFile, "malware_definitions_invalid"):
+                require_fresh_clamav_definitions(root, now=built_at)
 
     def test_invalid_database_header_fails_closed_even_with_fresh_mtime(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -35,6 +51,39 @@ class ScannerPolicyTests(unittest.TestCase):
             os.utime(definition, (time.time(), time.time()))
             with self.assertRaisesRegex(UnsafeFile, "malware_definitions_missing"):
                 require_fresh_clamav_definitions(Path(directory))
+
+    @patch("scanner.require_fresh_clamav_definitions")
+    @patch("scanner.start_clamav_daemon")
+    @patch("scanner.subprocess.run")
+    def test_scan_uses_the_fail_closed_daemon_configuration(self, run, _daemon, _definitions):
+        run.return_value.returncode = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.mp4"
+            path.write_bytes(b"fixture")
+            _scan_malware(path)
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], "clamdscan")
+        config_argument = next(value for value in command if value.startswith("--config-file="))
+        self.assertEqual(Path(config_argument.split("=", 1)[1]).name, "clamd.conf")
+        self.assertIn("--fdpass", command)
+
+    @patch("scanner.require_fresh_clamav_definitions")
+    @patch("scanner.start_clamav_daemon")
+    @patch("scanner.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("clamdscan", 600))
+    def test_scan_timeout_fails_closed(self, _run, _daemon, _definitions):
+        with self.assertRaisesRegex(UnsafeFile, "malware_scan_timeout"):
+            _scan_malware(Path("fixture.mp4"))
+
+    @patch("scanner._clamd_stream", side_effect=[b"stream: OK\0", b"stream: OK\0", b"stream: Tail.Test FOUND\0"])
+    def test_windowed_scan_rejects_a_signature_in_the_final_window(self, stream):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "large.bin"
+            with path.open("wb") as output:
+                output.seek(128 * 1024 * 1024 - 1)
+                output.write(b"\0")
+            with self.assertRaisesRegex(UnsafeFile, "malware_detected"):
+                _scan_large_file_windows(path)
+        self.assertEqual(stream.call_count, 3)
 
     def test_malware_scan_runs_before_ffprobe(self):
         with tempfile.TemporaryDirectory() as directory:

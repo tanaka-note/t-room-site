@@ -7,6 +7,7 @@ import {
   MAX_FILE_BYTES,
   MAX_SPACE_BYTES,
   QUEUE_MAX_RETRIES,
+  exceedsFullTranscodeBudget,
   isFinalQueueAttempt,
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
@@ -15,9 +16,7 @@ import {
   normalizeSourceUrl,
   publicJob,
   queueRetryDelaySeconds,
-  sanitizeFilename,
-  sha256Text,
-  sourcePathHint
+  sanitizeFilename
 } from "./downloader-domain.js";
 
 export { ContainerProxy };
@@ -27,6 +26,13 @@ const SESSION_COOKIE = "troom_downloader_session";
 const SESSION_ROLE = "owner";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const PRIVACY_EGRESS_USER_AGENT = "Mozilla/5.0";
+const PRIVACY_EGRESS_IP = "2a06:98c0:3600::103";
+const OUTBOUND_REQUEST_HEADERS = Object.freeze(["Accept", "Accept-Encoding", "Accept-Language", "Range", "If-Range"]);
+const YOUTUBE_ANALYSIS_HOSTS = Object.freeze([
+  "youtube.com", "*.youtube.com", "youtu.be", "youtube-nocookie.com", "*.youtube-nocookie.com",
+  "youtubei.googleapis.com", "jnn-pa.googleapis.com", "i.ytimg.com", "googlevideo.com", "*.googlevideo.com"
+]);
 const PRIVATE_DESTINATIONS = Object.freeze([
   "localhost", "*.localhost", "metadata.google.internal", "metadata.aws.internal", "instance-data.ec2.internal",
   "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
@@ -71,10 +77,19 @@ DownloaderContainer.outbound = async (request) => {
   try {
     const url = normalizeSourceUrl(request.url);
     if (!["GET", "HEAD", "POST"].includes(request.method)) return new Response("Method Not Allowed", { status: 405 });
-    const headers = new Headers(request.headers);
-    headers.delete("Proxy-Authorization");
-    headers.delete("Cookie");
-    headers.delete("Authorization");
+    if (request.method === "POST" && !isAllowedExtractorPost(url)) return new Response("Method Not Allowed", { status: 405 });
+    const headers = new Headers({ "User-Agent": PRIVACY_EGRESS_USER_AGENT, "X-Real-IP": PRIVACY_EGRESS_IP });
+    for (const name of OUTBOUND_REQUEST_HEADERS) {
+      const value = request.headers.get(name);
+      if (value) headers.set(name, value.slice(0, 512));
+    }
+    if (request.method === "POST") {
+      headers.set("Content-Type", "application/json");
+      headers.set("Origin", "https://www.youtube.com");
+      copyYoutubeExtractorHeader(request.headers, headers, "X-Youtube-Client-Name", /^\d{1,4}$/, 4);
+      copyYoutubeExtractorHeader(request.headers, headers, "X-Youtube-Client-Version", /^[A-Za-z0-9._-]{1,40}$/, 40);
+      copyYoutubeExtractorHeader(request.headers, headers, "X-Goog-Visitor-Id", /^[A-Za-z0-9_%=-]{1,2048}$/, 2048);
+    }
     return fetch(new Request(url, { method: request.method, headers, body: request.method === "POST" ? request.body : null, redirect: "manual" }));
   } catch (error) {
     return new Response(error instanceof DomainError ? error.message : "Blocked", { status: error instanceof DomainError ? error.status : 403 });
@@ -105,7 +120,8 @@ export async function handleQueueBatch(batch, env) {
   for (const message of batch.messages) {
     try {
       const body = message.body || {};
-      if (body.type === "download") await processDownloadMessage(env, body);
+      if (body.type === "analyze") await processAnalyzeMessage(env, body);
+      else if (body.type === "download") await processDownloadMessage(env, body);
       else if (body.type === "delete") await deleteJobObject(env, String(body.jobId || ""), "expired");
       message.ack();
     } catch (error) {
@@ -117,9 +133,10 @@ export async function handleQueueBatch(batch, env) {
         attempts: message.attempts,
         terminalAttempt
       }));
-      if (terminalAttempt && message.body?.type === "download") {
+      if (terminalAttempt && ["analyze", "download"].includes(message.body?.type)) {
         try {
-          await markDownloadFailed(env, message.body, error);
+          if (message.body?.type === "analyze") await markAnalysisFailed(env, message.body, error);
+          else await markDownloadFailed(env, message.body, error);
         } catch (markError) {
           console.error(JSON.stringify({ event: "downloader_queue_failure_status_update_failed", error: safeErrorName(markError) }));
         }
@@ -256,12 +273,16 @@ async function requireSession(request, env) {
 
 async function analyzeSource(request, env, session) {
   ensureContainerConfigured(env);
+  ensureQueueConfigured(env);
   const body = await readJson(request, 8192);
   const sourceUrl = normalizeSourceUrl(body.url);
+  if (isPolicyRestrictedHost(sourceUrl.hostname) && body.youtubeRightsConfirmed !== true) {
+    throw new HttpError(400, "YouTubeは、ご自身が投稿した動画または保存する権利を持つ動画であることを確認してください。", "youtube_rights_confirmation_required");
+  }
   const clientRequestId = normalizeClientRequestId(body.clientRequestId);
   if (!clientRequestId) throw new HttpError(400, "解析リクエストを確認してください。");
   await enforceRateLimit(env, session.identityId, sourceUrl.hostname, "analyze", 30, 10);
-  const hash = await sha256Text(sourceUrl.href);
+  const hash = await urlFingerprint(sourceUrl.href, env);
   const existing = await env.DB.prepare("SELECT * FROM downloader_jobs WHERE identity_id = ? AND client_request_id = ?")
     .bind(session.identityId, clientRequestId).first();
   if (existing) {
@@ -274,13 +295,45 @@ async function analyzeSource(request, env, session) {
     env.DB.prepare(`INSERT INTO downloader_jobs
       (id, identity_id, service_link_id, client_request_id, status, source_hostname, source_path_hint, url_hash)
       VALUES (?, ?, ?, ?, 'analyzing', ?, ?, ?)`)
-      .bind(jobId, session.identityId, session.serviceLinkId, clientRequestId, sourceUrl.hostname, sourcePathHint(sourceUrl), hash),
+      .bind(jobId, session.identityId, session.serviceLinkId, clientRequestId, sourceUrl.hostname, null, hash),
     rateEventStatement(env, session.identityId, sourceUrl.hostname, "analyze")
   ]);
   await audit(env, request, session, "downloader_analyze_requested", "success", auditSource(sourceUrl, hash, jobId));
-
-  const container = getContainer(env.DOWNLOADER_CONTAINER, "analysis");
+  const encrypted = await encryptPrivatePayload({ url: sourceUrl.href }, env);
   try {
+    await env.JOBS.send({ type: "analyze", jobId, identityId: session.identityId, ...encrypted });
+    return json({ job: publicJob(await ownedJob(env, session.identityId, jobId)) }, 202);
+  } catch (error) {
+    await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', error_type = 'analyze_failed', error_reason = ?,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing'`)
+      .bind(userSafeError(error), jobId, session.identityId).run();
+    await audit(env, request, session, "downloader_analyze_failed", "failure", auditSource(sourceUrl, hash, jobId));
+    throw error;
+  }
+}
+
+async function processAnalyzeMessage(env, message) {
+  ensureContainerConfigured(env);
+  const jobId = String(message.jobId || "");
+  const identityId = String(message.identityId || "");
+  const row = await env.DB.prepare("SELECT * FROM downloader_jobs WHERE id = ? AND identity_id = ?")
+    .bind(jobId, identityId).first();
+  if (!row || row.status !== "analyzing") return;
+  const analysisToken = crypto.randomUUID();
+  const claim = await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = ?, processing_lease_expires_at = ?,
+    updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing'
+    AND (processing_token IS NULL OR processing_lease_expires_at IS NULL OR processing_lease_expires_at <= ?)`)
+    .bind(analysisToken, nowSeconds() + 180, jobId, identityId, nowSeconds()).run();
+  if (!claim.meta?.changes) return;
+  let container = null;
+  try {
+    const payload = await decryptPrivatePayload(message, env);
+    const sourceUrl = normalizeSourceUrl(payload.url);
+    if (await urlFingerprint(sourceUrl.href, env) !== row.url_hash || sourceUrl.hostname !== row.source_hostname) {
+      throw new Error("analysis_capability_mismatch");
+    }
+    container = getContainer(env.DOWNLOADER_CONTAINER, `analysis-${jobId}`);
+    await configureContainerEgress(container, sourceUrl);
     const response = await container.fetch(new Request("http://container/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -289,31 +342,25 @@ async function analyzeSource(request, env, session) {
     }));
     const analysis = await response.json().catch(() => ({}));
     if (!response.ok) {
-      console.error(JSON.stringify({
-        event: "downloader_container_analyze_failed",
-        errorCode: cleanText(analysis.errorCode, 80) || "unknown",
-        status: response.status
-      }));
-      throw new HttpError(response.status >= 500 ? 503 : response.status, safeContainerMessage(analysis.error));
+      console.error(JSON.stringify({ event: "downloader_container_analyze_failed", errorCode: cleanText(analysis.errorCode, 80) || "unknown", status: response.status }));
+      throw new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
     }
-    const normalized = normalizeAnalysis(analysis, sourceUrl.hostname);
+    const normalized = await normalizeAnalysis(analysis, sourceUrl.hostname, row.url_hash, env);
     const extractor = String(normalized.extractor || "unknown").slice(0, 80);
     const mediaType = String(normalized.media?.[0]?.mediaType || "unknown").slice(0, 40);
     const deliveryType = String(normalized.media?.[0]?.delivery || "unknown").slice(0, 40);
-    await env.DB.prepare(`UPDATE downloader_jobs SET status = 'analyzed', extractor = ?, media_type = ?, delivery_type = ?, analysis_json = ?,
-      analyzed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing'`)
-      .bind(extractor, mediaType, deliveryType, JSON.stringify(normalized), jobId, session.identityId).run();
-    const row = await ownedJob(env, session.identityId, jobId);
-    await audit(env, request, session, "downloader_analyze_completed", "success", { ...auditSource(sourceUrl, hash, jobId), extractor, mediaCount: normalized.media.length });
-    return json({ job: publicJob(row) }, 201);
+    const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'analyzed', extractor = ?, media_type = ?, delivery_type = ?, analysis_json = ?,
+      analyzed_at = CURRENT_TIMESTAMP, processing_token = NULL, processing_lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND identity_id = ? AND status = 'analyzing' AND processing_token = ?`)
+      .bind(extractor, mediaType, deliveryType, JSON.stringify(normalized), jobId, identityId, analysisToken).run();
+    if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_analyze_completed", "success", { jobId, hostname: sourceUrl.hostname, urlHash: row.url_hash, extractor, mediaCount: normalized.media.length });
   } catch (error) {
-    await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', error_type = 'analyze_failed', error_reason = ?,
-      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing'`)
-      .bind(userSafeError(error), jobId, session.identityId).run();
-    await audit(env, request, session, error?.code === "ssrf_blocked" ? "downloader_ssrf_blocked" : "downloader_analyze_failed", "failure", auditSource(sourceUrl, hash, jobId));
+    await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing' AND processing_token = ?`)
+      .bind(jobId, identityId, analysisToken).run();
     throw error;
   } finally {
-    await releaseContainer(container);
+    if (container) await releaseContainer(container);
   }
 }
 
@@ -325,15 +372,20 @@ async function requestDownload(request, env, session, jobId) {
   const mediaId = normalizeMediaId(body.mediaId);
   if (!mediaId) throw new HttpError(400, "取得するメディアを選択してください。");
   const row = await ownedJob(env, session.identityId, jobId);
-  if (row.url_hash !== await sha256Text(sourceUrl.href)) throw new HttpError(409, "解析時と同じURLを入力してください。");
+  if (row.url_hash !== await urlFingerprint(sourceUrl.href, env)) throw new HttpError(409, "解析時と同じURLを入力してください。");
   const analysis = parseJson(row.analysis_json, {});
   if (isPolicyRestrictedHost(sourceUrl.hostname) || isPolicyRestrictedAnalysis(analysis)) {
+    if (body.youtubeRightsConfirmed !== true) {
+      throw new HttpError(400, "YouTubeは、ご自身が投稿した動画または保存する権利を持つ動画であることを確認してください。", "youtube_rights_confirmation_required");
+    }
     throw new HttpError(451, "YouTubeの利用規約により、このサービスから本体を取得できません。YouTube公式の保存機能をご利用ください。", "policy_restricted");
   }
   if (row.status === "processing" || row.status === "ready") return json({ job: publicJob(row) });
   if (row.status === "queued") {
-    const encrypted = await encryptQueueUrl(sourceUrl.href, env);
-    await env.JOBS.send({ type: "download", jobId, identityId: session.identityId, mediaId: row.selected_media_id || mediaId, ...encrypted });
+    const selectedMediaId = row.selected_media_id || mediaId;
+    const sealedRoute = analysis._sealedRoutes?.[selectedMediaId];
+    if (!sealedRoute) throw new HttpError(409, "解析結果の有効期限が切れました。もう一度解析してください。");
+    await env.JOBS.send({ type: "download", jobId, identityId: session.identityId, mediaId: selectedMediaId, ...sealedRoute });
     return json({ job: publicJob(row) }, 202);
   }
   if (row.status !== "analyzed") throw new HttpError(409, "この解析結果から取得を開始できません。");
@@ -341,18 +393,22 @@ async function requestDownload(request, env, session, jobId) {
   if (!selected || selected.downloadable !== true || selected.drm === true || selected.loginRequired === true) {
     throw new HttpError(409, selected?.unavailableReason || "このメディアは取得できません。");
   }
+  if (exceedsFullTranscodeBudget(selected)) {
+    throw new HttpError(422, "この動画は安全な処理時間内にMP4へ変換できない可能性が高いため取得できません。", "processing_budget_exceeded");
+  }
+  const sealedRoute = analysis._sealedRoutes?.[mediaId];
+  if (!sealedRoute) throw new HttpError(409, "解析結果の有効期限が切れました。もう一度解析してください。");
   await enforceRateLimit(env, session.identityId, sourceUrl.hostname, "download", 5, 5);
   const inFlight = await env.DB.prepare(`SELECT 1 AS ok FROM downloader_jobs
     WHERE identity_id = ? AND id != ? AND status IN ('queued', 'processing') LIMIT 1`).bind(session.identityId, jobId).first();
   if (inFlight) throw new HttpError(429, "現在の取得が完了してから、次の取得を開始してください。");
-  const encrypted = await encryptQueueUrl(sourceUrl.href, env);
   const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'queued', selected_media_id = ?, expected_size = ?,
     queued_at = CURRENT_TIMESTAMP, error_type = NULL, error_reason = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND identity_id = ? AND status = 'analyzed'`)
     .bind(mediaId, safeInteger(selected.estimatedSize), jobId, session.identityId).run();
   if (!update.meta?.changes) throw new HttpError(409, "取得状態が更新されています。画面を再読み込みしてください。");
   await env.DB.batch([rateEventStatement(env, session.identityId, sourceUrl.hostname, "download")]);
-  await env.JOBS.send({ type: "download", jobId, identityId: session.identityId, mediaId, ...encrypted });
+  await env.JOBS.send({ type: "download", jobId, identityId: session.identityId, mediaId, ...sealedRoute });
   await audit(env, request, session, "downloader_download_requested", "success", { jobId, hostname: sourceUrl.hostname, urlHash: row.url_hash, mediaId });
   return json({ job: publicJob(await ownedJob(env, session.identityId, jobId)) }, 202);
 }
@@ -375,21 +431,24 @@ async function processDownloadMessage(env, message) {
   if (!claim.meta?.changes) return;
   await auditSystem(env, identityId, row.service_link_id, "downloader_download_started", "success", { jobId, hostname: row.source_hostname });
   try {
-    const sourceUrl = normalizeSourceUrl(await decryptQueueUrl(message, env));
-    if (await sha256Text(sourceUrl.href) !== row.url_hash) throw new Error("url_hash_mismatch");
+    const capability = await decryptPrivatePayload(message, env);
+    if (capability.sourceHash !== row.url_hash || !capability.route || typeof capability.route !== "object") {
+      throw new Error("download_capability_mismatch");
+    }
+    const routeUrl = normalizeSourceUrl(capability.route.url);
+    if (isPolicyRestrictedHost(routeUrl.hostname)) throw new Error("policy_restricted");
     const objectKey = `downloads/${jobId}/${crypto.randomUUID()}`;
     const expiresAt = nowSeconds() + downloadTtl(env);
-    const grant = await createInternalGrant({ jobId, identityId, processingToken, objectKey, expiresAt, maxBytes: maxBytesForRow(env, row) }, env);
+    const grant = await createInternalGrant({ jobId, processingToken, objectKey, expiresAt, maxBytes: maxBytesForRow(env, row) }, env);
     const container = getContainer(env.DOWNLOADER_CONTAINER, `job-${jobId}`);
     try {
+      await configureContainerEgress(container, routeUrl, capability.route.egressHosts);
       const response = await container.fetch(new Request("http://container/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          url: sourceUrl.href,
-          mediaId: String(message.mediaId || row.selected_media_id || ""),
+          route: capability.route,
           jobId,
-          identityId,
           objectKey,
           uploadGrant: grant,
           maxBytes: maxBytesForRow(env, row),
@@ -432,6 +491,18 @@ async function markDownloadFailed(env, message, error) {
   if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_download_failed", "failure", { jobId, hostname: row.source_hostname, reason: safe });
 }
 
+async function markAnalysisFailed(env, message, error) {
+  const jobId = String(message?.jobId || "");
+  const identityId = String(message?.identityId || "");
+  const row = await env.DB.prepare("SELECT service_link_id, source_hostname FROM downloader_jobs WHERE id = ? AND identity_id = ?")
+    .bind(jobId, identityId).first();
+  if (!row) return;
+  const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', error_type = 'analyze_failed',
+    error_reason = 'このURLからメディアを確認できませんでした。', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND identity_id = ? AND status = 'analyzing'`).bind(jobId, identityId).run();
+  if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_analyze_failed", "failure", { jobId, hostname: row.source_hostname, reason: queueErrorReason(error) });
+}
+
 async function handleContainerUpload(request, env) {
   if (request.method !== "PUT") return new Response("Method Not Allowed", { status: 405 });
   const grant = await verifyInternalGrant(request.headers.get("Authorization"), env);
@@ -439,8 +510,8 @@ async function handleContainerUpload(request, env) {
   const size = Number(request.headers.get("Content-Length") || 0);
   if (!Number.isSafeInteger(size) || size <= 0 || size > grant.maxBytes) return new Response("Payload Too Large", { status: 413 });
   const row = await env.DB.prepare(`SELECT status FROM downloader_jobs
-    WHERE id = ? AND identity_id = ? AND status = 'processing' AND processing_token = ? AND processing_lease_expires_at > ?`)
-    .bind(grant.jobId, grant.identityId, grant.processingToken, nowSeconds()).first();
+    WHERE id = ? AND status = 'processing' AND processing_token = ? AND processing_lease_expires_at > ?`)
+    .bind(grant.jobId, grant.processingToken, nowSeconds()).first();
   if (!row) return new Response("Conflict", { status: 409 });
   const sha256 = String(request.headers.get("X-Content-SHA256") || "").toLowerCase();
   const mimeType = String(request.headers.get("Content-Type") || "application/octet-stream").slice(0, 120);
@@ -456,8 +527,8 @@ async function handleContainerUpload(request, env) {
     const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'ready', object_key = ?, actual_size = ?, sha256 = ?,
       mime_type = ?, safe_filename = ?, downloaded_at = CURRENT_TIMESTAMP, expires_at = ?, processing_token = NULL,
       processing_lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND identity_id = ? AND status = 'processing' AND processing_token = ?`)
-      .bind(grant.objectKey, size, sha256, mimeType, filename, grant.expiresAt, grant.jobId, grant.identityId, grant.processingToken).run();
+      WHERE id = ? AND status = 'processing' AND processing_token = ?`)
+      .bind(grant.objectKey, size, sha256, mimeType, filename, grant.expiresAt, grant.jobId, grant.processingToken).run();
     committed = update.meta?.changes === 1;
   } finally {
     if (!committed) await env.DOWNLOADS.delete(grant.objectKey);
@@ -536,6 +607,9 @@ async function cleanupExpiredJobs(env) {
     await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', object_key = NULL, error_type = 'stale_job',
       error_reason = '処理が完了しなかったため終了しました。', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
   }
+  await env.DB.prepare(`UPDATE downloader_jobs SET analysis_json = '{}', source_path_hint = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE analysis_json != '{}' AND status IN ('analyzed', 'failed', 'rejected', 'expired', 'deleted') AND updated_at < ?`)
+    .bind(sqliteUtcTimestamp(Date.now() - 60 * 60 * 1000)).run();
   await cleanupOrphanObjects(env);
   await env.DB.prepare("DELETE FROM downloader_rate_events WHERE occurred_at < ?")
     .bind(new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()).run();
@@ -577,23 +651,34 @@ function rateEventStatement(env, identityId, hostname, action) {
     VALUES (?, ?, ?, ?, ?)`).bind(crypto.randomUUID(), identityId, hostname, action, new Date().toISOString());
 }
 
-function normalizeAnalysis(input, hostname) {
-  const media = (Array.isArray(input.media) ? input.media : []).slice(0, 50).map((item, index) => ({
-    mediaId: normalizeMediaId(item.mediaId) || `media-${index + 1}`,
-    title: cleanText(item.title, 240) || `メディア ${index + 1}`,
-    mediaType: ["video", "audio", "image"].includes(item.mediaType) ? item.mediaType : "video",
-    container: cleanText(item.container, 40) || null,
-    mime: cleanText(item.mime, 100) || null,
-    estimatedSize: safeInteger(item.estimatedSize),
-    width: safeInteger(item.width), height: safeInteger(item.height), fps: safeInteger(item.fps), duration: safeInteger(item.duration),
-    videoCodec: cleanText(item.videoCodec, 80) || null,
-    audioCodec: cleanText(item.audioCodec, 80) || null,
-    delivery: cleanText(item.delivery, 40) || "unknown",
-    drm: Boolean(item.drm), loginRequired: Boolean(item.loginRequired),
-    downloadable: item.downloadable === true,
-    unavailableReason: cleanText(item.unavailableReason, 240) || null,
-    normalization: cleanText(item.normalization, 40) || (item.mediaType === "video" ? "AUTO" : "NOT_APPLICABLE")
-  }));
+async function normalizeAnalysis(input, hostname, sourceHash, env) {
+  const media = [];
+  const sealedRoutes = {};
+  for (const [index, item] of (Array.isArray(input.media) ? input.media : []).slice(0, 50).entries()) {
+    const mediaId = normalizeMediaId(item.mediaId) || `media-${index + 1}`;
+    let downloadable = item.downloadable === true;
+    if (downloadable) {
+      const route = normalizeDownloadRoute(item._downloadRoute);
+      if (route) sealedRoutes[mediaId] = await encryptPrivatePayload({ sourceHash, route }, env);
+      else downloadable = false;
+    }
+    media.push({
+      mediaId,
+      title: cleanText(item.title, 240) || `メディア ${index + 1}`,
+      mediaType: ["video", "audio", "image"].includes(item.mediaType) ? item.mediaType : "video",
+      container: cleanText(item.container, 40) || null,
+      mime: cleanText(item.mime, 100) || null,
+      estimatedSize: safeInteger(item.estimatedSize),
+      width: safeInteger(item.width), height: safeInteger(item.height), fps: safeInteger(item.fps), duration: safeInteger(item.duration),
+      videoCodec: cleanText(item.videoCodec, 80) || null,
+      audioCodec: cleanText(item.audioCodec, 80) || null,
+      delivery: cleanText(item.delivery, 40) || "unknown",
+      drm: Boolean(item.drm), loginRequired: Boolean(item.loginRequired),
+      downloadable,
+      unavailableReason: cleanText(item.unavailableReason, 240) || (downloadable ? null : "安全な取得経路を確定できませんでした。"),
+      normalization: cleanText(item.normalization, 40) || (item.mediaType === "video" ? "AUTO" : "NOT_APPLICABLE")
+    });
+  }
   return {
     site: cleanText(input.site, 120) || hostname,
     hostname,
@@ -605,8 +690,63 @@ function normalizeAnalysis(input, hostname) {
     extractor: cleanText(input.extractor, 80) || "unknown",
     browserFallbackUsed: Boolean(input.browserFallbackUsed),
     warning: cleanText(input.warning, 300) || null,
-    media
+    media,
+    _sealedRoutes: sealedRoutes
   };
+}
+
+function normalizeDownloadRoute(value) {
+  try {
+    if (!value || value.version !== 1 || !["direct", "adaptive", "yt-dlp"].includes(value.kind)) return null;
+    const url = normalizeSourceUrl(value.url);
+    if (isPolicyRestrictedHost(url.hostname)) return null;
+    const delivery = ["direct", "hls", "dash"].includes(value.delivery) ? value.delivery : "direct";
+    if (value.kind === "direct" && delivery !== "direct") return null;
+    if (value.kind === "adaptive" && !["hls", "dash"].includes(delivery)) return null;
+    const route = {
+      version: 1,
+      kind: value.kind,
+      url: url.href,
+      delivery,
+      filename: cleanText(value.filename, 120) || "download",
+      mime: cleanText(value.mime, 120) || null
+    };
+    const egressHosts = [];
+    for (const host of Array.isArray(value.egressHosts) ? value.egressHosts.slice(0, 32) : []) {
+      try {
+        const normalized = normalizeSourceUrl(`https://${String(host || "").trim()}/`).hostname;
+        if (!egressHosts.includes(normalized)) egressHosts.push(normalized);
+      } catch { /* invalid or private host is intentionally omitted */ }
+    }
+    if (!egressHosts.includes(url.hostname)) egressHosts.push(url.hostname);
+    route.egressHosts = egressHosts;
+    if (value.kind === "yt-dlp") {
+      route.playlistIndex = safeInteger(value.playlistIndex);
+      route.formatSelector = cleanFormatSelector(value.formatSelector);
+      if (!route.formatSelector) return null;
+    }
+    return route;
+  } catch { return null; }
+}
+
+async function configureContainerEgress(container, sourceUrl, analyzedHosts = []) {
+  if (typeof container?.setAllowedHosts !== "function") throw new Error("container_egress_allowlist_unavailable");
+  const hosts = new Set(["r2.tlain.internal"]);
+  const addFamily = (value) => {
+    let hostname;
+    try { hostname = normalizeSourceUrl(`https://${String(value || "").trim()}/`).hostname; } catch { return; }
+    hosts.add(hostname);
+    hosts.add(`*.${hostname}`);
+    if (hostname.startsWith("www.")) {
+      const root = hostname.slice(4);
+      hosts.add(root);
+      hosts.add(`*.${root}`);
+    }
+  };
+  addFamily(sourceUrl.hostname);
+  for (const host of Array.isArray(analyzedHosts) ? analyzedHosts.slice(0, 32) : []) addFamily(host);
+  if (isPolicyRestrictedHost(sourceUrl.hostname)) for (const host of YOUTUBE_ANALYSIS_HOSTS) hosts.add(host);
+  await container.setAllowedHosts([...hosts]);
 }
 
 function safeThumbnail(value) {
@@ -619,17 +759,17 @@ function safeThumbnail(value) {
   } catch { return null; }
 }
 
-async function encryptQueueUrl(url, env) {
+async function encryptPrivatePayload(value, env) {
   const key = await urlEncryptionKey(env);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(url));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(JSON.stringify(value)));
   return { sourceCiphertext: bytesToBase64Url(new Uint8Array(ciphertext)), sourceIv: bytesToBase64Url(iv) };
 }
 
-async function decryptQueueUrl(message, env) {
+async function decryptPrivatePayload(message, env) {
   const key = await urlEncryptionKey(env);
   const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64UrlToBytes(message.sourceIv) }, key, base64UrlToBytes(message.sourceCiphertext));
-  return decoder.decode(plaintext);
+  return JSON.parse(decoder.decode(plaintext));
 }
 
 async function urlEncryptionKey(env) {
@@ -653,7 +793,8 @@ async function verifyInternalGrant(header, env) {
   if (!(await safeEqual(signature, await hmac(payload, env.INTERNAL_SIGNING_SECRET)))) return null;
   try {
     const value = JSON.parse(decoder.decode(base64UrlToBytes(payload)));
-    return value.expiresAt > nowSeconds() && /^[A-Za-z0-9_-]{1,128}$/.test(String(value.processingToken || "")) &&
+    return value.expiresAt > nowSeconds() && /^[A-Za-z0-9_-]{1,128}$/.test(String(value.jobId || "")) &&
+      /^[A-Za-z0-9_-]{1,128}$/.test(String(value.processingToken || "")) &&
       /^downloads\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(value.objectKey) ? value : null;
   } catch { return null; }
 }
@@ -696,7 +837,7 @@ async function auditSystem(env, identityId, serviceLinkId, eventType, outcome, d
 }
 
 function auditSource(url, urlHash, jobId) {
-  return { jobId, hostname: url.hostname, pathHint: sourcePathHint(url), urlHash };
+  return { jobId, hostname: url.hostname, urlHash };
 }
 
 async function serveAsset(request, env, url, path) {
@@ -733,6 +874,7 @@ function clearCookie(secure) { return `${SESSION_COOKIE}=; Path=${BASE_PATH}; Ma
 function contentDisposition(filename) { return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(sanitizeFilename(filename))}`; }
 function parseCookies(header) { return Object.fromEntries(header.split(";").map((part) => part.trim()).filter(Boolean).map((part) => { const index = part.indexOf("="); return index < 0 ? [part, ""] : [part.slice(0, index), part.slice(index + 1)]; })); }
 function cleanText(value, max) { return String(value || "").trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, max); }
+function cleanFormatSelector(value) { const text = cleanText(value, 256); return /^[A-Za-z0-9_+.,:/?*^$=!<>~()\[\]{} -]+$/.test(text) ? text : ""; }
 function safeInteger(value) { const number = Number(value); return Number.isSafeInteger(number) && number >= 0 ? number : null; }
 function clampNumber(value, min, max, fallback) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback; }
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
@@ -741,12 +883,18 @@ function parseJson(value, fallback) { try { return JSON.parse(value); } catch { 
 function safeContainerMessage(value) { const text = cleanText(value, 240); return /^(この|URL|ファイル|コンテンツ|安全)/.test(text) ? text : "このURLからメディアを確認できませんでした。"; }
 function userSafeError(error) { return error instanceof HttpError || error instanceof DomainError ? cleanText(error.message, 240) : "このURLからメディアを確認できませんでした。"; }
 function queueErrorReason(error) { const code = cleanText(error?.message || error?.name || "unknown", 80); return code.includes("scan") ? "安全性を確認できなかったため取得を中止しました。" : code.includes("size") ? "ファイルサイズが上限を超えています。" : "ファイルを取得できませんでした。時間を置いてお試しください。"; }
+function isAllowedExtractorPost(url) {
+  const hostname = String(url?.hostname || "").toLowerCase();
+  return (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) && url.pathname.startsWith("/youtubei/v1/");
+}
+function copyYoutubeExtractorHeader(source, target, name, pattern, maxLength) { const value = String(source.get(name) || "").slice(0, maxLength); if (pattern.test(value)) target.set(name, value); }
 function decodeHeaderValue(value) { try { return decodeURIComponent(String(value || "")); } catch { return String(value || ""); } }
 function scheduleAudit(context, promise) { if (context?.waitUntil) context.waitUntil(promise); else void promise.catch(() => {}); }
-function safeErrorName(error) { return error instanceof Error ? `${error.name}:${cleanText(error.message, 120)}` : "unknown"; }
+function safeErrorName(error) { return error instanceof Error ? `${cleanText(error.name, 60) || "Error"}:${cleanText(error.code, 60) || "unspecified"}` : "unknown"; }
 function json(value, status = 200, inputHeaders) { const headers = new Headers(inputHeaders); headers.set("Content-Type", "application/json; charset=utf-8"); headers.set("Cache-Control", "no-store"); headers.set("X-Content-Type-Options", "nosniff"); headers.set("X-Robots-Tag", "noindex, nofollow, noarchive"); return new Response(JSON.stringify(value), { status, headers }); }
 async function readJson(request, max) { const size = Number(request.headers.get("Content-Length") || 0); if (size > max) throw new HttpError(413, "入力内容が大きすぎます。"); try { const value = await request.json(); return value && typeof value === "object" ? value : {}; } catch { throw new HttpError(400, "入力内容を読み取れませんでした。"); } }
 async function hmac(value, secret) { const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)))); }
+async function urlFingerprint(value, env) { if (!env.INTERNAL_SIGNING_SECRET) throw new HttpError(503, "Downloaderの内部署名設定が未完了です。"); return hmac(`downloader-url-v1\0${value}`, env.INTERNAL_SIGNING_SECRET); }
 async function safeEqual(left, right) { let a; let b; try { a = base64UrlToBytes(left); b = base64UrlToBytes(right); } catch { return false; } if (a.length !== b.length) return false; let result = 0; for (let i = 0; i < a.length; i += 1) result |= a[i] ^ b[i]; return result === 0; }
 function bytesToBase64Url(bytes) { let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, ""); }
 function base64UrlToBytes(value) { const text = String(value || ""); if (!/^[A-Za-z0-9_-]+$/.test(text) || text.length % 4 === 1) throw new Error("invalid base64url"); const padded = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "="); return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0)); }

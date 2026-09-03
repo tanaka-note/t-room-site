@@ -5,7 +5,8 @@
   const elements = Object.fromEntries([
     "message", "login-view", "passkey-login", "logout", "app-view", "analyze-form", "source-url",
     "analyze-button", "analysis-view", "analysis-title", "analysis-method", "source-details",
-    "analysis-warning", "download-form", "media-list", "rights-confirmed", "download-button",
+    "analysis-warning", "download-form", "media-list", "rights-confirmed", "youtube-rights-notice",
+    "youtube-rights-confirmed", "download-button",
     "progress-view", "progress-label", "ready-view", "file-details", "file-download", "expiry-note",
     "job-list", "refresh-jobs"
   ].map((id) => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.getElementById(id)]));
@@ -30,6 +31,7 @@
     elements.passkeyLogin.addEventListener("click", login);
     elements.logout.addEventListener("click", logout);
     elements.analyzeForm.addEventListener("submit", analyze);
+    elements.sourceUrl.addEventListener("input", updateYoutubeConfirmation);
     elements.downloadForm.addEventListener("submit", requestDownload);
     elements.refreshJobs.addEventListener("click", loadJobs);
   }
@@ -62,9 +64,17 @@
     const url = elements.sourceUrl.value.trim();
     setBusy(elements.analyzeButton, true, "解析中…");
     try {
-      const result = await api("/analyze", { method: "POST", body: { url, clientRequestId: requestId() } });
+      const result = await api("/analyze", {
+        method: "POST",
+        body: { url, clientRequestId: requestId(), youtubeRightsConfirmed: elements.youtubeRightsConfirmed.checked }
+      });
       currentJob = result.job;
-      renderAnalysis(result.job);
+      if (result.job.status === "analyzed") renderAnalysis(result.job);
+      else {
+        elements.progressView.hidden = false;
+        elements.progressLabel.textContent = "URLを解析しています";
+        pollJob();
+      }
       await loadJobs();
     } catch (error) {
       showMessage(error.message);
@@ -81,7 +91,11 @@
     try {
       const result = await api(`/jobs/${encodeURIComponent(currentJob.id)}/download`, {
         method: "POST",
-        body: { url: elements.sourceUrl.value.trim(), mediaId, rightsConfirmed: elements.rightsConfirmed.checked }
+        body: {
+          url: elements.sourceUrl.value.trim(), mediaId,
+          rightsConfirmed: elements.rightsConfirmed.checked,
+          youtubeRightsConfirmed: elements.youtubeRightsConfirmed.checked
+        }
       });
       currentJob = result.job;
       elements.analysisView.hidden = true;
@@ -99,6 +113,12 @@
     try {
       const result = await api(`/jobs/${encodeURIComponent(currentJob.id)}`);
       currentJob = result.job;
+      if (currentJob.status === "analyzed") {
+        elements.progressView.hidden = true;
+        renderAnalysis(currentJob);
+        await loadJobs();
+        return;
+      }
       if (currentJob.status === "ready") {
         renderReady(currentJob);
         await loadJobs();
@@ -110,7 +130,7 @@
         await loadJobs();
         return;
       }
-      elements.progressLabel.textContent = currentJob.status === "processing" ? "ダウンロードと検査を行っています" : "取得準備中";
+      elements.progressLabel.textContent = currentJob.status === "analyzing" ? "URLを解析しています" : currentJob.status === "processing" ? "ダウンロードと検査を行っています" : "取得準備中";
       pollTimer = window.setTimeout(pollJob, 2000);
     } catch (error) {
       showMessage(error.message);
@@ -152,6 +172,9 @@
     if (first) first.checked = true;
     elements.downloadButton.disabled = !first;
     elements.rightsConfirmed.checked = false;
+    const youtube = isYoutubeAnalysis(value);
+    elements.youtubeRightsNotice.hidden = !youtube;
+    elements.youtubeRightsConfirmed.required = youtube;
     elements.analysisView.hidden = false;
   }
 
@@ -174,7 +197,7 @@
       for (const job of result.jobs) {
         const row = document.createElement("article"); row.className = "job";
         const info = document.createElement("div");
-        const host = document.createElement("p"); host.textContent = `${job.sourceHostname}${job.sourcePathHint || "/"}`;
+        const host = document.createElement("p"); host.textContent = job.sourceHostname;
         const date = document.createElement("small"); date.textContent = dateText(job.createdAt);
         const status = document.createElement("span"); status.className = "job-status"; status.textContent = statusLabel(job.status);
         info.append(host, date); row.append(info, status); elements.jobList.append(row);
@@ -200,6 +223,9 @@
   function mediaSummary(media) { return [media.mediaType === "audio" ? "音声" : media.mediaType === "image" ? "画像" : "動画", media.width && media.height ? `${media.width}×${media.height}` : null, media.container?.toUpperCase(), media.videoCodec, media.audioCodec, media.estimatedSize ? sizeText(media.estimatedSize) : "サイズ不明", String(media.delivery || "").toUpperCase(), media.mediaType === "video" ? "最終形式 MP4（方式は実体検査後に決定）" : null].filter(Boolean).join(" · "); }
   function statusLabel(status) { return ({ analyzing: "解析中", analyzed: "解析済み", queued: "準備中", processing: "取得・検査中", ready: "ダウンロード可能", failed: "失敗", expired: "期限終了", deleted: "削除済み" })[status] || status; }
   function userMessage(error) { return error?.name === "PasskeyCancelledError" ? "端末のロック解除がキャンセルされたか、操作の有効期限が切れました。もう一度お試しください。" : error?.message || "パスキー処理を完了できませんでした。"; }
+  function isYoutubeAnalysis(value) { const text = `${value.hostname || ""} ${value.finalHostname || ""} ${value.site || ""} ${value.extractor || ""}`.toLowerCase(); return text.includes("youtube") || text.includes("youtu.be") || text.includes("googlevideo.com"); }
+  function isYoutubeUrl(value) { try { const host = new URL(value).hostname.toLowerCase().replace(/\.$/, ""); return host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com"); } catch { return false; } }
+  function updateYoutubeConfirmation() { const youtube = isYoutubeUrl(elements.sourceUrl.value); elements.youtubeRightsNotice.hidden = !youtube; elements.youtubeRightsConfirmed.required = youtube; if (!youtube) elements.youtubeRightsConfirmed.checked = false; }
 
   async function api(path, options = {}) {
     const headers = new Headers(options.headers);

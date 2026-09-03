@@ -30,24 +30,34 @@ class HealthEndpointTests(unittest.TestCase):
         except HTTPError as error:
             return error.code, json.loads(error.read())
 
+    @patch("server.clamav_daemon_ready", return_value=True)
     @patch("server.clamav_database_status", return_value={"healthy": True})
-    def test_healthy_definitions_are_ready(self, _status):
+    def test_healthy_definitions_are_ready(self, _status, _daemon):
         status, body = self._health()
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
 
+    @patch("server.clamav_daemon_ready", return_value=True)
     @patch("server.clamav_database_status", return_value={"healthy": False})
-    def test_stale_definitions_are_unhealthy(self, _status):
+    def test_stale_definitions_are_unhealthy(self, _status, _daemon):
         status, body = self._health()
         self.assertEqual(status, 503)
         self.assertFalse(body["ok"])
 
+    @patch("server.clamav_daemon_ready", return_value=True)
     @patch("server.clamav_database_status", return_value={"healthy": True})
-    def test_draining_container_is_unhealthy(self, _status):
+    def test_draining_container_is_unhealthy(self, _status, _daemon):
         DRAINING.set()
         status, body = self._health()
         self.assertEqual(status, 503)
         self.assertTrue(body["draining"])
+
+    @patch("server.clamav_daemon_ready", return_value=False)
+    @patch("server.clamav_database_status", return_value={"healthy": True})
+    def test_unavailable_daemon_is_unhealthy(self, _status, _daemon):
+        status, body = self._health()
+        self.assertEqual(status, 503)
+        self.assertFalse(body["ok"])
 
 
 if __name__ == "__main__":

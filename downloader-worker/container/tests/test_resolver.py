@@ -1,12 +1,47 @@
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 from ssrf import SafeUrl, UnsafeUrl
-from resolver import MEDIA_SUFFIXES, ResolverError, _classify_ytdlp_failure, _drm_dash, _encrypted_hls, _live_media_playlist, _media_type, _normalize_ytdlp, _refine_direct_type, _refine_signature_type, _signature_type, _validate_dash_manifest, _validate_hls_tree, _yt_dlp_metadata, analyze
+from resolver import MEDIA_SUFFIXES, ResolverError, _classify_ytdlp_failure, _drm_dash, _encrypted_hls, _live_media_playlist, _media_type, _normalize_ytdlp, _open, _refine_direct_type, _refine_signature_type, _signature_type, _validate_dash_manifest, _validate_hls_tree, _yt_dlp_metadata, analyze, download
 
 
 class ResolverSignatureTests(unittest.TestCase):
+    @patch("resolver.validate_url", return_value=SafeUrl("https://cdn.example/resolved.mp4", "cdn.example"))
+    @patch("resolver._download_direct")
+    def test_download_uses_exact_analyzed_direct_route_without_rediscovery(self, direct_download, _validate):
+        with tempfile.TemporaryDirectory() as directory:
+            path, name, mime = download({
+                "version": 1, "kind": "direct", "url": "https://cdn.example/resolved.mp4",
+                "delivery": "direct", "filename": "resolved.mp4", "mime": "video/mp4",
+            }, Path(directory), 1024, 60)
+        self.assertEqual(path.name, "resolved.mp4")
+        self.assertEqual((name, mime), ("resolved.mp4", "video/mp4"))
+        direct_download.assert_called_once()
+
+    @patch("resolver.build_opener")
+    @patch("resolver.validate_url", return_value=SafeUrl("https://media.example/video.mp4", "media.example"))
+    def test_direct_request_uses_only_allowlisted_headers(self, _validate, build_opener):
+        response = SimpleNamespace(headers={}, close=lambda: None)
+        build_opener.return_value.open.return_value = response
+        _open(
+            "https://media.example/video.mp4", method="GET", timeout=5, max_redirects=0,
+            request_headers={
+                "Range": "bytes=0-10", "Cookie": "secret", "Authorization": "Bearer secret",
+                "Referer": "https://tanaka-note.com/", "Origin": "https://tanaka-note.com",
+                "X-Forwarded-For": "203.0.113.2", "User-Agent": "user-browser",
+            },
+        )
+        request = build_opener.return_value.open.call_args.args[0]
+        headers = {key.lower(): value for key, value in request.header_items()}
+        self.assertEqual(headers["user-agent"], "Mozilla/5.0")
+        self.assertEqual(headers["range"], "bytes=0-10")
+        for forbidden in ("cookie", "authorization", "referer", "origin", "x-forwarded-for"):
+            self.assertNotIn(forbidden, headers)
+
     @patch("resolver.validate_url", return_value=SafeUrl("https://r3.googlevideo.com/videoplayback", "r3.googlevideo.com"))
     @patch("resolver._analyze_direct", return_value={"media": [{"downloadable": True}], "extractor": "direct"})
     def test_policy_restricted_direct_media_is_analysis_only(self, _direct, _validate):
@@ -65,6 +100,24 @@ class ResolverSignatureTests(unittest.TestCase):
         self.assertTrue(all(not item["downloadable"] for item in result["media"]))
         self.assertTrue(all("ライブ" in item["unavailableReason"] for item in result["media"]))
 
+    def test_ytdlp_route_records_only_validated_media_hosts(self):
+        def validate(value):
+            hostname = urlsplit(value).hostname
+            if not hostname:
+                raise UnsafeUrl("invalid_url")
+            return SafeUrl(value, hostname)
+
+        metadata = {
+            "id": "clip", "title": "clip", "webpage_url": "https://media.example/watch/1",
+            "formats": [
+                {"format_id": "v", "url": "https://video-cdn.example/v", "ext": "mp4", "vcodec": "h264", "acodec": "none"},
+                {"format_id": "a", "url": "https://audio-cdn.example/a", "ext": "m4a", "vcodec": "none", "acodec": "aac"},
+            ],
+        }
+        with patch("resolver.validate_url", side_effect=validate):
+            result = _normalize_ytdlp(metadata, "media.example", False, "https://media.example/watch/1")
+        self.assertEqual(result["media"][0]["_downloadRoute"]["egressHosts"], ["video-cdn.example", "audio-cdn.example"])
+
     def test_ytdlp_policy_failures_do_not_fall_through_to_generic_extractors(self):
         cases = {
             "DRM protected": "drm",
@@ -80,18 +133,38 @@ class ResolverSignatureTests(unittest.TestCase):
         self.assertIsNone(_classify_ytdlp_failure("This URL is not supported"))
 
     @patch("resolver.subprocess.run")
-    def test_ytdlp_blocking_failure_is_raised_but_ordinary_failure_can_fallback(self, run):
+    def test_ytdlp_blocking_and_unknown_failures_are_closed_but_unsupported_can_fallback(self, run):
         run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="Please log in to continue")
         with self.assertRaisesRegex(ResolverError, "login_required"):
             _yt_dlp_metadata("https://media.example/private", 5)
         command = run.call_args.args[0]
         self.assertIn("--ignore-config", command)
         self.assertIn("--no-cookies-from-browser", command)
+        self.assertIn("--js-runtimes", command)
         self.assertNotIn("--netrc", command)
         self.assertNotIn("--netrc-cmd", command)
 
         run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="Unable to parse an ordinary public page")
+        with self.assertRaisesRegex(ResolverError, "extractor_failed"):
+            _yt_dlp_metadata("https://media.example/public", 5)
+
+        run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="Unsupported URL: https://media.example/public")
         self.assertIsNone(_yt_dlp_metadata("https://media.example/public", 5))
+
+    @patch("resolver._analyze_direct", return_value=None)
+    @patch("resolver._yt_dlp_metadata", return_value=None)
+    @patch("resolver.validate_url", side_effect=lambda value: SafeUrl(value, "media.example"))
+    def test_html_analysis_preserves_the_exact_resolved_download_route(self, _validate, _metadata, _direct):
+        resolved = {
+            "site": "cdn.example", "title": "clip", "extractor": "direct",
+            "media": [{
+                "mediaId": "direct", "downloadable": True,
+                "_downloadRoute": {"version": 1, "kind": "direct", "url": "https://cdn.example/resolved.mp4", "delivery": "direct"},
+            }],
+        }
+        with patch("resolver._analyze_html", side_effect=[resolved, None]):
+            result = analyze("https://media.example/page", 1024)
+        self.assertEqual(result["media"][0]["_downloadRoute"]["url"], "https://cdn.example/resolved.mp4")
 
     def test_container_magic_keeps_a_compatible_url_format_hint(self):
         self.assertEqual(_refine_signature_type(("video/x-matroska", ".mkv"), ".webm"), ("video/webm", ".webm"))

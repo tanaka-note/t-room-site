@@ -2,11 +2,15 @@ FROM python:3.13.7-slim-bookworm
 
 ARG DENO_VERSION=2.9.5
 ARG DENO_SHA256=8b010a3b1a4a0188a67cdb8a7a27348b2a501af78aec7fc74f2ace167368d530
+ARG CLAMAV_VERSION=1.4.6
+ARG CLAMAV_DEB_SHA256=d3ee9e401974855a1edc1761b1425417d126de618d5f0c91cd51209f69f6fcc2
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     CLAMAV_MAX_DEFINITION_AGE_SECONDS=604800 \
+    CLAMAV_SCAN_TIMEOUT_SECONDS=600 \
+    CLAMAV_DATABASE_DIR=/var/lib/clamav \
     PATH="/opt/deno/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,7 +20,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && wget -q "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" -O /tmp/deno.zip \
     && echo "${DENO_SHA256}  /tmp/deno.zip" | sha256sum -c - \
     && unzip -q /tmp/deno.zip -d /opt/deno/bin \
-    && rm /tmp/deno.zip
+    && rm /tmp/deno.zip \
+    && wget -q "https://github.com/Cisco-Talos/clamav/releases/download/clamav-${CLAMAV_VERSION}/clamav-${CLAMAV_VERSION}.linux.x86_64.deb" -O /tmp/clamav.deb \
+    && echo "${CLAMAV_DEB_SHA256}  /tmp/clamav.deb" | sha256sum -c - \
+    && dpkg -i /tmp/clamav.deb \
+    && rm /tmp/clamav.deb
 
 # Wrangler passes this deliberately rotated value as a build argument. Updating
 # it invalidates only the definition layer, so scheduled rebuilds cannot reuse a
@@ -25,8 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG CLAMAV_DEFINITION_REFRESH=unset
 RUN test "${CLAMAV_DEFINITION_REFRESH}" != "unset" \
     && printf 'ClamAV definition refresh: %s\n' "${CLAMAV_DEFINITION_REFRESH}" \
-    && freshclam --stdout \
-    && clamscan --version
+    && /usr/local/bin/freshclam --config-file=/etc/clamav/freshclam.conf --stdout \
+    && /usr/local/bin/clamscan --database=/var/lib/clamav --version \
+    && /usr/local/bin/sigtool --info /var/lib/clamav/main.cvd \
+    && /usr/local/bin/sigtool --info /var/lib/clamav/daily.cvd \
+    && /usr/local/bin/sigtool --info /var/lib/clamav/bytecode.cvd
 
 RUN python -m pip install --no-cache-dir \
       "yt-dlp[default,curl-cffi]==2026.8.19"

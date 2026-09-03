@@ -49,6 +49,11 @@ YT_DLP_BLOCKING_FAILURES = (
         "intentionally not supported", "extractor is disabled by policy",
     )),
 )
+YT_DLP_UNSUPPORTED_FAILURES = (
+    "unsupported url", "this url is not supported", "no suitable extractor",
+    "generic extractor failed", "no video formats found",
+)
+GENERIC_USER_AGENT = "Mozilla/5.0"
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -103,7 +108,7 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
         return direct
     metadata = _yt_dlp_metadata(safe.value, timeout=90)
     if metadata:
-        return _normalize_ytdlp(metadata, safe.hostname, policy_restricted)
+        return _normalize_ytdlp(metadata, safe.hostname, policy_restricted, safe.value)
     if policy_restricted:
         raise ResolverError("policy_restricted")
     generic = _analyze_html(safe.value, max_bytes, browser=False)
@@ -116,34 +121,47 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
     raise ResolverError("media_not_found")
 
 
-def download(source_url: str, media_id: str, workdir: Path, max_bytes: int, timeout_seconds: int) -> tuple[Path, str, str | None]:
-    safe = validate_url(source_url)
-    direct = _analyze_direct(safe.value, max_bytes)
-    if direct and media_id == "direct" and direct["media"][0].get("delivery") == "direct":
-        item = direct["media"][0]
-        name = _name_from_url(safe.value, item.get("mime"))
+def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int) -> tuple[Path, str, str | None]:
+    """Execute the exact SSRF-validated route selected during analysis.
+
+    The Worker stores this route only as an authenticated encrypted capability.
+    Re-running discovery here could select a different resource after redirects,
+    page changes, or an extractor update, so processing fails closed instead.
+    """
+    if not isinstance(route, dict) or route.get("version") != 1:
+        raise ResolverError("download_route_invalid")
+    safe = validate_url(str(route.get("url") or ""))
+    kind = str(route.get("kind") or "")
+    delivery = str(route.get("delivery") or "direct")
+    name = _text(route.get("filename"), 120) or _name_from_url(safe.value, route.get("mime"))
+    declared_mime = _text(route.get("mime"), 120)
+    if kind == "direct" and delivery == "direct":
         path = workdir / name
         _download_direct(safe.value, path, max_bytes, timeout_seconds)
-        return path, name, item.get("mime")
-
-    metadata = _yt_dlp_metadata(safe.value, timeout=min(120, timeout_seconds))
-    if not metadata:
-        raise ResolverError("media_not_found")
-    if metadata.get("is_live") or metadata.get("live_status") in {"is_live", "is_upcoming"}:
-        raise ResolverError("live_stream_not_supported")
-    mapping = _ytdlp_choices(metadata)
-    choice = next((choice for choice in mapping if choice["mediaId"] == media_id), None)
-    if media_id == "direct" and direct and direct["media"][0].get("delivery") in {"hls", "dash"}:
-        _validate_adaptive_source(safe.value, direct["media"][0]["delivery"])
-        choice = mapping[0] if mapping else {
-            "playlistIndex": None, "formatSelector": "bestvideo+bestaudio/best",
-            "filename": _name_from_url(safe.value, "video/mp4"), "mime": "video/mp4",
+        return path, name, declared_mime
+    if kind == "adaptive":
+        if delivery not in {"hls", "dash"}:
+            raise ResolverError("adaptive_protocol_invalid")
+        _validate_adaptive_source(safe.value, delivery)
+        choice = {
+            "playlistIndex": None,
+            "formatSelector": "bestvideo+bestaudio/best",
+            "filename": name,
+            "mime": declared_mime or "video/mp4",
         }
-    if not choice:
-        raise ResolverError("media_choice_missing")
+    elif kind == "yt-dlp":
+        choice = {
+            "playlistIndex": _safe_int(route.get("playlistIndex")),
+            "formatSelector": _safe_format_selector(route.get("formatSelector")),
+            "filename": name,
+            "mime": declared_mime,
+        }
+    else:
+        raise ResolverError("download_route_invalid")
     output = str(workdir / "media.%(ext)s")
     command = [
         "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser",
+        "--js-runtimes", "deno:/opt/deno/bin/deno",
         "--no-playlist" if choice["playlistIndex"] is None else "--yes-playlist",
         "--no-write-info-json", "--no-write-thumbnail", "--no-write-subs", "--no-write-comments",
         "--restrict-filenames", "--no-part", "--max-filesize", str(max_bytes),
@@ -154,10 +172,13 @@ def download(source_url: str, media_id: str, workdir: Path, max_bytes: int, time
     if choice["playlistIndex"] is not None:
         command += ["--playlist-items", str(choice["playlistIndex"])]
     command.append(safe.value)
-    result = subprocess.run(
-        command, capture_output=True, text=True, timeout=timeout_seconds, check=False,
-        preexec_fn=(lambda: _subprocess_limits(max_bytes)) if resource is not None else None, env=_subprocess_environment(),
-    )
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout_seconds, check=False,
+            preexec_fn=(lambda: _subprocess_limits(max_bytes)) if resource is not None else None, env=_subprocess_environment(),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ResolverError("download_timeout") from error
     if result.returncode != 0:
         raise ResolverError("download_failed")
     files = [path for path in workdir.iterdir() if path.is_file()]
@@ -213,6 +234,15 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
                 "mediaType": media_type, "container": suffix.lstrip(".") or None,
                 "mime": content_type or None, "estimatedSize": length, "delivery": delivery,
                 "drm": encrypted, "loginRequired": False, "downloadable": downloadable,
+                "_downloadRoute": {
+                    "version": 1,
+                    "kind": "adaptive" if delivery in {"hls", "dash"} else "direct",
+                    "url": final_url,
+                    "delivery": delivery,
+                    "filename": _name_from_url(final_url, content_type),
+                    "mime": content_type or None,
+                    "egressHosts": [urlsplit(final_url).hostname],
+                },
                 "unavailableReason": None if downloadable else (
                     "暗号化またはDRMが使用されているため取得できません。" if encrypted else
                     "終了点を確認できないライブ配信は取得できません。" if live else
@@ -242,6 +272,9 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
                 "--disable-dev-shm-usage", "--disable-features=Crashpad",
                 f"--user-data-dir={Path(browser_home) / 'profile'}",
                 "--disable-extensions", "--disable-sync", "--disable-background-networking",
+                "--disable-component-update", "--disable-domain-reliability",
+                "--disable-client-side-phishing-detection", "--disable-default-apps",
+                "--no-first-run", "--no-default-browser-check",
             ]
             if os.path.exists("/etc/cloudflare/certs/cloudflare-containers-ca.crt"):
                 # Chromium does not consume SSL_CERT_FILE. In the Cloudflare
@@ -286,26 +319,34 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
 def _yt_dlp_metadata(url: str, timeout: int) -> dict | None:
     command = [
         "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser",
+        "--js-runtimes", "deno:/opt/deno/bin/deno",
         "--dump-single-json", "--skip-download", "--no-warnings", "--socket-timeout", "20",
         "--retries", "1", "--extractor-retries", "1", url,
     ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=_subprocess_environment())
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=_subprocess_environment())
+    except subprocess.TimeoutExpired as error:
+        raise ResolverError("metadata_timeout") from error
     if len(result.stdout) > 10_000_000:
         raise ResolverError("metadata_too_large")
     if result.returncode != 0:
         failure = _classify_ytdlp_failure(result.stderr)
         if failure:
             raise ResolverError(failure)
-        return None
+        if _is_ytdlp_unsupported_failure(result.stderr):
+            return None
+        # Unknown extractor failures are not evidence that it is safe to retry
+        # the same site through a less constrained generic/browser route.
+        raise ResolverError("extractor_failed")
     try:
         return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as error:
+        raise ResolverError("metadata_invalid") from error
 
 
-def _normalize_ytdlp(metadata: dict, hostname: str, policy_restricted: bool) -> dict:
+def _normalize_ytdlp(metadata: dict, hostname: str, policy_restricted: bool, source_url: str | None = None) -> dict:
     entries = metadata.get("entries") if isinstance(metadata.get("entries"), list) else [metadata]
-    choices = _ytdlp_choices(metadata)
+    choices = _ytdlp_choices(metadata, source_url)
     live = _yt_dlp_is_live(metadata)
     downloadable = not policy_restricted and not live
     unavailable_reason = (
@@ -330,7 +371,7 @@ def _normalize_ytdlp(metadata: dict, hostname: str, policy_restricted: bool) -> 
     }
 
 
-def _ytdlp_choices(metadata: dict) -> list[dict]:
+def _ytdlp_choices(metadata: dict, source_url: str | None = None) -> list[dict]:
     entries = metadata.get("entries") if isinstance(metadata.get("entries"), list) else [metadata]
     result = []
     for index, entry in enumerate(entries, start=1):
@@ -338,6 +379,7 @@ def _ytdlp_choices(metadata: dict) -> list[dict]:
             continue
         formats = entry.get("formats") if isinstance(entry.get("formats"), list) else []
         candidates = _preferred_formats(formats) or [entry]
+        egress_hosts = _ytdlp_egress_hosts(entry)
         for item in candidates:
             format_id = str(item.get("format_id") or "best")
             selector = f"{index}|{entry.get('id') or ''}|{format_id}"
@@ -362,8 +404,40 @@ def _ytdlp_choices(metadata: dict) -> list[dict]:
                     else format_id if format_id != "best" else "bestvideo+bestaudio/best"
                 ),
                 "filename": f"{_text(entry.get('title'), 100) or 'download'}.{ext}",
+                "_downloadRoute": {
+                    "version": 1,
+                    "kind": "yt-dlp",
+                    "url": _text(source_url or metadata.get("webpage_url") or metadata.get("original_url"), 4096),
+                    "delivery": _delivery(item.get("protocol")),
+                    "playlistIndex": index if len(entries) > 1 else None,
+                    "formatSelector": (
+                        f"{format_id}+bestaudio/best" if item.get("vcodec") not in {None, "none"} and item.get("acodec") == "none"
+                        else format_id if format_id != "best" else "bestvideo+bestaudio/best"
+                    ),
+                    "filename": f"{_text(entry.get('title'), 100) or 'download'}.{ext}",
+                    "mime": mimetypes.types_map.get(f".{ext}"),
+                    "egressHosts": egress_hosts,
+                },
             })
     return result
+
+
+def _ytdlp_egress_hosts(entry: dict) -> list[str]:
+    values = [entry.get("url"), entry.get("manifest_url"), entry.get("fragment_base_url")]
+    for item in entry.get("formats") if isinstance(entry.get("formats"), list) else []:
+        if isinstance(item, dict):
+            values.extend((item.get("url"), item.get("manifest_url"), item.get("fragment_base_url")))
+    hosts = []
+    for value in values:
+        try:
+            host = validate_url(str(value or "")).hostname
+        except (UnsafeUrl, ValueError):
+            continue
+        if host not in hosts:
+            hosts.append(host)
+        if len(hosts) >= 32:
+            break
+    return hosts
 
 
 def _preferred_formats(formats: list[dict]) -> list[dict]:
@@ -629,7 +703,11 @@ def _open(url: str, *, method: str, timeout: int, max_redirects: int, max_body: 
     opener = build_opener(NoRedirect)
     current = validate_url(url).value
     for _ in range(max_redirects + 1):
-        headers = {"User-Agent": "T-lain-Downloader/1.0", "Accept": "*/*", **(request_headers or {})}
+        headers = {"User-Agent": GENERIC_USER_AGENT, "Accept": "*/*"}
+        for name in ("Range", "If-Range", "Accept", "Accept-Language"):
+            value = (request_headers or {}).get(name)
+            if value:
+                headers[name] = str(value)[:512]
         request = Request(current, method=method, headers=headers)
         try:
             response = opener.open(request, timeout=timeout)
@@ -711,6 +789,18 @@ def _classify_ytdlp_failure(stderr: str) -> str | None:
         if any(marker in message for marker in markers):
             return code
     return None
+
+
+def _is_ytdlp_unsupported_failure(stderr: str) -> bool:
+    message = str(stderr or "").lower()
+    return any(marker in message for marker in YT_DLP_UNSUPPORTED_FAILURES)
+
+
+def _safe_format_selector(value) -> str:
+    selector = str(value or "")
+    if not selector or len(selector) > 256 or not re.fullmatch(r"[A-Za-z0-9_+.,:/?*^$=!<>~()\[\]{} -]+", selector):
+        raise ResolverError("format_selector_invalid")
+    return selector
 
 
 def _yt_dlp_is_live(metadata: dict) -> bool:

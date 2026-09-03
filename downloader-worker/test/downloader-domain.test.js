@@ -3,15 +3,16 @@ import test from "node:test";
 import {
   DomainError,
   QUEUE_MAX_RETRIES,
+  exceedsFullTranscodeBudget,
   isFinalQueueAttempt,
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
   normalizeClientRequestId,
   normalizeMediaId,
   normalizeSourceUrl,
+  publicJob,
   queueRetryDelaySeconds,
-  sanitizeFilename,
-  sourcePathHint
+  sanitizeFilename
 } from "../src/downloader-domain.js";
 
 test("HTTP/HTTPSの公開URLだけを受け付ける", () => {
@@ -36,10 +37,20 @@ test("Queueの最終attemptはinitial + max_retriesの次である", () => {
   assert.equal(queueRetryDelaySeconds(4), 240);
 });
 
-test("URLの監査用情報にqueryやfragmentを含めない", () => {
-  const url = normalizeSourceUrl("https://cdn.example.com/private/item/file.mp4?token=secret#x");
-  assert.equal(sourcePathHint(url), "/private/item/file.mp4");
-  assert.doesNotMatch(sourcePathHint(url), /secret/);
+test("公開jobから内部取得capabilityとsource pathを除外する", () => {
+  const job = publicJob({
+    id: "job", status: "analyzed", source_hostname: "media.example", source_path_hint: "/private/item",
+    analysis_json: JSON.stringify({ title: "clip", media: [], _sealedRoutes: { direct: { sourceCiphertext: "secret" } } }),
+  });
+  assert.equal(job.sourcePathHint, null);
+  assert.equal(job.analysis.title, "clip");
+  assert.equal("_sealedRoutes" in job.analysis, false);
+});
+
+test("明らかに処理枠を超えるFULL_TRANSCODEだけ事前拒否する", () => {
+  assert.equal(exceedsFullTranscodeBudget({ videoCodec: "vp9", audioCodec: "opus", duration: 600, width: 1920, height: 1080, fps: 30 }), true);
+  assert.equal(exceedsFullTranscodeBudget({ videoCodec: "h264", audioCodec: "opus", duration: 3600, width: 3840, height: 2160, fps: 60 }), false);
+  assert.equal(exceedsFullTranscodeBudget({ videoCodec: "vp9", audioCodec: "opus", duration: 60, width: 1280, height: 720, fps: 30 }), false);
 });
 
 test("YouTube関連ホストはGeneric取得ポリシーから除外する", () => {

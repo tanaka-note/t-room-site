@@ -140,6 +140,26 @@ class ScannerIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(UnsafeFile, "malware_detected"):
                 _scan_malware(path)
 
+    def test_real_clamav_detects_signature_near_tail_beyond_default_pcre_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "large-tail-eicar.bin"
+            signature = Path(directory) / "tail-test.ndb"
+            signature.write_text(
+                "Tlain.Test.Tail:0:*:544c61696e446f776e6c6f616465725461696c4d616c7761726546697874757265\n",
+                encoding="ascii",
+            )
+            with path.open("wb") as output:
+                output.seek(128 * 1024 * 1024)
+                output.write(b"TLainDownloaderTailMalwareFixture")
+            result = subprocess.run([
+                CLAMSCAN, "--database=/var/lib/clamav", f"--database={signature}",
+                "--no-summary", "--infected", "--alert-exceeds-max=yes",
+                "--max-filesize=2147483648", "--max-scansize=2147483648",
+                "--pcre-max-filesize=2147483648", "--max-scantime=0", "--", str(path),
+            ], capture_output=True, text=True, timeout=600, check=False)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("Tlain.Test.Tail", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
