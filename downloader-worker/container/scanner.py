@@ -73,9 +73,10 @@ class ScanResult:
     mime_type: str
     filename: str
     media_kind: str
+    probe: dict
 
 
-def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max_bytes: int) -> ScanResult:
+def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max_bytes: int, deadline=None, reserve_seconds: float = 0) -> ScanResult:
     size = path.stat().st_size
     if size <= 0 or size > max_bytes:
         raise UnsafeFile("size_limit")
@@ -86,15 +87,15 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
     if any(prefix.startswith(magic) for magic in EXECUTABLE_MAGIC):
         raise UnsafeFile("executable_content")
 
-    detected = _detect_mime(path)
+    detected = _detect_mime(path, deadline, reserve_seconds)
     if _mime_family(detected) not in {"audio", "image", "video"} and detected not in {
         "application/mxf", "application/octet-stream", "application/ogg", "application/x-matroska",
     }:
         raise UnsafeFile("unsupported_mime")
     # Keep complex media parsers behind the malware gate. libmagic performs the
     # minimal type check first; ClamAV then scans before ffprobe sees the file.
-    _scan_malware(path)
-    probe = probe_file(path)
+    _scan_malware(path, deadline, reserve_seconds)
+    probe = probe_file(path, deadline, reserve_seconds)
     media_kind = _media_kind(detected, probe)
     if Path(filename).suffix.lower() in {".mjpeg", ".mjpg"} and any(_is_playable_video_stream(stream) for stream in probe.get("streams", [])):
         # libmagic reports a raw MJPEG stream as image/jpeg; ffprobe proves that
@@ -111,8 +112,8 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
     if expected_family in {"audio", "image", "video"} and expected_family != media_kind and not ambiguous_ogg:
         raise UnsafeFile("extension_mismatch")
 
-    _validate_media(path, probe)
-    return ScanResult(_sha256(path), size, detected, filename, media_kind)
+    _validate_media(path, probe, deadline, reserve_seconds)
+    return ScanResult(_sha256(path, deadline, reserve_seconds), size, detected, filename, media_kind, probe)
 
 
 def clamav_database_status(database_dir: Path | None = None, now: float | None = None) -> dict:
@@ -175,10 +176,10 @@ def _reject_filename(filename: str) -> None:
         raise UnsafeFile("suspicious_double_extension")
 
 
-def _detect_mime(path: Path) -> str:
+def _detect_mime(path: Path, deadline=None, reserve_seconds: float = 0) -> str:
     result = subprocess.run(
         ["file", "--brief", "--mime-type", "--", str(path)],
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True, text=True, timeout=_phase_timeout(deadline, 30, reserve_seconds), check=False,
     )
     if result.returncode != 0:
         raise UnsafeFile("magic_failed")
@@ -200,12 +201,12 @@ def _mime_family(value: str) -> str:
     return value.split("/", 1)[0].lower() if "/" in value else ""
 
 
-def probe_file(path: Path) -> dict:
+def probe_file(path: Path, deadline=None, reserve_seconds: float = 0) -> dict:
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
          "format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,profile,level,pix_fmt,width,height,r_frame_rate,duration,bit_rate,sample_rate,channels:stream_disposition=attached_pic:stream_tags=rotate:stream_side_data=rotation",
          "-of", "json", "--", str(path)],
-        capture_output=True, text=True, timeout=90, check=False,
+        capture_output=True, text=True, timeout=_phase_timeout(deadline, 90, reserve_seconds), check=False,
     )
     if result.returncode != 0:
         raise UnsafeFile("ffprobe_failed")
@@ -215,7 +216,7 @@ def probe_file(path: Path) -> dict:
         raise UnsafeFile("ffprobe_invalid") from error
 
 
-def _validate_media(path: Path, probe: dict) -> None:
+def _validate_media(path: Path, probe: dict, deadline=None, reserve_seconds: float = 0) -> None:
     streams = probe.get("streams", [])
     stream_types = {stream.get("codec_type") for stream in streams}
     if "attachment" in stream_types or "data" in stream_types:
@@ -223,21 +224,21 @@ def _validate_media(path: Path, probe: dict) -> None:
     if not streams or any(kind not in {"audio", "video", "subtitle"} for kind in stream_types):
         # Still images are accepted through libmagic and decoded by Chromium/OS,
         # but ffprobe must validate every audio/video container.
-        mime = _detect_mime(path)
+        mime = _detect_mime(path, deadline, reserve_seconds)
         if not mime.startswith("image/"):
             raise UnsafeFile("invalid_media_stream")
 
 
-def _scan_malware(path: Path) -> None:
+def _scan_malware(path: Path, deadline=None, reserve_seconds: float = 0) -> None:
     require_fresh_clamav_definitions()
     start_clamav_daemon()
-    deadline = time.monotonic() + _clamav_scan_timeout_seconds()
+    scan_deadline = time.monotonic() + _phase_timeout(deadline, _clamav_scan_timeout_seconds(), reserve_seconds)
     command = [
         "clamdscan", f"--config-file={CLAMD_CONFIG}", "--fdpass", "--no-summary", "--", str(path),
     ]
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True, timeout=max(1, deadline - time.monotonic()), check=False,
+            command, capture_output=True, text=True, timeout=max(0.1, scan_deadline - time.monotonic()), check=False,
         )
     except subprocess.TimeoutExpired as error:
         raise UnsafeFile("malware_scan_timeout") from error
@@ -247,7 +248,7 @@ def _scan_malware(path: Path) -> None:
         # A scanner/configuration failure is not treated as a clean result.
         raise UnsafeFile("malware_scan_failed")
     if path.stat().st_size > CLAMD_WINDOW_BYTES:
-        _scan_large_file_windows(path, deadline)
+        _scan_large_file_windows(path, scan_deadline, deadline, reserve_seconds)
 
 
 def start_clamav_daemon() -> None:
@@ -308,13 +309,15 @@ def clamav_daemon_ready() -> bool:
         return False
 
 
-def _scan_large_file_windows(path: Path, deadline: float | None = None) -> None:
-    scan_deadline = deadline if deadline is not None else time.monotonic() + _clamav_scan_timeout_seconds()
+def _scan_large_file_windows(path: Path, scan_deadline: float | None = None, job_deadline=None, reserve_seconds: float = 0) -> None:
+    scan_deadline = scan_deadline if scan_deadline is not None else time.monotonic() + _clamav_scan_timeout_seconds()
     size = path.stat().st_size
     offset = 0
     with path.open("rb") as source:
         while offset < size:
             remaining_time = scan_deadline - time.monotonic()
+            if job_deadline is not None:
+                remaining_time = min(remaining_time, job_deadline.timeout(reserve_seconds=reserve_seconds))
             if remaining_time <= 0:
                 raise UnsafeFile("malware_scan_timeout")
             source.seek(offset)
@@ -442,9 +445,17 @@ def _is_playable_video_stream(stream: dict) -> bool:
     return stream.get("codec_type") == "video" and str(disposition.get("attached_pic") or "0") != "1"
 
 
-def _sha256(path: Path) -> str:
+def _sha256(path: Path, deadline=None, reserve_seconds: float = 0) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            if deadline is not None:
+                deadline.ensure(reserve_seconds=reserve_seconds)
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _phase_timeout(deadline, maximum_seconds: float, reserve_seconds: float = 0) -> float:
+    if deadline is None:
+        return float(maximum_seconds)
+    return deadline.timeout(maximum_seconds=maximum_seconds, reserve_seconds=reserve_seconds)

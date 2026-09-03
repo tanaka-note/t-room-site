@@ -7,7 +7,7 @@ import {
   MAX_FILE_BYTES,
   MAX_SPACE_BYTES,
   QUEUE_MAX_RETRIES,
-  exceedsFullTranscodeBudget,
+  exceedsVideoTranscodeBudget,
   isFinalQueueAttempt,
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
@@ -40,6 +40,7 @@ const PRIVATE_DESTINATIONS = Object.freeze([
   "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
   "::/128", "::1/128", "::ffff:0:0/96", "fc00::/7", "fe80::/10", "ff00::/8", "2001:db8::/32"
 ]);
+const CONTAINER_HEALTH_TIMEOUT_MS = 15_000;
 
 export class DownloaderContainer extends Container {
   defaultPort = 8080;
@@ -333,6 +334,7 @@ async function processAnalyzeMessage(env, message) {
       throw new Error("analysis_capability_mismatch");
     }
     container = getContainer(env.DOWNLOADER_CONTAINER, `analysis-${jobId}`);
+    await requireHealthyContainer(container);
     await configureContainerEgress(container, sourceUrl);
     const response = await container.fetch(new Request("http://container/analyze", {
       method: "POST",
@@ -345,7 +347,7 @@ async function processAnalyzeMessage(env, message) {
       console.error(JSON.stringify({ event: "downloader_container_analyze_failed", errorCode: cleanText(analysis.errorCode, 80) || "unknown", status: response.status }));
       throw new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
     }
-    const normalized = await normalizeAnalysis(analysis, sourceUrl.hostname, row.url_hash, env);
+    const normalized = await normalizeAnalysis(analysis, sourceUrl.hostname, row.url_hash, jobId, env);
     const extractor = String(normalized.extractor || "unknown").slice(0, 80);
     const mediaType = String(normalized.media?.[0]?.mediaType || "unknown").slice(0, 40);
     const deliveryType = String(normalized.media?.[0]?.delivery || "unknown").slice(0, 40);
@@ -393,7 +395,7 @@ async function requestDownload(request, env, session, jobId) {
   if (!selected || selected.downloadable !== true || selected.drm === true || selected.loginRequired === true) {
     throw new HttpError(409, selected?.unavailableReason || "このメディアは取得できません。");
   }
-  if (exceedsFullTranscodeBudget(selected)) {
+  if (exceedsVideoTranscodeBudget(selected)) {
     throw new HttpError(422, "この動画は安全な処理時間内にMP4へ変換できない可能性が高いため取得できません。", "processing_budget_exceeded");
   }
   const sealedRoute = analysis._sealedRoutes?.[mediaId];
@@ -432,7 +434,8 @@ async function processDownloadMessage(env, message) {
   await auditSystem(env, identityId, row.service_link_id, "downloader_download_started", "success", { jobId, hostname: row.source_hostname });
   try {
     const capability = await decryptPrivatePayload(message, env);
-    if (capability.sourceHash !== row.url_hash || !capability.route || typeof capability.route !== "object") {
+    if (capability.sourceHash !== row.url_hash || capability.jobId !== jobId || capability.mediaId !== String(message.mediaId || "") ||
+      !capability.route || typeof capability.route !== "object") {
       throw new Error("download_capability_mismatch");
     }
     const routeUrl = normalizeSourceUrl(capability.route.url);
@@ -442,6 +445,7 @@ async function processDownloadMessage(env, message) {
     const grant = await createInternalGrant({ jobId, processingToken, objectKey, expiresAt, maxBytes: maxBytesForRow(env, row) }, env);
     const container = getContainer(env.DOWNLOADER_CONTAINER, `job-${jobId}`);
     try {
+      await requireHealthyContainer(container);
       await configureContainerEgress(container, routeUrl, capability.route.egressHosts);
       const response = await container.fetch(new Request("http://container/download", {
         method: "POST",
@@ -651,7 +655,7 @@ function rateEventStatement(env, identityId, hostname, action) {
     VALUES (?, ?, ?, ?, ?)`).bind(crypto.randomUUID(), identityId, hostname, action, new Date().toISOString());
 }
 
-async function normalizeAnalysis(input, hostname, sourceHash, env) {
+async function normalizeAnalysis(input, hostname, sourceHash, jobId, env) {
   const media = [];
   const sealedRoutes = {};
   for (const [index, item] of (Array.isArray(input.media) ? input.media : []).slice(0, 50).entries()) {
@@ -659,7 +663,7 @@ async function normalizeAnalysis(input, hostname, sourceHash, env) {
     let downloadable = item.downloadable === true;
     if (downloadable) {
       const route = normalizeDownloadRoute(item._downloadRoute);
-      if (route) sealedRoutes[mediaId] = await encryptPrivatePayload({ sourceHash, route }, env);
+      if (route) sealedRoutes[mediaId] = await encryptPrivatePayload({ sourceHash, jobId, mediaId, route }, env);
       else downloadable = false;
     }
     media.push({
@@ -747,6 +751,31 @@ async function configureContainerEgress(container, sourceUrl, analyzedHosts = []
   for (const host of Array.isArray(analyzedHosts) ? analyzedHosts.slice(0, 32) : []) addFamily(host);
   if (isPolicyRestrictedHost(sourceUrl.hostname)) for (const host of YOUTUBE_ANALYSIS_HOSTS) hosts.add(host);
   await container.setAllowedHosts([...hosts]);
+}
+
+async function requireHealthyContainer(container) {
+  let response;
+  try {
+    response = await container.fetch(new Request("http://container/health", {
+      signal: AbortSignal.timeout(CONTAINER_HEALTH_TIMEOUT_MS)
+    }));
+  } catch (error) {
+    console.error(JSON.stringify({ event: "downloader_container_health_failed", error: safeErrorName(error) }));
+    throw new Error("container_unhealthy");
+  }
+  const health = await response.json().catch(() => ({}));
+  const healthy = response.ok && health.ok === true && health.draining === false &&
+    health.clamav?.healthy === true && health.clamav?.daemonReady === true;
+  if (!healthy) {
+    console.error(JSON.stringify({
+      event: "downloader_container_unhealthy",
+      status: response.status,
+      draining: health.draining === true,
+      clamavHealthy: health.clamav?.healthy === true,
+      daemonReady: health.clamav?.daemonReady === true
+    }));
+    throw new Error("container_unhealthy");
+  }
 }
 
 function safeThumbnail(value) {

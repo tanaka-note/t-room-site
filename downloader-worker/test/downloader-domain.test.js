@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   DomainError,
   QUEUE_MAX_RETRIES,
-  exceedsFullTranscodeBudget,
+  exceedsVideoTranscodeBudget,
   isFinalQueueAttempt,
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
@@ -47,10 +47,12 @@ test("公開jobから内部取得capabilityとsource pathを除外する", () =>
   assert.equal("_sealedRoutes" in job.analysis, false);
 });
 
-test("明らかに処理枠を超えるFULL_TRANSCODEだけ事前拒否する", () => {
-  assert.equal(exceedsFullTranscodeBudget({ videoCodec: "vp9", audioCodec: "opus", duration: 600, width: 1920, height: 1080, fps: 30 }), true);
-  assert.equal(exceedsFullTranscodeBudget({ videoCodec: "h264", audioCodec: "opus", duration: 3600, width: 3840, height: 2160, fps: 60 }), false);
-  assert.equal(exceedsFullTranscodeBudget({ videoCodec: "vp9", audioCodec: "opus", duration: 60, width: 1280, height: 720, fps: 30 }), false);
+test("映像再エンコードが処理枠を超える場合だけ事前拒否する", () => {
+  assert.equal(exceedsVideoTranscodeBudget({ mediaType: "video", videoCodec: "vp9", audioCodec: "aac", duration: 600, width: 1920, height: 1080, fps: 30 }), true);
+  assert.equal(exceedsVideoTranscodeBudget({ mediaType: "video", videoCodec: "hevc", audioCodec: "aac", duration: 600, width: 1920, height: 1080, fps: 30 }), true);
+  assert.equal(exceedsVideoTranscodeBudget({ mediaType: "video", videoCodec: "h264", audioCodec: "opus", duration: 3600, width: 3840, height: 2160, fps: 60 }), false);
+  assert.equal(exceedsVideoTranscodeBudget({ mediaType: "audio", videoCodec: "none", audioCodec: "opus", duration: 3600 }), false);
+  assert.equal(exceedsVideoTranscodeBudget({ mediaType: "video", videoCodec: "vp9", audioCodec: "opus", duration: 60, width: 1280, height: 720, fps: 30 }), false);
 });
 
 test("YouTube関連ホストはGeneric取得ポリシーから除外する", () => {

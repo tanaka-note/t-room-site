@@ -69,16 +69,16 @@ def plan_mp4(probe: dict) -> MediaPlan:
     return MediaPlan(PlanKind.FULL_TRANSCODE, video_codec, audio_codec, "incompatible_video_and_audio")
 
 
-def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_seconds: int) -> tuple[Path, str, str, MediaPlan]:
-    source_probe = probe_file(path)
+def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0, source_probe: dict | None = None) -> tuple[Path, str, str, MediaPlan]:
+    source_probe = source_probe or probe_file(path, deadline, reserve_seconds)
     plan = plan_mp4(source_probe)
     if plan.kind == PlanKind.REJECT:
         raise UnsafeFile(plan.reason)
-    if plan.kind == PlanKind.PASS_THROUGH and not _has_faststart(path):
+    if plan.kind == PlanKind.PASS_THROUGH and not _has_faststart(path, deadline, reserve_seconds):
         plan = MediaPlan(PlanKind.REMUX, "copy", "copy", "compatible_mp4_requires_faststart")
     output_name = f"{Path(safe_filename(requested_name)).stem or 'download'}.mp4"
     if plan.kind == PlanKind.PASS_THROUGH:
-        _validate_output(source_probe, source_probe, path, max_bytes)
+        _validate_output(source_probe, source_probe, path, max_bytes, deadline, reserve_seconds)
         return path, output_name, "video/mp4", plan
 
     output = path.parent / "output.mp4"
@@ -96,18 +96,22 @@ def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_sec
     if plan.audio_codec != "copy":
         command += ["-b:a", "192k"]
     command += ["-movflags", "+faststart", "-max_muxing_queue_size", "1024", str(output)]
-    result = subprocess.run(
-        command, capture_output=True, text=True, timeout=timeout_seconds, check=False,
-        preexec_fn=(lambda: _limits(max_bytes)) if resource is not None else None, env=_clean_environment(),
-    )
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True,
+            timeout=_phase_timeout(deadline, timeout_seconds, reserve_seconds), check=False,
+            preexec_fn=(lambda: _limits(max_bytes)) if resource is not None else None, env=_clean_environment(),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TimeoutError("job_deadline_exceeded") from error
     if result.returncode != 0 or not output.exists():
         raise UnsafeFile("normalization_failed")
-    output_probe = probe_file(output)
-    _validate_output(source_probe, output_probe, output, max_bytes)
+    output_probe = probe_file(output, deadline, reserve_seconds)
+    _validate_output(source_probe, output_probe, output, max_bytes, deadline, reserve_seconds)
     return output, output_name, "video/mp4", plan
 
 
-def _validate_output(source: dict, output: dict, path: Path, max_bytes: int) -> None:
+def _validate_output(source: dict, output: dict, path: Path, max_bytes: int, deadline=None, reserve_seconds: float = 0) -> None:
     if path.stat().st_size <= 0 or path.stat().st_size > max_bytes:
         raise UnsafeFile("normalized_size_limit")
     streams = output.get("streams", [])
@@ -119,7 +123,7 @@ def _validate_output(source: dict, output: dict, path: Path, max_bytes: int) -> 
     formats = set(str(output.get("format", {}).get("format_name") or "").split(","))
     if not formats.intersection({"mov", "mp4", "m4a", "3gp", "3g2", "mj2"}):
         raise UnsafeFile("normalized_container_invalid")
-    if not _has_faststart(path):
+    if not _has_faststart(path, deadline, reserve_seconds):
         raise UnsafeFile("normalized_faststart_missing")
     source_duration = _duration(source, source.get("streams", []))
     output_duration = _duration(output, streams)
@@ -139,7 +143,7 @@ def _duration(probe: dict, streams: list[dict]) -> float | None:
     return None
 
 
-def _has_faststart(path: Path) -> bool:
+def _has_faststart(path: Path, deadline=None, reserve_seconds: float = 0) -> bool:
     try:
         file_size = path.stat().st_size
         offset = 0
@@ -147,6 +151,8 @@ def _has_faststart(path: Path) -> bool:
         mdat_offset = None
         with path.open("rb") as source:
             while offset + 8 <= file_size and offset < 64 * 1024 * 1024:
+                if deadline is not None:
+                    deadline.ensure(reserve_seconds=reserve_seconds)
                 source.seek(offset)
                 header = source.read(16)
                 if len(header) < 8:
@@ -185,3 +191,9 @@ def _limits(max_bytes: int) -> None:
 
 def _clean_environment() -> dict:
     return {key: value for key, value in os.environ.items() if key not in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}}
+
+
+def _phase_timeout(deadline, maximum_seconds: float, reserve_seconds: float = 0) -> float:
+    if deadline is None:
+        return float(maximum_seconds)
+    return deadline.timeout(maximum_seconds=maximum_seconds, reserve_seconds=reserve_seconds)

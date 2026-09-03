@@ -11,6 +11,7 @@ const migration = await readFile(new URL("../migrations/0001_downloader_foundati
 const scanner = await readFile(new URL("../container/scanner.py", import.meta.url), "utf8");
 const clamd = await readFile(new URL("../container/clamd.conf", import.meta.url), "utf8");
 const server = await readFile(new URL("../container/server.py", import.meta.url), "utf8");
+const pipeline = await readFile(new URL("../container/media_pipeline.py", import.meta.url), "utf8");
 const entrypoint = await readFile(new URL("../container/entrypoint.sh", import.meta.url), "utf8");
 
 test("二段階解析と明示的な権利確認を分離する", () => {
@@ -100,7 +101,7 @@ test("ContainerはClamAV鮮度をfail-closedで確認してからffprobeへ渡�
   assert.match(clamd, /^PCREMaxFileSize 2G$/m);
   assert.match(scanner, /_scan_large_file_windows/);
   assert.match(scanner, /CLAMD_WINDOW_OVERLAP_BYTES/);
-  assert.ok(scanner.indexOf("_scan_malware(path)") < scanner.indexOf("probe = probe_file(path)"));
+  assert.ok(scanner.indexOf("_scan_malware(path,") < scanner.indexOf("probe = probe_file(path,"));
   assert.match(server, /signal\.SIGTERM/);
   assert.match(server, /DRAINING\.set\(\)/);
   assert.equal(config.containers[0].rollout_active_grace_period, 900);
@@ -133,8 +134,29 @@ test("解析時に確定した暗号化routeだけで実取得する", () => {
   assert.match(resolver, /"_downloadRoute"/);
   assert.match(worker, /_sealedRoutes/);
   assert.match(worker, /capability\.sourceHash !== row\.url_hash/);
+  assert.match(worker, /capability\.jobId !== jobId/);
+  assert.match(worker, /capability\.mediaId !== String\(message\.mediaId/);
   const downloadHandler = server.slice(server.indexOf("def _download(self, body):"), server.indexOf("def _json_body", server.indexOf("def _download(self, body):")));
   assert.doesNotMatch(downloadHandler, /body\.get\("url"\)/);
+});
+
+test("Container処理前にhealth本文とHTTP statusを明示確認する", () => {
+  assert.match(worker, /requireHealthyContainer\(container\)/);
+  assert.match(worker, /response\.ok && health\.ok === true/);
+  assert.match(worker, /health\.draining === false/);
+  assert.match(worker, /health\.clamav\?\.healthy === true/);
+  assert.match(worker, /health\.clamav\?\.daemonReady === true/);
+  assert.match(worker, /throw new Error\("container_unhealthy"\)/);
+});
+
+test("全処理は絶対deadlineを共有しPASS_THROUGHだけ再scanしない", () => {
+  assert.match(server, /deadline = JobDeadline\(timeout\)/);
+  assert.match(server, /download\([\s\S]*deadline=deadline/);
+  assert.match(server, /inspect_file\([\s\S]*deadline=deadline/);
+  assert.match(server, /normalize_video\([\s\S]*deadline=deadline/);
+  assert.match(server, /_upload_to_r2\(path, body, scan, deadline=deadline\)/);
+  assert.match(server, /plan\.kind != PlanKind\.PASS_THROUGH/);
+  assert.match(pipeline, /source_probe=initial_scan\.probe|source_probe: dict \| None/);
 });
 
 test("Chromiumはjobごとの一時profileを使い終了後に残さない", () => {
@@ -151,7 +173,6 @@ test("HTTPS interception CAを非root起動時に信頼する", () => {
 });
 
 test("外部ツールはshellを介さず固定argvと制限protocolで実行する", async () => {
-  const pipeline = await readFile(new URL("../container/media_pipeline.py", import.meta.url), "utf8");
   for (const source of [resolver, pipeline]) {
     assert.match(source, /subprocess\.run\(\s*(?:command|\[)/);
     assert.doesNotMatch(source, /shell\s*=\s*True|(?:sh|bash)\s+-c/);

@@ -121,7 +121,7 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
     raise ResolverError("media_not_found")
 
 
-def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int) -> tuple[Path, str, str | None]:
+def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0) -> tuple[Path, str, str | None]:
     """Execute the exact SSRF-validated route selected during analysis.
 
     The Worker stores this route only as an authenticated encrypted capability.
@@ -137,12 +137,12 @@ def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int) -
     declared_mime = _text(route.get("mime"), 120)
     if kind == "direct" and delivery == "direct":
         path = workdir / name
-        _download_direct(safe.value, path, max_bytes, timeout_seconds)
+        _download_direct(safe.value, path, max_bytes, timeout_seconds, deadline, reserve_seconds)
         return path, name, declared_mime
     if kind == "adaptive":
         if delivery not in {"hls", "dash"}:
             raise ResolverError("adaptive_protocol_invalid")
-        _validate_adaptive_source(safe.value, delivery)
+        _validate_adaptive_source(safe.value, delivery, deadline=deadline, reserve_seconds=reserve_seconds)
         choice = {
             "playlistIndex": None,
             "formatSelector": "bestvideo+bestaudio/best",
@@ -174,10 +174,13 @@ def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int) -
     command.append(safe.value)
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True, timeout=timeout_seconds, check=False,
+            command, capture_output=True, text=True,
+            timeout=_phase_timeout(deadline, timeout_seconds, reserve_seconds), check=False,
             preexec_fn=(lambda: _subprocess_limits(max_bytes)) if resource is not None else None, env=_subprocess_environment(),
         )
     except subprocess.TimeoutExpired as error:
+        if deadline is not None:
+            raise TimeoutError("job_deadline_exceeded") from error
         raise ResolverError("download_timeout") from error
     if result.returncode != 0:
         raise ResolverError("download_failed")
@@ -456,13 +459,17 @@ def _preferred_formats(formats: list[dict]) -> list[dict]:
     return chosen
 
 
-def _download_direct(url: str, path: Path, max_bytes: int, timeout_seconds: int) -> None:
-    response, _ = _open(url, method="GET", timeout=min(60, timeout_seconds), max_redirects=5)
+def _download_direct(url: str, path: Path, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0) -> None:
+    response, _ = _open(
+        url, method="GET", timeout=_phase_timeout(deadline, min(60, timeout_seconds), reserve_seconds), max_redirects=5,
+    )
     total = 0
     started = time.monotonic()
     try:
         with path.open("wb") as destination:
             while True:
+                if deadline is not None:
+                    deadline.ensure(reserve_seconds=reserve_seconds)
                 if time.monotonic() - started > timeout_seconds:
                     raise ResolverError("download_timeout")
                 chunk = response.read(1024 * 1024)
@@ -599,18 +606,20 @@ def _refine_direct_type(detected: tuple[str, str], path_suffix: str, declared_mi
     return mime, suffix
 
 
-def _validate_adaptive_source(url: str, delivery: str) -> None:
+def _validate_adaptive_source(url: str, delivery: str, deadline=None, reserve_seconds: float = 0) -> None:
     if delivery == "hls":
-        _validate_hls_tree(url, set(), [0])
+        _validate_hls_tree(url, set(), [0], deadline, reserve_seconds)
         return
     if delivery == "dash":
-        _validate_dash_manifest(url)
+        _validate_dash_manifest(url, deadline, reserve_seconds)
         return
     raise ResolverError("adaptive_protocol_invalid")
 
 
-def _read_manifest(url: str) -> tuple[bytes, str]:
-    response, final_url = _open(url, method="GET", timeout=30, max_redirects=5, max_body=1_000_000)
+def _read_manifest(url: str, deadline=None, reserve_seconds: float = 0) -> tuple[bytes, str]:
+    response, final_url = _open(
+        url, method="GET", timeout=_phase_timeout(deadline, 30, reserve_seconds), max_redirects=5, max_body=1_000_000,
+    )
     try:
         content = response.read(1_000_001)
     finally:
@@ -620,14 +629,14 @@ def _read_manifest(url: str) -> tuple[bytes, str]:
     return content, final_url
 
 
-def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int]) -> None:
+def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int], deadline=None, reserve_seconds: float = 0) -> None:
     safe = validate_url(url).value
     if safe in visited:
         return
     if len(visited) >= 16:
         raise ResolverError("manifest_playlist_limit")
     visited.add(safe)
-    content, final_url = _read_manifest(safe)
+    content, final_url = _read_manifest(safe, deadline, reserve_seconds)
     text = content.decode("utf-8", "replace")
     if not text.lstrip().startswith("#EXTM3U"):
         raise ResolverError("manifest_invalid")
@@ -648,11 +657,11 @@ def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int]) ->
                 reference = (match.group(1) or match.group(2) or "").strip()
                 target = validate_url(urljoin(final_url, reference)).value
                 if upper.startswith("#EXT-X-MEDIA:"):
-                    _validate_hls_tree(target, visited, segment_count)
+                    _validate_hls_tree(target, visited, segment_count, deadline, reserve_seconds)
             continue
         target = validate_url(urljoin(final_url, line)).value
         if next_is_playlist or is_master or urlsplit(target).path.lower().endswith(".m3u8"):
-            _validate_hls_tree(target, visited, segment_count)
+            _validate_hls_tree(target, visited, segment_count, deadline, reserve_seconds)
             next_is_playlist = False
             continue
         segment_count[0] += 1
@@ -662,8 +671,8 @@ def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int]) ->
         raise ResolverError("encrypted_stream_not_supported")
 
 
-def _validate_dash_manifest(url: str) -> None:
-    content, final_url = _read_manifest(validate_url(url).value)
+def _validate_dash_manifest(url: str, deadline=None, reserve_seconds: float = 0) -> None:
+    content, final_url = _read_manifest(validate_url(url).value, deadline, reserve_seconds)
     if _drm_dash(content):
         raise ResolverError("drm_not_supported")
     try:
@@ -811,3 +820,9 @@ def _yt_dlp_is_live(metadata: dict) -> bool:
         )
         for entry in entries
     )
+
+
+def _phase_timeout(deadline, maximum_seconds: float, reserve_seconds: float = 0) -> float:
+    if deadline is None:
+        return float(maximum_seconds)
+    return deadline.timeout(maximum_seconds=maximum_seconds, reserve_seconds=reserve_seconds)

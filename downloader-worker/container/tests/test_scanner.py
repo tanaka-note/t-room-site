@@ -90,9 +90,9 @@ class ScannerPolicyTests(unittest.TestCase):
             path = Path(directory) / "movie.mp4"
             path.write_bytes(b"media")
             order = []
-            with patch("scanner._detect_mime", side_effect=lambda _path: order.append("magic") or "video/mp4"), \
-                 patch("scanner._scan_malware", side_effect=lambda _path: order.append("clamav")), \
-                 patch("scanner.probe_file", side_effect=lambda _path: order.append("ffprobe") or {"streams": [{"codec_type": "video"}]}), \
+            with patch("scanner._detect_mime", side_effect=lambda *_args: order.append("magic") or "video/mp4"), \
+                 patch("scanner._scan_malware", side_effect=lambda *_args: order.append("clamav")), \
+                 patch("scanner.probe_file", side_effect=lambda *_args: order.append("ffprobe") or {"streams": [{"codec_type": "video"}]}), \
                  patch("scanner._sha256", return_value="0" * 64):
                 inspect_file(path, "movie.mp4", "video/mp4", 1024)
             self.assertEqual(order, ["magic", "clamav", "ffprobe"])

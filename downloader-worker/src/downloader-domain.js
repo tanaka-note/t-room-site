@@ -149,13 +149,12 @@ export function publicAnalysis(value) {
   return publicValue;
 }
 
-export function exceedsFullTranscodeBudget(media, budgetSeconds = 240) {
+export function exceedsVideoTranscodeBudget(media, budgetSeconds = 240) {
   const value = media && typeof media === "object" ? media : {};
   const videoCodec = String(value.videoCodec || "").toLowerCase();
-  const audioCodec = String(value.audioCodec || "").toLowerCase();
-  const needsVideo = Boolean(videoCodec) && !["avc1", "h264"].includes(videoCodec);
-  const needsAudio = Boolean(audioCodec) && !["aac", "mp4a"].includes(audioCodec);
-  if (!needsVideo || !needsAudio) return false;
+  const h264Compatible = videoCodec === "h264" || videoCodec === "avc1" || videoCodec.startsWith("avc1.");
+  const needsVideo = Boolean(videoCodec) && videoCodec !== "none" && !h264Compatible;
+  if (!needsVideo || (value.mediaType && value.mediaType !== "video")) return false;
   const duration = Number(value.duration);
   if (!Number.isFinite(duration) || duration <= 0) return false;
   const width = Math.max(320, Number(value.width) || 1920);
