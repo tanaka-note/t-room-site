@@ -115,6 +115,23 @@ async function createJpegFixture(page, orientation) {
   return addExifOrientation(Buffer.from(base64, "base64"), orientation);
 }
 
+async function createPngFixture(page, width, height, direction) {
+  const base64 = await page.evaluate(({ width: fixtureWidth, height: fixtureHeight, direction: splitDirection }) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = fixtureWidth;
+    canvas.height = fixtureHeight;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#e00000";
+    context.fillRect(0, 0, splitDirection === "horizontal" ? fixtureWidth / 2 : fixtureWidth,
+      splitDirection === "vertical" ? fixtureHeight / 2 : fixtureHeight);
+    context.fillStyle = "#0040e0";
+    if (splitDirection === "horizontal") context.fillRect(fixtureWidth / 2, 0, fixtureWidth / 2, fixtureHeight);
+    else context.fillRect(0, fixtureHeight / 2, fixtureWidth, fixtureHeight / 2);
+    return canvas.toDataURL("image/png").split(",")[1];
+  }, { width, height, direction });
+  return Buffer.from(base64, "base64");
+}
+
 async function inspectUploads(page) {
   return page.evaluate(async () => {
     const decode = async (blob) => {
@@ -136,6 +153,8 @@ async function inspectUploads(page) {
     const bytes = async (blob) => [...new Uint8Array(await blob.arrayBuffer())];
     return Promise.all(window.__photoUploads.map(async (upload) => ({
       id: upload.id,
+      width: upload.width,
+      height: upload.height,
       original: await bytes(upload.original),
       display: { type: upload.display.type, ...(await decode(upload.display)) },
       thumbnail: { type: upload.thumbnail.type, ...(await decode(upload.thumbnail)) }
@@ -161,7 +180,14 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
         const requestUrl = new URL(typeof resource === "string" ? resource : resource.url, window.location.href);
         if (init.method === "POST" && /\/diary\/api\/photo-upload-sessions\/[0-9a-f-]+\/photos$/i.test(requestUrl.pathname) && init.body instanceof FormData) {
           const parts = Object.fromEntries([...init.body.entries()].map(([key, value]) => [key, value instanceof Blob ? value : String(value)]));
-          window.__photoUploads.push({ id: parts.id, original: parts.original, display: parts.display, thumbnail: parts.thumbnail });
+          window.__photoUploads.push({
+            id: parts.id,
+            width: Number(parts.width),
+            height: Number(parts.height),
+            original: parts.original,
+            display: parts.display,
+            thumbnail: parts.thumbnail
+          });
         }
         return nativeFetch(resource, init);
       };
@@ -170,34 +196,52 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
     await page.waitForSelector("#app-view:not([hidden])");
     await page.click("#new-entry-button");
     await page.waitForSelector("#editor-dialog[open]");
-    const fixtures = new Map();
-    for (const orientation of [1, 3, 6, 8]) fixtures.set(orientation, await createJpegFixture(page, orientation));
+    const fixtures = [
+      {
+        label: "landscape PNG", name: "landscape.png", mimeType: "image/png",
+        buffer: await createPngFixture(page, 6, 2, "horizontal"),
+        expected: { width: 6, height: 2, first: "left", second: "right" }
+      },
+      {
+        label: "portrait PNG", name: "portrait.png", mimeType: "image/png",
+        buffer: await createPngFixture(page, 2, 6, "vertical"),
+        expected: { width: 2, height: 6, first: "top", second: "bottom" }
+      }
+    ];
+    for (const orientation of [1, 3, 6, 8]) {
+      fixtures.push({
+        label: "Orientation " + orientation,
+        name: "orientation-" + orientation + ".jpg",
+        mimeType: "image/jpeg",
+        buffer: await createJpegFixture(page, orientation),
+        expected: new Map([
+          [1, { width: 4, height: 2, first: "left", second: "right" }],
+          [3, { width: 4, height: 2, first: "right", second: "left" }],
+          [6, { width: 2, height: 4, first: "top", second: "bottom" }],
+          [8, { width: 2, height: 4, first: "bottom", second: "top" }]
+        ]).get(orientation)
+      });
+    }
     const chooserPromise = page.waitForEvent("filechooser");
     await page.click("#add-photo-button");
     const chooser = await chooserPromise;
-    await chooser.setFiles([...fixtures.entries()].map(([orientation, buffer]) => ({
-      name: "orientation-" + orientation + ".jpg", mimeType: "image/jpeg", buffer
-    })));
-    await page.waitForSelector("#editor-photo-list .editor-photo-card:nth-child(4)");
-    await page.waitForFunction(() => window.__photoUploads.length === 4);
+    await chooser.setFiles(fixtures.map(({ name, mimeType, buffer }) => ({ name, mimeType, buffer })));
+    await page.waitForSelector("#editor-photo-list .editor-photo-card:nth-child(6)");
+    await page.waitForFunction(() => window.__photoUploads.length === 6);
     const uploads = await inspectUploads(page);
-    const expected = new Map([
-      [1, { width: 4, height: 2, first: "left", second: "right" }],
-      [3, { width: 4, height: 2, first: "right", second: "left" }],
-      [6, { width: 2, height: 4, first: "top", second: "bottom" }],
-      [8, { width: 2, height: 4, first: "bottom", second: "top" }]
-    ]);
-    assert.equal(uploads.length, 4, name + ": all EXIF fixtures must upload");
-    for (const [index, orientation] of [1, 3, 6, 8].entries()) {
+    assert.equal(uploads.length, fixtures.length, name + ": all PNG and EXIF fixtures must upload");
+    for (const [index, fixture] of fixtures.entries()) {
       const upload = uploads[index];
-      const source = fixtures.get(orientation);
-      const output = expected.get(orientation);
-      assert.deepEqual(upload.original, [...source], name + " Orientation " + orientation + ": original must be unchanged");
+      const output = fixture.expected;
+      assert.deepEqual(upload.original, [...fixture.buffer], name + " " + fixture.label + ": original must be unchanged");
+      assert.deepEqual([upload.width, upload.height], [output.width, output.height],
+        name + " " + fixture.label + ": upload metadata dimensions must be normalized");
       for (const variant of [upload.display, upload.thumbnail]) {
-        assert.equal(variant.type, "image/webp", name + " Orientation " + orientation + ": derived image must be WebP");
-        assert.deepEqual([variant.width, variant.height], [output.width, output.height], name + " Orientation " + orientation + ": dimensions must be normalized");
-        assert.equal(isRed(variant[output.first]), true, name + " Orientation " + orientation + ": first color must be red");
-        assert.equal(isBlue(variant[output.second]), true, name + " Orientation " + orientation + ": second color must be blue");
+        assert.equal(variant.type, "image/webp", name + " " + fixture.label + ": derived image must be WebP");
+        assert.deepEqual([variant.width, variant.height], [output.width, output.height],
+          name + " " + fixture.label + ": dimensions must be normalized");
+        assert.equal(isRed(variant[output.first]), true, name + " " + fixture.label + ": first color must be red");
+        assert.equal(isBlue(variant[output.second]), true, name + " " + fixture.label + ": second color must be blue");
       }
     }
   } finally {
@@ -215,7 +259,7 @@ try {
   await runBrowser(firefox, "Firefox", firefoxPath);
   await runBrowser(chromium, "Touch", chromiumPath, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await runBrowser(webkit, "WebKit", undefined);
-  process.stdout.write("EXIF Orientation 1/3/6/8 normalization passed in Chromium, Firefox, WebKit, and touch-equivalent Chromium.\n");
+  process.stdout.write("Portrait/landscape PNG and EXIF Orientation 1/3/6/8 normalization passed in Chromium, Firefox, WebKit, and touch-equivalent Chromium.\n");
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }

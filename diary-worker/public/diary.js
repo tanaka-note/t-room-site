@@ -1988,10 +1988,12 @@
     const bytes = new Uint8Array(await file.arrayBuffer());
     const exif = readJpegOrientation(bytes);
     if (!exif) return { source: file, orientation: 1 };
-    const normalizedBytes = bytes.slice();
-    writeExifOrientation(normalizedBytes, exif.valueOffset, exif.littleEndian, 1);
+    // arrayBuffer() returns an independent copy. Mutating it preserves the
+    // original File while avoiding a second full-size copy on memory-limited
+    // mobile browsers.
+    writeExifOrientation(bytes, exif.valueOffset, exif.littleEndian, 1);
     return {
-      source: new Blob([normalizedBytes], { type: file.type || "image/jpeg" }),
+      source: new Blob([bytes], { type: file.type || "image/jpeg" }),
       orientation: exif.orientation
     };
   }
@@ -2028,7 +2030,7 @@
         for (let index = 0; index < entryCount; index += 1) {
           const entry = ifd + 2 + index * 12;
           if (entry + 12 > offset + segmentLength) break;
-          if (read16(entry) !== 0x0112 || read16(entry + 2) !== 3 || read32(entry + 4) < 1) continue;
+          if (read16(entry) !== 0x0112 || read16(entry + 2) !== 3 || read32(entry + 4) !== 1) continue;
           const valueOffset = entry + 8;
           const orientation = read16(valueOffset);
           return {
