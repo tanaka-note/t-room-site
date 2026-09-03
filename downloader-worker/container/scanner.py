@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,8 @@ MEDIA_EXTENSIONS = {
 EXECUTABLE_MAGIC = (
     b"MZ", b"\x7fELF", b"#!", b"\xca\xfe\xba\xbe", b"PK\x03\x04",
 )
+CLAMAV_DATABASE_DIR = Path(os.environ.get("CLAMAV_DATABASE_DIR", "/var/lib/clamav"))
+DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,13 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
         raise UnsafeFile("executable_content")
 
     detected = _detect_mime(path)
+    if _mime_family(detected) not in {"audio", "image", "video"} and detected not in {
+        "application/octet-stream", "application/ogg", "application/x-matroska",
+    }:
+        raise UnsafeFile("unsupported_mime")
+    # Keep complex media parsers behind the malware gate. libmagic performs the
+    # minimal type check first; ClamAV then scans before ffprobe sees the file.
+    _scan_malware(path)
     probe = probe_file(path)
     media_kind = _media_kind(detected, probe)
     if media_kind is None:
@@ -64,8 +74,36 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
         raise UnsafeFile("extension_mismatch")
 
     _validate_media(path, probe)
-    _scan_malware(path)
     return ScanResult(_sha256(path), size, detected, filename, media_kind)
+
+
+def clamav_database_status(database_dir: Path | None = None, now: float | None = None) -> dict:
+    root = database_dir or CLAMAV_DATABASE_DIR
+    definitions = [
+        path for pattern in ("*.cvd", "*.cld")
+        for path in root.glob(pattern)
+        if path.is_file()
+    ]
+    newest = max((path.stat().st_mtime for path in definitions), default=None)
+    current = time.time() if now is None else float(now)
+    max_age = _clamav_max_definition_age_seconds()
+    age = None if newest is None else max(0, int(current - newest))
+    return {
+        "available": newest is not None,
+        "healthy": newest is not None and age <= max_age,
+        "latestDefinitionUnix": int(newest) if newest is not None else None,
+        "ageSeconds": age,
+        "maxAgeSeconds": max_age,
+    }
+
+
+def require_fresh_clamav_definitions(database_dir: Path | None = None, now: float | None = None) -> dict:
+    status = clamav_database_status(database_dir, now)
+    if not status["available"]:
+        raise UnsafeFile("malware_definitions_missing")
+    if not status["healthy"]:
+        raise UnsafeFile("malware_definitions_stale")
+    return status
 
 
 def safe_filename(value: str) -> str:
@@ -138,6 +176,7 @@ def _validate_media(path: Path, probe: dict) -> None:
 
 
 def _scan_malware(path: Path) -> None:
+    require_fresh_clamav_definitions()
     result = subprocess.run(
         ["clamscan", "--no-summary", "--infected", "--", str(path)],
         capture_output=True, text=True, timeout=180, check=False,
@@ -147,6 +186,14 @@ def _scan_malware(path: Path) -> None:
     if result.returncode != 0:
         # A scanner/configuration failure is not treated as a clean result.
         raise UnsafeFile("malware_scan_failed")
+
+
+def _clamav_max_definition_age_seconds() -> int:
+    try:
+        value = int(os.environ.get("CLAMAV_MAX_DEFINITION_AGE_SECONDS", DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS
+    return value if 3600 <= value <= 30 * 24 * 60 * 60 else DEFAULT_CLAMAV_MAX_DEFINITION_AGE_SECONDS
 
 
 def _sha256(path: Path) -> str:

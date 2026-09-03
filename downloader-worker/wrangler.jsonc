@@ -19,7 +19,7 @@
     {
       "binding": "DB",
       "database_name": "downloader-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "1e047091-e838-4ec3-899d-62014b283660",
       "migrations_dir": "migrations"
     }
   ],
@@ -58,7 +58,8 @@
       "class_name": "DownloaderContainer",
       "image": "./container/Dockerfile",
       "instance_type": "standard-2",
-      "max_instances": 2
+      "max_instances": 2,
+      "rollout_active_grace_period": 900
     }
   ],
   "durable_objects": {

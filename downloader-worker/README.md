@@ -7,7 +7,7 @@
 - Worker: Security Centerの一回限りhandoff、セッション、所有者分離、rate limit、Queue、D1台帳、R2配信・期限削除
 - Queue: 1件ずつ冪等に処理し、processing tokenとleaseで重複実行を遮断
 - Container: site固有adapter → Direct → yt-dlp → Generic HTML → Chromium fallbackの順で解析・取得
-- Media pipeline: 実体をlibmagic、ffprobe、ClamAVで検査し、動画をMP4/H.264/AAC/yuv420pへ必要最小限で正規化
+- Media pipeline: 実体をlibmagicで基本判定し、ClamAV検査後にffprobeへ渡して、動画をMP4/H.264/AAC/yuv420pへ必要最小限で正規化
 - R2: `t-room-downloader-temp`の`downloads/`だけを使用。Worker経由の所有者認証なしでは取得不可
 
 動画変換は `PASS_THROUGH`、`REMUX`、`PARTIAL_TRANSCODE`、`FULL_TRANSCODE`、`REJECT` の計画を実体検査後に選びます。互換H.264/AACはcopyを優先し、非互換streamだけを変換します。ffmpegはshellを使わず固定argv・ローカル入力・`file,pipe` protocolだけで実行します。
@@ -25,6 +25,14 @@ YouTubeは公式ポリシーに合わせ解析表示までとし、本体取得�
 - 一時ファイルは処理終了時に削除。R2は30分のQueue削除と10分Cronを正本とし、1日R2 lifecycleを最終防衛線にする
 
 Cloudflare ContainersはWorkers Paid契約とDockerが必要です。Containerが利用できない環境ではWorkerだけで危険な代替取得をせず、公開を停止したままにします。
+
+## ClamAVとContainer更新
+
+ClamAV定義はContainer起動時に外部更新せず、image build時の`freshclam`を必須にしてimageへ固定します。定義ファイルの最新mtimeが7日を超えたContainerは`/health`と実スキャンの両方でfail closedとなり、更新失敗をcleanとして扱いません。少なくとも週1回、または脅威定義の緊急更新時にimageを再buildし、依存関係・EICAR fixture・stagingを通過してからrolloutしてください。
+
+Containerは非root UID `10001`で実行し、`/app`とClamAV定義は読み取り専用、作業データは`/work`だけへ置きます。HTTPS outbound interception用CAは起動時だけ注入されるため、非root entrypointが公開CA束と結合し、Python・yt-dlp・ffmpeg・Chromiumへ同じ信頼束を渡します。CAや外部credentialをimageへ焼き込みません。
+
+最大12分の処理に対し、Container rolloutはactive instanceを15分保護する`rollout_active_grace_period`を設定しています。さらにSIGTERM後は新規HTTP処理を503で拒否し、実行中のffmpeg・ClamAV・R2 uploadが終了するまでdrainします。失敗したQueue deliveryはprocessing leaseの失効後に再取得されます。
 
 ## Secretsと初回公開
 

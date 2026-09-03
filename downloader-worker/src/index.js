@@ -6,12 +6,15 @@ import {
   DOWNLOAD_TTL_SECONDS,
   MAX_FILE_BYTES,
   MAX_SPACE_BYTES,
+  QUEUE_MAX_RETRIES,
+  isFinalQueueAttempt,
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
   normalizeClientRequestId,
   normalizeMediaId,
   normalizeSourceUrl,
   publicJob,
+  queueRetryDelaySeconds,
   sanitizeFilename,
   sha256Text,
   sourcePathHint
@@ -37,6 +40,25 @@ export class DownloaderContainer extends Container {
   sleepAfter = "2m";
   interceptHttps = true;
   deniedHosts = [...PRIVATE_DESTINATIONS];
+
+  async fetch(request) {
+    const longRunning = new URL(request.url).pathname === "/download";
+    let activityTimer = null;
+    const renewActivity = () => {
+      this.renewActivityTimeout();
+      if (longRunning) activityTimer = setTimeout(renewActivity, 60_000);
+    };
+    renewActivity();
+    try {
+      return await this.containerFetch(request);
+    } finally {
+      if (activityTimer !== null) clearTimeout(activityTimer);
+    }
+  }
+
+  async release() {
+    await this.stop();
+  }
 }
 
 DownloaderContainer.outboundByHost = {
@@ -69,24 +91,42 @@ export default class DownloaderWorker extends WorkerEntrypoint {
   }
 
   async queue(batch) {
-    for (const message of batch.messages) {
-      try {
-        const body = message.body || {};
-        if (body.type === "download") await processDownloadMessage(this.env, body);
-        else if (body.type === "delete") await deleteJobObject(this.env, String(body.jobId || ""), "expired");
-        message.ack();
-      } catch (error) {
-        console.error(JSON.stringify({ event: "downloader_queue_failed", error: safeErrorName(error), attempts: message.attempts }));
-        if (message.attempts >= 3) {
-          if (message.body?.type === "download") await markDownloadFailed(this.env, message.body, error);
-          message.ack();
-        } else message.retry({ delaySeconds: Math.min(300, 30 * (2 ** Math.max(0, message.attempts - 1))) });
-      }
-    }
+    await handleQueueBatch(batch, this.env);
   }
 
   async scheduled() {
     await cleanupExpiredJobs(this.env);
+  }
+}
+
+export async function handleQueueBatch(batch, env) {
+  for (const message of batch.messages) {
+    try {
+      const body = message.body || {};
+      if (body.type === "download") await processDownloadMessage(env, body);
+      else if (body.type === "delete") await deleteJobObject(env, String(body.jobId || ""), "expired");
+      message.ack();
+    } catch (error) {
+      const terminalAttempt = isFinalQueueAttempt(message.attempts, QUEUE_MAX_RETRIES);
+      console.error(JSON.stringify({
+        event: "downloader_queue_failed",
+        jobId: safeQueueJobId(message.body?.jobId),
+        error: safeErrorName(error),
+        attempts: message.attempts,
+        terminalAttempt
+      }));
+      if (terminalAttempt && message.body?.type === "download") {
+        try {
+          await markDownloadFailed(env, message.body, error);
+        } catch (markError) {
+          console.error(JSON.stringify({ event: "downloader_queue_failure_status_update_failed", error: safeErrorName(markError) }));
+        }
+      }
+      // Do not acknowledge failures. On the fourth delivery (initial attempt plus
+      // max_retries=3), retry() lets Cloudflare move the message to the configured DLQ.
+      if (terminalAttempt) message.retry();
+      else message.retry({ delaySeconds: queueRetryDelaySeconds(message.attempts) });
+    }
   }
 }
 
@@ -237,8 +277,8 @@ async function analyzeSource(request, env, session) {
   ]);
   await audit(env, request, session, "downloader_analyze_requested", "success", auditSource(sourceUrl, hash, jobId));
 
+  const container = getContainer(env.DOWNLOADER_CONTAINER, "analysis");
   try {
-    const container = getContainer(env.DOWNLOADER_CONTAINER, "analysis");
     const response = await container.fetch(new Request("http://container/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -263,6 +303,8 @@ async function analyzeSource(request, env, session) {
       .bind(userSafeError(error), jobId, session.identityId).run();
     await audit(env, request, session, error?.code === "ssrf_blocked" ? "downloader_ssrf_blocked" : "downloader_analyze_failed", "failure", auditSource(sourceUrl, hash, jobId));
     throw error;
+  } finally {
+    await releaseContainer(container);
   }
 }
 
@@ -330,31 +372,35 @@ async function processDownloadMessage(env, message) {
     const expiresAt = nowSeconds() + downloadTtl(env);
     const grant = await createInternalGrant({ jobId, identityId, processingToken, objectKey, expiresAt, maxBytes: maxBytesForRow(env, row) }, env);
     const container = getContainer(env.DOWNLOADER_CONTAINER, `job-${jobId}`);
-    const response = await container.fetch(new Request("http://container/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: sourceUrl.href,
-        mediaId: String(message.mediaId || row.selected_media_id || ""),
-        jobId,
-        identityId,
-        objectKey,
-        uploadGrant: grant,
-        maxBytes: maxBytesForRow(env, row),
-        timeoutSeconds: clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720)
-      }),
-      signal: AbortSignal.timeout((clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720) + 30) * 1000)
-    }));
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(String(result.errorCode || `container_${response.status}`));
-    const normalization = ["PASS_THROUGH", "REMUX", "PARTIAL_TRANSCODE", "FULL_TRANSCODE", "NOT_APPLICABLE"].includes(result.normalization)
-      ? result.normalization : "UNKNOWN";
-    await env.DB.prepare(`UPDATE downloader_jobs SET normalization_mode = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND identity_id = ? AND status = 'ready'`).bind(normalization, jobId, identityId).run();
-    const ready = await env.DB.prepare("SELECT status FROM downloader_jobs WHERE id = ? AND identity_id = ?").bind(jobId, identityId).first();
-    if (ready?.status !== "ready") throw new Error("container_upload_not_committed");
-    await auditSystem(env, identityId, row.service_link_id, "downloader_scan_passed", "success", { jobId, hostname: row.source_hostname });
-    await auditSystem(env, identityId, row.service_link_id, "downloader_download_completed", "success", { jobId, hostname: row.source_hostname, actualSize: result.actualSize || null });
+    try {
+      const response = await container.fetch(new Request("http://container/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: sourceUrl.href,
+          mediaId: String(message.mediaId || row.selected_media_id || ""),
+          jobId,
+          identityId,
+          objectKey,
+          uploadGrant: grant,
+          maxBytes: maxBytesForRow(env, row),
+          timeoutSeconds: clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720)
+        }),
+        signal: AbortSignal.timeout((clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720) + 30) * 1000)
+      }));
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(String(result.errorCode || `container_${response.status}`));
+      const normalization = ["PASS_THROUGH", "REMUX", "PARTIAL_TRANSCODE", "FULL_TRANSCODE", "NOT_APPLICABLE"].includes(result.normalization)
+        ? result.normalization : "UNKNOWN";
+      await env.DB.prepare(`UPDATE downloader_jobs SET normalization_mode = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND identity_id = ? AND status = 'ready'`).bind(normalization, jobId, identityId).run();
+      const ready = await env.DB.prepare("SELECT status FROM downloader_jobs WHERE id = ? AND identity_id = ?").bind(jobId, identityId).first();
+      if (ready?.status !== "ready") throw new Error("container_upload_not_committed");
+      await auditSystem(env, identityId, row.service_link_id, "downloader_scan_passed", "success", { jobId, hostname: row.source_hostname });
+      await auditSystem(env, identityId, row.service_link_id, "downloader_download_completed", "success", { jobId, hostname: row.source_hostname, actualSize: result.actualSize || null });
+    } finally {
+      await releaseContainer(container);
+    }
   } catch (error) {
     await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
       updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'processing' AND processing_token = ?`)
@@ -391,6 +437,7 @@ async function handleContainerUpload(request, env) {
   const mimeType = String(request.headers.get("Content-Type") || "application/octet-stream").slice(0, 120);
   const filename = sanitizeFilename(decodeHeaderValue(request.headers.get("X-Filename")), mimeType);
   if (!/^[a-f0-9]{64}$/.test(sha256)) return new Response("Invalid digest", { status: 400 });
+  console.log(JSON.stringify({ event: "downloader_container_upload_received", jobId: grant.jobId, size }));
   let committed = false;
   try {
     await env.DOWNLOADS.put(grant.objectKey, request.body, {
@@ -409,6 +456,7 @@ async function handleContainerUpload(request, env) {
   if (!committed) {
     return new Response("Conflict", { status: 409 });
   }
+  console.log(JSON.stringify({ event: "downloader_container_upload_committed", jobId: grant.jobId, size }));
   await env.JOBS.send({ type: "delete", jobId: grant.jobId }, { delaySeconds: Math.max(1, grant.expiresAt - nowSeconds()) });
   return json({ stored: true, expiresAt: grant.expiresAt });
 }
@@ -670,6 +718,8 @@ function passkeysEnabled(env) { return String(env.PASSKEY_ENABLED || "false") ==
 function maxFileBytes(env) { return clampNumber(env.MAX_FILE_BYTES, 1_048_576, MAX_FILE_BYTES, MAX_FILE_BYTES); }
 function maxBytesForRow(env, row) { return String(row.extractor || "").toLowerCase().includes("twitter") && row.media_type === "audio" ? Math.min(maxFileBytes(env), clampNumber(env.MAX_SPACE_BYTES, 1_048_576, MAX_FILE_BYTES, MAX_SPACE_BYTES)) : maxFileBytes(env); }
 function downloadTtl(env) { return clampNumber(env.DOWNLOAD_TTL_SECONDS, 60, DOWNLOAD_TTL_SECONDS, DOWNLOAD_TTL_SECONDS); }
+async function releaseContainer(container) { try { await container.release(); } catch (error) { console.error(JSON.stringify({ event: "downloader_container_stop_failed", error: safeErrorName(error) })); } }
+function safeQueueJobId(value) { const jobId = String(value || ""); return /^[A-Za-z0-9_-]{1,128}$/.test(jobId) ? jobId : null; }
 function clearCookie(secure) { return `${SESSION_COOKIE}=; Path=${BASE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
 function contentDisposition(filename) { return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(sanitizeFilename(filename))}`; }
 function parseCookies(header) { return Object.fromEntries(header.split(";").map((part) => part.trim()).filter(Boolean).map((part) => { const index = part.indexOf("="); return index < 0 ? [part, ""] : [part.slice(0, index), part.slice(index + 1)]; })); }

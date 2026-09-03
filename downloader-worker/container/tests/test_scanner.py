@@ -1,12 +1,38 @@
 import unittest
 import tempfile
+import os
+import time
 from pathlib import Path
 from unittest.mock import patch
 
-from scanner import UnsafeFile, _reject_filename, inspect_file, safe_filename
+from scanner import UnsafeFile, _reject_filename, clamav_database_status, inspect_file, require_fresh_clamav_definitions, safe_filename
 
 
 class ScannerPolicyTests(unittest.TestCase):
+    def test_clamav_definitions_are_required_and_must_be_fresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(UnsafeFile, "malware_definitions_missing"):
+                require_fresh_clamav_definitions(root, now=10_000)
+            definition = root / "daily.cvd"
+            definition.write_bytes(b"fixture")
+            os.utime(definition, (10_000, 10_000))
+            self.assertTrue(clamav_database_status(root, now=10_001)["healthy"])
+            with self.assertRaisesRegex(UnsafeFile, "malware_definitions_stale"):
+                require_fresh_clamav_definitions(root, now=10_000 + 8 * 24 * 60 * 60)
+
+    def test_malware_scan_runs_before_ffprobe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "movie.mp4"
+            path.write_bytes(b"media")
+            order = []
+            with patch("scanner._detect_mime", side_effect=lambda _path: order.append("magic") or "video/mp4"), \
+                 patch("scanner._scan_malware", side_effect=lambda _path: order.append("clamav")), \
+                 patch("scanner.probe_file", side_effect=lambda _path: order.append("ffprobe") or {"streams": [{"codec_type": "video"}]}), \
+                 patch("scanner._sha256", return_value="0" * 64):
+                inspect_file(path, "movie.mp4", "video/mp4", 1024)
+            self.assertEqual(order, ["magic", "clamav", "ffprobe"])
+
     def test_executable_archive_and_double_extension_are_rejected(self):
         for name in ["movie.mp4.exe", "archive.zip", "run.ps1", "movie.mp4.js"]:
             with self.subTest(name=name), self.assertRaises(UnsafeFile):

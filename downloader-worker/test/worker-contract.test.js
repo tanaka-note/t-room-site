@@ -8,6 +8,9 @@ const client = await readFile(new URL("../public/downloader.js", import.meta.url
 const resolver = await readFile(new URL("../container/resolver.py", import.meta.url), "utf8");
 const config = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
 const migration = await readFile(new URL("../migrations/0001_downloader_foundation.sql", import.meta.url), "utf8");
+const scanner = await readFile(new URL("../container/scanner.py", import.meta.url), "utf8");
+const server = await readFile(new URL("../container/server.py", import.meta.url), "utf8");
+const entrypoint = await readFile(new URL("../container/entrypoint.sh", import.meta.url), "utf8");
 
 test("二段階解析と明示的な権利確認を分離する", () => {
   assert.match(worker, /\/api\/analyze/);
@@ -66,6 +69,45 @@ test("R2確定後に30分削除をQueueへ予約しCronも補完する", () => {
   assert.match(worker, /cleanupOrphanObjects/);
   assert.match(worker, /row\.status === "queued"[\s\S]*env\.JOBS\.send/, "Queue送信失敗・応答消失後は同じjobを安全に再配送できる");
   assert.match(worker, /normalization_mode = \?/);
+});
+
+test("Queue失敗は4回目でD1をfailedにしてackせずDLQへ委譲する", () => {
+  assert.equal(config.queues.consumers[0].max_retries, 3);
+  assert.equal(config.queues.consumers[0].dead_letter_queue, "t-room-downloader-jobs-dlq");
+  assert.match(worker, /isFinalQueueAttempt\(message\.attempts, QUEUE_MAX_RETRIES\)/);
+  assert.match(worker, /terminalAttempt[\s\S]*markDownloadFailed/);
+  assert.match(worker, /Do not acknowledge failures[\s\S]*message\.retry/);
+  const queueFailure = worker.slice(worker.indexOf("} catch (error) {", worker.indexOf("export async function handleQueueBatch")), worker.indexOf("\n    }\n  }\n}", worker.indexOf("export async function handleQueueBatch")));
+  assert.doesNotMatch(queueFailure, /message\.ack\(\)/);
+});
+
+test("ContainerはClamAV鮮度をfail-closedで確認してからffprobeへ渡す", () => {
+  assert.match(scanner, /CLAMAV_MAX_DEFINITION_AGE_SECONDS/);
+  assert.match(scanner, /malware_definitions_missing/);
+  assert.match(scanner, /malware_definitions_stale/);
+  assert.ok(scanner.indexOf("_scan_malware(path)") < scanner.indexOf("probe = probe_file(path)"));
+  assert.match(server, /signal\.SIGTERM/);
+  assert.match(server, /DRAINING\.set\(\)/);
+  assert.equal(config.containers[0].rollout_active_grace_period, 900);
+  assert.match(worker, /pathname === "\/download"/);
+  assert.match(worker, /renewActivityTimeout\(\)/);
+  assert.match(worker, /setTimeout\(renewActivity, 60_000\)/);
+  assert.match(worker, /clearTimeout\(activityTimer\)/);
+  assert.match(worker, /async release\(\)[\s\S]*await this\.stop\(\)/);
+  assert.match(worker, /finally \{[\s\S]*await releaseContainer\(container\)/);
+});
+
+test("Chromiumはjobごとの一時profileを使い終了後に残さない", () => {
+  assert.match(resolver, /TemporaryDirectory\(prefix="chromium-", dir="\/work"\)/);
+  assert.match(resolver, /--user-data-dir=/);
+  assert.match(resolver, /--disable-features=Crashpad/);
+});
+
+test("HTTPS interception CAを非root起動時に信頼する", () => {
+  assert.match(entrypoint, /cloudflare-containers-ca\.crt/);
+  assert.match(entrypoint, /base-ca-certificates\.crt/);
+  assert.match(entrypoint, /SSL_CERT_FILE/);
+  assert.match(entrypoint, /REQUESTS_CA_BUNDLE/);
 });
 
 test("外部ツールはshellを介さず固定argvと制限protocolで実行する", async () => {

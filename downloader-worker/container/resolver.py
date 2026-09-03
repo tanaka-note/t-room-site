@@ -210,12 +210,25 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
 def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
     final_url = url
     if browser:
-        result = subprocess.run(
-            ["chromium", "--headless", "--disable-gpu", "--disable-dev-shm-usage",
-             "--disable-extensions", "--disable-sync", "--disable-background-networking", "--dump-dom", url],
-            capture_output=True, text=True, timeout=60, check=False,
-            env=_subprocess_environment(),
-        )
+        # Chromium 151+ requires writable profile/cache locations even in
+        # headless mode. Keep them job-local so concurrent analyses neither
+        # share browser state nor leave profiles behind in /work.
+        with tempfile.TemporaryDirectory(prefix="chromium-", dir="/work") as browser_home:
+            browser_environment = _subprocess_environment()
+            browser_environment.update({
+                "HOME": browser_home,
+                "XDG_CACHE_HOME": str(Path(browser_home) / "cache"),
+                "XDG_CONFIG_HOME": str(Path(browser_home) / "config"),
+            })
+            result = subprocess.run(
+                ["chromium", "--headless", "--no-sandbox", "--disable-gpu",
+                 "--disable-dev-shm-usage", "--disable-features=Crashpad",
+                 f"--user-data-dir={Path(browser_home) / 'profile'}",
+                 "--disable-extensions", "--disable-sync", "--disable-background-networking",
+                 "--dump-dom", url],
+                capture_output=True, text=True, timeout=60, check=False,
+                env=browser_environment,
+            )
         if result.returncode != 0 or len(result.stdout) > 5_000_000:
             return None
         html = result.stdout

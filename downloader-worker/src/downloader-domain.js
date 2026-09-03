@@ -10,6 +10,18 @@ const BLOCKED_HOSTS = new Set([
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_SPACE_BYTES = 512 * 1024 * 1024;
 export const DOWNLOAD_TTL_SECONDS = 30 * 60;
+export const QUEUE_MAX_RETRIES = 3;
+
+export function isFinalQueueAttempt(attempts, maxRetries = QUEUE_MAX_RETRIES) {
+  const attempt = Number(attempts);
+  const retries = Number(maxRetries);
+  return Number.isInteger(attempt) && Number.isInteger(retries) && attempt > retries;
+}
+
+export function queueRetryDelaySeconds(attempts) {
+  const attempt = Number.isInteger(Number(attempts)) ? Math.max(1, Number(attempts)) : 1;
+  return Math.min(300, 30 * (2 ** Math.max(0, attempt - 1)));
+}
 
 export class DomainError extends Error {
   constructor(status, message, code = "invalid_request") {
@@ -72,6 +84,7 @@ function isBlockedIpv6(value) {
   if (text === "::" || text === "::1") return true;
   if (text.startsWith("fc") || text.startsWith("fd") || /^fe[89ab]/.test(text) || text.startsWith("ff")) return true;
   if (text.startsWith("2001:db8:")) return true;
+  if (text.startsWith("::ffff:")) return true;
   const mapped = text.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
   return mapped ? isBlockedIpLiteral(mapped[1]) : false;
 }

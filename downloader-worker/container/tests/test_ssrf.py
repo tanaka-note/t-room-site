@@ -13,7 +13,7 @@ class SsrfTests(unittest.TestCase):
         self.assertEqual(validate_url("https://example.com/video", resolver=resolver_for("8.8.8.8")).hostname, "example.com")
 
     def test_private_and_reserved_dns_are_blocked(self):
-        for address in ["127.0.0.1", "10.0.0.1", "169.254.169.254", "192.168.1.1", "::1", "fd00::1", "fe80::1", "2001:db8::1"]:
+        for address in ["0.0.0.0", "127.0.0.1", "10.0.0.1", "100.64.0.1", "169.254.169.254", "172.16.0.1", "192.168.1.1", "::1", "::ffff:127.0.0.1", "fd00::1", "fe80::1", "2001:db8::1"]:
             with self.subTest(address=address), self.assertRaises(UnsafeUrl):
                 validate_url("https://example.com/video", resolver=resolver_for(address))
 
@@ -31,7 +31,7 @@ class SsrfTests(unittest.TestCase):
             validate_redirect("https://example.com/video", "http://127.0.0.1/admin", resolver=resolver_for("8.8.8.8"))
 
     def test_non_http_and_credentials_are_blocked(self):
-        for value in ["file:///etc/passwd", "ftp://example.com/a", "https://u:p@example.com/a", "https://example.com:8443/a"]:
+        for value in ["file:///etc/passwd", "ftp://example.com/a", "https://u:p@example.com/a", "https://example.com:8443/a", "https://printer.local/a", "https://service.internal/a"]:
             with self.subTest(value=value), self.assertRaises(UnsafeUrl):
                 validate_url(value, resolver=resolver_for("8.8.8.8"))
 
