@@ -1944,16 +1944,9 @@
     const imageSource = await preparePhotoSource(file);
     let bitmap;
     try {
-      bitmap = await createImageBitmap(imageSource.source, { imageOrientation: "none" });
+      bitmap = await createImageBitmap(imageSource.source);
     } catch {
-      try {
-        // Some older implementations reject the options dictionary. The JPEG
-        // copy has already had its EXIF orientation neutralized, so this
-        // fallback is still independent of the browser's EXIF handling.
-        bitmap = await createImageBitmap(imageSource.source);
-      } catch {
-        throw new Error("この画像形式をブラウザで読み取れませんでした。");
-      }
+      throw new Error("この画像形式をブラウザで読み取れませんでした。");
     }
     try {
       const [displayBlob, thumbnailBlob] = await Promise.all([
