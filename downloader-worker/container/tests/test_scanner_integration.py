@@ -5,16 +5,17 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from scanner import UnsafeFile, _scan_malware, inspect_file
+from scanner import UnsafeFile, _scan_malware, _scan_yara, inspect_file
 
 
 FFMPEG = shutil.which("ffmpeg")
 FFPROBE = shutil.which("ffprobe")
 CLAMSCAN = shutil.which("clamscan")
 FILE = shutil.which("file")
+YARA = shutil.which("yara")
 
 
-@unittest.skipUnless(FFMPEG and FFPROBE and CLAMSCAN and FILE, "container media tools are not installed")
+@unittest.skipUnless(FFMPEG and FFPROBE and CLAMSCAN and FILE and YARA, "container media tools are not installed")
 class ScannerIntegrationTests(unittest.TestCase):
     def _run(self, *arguments):
         result = subprocess.run(arguments, capture_output=True, text=True, timeout=120, check=False)
@@ -37,6 +38,24 @@ class ScannerIntegrationTests(unittest.TestCase):
                     self._run(FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *encoder, str(path))
                     result = inspect_file(path, name, declared, 8 * 1024 * 1024)
                     self.assertEqual(result.media_kind, expected_kind)
+
+    def test_common_video_containers_do_not_false_positive_in_clamav_or_yara(self):
+        fixtures = [
+            ("movie.mp4", ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"]),
+            ("movie.mkv", ["-c:v", "libx265", "-pix_fmt", "yuv420p", "-x265-params", "log-level=error", "-c:a", "aac"]),
+            ("movie.webm", ["-c:v", "libvpx-vp9", "-c:a", "libopus"]),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, codecs in fixtures:
+                with self.subTest(name=name):
+                    path = root / name
+                    self._run(
+                        FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                        "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=5:duration=0.4",
+                        "-f", "lavfi", "-i", "sine=duration=0.4", "-shortest", *codecs, str(path),
+                    )
+                    self.assertEqual(inspect_file(path, name, None, 8 * 1024 * 1024).media_kind, "video")
 
     def test_expanded_audio_video_and_image_fixtures_are_scanned(self):
         audio_input = ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2"]
@@ -139,6 +158,13 @@ class ScannerIntegrationTests(unittest.TestCase):
             path.write_text("X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*", encoding="ascii")
             with self.assertRaisesRegex(UnsafeFile, "malware_detected"):
                 _scan_malware(path)
+
+    def test_safe_yara_fixture_is_rejected_by_real_yara(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "yara-safe-test.bin"
+            path.write_text("TLAIN-YARA-SAFE-TEST-MARKER-8F32C9A1", encoding="ascii")
+            with self.assertRaisesRegex(UnsafeFile, "yara_detected"):
+                _scan_yara(path)
 
     def test_real_clamav_detects_signature_near_tail_beyond_default_pcre_limit(self):
         with tempfile.TemporaryDirectory() as directory:

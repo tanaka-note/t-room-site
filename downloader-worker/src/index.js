@@ -12,6 +12,7 @@ import {
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
   normalizeClientRequestId,
+  normalizeContainerErrorCode,
   normalizeMediaId,
   normalizeSourceUrl,
   publicJob,
@@ -44,6 +45,12 @@ const PRIVATE_DESTINATIONS = Object.freeze([
 // below the request processing windows, but allow enough time for a real cold
 // start instead of spending Queue retries before any media work begins.
 const CONTAINER_HEALTH_TIMEOUT_MS = 90_000;
+const CONTAINER_RESPONSE_GRACE_MS = 20_000;
+const QUEUE_FINALIZATION_RESERVE_MS = 60_000;
+const QUEUE_MAX_WALL_MS = 15 * 60_000;
+if (CONTAINER_HEALTH_TIMEOUT_MS + 720_000 + CONTAINER_RESPONSE_GRACE_MS + QUEUE_FINALIZATION_RESERVE_MS > QUEUE_MAX_WALL_MS) {
+  throw new Error("downloader_queue_deadline_configuration_invalid");
+}
 
 export class DownloaderContainer extends Container {
   defaultPort = 8080;
@@ -427,7 +434,13 @@ async function processDownloadMessage(env, message) {
   if (!["queued", "processing"].includes(row.status)) throw new Error("job_not_processable");
   if (isPolicyRestrictedAnalysis(parseJson(row.analysis_json, {}))) throw new Error("policy_restricted");
   const processingToken = crypto.randomUUID();
-  const leaseExpiresAt = nowSeconds() + clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720) + 60;
+  const processTimeoutSeconds = clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720);
+  // Claim covers cold-start health wait, the Container's absolute deadline,
+  // response transport, and D1/audit finalization. It remains inside Queues'
+  // 15-minute wall-clock envelope and prevents a second delivery from taking
+  // the job while the first cold-started Container is still validly working.
+  const leaseExpiresAt = nowSeconds() + Math.ceil(CONTAINER_HEALTH_TIMEOUT_MS / 1000) +
+    processTimeoutSeconds + Math.ceil(QUEUE_FINALIZATION_RESERVE_MS / 1000);
   const claim = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'processing', processing_at = COALESCE(processing_at, CURRENT_TIMESTAMP),
     processing_token = ?, processing_lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND identity_id = ? AND (
@@ -459,14 +472,16 @@ async function processDownloadMessage(env, message) {
           objectKey,
           uploadGrant: grant,
           maxBytes: maxBytesForRow(env, row),
-          timeoutSeconds: clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720)
+          timeoutSeconds: processTimeoutSeconds
         }),
-        signal: AbortSignal.timeout((clampNumber(env.PROCESS_TIMEOUT_SECONDS, 60, 720, 720) + 30) * 1000)
+        signal: AbortSignal.timeout(processTimeoutSeconds * 1000 + CONTAINER_RESPONSE_GRACE_MS)
       }));
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(String(result.errorCode || `container_${response.status}`));
+      if (!response.ok) throw containerResponseError(result.errorCode, response.status);
       const normalization = ["PASS_THROUGH", "REMUX", "PARTIAL_TRANSCODE", "FULL_TRANSCODE", "NOT_APPLICABLE"].includes(result.normalization)
         ? result.normalization : "UNKNOWN";
+      const metrics = normalizeContainerMetrics(result.metrics);
+      if (metrics) console.log(JSON.stringify({ event: "downloader_container_metrics", jobId, normalization, ...metrics }));
       await env.DB.prepare(`UPDATE downloader_jobs SET normalization_mode = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND identity_id = ? AND status = 'ready'`).bind(normalization, jobId, identityId).run();
       const ready = await env.DB.prepare("SELECT status FROM downloader_jobs WHERE id = ? AND identity_id = ?").bind(jobId, identityId).first();
@@ -482,6 +497,17 @@ async function processDownloadMessage(env, message) {
       .bind(jobId, identityId, processingToken).run();
     throw error;
   }
+}
+
+function normalizeContainerMetrics(value) {
+  if (!value || typeof value !== "object") return null;
+  const names = ["wallMs", "cpuUserMs", "cpuSystemMs", "containerPeakRssBytes", "observedWorkBytes"];
+  const metrics = {};
+  for (const name of names) {
+    const number = Number(value[name]);
+    if (Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER) metrics[name] = Math.round(number);
+  }
+  return Object.keys(metrics).length ? metrics : null;
 }
 
 async function markDownloadFailed(env, message, error) {
@@ -768,14 +794,17 @@ async function requireHealthyContainer(container) {
   }
   const health = await response.json().catch(() => ({}));
   const healthy = response.ok && health.ok === true && health.draining === false &&
-    health.clamav?.healthy === true && health.clamav?.daemonReady === true;
+    health.clamav?.healthy === true && health.clamav?.daemonReady === true &&
+    health.yara?.healthy === true && health.yara?.verified === true;
   if (!healthy) {
     console.error(JSON.stringify({
       event: "downloader_container_unhealthy",
       status: response.status,
       draining: health.draining === true,
       clamavHealthy: health.clamav?.healthy === true,
-      daemonReady: health.clamav?.daemonReady === true
+      daemonReady: health.clamav?.daemonReady === true,
+      yaraHealthy: health.yara?.healthy === true,
+      yaraVerified: health.yara?.verified === true
     }));
     throw new Error("container_unhealthy");
   }
@@ -923,6 +952,13 @@ function copyYoutubeExtractorHeader(source, target, name, pattern, maxLength) { 
 function decodeHeaderValue(value) { try { return decodeURIComponent(String(value || "")); } catch { return String(value || ""); } }
 function scheduleAudit(context, promise) { if (context?.waitUntil) context.waitUntil(promise); else void promise.catch(() => {}); }
 function safeErrorName(error) { return error instanceof Error ? `${cleanText(error.name, 60) || "Error"}:${cleanText(error.code, 60) || "unspecified"}` : "unknown"; }
+
+function containerResponseError(value, status) {
+  const code = normalizeContainerErrorCode(value, status);
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
 function json(value, status = 200, inputHeaders) { const headers = new Headers(inputHeaders); headers.set("Content-Type", "application/json; charset=utf-8"); headers.set("Cache-Control", "no-store"); headers.set("X-Content-Type-Options", "nosniff"); headers.set("X-Robots-Tag", "noindex, nofollow, noarchive"); return new Response(JSON.stringify(value), { status, headers }); }
 async function readJson(request, max) { const size = Number(request.headers.get("Content-Length") || 0); if (size > max) throw new HttpError(413, "入力内容が大きすぎます。"); try { const value = await request.json(); return value && typeof value === "object" ? value : {}; } catch { throw new HttpError(400, "入力内容を読み取れませんでした。"); } }
 async function hmac(value, secret) { const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)))); }

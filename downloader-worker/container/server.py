@@ -13,9 +13,14 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from resolver import ResolverError, analyze, download
-from scanner import UnsafeFile, clamav_daemon_ready, clamav_database_status, inspect_file, start_clamav_daemon, stop_clamav_daemon
+from scanner import UnsafeFile, clamav_daemon_ready, clamav_database_status, inspect_file, start_clamav_daemon, stop_clamav_daemon, yara_rules_status
 from ssrf import UnsafeUrl
 from media_pipeline import PlanKind, normalize_video
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows-only unit-test fallback
+    resource = None
 
 
 MAX_REQUEST_BYTES = 16 * 1024
@@ -79,12 +84,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             return self._json(404, {"error": "not_found"})
         status = clamav_database_status()
+        yara = yara_rules_status()
         daemon_ready = clamav_daemon_ready()
-        healthy = status["healthy"] and daemon_ready and not DRAINING.is_set()
+        healthy = status["healthy"] and daemon_ready and yara["healthy"] and not DRAINING.is_set()
         return self._json(200 if healthy else 503, {
             "ok": healthy,
             "draining": DRAINING.is_set(),
             "clamav": {**status, "daemonReady": daemon_ready},
+            "yara": yara,
         })
 
     def _download(self, body):
@@ -92,12 +99,17 @@ class Handler(BaseHTTPRequestHandler):
         timeout = _number(body.get("timeoutSeconds"), 60, 720)
         deadline = JobDeadline(timeout)
         job_id = _safe_job_id(body.get("jobId"))
+        started_at = time.monotonic()
+        usage_before = _resource_usage()
+        observed_work_bytes = 0
         _event("download_started", job_id)
         with tempfile.TemporaryDirectory(prefix="tlain-", dir="/work") as directory:
+            work_directory = Path(directory)
             path, name, declared_mime = download(
-                body.get("route"), Path(directory), max_bytes, timeout,
+                body.get("route"), work_directory, max_bytes, timeout,
                 deadline=deadline, reserve_seconds=_phase_reserve(timeout, 90, 0.25),
             )
+            observed_work_bytes = max(observed_work_bytes, _directory_bytes(work_directory))
             _event("download_fetched", job_id)
             initial_scan = inspect_file(
                 path, name, declared_mime, max_bytes,
@@ -111,6 +123,7 @@ class Handler(BaseHTTPRequestHandler):
                     deadline=deadline, reserve_seconds=_phase_reserve(timeout, 45, 0.10),
                     source_probe=initial_scan.probe,
                 )
+                observed_work_bytes = max(observed_work_bytes, _directory_bytes(work_directory))
                 _event("download_video_normalized", job_id, normalization=plan.kind.value)
             changed = plan is not None and plan.kind != PlanKind.PASS_THROUGH
             scan = inspect_file(
@@ -122,11 +135,13 @@ class Handler(BaseHTTPRequestHandler):
             _event("download_upload_started", job_id)
             deadline.ensure(minimum_seconds=1)
             _upload_to_r2(path, body, scan, deadline=deadline)
-            _event("download_completed", job_id)
+            metrics = _job_metrics(started_at, usage_before, observed_work_bytes)
+            _event("download_completed", job_id, **metrics)
             return self._json(200, {
                 "uploaded": True, "actualSize": scan.size, "sha256": scan.sha256,
                 "mimeType": scan.mime_type, "scanMessage": "既知の脅威は検出されませんでした。",
                 "normalization": plan.kind.value if plan else "NOT_APPLICABLE",
+                "metrics": metrics,
             })
 
     def _json_body(self):
@@ -195,6 +210,43 @@ def _deadline_chunks(source, deadline: JobDeadline | None):
 
 def _phase_reserve(total_seconds: int, maximum_seconds: int, fraction: float) -> float:
     return min(float(maximum_seconds), max(1.0, float(total_seconds) * fraction))
+
+
+def _directory_bytes(root: Path) -> int:
+    total = 0
+    try:
+        for path in root.rglob("*"):
+            if path.is_file():
+                total += path.stat().st_size
+    except OSError:
+        return total
+    return total
+
+
+def _resource_usage() -> tuple[float, float, int] | None:
+    if resource is None:
+        return None
+    own = resource.getrusage(resource.RUSAGE_SELF)
+    children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    # Linux reports ru_maxrss in KiB. This is the Container process peak and is
+    # exact for a cold single-job performance run; it is intentionally labelled
+    # as a container peak rather than a per-thread allocation.
+    return own.ru_utime + children.ru_utime, own.ru_stime + children.ru_stime, max(own.ru_maxrss, children.ru_maxrss) * 1024
+
+
+def _job_metrics(started_at: float, usage_before: tuple[float, float, int] | None, observed_work_bytes: int) -> dict:
+    usage_after = _resource_usage()
+    value = {
+        "wallMs": max(0, round((time.monotonic() - started_at) * 1000)),
+        "observedWorkBytes": max(0, int(observed_work_bytes)),
+    }
+    if usage_before is not None and usage_after is not None:
+        value.update({
+            "cpuUserMs": max(0, round((usage_after[0] - usage_before[0]) * 1000)),
+            "cpuSystemMs": max(0, round((usage_after[1] - usage_before[1]) * 1000)),
+            "containerPeakRssBytes": max(0, int(usage_after[2])),
+        })
+    return value
 
 
 def _number(value, minimum: int, maximum: int) -> int:

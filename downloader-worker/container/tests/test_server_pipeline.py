@@ -46,6 +46,8 @@ class ServerPipelineTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(value["normalization"], "PASS_THROUGH")
+        self.assertGreaterEqual(value["metrics"]["wallMs"], 0)
+        self.assertGreaterEqual(value["metrics"]["observedWorkBytes"], 5)
         self.assertEqual(inspect.call_count, 1)
         self.assertIs(normalize.call_args.kwargs["source_probe"], initial.probe)
         self.assertIs(upload.call_args.kwargs["deadline"], normalize.call_args.kwargs["deadline"])

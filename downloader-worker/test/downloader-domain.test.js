@@ -8,6 +8,7 @@ import {
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
   normalizeClientRequestId,
+  normalizeContainerErrorCode,
   normalizeMediaId,
   normalizeSourceUrl,
   publicJob,
@@ -76,4 +77,11 @@ test("request IDとmedia IDを許可文字だけに制限する", () => {
   assert.equal(normalizeClientRequestId("short"), "");
   assert.equal(normalizeMediaId("a:b+c.1"), "a:b+c.1");
   assert.equal(normalizeMediaId("../../etc/passwd"), "");
+});
+
+test("Containerの安全なerror codeだけをQueueログへ引き継ぐ", () => {
+  assert.equal(normalizeContainerErrorCode("job_deadline_exceeded", 503), "job_deadline_exceeded");
+  assert.equal(normalizeContainerErrorCode("yara_scan_timeout", 422), "yara_scan_timeout");
+  assert.equal(normalizeContainerErrorCode("secret/path?token=value", 503), "container_503");
+  assert.equal(normalizeContainerErrorCode("", 999), "container_500");
 });

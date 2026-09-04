@@ -1,6 +1,7 @@
 import unittest
 
-from media_pipeline import PlanKind, plan_mp4
+from media_pipeline import PlanKind, enforce_video_transcode_budget, plan_mp4
+from scanner import UnsafeFile
 
 
 def probe(container="matroska,webm", video="h264", audio="aac", pix="yuv420p", audio_count=1, duration="60"):
@@ -31,6 +32,23 @@ class MediaPlannerTests(unittest.TestCase):
 
     def test_10_bit_h264_is_transcoded_for_compatibility(self):
         self.assertEqual(plan_mp4(probe(pix="yuv420p10le")).kind, PlanKind.PARTIAL_TRANSCODE)
+
+    def test_actual_probe_budget_rejects_special_h264_pixel_format(self):
+        value = probe(pix="yuv420p10le", duration="241")
+        plan = plan_mp4(value)
+        with self.assertRaisesRegex(UnsafeFile, "video_transcode_budget"):
+            enforce_video_transcode_budget(value, plan)
+
+    def test_actual_probe_budget_keeps_audio_only_transcode(self):
+        value = probe(audio="opus", duration="3600")
+        plan = plan_mp4(value)
+        self.assertEqual(enforce_video_transcode_budget(value, plan), 0)
+
+    def test_actual_probe_budget_uses_resolution_and_frame_rate(self):
+        value = probe(video="vp9", duration="300")
+        value["streams"][0].update({"width": 1280, "height": 720, "r_frame_rate": "30000/1001"})
+        plan = plan_mp4(value)
+        self.assertLess(enforce_video_transcode_budget(value, plan), 240)
 
     def test_video_without_audio_is_supported(self):
         self.assertEqual(plan_mp4(probe(audio_count=0)).kind, PlanKind.REMUX)

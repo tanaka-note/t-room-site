@@ -13,6 +13,7 @@ const clamd = await readFile(new URL("../container/clamd.conf", import.meta.url)
 const server = await readFile(new URL("../container/server.py", import.meta.url), "utf8");
 const pipeline = await readFile(new URL("../container/media_pipeline.py", import.meta.url), "utf8");
 const entrypoint = await readFile(new URL("../container/entrypoint.sh", import.meta.url), "utf8");
+const yaraRules = await readFile(new URL("../container/yara-rules/sources/tlain_downloader.yar", import.meta.url), "utf8");
 
 test("二段階解析と明示的な権利確認を分離する", () => {
   assert.match(worker, /\/api\/analyze/);
@@ -90,7 +91,7 @@ test("Queue失敗は4回目でD1をfailedにしてackせずDLQへ委譲する", 
   assert.doesNotMatch(queueFailure, /message\.ack\(\)/);
 });
 
-test("ContainerはClamAV鮮度をfail-closedで確認してからffprobeへ渡す", () => {
+test("ContainerはClamAVとYARAをfail-closedで確認してからffprobeへ渡す", () => {
   assert.match(scanner, /CLAMAV_MAX_DEFINITION_AGE_SECONDS/);
   assert.match(scanner, /malware_definitions_missing/);
   assert.match(scanner, /malware_definitions_stale/);
@@ -101,7 +102,13 @@ test("ContainerはClamAV鮮度をfail-closedで確認してからffprobeへ渡�
   assert.match(clamd, /^PCREMaxFileSize 2G$/m);
   assert.match(scanner, /_scan_large_file_windows/);
   assert.match(scanner, /CLAMD_WINDOW_OVERLAP_BYTES/);
+  assert.match(scanner, /_scan_yara\(path,/);
+  assert.match(scanner, /yara_rules_status/);
+  assert.match(scanner, /yara_detected/);
+  assert.match(scanner, /yara_scan_timeout/);
+  assert.match(yaraRules, /TLAIN_YARA_SAFE_TEST_MARKER/);
   assert.ok(scanner.indexOf("_scan_malware(path,") < scanner.indexOf("probe = probe_file(path,"));
+  assert.ok(scanner.indexOf("_scan_yara(path,") < scanner.indexOf("probe = probe_file(path,"));
   assert.match(server, /signal\.SIGTERM/);
   assert.match(server, /DRAINING\.set\(\)/);
   assert.equal(config.containers[0].rollout_active_grace_period, 900);
@@ -146,6 +153,8 @@ test("Container処理前にhealth本文とHTTP statusを明示確認する", () 
   assert.match(worker, /health\.draining === false/);
   assert.match(worker, /health\.clamav\?\.healthy === true/);
   assert.match(worker, /health\.clamav\?\.daemonReady === true/);
+  assert.match(worker, /health\.yara\?\.healthy === true/);
+  assert.match(worker, /health\.yara\?\.verified === true/);
   assert.match(worker, /throw new Error\("container_unhealthy"\)/);
   const timeout = worker.match(/const CONTAINER_HEALTH_TIMEOUT_MS = ([\d_]+);/);
   assert.ok(timeout, "Container health timeout must be explicit");
@@ -160,7 +169,20 @@ test("全処理は絶対deadlineを共有しPASS_THROUGHだけ再scanしない",
   assert.match(server, /normalize_video\([\s\S]*deadline=deadline/);
   assert.match(server, /_upload_to_r2\(path, body, scan, deadline=deadline\)/);
   assert.match(server, /plan\.kind != PlanKind\.PASS_THROUGH/);
+  assert.match(server, /"metrics": metrics/);
+  assert.match(worker, /downloader_container_metrics/);
+  assert.match(worker, /QUEUE_MAX_WALL_MS = 15 \* 60_000/);
+  assert.match(worker, /CONTAINER_HEALTH_TIMEOUT_MS \+ 720_000 \+ CONTAINER_RESPONSE_GRACE_MS \+ QUEUE_FINALIZATION_RESERVE_MS > QUEUE_MAX_WALL_MS/);
+  assert.match(worker, /leaseExpiresAt = nowSeconds\(\) \+ Math\.ceil\(CONTAINER_HEALTH_TIMEOUT_MS \/ 1000\)/);
   assert.match(pipeline, /source_probe=initial_scan\.probe|source_probe: dict \| None/);
+  assert.match(scanner, /start_clamav_daemon\(deadline=deadline, reserve_seconds=reserve_seconds\)/);
+  assert.match(scanner, /deadline\.ensure\(reserve_seconds=reserve_seconds\)/);
+});
+
+test("実probeのplanで特殊H.264を含む映像再エンコード予算を再判定する", () => {
+  assert.match(pipeline, /enforce_video_transcode_budget\(source_probe, plan\)/);
+  assert.match(pipeline, /plan\.video_codec == "copy"/);
+  assert.match(pipeline, /VIDEO_TRANSCODE_BUDGET_EQUIVALENT_1080P30_SECONDS = 240\.0/);
 });
 
 test("Chromiumはjobごとの一時profileを使い終了後に残さない", () => {

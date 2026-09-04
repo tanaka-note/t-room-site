@@ -35,6 +35,7 @@ MAX_WIDTH = 7680
 MAX_HEIGHT = 4320
 MAX_STREAMS = 16
 H264_PIXEL_FORMATS = {"yuv420p", "yuvj420p"}
+VIDEO_TRANSCODE_BUDGET_EQUIVALENT_1080P30_SECONDS = 240.0
 
 
 def plan_mp4(probe: dict) -> MediaPlan:
@@ -74,6 +75,7 @@ def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_sec
     plan = plan_mp4(source_probe)
     if plan.kind == PlanKind.REJECT:
         raise UnsafeFile(plan.reason)
+    enforce_video_transcode_budget(source_probe, plan)
     if plan.kind == PlanKind.PASS_THROUGH and not _has_faststart(path, deadline, reserve_seconds):
         plan = MediaPlan(PlanKind.REMUX, "copy", "copy", "compatible_mp4_requires_faststart")
     output_name = f"{Path(safe_filename(requested_name)).stem or 'download'}.mp4"
@@ -103,12 +105,35 @@ def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_sec
             preexec_fn=(lambda: _limits(max_bytes)) if resource is not None else None, env=_clean_environment(),
         )
     except subprocess.TimeoutExpired as error:
-        raise TimeoutError("job_deadline_exceeded") from error
+        if deadline is not None:
+            try:
+                deadline.ensure(reserve_seconds=reserve_seconds)
+            except TimeoutError:
+                raise
+        raise UnsafeFile("normalization_timeout") from error
     if result.returncode != 0 or not output.exists():
         raise UnsafeFile("normalization_failed")
     output_probe = probe_file(output, deadline, reserve_seconds)
     _validate_output(source_probe, output_probe, output, max_bytes, deadline, reserve_seconds)
     return output, output_name, "video/mp4", plan
+
+
+def enforce_video_transcode_budget(probe: dict, plan: MediaPlan, budget_seconds: float = VIDEO_TRANSCODE_BUDGET_EQUIVALENT_1080P30_SECONDS) -> float:
+    """Reject only plans that must re-encode video and exceed the measured budget."""
+    if plan.video_codec == "copy":
+        return 0.0
+    streams = probe.get("streams") if isinstance(probe.get("streams"), list) else []
+    video = next((stream for stream in streams if _is_playable_video_stream(stream)), None)
+    duration = _duration(probe, streams)
+    if video is None or duration is None or duration <= 0:
+        raise UnsafeFile("video_transcode_budget_unknown")
+    width = max(320.0, _positive_number(video.get("width"), 1920.0))
+    height = max(240.0, _positive_number(video.get("height"), 1080.0))
+    fps = max(1.0, _frame_rate(video))
+    equivalent = duration * ((width * height * fps) / (1920.0 * 1080.0 * 30.0))
+    if equivalent > max(30.0, float(budget_seconds)):
+        raise UnsafeFile("video_transcode_budget")
+    return equivalent
 
 
 def _validate_output(source: dict, output: dict, path: Path, max_bytes: int, deadline=None, reserve_seconds: float = 0) -> None:
@@ -141,6 +166,29 @@ def _duration(probe: dict, streams: list[dict]) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _frame_rate(video: dict) -> float:
+    value = str(video.get("r_frame_rate") or "")
+    try:
+        if "/" in value:
+            numerator, denominator = value.split("/", 1)
+            number = float(numerator) / float(denominator)
+        else:
+            number = float(value)
+        if number > 0:
+            return number
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    return 30.0
+
+
+def _positive_number(value, fallback: float) -> float:
+    try:
+        number = float(value)
+        return number if number > 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _has_faststart(path: Path, deadline=None, reserve_seconds: float = 0) -> bool:

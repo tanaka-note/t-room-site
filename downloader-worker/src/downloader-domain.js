@@ -120,6 +120,15 @@ export function normalizeMediaId(value) {
   return /^[A-Za-z0-9_.:@+-]{1,180}$/.test(text) ? text : "";
 }
 
+export function normalizeContainerErrorCode(value, status) {
+  const code = String(value || "").trim();
+  if (/^[a-z][a-z0-9_]{0,79}$/.test(code)) return code;
+  const httpStatus = Number.isInteger(Number(status)) && Number(status) >= 100 && Number(status) <= 599
+    ? Number(status)
+    : 500;
+  return `container_${httpStatus}`;
+}
+
 export function publicJob(row) {
   return {
     id: row.id,

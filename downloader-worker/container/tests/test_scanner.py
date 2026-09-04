@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from scanner import UnsafeFile, _reject_filename, _scan_large_file_windows, _scan_malware, clamav_database_status, inspect_file, require_fresh_clamav_definitions, safe_filename
+from scanner import UnsafeFile, _detect_mime, _reject_filename, _scan_large_file_windows, _scan_malware, _scan_yara, clamav_database_status, inspect_file, probe_file, require_fresh_clamav_definitions, require_yara_rules, safe_filename, start_clamav_daemon, yara_rules_status
 
 
 def clamav_header(build_time: int) -> bytes:
@@ -41,7 +41,7 @@ class ScannerPolicyTests(unittest.TestCase):
             with patch("scanner._clamav_database_signature_is_valid", return_value=True), self.assertRaisesRegex(UnsafeFile, "malware_definitions_missing"):
                 require_fresh_clamav_definitions(root, now=built_at)
             (root / "bytecode.cvd").write_bytes(clamav_header(built_at))
-            with patch("scanner._clamav_database_signature_is_valid", side_effect=lambda path: path.name != "main.cvd"), self.assertRaisesRegex(UnsafeFile, "malware_definitions_invalid"):
+            with patch("scanner._clamav_database_signature_is_valid", side_effect=lambda path, *_args: path.name != "main.cvd"), self.assertRaisesRegex(UnsafeFile, "malware_definitions_invalid"):
                 require_fresh_clamav_definitions(root, now=built_at)
 
     def test_invalid_database_header_fails_closed_even_with_fresh_mtime(self):
@@ -74,6 +74,55 @@ class ScannerPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(UnsafeFile, "malware_scan_timeout"):
             _scan_malware(Path("fixture.mp4"))
 
+    @patch("scanner.require_yara_rules")
+    @patch("scanner.subprocess.run")
+    def test_yara_match_and_scanner_errors_fail_closed(self, run, _rules):
+        run.return_value.returncode = 0
+        run.return_value.stdout = "TLAIN_YARA_SAFE_TEST_MARKER fixture.mp4\n"
+        run.return_value.stderr = ""
+        with self.assertRaisesRegex(UnsafeFile, "yara_detected"):
+            _scan_yara(Path("fixture.mp4"))
+        run.return_value.returncode = 2
+        run.return_value.stdout = ""
+        with self.assertRaisesRegex(UnsafeFile, "yara_scan_failed"):
+            _scan_yara(Path("fixture.mp4"))
+
+    @patch("scanner.require_yara_rules")
+    @patch("scanner.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("yara", 30))
+    def test_yara_timeout_fails_closed(self, _run, _rules):
+        with self.assertRaisesRegex(UnsafeFile, "yara_scan_timeout"):
+            _scan_yara(Path("fixture.mp4"))
+
+    def test_missing_yara_binary_or_rules_are_unhealthy(self):
+        with tempfile.TemporaryDirectory() as directory, patch("scanner.shutil.which", return_value=None):
+            root = Path(directory)
+            status = yara_rules_status(root / "missing.yarc", root / "missing.sha256")
+        self.assertFalse(status["healthy"])
+        with patch("scanner.yara_rules_status", return_value={"available": False, "healthy": False}), self.assertRaisesRegex(UnsafeFile, "yara_unavailable"):
+            require_yara_rules()
+
+    def test_clamav_startup_checks_deadline_before_launch(self):
+        class Deadline:
+            def timeout(self, **_kwargs):
+                raise TimeoutError("job_deadline_exceeded")
+        with patch("scanner.clamav_daemon_ready", return_value=False), patch("scanner.subprocess.Popen") as process, self.assertRaisesRegex(TimeoutError, "job_deadline_exceeded"):
+            start_clamav_daemon(deadline=Deadline())
+        process.assert_not_called()
+
+    def test_phase_timeouts_are_classified_without_hiding_deadline(self):
+        class Deadline:
+            def timeout(self, **_kwargs):
+                return 0.1
+            def ensure(self, **_kwargs):
+                raise TimeoutError("job_deadline_exceeded")
+        timeout = __import__("subprocess").TimeoutExpired("tool", 0.1)
+        with patch("scanner.subprocess.run", side_effect=timeout), self.assertRaisesRegex(UnsafeFile, "magic_timeout"):
+            _detect_mime(Path("fixture.mp4"))
+        with patch("scanner.subprocess.run", side_effect=timeout), self.assertRaisesRegex(UnsafeFile, "ffprobe_timeout"):
+            probe_file(Path("fixture.mp4"))
+        with patch("scanner.subprocess.run", side_effect=timeout), self.assertRaisesRegex(TimeoutError, "job_deadline_exceeded"):
+            probe_file(Path("fixture.mp4"), deadline=Deadline())
+
     @patch("scanner._clamd_stream", side_effect=[b"stream: OK\0", b"stream: OK\0", b"stream: Tail.Test FOUND\0"])
     def test_windowed_scan_rejects_a_signature_in_the_final_window(self, stream):
         with tempfile.TemporaryDirectory() as directory:
@@ -92,10 +141,11 @@ class ScannerPolicyTests(unittest.TestCase):
             order = []
             with patch("scanner._detect_mime", side_effect=lambda *_args: order.append("magic") or "video/mp4"), \
                  patch("scanner._scan_malware", side_effect=lambda *_args: order.append("clamav")), \
+                 patch("scanner._scan_yara", side_effect=lambda *_args: order.append("yara")), \
                  patch("scanner.probe_file", side_effect=lambda *_args: order.append("ffprobe") or {"streams": [{"codec_type": "video"}]}), \
                  patch("scanner._sha256", return_value="0" * 64):
                 inspect_file(path, "movie.mp4", "video/mp4", 1024)
-            self.assertEqual(order, ["magic", "clamav", "ffprobe"])
+            self.assertEqual(order, ["magic", "clamav", "yara", "ffprobe"])
 
     def test_executable_archive_and_double_extension_are_rejected(self):
         for name in ["movie.mp4.exe", "archive.zip", "run.ps1", "movie.mp4.js"]:
@@ -138,6 +188,7 @@ class ScannerPolicyTests(unittest.TestCase):
             with patch("scanner._detect_mime", return_value="application/ogg"), \
                  patch("scanner.probe_file", return_value=probe), \
                  patch("scanner._scan_malware"), \
+                 patch("scanner._scan_yara"), \
                  patch("scanner._sha256", return_value="0" * 64):
                 result = inspect_file(path, "movie.ogv", "video/ogg", 1024)
             self.assertEqual(result.media_kind, "video")
@@ -150,6 +201,7 @@ class ScannerPolicyTests(unittest.TestCase):
             with patch("scanner._detect_mime", return_value="image/png"), \
                  patch("scanner.probe_file", return_value=probe), \
                  patch("scanner._scan_malware"), \
+                 patch("scanner._scan_yara"), \
                  patch("scanner._sha256", return_value="0" * 64):
                 result = inspect_file(path, "cover.png", "image/png", 1024)
             self.assertEqual(result.media_kind, "image")
@@ -165,6 +217,7 @@ class ScannerPolicyTests(unittest.TestCase):
             with patch("scanner._detect_mime", return_value="audio/mp4"), \
                  patch("scanner.probe_file", return_value=probe), \
                  patch("scanner._scan_malware"), \
+                 patch("scanner._scan_yara"), \
                  patch("scanner._sha256", return_value="0" * 64):
                 result = inspect_file(path, "song.m4a", "audio/mp4", 1024)
             self.assertEqual(result.media_kind, "audio")
@@ -177,7 +230,7 @@ class ScannerPolicyTests(unittest.TestCase):
                 path.write_bytes(b"media")
                 with patch("scanner._detect_mime", return_value="video/x-matroska"), \
                      patch("scanner.probe_file", return_value={"streams": allowed}), \
-                     patch("scanner._scan_malware"), patch("scanner._sha256", return_value="0" * 64):
+                     patch("scanner._scan_malware"), patch("scanner._scan_yara"), patch("scanner._sha256", return_value="0" * 64):
                     self.assertEqual(inspect_file(path, path.name, None, 1024).media_kind, "video")
         for stream_type in ["attachment", "data"]:
             with tempfile.TemporaryDirectory() as directory:
@@ -185,7 +238,7 @@ class ScannerPolicyTests(unittest.TestCase):
                 path.write_bytes(b"media")
                 with patch("scanner._detect_mime", return_value="video/x-matroska"), \
                      patch("scanner.probe_file", return_value={"streams": base + [{"codec_type": stream_type}]}), \
-                     patch("scanner._scan_malware"), self.assertRaisesRegex(UnsafeFile, "unsafe_embedded_stream"):
+                     patch("scanner._scan_malware"), patch("scanner._scan_yara"), self.assertRaisesRegex(UnsafeFile, "unsafe_embedded_stream"):
                     inspect_file(path, path.name, None, 1024)
 
 

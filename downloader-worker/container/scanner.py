@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -64,6 +65,10 @@ _DATABASE_VERIFY_LOCK = threading.Lock()
 _CLAMD_LOCK = threading.Lock()
 _CLAMD_PROCESS: subprocess.Popen | None = None
 _CLAMD_ATEXIT_REGISTERED = False
+YARA_BINARY = os.environ.get("YARA_BINARY", "yara")
+YARA_RULES_FILE = Path(os.environ.get("YARA_RULES_FILE", "/app/yara-rules/compiled.yarc"))
+YARA_RULES_SHA256_FILE = Path(os.environ.get("YARA_RULES_SHA256_FILE", "/app/yara-rules/compiled.yarc.sha256"))
+DEFAULT_YARA_SCAN_TIMEOUT_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,7 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
     # Keep complex media parsers behind the malware gate. libmagic performs the
     # minimal type check first; ClamAV then scans before ffprobe sees the file.
     _scan_malware(path, deadline, reserve_seconds)
+    _scan_yara(path, deadline, reserve_seconds)
     probe = probe_file(path, deadline, reserve_seconds)
     media_kind = _media_kind(detected, probe)
     if Path(filename).suffix.lower() in {".mjpeg", ".mjpg"} and any(_is_playable_video_stream(stream) for stream in probe.get("streams", [])):
@@ -116,15 +122,17 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
     return ScanResult(_sha256(path, deadline, reserve_seconds), size, detected, filename, media_kind, probe)
 
 
-def clamav_database_status(database_dir: Path | None = None, now: float | None = None) -> dict:
+def clamav_database_status(database_dir: Path | None = None, now: float | None = None, deadline=None, reserve_seconds: float = 0) -> dict:
     root = database_dir or CLAMAV_DATABASE_DIR
     current = time.time() if now is None else float(now)
     max_age = _clamav_max_definition_age_seconds()
     databases = {}
     for name in REQUIRED_CLAMAV_DATABASES:
+        if deadline is not None:
+            deadline.ensure(reserve_seconds=reserve_seconds)
         path = _clamav_database_path(root, name)
         built_at = _clamav_database_build_time(path) if path else None
-        verified = bool(path and built_at is not None and _clamav_database_signature_is_valid(path))
+        verified = bool(path and built_at is not None and _clamav_database_signature_is_valid(path, deadline, reserve_seconds))
         databases[name] = {
             "available": path is not None,
             "verified": verified,
@@ -146,14 +154,54 @@ def clamav_database_status(database_dir: Path | None = None, now: float | None =
     }
 
 
-def require_fresh_clamav_definitions(database_dir: Path | None = None, now: float | None = None) -> dict:
-    status = clamav_database_status(database_dir, now)
+def require_fresh_clamav_definitions(database_dir: Path | None = None, now: float | None = None, deadline=None, reserve_seconds: float = 0) -> dict:
+    status = clamav_database_status(database_dir, now, deadline, reserve_seconds)
     if not status["available"]:
         raise UnsafeFile("malware_definitions_missing")
     if not all(value["verified"] for value in status["databases"].values()):
         raise UnsafeFile("malware_definitions_invalid")
     if not status["healthy"]:
         raise UnsafeFile("malware_definitions_stale")
+    return status
+
+
+def yara_rules_status(rules_file: Path | None = None, checksum_file: Path | None = None, deadline=None, reserve_seconds: float = 0) -> dict:
+    rules = rules_file or YARA_RULES_FILE
+    checksum = checksum_file or YARA_RULES_SHA256_FILE
+    binary = shutil.which(YARA_BINARY)
+    available = bool(binary and rules.is_file() and checksum.is_file())
+    if not available:
+        return {"available": False, "verified": False, "healthy": False, "version": None}
+    try:
+        if deadline is not None:
+            deadline.ensure(reserve_seconds=reserve_seconds)
+        expected = checksum.read_text(encoding="ascii").split()[0].strip().lower()
+        actual = _sha256(rules, deadline, reserve_seconds)
+        version_result = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True,
+            timeout=_phase_timeout(deadline, 10, reserve_seconds), check=False,
+        )
+        verify_result = subprocess.run(
+            [binary, "-C", "-w", "-a", "10", "-l", "1", str(rules), os.devnull],
+            capture_output=True, text=True, timeout=_phase_timeout(deadline, 15, reserve_seconds), check=False,
+        )
+        version = version_result.stdout.strip()[:40] if version_result.returncode == 0 else None
+        verified = bool(re.fullmatch(r"[0-9a-f]{64}", expected)) and expected == actual and verify_result.returncode == 0
+        return {"available": True, "verified": verified, "healthy": verified and version is not None, "version": version}
+    except subprocess.TimeoutExpired as error:
+        if deadline is not None:
+            _raise_phase_timeout(deadline, reserve_seconds, "yara_rules_check_timeout", error)
+        return {"available": True, "verified": False, "healthy": False, "version": None}
+    except (OSError, UnicodeError, IndexError):
+        return {"available": True, "verified": False, "healthy": False, "version": None}
+
+
+def require_yara_rules(deadline=None, reserve_seconds: float = 0) -> dict:
+    status = yara_rules_status(deadline=deadline, reserve_seconds=reserve_seconds)
+    if not status["available"]:
+        raise UnsafeFile("yara_unavailable")
+    if not status["healthy"]:
+        raise UnsafeFile("yara_rules_invalid")
     return status
 
 
@@ -177,10 +225,13 @@ def _reject_filename(filename: str) -> None:
 
 
 def _detect_mime(path: Path, deadline=None, reserve_seconds: float = 0) -> str:
-    result = subprocess.run(
-        ["file", "--brief", "--mime-type", "--", str(path)],
-        capture_output=True, text=True, timeout=_phase_timeout(deadline, 30, reserve_seconds), check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["file", "--brief", "--mime-type", "--", str(path)],
+            capture_output=True, text=True, timeout=_phase_timeout(deadline, 30, reserve_seconds), check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        _raise_phase_timeout(deadline, reserve_seconds, "magic_timeout", error)
     if result.returncode != 0:
         raise UnsafeFile("magic_failed")
     return result.stdout.strip().lower()
@@ -202,12 +253,16 @@ def _mime_family(value: str) -> str:
 
 
 def probe_file(path: Path, deadline=None, reserve_seconds: float = 0) -> dict:
-    result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries",
-         "format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,profile,level,pix_fmt,width,height,r_frame_rate,duration,bit_rate,sample_rate,channels:stream_disposition=attached_pic:stream_tags=rotate:stream_side_data=rotation",
-         "-of", "json", "--", str(path)],
-        capture_output=True, text=True, timeout=_phase_timeout(deadline, 90, reserve_seconds), check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
+             "format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,profile,level,pix_fmt,width,height,r_frame_rate,duration,bit_rate,sample_rate,channels:stream_disposition=attached_pic:stream_tags=rotate:stream_side_data=rotation",
+             "-of", "json", "--", str(path)],
+            capture_output=True, text=True, timeout=_phase_timeout(deadline, 90, reserve_seconds), check=False,
+            env=_local_parser_environment(),
+        )
+    except subprocess.TimeoutExpired as error:
+        _raise_phase_timeout(deadline, reserve_seconds, "ffprobe_timeout", error)
     if result.returncode != 0:
         raise UnsafeFile("ffprobe_failed")
     try:
@@ -230,8 +285,8 @@ def _validate_media(path: Path, probe: dict, deadline=None, reserve_seconds: flo
 
 
 def _scan_malware(path: Path, deadline=None, reserve_seconds: float = 0) -> None:
-    require_fresh_clamav_definitions()
-    start_clamav_daemon()
+    require_fresh_clamav_definitions(deadline=deadline, reserve_seconds=reserve_seconds)
+    start_clamav_daemon(deadline=deadline, reserve_seconds=reserve_seconds)
     scan_deadline = time.monotonic() + _phase_timeout(deadline, _clamav_scan_timeout_seconds(), reserve_seconds)
     command = [
         "clamdscan", f"--config-file={CLAMD_CONFIG}", "--fdpass", "--no-summary", "--", str(path),
@@ -241,7 +296,7 @@ def _scan_malware(path: Path, deadline=None, reserve_seconds: float = 0) -> None
             command, capture_output=True, text=True, timeout=max(0.1, scan_deadline - time.monotonic()), check=False,
         )
     except subprocess.TimeoutExpired as error:
-        raise UnsafeFile("malware_scan_timeout") from error
+        _raise_phase_timeout(deadline, reserve_seconds, "malware_scan_timeout", error)
     if result.returncode == 1:
         raise UnsafeFile("malware_detected")
     if result.returncode != 0:
@@ -251,15 +306,40 @@ def _scan_malware(path: Path, deadline=None, reserve_seconds: float = 0) -> None
         _scan_large_file_windows(path, scan_deadline, deadline, reserve_seconds)
 
 
-def start_clamav_daemon() -> None:
+def _scan_yara(path: Path, deadline=None, reserve_seconds: float = 0) -> None:
+    require_yara_rules(deadline=deadline, reserve_seconds=reserve_seconds)
+    phase_timeout = _phase_timeout(deadline, _yara_scan_timeout_seconds(), reserve_seconds)
+    command = [
+        YARA_BINARY, "-C", "-w", "-a", str(max(1, int(phase_timeout))), "-l", "1",
+        str(YARA_RULES_FILE), str(path),
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=phase_timeout, check=False,
+            env=_local_parser_environment(),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        if isinstance(error, subprocess.TimeoutExpired):
+            _raise_phase_timeout(deadline, reserve_seconds, "yara_scan_timeout", error)
+        raise UnsafeFile("yara_scan_failed") from error
+    if result.returncode != 0:
+        if "timeout" in result.stderr.lower():
+            _raise_phase_timeout(deadline, reserve_seconds, "yara_scan_timeout")
+        raise UnsafeFile("yara_scan_failed")
+    if result.stdout.strip():
+        raise UnsafeFile("yara_detected")
+
+
+def start_clamav_daemon(deadline=None, reserve_seconds: float = 0) -> None:
     global _CLAMD_PROCESS, _CLAMD_ATEXIT_REGISTERED
-    if clamav_daemon_ready():
+    if clamav_daemon_ready(deadline, reserve_seconds):
         return
     with _CLAMD_LOCK:
-        if clamav_daemon_ready():
+        if clamav_daemon_ready(deadline, reserve_seconds):
             return
         if _CLAMD_PROCESS is not None and _CLAMD_PROCESS.poll() is None:
-            stop_clamav_daemon()
+            stop_clamav_daemon(deadline=deadline, reserve_seconds=reserve_seconds)
+        startup_timeout = _phase_timeout(deadline, 45, reserve_seconds)
         try:
             CLAMD_SOCKET.unlink(missing_ok=True)
             _CLAMD_PROCESS = subprocess.Popen(
@@ -268,42 +348,50 @@ def start_clamav_daemon() -> None:
             )
         except (OSError, subprocess.SubprocessError) as error:
             raise UnsafeFile("malware_scanner_unavailable") from error
-        deadline = time.monotonic() + 45
-        while time.monotonic() < deadline:
+        startup_deadline = time.monotonic() + startup_timeout
+        while time.monotonic() < startup_deadline:
+            if deadline is not None:
+                deadline.ensure(reserve_seconds=reserve_seconds)
             if _CLAMD_PROCESS.poll() is not None:
                 break
-            if clamav_daemon_ready():
+            if clamav_daemon_ready(deadline, reserve_seconds):
                 if not _CLAMD_ATEXIT_REGISTERED:
                     atexit.register(stop_clamav_daemon)
                     _CLAMD_ATEXIT_REGISTERED = True
                 return
             time.sleep(0.1)
-        stop_clamav_daemon()
+        stop_clamav_daemon(deadline=deadline, reserve_seconds=reserve_seconds)
+        if deadline is not None:
+            deadline.ensure(reserve_seconds=reserve_seconds)
         raise UnsafeFile("malware_scanner_unavailable")
 
 
-def stop_clamav_daemon() -> None:
+def stop_clamav_daemon(deadline=None, reserve_seconds: float = 0) -> None:
     global _CLAMD_PROCESS
     process = _CLAMD_PROCESS
     _CLAMD_PROCESS = None
     if process is not None and process.poll() is None:
         process.terminate()
         try:
-            process.wait(timeout=10)
+            process.wait(timeout=_bounded_cleanup_timeout(deadline, reserve_seconds, 10))
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=5)
+            try:
+                process.wait(timeout=_bounded_cleanup_timeout(deadline, reserve_seconds, 5))
+            except subprocess.TimeoutExpired:
+                pass
     try:
         CLAMD_SOCKET.unlink(missing_ok=True)
     except OSError:
         pass
 
 
-def clamav_daemon_ready() -> bool:
+def clamav_daemon_ready(deadline=None, reserve_seconds: float = 0) -> bool:
     if not hasattr(socket, "AF_UNIX"):
         return False
+    timeout = 2 if deadline is None else deadline.timeout(maximum_seconds=2, reserve_seconds=reserve_seconds)
     try:
-        response = _clamd_command(b"zPING\0", timeout=2)
+        response = _clamd_command(b"zPING\0", timeout=timeout)
         return response.rstrip(b"\0") == b"PONG"
     except (OSError, TimeoutError, UnsafeFile):
         return False
@@ -322,7 +410,12 @@ def _scan_large_file_windows(path: Path, scan_deadline: float | None = None, job
                 raise UnsafeFile("malware_scan_timeout")
             source.seek(offset)
             length = min(CLAMD_WINDOW_BYTES, size - offset)
-            result = _clamd_stream(source, length, remaining_time)
+            try:
+                result = _clamd_stream(source, length, remaining_time)
+            except UnsafeFile as error:
+                if str(error) == "malware_scan_timeout":
+                    _raise_phase_timeout(job_deadline, reserve_seconds, "malware_scan_timeout", error)
+                raise
             if b"FOUND" in result:
                 raise UnsafeFile("malware_detected")
             if not result.rstrip(b"\0").endswith(b"OK"):
@@ -335,7 +428,7 @@ def _scan_large_file_windows(path: Path, scan_deadline: float | None = None, job
 def _clamd_stream(source, length: int, timeout: float | None = None) -> bytes:
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(max(1, timeout if timeout is not None else _clamav_scan_timeout_seconds()))
+            connection.settimeout(max(0.1, timeout if timeout is not None else _clamav_scan_timeout_seconds()))
             connection.connect(str(CLAMD_SOCKET))
             connection.sendall(b"zINSTREAM\0")
             remaining = length
@@ -392,6 +485,14 @@ def _clamav_scan_timeout_seconds() -> int:
     return value if 30 <= value <= 1800 else DEFAULT_CLAMAV_SCAN_TIMEOUT_SECONDS
 
 
+def _yara_scan_timeout_seconds() -> int:
+    try:
+        value = int(os.environ.get("YARA_SCAN_TIMEOUT_SECONDS", DEFAULT_YARA_SCAN_TIMEOUT_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_YARA_SCAN_TIMEOUT_SECONDS
+    return value if 10 <= value <= 600 else DEFAULT_YARA_SCAN_TIMEOUT_SECONDS
+
+
 def _clamav_database_path(root: Path, name: str) -> Path | None:
     for suffix in ("cld", "cvd"):
         candidate = root / f"{name}.{suffix}"
@@ -400,7 +501,7 @@ def _clamav_database_path(root: Path, name: str) -> Path | None:
     return None
 
 
-def _clamav_database_signature_is_valid(path: Path) -> bool:
+def _clamav_database_signature_is_valid(path: Path, deadline=None, reserve_seconds: float = 0) -> bool:
     try:
         stat = path.stat()
         key = (str(path.resolve()), int(stat.st_size), int(stat.st_mtime_ns))
@@ -411,11 +512,16 @@ def _clamav_database_signature_is_valid(path: Path) -> bool:
             return _DATABASE_VERIFY_CACHE[key]
     try:
         result = subprocess.run(
-            ["sigtool", "--info", str(path)], capture_output=True, text=True, timeout=120, check=False,
+            ["sigtool", "--info", str(path)], capture_output=True, text=True,
+            timeout=_phase_timeout(deadline, 120, reserve_seconds), check=False,
         )
         output = f"{result.stdout}\n{result.stderr}".lower()
         valid = result.returncode == 0 and re.search(r"verification\s*:?\s*ok", output) is not None
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired as error:
+        if deadline is not None:
+            _raise_phase_timeout(deadline, reserve_seconds, "malware_definitions_invalid", error)
+        valid = False
+    except OSError:
         valid = False
     with _DATABASE_VERIFY_LOCK:
         if len(_DATABASE_VERIFY_CACHE) >= 16:
@@ -453,6 +559,28 @@ def _sha256(path: Path, deadline=None, reserve_seconds: float = 0) -> str:
                 deadline.ensure(reserve_seconds=reserve_seconds)
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _local_parser_environment() -> dict:
+    return {key: value for key, value in os.environ.items() if key not in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}}
+
+
+def _raise_phase_timeout(deadline, reserve_seconds: float, code: str, cause=None) -> None:
+    if deadline is not None:
+        try:
+            deadline.ensure(reserve_seconds=reserve_seconds)
+        except TimeoutError:
+            raise
+    if cause is None:
+        raise UnsafeFile(code)
+    raise UnsafeFile(code) from cause
+
+
+def _bounded_cleanup_timeout(deadline, reserve_seconds: float, maximum_seconds: float) -> float:
+    if deadline is None:
+        return maximum_seconds
+    remaining = deadline.remaining() - max(0.0, float(reserve_seconds))
+    return max(0.05, min(float(maximum_seconds), remaining))
 
 
 def _phase_timeout(deadline, maximum_seconds: float, reserve_seconds: float = 0) -> float:

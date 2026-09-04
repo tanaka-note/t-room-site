@@ -64,6 +64,18 @@ class MediaPipelineIntegrationTests(unittest.TestCase):
             self._generate(source, "libvpx-vp9", "libopus")
             self._normalize(source, PlanKind.FULL_TRANSCODE)
 
+    def test_h264_ten_bit_is_reencoded_and_checked_by_actual_probe_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "h264-ten-bit.mkv"
+            result = subprocess.run([
+                FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=1",
+                "-f", "lavfi", "-i", "sine=duration=1", "-shortest",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p10le", "-c:a", "aac", str(source),
+            ], capture_output=True, text=True, check=False, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self._normalize(source, PlanKind.PARTIAL_TRANSCODE)
+
     def test_mov_h264_aac_is_preserved_when_already_compatible(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "compatible.mov"
