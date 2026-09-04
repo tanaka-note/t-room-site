@@ -8,6 +8,7 @@
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+  const MONTH_HEADING_SCROLL_GAP_PX = 12;
   const PHOTO_UPLOAD_RETRY_DELAYS_MS = Object.freeze([250, 750]);
   const PHOTO_UPLOAD_CONCURRENCY = 2;
   const TAG_SUGGESTION_MAX_HEIGHT = 246;
@@ -1361,10 +1362,19 @@
     }
   }
 
-  function handleArchiveClick(event) {
+  async function handleArchiveClick(event) {
     const button = event.target.closest("[data-month]");
     if (!button) return;
-    state.month = button.dataset.month;
+    const targetMonth = button.dataset.month;
+    const alreadyShowingMonth = isDiaryHomeRoute()
+      && isMonthlyView()
+      && state.month === targetMonth
+      && !elements.loadMore.disabled;
+    if (alreadyShowingMonth) {
+      await scrollToMonthlyHeadingAfterRender(targetMonth);
+      return;
+    }
+    state.month = targetMonth;
     state.monthExpanded = false;
     state.query = "";
     state.dateFrom = "";
@@ -1381,7 +1391,28 @@
       applyRouteState();
     }
     updateFilterControls();
-    loadEntries(true);
+    await loadEntries(true);
+    await scrollToMonthlyHeadingAfterRender(targetMonth);
+  }
+
+  function scrollToMonthlyHeadingAfterRender(targetMonth) {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          if (isDiaryHomeRoute() && isMonthlyView() && state.month === targetMonth && !elements.loadMore.disabled) {
+            const headerHeight = elements.siteHeader?.offsetHeight || 0;
+            const headingTop = window.scrollY + elements.listTitle.getBoundingClientRect().top;
+            window.scrollTo({
+              top: Math.max(0, headingTop - headerHeight - MONTH_HEADING_SCROLL_GAP_PX),
+              left: 0,
+              behavior: "auto"
+            });
+            resetHeaderVisibilityTracking();
+          }
+          resolve();
+        });
+      });
+    });
   }
 
   async function openEntry(id) {
