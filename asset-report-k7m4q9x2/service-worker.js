@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "asset-report-shell-asset-report-ce1b6032fc50";
+const CACHE_NAME = "asset-report-shell-asset-report-9ade0889c84d";
 const APP_PATH = "/asset-report-k7m4q9x2/";
 const APP_SHELL = [
   APP_PATH,
@@ -10,11 +10,11 @@ const APP_SHELL = [
   `${APP_PATH}icons/icon-maskable-512.png?v=20260812-2`,
   `${APP_PATH}icons/apple-touch-icon.png?v=20260812-2`,
   `${APP_PATH}icons/favicon-32.png?v=20260812-2`,
-  "/asset-report-k7m4q9x2/manifest.webmanifest?v=asset-report-ce1b6032fc50",
-  "/asset-report-k7m4q9x2/pwa.js?v=asset-report-ce1b6032fc50",
-  "/asset-report-k7m4q9x2/report.css?v=asset-report-ce1b6032fc50",
-  "/asset-report-k7m4q9x2/report.js?v=asset-report-ce1b6032fc50",
-  "/assets/pwa-auto-update.js?v=asset-report-ce1b6032fc50"
+  "/asset-report-k7m4q9x2/manifest.webmanifest?v=asset-report-9ade0889c84d",
+  "/asset-report-k7m4q9x2/pwa.js?v=asset-report-9ade0889c84d",
+  "/asset-report-k7m4q9x2/report.css?v=asset-report-9ade0889c84d",
+  "/asset-report-k7m4q9x2/report.js?v=asset-report-9ade0889c84d",
+  "/assets/pwa-auto-update.js?v=asset-report-9ade0889c84d"
 ];
 const APP_SHELL_PATHS = new Set(APP_SHELL.map((value) => new URL(value, self.location.origin).pathname));
 
