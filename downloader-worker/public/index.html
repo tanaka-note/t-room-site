@@ -6,10 +6,10 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#090c18">
-  <meta name="troom-app-build" content="downloader-8753ddb1f65b">
+  <meta name="troom-app-build" content="downloader-912f178f107d">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain Downloader</title>
-  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-8753ddb1f65b">
+  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-912f178f107d">
 </head>
 <body>
   <main class="shell">
@@ -70,14 +70,38 @@
         <p id="expiry-note" class="expiry"></p>
       </section>
 
+      <section id="usage-section" class="usage-section" aria-labelledby="usage-title" hidden>
+        <div class="result-head">
+          <div><p class="step-label">OWNER ONLY</p><h2 id="usage-title">利用状況</h2></div>
+          <button id="refresh-usage" class="text-button" type="button">更新</button>
+        </div>
+        <div id="usage-periods" class="usage-periods" aria-label="集計期間">
+          <button type="button" class="period-button active" data-period="today" aria-pressed="true">今日</button>
+          <button type="button" class="period-button" data-period="month" aria-pressed="false">今月</button>
+          <button type="button" class="period-button" data-period="all" aria-pressed="false">累計</button>
+        </div>
+        <div id="usage-summary" class="usage-summary" aria-live="polite"></div>
+        <p id="usage-alert" class="usage-alert" hidden></p>
+        <details class="usage-details">
+          <summary>内訳と推定料金</summary>
+          <div class="usage-detail-grid">
+            <section><h3>処理方式</h3><dl id="usage-normalizations" class="compact-details"></dl></section>
+            <section><h3>拒否・失敗</h3><dl id="usage-security" class="compact-details"></dl></section>
+          </div>
+          <section><h3>容量・ライフサイクル</h3><dl id="usage-capacity" class="compact-details"></dl></section>
+          <section><h3>直近の日別利用</h3><div id="usage-daily" class="usage-daily"></div></section>
+          <section><h3>Downloader推定追加料金</h3><div id="usage-pricing" class="usage-pricing"></div><div id="usage-notes" class="usage-notes"></div></section>
+        </details>
+      </section>
+
       <section class="history-section" aria-labelledby="history-title">
         <div class="result-head"><div><p class="step-label">RECENT</p><h2 id="history-title">最近の処理</h2></div><button id="refresh-jobs" class="text-button" type="button">更新</button></div>
         <div id="job-list" class="job-list"><p class="empty">処理履歴はありません。</p></div>
       </section>
     </section>
   </main>
-  <script src="/security/passkey-client.js?v=downloader-8753ddb1f65b"></script>
-  <script src="/downloader/downloader.js?v=downloader-8753ddb1f65b"></script>
-  <script src="/assets/pwa-auto-update.js?v=downloader-8753ddb1f65b" defer></script>
+  <script src="/security/passkey-client.js?v=downloader-912f178f107d"></script>
+  <script src="/downloader/downloader.js?v=downloader-912f178f107d"></script>
+  <script src="/assets/pwa-auto-update.js?v=downloader-912f178f107d" defer></script>
 </body>
 </html>

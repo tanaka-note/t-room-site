@@ -10,6 +10,14 @@
 - Media pipeline: 実体をlibmagicで基本判定し、ClamAVと独立YARA検査の両方を通過した後だけffprobeへ渡して、動画をMP4/H.264/AAC/yuv420pへ必要最小限で正規化
 - R2: `t-room-downloader-temp`の`downloads/`だけを使用。Worker経由の所有者認証なしでは取得不可
 
+## 親アカウント向け利用状況
+
+第一管理者の`owner` service linkから発行された有効なPasskey sessionだけが、`/downloader/api/admin/usage`と画面内の「利用状況」を使用できます。一般IdentityはUIが非表示になるだけでなく、Worker側で403になります。今日・今月・累計について、解析／取得要求、処理成功、実ファイル取得開始、削除／期限切れ、取得元・R2保存・配信容量、正規化方式、固定分類したsecurity結果を確認できます。
+
+長期保存する統計はJST日次の件数・bytes・resource値だけです。URL、query、filename、Cookie、Authorization、ファイル内容は保存しません。解析と取得要求はjob状態遷移で一度だけ数え、Queue retryや同一job再実行では増やしません。実ファイル取得はUIがクリックごとに発行する非秘密のattempt IDをHMAC fingerprint化して48時間だけ保持し、同じクリックから生じるRange／ブラウザ再試行を1回へまとめます。別のクリックは別の取得として数えます。
+
+「Downloader推定追加料金」は2026-09-04に確認したCloudflare公式料金を使い、Downloader単独で月間付帯枠を消費した場合の超過分を概算します。成功処理から観測できるContainer CPU・wall time・作業領域、Worker／Queue／R2操作、R2保持時間を対象にし、R2は公式の請求単位への切り上げも反映します。Workers CPU、D1 rows、失敗Containerの実使用量、実際のContainer起動待機はWorker内で正確に帰属できないため「取得不能」とし、基本料金5 USDも含めません。アカウント全体で共有される枠と正式請求額の正本はCloudflare Billingです。料金表は変更され得るため、公開前に公式の[Workers](https://developers.cloudflare.com/workers/platform/pricing/)、[Containers](https://developers.cloudflare.com/containers/platform/pricing/)、[Queues](https://developers.cloudflare.com/queues/platform/pricing/)、[D1](https://developers.cloudflare.com/d1/platform/pricing/)、[R2](https://developers.cloudflare.com/r2/pricing/)を再確認してください。
+
 動画変換は `PASS_THROUGH`、`REMUX`、`PARTIAL_TRANSCODE`、`FULL_TRANSCODE`、`REJECT` の計画を実体検査後に選びます。互換H.264/AACはcopyを優先し、非互換streamだけを変換します。実ffprobeから確定したplanで映像再エンコードが必要な場合だけ1080p/30fps換算240秒の事前予算を適用し、音声だけの変換は拒否しません。ffmpeg/ffprobeはshellを使わず固定argv・ローカル入力・`file,pipe` protocolだけで実行します。
 
 HLS/DASHはmanifest・redirect・参照URLごとに公開HTTP(S)宛てか再検証し、暗号化、DRM、終了点のないライブ配信、過大manifestを拒否します。Containerの外向き通信もprivate/link-local/metadata CIDRを拒否します。

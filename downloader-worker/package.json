@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/downloader-domain.js && node --check public/downloader.js && node test/run-python.mjs -m py_compile container/server.py container/resolver.py container/scanner.py container/ssrf.py container/media_pipeline.py container/adapters/__init__.py",
+    "check": "node --check src/index.js && node --check src/downloader-domain.js && node --check src/downloader-usage.js && node --check public/downloader.js && node test/run-python.mjs -m py_compile container/server.py container/resolver.py container/scanner.py container/ssrf.py container/media_pipeline.py container/adapters/__init__.py",
     "test": "node --test test/*.test.js && node test/run-python.mjs -m unittest discover -s container -p test_*.py",
     "test:browser": "node test/downloader.browser.mjs",
     "deploy:dry": "wrangler deploy --dry-run",

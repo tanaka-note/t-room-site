@@ -74,6 +74,8 @@ class RuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(headers["content-length"], str(len(content)))
         self.assertEqual(headers["x-content-sha256"], "a" * 64)
         self.assertEqual(headers["x-filename"], "test%20video.mp4")
+        self.assertEqual(headers["x-normalization"], "NOT_APPLICABLE")
+        self.assertEqual(headers["x-source-bytes"], "0")
         self.assertEqual(captured["response"].body, content)
         self.assertEqual(captured["timeout"], 180)
 
@@ -100,6 +102,34 @@ class RuntimeIntegrationTests(unittest.TestCase):
 
         self.assertEqual(captured["timeout"], 7)
         self.assertGreaterEqual(deadline.ensure_calls, 1)
+
+    def test_r2_upload_carries_bounded_usage_metrics(self):
+        content = b"measured-media"
+        scan = SimpleNamespace(filename="media.mp4", mime_type="video/mp4", size=len(content), sha256="c" * 64)
+        captured = {}
+
+        def open_request(request, timeout):
+            captured["request"] = request
+            return _UploadResponse(request)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "media.mp4")
+            path.write_bytes(content)
+            with patch("server.urlopen", side_effect=open_request):
+                _upload_to_r2(
+                    path, {"uploadGrant": "grant", "objectKey": "downloads/job/object"}, scan,
+                    normalization="REMUX", source_bytes=99,
+                    metrics={"wallMs": 12, "cpuUserMs": 3, "cpuSystemMs": 2, "containerPeakRssBytes": 4, "observedWorkBytes": 5},
+                )
+
+        headers = {key.lower(): value for key, value in captured["request"].header_items()}
+        self.assertEqual(headers["x-normalization"], "REMUX")
+        self.assertEqual(headers["x-source-bytes"], "99")
+        self.assertEqual(headers["x-container-wall-ms"], "12")
+        self.assertEqual(headers["x-container-cpu-user-ms"], "3")
+        self.assertEqual(headers["x-container-cpu-system-ms"], "2")
+        self.assertEqual(headers["x-container-peak-rss-bytes"], "4")
+        self.assertEqual(headers["x-container-work-bytes"], "5")
 
 
 if __name__ == "__main__":

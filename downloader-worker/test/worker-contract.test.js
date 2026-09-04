@@ -8,6 +8,7 @@ const client = await readFile(new URL("../public/downloader.js", import.meta.url
 const resolver = await readFile(new URL("../container/resolver.py", import.meta.url), "utf8");
 const config = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
 const migration = await readFile(new URL("../migrations/0001_downloader_foundation.sql", import.meta.url), "utf8");
+const usageMigration = await readFile(new URL("../migrations/0002_downloader_usage_stats.sql", import.meta.url), "utf8");
 const scanner = await readFile(new URL("../container/scanner.py", import.meta.url), "utf8");
 const clamd = await readFile(new URL("../container/clamd.conf", import.meta.url), "utf8");
 const server = await readFile(new URL("../container/server.py", import.meta.url), "utf8");
@@ -167,7 +168,7 @@ test("全処理は絶対deadlineを共有しPASS_THROUGHだけ再scanしない",
   assert.match(server, /download\([\s\S]*deadline=deadline/);
   assert.match(server, /inspect_file\([\s\S]*deadline=deadline/);
   assert.match(server, /normalize_video\([\s\S]*deadline=deadline/);
-  assert.match(server, /_upload_to_r2\(path, body, scan, deadline=deadline\)/);
+  assert.match(server, /_upload_to_r2\([\s\S]*deadline=deadline[\s\S]*source_bytes=source_bytes/);
   assert.match(server, /plan\.kind != PlanKind\.PASS_THROUGH/);
   assert.match(server, /"metrics": metrics/);
   assert.match(worker, /downloader_container_metrics/);
@@ -177,6 +178,19 @@ test("全処理は絶対deadlineを共有しPASS_THROUGHだけ再scanしない",
   assert.match(pipeline, /source_probe=initial_scan\.probe|source_probe: dict \| None/);
   assert.match(scanner, /start_clamav_daemon\(deadline=deadline, reserve_seconds=reserve_seconds\)/);
   assert.match(scanner, /deadline\.ensure\(reserve_seconds=reserve_seconds\)/);
+});
+
+test("親アカウント専用統計はサーバー認可し秘匿情報を日次集計へ保存しない", () => {
+  assert.match(worker, /requireParentUsageSession\(session\)/);
+  assert.match(worker, /isParentUsageSession\(session, SESSION_ROLE\)/);
+  assert.match(worker, /identityId: session\.identityId/);
+  assert.match(usageMigration, /CREATE TABLE downloader_usage_daily/);
+  assert.match(usageMigration, /CREATE TABLE downloader_file_delivery_attempts/);
+  assert.doesNotMatch(usageMigration, /source_url|query_string|filename|authorization|cookie/i);
+  assert.match(worker, /INSERT OR IGNORE INTO downloader_file_delivery_attempts/);
+  assert.match(worker, /delivery-attempt-v1/);
+  assert.doesNotMatch(worker, /\.bind\(row\.id, supplied/);
+  assert.match(worker, /\/api\/admin\/usage/);
 });
 
 test("実probeのplanで特殊H.264を含む映像再エンコード予算を再判定する", () => {

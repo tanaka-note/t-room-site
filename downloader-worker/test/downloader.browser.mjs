@@ -36,6 +36,19 @@ const youtubeAnalysis = {
 };
 const pendingYoutubeAnalysis = { ...youtubeAnalysis, status: "analyzing", analysis: {} };
 const analyzeBodies = [];
+const emptyUsage = {
+  analyzeRequests: 2, downloadRequests: 1, processingSuccesses: 1, fileDeliveryStarts: 1,
+  deleted: 0, expired: 0, sourceBytes: 2048, r2StoredBytes: 1024, deliveredBytes: 1024,
+  rejected: 1, failed: 0,
+  normalization: { PASS_THROUGH: 1, REMUX: 0, PARTIAL_TRANSCODE: 0, FULL_TRANSCODE: 0, NOT_APPLICABLE: 0, UNKNOWN: 0 },
+  security: { malware_detected: 0, yara_detected: 0, clamav_error: 0, yara_error: 0, scanner_timeout: 0, scanner_unavailable: 0, file_type_mismatch: 0, malformed_media: 0, processing_budget_exceeded: 0, deadline_exceeded: 0, ssrf_rejected: 0, rate_limited: 1, other_reject: 0, other_failed: 0 }
+};
+const usageResponse = {
+  periods: { today: emptyUsage, month: emptyUsage, all: emptyUsage },
+  signals: { alerts: ["本日、rate limitによる拒否が発生しています。"] },
+  recentDaily: [{ date: "2026-09-04", processingSuccesses: 1, fileDeliveryStarts: 1, rejected: 1, failed: 0 }],
+  pricing: { estimatedAdditionalUsd: 0, pricingAsOf: "2026-09-04", components: [{ name: "Queues operations", measured: true, available: true, estimatedAdditionalUsd: 0 }, { name: "D1 rows read", measured: false, available: false, estimatedAdditionalUsd: null }], notes: ["正式な請求額はCloudflare Billingを確認してください。"] }
+};
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
@@ -43,8 +56,9 @@ const server = createServer(async (request, response) => {
     response.writeHead(200, { "Content-Type": "text/javascript" });
     return response.end("window.TRoomPasskeys={authenticate:async()=>({handoff:{handoffToken:'test'}})};");
   }
-  if (url.pathname === "/downloader/api/session") return json(response, 200, { authenticated: true });
+  if (url.pathname === "/downloader/api/session") return json(response, 200, { authenticated: true, isParent: !String(request.headers.cookie || "").includes("test-role=member") });
   if (url.pathname === "/downloader/api/jobs" && request.method === "GET") return json(response, 200, { jobs: [] });
+  if (url.pathname === "/downloader/api/admin/usage" && request.method === "GET") return json(response, 200, usageResponse);
   if (url.pathname === "/downloader/api/analyze" && request.method === "POST") {
     const body = await requestJson(request);
     analyzeBodies.push(body);
@@ -90,6 +104,13 @@ try {
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(target, { waitUntil: "networkidle" });
       await page.locator("#app-view").waitFor({ state: "visible" });
+      await page.locator("#usage-section").waitFor({ state: "visible" });
+      assert.match(await page.locator("#usage-summary").textContent(), /実ファイル取得/);
+      assert.match(await page.locator("#usage-summary").textContent(), /今月推定追加/);
+      assert.match(await page.locator("#usage-capacity").textContent(), /R2へ保存/);
+      assert.match(await page.locator("#usage-alert").textContent(), /rate limit/);
+      await page.locator("button[data-period='month']").click();
+      assert.equal(await page.locator("button[data-period='month']").getAttribute("aria-pressed"), "true");
       assert.equal(await page.locator("meta[name=robots]").getAttribute("content"), "noindex,nofollow,noarchive,nosnippet,noimageindex");
       await page.locator("#source-url").fill("https://media.example/clip.webm");
       await page.locator("#analyze-button").click();
@@ -113,6 +134,15 @@ try {
       assert.equal(errors.length, 0, `${name}: ${errors.join("; ")}`);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
       assert.equal(overflow, true, `${name}: mobile layout must not overflow horizontally`);
+      const member = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      try {
+        await member.context().addCookies([{ name: "test-role", value: "member", url: target }]);
+        await member.goto(`${target}?role=member`, { waitUntil: "networkidle" });
+        await member.locator("#app-view").waitFor({ state: "visible" });
+        assert.equal(await member.locator("#usage-section").isHidden(), true, `${name}: non-parent UI must stay hidden`);
+      } finally {
+        await member.close();
+      }
     } finally {
       await browser.close();
     }

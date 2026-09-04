@@ -109,6 +109,7 @@ class Handler(BaseHTTPRequestHandler):
                 body.get("route"), work_directory, max_bytes, timeout,
                 deadline=deadline, reserve_seconds=_phase_reserve(timeout, 90, 0.25),
             )
+            source_bytes = path.stat().st_size
             observed_work_bytes = max(observed_work_bytes, _directory_bytes(work_directory))
             _event("download_fetched", job_id)
             initial_scan = inspect_file(
@@ -134,13 +135,18 @@ class Handler(BaseHTTPRequestHandler):
                 _event("download_final_scan_passed", job_id)
             _event("download_upload_started", job_id)
             deadline.ensure(minimum_seconds=1)
-            _upload_to_r2(path, body, scan, deadline=deadline)
+            pre_upload_metrics = _job_metrics(started_at, usage_before, observed_work_bytes)
+            normalization = plan.kind.value if plan else "NOT_APPLICABLE"
+            _upload_to_r2(
+                path, body, scan, deadline=deadline, normalization=normalization,
+                source_bytes=source_bytes, metrics=pre_upload_metrics,
+            )
             metrics = _job_metrics(started_at, usage_before, observed_work_bytes)
             _event("download_completed", job_id, **metrics)
             return self._json(200, {
                 "uploaded": True, "actualSize": scan.size, "sha256": scan.sha256,
                 "mimeType": scan.mime_type, "scanMessage": "既知の脅威は検出されませんでした。",
-                "normalization": plan.kind.value if plan else "NOT_APPLICABLE",
+                "normalization": normalization,
                 "metrics": metrics,
             })
 
@@ -165,7 +171,15 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def _upload_to_r2(path: Path, body: dict, scan, deadline: JobDeadline | None = None) -> None:
+def _upload_to_r2(
+    path: Path,
+    body: dict,
+    scan,
+    deadline: JobDeadline | None = None,
+    normalization: str = "NOT_APPLICABLE",
+    source_bytes: int = 0,
+    metrics: dict | None = None,
+) -> None:
     grant = str(body.get("uploadGrant") or "")
     object_key = str(body.get("objectKey") or "")
     if not grant or not object_key.startswith("downloads/"):
@@ -174,6 +188,7 @@ def _upload_to_r2(path: Path, body: dict, scan, deadline: JobDeadline | None = N
     # Containers route virtual outbound hosts through that proxy to
     # DownloaderContainer.outboundByHost; a raw HTTPConnection bypasses it.
     with path.open("rb") as source:
+        usage = metrics or {}
         request = Request(
             "http://r2.tlain.internal/upload",
             data=_deadline_chunks(source, deadline),
@@ -184,6 +199,13 @@ def _upload_to_r2(path: Path, body: dict, scan, deadline: JobDeadline | None = N
                 "Content-Length": str(scan.size),
                 "X-Content-SHA256": scan.sha256,
                 "X-Filename": quote(scan.filename, safe=""),
+                "X-Normalization": normalization,
+                "X-Source-Bytes": str(max(0, int(source_bytes))),
+                "X-Container-Wall-Ms": str(max(0, int(usage.get("wallMs", 0)))),
+                "X-Container-CPU-User-Ms": str(max(0, int(usage.get("cpuUserMs", 0)))),
+                "X-Container-CPU-System-Ms": str(max(0, int(usage.get("cpuSystemMs", 0)))),
+                "X-Container-Peak-RSS-Bytes": str(max(0, int(usage.get("containerPeakRssBytes", 0)))),
+                "X-Container-Work-Bytes": str(max(0, int(usage.get("observedWorkBytes", 0)))),
             },
         )
         try:
