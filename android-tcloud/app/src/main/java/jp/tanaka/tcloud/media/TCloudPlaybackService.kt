@@ -75,6 +75,8 @@ class TCloudPlaybackService : Service(), Player.Listener {
         manager.stateChanged = null
         mediaSession.isActive = false
         mediaSession.release()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        notificationManager.cancel(NOTIFICATION_ID)
         super.onDestroy()
     }
 

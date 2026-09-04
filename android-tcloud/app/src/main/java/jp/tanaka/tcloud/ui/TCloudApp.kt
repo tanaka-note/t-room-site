@@ -284,9 +284,11 @@ fun TCloudApp(
     DisposableEffect(viewModel, playbackManager) {
         playbackManager.playPrevious = { automatic -> viewModel.navigateMedia(-1, automatic) }
         playbackManager.playNext = { automatic -> viewModel.navigateMedia(1, automatic) }
+        playbackManager.playbackFailed = viewModel::handleAudioPlaybackFailure
         onDispose {
             playbackManager.playPrevious = null
             playbackManager.playNext = null
+            playbackManager.playbackFailed = null
         }
     }
     val powerManager = remember { context.getSystemService(PowerManager::class.java) }

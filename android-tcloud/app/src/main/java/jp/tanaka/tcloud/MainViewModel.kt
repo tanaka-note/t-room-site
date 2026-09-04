@@ -25,6 +25,7 @@ import jp.tanaka.tcloud.transfer.FolderTransferFailureNotice
 import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
 import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.media.TCloudDataSource
+import jp.tanaka.tcloud.media.AudioPlaybackFailure
 import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import jp.tanaka.tcloud.library.MediaLibraryManager
 import jp.tanaka.tcloud.library.MediaLibraryState
@@ -100,6 +101,23 @@ data class MainUiState(
 
 internal fun canDeleteSelection(session: Session?, page: FolderPage?): Boolean =
     session?.isAdmin == true || page?.canTrashContents == true
+
+internal fun MainUiState.afterAudioPlaybackFailure(failure: AudioPlaybackFailure): MainUiState {
+    val libraryAudioFailed = selectedLibraryMedia
+        ?.let(::libraryMediaDestination) == LibraryMediaDestination.AUDIO_NOW_PLAYING
+    val storageAudioFailed = selectedFile?.let { file ->
+        file.mediaKind == "audio" && (failure.fileId == null || failure.fileId == file.id)
+    } == true
+    return copy(
+        selectedLibraryMedia = if (libraryAudioFailed) null else selectedLibraryMedia,
+        selectedFile = if (storageAudioFailed) null else selectedFile,
+        selectedFileStartsAtBeginning = if (storageAudioFailed) false else selectedFileStartsAtBeginning,
+        imageBitmap = if (storageAudioFailed) null else imageBitmap,
+        imageLoading = if (storageAudioFailed) false else imageLoading,
+        imageError = if (storageAudioFailed) null else imageError,
+        error = failure.userMessage,
+    )
+}
 
 private fun MainUiState.activeFiles(): List<CloudFile> =
     if (searchQuery.isNotBlank()) searchResults.files else page?.files.orEmpty()
@@ -313,6 +331,10 @@ class MainViewModel(
                 },
             )
         }.onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
+    }
+
+    internal fun handleAudioPlaybackFailure(failure: AudioPlaybackFailure) {
+        mutableState.update { it.afterAudioPlaybackFailure(failure) }
     }
 
     fun closeLibraryMedia(positionMs: Long = 0L, durationMs: Long = 0L) {

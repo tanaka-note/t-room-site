@@ -7,6 +7,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
@@ -27,6 +28,39 @@ enum class PlaybackMode {
     OFF,
     REPEAT_ALL,
     REPEAT_ONE,
+}
+
+data class AudioPlaybackFailure(
+    val stableId: String?,
+    val fileId: Long?,
+    val userMessage: String,
+    val errorCodeName: String,
+)
+
+internal fun audioPlaybackFailure(
+    item: PlayableMediaItem?,
+    stableId: String?,
+    fileId: Long?,
+    title: String,
+    errorCodeName: String,
+): AudioPlaybackFailure {
+    val displayTitle = item?.title?.ifBlank { null } ?: title.ifBlank { "音楽" }
+    val source = item?.source ?: if (fileId != null) MediaSourceType.CLOUD else null
+    val message = when (source) {
+        MediaSourceType.LOCAL -> "「$displayTitle」を再生できませんでした。端末のファイルアクセスを確認してください。"
+        MediaSourceType.CLOUD -> "「$displayTitle」を再生できませんでした。通信状態を確認して、もう一度お試しください。"
+        else -> "「$displayTitle」を再生できませんでした。ファイルを確認して、もう一度お試しください。"
+    }
+    return AudioPlaybackFailure(stableId, fileId, message, errorCodeName)
+}
+
+internal fun completeAsyncPlaybackFailure(
+    failure: AudioPlaybackFailure,
+    stopPlayback: () -> Unit,
+    reportFailure: (AudioPlaybackFailure) -> Unit,
+) {
+    stopPlayback()
+    reportFailure(failure)
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -70,6 +104,22 @@ class TCloudPlaybackManager(
                     mediaMetadata.trackNumber,
                 )
             }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (currentStableId == null && currentFileId == null) return
+                val failure = audioPlaybackFailure(
+                    item = currentQueueItem.value,
+                    stableId = currentStableId,
+                    fileId = currentFileId,
+                    title = currentTitle,
+                    errorCodeName = error.errorCodeName,
+                )
+                completeAsyncPlaybackFailure(
+                    failure = failure,
+                    stopPlayback = ::stop,
+                    reportFailure = { playbackFailed?.invoke(it) },
+                )
+            }
         })
     }
 
@@ -86,6 +136,7 @@ class TCloudPlaybackManager(
     var playNext: ((Boolean) -> Unit)? = null
     var playbackRecorded: ((PlayableMediaItem, Long, Long) -> Unit)? = null
     var metadataResolved: ((PlayableMediaItem, String?, String?, String?, Int?) -> Unit)? = null
+    var playbackFailed: ((AudioPlaybackFailure) -> Unit)? = null
 
     private var currentFactory: DataSource.Factory? = null
     private var queue: List<PlayableMediaItem> = emptyList()

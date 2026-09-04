@@ -54,6 +54,7 @@ class MediaLibraryContractTest {
         assertTrue(viewModel.contains("playbackManager.playQueue("))
         assertTrue(app.contains("LibraryAudioNowPlayingScreen("))
         assertTrue(app.contains("playbackManager = playbackManager"))
+        assertTrue(app.contains("playbackManager.playbackFailed = viewModel::handleAudioPlaybackFailure"))
         assertTrue(audioScreen.contains("AudioQueueControls(playbackManager"))
         assertTrue(playerUi.contains("val player = manager.player"))
         assertFalse(audioScreen.contains("ExoPlayer.Builder"))

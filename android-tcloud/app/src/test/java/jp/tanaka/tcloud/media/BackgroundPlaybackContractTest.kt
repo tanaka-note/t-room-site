@@ -72,6 +72,22 @@ class BackgroundPlaybackContractTest {
         assertTrue(manager.contains("playbackStatusText(mode)"))
     }
 
+    @Test
+    fun asynchronousPlayerErrorsUseTheSameManagerCleanupPath() {
+        val manager = projectFile(
+            "app/src/main/java/jp/tanaka/tcloud/media/TCloudPlaybackManager.kt",
+        ).readText()
+        val service = projectFile(
+            "app/src/main/java/jp/tanaka/tcloud/media/TCloudPlaybackService.kt",
+        ).readText()
+
+        assertTrue(manager.contains("override fun onPlayerError(error: PlaybackException)"))
+        assertTrue(manager.contains("stopPlayback = ::stop"))
+        assertTrue(manager.contains("playbackFailed?.invoke(it)"))
+        assertTrue(service.contains("stopForeground(STOP_FOREGROUND_REMOVE)"))
+        assertTrue(service.contains("notificationManager.cancel(NOTIFICATION_ID)"))
+    }
+
     private fun projectFile(relativePath: String): File {
         var current = File(checkNotNull(System.getProperty("user.dir"))).canonicalFile
         repeat(6) {
