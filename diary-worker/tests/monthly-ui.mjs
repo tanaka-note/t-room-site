@@ -25,6 +25,8 @@ assert.match(script, /elements\.listTitle\.textContent = state\.month === curren
 assert.match(script, /return year === currentYear \? `\$\{month\}月の投稿` : `\$\{year\}年\$\{month\}月の投稿`/);
 assert.match(script, /\? "記事なし"/);
 assert.match(script, /function changeBrowseMonth\(offset\)/);
+assert.match(script, /async function handleArchiveClick\(event\)[\s\S]*?const alreadyShowingMonth = isDiaryHomeRoute\(\)[\s\S]*?state\.month === targetMonth[\s\S]*?!elements\.loadMore\.disabled;[\s\S]*?else await loadEntries\(true\);[\s\S]*?await scrollToMonthlyHeadingAfterRender\(targetMonth\);/);
+assert.match(script, /function scrollToMonthlyHeadingAfterRender\(targetMonth\)[\s\S]*?window\.requestAnimationFrame[\s\S]*?window\.requestAnimationFrame[\s\S]*?elements\.listTitle\.getBoundingClientRect\(\)\.top[\s\S]*?window\.scrollTo\(/);
 assert.match(script, /function returnToCurrentMonth\(\)[\s\S]*?state\.month = currentJapanMonth\(\);[\s\S]*?loadEntries\(true\)/);
 assert.match(script, /elements\.currentMonth\.disabled = state\.month === currentJapanMonth\(\)/);
 assert.doesNotMatch(script, /nextMonth > currentJapanMonth\(\)/);

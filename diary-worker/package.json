@@ -14,7 +14,7 @@
     "test:drafts": "node tests/drafts.e2e.mjs && node tests/drafts-ui.mjs",
     "test:initial-password": "node tests/initial-password-ui.mjs",
     "test:search": "node tests/search-ui.mjs",
-    "test:monthly": "node tests/monthly-ui.mjs",
+    "test:monthly": "node tests/monthly-ui.mjs && node tests/browser/monthly-navigation.mjs",
     "test:photos": "node tests/photos.e2e.mjs && node tests/photos-ui.mjs && node tests/browser/photo-exif-orientation.mjs",
     "test:photo-exif": "node tests/browser/photo-exif-orientation.mjs",
     "test:backup": "node tests/backup.mjs",
