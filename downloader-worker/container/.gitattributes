@@ -1,2 +1,7 @@
-clamd.conf text eol=lf
-entrypoint.sh text eol=lf
+# Linux container inputs must remain byte-for-byte reproducible on Windows.
+Dockerfile text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.conf text eol=lf
+*.yar text eol=lf
+*.md text eol=lf

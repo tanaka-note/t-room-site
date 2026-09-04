@@ -14,6 +14,7 @@ const clamd = await readFile(new URL("../container/clamd.conf", import.meta.url)
 const server = await readFile(new URL("../container/server.py", import.meta.url), "utf8");
 const pipeline = await readFile(new URL("../container/media_pipeline.py", import.meta.url), "utf8");
 const entrypoint = await readFile(new URL("../container/entrypoint.sh", import.meta.url), "utf8");
+const containerAttributes = await readFile(new URL("../container/.gitattributes", import.meta.url), "utf8");
 const yaraRules = await readFile(new URL("../container/yara-rules/sources/tlain_downloader.yar", import.meta.url), "utf8");
 
 test("二段階解析と明示的な権利確認を分離する", () => {
@@ -210,6 +211,11 @@ test("HTTPS interception CAを非root起動時に信頼する", () => {
   assert.match(entrypoint, /base-ca-certificates\.crt/);
   assert.match(entrypoint, /SSL_CERT_FILE/);
   assert.match(entrypoint, /REQUESTS_CA_BUNDLE/);
+});
+
+test("Linux ContainerのentrypointはWindows checkoutでもLFを維持する", () => {
+  assert.equal(entrypoint.includes("\r"), false, "CRLF shebang makes the Linux entrypoint unexecutable");
+  assert.match(containerAttributes, /^\*\.sh text eol=lf$/m);
 });
 
 test("外部ツールはshellを介さず固定argvと制限protocolで実行する", async () => {
