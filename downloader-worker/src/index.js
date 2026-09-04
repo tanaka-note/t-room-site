@@ -40,7 +40,10 @@ const PRIVATE_DESTINATIONS = Object.freeze([
   "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
   "::/128", "::1/128", "::ffff:0:0/96", "fc00::/7", "fe80::/10", "ff00::/8", "2001:db8::/32"
 ]);
-const CONTAINER_HEALTH_TIMEOUT_MS = 15_000;
+// A cold Container must start ClamAV before /health can become ready. Keep this
+// below the request processing windows, but allow enough time for a real cold
+// start instead of spending Queue retries before any media work begins.
+const CONTAINER_HEALTH_TIMEOUT_MS = 90_000;
 
 export class DownloaderContainer extends Container {
   defaultPort = 8080;

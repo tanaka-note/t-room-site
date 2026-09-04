@@ -147,6 +147,10 @@ test("Container処理前にhealth本文とHTTP statusを明示確認する", () 
   assert.match(worker, /health\.clamav\?\.healthy === true/);
   assert.match(worker, /health\.clamav\?\.daemonReady === true/);
   assert.match(worker, /throw new Error\("container_unhealthy"\)/);
+  const timeout = worker.match(/const CONTAINER_HEALTH_TIMEOUT_MS = ([\d_]+);/);
+  assert.ok(timeout, "Container health timeout must be explicit");
+  const timeoutMs = Number(timeout[1].replaceAll("_", ""));
+  assert.ok(timeoutMs >= 60_000 && timeoutMs <= 120_000, "health timeout must allow a ClamAV cold start without becoming unbounded");
 });
 
 test("全処理は絶対deadlineを共有しPASS_THROUGHだけ再scanしない", () => {
