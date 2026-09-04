@@ -31,7 +31,7 @@ class DoubleTapSeekControlsHoldTest {
 
     @Test
     fun playerViewUsesTheHoldWithoutChangingTheSeekDistance() {
-        val source = File("src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt").readText()
+        val source = File("src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt").readText().replace("\r\n", "\n")
 
         assertTrue(source.contains("doubleTapSeekControlsHold.begin()"))
         assertTrue(source.indexOf("doubleTapSeekControlsHold.begin()") < source.indexOf("player.seekTo((player.currentPosition + offset)"))

@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -66,8 +68,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Tab
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -218,19 +221,21 @@ internal fun MediaLibraryScreen(
                     .fillMaxSize()
                     .padding(horizontal = if (maxWidth < 600.dp) 12.dp else TCloudDimens.ScreenPadding),
             ) {
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 ) {
-                    PrimaryTabRow(
-                        selectedTabIndex = if (mediaType == LibraryMediaType.AUDIO) 0 else 1,
-                        containerColor = Color.Transparent,
-                        divider = {},
-                    ) {
-                        Tab(mediaType == LibraryMediaType.AUDIO, { mediaType = LibraryMediaType.AUDIO }, text = { Text("音楽") })
-                        Tab(mediaType == LibraryMediaType.VIDEO, { mediaType = LibraryMediaType.VIDEO }, text = { Text("動画") })
-                    }
+                    SegmentedButton(
+                        selected = mediaType == LibraryMediaType.AUDIO,
+                        onClick = { mediaType = LibraryMediaType.AUDIO },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        label = { Text("音楽") },
+                    )
+                    SegmentedButton(
+                        selected = mediaType == LibraryMediaType.VIDEO,
+                        onClick = { mediaType = LibraryMediaType.VIDEO },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        label = { Text("動画") },
+                    )
                 }
                 TCloudSearchField(
                     value = query,
@@ -380,7 +385,11 @@ private fun SearchMediaItemsList(
     youtubeQueryReady: Boolean,
     youtubeSearchFailed: Boolean,
 ) {
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         groups.forEach { group ->
             item(key = "search-header:${group.label}") {
                 Text(
@@ -478,8 +487,9 @@ private fun MediaItemRow(
         modifier = modifier.fillMaxWidth().animateContentSize(
             tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
         ),
-        color = Color.Transparent,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(TCloudDimens.ItemRadius),
+        tonalElevation = TCloudElevation.Resting,
     ) {
         Row(
             Modifier.fillMaxWidth().clickable { onOpen(item) }.padding(horizontal = 10.dp, vertical = 10.dp),
@@ -597,7 +607,7 @@ private fun MediaArtwork(item: PlayableMediaItem, loader: suspend (PlayableMedia
         value = loader(item)
     }
     Box(
-        Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+        Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.secondaryContainer),
         contentAlignment = Alignment.Center,
     ) {
         if (bitmap != null) {
@@ -627,8 +637,9 @@ private fun AudioQueueControls(manager: TCloudPlaybackManager) {
     if (manager.currentStableId == null) return
     Surface(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shadowElevation = TCloudElevation.Raised,
     ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Text(manager.currentTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
@@ -702,6 +713,7 @@ internal fun LibraryVideoPlayerScreen(
     item: PlayableMediaItem,
     playbackManager: TCloudPlaybackManager,
     pictureInPicture: Boolean,
+    onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
     onClose: (Long, Long) -> Unit,
 ) {
     val context = LocalContext.current
@@ -718,7 +730,7 @@ internal fun LibraryVideoPlayerScreen(
     }
     DisposableEffect(player) {
         onDispose {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             onClose(player.currentPosition, player.duration)
             player.release()
             (factory as? AutoCloseable)?.close()
@@ -727,7 +739,7 @@ internal fun LibraryVideoPlayerScreen(
     BackHandler {
         if (fullscreen) {
             fullscreen = false
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         } else onClose(player.currentPosition, player.duration)
     }
     Column(Modifier.fillMaxSize()) {
@@ -735,18 +747,78 @@ internal fun LibraryVideoPlayerScreen(
             title = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             navigationIcon = { IconButton(onClick = { onClose(player.currentPosition, player.duration) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
             actions = {
-                IconButton(onClick = {
-                    fullscreen = true
-                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                }) { Icon(Icons.Default.Fullscreen, "全画面") }
-                IconButton(onClick = { activity?.enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) }) { Icon(Icons.Default.PictureInPicture, "PiP") }
+                if (item.mediaType == LibraryMediaType.VIDEO) {
+                    IconButton(onClick = {
+                        fullscreen = true
+                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    }) { Icon(Icons.Default.Fullscreen, "全画面") }
+                    IconButton(onClick = { activity?.enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) }) { Icon(Icons.Default.PictureInPicture, "PiP") }
+                }
             },
         )
-        AndroidView(
-            factory = { PlayerView(it).apply { this.player = player; useController = true } },
-            update = { it.player = player },
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (item.mediaType == LibraryMediaType.AUDIO && !fullscreen) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                MediaHeroArtwork(item, onLoadArtwork)
+                Spacer(Modifier.height(20.dp))
+                Text(item.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOf(item.artist, item.album).filter(String::isNotBlank).joinToString(" ・ "),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                AndroidView(
+                    factory = { PlayerView(it).apply { this.player = player; useController = true } },
+                    update = { it.player = player },
+                    modifier = Modifier.fillMaxWidth().height(176.dp),
+                )
+            }
+        } else {
+            AndroidView(
+                factory = { PlayerView(it).apply { this.player = player; useController = true } },
+                update = { it.player = player },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaHeroArtwork(
+    item: PlayableMediaItem,
+    loader: suspend (PlayableMediaItem) -> Bitmap?,
+) {
+    val bitmap by produceState<Bitmap?>(initialValue = null, key1 = item.stableId, key2 = item.artworkUri) {
+        value = loader(item)
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth().widthIn(max = 280.dp).aspectRatio(1f),
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shadowElevation = TCloudElevation.Floating,
+    ) {
+        if (bitmap != null) {
+            Image(
+                checkNotNull(bitmap).asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.LibraryMusic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(88.dp),
+                )
+            }
+        }
     }
 }
 

@@ -1,8 +1,15 @@
 package jp.tanaka.tcloud.ui
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +26,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -28,20 +36,28 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 
+/** Stable brand colors. Surfaces and interactive colors come from MaterialTheme. */
 internal object TCloudColors {
     val Primary = Color(0xFF16756D)
     val PrimaryStrong = Color(0xFF0F5B55)
@@ -59,28 +75,56 @@ internal object TCloudColors {
     val Destructive = Color(0xFFB3261E)
 }
 
-internal object TCloudDimens {
-    val ScreenPadding = 20.dp
-    val CompactScreenPadding = 16.dp
-    val ContentMaxWidth = 920.dp
-    val ItemVerticalPadding = 12.dp
-    val ItemHorizontalPadding = 12.dp
-    val ItemSpacing = 8.dp
-    val IconContainer = 48.dp
-    val ThumbnailRadius = 14.dp
-    val ItemRadius = 18.dp
-    val SearchRadius = 28.dp
-    val DialogRadius = 28.dp
+internal object TCloudSpacing {
+    val Xs = 4.dp
+    val Sm = 8.dp
+    val Md = 12.dp
+    val Lg = 16.dp
+    val Xl = 20.dp
+    val Xxl = 24.dp
+    val Section = 32.dp
 }
 
+internal object TCloudDimens {
+    val ScreenPadding = TCloudSpacing.Xl
+    val CompactScreenPadding = TCloudSpacing.Lg
+    val ContentMaxWidth = 1040.dp
+    val DialogMaxWidth = 560.dp
+    val ItemVerticalPadding = TCloudSpacing.Md
+    val ItemHorizontalPadding = TCloudSpacing.Md
+    val ItemSpacing = TCloudSpacing.Sm
+    val IconContainer = 48.dp
+    val MinTouchTarget = 48.dp
+    val ThumbnailRadius = 16.dp
+    val ItemRadius = 20.dp
+    val SearchRadius = 28.dp
+    val DialogRadius = 28.dp
+    val NavigationRailWidth = 88.dp
+}
+
+internal object TCloudElevation {
+    val Resting = 0.dp
+    val Raised = 2.dp
+    val Floating = 6.dp
+}
+
+/** App-owned stable motion tokens; no alpha Material motion API is required. */
 internal object TCloudMotion {
     const val Quick = 160
     const val Standard = 220
     const val Emphasized = 280
     val NaturalEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+    val SpatialSpring = spring<Float>(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMediumLow,
+    )
+    val PressSpring = spring<Float>(
+        dampingRatio = Spring.DampingRatioMediumBouncy,
+        stiffness = Spring.StiffnessMedium,
+    )
 }
 
-private val TCloudColorScheme = lightColorScheme(
+private val TCloudLightScheme = lightColorScheme(
     primary = TCloudColors.Primary,
     onPrimary = Color.White,
     primaryContainer = Color(0xFFC7EAE5),
@@ -98,26 +142,63 @@ private val TCloudColorScheme = lightColorScheme(
     error = TCloudColors.Destructive,
 )
 
+private val TCloudDarkScheme = darkColorScheme(
+    primary = Color(0xFF8FD4CB),
+    onPrimary = Color(0xFF003731),
+    primaryContainer = Color(0xFF075049),
+    onPrimaryContainer = Color(0xFFA9F0E6),
+    secondary = Color(0xFFB1CCC6),
+    secondaryContainer = Color(0xFF334B47),
+    background = Color(0xFF0F1514),
+    onBackground = Color(0xFFDDE5E2),
+    surface = Color(0xFF121918),
+    onSurface = Color(0xFFDDE5E2),
+    surfaceVariant = Color(0xFF26302E),
+    onSurfaceVariant = Color(0xFFBAC8C4),
+    outline = Color(0xFF84938F),
+    outlineVariant = Color(0xFF3E4A47),
+    error = Color(0xFFFFB4AB),
+)
+
 private val TCloudShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
     medium = RoundedCornerShape(TCloudDimens.ItemRadius),
     large = RoundedCornerShape(TCloudDimens.DialogRadius),
-    extraLarge = RoundedCornerShape(32.dp),
+    extraLarge = RoundedCornerShape(36.dp),
 )
 
 private val TCloudTypography = Typography().let { base ->
     base.copy(
+        headlineMedium = base.headlineMedium.copy(fontWeight = FontWeight.Bold),
         headlineSmall = base.headlineSmall.copy(fontWeight = FontWeight.Bold),
         titleLarge = base.titleLarge.copy(fontWeight = FontWeight.Bold),
         titleMedium = base.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+        labelLarge = base.labelLarge.copy(fontWeight = FontWeight.SemiBold),
     )
 }
 
 @Composable
-internal fun TCloudTheme(content: @Composable () -> Unit) {
+private fun tCloudColorScheme(darkTheme: Boolean, dynamicColor: Boolean): ColorScheme {
+    val context = LocalContext.current
+    return when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && darkTheme ->
+            dynamicDarkColorScheme(context)
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            dynamicLightColorScheme(context)
+        darkTheme -> TCloudDarkScheme
+        else -> TCloudLightScheme
+    }
+}
+
+@Composable
+internal fun TCloudTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = true,
+    content: @Composable () -> Unit,
+) {
     MaterialTheme(
-        colorScheme = TCloudColorScheme,
+        colorScheme = tCloudColorScheme(darkTheme, dynamicColor),
         shapes = TCloudShapes,
         typography = TCloudTypography,
         content = content,
@@ -131,7 +212,7 @@ internal fun TCloudEntrance(
     content: @Composable () -> Unit,
 ) {
     val progress = remember { Animatable(0f) }
-    val shift = with(LocalDensity.current) { 22.dp.toPx() }
+    val shift = with(LocalDensity.current) { 18.dp.toPx() }
     LaunchedEffect(Unit) {
         progress.animateTo(
             targetValue = 1f,
@@ -143,10 +224,26 @@ internal fun TCloudEntrance(
             .fillMaxSize()
             .graphicsLayer {
                 translationX = direction.coerceIn(-1, 1) * shift * (1f - progress.value)
-                alpha = 0.82f + (0.18f * progress.value)
+                alpha = 0.88f + (0.12f * progress.value)
             },
     ) {
         content()
+    }
+}
+
+@Composable
+internal fun Modifier.tCloudPressScale(
+    interactionSource: MutableInteractionSource,
+): Modifier {
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.975f else 1f,
+        animationSpec = TCloudMotion.PressSpring,
+        label = "TCloud press scale",
+    )
+    return graphicsLayer {
+        scaleX = scale
+        scaleY = scale
     }
 }
 
@@ -160,7 +257,7 @@ internal fun TCloudSearchField(
     TextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(TCloudDimens.SearchRadius)),
         singleLine = true,
         placeholder = { Text(placeholder) },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
@@ -173,9 +270,9 @@ internal fun TCloudSearchField(
         },
         shape = RoundedCornerShape(TCloudDimens.SearchRadius),
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
             disabledIndicatorColor = Color.Transparent,
@@ -227,12 +324,12 @@ internal fun TCloudEmptyState(
         ) {
             Surface(
                 shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = MaterialTheme.colorScheme.secondaryContainer,
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.padding(18.dp).size(34.dp),
                 )
             }
@@ -242,6 +339,7 @@ internal fun TCloudEmptyState(
                 description,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
             )
             if (actionLabel != null && onAction != null) {
                 Button(onClick = onAction, modifier = Modifier.padding(top = 8.dp)) {
@@ -252,17 +350,20 @@ internal fun TCloudEmptyState(
     }
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFFF6F9F9)
+@Preview(name = "Light", showBackground = true)
+@Preview(name = "Dark", showBackground = true, uiMode = android.content.res.Configuration.UI_MODE_NIGHT_YES)
 @Composable
 private fun TCloudDesignPreview() {
-    TCloudTheme {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            TCloudSearchField("", {}, "ファイルを検索")
-            TCloudEmptyState(
-                icon = Icons.Default.FolderOpen,
-                title = "フォルダは空です",
-                description = "アップロードまたは新しいフォルダを作成できます。",
-            )
+    TCloudTheme(dynamicColor = false) {
+        Surface(color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                TCloudSearchField("", {}, "ファイルを検索")
+                TCloudEmptyState(
+                    icon = Icons.Default.FolderOpen,
+                    title = "フォルダは空です",
+                    description = "アップロードまたは新しいフォルダを作成できます。",
+                )
+            }
         }
     }
 }

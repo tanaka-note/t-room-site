@@ -36,7 +36,7 @@ class PlaybackModeTest {
         val source = File("src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt").readText()
 
         assertTrue(source.contains("Icons.Default.RepeatOne else Icons.Default.Repeat"))
-        assertTrue(source.contains("tint = if (playbackMode == PlaybackMode.OFF) TCloudMuted else TCloudBlue"))
+        assertTrue(source.contains("tint = if (playbackMode == PlaybackMode.OFF) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary"))
         assertFalse(source.contains("PlaybackMode.REPEAT_ALL -> Icons.AutoMirrored.Filled.PlaylistPlay"))
     }
 

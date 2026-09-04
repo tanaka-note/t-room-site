@@ -24,6 +24,7 @@ import android.view.MotionEvent
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -106,6 +107,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -117,13 +120,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,6 +140,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
@@ -145,6 +152,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_EXPANDED_LOWER_BOUND
+import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_MEDIUM_LOWER_BOUND
 import jp.tanaka.tcloud.MainViewModel
 import jp.tanaka.tcloud.R
 import jp.tanaka.tcloud.TCloudApplication
@@ -185,21 +196,47 @@ import jp.tanaka.tcloud.transfer.TransferDirection
 import jp.tanaka.tcloud.transfer.TransferStatus
 import jp.tanaka.tcloud.transfer.FolderTransferFailureNotice
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collect
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 
-private val TCloudBlue = TCloudColors.Primary
-private val TCloudBlueDark = TCloudColors.PrimaryStrong
-private val TCloudBackground = TCloudColors.AppBackground
-private val TCloudLine = Color(0xFFDCE2E7)
-private val TCloudMuted = TCloudColors.MutedText
-private val TCloudSelection = TCloudColors.Selection
-
 internal fun playerEntryVisible(currentFolderId: Long?, selectionMode: Boolean): Boolean =
     currentFolderId == null && !selectionMode
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+private data class TCloudSharedElementScopes(
+    val transitionScope: SharedTransitionScope,
+    val visibilityScope: AnimatedVisibilityScope,
+)
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+private val LocalTCloudSharedElementScopes = staticCompositionLocalOf<TCloudSharedElementScopes?> { null }
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun Modifier.tCloudSharedImage(fileId: Long, enabled: Boolean = true): Modifier {
+    val scopes = LocalTCloudSharedElementScopes.current
+    if (!enabled || scopes == null) return this
+    val base = this
+    return with(scopes.transitionScope) {
+        base.sharedElement(
+            sharedContentState = rememberSharedContentState(key = "image-$fileId"),
+            animatedVisibilityScope = scopes.visibilityScope,
+        )
+    }
+}
 
 private data class PendingCameraBackupSettings(
     val enabled: Boolean,
@@ -211,6 +248,7 @@ private data class PendingCameraBackupSettings(
     val sourceFolderIds: Set<String>,
 )
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun TCloudApp(
     viewModel: MainViewModel,
@@ -529,8 +567,39 @@ fun TCloudApp(
     }
 
     TCloudTheme {
-        Surface(modifier = Modifier.fillMaxSize(), color = TCloudBackground) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            SharedTransitionLayout {
+                val sharedTransitionScope = this
+                AnimatedContent(
+                    targetState = state.selectedFile?.takeIf { it.mediaKind == "image" },
+                    transitionSpec = {
+                        fadeIn(tween(TCloudMotion.Standard, easing = TCloudMotion.NaturalEasing)) togetherWith
+                            fadeOut(tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing))
+                    },
+                    label = "image-viewer-container",
+                ) { imageTarget ->
+                    CompositionLocalProvider(
+                        LocalTCloudSharedElementScopes provides TCloudSharedElementScopes(
+                            transitionScope = sharedTransitionScope,
+                            visibilityScope = this,
+                        ),
+                    ) {
             when {
+                imageTarget != null -> ImageViewerScreen(
+                    file = imageTarget,
+                    bitmap = state.imageBitmap,
+                    loading = state.imageLoading,
+                    error = state.imageError,
+                    canGoPrevious = state.page?.files.orEmpty()
+                        .filter { it.metadataDecrypted && it.mediaKind == "image" }
+                        .indexOfFirst { it.id == imageTarget.id } > 0,
+                    canGoNext = state.page?.files.orEmpty()
+                        .filter { it.metadataDecrypted && it.mediaKind == "image" }
+                        .let { images -> images.indexOfFirst { it.id == imageTarget.id } in 0 until images.lastIndex },
+                    onPrevious = { viewModel.navigateImage(-1) },
+                    onNext = { viewModel.navigateImage(1) },
+                    onClose = viewModel::closeFile,
+                )
                 state.restoring -> LoadingScreen("ログイン状態を確認しています")
                 state.session == null -> LoginScreen(
                     busy = state.busy,
@@ -546,6 +615,7 @@ fun TCloudApp(
                     item = checkNotNull(state.selectedLibraryMedia),
                     playbackManager = playbackManager,
                     pictureInPicture = pictureInPicture,
+                    onLoadArtwork = viewModel::loadMediaArtwork,
                     onClose = viewModel::closeLibraryMedia,
                 )
                 state.showingPlayerLibrary -> TCloudEntrance(direction = 1) {
@@ -566,21 +636,6 @@ fun TCloudApp(
                         onSetTags = viewModel::setMediaTags,
                     )
                 }
-                state.selectedFile?.mediaKind == "image" -> ImageViewerScreen(
-                    file = checkNotNull(state.selectedFile),
-                    bitmap = state.imageBitmap,
-                    loading = state.imageLoading,
-                    error = state.imageError,
-                    canGoPrevious = state.page?.files.orEmpty()
-                        .filter { it.metadataDecrypted && it.mediaKind == "image" }
-                        .indexOfFirst { it.id == state.selectedFile?.id } > 0,
-                    canGoNext = state.page?.files.orEmpty()
-                        .filter { it.metadataDecrypted && it.mediaKind == "image" }
-                        .let { images -> images.indexOfFirst { it.id == state.selectedFile?.id } in 0 until images.lastIndex },
-                    onPrevious = { viewModel.navigateImage(-1) },
-                    onNext = { viewModel.navigateImage(1) },
-                    onClose = viewModel::closeFile,
-                )
                 state.selectedFile != null && state.selectedFile?.mediaKind in setOf("video", "audio") -> {
                     val selectedMedia = checkNotNull(state.selectedFile)
                     val playbackFactory = remember(selectedMedia.id) {
@@ -683,6 +738,9 @@ fun TCloudApp(
                     onCancelTransfer = viewModel::cancelTransfer,
                     onDismissTransferFailure = viewModel::dismissTransferFailureNotice,
                 ) }
+            }
+                    }
+                }
             }
 
             state.pendingUnlock?.let { folder ->
@@ -826,15 +884,36 @@ private fun ImageViewerScreen(
     onNext: () -> Unit,
     onClose: () -> Unit,
 ) {
-    var scale by remember(file.id) { mutableStateOf(1f) }
+    var scale by remember(file.id) { mutableFloatStateOf(1f) }
     var offset by remember(file.id) { mutableStateOf(Offset.Zero) }
-    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+    var displayedBitmap by remember(file.id) { mutableStateOf(bitmap) }
+    var predictiveBackProgress by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(bitmap) {
+        if (bitmap != null) displayedBitmap = bitmap
+    }
+    val transformState = rememberTransformableState { _, zoomChange, panChange, _ ->
         val nextScale = (scale * zoomChange).coerceIn(1f, 6f)
         scale = nextScale
         offset = if (nextScale == 1f) Offset.Zero else offset + panChange
     }
+    PredictiveBackHandler { progress ->
+        try {
+            progress.collect { predictiveBackProgress = it.progress }
+            onClose()
+        } catch (_: CancellationException) {
+            // Keep the viewer open when the gesture is cancelled.
+        } finally {
+            predictiveBackProgress = 0f
+        }
+    }
 
     Scaffold(
+        modifier = Modifier.graphicsLayer {
+            val predictiveScale = 1f - (predictiveBackProgress * 0.04f)
+            scaleX = predictiveScale
+            scaleY = predictiveScale
+            alpha = 1f - (predictiveBackProgress * 0.12f)
+        },
         containerColor = Color.Black,
         topBar = {
             TopAppBar(
@@ -853,11 +932,12 @@ private fun ImageViewerScreen(
         ) {
             when {
                 loading -> CircularProgressIndicator(color = Color.White)
-                bitmap != null -> Image(
-                    bitmap = bitmap.asImageBitmap(),
+                displayedBitmap != null -> Image(
+                    bitmap = checkNotNull(displayedBitmap).asImageBitmap(),
                     contentDescription = file.name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
+                        .tCloudSharedImage(file.id)
                         .fillMaxSize()
                         .graphicsLayer(
                             scaleX = scale,
@@ -903,7 +983,7 @@ private fun ImageViewerScreen(
 private fun LoadingScreen(message: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(color = TCloudBlue)
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(16.dp))
             Text(message)
         }
@@ -921,7 +1001,7 @@ private fun LoginScreen(
     var passwordVisible by remember { mutableStateOf(false) }
 
     Scaffold(
-        containerColor = TCloudBackground,
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(
@@ -929,11 +1009,11 @@ private fun LoginScreen(
             contentAlignment = Alignment.Center,
         ) {
             Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                color = Color.White,
-                shadowElevation = 10.dp,
-                tonalElevation = 0.dp,
+                modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp),
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shadowElevation = TCloudElevation.Raised,
+                tonalElevation = TCloudElevation.Raised,
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 32.dp),
@@ -951,14 +1031,14 @@ private fun LoginScreen(
                         )
                         Column {
                             Text("T-Cloud Player", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
-                            Text("Cloud Storage", style = MaterialTheme.typography.labelMedium, color = TCloudMuted)
+                            Text("Cloud Storage", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     Spacer(Modifier.height(34.dp))
-                    Text("PRIVATE STORAGE", color = TCloudBlue, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Text("PRIVATE STORAGE", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     Text("ログイン", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.ExtraBold)
-                    Text("保存したファイルへ安全にアクセスします。", color = TCloudMuted, style = MaterialTheme.typography.bodyMedium)
+                    Text("保存したファイルへ安全にアクセスします。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(28.dp))
                     OutlinedTextField(
                         value = loginId,
@@ -990,8 +1070,8 @@ private fun LoginScreen(
                     Button(
                         onClick = { onLogin(loginId, password) },
                         enabled = !busy && loginId.isNotBlank() && password.length >= 8,
-                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                        shape = RoundedCornerShape(TCloudDimens.ItemRadius),
                     ) {
                         if (busy) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
                         else Text("ログイン", fontWeight = FontWeight.Bold)
@@ -1000,7 +1080,7 @@ private fun LoginScreen(
                     Text(
                         "パスワードと復号鍵は端末内で保護され、Cloudflareへ送信しません。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -1065,8 +1145,22 @@ private fun FolderScreen(
     onCancelTransfer: (String) -> Unit,
     onDismissTransferFailure: (String) -> Unit,
 ) {
+    val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass
+    val expandedWidth = windowSizeClass.isWidthAtLeastBreakpoint(WIDTH_DP_EXPANDED_LOWER_BOUND)
+    val mediumWidth = windowSizeClass.isWidthAtLeastBreakpoint(WIDTH_DP_MEDIUM_LOWER_BOUND)
     val selectionCount = selectedFileIds.size + selectedFolderIds.size
     val selectionMode = selectionCount > 0
+    var predictiveBackProgress by remember { mutableFloatStateOf(0f) }
+    PredictiveBackHandler(enabled = !busy && (selectionMode || canGoBack)) { progress ->
+        try {
+            progress.collect { predictiveBackProgress = it.progress }
+            if (selectionMode) onClearSelection() else onBack()
+        } catch (_: CancellationException) {
+            // A cancelled gesture returns the content to its resting state.
+        } finally {
+            predictiveBackProgress = 0f
+        }
+    }
     var selectionActionsExpanded by remember { mutableStateOf(false) }
     var storageActionsExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember(currentFolderId) { mutableStateOf("") }
@@ -1191,7 +1285,7 @@ private fun FolderScreen(
                             Text(
                                 if (canGoBack) "Cloud Storage" else "すべてのファイル",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = TCloudMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -1258,12 +1352,12 @@ private fun FolderScreen(
                                 }
                                 if (canDeleteItems) {
                                     DropdownMenuItem(
-                                        text = { Text("削除", color = Color(0xFFB42318)) },
+                                        text = { Text("削除", color = MaterialTheme.colorScheme.error) },
                                         leadingIcon = {
                                             Icon(
                                                 Icons.Default.DeleteOutline,
                                                 contentDescription = null,
-                                                tint = Color(0xFFB42318),
+                                                tint = MaterialTheme.colorScheme.error,
                                             )
                                         },
                                         onClick = {
@@ -1320,10 +1414,53 @@ private fun FolderScreen(
             )
         },
     ) { padding ->
-        BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .graphicsLayer {
+                    val predictiveScale = 1f - (predictiveBackProgress * 0.035f)
+                    scaleX = predictiveScale
+                    scaleY = predictiveScale
+                    translationX = predictiveBackProgress * 18.dp.toPx()
+                },
+        ) {
+            if (expandedWidth && currentFolderId == null && !selectionMode) {
+                NavigationRail(
+                    modifier = Modifier.width(TCloudDimens.NavigationRailWidth),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Spacer(Modifier.height(TCloudSpacing.Md))
+                    NavigationRailItem(
+                        selected = true,
+                        onClick = {},
+                        icon = { Icon(Icons.Default.Folder, contentDescription = null) },
+                        label = { Text("Storage") },
+                    )
+                    NavigationRailItem(
+                        selected = false,
+                        onClick = onOpenPlayer,
+                        icon = { Icon(Icons.Default.PlayCircle, contentDescription = null) },
+                        label = { Text("Player") },
+                    )
+                    NavigationRailItem(
+                        selected = false,
+                        onClick = onOpenOffline,
+                        icon = { Icon(Icons.Default.OfflinePin, contentDescription = null) },
+                        label = { Text("端末保存") },
+                    )
+                    NavigationRailItem(
+                        selected = false,
+                        onClick = onOpenSettings,
+                        icon = { Icon(Icons.Default.SettingsIcon, contentDescription = null) },
+                        label = { Text("設定") },
+                    )
+                }
+            }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize().weight(1f)) {
             val gridColumnCount = when {
-                maxWidth >= 900.dp -> 4
-                maxWidth >= 680.dp -> 3
+                expandedWidth -> 4
+                mediumWidth -> 3
                 else -> 2
             }
             LazyColumn(
@@ -1403,7 +1540,7 @@ private fun FolderScreen(
                             Text(
                                 "${filteredFolders.size}フォルダ・${filteredFiles.size}ファイル",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = TCloudMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f),
                             )
                             IconButton(
@@ -1413,7 +1550,7 @@ private fun FolderScreen(
                                 Icon(
                                     if (gridView) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
                                     contentDescription = if (gridView) "横長表示へ切り替え" else "1:1表示へ切り替え",
-                                    tint = TCloudBlue,
+                                    tint = MaterialTheme.colorScheme.primary,
                                 )
                             }
                         }
@@ -1422,13 +1559,13 @@ private fun FolderScreen(
                             Text(
                                 if (searchScannedCount > 0) "配下を検索中：${searchScannedCount}件確認" else "配下を検索しています…",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = TCloudMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         } else if (searchQuery.isNotBlank() && searchTruncated) {
                             Text(
                                 "検索結果が多いため、先頭2,000件を表示しています。",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = TCloudMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -1543,8 +1680,9 @@ private fun FolderScreen(
             if (busy) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
-                    color = TCloudBlue,
+                    color = MaterialTheme.colorScheme.primary,
                 )
+            }
             }
         }
     }
@@ -1600,7 +1738,7 @@ private fun CreateFolderDialog(
                             }
                         },
                     )
-                    Text("4文字以上で設定してください。", style = MaterialTheme.typography.bodySmall, color = TCloudMuted)
+                    Text("4文字以上で設定してください。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         },
@@ -1623,7 +1761,7 @@ private fun TCloudSortButton(
     modifier: Modifier = Modifier,
 ) {
     val containerColor by animateColorAsState(
-        if (selected) TCloudSelection else MaterialTheme.colorScheme.surfaceVariant,
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant,
         tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
         label = "sort-selection",
     )
@@ -1640,7 +1778,7 @@ private fun TCloudSortButton(
         ) {
             Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(4.dp))
-            Text(if (descending) "↓" else "↑", color = if (selected) TCloudBlueDark else TCloudMuted)
+            Text(if (descending) "↓" else "↑", color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1650,7 +1788,7 @@ private fun TransferProgressCard(batch: TransferBatchSnapshot, onCancel: (String
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
-        color = TCloudSelection,
+        color = MaterialTheme.colorScheme.secondaryContainer,
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -1663,7 +1801,7 @@ private fun TransferProgressCard(batch: TransferBatchSnapshot, onCancel: (String
                     TransferDirection.CAMERA_BACKUP -> if (batch.waitingForNetwork) "バックアップ：再接続待ち" else "バックアップ中"
                 },
                 fontWeight = FontWeight.Bold,
-                color = TCloudBlueDark,
+                color = MaterialTheme.colorScheme.primary,
             )
             LinearProgressIndicator(
                 progress = { batch.overallProgress / 100f },
@@ -1672,7 +1810,7 @@ private fun TransferProgressCard(batch: TransferBatchSnapshot, onCancel: (String
             Text(
                 "${batch.total}件中${batch.processed}件完了・残り${batch.remaining}件",
                 style = MaterialTheme.typography.bodySmall,
-                color = TCloudMuted,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (batch.activeCount > 1) {
                 Text(
@@ -1701,7 +1839,7 @@ private fun TransferFailureNoticeCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
-        color = Color(0xFFFFF4ED),
+        color = MaterialTheme.colorScheme.errorContainer,
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -1715,7 +1853,7 @@ private fun TransferFailureNoticeCard(
                     "アップロードできなかったファイルがあります",
                     modifier = Modifier.weight(1f),
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFFB42318),
+                    color = MaterialTheme.colorScheme.error,
                 )
                 IconButton(onClick = { onDismiss(notice.id) }) {
                     Icon(Icons.Default.Close, contentDescription = "エラー通知を閉じる")
@@ -1733,7 +1871,7 @@ private fun TransferFailureNoticeCard(
                     Text(
                         "${failure.name} — ${failure.reason}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB42318),
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
             }
@@ -1761,13 +1899,13 @@ private fun TransferHistoryRow(batch: TransferBatchSnapshot, onCancel: (String) 
             fontWeight = if (batch.active) FontWeight.SemiBold else FontWeight.Normal,
         )
         if (batch.status == TransferStatus.CANCELLED) {
-            Text("中止しました。", style = MaterialTheme.typography.bodySmall, color = TCloudMuted)
+            Text("中止しました。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (batch.active) TextButton(onClick = { onCancel(batch.id) }) { Text("中止") }
         Text(
             formatDateTime(batch.updatedAt),
             style = MaterialTheme.typography.labelSmall,
-            color = TCloudMuted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -1838,7 +1976,7 @@ private fun AppSettingsDialog(
                     Text(
                         "ゴミ箱：${cloudUsage.trashFileCount}ファイル・${formatBytes(cloudUsage.trashBytes)}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     usageDetails.forEach { folder ->
                         Text(
@@ -1872,7 +2010,7 @@ private fun AppSettingsDialog(
                     Text(
                         "保存先にしたいフォルダを開いてから設定してください。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF667085),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 SettingSwitchRow(
@@ -1917,7 +2055,7 @@ private fun AppSettingsDialog(
                         Text(
                             "写真・動画へのアクセスを許可すると、CameraやScreenshotsなどを選択できます。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = TCloudMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     cameraBackupSourceFolders.forEach { source ->
@@ -1941,7 +2079,7 @@ private fun AppSettingsDialog(
                     Text(
                         "${selectedSourceFolderIds.size}フォルダを選択中",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 SettingSwitchRow(
@@ -1959,21 +2097,21 @@ private fun AppSettingsDialog(
                 Text(
                     "選択した端末フォルダ内の既存の写真・動画と、今後追加される写真・動画を自動で暗号化して保存します。失敗分は次回自動で再試行します。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF667085),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (cameraBackupSettings.lastScanAtMillis > 0) {
                     Text(
                         "最終確認：${formatDateTime(cameraBackupSettings.lastScanAtMillis)}" +
                             "・${cameraBackupSettings.lastQueuedCount}件を処理",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (cameraBackupSettings.lastError.isNotBlank()) {
                     Text(
                         "確認が必要：${cameraBackupSettings.lastError}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB42318),
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
                 TextButton(
@@ -2051,7 +2189,7 @@ private fun TrashScreen(
                 actions = {
                     if (page.files.isNotEmpty() || page.folders.isNotEmpty()) {
                         TextButton(onClick = { confirmingEmptyTrash = true }, enabled = !busy) {
-                            Text("すべて削除", color = Color(0xFFB42318))
+                            Text("すべて削除", color = MaterialTheme.colorScheme.error)
                         }
                     }
                 },
@@ -2065,7 +2203,7 @@ private fun TrashScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (page.files.isEmpty() && page.folders.isEmpty()) {
-                    item { Text("ゴミ箱は空です。", color = TCloudMuted, modifier = Modifier.padding(24.dp)) }
+                    item { Text("ゴミ箱は空です。", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp)) }
                 }
                 items(page.folders, key = { "trash-folder-${it.folder.id}" }) { item ->
                     Row(
@@ -2079,14 +2217,14 @@ private fun TrashScreen(
                             Text(
                                 "${item.folder.fileCount}ファイル・${formatBytes(item.sizeBytes)}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = TCloudMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         IconButton(onClick = { onRestoreFolder(item.folder.id) }, enabled = !busy) {
                             Icon(Icons.Default.RestoreFromTrash, contentDescription = "復元")
                         }
                     }
-                    HorizontalDivider(color = TCloudLine)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
                 items(page.files, key = { "trash-file-${it.file.id}" }) { item ->
                     Row(
@@ -2094,27 +2232,27 @@ private fun TrashScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Icon(fileIcon(item.file.mediaKind), contentDescription = null, tint = TCloudBlue)
+                        Icon(fileIcon(item.file.mediaKind), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Column(Modifier.weight(1f)) {
                             Text(item.file.name.ifBlank { "暗号化ファイル" }, fontWeight = FontWeight.Medium)
                             Text(
                                 formatBytes(item.file.sizeBytes),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = TCloudMuted,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         IconButton(onClick = { onRestoreFile(item.file.id) }, enabled = !busy) {
                             Icon(Icons.Default.RestoreFromTrash, contentDescription = "復元")
                         }
                         IconButton(onClick = { pendingPermanentDeleteId = item.file.id }, enabled = !busy) {
-                            Icon(Icons.Default.DeleteForever, contentDescription = "完全削除", tint = Color(0xFFB42318))
+                            Icon(Icons.Default.DeleteForever, contentDescription = "完全削除", tint = MaterialTheme.colorScheme.error)
                         }
                     }
-                    HorizontalDivider(color = TCloudLine)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
             if (busy) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = TCloudBlue)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         }
     }
@@ -2210,7 +2348,7 @@ private fun OfflineScreen(
                         Text(
                             "端末に暗号化保存したファイルはありません。",
                             modifier = Modifier.padding(24.dp),
-                            color = Color(0xFF667085),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -2245,7 +2383,7 @@ private fun OfflineScreen(
                             Icon(
                                 if (entry.file.metadataDecrypted) fileIcon(entry.file.mediaKind) else Icons.Default.Lock,
                                 contentDescription = null,
-                                tint = TCloudBlue,
+                                tint = MaterialTheme.colorScheme.primary,
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
@@ -2255,7 +2393,7 @@ private fun OfflineScreen(
                                 Text(
                                     "${formatBytes(entry.file.sizeBytes)}・${formatDate(entry.expiresAtMillis)}まで",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFF667085),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                             IconButton(onClick = { onDelete(entry.file.id) }, enabled = !busy) {
@@ -2263,12 +2401,12 @@ private fun OfflineScreen(
                             }
                         }
                     }
-                    HorizontalDivider(color = Color(0xFFE7E9F0))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
             if (busy) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = TCloudBlue)
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -2286,8 +2424,9 @@ private fun FolderGridCard(
     onToggleSelection: (CloudFolder) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptics = LocalHapticFeedback.current
     val containerColor by animateColorAsState(
-        if (selected) TCloudSelection else MaterialTheme.colorScheme.surface,
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
         tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
         label = "folder-grid-selection",
     )
@@ -2301,7 +2440,12 @@ private fun FolderGridCard(
                 onClick = {
                     if (selectionMode) onToggleSelection(folder) else onOpenFolder(folder)
                 },
-                onLongClick = { if (canManage) onToggleSelection(folder) },
+                onLongClick = {
+                    if (canManage) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleSelection(folder)
+                    }
+                },
             ),
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -2330,7 +2474,7 @@ private fun FolderGridCard(
                     Text(
                         folder.searchPath,
                         style = MaterialTheme.typography.labelSmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -2338,7 +2482,7 @@ private fun FolderGridCard(
                 Text(
                     "${folder.folderCount}フォルダ・${folder.fileCount}ファイル",
                     style = MaterialTheme.typography.labelSmall,
-                    color = TCloudMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             AnimatedVisibility(
@@ -2355,7 +2499,7 @@ private fun FolderGridCard(
                 Icon(
                     if (folder.isUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
                     contentDescription = null,
-                    tint = TCloudMuted,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.TopStart).padding(10.dp).size(20.dp),
                 )
             }
@@ -2376,11 +2520,12 @@ private fun FileGridCard(
     onToggleSelection: (CloudFile) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptics = LocalHapticFeedback.current
     LaunchedEffect(file.id, file.hasThumbnail, thumbnailBitmap) {
         if (file.hasThumbnail && thumbnailBitmap == null) onRequestThumbnail(file)
     }
     val containerColor by animateColorAsState(
-        if (selected) TCloudSelection else MaterialTheme.colorScheme.surface,
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
         tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
         label = "file-grid-selection",
     )
@@ -2394,7 +2539,12 @@ private fun FileGridCard(
                 onClick = {
                     if (selectionMode) onToggleSelection(file) else onOpenFile(file)
                 },
-                onLongClick = { if (canManage && file.metadataDecrypted) onToggleSelection(file) },
+                onLongClick = {
+                    if (canManage && file.metadataDecrypted) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleSelection(file)
+                    }
+                },
             ),
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -2402,7 +2552,10 @@ private fun FileGridCard(
                 Image(
                     bitmap = thumbnailBitmap.asImageBitmap(),
                     contentDescription = null,
-                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(TCloudDimens.ItemRadius)),
+                    modifier = Modifier
+                        .tCloudSharedImage(file.id, enabled = file.mediaKind == "image")
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(TCloudDimens.ItemRadius)),
                     contentScale = ContentScale.Crop,
                 )
             } else {
@@ -2413,13 +2566,13 @@ private fun FileGridCard(
                     Icon(
                         fileIcon(file.mediaKind),
                         contentDescription = null,
-                        tint = TCloudBlue,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(52.dp),
                     )
                 }
             }
             Surface(
-                color = Color.White.copy(alpha = 0.92f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
             ) {
                 Column(Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
@@ -2434,7 +2587,7 @@ private fun FileGridCard(
                         Text(
                             file.searchPath,
                             style = MaterialTheme.typography.labelSmall,
-                            color = TCloudMuted,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -2442,7 +2595,7 @@ private fun FileGridCard(
                     Text(
                         formatBytes(file.sizeBytes),
                         style = MaterialTheme.typography.labelSmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -2460,7 +2613,7 @@ private fun FileGridCard(
                 Icon(
                     Icons.Default.Lock,
                     contentDescription = "暗号化",
-                    tint = TCloudMuted,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.TopStart).padding(10.dp).size(20.dp),
                 )
             }
@@ -2483,8 +2636,9 @@ private fun FolderRow(
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(folder.id) { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
     val containerColor by animateColorAsState(
-        if (selected) TCloudSelection else Color.Transparent,
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
         tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
         label = "folder-selection",
     )
@@ -2498,7 +2652,12 @@ private fun FolderRow(
                 onClick = {
                     if (selectionMode) onToggleSelection(folder) else onOpenFolder(folder)
                 },
-                onLongClick = { if (canManage) onToggleSelection(folder) },
+                onLongClick = {
+                    if (canManage) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleSelection(folder)
+                    }
+                },
             ),
     ) {
         Row(
@@ -2532,7 +2691,7 @@ private fun FolderRow(
                     Text(
                         folder.searchPath,
                         style = MaterialTheme.typography.bodySmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -2540,19 +2699,19 @@ private fun FolderRow(
                 Text(
                     "${folder.folderCount}フォルダ・${folder.fileCount}ファイル",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TCloudMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (folder.isProtected) {
                 Icon(
                     if (folder.isUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
                     contentDescription = if (folder.isUnlocked) "ロック解除済み" else "ロック中",
-                    tint = Color(0xFF667085),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (!selectionMode && canManage) Box {
                 IconButton(onClick = { menuExpanded = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "操作", tint = Color(0xFF667085))
+                    Icon(Icons.Default.MoreVert, contentDescription = "操作", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                     DropdownMenuItem(
@@ -2595,11 +2754,12 @@ private fun FileRow(
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember(file.id) { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
     LaunchedEffect(file.id, file.hasThumbnail, thumbnailBitmap) {
         if (file.hasThumbnail && thumbnailBitmap == null) onRequestThumbnail(file)
     }
     val containerColor by animateColorAsState(
-        if (selected) TCloudSelection else Color.Transparent,
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
         tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing),
         label = "file-selection",
     )
@@ -2613,7 +2773,12 @@ private fun FileRow(
                 onClick = {
                     if (selectionMode) onToggleSelection(file) else onOpenFile(file)
                 },
-                onLongClick = { if (canManage && file.metadataDecrypted) onToggleSelection(file) },
+                onLongClick = {
+                    if (canManage && file.metadataDecrypted) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleSelection(file)
+                    }
+                },
             ),
     ) {
         Row(
@@ -2648,7 +2813,7 @@ private fun FileRow(
                         "audio" -> TCloudColors.AudioContainer
                         else -> TCloudColors.FileContainer
                     },
-                    iconColor = TCloudBlue,
+                    iconColor = MaterialTheme.colorScheme.primary,
                 )
             }
             Column(modifier = Modifier.weight(1f)) {
@@ -2662,7 +2827,7 @@ private fun FileRow(
                     Text(
                         file.searchPath,
                         style = MaterialTheme.typography.bodySmall,
-                        color = TCloudMuted,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -2670,15 +2835,15 @@ private fun FileRow(
                 Text(
                     formatBytes(file.sizeBytes),
                     style = MaterialTheme.typography.bodySmall,
-                    color = TCloudMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (file.cryptoVersion == 1 && !file.metadataDecrypted) {
-                Icon(Icons.Default.Lock, contentDescription = "暗号化", tint = Color(0xFF667085))
+                Icon(Icons.Default.Lock, contentDescription = "暗号化", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             } else if (!selectionMode && canManage) {
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "操作", tint = Color(0xFF667085))
+                        Icon(Icons.Default.MoreVert, contentDescription = "操作", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                         DropdownMenuItem(
@@ -2773,7 +2938,7 @@ private fun ShareCreateDialog(
                 Text(
                     "共有先では、このPWだけで対象を開けます。フォルダPWや復号鍵は共有されません。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF667085),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
@@ -2813,7 +2978,7 @@ private fun ShareResultDialog(
                 Text(
                     "有効期限：${formatDate(result.expiresAt * 1000)}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF667085),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     TextButton(onClick = { copy("T-Cloud 共有URL", result.url) }) { Text("URL") }
@@ -2848,7 +3013,7 @@ private fun DeleteSelectionDialog(
         },
         confirmButton = {
             TextButton(onClick = onConfirm, enabled = !busy) {
-                Text(if (busy) "削除中…" else "はい", color = Color(0xFFB42318))
+                Text(if (busy) "削除中…" else "はい", color = MaterialTheme.colorScheme.error)
             }
         },
         dismissButton = {
@@ -2914,7 +3079,7 @@ private fun MoveItemDialog(
                     busy && destinations.isEmpty() -> Box(
                         modifier = Modifier.fillMaxWidth().height(120.dp),
                         contentAlignment = Alignment.Center,
-                    ) { CircularProgressIndicator(color = TCloudBlue) }
+                    ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
                     destinations.isEmpty() -> Text("選択できる移動先がありません。")
                     else -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                         items(destinations, key = { "move-${it.id}" }) { destination ->
@@ -3076,7 +3241,7 @@ private fun MediaPlayerScreen(
         if (isVideo) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
         onDispose {
             activity?.setVideoSystemBarsHidden(false)
-            if (isVideo) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            if (isVideo) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
     LaunchedEffect(activity, isVideoFullscreen) {
@@ -3084,7 +3249,7 @@ private fun MediaPlayerScreen(
     }
 
     Scaffold(
-        containerColor = Color.Black,
+        containerColor = if (isVideo) Color.Black else MaterialTheme.colorScheme.background,
         topBar = {
             if (!pictureInPicture && !isVideoFullscreen) TopAppBar(
                 title = {
@@ -3094,7 +3259,7 @@ private fun MediaPlayerScreen(
                             Text(
                                 if (playbackMode == PlaybackMode.REPEAT_ONE) "1曲リピート中" else "全体リピート中",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = TCloudBlue,
+                                color = MaterialTheme.colorScheme.primary,
                             )
                         }
                     }
@@ -3127,7 +3292,7 @@ private fun MediaPlayerScreen(
                                 PlaybackMode.REPEAT_ALL -> "全体リピート"
                                 PlaybackMode.REPEAT_ONE -> "1曲リピート"
                             },
-                            tint = if (playbackMode == PlaybackMode.OFF) TCloudMuted else TCloudBlue,
+                            tint = if (playbackMode == PlaybackMode.OFF) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                         )
                     }
                     if (file.mediaKind == "video") {
@@ -3168,8 +3333,39 @@ private fun MediaPlayerScreen(
             )
         },
     ) { padding ->
-        AndroidView(
-            modifier = Modifier.fillMaxSize().padding(padding),
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (isAudio) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 28.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().widthIn(max = 260.dp).aspectRatio(1f),
+                        shape = MaterialTheme.shapes.extraLarge,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shadowElevation = TCloudElevation.Floating,
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.MusicNote,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(88.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        file.name,
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            AndroidView(
+            modifier = if (isAudio) Modifier.fillMaxWidth().height(190.dp) else Modifier.fillMaxSize(),
             factory = { viewContext ->
                 PlayerView(viewContext).apply {
                     useController = true
@@ -3215,7 +3411,7 @@ private fun MediaPlayerScreen(
                             if (enterFullscreen) {
                                 activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
                             } else {
-                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                             }
                         }
                     }
@@ -3230,12 +3426,13 @@ private fun MediaPlayerScreen(
                         if (enterFullscreen) {
                             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
                         } else {
-                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                         }
                     }
                 }
             },
-        )
+            )
+        }
     }
 }
 
@@ -3352,7 +3549,7 @@ private fun FolderSecurityDialog(
                     visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                 )
                 if (confirmation.isNotEmpty() && confirmation != password) {
-                    Text("PWが一致していません。", color = Color(0xFFB42318))
+                    Text("PWが一致していません。", color = MaterialTheme.colorScheme.error)
                 }
                 if (canRelock) {
                     HorizontalDivider()
