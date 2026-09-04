@@ -103,6 +103,12 @@ const server = createServer(async (request, response) => {
         hasMore: offset + limit < entries.length
       });
     }
+    const detail = apiPath.match(/^\/entries\/(\d+)$/);
+    if (detail) {
+      const entryId = Number(detail[1]);
+      const entry = [...entriesByMonth.values()].flat().find((item) => item.id === entryId);
+      return entry ? sendJson(response, { entry }) : sendJson(response, {}, 404);
+    }
     return sendJson(response, {});
   }
 
@@ -121,8 +127,8 @@ const server = createServer(async (request, response) => {
   }
 });
 
-function sendJson(response, body) {
-  response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+function sendJson(response, body, status = 200) {
+  response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
   response.end(JSON.stringify(body));
 }
 
@@ -180,6 +186,15 @@ async function assertHeadingPosition(page, label) {
   assert.ok(Math.abs(position.headingTop - position.headerHeight - 12) <= 2, `${label}: 見出し位置 ${JSON.stringify(position)}`);
 }
 
+async function captureReturnViewWithoutLeaving(page) {
+  return page.evaluate(() => {
+    const link = document.querySelector("#favorites-link");
+    link.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    link.click();
+    return JSON.parse(sessionStorage.getItem("troom-diary-return-view-v1"));
+  });
+}
+
 async function run(browserType, name, executablePath, contextOptions = {}) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
@@ -206,6 +221,12 @@ async function run(browserType, name, executablePath, contextOptions = {}) {
     await page.waitForSelector("#app-view:not([hidden])");
     await waitForMonth(page, currentMonth, 100);
 
+    let targetMonthRequests = 0;
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/diary/api/entries" && url.searchParams.get("month") === targetMonth) targetMonthRequests += 1;
+    });
+
     await page.locator(`[data-month="${targetMonth}"]`).click();
     await waitForMonth(page, targetMonth, 200);
     assert.equal(await page.locator("#diary-recent-title").textContent(), postMonthHeading(targetMonth), `${name}: 別ページの年月見出し`);
@@ -216,14 +237,51 @@ async function run(browserType, name, executablePath, contextOptions = {}) {
 
     await page.evaluate(() => {
       window.__monthlyNavigationScrolls = [];
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" });
       window.__monthlyNavigationScrolls = [];
     });
+    await page.waitForTimeout(100);
     await page.locator(`[data-month="${targetMonth}"]`).click();
     await assertHeadingPosition(page, `${name}: 同一ページ`);
     const samePageScrolls = await page.evaluate(() => window.__monthlyNavigationScrolls);
     assert.ok(samePageScrolls.length > 0, `${name}: 同一ページでも見出しへスクロール`);
     assert.equal(samePageScrolls.at(-1).renderedEntryId, "200", `${name}: 同一ページの記事を維持`);
+
+    await page.locator("#load-more-button").click();
+    await page.waitForFunction(() => document.querySelectorAll("#entry-list [data-entry-id]").length === 9);
+    assert.equal(await page.locator("#entry-list [data-entry-id]").count(), 9, `${name}: もっと見るで全件展開`);
+    const requestsBeforeExpandedMonthClick = targetMonthRequests;
+    await page.evaluate(() => {
+      window.__monthlyNavigationScrolls = [];
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" });
+      window.__monthlyNavigationScrolls = [];
+    });
+    await page.waitForTimeout(100);
+    await page.locator(`[data-month="${targetMonth}"]`).click();
+    await assertHeadingPosition(page, `${name}: 全件展開後の同一ページ`);
+    assert.equal(targetMonthRequests, requestsBeforeExpandedMonthClick, `${name}: 全件展開済みの同一月を再取得しない`);
+    assert.equal(await page.locator("#entry-list [data-entry-id]").count(), 9, `${name}: 同一月再クリック後も全件表示`);
+    assert.equal((await captureReturnViewWithoutLeaving(page)).monthExpanded, true, `${name}: 同一月再クリック後も展開状態を維持`);
+
+    const returnEntry = page.locator('[data-entry-id="205"]');
+    await returnEntry.evaluate((entry) => entry.scrollIntoView({ block: "center", behavior: "instant" }));
+    await page.waitForTimeout(100);
+    const positionBeforeDetail = await returnEntry.evaluate((entry) => ({
+      top: entry.getBoundingClientRect().top,
+      scrollY: window.scrollY
+    }));
+    await returnEntry.click();
+    await page.waitForSelector("#entry-dialog[open]");
+    await page.goBack();
+    await page.waitForFunction(() => !document.querySelector("#entry-dialog").open);
+    const positionAfterDetail = await returnEntry.evaluate((entry) => ({
+      top: entry.getBoundingClientRect().top,
+      scrollY: window.scrollY
+    }));
+    assert.equal(await page.locator("#entry-list [data-entry-id]").count(), 9, `${name}: 詳細から戻っても全件表示`);
+    assert.ok(Math.abs(positionAfterDetail.top - positionBeforeDetail.top) <= 2, `${name}: 詳細から戻ったentry位置を維持 expected=${JSON.stringify(positionBeforeDetail)} actual=${JSON.stringify(positionAfterDetail)}`);
+    assert.ok(Math.abs(positionAfterDetail.scrollY - positionBeforeDetail.scrollY) <= 2, `${name}: 詳細から戻ったscrollYを維持 expected=${JSON.stringify(positionBeforeDetail)} actual=${JSON.stringify(positionAfterDetail)}`);
+    assert.equal((await captureReturnViewWithoutLeaving(page)).monthExpanded, true, `${name}: 詳細から戻っても展開状態を維持`);
     assert.deepEqual(pageErrors, [], `${name}: page errorなし`);
     await context.close();
   } finally {
@@ -243,7 +301,7 @@ try {
   await run(firefox, "Firefox", firefoxPath);
   await run(webkit, "WebKit", webkitPath);
   await run(chromium, "Touch Chromium", chromiumPath, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  process.stdout.write("Diary monthly navigation passed for same/different pages in Chromium, Firefox, WebKit, and touch Chromium.\n");
+  process.stdout.write("Diary monthly navigation, expanded-state preservation, and detail return passed in Chromium, Firefox, WebKit, and touch Chromium.\n");
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));
 }

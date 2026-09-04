@@ -1370,6 +1370,10 @@
       && isMonthlyView()
       && state.month === targetMonth
       && !elements.loadMore.disabled;
+    if (alreadyShowingMonth) {
+      await scrollToMonthlyHeadingAfterRender(targetMonth);
+      return;
+    }
     state.month = targetMonth;
     state.monthExpanded = false;
     state.query = "";
@@ -1387,8 +1391,7 @@
       applyRouteState();
     }
     updateFilterControls();
-    if (alreadyShowingMonth) updateListHeading();
-    else await loadEntries(true);
+    await loadEntries(true);
     await scrollToMonthlyHeadingAfterRender(targetMonth);
   }
 
