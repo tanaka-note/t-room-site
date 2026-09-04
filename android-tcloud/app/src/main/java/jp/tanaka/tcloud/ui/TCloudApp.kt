@@ -3403,7 +3403,7 @@ private fun MediaPlayerScreen(
             AndroidView(
             modifier = if (isAudio) Modifier.fillMaxWidth().height(190.dp) else Modifier.fillMaxSize(),
             factory = { viewContext ->
-                PlayerView(viewContext).apply {
+                (if (isVideo) relativeSeekPlayerView(viewContext, player) else PlayerView(viewContext)).apply {
                     useController = true
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     this.player = player
@@ -3456,6 +3456,7 @@ private fun MediaPlayerScreen(
             update = { playerView ->
                 playerView.player = player
                 if (isVideo) {
+                    playerView.bindRelativeSeekPlayer(player)
                     playerView.setFullscreenButtonState(isVideoFullscreen)
                     playerView.setFullscreenButtonClickListener { enterFullscreen ->
                         manualFullscreen = enterFullscreen

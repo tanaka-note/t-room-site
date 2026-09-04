@@ -105,7 +105,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.ui.PlayerView
 import jp.tanaka.tcloud.library.LibraryMediaType
 import jp.tanaka.tcloud.library.MediaLibraryState
 import jp.tanaka.tcloud.library.MediaPlaylist
@@ -825,8 +824,11 @@ internal fun LibraryVideoPlayerScreen(
             },
         )
         AndroidView(
-            factory = { PlayerView(it).apply { this.player = player; useController = true } },
-            update = { it.player = player },
+            factory = { relativeSeekPlayerView(it, player).apply { useController = true } },
+            update = {
+                it.player = player
+                it.bindRelativeSeekPlayer(player)
+            },
             modifier = Modifier.fillMaxSize(),
         )
     }

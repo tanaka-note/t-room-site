@@ -9,9 +9,15 @@
 - パッケージ名: `jp.tanaka.tcloud`
 - 対応OS: Android 8.0（API 26）以降
 - 対象SDK: Android 16（API 36）
-- アプリ版: `1.4.1`（versionCode 32）
+- アプリ版: `1.4.2`（versionCode 33）
 
 Android 8.0まで対応範囲を広げつつ、API 36を対象にして新しいAndroidのセキュリティ要件へ対応します。
+
+### 1.4.2 動画の相対シーク
+
+- 端末／T-Cloud動画のタッチ操作は、触れた位置へ即移動せず、タッチ開始時の再生位置から指の移動量に応じて前後へシーク
+- シークバー幅1本分のドラッグを動画全体時間相当として、`0 ～ duration`へ制限
+- マウス、キーボード、Media3標準コントローラー、YouTube公式Playerの操作は従来どおり
 
 ### 1.4.1 Visual Experience 2.0 Player修正
 
