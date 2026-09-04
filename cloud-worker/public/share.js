@@ -568,7 +568,7 @@ async function openPreview(file, options = {}) {
     else if (file.mediaKind === "video") { loadSharedVideoPlayerSource(preparedVideo || prepareSharedVideoPlayer(stage, file), file, url, generation); }
     else if (file.mediaKind === "audio") { renderSharedAudioPlayer(stage, file, url); }
     else if (file.mimeType === "application/pdf") { const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.replaceChildren(frame); }
-    else stage.innerHTML = "<p>この形式はブラウザ内表示に対応していません。ダウンロードしてご確認ください。</p>";
+    else stage.innerHTML = "<p>ダウンロードして確認してください。</p>";
   } catch (error) {
     if (sharedPreviewRequestActive(generation, file.id)) {
       if (preparedVideo) showSharedVideoPlayerError(stage, preparedVideo.buffering, error.message);

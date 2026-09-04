@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-e5458fa990ec";
+const APP_BUILD_ID = "cloud-e4f1ff91c543";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -6729,7 +6729,7 @@ async function openPreview(file, options = {}) {
   } else if (file.mimeType === "application/pdf") {
     const frame = document.createElement("iframe"); frame.title = file.name; frame.src = url; stage.replaceChildren(frame);
   } else {
-    stage.innerHTML = `<div class="preview-fallback"><p>この形式はブラウザ内プレビューに対応していません。</p><p>ダウンロードしてご確認ください。</p></div>`;
+    stage.innerHTML = `<div class="preview-fallback"><p>ダウンロードして確認してください。</p></div>`;
   }
   if (!dialog.open) dialog.showModal();
 }
