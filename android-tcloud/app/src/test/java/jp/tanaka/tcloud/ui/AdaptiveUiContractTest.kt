@@ -28,7 +28,7 @@ class AdaptiveUiContractTest {
 
         assertTrue(storage.contains("AndroidView("))
         assertTrue(player.contains("AndroidView("))
-        assertTrue(storage.contains("tCloudSharedImage(file.id"))
+        assertTrue(storage.contains("tCloudSharedImageBounds(file.id"))
         assertFalse(mediaPlayer.contains("sharedElement"))
         assertFalse(player.contains("sharedElement"))
     }

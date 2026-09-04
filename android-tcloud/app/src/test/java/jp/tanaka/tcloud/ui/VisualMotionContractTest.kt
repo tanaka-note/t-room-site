@@ -7,7 +7,7 @@ import org.junit.Test
 
 class VisualMotionContractTest {
     @Test
-    fun storageAndPlayerShareThe140DesignSystem() {
+    fun storageAndPlayerShareThe141DesignSystem() {
         val design = File("src/main/java/jp/tanaka/tcloud/ui/TCloudDesignSystem.kt").readText()
         val storage = File("src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt").readText()
         val player = File("src/main/java/jp/tanaka/tcloud/ui/MediaLibraryScreen.kt").readText()
@@ -27,6 +27,10 @@ class VisualMotionContractTest {
         assertTrue(player.contains("TCloudSearchField"))
         assertTrue(player.contains("SingleChoiceSegmentedButtonRow"))
         assertTrue(player.contains("MediaHeroArtwork"))
+        assertTrue(storage.contains("tCloudSharedImageBounds"))
+        assertTrue(storage.contains("SharedTransitionScope.ResizeMode.RemeasureToBounds"))
+        assertTrue(storage.contains("tCloudSharedImageContent"))
+        assertFalse(storage.contains(".tCloudSharedImage("))
     }
 
     @Test

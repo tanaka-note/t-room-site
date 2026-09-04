@@ -9,20 +9,26 @@
 - パッケージ名: `jp.tanaka.tcloud`
 - 対応OS: Android 8.0（API 26）以降
 - 対象SDK: Android 16（API 36）
-- アプリ版: `1.4.0`（versionCode 31）
+- アプリ版: `1.4.1`（versionCode 32）
 
 Android 8.0まで対応範囲を広げつつ、API 36を対象にして新しいAndroidのセキュリティ要件へ対応します。
+
+### 1.4.1 Visual Experience 2.0 Player修正
+
+- Local／T-Cloud音楽を選ぶと、既存キューの開始後にアートワーク中心のNow Playingを表示
+- Now Playingの再生、シーク、前後移動、シャッフル、リピートは一覧側と同じPlaybackManagerへ接続
+- 写真のCrop／Fitと角丸差はShared Bounds内でfadeし、開閉時の急な見た目の切替を抑制
 
 ### 1.4.0 T-Cloud Visual Experience 2.0
 
 - Material 3を基盤に、端末のライト／ダーク設定とAndroid 12以降のDynamic Colorへ追従
-- edge-to-edgeとWindow Size Classを採用し、スマートフォン、回転、タブレット、折りたたみ端末へ適応
+- edge-to-edgeとWindow Size Classを採用し、スマートフォンの回転やタブレット等の画面幅へ適応（ヒンジ位置を使う専用2ペインレイアウトではありません）
 - Storageは画面幅に応じた2〜4列表示と、拡張幅でのNavigation Railを提供
-- Playerは音楽のアートワーク中心表示、動画の没入表示、既存のMedia3／YouTube公式Player操作を両立
+- Playerは音楽のアートワーク中心表示から既存の再生キューを直接操作し、動画の没入表示、既存のMedia3／YouTube公式Player操作を両立
 - フォルダ階層、選択、フィルター、音楽／動画切替に一貫した短いモーションを適用
 - 予測型Back、選択時の触覚フィードバック、IMEリサイズ、48dp以上の操作領域を共通方針として適用
 
-認証、権限、暗号化・復号、通信、D1/R2、データモデル、検索・おすすめ、再生・保存ロジックは1.3.0から変更していません。動画をCloudflare側へ平文で渡さない原則も維持します。
+音楽Now Playingは一覧側と同じ`TCloudPlaybackManager`／`ExoPlayer`を利用します。認証、権限、暗号化・復号、通信、D1/R2、データモデル、検索・おすすめ、再生・保存ロジックは1.3.0から変更していません。動画をCloudflare側へ平文で渡さない原則も維持します。
 
 ### 1.3.0 Visual / Motion refresh
 

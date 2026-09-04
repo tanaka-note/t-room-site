@@ -619,18 +619,20 @@ private fun MediaArtwork(item: PlayableMediaItem, loader: suspend (PlayableMedia
 }
 
 @Composable
-private fun AudioQueueControls(manager: TCloudPlaybackManager) {
+private fun AudioQueueControls(manager: TCloudPlaybackManager, prominent: Boolean = false) {
+    val player = manager.player
+    val currentItem by manager.currentQueueItem.collectAsState()
     val mode by manager.playbackMode.collectAsState()
     val shuffle by manager.shuffle.collectAsState()
-    var playing by remember { mutableStateOf(manager.player.isPlaying) }
-    var position by remember { mutableFloatStateOf(manager.player.currentPosition.coerceAtLeast(0L).toFloat()) }
-    var duration by remember { mutableFloatStateOf(manager.player.duration.coerceAtLeast(1L).toFloat()) }
+    var playing by remember(player) { mutableStateOf(player.isPlaying) }
+    var position by remember(player) { mutableFloatStateOf(player.currentPosition.coerceAtLeast(0L).toFloat()) }
+    var duration by remember(player) { mutableFloatStateOf(player.duration.coerceAtLeast(1L).toFloat()) }
     var seeking by remember { mutableStateOf(false) }
-    LaunchedEffect(manager) {
+    LaunchedEffect(player) {
         while (true) {
-            playing = manager.player.isPlaying
-            if (!seeking) position = manager.player.currentPosition.coerceAtLeast(0L).toFloat()
-            duration = manager.player.duration.coerceAtLeast(1L).toFloat()
+            playing = player.isPlaying
+            if (!seeking) position = player.currentPosition.coerceAtLeast(0L).toFloat()
+            duration = player.duration.coerceAtLeast(1L).toFloat()
             delay(350)
         }
     }
@@ -642,11 +644,13 @@ private fun AudioQueueControls(manager: TCloudPlaybackManager) {
         shadowElevation = TCloudElevation.Raised,
     ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Text(manager.currentTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+        if (!prominent) {
+            Text(currentItem?.title ?: manager.currentTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+        }
         Slider(
             value = position.coerceIn(0f, duration),
             onValueChange = { seeking = true; position = it },
-            onValueChangeFinished = { manager.player.seekTo(position.toLong()); seeking = false },
+            onValueChangeFinished = { player.seekTo(position.toLong()); seeking = false },
             valueRange = 0f..duration,
         )
         Row(
@@ -656,7 +660,16 @@ private fun AudioQueueControls(manager: TCloudPlaybackManager) {
         ) {
             IconButton(onClick = { manager.setShuffle(!shuffle) }) { Icon(Icons.Default.Shuffle, "シャッフル", tint = if (shuffle) MaterialTheme.colorScheme.primary else Color.Unspecified) }
             IconButton(onClick = { manager.skipPrevious() }) { Icon(Icons.Default.SkipPrevious, "前の曲") }
-            IconButton(onClick = { if (playing) manager.player.pause() else manager.player.play() }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "一時停止" else "再生") }
+            IconButton(
+                onClick = { if (player.isPlaying) player.pause() else player.play() },
+                modifier = Modifier.size(if (prominent) 64.dp else 48.dp),
+            ) {
+                Icon(
+                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (playing) "一時停止" else "再生",
+                    modifier = Modifier.size(if (prominent) 38.dp else 28.dp),
+                )
+            }
             IconButton(onClick = { manager.skipNext() }) { Icon(Icons.Default.SkipNext, "次の曲") }
             IconButton(onClick = {
                 manager.setPlaybackMode(when (mode) { PlaybackMode.OFF -> PlaybackMode.REPEAT_ALL; PlaybackMode.REPEAT_ALL -> PlaybackMode.REPEAT_ONE; PlaybackMode.REPEAT_ONE -> PlaybackMode.OFF })
@@ -707,13 +720,70 @@ private fun TagDialog(item: PlayableMediaItem, onDismiss: () -> Unit, onSave: (S
     )
 }
 
+@Composable
+internal fun LibraryAudioNowPlayingScreen(
+    initialItem: PlayableMediaItem,
+    playbackManager: TCloudPlaybackManager,
+    onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
+    onClose: () -> Unit,
+) {
+    val currentItem by playbackManager.currentQueueItem.collectAsState()
+    val item = currentItem ?: initialItem
+    BackHandler(onBack = onClose)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("再生中") },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            item {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    MediaHeroArtwork(item, onLoadArtwork)
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        item.title,
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOf(item.artist, item.album).filter(String::isNotBlank).joinToString(" ・ "),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Box(Modifier.fillMaxWidth().widthIn(max = 560.dp)) {
+                        AudioQueueControls(playbackManager, prominent = true)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun LibraryVideoPlayerScreen(
     item: PlayableMediaItem,
     playbackManager: TCloudPlaybackManager,
     pictureInPicture: Boolean,
-    onLoadArtwork: suspend (PlayableMediaItem) -> Bitmap?,
     onClose: (Long, Long) -> Unit,
 ) {
     val context = LocalContext.current
@@ -747,44 +817,18 @@ internal fun LibraryVideoPlayerScreen(
             title = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             navigationIcon = { IconButton(onClick = { onClose(player.currentPosition, player.duration) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
             actions = {
-                if (item.mediaType == LibraryMediaType.VIDEO) {
-                    IconButton(onClick = {
-                        fullscreen = true
-                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                    }) { Icon(Icons.Default.Fullscreen, "全画面") }
-                    IconButton(onClick = { activity?.enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) }) { Icon(Icons.Default.PictureInPicture, "PiP") }
-                }
+                IconButton(onClick = {
+                    fullscreen = true
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }) { Icon(Icons.Default.Fullscreen, "全画面") }
+                IconButton(onClick = { activity?.enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) }) { Icon(Icons.Default.PictureInPicture, "PiP") }
             },
         )
-        if (item.mediaType == LibraryMediaType.AUDIO && !fullscreen) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                MediaHeroArtwork(item, onLoadArtwork)
-                Spacer(Modifier.height(20.dp))
-                Text(item.title, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(
-                    listOf(item.artist, item.album).filter(String::isNotBlank).joinToString(" ・ "),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                AndroidView(
-                    factory = { PlayerView(it).apply { this.player = player; useController = true } },
-                    update = { it.player = player },
-                    modifier = Modifier.fillMaxWidth().height(176.dp),
-                )
-            }
-        } else {
-            AndroidView(
-                factory = { PlayerView(it).apply { this.player = player; useController = true } },
-                update = { it.player = player },
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        AndroidView(
+            factory = { PlayerView(it).apply { this.player = player; useController = true } },
+            update = { it.player = player },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 

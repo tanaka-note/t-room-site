@@ -35,11 +35,28 @@ class MediaLibraryContractTest {
     }
 
     @Test
-    fun versionIs140AndCredentialsAreNotEmbedded() {
+    fun versionIs141AndCredentialsAreNotEmbedded() {
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains("versionCode = 31"))
-        assertTrue(gradle.contains("versionName = \"1.4.0\""))
+        assertTrue(gradle.contains("versionCode = 32"))
+        assertTrue(gradle.contains("versionName = \"1.4.1\""))
         assertFalse(gradle.contains("YOUTUBE_API_KEY"))
+    }
+
+    @Test
+    fun audioNowPlayingReusesTheApplicationPlaybackManagerPlayer() {
+        val viewModel = File("src/main/java/jp/tanaka/tcloud/MainViewModel.kt").readText()
+        val app = File("src/main/java/jp/tanaka/tcloud/ui/TCloudApp.kt").readText()
+        val playerUi = File("src/main/java/jp/tanaka/tcloud/ui/MediaLibraryScreen.kt").readText()
+        val audioScreen = playerUi.substringAfter("internal fun LibraryAudioNowPlayingScreen")
+            .substringBefore("internal fun LibraryVideoPlayerScreen")
+
+        assertTrue(viewModel.contains("coordinateLibraryMediaOpen("))
+        assertTrue(viewModel.contains("playbackManager.playQueue("))
+        assertTrue(app.contains("LibraryAudioNowPlayingScreen("))
+        assertTrue(app.contains("playbackManager = playbackManager"))
+        assertTrue(audioScreen.contains("AudioQueueControls(playbackManager"))
+        assertTrue(playerUi.contains("val player = manager.player"))
+        assertFalse(audioScreen.contains("ExoPlayer.Builder"))
     }
 
     @Test

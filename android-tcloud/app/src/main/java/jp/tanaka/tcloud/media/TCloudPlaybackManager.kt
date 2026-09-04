@@ -38,6 +38,8 @@ class TCloudPlaybackManager(
     val playbackMode: StateFlow<PlaybackMode> = mutablePlaybackMode.asStateFlow()
     private val mutableShuffle = MutableStateFlow(false)
     val shuffle: StateFlow<Boolean> = mutableShuffle.asStateFlow()
+    private val mutableCurrentQueueItem = MutableStateFlow<PlayableMediaItem?>(null)
+    val currentQueueItem: StateFlow<PlayableMediaItem?> = mutableCurrentQueueItem.asStateFlow()
 
     val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -59,7 +61,7 @@ class TCloudPlaybackManager(
             }
 
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
-                val item = currentItem ?: return
+                val item = currentQueueItem.value ?: return
                 metadataResolved?.invoke(
                     item,
                     mediaMetadata.title?.toString(),
@@ -76,8 +78,6 @@ class TCloudPlaybackManager(
     var currentTitle: String = ""
         private set
     var currentStableId: String? = null
-        private set
-    var currentItem: PlayableMediaItem? = null
         private set
     var statusText: String = "再生中"
         private set
@@ -99,7 +99,7 @@ class TCloudPlaybackManager(
         queue = emptyList()
         unshuffledQueue = emptyList()
         currentStableId = "cloud:${file.id}"
-        currentItem = null
+        mutableCurrentQueueItem.value = null
         if (currentFileId == file.id && player.mediaItemCount > 0) {
             (factory as? AutoCloseable)?.close()
             if (startAtBeginning) player.seekTo(0L)
@@ -186,7 +186,7 @@ class TCloudPlaybackManager(
         currentFileId = null
         currentTitle = ""
         currentStableId = null
-        currentItem = null
+        mutableCurrentQueueItem.value = null
         queue = emptyList()
         unshuffledQueue = emptyList()
         statusText = "再生中"
@@ -215,6 +215,9 @@ class TCloudPlaybackManager(
 
     private fun playQueueItem(item: PlayableMediaItem, startAtBeginning: Boolean) {
         if (currentStableId == item.stableId && player.mediaItemCount > 0) {
+            mutableCurrentQueueItem.value = item
+            currentFileId = item.cloudFile?.id
+            currentTitle = item.title
             if (startAtBeginning) player.seekTo(0L)
             player.play()
             TCloudPlaybackService.start(context)
@@ -226,7 +229,7 @@ class TCloudPlaybackManager(
         val factory = createDataSourceFactory(item)
         currentFactory = factory
         currentStableId = item.stableId
-        currentItem = item
+        mutableCurrentQueueItem.value = item
         currentFileId = item.cloudFile?.id
         currentTitle = item.title
         playbackRecorded?.invoke(item, item.playbackPositionMs, item.durationMs)
@@ -245,7 +248,7 @@ class TCloudPlaybackManager(
     }
 
     private fun recordCurrentPlayback() {
-        currentItem?.let { item ->
+        currentQueueItem.value?.let { item ->
             playbackRecorded?.invoke(item, player.currentPosition.coerceAtLeast(0L), player.duration.coerceAtLeast(0L))
         }
     }

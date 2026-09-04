@@ -29,8 +29,9 @@ import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import jp.tanaka.tcloud.library.MediaLibraryManager
 import jp.tanaka.tcloud.library.MediaLibraryState
 import jp.tanaka.tcloud.library.PlayableMediaItem
-import jp.tanaka.tcloud.library.LibraryMediaType
-import jp.tanaka.tcloud.library.MediaSourceType
+import jp.tanaka.tcloud.library.LibraryMediaDestination
+import jp.tanaka.tcloud.library.coordinateLibraryMediaOpen
+import jp.tanaka.tcloud.library.libraryMediaDestination
 import jp.tanaka.tcloud.offline.TCloudOfflineManager
 import jp.tanaka.tcloud.offline.TCloudOfflineStore
 import jp.tanaka.tcloud.backup.CameraBackupManager
@@ -290,22 +291,40 @@ class MainViewModel(
 
     fun openLibraryMedia(item: PlayableMediaItem) {
         mediaLibraryManager.ensureStored(item)
-        if (item.mediaType == LibraryMediaType.AUDIO && item.source != MediaSourceType.YOUTUBE) {
-            runCatching {
-                playbackManager.playQueue(
-                    mediaLibraryManager.state.value.items,
-                    item.stableId,
-                    startAtBeginning = false,
-                )
-            }.onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
-        } else {
-            mutableState.update { it.copy(selectedLibraryMedia = item) }
-            mediaLibraryManager.recordPlayback(item.stableId, item.playbackPositionMs, item.durationMs)
-        }
+        runCatching {
+            coordinateLibraryMediaOpen(
+                item = item,
+                startAudioQueue = { selected ->
+                    playbackManager.playQueue(
+                        mediaLibraryManager.state.value.items,
+                        selected.stableId,
+                        startAtBeginning = false,
+                    )
+                },
+                selectMedia = { selected ->
+                    mutableState.update { it.copy(selectedLibraryMedia = selected, error = null) }
+                },
+                recordStandalonePlayback = { selected ->
+                    mediaLibraryManager.recordPlayback(
+                        selected.stableId,
+                        selected.playbackPositionMs,
+                        selected.durationMs,
+                    )
+                },
+            )
+        }.onFailure { error -> mutableState.update { it.copy(error = error.userMessage()) } }
     }
 
     fun closeLibraryMedia(positionMs: Long = 0L, durationMs: Long = 0L) {
-        mutableState.value.selectedLibraryMedia?.let { mediaLibraryManager.recordPlayback(it.stableId, positionMs, durationMs) }
+        mutableState.value.selectedLibraryMedia?.let { selected ->
+            val isAudioNowPlaying = libraryMediaDestination(selected) == LibraryMediaDestination.AUDIO_NOW_PLAYING
+            val recordedItem = if (isAudioNowPlaying) playbackManager.currentQueueItem.value ?: selected else selected
+            mediaLibraryManager.recordPlayback(
+                recordedItem.stableId,
+                if (isAudioNowPlaying) playbackManager.player.currentPosition.coerceAtLeast(0L) else positionMs,
+                if (isAudioNowPlaying) playbackManager.player.duration.coerceAtLeast(0L) else durationMs,
+            )
+        }
         mutableState.update { it.copy(selectedLibraryMedia = null) }
     }
 

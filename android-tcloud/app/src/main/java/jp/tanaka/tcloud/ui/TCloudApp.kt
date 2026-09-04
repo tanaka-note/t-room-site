@@ -189,7 +189,9 @@ import jp.tanaka.tcloud.media.TCloudPlaybackManager
 import jp.tanaka.tcloud.media.PlaybackMode
 import jp.tanaka.tcloud.library.MediaSourceType
 import jp.tanaka.tcloud.library.LibraryMediaType
+import jp.tanaka.tcloud.library.LibraryMediaDestination
 import jp.tanaka.tcloud.library.PlayableMediaItem
+import jp.tanaka.tcloud.library.libraryMediaDestination
 import jp.tanaka.tcloud.library.requiredLocalMediaPermissions
 import jp.tanaka.tcloud.transfer.TransferBatchSnapshot
 import jp.tanaka.tcloud.transfer.TransferDirection
@@ -226,14 +228,31 @@ private val LocalTCloudSharedElementScopes = staticCompositionLocalOf<TCloudShar
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-private fun Modifier.tCloudSharedImage(fileId: Long, enabled: Boolean = true): Modifier {
+private fun Modifier.tCloudSharedImageBounds(fileId: Long, enabled: Boolean = true): Modifier {
     val scopes = LocalTCloudSharedElementScopes.current
     if (!enabled || scopes == null) return this
     val base = this
     return with(scopes.transitionScope) {
-        base.sharedElement(
+        base.sharedBounds(
             sharedContentState = rememberSharedContentState(key = "image-$fileId"),
             animatedVisibilityScope = scopes.visibilityScope,
+            enter = fadeIn(tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing)),
+            exit = fadeOut(tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing)),
+            resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
+        )
+    }
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun Modifier.tCloudSharedImageContent(enabled: Boolean = true): Modifier {
+    val scopes = LocalTCloudSharedElementScopes.current
+    if (!enabled || scopes == null) return this
+    val base = this
+    return with(scopes.visibilityScope) {
+        base.animateEnterExit(
+            enter = fadeIn(tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing)),
+            exit = fadeOut(tween(TCloudMotion.Quick, easing = TCloudMotion.NaturalEasing)),
         )
     }
 }
@@ -611,11 +630,16 @@ fun TCloudApp(
                     applicationVisible = applicationVisible,
                     onClose = { viewModel.closeLibraryMedia() },
                 )
+                state.selectedLibraryMedia?.let(::libraryMediaDestination) == LibraryMediaDestination.AUDIO_NOW_PLAYING -> LibraryAudioNowPlayingScreen(
+                    initialItem = checkNotNull(state.selectedLibraryMedia),
+                    playbackManager = playbackManager,
+                    onLoadArtwork = viewModel::loadMediaArtwork,
+                    onClose = { viewModel.closeLibraryMedia() },
+                )
                 state.selectedLibraryMedia != null -> LibraryVideoPlayerScreen(
                     item = checkNotNull(state.selectedLibraryMedia),
                     playbackManager = playbackManager,
                     pictureInPicture = pictureInPicture,
-                    onLoadArtwork = viewModel::loadMediaArtwork,
                     onClose = viewModel::closeLibraryMedia,
                 )
                 state.showingPlayerLibrary -> TCloudEntrance(direction = 1) {
@@ -932,12 +956,9 @@ private fun ImageViewerScreen(
         ) {
             when {
                 loading -> CircularProgressIndicator(color = Color.White)
-                displayedBitmap != null -> Image(
-                    bitmap = checkNotNull(displayedBitmap).asImageBitmap(),
-                    contentDescription = file.name,
-                    contentScale = ContentScale.Fit,
+                displayedBitmap != null -> Box(
                     modifier = Modifier
-                        .tCloudSharedImage(file.id)
+                        .tCloudSharedImageBounds(file.id)
                         .fillMaxSize()
                         .graphicsLayer(
                             scaleX = scale,
@@ -946,7 +967,14 @@ private fun ImageViewerScreen(
                             translationY = offset.y,
                         )
                         .transformable(transformState),
-                )
+                ) {
+                    Image(
+                        bitmap = checkNotNull(displayedBitmap).asImageBitmap(),
+                        contentDescription = file.name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().tCloudSharedImageContent(),
+                    )
+                }
                 else -> Text(error ?: "画像を表示できませんでした。", color = Color.White)
             }
             if (scale == 1f) {
@@ -2549,15 +2577,21 @@ private fun FileGridCard(
     ) {
         Box(Modifier.fillMaxSize()) {
             if (thumbnailBitmap != null) {
-                Image(
-                    bitmap = thumbnailBitmap.asImageBitmap(),
-                    contentDescription = null,
+                Box(
                     modifier = Modifier
-                        .tCloudSharedImage(file.id, enabled = file.mediaKind == "image")
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(TCloudDimens.ItemRadius)),
-                    contentScale = ContentScale.Crop,
-                )
+                        .tCloudSharedImageBounds(file.id, enabled = file.mediaKind == "image")
+                        .fillMaxSize(),
+                ) {
+                    Image(
+                        bitmap = thumbnailBitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .tCloudSharedImageContent(enabled = file.mediaKind == "image")
+                            .clip(RoundedCornerShape(TCloudDimens.ItemRadius)),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
             } else {
                 Box(
                     modifier = Modifier.fillMaxSize().padding(bottom = 48.dp),
