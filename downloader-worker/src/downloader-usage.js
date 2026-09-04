@@ -74,8 +74,11 @@ export function classifyUsageError(error) {
   else if (/(malware_scanner_unavailable|yara_unavailable)/.test(code)) category = "scanner_unavailable";
   else if (/(malware_definitions_|malware_scan_failed|malware_scan_incomplete)/.test(code)) category = "clamav_error";
   else if (/(yara_rules_invalid|yara_scan_failed)/.test(code)) category = "yara_error";
+  else if (code.includes("download_tls_failed")) category = "tls_failed";
+  else if (code.includes("download_network_failed")) category = "network_failed";
   else if (/(mime_mismatch|extension_mismatch|unsupported_mime|executable_content|blocked_extension|suspicious_double_extension|magic_failed)/.test(code)) category = "file_type_mismatch";
-  else if (/(ffprobe_|invalid_media_stream|unsafe_embedded_stream|normalized_|normalization_|manifest_invalid)/.test(code)) category = "malformed_media";
+  else if (/(ffprobe_|invalid_media_stream|unsafe_embedded_stream|normalized_|normalization_|manifest_invalid|format_unavailable)/.test(code)) category = "malformed_media";
+  else if (code.includes("scanner_rejected") || code.startsWith("scan_")) category = "scanner_rejected";
   else if (/(processing_budget_exceeded|video_transcode_budget)/.test(code)) category = "processing_budget_exceeded";
   else if (/(job_deadline_exceeded|download_timeout|metadata_timeout)/.test(code)) category = "deadline_exceeded";
   else if (/(ssrf_blocked|blocked_address|blocked_hostname|blocked_port|credentials_not_allowed|dns_failed|invalid_dns_result)/.test(code)) category = "ssrf_rejected";

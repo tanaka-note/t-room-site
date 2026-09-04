@@ -18,7 +18,7 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
-from adapters import ADAPTERS
+from adapters import ADAPTERS, AdapterError
 from ssrf import UnsafeUrl, validate_redirect, validate_url
 
 
@@ -51,7 +51,32 @@ YT_DLP_BLOCKING_FAILURES = (
 )
 YT_DLP_UNSUPPORTED_FAILURES = (
     "unsupported url", "this url is not supported", "no suitable extractor",
-    "generic extractor failed", "no video formats found",
+    "generic extractor failed",
+)
+YT_DLP_RUNTIME_FAILURES = (
+    ("download_tls_failed", (
+        "certificate verify failed", "certificate verification failed", "ssl certificate",
+        "unable to get local issuer certificate", "self signed certificate", "curl: (60)",
+        "tlsv1 alert", "sslerror", "x509",
+    )),
+    ("download_timeout", (
+        "timed out", "timeout", "operation too slow", "read operation timed out",
+    )),
+    ("format_unavailable", (
+        "requested format is not available", "no video formats found", "no suitable formats",
+        "requested format not available", "format selection failed",
+    )),
+    ("manifest_invalid", (
+        "failed to parse m3u8", "invalid data found when processing input",
+        "invalid manifest", "unable to parse manifest", "failed to parse manifest",
+    )),
+    ("download_network_failed", (
+        "proxyerror", "proxy error", "unable to connect", "connection refused",
+        "connection reset", "network is unreachable", "temporary failure in name resolution",
+        "name or service not known", "remote end closed connection", "http error 502",
+        "http error 503", "unable to download", "transport error", "tunnel connection failed",
+        "proxy tunnel", "forbidden by proxy",
+    )),
 )
 GENERIC_USER_AGENT = "Mozilla/5.0"
 
@@ -96,7 +121,10 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
     safe = validate_url(source_url)
     for adapter in ADAPTERS:
         if adapter.matches(safe.value):
-            return adapter.analyze(safe.value, max_bytes=max_bytes)
+            # Adapters are resolved through the dedicated two-stage endpoint so
+            # the Worker can validate and allowlist the discovered media host
+            # before any manifest request is made.
+            raise ResolverError("adapter_resolution_required")
 
     direct = _analyze_direct(safe.value, max_bytes)
     if direct:
@@ -119,6 +147,33 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
         browser["browserFallbackUsed"] = True
         return browser
     raise ResolverError("media_not_found")
+
+
+def resolve_site_adapter(source_url: str, max_bytes: int) -> dict:
+    safe = validate_url(source_url)
+    adapter = next((item for item in ADAPTERS if item.matches(safe.value)), None)
+    if adapter is None:
+        raise ResolverError("adapter_not_supported")
+    try:
+        discovery_url = adapter.discovery_url(safe.value)
+        payload = _read_json_document(discovery_url, max_bytes=min(max_bytes, 1_000_000))
+        result = adapter.parse(payload)
+    except AdapterError as error:
+        raise ResolverError(str(error)) from error
+    discovered = validate_url(str(result.get("url") or ""))
+    thumbnail = None
+    if result.get("thumbnail"):
+        try:
+            thumbnail = validate_url(str(result["thumbnail"])).value
+        except UnsafeUrl:
+            thumbnail = None
+    return {
+        "adapter": str(result.get("adapter") or adapter.name)[:80],
+        "url": discovered.value,
+        "hostname": discovered.hostname,
+        "title": _text(result.get("title"), 240),
+        "thumbnail": thumbnail,
+    }
 
 
 def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0) -> tuple[Path, str, str | None]:
@@ -161,6 +216,7 @@ def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int, d
     output = str(workdir / "media.%(ext)s")
     command = [
         "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser",
+        "--compat-options", "no-certifi",
         "--js-runtimes", "deno:/opt/deno/bin/deno",
         "--no-playlist" if choice["playlistIndex"] is None else "--yes-playlist",
         "--no-write-info-json", "--no-write-thumbnail", "--no-write-subs", "--no-write-comments",
@@ -176,21 +232,25 @@ def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int, d
         result = subprocess.run(
             command, capture_output=True, text=True,
             timeout=_phase_timeout(deadline, timeout_seconds, reserve_seconds), check=False,
-            preexec_fn=(lambda: _subprocess_limits(max_bytes)) if resource is not None else None, env=_subprocess_environment(),
+            preexec_fn=(lambda: _subprocess_limits(max_bytes)) if resource is not None else None,
+            env=_network_subprocess_environment(),
         )
     except subprocess.TimeoutExpired as error:
         if deadline is not None:
             raise TimeoutError("job_deadline_exceeded") from error
         raise ResolverError("download_timeout") from error
     if result.returncode != 0:
-        raise ResolverError("download_failed")
+        raise ResolverError(_classify_ytdlp_failure(result.stderr) or "download_failed")
     files = [path for path in workdir.iterdir() if path.is_file()]
     if not files:
         raise ResolverError("download_missing")
     path = max(files, key=lambda candidate: candidate.stat().st_size)
     if path.stat().st_size > max_bytes:
         raise ResolverError("size_limit")
-    return path, choice.get("filename") or path.name, choice.get("mime")
+    preferred_name = choice.get("filename") or path.name
+    actual_name = _replace_suffix(preferred_name, path.suffix)
+    actual_mime = mimetypes.guess_type(actual_name)[0] or choice.get("mime")
+    return path, actual_name, actual_mime
 
 
 def _analyze_direct(url: str, max_bytes: int) -> dict | None:
@@ -225,6 +285,17 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
         delivery = "hls" if suffix == ".m3u8" or "mpegurl" in content_type else "dash" if suffix == ".mpd" or "dash+xml" in content_type else "direct"
         encrypted = (delivery == "hls" and _encrypted_hls(signature)) or (delivery == "dash" and _drm_dash(signature))
         live = delivery == "hls" and _live_media_playlist(signature)
+        egress_hosts = [urlsplit(final_url).hostname]
+        if delivery in {"hls", "dash"} and not encrypted and not live:
+            try:
+                egress_hosts = _validate_adaptive_source(final_url, delivery)
+            except ResolverError as error:
+                if str(error) in {"encrypted_stream_not_supported", "drm_not_supported"}:
+                    encrypted = True
+                elif str(error) == "live_stream_not_supported":
+                    live = True
+                else:
+                    raise
         downloadable = (length is None or length <= max_bytes) and not encrypted and not live
         return {
             "site": urlsplit(final_url).hostname,
@@ -244,7 +315,7 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
                     "delivery": delivery,
                     "filename": _name_from_url(final_url, content_type),
                     "mime": content_type or None,
-                    "egressHosts": [urlsplit(final_url).hostname],
+                    "egressHosts": egress_hosts,
                 },
                 "unavailableReason": None if downloadable else (
                     "暗号化またはDRMが使用されているため取得できません。" if encrypted else
@@ -264,7 +335,7 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
         # headless mode. Keep them job-local so concurrent analyses neither
         # share browser state nor leave profiles behind in /work.
         with tempfile.TemporaryDirectory(prefix="chromium-", dir="/work") as browser_home:
-            browser_environment = _subprocess_environment()
+            browser_environment = _network_subprocess_environment()
             browser_environment.update({
                 "HOME": browser_home,
                 "XDG_CACHE_HOME": str(Path(browser_home) / "cache"),
@@ -322,12 +393,13 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
 def _yt_dlp_metadata(url: str, timeout: int) -> dict | None:
     command = [
         "yt-dlp", "--ignore-config", "--no-cache-dir", "--no-cookies-from-browser",
+        "--compat-options", "no-certifi",
         "--js-runtimes", "deno:/opt/deno/bin/deno",
         "--dump-single-json", "--skip-download", "--no-warnings", "--socket-timeout", "20",
         "--retries", "1", "--extractor-retries", "1", url,
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=_subprocess_environment())
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=_network_subprocess_environment())
     except subprocess.TimeoutExpired as error:
         raise ResolverError("metadata_timeout") from error
     if len(result.stdout) > 10_000_000:
@@ -606,13 +678,14 @@ def _refine_direct_type(detected: tuple[str, str], path_suffix: str, declared_mi
     return mime, suffix
 
 
-def _validate_adaptive_source(url: str, delivery: str, deadline=None, reserve_seconds: float = 0) -> None:
+def _validate_adaptive_source(url: str, delivery: str, deadline=None, reserve_seconds: float = 0) -> list[str]:
+    egress_hosts: list[str] = []
     if delivery == "hls":
-        _validate_hls_tree(url, set(), [0], deadline, reserve_seconds)
-        return
+        _validate_hls_tree(url, set(), [0], deadline, reserve_seconds, egress_hosts)
+        return egress_hosts
     if delivery == "dash":
-        _validate_dash_manifest(url, deadline, reserve_seconds)
-        return
+        _validate_dash_manifest(url, deadline, reserve_seconds, egress_hosts)
+        return egress_hosts
     raise ResolverError("adaptive_protocol_invalid")
 
 
@@ -629,14 +702,31 @@ def _read_manifest(url: str, deadline=None, reserve_seconds: float = 0) -> tuple
     return content, final_url
 
 
-def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int], deadline=None, reserve_seconds: float = 0) -> None:
-    safe = validate_url(url).value
+def _read_json_document(url: str, max_bytes: int = 1_000_000) -> object:
+    response, _ = _open(url, method="GET", timeout=30, max_redirects=3, max_body=max_bytes)
+    try:
+        content = response.read(max_bytes + 1)
+    finally:
+        response.close()
+    if len(content) > max_bytes:
+        raise ResolverError("adapter_response_too_large")
+    try:
+        return json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ResolverError("adapter_response_invalid") from error
+
+
+def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int], deadline=None, reserve_seconds: float = 0, egress_hosts: list[str] | None = None) -> None:
+    validated = validate_url(url)
+    safe = validated.value
+    _record_egress_host(validated.hostname, egress_hosts)
     if safe in visited:
         return
     if len(visited) >= 16:
         raise ResolverError("manifest_playlist_limit")
     visited.add(safe)
     content, final_url = _read_manifest(safe, deadline, reserve_seconds)
+    _record_egress_host((urlsplit(final_url).hostname or "").lower(), egress_hosts)
     text = content.decode("utf-8", "replace")
     if not text.lstrip().startswith("#EXTM3U"):
         raise ResolverError("manifest_invalid")
@@ -655,13 +745,17 @@ def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int], de
         if line.startswith("#"):
             for match in re.finditer(r'URI=(?:"([^"]+)"|([^,]+))', line, flags=re.IGNORECASE):
                 reference = (match.group(1) or match.group(2) or "").strip()
-                target = validate_url(urljoin(final_url, reference)).value
+                target_safe = validate_url(urljoin(final_url, reference))
+                target = target_safe.value
+                _record_egress_host(target_safe.hostname, egress_hosts)
                 if upper.startswith("#EXT-X-MEDIA:"):
-                    _validate_hls_tree(target, visited, segment_count, deadline, reserve_seconds)
+                    _validate_hls_tree(target, visited, segment_count, deadline, reserve_seconds, egress_hosts)
             continue
-        target = validate_url(urljoin(final_url, line)).value
+        target_safe = validate_url(urljoin(final_url, line))
+        target = target_safe.value
+        _record_egress_host(target_safe.hostname, egress_hosts)
         if next_is_playlist or is_master or urlsplit(target).path.lower().endswith(".m3u8"):
-            _validate_hls_tree(target, visited, segment_count, deadline, reserve_seconds)
+            _validate_hls_tree(target, visited, segment_count, deadline, reserve_seconds, egress_hosts)
             next_is_playlist = False
             continue
         segment_count[0] += 1
@@ -671,8 +765,11 @@ def _validate_hls_tree(url: str, visited: set[str], segment_count: list[int], de
         raise ResolverError("encrypted_stream_not_supported")
 
 
-def _validate_dash_manifest(url: str, deadline=None, reserve_seconds: float = 0) -> None:
-    content, final_url = _read_manifest(validate_url(url).value, deadline, reserve_seconds)
+def _validate_dash_manifest(url: str, deadline=None, reserve_seconds: float = 0, egress_hosts: list[str] | None = None) -> None:
+    validated = validate_url(url)
+    _record_egress_host(validated.hostname, egress_hosts)
+    content, final_url = _read_manifest(validated.value, deadline, reserve_seconds)
+    _record_egress_host((urlsplit(final_url).hostname or "").lower(), egress_hosts)
     if _drm_dash(content):
         raise ResolverError("drm_not_supported")
     try:
@@ -686,11 +783,21 @@ def _validate_dash_manifest(url: str, deadline=None, reserve_seconds: float = 0)
     for element in root.iter():
         local_name = element.tag.rsplit("}", 1)[-1].lower()
         if local_name in {"baseurl", "location"} and (element.text or "").strip():
-            validate_url(urljoin(final_url, (element.text or "").strip()))
+            target = validate_url(urljoin(final_url, (element.text or "").strip()))
+            _record_egress_host(target.hostname, egress_hosts)
         for name, value in element.attrib.items():
             local_attribute = name.rsplit("}", 1)[-1].lower()
             if local_attribute in {"href", "sourceurl", "media", "initialization", "index"} and value:
-                validate_url(urljoin(final_url, value))
+                target = validate_url(urljoin(final_url, value))
+                _record_egress_host(target.hostname, egress_hosts)
+
+
+def _record_egress_host(hostname: str, egress_hosts: list[str] | None) -> None:
+    if egress_hosts is None or not hostname or hostname in egress_hosts:
+        return
+    if len(egress_hosts) >= 32:
+        raise ResolverError("manifest_host_limit")
+    egress_hosts.append(hostname)
 
 
 def _encrypted_hls(value: bytes) -> bool:
@@ -740,11 +847,17 @@ def _subprocess_limits(max_bytes: int) -> None:
     resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
 
 
-def _subprocess_environment() -> dict:
-    env = {key: value for key, value in os.environ.items() if key not in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}}
-    ca = "/etc/cloudflare/certs/cloudflare-containers-ca.crt"
-    if os.path.exists(ca):
-        env.update({"SSL_CERT_FILE": ca, "REQUESTS_CA_BUNDLE": ca})
+def _network_subprocess_environment() -> dict:
+    """Keep the Container-injected outbound proxy and use the combined CA."""
+    env = dict(os.environ)
+    candidates = (
+        env.get("SSL_CERT_FILE"),
+        "/work/ca-certificates.crt",
+        "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+    )
+    ca = next((value for value in candidates if value and os.path.isfile(value)), None)
+    if ca:
+        env.update({"SSL_CERT_FILE": ca, "REQUESTS_CA_BUNDLE": ca, "CURL_CA_BUNDLE": ca})
     return env
 
 
@@ -754,6 +867,12 @@ def _name_from_url(url: str, mime: str | None) -> str:
         extension = mimetypes.guess_extension((mime or "").split(";", 1)[0]) or ""
         name += extension
     return _text(name, 120) or "download"
+
+
+def _replace_suffix(filename: str, suffix: str) -> str:
+    safe_suffix = suffix if re.fullmatch(r"\.[A-Za-z0-9]{1,12}", suffix or "") else ""
+    stem = Path(str(filename or "download")).stem or "download"
+    return f"{stem[:max(1, 120 - len(safe_suffix))]}{safe_suffix}"
 
 
 def _media_type(mime: str, suffix: str) -> str:
@@ -795,6 +914,9 @@ def _text(value, maximum: int) -> str | None:
 def _classify_ytdlp_failure(stderr: str) -> str | None:
     message = str(stderr or "").lower()
     for code, markers in YT_DLP_BLOCKING_FAILURES:
+        if any(marker in message for marker in markers):
+            return code
+    for code, markers in YT_DLP_RUNTIME_FAILURES:
         if any(marker in message for marker in markers):
             return code
     return None

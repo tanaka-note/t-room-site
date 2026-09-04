@@ -42,6 +42,8 @@ const YOUTUBE_ANALYSIS_HOSTS = Object.freeze([
   "youtube.com", "*.youtube.com", "youtu.be", "youtube-nocookie.com", "*.youtube-nocookie.com",
   "youtubei.googleapis.com", "jnn-pa.googleapis.com", "i.ytimg.com", "googlevideo.com", "*.googlevideo.com"
 ]);
+const IMAGE_SHARE_SOURCE_HOST = "cdn.image-share.cc";
+const IMAGE_SHARE_API_HOST = "rwzugqnp.fun800.click";
 const PRIVATE_DESTINATIONS = Object.freeze([
   "localhost", "*.localhost", "metadata.google.internal", "metadata.aws.internal", "instance-data.ec2.internal",
   "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
@@ -379,17 +381,24 @@ async function processAnalyzeMessage(env, message) {
     }
     container = getContainer(env.DOWNLOADER_CONTAINER, `analysis-${jobId}`);
     await requireHealthyContainer(container);
-    await configureContainerEgress(container, sourceUrl);
+    const resolved = await resolveAnalysisSource(container, sourceUrl, maxFileBytes(env));
+    await configureContainerEgress(container, sourceUrl, resolved.egressHosts);
     const response = await container.fetch(new Request("http://container/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: sourceUrl.href, maxBytes: maxFileBytes(env), policyRestricted: isPolicyRestrictedHost(sourceUrl.hostname) }),
+      body: JSON.stringify({ url: resolved.url.href, maxBytes: maxFileBytes(env), policyRestricted: isPolicyRestrictedHost(sourceUrl.hostname) }),
       signal: AbortSignal.timeout(120_000)
     }));
     const analysis = await response.json().catch(() => ({}));
     if (!response.ok) {
       console.error(JSON.stringify({ event: "downloader_container_analyze_failed", errorCode: cleanText(analysis.errorCode, 80) || "unknown", status: response.status }));
       throw new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
+    }
+    if (resolved.adapter) {
+      analysis.site = sourceUrl.hostname;
+      analysis.extractor = resolved.adapter;
+      if (resolved.title) analysis.title = resolved.title;
+      if (resolved.thumbnail) analysis.thumbnail = resolved.thumbnail;
     }
     const normalized = await normalizeAnalysis(analysis, sourceUrl.hostname, row.url_hash, jobId, env);
     const extractor = String(normalized.extractor || "unknown").slice(0, 80);
@@ -979,6 +988,34 @@ function normalizeDownloadRoute(value) {
   } catch { return null; }
 }
 
+async function resolveAnalysisSource(container, sourceUrl, maxBytes) {
+  if (sourceUrl.hostname !== IMAGE_SHARE_SOURCE_HOST) {
+    return { url: sourceUrl, adapter: null, title: null, thumbnail: null, egressHosts: [] };
+  }
+  // Only the named landing-page adapter receives access to its documented
+  // metadata API. The discovered URL is returned privately to this Worker,
+  // revalidated here, and allowlisted before the Container inspects it.
+  await configureContainerEgress(container, sourceUrl, [IMAGE_SHARE_API_HOST]);
+  const response = await container.fetch(new Request("http://container/resolve-adapter", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: sourceUrl.href, maxBytes }),
+    signal: AbortSignal.timeout(60_000)
+  }));
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw containerResponseError(result.errorCode, response.status);
+  if (result.adapter !== "image-share") throw new Error("adapter_response_invalid");
+  const discovered = normalizeSourceUrl(result.url);
+  if (isPolicyRestrictedHost(discovered.hostname)) throw new Error("policy_restricted");
+  return {
+    url: discovered,
+    adapter: "image-share",
+    title: cleanText(result.title, 240) || null,
+    thumbnail: safeThumbnail(result.thumbnail),
+    egressHosts: [IMAGE_SHARE_API_HOST, discovered.hostname]
+  };
+}
+
 async function configureContainerEgress(container, sourceUrl, analyzedHosts = []) {
   if (typeof container?.setAllowedHosts !== "function") throw new Error("container_egress_allowlist_unavailable");
   const hosts = new Set(["r2.tlain.internal"]);
@@ -1160,7 +1197,14 @@ function sqliteUtcTimestamp(milliseconds) { return new Date(milliseconds).toISOS
 function parseJson(value, fallback) { try { return JSON.parse(value); } catch { return fallback; } }
 function safeContainerMessage(value) { const text = cleanText(value, 240); return /^(この|URL|ファイル|コンテンツ|安全)/.test(text) ? text : "このURLからメディアを確認できませんでした。"; }
 function userSafeError(error) { return error instanceof HttpError || error instanceof DomainError ? cleanText(error.message, 240) : "このURLからメディアを確認できませんでした。"; }
-function queueErrorReason(error) { const code = cleanText(error?.message || error?.name || "unknown", 80); return code.includes("scan") ? "安全性を確認できなかったため取得を中止しました。" : code.includes("size") ? "ファイルサイズが上限を超えています。" : "ファイルを取得できませんでした。時間を置いてお試しください。"; }
+function queueErrorReason(error) {
+  const code = cleanText(error?.message || error?.name || "unknown", 80);
+  if (code.includes("scan") || code.includes("malware") || code.includes("yara")) return "安全性を確認できなかったため取得を中止しました。";
+  if (code.includes("size")) return "ファイルサイズが上限を超えています。";
+  if (code.includes("format_unavailable") || code.includes("manifest_invalid")) return "動画の配信形式を確認できませんでした。";
+  if (code.includes("download_timeout") || code.includes("job_deadline_exceeded")) return "安全な処理時間を超えたため取得を中止しました。";
+  return "ファイルを取得できませんでした。時間を置いてお試しください。";
+}
 function isAllowedExtractorPost(url) {
   const hostname = String(url?.hostname || "").toLowerCase();
   return (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) && url.pathname.startsWith("/youtubei/v1/");

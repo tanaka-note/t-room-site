@@ -30,6 +30,10 @@ test("security failureを秘匿可能な固定分類へ正規化する", () => {
   assert.equal(classifyUsageError({ message: "scan_yara_scan_timeout" }).category, "scanner_timeout");
   assert.equal(classifyUsageError({ message: "scan_mime_mismatch" }).category, "file_type_mismatch");
   assert.equal(classifyUsageError({ message: "scan_normalization_failed" }).category, "malformed_media");
+  assert.equal(classifyUsageError({ message: "download_tls_failed" }).category, "tls_failed");
+  assert.equal(classifyUsageError({ message: "download_network_failed" }).category, "network_failed");
+  assert.equal(classifyUsageError({ message: "format_unavailable" }).category, "malformed_media");
+  assert.equal(classifyUsageError({ message: "scanner_rejected" }).category, "scanner_rejected");
   assert.equal(classifyUsageError({ code: "processing_budget_exceeded", status: 422 }).category, "processing_budget_exceeded");
   assert.equal(classifyUsageError({ message: "job_deadline_exceeded" }).category, "deadline_exceeded");
   assert.deepEqual(classifyUsageError({ code: "rate_limited", status: 429 }), { code: "rate_limited", outcome: "rejected", category: "rate_limited" });

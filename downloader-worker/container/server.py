@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from resolver import ResolverError, analyze, download
+from resolver import ResolverError, analyze, download, resolve_site_adapter
 from scanner import UnsafeFile, clamav_daemon_ready, clamav_database_status, inspect_file, start_clamav_daemon, stop_clamav_daemon, yara_rules_status
 from ssrf import UnsafeUrl
 from media_pipeline import PlanKind, normalize_video
@@ -61,6 +61,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(503, {"error": "Containerを安全に更新しています。", "errorCode": "container_draining"})
         try:
             body = self._json_body()
+            if self.path == "/resolve-adapter":
+                result = resolve_site_adapter(
+                    str(body.get("url") or ""),
+                    _number(body.get("maxBytes"), 1, 2 * 1024**3),
+                )
+                return self._json(200, result)
             if self.path == "/analyze":
                 result = analyze(str(body.get("url") or ""), _number(body.get("maxBytes"), 1, 2 * 1024**3), bool(body.get("policyRestricted")))
                 return self._json(200, result)

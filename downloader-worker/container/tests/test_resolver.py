@@ -1,12 +1,13 @@
 import unittest
 import tempfile
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
 from ssrf import SafeUrl, UnsafeUrl
-from resolver import MEDIA_SUFFIXES, ResolverError, _classify_ytdlp_failure, _drm_dash, _encrypted_hls, _live_media_playlist, _media_type, _normalize_ytdlp, _open, _refine_direct_type, _refine_signature_type, _signature_type, _validate_dash_manifest, _validate_hls_tree, _yt_dlp_metadata, analyze, download
+from resolver import MEDIA_SUFFIXES, ResolverError, _classify_ytdlp_failure, _drm_dash, _encrypted_hls, _live_media_playlist, _media_type, _network_subprocess_environment, _normalize_ytdlp, _open, _refine_direct_type, _refine_signature_type, _signature_type, _validate_adaptive_source, _validate_dash_manifest, _validate_hls_tree, _yt_dlp_metadata, analyze, download, resolve_site_adapter
 
 
 class ResolverSignatureTests(unittest.TestCase):
@@ -141,6 +142,8 @@ class ResolverSignatureTests(unittest.TestCase):
         self.assertIn("--ignore-config", command)
         self.assertIn("--no-cookies-from-browser", command)
         self.assertIn("--js-runtimes", command)
+        self.assertIn("--compat-options", command)
+        self.assertIn("no-certifi", command)
         self.assertNotIn("--netrc", command)
         self.assertNotIn("--netrc-cmd", command)
 
@@ -150,6 +153,109 @@ class ResolverSignatureTests(unittest.TestCase):
 
         run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="Unsupported URL: https://media.example/public")
         self.assertIsNone(_yt_dlp_metadata("https://media.example/public", 5))
+
+    def test_ytdlp_runtime_failures_are_safely_classified_without_exposing_stderr(self):
+        cases = {
+            "certificate verify failed for https://secret.invalid/token": "download_tls_failed",
+            "ProxyError: unable to connect to proxy": "download_network_failed",
+            "Requested format is not available": "format_unavailable",
+            "Failed to parse m3u8 manifest": "manifest_invalid",
+            "Read operation timed out": "download_timeout",
+        }
+        for message, expected in cases.items():
+            with self.subTest(expected=expected):
+                self.assertEqual(_classify_ytdlp_failure(message), expected)
+
+    @patch("resolver._network_subprocess_environment", return_value={"HTTPS_PROXY": "http://proxy.invalid"})
+    @patch("resolver._validate_adaptive_source", return_value=["media.example"])
+    @patch("resolver.validate_url", return_value=SafeUrl("https://media.example/master.m3u8", "media.example"))
+    @patch("resolver.subprocess.run")
+    def test_adaptive_download_uses_network_environment_and_fixed_failure_code(self, run, _validate, _manifest, network_env):
+        run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="certificate verify failed for a private URL")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ResolverError, "download_tls_failed"):
+                download({
+                    "version": 1, "kind": "adaptive", "url": "https://media.example/master.m3u8",
+                    "delivery": "hls", "filename": "media.mp4", "mime": "video/mp4",
+                }, Path(directory), 1024, 60)
+        command = run.call_args.args[0]
+        self.assertIn("--compat-options", command)
+        self.assertIn("no-certifi", command)
+        self.assertEqual(run.call_args.kwargs["env"], {"HTTPS_PROXY": "http://proxy.invalid"})
+        network_env.assert_called_once()
+
+    @patch("resolver._network_subprocess_environment", return_value={})
+    @patch("resolver._validate_adaptive_source", return_value=["media.example"])
+    @patch("resolver.validate_url", return_value=SafeUrl("https://media.example/master.m3u8", "media.example"))
+    @patch("resolver.subprocess.run")
+    def test_adaptive_output_uses_the_downloaded_file_extension_and_mime(self, run, _validate, _manifest, _environment):
+        run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "media.mp4").write_bytes(b"media")
+            path, name, mime = download({
+                "version": 1, "kind": "adaptive", "url": "https://media.example/master.m3u8",
+                "delivery": "hls", "filename": "playlist.m3u8", "mime": "application/vnd.apple.mpegurl",
+            }, Path(directory), 1024, 60)
+        self.assertEqual(path.name, "media.mp4")
+        self.assertEqual(name, "playlist.mp4")
+        self.assertEqual(mime, "video/mp4")
+
+    def test_network_subprocess_keeps_proxy_and_combined_ca(self):
+        with tempfile.NamedTemporaryFile() as bundle, patch.dict(os.environ, {
+            "HTTP_PROXY": "http://container-proxy.invalid:8080",
+            "HTTPS_PROXY": "http://container-proxy.invalid:8080",
+            "ALL_PROXY": "http://container-proxy.invalid:8080",
+            "NO_PROXY": "localhost",
+            "SSL_CERT_FILE": bundle.name,
+        }, clear=True):
+            network = _network_subprocess_environment()
+        self.assertEqual(network["HTTP_PROXY"], "http://container-proxy.invalid:8080")
+        self.assertEqual(network["HTTPS_PROXY"], "http://container-proxy.invalid:8080")
+        self.assertEqual(network["SSL_CERT_FILE"], bundle.name)
+        self.assertEqual(network["REQUESTS_CA_BUNDLE"], bundle.name)
+        self.assertEqual(network["CURL_CA_BUNDLE"], bundle.name)
+
+    @patch("resolver._read_json_document")
+    def test_image_share_adapter_returns_only_explicit_media_candidate(self, read_json):
+        read_json.return_value = {"code": 0, "data": {"info": {"netDiskInfo": {
+            "name": "sample.mp4", "fileUrl": "https://video-cdn.example/vod/master.m3u8",
+            "coverImage": "https://video-cdn.example/vod/cover.jpg",
+            "untrusted": {"url": "http://127.0.0.1/private"},
+        }}}}
+
+        def validate(value):
+            host = urlsplit(value).hostname
+            if host == "127.0.0.1":
+                raise UnsafeUrl("blocked_address")
+            return SafeUrl(value, host)
+
+        with patch("resolver.validate_url", side_effect=validate):
+            result = resolve_site_adapter("https://cdn.image-share.cc/Abc_12", 2_000_000)
+        self.assertEqual(result["adapter"], "image-share")
+        self.assertEqual(result["hostname"], "video-cdn.example")
+        self.assertEqual(result["url"], "https://video-cdn.example/vod/master.m3u8")
+        requested = read_json.call_args.args[0]
+        self.assertEqual(urlsplit(requested).hostname, "rwzugqnp.fun800.click")
+        self.assertNotIn("127.0.0.1", requested)
+
+    def test_image_share_source_requires_two_stage_resolution(self):
+        with patch("resolver.validate_url", return_value=SafeUrl("https://cdn.image-share.cc/Abc12", "cdn.image-share.cc")):
+            with self.assertRaisesRegex(ResolverError, "adapter_resolution_required"):
+                analyze("https://cdn.image-share.cc/Abc12", 1024)
+
+    @patch("resolver._read_manifest")
+    def test_hls_analysis_collects_validated_cross_host_playlists_and_segments(self, read_manifest):
+        read_manifest.side_effect = [
+            (b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://playlist-cdn.example/v.m3u8", "https://origin.example/master.m3u8"),
+            (b"#EXTM3U\n#EXTINF:10,\nhttps://segment-cdn.example/a.ts\n#EXT-X-ENDLIST", "https://playlist-cdn.example/v.m3u8"),
+        ]
+
+        def validate(value):
+            return SafeUrl(value, urlsplit(value).hostname)
+
+        with patch("resolver.validate_url", side_effect=validate):
+            hosts = _validate_adaptive_source("https://origin.example/master.m3u8", "hls")
+        self.assertEqual(hosts, ["origin.example", "playlist-cdn.example", "segment-cdn.example"])
 
     @patch("resolver._analyze_direct", return_value=None)
     @patch("resolver._yt_dlp_metadata", return_value=None)

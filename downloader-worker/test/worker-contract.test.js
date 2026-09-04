@@ -6,6 +6,7 @@ const worker = await readFile(new URL("../src/index.js", import.meta.url), "utf8
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/downloader.js", import.meta.url), "utf8");
 const resolver = await readFile(new URL("../container/resolver.py", import.meta.url), "utf8");
+const imageShareAdapter = await readFile(new URL("../container/adapters/image_share.py", import.meta.url), "utf8");
 const config = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
 const migration = await readFile(new URL("../migrations/0001_downloader_foundation.sql", import.meta.url), "utf8");
 const usageMigration = await readFile(new URL("../migrations/0002_downloader_usage_stats.sql", import.meta.url), "utf8");
@@ -212,6 +213,31 @@ test("HTTPS interception CAを非root起動時に信頼する", () => {
   assert.match(entrypoint, /base-ca-certificates\.crt/);
   assert.match(entrypoint, /SSL_CERT_FILE/);
   assert.match(entrypoint, /REQUESTS_CA_BUNDLE/);
+  assert.match(resolver, /_network_subprocess_environment/);
+  assert.match(resolver, /"--compat-options", "no-certifi"/);
+  assert.match(resolver, /CURL_CA_BUNDLE/);
+  assert.doesNotMatch(resolver, /env\.update\(\{"SSL_CERT_FILE": ca, "REQUESTS_CA_BUNDLE": ca\}\)/);
+});
+
+test("image-shareは限定adapterで候補を解決しWorker再検証後に動的allowlistする", () => {
+  assert.match(worker, /IMAGE_SHARE_SOURCE_HOST = "cdn\.image-share\.cc"/);
+  assert.match(worker, /IMAGE_SHARE_API_HOST = "rwzugqnp\.fun800\.click"/);
+  assert.match(worker, /resolveAnalysisSource\(container, sourceUrl/);
+  assert.match(worker, /normalizeSourceUrl\(result\.url\)/);
+  assert.match(worker, /configureContainerEgress\(container, sourceUrl, resolved\.egressHosts\)/);
+  assert.match(server, /self\.path == "\/resolve-adapter"/);
+  assert.match(imageShareAdapter, /source_hostname = "cdn\.image-share\.cc"/);
+  assert.match(imageShareAdapter, /for name in \("fileUrl", "originUrl"\)/);
+  assert.doesNotMatch(imageShareAdapter, /\.click\s*\(|\b(?:chromium|selenium|playwright)\b/i);
+});
+
+test("yt-dlp失敗はstderrを保存せず固定コードへ分類する", () => {
+  for (const code of ["download_network_failed", "download_tls_failed", "format_unavailable", "manifest_invalid", "download_timeout"]) {
+    assert.match(resolver, new RegExp(code));
+  }
+  assert.match(resolver, /_classify_ytdlp_failure\(result\.stderr\) or "download_failed"/);
+  assert.doesNotMatch(server, /print\([^\n]*stderr/);
+  assert.doesNotMatch(worker, /console\.(?:log|error)\([^\n]*stderr/);
 });
 
 test("Linux ContainerのentrypointはWindows checkoutでもLFを維持する", () => {
