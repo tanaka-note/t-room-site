@@ -534,24 +534,8 @@ async function processDownloadMessage(env, message) {
       const normalization = ["PASS_THROUGH", "REMUX", "PARTIAL_TRANSCODE", "FULL_TRANSCODE", "NOT_APPLICABLE"].includes(result.normalization)
         ? result.normalization : "UNKNOWN";
       const metrics = normalizeContainerMetrics(result.metrics);
-      const containerCpuMs = metrics && (metrics.cpuUserMs !== undefined || metrics.cpuSystemMs !== undefined)
-        ? (metrics.cpuUserMs || 0) + (metrics.cpuSystemMs || 0)
-        : null;
       if (metrics) console.log(JSON.stringify({ event: "downloader_container_metrics", jobId, normalization, containerHealthMs, ...metrics }));
-      const phases = metrics?.phaseMs || {};
-      await env.DB.prepare(`UPDATE downloader_jobs SET normalization_mode = ?, container_health_ms = ?,
-        container_wall_ms = COALESCE(?, container_wall_ms), container_cpu_ms = COALESCE(?, container_cpu_ms),
-        container_peak_rss_bytes = COALESCE(?, container_peak_rss_bytes), container_work_bytes = COALESCE(?, container_work_bytes),
-        download_ms = COALESCE(?, download_ms), validation_ms = COALESCE(?, validation_ms),
-        processing_ms = COALESCE(?, processing_ms), security_scan_ms = COALESCE(?, security_scan_ms),
-        upload_ms = COALESCE(?, upload_ms), progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND identity_id = ? AND status = 'ready'`).bind(
-          normalization, containerHealthMs, metrics?.wallMs ?? null,
-          containerCpuMs,
-          metrics?.containerPeakRssBytes ?? null, metrics?.observedWorkBytes ?? null,
-          phases.download ?? null, phases.validation ?? null, phases.processing ?? null,
-          phases.securityScan ?? null, phases.upload ?? null, jobId, identityId
-        ).run();
+      await finalizeContainerMetrics(env, { jobId, identityId, processingToken }, metrics, containerHealthMs);
       const ready = await env.DB.prepare("SELECT status FROM downloader_jobs WHERE id = ? AND identity_id = ?").bind(jobId, identityId).first();
       if (ready?.status !== "ready") throw new Error("container_upload_not_committed");
       await auditSystem(env, identityId, row.service_link_id, "downloader_scan_passed", "success", { jobId, hostname: row.source_hostname });
@@ -574,23 +558,54 @@ async function processDownloadMessage(env, message) {
   }
 }
 
+// Only the attempt that committed the upload can finalize its measurements. The
+// DB trigger applies the delta atomically to the original usage day and identity.
+// A missing/lost final response leaves the provisional measurement visible.
+async function finalizeContainerMetrics(env, attempt, metrics, containerHealthMs) {
+  if (!metrics || (metrics.wallMs === undefined && metrics.cpuUserMs === undefined && metrics.cpuSystemMs === undefined)) return;
+  const cpuMs = metrics.cpuUserMs !== undefined && metrics.cpuSystemMs !== undefined
+    ? metrics.cpuUserMs + metrics.cpuSystemMs : null;
+  const phases = metrics.phaseMs || {};
+  return env.DB.prepare(`UPDATE downloader_jobs SET container_health_ms = ?,
+    container_wall_ms = CASE WHEN ? IS NULL THEN container_wall_ms ELSE MAX(COALESCE(container_wall_ms, 0), ?) END,
+    container_cpu_ms = CASE WHEN ? IS NULL THEN container_cpu_ms ELSE MAX(COALESCE(container_cpu_ms, 0), ?) END,
+    container_peak_rss_bytes = CASE WHEN ? IS NULL THEN container_peak_rss_bytes ELSE MAX(COALESCE(container_peak_rss_bytes, 0), ?) END,
+    container_work_bytes = CASE WHEN ? IS NULL THEN container_work_bytes ELSE MAX(COALESCE(container_work_bytes, 0), ?) END,
+    download_ms = COALESCE(?, download_ms), validation_ms = COALESCE(?, validation_ms),
+    processing_ms = COALESCE(?, processing_ms), security_scan_ms = COALESCE(?, security_scan_ms),
+    upload_ms = COALESCE(?, upload_ms), metrics_cpu_scope = ?, metrics_finalized_at = CURRENT_TIMESTAMP,
+    progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND identity_id = ? AND metrics_token = ? AND metrics_finalized_at IS NULL
+      AND usage_day_jst IS NOT NULL AND status IN ('ready', 'deleted', 'expired')`).bind(
+      containerHealthMs, metrics.wallMs ?? null, metrics.wallMs ?? null, cpuMs, cpuMs,
+      metrics.containerPeakRssBytes ?? null, metrics.containerPeakRssBytes ?? null,
+      metrics.observedWorkBytes ?? null, metrics.observedWorkBytes ?? null,
+      phases.download ?? null, phases.validation ?? null, phases.processing ?? null,
+      phases.securityScan ?? null, phases.upload ?? null, metrics.cpuScope ?? null,
+      attempt.jobId, attempt.identityId, attempt.processingToken
+    ).run();
+}
+
 function normalizeContainerMetrics(value) {
   if (!value || typeof value !== "object") return null;
   const names = ["wallMs", "cpuUserMs", "cpuSystemMs", "containerPeakRssBytes", "observedWorkBytes"];
   const metrics = {};
   for (const name of names) {
+    if (value[name] === null || value[name] === undefined || value[name] === "") continue;
     const number = Number(value[name]);
     if (Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER) metrics[name] = Math.round(number);
   }
   const phaseNames = ["download", "validation", "processing", "securityScan", "upload", "scannerReady", "clamavNormal", "clamavWindows", "yara", "sha256"];
   const phaseMs = {};
   for (const name of phaseNames) {
+    if (value.phaseMs?.[name] == null || value.phaseMs[name] === "") continue;
     const number = Number(value.phaseMs?.[name]);
     if (Number.isFinite(number) && number >= 0 && number <= 720_000) phaseMs[name] = Math.round(number);
   }
   if (Object.keys(phaseMs).length) metrics.phaseMs = phaseMs;
   const phaseCpuMs = {};
   for (const name of phaseNames) {
+    if (value.phaseCpuMs?.[name] == null || value.phaseCpuMs[name] === "") continue;
     const number = Number(value.phaseCpuMs?.[name]);
     if (Number.isFinite(number) && number >= 0 && number <= 2_880_000) phaseCpuMs[name] = Math.round(number);
   }
@@ -698,11 +713,11 @@ async function handleContainerUpload(request, env) {
       mime_type = ?, safe_filename = ?, downloaded_at = CURRENT_TIMESTAMP, expires_at = ?, processing_token = NULL,
       processing_lease_expires_at = NULL, normalization_mode = ?, source_bytes = ?, container_wall_ms = ?,
       container_cpu_ms = ?, container_peak_rss_bytes = ?, container_work_bytes = ?, download_ms = ?,
-      validation_ms = ?, processing_ms = ?, security_scan_ms = ?, progress_stage = 'finalizing', updated_at = CURRENT_TIMESTAMP
+      validation_ms = ?, processing_ms = ?, security_scan_ms = ?, metrics_token = ?, progress_stage = 'finalizing', updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND status = 'processing' AND processing_token = ?`)
       .bind(grant.objectKey, size, sha256, mimeType, filename, grant.expiresAt, normalization, sourceBytes,
-        containerWallMs, cpuUserMs + cpuSystemMs, containerPeakRssBytes, containerWorkBytes,
-        downloadMs, validationMs, processingMs, securityScanMs, grant.jobId, uploadToken).run();
+        containerWallMs, cpuUserMs !== null && cpuSystemMs !== null ? cpuUserMs + cpuSystemMs : null, containerPeakRssBytes, containerWorkBytes,
+        downloadMs, validationMs, processingMs, securityScanMs, grant.processingToken, grant.jobId, uploadToken).run();
     committed = update.meta?.changes === 1;
   } finally {
     if (!committed) {
@@ -1327,7 +1342,7 @@ function decodeHeaderValue(value) { try { return decodeURIComponent(String(value
 function scheduleAudit(context, promise) { if (context?.waitUntil) context.waitUntil(promise); else void promise.catch(() => {}); }
 function scheduleUsage(context, promise) { if (context?.waitUntil) context.waitUntil(promise); else void promise.catch(() => {}); }
 function safeErrorName(error) { return error instanceof Error ? `${cleanText(error.name, 60) || "Error"}:${cleanText(error.code, 60) || "unspecified"}` : "unknown"; }
-function safeMetricHeader(value, maximum) { const number = Number(value); return Number.isSafeInteger(number) && number >= 0 && number <= maximum ? number : 0; }
+function safeMetricHeader(value, maximum) { if (value === null || value === "") return null; const number = Number(value); return Number.isSafeInteger(number) && number >= 0 && number <= maximum ? number : null; }
 function normalizeNormalizationMode(value) { const mode = String(value || ""); return ["PASS_THROUGH", "REMUX", "PARTIAL_TRANSCODE", "FULL_TRANSCODE", "NOT_APPLICABLE"].includes(mode) ? mode : "UNKNOWN"; }
 
 function containerResponseError(value, status) {

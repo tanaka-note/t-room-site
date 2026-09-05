@@ -82,3 +82,25 @@ test("推定料金はDownloader単独の付帯枠超過分だけを算出する"
   assert.equal(estimate.components.find((item) => item.name === "Workers CPU").available, false);
   assert.equal(estimate.components.find((item) => item.name === "D1 rows read").estimatedAdditionalUsd, null);
 });
+
+test("料金試算は旧120秒仮定を除外し、欠測と実測ゼロを区別する", () => {
+  const legacy = aggregateUsageRows([
+    { metric: "resource", dimension: "container_memory_gib_seconds", value_sum: 1000000 },
+    { metric: "resource", dimension: "container_disk_gb_seconds", value_sum: 2000000 }
+  ]);
+  const missing = estimateDownloaderCost(legacy);
+  for (const name of ["Containers CPU", "Containers memory", "Containers disk"]) {
+    assert.equal(missing.components.find(c => c.name === name).usage, null);
+  }
+  assert.equal(legacy.container.legacyMemoryGibSeconds, 1000000);
+  const measured = estimateDownloaderCost(aggregateUsageRows([
+    { metric: "resource", dimension: "container_cpu_ms", value_sum: 0, event_count: 1 },
+    { metric: "resource", dimension: "container_observed_memory_gib_seconds", value_sum: 6, event_count: 1 },
+    { metric: "resource", dimension: "container_observed_disk_gb_seconds", value_sum: 12, event_count: 1 }
+  ]));
+  assert.equal(measured.components.find(c => c.name === "Containers CPU").usage, 0);
+  assert.equal(measured.components.find(c => c.name === "Containers memory").usage, 6);
+  assert.equal(measured.components.find(c => c.name === "Containers disk").usage, 12);
+  assert.equal(measured.complete, false);
+  for (const phrase of ["請求上限", "共有", "固定120秒", "release RPC", "常駐clamd", "最終応答未受信"]) assert.ok(measured.notes.join(" ").includes(phrase), phrase);
+});

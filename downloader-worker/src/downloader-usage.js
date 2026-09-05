@@ -2,7 +2,7 @@ export const PRIMARY_ADMIN_IDENTITY_ID = "primary-admin";
 
 export const DOWNLOADER_PRICING = Object.freeze({
   currency: "USD",
-  asOf: "2026-09-04",
+  asOf: "2026-09-05",
   workers: Object.freeze({
     includedRequests: 10_000_000,
     requestPerMillion: 0.30,
@@ -103,7 +103,7 @@ export function aggregateUsageRows(rows = []) {
     normalization: Object.fromEntries(NORMALIZATION_MODES.map((name) => [name, 0])),
     security: Object.fromEntries(SECURITY_CATEGORIES.map((name) => [name, 0])),
     platform: { workerRequests: 0, queueWrites: 0, queueReads: 0, queueDeletes: 0, queueDlqWrites: 0, r2ClassA: 0, r2ClassB: 0 },
-    container: { cpuMs: 0, wallMs: 0, memoryGibSeconds: 0, diskGbSeconds: 0, networkTxBytes: 0, peakRssBytes: 0, peakWorkBytes: 0 },
+    container: { cpuMs: 0, wallMs: 0, memoryGibSeconds: 0, diskGbSeconds: 0, networkTxBytes: 0, peakRssBytes: 0, peakWorkBytes: 0, cpuSamples: 0, wallSamples: 0, provisional: 0, finalized: 0, legacyMemoryGibSeconds: 0, legacyDiskGbSeconds: 0 },
     r2StorageByteSeconds: 0
   };
   for (const row of rows || []) {
@@ -132,10 +132,14 @@ export function aggregateUsageRows(rows = []) {
     else if (metric === "platform" && dimension === "queue_dlq_write") value.platform.queueDlqWrites += count;
     else if (metric === "platform" && dimension === "r2_class_a") value.platform.r2ClassA += count;
     else if (metric === "platform" && dimension === "r2_class_b") value.platform.r2ClassB += count;
-    else if (metric === "resource" && dimension === "container_cpu_ms") value.container.cpuMs += sum;
+    else if (metric === "resource" && dimension === "container_cpu_ms") { value.container.cpuMs += sum; value.container.cpuSamples += count; }
     else if (metric === "resource" && dimension === "container_wall_ms") value.container.wallMs += sum;
-    else if (metric === "resource" && dimension === "container_memory_gib_seconds") value.container.memoryGibSeconds += sum;
-    else if (metric === "resource" && dimension === "container_disk_gb_seconds") value.container.diskGbSeconds += sum;
+    else if (metric === "resource" && dimension === "container_memory_gib_seconds") value.container.legacyMemoryGibSeconds += sum;
+    else if (metric === "resource" && dimension === "container_disk_gb_seconds") value.container.legacyDiskGbSeconds += sum;
+    else if (metric === "resource" && dimension === "container_observed_memory_gib_seconds") { value.container.memoryGibSeconds += sum; value.container.wallSamples += count; }
+    else if (metric === "resource" && dimension === "container_observed_disk_gb_seconds") value.container.diskGbSeconds += sum;
+    else if (metric === "measurement" && dimension === "container_provisional") value.container.provisional += count;
+    else if (metric === "measurement" && dimension === "container_finalized") value.container.finalized += count;
     else if (metric === "resource" && dimension === "container_network_tx") value.container.networkTxBytes += bytes;
     else if (metric === "resource" && dimension === "container_peak_rss") value.container.peakRssBytes = Math.max(value.container.peakRssBytes, max);
     else if (metric === "resource" && dimension === "container_peak_work") value.container.peakWorkBytes = Math.max(value.container.peakWorkBytes, max);
@@ -152,9 +156,9 @@ export function estimateDownloaderCost(usage, pricing = DOWNLOADER_PRICING) {
   const components = [
     component("Workers requests", usage.platform.workerRequests, pricing.workers.includedRequests, pricing.workers.requestPerMillion / 1_000_000, true),
     unavailableComponent("Workers CPU"),
-    component("Containers CPU", cpuSeconds, pricing.containers.includedCpuSeconds, pricing.containers.cpuPerSecond, true),
-    component("Containers memory", usage.container.memoryGibSeconds, pricing.containers.includedMemoryGibSeconds, pricing.containers.memoryPerGibSecond, false),
-    component("Containers disk", usage.container.diskGbSeconds, pricing.containers.includedDiskGbSeconds, pricing.containers.diskPerGbSecond, false),
+    (usage.container.cpuSamples > 0 || cpuSeconds > 0) ? component("Containers CPU", cpuSeconds, pricing.containers.includedCpuSeconds, pricing.containers.cpuPerSecond, false) : unavailableComponent("Containers CPU"),
+    usage.container.wallSamples > 0 ? component("Containers memory", usage.container.memoryGibSeconds, pricing.containers.includedMemoryGibSeconds, pricing.containers.memoryPerGibSecond, false) : unavailableComponent("Containers memory"),
+    usage.container.wallSamples > 0 ? component("Containers disk", usage.container.diskGbSeconds, pricing.containers.includedDiskGbSeconds, pricing.containers.diskPerGbSecond, false) : unavailableComponent("Containers disk"),
     component("Containers network", networkGb, pricing.containers.includedNetworkBytes / 1_000_000_000, pricing.containers.conservativeNetworkPerGb, false),
     component("Queues operations", queueOperations, pricing.queues.includedOperations, pricing.queues.operationPerMillion / 1_000_000, true),
     component("R2 storage", storageGbMonth, pricing.r2.includedStorageGbMonth, pricing.r2.storagePerGbMonth, false, 1),
@@ -162,11 +166,13 @@ export function estimateDownloaderCost(usage, pricing = DOWNLOADER_PRICING) {
     component("R2 Class B", usage.platform.r2ClassB, pricing.r2.includedClassB, pricing.r2.classBPerMillion / 1_000_000, true, 1_000_000),
     unavailableComponent("D1 rows read"),
     unavailableComponent("D1 rows written"),
-    unavailableComponent("D1 storage")
+    unavailableComponent("D1 storage"),
+    unavailableComponent("Durable Objects"),
+    unavailableComponent("Logs")
   ];
   const estimatedAdditionalUsd = components.reduce((total, item) => total + (item.estimatedAdditionalUsd || 0), 0);
   return {
-    label: "Downloader推定追加料金",
+    label: "Downloader対象分の追加料金試算",
     currency: pricing.currency,
     pricingAsOf: pricing.asOf,
     estimatedAdditionalUsd,
@@ -175,9 +181,13 @@ export function estimateDownloaderCost(usage, pricing = DOWNLOADER_PRICING) {
     components,
     complete: false,
     notes: [
-      "Downloader内部で計測できた利用量だけを、Downloader単独で無料・付帯枠を利用した場合として概算しています。",
-      "Workers CPU、D1の正確な行read/write、失敗したContainer処理、Containerの実際の起動待機時間は含みません。",
-      "Containers memory/disk/networkは成功ジョブの観測値を使う参考値です。正式な請求額はCloudflare Billingを確認してください。",
+      "表示額は対象範囲だけの小計です。無料・追加課金なし・請求上限を示しません。不明な利用量は含めていません。",
+      "月間付帯枠をDownloaderだけで利用できると仮定した試算です。枠はアカウント内の他サービスと共有され、他の利用分を差し引いていません。",
+      "URL解析、Container起動／health待ち、停止、失敗・再試行の使用量、Workers CPU、D1のread/write・保存、Durable Objects、Logsは集計対象外です。release RPC完了もCloudflareの課金終了時刻ではありません。",
+      "memory/diskは今回の変更以後の成功処理のwall timeに割当量6 GiB／12 GBを掛けた参考値です。固定120秒は加算せず、旧120秒込みの履歴は保存したまま料金試算から除外しています。未計測の稼働時間は推測で補完しません。",
+      "CPUは成功処理区間の値です。旧方式・fallbackはプロセスと回収済み子プロセスのみで常駐clamdを含まず、cgroup v2方式と計測範囲が異なります。過去値は補完していません。",
+      `変更以後の当月計測: 最終応答受信 ${usage.container.finalized}件、最終応答未受信 ${usage.container.provisional}件。未受信時は保存前までの暫定値です。最終応答にも個別の欠測があり得ます。`,
+      "Containers networkは成功時のR2保存容量を使う参考値です。正式な請求額はCloudflare Billingを確認してください。",
       "Workers Paidの月額基本料金5 USDはDownloader専用料金ではないため含めていません。"
     ]
   };

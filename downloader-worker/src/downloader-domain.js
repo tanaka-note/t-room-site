@@ -142,12 +142,14 @@ export function normalizeContainerErrorCode(value, status) {
 
 // Only deterministic content/policy failures terminate early. Engine, network,
 // definition and timeout failures retain the existing bounded retry policy.
+// ffprobe_failed includes signals, allocation failures and unknown exits;
+// ffprobe_invalid describes invalid parser output, not proven invalid content.
 const PERMANENT_DOWNLOAD_ERRORS = new Set([
   "scan_malware_detected", "scan_yara_detected", "scan_executable_content",
   "scan_blocked_extension", "scan_suspicious_double_extension", "scan_size_limit",
   "scan_unsupported_mime", "scan_mime_mismatch", "scan_extension_mismatch",
-  "scan_unsafe_embedded_stream", "scan_invalid_media_stream", "scan_ffprobe_failed",
-  "scan_ffprobe_invalid", "scan_video_stream_missing", "scan_stream_limit",
+  "scan_unsafe_embedded_stream", "scan_invalid_media_stream",
+  "scan_video_stream_missing", "scan_stream_limit",
   "scan_resolution_limit", "scan_duration_limit", "scan_video_transcode_budget",
   "scan_normalized_size_limit", "scan_normalized_video_incompatible",
   "scan_normalized_audio_incompatible", "scan_normalized_container_invalid",

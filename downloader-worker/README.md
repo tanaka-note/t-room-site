@@ -16,7 +16,7 @@
 
 長期保存する統計はJST日次の件数・bytes・resource値だけです。URL、query、filename、Cookie、Authorization、ファイル内容は保存しません。解析と取得要求はjob状態遷移で一度だけ数え、Queue retryや同一job再実行では増やしません。実ファイル取得はUIがクリックごとに発行する非秘密のattempt IDをHMAC fingerprint化して48時間だけ保持し、同じクリックから生じるRange／ブラウザ再試行を1回へまとめます。別のクリックは別の取得として数えます。
 
-「Downloader推定追加料金」は2026-09-04に確認したCloudflare公式料金を使い、Downloader単独で月間付帯枠を消費した場合の超過分を概算します。成功処理から観測できるContainer CPU・wall time・作業領域、Worker／Queue／R2操作、R2保持時間を対象にし、R2は公式の請求単位への切り上げも反映します。Workers CPU、D1 rows、失敗Containerの実使用量、実際のContainer起動待機はWorker内で正確に帰属できないため「取得不能」とし、基本料金5 USDも含めません。アカウント全体で共有される枠と正式請求額の正本はCloudflare Billingです。料金表は変更され得るため、公開前に公式の[Workers](https://developers.cloudflare.com/workers/platform/pricing/)、[Containers](https://developers.cloudflare.com/containers/platform/pricing/)、[Queues](https://developers.cloudflare.com/queues/platform/pricing/)、[D1](https://developers.cloudflare.com/d1/platform/pricing/)、[R2](https://developers.cloudflare.com/r2/pricing/)を再確認してください。
+「Downloader対象分の追加料金試算」は2026-09-05に確認したCloudflare公式料金を使い、Downloader単独で月間付帯枠を消費した場合の超過分を概算します。成功処理から観測できるContainer CPU・wall time・作業領域、Worker／Queue／R2操作、R2保持時間を対象にし、R2は公式の請求単位への切り上げも反映します。Workers CPU、D1 rows、失敗Containerの実使用量、実際のContainer起動待機はWorker内で正確に帰属できないため「取得不能」とし、基本料金5 USDも含めません。アカウント全体で共有される枠と正式請求額の正本はCloudflare Billingです。料金表は変更され得るため、公開前に公式の[Workers](https://developers.cloudflare.com/workers/platform/pricing/)、[Containers](https://developers.cloudflare.com/containers/platform/pricing/)、[Queues](https://developers.cloudflare.com/queues/platform/pricing/)、[D1](https://developers.cloudflare.com/d1/platform/pricing/)、[R2](https://developers.cloudflare.com/r2/pricing/)を再確認してください。
 
 動画変換は `PASS_THROUGH`、`REMUX`、`PARTIAL_TRANSCODE`、`FULL_TRANSCODE`、`REJECT` の計画を実体検査後に選びます。互換H.264/AACはcopyを優先し、非互換streamだけを変換します。実ffprobeから確定したplanで映像再エンコードが必要な場合だけ1080p/30fps換算240秒の事前予算を適用し、音声だけの変換は拒否しません。ffmpeg/ffprobeはshellを使わず固定argv・ローカル入力・`file,pipe` protocolだけで実行します。
 
@@ -66,7 +66,7 @@ Gitへ保存しない次のSecretが必要です。
 - `URL_ENCRYPTION_KEY`（32 byte相当の高entropy値）
 - `INTERNAL_SIGNING_SECRET`
 
-さらにDownloader D1、private R2、Queue、DLQを作成し、`wrangler.jsonc`のD1 IDを実値へ置換します。Security D1 migration `0011_downloader_service.sql` とDownloader migration `0001`〜`0003` を順に適用後、Security/Downloader Workerを揃えて公開します。Lifecycleは `pnpm run r2:lifecycle` で適用します。
+さらにDownloader D1、private R2、Queue、DLQを作成し、`wrangler.jsonc`のD1 IDを実値へ置換します。Security D1 migration `0011_downloader_service.sql` とDownloader migration `0001`〜`0004` を順に適用後、Security/Downloader Workerを揃えて公開します。Lifecycleは `pnpm run r2:lifecycle` で適用します。
 
 ## 検証
 
@@ -78,3 +78,17 @@ pnpm run deploy:dry
 ```
 
 Dockerが使える環境ではContainer imageをbuildし、実ffmpeg/ffprobe/ClamAVを含むformat fixture試験も行います。依存物のライセンスは `THIRD_PARTY_NOTICES.md` に記録しています。
+
+## 2026-09-05 最終計測・料金表示の補正
+
+`scan_ffprobe_failed`はsignal終了・メモリ不足・未知の異常終了も同じcodeになるため、`scan_ffprobe_invalid`（JSON応答不正）とともに上限付き再試行へ戻す。stderrの文言だけで内容不正と断定しない。正常に解析された結果への`scan_invalid_media_stream`等の確定拒否は再試行しない。配信禁止、token CAS、4 delivery／DLQ、deadlineは維持する。
+
+追加migration `0004_downloader_final_metrics.sql`はready時の利用日（JST）・利用者を固定し、uploadを勝ち取った元processing tokenを最終計測用に保持する。最終応答はこのtokenと未確定条件のCASで一度だけ反映し、同一SQL transaction内のtriggerでCPU・wall・peakとmemory/disk参考値を差分補正する。日付またぎ・ready後の削除でも元の日へ反映する。古いattempt／二重応答は更新せず、累積CPU・wallが下がる応答でも既存値を減らさない。最終応答紛失やDB更新失敗時は暫定値のまま残り、計測のために再取得はしない。成功件数と最終応答受信件数を混同しない。
+
+旧memory/disk集計の固定120秒はidle fallbackを基にした仮定であり実測ではなかった。新規集計は実測wall（成功処理区間）の秒数×割当6 GiB／12 GBとし、起動／解析／health／停止／失敗／再試行を補完しない。release RPCの完了は課金終了ではない。旧120秒込みの日次行は保持して新料金試算から除外し、旧CPU（常駐clamdを含まない部分計測）も推測で書き換えない。表示は対象分の小計で、付帯枠をDownloader単独で利用できる仮定を明記する。他サービスとの共有枠、未計測のWorkers CPU・D1・DO・Logs、基本料金があるため、0 USDでも無料や請求上限を意味しない。欠測のContainer CPU/memory/diskは取得不能とする。[公式Container料金](https://developers.cloudflare.com/containers/platform/pricing/)を2026-09-05に再確認した。
+
+開始時の本番はWorker `ecc44ac9-ea15-42e0-9751-1744f88b5a95`、Container version 7。読み取りでは過去成功8件のジョブCPU合計56,605 ms・wall合計387,150 msが日次値と一致しており、本番で差が生じていたとは断定しない。旧実装の未補正はSQLite再現テストで確認する。過去値の確実な加算元が残っていないため、migrationは既存行を再集計・推測補完しない。
+
+公開は処理中・待機中ジョブを確認し、`pnpm exec wrangler d1 migrations apply downloader-db --remote`で0004を先に適用後、Container変更がないため`pnpm exec wrangler deploy --containers-rollout=none`でWorkerだけを更新する。切り戻しは旧Worker `ecc44ac9-ea15-42e0-9751-1744f88b5a95`へ戻せる（追加列は後方互換、Containerは変更なし）。0004は削除せず履歴を保持する。旧Workerへ戻すと最終補正・新表示は停止し、新規の最終値は暫定扱いになるため、復旧後に推測で加算しない。
+
+検証: Node 52件PASS、Windows Python 112件中87件PASS・外部ツール依存25件skip。ffprobe異常終了はmockで再現し実エンジン試験とは区別する。SQLite実行で旧未補正、最終補正、日付またぎ、異なる利用者、CAS競合、R2 upload再送、transaction rollback、履歴保持を確認した。Containerコードは変更せず、通常動画や大容量の本番取得試験は追加しない。全サイト契約テストのcalculator既存build不一致は今回の回帰と分離する。

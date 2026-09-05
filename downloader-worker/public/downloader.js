@@ -266,7 +266,7 @@
       ["拒否", countText(usage.rejected)],
       ["失敗", countText(usage.failed)],
       ["脅威検知", countText(Number(usage.security?.malware_detected || 0) + Number(usage.security?.yara_detected || 0))],
-      ["今月推定追加", usdText(usageData.pricing?.estimatedAdditionalUsd)]
+      ["今月の対象分試算", `${usdText(usageData.pricing?.estimatedAdditionalUsd)}（一部）`]
     ];
     elements.usageSummary.replaceChildren(...summary.map(([label, value]) => usageMetric(label, value)));
     renderDetails(elements.usageNormalizations, Object.entries(usage.normalization || {}).map(([name, count]) => [normalizationLabel(name), countText(count)]));
@@ -312,8 +312,8 @@
     elements.usagePricing.replaceChildren();
     elements.usageNotes.replaceChildren();
     if (!pricing) return;
-    const total = document.createElement("strong"); total.textContent = usdText(pricing.estimatedAdditionalUsd);
-    const label = document.createElement("span"); label.textContent = `今月の計測済み範囲 · 料金表 ${pricing.pricingAsOf}時点`;
+    const total = document.createElement("strong"); total.textContent = `${usdText(pricing.estimatedAdditionalUsd)}（対象分のみ）`;
+    const label = document.createElement("span"); label.textContent = `請求総額・上限ではありません · 料金表 ${pricing.pricingAsOf}時点`;
     elements.usagePricing.append(total, label);
     for (const component of pricing.components || []) {
       const row = document.createElement("div"); row.className = "usage-price-row";

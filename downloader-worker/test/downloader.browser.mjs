@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { aggregateUsageRows, estimateDownloaderCost } from "../src/downloader-usage.js";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -55,7 +56,7 @@ const usageResponse = {
   periods: { today: emptyUsage, month: emptyUsage, all: emptyUsage },
   signals: { alerts: ["本日、rate limitによる拒否が発生しています。"] },
   recentDaily: [{ date: "2026-09-04", processingSuccesses: 1, fileDeliveryStarts: 1, rejected: 1, failed: 0 }],
-  pricing: { estimatedAdditionalUsd: 0, pricingAsOf: "2026-09-04", components: [{ name: "Queues operations", measured: true, available: true, estimatedAdditionalUsd: 0 }, { name: "D1 rows read", measured: false, available: false, estimatedAdditionalUsd: null }], notes: ["正式な請求額はCloudflare Billingを確認してください。"] }
+  pricing: estimateDownloaderCost(aggregateUsageRows([]))
 };
 
 const server = createServer(async (request, response) => {
@@ -140,7 +141,10 @@ try {
       assert.equal(fileAttempts.length, attemptsBefore + 2, `${name}: a ready R2 artifact remains downloadable more than once`);
       assert.notEqual(fileAttempts.at(-1), fileAttempts.at(-2), `${name}: each explicit download uses a fresh delivery attempt`);
       assert.match(await page.locator("#usage-summary").textContent(), /実ファイル取得/);
-      assert.match(await page.locator("#usage-summary").textContent(), /今月推定追加/);
+      assert.match(await page.locator("#usage-summary").textContent(), /今月の対象分試算/);
+      assert.match(await page.locator("#usage-pricing").textContent(), /対象分のみ/);
+      assert.match(await page.locator("#usage-pricing").textContent(), /請求総額・上限ではありません/);
+      assert.match(await page.locator("#usage-pricing").textContent(), /取得不能/);
       assert.match(await page.locator("#usage-capacity").textContent(), /R2へ保存/);
       assert.match(await page.locator("#usage-alert").textContent(), /rate limit/);
       await page.locator("button[data-period='month']").click();
