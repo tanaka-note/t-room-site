@@ -152,6 +152,44 @@ class ScannerIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(UnsafeFile, "extension_mismatch"):
                 inspect_file(png, "disguised.mp4", "application/octet-stream", 4096)
 
+    def test_final_pipeline_validates_scans_and_delivers_exact_artifact(self):
+        import hashlib
+        from unittest.mock import patch
+        from server import Handler
+        fixtures = [
+            ("video.mp4", ["-f", "lavfi", "-i", "testsrc2=size=64x64:rate=5:duration=0.4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"], "video/mp4", "PASS_THROUGH"),
+            ("video.mkv", ["-f", "lavfi", "-i", "testsrc2=size=64x64:rate=5:duration=0.4", "-c:v", "libx264", "-pix_fmt", "yuv420p"], "video/x-matroska", "REMUX"),
+            ("tone.mp3", ["-f", "lavfi", "-i", "sine=duration=0.2", "-c:a", "libmp3lame"], "audio/mpeg", "NOT_APPLICABLE"),
+            ("image.png", ["-f", "lavfi", "-i", "color=green:size=32x32", "-frames:v", "1"], "image/png", "NOT_APPLICABLE"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            for name, args, mime, mode in fixtures:
+                with self.subTest(name=name):
+                    seed = Path(directory) / name
+                    self._run(FFMPEG, "-v", "error", "-y", *args, str(seed))
+                    payload = seed.read_bytes()
+                    work_paths, deliveries = [], []
+                    def download(_route, workdir, *_args, **_kwargs):
+                        path = workdir / name
+                        path.write_bytes(payload)
+                        work_paths.append(workdir)
+                        return path, name, mime
+                    def upload(path, _body, scan, **_kwargs):
+                        data = path.read_bytes()
+                        self.assertEqual(scan.sha256, hashlib.sha256(data).hexdigest())
+                        self.assertEqual(scan.size, len(data))
+                        deliveries.append(data)
+                    handler = Handler.__new__(Handler)
+                    handler._json = lambda status, body: (status, body)
+                    with patch("server.download", side_effect=download), patch("server._report_progress"), patch("server._upload_to_r2", side_effect=upload):
+                        status, body = handler._download({"route": {"version": 1}, "maxBytes": 8*1024**2, "timeoutSeconds": 120, "jobId": "fixture"})
+                    self.assertEqual(status, 200)
+                    self.assertEqual(body["normalization"], mode)
+                    self.assertEqual(len(deliveries), 1)
+                    self.assertTrue(all(not path.exists() for path in work_paths))
+                    if mode == "REMUX": self.assertNotEqual(deliveries[0], payload)
+                    else: self.assertEqual(deliveries[0], payload)
+
     def test_eicar_fixture_is_rejected_by_real_clamav(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "eicar.txt"

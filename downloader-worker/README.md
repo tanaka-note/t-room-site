@@ -36,11 +36,19 @@ YouTubeは公式ポリシーに合わせ、公開動画のメタデータ解析�
 
 Cloudflare ContainersはWorkers Paid契約とDockerが必要です。Containerが利用できない環境ではWorkerだけで危険な代替取得をせず、公開を停止したままにします。
 
+## 起動と再試行
+
+解析は軽量な`/ready`でHTTP受付とdrain状態だけを確認し、ClamAVを起動しません。取得前の`/health`で定義署名・鮮度を確認し、必要時にclamdを起動してYARAの正常性まで確認します。実スキャンでも定義・エンジンを再確認します。`/ready`は配信許可ではありません。Containerは処理後に明示停止し、常駐時間は延長しません。
+
+検出、偽装形式、破損、サイズ・メディア制限など既知の確定拒否は、有効なprocessing tokenでD1をfailedへ確定した後に終了します。同じjobの再配送で再取得・再検査しません。未知の失敗、通信・エンジン・定義異常、timeoutは既存の最大4回／DLQ処理を維持します。
+
+工程別計測と今回の判断・実測・制約は[性能調査](PERFORMANCE-2026-09-05.md)を参照してください。
+
 ## ClamAV・YARAとContainer更新
 
 ClamAV 1.4.6 LTSをchecksum固定した公式packageから導入します。定義はContainer起動時に外部更新せず、image build時の同版`freshclam`を必須にしてimageへ固定します。週次または緊急更新時は`wrangler.jsonc`の`containers[0].image_vars.CLAMAV_DEFINITION_REFRESH`を現在のJST ISO週（例: `2026-W36`）へ進めてください。この値が定義更新layerだけを確実にcache bustします。同じ値での再buildは意図的にcacheを再利用します。
 
-`main`、`daily`、`bytecode`を個別に存在・署名検証し、鮮度は`daily.cvd/.cld`内部のbuild timestampだけで判定します。いずれかの欠落・署名異常、dailyの7日超、scanner timeout・異常終了は`/health`と実スキャンの両方でfail closedです。`clamd`は2 GiBの`MaxFileSize`・`MaxScanSize`・`PCREMaxFileSize`、再帰・展開・PCRE・bytecode上限と`AlertExceedsMax`を明示します。さらに64 MiB単位（1 MiB overlap）の全域stream scanを重ね、部分検査や上限超過をclean扱いしません。
+`main`、`daily`、`bytecode`を個別に存在・署名検証し、鮮度は`daily.cvd/.cld`内部のbuild timestampだけで判定します。いずれかの欠落・署名異常、dailyの7日超、scanner timeout・異常終了は`/health`と実スキャンの両方でfail closedです。`clamd`は2 GiBの`MaxFileSize`・`MaxScanSize`・`PCREMaxFileSize`、再帰・展開・PCRE・bytecode上限と`AlertExceedsMax`を明示します。さらに64 MiB単位（1 MiB overlap）の全域stream scanを重ね、部分検査や上限超過をclean扱いしません。通常検査はexit code 0だけでなく対象ファイルの明示的な`OK`応答を必須にします。分割検査は元ファイルと同じ構造・offset解釈ではないため、同等性を確認できるまで維持します。
 
 独立した第二検査は公式YARA CLI 4.5.8です。公式source archiveのSHA-256を固定し、ルールはContainer build時にcompile・checksum化します。外部ルールは`Neo23x0/signature-base@278165d7845decece517f756cf92ff4a41938d1e`から誤検知範囲を限定できる2ファイルだけを選び、全feed、generic、experimental、hunting、Office、web-shell系は取り込みません。YARAの欠落・checksum不一致・timeout・error・matchはいずれもR2保存前にfail closedします。PASS_THROUGH、REMUX、変換のいずれも、R2へ保存する最終成果物に対してClamAV＋YARA＋SHA-256を1回だけ実行します。検査前後で同一file identityを照合し、途中で実体が変化した場合もfail closedにします。変更後はContainerをstagingでbuildし、`/health`、EICAR、YARA安全fixture、既定PCRE上限より後方のmarker、正常media fixtureを通過してからrolloutしてください。
 
@@ -48,7 +56,7 @@ Containerは非root UID `10001`で実行し、`/app`とClamAV定義は読み取�
 
 Cloudflare Workersから外部originへ送る通信では、プラットフォーム仕様上`CF-Worker: tanaka-note.com`が付与されます。利用者IPは固定のCloudflare Workers addressへ置き換えますが、運営zoneまで秘匿するにはCloudflare外の固定Privacy Relayが別途必要です。Relayはアクセス制限・地域制限回避やIP rotationには使用せず、運用先・固定費・abuse対応を決めてから導入してください。
 
-最大12分の処理に対し、download、軽量検証、ffmpeg、最終成果物のClamAV＋YARA検査、R2 uploadは単一の絶対deadlineを共有します。clamd再起動も残時間を超えて待機しません。Container health cold startは最大90秒、Workerからの本処理は最大750秒で中断し、Queueの15分wall-clock内にD1更新・retry用の余裕を残します。Containerは署名済みjob grantで実処理段階を通知し、D1にはContainer起動、取得、検証、変換、最終検査、R2保存の実測時間だけを記録します。Container rolloutはactive instanceを15分保護する`rollout_active_grace_period`を設定しています。さらにSIGTERM後は新規HTTP処理を503で拒否し、実行中のffmpeg・ClamAV・YARA・R2 uploadが終了するまでdrainします。失敗したQueue deliveryはprocessing leaseの失効後に再取得されます。
+最大12分の処理に対し、download、軽量検証、ffmpeg、最終成果物のClamAV＋YARA検査、R2 uploadは単一の絶対deadlineを共有します。clamd再起動も残時間を超えて待機しません。取得用Container health cold startは最大90秒、Workerからの本処理は最大750秒で中断し、Queueの15分wall-clock内にD1更新・retry用の余裕を残します。Containerは署名済みjob grantで実処理段階を通知し、D1には取得時のContainer起動、取得、検証、変換、最終検査、R2保存の実測時間だけを記録します。追加の構造化ログはClamAV通常／分割、YARA、SHA-256、解析と停止RPCの経過時間を分離します。cgroup v2が利用できる場合は稼働中clamdを含むCPU時間を記録し、利用不能時は部分計測であることを`cpuScope`で明示します。工程内訳と合計は重複するので足し合わせません。起動前・停止後やCloudflare側のCPUは含みません。過去のCPU値は再集計せず、旧値に常駐clamdが含まれない点に注意してください。RSSはプロセス単位の最大値で、Container全体の使用メモリではありません。Container rolloutはactive instanceを15分保護する`rollout_active_grace_period`を設定しています。さらにSIGTERM後は新規HTTP処理を503で拒否し、実行中のffmpeg・ClamAV・YARA・R2 uploadが終了するまでdrainします。失敗したQueue deliveryはprocessing leaseの失効後に再取得されます。
 
 ## Secretsと初回公開
 

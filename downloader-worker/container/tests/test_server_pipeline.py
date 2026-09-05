@@ -86,6 +86,31 @@ class ServerPipelineTests(unittest.TestCase):
         self.assertEqual(inspect.call_args.args[0], output)
         self.assertIs(upload.call_args.args[2], final)
 
+    def test_rejected_scan_never_uploads_and_cleans_work_directory(self):
+        from scanner import UnsafeFile
+        for code in ("malware_detected", "malware_scan_failed", "malware_scan_timeout", "malware_scan_incomplete", "malware_definitions_invalid"):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as parent:
+                created = []
+                real_temporary = tempfile.TemporaryDirectory
+                def temporary(**_kwargs):
+                    value = real_temporary(dir=parent)
+                    created.append(Path(value.name))
+                    return value
+                def fetched(_route, directory, *_args, **_kwargs):
+                    path = directory / "tone.mp3"
+                    path.write_bytes(b"fixture")
+                    return path, path.name, "audio/mpeg"
+                with patch("server.tempfile.TemporaryDirectory", side_effect=temporary), \
+                     patch("server.download", side_effect=fetched), \
+                     patch("server.validate_file", return_value=SimpleNamespace(media_kind="audio")), \
+                     patch("server.inspect_validated_file", side_effect=UnsafeFile(code)), \
+                     patch("server._report_progress"), patch("server._upload_to_r2") as upload:
+                    with self.assertRaises(UnsafeFile):
+                        self._handler()._download(self._body())
+                upload.assert_not_called()
+                self.assertTrue(created)
+                self.assertTrue(all(not path.exists() for path in created))
+
     def test_absolute_deadline_is_shared_and_fails_closed(self):
         now = [100.0]
         deadline = JobDeadline(10, clock=lambda: now[0])

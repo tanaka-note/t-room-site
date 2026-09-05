@@ -6,7 +6,7 @@ import signal
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from scanner import cgroup_cpu, measure_phase as _measure_phase
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -89,11 +89,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(500, {"error": "Downloaderで処理を完了できませんでした。", "errorCode": type(error).__name__})
 
     def do_GET(self):
+        if self.path == "/ready":
+            healthy = not DRAINING.is_set()
+            return self._json(200 if healthy else 503, {"ok": healthy, "draining": DRAINING.is_set(), "mode": "analysis"})
         if self.path != "/health":
             return self._json(404, {"error": "not_found"})
-        status = clamav_database_status()
-        yara = yara_rules_status()
-        daemon_ready = clamav_daemon_ready()
+        phases, phase_cpu = {}, {}
+        with _measure_phase(phases, "definitions", phase_cpu):
+            status = clamav_database_status()
+        with _measure_phase(phases, "scannerStartup", phase_cpu):
+            if status["healthy"] and not DRAINING.is_set():
+                try:
+                    start_clamav_daemon()
+                except UnsafeFile:
+                    pass
+            daemon_ready = clamav_daemon_ready()
+        with _measure_phase(phases, "yaraHealth", phase_cpu):
+            yara = yara_rules_status()
+        _event("scanner_health_metrics", "health", phaseMs=phases, phaseCpuMs=phase_cpu, cpuScope="cgroup_v2" if cgroup_cpu() else "unavailable")
         healthy = status["healthy"] and daemon_ready and yara["healthy"] and not DRAINING.is_set()
         return self._json(200 if healthy else 503, {
             "ok": healthy,
@@ -111,11 +124,12 @@ class Handler(BaseHTTPRequestHandler):
         usage_before = _resource_usage()
         observed_work_bytes = 0
         phase_ms = {}
+        phase_cpu_ms = {}
         _event("download_started", job_id)
         with tempfile.TemporaryDirectory(prefix="tlain-", dir="/work") as directory:
             work_directory = Path(directory)
             _report_progress(body, "downloading", deadline)
-            with _measure_phase(phase_ms, "download"):
+            with _measure_phase(phase_ms, "download", phase_cpu_ms):
                 path, name, declared_mime = download(
                     body.get("route"), work_directory, max_bytes, timeout,
                     deadline=deadline, reserve_seconds=_phase_reserve(timeout, 90, 0.25),
@@ -124,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             observed_work_bytes = max(observed_work_bytes, _directory_bytes(work_directory))
             _event("download_fetched", job_id)
             _report_progress(body, "validating", deadline)
-            with _measure_phase(phase_ms, "validation"):
+            with _measure_phase(phase_ms, "validation", phase_cpu_ms):
                 initial_validation = validate_file(
                     path, name, declared_mime, max_bytes,
                     deadline=deadline, reserve_seconds=_phase_reserve(timeout, 60, 0.15),
@@ -134,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
             final_validation = initial_validation
             if initial_validation.media_kind == "video":
                 _report_progress(body, "processing", deadline)
-                with _measure_phase(phase_ms, "processing"):
+                with _measure_phase(phase_ms, "processing", phase_cpu_ms):
                     path, name, declared_mime, plan, output_probe = normalize_video(
                         path, name, max_bytes, timeout,
                         deadline=deadline, reserve_seconds=_phase_reserve(timeout, 45, 0.10),
@@ -143,30 +157,31 @@ class Handler(BaseHTTPRequestHandler):
                 observed_work_bytes = max(observed_work_bytes, _directory_bytes(work_directory))
                 _event("download_video_normalized", job_id, normalization=plan.kind.value)
                 if plan.kind != PlanKind.PASS_THROUGH:
-                    with _measure_phase(phase_ms, "validation"):
+                    with _measure_phase(phase_ms, "validation", phase_cpu_ms):
                         final_validation = validate_file(
                             path, name, declared_mime, max_bytes,
                             deadline=deadline, reserve_seconds=_phase_reserve(timeout, 30, 0.05),
                             probe=output_probe,
                         )
             _report_progress(body, "scanning", deadline)
-            with _measure_phase(phase_ms, "securityScan"):
+            with _measure_phase(phase_ms, "securityScan", phase_cpu_ms):
                 scan = inspect_validated_file(
                     path, final_validation,
                     deadline=deadline, reserve_seconds=_phase_reserve(timeout, 30, 0.05),
+                    phase_ms=phase_ms, phase_cpu_ms=phase_cpu_ms,
                 )
             _event("download_final_scan_passed", job_id)
             _report_progress(body, "saving", deadline)
             _event("download_upload_started", job_id)
             deadline.ensure(minimum_seconds=1)
-            pre_upload_metrics = _job_metrics(started_at, usage_before, observed_work_bytes, phase_ms)
+            pre_upload_metrics = _job_metrics(started_at, usage_before, observed_work_bytes, phase_ms, phase_cpu_ms)
             normalization = plan.kind.value if plan else "NOT_APPLICABLE"
-            with _measure_phase(phase_ms, "upload"):
+            with _measure_phase(phase_ms, "upload", phase_cpu_ms):
                 _upload_to_r2(
                     path, body, scan, deadline=deadline, normalization=normalization,
                     source_bytes=source_bytes, metrics=pre_upload_metrics,
                 )
-            metrics = _job_metrics(started_at, usage_before, observed_work_bytes, phase_ms)
+            metrics = _job_metrics(started_at, usage_before, observed_work_bytes, phase_ms, phase_cpu_ms)
             _event("download_completed", job_id, **metrics)
             return self._json(200, {
                 "uploaded": True, "actualSize": scan.size, "sha256": scan.sha256,
@@ -306,18 +321,20 @@ def _resource_usage() -> tuple[float, float, int] | None:
         return None
     own = resource.getrusage(resource.RUSAGE_SELF)
     children = resource.getrusage(resource.RUSAGE_CHILDREN)
-    # Linux reports ru_maxrss in KiB. This is the Container process peak and is
-    # exact for a cold single-job performance run; it is intentionally labelled
-    # as a container peak rather than a per-thread allocation.
-    return own.ru_utime + children.ru_utime, own.ru_stime + children.ru_stime, max(own.ru_maxrss, children.ru_maxrss) * 1024
+    # RSS remains a process high-water mark, not total Container memory.
+    # cgroup CPU includes live clamd; fallback scope is explicitly logged.
+    user, system = cgroup_cpu() or (own.ru_utime + children.ru_utime, own.ru_stime + children.ru_stime)
+    return user, system, max(own.ru_maxrss, children.ru_maxrss) * 1024
 
 
-def _job_metrics(started_at: float, usage_before: tuple[float, float, int] | None, observed_work_bytes: int, phase_ms: dict | None = None) -> dict:
+def _job_metrics(started_at: float, usage_before: tuple[float, float, int] | None, observed_work_bytes: int, phase_ms: dict | None = None, phase_cpu_ms: dict | None = None) -> dict:
     usage_after = _resource_usage()
     value = {
         "wallMs": max(0, round((time.monotonic() - started_at) * 1000)),
         "observedWorkBytes": max(0, int(observed_work_bytes)),
         "phaseMs": {name: max(0, int(value)) for name, value in (phase_ms or {}).items()},
+        "phaseCpuMs": dict(phase_cpu_ms or {}),
+        "cpuScope": "cgroup_v2" if cgroup_cpu() is not None else "process_and_reaped_children",
     }
     if usage_before is not None and usage_after is not None:
         value.update({
@@ -326,16 +343,6 @@ def _job_metrics(started_at: float, usage_before: tuple[float, float, int] | Non
             "containerPeakRssBytes": max(0, int(usage_after[2])),
         })
     return value
-
-
-@contextmanager
-def _measure_phase(metrics: dict, name: str):
-    started_at = time.monotonic()
-    try:
-        yield
-    finally:
-        elapsed = max(0, round((time.monotonic() - started_at) * 1000))
-        metrics[name] = int(metrics.get(name, 0)) + elapsed
 
 
 def _phase_metric(metrics: dict, name: str) -> int:
@@ -368,7 +375,6 @@ def _event(event: str, job_id: str, **details) -> None:
 
 
 if __name__ == "__main__":
-    start_clamav_daemon()
     server = ThreadingHTTPServer(("0.0.0.0", 8080), Handler)
     server.daemon_threads = False
     server.block_on_close = True

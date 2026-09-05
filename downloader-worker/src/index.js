@@ -10,6 +10,7 @@ import {
   QUEUE_MAX_RETRIES,
   exceedsVideoTranscodeBudget,
   isFinalQueueAttempt,
+  isPermanentDownloadError,
   isPolicyRestrictedAnalysis,
   isPolicyRestrictedHost,
   normalizeClientRequestId,
@@ -71,7 +72,7 @@ export class DownloaderContainer extends Container {
   enableInternet = false;
   interceptHttps = true;
   deniedHosts = [...PRIVATE_DESTINATIONS];
-  pingEndpoint = "localhost/health";
+  pingEndpoint = "localhost/ready";
 
   async fetch(request) {
     const longRunning = new URL(request.url).pathname === "/download";
@@ -383,7 +384,9 @@ async function processAnalyzeMessage(env, message) {
       throw new Error("analysis_capability_mismatch");
     }
     container = getContainer(env.DOWNLOADER_CONTAINER, `analysis-${jobId}`);
-    await requireHealthyContainer(container);
+    const healthStartedAt = Date.now();
+    await requireHealthyContainer(container, true);
+    const analysisStartedAt = Date.now();
     const resolved = await resolveAnalysisSource(container, sourceUrl, maxFileBytes(env));
     await configureContainerEgress(container, sourceUrl, resolved.egressHosts);
     const response = await container.fetch(new Request("http://container/analyze", {
@@ -403,6 +406,8 @@ async function processAnalyzeMessage(env, message) {
       if (resolved.title) analysis.title = resolved.title;
       if (resolved.thumbnail) analysis.thumbnail = resolved.thumbnail;
     }
+    console.log(JSON.stringify({ event: "downloader_analysis_metrics", jobId,
+      healthMs: analysisStartedAt - healthStartedAt, analysisMs: Date.now() - analysisStartedAt }));
     const normalized = await normalizeAnalysis(analysis, sourceUrl.hostname, row.url_hash, jobId, env);
     const extractor = String(normalized.extractor || "unknown").slice(0, 80);
     const mediaType = String(normalized.media?.[0]?.mediaType || "unknown").slice(0, 40);
@@ -476,7 +481,7 @@ async function processDownloadMessage(env, message) {
   const jobId = String(message.jobId || "");
   const identityId = String(message.identityId || "");
   const row = await env.DB.prepare("SELECT * FROM downloader_jobs WHERE id = ? AND identity_id = ?").bind(jobId, identityId).first();
-  if (!row || ["ready", "deleted", "expired"].includes(row.status)) return;
+  if (!row || ["ready", "deleted", "expired", "failed", "rejected"].includes(row.status)) return;
   if (!["queued", "processing"].includes(row.status)) throw new Error("job_not_processable");
   if (isPolicyRestrictedAnalysis(parseJson(row.analysis_json, {}))) throw new Error("policy_restricted");
   const processingToken = crypto.randomUUID();
@@ -555,6 +560,12 @@ async function processDownloadMessage(env, message) {
       await releaseContainer(container);
     }
   } catch (error) {
+    if (isPermanentDownloadError(error)) {
+      // Persist the terminal rejection before the Queue can acknowledge it.
+      // CAS prevents an old delivery from overwriting another lease or ready artifact.
+      await markDownloadFailed(env, message, error, processingToken);
+      return;
+    }
     await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
       progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND identity_id = ? AND status = 'processing' AND processing_token = ?`)
@@ -571,17 +582,24 @@ function normalizeContainerMetrics(value) {
     const number = Number(value[name]);
     if (Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER) metrics[name] = Math.round(number);
   }
-  const phaseNames = ["download", "validation", "processing", "securityScan", "upload"];
+  const phaseNames = ["download", "validation", "processing", "securityScan", "upload", "scannerReady", "clamavNormal", "clamavWindows", "yara", "sha256"];
   const phaseMs = {};
   for (const name of phaseNames) {
     const number = Number(value.phaseMs?.[name]);
     if (Number.isFinite(number) && number >= 0 && number <= 720_000) phaseMs[name] = Math.round(number);
   }
   if (Object.keys(phaseMs).length) metrics.phaseMs = phaseMs;
+  const phaseCpuMs = {};
+  for (const name of phaseNames) {
+    const number = Number(value.phaseCpuMs?.[name]);
+    if (Number.isFinite(number) && number >= 0 && number <= 2_880_000) phaseCpuMs[name] = Math.round(number);
+  }
+  if (Object.keys(phaseCpuMs).length) metrics.phaseCpuMs = phaseCpuMs;
+  metrics.cpuScope = value.cpuScope === "cgroup_v2" ? "cgroup_v2" : "process_and_reaped_children";
   return Object.keys(metrics).length ? metrics : null;
 }
 
-async function markDownloadFailed(env, message, error) {
+async function markDownloadFailed(env, message, error, processingToken = null) {
   const jobId = String(message?.jobId || "");
   const identityId = String(message?.identityId || "");
   const row = await env.DB.prepare("SELECT service_link_id, source_hostname FROM downloader_jobs WHERE id = ? AND identity_id = ?")
@@ -591,8 +609,9 @@ async function markDownloadFailed(env, message, error) {
   const failure = classifyUsageError(error);
   const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', error_type = ?, error_reason = ?, failure_category = ?,
     processing_token = NULL, processing_lease_expires_at = NULL, progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND identity_id = ? AND status IN ('queued', 'processing')`)
-    .bind(failure.code, safe, failure.category, jobId, identityId).run();
+    WHERE id = ? AND identity_id = ? AND status IN ('queued', 'processing')
+    AND (? IS NULL OR processing_token = ?)`)
+    .bind(failure.code, safe, failure.category, jobId, identityId, processingToken, processingToken).run();
   if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_download_failed", "failure", { jobId, hostname: row.source_hostname, reason: safe });
 }
 
@@ -1121,10 +1140,10 @@ async function configureContainerEgress(container, sourceUrl, analyzedHosts = []
   await container.setAllowedHosts([...hosts]);
 }
 
-async function requireHealthyContainer(container) {
+async function requireHealthyContainer(container, analysisOnly = false) {
   let response;
   try {
-    response = await container.fetch(new Request("http://container/health", {
+    response = await container.fetch(new Request(analysisOnly ? "http://container/ready" : "http://container/health", {
       signal: AbortSignal.timeout(CONTAINER_HEALTH_TIMEOUT_MS)
     }));
   } catch (error) {
@@ -1133,8 +1152,9 @@ async function requireHealthyContainer(container) {
   }
   const health = await response.json().catch(() => ({}));
   const healthy = response.ok && health.ok === true && health.draining === false &&
-    health.clamav?.healthy === true && health.clamav?.daemonReady === true &&
-    health.yara?.healthy === true && health.yara?.verified === true;
+    (analysisOnly ? health.mode === "analysis" :
+      health.clamav?.healthy === true && health.clamav?.daemonReady === true &&
+      health.yara?.healthy === true && health.yara?.verified === true);
   if (!healthy) {
     console.error(JSON.stringify({
       event: "downloader_container_unhealthy",
@@ -1268,7 +1288,15 @@ function passkeysEnabled(env) { return String(env.PASSKEY_ENABLED || "false") ==
 function maxFileBytes(env) { return clampNumber(env.MAX_FILE_BYTES, 1_048_576, MAX_FILE_BYTES, MAX_FILE_BYTES); }
 function maxBytesForRow(env, row) { return String(row.extractor || "").toLowerCase().includes("twitter") && row.media_type === "audio" ? Math.min(maxFileBytes(env), clampNumber(env.MAX_SPACE_BYTES, 1_048_576, MAX_FILE_BYTES, MAX_SPACE_BYTES)) : maxFileBytes(env); }
 function downloadTtl(env) { return clampNumber(env.DOWNLOAD_TTL_SECONDS, 60, DOWNLOAD_TTL_SECONDS, DOWNLOAD_TTL_SECONDS); }
-async function releaseContainer(container) { try { await container.release(); } catch (error) { console.error(JSON.stringify({ event: "downloader_container_stop_failed", error: safeErrorName(error) })); } }
+async function releaseContainer(container) {
+  const startedAt = Date.now();
+  try {
+    await container.release();
+    console.log(JSON.stringify({ event: "downloader_container_release_metrics", releaseMs: Date.now() - startedAt }));
+  } catch (error) {
+    console.error(JSON.stringify({ event: "downloader_container_stop_failed", error: safeErrorName(error) }));
+  }
+}
 function safeQueueJobId(value) { const jobId = String(value || ""); return /^[A-Za-z0-9_-]{1,128}$/.test(jobId) ? jobId : null; }
 function clearCookie(secure) { return `${SESSION_COOKIE}=; Path=${BASE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
 function contentDisposition(filename) { return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(sanitizeFilename(filename))}`; }

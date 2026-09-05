@@ -60,6 +60,8 @@ class ScannerPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fixture.mp4"
             path.write_bytes(b"fixture")
+            run.return_value.stdout = f"{path}: OK\n"
+            run.return_value.stderr = ""
             _scan_malware(path)
         command = run.call_args.args[0]
         self.assertEqual(command[0], "clamdscan")
@@ -73,6 +75,17 @@ class ScannerPolicyTests(unittest.TestCase):
     def test_scan_timeout_fails_closed(self, _run, _daemon, _definitions):
         with self.assertRaisesRegex(UnsafeFile, "malware_scan_timeout"):
             _scan_malware(Path("fixture.mp4"))
+
+    @patch("scanner.require_fresh_clamav_definitions")
+    @patch("scanner.start_clamav_daemon")
+    @patch("scanner.subprocess.run")
+    def test_exit_zero_without_explicit_file_ok_is_not_clean(self, run, _daemon, _definitions):
+        run.return_value.returncode = 0
+        run.return_value.stderr = ""
+        for output in ("", "fixture.mp4: SKIPPED", "another.mp4: OK"):
+            run.return_value.stdout = output
+            with self.assertRaisesRegex(UnsafeFile, "malware_scan_failed"):
+                _scan_malware(Path("fixture.mp4"))
 
     @patch("scanner.require_yara_rules")
     @patch("scanner.subprocess.run")

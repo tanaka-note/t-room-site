@@ -146,7 +146,7 @@ test("Containerは最終成果物だけをClamAVとYARAで1回fail-closed検査�
   assert.equal(config.containers[0].rollout_active_grace_period, 900);
   assert.equal(config.containers[0].image_vars.CLAMAV_DEFINITION_REFRESH, "2026-W36");
   assert.match(worker, /enableInternet = false/);
-  assert.match(worker, /pingEndpoint = "localhost\/health"/);
+  assert.match(worker, /pingEndpoint = "localhost\/ready"/);
   assert.match(worker, /DownloaderContainer\.outbound = async/);
   assert.match(worker, /DownloaderContainer\.outboundByHost/);
   assert.match(worker, /pathname === "\/download"/);

@@ -12,6 +12,7 @@ from server import DRAINING, Handler
 class HealthEndpointTests(unittest.TestCase):
     def setUp(self):
         DRAINING.clear()
+        self.start_scanner = self.enterContext(patch("server.start_clamav_daemon"))
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -21,6 +22,21 @@ class HealthEndpointTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
+
+    def test_analysis_readiness_does_not_initialize_scanners(self):
+        with patch("server.clamav_database_status") as definitions, patch("server.yara_rules_status") as yara:
+            with urlopen(f"http://127.0.0.1:{self.server.server_port}/ready", timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.loads(response.read())["mode"], "analysis")
+            definitions.assert_not_called()
+            yara.assert_not_called()
+            self.start_scanner.assert_not_called()
+
+    def test_analysis_readiness_rejects_draining(self):
+        DRAINING.set()
+        with self.assertRaises(HTTPError) as error:
+            urlopen(f"http://127.0.0.1:{self.server.server_port}/ready", timeout=5)
+        self.assertEqual(error.exception.code, 503)
 
     def _health(self):
         url = f"http://127.0.0.1:{self.server.server_port}/health"

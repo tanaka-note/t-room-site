@@ -14,6 +14,28 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from contextlib import contextmanager
+
+
+def cgroup_cpu():
+    try:
+        values = dict(line.split() for line in Path('/sys/fs/cgroup/cpu.stat').read_text().splitlines())
+        return int(values['user_usec']) / 1_000_000, int(values['system_usec']) / 1_000_000
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+@contextmanager
+def measure_phase(wall, name, cpu=None):
+    started = time.monotonic()
+    before = cgroup_cpu() if cpu is not None else None
+    try:
+        yield
+    finally:
+        wall[name] = wall.get(name, 0) + max(0, round((time.monotonic() - started) * 1000))
+        after = cgroup_cpu() if before is not None else None
+        if before is not None and after is not None:
+            cpu[name] = cpu.get(name, 0) + max(0, round((sum(after) - sum(before)) * 1000))
 
 
 class UnsafeFile(ValueError):
@@ -60,7 +82,7 @@ CLAMD_CONFIG = Path(os.environ.get("CLAMD_CONFIG", "/app/clamd.conf"))
 CLAMD_SOCKET = Path(os.environ.get("CLAMD_SOCKET", "/work/clamd.sock"))
 CLAMD_WINDOW_BYTES = 64 * 1024 * 1024
 CLAMD_WINDOW_OVERLAP_BYTES = 1024 * 1024
-_DATABASE_VERIFY_CACHE: dict[tuple[str, int, int], bool] = {}
+_DATABASE_VERIFY_CACHE: dict[tuple, bool] = {}
 _DATABASE_VERIFY_LOCK = threading.Lock()
 _CLAMD_LOCK = threading.Lock()
 _CLAMD_PROCESS: subprocess.Popen | None = None
@@ -152,14 +174,18 @@ def inspect_validated_file(
     validation: FileValidation,
     deadline=None,
     reserve_seconds: float = 0,
+    phase_ms=None, phase_cpu_ms=None,
 ) -> ScanResult:
     """Run the single fail-closed full scan on the artifact to be persisted."""
+    phases = phase_ms if phase_ms is not None else {}
     _require_same_file(path, validation)
-    _scan_malware(path, deadline, reserve_seconds)
+    _scan_malware(path, deadline, reserve_seconds, phases, phase_cpu_ms)
     _require_same_file(path, validation)
-    _scan_yara(path, deadline, reserve_seconds)
+    with measure_phase(phases, "yara", phase_cpu_ms):
+        _scan_yara(path, deadline, reserve_seconds)
     _require_same_file(path, validation)
-    sha256 = _sha256(path, deadline, reserve_seconds)
+    with measure_phase(phases, "sha256", phase_cpu_ms):
+        sha256 = _sha256(path, deadline, reserve_seconds)
     _require_same_file(path, validation)
     return ScanResult(
         sha256, validation.size, validation.mime_type, validation.filename,
@@ -347,26 +373,31 @@ def _require_same_file(path: Path, validation: FileValidation) -> None:
         raise UnsafeFile("file_changed_after_validation")
 
 
-def _scan_malware(path: Path, deadline=None, reserve_seconds: float = 0) -> None:
-    require_fresh_clamav_definitions(deadline=deadline, reserve_seconds=reserve_seconds)
-    start_clamav_daemon(deadline=deadline, reserve_seconds=reserve_seconds)
+def _scan_malware(path: Path, deadline=None, reserve_seconds: float = 0, phase_ms=None, phase_cpu_ms=None) -> None:
+    phases = phase_ms if phase_ms is not None else {}
+    with measure_phase(phases, "scannerReady", phase_cpu_ms):
+        require_fresh_clamav_definitions(deadline=deadline, reserve_seconds=reserve_seconds)
+        start_clamav_daemon(deadline=deadline, reserve_seconds=reserve_seconds)
     scan_deadline = time.monotonic() + _phase_timeout(deadline, _clamav_scan_timeout_seconds(), reserve_seconds)
     command = [
         "clamdscan", f"--config-file={CLAMD_CONFIG}", "--fdpass", "--no-summary", "--", str(path),
     ]
     try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=max(0.1, scan_deadline - time.monotonic()), check=False,
-        )
+        with measure_phase(phases, "clamavNormal", phase_cpu_ms):
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=max(0.1, scan_deadline - time.monotonic()), check=False,
+            )
     except subprocess.TimeoutExpired as error:
         _raise_phase_timeout(deadline, reserve_seconds, "malware_scan_timeout", error)
     if result.returncode == 1:
         raise UnsafeFile("malware_detected")
-    if result.returncode != 0:
+    if result.returncode != 0 or result.stdout.strip() != f"{path}: OK" or result.stderr.strip():
+        # Require an explicit clean result for this file, not just exit zero.
         # A scanner/configuration failure is not treated as a clean result.
         raise UnsafeFile("malware_scan_failed")
     if path.stat().st_size > CLAMD_WINDOW_BYTES:
-        _scan_large_file_windows(path, scan_deadline, deadline, reserve_seconds)
+        with measure_phase(phases, "clamavWindows", phase_cpu_ms):
+            _scan_large_file_windows(path, scan_deadline, deadline, reserve_seconds)
 
 
 def _scan_yara(path: Path, deadline=None, reserve_seconds: float = 0) -> None:
@@ -567,7 +598,7 @@ def _clamav_database_path(root: Path, name: str) -> Path | None:
 def _clamav_database_signature_is_valid(path: Path, deadline=None, reserve_seconds: float = 0) -> bool:
     try:
         stat = path.stat()
-        key = (str(path.resolve()), int(stat.st_size), int(stat.st_mtime_ns))
+        key = (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
     except OSError:
         return False
     with _DATABASE_VERIFY_LOCK:
