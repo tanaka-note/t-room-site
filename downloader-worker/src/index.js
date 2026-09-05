@@ -687,7 +687,11 @@ async function handleContainerUpload(request, env) {
     committed = update.meta?.changes === 1;
   } finally {
     if (!committed) {
-      await env.DOWNLOADS.delete(grant.objectKey);
+      // Do not delete the key here. The Container transport can replay an upload
+      // request after another delivery has already committed the same signed key;
+      // a losing request must never be able to remove the winner's ready artifact.
+      // An uncommitted object is unreachable and cleanupOrphanObjects reclaims it
+      // after the short R2/D1 consistency grace period.
       await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
         progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND status = 'processing' AND processing_token = ?`).bind(grant.jobId, uploadToken).run();
@@ -792,7 +796,9 @@ async function cleanupOrphanObjects(env) {
       const jobId = String(object.customMetadata?.jobId || object.key.split("/")[1] || "");
       const row = jobId ? await env.DB.prepare("SELECT object_key, status, expires_at, processing_token, processing_lease_expires_at FROM downloader_jobs WHERE id = ?").bind(jobId).first() : null;
       const current = row?.status === "ready" && row.object_key === object.key && Number(row.expires_at || 0) > nowSeconds();
-      const uploading = row?.status === "processing" && row.processing_token === object.customMetadata?.processingToken &&
+      const objectProcessingToken = String(object.customMetadata?.processingToken || "");
+      const uploading = row?.status === "processing" &&
+        (row.processing_token === objectProcessingToken || row.processing_token === `upload:${objectProcessingToken}`) &&
         Number(row.processing_lease_expires_at || 0) > nowSeconds();
       // R2 put and the D1 ready transition cannot be committed atomically. A scheduled cleanup
       // that overlaps that narrow boundary must not delete the just-created final artifact.

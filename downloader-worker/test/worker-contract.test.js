@@ -86,9 +86,16 @@ test("R2確定後に12時間削除をQueueへ予約し期限内の再取得を�
     "R2書込み前に有効leaseをD1で一意にclaimする");
   assert.match(worker, /sameCommittedUpload/,
     "同じ署名済み成果物の応答消失・再送を冪等成功として扱う");
+  const containerUpload = worker.slice(worker.indexOf("async function handleContainerUpload("), worker.indexOf("async function listJobs("));
+  assert.doesNotMatch(containerUpload, /DOWNLOADS\.delete/,
+    "競合したupload requestは、別requestがready化した同一R2 keyを削除しない");
+  assert.match(containerUpload, /cleanupOrphanObjects reclaims it/,
+    "D1未確定objectは猶予後のorphan cleanupへ委譲する");
   assert.match(worker, /cleanupOrphanObjects/);
   assert.match(worker, /orphanObjectIsPastGrace\(object\.uploaded/,
     "R2/D1境界では作成直後の成果物をorphan cleanupから保護する");
+  assert.match(worker, /row\.processing_token === `upload:\$\{objectProcessingToken\}`/,
+    "upload claim中のR2/D1境界もorphan cleanupから保護する");
   assert.match(worker, /row\.status === "queued"[\s\S]*env\.JOBS\.send/, "Queue送信失敗・応答消失後は同じjobを安全に再配送できる");
   assert.match(worker, /normalization_mode = \?/);
   assert.match(client, /job-download/);
