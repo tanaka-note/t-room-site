@@ -82,6 +82,8 @@ test("R2確定後に12時間削除をQueueへ予約し期限内の再取得を�
   assert.match(worker, /processing_token = \?/);
   assert.match(worker, /processing_lease_expires_at/);
   assert.match(worker, /cleanupOrphanObjects/);
+  assert.match(worker, /orphanObjectIsPastGrace\(object\.uploaded/,
+    "R2/D1境界では作成直後の成果物をorphan cleanupから保護する");
   assert.match(worker, /row\.status === "queued"[\s\S]*env\.JOBS\.send/, "Queue送信失敗・応答消失後は同じjobを安全に再配送できる");
   assert.match(worker, /normalization_mode = \?/);
   assert.match(client, /job-download/);

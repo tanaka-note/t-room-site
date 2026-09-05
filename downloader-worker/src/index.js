@@ -6,6 +6,7 @@ import {
   DOWNLOAD_TTL_SECONDS,
   MAX_FILE_BYTES,
   MAX_SPACE_BYTES,
+  ORPHAN_OBJECT_GRACE_MS,
   QUEUE_MAX_RETRIES,
   exceedsVideoTranscodeBudget,
   isFinalQueueAttempt,
@@ -15,6 +16,7 @@ import {
   normalizeContainerErrorCode,
   normalizeMediaId,
   normalizeSourceUrl,
+  orphanObjectIsPastGrace,
   publicJob,
   queueRetryDelaySeconds,
   sanitizeFilename
@@ -762,6 +764,7 @@ async function cleanupExpiredJobs(env) {
 }
 
 async function cleanupOrphanObjects(env) {
+  const cleanupStartedAt = Date.now();
   let cursor;
   let pages = 0;
   do {
@@ -773,7 +776,11 @@ async function cleanupOrphanObjects(env) {
       const current = row?.status === "ready" && row.object_key === object.key && Number(row.expires_at || 0) > nowSeconds();
       const uploading = row?.status === "processing" && row.processing_token === object.customMetadata?.processingToken &&
         Number(row.processing_lease_expires_at || 0) > nowSeconds();
-      if (!current && !uploading) await env.DOWNLOADS.delete(object.key);
+      // R2 put and the D1 ready transition cannot be committed atomically. A scheduled cleanup
+      // that overlaps that narrow boundary must not delete the just-created final artifact.
+      // Unknown/malformed upload timestamps also fail closed and are retained for a later audit.
+      const pastGrace = orphanObjectIsPastGrace(object.uploaded, cleanupStartedAt, ORPHAN_OBJECT_GRACE_MS);
+      if (!current && !uploading && pastGrace) await env.DOWNLOADS.delete(object.key);
     }
     cursor = listed.truncated ? listed.cursor : undefined;
     pages += 1;

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   DomainError,
   DOWNLOAD_TTL_SECONDS,
+  ORPHAN_OBJECT_GRACE_MS,
   QUEUE_MAX_RETRIES,
   exceedsVideoTranscodeBudget,
   isFinalQueueAttempt,
@@ -12,6 +13,7 @@ import {
   normalizeContainerErrorCode,
   normalizeMediaId,
   normalizeSourceUrl,
+  orphanObjectIsPastGrace,
   publicJob,
   queueRetryDelaySeconds,
   sanitizeFilename
@@ -55,6 +57,14 @@ test("公開jobから内部取得capabilityとsource pathを除外する", () =>
 
 test("R2成果物は12時間だけ保持する", () => {
   assert.equal(DOWNLOAD_TTL_SECONDS, 12 * 60 * 60);
+});
+
+test("作成直後のR2成果物をorphan cleanupから保護する", () => {
+  const now = Date.parse("2026-09-05T03:00:00Z");
+  assert.equal(ORPHAN_OBJECT_GRACE_MS, 15 * 60 * 1000);
+  assert.equal(orphanObjectIsPastGrace(new Date(now - ORPHAN_OBJECT_GRACE_MS + 1), now), false);
+  assert.equal(orphanObjectIsPastGrace(new Date(now - ORPHAN_OBJECT_GRACE_MS), now), true);
+  assert.equal(orphanObjectIsPastGrace("invalid", now), false, "unknown timestamps must be retained");
 });
 
 test("映像再エンコードが処理枠を超える場合だけ事前拒否する", () => {

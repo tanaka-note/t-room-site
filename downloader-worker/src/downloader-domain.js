@@ -10,7 +10,18 @@ const BLOCKED_HOSTS = new Set([
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_SPACE_BYTES = 512 * 1024 * 1024;
 export const DOWNLOAD_TTL_SECONDS = 12 * 60 * 60;
+export const ORPHAN_OBJECT_GRACE_MS = 15 * 60 * 1000;
 export const QUEUE_MAX_RETRIES = 3;
+
+export function orphanObjectIsPastGrace(uploaded, nowMs = Date.now(), graceMs = ORPHAN_OBJECT_GRACE_MS) {
+  const uploadedMs = uploaded instanceof Date ? uploaded.getTime() : new Date(uploaded).getTime();
+  const currentMs = Number(nowMs);
+  const minimumAgeMs = Number(graceMs);
+  if (!Number.isFinite(uploadedMs) || !Number.isFinite(currentMs) || !Number.isFinite(minimumAgeMs) || minimumAgeMs < 0) {
+    return false;
+  }
+  return uploadedMs <= currentMs - minimumAgeMs;
+}
 
 export function isFinalQueueAttempt(attempts, maxRetries = QUEUE_MAX_RETRIES) {
   const attempt = Number(attempts);
