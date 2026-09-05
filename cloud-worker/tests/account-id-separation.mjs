@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 
 const [worker, client, cryptoClient, example] = await Promise.all([
   readFile(new URL("../src/index.js", import.meta.url), "utf8"),
@@ -20,4 +21,25 @@ assert.match(example, /ADMIN_LOGIN_ID=/);
 assert.match(example, /SUBADMIN_LOGIN_ID=/);
 assert.match(example, /ACCOUNT_KDF_ID=/);
 
-console.log("account login ID separation: ok");
+const labels = new Map();
+const state = { session: null, unlockedTopFolderNames: new Map() };
+const context = vm.createContext({ state, $: (selector) => {
+  if (!labels.has(selector)) labels.set(selector, {});
+  return labels.get(selector);
+} });
+const start = client.indexOf("function syncAccountIdentity()");
+vm.runInContext(client.slice(start, client.indexOf("\n}", start) + 2), context);
+for (const [session, expected] of [
+  [{ role: "admin" }, "管理者"],
+  [{ role: "member", accountName: "Atsushi" }, "Atsushi"],
+  [{ role: "member", accountName: "一般利用者のフォルダー" }, "一般利用者のフォルダー"],
+  [{ role: "subadmin" }, "未ログイン"]
+]) {
+  state.session = session;
+  vm.runInContext("syncAccountIdentity()", context);
+  for (const selector of ["#account-name", "#mobile-account-name"]) assert.equal(labels.get(selector).textContent, expected);
+}
+state.unlockedTopFolderNames.set(9, "PW解除済みのフォルダー");
+vm.runInContext("syncAccountIdentity()", context);
+assert.equal(labels.get("#account-name").textContent, "PW解除済みのフォルダー");
+console.log("account login ID separation and member labels: ok");

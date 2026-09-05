@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-724e15497064";
+const APP_BUILD_ID = "cloud-30deacacd55c";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -2313,7 +2313,9 @@ function syncAccountIdentity() {
   const unlockedNames = [...state.unlockedTopFolderNames.values()];
   const accountText = state.session?.role === "admin"
     ? "管理者"
-    : (unlockedNames.length ? unlockedNames.join("\n") : "未ログイン");
+    : state.session?.role === "member"
+      ? state.session.accountName
+      : (unlockedNames.length ? unlockedNames.join("\n") : "未ログイン");
   $("#account-name").textContent = accountText;
   $("#mobile-account-name").textContent = accountText;
   $("#account-permission").textContent = permissionText;
