@@ -6,14 +6,15 @@ import signal
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from resolver import ResolverError, analyze, download, resolve_site_adapter
-from scanner import UnsafeFile, clamav_daemon_ready, clamav_database_status, inspect_file, start_clamav_daemon, stop_clamav_daemon, yara_rules_status
+from scanner import UnsafeFile, clamav_daemon_ready, clamav_database_status, inspect_validated_file, start_clamav_daemon, stop_clamav_daemon, validate_file, yara_rules_status
 from ssrf import UnsafeUrl
 from media_pipeline import PlanKind, normalize_video
 
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover - Windows-only unit-test fallback
 
 MAX_REQUEST_BYTES = 16 * 1024
 DRAINING = threading.Event()
+PROGRESS_STAGES = {"downloading", "validating", "processing", "scanning", "saving", "finalizing"}
 
 
 class JobDeadlineExceeded(TimeoutError):
@@ -108,46 +110,63 @@ class Handler(BaseHTTPRequestHandler):
         started_at = time.monotonic()
         usage_before = _resource_usage()
         observed_work_bytes = 0
+        phase_ms = {}
         _event("download_started", job_id)
         with tempfile.TemporaryDirectory(prefix="tlain-", dir="/work") as directory:
             work_directory = Path(directory)
-            path, name, declared_mime = download(
-                body.get("route"), work_directory, max_bytes, timeout,
-                deadline=deadline, reserve_seconds=_phase_reserve(timeout, 90, 0.25),
-            )
+            _report_progress(body, "downloading", deadline)
+            with _measure_phase(phase_ms, "download"):
+                path, name, declared_mime = download(
+                    body.get("route"), work_directory, max_bytes, timeout,
+                    deadline=deadline, reserve_seconds=_phase_reserve(timeout, 90, 0.25),
+                )
             source_bytes = path.stat().st_size
             observed_work_bytes = max(observed_work_bytes, _directory_bytes(work_directory))
             _event("download_fetched", job_id)
-            initial_scan = inspect_file(
-                path, name, declared_mime, max_bytes,
-                deadline=deadline, reserve_seconds=_phase_reserve(timeout, 60, 0.15),
-            )
-            _event("download_initial_scan_passed", job_id)
-            plan = None
-            if initial_scan.media_kind == "video":
-                path, name, declared_mime, plan = normalize_video(
-                    path, name, max_bytes, timeout,
-                    deadline=deadline, reserve_seconds=_phase_reserve(timeout, 45, 0.10),
-                    source_probe=initial_scan.probe,
+            _report_progress(body, "validating", deadline)
+            with _measure_phase(phase_ms, "validation"):
+                initial_validation = validate_file(
+                    path, name, declared_mime, max_bytes,
+                    deadline=deadline, reserve_seconds=_phase_reserve(timeout, 60, 0.15),
                 )
+            _event("download_source_validated", job_id)
+            plan = None
+            final_validation = initial_validation
+            if initial_validation.media_kind == "video":
+                _report_progress(body, "processing", deadline)
+                with _measure_phase(phase_ms, "processing"):
+                    path, name, declared_mime, plan, output_probe = normalize_video(
+                        path, name, max_bytes, timeout,
+                        deadline=deadline, reserve_seconds=_phase_reserve(timeout, 45, 0.10),
+                        source_probe=initial_validation.probe,
+                    )
                 observed_work_bytes = max(observed_work_bytes, _directory_bytes(work_directory))
                 _event("download_video_normalized", job_id, normalization=plan.kind.value)
-            changed = plan is not None and plan.kind != PlanKind.PASS_THROUGH
-            scan = inspect_file(
-                path, name, declared_mime, max_bytes,
-                deadline=deadline, reserve_seconds=_phase_reserve(timeout, 30, 0.05),
-            ) if changed else initial_scan
-            if changed:
-                _event("download_final_scan_passed", job_id)
+                if plan.kind != PlanKind.PASS_THROUGH:
+                    with _measure_phase(phase_ms, "validation"):
+                        final_validation = validate_file(
+                            path, name, declared_mime, max_bytes,
+                            deadline=deadline, reserve_seconds=_phase_reserve(timeout, 30, 0.05),
+                            probe=output_probe,
+                        )
+            _report_progress(body, "scanning", deadline)
+            with _measure_phase(phase_ms, "securityScan"):
+                scan = inspect_validated_file(
+                    path, final_validation,
+                    deadline=deadline, reserve_seconds=_phase_reserve(timeout, 30, 0.05),
+                )
+            _event("download_final_scan_passed", job_id)
+            _report_progress(body, "saving", deadline)
             _event("download_upload_started", job_id)
             deadline.ensure(minimum_seconds=1)
-            pre_upload_metrics = _job_metrics(started_at, usage_before, observed_work_bytes)
+            pre_upload_metrics = _job_metrics(started_at, usage_before, observed_work_bytes, phase_ms)
             normalization = plan.kind.value if plan else "NOT_APPLICABLE"
-            _upload_to_r2(
-                path, body, scan, deadline=deadline, normalization=normalization,
-                source_bytes=source_bytes, metrics=pre_upload_metrics,
-            )
-            metrics = _job_metrics(started_at, usage_before, observed_work_bytes)
+            with _measure_phase(phase_ms, "upload"):
+                _upload_to_r2(
+                    path, body, scan, deadline=deadline, normalization=normalization,
+                    source_bytes=source_bytes, metrics=pre_upload_metrics,
+                )
+            metrics = _job_metrics(started_at, usage_before, observed_work_bytes, phase_ms)
             _event("download_completed", job_id, **metrics)
             return self._json(200, {
                 "uploaded": True, "actualSize": scan.size, "sha256": scan.sha256,
@@ -212,6 +231,10 @@ def _upload_to_r2(
                 "X-Container-CPU-System-Ms": str(max(0, int(usage.get("cpuSystemMs", 0)))),
                 "X-Container-Peak-RSS-Bytes": str(max(0, int(usage.get("containerPeakRssBytes", 0)))),
                 "X-Container-Work-Bytes": str(max(0, int(usage.get("observedWorkBytes", 0)))),
+                "X-Phase-Download-Ms": str(_phase_metric(usage, "download")),
+                "X-Phase-Validation-Ms": str(_phase_metric(usage, "validation")),
+                "X-Phase-Processing-Ms": str(_phase_metric(usage, "processing")),
+                "X-Phase-Security-Scan-Ms": str(_phase_metric(usage, "securityScan")),
             },
         )
         try:
@@ -234,6 +257,33 @@ def _deadline_chunks(source, deadline: JobDeadline | None):
         if not chunk:
             return
         yield chunk
+
+
+def _report_progress(body: dict, stage: str, deadline: JobDeadline | None = None) -> None:
+    if stage not in PROGRESS_STAGES:
+        raise ValueError("invalid_progress_stage")
+    grant = str(body.get("uploadGrant") or "")
+    if not grant:
+        return
+    payload = json.dumps({"stage": stage}, separators=(",", ":")).encode()
+    request = Request(
+        "http://r2.tlain.internal/progress",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {grant}",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(payload)),
+        },
+    )
+    timeout = 3 if deadline is None else deadline.timeout(maximum_seconds=3, reserve_seconds=1)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            response.read(4096)
+    except (HTTPError, URLError, OSError):
+        # Progress is observational. The signed upload commit remains the
+        # authoritative fail-closed state transition.
+        return
 
 
 def _phase_reserve(total_seconds: int, maximum_seconds: int, fraction: float) -> float:
@@ -262,11 +312,12 @@ def _resource_usage() -> tuple[float, float, int] | None:
     return own.ru_utime + children.ru_utime, own.ru_stime + children.ru_stime, max(own.ru_maxrss, children.ru_maxrss) * 1024
 
 
-def _job_metrics(started_at: float, usage_before: tuple[float, float, int] | None, observed_work_bytes: int) -> dict:
+def _job_metrics(started_at: float, usage_before: tuple[float, float, int] | None, observed_work_bytes: int, phase_ms: dict | None = None) -> dict:
     usage_after = _resource_usage()
     value = {
         "wallMs": max(0, round((time.monotonic() - started_at) * 1000)),
         "observedWorkBytes": max(0, int(observed_work_bytes)),
+        "phaseMs": {name: max(0, int(value)) for name, value in (phase_ms or {}).items()},
     }
     if usage_before is not None and usage_after is not None:
         value.update({
@@ -275,6 +326,24 @@ def _job_metrics(started_at: float, usage_before: tuple[float, float, int] | Non
             "containerPeakRssBytes": max(0, int(usage_after[2])),
         })
     return value
+
+
+@contextmanager
+def _measure_phase(metrics: dict, name: str):
+    started_at = time.monotonic()
+    try:
+        yield
+    finally:
+        elapsed = max(0, round((time.monotonic() - started_at) * 1000))
+        metrics[name] = int(metrics.get(name, 0)) + elapsed
+
+
+def _phase_metric(metrics: dict, name: str) -> int:
+    value = (metrics.get("phaseMs") or {}).get(name, 0)
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _number(value, minimum: int, maximum: int) -> int:

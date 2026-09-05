@@ -89,7 +89,7 @@
     "MAX_FILE_BYTES": "2147483648",
     "MAX_SPACE_BYTES": "536870912",
     "PROCESS_TIMEOUT_SECONDS": "720",
-    "DOWNLOAD_TTL_SECONDS": "1800"
+    "DOWNLOAD_TTL_SECONDS": "43200"
   },
   "observability": {
     "enabled": true,

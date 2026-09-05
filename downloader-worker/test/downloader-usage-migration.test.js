@@ -5,6 +5,7 @@ import test from "node:test";
 
 const foundation = await readFile(new URL("../migrations/0001_downloader_foundation.sql", import.meta.url), "utf8");
 const usageMigration = await readFile(new URL("../migrations/0002_downloader_usage_stats.sql", import.meta.url), "utf8");
+const progressMigration = await readFile(new URL("../migrations/0003_downloader_progress_metrics.sql", import.meta.url), "utf8");
 
 function metric(db, metricName, dimension) {
   return db.prepare(`SELECT event_count, byte_count, value_sum, value_max
@@ -28,6 +29,7 @@ test("usage migrationは既存履歴をbackfillし新規状態遷移を一度だ
   insertJob(db, "historical-failed", "failed");
 
   db.exec(usageMigration);
+  db.exec(progressMigration);
   assert.equal(metric(db, "request", "analyze").event_count, 2);
   assert.equal(metric(db, "request", "download").event_count, 1);
   assert.equal(metric(db, "result", "success").event_count, 1);
@@ -83,9 +85,31 @@ test("usage tables do not retain source URL, query, filename, cookie, or authori
   const db = new DatabaseSync(":memory:");
   db.exec(foundation);
   db.exec(usageMigration);
+  db.exec(progressMigration);
   for (const table of ["downloader_usage_daily", "downloader_file_delivery_attempts"]) {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((row) => String(row.name));
     assert.equal(columns.some((name) => /url|query|filename|cookie|authorization/i.test(name)), false);
   }
+  db.close();
+});
+
+test("progress migrationは安全な段階名と非負の実測時間だけを保持する", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(foundation);
+  db.exec(usageMigration);
+  db.exec(progressMigration);
+  insertJob(db, "measured");
+  db.prepare(`UPDATE downloader_jobs SET progress_stage = 'scanning', container_health_ms = 10,
+    download_ms = 20, validation_ms = 30, processing_ms = 40, security_scan_ms = 50, upload_ms = 60
+    WHERE id = 'measured'`).run();
+  const row = db.prepare(`SELECT progress_stage, container_health_ms, download_ms, validation_ms,
+    processing_ms, security_scan_ms, upload_ms FROM downloader_jobs WHERE id = 'measured'`).get();
+  assert.deepEqual({ ...row }, {
+    progress_stage: "scanning", container_health_ms: 10, download_ms: 20, validation_ms: 30,
+    processing_ms: 40, security_scan_ms: 50, upload_ms: 60
+  });
+  assert.throws(() => db.prepare("UPDATE downloader_jobs SET progress_stage = 'invented' WHERE id = 'measured'").run());
+  assert.throws(() => db.prepare("UPDATE downloader_jobs SET security_scan_ms = -1 WHERE id = 'measured'").run());
+  assert.equal(db.prepare("PRAGMA foreign_key_check").all().length, 0);
   db.close();
 });

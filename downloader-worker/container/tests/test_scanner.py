@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from scanner import UnsafeFile, _detect_mime, _reject_filename, _scan_large_file_windows, _scan_malware, _scan_yara, clamav_database_status, inspect_file, probe_file, require_fresh_clamav_definitions, require_yara_rules, safe_filename, start_clamav_daemon, yara_rules_status
+from scanner import UnsafeFile, _detect_mime, _reject_filename, _scan_large_file_windows, _scan_malware, _scan_yara, clamav_database_status, inspect_file, inspect_validated_file, probe_file, require_fresh_clamav_definitions, require_yara_rules, safe_filename, start_clamav_daemon, validate_file, yara_rules_status
 
 
 def clamav_header(build_time: int) -> bytes:
@@ -134,7 +134,7 @@ class ScannerPolicyTests(unittest.TestCase):
                 _scan_large_file_windows(path)
         self.assertEqual(stream.call_count, 3)
 
-    def test_malware_scan_runs_before_ffprobe(self):
+    def test_lightweight_validation_precedes_the_single_final_full_scan(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "movie.mp4"
             path.write_bytes(b"media")
@@ -143,9 +143,26 @@ class ScannerPolicyTests(unittest.TestCase):
                  patch("scanner._scan_malware", side_effect=lambda *_args: order.append("clamav")), \
                  patch("scanner._scan_yara", side_effect=lambda *_args: order.append("yara")), \
                  patch("scanner.probe_file", side_effect=lambda *_args: order.append("ffprobe") or {"streams": [{"codec_type": "video"}]}), \
-                 patch("scanner._sha256", return_value="0" * 64):
-                inspect_file(path, "movie.mp4", "video/mp4", 1024)
-            self.assertEqual(order, ["magic", "clamav", "yara", "ffprobe"])
+                 patch("scanner._sha256", side_effect=lambda *_args: order.append("sha256") or "0" * 64):
+                validation = validate_file(path, "movie.mp4", "video/mp4", 1024)
+                self.assertEqual(order, ["magic", "ffprobe"])
+                inspect_validated_file(path, validation)
+            self.assertEqual(order, ["magic", "ffprobe", "clamav", "yara", "sha256"])
+
+    def test_final_scan_rejects_a_file_changed_after_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "movie.mp4"
+            path.write_bytes(b"media")
+            with patch("scanner._detect_mime", return_value="video/mp4"), \
+                 patch("scanner.probe_file", return_value={"streams": [{"codec_type": "video"}]}):
+                validation = validate_file(path, path.name, "video/mp4", 1024)
+            path.write_bytes(b"changed-media")
+            with patch("scanner._scan_malware") as clamav, \
+                 patch("scanner._scan_yara") as yara, \
+                 self.assertRaisesRegex(UnsafeFile, "file_changed_after_validation"):
+                inspect_validated_file(path, validation)
+            clamav.assert_not_called()
+            yara.assert_not_called()
 
     def test_executable_archive_and_double_extension_are_rejected(self):
         for name in ["movie.mp4.exe", "archive.zip", "run.ps1", "movie.mp4.js"]:

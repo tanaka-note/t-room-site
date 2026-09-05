@@ -70,7 +70,7 @@ def plan_mp4(probe: dict) -> MediaPlan:
     return MediaPlan(PlanKind.FULL_TRANSCODE, video_codec, audio_codec, "incompatible_video_and_audio")
 
 
-def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0, source_probe: dict | None = None) -> tuple[Path, str, str, MediaPlan]:
+def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0, source_probe: dict | None = None) -> tuple[Path, str, str, MediaPlan, dict]:
     source_probe = source_probe or probe_file(path, deadline, reserve_seconds)
     plan = plan_mp4(source_probe)
     if plan.kind == PlanKind.REJECT:
@@ -81,7 +81,7 @@ def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_sec
     output_name = f"{Path(safe_filename(requested_name)).stem or 'download'}.mp4"
     if plan.kind == PlanKind.PASS_THROUGH:
         _validate_output(source_probe, source_probe, path, max_bytes, deadline, reserve_seconds)
-        return path, output_name, "video/mp4", plan
+        return path, output_name, "video/mp4", plan, source_probe
 
     output = path.parent / "output.mp4"
     playable_video = next(stream for stream in source_probe.get("streams", []) if _is_playable_video_stream(stream))
@@ -115,7 +115,7 @@ def normalize_video(path: Path, requested_name: str, max_bytes: int, timeout_sec
         raise UnsafeFile("normalization_failed")
     output_probe = probe_file(output, deadline, reserve_seconds)
     _validate_output(source_probe, output_probe, output, max_bytes, deadline, reserve_seconds)
-    return output, output_name, "video/mp4", plan
+    return output, output_name, "video/mp4", plan, output_probe
 
 
 def enforce_video_transcode_budget(probe: dict, plan: MediaPlan, budget_seconds: float = VIDEO_TRANSCODE_BUDGET_EQUIVALENT_1080P30_SECONDS) -> float:

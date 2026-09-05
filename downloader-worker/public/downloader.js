@@ -137,7 +137,7 @@
         await loadJobs();
         return;
       }
-      elements.progressLabel.textContent = currentJob.status === "analyzing" ? "URLを解析しています" : currentJob.status === "processing" ? "ダウンロードと検査を行っています" : "取得準備中";
+      elements.progressLabel.textContent = progressLabel(currentJob);
       pollTimer = window.setTimeout(pollJob, 2000);
     } catch (error) {
       showMessage(error.message);
@@ -191,7 +191,7 @@
     elements.fileDownload.dataset.jobId = job.id;
     elements.fileDownload.href = `/downloader/api/jobs/${encodeURIComponent(job.id)}/file?attempt=${encodeURIComponent(downloadAttemptId())}`;
     elements.fileDownload.setAttribute("download", job.filename || "download");
-    elements.expiryNote.textContent = `保存期限：${dateText(job.expiresAt)}（最大30分で自動削除）`;
+    elements.expiryNote.textContent = `保存期限：${dateText(job.expiresAt)}（最大12時間で自動削除）`;
     elements.readyView.hidden = false;
   }
 
@@ -207,8 +207,20 @@
         const info = document.createElement("div");
         const host = document.createElement("p"); host.textContent = job.sourceHostname;
         const date = document.createElement("small"); date.textContent = dateText(job.createdAt);
-        const status = document.createElement("span"); status.className = "job-status"; status.textContent = statusLabel(job.status);
-        info.append(host, date); row.append(info, status); elements.jobList.append(row);
+        const actions = document.createElement("div"); actions.className = "job-actions";
+        const status = document.createElement("span"); status.className = "job-status";
+        status.textContent = job.status === "ready" && !isDownloadAvailable(job) ? "期限終了" : statusLabel(job.status);
+        actions.append(status);
+        if (isDownloadAvailable(job)) {
+          const link = document.createElement("a");
+          link.className = "job-download";
+          link.textContent = "再ダウンロード";
+          link.href = jobDownloadHref(job.id);
+          link.setAttribute("download", job.filename || "download");
+          link.addEventListener("click", () => { link.href = jobDownloadHref(job.id); });
+          actions.append(link);
+        }
+        info.append(host, date); row.append(info, actions); elements.jobList.append(row);
       }
     } catch (error) {
       if (error.status === 401) showLogin();
@@ -316,7 +328,7 @@
 
   function prepareDownloadAttempt() {
     const jobId = elements.fileDownload.dataset.jobId;
-    if (jobId) elements.fileDownload.href = `/downloader/api/jobs/${encodeURIComponent(jobId)}/file?attempt=${encodeURIComponent(downloadAttemptId())}`;
+    if (jobId) elements.fileDownload.href = jobDownloadHref(jobId);
   }
 
   function showLogin() { elements.loginView.hidden = false; elements.appView.hidden = true; elements.usageSection.hidden = true; elements.logout.hidden = true; }
@@ -332,6 +344,21 @@
   function usdText(value) { const number = Number(value || 0); return `$${number < 0.01 ? number.toFixed(6) : number.toFixed(2)}`; }
   function sizeText(value) { const size = Number(value); if (!Number.isFinite(size)) return "不明"; if (size <= 0) return "0 KB"; if (size < 1024) return `${Math.round(size)} B`; if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(2)} GB`; if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MB`; return `${Math.round(size / 1024)} KB`; }
   function dateText(value) { if (!value) return "不明"; const date = new Date(value); return Number.isNaN(date.getTime()) ? "不明" : new Intl.DateTimeFormat("ja-JP", { dateStyle: "short", timeStyle: "short" }).format(date); }
+  function isDownloadAvailable(job) { const expires = Date.parse(job?.expiresAt || ""); return job?.status === "ready" && Number.isFinite(expires) && expires > Date.now(); }
+  function jobDownloadHref(jobId) { return `/downloader/api/jobs/${encodeURIComponent(jobId)}/file?attempt=${encodeURIComponent(downloadAttemptId())}`; }
+  function progressLabel(job) {
+    if (job?.status === "analyzing") return "URLを解析しています";
+    if (job?.status !== "processing") return "取得準備中";
+    return ({
+      starting: "処理環境を準備しています",
+      downloading: "ファイルを取得しています",
+      validating: "メディアを確認しています",
+      processing: "メディアを処理しています",
+      scanning: "安全性を検査しています",
+      saving: "保存しています",
+      finalizing: "完了処理を行っています"
+    })[job.progressStage] || "取得処理を開始しています";
+  }
   function extractorLabel(value) { const text = String(value || "unknown"); if (text === "direct") return "Direct Media"; if (text.includes("browser")) return "Browser解析"; if (text.includes("generic")) return "Generic解析"; return text; }
   function normalizationLabel(value) { return ({ PASS_THROUGH: "そのまま", REMUX: "無劣化Remux", PARTIAL_TRANSCODE: "非互換部分のみ変換", FULL_TRANSCODE: "MP4へ再エンコード", NOT_APPLICABLE: "変換なし" })[value] || "実体検査済み"; }
   function securityLabel(value) { return ({ malware_detected: "Malware検知", yara_detected: "YARA検知", clamav_error: "ClamAV異常", yara_error: "YARA異常", scanner_timeout: "Scanner timeout", scanner_unavailable: "Scanner停止", file_type_mismatch: "形式不一致", malformed_media: "破損メディア", processing_budget_exceeded: "処理予算超過", deadline_exceeded: "Deadline超過", ssrf_rejected: "SSRF拒否", rate_limited: "Rate limit", other_reject: "その他拒否", other_failed: "その他失敗" })[value] || value; }

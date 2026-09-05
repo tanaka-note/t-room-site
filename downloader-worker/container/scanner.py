@@ -81,8 +81,35 @@ class ScanResult:
     probe: dict
 
 
-def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max_bytes: int, deadline=None, reserve_seconds: float = 0) -> ScanResult:
-    size = path.stat().st_size
+@dataclass(frozen=True)
+class FileValidation:
+    size: int
+    mime_type: str
+    filename: str
+    media_kind: str
+    probe: dict
+    file_identity: tuple[int, int, int, int]
+
+
+def validate_file(
+    path: Path,
+    requested_name: str,
+    declared_mime: str | None,
+    max_bytes: int,
+    deadline=None,
+    reserve_seconds: float = 0,
+    probe: dict | None = None,
+) -> FileValidation:
+    """Validate untrusted media without performing the final malware scan.
+
+    This stage deliberately stays inside the disposable Container. It rejects
+    obvious executable/archive payloads, MIME/extension mismatches, malformed
+    media and unsafe streams before normalization. ffprobe is restricted to
+    local file/pipe protocols. The heavier ClamAV/YARA pass is reserved for the
+    exact artifact that will be persisted.
+    """
+    file_identity = _file_identity(path)
+    size = file_identity[2]
     if size <= 0 or size > max_bytes:
         raise UnsafeFile("size_limit")
     filename = safe_filename(requested_name or path.name)
@@ -97,11 +124,7 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
         "application/mxf", "application/octet-stream", "application/ogg", "application/x-matroska",
     }:
         raise UnsafeFile("unsupported_mime")
-    # Keep complex media parsers behind the malware gate. libmagic performs the
-    # minimal type check first; ClamAV then scans before ffprobe sees the file.
-    _scan_malware(path, deadline, reserve_seconds)
-    _scan_yara(path, deadline, reserve_seconds)
-    probe = probe_file(path, deadline, reserve_seconds)
+    probe = probe if probe is not None else probe_file(path, deadline, reserve_seconds)
     media_kind = _media_kind(detected, probe)
     if Path(filename).suffix.lower() in {".mjpeg", ".mjpg"} and any(_is_playable_video_stream(stream) for stream in probe.get("streams", [])):
         # libmagic reports a raw MJPEG stream as image/jpeg; ffprobe proves that
@@ -118,8 +141,36 @@ def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max
     if expected_family in {"audio", "image", "video"} and expected_family != media_kind and not ambiguous_ogg:
         raise UnsafeFile("extension_mismatch")
 
-    _validate_media(path, probe, deadline, reserve_seconds)
-    return ScanResult(_sha256(path, deadline, reserve_seconds), size, detected, filename, media_kind, probe)
+    _validate_media(detected, probe)
+    if _file_identity(path) != file_identity:
+        raise UnsafeFile("file_changed_during_validation")
+    return FileValidation(size, detected, filename, media_kind, probe, file_identity)
+
+
+def inspect_validated_file(
+    path: Path,
+    validation: FileValidation,
+    deadline=None,
+    reserve_seconds: float = 0,
+) -> ScanResult:
+    """Run the single fail-closed full scan on the artifact to be persisted."""
+    _require_same_file(path, validation)
+    _scan_malware(path, deadline, reserve_seconds)
+    _require_same_file(path, validation)
+    _scan_yara(path, deadline, reserve_seconds)
+    _require_same_file(path, validation)
+    sha256 = _sha256(path, deadline, reserve_seconds)
+    _require_same_file(path, validation)
+    return ScanResult(
+        sha256, validation.size, validation.mime_type, validation.filename,
+        validation.media_kind, validation.probe,
+    )
+
+
+def inspect_file(path: Path, requested_name: str, declared_mime: str | None, max_bytes: int, deadline=None, reserve_seconds: float = 0) -> ScanResult:
+    """Compatibility wrapper for callers that need validation plus one scan."""
+    validation = validate_file(path, requested_name, declared_mime, max_bytes, deadline, reserve_seconds)
+    return inspect_validated_file(path, validation, deadline, reserve_seconds)
 
 
 def clamav_database_status(database_dir: Path | None = None, now: float | None = None, deadline=None, reserve_seconds: float = 0) -> dict:
@@ -255,7 +306,7 @@ def _mime_family(value: str) -> str:
 def probe_file(path: Path, deadline=None, reserve_seconds: float = 0) -> dict:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
+            ["ffprobe", "-v", "error", "-max_alloc", "268435456", "-protocol_whitelist", "file,pipe", "-show_entries",
              "format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,profile,level,pix_fmt,width,height,r_frame_rate,duration,bit_rate,sample_rate,channels:stream_disposition=attached_pic:stream_tags=rotate:stream_side_data=rotation",
              "-of", "json", "--", str(path)],
             capture_output=True, text=True, timeout=_phase_timeout(deadline, 90, reserve_seconds), check=False,
@@ -271,7 +322,7 @@ def probe_file(path: Path, deadline=None, reserve_seconds: float = 0) -> dict:
         raise UnsafeFile("ffprobe_invalid") from error
 
 
-def _validate_media(path: Path, probe: dict, deadline=None, reserve_seconds: float = 0) -> None:
+def _validate_media(detected_mime: str, probe: dict) -> None:
     streams = probe.get("streams", [])
     stream_types = {stream.get("codec_type") for stream in streams}
     if "attachment" in stream_types or "data" in stream_types:
@@ -279,9 +330,21 @@ def _validate_media(path: Path, probe: dict, deadline=None, reserve_seconds: flo
     if not streams or any(kind not in {"audio", "video", "subtitle"} for kind in stream_types):
         # Still images are accepted through libmagic and decoded by Chromium/OS,
         # but ffprobe must validate every audio/video container.
-        mime = _detect_mime(path, deadline, reserve_seconds)
-        if not mime.startswith("image/"):
+        if not detected_mime.startswith("image/"):
             raise UnsafeFile("invalid_media_stream")
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int]:
+    try:
+        stat = path.stat()
+    except OSError as error:
+        raise UnsafeFile("file_unavailable") from error
+    return int(stat.st_dev), int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns)
+
+
+def _require_same_file(path: Path, validation: FileValidation) -> None:
+    if _file_identity(path) != validation.file_identity:
+        raise UnsafeFile("file_changed_after_validation")
 
 
 def _scan_malware(path: Path, deadline=None, reserve_seconds: float = 0) -> None:

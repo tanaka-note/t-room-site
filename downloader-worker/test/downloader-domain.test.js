@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DomainError,
+  DOWNLOAD_TTL_SECONDS,
   QUEUE_MAX_RETRIES,
   exceedsVideoTranscodeBudget,
   isFinalQueueAttempt,
@@ -41,11 +42,19 @@ test("Queueの最終attemptはinitial + max_retriesの次である", () => {
 test("公開jobから内部取得capabilityとsource pathを除外する", () => {
   const job = publicJob({
     id: "job", status: "analyzed", source_hostname: "media.example", source_path_hint: "/private/item",
+    progress_stage: "scanning",
     analysis_json: JSON.stringify({ title: "clip", media: [], _sealedRoutes: { direct: { sourceCiphertext: "secret" } } }),
   });
   assert.equal(job.sourcePathHint, null);
   assert.equal(job.analysis.title, "clip");
   assert.equal("_sealedRoutes" in job.analysis, false);
+  assert.equal(job.progressStage, null, "non-processing jobs must not expose stale progress");
+  assert.equal(publicJob({ ...job, id: "processing", status: "processing", source_hostname: "media.example", progress_stage: "scanning", analysis_json: "{}" }).progressStage, "scanning");
+  assert.equal(publicJob({ ...job, id: "invalid", status: "processing", source_hostname: "media.example", progress_stage: "<script>", analysis_json: "{}" }).progressStage, null);
+});
+
+test("R2成果物は12時間だけ保持する", () => {
+  assert.equal(DOWNLOAD_TTL_SECONDS, 12 * 60 * 60);
 });
 
 test("映像再エンコードが処理枠を超える場合だけ事前拒否する", () => {

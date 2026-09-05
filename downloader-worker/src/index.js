@@ -58,6 +58,7 @@ const CONTAINER_HEALTH_TIMEOUT_MS = 90_000;
 const CONTAINER_RESPONSE_GRACE_MS = 20_000;
 const QUEUE_FINALIZATION_RESERVE_MS = 60_000;
 const QUEUE_MAX_WALL_MS = 15 * 60_000;
+const CONTAINER_PROGRESS_STAGES = new Set(["downloading", "validating", "processing", "scanning", "saving", "finalizing"]);
 if (CONTAINER_HEALTH_TIMEOUT_MS + 720_000 + CONTAINER_RESPONSE_GRACE_MS + QUEUE_FINALIZATION_RESERVE_MS > QUEUE_MAX_WALL_MS) {
   throw new Error("downloader_queue_deadline_configuration_invalid");
 }
@@ -91,7 +92,7 @@ export class DownloaderContainer extends Container {
 }
 
 DownloaderContainer.outboundByHost = {
-  "r2.tlain.internal": async (request, env, ctx) => handleContainerUpload(request, env, ctx)
+  "r2.tlain.internal": async (request, env, ctx) => handleContainerInternalRequest(request, env, ctx)
 };
 
 DownloaderContainer.outbound = async (request) => {
@@ -485,7 +486,7 @@ async function processDownloadMessage(env, message) {
   const leaseExpiresAt = nowSeconds() + Math.ceil(CONTAINER_HEALTH_TIMEOUT_MS / 1000) +
     processTimeoutSeconds + Math.ceil(QUEUE_FINALIZATION_RESERVE_MS / 1000);
   const claim = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'processing', processing_at = COALESCE(processing_at, CURRENT_TIMESTAMP),
-    processing_token = ?, processing_lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+    processing_token = ?, processing_lease_expires_at = ?, progress_stage = 'starting', updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND identity_id = ? AND (
       status = 'queued' OR (status = 'processing' AND (processing_lease_expires_at IS NULL OR processing_lease_expires_at <= ?))
     )`).bind(processingToken, leaseExpiresAt, jobId, identityId, nowSeconds()).run();
@@ -504,7 +505,9 @@ async function processDownloadMessage(env, message) {
     const grant = await createInternalGrant({ jobId, processingToken, objectKey, expiresAt, maxBytes: maxBytesForRow(env, row) }, env);
     const container = getContainer(env.DOWNLOADER_CONTAINER, `job-${jobId}`);
     try {
+      const healthStartedAt = Date.now();
       await requireHealthyContainer(container);
+      const containerHealthMs = Math.max(0, Date.now() - healthStartedAt);
       await configureContainerEgress(container, routeUrl, capability.route.egressHosts);
       const response = await container.fetch(new Request("http://container/download", {
         method: "POST",
@@ -524,9 +527,24 @@ async function processDownloadMessage(env, message) {
       const normalization = ["PASS_THROUGH", "REMUX", "PARTIAL_TRANSCODE", "FULL_TRANSCODE", "NOT_APPLICABLE"].includes(result.normalization)
         ? result.normalization : "UNKNOWN";
       const metrics = normalizeContainerMetrics(result.metrics);
-      if (metrics) console.log(JSON.stringify({ event: "downloader_container_metrics", jobId, normalization, ...metrics }));
-      await env.DB.prepare(`UPDATE downloader_jobs SET normalization_mode = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND identity_id = ? AND status = 'ready'`).bind(normalization, jobId, identityId).run();
+      const containerCpuMs = metrics && (metrics.cpuUserMs !== undefined || metrics.cpuSystemMs !== undefined)
+        ? (metrics.cpuUserMs || 0) + (metrics.cpuSystemMs || 0)
+        : null;
+      if (metrics) console.log(JSON.stringify({ event: "downloader_container_metrics", jobId, normalization, containerHealthMs, ...metrics }));
+      const phases = metrics?.phaseMs || {};
+      await env.DB.prepare(`UPDATE downloader_jobs SET normalization_mode = ?, container_health_ms = ?,
+        container_wall_ms = COALESCE(?, container_wall_ms), container_cpu_ms = COALESCE(?, container_cpu_ms),
+        container_peak_rss_bytes = COALESCE(?, container_peak_rss_bytes), container_work_bytes = COALESCE(?, container_work_bytes),
+        download_ms = COALESCE(?, download_ms), validation_ms = COALESCE(?, validation_ms),
+        processing_ms = COALESCE(?, processing_ms), security_scan_ms = COALESCE(?, security_scan_ms),
+        upload_ms = COALESCE(?, upload_ms), progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND identity_id = ? AND status = 'ready'`).bind(
+          normalization, containerHealthMs, metrics?.wallMs ?? null,
+          containerCpuMs,
+          metrics?.containerPeakRssBytes ?? null, metrics?.observedWorkBytes ?? null,
+          phases.download ?? null, phases.validation ?? null, phases.processing ?? null,
+          phases.securityScan ?? null, phases.upload ?? null, jobId, identityId
+        ).run();
       const ready = await env.DB.prepare("SELECT status FROM downloader_jobs WHERE id = ? AND identity_id = ?").bind(jobId, identityId).first();
       if (ready?.status !== "ready") throw new Error("container_upload_not_committed");
       await auditSystem(env, identityId, row.service_link_id, "downloader_scan_passed", "success", { jobId, hostname: row.source_hostname });
@@ -536,7 +554,8 @@ async function processDownloadMessage(env, message) {
     }
   } catch (error) {
     await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
-      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'processing' AND processing_token = ?`)
+      progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND identity_id = ? AND status = 'processing' AND processing_token = ?`)
       .bind(jobId, identityId, processingToken).run();
     throw error;
   }
@@ -550,6 +569,13 @@ function normalizeContainerMetrics(value) {
     const number = Number(value[name]);
     if (Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER) metrics[name] = Math.round(number);
   }
+  const phaseNames = ["download", "validation", "processing", "securityScan", "upload"];
+  const phaseMs = {};
+  for (const name of phaseNames) {
+    const number = Number(value.phaseMs?.[name]);
+    if (Number.isFinite(number) && number >= 0 && number <= 720_000) phaseMs[name] = Math.round(number);
+  }
+  if (Object.keys(phaseMs).length) metrics.phaseMs = phaseMs;
   return Object.keys(metrics).length ? metrics : null;
 }
 
@@ -562,7 +588,7 @@ async function markDownloadFailed(env, message, error) {
   const safe = queueErrorReason(error);
   const failure = classifyUsageError(error);
   const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', error_type = ?, error_reason = ?, failure_category = ?,
-    processing_token = NULL, processing_lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+    processing_token = NULL, processing_lease_expires_at = NULL, progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND identity_id = ? AND status IN ('queued', 'processing')`)
     .bind(failure.code, safe, failure.category, jobId, identityId).run();
   if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_download_failed", "failure", { jobId, hostname: row.source_hostname, reason: safe });
@@ -579,6 +605,26 @@ async function markAnalysisFailed(env, message, error) {
     error_reason = 'このURLからメディアを確認できませんでした。', updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND identity_id = ? AND status = 'analyzing'`).bind(failure.code, failure.category, jobId, identityId).run();
   if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_analyze_failed", "failure", { jobId, hostname: row.source_hostname, reason: queueErrorReason(error) });
+}
+
+async function handleContainerInternalRequest(request, env) {
+  const path = new URL(request.url).pathname;
+  if (path === "/progress") return handleContainerProgress(request, env);
+  if (path === "/upload") return handleContainerUpload(request, env);
+  return new Response("Not Found", { status: 404 });
+}
+
+async function handleContainerProgress(request, env) {
+  if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+  const grant = await verifyInternalGrant(request.headers.get("Authorization"), env);
+  if (!grant) return new Response("Unauthorized", { status: 401 });
+  const body = await readJson(request, 1024);
+  const stage = String(body.stage || "");
+  if (!CONTAINER_PROGRESS_STAGES.has(stage)) return new Response("Invalid stage", { status: 400 });
+  const update = await env.DB.prepare(`UPDATE downloader_jobs SET progress_stage = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'processing' AND processing_token = ? AND processing_lease_expires_at > ?`)
+    .bind(stage, grant.jobId, grant.processingToken, nowSeconds()).run();
+  return update.meta?.changes === 1 ? json({ ok: true }) : new Response("Conflict", { status: 409 });
 }
 
 async function handleContainerUpload(request, env) {
@@ -601,6 +647,10 @@ async function handleContainerUpload(request, env) {
   const cpuSystemMs = safeMetricHeader(request.headers.get("X-Container-CPU-System-Ms"), 720_000);
   const containerPeakRssBytes = safeMetricHeader(request.headers.get("X-Container-Peak-RSS-Bytes"), 16 * 1024 ** 3);
   const containerWorkBytes = safeMetricHeader(request.headers.get("X-Container-Work-Bytes"), 12 * 1024 ** 3);
+  const downloadMs = safeMetricHeader(request.headers.get("X-Phase-Download-Ms"), 720_000);
+  const validationMs = safeMetricHeader(request.headers.get("X-Phase-Validation-Ms"), 720_000);
+  const processingMs = safeMetricHeader(request.headers.get("X-Phase-Processing-Ms"), 720_000);
+  const securityScanMs = safeMetricHeader(request.headers.get("X-Phase-Security-Scan-Ms"), 720_000);
   if (!/^[a-f0-9]{64}$/.test(sha256)) return new Response("Invalid digest", { status: 400 });
   console.log(JSON.stringify({ event: "downloader_container_upload_received", jobId: grant.jobId, size }));
   let committed = false;
@@ -613,10 +663,12 @@ async function handleContainerUpload(request, env) {
     const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'ready', object_key = ?, actual_size = ?, sha256 = ?,
       mime_type = ?, safe_filename = ?, downloaded_at = CURRENT_TIMESTAMP, expires_at = ?, processing_token = NULL,
       processing_lease_expires_at = NULL, normalization_mode = ?, source_bytes = ?, container_wall_ms = ?,
-      container_cpu_ms = ?, container_peak_rss_bytes = ?, container_work_bytes = ?, updated_at = CURRENT_TIMESTAMP
+      container_cpu_ms = ?, container_peak_rss_bytes = ?, container_work_bytes = ?, download_ms = ?,
+      validation_ms = ?, processing_ms = ?, security_scan_ms = ?, progress_stage = 'finalizing', updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND status = 'processing' AND processing_token = ?`)
       .bind(grant.objectKey, size, sha256, mimeType, filename, grant.expiresAt, normalization, sourceBytes,
-        containerWallMs, cpuUserMs + cpuSystemMs, containerPeakRssBytes, containerWorkBytes, grant.jobId, grant.processingToken).run();
+        containerWallMs, cpuUserMs + cpuSystemMs, containerPeakRssBytes, containerWorkBytes,
+        downloadMs, validationMs, processingMs, securityScanMs, grant.jobId, grant.processingToken).run();
     committed = update.meta?.changes === 1;
   } finally {
     if (!committed) await env.DOWNLOADS.delete(grant.objectKey);
@@ -656,7 +708,7 @@ async function serveDownload(request, env, session, jobId) {
   await safeRecordUsageItems(env, session.identityId, [{ metric: "platform", dimension: "r2_class_b", count: 1 }]);
   if (!object) {
     await env.DB.prepare(`UPDATE downloader_jobs SET status = 'expired', error_type = 'object_missing',
-      error_reason = 'ファイルの保存期限が終了しました。', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(jobId).run();
+      error_reason = 'ファイルの保存期限が終了しました。', progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(jobId).run();
     throw new HttpError(410, "ファイルの保存期限が終了しました。");
   }
   await recordFileDeliveryAttempt(request, env, session, row, object.size);
@@ -682,7 +734,7 @@ async function deleteJobObject(env, jobId, finalStatus) {
   if (!row || row.status === "deleted") return;
   if (row.object_key) await env.DOWNLOADS.delete(row.object_key);
   await env.DB.prepare(`UPDATE downloader_jobs SET status = ?, object_key = NULL, deleted_at = CURRENT_TIMESTAMP,
-    updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(finalStatus === "expired" ? "expired" : "deleted", jobId).run();
+    progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(finalStatus === "expired" ? "expired" : "deleted", jobId).run();
 }
 
 async function cleanupExpiredJobs(env) {
@@ -695,7 +747,9 @@ async function cleanupExpiredJobs(env) {
   for (const row of stale.results || []) {
     if (row.object_key) await env.DOWNLOADS.delete(row.object_key);
     await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', object_key = NULL, error_type = 'stale_job',
-      failure_category = 'other_failed', error_reason = '処理が完了しなかったため終了しました。', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
+      failure_category = 'other_failed', error_reason = '処理が完了しなかったため終了しました。',
+      processing_token = NULL, processing_lease_expires_at = NULL, progress_stage = NULL,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
   }
   await env.DB.prepare(`UPDATE downloader_jobs SET analysis_json = '{}', source_path_hint = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE analysis_json != '{}' AND status IN ('analyzed', 'failed', 'rejected', 'expired', 'deleted') AND updated_at < ?`)

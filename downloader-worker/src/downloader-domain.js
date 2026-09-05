@@ -9,7 +9,7 @@ const BLOCKED_HOSTS = new Set([
 
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_SPACE_BYTES = 512 * 1024 * 1024;
-export const DOWNLOAD_TTL_SECONDS = 30 * 60;
+export const DOWNLOAD_TTL_SECONDS = 12 * 60 * 60;
 export const QUEUE_MAX_RETRIES = 3;
 
 export function isFinalQueueAttempt(attempts, maxRetries = QUEUE_MAX_RETRIES) {
@@ -137,6 +137,9 @@ export function publicJob(row) {
     sourcePathHint: null,
     extractor: row.extractor || null,
     mediaType: row.media_type || null,
+    progressStage: row.status === "processing" && [
+      "starting", "downloading", "validating", "processing", "scanning", "saving", "finalizing"
+    ].includes(row.progress_stage) ? row.progress_stage : null,
     normalizationMode: row.normalization_mode || null,
     expectedSize: numberOrNull(row.expected_size),
     actualSize: numberOrNull(row.actual_size),

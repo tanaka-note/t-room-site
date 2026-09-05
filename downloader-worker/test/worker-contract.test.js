@@ -10,6 +10,7 @@ const imageShareAdapter = await readFile(new URL("../container/adapters/image_sh
 const config = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
 const migration = await readFile(new URL("../migrations/0001_downloader_foundation.sql", import.meta.url), "utf8");
 const usageMigration = await readFile(new URL("../migrations/0002_downloader_usage_stats.sql", import.meta.url), "utf8");
+const progressMigration = await readFile(new URL("../migrations/0003_downloader_progress_metrics.sql", import.meta.url), "utf8");
 const scanner = await readFile(new URL("../container/scanner.py", import.meta.url), "utf8");
 const clamd = await readFile(new URL("../container/clamd.conf", import.meta.url), "utf8");
 const server = await readFile(new URL("../container/server.py", import.meta.url), "utf8");
@@ -73,7 +74,7 @@ test("ユーザー分離と一回限りhandoffを既存Security境界へ委譲�
   assert.doesNotMatch(worker, /password_login|login_password/);
 });
 
-test("R2確定後に30分削除をQueueへ予約しCronも補完する", () => {
+test("R2確定後に12時間削除をQueueへ予約し期限内の再取得を提供する", () => {
   assert.match(worker, /delaySeconds/);
   assert.match(worker, /DOWNLOAD_TTL_SECONDS/);
   assert.match(worker, /cleanupExpiredJobs/);
@@ -83,6 +84,14 @@ test("R2確定後に30分削除をQueueへ予約しCronも補完する", () => {
   assert.match(worker, /cleanupOrphanObjects/);
   assert.match(worker, /row\.status === "queued"[\s\S]*env\.JOBS\.send/, "Queue送信失敗・応答消失後は同じjobを安全に再配送できる");
   assert.match(worker, /normalization_mode = \?/);
+  assert.match(client, /job-download/);
+  assert.match(client, /再ダウンロード/);
+  assert.match(client, /最大12時間/);
+  assert.match(progressMigration, /progress_stage/);
+  assert.equal(config.vars.DOWNLOAD_TTL_SECONDS, "43200");
+  const fileDelivery = worker.slice(worker.indexOf("async function serveDownload("), worker.indexOf("async function deleteOwnedJob("));
+  assert.match(fileDelivery, /env\.DOWNLOADS\.get\(row\.object_key\)/);
+  assert.doesNotMatch(fileDelivery, /DOWNLOADS\.delete|status = 'deleted'/, "明示削除または期限切れまでR2成果物を維持する");
 });
 
 test("Queue失敗は4回目でD1をfailedにしてackせずDLQへ委譲する", () => {
@@ -95,7 +104,7 @@ test("Queue失敗は4回目でD1をfailedにしてackせずDLQへ委譲する", 
   assert.doesNotMatch(queueFailure, /message\.ack\(\)/);
 });
 
-test("ContainerはClamAVとYARAをfail-closedで確認してからffprobeへ渡す", () => {
+test("Containerは最終成果物だけをClamAVとYARAで1回fail-closed検査する", () => {
   assert.match(scanner, /CLAMAV_MAX_DEFINITION_AGE_SECONDS/);
   assert.match(scanner, /malware_definitions_missing/);
   assert.match(scanner, /malware_definitions_stale/);
@@ -111,8 +120,13 @@ test("ContainerはClamAVとYARAをfail-closedで確認してからffprobeへ渡�
   assert.match(scanner, /yara_detected/);
   assert.match(scanner, /yara_scan_timeout/);
   assert.match(yaraRules, /TLAIN_YARA_SAFE_TEST_MARKER/);
-  assert.ok(scanner.indexOf("_scan_malware(path,") < scanner.indexOf("probe = probe_file(path,"));
-  assert.ok(scanner.indexOf("_scan_yara(path,") < scanner.indexOf("probe = probe_file(path,"));
+  assert.match(scanner, /def validate_file\(/);
+  assert.match(scanner, /def inspect_validated_file\(/);
+  assert.ok(scanner.indexOf("probe = probe if probe is not None else probe_file") < scanner.indexOf("def inspect_validated_file("));
+  const fullScan = scanner.slice(scanner.indexOf("def inspect_validated_file("), scanner.indexOf("def inspect_file("));
+  assert.equal((fullScan.match(/_scan_malware\(path,/g) || []).length, 1);
+  assert.equal((fullScan.match(/_scan_yara\(path,/g) || []).length, 1);
+  assert.match(fullScan, /_require_same_file\(path, validation\)/);
   assert.match(server, /signal\.SIGTERM/);
   assert.match(server, /DRAINING\.set\(\)/);
   assert.equal(config.containers[0].rollout_active_grace_period, 900);
@@ -166,14 +180,19 @@ test("Container処理前にhealth本文とHTTP statusを明示確認する", () 
   assert.ok(timeoutMs >= 60_000 && timeoutMs <= 120_000, "health timeout must allow a ClamAV cold start without becoming unbounded");
 });
 
-test("全処理は絶対deadlineを共有しPASS_THROUGHだけ再scanしない", () => {
+test("全処理は絶対deadlineを共有し全方式で最終成果物だけを1回scanする", () => {
   assert.match(server, /deadline = JobDeadline\(timeout\)/);
   assert.match(server, /download\([\s\S]*deadline=deadline/);
-  assert.match(server, /inspect_file\([\s\S]*deadline=deadline/);
+  assert.match(server, /validate_file\([\s\S]*deadline=deadline/);
+  assert.match(server, /inspect_validated_file\([\s\S]*deadline=deadline/);
   assert.match(server, /normalize_video\([\s\S]*deadline=deadline/);
   assert.match(server, /_upload_to_r2\([\s\S]*deadline=deadline[\s\S]*source_bytes=source_bytes/);
-  assert.match(server, /plan\.kind != PlanKind\.PASS_THROUGH/);
+  assert.doesNotMatch(server, /initial_scan|download_initial_scan_passed/);
+  assert.equal((server.match(/inspect_validated_file\(/g) || []).length, 1);
   assert.match(server, /"metrics": metrics/);
+  assert.match(server, /"phaseMs"/);
+  assert.match(worker, /handleContainerProgress/);
+  for (const label of ["ファイルを取得しています", "メディアを確認しています", "メディアを処理しています", "安全性を検査しています", "保存しています", "完了処理を行っています"]) assert.match(client, new RegExp(label));
   assert.match(worker, /downloader_container_metrics/);
   assert.match(worker, /QUEUE_MAX_WALL_MS = 15 \* 60_000/);
   assert.match(worker, /CONTAINER_HEALTH_TIMEOUT_MS \+ 720_000 \+ CONTAINER_RESPONSE_GRACE_MS \+ QUEUE_FINALIZATION_RESERVE_MS > QUEUE_MAX_WALL_MS/);

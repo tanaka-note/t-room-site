@@ -25,11 +25,11 @@ class MediaPipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def _normalize(self, source: Path, expected: PlanKind):
-        output, name, mime, plan = normalize_video(source, source.name, 64 * 1024 * 1024, 120)
+        output, name, mime, plan, output_probe = normalize_video(source, source.name, 64 * 1024 * 1024, 120)
         self.assertEqual(plan.kind, expected)
         self.assertEqual(mime, "video/mp4")
         self.assertTrue(name.endswith(".mp4"))
-        probe = probe_file(output)
+        probe = output_probe
         video = next(stream for stream in probe["streams"] if stream["codec_type"] == "video")
         self.assertEqual((video["codec_name"], video["pix_fmt"]), ("h264", "yuv420p"))
         self.assertTrue(all(stream["codec_name"] == "aac" for stream in probe["streams"] if stream["codec_type"] == "audio"))
@@ -113,5 +113,5 @@ class MediaPipelineIntegrationTests(unittest.TestCase):
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-c:s", "srt", str(source),
             ], capture_output=True, text=True, check=False, timeout=90)
             self.assertEqual(result.returncode, 0, result.stderr)
-            output, _name, _mime, _plan = normalize_video(source, source.name, 64 * 1024 * 1024, 120)
-            self.assertFalse(any(stream.get("codec_type") == "subtitle" for stream in probe_file(output)["streams"]))
+            output, _name, _mime, _plan, output_probe = normalize_video(source, source.name, 64 * 1024 * 1024, 120)
+            self.assertFalse(any(stream.get("codec_type") == "subtitle" for stream in output_probe["streams"]))

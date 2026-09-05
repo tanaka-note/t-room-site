@@ -22,6 +22,11 @@ const analysis = {
   }
 };
 const pendingAnalysis = { ...analysis, status: "analyzing", analysis: {} };
+const readyHistory = {
+  ...analysis, id: "job_ready_history", status: "ready", analysis: {}, filename: "saved-video.mp4",
+  mimeType: "video/mp4", actualSize: 12, sha256: "a".repeat(64), normalizationMode: "PASS_THROUGH",
+  expiresAt: "2099-09-05T12:00:00.000Z", downloadedAt: "2026-09-05T00:00:00.000Z"
+};
 const youtubeAnalysis = {
   ...analysis,
   id: "job_browser_youtube",
@@ -36,6 +41,9 @@ const youtubeAnalysis = {
 };
 const pendingYoutubeAnalysis = { ...youtubeAnalysis, status: "analyzing", analysis: {} };
 const analyzeBodies = [];
+const fileAttempts = [];
+let downloadRequested = false;
+let downloadPolls = 0;
 const emptyUsage = {
   analyzeRequests: 2, downloadRequests: 1, processingSuccesses: 1, fileDeliveryStarts: 1,
   deleted: 0, expired: 0, sourceBytes: 2048, r2StoredBytes: 1024, deliveredBytes: 1024,
@@ -57,7 +65,7 @@ const server = createServer(async (request, response) => {
     return response.end("window.TRoomPasskeys={authenticate:async()=>({handoff:{handoffToken:'test'}})};");
   }
   if (url.pathname === "/downloader/api/session") return json(response, 200, { authenticated: true, isParent: !String(request.headers.cookie || "").includes("test-role=member") });
-  if (url.pathname === "/downloader/api/jobs" && request.method === "GET") return json(response, 200, { jobs: [] });
+  if (url.pathname === "/downloader/api/jobs" && request.method === "GET") return json(response, 200, { jobs: [readyHistory] });
   if (url.pathname === "/downloader/api/admin/usage" && request.method === "GET") return json(response, 200, usageResponse);
   if (url.pathname === "/downloader/api/analyze" && request.method === "POST") {
     const body = await requestJson(request);
@@ -66,7 +74,21 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/downloader/api/jobs/job_browser_1") {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+    if (downloadRequested) {
+      downloadPolls += 1;
+      return json(response, 200, { job: downloadPolls === 1 ? { ...analysis, status: "processing", progressStage: "saving" } : { ...readyHistory, id: analysis.id } });
+    }
     return json(response, 200, { job: analysis });
+  }
+  if (url.pathname === "/downloader/api/jobs/job_browser_1/download" && request.method === "POST") {
+    downloadRequested = true;
+    downloadPolls = 0;
+    return json(response, 202, { job: { ...analysis, status: "queued", progressStage: null } });
+  }
+  if (url.pathname === "/downloader/api/jobs/job_ready_history/file") {
+    fileAttempts.push(url.searchParams.get("attempt"));
+    response.writeHead(200, { "Content-Type": "video/mp4", "Content-Disposition": "attachment; filename=saved-video.mp4" });
+    return response.end("saved-media");
   }
   if (url.pathname === "/downloader/api/jobs/job_browser_youtube") {
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
@@ -97,6 +119,8 @@ const target = `http://127.0.0.1:${address.port}/downloader/`;
 
 try {
   for (const [name, engine] of [["Chromium", chromium], ["Firefox", firefox]]) {
+    downloadRequested = false;
+    downloadPolls = 0;
     const browser = await engine.launch({ headless: true });
     try {
       const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -105,6 +129,16 @@ try {
       await page.goto(target, { waitUntil: "networkidle" });
       await page.locator("#app-view").waitFor({ state: "visible" });
       await page.locator("#usage-section").waitFor({ state: "visible" });
+      const historyDownload = page.locator(".job-download");
+      await historyDownload.waitFor({ state: "visible" });
+      const attemptsBefore = fileAttempts.length;
+      for (let count = 0; count < 2; count += 1) {
+        const completed = page.waitForEvent("download");
+        await historyDownload.click();
+        await completed;
+      }
+      assert.equal(fileAttempts.length, attemptsBefore + 2, `${name}: a ready R2 artifact remains downloadable more than once`);
+      assert.notEqual(fileAttempts.at(-1), fileAttempts.at(-2), `${name}: each explicit download uses a fresh delivery attempt`);
       assert.match(await page.locator("#usage-summary").textContent(), /実ファイル取得/);
       assert.match(await page.locator("#usage-summary").textContent(), /今月推定追加/);
       assert.match(await page.locator("#usage-capacity").textContent(), /R2へ保存/);
@@ -122,6 +156,11 @@ try {
       assert.match(await page.locator(".media-choice small").first().textContent(), /最終形式 MP4/);
       assert.equal(await page.locator("#download-button").isEnabled(), true);
       assert.equal(await page.locator("#youtube-rights-notice").isHidden(), true);
+      await page.locator("#rights-confirmed").check();
+      await page.locator("#download-button").click();
+      await page.waitForFunction(() => document.querySelector("#progress-label")?.textContent === "保存しています");
+      await page.locator("#ready-view").waitFor({ state: "visible" });
+      assert.match(await page.locator("#expiry-note").textContent(), /最大12時間/);
       await page.locator("#source-url").fill("https://www.youtube.com/watch?v=jNQXAC9IVRw");
       await page.locator("#youtube-rights-notice").waitFor({ state: "visible" });
       assert.equal(await page.locator("#youtube-rights-confirmed").getAttribute("required"), "");

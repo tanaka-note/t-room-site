@@ -73,6 +73,8 @@ legend { margin-bottom: 12px; font-weight: 700; }
 .job p { margin: 0; }
 .job small { color: var(--muted); }
 .job-status { color: var(--accent); font-size: .82rem; }
+.job-actions { display: flex; align-items: flex-end; gap: 7px; flex-direction: column; }
+.job-download { color: var(--accent); font-size: .82rem; font-weight: 700; text-underline-offset: 3px; }
 .empty { margin: 0; }
 .usage-periods { display: flex; gap: 8px; margin: 22px 0 16px; overflow-x: auto; }
 .period-button { border: 1px solid var(--line); border-radius: 999px; padding: 8px 15px; color: var(--muted); background: transparent; cursor: pointer; }
