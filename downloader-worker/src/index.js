@@ -635,10 +635,6 @@ async function handleContainerUpload(request, env) {
   if (!grant) return new Response("Unauthorized", { status: 401 });
   const size = Number(request.headers.get("Content-Length") || 0);
   if (!Number.isSafeInteger(size) || size <= 0 || size > grant.maxBytes) return new Response("Payload Too Large", { status: 413 });
-  const row = await env.DB.prepare(`SELECT status, identity_id FROM downloader_jobs
-    WHERE id = ? AND status = 'processing' AND processing_token = ? AND processing_lease_expires_at > ?`)
-    .bind(grant.jobId, grant.processingToken, nowSeconds()).first();
-  if (!row) return new Response("Conflict", { status: 409 });
   const sha256 = String(request.headers.get("X-Content-SHA256") || "").toLowerCase();
   const mimeType = String(request.headers.get("Content-Type") || "application/octet-stream").slice(0, 120);
   const filename = sanitizeFilename(decodeHeaderValue(request.headers.get("X-Filename")), mimeType);
@@ -654,6 +650,23 @@ async function handleContainerUpload(request, env) {
   const processingMs = safeMetricHeader(request.headers.get("X-Phase-Processing-Ms"), 720_000);
   const securityScanMs = safeMetricHeader(request.headers.get("X-Phase-Security-Scan-Ms"), 720_000);
   if (!/^[a-f0-9]{64}$/.test(sha256)) return new Response("Invalid digest", { status: 400 });
+  const row = await env.DB.prepare(`SELECT status, identity_id FROM downloader_jobs
+    WHERE id = ? AND status = 'processing' AND processing_token = ? AND processing_lease_expires_at > ?`)
+    .bind(grant.jobId, grant.processingToken, nowSeconds()).first();
+  if (!row) {
+    const ready = await env.DB.prepare(`SELECT status, object_key, actual_size, sha256, expires_at FROM downloader_jobs
+      WHERE id = ?`).bind(grant.jobId).first();
+    const sameCommittedUpload = ready?.status === "ready" && ready.object_key === grant.objectKey &&
+      Number(ready.actual_size) === size && ready.sha256 === sha256 && Number(ready.expires_at || 0) > nowSeconds();
+    return sameCommittedUpload ? json({ stored: true, expiresAt: Number(ready.expires_at) }) : new Response("Conflict", { status: 409 });
+  }
+  // A Container request can be retried at the transport boundary. Claim the upload in D1
+  // before streaming to R2 so only one request can write/delete this signed object key.
+  const uploadToken = `upload:${grant.processingToken}`;
+  const uploadClaim = await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'processing' AND processing_token = ? AND processing_lease_expires_at > ?`)
+    .bind(uploadToken, grant.jobId, grant.processingToken, nowSeconds()).run();
+  if (uploadClaim.meta?.changes !== 1) return new Response("Conflict", { status: 409 });
   console.log(JSON.stringify({ event: "downloader_container_upload_received", jobId: grant.jobId, size }));
   let committed = false;
   try {
@@ -670,10 +683,15 @@ async function handleContainerUpload(request, env) {
       WHERE id = ? AND status = 'processing' AND processing_token = ?`)
       .bind(grant.objectKey, size, sha256, mimeType, filename, grant.expiresAt, normalization, sourceBytes,
         containerWallMs, cpuUserMs + cpuSystemMs, containerPeakRssBytes, containerWorkBytes,
-        downloadMs, validationMs, processingMs, securityScanMs, grant.jobId, grant.processingToken).run();
+        downloadMs, validationMs, processingMs, securityScanMs, grant.jobId, uploadToken).run();
     committed = update.meta?.changes === 1;
   } finally {
-    if (!committed) await env.DOWNLOADS.delete(grant.objectKey);
+    if (!committed) {
+      await env.DOWNLOADS.delete(grant.objectKey);
+      await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
+        progress_stage = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'processing' AND processing_token = ?`).bind(grant.jobId, uploadToken).run();
+    }
   }
   if (!committed) {
     return new Response("Conflict", { status: 409 });

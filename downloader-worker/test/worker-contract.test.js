@@ -81,6 +81,11 @@ test("R2確定後に12時間削除をQueueへ予約し期限内の再取得を�
   assert.match(worker, /env\.DOWNLOADS\.delete/);
   assert.match(worker, /processing_token = \?/);
   assert.match(worker, /processing_lease_expires_at/);
+  assert.match(worker, /const uploadToken = `upload:\$\{grant\.processingToken\}`/);
+  assert.match(worker, /WHERE id = \? AND status = 'processing' AND processing_token = \? AND processing_lease_expires_at > \?/,
+    "R2書込み前に有効leaseをD1で一意にclaimする");
+  assert.match(worker, /sameCommittedUpload/,
+    "同じ署名済み成果物の応答消失・再送を冪等成功として扱う");
   assert.match(worker, /cleanupOrphanObjects/);
   assert.match(worker, /orphanObjectIsPastGrace\(object\.uploaded/,
     "R2/D1境界では作成直後の成果物をorphan cleanupから保護する");
