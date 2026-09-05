@@ -46,7 +46,6 @@ const SERVICE_REGISTRY = Object.freeze({
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
-  "cloud\u0000subadmin\u0000",
   "diary\u0000main-admin\u0000",
   "diary\u0000main-user\u0000",
   "billing\u0000owner\u0000",
@@ -301,7 +300,7 @@ async function bootstrapVerify(request, env, url) {
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
     env.DB.prepare("UPDATE security_identities SET status = 'active', is_security_admin = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(PRIMARY_ADMIN_ID),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND (service != 'cloud' OR service_account_id = 'subadmin')").bind(PRIMARY_ADMIN_ID),
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service != 'cloud'").bind(PRIMARY_ADMIN_ID),
     insertSetupSessionStatement(env, setup),
     await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request)
   ]);
@@ -386,8 +385,6 @@ async function authenticationOptions(request, env) {
                   AND e.service_link_id = l.id AND e.envelope_type = 'admin_private_prf'
               ))
               OR
-              l.service_account_id = 'subadmin'
-              OR
               (l.service_account_id = 'folder-member'
                 AND EXISTS (SELECT 1 FROM security_tcloud_client_vaults v WHERE v.identity_id = i.id AND v.credential_id = c.credential_id)
                 AND EXISTS (
@@ -470,9 +467,7 @@ async function createHandoff(request, env) {
   if (service === "cloud") {
     const ready = selected.service_account_id === "admin"
       ? Boolean(envelopes.admin_private_prf)
-      : selected.service_account_id === "subadmin"
-        ? true
-        : Boolean(envelopes.client_private_prf && envelopes.folder_key_rsa);
+      : selected.service_account_id === "folder-member" && Boolean(envelopes.client_private_prf && envelopes.folder_key_rsa);
     if (!ready) throw new HttpError(409, "この端末ではT-Cloudのパスキー復号準備が完了していません。従来のID・パスワードをご利用ください。");
   }
   const rawToken = randomToken(32);
@@ -485,11 +480,16 @@ async function createHandoff(request, env) {
 
 async function setupStatus(request, env) {
   const setup = await readSetupSession(request, env, ["active", "completed"]);
-  if (setup) return json(await tcloudSetupStatus(env, setup.identity_id, setup.credential_id, {
-    active: setup.status === "active",
-    completed: setup.status === "completed",
-    resumable: false
-  }));
+  if (setup) {
+    const status = await tcloudSetupStatus(env, setup.identity_id, setup.credential_id, {
+      active: setup.status === "active",
+      completed: setup.status === "completed",
+      resumable: false
+    });
+    if (status.active || !status.needsTCloudSetup) return json(status);
+    // A completed setup cookie remains read-only. A new capability requires a
+    // current signed credential session and a fresh user-verification step.
+  }
   const actor = await currentSetupActor(request, env);
   if (!actor) return json({ active: false, resumable: false });
   const completed = await env.DB.prepare(`SELECT 1 AS ok FROM security_setup_sessions
@@ -498,7 +498,7 @@ async function setupStatus(request, env) {
   const status = await tcloudSetupStatus(env, actor.identityId, actor.credentialId, {
     active: false,
     completed: Boolean(completed),
-    resumable: !completed
+    resumable: true
   });
   status.resumable = Boolean(status.resumable && status.needsTCloudSetup && status.prfEnabled);
   return json(status);
@@ -507,10 +507,6 @@ async function setupStatus(request, env) {
 async function resumeSetup(request, env, url) {
   const actor = await currentSetupActor(request, env);
   if (!actor) throw new HttpError(401, "現在のパスキーでログインしてからT-Cloudの準備を再開してください。");
-  const completed = await env.DB.prepare(`SELECT 1 AS ok FROM security_setup_sessions
-    WHERE identity_id = ? AND credential_id = ? AND status = 'completed' LIMIT 1`)
-    .bind(actor.identityId, actor.credentialId).first();
-  if (completed) throw new HttpError(409, "このパスキーのT-Cloud準備は完了済みです。");
   const status = await tcloudSetupStatus(env, actor.identityId, actor.credentialId, {
     active: false,
     completed: false,
@@ -548,11 +544,12 @@ async function tcloudSetupStatus(env, identityId, credentialId, flags) {
   ]);
   if (!credential || credential.status === "revoked") return { active: false, resumable: false };
   const links = cloudLinks.results || [];
-  let ready = Boolean(vault);
-  if (identityId === PRIMARY_ADMIN_ID) {
-    const envelope = await env.DB.prepare("SELECT 1 AS ok FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ? AND envelope_type = 'admin_private_prf'").bind(credentialId, identityId).first();
-    ready = Boolean(envelope);
-  }
+  const adminLinks = links.filter((link) => link.service_account_id === "admin");
+  const memberLinks = links.filter((link) => link.service_account_id === "folder-member");
+  const adminEnvelopes = await env.DB.prepare("SELECT service_link_id FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ? AND envelope_type = 'admin_private_prf'").bind(credentialId, identityId).all();
+  const adminKeyReady = adminLinks.every((link) => (adminEnvelopes.results || []).some((envelope) => envelope.service_link_id === link.id));
+  const clientKeyReady = !memberLinks.length || Boolean(vault);
+  const ready = adminKeyReady && clientKeyReady;
   return {
     ...flags,
     identityId,
@@ -560,6 +557,8 @@ async function tcloudSetupStatus(env, identityId, credentialId, flags) {
     isPrimaryAdmin: identityId === PRIMARY_ADMIN_ID,
     prfEnabled: Boolean(credential.prf_enabled),
     tcloudReady: ready,
+    adminKeyReady,
+    clientKeyReady,
     needsTCloudSetup: Boolean(links.length && !ready),
     clientKeyFingerprint: vault?.public_key_fingerprint || null,
     cloudLinks: links.map((link) => ({ id: link.id, accountId: link.service_account_id, rootFolderId: link.cloud_root_folder_id, status: link.status }))
@@ -701,9 +700,10 @@ async function saveOwnTCloudEnvelope(request, env) {
   if (envelopeType === "admin_private_prf") {
     statements.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ?").bind(link.id, identitySession.identityId));
   }
-  statements.push(env.DB.prepare("UPDATE security_setup_sessions SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identitySession.setupId));
   statements.push(await localAuditStatement(env, { eventType: "tcloud_key_envelope_saved", outcome: "success", identityId: identitySession.identityId, service: "cloud", authMethod: "passkey" }, request));
   await env.DB.batch(statements);
+  const status = await tcloudSetupStatus(env, identitySession.identityId, identitySession.credentialId, {});
+  if (status.tcloudReady) await env.DB.prepare("UPDATE security_setup_sessions SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identitySession.setupId).run();
   return json({ ok: true, existing: alreadyExisting });
 }
 
@@ -1108,7 +1108,7 @@ async function approveIdentity(identityId, request, env, admin) {
     env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service != 'cloud'").bind(identityId),
     env.DB.prepare("UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId)
   ];
-  if (cloudPasskeyReady) updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud'").bind(identityId));
+  if (cloudPasskeyReady) updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud' AND service_account_id = 'folder-member'").bind(identityId));
   updates.push(await localAuditStatement(env, { eventType: "identity_approved", outcome: "success", identityId, authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: cloudPasskeyReady } }, request));
   await env.DB.batch(updates);
   return json({ ok: true, tcloudPasskeyReady: cloudPasskeyReady });
@@ -1313,7 +1313,7 @@ async function redeemHandoff(env, token, service) {
     WHERE h.token_hash = ? AND h.consumed_at IS NULL AND h.expires_at > ? AND h.session_epoch = ?
       AND l.service = ? AND l.status = 'active' AND i.status = 'active' AND c.status = 'active'`)
     .bind(tokenHash, now, runtime.epoch, normalizedService).first();
-  if (!row) return null;
+  if (!row || (row.service === "cloud" && row.serviceAccountId === "subadmin")) return null;
   const update = await env.DB.prepare("UPDATE security_handoffs SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(now, row.id).run();
   if (!update.meta?.changes) return null;
   return { identityId: row.identity_id, identityDisplayName: row.identityDisplayName, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel, sessionEpoch: runtime.epoch };
@@ -1328,6 +1328,7 @@ async function validatePasskeySession(env, input) {
   const serviceAccountId = normalizeText(input?.serviceAccountId, 100);
   const sessionEpoch = Number(input?.sessionEpoch);
   if (!runtime.enabled || !service || !identityId || !credentialId || !serviceLinkId || !serviceAccountId || !Number.isInteger(sessionEpoch)) return { valid: false };
+  if (service === "cloud" && serviceAccountId === "subadmin") return { valid: false };
   const row = await env.DB.prepare(`SELECT c.credential_id, c.identity_id, l.id AS link_id, l.service,
       l.service_account_id, l.cloud_root_folder_id, ? AS session_epoch
     FROM security_credentials c
@@ -1408,8 +1409,6 @@ async function activeLinks(env, identityId, service, credentialId) {
         WHERE e.identity_id = security_service_links.identity_id AND e.credential_id = ?
           AND e.service_link_id = security_service_links.id AND e.envelope_type = 'admin_private_prf'
       ))
-      OR
-      service_account_id = 'subadmin'
       OR
       (service_account_id = 'folder-member'
         AND EXISTS (SELECT 1 FROM security_tcloud_client_vaults v WHERE v.identity_id = security_service_links.identity_id AND v.credential_id = ?)
@@ -1566,7 +1565,6 @@ async function ensurePrimaryAdminRecords(env) {
     VALUES (?, '第一管理者', 'invited', 1) ON CONFLICT(id) DO NOTHING`).bind(PRIMARY_ADMIN_ID).run();
   const defaults = [
     { service: "cloud", accountId: "admin", rootFolderId: null, displayLabel: "T-Cloud 管理者" },
-    { service: "cloud", accountId: "subadmin", rootFolderId: null, displayLabel: "T-Cloud 副管理者" },
     { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: "日記 管理者" },
     { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
     { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" },

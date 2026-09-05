@@ -11,9 +11,11 @@ assert.equal(runtime, source, "公開用とruntime用のCloudクライアント�
 assert.equal((source.match(/requirePasskeyPrf\(authentication\);/g) || []).length, 2,
   "初回ログインとsession再開が同じPRF判定を利用していません。");
 
-async function resumePasskeySession(accountId, prfOutput = null) {
+async function resumePasskeySession(accountId, prfOutput = null, returnedAccountId = accountId, chooseFromMultiple = false) {
   const calls = { handoff: 0, logout: 0, enterApp: [], errors: [] };
   const role = accountId === "folder-member" ? "member" : accountId;
+  const rootFolderId = role === "member" ? 7 : null;
+  const session = { authenticated: true, authMethod: "passkey", role, serviceAccountId: accountId, serviceLinkId: `cloud-${accountId}`, rootFolderId };
   const context = {
     console,
     URL,
@@ -30,19 +32,23 @@ async function resumePasskeySession(accountId, prfOutput = null) {
     window: { setInterval() { return 0; } },
     TCloudOffline: { async cleanupExpired() {} },
     TRoomPasskeys: {
-      async authenticate() {
+      async authenticate(_service, chooseLink) {
+        const link = { id: `cloud-${returnedAccountId}`, accountId: returnedAccountId, role: returnedAccountId === "folder-member" ? "member" : returnedAccountId, rootFolderId: returnedAccountId === "folder-member" ? 7 : null };
+        const selected = chooseFromMultiple ? await chooseLink([
+          { id: "cloud-admin", accountId: "admin", role: "admin", rootFolderId: null }, link
+        ]) : link;
         return {
-          link: { id: `cloud-${accountId}`, accountId },
+          link: selected,
           prfOutput,
           handoff: { handoffToken: `handoff-${accountId}`, tcloudKey: {} }
         };
       }
     },
     __api: async (path) => {
-      if (path === "/session") return { authenticated: true, authMethod: "passkey", role, serviceAccountId: accountId };
+      if (path === "/session") return session;
       if (path === "/passkey/handoff") {
         calls.handoff += 1;
-        return { authenticated: true, authMethod: "passkey", role, serviceAccountId: accountId };
+        return session;
       }
       if (path === "/logout") {
         calls.logout += 1;
@@ -75,14 +81,9 @@ async function resumePasskeySession(accountId, prfOutput = null) {
 }
 
 const subadmin = await resumePasskeySession("subadmin");
-assert.equal(subadmin.calls.handoff, 1, "PRFなし副管理者のhandoffが再発行されていません。");
-assert.equal(subadmin.calls.logout, 0, "PRFなし副管理者sessionがlogoutされました。");
-assert.equal(subadmin.calls.enterApp.length, 1, "PRFなし副管理者sessionを再開できませんでした。");
-assert.equal(subadmin.calls.enterApp[0].session.role, "subadmin");
-assert.equal(subadmin.calls.enterApp[0].session.serviceAccountId, "subadmin");
-assert.equal(subadmin.calls.enterApp[0].passkeyContext.prfOutput, null);
-assert.deepEqual(subadmin.calls.enterApp[0].passkeyContext.tcloudKey, {});
-assert.equal(subadmin.state.session?.authMethod, "passkey");
+assert.equal(subadmin.calls.handoff, 0, "旧副管理者パスキーsessionは再開しない");
+assert.equal(subadmin.calls.logout, 1);
+assert.equal(subadmin.calls.enterApp.length, 0);
 
 for (const accountId of ["admin", "folder-member"]) {
   const rejected = await resumePasskeySession(accountId);
@@ -92,5 +93,18 @@ for (const accountId of ["admin", "folder-member"]) {
   assert.equal(rejected.state.session, null, `PRFなし${accountId}のsession状態が残っています。`);
   assert.match(rejected.calls.errors.at(-1) || "", /ID・パスワードでログインしてください/);
 }
+
+for (const accountId of ["admin", "folder-member"]) {
+  const resumed = await resumePasskeySession(accountId, new Uint8Array(32));
+  assert.equal(resumed.calls.handoff, 1);
+  assert.equal(resumed.calls.enterApp[0].session.serviceAccountId, accountId);
+  assert.equal(resumed.calls.enterApp[0].session.rootFolderId, accountId === "folder-member" ? 7 : null);
+}
+const promoted = await resumePasskeySession("folder-member", new Uint8Array(32), "admin");
+assert.equal(promoted.calls.handoff, 0, "再読込時に唯一の候補がadminになっても昇格しない");
+assert.equal(promoted.calls.enterApp.length, 0);
+const multiple = await resumePasskeySession("folder-member", new Uint8Array(32), "folder-member", true);
+assert.equal(multiple.calls.handoff, 1, "複数候補では既存member linkだけを選ぶ");
+assert.equal(multiple.calls.enterApp[0].session.role, "member");
 
 process.stdout.write("Cloud passkey session resume PRF role boundary passed.\n");

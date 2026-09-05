@@ -260,6 +260,12 @@ const server = createServer(async (request, response) => {
     response.end("try { Function('return 1')(); window.__troomJavascriptEvalAllowed = true; } catch { window.__troomJavascriptEvalAllowed = false; }");
     return;
   }
+  if (url.pathname === "/security/cloud-choice-test.js") {
+    const source = await readFile(join(cloudPublic, "cloud.js"), "utf8");
+    response.writeHead(200, responseHeaders("text/javascript; charset=utf-8"));
+    response.end(source.slice(source.indexOf("async function choosePasskeyLink("), source.indexOf("function resumePasskeyLink(")));
+    return;
+  }
   const staticFile = staticFiles.get(url.pathname);
   if (!staticFile) {
     response.writeHead(404, responseHeaders("text/plain; charset=utf-8"));
@@ -345,7 +351,7 @@ async function verifyBrowser(browserType, name, origin) {
           signature: new Uint8Array([7, 8, 9]).buffer,
           userHandle: null
         },
-        getClientExtensionResults: () => ({ prf: prfAvailable ? { results: { first: new Uint8Array([10, 11, 12]).buffer } } : {} })
+        getClientExtensionResults: () => ({ prf: prfAvailable ? { results: { first: new Uint8Array(32).fill(10).buffer } } : {} })
       });
       const registration = (prfEnabled) => ({
         id: credentialId,
@@ -366,7 +372,7 @@ async function verifyBrowser(browserType, name, origin) {
           get: async () => {
             window.__troomWebAuthnGetCalled = true;
             window.__troomWebAuthnGetCount = Number(window.__troomWebAuthnGetCount || 0) + 1;
-            if (["bootstrap-prf-unsupported", "bootstrap-prf-temporary-missing", "bootstrap-transient", "primary-retry", "general-retry"].includes(scenario())) {
+            if (["bootstrap-prf-unsupported", "bootstrap-prf-temporary-missing", "bootstrap-transient", "primary-retry", "general-retry", "add-member-vault"].includes(scenario())) {
               return assertion(!["bootstrap-prf-unsupported", "bootstrap-prf-temporary-missing"].includes(scenario()));
             }
             throw new DOMException("CSP regression test reached resumed WebAuthn", "NotAllowedError");
@@ -828,6 +834,33 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(setupStatusBody.completed, true);
     assert.equal(setupStatusBody.tcloudReady, true);
     assert.ok(!consoleErrors.some((message) => /Content Security Policy|WebAssembly\.compile|Unhandled|TypeError/i.test(message)), `${name}: ${consoleErrors.join("\n")}`);
+    setupStatusBody = {
+      active: false, completed: true, resumable: true, needsTCloudSetup: true,
+      identityId: "primary-admin", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
+      isPrimaryAdmin: true, prfEnabled: true, adminKeyReady: true, clientKeyReady: false, tcloudReady: false,
+      cloudLinks: [{ id: "primary-cloud", accountId: "admin", rootFolderId: null }, { id: "personal-cloud", accountId: "folder-member", rootFolderId: 7 }]
+    };
+    const passwordsBeforeMemberSetup = receivedResumeBodies.length;
+    await transient.goto(`${origin}/security/?scenario=add-member-vault`, { waitUntil: "load" });
+    await transient.locator("#tcloud-setup-resume").click();
+    await transient.waitForFunction(() => document.querySelector("#message").textContent.includes("フォルダー利用の鍵を準備しました"));
+    assert.equal(receivedResumeBodies.length, passwordsBeforeMemberSetup, `${name}: adding a member vault never unlocks the existing admin private key`);
+    assert.equal(receivedEnvelopeBodies.at(-1).envelopeType, "client_private_prf");
+    assert.equal(receivedEnvelopeBodies.at(-1).serviceLinkId, "personal-cloud");
+    assert.equal(registeredCredentialCount, 1, `${name}: member preparation reuses the existing WebAuthn credential`);
+    await transient.addScriptTag({ url: `${origin}/security/cloud-choice-test.js` });
+    await transient.evaluate(() => {
+      choosePasskeyLink([
+        { id: "primary-cloud", accountId: "admin", role: "admin", rootFolderId: null, displayLabel: "T-Cloud 管理者" },
+        { id: "personal-cloud", accountId: "folder-member", role: "member", rootFolderId: 7, displayLabel: "Atsushi" }
+      ]).then((link) => { window.__memberChoice = link; });
+    });
+    assert.equal(await transient.getByRole("heading", { name: "T-Cloudを開く方法を選択", exact: true }).count(), 1);
+    assert.deepEqual(await transient.locator(".troom-passkey-account-option strong").allTextContents(), ["管理者", "Atsushi"]);
+    assert.doesNotMatch(await transient.locator(".troom-passkey-account-dialog").textContent(), /subadmin|folder-member|副管理者|rootFolderId/);
+    await transient.getByRole("button", { name: /Atsushiフォルダーを利用/ }).click();
+    await transient.waitForFunction(() => window.__memberChoice?.accountId === "folder-member");
+    assert.equal((await transient.evaluate(() => window.__memberChoice)).rootFolderId, 7);
     setupStatusBody = { active: false };
     return `${name}: pass`;
   } finally {
@@ -869,10 +902,10 @@ try {
   for (const body of receivedPrfOptionBodies.filter((body) => body.credentialId !== malformedPrfCredentialId)) {
     assert.equal(body.credentialId, "cmVzdW1lLWNyZWRlbnRpYWw");
   }
-  assert.equal(receivedSetupResumeBodies.length, passedBrowsers * 2, "lost general and primary setup cookies are resumed explicitly");
+  assert.equal(receivedSetupResumeBodies.length, passedBrowsers * 3, "lost general, primary and newly linked member setup are resumed explicitly");
   for (const body of receivedSetupResumeBodies) assert.deepEqual(body, {}, "setup resume never trusts a client credential ID");
-  assert.equal(receivedEnvelopeBodies.length, passedBrowsers * 2,
-    "each browser performs one failed and one successful primary-admin envelope request");
+  assert.equal(receivedEnvelopeBodies.length, passedBrowsers * 3,
+    "each browser performs failed/successful admin preparation and independent member vault preparation");
   console.log(results.join("\n"));
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));

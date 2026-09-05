@@ -45,6 +45,16 @@
           state.pendingPrimarySetup = await TRoomPasskeys.resumeSetup();
           renderPrimarySetupNotice(state.pendingPrimarySetup);
         }
+        if (state.pendingPrimarySetup?.adminKeyReady) {
+          const setup = state.pendingPrimarySetup;
+          const prf = await TRoomPasskeys.obtainPrf(setup.credentialId);
+          if (!prf.prfOutput) throw new Error("この端末ではT-Cloudの安全な鍵準備を利用できません。");
+          await prepareClientVault(setup, prf.prfOutput);
+          renderPrimarySetupNotice(await TRoomPasskeys.setupStatus());
+          showMessage("フォルダー利用の鍵を準備しました。ユーザー詳細でこのパスキーのT-Cloud連携を承認してください。");
+          await viewIdentity(setup.identityId);
+          return;
+        }
         $("#tcloud-setup-form").hidden = false;
         $("#tcloud-setup-id").focus();
       } catch (error) { showMessage(error.message, true); }
@@ -181,6 +191,8 @@
     if (!link) throw new Error("T-Cloud管理者連携を確認できません。");
     const envelope = await TRoomCrypto.wrapAdminPrivateKeyForPasskey(accountKey, config, prfOutput);
     await post("/tcloud/envelope", { serviceLinkId: link.id, envelopeType: "admin_private_prf", ...envelope });
+    const setup = await TRoomPasskeys.setupStatus();
+    if (!setup.clientKeyReady && setup.cloudLinks?.some((item) => item.accountId === "folder-member")) await prepareClientVault(setup, prfOutput);
   }
 
   async function adminLogin(event) {
@@ -235,9 +247,7 @@
         showMessage("パスキー登録は完了しました。日記・請求書では承認後に利用できます。この端末ではT-Cloudのパスキー利用に対応していないため、T-Cloudは従来のID・パスワードをご利用ください。");
         return false;
       }
-      const vault = await TRoomCrypto.createPasskeyClientVault(prfOutput);
-      const cloudLinks = result.cloudLinks || setup.cloudLinks || [];
-      await post("/tcloud/envelope", { serviceLinkId: cloudLinks[0]?.id || null, envelopeType: "client_private_prf", publicKeyJwk: vault.publicKeyJwk, encryptedPayload: vault.encryptedPayload, payloadIv: vault.payloadIv });
+      await prepareClientVault(setup, prfOutput);
       state.pendingInviteCloud = null;
       return true;
     } catch (error) {
@@ -266,6 +276,15 @@
     } finally {
       button.disabled = false;
     }
+  }
+
+  async function prepareClientVault(setup, prfOutput) {
+    // One immutable RSA vault per credential, shared by all of its member links.
+    if (setup.clientKeyReady || setup.clientKeyFingerprint) return;
+    const link = (setup.cloudLinks || []).find((item) => item.accountId === "folder-member");
+    if (!link) throw new Error("フォルダー利用の連携を確認してください。");
+    const vault = await TRoomCrypto.createPasskeyClientVault(prfOutput);
+    await post("/tcloud/envelope", { serviceLinkId: link.id, envelopeType: "client_private_prf", publicKeyJwk: vault.publicKeyJwk, encryptedPayload: vault.encryptedPayload, payloadIv: vault.payloadIv });
   }
 
   async function showAdmin(setup = null) {

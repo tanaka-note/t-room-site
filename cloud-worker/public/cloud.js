@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-e4f1ff91c543";
+const APP_BUILD_ID = "cloud-724e15497064";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -160,7 +160,8 @@ async function initialize() {
     if (session.authenticated) {
       state.session = session;
       if (session.authMethod === "passkey") {
-        const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
+        const authentication = await TRoomPasskeys.authenticate("cloud", (links) => resumePasskeyLink(links, session));
+        resumePasskeyLink([authentication.link], session);
         requirePasskeyPrf(authentication);
         const refreshed = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
         await enterApp(refreshed, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
@@ -969,16 +970,35 @@ async function loginWithPasskey() {
 }
 
 function requirePasskeyPrf(authentication) {
-  if (authentication.link?.accountId !== "subadmin" && !authentication.prfOutput) {
+  if (!authentication.prfOutput || !["admin", "folder-member"].includes(authentication.link?.accountId)) {
     throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
   }
 }
 
 async function choosePasskeyLink(links) {
-  return TRoomPasskeys.chooseLinkDialog(links, "cloud");
+  const dialogLinks = links.map((link) => ({
+    ...link,
+    displayLabel: link.accountId === "admin" ? "管理者" : link.displayLabel,
+    roleLabel: link.accountId === "admin" ? "T-Cloud全体を管理" : `${link.displayLabel}フォルダーを利用`,
+    scopeLabel: null
+  }));
+  const selection = TRoomPasskeys.chooseLinkDialog(dialogLinks, "cloud");
+  const title = document.querySelector("#troom-passkey-account-title");
+  if (title) title.textContent = "T-Cloudを開く方法を選択";
+  return selection;
+}
+
+function resumePasskeyLink(links, session) {
+  const link = links.find((item) => item?.id === session.serviceLinkId
+    && item.accountId === session.serviceAccountId
+    && item.role === session.role
+    && (item.rootFolderId ?? null) === (session.rootFolderId ?? null));
+  if (!link) throw new Error("前回の利用範囲を再開できません。ログイン画面から選び直してください。");
+  return link;
 }
 
 async function enterApp(session, password = "", accountKey = null, passkeyContext = null) {
+  state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
   state.session = session;
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
   state.credentialSalt = String(session.credentialSalt || "");
@@ -1921,8 +1941,25 @@ async function loadNextItemPage() {
   }
 }
 
+function memberCacheScope() {
+  const session = state.session;
+  if (session?.role !== "member" || session.serviceAccountId !== "folder-member"
+    || !session.serviceLinkId || !session.sessionCacheId
+    || !Number.isSafeInteger(session.rootFolderId) || session.rootFolderId <= 0) return "";
+  return `member:${session.serviceLinkId}:${session.rootFolderId}:${session.sessionCacheId}`;
+}
+
+function offlineAccountScope() {
+  if (state.session?.role === "member") {
+    if (!memberCacheScope()) return "";
+    return `member:${state.session.serviceLinkId}:${state.session.rootFolderId}`;
+  }
+  return state.session?.role === "admin" ? "admin" : "subadmin";
+}
+
 function displayCacheScope() {
   if (!state.session || !globalThis.TCloudDisplayCache?.supported?.()) return "";
+  if (state.session.role === "member") return memberCacheScope();
   const account = String(state.credentialSalt || state.session.sessionCacheId || "default");
   return `${state.session.role}:${account}`;
 }
@@ -3614,8 +3651,10 @@ function currentOfflineContext() {
   const rootFolderId = Number(rootFolder?.id || 0);
   const rootFolderKey = state.crypto.folderKeys.get(rootFolderId);
   if (!rootFolderId || !(rootFolderKey instanceof CryptoKey) || !rootFolder.isUnlocked) return null;
+  const accountScope = offlineAccountScope();
+  if (!accountScope) return null;
   return {
-    accountScope: state.session.role === "admin" ? "admin" : "subadmin",
+    accountScope,
     rootFolder,
     rootFolderId,
     rootFolderKey
@@ -8055,7 +8094,7 @@ async function refreshDeviceStorageSummary() {
 }
 
 function playbackCacheLimitStorageKey() {
-  const accountScope = state.session?.role === "admin" ? "admin" : "subadmin";
+  const accountScope = offlineAccountScope();
   return `${PLAYBACK_CACHE_LIMIT_KEY}:${accountScope}`;
 }
 
@@ -8264,13 +8303,15 @@ async function deleteAllOfflineEntries() {
 
 async function removeDeviceCopiesForFiles(files) {
   if (!globalThis.TCloudOffline?.supported() || !state.session) return;
-  const accountScope = state.session.role === "admin" ? "admin" : "subadmin";
+  const accountScope = offlineAccountScope();
+  if (!accountScope) return;
   await Promise.all((files || []).map((file) => TCloudOffline.removeFile(accountScope, Number(file.id)).catch(() => 0)));
 }
 
 async function removeDeviceCopiesForFolders(folders) {
   if (!globalThis.TCloudOffline?.supported() || !state.session) return;
-  const accountScope = state.session.role === "admin" ? "admin" : "subadmin";
+  const accountScope = offlineAccountScope();
+  if (!accountScope) return;
   const topFolders = (folders || []).filter((folder) => folder.parentId == null);
   await Promise.all(topFolders.map((folder) => TCloudOffline.removeRoot(accountScope, Number(folder.id)).catch(() => 0)));
   if (topFolders.length === (folders || []).length) return;

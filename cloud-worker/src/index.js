@@ -5,7 +5,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-e4f1ff91c543";
+const APP_BUILD_ID = "cloud-724e15497064";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -374,7 +374,7 @@ async function completePasskeyHandoff(request, env, url, context) {
   const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "cloud");
   if (!handoff) throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
   let account;
-  if (["admin", "subadmin"].includes(handoff.serviceAccountId)) {
+  if (handoff.serviceAccountId === "admin" && handoff.cloudRootFolderId == null) {
     account = ACCOUNTS.find((item) => item.role === handoff.serviceAccountId);
   } else if (handoff.serviceAccountId === "folder-member" && optionalId(handoff.cloudRootFolderId)) {
     account = PASSKEY_MEMBER_ACCOUNT;
@@ -1726,7 +1726,7 @@ async function uploadPart(id, partNumber, request, env, session) {
   if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) throw new HttpError(400, "分割番号が不正です。");
   const file = await requireUploadingFile(env, id);
   requireUploadOwnership(session, file);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   const upload = env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id);
   const part = await upload.uploadPart(partNumber, request.body);
   return json({ partNumber: part.partNumber, etag: part.etag });
@@ -1739,7 +1739,7 @@ async function completeUpload(id, request, env, session) {
   const parts = body.parts.map((part) => ({ partNumber: Number(part.partNumber), etag: String(part.etag || "") }));
   const file = await requireUploadingFile(env, id);
   requireUploadOwnership(session, file);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   const upload = env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id);
   await upload.complete(parts);
   const stored = await env.FILES.head(file.object_key);
@@ -1759,7 +1759,7 @@ async function cancelUpload(id, env, session) {
   requireUpload(session);
   const file = await requireUploadingFile(env, id);
   requireUploadOwnership(session, file);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort();
   await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).run();
   return json({ ok: true });
@@ -1768,7 +1768,7 @@ async function cancelUpload(id, env, session) {
 async function getFile(id, env, session) {
   const file = await requireReadyFile(env, id, true);
   requireTrashVisibility(session, file);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   const mapped = mapFile(file);
   if (Number(file.crypto_version) === 1 && file.folder_id) {
     const folder = await requireFolder(env, file.folder_id);
@@ -1788,7 +1788,7 @@ async function getFile(id, env, session) {
 async function updateFile(id, request, env, session) {
   requireFileEdit(session);
   const file = await requireReadyFile(env, id, false);
-  const unlocked = file.folder_id ? await requireFolderAccess(env, file.folder_id, session) : false;
+  const unlocked = await requireFolderAccess(env, file.folder_id, session);
   const body = await readJson(request, 16384);
   const moving = Object.prototype.hasOwnProperty.call(body, "folderId");
   if (!session.canEditFiles) {
@@ -1900,7 +1900,7 @@ async function updateFileMetadataBatch(request, env, session) {
 async function moveFileToTrash(id, env, session) {
   const file = await requireReadyFile(env, id, false);
   if (session.canDelete) {
-    if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+    await requireFolderAccess(env, file.folder_id, session);
   } else {
     if (!session.canTrashUnlockedFiles || !file.folder_id) throw new HttpError(403, "このファイルは削除できません。");
     const protectedFolderUnlocked = await requireFolderAccess(env, file.folder_id, session);
@@ -1918,7 +1918,7 @@ async function restoreFile(id, env, session) {
   requireDelete(session);
   const file = await env.DB.prepare("SELECT id, folder_id FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   await env.DB.prepare("UPDATE cloud_files SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
   await audit(env, "file_restored", session, "file", id);
   return json({ ok: true });
@@ -1988,7 +1988,7 @@ async function putThumbnail(id, request, env, session) {
     const isFreshOwnUpload = file.created_by === session.role && !file.thumbnail_key && Number.isFinite(completedAt) && Date.now() - completedAt < 60 * 60 * 1000;
     if (!isFreshOwnUpload) throw new HttpError(403, "副管理者は既存ファイルのサムネイルを変更できません。");
   }
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   const length = Number(request.headers.get("Content-Length") || 0);
   if (length > 2 * 1024 * 1024) throw new HttpError(413, "サムネイルが大きすぎます。");
   const key = file.thumbnail_key || `thumbnails/${crypto.randomUUID()}.webp`;
@@ -2000,7 +2000,7 @@ async function putThumbnail(id, request, env, session) {
 async function getThumbnail(id, env, session) {
   const file = await requireReadyFile(env, id, true);
   requireTrashVisibility(session, file);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   if (!file.thumbnail_key) throw new HttpError(404, "サムネイルがありません。");
   const object = await env.FILES.get(file.thumbnail_key);
   if (!object) throw new HttpError(404, "サムネイルがありません。");
@@ -2010,7 +2010,7 @@ async function getThumbnail(id, env, session) {
 async function putDisplayThumbnail(id, request, env, session) {
   requireUpload(session);
   const file = await requireReadyFile(env, id, false);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   if (Number(file.display_metadata_version) !== 1 || file.display_media_kind !== "image") {
     throw new HttpError(403, "動画・未確認形式の表示用データはオンラインへ平文保存できません。");
   }
@@ -2026,7 +2026,7 @@ async function putDisplayThumbnail(id, request, env, session) {
 async function getDisplayThumbnail(id, env, session) {
   const file = await requireReadyFile(env, id, true);
   requireTrashVisibility(session, file);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   if (Number(file.display_metadata_version) !== 1 || file.display_media_kind === "video" || !file.display_thumbnail_key) {
     throw new HttpError(404, "表示用サムネイルがありません。");
   }
@@ -2041,7 +2041,7 @@ async function getDisplayThumbnail(id, env, session) {
 async function streamFile(id, disposition, request, env, session) {
   const file = await requireReadyFile(env, id, true);
   requireTrashVisibility(session, file);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   if (file.stream_uid && disposition === "view" && env.STREAM) {
     const token = await env.STREAM.video(file.stream_uid).generateToken({ expiresIn: 900 });
     return json({ streamToken: token, streamUid: file.stream_uid });
@@ -2215,7 +2215,7 @@ async function recordDownloadEvent(request, env, session) {
   const eventType = ["download_started", "download_completed", "download_failed"].includes(body.eventType) ? body.eventType : "";
   if (!fileId || !eventType) throw new HttpError(400, "ダウンロード履歴を確認してください。");
   const file = await requireReadyFile(env, fileId, false);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   const details = eventType === "download_failed" ? { errorCode: normalizeText(body.errorCode || "client_error", 80) } : null;
   await audit(env, eventType, session, "file", fileId, details);
   return json({ ok: true });
@@ -2224,7 +2224,7 @@ async function recordDownloadEvent(request, env, session) {
 async function requestFileDeletion(id, env, session) {
   requireDeletionRequest(session);
   const file = await requireReadyFile(env, id, false);
-  if (file.folder_id) await requireFolderAccess(env, file.folder_id, session);
+  await requireFolderAccess(env, file.folder_id, session);
   try {
     const result = await env.DB.prepare(`INSERT INTO cloud_deletion_requests (file_id, file_name, requested_by)
       VALUES (?, ?, ?)` ).bind(id, file.original_name, session.role).run();
@@ -2752,10 +2752,17 @@ async function readSession(request, env) {
     if (payload.exp <= Math.floor(Date.now() / 1000) || String(payload.version) !== String(env.SESSION_VERSION || "1")) return null;
     const account = payload.role === "member" ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find((item) => item.role === payload.role);
     if (!account) return null;
+    if (payload.authMethod === "passkey") {
+      if (payload.serviceAccountId === "admin") {
+        if (payload.role !== "admin" || payload.rootFolderId != null) return null;
+      } else if (payload.serviceAccountId === "folder-member") {
+        if (payload.role !== "member" || !optionalId(payload.rootFolderId)) return null;
+      } else return null;
+    } else if (payload.role === "member") return null;
     if (!(await validateServicePasskeySession(payload, env, "cloud", payload.rootFolderId == null ? null : Number(payload.rootFolderId)))) return null;
     return {
       role: account.role,
-      label: account.label,
+      label: payload.authMethod === "passkey" ? payload.label || account.label : account.label,
       canUpload: account.canUpload,
       canDelete: account.canDelete,
       canTrashUnlockedFiles: account.canTrashUnlockedFiles,
@@ -2954,7 +2961,7 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session) { return { role: session.role, accountName: session.label, loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session) { return { role: session.role, accountName: session.label, loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, serviceLinkId: session.serviceLinkId || null, serviceAccountId: session.serviceAccountId || session.role, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function configuredLoginId(env, role) {
   const roleSpecific = role === "admin" ? env.ADMIN_LOGIN_ID : env.SUBADMIN_LOGIN_ID;
   return String(roleSpecific || env.LOGIN_ID || "").trim().toLowerCase();

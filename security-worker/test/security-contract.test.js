@@ -151,21 +151,13 @@ test("service-account roles stay authoritative and are not combined in Security 
   assert.doesNotMatch(worker, /mergedRole|combinedPermissions|unionPermissions/);
 });
 
-test("the primary administrator can select Cloud admin or subadmin without sharing administrator keys", () => {
-  assert.match(primaryCloudAccountsMigration, /service_account_id[\s\S]*'subadmin'/);
-  assert.match(primaryCloudAccountsMigration, /identity\.id = 'primary-admin'/);
-  assert.match(primaryCloudAccountsMigration, /status IN \('pending', 'active'\)/);
-  assert.match(worker, /"cloud\\u0000subadmin\\u0000"/);
-  assert.match(worker, /service_account_id = 'subadmin'/);
-  assert.match(worker, /selected\.service_account_id === "subadmin"[\s\S]*\? true/);
-  assert.match(worker, /if \(accountId === "subadmin"\) return \{\};/,
-    "subadmin handoff intentionally contains no administrator or client key envelope");
-  assert.match(cloud, /\["admin", "subadmin"\]\.includes\(handoff\.serviceAccountId\)/);
-  assert.match(cloud, /role: account\.role/);
-  assert.match(cloudClient, /authentication\.link\?\.accountId !== "subadmin"/);
-  assert.match(client, /利用するT-Cloudアカウントを選択/);
-  assert.match(client, /\["admin", "subadmin"\]\.includes\(link\.accountId\)/);
-  assert.doesNotMatch(primaryCloudAccountsMigration, /admin_private_prf|recovery_private|client_private_prf|folder_key_rsa/);
+test("Cloud passkey roles use the normal admin and folder-member paths", () => {
+  assert.doesNotMatch(worker, /"cloud\\u0000subadmin\\u0000"/);
+  assert.match(worker, /service === "cloud" && serviceAccountId === "subadmin"/);
+  assert.match(cloud, /handoff.serviceAccountId === "admin" && handoff.cloudRootFolderId == null/);
+  assert.match(cloudClient, /resumePasskeyLink/);
+  assert.match(cloudClient, /T-Cloudを開く方法を選択/);
+  assert.match(securityUi, /async function prepareClientVault/);
 });
 
 test("the primary administrator keeps both Diary administrator and ordinary-user links", () => {
@@ -245,7 +237,7 @@ test("service links come from an explicit provider registry and never from free-
     "the provider filters candidates using the existing parent relationship");
   assert.match(worker, /describeAccount\(\{ accountId, rootFolderId, selectableOnly: true \}\)/,
     "new service links are revalidated against selectable top-level targets on the server");
-  const cloudTargetsMethod = cloud.match(/async listLinkTargets\(\) \{([\s\S]*?)\n  \}\n\n  async getFolderCryptoRecord/)?.[1] || "";
+  const cloudTargetsMethod = cloud.match(/async listLinkTargets\(\) \{([\s\S]*?)\r?\n  \}\r?\n\r?\n  async getFolderCryptoRecord/)?.[1] || "";
   assert.ok(cloudTargetsMethod, "T-Cloudの候補取得メソッドを検出できます");
   assert.doesNotMatch(cloudTargetsMethod, /adminWrappedKey|folder_key|file_key|password_hash/);
   assert.doesNotMatch(securityHtml, /invite-identity-id|サービス内アカウントID|T-CloudフォルダID/);

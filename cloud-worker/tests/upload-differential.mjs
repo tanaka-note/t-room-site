@@ -41,7 +41,7 @@ const sameRelativeFolder = vm.runInContext(`(() => {
 })()`, context);
 assert.equal(sameRelativeFolder.length, 1, "同じ相対パスへ保存する同名・同容量データは、アップロード時の競合にしてください。");
 
-const folderUpload = client.match(/async function uploadSelectedFolder\(event\) \{[\s\S]*?\n\}\n\nfunction waitForInterfacePaint/)?.[0] || "";
+const folderUpload = client.match(/async function uploadSelectedFolder\(event\) \{[\s\S]*?\r?\n\}\r?\n\r?\nfunction waitForInterfacePaint/)?.[0] || "";
 assert.match(folderUpload, /planFolderUpload/);
 assert.ok(folderUpload.indexOf("await planFolderUpload") < folderUpload.indexOf("await createEncryptedFolder"), "ファイル・フォルダの全差分確認を保存開始前に完了してください。");
 assert.match(folderUpload, /displayName: record\.relativePath/);

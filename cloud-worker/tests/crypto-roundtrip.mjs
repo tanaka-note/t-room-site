@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 globalThis.window = globalThis;
 
 await import("../public/vendor/argon2.umd.min.js");
@@ -43,6 +44,9 @@ const delegatedFolderEnvelope = await TRoomCrypto.wrapFolderKeyForIdentity(admin
 const clientPrivateKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyPrf, clientVault);
 const delegatedFolderKey = await TRoomCrypto.unlockDelegatedFolderKey(clientPrivateKey, delegatedFolderEnvelope);
 const delegatedName = await TRoomCrypto.decryptFolderName(record, delegatedFolderKey);
+await assert.rejects(() => TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyPrf, adminPasskeyEnvelope), "member context cannot decrypt the admin envelope even with the same PRF");
+await assert.rejects(() => TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyPrf, clientVault), "admin and member wrapping contexts remain distinct");
+await assert.rejects(() => TRoomCrypto.unlockFolderAsAdmin(record, clientPrivateKey), "the member RSA key cannot decrypt an administrator-wrapped folder key");
 
 const fileSource = { name: "家族写真.jpg", type: "image/jpeg", size: 19, lastModified: 1 };
 const filePackage = await TRoomCrypto.createFilePackage(fileSource, adminKey, "image");

@@ -243,8 +243,8 @@ try {
     "status does not audit a non-administrator cookie as a successful resume");
   runSecuritySql(`UPDATE security_identities SET is_security_admin = 1 WHERE id = '${statusAdminIdentityId}'`);
   assert.equal(await securityIdentityHandoff(oldIdentityCookie), 200, "current-epoch Security identity cookie is accepted");
-  assert.deepEqual(await cloudAuthenticationCredentialIds(), [readinessCredentialA, primaryCredentialId].sort(),
-    "Cloud login candidates include a folder-ready member and the envelope-free primary subadministrator, but not an unready folder credential");
+  assert.deepEqual(await cloudAuthenticationCredentialIds(), [readinessCredentialA].sort(),
+    "Cloud candidates require their own key envelope; the legacy subadmin link is never eligible");
   const securityOptions = await readAuthenticationOptions("security");
   assert.equal(typeof securityOptions.extensions?.prf?.evalByCredential?.["audit-credential"]?.first, "string",
     "Security authentication PRF input crosses HTTP as Base64URL text");
@@ -284,7 +284,7 @@ try {
   assert.equal(queryText("security-worker", "security-db", `SELECT wrapped_key AS value FROM security_tcloud_key_envelopes
     WHERE credential_id = '${readinessCredentialB}' AND service_link_id = 'readiness-cloud-link' AND envelope_type = 'folder_key_rsa'`),
     serviceBindingDelegatedWrap, "approval persists the real delegated envelope returned by the browser crypto path");
-  assert.deepEqual((await cloudAuthenticationCredentialIds()).sort(), [readinessCredentialA, readinessCredentialB, primaryCredentialId].sort(),
+  assert.deepEqual((await cloudAuthenticationCredentialIds()).sort(), [readinessCredentialA, readinessCredentialB].sort(),
     "the second credential becomes a Cloud candidate only after delegation");
   assert.equal(await securityCloudHandoff(readinessCookieB), 200, "credential B can create a handoff after its own delegation");
   readinessDetail = await securityIdentityDetail(readinessIdentityId, oldAdminCookie);
@@ -746,7 +746,7 @@ try {
   const protectedCore = await securityAdminRequest("/security/api/service-links/primary-admin-cloud-link", freshAdminCookie, {});
   assert.equal(protectedCore.response.status, 409, "the primary administrator core T-Cloud link cannot be removed");
   const protectedSubadminCore = await securityAdminRequest("/security/api/service-links/primary-admin-cloud-subadmin-link", freshAdminCookie, {});
-  assert.equal(protectedSubadminCore.response.status, 409, "the primary subadministrator core T-Cloud link cannot be removed");
+  assert.equal(protectedSubadminCore.response.status, 200, "the obsolete subadmin link can be retired");
   const stalePrivileged = await securityAdminRequest("/security/api/identities/primary-admin/links", oldAdminCookie, {
     links: [{ service: "diary", accountId: "chiharu-admin", rootFolderId: null }]
   });
@@ -848,58 +848,82 @@ try {
   assert.deepEqual(Object.keys(primaryAdminHandoff.body.tcloudKey || {}).sort(), ["admin_private_prf"],
     "administrator handoff contains only the credential-specific administrator envelope");
   const primarySubadminHandoff = await createSecurityHandoff(primaryIdentityCookie, "cloud", "primary-admin-cloud-subadmin-link");
-  assert.equal(primarySubadminHandoff.response.status, 200, JSON.stringify(primarySubadminHandoff.body));
-  assert.equal(primarySubadminHandoff.body.link.accountId, "subadmin");
-  assert.equal(primarySubadminHandoff.body.link.role, "subadmin");
-  assert.deepEqual(primarySubadminHandoff.body.tcloudKey, {},
-    "subadministrator handoff exposes no administrator, recovery, PRF, client-vault, or folder-key envelope");
-
+  assert.equal(primarySubadminHandoff.response.status, 409, "legacy subadmin cannot be selected even by explicit ID");
+  const primaryMemberLinkId = queryText("security-worker", "security-db", `SELECT id AS value FROM security_service_links WHERE identity_id='primary-admin' AND service_account_id='folder-member' AND cloud_root_folder_id=${cloudSelectedRootId} AND status='pending'`);
+  const secondPrimaryMemberLinkId = queryText("security-worker", "security-db", `SELECT id AS value FROM security_service_links WHERE identity_id='primary-admin' AND service_account_id='folder-member' AND cloud_root_folder_id=${cloudUnselectedRootId} AND status='pending'`);
+  await securityAdminRequest(`/security/api/service-links/${secondPrimaryMemberLinkId}`, freshAdminCookie, {});
+  const primaryPartialStatus = await readSetupStatus(primarySetupToken);
+  assert.equal(primaryPartialStatus.active, true, "saving the admin envelope does not complete missing member preparation");
+  assert.equal(primaryPartialStatus.adminKeyReady, true);
+  assert.equal(primaryPartialStatus.clientKeyReady, false);
+  const primaryPrf = crypto.getRandomValues(new Uint8Array(32));
+  const primaryVault = await TRoomCrypto.createPasskeyClientVault(primaryPrf);
+  const primaryVaultSave = await fetch("http://127.0.0.1:8810/security/api/tcloud/envelope", {
+    method: "POST", headers: { Origin: "http://127.0.0.1:8810", "Content-Type": "application/json", Cookie: `troom_security_setup=${primarySetupToken}` },
+    body: JSON.stringify({ serviceLinkId: primaryMemberLinkId, envelopeType: "client_private_prf", publicKeyJwk: primaryVault.publicKeyJwk, encryptedPayload: primaryVault.encryptedPayload, payloadIv: primaryVault.payloadIv })
+  });
+  assert.equal(primaryVaultSave.status, 200, await primaryVaultSave.text());
+  const primaryWrappedRoot = await TRoomCrypto.wrapFolderKeyForIdentity(serviceBindingFolderKey, primaryVault.publicKeyJwk);
+  const primaryApproval = await securityAdminRequest("/security/api/identities/primary-admin/approve", freshAdminCookie, {
+    credentialId: primaryCredentialId, cloudEnvelopes: [{ serviceLinkId: primaryMemberLinkId, wrappedKey: primaryWrappedRoot }]
+  });
+  assert.equal(primaryApproval.response.status, 200, JSON.stringify(primaryApproval.body));
+  const primaryMemberHandoff = await createSecurityHandoff(primaryIdentityCookie, "cloud", primaryMemberLinkId);
+  assert.equal(primaryMemberHandoff.response.status, 200, JSON.stringify(primaryMemberHandoff.body));
+  assert.deepEqual(Object.keys(primaryMemberHandoff.body.tcloudKey).sort(), ["client_private_prf", "folder_key_rsa"]);
+  const primaryClientKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(primaryPrf, primaryMemberHandoff.body.tcloudKey.client_private_prf);
+  const primaryRootKey = await TRoomCrypto.unlockDelegatedFolderKey(primaryClientKey, primaryMemberHandoff.body.tcloudKey.folder_key_rsa.wrappedKey);
+  assert.equal(await TRoomCrypto.decryptFolderName(serviceBindingFolder, primaryRootKey), cloudSelectedRootName);
+  // Exercise authenticationVerify's real activeLinks query without faking WebAuthn signature verification.
+  const ambiguousPrimary = await createSecurityHandoff(primaryIdentityCookie, "cloud", null);
+  assert.equal(ambiguousPrimary.response.status, 409, "admin and member require an explicit choice");
   const redeemedPrimaryAdmin = await redeemServiceHandoff("cloud", primaryAdminHandoff.body.handoffToken);
-  const redeemedPrimarySubadmin = await redeemServiceHandoff("cloud", primarySubadminHandoff.body.handoffToken);
+  const redeemedPrimaryMember = await redeemServiceHandoff("cloud", primaryMemberHandoff.body.handoffToken);
   assert.equal(redeemedPrimaryAdmin.response.status, 200, JSON.stringify(redeemedPrimaryAdmin.body));
-  assert.equal(redeemedPrimarySubadmin.response.status, 200, JSON.stringify(redeemedPrimarySubadmin.body));
+  assert.equal(redeemedPrimaryMember.response.status, 200, JSON.stringify(redeemedPrimaryMember.body));
   const primaryAdminPayload = decodeSignedPayload(redeemedPrimaryAdmin.cookie);
-  const primarySubadminPayload = decodeSignedPayload(redeemedPrimarySubadmin.cookie);
+  const primaryMemberPayload = decodeSignedPayload(redeemedPrimaryMember.cookie);
   assert.equal(primaryAdminPayload.role, "admin");
-  assert.equal(primaryAdminPayload.serviceAccountId, "admin");
-  assert.equal(primarySubadminPayload.role, "subadmin");
-  assert.equal(primarySubadminPayload.serviceAccountId, "subadmin");
-  assert.equal(primarySubadminPayload.serviceLinkId, "primary-admin-cloud-subadmin-link");
-  assert.equal(primarySubadminPayload.rootFolderId, null);
-
+  assert.equal(primaryAdminPayload.rootFolderId, null);
+  assert.equal(primaryMemberPayload.role, "member");
+  assert.equal(primaryMemberPayload.serviceAccountId, "folder-member");
+  assert.equal(primaryMemberPayload.rootFolderId, cloudSelectedRootId);
+  for (const permission of ["canUpload", "canDelete", "canTrashUnlockedFiles", "canEditFiles", "canEditFolders", "canRenameUnlockedItems", "canViewHistory"]) {
+    assert.equal(redeemedPrimaryMember.body[permission], (await cloudRequest(memberCloudCookie, "/cloud/api/session")).body[permission]);
+  }
+  await assertFolderMemberApiScope(redeemedPrimaryMember.cookie);
+  const memberResume = await cloudRequest(redeemedPrimaryMember.cookie, "/cloud/api/session");
+  assert.equal(memberResume.body.serviceLinkId, primaryMemberLinkId);
+  assert.equal(memberResume.body.role, "member");
+  assert.equal(memberResume.body.rootFolderId, cloudSelectedRootId);
+  for (const role of ["admin", "subadmin"]) {
+    const forged = signCookie({ ...primaryMemberPayload, role });
+    assert.equal((await cloudRequest(forged, "/cloud/api/items")).response.status, 401, "even a valid signature cannot combine member link and elevated role");
+  }
+  const adminItems = await cloudRequest(redeemedPrimaryAdmin.cookie, "/cloud/api/items");
+  assert.ok(adminItems.body.folders.some((folder) => Number(folder.id) === cloudUnselectedRootId));
   const passwordSubadmin = await loginCloudSubadmin();
   assert.equal(passwordSubadmin.response.status, 200, JSON.stringify(passwordSubadmin.body));
-  for (const permission of ["canUpload", "canDelete", "canTrashUnlockedFiles", "canEditFiles", "canEditFolders", "canRenameUnlockedItems", "canViewHistory", "canRequestDelete", "canReviewDeletion"]) {
-    assert.equal(redeemedPrimarySubadmin.body[permission], passwordSubadmin.body[permission],
-      `passkey subadmin keeps the password subadmin ${permission} permission`);
-  }
-  assert.equal(redeemedPrimarySubadmin.body.role, "subadmin");
-  const subadminCrypto = await cloudRequest(redeemedPrimarySubadmin.cookie, "/cloud/api/crypto-config");
-  assert.equal(subadminCrypto.response.status, 200, JSON.stringify(subadminCrypto.body));
-  for (const secretField of ["adminPrivateCipher", "adminPrivateIv", "recoveryPrivateCipher", "recoveryPrivateIv"]) {
-    assert.equal(Object.hasOwn(subadminCrypto.body, secretField), false, `subadmin does not receive ${secretField}`);
-  }
-  const subadminUsage = await cloudRequest(redeemedPrimarySubadmin.cookie, "/cloud/api/usage");
-  assert.equal(subadminUsage.response.status, 403, "passkey subadmin cannot use an administrator-only API");
-  const subadminItems = await cloudRequest(redeemedPrimarySubadmin.cookie, "/cloud/api/items");
-  assert.equal(subadminItems.response.status, 200, JSON.stringify(subadminItems.body));
-  assert.ok(subadminItems.body.folders.some((folder) => Number(folder.id) === cloudSelectedRootId),
-    "passkey subadmin keeps the existing whole-Cloud listing scope without administrator privileges");
-  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
-    WHERE identity_id = 'primary-admin' AND service = 'cloud' AND event_type = 'passkey_login_success'
-      AND service_link_id = 'primary-admin-cloud-subadmin-link' AND service_account_id = 'subadmin'
-      AND role = 'subadmin' AND auth_method = 'passkey'`), 1,
-  "Security audit records the selected subadmin account and role exactly");
-
-  runSecuritySql("UPDATE security_service_links SET status = 'disabled' WHERE id = 'primary-admin-cloud-subadmin-link'");
-  const revokedSubadminSession = await cloudRequest(redeemedPrimarySubadmin.cookie, "/cloud/api/items");
-  assert.equal(revokedSubadminSession.response.status, 401, "disabling the subadmin link revokes its existing passkey session");
-  const stillActiveAdminSession = await cloudRequest(redeemedPrimaryAdmin.cookie, "/cloud/api/items");
-  assert.equal(stillActiveAdminSession.response.status, 200, "disabling subadmin does not revoke the separately selected admin link");
+  assert.equal(passwordSubadmin.body.role, "subadmin");
+  assert.equal(passwordSubadmin.body.canDelete, false);
+  assert.equal(passwordSubadmin.body.canViewHistory, true);
+  assert.equal((await cloudRequest(passwordSubadmin.cookie, "/cloud/api/usage")).response.status, 403);
+  const subadminItems = await cloudRequest(passwordSubadmin.cookie, "/cloud/api/items");
+  assert.ok(subadminItems.body.folders.some((folder) => Number(folder.id) === cloudUnselectedRootId));
+  await assertCloudFolderAccess(passwordSubadmin.cookie, cloudSelectedRootId, 423, "PW subadmin still needs the folder password");
+  assert.equal((await cloudRequest(passwordSubadmin.cookie, `/cloud/api/folders/${cloudSelectedRootId}/unlock`, { method: "POST", body: { authProof: cloudRootAuthProof } })).response.status, 200);
+  await assertCloudFolderAccess(passwordSubadmin.cookie, cloudChildId, 200, "PW subadmin retains unlocked child access");
+  assert.equal((await cloudRequest(passwordSubadmin.cookie, `/cloud/api/files/${cloudRootFileId}`, { method: "PATCH", body: { name: cloudRootFileName } })).response.status, 200);
   const completedPrimaryResume = await resumeSetupWithCookie(`troom_security_admin=${primaryAdminCookie}`);
-  assert.equal(completedPrimaryResume.response.status, 409, "completed primary-admin setup cannot be elevated again");
+  assert.equal(completedPrimaryResume.response.status, 409, "no setup authority when all required keys already exist");
 
   const setupToken = "setup-session-token-for-retry-test-1234567890";
+  // This integration identity also carries an artificial Cloud admin link for
+  // cross-service revocation tests. Mark that independent key purpose ready
+  // before asserting completion of its normal member-vault setup.
+  runSecuritySql(`INSERT INTO security_tcloud_key_envelopes
+    (id, identity_id, credential_id, service_link_id, envelope_type, encrypted_payload, payload_iv)
+    VALUES ('fixture-general-admin-envelope', '${identityId}', '${credentialId}', '${services.cloud.linkId}', 'admin_private_prf', 'fixture-cipher', 'fixture-iv')`);
   const setupTokenHash = createHash("sha256").update(setupToken).digest("base64url");
   runSecuritySql(`INSERT INTO security_setup_sessions
     (id, token_hash, identity_id, credential_id, expires_at, last_user_verification_at)

@@ -147,7 +147,7 @@ assert.match(source, /openFolderUploadDialog\(selection, \{ append: \$\("#folder
 assert.match(source, /if \(!dialog\.open\) dialog\.showModal\(\)/);
 assert.match(source, /folderUploadOperationSequence: 0/);
 assert.match(source, /activeFolderUploadOperationId: null/);
-const uploadStart = source.match(/async function uploadSelectedFolder\(event\) \{[\s\S]*?\n\}\n\nfunction waitForInterfacePaint/)?.[0] || "";
+const uploadStart = source.match(/async function uploadSelectedFolder\(event\) \{[\s\S]*?\r?\n\}\r?\n\r?\nfunction waitForInterfacePaint/)?.[0] || "";
 assert.ok(uploadStart.indexOf('submitButton.textContent = "準備中…"') < uploadStart.indexOf('$("#folder-upload-dialog").close()'));
 assert.ok(uploadStart.indexOf('$("#folder-upload-dialog").close()') < uploadStart.indexOf("await waitForInterfacePaint()"));
 assert.ok(uploadStart.indexOf("await waitForInterfacePaint()") < uploadStart.indexOf("await planFolderUpload"), "描画後にフォルダの差分確認を開始してください。");
