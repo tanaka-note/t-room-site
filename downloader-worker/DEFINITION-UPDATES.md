@@ -55,3 +55,17 @@ Security Workerが毎時17分にD1記録だけを監視する。Containerを起�
 ## 検証
 
 `node --test downloader-worker/test/definition-updates.test.js` はSQLite実行とAPI/Docker mockで正常更新、署名/鮮度候補拒否、更新失敗、active job延期、lease競合、rollout完了待ち、期限前/期限切れ/監視停止、通知重複抑制・復旧を確認する。実エンジンの確認は`tools/verify-definitions.py`を候補imageにread-only mountし、`--network none --cpus 1 --memory 4g --entrypoint python -e PYTHONPATH=/app`で実行する。小容量の正常/EICAR試験であり、大容量media検査の速度・検出網羅性を検証したものではない。
+
+## 2026-09-06 初回導入記録
+
+- Security migration 0014適用、Worker `20a798ae-d542-4810-a641-0fd0f9064dcd`、build `security-ec7f431cfd8e`。本番HTML/JS一致と未認証dashboard 401を確認。
+- Container version 8、digest `sha256:21b2fb59ef49b9d0befa36e5e03646374ff99ba758ed9ceade01128b57569e73`。rollout `863a2dbe-ced2-4cc2-abae-ebdabbc94c5a` completed・active rolloutなし。CPU 1、memory 6144 MiB、disk 12000 MB、private network、grace 900秒の維持を読み取り確認。
+- 定義の内部生成日時は2026-09-06 15:26:06 JST、有効期限は2026-09-13 15:26:06 JST。Downloader Worker `bd836330-5b09-4333-b055-0628ffcc2e2e`は今回更新していない。
+- 切り戻し候補はD1 previous_image（`sha256:6c3d248dae07b77ed20ed1ea3d68e5273f9ee48aacd56e539a31d5f4825707a9`）。必ず切り戻し時点の署名・鮮度を再検証する。Security旧Workerは `78f17926-81de-4971-ab2b-00358f7ea4b5`。追加tableは保持する。
+- Downloader Node 63件、Security Node 99件、両サービスのChromium/Firefox表示・回帰試験がPASS。Windows Python 112件中87件PASS、外部ツール依存25件skip。定義更新・障害・監視・通知の11件はSQLite/API/Docker mock試験を含む。
+- サービス横断のパスキー失効・HTTP連携E2EもPASS。初回はローカルのWrangler依存不足で開始できず、依存を補って再実行した。認証方式・鍵の運用は変更していない。
+- 候補imageで実sigtool署名・内部時刻、実ClamAV正常/EICAR拒否、YARA正常性を確認。実定義を用いた時刻注入で7日超過拒否、空の定義directoryと無害な破損定義fixtureで欠落/署名不正拒否も確認。本番の大容量取得は実施していない。
+- 初回候補検証のsubprocessが一度失敗した（詳細を保存していないため原因は未確定）。同じ候補の再検証は通過。rollout要求の段階指定不足も本番APIで判明し、明示的なsteps指定と回帰テストを追加後に反映完了した。候補buildは1回だけで、途中の失敗時には本番の旧imageを維持した。
+- 全サイトcontractは既存calculator build不一致で失敗。Downloaderにも着手前からbuild marker不一致があり、今回はWorker/UIを変更していない。今回変更したSecurityのbuild/HTML契約とdry-runは個別にPASS。
+- GitHub標準通知Issue [#1](https://github.com/tanaka-note/t-room-site/issues/1)を管理者へ割り当て、同じ未設定状態の再送でIssue/commentが増えないことを確認。通知メールの受信、実障害からの外部復旧通知は未確認（復旧・重複抑制はmockで確認）。
+- 自動更新用 `CLAMAV_CLOUDFLARE_API_TOKEN` は未登録。手元の既存ログインによる初回更新だけ完了しており、自動運転完了とは扱わない。登録後daily workflowを実行する。Securityの毎時cronは登録済みだが、初回導入確認時点では本番heartbeatは未観測。未設定/未観測を正常扱いしていない。
