@@ -1,4 +1,5 @@
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
+import { splitSearchTerms } from "../public/diary-search.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
@@ -467,6 +468,7 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/diary-search.js", "/diary-search.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
     ["/troom-date-picker.js", "/troom-date-picker.js"],
     ["/manifest.webmanifest", "/manifest.webmanifest"],
@@ -563,7 +565,7 @@ async function listInvestmentHistory(env) {
 async function listEntries(url, env, session) {
   const limit = clampNumber(url.searchParams.get("limit"), 1, 50, 20);
   const offset = clampNumber(url.searchParams.get("offset"), 0, 1000000, 0);
-  const query = normalizeSearch(url.searchParams.get("q") || "", 100);
+  const searchTerms = splitSearchTerms(url.searchParams.get("q"));
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("month") || "")
     ? url.searchParams.get("month")
     : "";
@@ -608,9 +610,12 @@ async function listEntries(url, env, session) {
     )`);
     bindings.push(...trashAccess.bindings);
   }
-  if (query && !draft) {
-    conditions.push("(instr(e.title, ?) > 0 OR instr(e.content, ?) > 0)");
-    bindings.push(query, query);
+  if (!draft) {
+    for (const term of searchTerms) {
+      const parameter = `?${bindings.length + 1}`;
+      conditions.push(`(instr(e.title, ${parameter}) > 0 OR instr(e.content, ${parameter}) > 0)`);
+      bindings.push(term);
+    }
   }
   if (month && !draft) {
     conditions.push("substr(e.entry_date, 1, 7) = ?");

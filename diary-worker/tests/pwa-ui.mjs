@@ -62,6 +62,8 @@ assert.ok(serviceWorker.includes(`/diary/diary.css?v=${build}`));
 assert.ok(serviceWorker.includes(`/diary/troom-date-picker.css?v=${build}`));
 assert.ok(serviceWorker.includes(`/diary/troom-date-picker.js?v=${build}`));
 assert.ok(serviceWorker.includes(`/diary/diary.js?v=${build}`));
+assert.ok(serviceWorker.includes(`/diary/diary-search.js?v=${build}`));
+assert.match(script, /diary-search\.js\$\{scriptUrl\.search\}/);
 assert.ok(serviceWorker.includes(`/assets/pwa-auto-update.js?v=${build}`));
 assert.match(serviceWorker, /icon-maskable-512-v4\.png\?v=5/);
 assert.match(script, /new PasswordCredential/);

@@ -1,4 +1,9 @@
-(() => {
+(async () => {
+  // Keep the shared module on the same build URL as this app shell, including offline fallback.
+  const scriptUrl = new URL(document.currentScript.src);
+  const { splitSearchTerms, createSearchExcerpt, highlightSearchTerms } = await import(
+    new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href
+  );
   const BASE_PATH = "/diary";
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
   const EDITOR_HISTORY_KEY = "troomDiaryEditor";
@@ -318,7 +323,8 @@
     });
     elements.searchInput.addEventListener("input", () => {
       window.clearTimeout(state.searchTimer);
-      state.query = elements.searchInput.value.trim();
+      state.query = splitSearchTerms(elements.searchInput.value).join(" ");
+      state.requestId += 1;
       state.favoritePage = false;
       state.monthExpanded = false;
       updateFilterControls();
@@ -974,7 +980,7 @@
   }
 
   function applyDiaryReturnView(returnView) {
-    state.query = String(returnView.query || "").slice(0, 200);
+    state.query = splitSearchTerms(returnView.query).join(" ");
     state.month = /^\d{4}-\d{2}$/.test(returnView.month) ? returnView.month : currentJapanMonth();
     state.monthExpanded = Boolean(returnView.monthExpanded);
     state.dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateFrom) ? returnView.dateFrom : "";
@@ -1121,6 +1127,7 @@
     const existingCardCount = elements.entryList.querySelectorAll(":scope > .diary-entry-card").length;
     const canAppend = appendFrom > 0 && existingCardCount === appendFrom;
     const entriesToRender = canAppend ? state.entries.slice(appendFrom) : state.entries;
+    const searchTerms = state.drafts ? [] : splitSearchTerms(state.query);
     const cards = entriesToRender.map((entry) => {
       const article = document.createElement("article");
       article.className = "diary-entry-card";
@@ -1150,7 +1157,10 @@
       const title = document.createElement("h3");
       title.textContent = entry.title || "無題の下書き";
       const summary = document.createElement("p");
-      summary.textContent = excerpt(entry.content, 130) || (state.drafts ? "本文はまだありません。" : "");
+      summary.textContent = (searchTerms.length ? createSearchExcerpt(entry.content, searchTerms) : excerpt(entry.content, 130))
+        || (state.drafts ? "本文はまだありません。" : "");
+      highlightSearchTerms(title, searchTerms);
+      highlightSearchTerms(summary, searchTerms);
       button.append(meta, title, summary);
       if (state.drafts) {
         const updated = document.createElement("span");
@@ -1606,6 +1616,9 @@
     elements.detailDeletion.textContent = entry.deletedByName ? `削除者：${entry.deletedByName}` : "";
     renderFavoriteButton(entry);
     renderEntryContent(entry);
+    const searchTerms = state.drafts ? [] : splitSearchTerms(state.query);
+    highlightSearchTerms(elements.detailTitle, searchTerms);
+    highlightSearchTerms(elements.detailContent, searchTerms);
     elements.detailTags.replaceChildren(...createTagElements(entry.tags));
     const isDeleted = Boolean(entry.deletedAt);
     elements.detailActions.hidden = !state.canManageEntries || isDeleted;

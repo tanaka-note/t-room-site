@@ -2227,3 +2227,9 @@ button:disabled {
 +.troom-passkey-account-option:focus-visible { outline: 3px solid #6f8fe8; outline-offset: 2px; }
 +.troom-passkey-account-option small { color: #58657a; }
 +.troom-passkey-account-cancel { margin-top: 1rem; }
+mark.diary-search-match {
+  background-color: rgba(255, 218, 92, 0.32);
+  color: inherit;
+  font: inherit;
+  text-decoration: inherit;
+}

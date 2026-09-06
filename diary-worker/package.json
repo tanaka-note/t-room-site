@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "node ../tools/sync-web-app-builds.mjs && wrangler deploy",
-    "check": "node --check src/index.js && node --check src/backup.js && node --check public/diary.js && node --check public/investment.js",
+    "check": "node --check src/index.js && node --check src/backup.js && node --check public/diary.js && node --check public/diary-search.js && node --check public/investment.js",
     "test:permissions": "node tests/permissions.e2e.mjs",
     "test:households": "node tests/household-isolation.e2e.mjs",
     "test:favorites": "node tests/favorites.e2e.mjs && node tests/favorites-ui.mjs",
@@ -13,7 +13,7 @@
     "test:trash": "node tests/trash-isolation.e2e.mjs",
     "test:drafts": "node tests/drafts.e2e.mjs && node tests/drafts-ui.mjs",
     "test:initial-password": "node tests/initial-password-ui.mjs",
-    "test:search": "node tests/search-ui.mjs",
+    "test:search": "node tests/search-ui.mjs && node tests/search-text.mjs && node tests/search.e2e.mjs && node tests/browser/search.mjs",
     "test:monthly": "node tests/monthly-ui.mjs && node tests/browser/monthly-navigation.mjs",
     "test:photos": "node tests/photos.e2e.mjs && node tests/photos-ui.mjs && node tests/browser/photo-exif-orientation.mjs",
     "test:photo-exif": "node tests/browser/photo-exif-orientation.mjs",
