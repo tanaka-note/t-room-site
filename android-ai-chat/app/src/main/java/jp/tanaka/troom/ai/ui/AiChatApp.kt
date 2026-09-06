@@ -76,7 +76,7 @@ private fun LoginScreen(loading: Boolean, signingIn: Boolean, onLogin: () -> Uni
             }
             Spacer(Modifier.height(28.dp))
             Text("AI Chat", fontSize = 38.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-1).sp)
-            Text("By T-ROOM", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("By T-lain", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(18.dp))
             Text("考えを整理し、会話を育てるための静かな場所。", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(42.dp))

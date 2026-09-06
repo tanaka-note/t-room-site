@@ -1,4 +1,4 @@
-# AI Chat By T-ROOM (Android)
+# AI Chat By T-lain (Android)
 
 `jp.tanaka.troom.ai` のAndroidネイティブアプリです。Web版はありません。
 
@@ -11,7 +11,7 @@
 - AI Workerが返す利用額、予算、安全停止状態の閲覧
 - `VoiceEngine`境界（OpenAI Realtime / 将来のVOICEVOX差し替え用）
 
-音声会話のWebRTC接続、VOICEVOX、Live2D、T-ROOM各サービスのツール連携は次Phaseです。OpenAI APIキーやRealtime client secretをAPKへ保存してはいけません。
+音声会話のWebRTC接続、VOICEVOX、Live2D、T-lain各サービスのツール連携は次Phaseです。OpenAI APIキーやRealtime client secretをAPKへ保存してはいけません。
 
 ## Build
 

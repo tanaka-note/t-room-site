@@ -1,7 +1,7 @@
 {
-  "name": "T-ROOM おみくじ",
+  "name": "T-lain おみくじ",
   "short_name": "おみくじ",
-  "description": "六角みくじ箱を振って運勢を楽しむT-ROOMのWebアプリ",
+  "description": "六角みくじ箱を振って運勢を楽しむT-lainのWebアプリ",
   "start_url": "./index.html?v=20260621-omikuji1",
   "scope": "./",
   "display": "fullscreen",

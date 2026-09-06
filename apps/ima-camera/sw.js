@@ -1,15 +1,15 @@
-const CACHE_NAME = "t-room-ima-camera-ima-camera-840804671c25";
+const CACHE_NAME = "t-room-ima-camera-ima-camera-ad2b498a65a1";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=ima-camera-840804671c25",
+  "./index.html?v=ima-camera-ad2b498a65a1",
   "./icon-192.png",
   "./icon-512.png",
   "./icon.svg",
-  "/apps/ima-camera/ima-camera.css?v=ima-camera-840804671c25",
-  "/apps/ima-camera/ima-camera.js?v=ima-camera-840804671c25",
-  "/apps/ima-camera/manifest.webmanifest?v=ima-camera-840804671c25",
-  "/assets/pwa-auto-update.js?v=ima-camera-840804671c25"
+  "/apps/ima-camera/ima-camera.css?v=ima-camera-ad2b498a65a1",
+  "/apps/ima-camera/ima-camera.js?v=ima-camera-ad2b498a65a1",
+  "/apps/ima-camera/manifest.webmanifest?v=ima-camera-ad2b498a65a1",
+  "/assets/pwa-auto-update.js?v=ima-camera-ad2b498a65a1"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 

@@ -1,13 +1,13 @@
-const CACHE_NAME = "t-room-kokoro-tenbin-kokoro-tenbin-c0fbc19fd0c3";
+const CACHE_NAME = "t-room-kokoro-tenbin-kokoro-tenbin-1d442317e6c4";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=kokoro-tenbin-c0fbc19fd0c3",
+  "./index.html?v=kokoro-tenbin-1d442317e6c4",
   "./icon.svg",
-  "/apps/kokoro-tenbin/kokoro-tenbin.css?v=kokoro-tenbin-c0fbc19fd0c3",
-  "/apps/kokoro-tenbin/kokoro-tenbin.js?v=kokoro-tenbin-c0fbc19fd0c3",
-  "/apps/kokoro-tenbin/manifest.webmanifest?v=kokoro-tenbin-c0fbc19fd0c3",
-  "/assets/pwa-auto-update.js?v=kokoro-tenbin-c0fbc19fd0c3"
+  "/apps/kokoro-tenbin/kokoro-tenbin.css?v=kokoro-tenbin-1d442317e6c4",
+  "/apps/kokoro-tenbin/kokoro-tenbin.js?v=kokoro-tenbin-1d442317e6c4",
+  "/apps/kokoro-tenbin/manifest.webmanifest?v=kokoro-tenbin-1d442317e6c4",
+  "/assets/pwa-auto-update.js?v=kokoro-tenbin-1d442317e6c4"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 

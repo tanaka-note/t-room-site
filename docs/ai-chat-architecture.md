@@ -1,4 +1,4 @@
-# AI Chat By T-ROOM アーキテクチャ
+# AI Chat By T-lain アーキテクチャ
 
 ## 境界
 

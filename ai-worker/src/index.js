@@ -43,7 +43,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
       displayName: "AI Chat",
       targets: [{
         accountId: "owner",
-        displayLabel: "AI Chat By T-ROOM",
+        displayLabel: "AI Chat By T-lain",
         role: "admin",
         roleLabel: "AI利用者",
         privileged: false,

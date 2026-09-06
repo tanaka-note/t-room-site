@@ -430,7 +430,7 @@
     lastTime = 0;
     startButton.textContent = "PLAY";
     showMessage(
-      "T-ROOM Garden Hop",
+      "T-lain Garden Hop",
       "クリック・タップ・Spaceで2回までジャンプ。知の芽と星のしずくを集めよう。",
       "PLAY"
     );

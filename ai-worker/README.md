@@ -1,4 +1,4 @@
-# T-ROOM AI Worker
+# T-lain AI Worker
 
 Android専用AI ChatのAPIです。Web UIは配信しません。
 

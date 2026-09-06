@@ -1568,7 +1568,7 @@ async function ensurePrimaryAdminRecords(env) {
     { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: "日記 管理者" },
     { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
     { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" },
-    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: "AI Chat By T-ROOM" },
+    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: "AI Chat By T-lain" },
     { service: "downloader", accountId: "owner", rootFolderId: null, displayLabel: "T-lain Downloader 管理者" }
   ];
   for (const link of defaults) {

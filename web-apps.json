@@ -10,7 +10,7 @@
   "apps": [
     {
       "id": "site",
-      "name": "T-ROOM本体・公開ページ",
+      "name": "T-lain本体・公開ページ",
       "publicUrls": ["https://tanaka-note.com/"],
       "entrypoints": [
         "index.html", "apps.html", "articles.html", "work.html", "game.html", "investment.html",
@@ -188,7 +188,7 @@
     },
     {
       "id": "security",
-      "name": "T-ROOM Security Center",
+      "name": "T-lain Security Center",
       "publicUrls": ["https://tanaka-note.com/security/"],
       "entrypoints": ["security-worker/public/index.html"],
       "buildRoots": ["security-worker/public"],

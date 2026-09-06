@@ -1,7 +1,7 @@
 {
-  "name": "T-ROOM Swich",
+  "name": "T-lain Swich",
   "short_name": "Swich",
-  "description": "押すたびに、今の自分へ短い一言が返ってくるT-ROOMのやる気スイッチ",
+  "description": "押すたびに、今の自分へ短い一言が返ってくるT-lainのやる気スイッチ",
   "start_url": "./index.html?v=20260704-switch2",
   "scope": "./",
   "display": "fullscreen",

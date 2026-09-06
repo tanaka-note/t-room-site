@@ -395,7 +395,7 @@
     touchInput = null;
     updateHud();
     draw();
-    showMessage("T-ROOM BLOCKS", "画面をタップして開始 / タップで回転 / スワイプで移動・落下");
+    showMessage("T-lain BLOCKS", "画面をタップして開始 / タップで回転 / スワイプで移動・落下");
   }
 
   function collides(matrix, row, col) {

@@ -1,7 +1,7 @@
 {
-  "name": "T-ROOM 電卓",
+  "name": "T-lain 電卓",
   "short_name": "電卓",
-  "description": "T-ROOMのスマホ向け実務電卓アプリ",
+  "description": "T-lainのスマホ向け実務電卓アプリ",
   "start_url": "./apps/calculator/index.html?v=20260621-remake10",
   "scope": "./",
   "display": "fullscreen",
