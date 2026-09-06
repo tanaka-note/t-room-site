@@ -10,7 +10,10 @@ const directory = fileURLToPath(new URL('.', import.meta.url));
 function command(args, options = {}) {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 20 * 60 * 1000, maxBuffer: 8 * 1024 * 1024, ...options });
   // Subprocess stderr can include registry credentials/URLs. Report fixed codes.
-  if (result.status !== 0) throw new Error('definition_docker_failed');
+  if (result.status !== 0) {
+    const phase = ['login', 'build', 'run', 'push', 'image'].includes(args[0]) ? args[0] : 'command';
+    throw new Error(`definition_docker_${phase}_failed`);
+  }
   return result.stdout.trim();
 }
 export function candidateReport(value, now) {
@@ -18,6 +21,18 @@ export function candidateReport(value, now) {
     value.definitionUnix > now + 300 || now - value.definitionUnix >= 5 * 86400 ||
     !Number.isSafeInteger(value.verifiedAt) || Math.abs(now - value.verifiedAt) > 300) throw new Error('definition_candidate_invalid');
   return value;
+}
+
+export function definitionTarget(configuration, image) {
+  // GET includes platform-managed runtime/network fields which Containers does
+  // not allow callers to set. Submit only the image and existing resource/log
+  // settings, as Wrangler does; unspecified deployment settings are retained.
+  const target = { image };
+  for (const key of ['vcpu', 'memory_mib', 'observability']) {
+    if (configuration[key] !== undefined) target[key] = configuration[key];
+  }
+  if (configuration.disk?.size_mb !== undefined) target.disk = { size_mb: configuration.disk.size_mb };
+  return target;
 }
 
 export async function refresh({ api = cloudflareClient(), docker = command, now = () => Math.floor(Date.now() / 1000), wait = waitForRollout } = {}) {
@@ -47,6 +62,7 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
     console.log('Verifying candidate signatures, signed timestamps, engine and harmless fixtures');
     const raw = run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--mount', `type=bind,source=${join(directory, 'verify-definitions.py')},target=/tmp/verify-definitions.py,readonly`, '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', temporaryTag, '/tmp/verify-definitions.py']);
     const report = candidateReport(JSON.parse(raw), now());
+    console.log('Pushing verified definition candidate');
     run(['push', temporaryTag]);
     const digests = JSON.parse(run(['image', 'inspect', temporaryTag, '--format', '{{json .RepoDigests}}']));
     const image = digests.find(validImage);
@@ -62,7 +78,11 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
       return { deferred: true };
     }
     console.log('Starting image-only rollout; Worker code and existing grace period are unchanged');
-    const rollout = await api(`${APPLICATION_PATH}/rollouts`, 'POST', { description: 'Daily verified ClamAV definitions', strategy: 'rolling', kind: 'full_auto', target_configuration: { ...before.configuration, image } });
+    const rollout = await api(`${APPLICATION_PATH}/rollouts`, 'POST', {
+      description: 'Daily verified ClamAV definitions', strategy: 'rolling', kind: 'full_auto',
+      steps: [10, 100].map(percentage => ({ step_size: { percentage }, description: `Rollout to ${percentage}% of instances` })),
+      target_configuration: definitionTarget(before.configuration, image)
+    });
     await wait(api, rollout.id, image);
     const updated = await query(api, SECURITY_DB, `UPDATE security_definition_updates SET image=?,previous_image=?,source_image=?,definition_unix=?,verified_at=?,
       last_success_at=?,image_checked_at=?,deployment_matches=1,last_result='success',failure_count=0,lease_until=NULL WHERE service='downloader' AND run_id=?`,

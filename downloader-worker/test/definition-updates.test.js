@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { definitionStatus, monitorDefinitions } from '../../security-worker/src/definition-status.js';
-import { refresh, candidateReport } from '../tools/refresh-definitions.mjs';
+import { refresh, candidateReport, definitionTarget } from '../tools/refresh-definitions.mjs';
 import { notifyGithub, monitor } from '../tools/monitor-definitions.mjs';
 import { ACCOUNT, SECURITY_DB, APPLICATION_PATH, waitForRollout } from '../tools/definition-api.mjs';
 
@@ -13,6 +13,10 @@ const next = image.replace(/a{64}$/, 'b'.repeat(64));
 const report = { verified: true, definitionUnix: now - 3600, verifiedAt: now, maxAgeSeconds: 604800 };
 const good = { image, definition_unix: now - 86400, verified_at: now - 10, last_attempt_at: now - 10, last_success_at: now - 10, last_result: 'success', automation_enabled: 1, monitor_checked_at: now - 10, deployment_matches: 1, image_checked_at: now - 10 };
 const migration = await readFile(new URL('../../security-worker/migrations/0014_clamav_definition_updates.sql', import.meta.url), 'utf8');
+test('rollout retains resource/log settings without writing platform-managed runtime/network fields', () => {
+  assert.deepEqual(definitionTarget({image,vcpu:1,memory:'6GiB',memory_mib:6144,disk:{size_mb:12000,size:'12GB'},runtime:'firecracker',network:{mode:'private'},observability:{logs:{enabled:true}}},next),
+    {image:next,vcpu:1,memory_mib:6144,disk:{size_mb:12000},observability:{logs:{enabled:true}}});
+});
 function database() { const db = new DatabaseSync(':memory:'); db.exec(migration); return db; }
 function envFor(db) { return { DB: {
   prepare(sql) { return { values: [], bind(...values) { this.values = values; return this; }, async first() { return db.prepare(sql).get(...this.values); }, sql }; },
@@ -94,7 +98,11 @@ function harness({ failure, jobs = 0 } = {}) {
     if (path.includes('/d1/database/')) return [{ success: true, results: [{ count: jobs }] }];
     if (path.endsWith('/credentials')) return { username: 'test', password: 'test' };
     if (path === APPLICATION_PATH) return { configuration: { image: active }, rollout_active_grace_period: 900 };
-    if (path.endsWith('/rollouts')) { rollouts++; return { id: 'rollout' }; }
+    if (path.endsWith('/rollouts')) {
+      assert.deepEqual(body.steps.map(step => step.step_size.percentage), [10, 100]);
+      assert.ok(body.steps.every(step => typeof step.description === 'string'));
+      rollouts++; return { id: 'rollout' };
+    }
     throw Error('unexpected_test_api');
   };
   const docker = args => {

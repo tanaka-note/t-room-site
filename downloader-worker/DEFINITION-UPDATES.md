@@ -34,6 +34,8 @@ Security Workerが毎時17分にD1記録だけを監視する。Containerを起�
 
 状態が同じ間はIssue/commentを追加しない。状態変化時にcomment、全条件復旧時に復旧commentとcloseを行う。通知jobを直列化して重複を抑制する。Securityの状態変化履歴は180日保持する。既存認証・利用履歴は変更しない。
 
+監視workflowの成功は通知処理が成功したという意味であり、定義の正常性ではない。異常状態はIssue・Security表示に残す。同じ異常を監視のたびにActions失敗メールとして重送しない。更新job自体の失敗メールも不要な場合はGitHubのActions通知設定で調整する。
+
 更新workflowだけの停止は独立workflowが検知し、Security cronの停止はGitHub側が検知する。GitHub Actions全体が無効・予算停止・サービス障害になった場合もSecurity内では更新停止を検知するが、GitHub経由の外部通知は送れない。完全に独立した外部通知を必要とする場合は別通知経路の設定が必要。全基盤停止時の配信保証はしない。GitHubの通知メールが実際に受信されたかは管理者側で確認する。
 
 ## 費用と日常運用

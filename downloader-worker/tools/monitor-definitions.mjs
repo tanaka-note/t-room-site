@@ -47,6 +47,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     if (!response.ok) throw new Error(`notification_http_${response.status}`);
     return response.json();
   };
-  monitor({ github }).then(state => { console.log(`ClamAV monitor: ${state}`); if (state !== 'healthy') process.exitCode = 1; })
+  // A delivered/deduplicated incident is a successful notification operation,
+  // not a healthy scanner. Failing every poll would send repeated Actions mail.
+  monitor({ github }).then(state => { console.log(`ClamAV monitor: ${state}`); })
     .catch(() => { console.error('definition_notification_failed'); process.exitCode = 1; });
 }

@@ -11,7 +11,10 @@ export function cloudflareClient(token = process.env.CLOUDFLARE_API_TOKEN) {
       body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30000)
     });
     const result = await response.json();
-    if (!response.ok || result.success === false) throw new Error(`cloudflare_api_${response.status}`);
+    if (!response.ok || result.success === false) {
+      const codes = (result.errors || []).map(error => Number(error.code)).filter(Number.isSafeInteger).join('_');
+      throw new Error(`cloudflare_api_${response.status}${codes ? '_' + codes : ''}`);
+    }
     return result.result;
   };
 }
@@ -30,7 +33,7 @@ export function validImage(image) {
 export async function waitForRollout(api, id, expectedImage, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))) {
   for (let attempt = 0; attempt < 60; attempt++) {
     const rollout = await api(`${APPLICATION_PATH}/rollouts/${id}`);
-    if (['failed', 'cancelled', 'rolled_back'].includes(rollout.status)) throw new Error('definition_rollout_failed');
+    if (['failed', 'cancelled', 'rolled_back', 'replaced'].includes(rollout.status)) throw new Error('definition_rollout_failed');
     if (rollout.status === 'completed') {
       const app = await api(APPLICATION_PATH);
       if (app.configuration.image === expectedImage && !app.active_rollout_id) return app;
