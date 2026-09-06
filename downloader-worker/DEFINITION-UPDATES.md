@@ -42,6 +42,10 @@ Security Workerが毎時17分にD1記録だけを監視する。Containerを起�
 
 定義更新は利用者の取得ごとには実行しない。1日1回のDocker build/小容量検査はGitHub runnerで行う。監視は軽量なAPI/D1処理だけで、Cloudflare Containerを常時起動・監視起動しない。GitHub標準通知に連絡先ごとの追加料金はないが、private repositoryのActions実行時間には契約枠・超過料金があり、他workflowと共有する。毎日定義を含むimage layerをpushするためregistry容量も増える。既存の本番・base・previous imageを不用意に削除しない。費用ゼロや固定請求上限とは扱わない。
 
+2026-09-06時点の対象repositoryはpublicで、使用する標準GitHub-hosted runnerは無料枠の対象。追加契約・有料runner・Cloudflare資源増量は行わない。Cloudflareは既存の付帯枠内での運用を原則とし、超過が予想される変更は事前承認を得る。付帯枠はaccount全体で共有するため、今回の更新単独では将来の請求額を保証できない。利用確認には`containersUsageAdaptiveGroups`のsandbox込みの値を使い、コンテナ内CPU値だけで請求を判断しない。請求期間・集計遅延・D1/Workers/DO/保存容量等も別に考慮する。
+
+参考: [GitHub標準runnerのpublic repository条件](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)、[Containers料金・付帯枠](https://developers.cloudflare.com/containers/platform/pricing/)、[課金利用量の取得](https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-container-metrics/)。
+
 通常のContainerコード公開でも手動buildの `CLAMAV_DEFINITION_REFRESH` を当日の固有値へ進める。通常公開後は自動更新を手動実行し、新しいコードbaseの検証済み記録へ更新する。Workerだけの公開では `--containers-rollout=none` を用い、定義imageを古いbuildへ戻さない。
 
 参考: [Cloudflare rolloutの完了・drain](https://developers.cloudflare.com/containers/configuration/rollouts/)、[API token権限](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)、[GitHub通知](https://docs.github.com/en/subscriptions-and-notifications/concepts/about-notifications)、[Actions課金](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
@@ -69,3 +73,16 @@ Security Workerが毎時17分にD1記録だけを監視する。Containerを起�
 - 全サイトcontractは既存calculator build不一致で失敗。Downloaderにも着手前からbuild marker不一致があり、今回はWorker/UIを変更していない。今回変更したSecurityのbuild/HTML契約とdry-runは個別にPASS。
 - GitHub標準通知Issue [#1](https://github.com/tanaka-note/t-room-site/issues/1)を管理者へ割り当て、同じ未設定状態の再送でIssue/commentが増えないことを確認。通知メールの受信、実障害からの外部復旧通知は未確認（復旧・重複抑制はmockで確認）。
 - 自動更新用 `CLAMAV_CLOUDFLARE_API_TOKEN` は未登録。手元の既存ログインによる初回更新だけ完了しており、自動運転完了とは扱わない。登録後daily workflowを実行する。Securityの毎時cronは登録済みだが、初回導入確認時点では本番heartbeatは未観測。未設定/未観測を正常扱いしていない。
+
+## 2026-09-06 自動運転の有効化
+
+- 上記「初回導入記録」の未設定項目を解消する作業。main `a622bf5`を起点とし、対象accountのみ・Containers Edit / D1 Editの専用Tokenを発行、GitHub Secret `CLAMAV_CLOUDFLARE_API_TOKEN`へ登録した。既存Token、認証、課金契約は変更していない。
+- [初回daily実行 34032282734](https://github.com/tanaka-note/t-room-site/actions/runs/34032282734)が成功。GitHub runnerで候補を1回buildし、実sigtool署名・内部日時、ClamAV正常fixture / EICAR拒否、YARA正常性を確認してから反映した。
+- Container version 9、digest `sha256:795f752a9010a936670ee443090f3c73a921097095850c43066573d7460e4488`。rollout `ca4fc666-ee93-4ded-9182-3d25015a4b1c` completed・active rolloutなし・D1 image一致。既存のCPU/memory/disk/private network/graceを維持。Downloader/Security Workerは上記versionのままで、再deployは不要。
+- 定義の内部生成日時は2026-09-06 15:26:06 JST、有効期限は2026-09-13 15:26:06 JST。最終検証は同日21:12:03 JST、本番反映確認は21:14:39 JST。同日の再取得なので生成日時自体は初回導入時と同じ。D1は`automation_enabled=1`、`last_result=success`、連続失敗0、lease解放を確認。
+- 切り戻し候補`previous_image`はversion 8の`sha256:21b2fb59ef49b9d0befa36e5e03646374ff99ba758ed9ceade01128b57569e73`へ進んだ。上記の署名・鮮度再検証とジョブ/drain確認を省略しない。
+- 対象試験24件PASS（定義更新/監視11、処理/再試行5、Worker契約6、保存期限2）。定義更新3モジュールの構文確認・`git diff --check`もPASS。今回のコード差分は文書だけのため、既存のbuild/dry-run結果を再利用。全Node/Python・全ブラウザーE2E・大容量本番検査は再実行していない。
+- 更新前のCloudflare GraphQL読み取りでは2026-08-07〜09-06のaccount全体のContainers利用量はCPU 5483.88秒、memory 64134181189462.7 byte-seconds、disk 119459221492452 byte-seconds、送信2148166807 bytes。CPU約91.4分、memory約16.6 GiB時間、disk約33.2 GB時間で公表付帯枠より少なかった。これは過去の集計値で、今回の増分や請求確定額ではない。今後の利用増加・他サービスとの共有枠・集計遅延を含め、追加課金ゼロは保証しない。
+- [独立monitor実行 34032800007](https://github.com/tanaka-note/t-room-site/actions/runs/34032800007)成功。daily後の通知と同じ`monitor_stopped`状態でIssue #1のコメント数が1のまま増えないことを確認。これは通知処理の成功であり、全監視の正常確認ではない。
+- 21:22 JST時点では毎時17分の本番heartbeatは未観測。cron登録・稼働Worker内のscheduled handler/定義監視コード・正しいD1 bindingは読み取り確認済み。GraphQLのCron実行履歴には前日の既存日次cron成功があり、当日の毎時cronはまだない。実行遅延か停止かは判別できず、`monitor_stopped`を維持する。D1 heartbeatの手動補完や復旧Issueの手動closeはしていない。次の実行を観測し、独立monitorが`healthy`となりIssueが自動closeするまで監視の本番確認は未完了。
+- Security Centerの本番ログイン画面・公開asset、未認証dashboard拒否を確認。管理者ログイン後の定義パネル表示とGitHub通知メールの受信は本人確認待ち。設定上は次回daily（09-07 04:37 JST）と6時間ごとの独立monitorが有効だが、GitHub/Cloudflare schedulerの遅延・停止まで保証するものではない。
