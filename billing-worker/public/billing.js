@@ -3,6 +3,7 @@
     session: null,
     accounts: [],
     summary: null,
+    entryInitialSnapshot: null,
     dateDraft: null,
     dateWheelTarget: null,
     dateWheelMode: "date",
@@ -85,6 +86,10 @@
       document.getElementById(button.dataset.closeDialog).close();
     }));
     el["entry-dialog"].addEventListener("click", closeEntryFromDesktopBackdrop);
+    el["entry-dialog"].addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeEntryDialog();
+    });
     el["entries-body"].addEventListener("click", handleEntryAction);
     el["settlements-card"].addEventListener("click", openSettlements);
     el["settlements-body"].addEventListener("click", handleSettlementAction);
@@ -306,6 +311,7 @@
     el["settlement-direction"].value = settlement?.direction || "incoming";
     el["settlement-method"].value = settlement?.method === "unspecified" ? "other" : (settlement?.method || "bank_transfer");
     updateEntryMode();
+    state.entryInitialSnapshot = entryFormSnapshot();
     el["entry-dialog"].showModal();
   }
 
@@ -614,8 +620,18 @@
     closeEntryDialog();
   }
 
+  function entryFormSnapshot() {
+    return JSON.stringify([...el["entry-form"].querySelectorAll("input, select, textarea")].map((field) => [
+      field.id,
+      field.type === "checkbox" || field.type === "radio" ? field.checked : field.value
+    ]));
+  }
+
   function closeEntryDialog() {
-    if (el["entry-dialog"]?.open) el["entry-dialog"].close();
+    if (!el["entry-dialog"]?.open) return;
+    if (entryFormSnapshot() !== state.entryInitialSnapshot
+      && !confirm("入力内容が保存されていません。破棄して閉じますか？")) return;
+    el["entry-dialog"].close();
   }
 
   function applyDateWheel() {
