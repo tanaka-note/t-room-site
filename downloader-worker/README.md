@@ -46,7 +46,7 @@ Cloudflare ContainersはWorkers Paid契約とDockerが必要です。Container�
 
 ## ClamAV・YARAとContainer更新
 
-ClamAV 1.4.6 LTSをchecksum固定した公式packageから導入します。定義はContainer起動時に外部更新せず、image build時の同版`freshclam`を必須にしてimageへ固定します。週次または緊急更新時は`wrangler.jsonc`の`containers[0].image_vars.CLAMAV_DEFINITION_REFRESH`を現在のJST ISO週（例: `2026-W36`）へ進めてください。この値が定義更新layerだけを確実にcache bustします。同じ値での再buildは意図的にcacheを再利用します。
+ClamAV 1.4.6 LTSをchecksum固定した公式packageから導入します。定義はContainer起動時に外部更新せず、image build時の同版`freshclam`を必須にしてimageへ固定します。日次自動更新・期限前通知は[定義更新手順](DEFINITION-UPDATES.md)に従います。通常のコード公開・緊急手動build時は`wrangler.jsonc`の`containers[0].image_vars.CLAMAV_DEFINITION_REFRESH`を当日の固有値（例: `2026-09-06-manual-1`）へ進めてください。この値が定義更新layerだけを確実にcache bustします。同じ値での再buildは意図的にcacheを再利用します。
 
 `main`、`daily`、`bytecode`を個別に存在・署名検証し、鮮度は`daily.cvd/.cld`内部のbuild timestampだけで判定します。いずれかの欠落・署名異常、dailyの7日超、scanner timeout・異常終了は`/health`と実スキャンの両方でfail closedです。`clamd`は2 GiBの`MaxFileSize`・`MaxScanSize`・`PCREMaxFileSize`、再帰・展開・PCRE・bytecode上限と`AlertExceedsMax`を明示します。さらに64 MiB単位（1 MiB overlap）の全域stream scanを重ね、部分検査や上限超過をclean扱いしません。通常検査はexit code 0だけでなく対象ファイルの明示的な`OK`応答を必須にします。分割検査は元ファイルと同じ構造・offset解釈ではないため、同等性を確認できるまで維持します。
 

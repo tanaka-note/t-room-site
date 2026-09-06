@@ -41,7 +41,7 @@
     ]
   },
   "triggers": {
-    "crons": ["41 18 * * *"]
+    "crons": ["41 18 * * *", "17 * * * *"]
   },
   "vars": {
     "RP_ID": "tanaka-note.com",

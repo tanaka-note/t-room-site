@@ -1,0 +1,43 @@
+name: ClamAV daily definitions
+on:
+  schedule:
+    - cron: '37 19 * * *' # 04:37 JST, once per day
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: clamav-definition-update
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: node downloader-worker/tools/refresh-definitions.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}
+  notify:
+    needs: update
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: clamav-definition-notification
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: node downloader-worker/tools/monitor-definitions.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}

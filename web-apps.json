@@ -192,7 +192,7 @@
       "publicUrls": ["https://tanaka-note.com/security/"],
       "entrypoints": ["security-worker/public/index.html"],
       "buildRoots": ["security-worker/public"],
-      "buildFiles": ["security-worker/src/index.js", "security-worker/src/security-domain.js", "security-worker/src/security-headers.js"],
+      "buildFiles": ["security-worker/src/index.js", "security-worker/src/security-domain.js", "security-worker/src/security-headers.js", "security-worker/src/definition-status.js"],
       "buildMode": "content-hash",
       "serviceWorker": null,
       "manifest": null,

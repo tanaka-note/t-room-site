@@ -590,6 +590,8 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#bootstrap-password").fill(dummyPassword);
     await unsupported.getByRole("button", { name: "端末のロック解除を登録" }).click();
     await unsupported.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
+    assert.match(await unsupported.locator("#clamav-definitions").textContent(), /状態を取得できません/);
+    assert.doesNotMatch(await unsupported.locator("#clamav-definitions").textContent(), /定義は有効/);
     assert.equal(await unsupported.locator("#admin-view").isVisible(), true, `${name}: PRF unsupported must not block Security Center`);
     assert.match(await unsupported.locator("#dashboard-panel .active-users").textContent(), /第一管理者.*T-Cloud.*日記/s,
       `${name}: dashboard summarizes the services with currently valid sessions`);
@@ -598,8 +600,15 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await unsupported.locator("#tcloud-setup-resume").isVisible(), false, `${name}: PRF unsupported must not promise a retry`);
     assert.match(await unsupported.locator("#message").textContent(), /セキュリティセンター・日記・請求書のパスキー登録は完了しました/);
     assert.equal(registeredCredentialCount, 1);
+    await unsupported.route('**/security/api/dashboard*', async route => {
+      const response = await route.fetch(); const body = await response.json();
+      body.clamavDefinitions = { issues: ['expiring'], generatedAt: 1788503145, expiresAt: 1789107945, verifiedAt: 1788693970, result: 'failed', failures: 2 };
+      await route.fulfill({ response, json: body });
+    });
     await unsupported.reload({ waitUntil: "load" });
     await unsupported.locator("#dashboard-panel .stats").waitFor();
+    assert.match(await unsupported.locator("#clamav-definitions").textContent(), /5日以上.*2026.*更新失敗.*連続失敗 2回/s);
+    await unsupported.unroute("**/security/api/dashboard*");
     assert.equal(await unsupported.locator("#tcloud-setup-notice").isVisible(), true, `${name}: warning survives reload without blocking admin UI`);
     assert.equal(registeredCredentialCount, 1, `${name}: reload must not create a second credential`);
     await unsupported.getByRole("button", { name: "履歴", exact: true }).click();

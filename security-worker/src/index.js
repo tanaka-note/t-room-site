@@ -1,3 +1,4 @@
+import { readDefinitionStatus, monitorDefinitions } from "./definition-status.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue } from "../../assets/session-policy.mjs";
 import {
@@ -92,7 +93,8 @@ export default class SecurityWorker extends WorkerEntrypoint {
     }
   }
 
-  async scheduled() {
+  async scheduled(event) {
+    if (event?.cron === "17 * * * *") return monitorDefinitions(this.env);
     const retentionDays = clampNumber(this.env.AUDIT_RETENTION_DAYS, 30, 730, 180);
     const retentionCutoff = auditRetentionCutoff(retentionDays);
     await this.env.DB.batch([
@@ -103,6 +105,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
       this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
       this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < ?").bind(retentionCutoff)
     ]);
+    await monitorDefinitions(this.env);
   }
 
   async redeemHandoff(token, service) {
@@ -731,7 +734,7 @@ async function dashboard(env) {
     FROM security_identities i
     WHERE i.status != 'disabled'`).first();
   const sessionState = await activeSessionState(env);
-  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0), activeUsers: sessionState.users });
+  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0), activeUsers: sessionState.users, clamavDefinitions: await readDefinitionStatus(env) });
 }
 
 async function activeSessionState(env, identityId = null) {
