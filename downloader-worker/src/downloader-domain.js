@@ -9,7 +9,7 @@ const BLOCKED_HOSTS = new Set([
 
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_SPACE_BYTES = 512 * 1024 * 1024;
-export const DOWNLOAD_TTL_SECONDS = 12 * 60 * 60;
+export const DOWNLOAD_TTL_SECONDS = 60 * 60;
 export const ORPHAN_OBJECT_GRACE_MS = 15 * 60 * 1000;
 export const QUEUE_MAX_RETRIES = 3;
 
@@ -214,7 +214,7 @@ export function isPolicyRestrictedHost(hostname) {
 }
 
 export function isPolicyRestrictedAnalysis(analysis) {
-  const value = analysis && typeof analysis === "object" ? analysis : {};
+  const value = analysis && typeof analysis === "object" && !Array.isArray(analysis) ? analysis : {};
   if ([value.hostname, value.finalHostname].some((hostname) => isPolicyRestrictedHost(hostname))) return true;
   const descriptor = `${String(value.site || "")} ${String(value.extractor || "")}`.toLowerCase();
   return descriptor.includes("youtube");
