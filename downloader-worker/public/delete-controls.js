@@ -140,8 +140,9 @@
   }
 
   function normalizeExpiryCopy(node) {
-    if (!node.textContent) return;
-    node.textContent = node.textContent.replace("最大12時間で自動削除", "最大1時間で自動削除");
+    const current = node.textContent || "";
+    const next = current.replace("最大12時間で自動削除", "最大1時間で自動削除");
+    if (next !== current) node.textContent = next;
   }
 
   function showDeleteError(message) {
