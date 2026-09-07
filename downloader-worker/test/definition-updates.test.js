@@ -138,6 +138,7 @@ test('explicit code release verifies local browser fixtures before rollout and u
     const build=calls.find(x=>x[0]==='build');
     assert.ok(build.includes(`CLAMAV_DEFINITION_REFRESH=${h.row().run_id}`));
     assert.ok(calls.some(x=>x.includes('test_main_video.py') && x.includes('none')));
+    assert.ok(calls.find(x=>x.includes('test_main_video.py')).includes('HOME=/work'));
     assert.equal(h.row().source_image,next);
     assert.equal(h.row().image,next);
   } finally {h.db.close()}

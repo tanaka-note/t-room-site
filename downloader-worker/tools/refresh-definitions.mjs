@@ -11,6 +11,9 @@ function command(args, options = {}) {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 20 * 60 * 1000, maxBuffer: 8 * 1024 * 1024, ...options });
   // Subprocess stderr can include registry credentials/URLs. Report fixed codes.
   if (result.status !== 0) {
+    // Only this repository-owned, offline fixture suite: its diagnostics do
+    // not contain remote URLs, registry credentials, or user content.
+    if (args.includes('test_main_video.py')) console.error(String(result.stderr || '').slice(-8000));
     const phase = ['login', 'build', 'run', 'push', 'image'].includes(args[0]) ? args[0] : 'command';
     throw new Error(`definition_docker_${phase}_failed`);
   }
@@ -63,7 +66,9 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
       const context = resolve(directory, '../container');
       run(['build', '--platform', 'linux/amd64', '-f', join(context, 'Dockerfile'), '--build-arg', `CLAMAV_DEFINITION_REFRESH=${runId}`, '-t', temporaryTag, context]);
       console.log('Verifying small local browser fixtures and process cleanup offline');
-      run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', '-e', 'MAIN_VIDEO_TEST_BROWSER=/usr/bin/chromium', temporaryTag, '-m', 'unittest', 'discover', '-s', '/app/tests', '-p', 'test_main_video.py']);
+      // Production run_phase supplies a job-local writable HOME. The direct
+      // fixture runner also needs one (the image user's home is /nonexistent).
+      run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', '-e', 'HOME=/work', '-e', 'XDG_CONFIG_HOME=/work', '-e', 'XDG_CACHE_HOME=/work', '-e', 'MAIN_VIDEO_TEST_BROWSER=/usr/bin/chromium', temporaryTag, '-m', 'unittest', 'discover', '-s', '/app/tests', '-p', 'test_main_video.py']);
     } else {
       console.log('Building definition candidate from the deployed code base');
       run(['build', '--platform', 'linux/amd64', '-f', join(directory, 'definitions.Dockerfile'), '--build-arg', `BASE_IMAGE=${source}`, '--build-arg', `REFRESH_ID=${runId}`, '-t', temporaryTag, directory]);
