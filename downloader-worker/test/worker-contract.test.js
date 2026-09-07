@@ -5,9 +5,11 @@ import test from "node:test";
 const worker = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const client = await readFile(new URL("../public/downloader.js", import.meta.url), "utf8");
+const deleteControls = await readFile(new URL("../public/delete-controls.js", import.meta.url), "utf8");
 const resolver = await readFile(new URL("../container/resolver.py", import.meta.url), "utf8");
 const imageShareAdapter = await readFile(new URL("../container/adapters/image_share.py", import.meta.url), "utf8");
 const config = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
+const lifecycle = JSON.parse(await readFile(new URL("../r2-lifecycle.json", import.meta.url), "utf8"));
 const migration = await readFile(new URL("../migrations/0001_downloader_foundation.sql", import.meta.url), "utf8");
 const usageMigration = await readFile(new URL("../migrations/0002_downloader_usage_stats.sql", import.meta.url), "utf8");
 const progressMigration = await readFile(new URL("../migrations/0003_downloader_progress_metrics.sql", import.meta.url), "utf8");
@@ -74,7 +76,7 @@ test("ユーザー分離と一回限りhandoffを既存Security境界へ委譲�
   assert.doesNotMatch(worker, /password_login|login_password/);
 });
 
-test("R2確定後に12時間削除をQueueへ予約し期限内の再取得を提供する", () => {
+test("R2確定後は1時間で多重削除し明示削除を通常取得経路から分離する", () => {
   assert.match(worker, /delaySeconds/);
   assert.match(worker, /DOWNLOAD_TTL_SECONDS/);
   assert.match(worker, /cleanupExpiredJobs/);
@@ -100,12 +102,22 @@ test("R2確定後に12時間削除をQueueへ予約し期限内の再取得を�
   assert.match(worker, /normalization_mode = \?/);
   assert.match(client, /job-download/);
   assert.match(client, /再ダウンロード/);
-  assert.match(client, /最大12時間/);
+  assert.match(html, /id="file-delete"/);
+  assert.match(html, /一時ファイルを削除/);
+  assert.match(deleteControls, /\/delete/);
+  assert.match(deleteControls, /status === "deleted"/);
+  assert.match(deleteControls, /RETRY_DELAYS_MS/);
+  assert.match(deleteControls, /最大1時間で自動削除/);
+  assert.match(deleteControls, /refresh-jobs/);
   assert.match(progressMigration, /progress_stage/);
-  assert.equal(config.vars.DOWNLOAD_TTL_SECONDS, "43200");
+  assert.equal(config.vars.DOWNLOAD_TTL_SECONDS, "3600");
+  assert.equal(lifecycle.rules[0].deleteObjectsTransition.condition.maxAge, 3600);
+  assert.equal(lifecycle.rules[0].abortMultipartUploadsTransition.condition.maxAge, 3600);
   const fileDelivery = worker.slice(worker.indexOf("async function serveDownload("), worker.indexOf("async function deleteOwnedJob("));
   assert.match(fileDelivery, /env\.DOWNLOADS\.get\(row\.object_key\)/);
   assert.doesNotMatch(fileDelivery, /DOWNLOADS\.delete|status = 'deleted'/, "明示削除または期限切れまでR2成果物を維持する");
+  const processing = worker.slice(worker.indexOf("async function processDownloadMessage("), worker.indexOf("// Only the attempt that committed"));
+  assert.doesNotMatch(processing, /deleteOwnedJob|deleteJobObject/, "削除処理を通常の取得・検査経路へ混ぜない");
 });
 
 test("Queue失敗は4回目でD1をfailedにしてackせずDLQへ委譲する", () => {

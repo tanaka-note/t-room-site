@@ -8,13 +8,13 @@
       },
       "deleteObjectsTransition": {
         "condition": {
-          "maxAge": 86400,
+          "maxAge": 3600,
           "type": "Age"
         }
       },
       "abortMultipartUploadsTransition": {
         "condition": {
-          "maxAge": 86400,
+          "maxAge": 3600,
           "type": "Age"
         }
       }

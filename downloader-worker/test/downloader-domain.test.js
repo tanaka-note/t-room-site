@@ -55,8 +55,8 @@ test("公開jobから内部取得capabilityとsource pathを除外する", () =>
   assert.equal(publicJob({ ...job, id: "invalid", status: "processing", source_hostname: "media.example", progress_stage: "<script>", analysis_json: "{}" }).progressStage, null);
 });
 
-test("R2成果物は12時間だけ保持する", () => {
-  assert.equal(DOWNLOAD_TTL_SECONDS, 12 * 60 * 60);
+test("R2成果物は1時間だけ保持する", () => {
+  assert.equal(DOWNLOAD_TTL_SECONDS, 60 * 60);
 });
 
 test("作成直後のR2成果物をorphan cleanupから保護する", () => {

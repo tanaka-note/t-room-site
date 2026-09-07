@@ -6,10 +6,10 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#090c18">
-  <meta name="troom-app-build" content="downloader-338060f18de8">
+  <meta name="troom-app-build" content="downloader-c6b944a93149">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain Downloader</title>
-  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-338060f18de8">
+  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-c6b944a93149">
 </head>
 <body>
   <main class="shell">
@@ -67,6 +67,8 @@
         <p>既知の脅威は検出されませんでした。安全性を完全に保証するものではありません。</p>
         <dl id="file-details" class="details"></dl>
         <a id="file-download" class="primary download-link" download>ファイルをダウンロード</a>
+        <button id="file-delete" class="text-button" type="button">一時ファイルを削除</button>
+        <p class="expiry">ダウンロード完了後は削除してください。削除後は再ダウンロードできません。</p>
         <p id="expiry-note" class="expiry"></p>
       </section>
 
@@ -100,8 +102,9 @@
       </section>
     </section>
   </main>
-  <script src="/security/passkey-client.js?v=downloader-338060f18de8"></script>
-  <script src="/downloader/downloader.js?v=downloader-338060f18de8"></script>
-  <script src="/assets/pwa-auto-update.js?v=downloader-338060f18de8" defer></script>
+  <script src="/security/passkey-client.js?v=downloader-c6b944a93149"></script>
+  <script src="/downloader/downloader.js?v=downloader-c6b944a93149"></script>
+  <script src="/downloader/delete-controls.js?v=downloader-c6b944a93149"></script>
+  <script src="/assets/pwa-auto-update.js?v=downloader-c6b944a93149" defer></script>
 </body>
 </html>
