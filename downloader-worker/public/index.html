@@ -67,6 +67,8 @@
         <p>既知の脅威は検出されませんでした。安全性を完全に保証するものではありません。</p>
         <dl id="file-details" class="details"></dl>
         <a id="file-download" class="primary download-link" download>ファイルをダウンロード</a>
+        <button id="file-delete" class="text-button" type="button">一時ファイルを削除</button>
+        <p class="expiry">ダウンロード完了後は削除してください。削除後は再ダウンロードできません。</p>
         <p id="expiry-note" class="expiry"></p>
       </section>
 
@@ -102,6 +104,7 @@
   </main>
   <script src="/security/passkey-client.js?v=downloader-338060f18de8"></script>
   <script src="/downloader/downloader.js?v=downloader-338060f18de8"></script>
+  <script src="/downloader/delete-controls.js?v=downloader-338060f18de8"></script>
   <script src="/assets/pwa-auto-update.js?v=downloader-338060f18de8" defer></script>
 </body>
 </html>
