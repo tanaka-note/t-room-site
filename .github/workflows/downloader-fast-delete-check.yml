@@ -1,0 +1,72 @@
+name: Downloader fast-delete branch check
+
+on:
+  push:
+    branches:
+      - work/downloader-fast-delete
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/downloader-fast-delete
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: downloader-worker/pnpm-lock.yaml
+
+      - name: Install Downloader dependencies
+        run: pnpm -C downloader-worker install --frozen-lockfile
+
+      - name: Syntax and lightweight checks
+        run: pnpm -C downloader-worker check
+
+      - name: Focused regression tests
+        run: node --test downloader-worker/test/downloader-domain.test.js downloader-worker/test/worker-contract.test.js
+
+      - name: Wrangler dry run
+        run: pnpm -C downloader-worker deploy:dry
+
+      - name: Sync Downloader build marker only
+        run: |
+          node --input-type=module <<'NODE'
+          import { loadWebAppRegistry, syncContentHashApp, expectedBuild } from './tools/web-app-registry.mjs';
+          import { readFile } from 'node:fs/promises';
+          const registry = await loadWebAppRegistry();
+          const app = registry.apps.find((item) => item.id === 'downloader');
+          if (!app) throw new Error('downloader registry entry missing');
+          const result = await syncContentHashApp(app, registry.contract);
+          const expected = await expectedBuild(app, registry.contract);
+          const html = await readFile(app.entrypoints[0], 'utf8');
+          if (!html.includes(`name="${registry.contract.buildMeta}" content="${expected}"`)) {
+            throw new Error(`downloader build marker mismatch: ${expected}`);
+          }
+          console.log(JSON.stringify({ result, expected }));
+          NODE
+
+      - name: Diff safety check
+        run: git diff --check
+
+      - name: Commit synced Downloader build marker
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add downloader-worker/public/index.html
+          if git diff --cached --quiet; then
+            echo "Downloader build marker already synchronized."
+          else
+            git commit -m "chore(downloader): sync app build marker"
+            git push origin HEAD:work/downloader-fast-delete
+          fi
