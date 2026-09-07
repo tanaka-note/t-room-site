@@ -52,6 +52,8 @@ Security Workerが毎時17分にD1記録だけを監視する。Containerを起�
 
 通常のContainerコード公開でも手動buildの `CLAMAV_DEFINITION_REFRESH` を当日の固有値へ進める。通常公開後は自動更新を手動実行し、新しいコードbaseの検証済み記録へ更新する。Workerだけの公開では `--containers-rollout=none` を用い、定義imageを古いbuildへ戻さない。
 
+Dockerを使えない開発環境では、`ClamAV daily definitions` の手動入力 `release_code=true` でcheckoutしたDownloaderコードをbuild・offline検証し、同じlease/job/rollout確認を経て公開できる（詳細はDownloader README）。このモードは成功時に新しいimageを`source_image`にも設定するので、直後に通常の日次更新を重ねて実行する必要はない。定期scheduleの動作は従来の定義更新のみ。
+
 参考: [Cloudflare rolloutの完了・drain](https://developers.cloudflare.com/containers/configuration/rollouts/)、[API token権限](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)、[GitHub通知](https://docs.github.com/en/subscriptions-and-notifications/concepts/about-notifications)、[Actions課金](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
 
 ## 切り戻し
