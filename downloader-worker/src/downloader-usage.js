@@ -95,6 +95,7 @@ export function aggregateUsageRows(rows = []) {
     fileDeliveryStarts: 0,
     deleted: 0,
     expired: 0,
+    cancelled: 0,
     sourceBytes: 0,
     r2StoredBytes: 0,
     deliveredBytes: 0,
@@ -119,6 +120,7 @@ export function aggregateUsageRows(rows = []) {
     else if (metric === "delivery" && dimension === "started") { value.fileDeliveryStarts += count; value.deliveredBytes += bytes; }
     else if (metric === "lifecycle" && dimension === "deleted") value.deleted += count;
     else if (metric === "lifecycle" && dimension === "expired") value.expired += count;
+    else if (metric === "lifecycle" && dimension === "cancelled") value.cancelled += count;
     else if (metric === "bytes" && dimension === "source") value.sourceBytes += bytes;
     else if (metric === "bytes" && dimension === "r2_stored") value.r2StoredBytes += bytes;
     else if (metric === "outcome" && dimension === "rejected") value.rejected += count;

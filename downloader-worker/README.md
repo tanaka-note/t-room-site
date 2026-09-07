@@ -92,3 +92,17 @@ Dockerが使える環境ではContainer imageをbuildし、実ffmpeg/ffprobe/Cla
 公開は処理中・待機中ジョブを確認し、`pnpm exec wrangler d1 migrations apply downloader-db --remote`で0004を先に適用後、Container変更がないため`pnpm exec wrangler deploy --containers-rollout=none`でWorkerだけを更新する。切り戻しは旧Worker `ecc44ac9-ea15-42e0-9751-1744f88b5a95`へ戻せる（追加列は後方互換、Containerは変更なし）。0004は削除せず履歴を保持する。旧Workerへ戻すと最終補正・新表示は停止し、新規の最終値は暫定扱いになるため、復旧後に推測で加算しない。
 
 検証: Node 52件PASS、Windows Python 112件中87件PASS・外部ツール依存25件skip。ffprobe異常終了はmockで再現し実エンジン試験とは区別する。SQLite実行で旧未補正、最終補正、日付またぎ、異なる利用者、CAS競合、R2 upload再送、transaction rollback、履歴保持を確認した。Containerコードは変更せず、通常動画や大容量の本番取得試験は追加しない。全サイト契約テストのcalculator既存build不一致は今回の回帰と分離する。
+
+## URL解析の中止
+
+解析画面と最近の処理の「中止する」は、認証済み・同一OriginのJSON POST `/downloader/api/jobs/:jobId/cancel` を使用する。所有者の `analyzing` 行をCASで `cancelled` に確定してtoken・lease・progressを消去した後、`analysis-{jobId}` の専用RPCで実行中Containerを強制停止する。`cancelled_at` は中止確定、`cancel_stop_completed_at` は停止RPC完了の記録であり、Cloudflareの課金終了時刻ではない。
+
+DOにも永続的な中止記録を残し、起動待ちのfetchをabortしてdestroyする。停止前から進行中だった起動が遅れて終了する場合に備え、待機中fetchの終了後にもdestroyする。通常の完了時は従来どおりrelease/stopを使用する。ジョブIDは再利用しない。中止済みQueue配送は再解析せずackし、遅い解析結果は既存のstatus/token CASにより破棄する。停止確認に失敗してもD1の中止は取り消さず、履歴の中止ボタンで停止だけを再試行できる。監査イベントは `downloader_analyze_cancelled`、集計は `lifecycle/cancelled` とし、失敗には加算しない。
+
+解析leaseはready 90秒 + adapter 60秒 + analyze 120秒 + 終了処理余裕60秒から330秒を算出する。各処理のtimeoutとQueue再試行回数は延長しない。
+
+追加migration `0005_downloader_analysis_cancel.sql` は状態CHECKを更新するためテーブルを再作成する。既存ジョブ全列・配信履歴・利用集計・既存triggerを維持し、配信履歴を復元してからtriggerを戻すため再集計しない。公開前に稼働ジョブと適用済みmigrationを確認し、D1 Time Travel bookmarkを控え、Wrangler migrationで0005を先に適用する。Workerのみ `wrangler deploy --containers-rollout=none` で公開し、現行Container imageを維持する。
+
+切り戻しは公開前に控えたWorker versionへ戻す。0005の追加状態・列と既存履歴は残す。旧Workerでもcancelledは解析再開対象にならないが、中止UIと停止再試行APIがなくなるため、停止未確認ジョブがある場合は旧版へ戻す前に今回のRPCで停止を完了させる。Container imageの切り戻しは不要。Time TravelによるDB全体の巻き戻しは新しい履歴を失うため通常の切り戻しには使用しない。
+
+対象検証: `node --test test/downloader-cancellation.test.js`（SQLite・Container mock）、`node test/downloader-cancellation.browser.mjs`（Chromium・mock API）。実Containerを起動するテストではない。

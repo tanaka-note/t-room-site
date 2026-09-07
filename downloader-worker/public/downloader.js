@@ -7,13 +7,16 @@
     "analyze-button", "analysis-view", "analysis-title", "analysis-method", "source-details",
     "analysis-warning", "download-form", "media-list", "rights-confirmed", "youtube-rights-notice",
     "youtube-rights-confirmed", "download-button",
-    "progress-view", "progress-label", "ready-view", "file-details", "file-download", "expiry-note",
+    "progress-view", "progress-label", "cancel-analysis", "ready-view", "file-details", "file-download", "expiry-note",
     "usage-section", "refresh-usage", "usage-periods", "usage-summary", "usage-alert",
     "usage-normalizations", "usage-security", "usage-capacity", "usage-daily", "usage-pricing", "usage-notes",
     "job-list", "refresh-jobs"
   ].map((id) => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.getElementById(id)]));
   let currentJob = null;
   let pollTimer = 0;
+  let viewGeneration = 0;
+  let historyGeneration = 0;
+  const cancellingJobs = new Set();
   let usageData = null;
   let usagePeriod = "today";
 
@@ -38,6 +41,7 @@
     elements.sourceUrl.addEventListener("input", updateYoutubeConfirmation);
     elements.downloadForm.addEventListener("submit", requestDownload);
     elements.refreshJobs.addEventListener("click", loadJobs);
+    elements.cancelAnalysis.addEventListener("click", () => { if (currentJob) cancelAnalysis(currentJob.id); });
     elements.refreshUsage.addEventListener("click", loadUsage);
     elements.usagePeriods.addEventListener("click", selectUsagePeriod);
     elements.fileDownload.addEventListener("click", prepareDownloadAttempt);
@@ -59,8 +63,7 @@
 
   async function logout() {
     try { await api("/logout", { method: "POST", body: {} }); } catch { /* local state is cleared either way */ }
-    clearTimeout(pollTimer);
-    currentJob = null;
+    clearViews();
     showLogin();
   }
 
@@ -80,6 +83,7 @@
       else {
         elements.progressView.hidden = false;
         elements.progressLabel.textContent = "URLを解析しています";
+        updateCancelButtons();
         pollJob();
       }
       await loadJobs();
@@ -117,9 +121,23 @@
   async function pollJob() {
     clearTimeout(pollTimer);
     if (!currentJob) return;
+    const jobId = currentJob.id;
+    const generation = viewGeneration;
     try {
-      const result = await api(`/jobs/${encodeURIComponent(currentJob.id)}`);
+      const result = await api(`/jobs/${encodeURIComponent(jobId)}`);
+      if (generation !== viewGeneration || currentJob?.id !== jobId) return;
       currentJob = result.job;
+      updateCancelButtons();
+      if (currentJob.status === "cancelled") {
+        if (currentJob.cancelStopCompletedAt) {
+          clearViews();
+          showMessage("解析を中止しました。");
+        } else {
+          elements.progressLabel.textContent = "中止中… 停止未確認の場合は中止ボタンで再試行してください。";
+        }
+        await loadJobs();
+        return;
+      }
       if (currentJob.status === "analyzed") {
         elements.progressView.hidden = true;
         renderAnalysis(currentJob);
@@ -140,8 +158,43 @@
       elements.progressLabel.textContent = progressLabel(currentJob);
       pollTimer = window.setTimeout(pollJob, 2000);
     } catch (error) {
+      if (generation !== viewGeneration || currentJob?.id !== jobId) return;
       showMessage(error.message);
       pollTimer = window.setTimeout(pollJob, 5000);
+    }
+  }
+
+  function canCancel(job) {
+    return job?.status === "analyzing" || (job?.status === "cancelled" && !job.cancelStopCompletedAt);
+  }
+
+  function updateCancelButtons() {
+    elements.cancelAnalysis.hidden = !canCancel(currentJob);
+    elements.cancelAnalysis.dataset.cancelJob = currentJob?.id || "";
+    for (const button of document.querySelectorAll("[data-cancel-job]")) {
+      const busy = cancellingJobs.has(button.dataset.cancelJob);
+      setBusy(button, busy, busy ? "中止中…" : "中止する");
+    }
+  }
+
+  async function cancelAnalysis(jobId) {
+    if (cancellingJobs.has(jobId)) return;
+    cancellingJobs.add(jobId);
+    if (currentJob?.id === jobId) { ++viewGeneration; clearTimeout(pollTimer); }
+    updateCancelButtons();
+    try {
+      await api(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: {} });
+      if (currentJob?.id === jobId) clearViews();
+      showMessage("解析を中止しました。");
+      await loadJobs();
+    } catch (error) {
+      showMessage(error.message);
+      // Refresh committed state even when only Container stop confirmation failed.
+      if (currentJob?.id === jobId) pollJob();
+      await loadJobs();
+    } finally {
+      cancellingJobs.delete(jobId);
+      updateCancelButtons();
     }
   }
 
@@ -196,8 +249,10 @@
   }
 
   async function loadJobs() {
+    const generation = ++historyGeneration;
     try {
       const result = await api("/jobs");
+      if (generation !== historyGeneration) return;
       elements.jobList.replaceChildren();
       if (!result.jobs?.length) {
         const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "処理履歴はありません。"; elements.jobList.append(empty); return;
@@ -211,6 +266,14 @@
         const status = document.createElement("span"); status.className = "job-status";
         status.textContent = job.status === "ready" && !isDownloadAvailable(job) ? "期限終了" : statusLabel(job.status);
         actions.append(status);
+        if (canCancel(job)) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.cancelJob = job.id;
+          setBusy(button, cancellingJobs.has(job.id), cancellingJobs.has(job.id) ? "中止中…" : "中止する");
+          button.addEventListener("click", () => cancelAnalysis(job.id));
+          actions.append(button);
+        }
         if (isDownloadAvailable(job)) {
           const link = document.createElement("a");
           link.className = "job-download";
@@ -276,6 +339,7 @@
       ["R2へ保存", sizeText(usage.r2StoredBytes)],
       ["利用者へ配信", sizeText(usage.deliveredBytes)],
       ["利用者による削除", countText(usage.deleted)],
+      ["利用者による解析中止", countText(usage.cancelled)],
       ["期限切れ", countText(usage.expired)]
     ]);
     const alerts = usageData.signals?.alerts || [];
@@ -333,7 +397,7 @@
 
   function showLogin() { elements.loginView.hidden = false; elements.appView.hidden = true; elements.usageSection.hidden = true; elements.logout.hidden = true; }
   function showApp(isParent = false) { elements.loginView.hidden = true; elements.appView.hidden = false; elements.usageSection.hidden = !isParent; elements.logout.hidden = false; hideMessage(); }
-  function clearViews() { clearTimeout(pollTimer); currentJob = null; elements.analysisView.hidden = true; elements.progressView.hidden = true; elements.readyView.hidden = true; }
+  function clearViews() { ++viewGeneration; clearTimeout(pollTimer); currentJob = null; elements.analysisView.hidden = true; elements.progressView.hidden = true; elements.readyView.hidden = true; updateCancelButtons(); }
   function showMessage(text) { elements.message.textContent = String(text || "処理を完了できませんでした。"); elements.message.hidden = false; }
   function hideMessage() { elements.message.hidden = true; elements.message.textContent = ""; }
   function setBusy(button, busy, label) { button.disabled = busy; button.textContent = label; }
@@ -363,7 +427,7 @@
   function normalizationLabel(value) { return ({ PASS_THROUGH: "そのまま", REMUX: "無劣化Remux", PARTIAL_TRANSCODE: "非互換部分のみ変換", FULL_TRANSCODE: "MP4へ再エンコード", NOT_APPLICABLE: "変換なし" })[value] || "実体検査済み"; }
   function securityLabel(value) { return ({ malware_detected: "Malware検知", yara_detected: "YARA検知", clamav_error: "ClamAV異常", yara_error: "YARA異常", scanner_timeout: "Scanner timeout", scanner_unavailable: "Scanner停止", file_type_mismatch: "形式不一致", malformed_media: "破損メディア", processing_budget_exceeded: "処理予算超過", deadline_exceeded: "Deadline超過", ssrf_rejected: "SSRF拒否", rate_limited: "Rate limit", other_reject: "その他拒否", other_failed: "その他失敗" })[value] || value; }
   function mediaSummary(media) { return [media.mediaType === "audio" ? "音声" : media.mediaType === "image" ? "画像" : "動画", media.width && media.height ? `${media.width}×${media.height}` : null, media.container?.toUpperCase(), media.videoCodec, media.audioCodec, media.estimatedSize ? sizeText(media.estimatedSize) : "サイズ不明", String(media.delivery || "").toUpperCase(), media.mediaType === "video" ? "最終形式 MP4（方式は実体検査後に決定）" : null].filter(Boolean).join(" · "); }
-  function statusLabel(status) { return ({ analyzing: "解析中", analyzed: "解析済み", queued: "準備中", processing: "取得・検査中", ready: "ダウンロード可能", failed: "失敗", expired: "期限終了", deleted: "削除済み" })[status] || status; }
+  function statusLabel(status) { return ({ analyzing: "解析中", analyzed: "解析済み", queued: "準備中", processing: "取得・検査中", ready: "ダウンロード可能", failed: "失敗", cancelled: "中止済み", expired: "期限終了", deleted: "削除済み" })[status] || status; }
   function userMessage(error) { return error?.name === "PasskeyCancelledError" ? "端末のロック解除がキャンセルされたか、操作の有効期限が切れました。もう一度お試しください。" : error?.message || "パスキー処理を完了できませんでした。"; }
   function isYoutubeAnalysis(value) { const text = `${value.hostname || ""} ${value.finalHostname || ""} ${value.site || ""} ${value.extractor || ""}`.toLowerCase(); return text.includes("youtube") || text.includes("youtu.be") || text.includes("googlevideo.com"); }
   function isYoutubeUrl(value) { try { const host = new URL(value).hostname.toLowerCase().replace(/\.$/, ""); return host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com"); } catch { return false; } }

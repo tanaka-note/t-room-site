@@ -58,6 +58,11 @@ const PRIVATE_DESTINATIONS = Object.freeze([
 // below the request processing windows, but allow enough time for a real cold
 // start instead of spending Queue retries before any media work begins.
 const CONTAINER_HEALTH_TIMEOUT_MS = 90_000;
+const ANALYSIS_ADAPTER_TIMEOUT_MS = 60_000;
+const ANALYSIS_TIMEOUT_MS = 120_000;
+const ANALYSIS_FINALIZATION_MARGIN_MS = 60_000;
+const ANALYSIS_LEASE_SECONDS = Math.ceil((CONTAINER_HEALTH_TIMEOUT_MS + ANALYSIS_ADAPTER_TIMEOUT_MS +
+  ANALYSIS_TIMEOUT_MS + ANALYSIS_FINALIZATION_MARGIN_MS) / 1000);
 const CONTAINER_RESPONSE_GRACE_MS = 20_000;
 const QUEUE_FINALIZATION_RESERVE_MS = 60_000;
 const QUEUE_MAX_WALL_MS = 15 * 60_000;
@@ -73,8 +78,18 @@ export class DownloaderContainer extends Container {
   interceptHttps = true;
   deniedHosts = [...PRIVATE_DESTINATIONS];
   pingEndpoint = "localhost/ready";
+  analysisCancelled = false;
+  cancellationLoaded = null;
+  cancellationController = new AbortController();
+  activeFetches = new Set();
+  cancellationInFlight = null;
 
   async fetch(request) {
+    this.cancellationLoaded ||= this.ctx.storage.get("analysisCancelled");
+    if (await this.cancellationLoaded || this.analysisCancelled) {
+      return new Response("analysis_cancelled", { status: 409 });
+    }
+    request = new Request(request, { signal: AbortSignal.any([request.signal, this.cancellationController.signal]) });
     const longRunning = new URL(request.url).pathname === "/download";
     let activityTimer = null;
     const renewActivity = () => {
@@ -82,11 +97,30 @@ export class DownloaderContainer extends Container {
       if (longRunning) activityTimer = setTimeout(renewActivity, 60_000);
     };
     renewActivity();
+    const pending = this.containerFetch(request);
+    this.activeFetches.add(pending);
     try {
-      return await this.containerFetch(request);
+      return await pending;
     } finally {
+      this.activeFetches.delete(pending);
       if (activityTimer !== null) clearTimeout(activityTimer);
     }
+  }
+
+  async cancelAnalysis() {
+    // Persist the fence before stopping, including across DO eviction/recreation.
+    this.analysisCancelled = true;
+    this.cancellationController.abort();
+    if (!this.cancellationInFlight) {
+      this.cancellationInFlight = (async () => {
+        await this.ctx.storage.put("analysisCancelled", true);
+        await this.destroy();
+        // A startup already awaiting the runtime can finish after the first destroy.
+        await Promise.allSettled([...this.activeFetches]);
+        await this.destroy();
+      })().finally(() => { this.cancellationInFlight = null; });
+    }
+    await this.cancellationInFlight;
   }
 
   async release() {
@@ -155,6 +189,11 @@ export async function handleQueueBatch(batch, env) {
       message.ack();
       await safeRecordUsageItems(env, messageIdentityId, [{ metric: "platform", dimension: "queue_delete", count: 1 }]);
     } catch (error) {
+      if (message.body?.type === "analyze" && await analysisIsCancelled(env, message.body).catch(() => false)) {
+        message.ack();
+        await safeRecordUsageItems(env, messageIdentityId, [{ metric: "platform", dimension: "queue_delete", count: 1 }]);
+        continue;
+      }
       const terminalAttempt = isFinalQueueAttempt(message.attempts, QUEUE_MAX_RETRIES);
       console.error(JSON.stringify({
         event: "downloader_queue_failed",
@@ -253,6 +292,11 @@ async function handleRequest(request, env, context) {
 
   const jobMatch = path.match(/^\/api\/jobs\/([A-Za-z0-9_-]{1,128})$/);
   if (jobMatch && request.method === "GET") return getJob(env, session, jobMatch[1]);
+  const cancelMatch = path.match(/^\/api\/jobs\/([A-Za-z0-9_-]{1,128})\/cancel$/);
+  if (cancelMatch && request.method === "POST") {
+    requireMutation(request, url);
+    return cancelAnalysisJob(request, env, session, cancelMatch[1]);
+  }
   const downloadMatch = path.match(/^\/api\/jobs\/([A-Za-z0-9_-]{1,128})\/download$/);
   if (downloadMatch && request.method === "POST") {
     requireMutation(request, url);
@@ -364,17 +408,17 @@ async function analyzeSource(request, env, session) {
 }
 
 async function processAnalyzeMessage(env, message) {
-  ensureContainerConfigured(env);
   const jobId = String(message.jobId || "");
   const identityId = String(message.identityId || "");
   const row = await env.DB.prepare("SELECT * FROM downloader_jobs WHERE id = ? AND identity_id = ?")
     .bind(jobId, identityId).first();
   if (!row || row.status !== "analyzing") return;
+  ensureContainerConfigured(env);
   const analysisToken = crypto.randomUUID();
   const claim = await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = ?, processing_lease_expires_at = ?,
     updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing'
     AND (processing_token IS NULL OR processing_lease_expires_at IS NULL OR processing_lease_expires_at <= ?)`)
-    .bind(analysisToken, nowSeconds() + 180, jobId, identityId, nowSeconds()).run();
+    .bind(analysisToken, nowSeconds() + ANALYSIS_LEASE_SECONDS, jobId, identityId, nowSeconds()).run();
   if (!claim.meta?.changes) return;
   let container = null;
   try {
@@ -393,10 +437,11 @@ async function processAnalyzeMessage(env, message) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: resolved.url.href, maxBytes: maxFileBytes(env), policyRestricted: isPolicyRestrictedHost(sourceUrl.hostname) }),
-      signal: AbortSignal.timeout(120_000)
+      signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS)
     }));
     const analysis = await response.json().catch(() => ({}));
     if (!response.ok) {
+      if (await analysisIsCancelled(env, message)) return;
       console.error(JSON.stringify({ event: "downloader_container_analyze_failed", errorCode: cleanText(analysis.errorCode, 80) || "unknown", status: response.status }));
       throw new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
     }
@@ -421,10 +466,44 @@ async function processAnalyzeMessage(env, message) {
     await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
       updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing' AND processing_token = ?`)
       .bind(jobId, identityId, analysisToken).run();
+    if (await analysisIsCancelled(env, message)) return;
     throw error;
   } finally {
     if (container) await releaseContainer(container);
   }
+}
+
+async function analysisIsCancelled(env, message) {
+  const row = await env.DB.prepare("SELECT status FROM downloader_jobs WHERE id = ? AND identity_id = ?")
+    .bind(String(message.jobId || ""), String(message.identityId || "")).first();
+  return row?.status === "cancelled";
+}
+
+async function cancelAnalysisJob(request, env, session, jobId) {
+  await ownedJob(env, session.identityId, jobId);
+  const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'cancelled',
+    processing_token = NULL, processing_lease_expires_at = NULL, progress_stage = NULL,
+    cancelled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND identity_id = ? AND status = 'analyzing'`).bind(jobId, session.identityId).run();
+  const row = await ownedJob(env, session.identityId, jobId);
+  if (row.status !== "cancelled") throw new HttpError(409, "解析が終了しているため中止できません。");
+  if (update.meta?.changes) {
+    await audit(env, request, session, "downloader_analyze_cancelled", "success", { jobId });
+  }
+  if (!row.cancel_stop_completed_at) {
+    // Never stop first: the committed D1 state fences late results and Queue delivery.
+    try {
+      ensureContainerConfigured(env);
+      await getContainer(env.DOWNLOADER_CONTAINER, `analysis-${jobId}`).cancelAnalysis();
+    } catch (error) {
+      console.error(JSON.stringify({ event: "downloader_analysis_cancel_stop_failed", jobId, error: safeErrorName(error) }));
+      throw new HttpError(503, "解析の中止は確定しましたが、停止を確認できません。中止ボタンで停止を再試行してください。");
+    }
+    await env.DB.prepare(`UPDATE downloader_jobs SET cancel_stop_completed_at = COALESCE(cancel_stop_completed_at, CURRENT_TIMESTAMP),
+      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'cancelled'`)
+      .bind(jobId, session.identityId).run();
+  }
+  return json({ job: publicJob(await ownedJob(env, session.identityId, jobId)) });
 }
 
 async function requestDownload(request, env, session, jobId) {
@@ -789,10 +868,10 @@ async function deleteOwnedJob(env, session, jobId) {
 
 async function deleteJobObject(env, jobId, finalStatus) {
   const row = await env.DB.prepare("SELECT id, object_key, status FROM downloader_jobs WHERE id = ?").bind(jobId).first();
-  if (!row || row.status === "deleted") return;
+  if (!row || ["deleted", "cancelled"].includes(row.status)) return;
   if (row.object_key) await env.DOWNLOADS.delete(row.object_key);
   await env.DB.prepare(`UPDATE downloader_jobs SET status = ?, object_key = NULL, deleted_at = CURRENT_TIMESTAMP,
-    progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(finalStatus === "expired" ? "expired" : "deleted", jobId).run();
+    progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'cancelled'`).bind(finalStatus === "expired" ? "expired" : "deleted", jobId).run();
 }
 
 async function cleanupExpiredJobs(env) {
@@ -807,7 +886,7 @@ async function cleanupExpiredJobs(env) {
     await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', object_key = NULL, error_type = 'stale_job',
       failure_category = 'other_failed', error_reason = '処理が完了しなかったため終了しました。',
       processing_token = NULL, processing_lease_expires_at = NULL, progress_stage = NULL,
-      updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
+      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('analyzing', 'queued', 'processing')`).bind(row.id).run();
   }
   await env.DB.prepare(`UPDATE downloader_jobs SET analysis_json = '{}', source_path_hint = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE analysis_json != '{}' AND status IN ('analyzed', 'failed', 'rejected', 'expired', 'deleted') AND updated_at < ?`)
@@ -1119,7 +1198,7 @@ async function resolveAnalysisSource(container, sourceUrl, maxBytes) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: sourceUrl.href, maxBytes }),
-    signal: AbortSignal.timeout(60_000)
+    signal: AbortSignal.timeout(ANALYSIS_ADAPTER_TIMEOUT_MS)
   }));
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw containerResponseError(result.errorCode, response.status);

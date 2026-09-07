@@ -126,8 +126,10 @@ test("Queue失敗は4回目でD1をfailedにしてackせずDLQへ委譲する", 
   assert.match(worker, /isFinalQueueAttempt\(message\.attempts, QUEUE_MAX_RETRIES\)/);
   assert.match(worker, /terminalAttempt[\s\S]*markDownloadFailed/);
   assert.match(worker, /Do not acknowledge failures[\s\S]*message\.retry/);
-  const queueFailure = worker.slice(worker.indexOf("} catch (error) {", worker.indexOf("export async function handleQueueBatch")), worker.indexOf("\n    }\n  }\n}", worker.indexOf("export async function handleQueueBatch")));
-  assert.doesNotMatch(queueFailure, /message\.ack\(\)/);
+  const queue = worker.slice(worker.indexOf("export async function handleQueueBatch"), worker.indexOf("export class SecurityIntegration"));
+  assert.match(queue, /type === "analyze" && await analysisIsCancelled[\s\S]*message\.ack\(\)[\s\S]*continue;/);
+  const queueFailure = queue.slice(queue.indexOf("const terminalAttempt"));
+  assert.doesNotMatch(queueFailure, /message\.ack\(\)/, "確定したキャンセル以外の障害はackしない");
 });
 
 test("Containerは最終成果物だけをClamAVとYARAで1回fail-closed検査する", () => {
