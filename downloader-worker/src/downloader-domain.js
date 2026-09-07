@@ -183,6 +183,7 @@ export function publicJob(row) {
     cancelledAt: utc(row.cancelled_at),
     cancelStopCompletedAt: utc(row.cancel_stop_completed_at),
     downloadedAt: utc(row.downloaded_at),
+    deletionConfirmed: !row.object_key && Boolean(row.deleted_at),
     expiresAt: row.expires_at ? new Date(Number(row.expires_at) * 1000).toISOString() : null
   };
 }

@@ -137,7 +137,7 @@ test("actual upload CAS preserves the winning artifact and binds final metrics t
       ...domain, Response, Request, console: { log() {} },
       verifyInternalGrant: async () => ({ jobId: "job", processingToken: "winner", objectKey: "downloads/job/winner", maxBytes: 10000, expiresAt: 1000 }),
       decodeHeaderValue: value => value, normalizeNormalizationMode: () => "PASS_THROUGH", nowSeconds: () => 100,
-      contentDisposition: () => "attachment", safeRecordUsageItems: async () => {}, sendJobMessage: async () => {}, json: body => Response.json(body)
+      downloadTtl: () => 3600, waitUntil() {}, contentDisposition: () => "attachment", safeRecordUsageItems: async () => {}, sendJobMessage: async () => {}, json: body => Response.json(body)
     };
     vm.runInNewContext(source.slice(source.indexOf("async function handleContainerUpload("), source.indexOf("async function listJobs(")) + source.slice(source.indexOf("function safeMetricHeader("), source.indexOf("\n", source.indexOf("function safeMetricHeader("))) + ";this.upload = handleContainerUpload;", uploadContext);
     const request = () => new Request("http://internal/upload", { method: "PUT", body: "safe", headers: {

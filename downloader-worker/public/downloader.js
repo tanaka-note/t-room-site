@@ -247,7 +247,7 @@
     elements.fileDownload.dataset.jobId = job.id;
     elements.fileDownload.href = `/downloader/api/jobs/${encodeURIComponent(job.id)}/file?attempt=${encodeURIComponent(downloadAttemptId())}`;
     elements.fileDownload.setAttribute("download", job.filename || "download");
-    elements.expiryNote.textContent = `保存期限：${dateText(job.expiresAt)}（最大12時間で自動削除）`;
+    elements.expiryNote.textContent = `一時保管期限：${dateText(job.expiresAt)}`;
     elements.readyView.hidden = false;
   }
 
@@ -267,7 +267,8 @@
         const date = document.createElement("small"); date.textContent = dateText(job.createdAt);
         const actions = document.createElement("div"); actions.className = "job-actions";
         const status = document.createElement("span"); status.className = "job-status";
-        status.textContent = job.status === "ready" && !isDownloadAvailable(job) ? "期限終了" : statusLabel(job.status);
+        status.textContent = job.status === "expired" || (job.status === "ready" && !isDownloadAvailable(job))
+          ? (job.deletionConfirmed ? "期限終了（削除確認済み）" : "期限終了（削除未確認）") : statusLabel(job.status);
         actions.append(status);
         if (canCancel(job)) {
           const button = document.createElement("button");

@@ -107,7 +107,9 @@ test("R2確定後は1時間で多重削除し明示削除を通常取得経路�
   assert.match(deleteControls, /\/delete/);
   assert.match(deleteControls, /status === "deleted"/);
   assert.match(deleteControls, /RETRY_DELAYS_MS/);
-  assert.match(deleteControls, /最大1時間で自動削除/);
+  assert.match(client, /一時保管期限/);
+  assert.match(html, /READYになってから1時間後/);
+  assert.doesNotMatch(client + deleteControls, /最大12時間|最大1時間で自動削除|normalizeExpiryCopy/);
   assert.match(deleteControls, /refresh-jobs/);
   assert.match(progressMigration, /progress_stage/);
   assert.equal(config.vars.DOWNLOAD_TTL_SECONDS, "3600");

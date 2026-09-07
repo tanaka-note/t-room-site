@@ -6,10 +6,10 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#090c18">
-  <meta name="troom-app-build" content="downloader-76035605134f">
+  <meta name="troom-app-build" content="downloader-c25bdea516de">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain Downloader</title>
-  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-76035605134f">
+  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-c25bdea516de">
 </head>
 <body>
   <main class="shell">
@@ -69,8 +69,9 @@
         <dl id="file-details" class="details"></dl>
         <a id="file-download" class="primary download-link" download>ファイルをダウンロード</a>
         <button id="file-delete" class="text-button" type="button">一時ファイルを削除</button>
-        <p class="expiry">ダウンロード完了後は削除してください。削除後は再ダウンロードできません。</p>
+        <p class="expiry">ダウンロード済みの場合は「一時ファイルを削除」で即時削除できます。削除後は再ダウンロードできません。</p>
         <p id="expiry-note" class="expiry"></p>
+        <p class="expiry">READYになってから1時間後に再ダウンロード期限が終了し、R2削除処理を開始します。削除処理の完了には時間がかかる場合があります。</p>
       </section>
 
       <section id="usage-section" class="usage-section" aria-labelledby="usage-title" hidden>
@@ -103,9 +104,9 @@
       </section>
     </section>
   </main>
-  <script src="/security/passkey-client.js?v=downloader-76035605134f"></script>
-  <script src="/downloader/downloader.js?v=downloader-76035605134f"></script>
-  <script src="/downloader/delete-controls.js?v=downloader-76035605134f"></script>
-  <script src="/assets/pwa-auto-update.js?v=downloader-76035605134f" defer></script>
+  <script src="/security/passkey-client.js?v=downloader-c25bdea516de"></script>
+  <script src="/downloader/downloader.js?v=downloader-c25bdea516de"></script>
+  <script src="/downloader/delete-controls.js?v=downloader-c25bdea516de"></script>
+  <script src="/assets/pwa-auto-update.js?v=downloader-c25bdea516de" defer></script>
 </body>
 </html>

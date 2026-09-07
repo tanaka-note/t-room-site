@@ -1,5 +1,5 @@
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
   DomainError,
@@ -587,8 +587,10 @@ async function processDownloadMessage(env, message) {
     const routeUrl = normalizeSourceUrl(capability.route.url);
     if (isPolicyRestrictedHost(routeUrl.hostname)) throw new Error("policy_restricted");
     const objectKey = `downloads/${jobId}/${crypto.randomUUID()}`;
-    const expiresAt = nowSeconds() + downloadTtl(env);
-    const grant = await createInternalGrant({ jobId, processingToken, objectKey, expiresAt, maxBytes: maxBytesForRow(env, row) }, env);
+    // Grant expiry bounds upload authorization, not the lifetime of a ready artifact.
+    // Keep the signed wire field for in-flight/rollback compatibility.
+    const uploadGrantExpiresAt = leaseExpiresAt;
+    const grant = await createInternalGrant({ jobId, processingToken, objectKey, expiresAt: uploadGrantExpiresAt, maxBytes: maxBytesForRow(env, row) }, env);
     const container = getContainer(env.DOWNLOADER_CONTAINER, `job-${jobId}`);
     try {
       const healthStartedAt = Date.now();
@@ -782,6 +784,7 @@ async function handleContainerUpload(request, env) {
   if (uploadClaim.meta?.changes !== 1) return new Response("Conflict", { status: 409 });
   console.log(JSON.stringify({ event: "downloader_container_upload_received", jobId: grant.jobId, size }));
   let committed = false;
+  let expiresAt = null;
   try {
     await env.DOWNLOADS.put(grant.objectKey, request.body, {
       httpMetadata: { contentType: mimeType, contentDisposition: contentDisposition(filename) },
@@ -789,15 +792,17 @@ async function handleContainerUpload(request, env) {
     });
     await safeRecordUsageItems(env, row.identity_id, [{ metric: "platform", dimension: "r2_class_a", count: 1 }]);
     const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'ready', object_key = ?, actual_size = ?, sha256 = ?,
-      mime_type = ?, safe_filename = ?, downloaded_at = CURRENT_TIMESTAMP, expires_at = ?, processing_token = NULL,
+      mime_type = ?, safe_filename = ?, downloaded_at = CURRENT_TIMESTAMP,
+      expires_at = CAST(strftime('%s', 'now') AS INTEGER) + ?, processing_token = NULL,
       processing_lease_expires_at = NULL, normalization_mode = ?, source_bytes = ?, container_wall_ms = ?,
       container_cpu_ms = ?, container_peak_rss_bytes = ?, container_work_bytes = ?, download_ms = ?,
       validation_ms = ?, processing_ms = ?, security_scan_ms = ?, metrics_token = ?, progress_stage = 'finalizing', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND status = 'processing' AND processing_token = ?`)
-      .bind(grant.objectKey, size, sha256, mimeType, filename, grant.expiresAt, normalization, sourceBytes,
+      WHERE id = ? AND status = 'processing' AND processing_token = ? RETURNING expires_at`)
+      .bind(grant.objectKey, size, sha256, mimeType, filename, downloadTtl(env), normalization, sourceBytes,
         containerWallMs, cpuUserMs !== null && cpuSystemMs !== null ? cpuUserMs + cpuSystemMs : null, containerPeakRssBytes, containerWorkBytes,
-        downloadMs, validationMs, processingMs, securityScanMs, grant.processingToken, grant.jobId, uploadToken).run();
-    committed = update.meta?.changes === 1;
+        downloadMs, validationMs, processingMs, securityScanMs, grant.processingToken, grant.jobId, uploadToken).first();
+    committed = Boolean(update);
+    expiresAt = update ? Number(update.expires_at) : null;
   } finally {
     if (!committed) {
       // Do not delete the key here. The Container transport can replay an upload
@@ -814,8 +819,13 @@ async function handleContainerUpload(request, env) {
     return new Response("Conflict", { status: 409 });
   }
   console.log(JSON.stringify({ event: "downloader_container_upload_committed", jobId: grant.jobId, size }));
-  await sendJobMessage(env, { type: "delete", jobId: grant.jobId, identityId: row.identity_id }, { delaySeconds: Math.max(1, grant.expiresAt - nowSeconds()) });
-  return json({ stored: true, expiresAt: grant.expiresAt });
+  // A failed reservation must not turn a committed artifact into an upload failure.
+  // Cron and Lifecycle remain the independent recovery paths.
+  waitUntil(sendJobMessage(env, { type: "delete", jobId: grant.jobId, identityId: row.identity_id },
+    { delaySeconds: Math.max(1, expiresAt - nowSeconds()) }).catch((error) => {
+    console.error(JSON.stringify({ event: "downloader_expiry_queue_failed", jobId: grant.jobId, error: safeErrorName(error) }));
+  }));
+  return json({ stored: true, expiresAt });
 }
 
 async function listJobs(env, session) {
@@ -838,14 +848,14 @@ async function serveDownload(request, env, session, jobId) {
   const row = await ownedJob(env, session.identityId, jobId);
   if (row.status !== "ready" || !row.object_key) throw new HttpError(409, "ファイルはまだダウンロードできません。");
   if (Number(row.expires_at || 0) <= nowSeconds()) {
-    await deleteJobObject(env, jobId, "expired");
     throw new HttpError(410, "ファイルの保存期限が終了しました。");
   }
   const object = await env.DOWNLOADS.get(row.object_key);
   await safeRecordUsageItems(env, session.identityId, [{ metric: "platform", dimension: "r2_class_b", count: 1 }]);
   if (!object) {
-    await env.DB.prepare(`UPDATE downloader_jobs SET status = 'expired', error_type = 'object_missing',
-      error_reason = 'ファイルの保存期限が終了しました。', progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(jobId).run();
+    await env.DB.prepare(`UPDATE downloader_jobs SET status = 'expired', object_key = NULL, deleted_at = CURRENT_TIMESTAMP,
+      error_type = 'object_missing', error_reason = '一時ファイルは削除されています。', progress_stage = NULL,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'ready' AND object_key = ?`).bind(jobId, row.object_key).run();
     throw new HttpError(410, "ファイルの保存期限が終了しました。");
   }
   await recordFileDeliveryAttempt(request, env, session, row, object.size);
@@ -867,9 +877,17 @@ async function deleteOwnedJob(env, session, jobId) {
 }
 
 async function deleteJobObject(env, jobId, finalStatus) {
-  const row = await env.DB.prepare("SELECT id, object_key, status FROM downloader_jobs WHERE id = ?").bind(jobId).first();
+  const row = await env.DB.prepare("SELECT id, object_key, status, expires_at FROM downloader_jobs WHERE id = ?").bind(jobId).first();
   if (!row || ["deleted", "cancelled"].includes(row.status)) return;
-  if (row.object_key) await env.DOWNLOADS.delete(row.object_key);
+  // Ignore early/stale expiry deliveries. Cron will pick up the committed deadline.
+  if (finalStatus === "expired" && (Number(row.expires_at || 0) > nowSeconds() || (row.status === "expired" && !row.object_key))) return;
+  if (row.object_key) {
+    try { await env.DOWNLOADS.delete(row.object_key); }
+    catch (error) {
+      console.error(JSON.stringify({ event: "downloader_object_delete_failed", jobId, finalStatus, error: safeErrorName(error) }));
+      throw error;
+    }
+  }
   await env.DB.prepare(`UPDATE downloader_jobs SET status = ?, object_key = NULL, deleted_at = CURRENT_TIMESTAMP,
     progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status NOT IN ('cancelled', 'deleted')`).bind(finalStatus === "expired" ? "expired" : "deleted", jobId).run();
 }

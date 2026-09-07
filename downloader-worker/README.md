@@ -109,8 +109,14 @@ DOにも永続的な中止記録を残し、起動待ちのfetchをabortしてde
 
 ## 一時ファイルの手動削除と1時間の期限
 
-`DOWNLOAD_TTL_SECONDS=3600`、期限時刻までのQueue遅延配送、10分Cron、`downloads/`限定のR2 Lifecycle（object削除・未完了multipartの破棄とも3600秒）を併用する。期限は既存の取得grant発行時に確定するため、READY後の利用可能時間は取得処理時間の分だけ1時間より短くなる。期限を過ぎた新しい配信要求は拒否する。Queue/CronやLifecycleの実行は非同期であり、物理削除完了の厳密な時刻保証ではない。R2 Lifecycleには通常期限後24時間以内の処理遅延があり得るため、これは補完策として扱う（https://developers.cloudflare.com/r2/buckets/object-lifecycles/）。
+`DOWNLOAD_TTL_SECONDS=3600`、期限時刻までのQueue遅延配送、10分Cron、`downloads/`限定のR2 Lifecycle（object削除・未完了multipartの破棄とも3600秒）を併用する。R2.put成功後、READY更新SQLのCURRENT_TIMESTAMPをdownloaded_atとし、同じSQLでexpires_atをその時刻+3600秒に確定する。UPDATE RETURNINGで正本の期限を受け取るため、期限取得の追加DB往復はない。取得・変換・検査時間を保管時間から差し引かず、既存のREADY履歴の期限は変更しない。期限を過ぎた新しい配信要求はR2削除を待たず410で拒否する。Queue/CronやLifecycleの実行は非同期であり、物理削除完了の厳密な時刻保証ではない。R2 Lifecycleには通常期限後24時間以内の処理遅延があり得るため、これは補完策として扱う（https://developers.cloudflare.com/r2/buckets/object-lifecycles/）。
 
 手動削除はR2削除成功後にD1をdeletedにし、UIもdeletedを再取得して確認する。R2失敗時は参照を保持して再試行可能にする。遅れて終了した期限回収はdeleted/cancelledを上書きしない。READY画面は次のジョブで操作ボタンを復元し、前のジョブの削除応答で別ジョブのリンクを隠さない。取得・Container起動・変換・ClamAV/YARA・保存の通常処理には待機や削除リトライを追加しない。
 
 対象テスト: `node --test test/downloader-deletion.test.js test/downloader-domain.test.js test/worker-contract.test.js test/downloader-cancellation.test.js`、`node test/downloader-deletion.browser.mjs`。DBはローカルSQLite、R2とブラウザAPIはmockであり、本番オブジェクトの削除テストは行わない。公開はWorkerを`--containers-rollout=none`で更新し、`wrangler r2 bucket lifecycle set t-room-downloader-temp --file r2-lifecycle.json`を実行後、APIで3600秒の設定を再取得する。Container imageの更新は不要。
+
+内部upload grantの署名済みexpiresAtは認証用だけに使用し、processing leaseの期限を使う（既存wire形式は維持）。成果物のexpires_atには流用しない。READY確定後の正本expires_atを基準に削除Queueを予約し、waitUntilで保存応答から分離する。予約失敗はdownloader_expiry_queue_failedとして記録し、Cron/Lifecycleが回収する。同じuploadの再送でも保存期限を延長しない。早着・古い期限Queueは新しい期限前に削除せず、期限超過行はCronが回収する。
+
+期限を過ぎてもR2削除が未確認ならobject_keyを残す。削除失敗はdownloader_object_delete_failedとして記録し、Queueの既存再試行または次回Cronで再試行する。R2削除成功またはR2 object欠落の確認後にだけobject_keyを消し、deleted_atを記録する。公開jobのdeletionConfirmedと履歴では期限終了・削除未確認／削除確認済みを区別する。READY表示は「一時保管期限」と実日時を直接表示し、12時間表記のDOM置換は使用しない。Queue/Cronが主系、Lifecycleは最終保険であり、物理削除時刻の保証とは区別する。
+
+期限の対象テスト: `node --test test/downloader-retention.test.js test/downloader-final-metrics.test.js test/downloader-processing.test.js`。0秒・600秒処理fixture、署名grant期限、READY時刻との3600秒差、削除予約失敗・非同期応答、期限後配信拒否、古い削除イベント、upload CAS再送をローカルで確認する。

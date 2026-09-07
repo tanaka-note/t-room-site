@@ -16,12 +16,6 @@
       installHistoryDeleteButtons(jobList);
       new MutationObserver(() => installHistoryDeleteButtons(jobList)).observe(jobList, { childList: true, subtree: true });
     }
-
-    const expiryNote = document.getElementById("expiry-note");
-    if (expiryNote) {
-      normalizeExpiryCopy(expiryNote);
-      new MutationObserver(() => normalizeExpiryCopy(expiryNote)).observe(expiryNote, { childList: true, characterData: true, subtree: true });
-    }
   }
 
   async function deleteReadyFile() {
@@ -86,7 +80,7 @@
       await deleteWithVerification(jobId);
       return true;
     } catch (error) {
-      showDeleteError(error?.message || "一時ファイルを削除できませんでした。もう一度お試しください。1時間以内の自動削除も有効です。");
+      showDeleteError(error?.message || "一時ファイルを削除できませんでした。もう一度お試しください。保存期限後は自動回収を再試行します。");
       return false;
     } finally {
       button.disabled = false;
@@ -109,7 +103,7 @@
         if (!isRetryable(error)) break;
       }
     }
-    throw lastError || new Error("一時ファイルを削除できませんでした。もう一度お試しください。1時間以内の自動削除も有効です。");
+    throw lastError || new Error("一時ファイルを削除できませんでした。もう一度お試しください。保存期限後は自動回収を再試行します。");
   }
 
   function isRetryable(error) {
@@ -129,7 +123,7 @@
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
     } catch {
-      const error = new Error("通信が不安定なため削除を確認できませんでした。もう一度お試しください。1時間以内の自動削除も有効です。");
+      const error = new Error("通信が不安定なため削除を確認できませんでした。もう一度お試しください。保存期限後は自動回収を再試行します。");
       error.status = 0;
       throw error;
     }
@@ -140,12 +134,6 @@
       throw error;
     }
     return body;
-  }
-
-  function normalizeExpiryCopy(node) {
-    const current = node.textContent || "";
-    const next = current.replace("最大12時間で自動削除", "最大1時間で自動削除");
-    if (next !== current) node.textContent = next;
   }
 
   function showDeleteError(message) {
