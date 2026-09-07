@@ -7,7 +7,7 @@
     "analyze-button", "analysis-view", "analysis-title", "analysis-method", "source-details",
     "analysis-warning", "download-form", "media-list", "rights-confirmed", "youtube-rights-notice",
     "youtube-rights-confirmed", "download-button",
-    "progress-view", "progress-label", "cancel-analysis", "ready-view", "file-details", "file-download", "expiry-note",
+    "progress-view", "progress-label", "cancel-analysis", "ready-view", "file-details", "file-download", "file-delete", "expiry-note",
     "usage-section", "refresh-usage", "usage-periods", "usage-summary", "usage-alert",
     "usage-normalizations", "usage-security", "usage-capacity", "usage-daily", "usage-pricing", "usage-notes",
     "job-list", "refresh-jobs"
@@ -240,6 +240,9 @@
 
   function renderReady(job) {
     elements.progressView.hidden = true;
+    elements.fileDownload.hidden = false;
+    elements.fileDelete.hidden = false;
+    setBusy(elements.fileDelete, false, "一時ファイルを削除");
     renderDetails(elements.fileDetails, [["ファイル", job.filename || "download"], ["形式", job.mimeType || "不明"], ["処理方式", normalizationLabel(job.normalizationMode)], ["サイズ", sizeText(job.actualSize)], ["SHA-256", job.sha256 || "不明"]]);
     elements.fileDownload.dataset.jobId = job.id;
     elements.fileDownload.href = `/downloader/api/jobs/${encodeURIComponent(job.id)}/file?attempt=${encodeURIComponent(downloadAttemptId())}`;

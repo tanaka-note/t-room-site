@@ -106,3 +106,11 @@ DOにも永続的な中止記録を残し、起動待ちのfetchをabortしてde
 切り戻しは公開前に控えたWorker versionへ戻す。0005の追加状態・列と既存履歴は残す。旧Workerでもcancelledは解析再開対象にならないが、中止UIと停止再試行APIがなくなるため、停止未確認ジョブがある場合は旧版へ戻す前に今回のRPCで停止を完了させる。Container imageの切り戻しは不要。Time TravelによるDB全体の巻き戻しは新しい履歴を失うため通常の切り戻しには使用しない。
 
 対象検証: `node --test test/downloader-cancellation.test.js`（SQLite・Container mock）、`node test/downloader-cancellation.browser.mjs`（Chromium・mock API）。実Containerを起動するテストではない。
+
+## 一時ファイルの手動削除と1時間の期限
+
+`DOWNLOAD_TTL_SECONDS=3600`、期限時刻までのQueue遅延配送、10分Cron、`downloads/`限定のR2 Lifecycle（object削除・未完了multipartの破棄とも3600秒）を併用する。期限は既存の取得grant発行時に確定するため、READY後の利用可能時間は取得処理時間の分だけ1時間より短くなる。期限を過ぎた新しい配信要求は拒否する。Queue/CronやLifecycleの実行は非同期であり、物理削除完了の厳密な時刻保証ではない。R2 Lifecycleには通常期限後24時間以内の処理遅延があり得るため、これは補完策として扱う（https://developers.cloudflare.com/r2/buckets/object-lifecycles/）。
+
+手動削除はR2削除成功後にD1をdeletedにし、UIもdeletedを再取得して確認する。R2失敗時は参照を保持して再試行可能にする。遅れて終了した期限回収はdeleted/cancelledを上書きしない。READY画面は次のジョブで操作ボタンを復元し、前のジョブの削除応答で別ジョブのリンクを隠さない。取得・Container起動・変換・ClamAV/YARA・保存の通常処理には待機や削除リトライを追加しない。
+
+対象テスト: `node --test test/downloader-deletion.test.js test/downloader-domain.test.js test/worker-contract.test.js test/downloader-cancellation.test.js`、`node test/downloader-deletion.browser.mjs`。DBはローカルSQLite、R2とブラウザAPIはmockであり、本番オブジェクトの削除テストは行わない。公開はWorkerを`--containers-rollout=none`で更新し、`wrangler r2 bucket lifecycle set t-room-downloader-temp --file r2-lifecycle.json`を実行後、APIで3600秒の設定を再取得する。Container imageの更新は不要。

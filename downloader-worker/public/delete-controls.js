@@ -32,12 +32,15 @@
     const deleted = await confirmAndDelete(jobId, button);
     if (!deleted) return;
 
-    downloadLink.removeAttribute("href");
-    downloadLink.removeAttribute("download");
-    downloadLink.hidden = true;
-    button.hidden = true;
-    const expiryNote = document.getElementById("expiry-note");
-    if (expiryNote) expiryNote.textContent = "R2上の一時ファイルを削除しました。再ダウンロードはできません。";
+    // A later download may already own this shared READY panel.
+    if (downloadLink.dataset.jobId === jobId) {
+      downloadLink.removeAttribute("href");
+      downloadLink.removeAttribute("download");
+      downloadLink.hidden = true;
+      button.hidden = true;
+      const expiryNote = document.getElementById("expiry-note");
+      if (expiryNote) expiryNote.textContent = "R2上の一時ファイルを削除しました。再ダウンロードはできません。";
+    }
     document.getElementById("refresh-jobs")?.click();
   }
 

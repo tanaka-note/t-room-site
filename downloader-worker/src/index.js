@@ -871,7 +871,7 @@ async function deleteJobObject(env, jobId, finalStatus) {
   if (!row || ["deleted", "cancelled"].includes(row.status)) return;
   if (row.object_key) await env.DOWNLOADS.delete(row.object_key);
   await env.DB.prepare(`UPDATE downloader_jobs SET status = ?, object_key = NULL, deleted_at = CURRENT_TIMESTAMP,
-    progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'cancelled'`).bind(finalStatus === "expired" ? "expired" : "deleted", jobId).run();
+    progress_stage = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status NOT IN ('cancelled', 'deleted')`).bind(finalStatus === "expired" ? "expired" : "deleted", jobId).run();
 }
 
 async function cleanupExpiredJobs(env) {
