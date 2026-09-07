@@ -82,7 +82,7 @@ class MainVideoBrowserTests(unittest.TestCase):
                 player='<main><video width="640" height="360"></video></main>'
                 if self.path=='/ambiguous': player+='<main><video width="640" height="360"></video></main>'
                 if iframe: player='<main><iframe src="/frame" width="640" height="360"></iframe></main>'
-                script="const v=document.querySelector('video'); if(v){v.src=URL.createObjectURL(new MediaSource()); fetch('/advert.mp4').catch(()=>{}); fetch('/main.m3u8').catch(()=>{});}" 
+                script="const v=document.querySelector('video'); if(v){v.src=URL.createObjectURL(new MediaSource()); fetch('/advert.mp4').catch(()=>{}); fetch('/main.m3u8').catch(()=>{});}"
                 if self.path=='/ad-only': script=script.replace("fetch('/main.m3u8').catch(()=>{});",'')
                 html=f'<html><head><script type="application/ld+json">{json.dumps(metadata)}</script></head><body>{player}<script>{script}</script></body></html>'
                 if self.path=='/restricted': html=html.replace('<body>','<body><input type="password">')
