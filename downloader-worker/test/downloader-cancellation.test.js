@@ -117,6 +117,17 @@ test('normal analysis completes, releases container and preserves bounded retrie
  }finally{db.close()}
 });
 
+test('cancellation during supplemental exploration fences late result and acknowledges redelivery',async()=>{
+ const db=database();try{insert(db);let started,finish;const ready=new Promise(r=>started=r);let stopped=0,released=0;
+ const h=harness(db,{async fetch(){return Response.json({errorCode:'media_not_found'},{status:422})},async cancelAnalysis(){stopped++;finish({extractor:'main-video',media:[]})},async release(){released++}});
+ h.env.MAIN_VIDEO_FALLBACK='true';h.context.exploreMainVideo=async()=>{started();return new Promise(r=>finish=r)};
+ let ack=0,retry=0;const message={body:{type:'analyze',jobId:'job',identityId:'owner'},attempts:1,ack(){ack++},retry(){retry++}};
+ const pending=h.context.queue({messages:[message]},h.env);await ready;await h.cancel();await pending;
+ assert.equal(db.prepare('SELECT status FROM downloader_jobs').get().status,'cancelled');assert.equal(stopped,1);assert.equal(released,1);assert.equal(ack,1);assert.equal(retry,0);
+ h.context.exploreMainVideo=()=>assert.fail('redelivery explored');await h.context.queue({messages:[message]},h.env);assert.equal(ack,2);
+ }finally{db.close()}
+});
+
 function containerClass(storage,forward){
  const calls=[];
  class Base {constructor(){this.ctx={storage:{async get(k){return storage.get(k)},async put(k,v){calls.push('persist');storage.set(k,v)}}}} async containerFetch(request){calls.push('fetch');return forward(request)}async destroy(){calls.push('destroy')}async stop(){calls.push('stop')}renewActivityTimeout(){} }

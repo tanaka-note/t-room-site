@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check tools/definition-api.mjs && node --check tools/refresh-definitions.mjs && node --check tools/monitor-definitions.mjs && node --check src/index.js && node --check src/downloader-domain.js && node --check src/downloader-usage.js && node --check public/downloader.js && node test/run-python.mjs -m py_compile tools/verify-definitions.py container/server.py container/resolver.py container/scanner.py container/ssrf.py container/media_pipeline.py container/adapters/__init__.py container/adapters/image_share.py",
+    "check": "node --check tools/definition-api.mjs && node --check tools/refresh-definitions.mjs && node --check tools/monitor-definitions.mjs && node --check src/index.js && node --check src/main-video.js && node --check src/downloader-domain.js && node --check src/downloader-usage.js && node --check public/downloader.js && node test/run-python.mjs -m py_compile tools/verify-definitions.py container/server.py container/main_video.py container/resolver.py container/scanner.py container/ssrf.py container/media_pipeline.py container/adapters/__init__.py container/adapters/image_share.py",
     "test": "node --test test/*.test.js && node test/run-python.mjs -m unittest discover -s container -p test_*.py",
     "test:browser": "node test/downloader.browser.mjs",
     "deploy:dry": "wrangler deploy --dry-run",

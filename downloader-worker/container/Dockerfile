@@ -64,7 +64,7 @@ RUN test "${CLAMAV_DEFINITION_REFRESH}" != "unset" \
     && /usr/local/bin/sigtool --info /var/lib/clamav/bytecode.cvd
 
 RUN python -m pip install --no-cache-dir \
-      "yt-dlp[default,curl-cffi]==2026.8.19"
+      "yt-dlp[default,curl-cffi]==2026.8.19" "playwright==1.58.0"
 
 RUN groupadd --system --gid 10001 downloader \
     && useradd --system --uid 10001 --gid downloader --home-dir /nonexistent --shell /usr/sbin/nologin downloader \

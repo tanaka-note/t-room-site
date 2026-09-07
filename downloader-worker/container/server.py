@@ -72,6 +72,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/analyze":
                 result = analyze(str(body.get("url") or ""), _number(body.get("maxBytes"), 1, 2 * 1024**3), bool(body.get("policyRestricted")))
                 return self._json(200, result)
+            if self.path == "/main-video":
+                from main_video import run_phase
+                return self._json(200, run_phase(body))
             if self.path == "/download":
                 return self._download(body)
             return self._json(404, {"error": "not_found"})

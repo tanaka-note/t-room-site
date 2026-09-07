@@ -1,5 +1,6 @@
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
+import { configureMainVideoEgress, exploreMainVideo, mainVideoOutbound } from "./main-video.js";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
   DomainError,
@@ -126,6 +127,21 @@ export class DownloaderContainer extends Container {
   async release() {
     await this.stop();
   }
+
+  async claimMainVideoExploration() {
+    return this.ctx.storage.transaction(async txn => {
+      if (await txn.get("analysisCancelled") || await txn.get("mainVideoExplored")) return false;
+      await txn.put("mainVideoExplored", true);
+      return true;
+    });
+  }
+
+  async setAllowedHosts(hosts) {
+    // This existing RPC is also used before a Queue retry. Clear the prior
+    // supplemental handler without adding an RPC to normal analysis jobs.
+    if (this.outboundHandlerOverride?.method === "mainVideo") await this.setOutboundHandler("standard");
+    await super.setAllowedHosts(hosts);
+  }
 }
 
 DownloaderContainer.outboundByHost = {
@@ -154,6 +170,8 @@ DownloaderContainer.outbound = async (request) => {
     return new Response(error instanceof DomainError ? error.message : "Blocked", { status: error instanceof DomainError ? error.status : 403 });
   }
 };
+
+DownloaderContainer.outboundHandlers = { mainVideo: mainVideoOutbound, standard: DownloaderContainer.outbound };
 
 export default class DownloaderWorker extends WorkerEntrypoint {
   async fetch(request) {
@@ -433,14 +451,20 @@ async function processAnalyzeMessage(env, message) {
     const analysisStartedAt = Date.now();
     const resolved = await resolveAnalysisSource(container, sourceUrl, maxFileBytes(env));
     await configureContainerEgress(container, sourceUrl, resolved.egressHosts);
+    const analysisEndsAt = Date.now() + ANALYSIS_TIMEOUT_MS;
     const response = await container.fetch(new Request("http://container/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: resolved.url.href, maxBytes: maxFileBytes(env), policyRestricted: isPolicyRestrictedHost(sourceUrl.hostname) }),
       signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS)
     }));
-    const analysis = await response.json().catch(() => ({}));
-    if (!response.ok) {
+    let analysis = await response.json().catch(() => ({}));
+    if (!response.ok && response.status === 422 && analysis.errorCode === "media_not_found" &&
+        env.MAIN_VIDEO_FALLBACK === "true" && !await analysisIsCancelled(env, message)) {
+      const extra = await exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxFileBytes(env));
+      if (extra) analysis = extra;
+    }
+    if (!response.ok && analysis.extractor !== "main-video") {
       if (await analysisIsCancelled(env, message)) return;
       console.error(JSON.stringify({ event: "downloader_container_analyze_failed", errorCode: cleanText(analysis.errorCode, 80) || "unknown", status: response.status }));
       throw new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
@@ -597,6 +621,9 @@ async function processDownloadMessage(env, message) {
       await requireHealthyContainer(container);
       const containerHealthMs = Math.max(0, Date.now() - healthStartedAt);
       await configureContainerEgress(container, routeUrl, capability.route.egressHosts);
+      if (capability.route.strictPublicEgress) {
+        await configureMainVideoEgress(container, capability.route.egressHosts, Date.now() + processTimeoutSeconds * 1000, false);
+      }
       const response = await container.fetch(new Request("http://container/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1195,6 +1222,7 @@ function normalizeDownloadRoute(value) {
     }
     if (!egressHosts.includes(url.hostname)) egressHosts.push(url.hostname);
     route.egressHosts = egressHosts;
+    if (value.strictPublicEgress === true) route.strictPublicEgress = true;
     if (value.kind === "yt-dlp") {
       route.playlistIndex = safeInteger(value.playlistIndex);
       route.formatSelector = cleanFormatSelector(value.formatSelector);

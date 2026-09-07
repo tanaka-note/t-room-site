@@ -130,6 +130,28 @@ test('normal update records only a verified completed image-only rollout', async
   } finally { h.db.close(); }
 });
 
+test('explicit code release verifies local browser fixtures before rollout and updates daily code base', async () => {
+  const h=harness(),calls=[];
+  const docker=args=>{calls.push(args);return h.docker(args)};
+  try {
+    await refresh({...h,docker,releaseCode:true});
+    const build=calls.find(x=>x[0]==='build');
+    assert.ok(build.includes(`CLAMAV_DEFINITION_REFRESH=${h.row().run_id}`));
+    assert.ok(calls.some(x=>x.includes('test_main_video.py') && x.includes('none')));
+    assert.equal(h.row().source_image,next);
+    assert.equal(h.row().image,next);
+  } finally {h.db.close()}
+});
+
+test('failed code-release fixture prevents push and rollout', async () => {
+  const h=harness(),calls=[];
+  const docker=args=>{calls.push(args);if(args.includes('test_main_video.py'))throw Error('fixture_failed');return h.docker(args)};
+  try{
+    await assert.rejects(refresh({...h,docker,releaseCode:true}),/fixture_failed/);
+    assert.equal(h.counts().rollouts,0);assert.equal(calls.some(x=>x[0]==='push'),false);assert.equal(h.row().image,image);
+  }finally{h.db.close()}
+});
+
 test('failed build/signature/rollout preserves last verified image and consecutive failures', async () => {
   for (const failure of ['build', 'signature', 'rollout']) {
     const h = harness({ failure });

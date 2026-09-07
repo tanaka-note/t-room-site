@@ -3,6 +3,11 @@ on:
   schedule:
     - cron: '37 19 * * *' # 04:37 JST, once per day
   workflow_dispatch:
+    inputs:
+      release_code:
+        description: 'Build and verify the checked-out Downloader Container code before rollout'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -22,6 +27,7 @@ jobs:
       - run: node downloader-worker/tools/refresh-definitions.mjs
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}
+          RELEASE_CONTAINER_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_code && 'true' || 'false' }}
   notify:
     needs: update
     if: always()

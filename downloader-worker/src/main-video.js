@@ -1,0 +1,123 @@
+import { isIP } from 'node:net';
+import { normalizeSourceUrl, isBlockedIpLiteral, isPolicyRestrictedHost } from './downloader-domain.js';
+
+export function publicAddress(address) {
+  if (!isIP(address) || isBlockedIpLiteral(address)) return false;
+  if (isIP(address) === 6) {
+    // Global unicast only; conservatively exclude special-purpose 2001::/23,
+    // documentation and 6to4 (embedded addresses) rather than translate them.
+    const first = parseInt(address.split(':')[0], 16);
+    const second = parseInt(address.split(':')[1] || '0', 16);
+    return first >= 0x2000 && first < 0x3fff && first !== 0x2002 &&
+      !(first === 0x2001 && (second < 0x200 || second === 0xdb8));
+  }
+  return !/^(?:192\.0\.0\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(address);
+}
+
+export async function assertPublicDestination(value, signal, fetcher = fetch) {
+  const url = normalizeSourceUrl(value);
+  if (isPolicyRestrictedHost(url.hostname)) throw new Error('main_video_policy_restricted');
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(host)) {
+    if (!publicAddress(host)) throw new Error('main_video_dns_blocked');
+    return url;
+  }
+  const answers = await Promise.all(['A', 'AAAA'].map(async type => {
+    const endpoint = new URL('https://cloudflare-dns.com/dns-query');
+    endpoint.searchParams.set('name', host);
+    endpoint.searchParams.set('type', type);
+    const response = await fetcher(endpoint, {headers: {Accept:'application/dns-json'}, signal, redirect:'error'});
+    if (!response.ok) throw new Error('main_video_dns_failed');
+    const data = await response.json();
+    if (data.Status !== 0) throw new Error('main_video_dns_failed');
+    return (data.Answer || []).filter(x => x.type === 1 || x.type === 28).map(x => x.data);
+  }));
+  const addresses = answers.flat();
+  if (!addresses.length || addresses.some(x => !publicAddress(x))) throw new Error('main_video_dns_blocked');
+  return url;
+}
+
+// Named, instance-scoped ContainerProxy handler. The normal successful paths
+// keep their existing handler. Recheck public DNS on each outbound request;
+// redirects are returned, never followed here. No VPC/internal-service binding
+// is used. Cloudflare's public fetch is the final origin connection boundary.
+export async function mainVideoOutbound(request, _env, ctx) {
+  try {
+    const policy = ctx.params;
+    if (!policy || Date.now() >= policy.until || !['GET','HEAD'].includes(request.method)) return new Response('Blocked', {status:403});
+    const signal = AbortSignal.timeout(Math.max(1, policy.until-Date.now()));
+    const url = normalizeSourceUrl(request.url);
+    if (!policy.hosts.includes(url.hostname)) return new Response('Blocked', {status:403});
+    await assertPublicDestination(url.href, signal);
+    const headers = new Headers({'User-Agent':'Mozilla/5.0','X-Real-IP':'2a06:98c0:3600::103'});
+    for (const name of ['Accept','Range','If-Range']) {
+      const value = request.headers.get(name);
+      if (value) headers.set(name, value.slice(0,512));
+    }
+    const response = await fetch(url, {method:request.method, headers, redirect:'manual', signal});
+    if (!policy.bounded || !response.body) return response;
+    let size=0;
+    const body=response.body.pipeThrough(new TransformStream({transform(chunk, controller) {
+      size+=chunk.byteLength;
+      if(size>1_000_000) throw new Error('main_video_response_limit');
+      controller.enqueue(chunk);
+    }}));
+    return new Response(body,{status:response.status,headers:response.headers});
+  } catch { return new Response('Blocked', {status:403}); }
+}
+
+export async function configureMainVideoEgress(container, hosts, until, bounded = true) {
+  const exact = [...new Set(hosts.map(host => normalizeSourceUrl(`https://${host}/`).hostname))];
+  if(exact.length>32) throw new Error('main_video_host_limit');
+  await container.setAllowedHosts(bounded ? exact : ['r2.tlain.internal', ...exact]);
+  await container.setOutboundHandler('mainVideo', {hosts:exact,until,bounded});
+}
+
+export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxBytes) {
+  const started=Date.now();
+  const until = Math.min(analysisEndsAt, Date.now()+10_000);
+  if (env.MAIN_VIDEO_FALLBACK !== 'true' || until-Date.now()<1000 || isPolicyRestrictedHost(sourceUrl.hostname)) return null;
+  const remaining = () => {
+    const ms=until-Date.now();
+    if(ms<100) throw new Error('main_video_timeout');
+    return ms;
+  };
+  const call = async body => {
+    const response=await container.fetch(new Request('http://container/main-video', {
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({...body,budgetSeconds:remaining()/1000,expiresAtMs:until}),signal:AbortSignal.timeout(remaining())
+    }));
+    const value=await response.json();
+    if(!response.ok) throw new Error('main_video_unavailable');
+    return value;
+  };
+  const run = async () => { try {
+    // Persistent per-analysis DO fence survives Queue redelivery and DO eviction.
+    if (!await container.claimMainVideoExploration()) return null;
+    remaining();
+    // Optional named site dependencies only. No wildcard or browser-discovered
+    // arbitrary script/frame host is granted network access.
+    const sites=JSON.parse(env.MAIN_VIDEO_PAGE_HOSTS || '{}');
+    const dependencies=Array.isArray(sites[sourceUrl.hostname]) ? sites[sourceUrl.hostname].slice(0,8) : [];
+    const hosts=[sourceUrl.hostname,...dependencies];
+    await configureMainVideoEgress(container,hosts,until);
+    remaining();
+    const found=await call({phase:'discover',url:sourceUrl.href,allowedHosts:hosts});
+    const candidate=await assertPublicDestination(found.url,AbortSignal.timeout(remaining()));
+    // Only the single correlated candidate's exact CDN is admitted. Its
+    // manifests must pass the existing validators before the route is sealed.
+    await configureMainVideoEgress(container,[...hosts,candidate.hostname],until);
+    const analysis=await call({phase:'validate',url:candidate.href,maxBytes});
+    remaining();
+    if(found.title) analysis.title=String(found.title).slice(0,240);
+    console.log(JSON.stringify({event:'downloader_main_video',result:'found',elapsedMs:Date.now()-started}));
+    return analysis;
+  } catch {
+    console.log(JSON.stringify({event:'downloader_main_video',result:'unavailable'}));
+    return null;
+  }};
+  let timer;
+  try {
+    return await Promise.race([run(),new Promise(resolve => {timer=setTimeout(()=>resolve(null),Math.max(1,until-Date.now()));})]);
+  } finally {clearTimeout(timer);}
+}

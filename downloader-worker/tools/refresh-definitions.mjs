@@ -35,7 +35,8 @@ export function definitionTarget(configuration, image) {
   return target;
 }
 
-export async function refresh({ api = cloudflareClient(), docker = command, now = () => Math.floor(Date.now() / 1000), wait = waitForRollout } = {}) {
+export async function refresh({ api = cloudflareClient(), docker = command, now = () => Math.floor(Date.now() / 1000), wait = waitForRollout,
+  releaseCode = process.env.RELEASE_CONTAINER_CODE === 'true' } = {}) {
   const runId = `${process.env.GITHUB_RUN_ID || 'manual'}-${process.env.GITHUB_RUN_ATTEMPT || '1'}-${now()}`;
   const initial = await readState(api);
   const claim = await query(api, SECURITY_DB, `UPDATE security_definition_updates SET run_id=?,lease_until=?,last_attempt_at=?,last_result='running',
@@ -57,8 +58,16 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
     const registry = await api('/containers/registries/registry.cloudflare.com/credentials', 'POST', { expiration_minutes: 60, permissions: ['pull', 'push'] });
     docker(['login', 'registry.cloudflare.com', '--username', registry.username, '--password-stdin'], { ...dockerOptions, input: registry.password });
     temporaryTag = `registry.cloudflare.com/${ACCOUNT}/t-room-downloader-downloadercontainer:definitions-${runId}`;
-    console.log('Building definition candidate from the deployed code base');
-    run(['build', '--platform', 'linux/amd64', '-f', join(directory, 'definitions.Dockerfile'), '--build-arg', `BASE_IMAGE=${source}`, '--build-arg', `REFRESH_ID=${runId}`, '-t', temporaryTag, directory]);
+    if (releaseCode) {
+      console.log('Building the explicitly requested repository Container code');
+      const context = resolve(directory, '../container');
+      run(['build', '--platform', 'linux/amd64', '-f', join(context, 'Dockerfile'), '--build-arg', `CLAMAV_DEFINITION_REFRESH=${runId}`, '-t', temporaryTag, context]);
+      console.log('Verifying small local browser fixtures and process cleanup offline');
+      run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', '-e', 'MAIN_VIDEO_TEST_BROWSER=/usr/bin/chromium', temporaryTag, '-m', 'unittest', 'discover', '-s', '/app/tests', '-p', 'test_main_video.py']);
+    } else {
+      console.log('Building definition candidate from the deployed code base');
+      run(['build', '--platform', 'linux/amd64', '-f', join(directory, 'definitions.Dockerfile'), '--build-arg', `BASE_IMAGE=${source}`, '--build-arg', `REFRESH_ID=${runId}`, '-t', temporaryTag, directory]);
+    }
     console.log('Verifying candidate signatures, signed timestamps, engine and harmless fixtures');
     const raw = run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--mount', `type=bind,source=${join(directory, 'verify-definitions.py')},target=/tmp/verify-definitions.py,readonly`, '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', temporaryTag, '/tmp/verify-definitions.py']);
     const report = candidateReport(JSON.parse(raw), now());
@@ -86,7 +95,7 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
     await wait(api, rollout.id, image);
     const updated = await query(api, SECURITY_DB, `UPDATE security_definition_updates SET image=?,previous_image=?,source_image=?,definition_unix=?,verified_at=?,
       last_success_at=?,image_checked_at=?,deployment_matches=1,last_result='success',failure_count=0,lease_until=NULL WHERE service='downloader' AND run_id=?`,
-      [image, oldImage, source, report.definitionUnix, report.verifiedAt, now(), now(), runId]);
+      [image, oldImage, releaseCode ? image : source, report.definitionUnix, report.verifiedAt, now(), now(), runId]);
     if (updated.meta.changes !== 1) throw new Error('definition_completion_conflict');
     console.log('Verified definition image rollout completed');
     return { image, ...report };

@@ -58,7 +58,7 @@
       "class_name": "DownloaderContainer",
       "image": "./container/Dockerfile",
       "image_vars": {
-        "CLAMAV_DEFINITION_REFRESH": "2026-W36"
+        "CLAMAV_DEFINITION_REFRESH": "2026-09-07-main-video-1"
       },
       "instance_type": "standard-2",
       "max_instances": 2,
@@ -84,6 +84,8 @@
   },
   "vars": {
     "SESSION_VERSION": "1",
+    "MAIN_VIDEO_FALLBACK": "true",
+    "MAIN_VIDEO_PAGE_HOSTS": "{}",
     "PASSKEY_ENABLED": "true",
     "PASSKEY_SESSION_TTL_SECONDS": "43200",
     "MAX_FILE_BYTES": "2147483648",

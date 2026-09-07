@@ -120,3 +120,20 @@ DOにも永続的な中止記録を残し、起動待ちのfetchをabortしてde
 期限を過ぎてもR2削除が未確認ならobject_keyを残す。削除失敗はdownloader_object_delete_failedとして記録し、Queueの既存再試行または次回Cronで再試行する。R2削除成功またはR2 object欠落の確認後にだけobject_keyを消し、deleted_atを記録する。公開jobのdeletionConfirmedと履歴では期限終了・削除未確認／削除確認済みを区別する。READY表示は「一時保管期限」と実日時を直接表示し、12時間表記のDOM置換は使用しない。Queue/Cronが主系、Lifecycleは最終保険であり、物理削除時刻の保証とは区別する。
 
 期限の対象テスト: `node --test test/downloader-retention.test.js test/downloader-final-metrics.test.js test/downloader-processing.test.js`。0秒・600秒処理fixture、署名grant期限、READY時刻との3600秒差、削除予約失敗・非同期応答、期限後配信拒否、古い削除イベント、upload CAS再送をローカルで確認する。
+
+
+## 視聴ページの本編補助探索
+
+`MAIN_VIDEO_FALLBACK=true`で有効、`false`でこの機能だけを停止する。既存adapter / Direct / yt-dlp / HTML / Chromiumの成功結果は維持し、Containerの明示的な`422 media_not_found`だけが追加探索の対象。DRM・login・geo・bot・SSRF・未知の実行障害では再探索しない。通常解析の120秒期限内で、準備・ブラウザ・候補検証を合わせて最大10秒。残り1秒未満では開始しない。`analysis-{jobId}`のDurable Object storageへ1回限りのclaimを保存し、Queue再配送・DO再生成でも繰り返さない。中止は既存のD1 cancelled確定・Container destroyを使う。子プロセスのdeadlineと終了時cleanupも維持する。
+
+初期対応は、現在のページを`mainEntityOfPage`等で指す単一のJSON-LD VideoObject（公開contentUrlあり）と、main内の単一プレイヤー、または同じVideoObjectのembedUrlに一致するiframeがある公開ページ。currentSrcまたはblobプレイヤーと、そのframeが実際に要求したcontentUrlが一致する場合だけ1候補を採用する。広告・関連候補・複数プレイヤー・所有ページ不一致は採用しない。識別済みvideo要素のnative playを1回だけ試し、任意のボタン・リンクを押さない。メディア通信は観測してabortするため、補助ブラウザで動画本体を再生しない。必要なmanifest/署名確認だけ既存Direct validatorで読み、DRM（名前空間付きDASH ContentProtectionも含む）・暗号化・live・サイズ検証後のrouteを既存方式で暗号化固定する。最終ClamAV/YARAは変更しない。
+
+ページ依存通信はsourceの正確なhostだけ。必要なscript/iframe CDNは`MAIN_VIDEO_PAGE_HOSTS`のJSON `{ "watch.example": ["player.example"] }`で個別登録可能（最大8、wildcard不可）。初期設定は空。媒体CDNは本編との関連を確認した単一候補だけをWorkerで再検証して許可する。別hostのredirectは探索時には追跡せず、未知のiframe・Cookie・Authorization・POST・WebSocket・Service Workerは使用しない。最大32要求、個別1MB・合計2MBの補助ページ予算。候補manifestが未許可の別hostのplaylistを要求する場合も拒否する。このため全ての視聴ページに対応するものではない。
+
+Cloudflare透過DNSのPython例外は既存経路のため維持。補助経路ではContainerProxyの専用handlerを使い、exact host制限と要求ごとのpublic A/AAAA確認・private/special-use拒否をWorker側でも行う。リダイレクトを自動追跡せず、Cookie等を落としたCloudflare public fetchで接続する。VPC/内部service bindingは使わない。PythonのDNS例外だけを根拠に送信を許可しない。最終取得にも専用handlerをroute属性で引き継ぐ。通常経路の送信handlerは変更せず、再配送時に古い補助handlerを既存setAllowedHosts RPC内で解除する。生URL/query・本文・HARはログに出さない。
+
+費用: 既存成功時の追加ブラウザ・追加DNS検査は0回。該当未発見ジョブのみ最大10秒のContainer実行と軽量D1/DO・Proxy/DNS要求が増える（claimはDO、追加D1更新なし）。これはCPU実測・請求額ではなく上限設定であり、起動/停止課金を含む料金上限ではない。新しい常時稼働枠やBrowser Rendering契約は作らない。Playwrightを既存Chromiumで使う分、image容量は増える。
+
+対象検証: `node --test test/main-video.test.js test/downloader-cancellation.test.js test/worker-contract.test.js test/downloader-processing.test.js`、Python `tests/test_main_video.py` / `test_resolver.py` / `test_ssrf.py`。実ブラウザは`MAIN_VIDEO_TEST_BROWSER=/usr/bin/chromium`を指定して小容量loopback fixtureだけを使う。fixtureテストだけでprivate-IP拒否を緩和し、本番設定には持ち込まない。指定されたimage-share代表URLは既存adapter 468ms・Direct確認969ms（Windowsローカル1回の観測、2026-09-07）。旧mainと同じ成功処理を使い、追加探索なし。変更前後の本番時間や全サイト成功率を保証する値ではない。
+
+Containerコード公開は`ClamAV daily definitions`の手動入力`release_code=true`を使える。通常の日次実行は既存の定義だけを更新する。明示コード公開ではcheckoutしたDockerfileをbuildし、network noneの小容量browser/process fixture、署名・生成日時・正常fixture/EICARを確認してからregistry push・既存lease/job/grace保護でrolloutする。失敗した候補は本番へ反映しない。成功時のsource_imageを新コードのdigestへ更新し、翌日の日次更新が旧コードへ戻ることを防ぐ。Container完了後にWorkerを`wrangler deploy --containers-rollout=none`で公開し、build/JS一致を読み戻す。DB migration不要。切り戻しは先に`MAIN_VIDEO_FALLBACK=false`でWorkerを更新（Container更新不要）。image自体を戻す場合は定義更新手順に従い、期限内の検証済みprevious_imageだけを利用する。

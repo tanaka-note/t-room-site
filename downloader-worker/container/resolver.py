@@ -362,7 +362,7 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
                 env=browser_environment,
             )
         if result.returncode != 0 or len(result.stdout) > 5_000_000:
-            return None
+            raise ResolverError("browser_execution_failed")
         html = result.stdout
     else:
         response, final_url = _open(url, method="GET", timeout=25, max_redirects=5, max_body=2_000_000)
@@ -807,7 +807,13 @@ def _encrypted_hls(value: bytes) -> bool:
 
 def _drm_dash(value: bytes) -> bool:
     text = value.decode("utf-8", "replace").lower()
-    return "<contentprotection" in text or "widevine" in text or "playready" in text
+    if re.search(r"<(?:[\w.-]+:)?contentprotection\b", text) or "widevine" in text or "playready" in text:
+        return True
+    try:
+        root = ElementTree.fromstring(value)
+        return any(element.tag.rsplit("}", 1)[-1].lower() == "contentprotection" for element in root.iter())
+    except ElementTree.ParseError:
+        return False  # The full manifest validator rejects malformed XML.
 
 
 def _live_media_playlist(value: bytes) -> bool:
