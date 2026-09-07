@@ -24,6 +24,10 @@ imageのみのrolling rolloutがcompletedとなり、本番applicationのdigest�
 
 Security Workerが毎時17分にD1記録だけを監視する。Containerを起動しない。管理者dashboardに生成日時、有効期限、最終署名検証、最終更新試行、更新結果、監視日時を表示する。未取得・migration未適用・本番image不一致を正常扱いしない。
 
+毎時監視の判定は`hourly_monitor_checked_at`専用とし、未記録・未来の異常値・3時間超過を`monitor_stopped`とする。日次cleanupや定義更新成功でこの値を補完しない。`hourly_monitor_started_at`は毎時分岐の起動記録、完了値は状態履歴と同じD1 batchが成功した時だけ更新する。既存`monitor_checked_at`は日次を含む定義状態確認の履歴として保持し、画面では毎時の起動・完了と区別する。GitHub監視も同じ判定関数を使う。
+
+追加migration `0015_hourly_definition_heartbeat.sql`をSecurity Worker公開前に適用する。既存値から毎時実行を推測して埋めない。consoleには固定の`clamav_monitor`、source、stage（started/completed、失敗時start_record/read/complete_record）だけを出し、生の例外・SQL値・秘密情報は記録しない。Workers Logsの保存は今回有効化していないため、consoleの過去ログを取得できるとは限らない。自然発火後はCron Events（GraphQL `workersInvocationsScheduled`）と専用D1列を読み取る。開始のみなら読込/完了batchの失敗を確認し、開始も実行履歴もなければ配信・Trigger側の調査を続ける。時刻変更・手動heartbeat・手動Issue closeで復旧を装わない。
+
 別workflow `ClamAV independent monitor` が6時間ごと（UTC 00/06/12/18:23）に本番imageとの一致とSecurityのheartbeatを確認する。更新job終了後にも同じ監視を実行する。次の場合に管理者割り当ての単一Issueを作成・更新する。
 
 - 生成から5日経過（7日超では既存Container側が取得停止）
@@ -56,6 +60,8 @@ Security Workerが毎時17分にD1記録だけを監視する。Containerを起�
 
 通常の手順と同じジョブ確認・grace/drainを使い、Container application APIのimageのみrolling rolloutで有効な旧digestへ戻す。completedとdigestを再確認する。D1の成功記録を推測で書き換えない（不一致警告を保持）；その後daily workflowを再実行して検証済み状態へ復旧する。Worker rollbackはContainer imageを戻さない。Security Workerだけ戻す場合も0014の追加tableを削除せず保持する。
 
+毎時heartbeat分離のSecurity Worker切り戻し候補は`20a798ae-d542-4810-a641-0fd0f9064dcd`。0015の追加列と履歴は保持する。旧Workerは専用heartbeatを更新しないため、GitHub側の新判定では監視停止警告が続く。これを正常扱いせず、自然発火で専用値を記録できる版へ復旧する。Container更新・定義更新workflowの再実行はこのWorker修正の公開/切り戻しには不要。
+
 ## 検証
 
 `node --test downloader-worker/test/definition-updates.test.js` はSQLite実行とAPI/Docker mockで正常更新、署名/鮮度候補拒否、更新失敗、active job延期、lease競合、rollout完了待ち、期限前/期限切れ/監視停止、通知重複抑制・復旧を確認する。実エンジンの確認は`tools/verify-definitions.py`を候補imageにread-only mountし、`--network none --cpus 1 --memory 4g --entrypoint python -e PYTHONPATH=/app`で実行する。小容量の正常/EICAR試験であり、大容量media検査の速度・検出網羅性を検証したものではない。
@@ -86,3 +92,11 @@ Security Workerが毎時17分にD1記録だけを監視する。Containerを起�
 - [独立monitor実行 34032800007](https://github.com/tanaka-note/t-room-site/actions/runs/34032800007)成功。daily後の通知と同じ`monitor_stopped`状態でIssue #1のコメント数が1のまま増えないことを確認。これは通知処理の成功であり、全監視の正常確認ではない。
 - 21:22 JST時点では毎時17分の本番heartbeatは未観測。cron登録・稼働Worker内のscheduled handler/定義監視コード・正しいD1 bindingは読み取り確認済み。GraphQLのCron実行履歴には前日の既存日次cron成功があり、当日の毎時cronはまだない。実行遅延か停止かは判別できず、`monitor_stopped`を維持する。D1 heartbeatの手動補完や復旧Issueの手動closeはしていない。次の実行を観測し、独立monitorが`healthy`となりIssueが自動closeするまで監視の本番確認は未完了。
 - Security Centerの本番ログイン画面・公開asset、未認証dashboard拒否を確認。管理者ログイン後の定義パネル表示とGitHub通知メールの受信は本人確認待ち。設定上は次回daily（09-07 04:37 JST）と6時間ごとの独立monitorが有効だが、GitHub/Cloudflare schedulerの遅延・停止まで保証するものではない。
+
+## 2026-09-07 毎時監視の調査とheartbeat分離
+
+- main `a274aa4`と本番を直接照合。productionは単一環境、Worker version `20a798ae-d542-4810-a641-0fd0f9064dcd`を100%配信。毎時/日次Trigger、scheduledの毎時分岐、D1 `security-db` bindingは一致。bundleのPURE注釈等の変換をコード相違とは扱わない。
+- 19:22 JSTの本番GraphQLには日次`41 18 * * *`の03:41:47成功だけがあり、毎時`17 * * * *`は未観測。D1の共有heartbeatも03:41:47。過去のWorkers Logs保存は無効で、毎時起動・分岐到達・D1失敗の例外記録は得られなかった。毎時未発火の根本原因は未確定であり、時刻変更や再公開だけで解決したとは扱わない。
+- 旧mainの関数をSQLite fixtureで実行し、日次だけで`healthy`になる誤判定を再現。専用heartbeatを分離し、日次では毎時停止が復旧しないよう修正。毎時開始/完了と失敗段階を追跡可能にした。
+- 対象16件（SQLite/API mock、毎時/日次分岐、無関係cron拒否、追加migrationの履歴保持、開始/読込/完了batch失敗、停止/復旧/通知判定）と認証回帰2件PASS。構文確認とSecurity build/dry-runもPASS。Container・実検査・大容量取得・定義更新workflow・全テストは実行していない。
+- 公開と自動運転の確認を区別する。次の自然発火で専用heartbeat更新を確認し、その後の独立monitorでIssue #1の自動復旧を確認する。未到来なら確認待ちとして報告し、長時間待機や頻繁なポーリングはしない。

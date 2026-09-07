@@ -1,4 +1,4 @@
-import { readDefinitionStatus, monitorDefinitions } from "./definition-status.js";
+import { readDefinitionStatus, runDefinitionSchedule } from "./definition-status.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue } from "../../assets/session-policy.mjs";
 import {
@@ -94,18 +94,18 @@ export default class SecurityWorker extends WorkerEntrypoint {
   }
 
   async scheduled(event) {
-    if (event?.cron === "17 * * * *") return monitorDefinitions(this.env);
-    const retentionDays = clampNumber(this.env.AUDIT_RETENTION_DAYS, 30, 730, 180);
-    const retentionCutoff = auditRetentionCutoff(retentionDays);
-    await this.env.DB.batch([
-      this.env.DB.prepare("DELETE FROM security_challenges WHERE expires_at < ?").bind(nowSeconds() - 86400),
-      this.env.DB.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").bind(nowSeconds() - 86400),
-      this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
-      this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
-      this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
-      this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < ?").bind(retentionCutoff)
-    ]);
-    await monitorDefinitions(this.env);
+    return runDefinitionSchedule(event, this.env, async () => {
+      const retentionDays = clampNumber(this.env.AUDIT_RETENTION_DAYS, 30, 730, 180);
+      const retentionCutoff = auditRetentionCutoff(retentionDays);
+      await this.env.DB.batch([
+        this.env.DB.prepare("DELETE FROM security_challenges WHERE expires_at < ?").bind(nowSeconds() - 86400),
+        this.env.DB.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").bind(nowSeconds() - 86400),
+        this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
+        this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
+        this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
+        this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < ?").bind(retentionCutoff)
+      ]);
+    });
   }
 
   async redeemHandoff(token, service) {
