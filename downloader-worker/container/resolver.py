@@ -295,7 +295,9 @@ class MediaHtmlParser(HTMLParser):
         if len(groups)==1 and groups[0]['urls']:
             urls=list(dict.fromkeys(groups[0]['urls']))
             return [x for x in urls if x in metadata] or urls
-        if not groups and len(metadata)==1: return metadata
+        # An explicit embedded player still needs its restriction/correlation
+        # checks, even if page metadata also exposes a content URL.
+        if not groups and not self.embeds and len(metadata)==1: return metadata
         return []
 
     def plan(self):

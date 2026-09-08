@@ -39,6 +39,7 @@ class MainVideoUnitTests(unittest.TestCase):
             ('<main><video src="/preview.mp4"></video></main>',[]),
             ('<script type="application/ld+json">{"@type":"VideoObject","mainEntityOfPage":"/watch","contentUrl":"/media"}</script>',['https://example.com/media']),
             ('<script type="application/ld+json">{"@type":"VideoObject","mainEntityOfPage":"/other","contentUrl":"/media"}</script>',[]),
+            ('<script type="application/ld+json">{"@type":"VideoObject","mainEntityOfPage":"/watch","contentUrl":"/media","embedUrl":"/frame"}</script>',[]),
         ]
         for html,expected in cases:
             parser=MediaHtmlParser('https://example.com/watch');parser.feed(html)
@@ -271,19 +272,19 @@ class MainVideoBrowserTests(unittest.TestCase):
                     self.send_header('x-tlain-egress-source','egress' if self.path=='/egress' else 'upstream')
                     self.end_headers();return
                 root=f'http://127.0.0.1:{self.server.server_port}'
-                iframe=self.path in {'/iframe','/embedded'}
-                embed='/frame' if iframe else ''
+                iframe=self.path in {'/iframe','/embedded','/iframe-restricted'}
+                embed=('/frame-restricted' if self.path=='/iframe-restricted' else '/frame') if iframe else ''
                 metadata={'@type':'VideoObject','mainEntityOfPage':root+self.path,'contentUrl':root+'/main.m3u8','name':'Main','embedUrl':root+embed if embed else ''}
                 player='<main><video width="640" height="360"></video></main>'
                 if self.path=='/ambiguous': player+='<main><video width="640" height="360"></video></main>'
-                if iframe: player='<main><iframe src="/frame" width="640" height="360"></iframe></main>'
+                if iframe: player=f'<main><iframe src="{embed}" width="640" height="360"></iframe></main>'
                 script="const v=document.querySelector('video'); if(v){v.src=URL.createObjectURL(new MediaSource()); fetch('/advert.mp4').catch(()=>{}); fetch('/main.m3u8').catch(()=>{});}"
                 if self.path=='/ad-only': script=script.replace("fetch('/main.m3u8').catch(()=>{});",'')
                 if self.path=='/embedded' or self.path=='/frame':
                     metadata={}
                     script=script.replace("fetch('/advert.mp4').catch(()=>{});",'')
                 html=f'<html><head><script type="application/ld+json">{json.dumps(metadata)}</script></head><body>{player}<script>{script}</script></body></html>'
-                if self.path=='/restricted': html=html.replace('<body>','<body><input type="password">')
+                if self.path in {'/restricted','/frame-restricted'}: html=html.replace('<body>','<body><input type="password">')
                 if self.path=='/button-extensionless':
                     html='''<html><head></head><body><main id="player"><video width="640" height="360"></video><button aria-label="Play video">Play</button></main><script>
                     document.querySelector('button').onclick=()=>{const v=document.querySelector('video');v.src=URL.createObjectURL(new MediaSource());fetch('/media-endpoint').catch(()=>{});};
@@ -357,3 +358,7 @@ class MainVideoBrowserTests(unittest.TestCase):
                 path,_,_=download({**direct,'strictPublicEgress':True,'requestContext':context},Path(directory),1024,5)
                 self.assertEqual(path.read_bytes(),b'\x00\x00\x00\x18ftypisom'+b'\0'*20)
             self.assertIsNone(REQUEST_CONTEXT.get())
+
+    def test_structured_url_never_skips_restricted_embedded_player(self):
+        with self.assertRaisesRegex(ValueError,'main_video_restricted'):
+            self.run_browser('/iframe-restricted')
