@@ -1,6 +1,6 @@
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
-import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound } from "./main-video.js";
+import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound, markEgressResponse, safeAnalysisDiagnostic } from "./main-video.js";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
   DomainError,
@@ -151,8 +151,8 @@ DownloaderContainer.outboundByHost = {
 DownloaderContainer.outbound = async (request) => {
   try {
     const url = normalizeSourceUrl(request.url);
-    if (!["GET", "HEAD", "POST"].includes(request.method)) return new Response("Method Not Allowed", { status: 405 });
-    if (request.method === "POST" && !isAllowedExtractorPost(url)) return new Response("Method Not Allowed", { status: 405 });
+    if (!["GET", "HEAD", "POST"].includes(request.method)) return markEgressResponse(new Response("Method Not Allowed", { status: 405 }), 'egress');
+    if (request.method === "POST" && !isAllowedExtractorPost(url)) return markEgressResponse(new Response("Method Not Allowed", { status: 405 }), 'egress');
     const headers = new Headers({ "User-Agent": PRIVACY_EGRESS_USER_AGENT, "X-Real-IP": PRIVACY_EGRESS_IP });
     for (const name of OUTBOUND_REQUEST_HEADERS) {
       const value = request.headers.get(name);
@@ -165,9 +165,9 @@ DownloaderContainer.outbound = async (request) => {
       copyYoutubeExtractorHeader(request.headers, headers, "X-Youtube-Client-Version", /^[A-Za-z0-9._-]{1,40}$/, 40);
       copyYoutubeExtractorHeader(request.headers, headers, "X-Goog-Visitor-Id", /^[A-Za-z0-9_%=-]{1,2048}$/, 2048);
     }
-    return fetch(new Request(url, { method: request.method, headers, body: request.method === "POST" ? request.body : null, redirect: "manual" }));
+    return fetch(new Request(url, { method: request.method, headers, body: request.method === "POST" ? request.body : null, redirect: "manual" })).then(response => markEgressResponse(response, 'upstream'));
   } catch (error) {
-    return new Response(error instanceof DomainError ? error.message : "Blocked", { status: error instanceof DomainError ? error.status : 403 });
+    return markEgressResponse(new Response(error instanceof DomainError ? error.message : "Blocked", { status: error instanceof DomainError ? error.status : 403 }), error instanceof DomainError ? 'egress' : 'unknown');
   }
 };
 
@@ -469,13 +469,26 @@ async function processAnalyzeMessage(env, message) {
     let analysis = await response.json().catch(() => ({}));
     if (!response.ok && response.status === 422 && canExploreAnalysis(analysis.errorCode) &&
         env.MAIN_VIDEO_FALLBACK === "true" && !await analysisIsCancelled(env, message)) {
-      const extra = await exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxFileBytes(env), analysis.pagePlan);
+      const initialCode = normalizeContainerErrorCode(analysis.errorCode, response.status);
+      const extra = await exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxFileBytes(env), analysis.pagePlan, failure => {
+        analysis.diagnostic = failure.diagnostic;
+        analysis.supplementalError = failure.errorCode;
+        // Preserve the initial retry decision, but do not hide an explicit
+        // refusal discovered by the final explorer behind media_not_found.
+        if (terminalAnalysisError(failure.errorCode)) analysis.errorCode = failure.errorCode;
+        analysis.initialCode = initialCode;
+      });
       if (extra) analysis = extra;
     }
     if (!response.ok && analysis.extractor !== "main-video") {
       if (await analysisIsCancelled(env, message)) return;
-      console.error(JSON.stringify({ event: "downloader_container_analyze_failed", errorCode: cleanText(analysis.errorCode, 80) || "unknown", status: response.status }));
-      const error = new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
+      const diagnostic = safeAnalysisDiagnostic(analysis.diagnostic);
+      const errorCode = normalizeContainerErrorCode(analysis.errorCode, response.status);
+      console.error(JSON.stringify({ event: "downloader_container_analyze_failed", jobId, errorCode, ...diagnostic,
+        initialCode: analysis.initialCode, supplementalError: analysis.supplementalError, status: response.status,
+        healthMs: analysisStartedAt - healthStartedAt, analysisMs: Date.now() - analysisStartedAt }));
+      const error = new Error(errorCode);
+      error.diagnostic = diagnostic;
       error.analysisTerminal = response.status === 422 && terminalAnalysisError(analysis.errorCode);
       throw error;
     }
@@ -766,7 +779,7 @@ async function markAnalysisFailed(env, message, error, analysisToken = null) {
     .bind(failure.code, failure.category,
       ['bot_challenge','access_denied'].includes(failure.code) ? 'サイト側のアクセス制限により解析できません。' : 'このURLからメディアを確認できませんでした。',
       jobId, identityId, analysisToken, analysisToken).run();
-  if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_analyze_failed", "failure", { jobId, hostname: row.source_hostname, reason: queueErrorReason(error) });
+  if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_analyze_failed", "failure", { jobId, hostname: row.source_hostname, reason: queueErrorReason(error), ...safeAnalysisDiagnostic(error?.diagnostic) });
   return Boolean(update.meta?.changes);
 }
 

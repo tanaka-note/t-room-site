@@ -24,7 +24,38 @@ from ssrf import UnsafeUrl, validate_redirect, validate_url
 
 
 class ResolverError(ValueError):
-    pass
+    def __init__(self, code, diagnostic=None):
+        super().__init__(code)
+        self.diagnostic = safe_diagnostic(diagnostic)
+
+
+def safe_diagnostic(value):
+    """Only fixed labels and an HTTP status cross the process/log boundary."""
+    value = value if isinstance(value, dict) else {}
+    result = {}
+    for key, allowed in {
+        'stage': {'direct', 'html', 'metadata', 'chromium', 'prepare', 'discover', 'validate'},
+        'source': {'upstream', 'egress', 'browser', 'resolver', 'unknown'},
+    }.items():
+        if value.get(key) in allowed: result[key] = value[key]
+    status = value.get('httpStatus')
+    if type(status) is int and 100 <= status <= 599: result['httpStatus'] = status
+    return result
+
+
+def http_diagnostic(headers, status):
+    # Only our outbound handler writes this marker in production; it overwrites
+    # any origin-provided marker. Unmarked SDK/transport errors stay unknown.
+    source = headers.get('x-tlain-egress-source', 'unknown')
+    return safe_diagnostic({'source': source, 'httpStatus': status})
+
+
+def _at_stage(stage, call):
+    try:
+        return call()
+    except Exception as error:
+        error.diagnostic = {**safe_diagnostic(getattr(error, 'diagnostic', None)), 'stage': stage}
+        raise
 
 
 ANALYSIS_END = ContextVar('analysis_end', default=None)
@@ -186,7 +217,7 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
             # before any manifest request is made.
             raise ResolverError("adapter_resolution_required")
 
-    direct = _analyze_direct(safe.value, max_bytes)
+    direct = _at_stage('direct', lambda: _analyze_direct(safe.value, max_bytes))
     if direct:
         if policy_restricted:
             direct["warning"] = "このサイトは解析のみ対応しています。公式の保存機能をご利用ください。"
@@ -196,23 +227,23 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
         return direct
     specialized = has_specialized_extractor(safe.value) or policy_restricted
     if not specialized:
-        generic = _analysis_stage(lambda: _analyze_html(safe.value, max_bytes, browser=False))
+        generic = _analysis_stage(lambda: _at_stage('html', lambda: _analyze_html(safe.value, max_bytes, browser=False)))
         if generic:
             return generic
-    metadata = _analysis_stage(lambda: _yt_dlp_metadata(safe.value, timeout=90 if specialized else 8))
+    metadata = _analysis_stage(lambda: _at_stage('metadata', lambda: _yt_dlp_metadata(safe.value, timeout=90 if specialized else 8)))
     if metadata:
         return _normalize_ytdlp(metadata, safe.hostname, policy_restricted, safe.value)
     if policy_restricted:
         raise ResolverError("policy_restricted")
     if specialized:
-        generic = _analysis_stage(lambda: _analyze_html(safe.value, max_bytes, browser=False))
+        generic = _analysis_stage(lambda: _at_stage('html', lambda: _analyze_html(safe.value, max_bytes, browser=False)))
         if generic:
             return generic
     # A correlated iframe needs the bounded, separately allowlisted player
     # explorer; dump-dom cannot inspect its frame and adds another long wait.
     if (ANALYSIS_PLAN.get() or {}).get('embed'):
         raise ResolverError('media_not_found')
-    browser = _analysis_stage(lambda: _analyze_html(safe.value, max_bytes, browser=True))
+    browser = _analysis_stage(lambda: _at_stage('chromium', lambda: _analyze_html(safe.value, max_bytes, browser=True)))
     if browser:
         browser["browserFallbackUsed"] = True
         return browser
@@ -912,20 +943,23 @@ def _open(url: str, *, method: str, timeout: int, max_redirects: int, max_body: 
         try:
             response = opener.open(request, timeout=analysis_timeout(timeout))
             if ANALYSIS_END.get() is not None and response.headers.get('cf-mitigated') == 'challenge':
+                diagnostic = http_diagnostic(response.headers, response.status)
                 response.close()
-                raise ResolverError('bot_challenge')
+                raise ResolverError('bot_challenge', diagnostic)
             if max_body is not None and _safe_int(response.headers.get("Content-Length")) not in {None} and int(response.headers["Content-Length"]) > max_body:
                 response.close()
                 raise ResolverError("response_too_large")
             return response, current
         except Exception as error:
             code = getattr(error, "code", None)
+            response_headers = getattr(error, 'headers', {}) or {}
+            if ANALYSIS_END.get() is not None and response_headers.get('x-tlain-egress-source') == 'egress':
+                raise ResolverError('egress_denied', http_diagnostic(response_headers, code)) from None
             if ANALYSIS_END.get() is not None and code in {401, 403, 407, 429, 451}:
-                headers = getattr(error, 'headers', {}) or {}
-                if headers.get('cf-mitigated') == 'challenge':
-                    raise ResolverError('bot_challenge') from None
+                if response_headers.get('cf-mitigated') == 'challenge':
+                    raise ResolverError('bot_challenge', http_diagnostic(response_headers, code)) from None
                 if method != 'HEAD' or code != 403:
-                    raise ResolverError('access_denied') from None
+                    raise ResolverError('access_denied', http_diagnostic(response_headers, code)) from None
             if code not in {301, 302, 303, 307, 308}:
                 raise
             current = validate_redirect(current, error.headers.get("Location")).value

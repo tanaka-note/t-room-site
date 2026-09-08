@@ -12,13 +12,38 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlsplit
+from urllib.error import HTTPError
 
-from main_video import discover, run_phase, stop_process_tree, page_plan
-from resolver import ResolverError, _drm_dash, analyze, ANALYSIS_END, ANALYSIS_PLAN, _analysis_command
+from main_video import discover, run_phase, stop_process_tree, page_plan, error_payload
+from resolver import ResolverError, _drm_dash, analyze, ANALYSIS_END, ANALYSIS_PLAN, _analysis_command, _open, _at_stage
 from ssrf import SafeUrl
 
 
 class MainVideoUnitTests(unittest.TestCase):
+    def test_http_provenance_stage_and_challenge_survive_without_secrets(self):
+        token=ANALYSIS_END.set(time.monotonic()+10)
+        try:
+            for source,expected in [('upstream','bot_challenge'),('egress','egress_denied')]:
+                headers={'x-tlain-egress-source':source,'cf-mitigated':'challenge','Set-Cookie':'secret'}
+                upstream=HTTPError('https://example.com/?secret',403,'private text',headers,None)
+                with patch('resolver.validate_url',return_value=SafeUrl('https://example.com/','example.com')), \
+                     patch('resolver.build_opener',return_value=SimpleNamespace(open=lambda *a,**kw: (_ for _ in ()).throw(upstream))):
+                    with self.assertRaises(ResolverError) as raised:
+                        _at_stage('direct',lambda:_open('https://example.com/',method='GET',timeout=1,max_redirects=0))
+                    payload=error_payload(raised.exception)
+                    self.assertEqual(payload,{'errorCode':expected,'diagnostic':{'stage':'direct','source':source,'httpStatus':403}})
+                    self.assertNotIn('secret',json.dumps(payload))
+            self.assertEqual(error_payload(RuntimeError('https://example.com/?secret'))['errorCode'],'analysis_execution_failed')
+        finally: ANALYSIS_END.reset(token)
+
+    def test_child_error_metadata_is_preserved_and_sanitized_before_server(self):
+        payload={'errorCode':'bot_challenge','diagnostic':{'stage':'direct','source':'upstream','httpStatus':403,'cookie':'secret'}}
+        proc=SimpleNamespace(returncode=0,communicate=lambda *a,**kw:(json.dumps(payload),None),wait=lambda:None)
+        with patch('main_video.subprocess.Popen',return_value=proc),patch('main_video.stop_process_tree') as stop:
+            with self.assertRaises(ResolverError) as raised: run_phase({'phase':'analyze','budgetSeconds':2})
+            self.assertEqual(raised.exception.diagnostic,{'stage':'direct','source':'upstream','httpStatus':403})
+            stop.assert_called_once_with(proc)
+
     @unittest.skipUnless(importlib.util.find_spec('yt_dlp'), 'installed in production runtime')
     def test_actual_extractor_selection_is_offline_and_keeps_youtube(self):
         from resolver import has_specialized_extractor
@@ -135,6 +160,11 @@ class MainVideoBrowserTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args): pass
             def do_GET(self):
+                if self.path in {'/challenge','/egress'}:
+                    self.send_response(403)
+                    self.send_header('cf-mitigated','challenge')
+                    self.send_header('x-tlain-egress-source','upstream' if self.path=='/challenge' else 'egress')
+                    self.end_headers();return
                 root=f'http://127.0.0.1:{self.server.server_port}'
                 iframe=self.path in {'/iframe','/embedded'}
                 embed='/frame' if iframe else ''
@@ -174,3 +204,9 @@ class MainVideoBrowserTests(unittest.TestCase):
     def test_ads_ambiguity_and_login_are_not_adopted(self):
         for path in ['/ad-only','/ambiguous','/restricted']:
             with self.subTest(path=path),self.assertRaises(ValueError): self.run_browser(path)
+
+    def test_browser_navigation_reports_upstream_challenge_and_own_denial(self):
+        for path,code,source in [('/challenge','bot_challenge','upstream'),('/egress','egress_denied','egress')]:
+            with self.subTest(path=path),self.assertRaises(ResolverError) as raised: self.run_browser(path)
+            self.assertEqual(str(raised.exception),code)
+            self.assertEqual(raised.exception.diagnostic,{'source':source,'httpStatus':403})

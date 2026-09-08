@@ -15,6 +15,17 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from ssrf import validate_url
+from resolver import ResolverError, safe_diagnostic, http_diagnostic
+
+
+def error_payload(error, stage=None):
+    code = str(error)
+    # Unexpected Playwright/OS errors can contain complete URLs or headers.
+    if not isinstance(error, (ResolverError, ValueError)) or not re.fullmatch('[a-z][a-z0-9_]{0,79}', code):
+        code = 'main_video_timeout' if isinstance(error, TimeoutError) else 'analysis_execution_failed'
+    diagnostic = safe_diagnostic(getattr(error, 'diagnostic', None))
+    if stage: diagnostic = safe_diagnostic({**diagnostic, 'stage': stage})
+    return {'errorCode': code, 'diagnostic': diagnostic}
 
 
 AD_MARKER = re.compile(r'(^|[\s_-])(ad|ads|advert|advertisement|sponsor|related|preview|trailer)([\s_-]|$)', re.I)
@@ -115,7 +126,7 @@ async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_p
     if safe.hostname not in allowed:
         raise ValueError('main_video_host_blocked')
     requests = []
-    failed = False
+    failed = None
     count = 0
     transferred = 0
     started = time.monotonic()
@@ -148,7 +159,7 @@ async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_p
                     target = validate_url(req.url)
                     headers = await req.all_headers()
                     if failed or count > 32 or req.method not in {'GET', 'HEAD'} or headers.get('authorization') or headers.get('cookie'):
-                        failed = True
+                        failed = ResolverError('main_video_request_rejected', {'source':'browser'})
                         return await route.abort()
                     if req.resource_type in {'media', 'fetch', 'xhr'}:
                         if len(requests) < 32:
@@ -171,27 +182,38 @@ async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_p
                         max_redirects=0, timeout=max(1, (timeout - (time.monotonic()-started)) * 1000),
                     )
                     if response.status in {401, 403, 407, 429, 451}:
-                        failed = True
+                        diagnostic = http_diagnostic(response.headers, response.status)
+                        code = ('egress_denied' if diagnostic.get('source') == 'egress' else
+                                'bot_challenge' if response.headers.get('cf-mitigated') == 'challenge' else 'access_denied')
+                        failed = ResolverError(code, diagnostic)
                     # Redirects are intentionally denied in this initial public
                     # subset: no unvalidated redirect is followed by the browser.
                     if response.status >= 300 or int(response.headers.get('content-length', '0')) > 1_000_000:
+                        failed = failed or ResolverError('main_video_redirect_rejected' if 300 <= response.status < 400 else
+                            'main_video_http_failed' if response.status >= 400 else 'main_video_response_limit',
+                            http_diagnostic(response.headers, response.status))
                         return await route.abort()
                     body = await response.body()
                     transferred += len(body)
                     if len(body) > 1_000_000 or transferred > 2_000_000:
-                        failed = True
+                        failed = ResolverError('main_video_response_limit', {'source':'browser'})
                         return await route.abort()
                     headers = {k:v for k,v in response.headers.items() if k.lower() not in {'set-cookie','content-length','content-encoding','location'}}
                     await route.fulfill(status=response.status, headers=headers, body=body)
                 except Exception:
-                    failed = True
+                    failed = failed or ResolverError('main_video_network_failed', {'source':'browser'})
                     await route.abort()
 
             await context.route('**/*', intercept)
-            await page.goto(safe.value, wait_until='domcontentloaded', timeout=max(1, timeout * 1000))
+            try:
+                await page.goto(safe.value, wait_until='domcontentloaded', timeout=max(1, timeout * 1000))
+            except Exception:
+                if failed: raise failed from None
+                raise
             played = False
             while time.monotonic() - started < timeout - 0.2:
-                if failed or await page.evaluate(RESTRICTED):
+                if failed: raise failed
+                if await page.evaluate(RESTRICTED):
                     raise ValueError('main_video_restricted')
                 metadata = await page.evaluate(METADATA) or {'url':'', 'embed':plan.get('embed',''), 'title':''}
                 if metadata:
@@ -285,7 +307,7 @@ def run_phase(body: dict) -> dict:
                 raise ResolverError('main_video_failed')
             result = json.loads(output)
             if result.get('errorCode'):
-                error = ResolverError(result['errorCode'])
+                error = ResolverError(result['errorCode'], result.get('diagnostic'))
                 error.page_plan = result.get('pagePlan')
                 raise error
             return result
@@ -305,9 +327,7 @@ def main():
         try:
             return analyze(body['url'], int(body['maxBytes']), bool(body.get('policyRestricted')))
         except Exception as error:
-            code = str(error)
-            return {'errorCode':code if re.fullmatch('[a-z][a-z0-9_]{0,79}',code) else 'analysis_execution_failed',
-                    'pagePlan':ANALYSIS_PLAN.get()}
+            return {**error_payload(error), 'pagePlan':ANALYSIS_PLAN.get()}
     if body.get('phase') == 'prepare':
         ANALYSIS_END.set(time.monotonic() + float(body['budgetSeconds']) - 0.5)
         response, final_url = _open(body['url'], method='GET', timeout=5, max_redirects=0, max_body=1_000_000)
@@ -336,6 +356,6 @@ def main():
 if __name__ == '__main__':
     try:
         print(json.dumps(main()))
-    except Exception:
+    except Exception as error:
         # Neither browser error strings nor the source URL enter logs/output.
-        print(json.dumps({'errorCode': 'main_video_unavailable'}))
+        print(json.dumps(error_payload(error)))

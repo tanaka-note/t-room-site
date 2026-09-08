@@ -155,3 +155,11 @@ Containerコード公開は`ClamAV daily definitions`の手動入力`release_cod
 本番build `downloader-bc6772b65629`、Worker `11ce3f56-8db9-484e-ac2e-0be8cd0d376b`（100%）、deployment `51ea6ac2-d7f8-45b7-9d05-431067fc9087`。Container13 / digest `sha256:b9e49c44884574d0a266ae286bd667246761d20a2cfa1e1c72fd80a9087f8208`、rollout `e39fe4f9-2fb1-4a7d-ae90-da907b44eb63` completed・activeなし。mainとHTML build/配信JS一致、未認証jobs 401、TTL3600・10分Cron・D1/R2/Queue・flag=trueを確認。定義生成2026-09-07 06:24:32 UTC、期限09-14同時刻、D1 image/source_image一致。
 
 切り戻し: 補助探索だけならMAIN_VIDEO_FALLBACK=false。解析順序も戻す場合はWorker前版 `3fda4375-5ea2-4944-b287-a69efa8984ac` と、定義更新手順で鮮度を再検証したprevious image `sha256:0ddbf30cfc90877d567310eb06f6c34474188ab01c71c60ff9fe58b05ba15d38` を組み合わせる。進行中job/drain・active rollout・D1 image/source_image整合を省略しない。
+
+### 解析拒否の診断（2026-09-08）
+
+Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工程名・発生元・HTTP statusを引き継ぐ。補助探索のHTTP/redirect/通信拒否を一律`unavailable`にしない。Worker送信handlerは相手由来の診断markerを上書きし、上流応答と自前のpolicy拒否を識別する。SDKがhandler到達前に返す応答など、発生元を確認できないものは`unknown`のままにする。URL/query、Cookie、Authorization、本文は診断へ渡さない。失敗ログにはjob ID、起動待ちと解析の経過時間を含める（CPU時間ではない）。監査は既存のtoken付きCAS成功後だけ記録する。
+
+対象ページの通常Chromeでは、main playerに同一ホストHLSの参照があり、明確なPlay buttonを1回押すとblob再生へ移った。関連previewとは区別して確認し、直後にページを閉じて転送を止めた。このDOMでは本編iframe必須とは確認できなかった。一方、Cookieを持たないWindows HTTPは既存/ブラウザ相当UAとも403＋`cf-mitigated: challenge`、新規Chromium contextは307→403 challengeでvideo要素へ到達しなかった。通常Chromeとの環境差の具体的原因（profile状態等）は未確定。UA/Acceptの置換だけで解決したとは扱わない。[Cloudflareのchallenge応答仕様](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)に従い、確定拒否をfallbackで回避しない。
+
+この修正は観測した診断欠落の是正であり、対象動画の取得成功やサーバーからのchallenge通過を実現したものではない。Cookie/POST/認証・通信先制限は維持し、追加待機・リクエスト・ブラウザ起動を増やさない。正常経路の変更は診断headerの付与のみで、速度差や請求増分は未計測。エンジン・定義・Container枠は変更しない。

@@ -2,9 +2,47 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { canExploreAnalysis, terminalAnalysisError, assertPublicDestination, publicAddress, exploreMainVideo, mainVideoOutbound } from '../src/main-video.js';
+import { canExploreAnalysis, terminalAnalysisError, assertPublicDestination, publicAddress, exploreMainVideo, mainVideoOutbound, safeAnalysisDiagnostic, markEgressResponse } from '../src/main-video.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const dns=addresses=>async()=>Response.json({Status:0,Answer:addresses.map(data=>({type:data.includes(':')?28:1,data}))});
+
+test('upstream cannot forge own-policy provenance; diagnostics contain no URL/header/body',async()=>{
+ const response=markEgressResponse(new Response('origin',{status:403,headers:{'X-Tlain-Egress-Source':'egress','cf-mitigated':'challenge'}}),'upstream');
+ assert.equal(response.headers.get('X-Tlain-Egress-Source'),'upstream');
+ assert.equal(response.status,403);assert.equal(await response.text(),'origin');
+ assert.deepEqual(safeAnalysisDiagnostic({stage:'direct',source:'upstream',httpStatus:403,url:'https://host/?secret',cookie:'secret',body:'secret'}),{stage:'direct',source:'upstream',httpStatus:403});
+ assert.deepEqual(safeAnalysisDiagnostic({stage:'https://host/?secret',source:'secret',httpStatus:'403'}),{});
+ assert.equal(canExploreAnalysis('egress_denied'),false);assert.equal(terminalAnalysisError('egress_denied'),true);
+});
+
+test('standard egress preserves privacy, manual redirects and body while identifying upstream',async()=>{
+ const requests=[];
+ class DomainError extends Error {}
+ const ctx={DownloaderContainer:{},normalizeSourceUrl:x=>new URL(x),Request,Response,Headers,DomainError,
+  PRIVACY_EGRESS_USER_AGENT:'Mozilla/5.0',PRIVACY_EGRESS_IP:'2a06:98c0:3600::103',OUTBOUND_REQUEST_HEADERS:['Accept','Range'],
+  isAllowedExtractorPost:()=>false,markEgressResponse,fetch:async req=>{requests.push(req);return new Response('fixture',{status:403,headers:{'X-Tlain-Egress-Source':'egress'}})}};
+ vm.createContext(ctx);
+ vm.runInContext(source.slice(source.indexOf('DownloaderContainer.outbound ='),source.indexOf('DownloaderContainer.outboundHandlers =')),ctx);
+ const response=await ctx.DownloaderContainer.outbound(new Request('https://example.com/',{headers:{Cookie:'secret',Authorization:'secret',Referer:'https://private.example',Range:'bytes=0-9'}}));
+ assert.equal(response.headers.get('X-Tlain-Egress-Source'),'upstream');assert.equal(await response.text(),'fixture');
+ assert.equal(requests[0].redirect,'manual');assert.equal(requests[0].headers.get('User-Agent'),'Mozilla/5.0');
+ for(const header of ['Cookie','Authorization','Referer'])assert.equal(requests[0].headers.get(header),null);
+ assert.equal(requests[0].headers.get('Range'),'bytes=0-9');
+ const denied=await ctx.DownloaderContainer.outbound(new Request('https://example.com/',{method:'POST'}));
+ assert.equal(denied.status,405);assert.equal(denied.headers.get('X-Tlain-Egress-Source'),'egress');assert.equal(requests.length,1);
+});
+
+test('failed explorer preserves phase, refusal and origin status instead of unavailable',async()=>{
+ let failure;const logs=[];const previous=console.log;console.log=x=>logs.push(x);
+ const container={async claimMainVideoExploration(){return true},async setAllowedHosts(){},async setOutboundHandler(){},async fetch(){
+  return Response.json({errorCode:'bot_challenge',diagnostic:{source:'upstream',httpStatus:403,cookie:'secret'}},{status:422});
+ }};
+ try {
+  assert.equal(await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},container,new URL('https://example.com/?secret'),Date.now()+120000,1024,null,x=>failure=x),null);
+  assert.deepEqual(failure,{errorCode:'bot_challenge',diagnostic:{stage:'discover',source:'upstream',httpStatus:403}});
+  assert.ok(!logs.join('').includes('secret'));assert.ok(logs[0].includes('bot_challenge'));
+ } finally {console.log=previous}
+});
 
 test('recoverable extractor failures explore once; explicit refusals never explore',()=>{
  for(const code of ['metadata_timeout','extractor_failed','metadata_invalid','media_not_found']) {

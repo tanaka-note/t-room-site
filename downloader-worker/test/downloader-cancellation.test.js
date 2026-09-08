@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import vm from 'node:vm';
-import {canExploreAnalysis,terminalAnalysisError} from '../src/main-video.js';
+import {canExploreAnalysis,terminalAnalysisError,safeAnalysisDiagnostic} from '../src/main-video.js';
 import * as domain from '../src/downloader-domain.js';
 import {aggregateUsageRows,classifyUsageError} from '../src/downloader-usage.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
@@ -24,7 +24,7 @@ function binding(db) {
   } };
 }
 function harness(db,container={async cancelAnalysis(){},async release(){}}){
-  const events=[]; const context={...domain,classifyUsageError,queueErrorReason:()=>"fixture",canExploreAnalysis,terminalAnalysisError,Request,Response,AbortSignal,URL,console,Date,crypto,Math,
+  const events=[]; const context={...domain,classifyUsageError,queueErrorReason:()=>"fixture",canExploreAnalysis,terminalAnalysisError,safeAnalysisDiagnostic,Request,Response,AbortSignal,URL,console,Date,crypto,Math,
     HttpError: class extends Error {constructor(status,message){super(message);this.status=status}},
     ensureContainerConfigured(env){assert.ok(env.DOWNLOADER_CONTAINER)},getContainer(_ns,name){events.push(name);return container},
     json:Response.json,nowSeconds:()=>1000,safeErrorName:e=>e.message,

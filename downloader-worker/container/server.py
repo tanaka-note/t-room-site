@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from resolver import ResolverError, analyze, download, resolve_site_adapter
+from resolver import ResolverError, analyze, download, resolve_site_adapter, safe_diagnostic
 from scanner import UnsafeFile, clamav_daemon_ready, clamav_database_status, inspect_validated_file, start_clamav_daemon, stop_clamav_daemon, validate_file, yara_rules_status
 from ssrf import UnsafeUrl
 from media_pipeline import PlanKind, normalize_video
@@ -81,7 +81,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "not_found"})
         except (UnsafeUrl, ResolverError) as error:
             return self._json(422, {"error": "このURLからメディアを確認できませんでした。", "errorCode": str(error),
-                                    "pagePlan":getattr(error, 'page_plan', None)})
+                                    "pagePlan":getattr(error, 'page_plan', None),
+                                    "diagnostic":safe_diagnostic(getattr(error, 'diagnostic', None))})
         except UnsafeFile as error:
             return self._json(422, {"error": "安全性を確認できなかったため取得を中止しました。", "errorCode": f"scan_{error}"})
         except TimeoutError:

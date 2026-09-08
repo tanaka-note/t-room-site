@@ -1,6 +1,23 @@
 import { isIP } from 'node:net';
 import { normalizeSourceUrl, isBlockedIpLiteral, isPolicyRestrictedHost } from './downloader-domain.js';
 
+export function safeAnalysisDiagnostic(value) {
+  const result={};
+  if(['direct','html','metadata','chromium','prepare','discover','validate'].includes(value?.stage)) result.stage=value.stage;
+  if(['upstream','egress','browser','resolver','unknown'].includes(value?.source)) result.source=value.source;
+  if(Number.isInteger(value?.httpStatus) && value.httpStatus>=100 && value.httpStatus<=599) result.httpStatus=value.httpStatus;
+  return result;
+}
+
+export function markEgressResponse(response, source) {
+  const headers=new Headers(response.headers);
+  // Never trust an origin-supplied diagnostic marker.
+  headers.set('X-Tlain-Egress-Source', source);
+  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+}
+
+const blocked = () => markEgressResponse(new Response('Blocked',{status:403}), 'egress');
+
 export function canExploreAnalysis(code) {
   return new Set(['metadata_timeout','metadata_invalid','extractor_failed','media_not_found',
     'browser_execution_failed','download_timeout','download_network_failed','analysis_execution_failed']).has(code);
@@ -9,7 +26,7 @@ export function canExploreAnalysis(code) {
 export function terminalAnalysisError(code) {
   return canExploreAnalysis(code) || new Set(['drm','drm_not_supported','encrypted_stream','encrypted_stream_not_supported',
     'login_required','premium_required','geo_restricted','policy_restricted','extractor_intentionally_unsupported',
-    'bot_challenge','access_denied','analysis_deadline_exceeded','live_stream_not_supported']).has(code);
+    'bot_challenge','access_denied','egress_denied','analysis_deadline_exceeded','live_stream_not_supported']).has(code);
 }
 
 export function publicAddress(address) {
@@ -55,17 +72,17 @@ export async function assertPublicDestination(value, signal, fetcher = fetch) {
 export async function mainVideoOutbound(request, _env, ctx) {
   try {
     const policy = ctx.params;
-    if (!policy || Date.now() >= policy.until || !['GET','HEAD'].includes(request.method)) return new Response('Blocked', {status:403});
+    if (!policy || Date.now() >= policy.until || !['GET','HEAD'].includes(request.method)) return blocked();
     const signal = AbortSignal.timeout(Math.max(1, policy.until-Date.now()));
     const url = normalizeSourceUrl(request.url);
-    if (!policy.hosts.includes(url.hostname)) return new Response('Blocked', {status:403});
+    if (!policy.hosts.includes(url.hostname)) return blocked();
     await assertPublicDestination(url.href, signal);
     const headers = new Headers({'User-Agent':'Mozilla/5.0','X-Real-IP':'2a06:98c0:3600::103'});
     for (const name of ['Accept','Range','If-Range']) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value.slice(0,512));
     }
-    const response = await fetch(url, {method:request.method, headers, redirect:'manual', signal});
+    const response = markEgressResponse(await fetch(url, {method:request.method, headers, redirect:'manual', signal}), 'upstream');
     if (!policy.bounded || !response.body) return response;
     let size=0;
     const body=response.body.pipeThrough(new TransformStream({transform(chunk, controller) {
@@ -74,7 +91,10 @@ export async function mainVideoOutbound(request, _env, ctx) {
       controller.enqueue(chunk);
     }}));
     return new Response(body,{status:response.status,headers:response.headers});
-  } catch { return new Response('Blocked', {status:403}); }
+  } catch (error) {
+    const own = ['main_video_dns_blocked','main_video_policy_restricted'].includes(error?.message) || error?.name==='DomainError';
+    return markEgressResponse(new Response('Blocked', {status:403}), own ? 'egress' : 'unknown');
+  }
 }
 
 export async function configureMainVideoEgress(container, hosts, until, bounded = true) {
@@ -84,7 +104,7 @@ export async function configureMainVideoEgress(container, hosts, until, bounded 
   await container.setOutboundHandler('mainVideo', {hosts:exact,until,bounded});
 }
 
-export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxBytes, pagePlan = null) {
+export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxBytes, pagePlan = null, onFailure = () => {}) {
   const started=Date.now();
   const until = Math.min(analysisEndsAt, Date.now()+10_000);
   if (env.MAIN_VIDEO_FALLBACK !== 'true' || until-Date.now()<1000 || isPolicyRestrictedHost(sourceUrl.hostname)) return null;
@@ -99,7 +119,11 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
       body:JSON.stringify({...body,budgetSeconds:remaining()/1000,expiresAtMs:until}),signal:AbortSignal.timeout(remaining())
     }));
     const value=await response.json();
-    if(!response.ok) throw new Error('main_video_unavailable');
+    if(!response.ok) {
+      const error = new Error(/^[a-z][a-z0-9_]{0,79}$/.test(value.errorCode || '') ? value.errorCode : 'main_video_http_failed');
+      error.diagnostic=safeAnalysisDiagnostic({...value.diagnostic,stage:body.phase});
+      throw error;
+    }
     return value;
   };
   const run = async () => { try {
@@ -142,8 +166,11 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
     if(found.title) analysis.title=String(found.title).slice(0,240);
     console.log(JSON.stringify({event:'downloader_main_video',result:'found',elapsedMs:Date.now()-started}));
     return analysis;
-  } catch {
-    console.log(JSON.stringify({event:'downloader_main_video',result:'unavailable'}));
+  } catch (error) {
+    const errorCode=/^[a-z][a-z0-9_]{0,79}$/.test(error?.message || '') ? error.message : 'analysis_execution_failed';
+    const diagnostic=safeAnalysisDiagnostic(error?.diagnostic);
+    onFailure({errorCode,diagnostic});
+    console.log(JSON.stringify({event:'downloader_main_video',result:'failed',errorCode,...diagnostic,elapsedMs:Date.now()-started}));
     return null;
   }};
   let timer;
