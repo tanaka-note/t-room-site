@@ -592,7 +592,9 @@ try {
   const disabledIdentityList = await securityAdminRequest("/security/api/identities", freshAdminCookie);
   assert.equal(disabledIdentityList.body.identities.some((identity) => identity.id === disabledLifecycleIdentityId), false,
     "disabled Identities disappear from the normal user list");
-  assert.equal(disabledIdentityList.body.auditIdentities.some((identity) => identity.id === disabledLifecycleIdentityId), true,
+  assert.equal(disabledIdentityList.body.auditIdentities.length, 0);
+  const disabledAuditIdentityList = await securityAdminRequest("/security/api/identities?includeDisabled=true", freshAdminCookie);
+  assert.equal(disabledAuditIdentityList.body.auditIdentities.some((identity) => identity.id === disabledLifecycleIdentityId), true,
     "a disabled Identity with retained audit history remains available to the audit filter");
   assert.equal((await createSecurityHandoff(disabledLifecycleIdentityCookie, "cloud", disabledLifecycleCloudLinkId)).response.status, 401,
     "the old Security Identity cookie is rejected on its next access");

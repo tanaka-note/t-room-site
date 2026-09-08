@@ -615,8 +615,8 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#audit-list .audit-row").first().waitFor();
     assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=/, `${name}: all users remains the default audit filter`);
     assert.deepEqual(await unsupported.locator("#audit-identity option").allTextContents(),
-      ["すべて", "第一管理者", "過去利用者（停止済み）"],
-      `${name}: registered users remain selectable while invitation-only identities are excluded`);
+      ["すべて", "第一管理者", ...(detailUiIdentityVisible ? ["詳細UIテスト"] : []), ...(cancelledInviteIdentityVisible ? ["取消テストユーザー"] : [])],
+      `${name}: current and preparing users remain selectable while disabled identities are excluded`);
     const auditText = await unsupported.locator("#audit-list").innerText();
     assert.match(auditText, /パスキーでログイン成功/, `${name}: known audit event is shown in Japanese`);
     assert.match(auditText, /パスキーの本人確認に成功/, `${name}: intermediate WebAuthn success is distinct from a completed login`);
@@ -651,6 +651,8 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: the primary administrator filter sends its Identity ID`);
     assert.match(receivedAuditQueries.at(-1), /service=cloud/, `${name}: user and service filters are combined`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: a new user search does not reuse the prior cursor`);
+    await unsupported.locator("#audit-include-disabled").check();
+    await unsupported.waitForFunction(() => !!document.querySelector('#audit-identity option[value="retired-audit-user"]'));
     await unsupported.locator("#audit-identity").selectOption("retired-audit-user");
     await unsupported.getByRole("button", { name: "もっと見る" }).click();
     assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: paging keeps the submitted user filter`);

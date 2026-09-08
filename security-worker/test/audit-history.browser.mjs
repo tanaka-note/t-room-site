@@ -28,10 +28,13 @@ const server = createServer(async (request, response) => {
     if (failNext) { failNext = false; return send({ error: "一時的に確認できません" }, 503); }
     return send(await fixture.query(url.search.slice(1)));
   }
+  if (url.pathname === "/security/api/identities" && url.searchParams.get("includeDisabled") === "true") {
+    return send({ auditIdentities: [{ id: "retired-user", displayName: "田中宏知", status: "disabled" }] });
+  }
   const api = {
     "/security/api/setup/status": { active: false },
     "/security/api/status": { enabled: true, initialized: true, adminAuthenticated: true },
-    "/security/api/services": { services: [] },
+    "/security/api/services": { services: [{ id: "diary", displayName: "日記", targets: [] }] },
     "/security/api/dashboard": {},
     "/security/api/identities": { identities: [{ id: "test-user", displayName: "副管理者", status: "active" }], pendingIdentities: [], auditIdentities: [] }
   };
@@ -112,8 +115,32 @@ try {
   assert.match(await page.locator("#audit-status").innerText(), /読み込めませんでした/);
   await page.locator("#audit-refresh").click(); await settle();
   assert.equal(await page.locator(".audit-row").count(), 3);
+  fixture.add({ identity_id: "retired-user", service_account_label: "旧サービス名" });
+  await choose("all");
+  assert.doesNotMatch(await page.locator("#identity-list").innerText(), /田中宏知/);
+  assert.equal(await page.locator("#audit-include-disabled").isChecked(), false);
+  assert.equal(await page.locator('#audit-identity option[value="retired-user"]').count(), 0);
+  await page.locator("#audit-load-more").click(); await settle();
+  assert.match(await page.locator("#audit-list").innerText(), /田中宏知/);
+  await page.locator("#audit-include-disabled").check();
+  await page.waitForFunction(() => !!document.querySelector('#audit-identity option[value="retired-user"]'));
+  assert.equal(await page.locator('#audit-identity option[value="retired-user"]').innerText(), "田中宏知（停止済み）");
+  await page.locator("#audit-identity").selectOption("retired-user");
+  await page.getByRole("button", { name: "履歴を絞り込む" }).click(); await settle();
+  assert.equal(await page.locator(".audit-row").count(), 1);
+  assert.match(await page.locator("#audit-list").innerText(), /田中宏知/);
+  await page.locator("#audit-include-disabled").uncheck(); await settle();
+  assert.equal(await page.locator("#audit-identity").inputValue(), "");
+  assert.equal(await page.locator('#audit-identity option[value="retired-user"]').count(), 0);
+  assert.doesNotMatch(queries.at(-1), /identityId=retired-user/);
+  await page.locator("#audit-include-disabled").check();
+  await page.waitForFunction(() => !!document.querySelector('#audit-identity option[value="retired-user"]'));
+  await page.locator("#audit-filter-clear").click(); await settle();
+  assert.equal(await page.locator("#audit-include-disabled").isChecked(), false);
+  assert.equal(await page.locator('#audit-identity option[value="retired-user"]').count(), 0);
   for (const width of [1280, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
+    assert.equal(await page.locator("#audit-include-disabled").isVisible(), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `no page overflow at ${width}`);
     for (const view of ["all", "password", "passkey", "attention"]) assert.equal(await page.locator(`[data-audit-view="${view}"]`).isVisible(), true);
     const geometry = await page.locator(".audit-summary").first().evaluate((row) => ({ width: row.clientWidth, scroll: row.scrollWidth, columns: getComputedStyle(row).gridTemplateColumns, after: getComputedStyle(row, '::after').gridColumn,
@@ -123,7 +150,7 @@ try {
   }
   await page.setViewportSize({ width: 1280, height: 900 });
   await choose("password");
-  await page.locator("#audit-search > summary").click();
+  if (await page.locator("#audit-search").getAttribute("open") === null) await page.locator("#audit-search > summary").click();
   await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({ path: process.env.AUDIT_SCREENSHOT || "../tmp/security-audit-desktop.png" });
   await page.setViewportSize({ width: 390, height: 844 });

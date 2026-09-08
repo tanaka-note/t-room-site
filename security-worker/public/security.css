@@ -167,3 +167,5 @@ output { overflow-wrap: anywhere; }
 .audit-summary > :nth-child(4) { grid-area: method; }
 .audit-summary > :nth-child(5) { grid-area: outcome; }
 .audit-summary > :nth-child(6) { grid-area: device; }
+.audit-disabled-toggle { grid-column: 1 / -1; display: flex; align-items: center; gap: .5rem; }
+.audit-disabled-toggle input { width: auto; margin: 0; }

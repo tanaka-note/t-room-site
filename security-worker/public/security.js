@@ -5,6 +5,7 @@
   const state = {
     adminPrf: null, adminCredentialId: null, selectedIdentity: null,
     pendingInviteCloud: null, pendingPrimarySetup: null, identityNames: new Map(),
+    currentIdentities: [], auditIdentities: [], auditIdentitiesRequest: 0,
     auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: []
   };
   const $ = (selector) => document.querySelector(selector);
@@ -90,7 +91,32 @@
     }));
     $("#audit-filter-clear").addEventListener("click", () => {
       $("#audit-filter").reset();
+      state.auditIdentitiesRequest++;
+      state.auditIdentities = [];
+      populateAuditIdentityFilter(state.currentIdentities);
       loadAudit().catch((error) => showMessage(error.message, true));
+    });
+    $("#audit-include-disabled").addEventListener("change", async () => {
+      const requestId = ++state.auditIdentitiesRequest;
+      const selected = $("#audit-identity").value;
+      if (!$("#audit-include-disabled").checked) {
+        const appliedIdentity = new URLSearchParams(state.auditQuery).get("identityId");
+        const disabledFilterApplied = state.auditIdentities.some((identity) => identity.id === appliedIdentity);
+        state.auditIdentities = [];
+        populateAuditIdentityFilter(state.currentIdentities);
+        if (disabledFilterApplied || (selected && !$("#audit-identity").value)) await loadAudit();
+        return;
+      }
+      try {
+        const data = await get("/identities?includeDisabled=true");
+        if (requestId !== state.auditIdentitiesRequest || !$("#audit-include-disabled").checked) return;
+        state.auditIdentities = Array.isArray(data.auditIdentities) ? data.auditIdentities : [];
+        populateAuditIdentityFilter([...state.currentIdentities, ...state.auditIdentities]);
+      } catch (error) {
+        if (requestId !== state.auditIdentitiesRequest) return;
+        $("#audit-include-disabled").checked = false;
+        showMessage(error.message, true);
+      }
     });
     $("#audit-refresh").addEventListener("click", async (event) => {
       const button = event.currentTarget;
@@ -386,11 +412,11 @@
 
   async function loadIdentities() {
     const data = await get("/identities");
-    const currentIdentities = Array.isArray(data.identities) ? data.identities : [];
-    const pendingIdentities = Array.isArray(data.pendingIdentities) ? data.pendingIdentities : [];
-    const auditIdentities = Array.isArray(data.auditIdentities) ? data.auditIdentities : [];
-    state.identityNames = new Map([...currentIdentities, ...pendingIdentities, ...auditIdentities].map((identity) => [identity.id, identity.displayName]));
-    populateAuditIdentityFilter([...currentIdentities, ...auditIdentities]);
+    const currentIdentities = (Array.isArray(data.identities) ? data.identities : []).filter((identity) => identity.status !== "disabled");
+    const pendingIdentities = (Array.isArray(data.pendingIdentities) ? data.pendingIdentities : []).filter((identity) => identity.status !== "disabled");
+    state.currentIdentities = [...currentIdentities, ...pendingIdentities];
+    state.identityNames = new Map(state.currentIdentities.map((identity) => [identity.id, identity.displayName]));
+    populateAuditIdentityFilter([...state.currentIdentities, ...state.auditIdentities]);
     const identityRow = (identity) => `<div class="identity-row"><button data-view-identity="${escapeHtml(identity.id)}">詳細</button><strong>${escapeHtml(identity.displayName)}</strong><div class="status-${escapeHtml(identity.status)}">${escapeHtml(display.identityStatusLabel(identity.status))}・パスキー ${identity.activeCredentials}件${identity.pendingCredentials ? `・承認待ち ${identity.pendingCredentials}件` : ""}</div><small>${identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(identity.lastLoginAt))}` : "認証履歴なし"}${identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(identity.lastSeenAt))}` : ""}</small></div>`;
     const registered = currentIdentities.map(identityRow).join("") || "<p>登録済みユーザーはいません。</p>";
     const pending = pendingIdentities.map(identityRow).join("");
@@ -759,6 +785,7 @@
     const selected = select.value;
     const unique = new Map();
     for (const identity of identities) {
+      if (identity.status === "disabled" && !$("#audit-include-disabled").checked) continue;
       if (identity?.id && !unique.has(identity.id)) unique.set(identity.id, identity);
     }
     select.replaceChildren(new Option("すべて", ""));
@@ -789,13 +816,14 @@
   function renderAuditEvent(event) {
     const identityId = String(event.identity_id || "");
     const serviceAccountId = String(event.service_account_id || "");
-    const actor = display.identityLabel(identityId, state.identityNames.get(identityId), serviceAccountId, event.role);
+    const identityName = event.identity_display_name || state.identityNames.get(identityId);
+    const actor = display.identityLabel(identityId, identityName, serviceAccountId, event.role);
     const outcome = String(event.outcome || "");
     const outcomeClass = ["success", "failure", "blocked", "cancelled", "info"].includes(outcome) ? outcome : "unknown";
     const userAgent = String(event.user_agent || "");
     // Password audit attribution describes a service account, not necessarily a
     // verified person. Prefer its saved label when Identity linkage is absent.
-    const user = state.identityNames.has(identityId) || identityId === "primary-admin"
+    const user = identityName || identityId === "primary-admin"
       ? actor : event.service_account_label || actor;
     const fields = [
       ["Identity ID", identityId], ["サービス内ID", serviceAccountId],

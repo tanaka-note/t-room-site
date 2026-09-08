@@ -1,4 +1,5 @@
 import { readDefinitionStatus, runDefinitionSchedule } from "./definition-status.js";
+import { cleanupDisabledIdentities } from "./identity-cleanup.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue } from "../../assets/session-policy.mjs";
 import {
@@ -106,6 +107,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
         this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
         this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < ?").bind(retentionCutoff)
       ]);
+      await cleanupDisabledIdentities(this.env.DB, retentionCutoff);
     });
   }
 
@@ -214,7 +216,7 @@ async function handleApi(request, env, url, path, context = null) {
   const admin = await requireSecurityAdmin(request, env);
   if (path === "/api/services" && request.method === "GET") return listServiceRegistry(env);
   if (path === "/api/dashboard" && request.method === "GET") return dashboard(env);
-  if (path === "/api/identities" && request.method === "GET") return listIdentities(env);
+  if (path === "/api/identities" && request.method === "GET") return listIdentities(env, url.searchParams.get("includeDisabled") === "true");
   if (path === "/api/identities" && request.method === "POST") {
     requireMutation(request, url);
     return createIdentityAndInvite(request, env, admin);
@@ -890,7 +892,7 @@ async function listServiceRegistry(env) {
   return json({ services });
 }
 
-async function listIdentities(env) {
+async function listIdentities(env, includeDisabled = false) {
   const [result, pendingResult, auditIdentityResult] = await Promise.all([
     env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin, i.last_login_at, i.last_seen_at,
     COUNT(DISTINCT CASE WHEN c.status = 'active' THEN c.credential_id END) AS activeCredentials,
@@ -910,15 +912,10 @@ async function listIdentities(env) {
       LEFT JOIN security_invitations inv ON inv.identity_id = i.id
       WHERE i.status IN ('invited', 'pending_approval')
       GROUP BY i.id ORDER BY i.display_name COLLATE NOCASE`).all(),
-    env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin
+    includeDisabled ? env.DB.prepare(`SELECT i.id, i.display_name, i.status, i.is_security_admin
       FROM security_identities i
       WHERE i.status = 'disabled'
-        AND (
-          EXISTS (SELECT 1 FROM security_credentials credential WHERE credential.identity_id = i.id AND credential.approved_at IS NOT NULL)
-          OR EXISTS (SELECT 1 FROM security_audit_events audit WHERE audit.identity_id = i.id
-            AND audit.event_type IN (${REGISTERED_IDENTITY_AUDIT_EVENTS.map(() => "?").join(", ")}))
-        )
-      ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).bind(...REGISTERED_IDENTITY_AUDIT_EVENTS).all()
+      ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all() : Promise.resolve({ results: [] })
   ]);
   const mapIdentity = (row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null });
   return json({
@@ -1293,7 +1290,9 @@ async function listAuditEvents(url, env) {
     clauses.push("(occurred_at < ? OR (occurred_at = ? AND event_id > ?))");
     values.push(cursor.occurredAt, cursor.occurredAt, cursor.eventId);
   }
-  const result = await env.DB.prepare(`SELECT * FROM security_audit_events
+  const result = await env.DB.prepare(`SELECT *,
+      (SELECT display_name FROM security_identities WHERE id = security_audit_events.identity_id) AS identity_display_name
+    FROM security_audit_events
     WHERE ${clauses.join(" AND ")}
     ORDER BY occurred_at DESC, event_id ASC LIMIT ?`)
     .bind(...values, AUDIT_PAGE_SIZE + 1).all();

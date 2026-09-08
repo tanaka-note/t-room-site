@@ -16,6 +16,8 @@ const handler = new Function(...Object.keys(dependencies), `${source}; return li
 
 export function auditFixture() {
   const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE security_identities (id TEXT PRIMARY KEY, display_name TEXT);
+    INSERT INTO security_identities VALUES ('test-user', '副管理者'), ('retired-user', '田中宏知')`);
   db.exec(`CREATE TABLE security_audit_events (
     event_id TEXT PRIMARY KEY, occurred_at TEXT, event_type TEXT, service TEXT,
     outcome TEXT, auth_method TEXT, identity_id TEXT, service_account_id TEXT,

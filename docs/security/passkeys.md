@@ -48,6 +48,16 @@ WebAuthn credential登録とT-Cloud鍵準備は別状態として扱う。PRF非
 
 ## 監査
 
+### 停止済みIdentityの表示と保持期限後の整理
+
+通常のユーザー一覧・監査ユーザー候補はactive／invited／pending_approvalのみとする。詳細検索の「停止済みユーザーも表示」は初期OFFで、ON時だけ`includeDisabled=true`を指定してdisabled候補を取得する。監査イベント自身は切替に関係なく保持し、取得時にIdentityのdisplay_nameを解決する。停止・再招待禁止・失効・鍵管理の仕様は変更しない。
+
+日次scheduledは既存の監査保持期限（既定180日）の削除を成功させた後、`src/identity-cleanup.js`の条件で最大20件を1件ずつ整理する。disabledで第一管理者IDでもsecurity adminでもなく、停止・最終利用から保持期間が経過し、監査イベントからの直接参照・対象ID・details内Identity ID・service link参照が一切ない場合だけ対象となる。active/pending credential、pending/active link、有効招待、招待作成者参照、setup／challenge／handoff、Client Vault／Key Envelope（credential・link経由も含む）、AI予算が1件でもあれば保持する。未終了・保持期間内・期限内・不正日時のsessionも削除を禁止する。外部DBにIdentity別履歴を持つAI／Downloaderは、disabled linkでも保持する。
+
+各候補の条件は削除時に再評価する。保持期限を過ぎた終了済みsession、Identity、削除件数だけの監査イベントをD1の同一batchで確定し、失敗時は全体をrollbackする。Identity削除のcascade対象は審査済みのrevoked credential・disabled link・終了済みinvitationだけであり、鍵データは存在そのものが削除禁止条件となる。他Identityからの参照も禁止し、未知のテーブル／triggerが増えた場合は自動整理を停止して依存関係の再審査を要求する。新しいカラムやFKの追加時もこのguardとテストを見直す。
+
+`disabled_identity_cleanup`監査は実行時刻、削除件数、保持期限、policyVersionのみを保存し、削除したIdentity ID・氏名・対応表を再保存しない。この記録にも通常の監査保持期限が適用される。外部サービスのアカウント・履歴・T-Cloudの実ファイルは一切削除しない。鍵や外部参照が残るIdentityは自動削除せず保持し、必要性を判断せず鍵を破棄しない。
+
 各サービスの既存監査ログを維持したまま、ログイン成功と有効sessionの復帰はSecurity Service BindingでSecurity D1へ同期反映する。同期処理が失敗した場合だけ、同一event IDのイベントをQueueへ送り後から補完するため、監査障害だけで通常ログインを停止しない。失敗・停止・キャンセルや通常の管理操作は従来どおりQueueで非同期送信する。成功・失敗・停止・キャンセル、PW/パスキー、Identity、サービスaccount、role、時刻、salt/hash化したアクセス元、User-Agent、安全なsession識別子、重要な管理操作を記録する。
 
 `passkey_authentication_success`はSecurity WorkerがWebAuthn本人確認まで完了した中間イベント、`passkey_login_success`は対象サービスが一回限りのhandoffを引き換えてサービス固有sessionを発行したログイン完了イベント、`session_resume`は保存済みの有効なsessionによるアクセスとして分離する。Security Center自身はhandoffを使わないため、WebAuthn本人確認とSecurity session発行の完了を1件の`passkey_login_success`として記録する。`password_login_success`と`passkey_login_success`だけをログイン成功件数へ含め、中間本人確認と`session_resume`は含めない。

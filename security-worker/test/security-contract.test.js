@@ -521,12 +521,12 @@ test("audit history uses stable composite cursor pagination", () => {
   assert.match(securityUi, /insertAdjacentHTML\("beforeend"/);
 });
 
-test("user choices separate registered identities from invitation-only history", () => {
+test("user choices include disabled history only through explicit advanced-search opt-in", () => {
   assert.match(worker, /auditIdentities/);
-  assert.match(worker, /i\.status = 'disabled'[\s\S]*credential\.approved_at IS NOT NULL[\s\S]*REGISTERED_IDENTITY_AUDIT_EVENTS/);
+  assert.match(worker, /includeDisabled \? env\.DB\.prepare[\s\S]*i\.status = 'disabled'/);
   assert.match(worker, /pendingIdentities/);
   assert.match(worker, /WHERE i\.status = 'active'/);
-  assert.match(securityUi, /populateAuditIdentityFilter\(\[\.\.\.currentIdentities, \.\.\.auditIdentities\]\)/);
+  assert.match(securityUi, /populateAuditIdentityFilter\(\[\.\.\.state\.currentIdentities, \.\.\.state\.auditIdentities\]\)/);
   assert.doesNotMatch(securityUi, /populateAuditIdentityFilter\(\[\.\.\.currentIdentities, \.\.\.pendingIdentities/);
   assert.match(securityUi, /display\.identityLabel\(identity\.id, identity\.displayName\)/);
   assert.match(securityUi, /identity\.status === "disabled" \? "（停止済み）"/);

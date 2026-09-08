@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta name="troom-app-build" content="security-08cec80ab25a">
+  <meta name="troom-app-build" content="security-9d19fc22e5d0">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain セキュリティセンター</title>
-  <link rel="stylesheet" href="/security/security.css?v=security-08cec80ab25a">
+  <link rel="stylesheet" href="/security/security.css?v=security-9d19fc22e5d0">
 </head>
 <body>
   <main class="shell">
@@ -97,6 +97,7 @@
         <details class="audit-search" id="audit-search">
           <summary>詳細検索<span id="audit-filter-status"></span></summary>
         <form id="audit-filter" class="filters">
+          <label class="audit-disabled-toggle"><input id="audit-include-disabled" type="checkbox">停止済みユーザーも表示</label>
           <label class="filter-field"><span>ユーザー</span><select id="audit-identity"><option value="">すべて</option></select></label>
           <label class="filter-field"><span>サービス</span><select id="audit-service"><option value="">すべて</option><option value="security">Security Center</option><option value="cloud">T-Cloud</option><option value="diary">日記</option><option value="billing">請求書</option><option value="ai">AI Chat</option><option value="downloader">T-lain Downloader</option></select></label>
           <label class="filter-field"><span>認証方式</span><select id="audit-auth"><option value="">すべて</option><option value="password">ID・パスワード</option><option value="passkey">パスキー</option><option value="system">システム</option></select></label>
@@ -114,11 +115,11 @@
       </section>
     </section>
   </main>
-  <script src="/cloud/vendor/argon2.umd.min.js?v=security-08cec80ab25a"></script>
-  <script src="/cloud/crypto-vault.js?v=security-08cec80ab25a"></script>
-  <script src="/security/passkey-client.js?v=security-08cec80ab25a"></script>
-  <script src="/security/security-display.js?v=security-08cec80ab25a"></script>
-  <script src="/assets/pwa-auto-update.js?v=security-08cec80ab25a" defer></script>
-  <script src="/security/security.js?v=security-08cec80ab25a"></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-9d19fc22e5d0"></script>
+  <script src="/cloud/crypto-vault.js?v=security-9d19fc22e5d0"></script>
+  <script src="/security/passkey-client.js?v=security-9d19fc22e5d0"></script>
+  <script src="/security/security-display.js?v=security-9d19fc22e5d0"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-9d19fc22e5d0" defer></script>
+  <script src="/security/security.js?v=security-9d19fc22e5d0"></script>
 </body>
 </html>
