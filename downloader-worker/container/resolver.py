@@ -60,6 +60,26 @@ def _at_stage(stage, call):
 
 ANALYSIS_END = ContextVar('analysis_end', default=None)
 ANALYSIS_PLAN = ContextVar('analysis_plan', default=None)
+DEFER_BROWSER = ContextVar('defer_browser', default=False)
+REQUEST_CONTEXT = ContextVar('request_context', default=None)
+MEDIA_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36'
+
+
+def media_request_headers(url, context):
+    """Trusted, sealed per-origin context; never caller-supplied raw headers."""
+    target=urlsplit(url)
+    origin=f'{target.scheme}://{target.netloc}'
+    headers={'User-Agent':MEDIA_USER_AGENT}
+    for entry in context or []:
+        if entry.get('origin') != origin: continue
+        ref=urlsplit(entry.get('refererOrigin',''))
+        if ref.scheme not in {'http','https'} or not ref.hostname or ref.username or ref.password or ref.query or ref.fragment or ref.path:
+            raise ResolverError('download_context_invalid')
+        validate_url(ref.geturl()+'/')
+        if target.scheme=='http' and ref.scheme=='https': continue
+        headers['Referer']=ref.geturl()+'/'
+        if entry.get('sendOrigin') is True: headers['Origin']=ref.geturl()
+    return headers
 RECOVERABLE_ANALYSIS_ERRORS = frozenset({
     'metadata_timeout', 'metadata_invalid', 'extractor_failed', 'media_not_found',
     'browser_execution_failed', 'download_timeout', 'download_network_failed',
@@ -181,31 +201,108 @@ class MediaHtmlParser(HTMLParser):
     def __init__(self, base: str):
         super().__init__()
         self.base = base
-        self.candidates: list[str] = []
+        self.groups = {}
+        self.stack = []
+        self.page_candidates = []
+        self.embeds = []
+        self.scripts = []
+        self.restricted = False
+        self.excluded_media = False
+        self._json = None
         self.title = ""
         self._title = False
         self.metadata = {}
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
-        if tag in {"video", "audio", "source", "iframe"} and values.get("src"):
-            self.candidates.append(urljoin(self.base, values["src"]))
+        marker = ' '.join(str(values.get(k, '')) for k in ('id','class','title','aria-label'))
+        ad = bool(re.search(r'(^|[\s_-])(ad|ads|advert|advertisement|sponsor|related|preview|trailer)([\s_-]|$)', marker, re.I)) or any(x[1] for x in self.stack)
+        main = tag == 'main' or values.get('role') == 'main' or bool(re.search(r'player|video|watch',marker,re.I)) or any(x[2] for x in self.stack)
+        group = next((x[3] for x in reversed(self.stack) if x[3] is not None),None)
+        if tag in {'video','audio'}:
+            group = len(self.groups)
+            self.groups[group] = {'main':main,'ad':ad,'urls':[]}
+        src = values.get('src') or values.get('data-src')
+        if tag in {'video','audio','source'} and src:
+            if group is not None and not ad and not self.is_ad_url(src):
+                self.groups[group]['urls'].append(urljoin(self.base,src))
+            else:
+                self.excluded_media = True
+        if tag == 'iframe' and src and main and not ad and not self.is_ad_url(src):
+            self.embeds.append(urljoin(self.base,src))
+        if tag == 'script' and values.get('src') and not ad:
+            self.scripts.append(urljoin(self.base,values['src']))
+        if tag == 'script' and values.get('type') == 'application/ld+json':
+            self._json = ''
         if tag == "meta":
             key = (values.get("property") or values.get("name") or "").lower()
             content = values.get("content") or ""
             if key in {"og:video", "og:video:url", "og:audio", "twitter:player:stream"} and content:
-                self.candidates.append(urljoin(self.base, content))
+                if not self.is_ad_url(content): self.page_candidates.append(urljoin(self.base, content))
             if key in {"og:title", "twitter:title", "author"}:
                 self.metadata[key] = content
         self._title = tag == "title"
+        if tag not in {'meta','link','img','source','input','br','hr','area','base','embed','wbr','track'}:
+            self.stack.append((tag,ad,main,group))
 
     def handle_endtag(self, tag):
         if tag == "title":
             self._title = False
+        if tag == 'script' and self._json is not None:
+            try: self._structured(json.loads(self._json))
+            except (ValueError, RecursionError): pass
+            self._json = None
+        for i in range(len(self.stack)-1,-1,-1):
+            if self.stack[i][0] == tag:
+                del self.stack[i:]; break
 
     def handle_data(self, data):
         if self._title:
             self.title += data
+        if self._json is not None and len(self._json) <= 65536: self._json += data
+
+    @staticmethod
+    def is_ad_url(value):
+        try: path=urlsplit(value).path
+        except ValueError: return True
+        return bool(re.search(r'(^|[\s/_.-])(ad|ads|advert|advertisement|sponsor|related|preview|trailer)([\s/_.-]|$)',path,re.I))
+
+    def _structured(self, value, depth=0):
+        if depth > 12: return
+        if isinstance(value,list):
+            for item in value[:100]: self._structured(item,depth+1)
+        elif isinstance(value,dict):
+            if value.get('@type') == 'VideoObject' or 'VideoObject' in (value.get('@type') if isinstance(value.get('@type'),list) else []):
+                owner=value.get('mainEntityOfPage') or value.get('url')
+                if isinstance(owner,dict): owner=owner.get('@id')
+                if isinstance(owner,str) and urljoin(self.base,owner).split('#')[0] == self.base.split('#')[0]:
+                    if value.get('requiresSubscription') or value.get('isAccessibleForFree') is False: self.restricted=True
+                    src=value.get('contentUrl')
+                    if isinstance(src,str) and not self.is_ad_url(src): self.page_candidates.append(urljoin(self.base,src))
+                    embed=value.get('embedUrl')
+                    if isinstance(embed,str) and not self.is_ad_url(embed): self.embeds.append(urljoin(self.base,embed))
+            for key in ['@graph','mainEntity']:
+                if key in value: self._structured(value[key],depth+1)
+
+    @property
+    def candidates(self):
+        groups=[x for x in self.groups.values() if not x['ad']]
+        main=[x for x in groups if x['main']]
+        groups=main or groups
+        metadata=list(dict.fromkeys(self.page_candidates))
+        # Choose a player, not the first URL in the document. Multiple sources
+        # within that one player are alternative encodings of the same item.
+        if len(groups)==1 and groups[0]['urls']:
+            urls=list(dict.fromkeys(groups[0]['urls']))
+            return [x for x in urls if x in metadata] or urls
+        if not groups and len(metadata)==1: return metadata
+        return []
+
+    def plan(self):
+        embeds=list(dict.fromkeys(self.embeds))
+        return {'page':self.base,'embed':embeds[0] if len(embeds)==1 else '',
+                'scripts':list(dict.fromkeys(self.scripts))[:8],
+                'hasPlayers':bool(self.groups or self.page_candidates or self.embeds or self.excluded_media)}
 
 
 def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) -> dict:
@@ -230,7 +327,9 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
         generic = _analysis_stage(lambda: _at_stage('html', lambda: _analyze_html(safe.value, max_bytes, browser=False)))
         if generic:
             return generic
-    metadata = _analysis_stage(lambda: _at_stage('metadata', lambda: _yt_dlp_metadata(safe.value, timeout=90 if specialized else 8)))
+    # A known player needs correlation; generic extractors may pick an ad or
+    # preview first. Dedicated extractors retain their existing path/budget.
+    metadata = None if not specialized and (ANALYSIS_PLAN.get() or {}).get('hasPlayers') else _analysis_stage(lambda: _at_stage('metadata', lambda: _yt_dlp_metadata(safe.value, timeout=90 if specialized else 8)))
     if metadata:
         return _normalize_ytdlp(metadata, safe.hostname, policy_restricted, safe.value)
     if policy_restricted:
@@ -241,7 +340,7 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
             return generic
     # A correlated iframe needs the bounded, separately allowlisted player
     # explorer; dump-dom cannot inspect its frame and adds another long wait.
-    if (ANALYSIS_PLAN.get() or {}).get('embed'):
+    if DEFER_BROWSER.get() or (ANALYSIS_PLAN.get() or {}).get('embed'):
         raise ResolverError('media_not_found')
     browser = _analysis_stage(lambda: _at_stage('chromium', lambda: _analyze_html(safe.value, max_bytes, browser=True)))
     if browser:
@@ -278,6 +377,14 @@ def resolve_site_adapter(source_url: str, max_bytes: int) -> dict:
 
 
 def download(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0) -> tuple[Path, str, str | None]:
+    token=REQUEST_CONTEXT.set(route.get('requestContext') if isinstance(route,dict) and route.get('strictPublicEgress') else None)
+    try:
+        return _download_route(route,workdir,max_bytes,timeout_seconds,deadline,reserve_seconds)
+    finally:
+        REQUEST_CONTEXT.reset(token)
+
+
+def _download_route(route: dict, workdir: Path, max_bytes: int, timeout_seconds: int, deadline=None, reserve_seconds: float = 0) -> tuple[Path, str, str | None]:
     """Execute the exact SSRF-validated route selected during analysis.
 
     The Worker stores this route only as an authenticated encrypted capability.
@@ -479,13 +586,22 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
                 return None
         finally:
             response.close()
-    if ANALYSIS_PLAN.get() is not None:
-        from main_video import page_plan
-        ANALYSIS_PLAN.get().update(page_plan(html, final_url))
     parser = MediaHtmlParser(final_url)
     parser.feed(html)
+    if parser.restricted: raise ResolverError('login_required')
+    if ANALYSIS_PLAN.get() is not None:
+        ANALYSIS_PLAN.get().update(parser.plan())
+        if DEFER_BROWSER.get() and len(parser.candidates)==1:
+            candidate=parser.candidates[0]
+            if urlsplit(candidate).hostname!=urlsplit(final_url).hostname:
+                # A related CDN needs Worker approval before its first request;
+                # do not trigger an own-egress refusal and then ignore it.
+                ANALYSIS_PLAN.get()['candidate']=candidate
+                return None
     for candidate in parser.candidates[:20]:
         if candidate == (ANALYSIS_PLAN.get() or {}).get('embed'):
+            continue
+        if DEFER_BROWSER.get() and urlsplit(candidate).hostname!=urlsplit(final_url).hostname:
             continue
         try:
             direct = _analyze_direct(validate_url(candidate).value, max_bytes)
@@ -935,6 +1051,8 @@ def _open(url: str, *, method: str, timeout: int, max_redirects: int, max_body: 
     current = validate_url(url).value
     for _ in range(max_redirects + 1):
         headers = {"User-Agent": GENERIC_USER_AGENT, "Accept": "*/*"}
+        if REQUEST_CONTEXT.get() is not None:
+            headers.update(media_request_headers(current, REQUEST_CONTEXT.get()))
         for name in ("Range", "If-Range", "Accept", "Accept-Language"):
             value = (request_headers or {}).get(name)
             if value:
@@ -962,7 +1080,11 @@ def _open(url: str, *, method: str, timeout: int, max_redirects: int, max_body: 
                     raise ResolverError('access_denied', http_diagnostic(response_headers, code)) from None
             if code not in {301, 302, 303, 307, 308}:
                 raise
-            current = validate_redirect(current, error.headers.get("Location")).value
+            target = validate_redirect(current, error.headers.get("Location")).value
+            if hasattr(error,'close'): error.close()
+            if REQUEST_CONTEXT.get() is not None and (urlsplit(target)[:2]!=urlsplit(current)[:2] or _>=3):
+                raise ResolverError('main_video_redirect_rejected',http_diagnostic(response_headers,code))
+            current = target
     raise ResolverError("too_many_redirects")
 
 

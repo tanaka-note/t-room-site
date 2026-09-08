@@ -17,6 +17,20 @@ export function markEgressResponse(response, source) {
 }
 
 const blocked = () => markEgressResponse(new Response('Blocked',{status:403}), 'egress');
+export const MEDIA_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
+
+export function normalizeRequestContext(value, hosts) {
+  if(value == null) return [];
+  if(!Array.isArray(value) || value.length>32) throw new Error('download_context_invalid');
+  const seen=new Set();
+  return value.map(entry=>{
+    const target=normalizeSourceUrl(`${entry.origin}/`), ref=normalizeSourceUrl(`${entry.refererOrigin}/`);
+    if(target.origin!==entry.origin || ref.origin!==entry.refererOrigin || !hosts.includes(target.hostname) ||
+      isPolicyRestrictedHost(ref.hostname) || seen.has(target.origin) || (target.protocol==='http:' && ref.protocol==='https:')) throw new Error('download_context_invalid');
+    seen.add(target.origin);
+    return {origin:target.origin,refererOrigin:ref.origin,sendOrigin:entry.sendOrigin===true};
+  });
+}
 
 export function canExploreAnalysis(code) {
   return new Set(['metadata_timeout','metadata_invalid','extractor_failed','media_not_found',
@@ -77,7 +91,24 @@ export async function mainVideoOutbound(request, _env, ctx) {
     const url = normalizeSourceUrl(request.url);
     if (!policy.hosts.includes(url.hostname)) return blocked();
     await assertPublicDestination(url.href, signal);
-    const headers = new Headers({'User-Agent':'Mozilla/5.0','X-Real-IP':'2a06:98c0:3600::103'});
+    const headers = new Headers({'User-Agent':MEDIA_USER_AGENT,'X-Real-IP':'2a06:98c0:3600::103'});
+    const contexts=normalizeRequestContext(policy.requestContext,policy.hosts);
+    const context=contexts.find(x=>x.origin===url.origin);
+    // The policy comes from validated frame relationships / an encrypted route,
+    // never from request Referer, Origin or arbitrary client input.
+    if(context) {
+      headers.set('Referer',`${context.refererOrigin}/`);
+      if(context.sendOrigin) headers.set('Origin',context.refererOrigin);
+    } else if(policy.bounded && Array.isArray(policy.pageOrigins)) {
+      const raw=request.headers.get('Referer');
+      if(raw) {
+        const ref=normalizeSourceUrl(raw);
+        if(policy.pageOrigins.includes(ref.origin) && !(url.protocol==='http:' && ref.protocol==='https:')) {
+          headers.set('Referer',`${ref.origin}/`);
+          if(request.headers.get('Origin')===ref.origin) headers.set('Origin',ref.origin);
+        }
+      }
+    }
     for (const name of ['Accept','Range','If-Range']) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value.slice(0,512));
@@ -97,11 +128,12 @@ export async function mainVideoOutbound(request, _env, ctx) {
   }
 }
 
-export async function configureMainVideoEgress(container, hosts, until, bounded = true) {
+export async function configureMainVideoEgress(container, hosts, until, bounded = true, context = {}) {
   const exact = [...new Set(hosts.map(host => normalizeSourceUrl(`https://${host}/`).hostname))];
   if(exact.length>32) throw new Error('main_video_host_limit');
   await container.setAllowedHosts(bounded ? exact : ['r2.tlain.internal', ...exact]);
-  await container.setOutboundHandler('mainVideo', {hosts:exact,until,bounded});
+  await container.setOutboundHandler('mainVideo', {hosts:exact,until,bounded,
+    requestContext:normalizeRequestContext(context.requestContext,exact),pageOrigins:context.pageOrigins || []});
 }
 
 export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxBytes, pagePlan = null, onFailure = () => {}) {
@@ -144,27 +176,41 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
       }
     };
     let plan={};
-    if(pagePlan?.page && normalizeSourceUrl(pagePlan.page).href===sourceUrl.href) {
-      plan={embed:pagePlan.embed || ''};
-      await addUrls([...(pagePlan.scripts || []).slice(0,8),...(plan.embed?[plan.embed]:[])]);
+    if(pagePlan?.page && normalizeSourceUrl(pagePlan.page).origin===sourceUrl.origin) {
+      plan={embed:pagePlan.embed || '',candidate:pagePlan.candidate || ''};
+      if(plan.candidate) plan.embed='';
+      else await addUrls([...(pagePlan.scripts || []).slice(0,8),...(plan.embed?[plan.embed]:[])]);
     }
-    await configureMainVideoEgress(container,hosts,until);
+    const context={pageOrigins:[sourceUrl.origin,...(plan.embed?[new URL(plan.embed).origin]:[])]};
+    await configureMainVideoEgress(container,hosts,until,true,context);
     remaining();
     if(plan.embed) {
       const frame=await call({phase:'prepare',url:plan.embed});
-      if(frame.page!==plan.embed) throw new Error('main_video_frame_redirect');
+      if(new URL(frame.page).origin!==new URL(plan.embed).origin) throw new Error('main_video_frame_redirect');
       await addUrls((frame.scripts || []).slice(0,8));
-      await configureMainVideoEgress(container,hosts,until);
+      await configureMainVideoEgress(container,hosts,until,true,context);
     }
-    const found=await call({phase:'discover',url:sourceUrl.href,allowedHosts:hosts,plan});
+    // A sole main media element on an already-read page needs no browser.
+    // No request to this CDN occurred before this public-DNS approval.
+    const found=plan.candidate ? {url:plan.candidate,refererOrigin:sourceUrl.origin,sendOrigin:false,
+      metrics:{requests:0,bodyBytes:0,browserLaunches:0}} :
+      await call({phase:'discover',url:sourceUrl.href,allowedHosts:hosts,plan});
     const candidate=await assertPublicDestination(found.url,AbortSignal.timeout(remaining()));
     // Only the single correlated candidate's exact CDN is admitted. Its
     // manifests must pass the existing validators before the route is sealed.
-    await configureMainVideoEgress(container,[...hosts,candidate.hostname],until);
-    const analysis=await call({phase:'validate',url:candidate.href,maxBytes});
+    const ref=found.refererOrigin;
+    if(ref && !context.pageOrigins.includes(ref)) throw new Error('download_context_invalid');
+    const requestContext=ref && !(candidate.protocol==='http:' && new URL(ref).protocol==='https:') ?
+      [{origin:candidate.origin,refererOrigin:ref,sendOrigin:found.sendOrigin===true}] : [];
+    await configureMainVideoEgress(container,[...hosts,candidate.hostname],until,true,{...context,requestContext});
+    const analysis=await call({phase:'validate',url:candidate.href,maxBytes,requestContext,browserUsed:!plan.candidate});
     remaining();
     if(found.title) analysis.title=String(found.title).slice(0,240);
-    console.log(JSON.stringify({event:'downloader_main_video',result:'found',elapsedMs:Date.now()-started}));
+    const metrics={};
+    for(const [key,output,max] of [['requests','browserRequests',32],['bodyBytes','browserBodyBytes',2_000_000],['browserLaunches','browserLaunches',1]]) {
+      const n=found.metrics?.[key]; if(Number.isInteger(n) && n>=0 && n<=max) metrics[output]=n;
+    }
+    console.log(JSON.stringify({event:'downloader_main_video',result:'found',elapsedMs:Date.now()-started,...metrics}));
     return analysis;
   } catch (error) {
     const errorCode=/^[a-z][a-z0-9_]{0,79}$/.test(error?.message || '') ? error.message : 'analysis_execution_failed';

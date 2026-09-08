@@ -124,13 +124,15 @@ DOにも永続的な中止記録を残し、起動待ちのfetchをabortしてde
 
 ## 視聴ページの本編補助探索
 
-`MAIN_VIDEO_FALLBACK=true`で補助探索を有効、`false`で単独停止する。Direct / adapterの成功結果と、yt-dlp専用extractor（YouTube等）の90秒上限を維持する。未知サイトは軽量HTML → 最大8秒のyt-dlp → Chromium / 本編補助探索。HTMLで一意のmain/player iframeを確認できた場合、frameを読めないdump-domを省く。metadata_timeout / unsupported / generic extractor失敗など未確定の解析障害は残り時間内で次の方式へ進む。DRM・login・geo・policy・明確なaccess拒否 / bot challenge・SSRFでは進めない。
+`MAIN_VIDEO_FALLBACK=true`で補助探索を有効、`false`で単独停止する。Direct / adapterの成功結果と、yt-dlp専用extractor（YouTube等）の90秒上限を維持する。未知サイトは軽量HTML → 最大8秒のyt-dlp → 本編補助探索。HTMLでプレイヤーを確認済みなら、広告等を先に選び得るgeneric extractorも省く。補助探索有効時はdump-domを起動せずPlaywright一回へまとめ、無効時は従来のChromium経路を維持する。metadata_timeout / unsupported / generic extractor失敗など未確定の解析障害は残り時間内で次の方式へ進む。DRM・login・geo・policy・明確なaccess拒否 / bot challenge・SSRFでは進めない。
 
 Workerの120秒期限をadapter・通常解析・補助探索で共有する。従来Chromiumを待つ段階では残り12秒を補助探索と終了処理に残す。専用yt-dlpの既存予算を削らず、子プロセス側にも絶対期限を渡して全体を監督する。補助探索は準備・ブラウザ・候補検証を合わせて最大10秒、残り1秒未満では開始しない。解析完了後の未発見/拒否はtoken CASでfailedに確定してQueueをackし、同じ長い探索を再配送で繰り返さない。Container起動失敗等の基盤障害には既存の上限付きretryを維持。中止はD1 cancelled確定後のContainer destroy、通常終了はrelease/stopを維持する。
 
-JSON-LD VideoObjectに加え、main/player領域の一意のiframeと、そのframe内でJS生成されたvideoにも対応する。プレイヤーのcurrentSrcと実通信、または同じframeの一意のメディア候補を照合する。複数候補・広告/関連動画・ログイン/購読/DRMは採用しない。識別済みvideoのnative playを1回だけ試し、任意リンクや広告をクリックしない。メディア通信は観測後abortし、検出候補を既存のDirect/manifest/DRM/サイズ検証へ通して取得経路を固定する。最終ClamAV/YARAは維持。
+通常HTMLと描画後の解析はmain/player、広告/関連/preview除外、data-src、ページに紐付くJSON-LDを使い、先頭URLだけで本編を選ばない。同じ一つのプレイヤー内の複数sourceは代替形式として扱うが、複数プレイヤーを推測で選ばない。HTMLで一意の本編CDNが判明した場合はWorkerのDNS承認後に直接検証し、ブラウザも不要なscript事前読込も起動しない。描画が必要ならcurrentSrcと同frameの通信を照合し、拡張子なしのfetch/XHRはContent-Typeも使う。識別済みvideoのnative play、または同じ単一プレイヤー内の可視・一意・明示的な再生buttonを一回だけ操作し、任意リンク/広告/フォームは操作しない。blobを配信URLにしない。候補はDirect/manifest/DRM/サイズ検証を通してrouteへ固定し、最終ClamAV/YARAは維持する。
 
-ページHTMLで確認した1段のmain iframe、ページとiframeが明示参照するscript（各最大8）だけを依存候補にする。Workerがpublic DNSを検証後、job専用allowlistへ最大12のexact hostを期限付きで追加する。`MAIN_VIDEO_PAGE_HOSTS`は任意の補助設定で必須ではない。Cookie / Authorization / POST / WebSocket / Service Workerは使わない。補助ブラウザは32要求・個別1MB・合計2MB、iframeの軽量事前読込は1MBまで。redirectは追跡しない。実行時に外部iframe自体を生成する任意JS、多段iframe、任意APIやCookieが必要なプレイヤー、未許可hostの子playlist、複数候補からの推測には対応しない。
+ページHTMLで確認した1段のmain iframe、ページとiframeが明示参照するscript（各最大8）だけを依存候補にする。Workerがpublic DNSを検証後、job専用allowlistへ最大12のexact hostを期限付きで追加する。`MAIN_VIDEO_PAGE_HOSTS`は任意の補助設定で必須ではない。Cookie / Authorization / POST / WebSocket / Service Workerは使わない。補助ブラウザは32要求・個別1MB・合計2MB、iframeの軽量事前読込は1MBまで。同一originの転送だけ最大3回、各hopでURL/DNS/要求数/期限を確認して手動追跡し、ブラウザの自動redirectへ任せない。最終HTMLの相対参照には検証済み転送先をbaseとして使う。cross-origin redirect、実行時に外部iframe自体を生成する任意JS、多段iframe、任意APIやCookieが必要なプレイヤー、未許可hostの子playlist、複数候補からの推測には対応しない。
+
+補助経路は固定の通常Chrome形式UAをPython/browser/Workerで共有する。Refererは確認済みページ/iframeのoriginまでに縮め、Originはブラウザ要求で観測した場合だけ使用する。静的本編CDNの検証はページoriginのRefererのみを使用する。両者は送信先origin別にWorkerで正規化し、暗号化routeへ保存、manifest検証と実取得の送信境界で再適用する。ユーザーから任意headerは受け付けず、未登録originやHTTPS→HTTPには送らない。query/path/Cookie/Authorizationは引き継がない。別originのmanifest参照はDNS/allowlist対象だが、headerを無条件に継承しないので取得できない配信もある。既存の通常経路のUA/headerは維持する。
 
 Cloudflare透過DNSのPython例外は既存経路のため維持。補助経路ではContainerProxyの専用handlerを使い、exact host制限と要求ごとのpublic A/AAAA確認・private/special-use拒否をWorker側でも行う。リダイレクトを自動追跡せず、Cookie等を落としたCloudflare public fetchで接続する。VPC/内部service bindingは使わない。PythonのDNS例外だけを根拠に送信を許可しない。最終取得にも専用handlerをroute属性で引き継ぐ。通常経路の送信handlerは変更せず、再配送時に古い補助handlerを既存setAllowedHosts RPC内で解除する。生URL/query・本文・HARはログに出さない。
 
@@ -177,3 +179,13 @@ Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工�
 失敗後の再読込でもstatus=failed、processing token/leaseはNULL、受付/失敗監査は各1件、object参照なし、取得開始/利用者DL/スキャン計測なし。UIは「サイト側のアクセス制限により解析できません。」に戻り、長時間の再解析は観測しなかった。本番Worker `9527bd34-7527-4459-8515-ff87f4a3329d` 100%・Container14/digest一致・active rolloutなしを再確認。アプリの認証障害は解消したが、動画URL検出・取得・検査・保存・利用者ダウンロード成功は未達成。確定challengeを無視するfallbackやCookieの移送は行わず、同条件の本番試験を反復しない。今回の追加変更はこの検証記録だけであり、既存対象テストを再利用して再deploy/Container buildは行わない。
 
 今回の切り戻し: Worker旧版 `11ce3f56-8db9-484e-ac2e-0be8cd0d376b`。Containerまで戻す必要がある場合は、定義更新手順の署名/鮮度・job/drain・rollout確認後にprevious image `sha256:b9e49c44884574d0a266ae286bd667246761d20a2cfa1e1c72fd80a9087f8208`を使う。Workerだけのrollbackはimageを戻さない。補助探索の停止だけなら既存のMAIN_VIDEO_FALLBACK=falseを使用する。
+
+### 2026-09-08 ページ解析の互換性改善
+
+対象サイトは新規Chrome153の最初の応答をCDPで止め、260,405 bytesのHTML（video要素28、player marker、media参照あり）を読み取った。本文を空文書に置換したためサイトscript/広告/動画は実行していない。challenge-platform scriptの参照自体はHTMLにあったが、HTTPは200でcf-mitigated: challengeはなかった。同一UAでPlaywright route.fetch GETは403 challenge。この比較と以前のWorker fetch比較から、UA変更だけではサーバー経路を解決できない。Cloudflare公式の[HTTPS interception](https://developers.cloudflare.com/containers/guides/outbound-traffic/)と現行SDK/送信handlerを照合し、現在のHTTP単位の検証を維持しながらネイティブChromeのTLSをそのまま通す経路は確認できなかった。interceptHttps=false、通信制限の解除、Cookie移送、確認処理の回避は採用しない。対象サイトの動画解析/保存成功は未達成。
+
+ローカル対象Node64件PASS、Python53件中52件PASS・yt-dlp未導入1件skip。小容量Chrome fixtureでJS/blob、iframe、広告/曖昧候補/ログイン/403拒否、明示再生button、拡張子なしHLS、origin Referer、同一origin転送、動的OG metadataを確認。Windowsの広告拒否1件は終了待ちが外側期限に達し、該当拒否セット単独再確認でPASS。ブラウザ終了は既存の親プロセス監督/Container中止で強制停止される。fixture HTTPによるmanifest再検証と32-byte署名fixtureの実ダウンロードも確認したが、この32-byteデータは再生可能動画/実スキャン試験ではない。
+
+同じローカルJS/blob fixtureを旧/新コードで各一回、同じChrome153・毎回新規browserで比較: 起動/終了込み1,297ms→1,125ms、origin要求1→1、応答header込み送信593→593bytes。少数のローカル観測で本番性能倍率を保証しない。直URL/専用extractor成功時に追加探索は起動しない。ブラウザ二重起動や静的CDNのブラウザ起動を省ける場合は費用減が見込めるが、DNS/検証回数とサイト次第で差があり、CPU/請求額は未計測。成功ログのbrowserRequests/browserBodyBytesはブラウザ内の要求（abort含む）/読込bodyで、DNS・prepare・validate・取得全体の集計ではない。
+
+公開は既存analysis_only workflowで本番の依存/エンジン/定義を継承し、Linux小容量fixtureと定義の署名/内部日時を再検証してからrollout、続けてWorkerを--containers-rollout=noneで公開する。migration不要。検査エンジンの変更や重い実スキャンは行わない。新機能停止はMAIN_VIDEO_FALLBACK=false。今回の公開前Workerは9527bd34-7527-4459-8515-ff87f4a3329d、Container14/digest 26ee1cce3e0b01c5f31adcdc3f324921da942d2f0da48f23641187fb93acd80c。headerを必要とする今回のrouteが残る間はflag停止を優先する。完全rollbackではその解析結果の再解析が必要であり、旧Workerは新requestContextを保証しない。image rollbackは定義鮮度・進行job/drainとsource_imageの整合確認を省略しない。

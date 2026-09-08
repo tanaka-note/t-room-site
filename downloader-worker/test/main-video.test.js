@@ -2,9 +2,61 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { canExploreAnalysis, terminalAnalysisError, assertPublicDestination, publicAddress, exploreMainVideo, mainVideoOutbound, safeAnalysisDiagnostic, markEgressResponse } from '../src/main-video.js';
+import { canExploreAnalysis, terminalAnalysisError, assertPublicDestination, publicAddress, exploreMainVideo, mainVideoOutbound, safeAnalysisDiagnostic, markEgressResponse, normalizeRequestContext, MEDIA_USER_AGENT } from '../src/main-video.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const dns=addresses=>async()=>Response.json({Status:0,Answer:addresses.map(data=>({type:data.includes(':')?28:1,data}))});
+
+test('validated per-origin context survives sealing and applies to manifest/segment fetch only on that origin',async()=>{
+ const entry={origin:'https://cdn.example',refererOrigin:'https://page.example',sendOrigin:true};
+ assert.deepEqual(normalizeRequestContext([entry],['cdn.example']),[entry]);
+ for(const values of [[{...entry,refererOrigin:'https://page.example/?secret'}],[{...entry,origin:'https://other.example'}],[entry,entry],[{...entry,refererOrigin:'http://127.0.0.1'}]])assert.throws(()=>normalizeRequestContext(values,['cdn.example']));
+ const ctx={normalizeSourceUrl:x=>new URL(x),isPolicyRestrictedHost:()=>false,cleanText:x=>x,safeInteger:Number,normalizeRequestContext};vm.createContext(ctx);
+ vm.runInContext(source.slice(source.indexOf('function normalizeDownloadRoute('),source.indexOf('async function resolveAnalysisSource('))+';globalThis.normalize=normalizeDownloadRoute;',ctx);
+ const route=ctx.normalize({version:1,kind:'adaptive',delivery:'hls',url:'https://cdn.example/manifest',egressHosts:['cdn.example'],strictPublicEgress:true,requestContext:[entry]});
+ assert.deepEqual(route.requestContext,[entry]);
+ assert.equal(ctx.normalize({...route,strictPublicEgress:false}),null);
+ const previous=globalThis.fetch, sent=[];
+ globalThis.fetch=async(url,init)=>{
+  if(String(url).startsWith('https://cloudflare-dns.com/'))return dns(['8.8.8.8'])();
+  sent.push({url:String(url),headers:init.headers});return new Response('fixture');
+ };
+ try {
+  const policy={hosts:['cdn.example','other.example'],requestContext:[entry],until:Date.now()+5000,bounded:false};
+  for(const path of ['https://cdn.example/manifest','https://cdn.example/segment','https://other.example/redirect']) {
+   assert.equal((await mainVideoOutbound(new Request(path,{headers:{Referer:'https://private.example/?secret',Origin:'https://private.example',Cookie:'secret'}}),{},{params:policy})).status,200);
+  }
+  for(const request of sent.slice(0,2)) {
+   assert.equal(request.headers.get('Referer'),'https://page.example/');assert.equal(request.headers.get('Origin'),'https://page.example');
+   assert.equal(request.headers.get('User-Agent'),MEDIA_USER_AGENT);assert.equal(request.headers.get('Cookie'),null);
+  }
+  assert.equal(sent[2].headers.get('Referer'),null);assert.equal(sent[2].headers.get('Origin'),null);
+ } finally {globalThis.fetch=previous}
+});
+
+test('discovery context is constrained to a verified page/frame origin and passed into validation',async()=>{
+ const previous=globalThis.fetch;globalThis.fetch=dns(['8.8.8.8']);const calls=[];
+ let ref='https://example.com';
+ const container={async claimMainVideoExploration(){return true},async setAllowedHosts(){},async setOutboundHandler(){},async fetch(req){const body=await req.json();calls.push(body);return Response.json(body.phase==='discover'?{url:'https://cdn.example/media',refererOrigin:ref,sendOrigin:true}:{extractor:'main-video',media:[]})}};
+ try {
+  assert.ok(await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},container,new URL('https://example.com/watch?private'),Date.now()+120000,1024));
+  assert.deepEqual(calls.at(-1).requestContext,[{origin:'https://cdn.example',refererOrigin:'https://example.com',sendOrigin:true}]);
+  ref='https://unknown.example';calls.length=0;
+  assert.equal(await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},container,new URL('https://example.com/watch'),Date.now()+120000,1024),null);
+  assert.equal(calls.length,1);
+ } finally {globalThis.fetch=previous}
+});
+
+test('one statically correlated CDN candidate validates without browser, scripts or frame prefetch',async()=>{
+ const previous=globalThis.fetch;globalThis.fetch=dns(['8.8.8.8']);const calls=[],policies=[];
+ const container={async claimMainVideoExploration(){return true},async setAllowedHosts(){},async setOutboundHandler(_,p){policies.push(p)},async fetch(req){const body=await req.json();calls.push(body);return Response.json({extractor:'main-video',media:[]})}};
+ try {
+  const result=await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},container,new URL('https://example.com/watch'),Date.now()+120000,1024,
+   {page:'https://example.com/watch',candidate:'https://cdn.example/media',scripts:['http://127.0.0.1/unneeded'],embed:'http://127.0.0.1/unneeded'});
+  assert.ok(result);assert.deepEqual(calls.map(x=>x.phase),['validate']);assert.equal(calls[0].browserUsed,false);
+  assert.deepEqual(policies.at(-1).hosts,['example.com','cdn.example']);
+  assert.deepEqual(calls[0].requestContext,[{origin:'https://cdn.example',refererOrigin:'https://example.com',sendOrigin:false}]);
+ }finally{globalThis.fetch=previous}
+});
 
 test('upstream cannot forge own-policy provenance; diagnostics contain no URL/header/body',async()=>{
  const response=markEgressResponse(new Response('origin',{status:403,headers:{'X-Tlain-Egress-Source':'egress','cf-mitigated':'challenge'}}),'upstream');

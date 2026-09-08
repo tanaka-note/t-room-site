@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,11 +16,99 @@ from urllib.parse import urlsplit
 from urllib.error import HTTPError
 
 from main_video import discover, run_phase, stop_process_tree, page_plan, error_payload
-from resolver import ResolverError, _drm_dash, analyze, ANALYSIS_END, ANALYSIS_PLAN, _analysis_command, _open, _at_stage
+from resolver import ResolverError, _drm_dash, analyze, ANALYSIS_END, ANALYSIS_PLAN, DEFER_BROWSER, REQUEST_CONTEXT, MediaHtmlParser, media_request_headers, download, _analysis_command, _open, _at_stage
 from ssrf import SafeUrl
 
 
 class MainVideoUnitTests(unittest.TestCase):
+    def test_related_cdn_is_deferred_before_any_candidate_request(self):
+        from resolver import _analyze_html
+        token=DEFER_BROWSER.set(True); plan=ANALYSIS_PLAN.set({})
+        response=SimpleNamespace(headers={'Content-Type':'text/html'},read=lambda n:b'<main><video src="https://cdn.example/media"></video></main>',close=lambda:None)
+        try:
+            with patch('resolver._open',return_value=(response,'https://example.com/watch')),patch('resolver._analyze_direct') as direct:
+                self.assertIsNone(_analyze_html('https://example.com/watch',1024,False))
+                direct.assert_not_called();self.assertEqual(ANALYSIS_PLAN.get()['candidate'],'https://cdn.example/media')
+        finally: DEFER_BROWSER.reset(token);ANALYSIS_PLAN.reset(plan)
+
+    def test_static_main_selection_data_src_metadata_ads_and_ambiguity(self):
+        cases=[
+            ('<aside class="ads"><video src="/first.mp4"></video></aside><main><video data-src="/main.mp4"></video></main>',['https://example.com/main.mp4']),
+            ('<main><video><source data-src="/main.mp4"></video></main><section class="related"><video src="/other.mp4"></video></section>',['https://example.com/main.mp4']),
+            ('<video src="/one.mp4"></video><video src="/two.mp4"></video>',[]),
+            ('<main><video src="/preview.mp4"></video></main>',[]),
+            ('<script type="application/ld+json">{"@type":"VideoObject","mainEntityOfPage":"/watch","contentUrl":"/media"}</script>',['https://example.com/media']),
+            ('<script type="application/ld+json">{"@type":"VideoObject","mainEntityOfPage":"/other","contentUrl":"/media"}</script>',[]),
+        ]
+        for html,expected in cases:
+            parser=MediaHtmlParser('https://example.com/watch');parser.feed(html)
+            self.assertEqual(parser.candidates,expected)
+
+    def test_single_browser_policy_keeps_direct_and_specialized_success(self):
+        token=DEFER_BROWSER.set(True); plan=ANALYSIS_PLAN.set({})
+        try:
+            with patch('resolver.validate_url',return_value=SafeUrl('https://example.com/watch','example.com')), \
+                 patch('resolver._analyze_direct',return_value=None),patch('resolver.has_specialized_extractor',return_value=False), \
+                 patch('resolver._analyze_html',return_value=None) as html,patch('resolver._yt_dlp_metadata',return_value=None):
+                with self.assertRaisesRegex(ResolverError,'media_not_found'): analyze('https://example.com/watch',1024)
+                self.assertEqual(html.call_args_list[0].kwargs,{'browser':False})
+                self.assertEqual(html.call_count,1)
+        finally: DEFER_BROWSER.reset(token); ANALYSIS_PLAN.reset(plan)
+
+    def test_declared_player_skips_generic_extractor_ad_selection(self):
+        token=DEFER_BROWSER.set(True); plan=ANALYSIS_PLAN.set({'hasPlayers':True})
+        try:
+            with patch('resolver.validate_url',return_value=SafeUrl('https://example.com/watch','example.com')), \
+                 patch('resolver._analyze_direct',return_value=None),patch('resolver.has_specialized_extractor',return_value=False), \
+                 patch('resolver._analyze_html',return_value=None),patch('resolver._yt_dlp_metadata') as metadata:
+                with self.assertRaisesRegex(ResolverError,'media_not_found'): analyze('https://example.com/watch',1024)
+                metadata.assert_not_called()
+        finally: DEFER_BROWSER.reset(token); ANALYSIS_PLAN.reset(plan)
+
+    def test_header_scope_and_download_context_reset(self):
+        context=[{'origin':'https://cdn.example','refererOrigin':'https://page.example','sendOrigin':True}]
+        with patch('resolver.validate_url',side_effect=lambda x:SafeUrl(x,urlsplit(x).hostname)):
+            headers=media_request_headers('https://cdn.example/media?secret',context)
+            self.assertEqual(headers['Referer'],'https://page.example/')
+            self.assertEqual(headers['Origin'],'https://page.example')
+            self.assertNotIn('Referer',media_request_headers('https://other.example/media',context))
+            with self.assertRaisesRegex(ResolverError,'download_context_invalid'):
+                media_request_headers('https://cdn.example/media',[{**context[0],'refererOrigin':'https://page.example/?secret'}])
+            with patch('resolver._download_direct') as direct, tempfile.TemporaryDirectory() as directory:
+                route={'version':1,'kind':'direct','url':'https://cdn.example/media','strictPublicEgress':True,'requestContext':context}
+                direct.side_effect=lambda *a,**k:self.assertEqual(REQUEST_CONTEXT.get(),context)
+                download(route,Path(directory),1024,5)
+                self.assertIsNone(REQUEST_CONTEXT.get())
+
+    def test_strict_redirect_checks_every_hop_and_strips_context_on_unlisted_origin(self):
+        token=REQUEST_CONTEXT.set([])
+        seen=[]
+        def opening(req,**kw):
+            seen.append(req.full_url)
+            if len(seen)==1: raise HTTPError(req.full_url,302,'redirect',{'Location':'/final'},None)
+            return SimpleNamespace(headers={},close=lambda:None)
+        safe=lambda x:SafeUrl(x,urlsplit(x).hostname)
+        try:
+            with patch('resolver.validate_url',side_effect=safe),patch('ssrf.validate_url',side_effect=lambda x,**kw:safe(x)), \
+                 patch('resolver.build_opener',return_value=SimpleNamespace(open=opening)):
+                _,final=_open('https://example.com/start',method='GET',timeout=1,max_redirects=3)
+                self.assertEqual(final,'https://example.com/final');self.assertEqual(len(seen),2)
+            attempts=[]
+            def redirects(req,**kw):
+                attempts.append(req.full_url)
+                raise HTTPError(req.full_url,302,'redirect',{'Location':'/next'},None)
+            with patch('resolver.validate_url',side_effect=safe),patch('ssrf.validate_url',side_effect=lambda x,**kw:safe(x)), \
+                 patch('resolver.build_opener',return_value=SimpleNamespace(open=redirects)):
+                with self.assertRaisesRegex(ResolverError,'main_video_redirect_rejected'):
+                    _open('https://example.com/start',method='GET',timeout=1,max_redirects=5)
+                self.assertEqual(len(attempts),4)
+            with patch('resolver.validate_url',side_effect=safe), \
+                 patch('resolver.validate_redirect',return_value=SafeUrl('https://elsewhere.example/','elsewhere.example')), \
+                 patch('resolver.build_opener',return_value=SimpleNamespace(open=lambda *a,**kw:(_ for _ in ()).throw(HTTPError('https://example.com/',302,'redirect',{'Location':'https://elsewhere.example/'},None)))):
+                with self.assertRaisesRegex(ResolverError,'main_video_redirect_rejected'):
+                    _open('https://example.com/start',method='GET',timeout=1,max_redirects=3)
+        finally: REQUEST_CONTEXT.reset(token)
+
     def test_http_provenance_stage_and_challenge_survive_without_secrets(self):
         token=ANALYSIS_END.set(time.monotonic()+10)
         try:
@@ -160,10 +249,26 @@ class MainVideoBrowserTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args): pass
             def do_GET(self):
-                if self.path in {'/challenge','/egress'}:
-                    self.send_response(403)
+                if self.path=='/alias':
+                    self.send_response(302);self.send_header('Location','/watch');self.end_headers();return
+                if self.path=='/cross-redirect':
+                    self.send_response(302);self.send_header('Location','https://example.invalid/private');self.end_headers();return
+                if self.path=='/media-endpoint':
+                    root=f'http://127.0.0.1:{self.server.server_port}'
+                    if self.headers.get('Referer')!=root+'/':
+                        self.send_response(403);self.end_headers();return
+                    body=b'#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nsegment.ts\n#EXT-X-ENDLIST\n'
+                    self.send_response(200);self.send_header('Content-Type','application/vnd.apple.mpegurl');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+                if self.path=='/media-file':
+                    root=f'http://127.0.0.1:{self.server.server_port}'
+                    if self.headers.get('Referer')!=root+'/':
+                        self.send_response(403);self.end_headers();return
+                    body=b'\x00\x00\x00\x18ftypisom'+b'\0'*20
+                    self.send_response(200);self.send_header('Content-Type','video/mp4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+                if self.path in {'/challenge','/challenge200','/egress'}:
+                    self.send_response(200 if self.path=='/challenge200' else 403)
                     self.send_header('cf-mitigated','challenge')
-                    self.send_header('x-tlain-egress-source','upstream' if self.path=='/challenge' else 'egress')
+                    self.send_header('x-tlain-egress-source','egress' if self.path=='/egress' else 'upstream')
                     self.end_headers();return
                 root=f'http://127.0.0.1:{self.server.server_port}'
                 iframe=self.path in {'/iframe','/embedded'}
@@ -179,6 +284,14 @@ class MainVideoBrowserTests(unittest.TestCase):
                     script=script.replace("fetch('/advert.mp4').catch(()=>{});",'')
                 html=f'<html><head><script type="application/ld+json">{json.dumps(metadata)}</script></head><body>{player}<script>{script}</script></body></html>'
                 if self.path=='/restricted': html=html.replace('<body>','<body><input type="password">')
+                if self.path=='/button-extensionless':
+                    html='''<html><head></head><body><main id="player"><video width="640" height="360"></video><button aria-label="Play video">Play</button></main><script>
+                    document.querySelector('button').onclick=()=>{const v=document.querySelector('video');v.src=URL.createObjectURL(new MediaSource());fetch('/media-endpoint').catch(()=>{});};
+                    </script></body></html>'''
+                if self.path=='/data-source':
+                    html='<html><head></head><body><main><video width="640" height="360" src="/main.m3u8"></video></main></body></html>'
+                if self.path=='/dynamic-metadata':
+                    html='<html><head></head><body><script>const m=document.createElement("meta");m.setAttribute("property","og:video");m.content="/main.mp4";document.head.append(m)</script></body></html>'
                 self.send_response(200);self.send_header('Content-Type','text/html');self.end_headers();self.wfile.write(html.encode())
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
         cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True);cls.thread.start()
@@ -206,7 +319,41 @@ class MainVideoBrowserTests(unittest.TestCase):
             with self.subTest(path=path),self.assertRaises(ValueError): self.run_browser(path)
 
     def test_browser_navigation_reports_upstream_challenge_and_own_denial(self):
-        for path,code,source in [('/challenge','bot_challenge','upstream'),('/egress','egress_denied','egress')]:
+        for path,code,source in [('/challenge','bot_challenge','upstream'),('/challenge200','bot_challenge','upstream'),('/egress','egress_denied','egress')]:
             with self.subTest(path=path),self.assertRaises(ResolverError) as raised: self.run_browser(path)
             self.assertEqual(str(raised.exception),code)
-            self.assertEqual(raised.exception.diagnostic,{'source':source,'httpStatus':403})
+            self.assertEqual(raised.exception.diagnostic,{'source':source,'httpStatus':200 if path=='/challenge200' else 403})
+
+    def test_explicit_button_extensionless_mime_referrer_and_same_origin_redirect(self):
+        for path,suffix in [('/button-extensionless','/media-endpoint'),('/alias','/main.m3u8'),('/data-source','/main.m3u8'),('/dynamic-metadata','/main.mp4')]:
+            with self.subTest(path=path):
+                result=self.run_browser(path)
+                self.assertTrue(result['url'].endswith(suffix))
+                self.assertEqual(result['metrics']['browserLaunches'],1)
+                self.assertLessEqual(result['metrics']['requests'],32)
+                self.assertLessEqual(result['metrics']['bodyBytes'],2_000_000)
+                self.assertLess(result['metrics']['elapsedMs'],8000)
+                if path=='/button-extensionless': self.assertTrue(result['refererOrigin'].startswith('http://127.0.0.1:'))
+
+    def test_context_survives_manifest_revalidation_and_actual_small_download(self):
+        from resolver import _analyze_direct
+        root=f'http://127.0.0.1:{self.server.server_port}'
+        def safe(value):
+            p=urlsplit(value)
+            if p.hostname!='127.0.0.1' or p.port!=self.server.server_port: raise ValueError('fixture_host_blocked')
+            return SafeUrl(value,p.hostname)
+        context=[{'origin':root,'refererOrigin':root,'sendOrigin':False}]
+        with patch('resolver.validate_url',side_effect=safe):
+            token=REQUEST_CONTEXT.set(context)
+            try:
+                # HEAD is intentionally unsupported by this fixture: range GET,
+                # signature read and the HLS tree must all preserve context.
+                adaptive=_analyze_direct(root+'/media-endpoint',1024)
+                self.assertEqual(adaptive['media'][0]['delivery'],'hls')
+                self.assertTrue(adaptive['media'][0]['downloadable'])
+                direct=_analyze_direct(root+'/media-file',1024)['media'][0]['_downloadRoute']
+            finally: REQUEST_CONTEXT.reset(token)
+            with tempfile.TemporaryDirectory() as directory:
+                path,_,_=download({**direct,'strictPublicEgress':True,'requestContext':context},Path(directory),1024,5)
+                self.assertEqual(path.read_bytes(),b'\x00\x00\x00\x18ftypisom'+b'\0'*20)
+            self.assertIsNone(REQUEST_CONTEXT.get())

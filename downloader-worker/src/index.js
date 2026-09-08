@@ -1,6 +1,6 @@
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
-import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound, markEgressResponse, safeAnalysisDiagnostic } from "./main-video.js";
+import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound, markEgressResponse, safeAnalysisDiagnostic, normalizeRequestContext } from "./main-video.js";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
   DomainError,
@@ -463,6 +463,7 @@ async function processAnalyzeMessage(env, message) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: resolved.url.href, maxBytes: maxFileBytes(env), policyRestricted: isPolicyRestrictedHost(sourceUrl.hostname),
+        deferBrowser: env.MAIN_VIDEO_FALLBACK === "true",
         budgetSeconds: Math.max(0, (analysisEndsAt - Date.now()) / 1000), expiresAtMs: analysisEndsAt }),
       signal: AbortSignal.timeout(Math.max(1, analysisEndsAt - Date.now()))
     }));
@@ -650,7 +651,8 @@ async function processDownloadMessage(env, message) {
       const containerHealthMs = Math.max(0, Date.now() - healthStartedAt);
       await configureContainerEgress(container, routeUrl, capability.route.egressHosts);
       if (capability.route.strictPublicEgress) {
-        await configureMainVideoEgress(container, capability.route.egressHosts, Date.now() + processTimeoutSeconds * 1000, false);
+        await configureMainVideoEgress(container, capability.route.egressHosts, Date.now() + processTimeoutSeconds * 1000, false,
+          {requestContext:capability.route.requestContext});
       }
       const response = await container.fetch(new Request("http://container/download", {
         method: "POST",
@@ -1255,6 +1257,10 @@ function normalizeDownloadRoute(value) {
     if (!egressHosts.includes(url.hostname)) egressHosts.push(url.hostname);
     route.egressHosts = egressHosts;
     if (value.strictPublicEgress === true) route.strictPublicEgress = true;
+    if (value.requestContext != null) {
+      if(!route.strictPublicEgress) return null;
+      route.requestContext=normalizeRequestContext(value.requestContext,egressHosts);
+    }
     if (value.kind === "yt-dlp") {
       route.playlistIndex = safeInteger(value.playlistIndex);
       route.formatSelector = cleanFormatSelector(value.formatSelector);
