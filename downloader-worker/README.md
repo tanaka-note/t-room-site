@@ -160,7 +160,11 @@ Containerコード公開は`ClamAV daily definitions`の手動入力`release_cod
 
 Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工程名・発生元・HTTP statusを引き継ぐ。補助探索のHTTP/redirect/通信拒否を一律`unavailable`にしない。Worker送信handlerは相手由来の診断markerを上書きし、上流応答と自前のpolicy拒否を識別する。SDKがhandler到達前に返す応答など、発生元を確認できないものは`unknown`のままにする。URL/query、Cookie、Authorization、本文は診断へ渡さない。失敗ログにはjob ID、起動待ちと解析の経過時間を含める（CPU時間ではない）。監査は既存のtoken付きCAS成功後だけ記録する。
 
-対象ページの通常Chromeでは、main playerに同一ホストHLSの参照があり、明確なPlay buttonを1回押すとblob再生へ移った。関連previewとは区別して確認し、直後にページを閉じて転送を止めた。このDOMでは本編iframe必須とは確認できなかった。一方、Cookieを持たないWindows HTTPは既存/ブラウザ相当UAとも403＋`cf-mitigated: challenge`、新規Chromium contextは307→403 challengeでvideo要素へ到達しなかった。通常Chromeとの環境差の具体的原因（profile状態等）は未確定。UA/Acceptの置換だけで解決したとは扱わない。[Cloudflareのchallenge応答仕様](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)に従い、確定拒否をfallbackで回避しない。
+対象ページの通常Chromeでは、main playerに同一ホストHLSの参照があり、明確なPlay buttonを1回押すとblob再生へ移った。関連previewとは区別して確認し、直後にページを閉じて転送を止めた。このDOMでは本編iframe必須とは確認できなかった。一方、Cookieを持たないWindows HTTPは既存/ブラウザ相当UAとも403＋`cf-mitigated: challenge`、新規Chromium contextは307→403 challengeでvideo要素へ到達しなかった。[Cloudflareのchallenge応答仕様](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)に従い、確定拒否をfallbackで回避しない。
+
+追加切り分け（同日）: 利用者は通常Chromeのシークレットでも人間確認なしで再生できると報告した。独立した新規Chrome 153で、最初のHTTP応答をheaders時点で遮断し、本文を空文書へ置換した比較では、stock HeadlessChrome UAは403、UAのHeadlessChrome表記だけをChromeにした条件は200だった。送信headerをUA/Acceptだけに絞った比較でも、Mozilla/5.0は403、通常Chrome形式は200。Cookieの移送・challenge script実行・広告クリック・動画要求は行っていない。200は最初のHTTP応答だけの確認であり、本文の正当性、解析・取得成功を意味しない。HEAD/GET差だけでは解消せず、以前の307は同じURLへの再要求で、最初の実応答にLocationはなくAccept-CH/Critical-CHがあったため、埋め込み先へのHTTP転送の根拠にはしない。
+
+同じ通常Chrome形式UAでも、Windows Python HTTPとCloudflareの隔離edge-previewのfetchは403 challengeだった。previewは既存Worker名の一時実行で、Container/D1/R2 bindingを持たず、応答bodyを読まずcancelし、本番deployment/versionが不変なことを読み戻した。X-Real-IPを外したpreviewも403だった。UAだけ、固定IP headerだけ、Cloudflare送信元だけを単独原因とは断定できない。現在の通常・補助egressはWorker fetchで接続を作り直し、UAをMozilla/5.0へ固定するため、ローカルChromeの200という条件をそのまま再現するものではない。ブラウザとHTTPクライアントの通信特性による差は残るが、TLS/HTTP特性・送信元評価など相手側の具体的判定規則は未確定。UAだけの本番変更で解決したとは扱わず、通信制限の解除・Cookie転送・challenge回避は行わない。追加調査はHTTP metadata比較のみで、コード変更・Container起動・再deploy・実スキャン・動画取得は行っていない。
 
 この修正は観測した診断欠落の是正であり、対象動画の取得成功やサーバーからのchallenge通過を実現したものではない。Cookie/POST/認証・通信先制限は維持し、追加待機・リクエスト・ブラウザ起動を増やさない。正常経路の変更は診断headerの付与のみで、速度差や請求増分は未計測。エンジン・定義・Container枠は変更しない。
 
@@ -168,7 +172,7 @@ Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工�
 
 本番build `downloader-cac27d5cf650`、Worker `9527bd34-7527-4459-8515-ff87f4a3329d`（100%）、deployment `2e120568-7de4-497b-b609-5960da594a20`。Container14 / `sha256:26ee1cce3e0b01c5f31adcdc3f324921da942d2f0da48f23641187fb93acd80c`、rollout `0aa010a0-f906-494a-8b38-2c47e4dc942f` completed・activeなし・D1 image/source_image一致。HTML buildとdownloader.js/delete-controls.js一致、未認証jobs 401、TTL3600・10分Cron・既存D1/R2/Queue・flag=trueを読み戻し確認した。
 
-2026-09-08 18:21 JST、利用者の再ログイン後にChromeの認証済みURL入力欄を確認し、対象URLを本番で1回解析した。job `686ecfe2-771a-41aa-9ebe-1ba02aa6a724` は受付09:21:02 UTC→失敗確定09:21:10 UTC（約8秒、起動/Queue待ちを含む経過時間でCPU時間ではない）。Security監査の固定診断は `stage=direct, source=upstream, httpStatus=403`、D1 `error_type=bot_challenge`。この版のcodeで実際の上流 `cf-mitigated: challenge` を判定しており、自前のegress/SSRF拒否とは区別できた。通常Chromeとの差の具体的条件（IP、ブラウザ状態等）は未確定。
+2026-09-08 18:21 JST、利用者の再ログイン後にChromeの認証済みURL入力欄を確認し、対象URLを本番で1回解析した。job `686ecfe2-771a-41aa-9ebe-1ba02aa6a724` は受付09:21:02 UTC→失敗確定09:21:10 UTC（約8秒、起動/Queue待ちを含む経過時間でCPU時間ではない）。Security監査の固定診断は `stage=direct, source=upstream, httpStatus=403`、D1 `error_type=bot_challenge`。この版のcodeで実際の上流 `cf-mitigated: challenge` を判定しており、自前のegress/SSRF拒否とは区別できた。この時点では通常Chromeとの差の具体的条件は未確定だった。上記の追加切り分けでも、本番からの解析成功は未達成である。
 
 失敗後の再読込でもstatus=failed、processing token/leaseはNULL、受付/失敗監査は各1件、object参照なし、取得開始/利用者DL/スキャン計測なし。UIは「サイト側のアクセス制限により解析できません。」に戻り、長時間の再解析は観測しなかった。本番Worker `9527bd34-7527-4459-8515-ff87f4a3329d` 100%・Container14/digest一致・active rolloutなしを再確認。アプリの認証障害は解消したが、動画URL検出・取得・検査・保存・利用者ダウンロード成功は未達成。確定challengeを無視するfallbackやCookieの移送は行わず、同条件の本番試験を反復しない。今回の追加変更はこの検証記録だけであり、既存対象テストを再利用して再deploy/Container buildは行わない。
 
