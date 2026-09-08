@@ -168,6 +168,8 @@ Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工�
 
 本番build `downloader-cac27d5cf650`、Worker `9527bd34-7527-4459-8515-ff87f4a3329d`（100%）、deployment `2e120568-7de4-497b-b609-5960da594a20`。Container14 / `sha256:26ee1cce3e0b01c5f31adcdc3f324921da942d2f0da48f23641187fb93acd80c`、rollout `0aa010a0-f906-494a-8b38-2c47e4dc942f` completed・activeなし・D1 image/source_image一致。HTML buildとdownloader.js/delete-controls.js一致、未認証jobs 401、TTL3600・10分Cron・既存D1/R2/Queue・flag=trueを読み戻し確認した。
 
-本番実取得は未実施・未達成。検証用Chromeは本人確認中のままで、Security監査には2026-09-08 08:56:22/08:58:42 UTCの認証開始だけがあり、認証完了は未記録。対象ホストの新jobも未作成。利用者から本人確認完了との連絡はあったが、このタブの認証済み画面では確認できなかった。セッションを代作せず、URL入力欄が表示されてから最小容量の取得・検査・保存・利用者ダウンロードを確認する必要がある。Windowsで観測したchallengeを本番の観測結果に置き換えない。
+2026-09-08 18:21 JST、利用者の再ログイン後にChromeの認証済みURL入力欄を確認し、対象URLを本番で1回解析した。job `686ecfe2-771a-41aa-9ebe-1ba02aa6a724` は受付09:21:02 UTC→失敗確定09:21:10 UTC（約8秒、起動/Queue待ちを含む経過時間でCPU時間ではない）。Security監査の固定診断は `stage=direct, source=upstream, httpStatus=403`、D1 `error_type=bot_challenge`。この版のcodeで実際の上流 `cf-mitigated: challenge` を判定しており、自前のegress/SSRF拒否とは区別できた。通常Chromeとの差の具体的条件（IP、ブラウザ状態等）は未確定。
+
+失敗後の再読込でもstatus=failed、processing token/leaseはNULL、受付/失敗監査は各1件、object参照なし、取得開始/利用者DL/スキャン計測なし。UIは「サイト側のアクセス制限により解析できません。」に戻り、長時間の再解析は観測しなかった。本番Worker `9527bd34-7527-4459-8515-ff87f4a3329d` 100%・Container14/digest一致・active rolloutなしを再確認。アプリの認証障害は解消したが、動画URL検出・取得・検査・保存・利用者ダウンロード成功は未達成。確定challengeを無視するfallbackやCookieの移送は行わず、同条件の本番試験を反復しない。今回の追加変更はこの検証記録だけであり、既存対象テストを再利用して再deploy/Container buildは行わない。
 
 今回の切り戻し: Worker旧版 `11ce3f56-8db9-484e-ac2e-0be8cd0d376b`。Containerまで戻す必要がある場合は、定義更新手順の署名/鮮度・job/drain・rollout確認後にprevious image `sha256:b9e49c44884574d0a266ae286bd667246761d20a2cfa1e1c72fd80a9087f8208`を使う。Workerだけのrollbackはimageを戻さない。補助探索の停止だけなら既存のMAIN_VIDEO_FALLBACK=falseを使用する。
