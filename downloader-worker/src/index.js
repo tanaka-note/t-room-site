@@ -1,6 +1,6 @@
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
-import { configureMainVideoEgress, exploreMainVideo, mainVideoOutbound } from "./main-video.js";
+import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound } from "./main-video.js";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
   DomainError,
@@ -208,6 +208,13 @@ export async function handleQueueBatch(batch, env) {
       await safeRecordUsageItems(env, messageIdentityId, [{ metric: "platform", dimension: "queue_delete", count: 1 }]);
     } catch (error) {
       if (message.body?.type === "analyze" && await analysisIsCancelled(env, message.body).catch(() => false)) {
+        message.ack();
+        await safeRecordUsageItems(env, messageIdentityId, [{ metric: "platform", dimension: "queue_delete", count: 1 }]);
+        continue;
+      }
+      if (message.body?.type === "analyze" && error?.analysisTerminal === true) {
+        // The bounded discovery plan has completed (or definitively refused).
+        // Record failure before ack; redelivery sees failed and cannot restart.
         message.ack();
         await safeRecordUsageItems(env, messageIdentityId, [{ metric: "platform", dimension: "queue_delete", count: 1 }]);
         continue;
@@ -449,25 +456,28 @@ async function processAnalyzeMessage(env, message) {
     const healthStartedAt = Date.now();
     await requireHealthyContainer(container, true);
     const analysisStartedAt = Date.now();
+    const analysisEndsAt = analysisStartedAt + ANALYSIS_TIMEOUT_MS;
     const resolved = await resolveAnalysisSource(container, sourceUrl, maxFileBytes(env));
     await configureContainerEgress(container, sourceUrl, resolved.egressHosts);
-    const analysisEndsAt = Date.now() + ANALYSIS_TIMEOUT_MS;
     const response = await container.fetch(new Request("http://container/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: resolved.url.href, maxBytes: maxFileBytes(env), policyRestricted: isPolicyRestrictedHost(sourceUrl.hostname) }),
-      signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS)
+      body: JSON.stringify({ url: resolved.url.href, maxBytes: maxFileBytes(env), policyRestricted: isPolicyRestrictedHost(sourceUrl.hostname),
+        budgetSeconds: Math.max(0, (analysisEndsAt - Date.now()) / 1000), expiresAtMs: analysisEndsAt }),
+      signal: AbortSignal.timeout(Math.max(1, analysisEndsAt - Date.now()))
     }));
     let analysis = await response.json().catch(() => ({}));
-    if (!response.ok && response.status === 422 && analysis.errorCode === "media_not_found" &&
+    if (!response.ok && response.status === 422 && canExploreAnalysis(analysis.errorCode) &&
         env.MAIN_VIDEO_FALLBACK === "true" && !await analysisIsCancelled(env, message)) {
-      const extra = await exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxFileBytes(env));
+      const extra = await exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxFileBytes(env), analysis.pagePlan);
       if (extra) analysis = extra;
     }
     if (!response.ok && analysis.extractor !== "main-video") {
       if (await analysisIsCancelled(env, message)) return;
       console.error(JSON.stringify({ event: "downloader_container_analyze_failed", errorCode: cleanText(analysis.errorCode, 80) || "unknown", status: response.status }));
-      throw new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
+      const error = new Error(cleanText(analysis.errorCode, 80) || `container_${response.status}`);
+      error.analysisTerminal = response.status === 422 && terminalAnalysisError(analysis.errorCode);
+      throw error;
     }
     if (resolved.adapter) {
       analysis.site = sourceUrl.hostname;
@@ -487,6 +497,11 @@ async function processAnalyzeMessage(env, message) {
       .bind(extractor, mediaType, deliveryType, JSON.stringify(normalized), jobId, identityId, analysisToken).run();
     if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_analyze_completed", "success", { jobId, hostname: sourceUrl.hostname, urlHash: row.url_hash, extractor, mediaCount: normalized.media.length });
   } catch (error) {
+    if (error?.analysisTerminal === true) {
+      // Commit with the same lease token before clearing it. A late response
+      // cannot mark another delivery, or a cancelled job, as failed.
+      error.analysisTerminal = await markAnalysisFailed(env, message, error, analysisToken);
+    }
     await env.DB.prepare(`UPDATE downloader_jobs SET processing_token = NULL, processing_lease_expires_at = NULL,
       updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ? AND status = 'analyzing' AND processing_token = ?`)
       .bind(jobId, identityId, analysisToken).run();
@@ -738,7 +753,7 @@ async function markDownloadFailed(env, message, error, processingToken = null) {
   if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_download_failed", "failure", { jobId, hostname: row.source_hostname, reason: safe });
 }
 
-async function markAnalysisFailed(env, message, error) {
+async function markAnalysisFailed(env, message, error, analysisToken = null) {
   const jobId = String(message?.jobId || "");
   const identityId = String(message?.identityId || "");
   const row = await env.DB.prepare("SELECT service_link_id, source_hostname FROM downloader_jobs WHERE id = ? AND identity_id = ?")
@@ -746,9 +761,13 @@ async function markAnalysisFailed(env, message, error) {
   if (!row) return;
   const failure = classifyUsageError(error);
   const update = await env.DB.prepare(`UPDATE downloader_jobs SET status = 'failed', error_type = ?, failure_category = ?,
-    error_reason = 'このURLからメディアを確認できませんでした。', updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND identity_id = ? AND status = 'analyzing'`).bind(failure.code, failure.category, jobId, identityId).run();
+    error_reason = ?, processing_token = NULL, processing_lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND identity_id = ? AND status = 'analyzing' AND (? IS NULL OR processing_token = ?)`)
+    .bind(failure.code, failure.category,
+      ['bot_challenge','access_denied'].includes(failure.code) ? 'サイト側のアクセス制限により解析できません。' : 'このURLからメディアを確認できませんでした。',
+      jobId, identityId, analysisToken, analysisToken).run();
   if (update.meta?.changes) await auditSystem(env, identityId, row.service_link_id, "downloader_analyze_failed", "failure", { jobId, hostname: row.source_hostname, reason: queueErrorReason(error) });
+  return Boolean(update.meta?.changes);
 }
 
 async function handleContainerInternalRequest(request, env) {

@@ -3,8 +3,9 @@ import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import vm from 'node:vm';
+import {canExploreAnalysis,terminalAnalysisError} from '../src/main-video.js';
 import * as domain from '../src/downloader-domain.js';
-import {aggregateUsageRows} from '../src/downloader-usage.js';
+import {aggregateUsageRows,classifyUsageError} from '../src/downloader-usage.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const migrationFiles=readdirSync(new URL('../migrations/',import.meta.url)).sort();
 const migrations=migrationFiles.map(f=>readFileSync(new URL('../migrations/'+f,import.meta.url),'utf8'));
@@ -23,7 +24,7 @@ function binding(db) {
   } };
 }
 function harness(db,container={async cancelAnalysis(){},async release(){}}){
-  const events=[]; const context={...domain,Request,Response,AbortSignal,URL,console,Date,crypto,Math,
+  const events=[]; const context={...domain,classifyUsageError,queueErrorReason:()=>"fixture",canExploreAnalysis,terminalAnalysisError,Request,Response,AbortSignal,URL,console,Date,crypto,Math,
     HttpError: class extends Error {constructor(status,message){super(message);this.status=status}},
     ensureContainerConfigured(env){assert.ok(env.DOWNLOADER_CONTAINER)},getContainer(_ns,name){events.push(name);return container},
     json:Response.json,nowSeconds:()=>1000,safeErrorName:e=>e.message,
@@ -39,6 +40,7 @@ function harness(db,container={async cancelAnalysis(){},async release(){}}){
   vm.createContext(context);
   vm.runInContext(slice('const CONTAINER_HEALTH_TIMEOUT_MS','const CONTAINER_RESPONSE_GRACE_MS')+
     slice('async function processAnalyzeMessage(','async function requestDownload(')+
+    slice('async function markAnalysisFailed(', 'async function handleContainerInternalRequest(')+
     slice('async function ownedJob(','async function serveDownload(')+
     slice('export async function handleQueueBatch(','export class SecurityIntegration').replace('export ','')+
     slice('function requireMutation(','function ensureContainerConfigured(')+
@@ -114,6 +116,26 @@ for(const stopped of [false,true])test(`in-flight ${stopped?'stopped':'late succ
 test('normal analysis completes, releases container and preserves bounded retries on genuine failure',async()=>{
  const db=database();try{insert(db);let released=0;const h=harness(db,{async fetch(){return Response.json({media:[]})},async release(){released++}});await h.context.analyze(h.env,{jobId:'job',identityId:'owner'});assert.equal(db.prepare('SELECT status FROM downloader_jobs').get().status,'analyzed');assert.equal(released,1);assert.ok(h.events.includes('downloader_analyze_completed'));
  insert(db,'bad');let retries=0;h.context.decryptPrivatePayload=async()=>{throw Error('temporary')};await h.context.queue({messages:[{body:{type:'analyze',jobId:'bad',identityId:'owner'},attempts:1,ack(){assert.fail('failure acknowledged')},retry(options){assert.equal(options.delaySeconds,10);retries++}}]},h.env);assert.equal(retries,1);
+ }finally{db.close()}
+});
+
+test('exhausted metadata fallback commits failure once and redelivery never starts Container',async()=>{
+ const db=database();try{insert(db);let fetches=0,extras=0,ack=0,retry=0;
+ const h=harness(db,{async fetch(){fetches++;return Response.json({errorCode:'metadata_timeout'},{status:422})},async release(){}});
+ h.env.MAIN_VIDEO_FALLBACK='true';h.context.exploreMainVideo=async()=>{extras++;return null};
+ const msg={body:{type:'analyze',jobId:'job',identityId:'owner'},attempts:1,ack(){ack++},retry(){retry++}};
+ await h.context.queue({messages:[msg]},h.env);await h.context.queue({messages:[msg]},h.env);
+ const row=db.prepare('SELECT * FROM downloader_jobs').get();assert.equal(row.status,'failed');assert.equal(row.error_type,'metadata_timeout');assert.equal(row.processing_token,null);
+ assert.equal(fetches,1);assert.equal(extras,1);assert.equal(ack,2);assert.equal(retry,0);
+ assert.equal(h.events.filter(x=>x==='downloader_analyze_failed').length,1);
+ }finally{db.close()}
+});
+
+test('terminal analysis refusal cannot overwrite a replacement lease',async()=>{
+ const db=database();try{insert(db);let retry=0;
+ const h=harness(db,{async fetch(){db.exec("UPDATE downloader_jobs SET processing_token='replacement'");return Response.json({errorCode:'bot_challenge'},{status:422})},async release(){}});
+ await h.context.queue({messages:[{body:{type:'analyze',jobId:'job',identityId:'owner'},attempts:1,ack(){assert.fail('uncommitted failure acknowledged')},retry(){retry++}}]},h.env);
+ assert.equal(db.prepare('SELECT status FROM downloader_jobs').get().status,'analyzing');assert.equal(db.prepare('SELECT processing_token FROM downloader_jobs').get().processing_token,'replacement');assert.equal(retry,1);
  }finally{db.close()}
 });
 

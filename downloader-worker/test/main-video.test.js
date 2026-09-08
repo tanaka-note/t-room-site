@@ -2,9 +2,36 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { assertPublicDestination, publicAddress, exploreMainVideo, mainVideoOutbound } from '../src/main-video.js';
+import { canExploreAnalysis, terminalAnalysisError, assertPublicDestination, publicAddress, exploreMainVideo, mainVideoOutbound } from '../src/main-video.js';
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const dns=addresses=>async()=>Response.json({Status:0,Answer:addresses.map(data=>({type:data.includes(':')?28:1,data}))});
+
+test('recoverable extractor failures explore once; explicit refusals never explore',()=>{
+ for(const code of ['metadata_timeout','extractor_failed','metadata_invalid','media_not_found']) {
+  assert.equal(canExploreAnalysis(code),true);assert.equal(terminalAnalysisError(code),true);
+ }
+ for(const code of ['drm','login_required','geo_restricted','policy_restricted','access_denied','bot_challenge']) {
+  assert.equal(canExploreAnalysis(code),false);assert.equal(terminalAnalysisError(code),true);
+ }
+ assert.equal(canExploreAnalysis('ssrf_blocked'),false);
+ assert.equal(terminalAnalysisError('container_draining'),false);
+});
+
+test('page-associated frame and scripts receive bounded exact permissions without site configuration',async()=>{
+ const previous=globalThis.fetch;globalThis.fetch=dns(['8.8.8.8']);const policies=[],calls=[];
+ const container={async claimMainVideoExploration(){return true},async setAllowedHosts(){},async setOutboundHandler(_name,p){policies.push(p)},async fetch(req){
+  const b=await req.json();calls.push(b);
+  return Response.json(b.phase==='prepare'?{page:'https://player.example/embed/123',scripts:['https://assets.example/player.js']}:
+   b.phase==='discover'?{url:'https://cdn.example/main.mp4'}:{extractor:'main-video',media:[]});
+ }};
+ try {
+  const result=await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},container,new URL('https://example.com/watch'),Date.now()+120000,1024,
+   {page:'https://example.com/watch',embed:'https://player.example/embed/123',scripts:[]});
+  assert.equal(result.extractor,'main-video');assert.deepEqual(calls.map(x=>x.phase),['prepare','discover','validate']);
+  assert.deepEqual(policies.at(-1).hosts,['example.com','player.example','assets.example','cdn.example']);
+  assert.equal(new Set(calls.map(x=>x.expiresAtMs)).size,1);
+ } finally {globalThis.fetch=previous}
+});
 
 test('public DNS rejects private, mixed, special-use, mapped IP and DNS failure',async()=>{
  for(const ip of ['127.0.0.1','10.0.0.1','169.254.169.254','100.64.0.1','192.168.1.1','::1','::ffff:127.0.0.1','fe80::1','fc00::1','2002:7f00:1::','2001:db8::1','192.0.2.1'])assert.equal(publicAddress(ip),false,ip);
@@ -64,12 +91,12 @@ test('slow RPC cannot extend remaining analysis time or start a browser later',a
  await new Promise(r=>setTimeout(r,100));assert.equal(fetches,0);
 });
 
-test('actual analysis caller gates extra work on explicit not-found and preserves cancellation CAS',()=>{
+test('actual analysis caller gates extra work on recoverable errors and preserves cancellation CAS',()=>{
  const body=source.slice(source.indexOf('async function processAnalyzeMessage('),source.indexOf('async function analysisIsCancelled('));
- assert.match(body,/response\.status === 422 && analysis\.errorCode === "media_not_found"/);
+ assert.match(body,/response\.status === 422 && canExploreAnalysis\(analysis\.errorCode\)/);
  assert.match(body,/!await analysisIsCancelled\(env, message\)/);
  assert.match(body,/status = 'analyzing' AND processing_token = \?/);
- assert.match(body,/Date\.now\(\) \+ ANALYSIS_TIMEOUT_MS/);
+ assert.match(body,/analysisStartedAt \+ ANALYSIS_TIMEOUT_MS/);
  assert.ok(body.indexOf('if (!response.ok &&')<body.indexOf('await exploreMainVideo'));
 });
 

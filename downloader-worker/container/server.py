@@ -70,7 +70,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return self._json(200, result)
             if self.path == "/analyze":
-                result = analyze(str(body.get("url") or ""), _number(body.get("maxBytes"), 1, 2 * 1024**3), bool(body.get("policyRestricted")))
+                from main_video import run_phase
+                result = run_phase({**body, 'phase':'analyze', 'budgetSeconds':body.get('budgetSeconds', 120)})
                 return self._json(200, result)
             if self.path == "/main-video":
                 from main_video import run_phase
@@ -79,7 +80,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._download(body)
             return self._json(404, {"error": "not_found"})
         except (UnsafeUrl, ResolverError) as error:
-            return self._json(422, {"error": "このURLからメディアを確認できませんでした。", "errorCode": str(error)})
+            return self._json(422, {"error": "このURLからメディアを確認できませんでした。", "errorCode": str(error),
+                                    "pagePlan":getattr(error, 'page_plan', None)})
         except UnsafeFile as error:
             return self._json(422, {"error": "安全性を確認できなかったため取得を中止しました。", "errorCode": f"scan_{error}"})
         except TimeoutError:

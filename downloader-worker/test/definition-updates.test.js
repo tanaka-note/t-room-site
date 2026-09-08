@@ -153,6 +153,19 @@ test('failed code-release fixture prevents push and rollout', async () => {
   }finally{h.db.close()}
 });
 
+test('analysis-only release inherits production runtime and signatures without repeated engine scans', async () => {
+  const h=harness(),calls=[];
+  try {
+    await refresh({...h,releaseCode:true,analysisOnly:true,docker:args=>{calls.push(args);return h.docker(args)}});
+    const build=calls.find(x=>x[0]==='build');
+    assert.ok(build.includes(`BASE_IMAGE=${image}`));assert.ok(build.some(x=>x.endsWith('analysis.Dockerfile')));
+    assert.ok(calls.some(x=>x.includes('test_main_video.py')));
+    assert.ok(calls.some(x=>x.includes('/tmp/verify-definitions.py') && x.includes('--definitions-only')));
+    assert.equal(h.row().source_image,next);assert.equal(h.row().definition_unix,report.definitionUnix);
+    await assert.rejects(refresh({...h,analysisOnly:true,releaseCode:false}),/requires_code/);
+  } finally {h.db.close()}
+});
+
 test('failed build/signature/rollout preserves last verified image and consecutive failures', async () => {
   for (const failure of ['build', 'signature', 'rollout']) {
     const h = harness({ failure });

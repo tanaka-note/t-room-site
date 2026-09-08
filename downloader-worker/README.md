@@ -124,15 +124,17 @@ DOにも永続的な中止記録を残し、起動待ちのfetchをabortしてde
 
 ## 視聴ページの本編補助探索
 
-`MAIN_VIDEO_FALLBACK=true`で有効、`false`でこの機能だけを停止する。既存adapter / Direct / yt-dlp / HTML / Chromiumの成功結果は維持し、Containerの明示的な`422 media_not_found`だけが追加探索の対象。DRM・login・geo・bot・SSRF・未知の実行障害では再探索しない。通常解析の120秒期限内で、準備・ブラウザ・候補検証を合わせて最大10秒。残り1秒未満では開始しない。`analysis-{jobId}`のDurable Object storageへ1回限りのclaimを保存し、Queue再配送・DO再生成でも繰り返さない。中止は既存のD1 cancelled確定・Container destroyを使う。子プロセスのdeadlineと終了時cleanupも維持する。
+`MAIN_VIDEO_FALLBACK=true`で補助探索を有効、`false`で単独停止する。Direct / adapterの成功結果と、yt-dlp専用extractor（YouTube等）の90秒上限を維持する。未知サイトは軽量HTML → 最大8秒のyt-dlp → Chromium / 本編補助探索。HTMLで一意のmain/player iframeを確認できた場合、frameを読めないdump-domを省く。metadata_timeout / unsupported / generic extractor失敗など未確定の解析障害は残り時間内で次の方式へ進む。DRM・login・geo・policy・明確なaccess拒否 / bot challenge・SSRFでは進めない。
 
-初期対応は、現在のページを`mainEntityOfPage`等で指す単一のJSON-LD VideoObject（公開contentUrlあり）と、main内の単一プレイヤー、または同じVideoObjectのembedUrlに一致するiframeがある公開ページ。currentSrcまたはblobプレイヤーと、そのframeが実際に要求したcontentUrlが一致する場合だけ1候補を採用する。広告・関連候補・複数プレイヤー・所有ページ不一致は採用しない。識別済みvideo要素のnative playを1回だけ試し、任意のボタン・リンクを押さない。メディア通信は観測してabortするため、補助ブラウザで動画本体を再生しない。必要なmanifest/署名確認だけ既存Direct validatorで読み、DRM（名前空間付きDASH ContentProtectionも含む）・暗号化・live・サイズ検証後のrouteを既存方式で暗号化固定する。最終ClamAV/YARAは変更しない。
+Workerの120秒期限をadapter・通常解析・補助探索で共有する。従来Chromiumを待つ段階では残り12秒を補助探索と終了処理に残す。専用yt-dlpの既存予算を削らず、子プロセス側にも絶対期限を渡して全体を監督する。補助探索は準備・ブラウザ・候補検証を合わせて最大10秒、残り1秒未満では開始しない。解析完了後の未発見/拒否はtoken CASでfailedに確定してQueueをackし、同じ長い探索を再配送で繰り返さない。Container起動失敗等の基盤障害には既存の上限付きretryを維持。中止はD1 cancelled確定後のContainer destroy、通常終了はrelease/stopを維持する。
 
-ページ依存通信はsourceの正確なhostだけ。必要なscript/iframe CDNは`MAIN_VIDEO_PAGE_HOSTS`のJSON `{ "watch.example": ["player.example"] }`で個別登録可能（最大8、wildcard不可）。初期設定は空。媒体CDNは本編との関連を確認した単一候補だけをWorkerで再検証して許可する。別hostのredirectは探索時には追跡せず、未知のiframe・Cookie・Authorization・POST・WebSocket・Service Workerは使用しない。最大32要求、個別1MB・合計2MBの補助ページ予算。候補manifestが未許可の別hostのplaylistを要求する場合も拒否する。このため全ての視聴ページに対応するものではない。
+JSON-LD VideoObjectに加え、main/player領域の一意のiframeと、そのframe内でJS生成されたvideoにも対応する。プレイヤーのcurrentSrcと実通信、または同じframeの一意のメディア候補を照合する。複数候補・広告/関連動画・ログイン/購読/DRMは採用しない。識別済みvideoのnative playを1回だけ試し、任意リンクや広告をクリックしない。メディア通信は観測後abortし、検出候補を既存のDirect/manifest/DRM/サイズ検証へ通して取得経路を固定する。最終ClamAV/YARAは維持。
+
+ページHTMLで確認した1段のmain iframe、ページとiframeが明示参照するscript（各最大8）だけを依存候補にする。Workerがpublic DNSを検証後、job専用allowlistへ最大12のexact hostを期限付きで追加する。`MAIN_VIDEO_PAGE_HOSTS`は任意の補助設定で必須ではない。Cookie / Authorization / POST / WebSocket / Service Workerは使わない。補助ブラウザは32要求・個別1MB・合計2MB、iframeの軽量事前読込は1MBまで。redirectは追跡しない。実行時に外部iframe自体を生成する任意JS、多段iframe、任意APIやCookieが必要なプレイヤー、未許可hostの子playlist、複数候補からの推測には対応しない。
 
 Cloudflare透過DNSのPython例外は既存経路のため維持。補助経路ではContainerProxyの専用handlerを使い、exact host制限と要求ごとのpublic A/AAAA確認・private/special-use拒否をWorker側でも行う。リダイレクトを自動追跡せず、Cookie等を落としたCloudflare public fetchで接続する。VPC/内部service bindingは使わない。PythonのDNS例外だけを根拠に送信を許可しない。最終取得にも専用handlerをroute属性で引き継ぐ。通常経路の送信handlerは変更せず、再配送時に古い補助handlerを既存setAllowedHosts RPC内で解除する。生URL/query・本文・HARはログに出さない。
 
-費用: 既存成功時の追加ブラウザ・追加DNS検査は0回。該当未発見ジョブのみ最大10秒のContainer実行と軽量D1/DO・Proxy/DNS要求が増える（claimはDO、追加D1更新なし）。これはCPU実測・請求額ではなく上限設定であり、起動/停止課金を含む料金上限ではない。新しい常時稼働枠やBrowser Rendering契約は作らない。Playwrightを既存Chromiumで使う分、image容量は増える。
+費用: 既存成功時に補助ブラウザは起動しない。通常解析の子プロセス監督と未知サイトのHTML先行による小さなオーバーヘッドはある。該当未発見ジョブのみ最大10秒のContainer実行と軽量D1/DO・Proxy/DNS要求が増える（claimはDO、追加D1更新なし）。これはCPU実測・請求額ではなく上限設定であり、起動/停止課金を含む料金上限ではない。新しい常時稼働枠やBrowser Rendering契約は作らない。Playwrightを既存Chromiumで使う分、image容量は増える。
 
 対象検証: `node --test test/main-video.test.js test/downloader-cancellation.test.js test/worker-contract.test.js test/downloader-processing.test.js`、Python `tests/test_main_video.py` / `test_resolver.py` / `test_ssrf.py`。実ブラウザは`MAIN_VIDEO_TEST_BROWSER=/usr/bin/chromium`を指定して小容量loopback fixtureだけを使う。fixtureテストだけでprivate-IP拒否を緩和し、本番設定には持ち込まない。指定されたimage-share代表URLは既存adapter 468ms・Direct確認969ms（Windowsローカル1回の観測、2026-09-07）。旧mainと同じ成功処理を使い、追加探索なし。変更前後の本番時間や全サイト成功率を保証する値ではない。
 
@@ -141,3 +143,8 @@ Containerコード公開は`ClamAV daily definitions`の手動入力`release_cod
 公開記録（2026-09-08 JST）: 実装`89765b7`、公開コード`1ea791b`。対象Node 65件（変更箇所ごとの実行の合算）、Python unit 40件PASS。Windows ChromiumでJS/blob・iframe・広告除外・曖昧候補・login拒否の5ケースを確認。初回Linux fixture実行は失敗し、本番ラッパーと同様の書き込み可能HOMEをCIにも設定後、[公開workflow 34136475258](https://github.com/tanaka-note/t-room-site/actions/runs/34136475258)でLinuxの7テスト（上記5ブラウザケースを含む）・実ClamAV正常/EICAR・署名/鮮度・YARA正常性を通過。初回失敗時は未公開。初回の詳細stderrは取得できず、HOME修正後の成功と区別して記録する。全E2E・大容量取得・Cloudflare上の補助探索end-to-end/敵対的DNS切替試験は実施していない。
 
 本番Worker `3fda4375-5ea2-4944-b287-a69efa8984ac`、deployment `a51190ec-da71-4565-bcaf-216e3b300fc7`、build `downloader-fcf2a3846067`。本番HTML build、downloader.js/delete-controls.jsのmain一致、未認証jobs API 401、既存D1/R2/QueueとTTL3600・Cron10分・新機能flag=trueを確認。Container version 11、digest `sha256:bd6edcda383bdc7c12f08b9b7942c555f81e63a4541b2a7b5e9fd2a538abab39`、rollout `5b911d08-4673-4d8d-a2fb-60e817e3fc13` completed・activeなし。定義生成`2026-09-07T06:24:32Z`・7日期限`2026-09-14T06:24:32Z`、D1 image/source_image一致。Workerを前版へ戻す場合のversionは`ab093ef1-6823-4f0b-bdb4-d4c0a2729f59`（Containerを戻す操作ではない）。通常は新機能flagだけfalseにして既存成功経路を維持する。
+
+
+### 2026-09-08 埋め込み解析の待ち時間修正
+
+本番旧ジョブは4分3秒後にextractor_failed。待機中もanalyzingを表示し、Queueの30/60/120秒再試行待ちが含まれていた。改修後の対象URL解析はWindowsローカル1回で0.734秒、bot_challengeで拒否（ページ側Cloudflare確認）。動画取得成功ではなく、拒否を長時間再試行しないことの確認。旧本番とローカルの数値は環境が異なり性能倍率に換算しない。Cloudflare上の同URL再実行や動画本体取得は行わない。

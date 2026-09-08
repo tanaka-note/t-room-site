@@ -9,14 +9,52 @@ import subprocess
 import sys
 import tempfile
 import time
+import re
+from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from ssrf import validate_url
 
 
-# Require one page-level VideoObject and a matching player. A large player or
-# the first media request alone is deliberately insufficient evidence.
+AD_MARKER = re.compile(r'(^|[\s_-])(ad|ads|advert|advertisement|sponsor|related|preview|trailer)([\s_-]|$)', re.I)
+PLAYER_MARKER = re.compile(r'player|video|embed|watch', re.I)
+
+
+def page_plan(html, url):
+    """Only document-declared scripts and one main player, never arbitrary links.
+
+    The Worker validates public DNS for every proposed exact host before it
+    changes the job-local egress policy. URLs stay in memory, never in logs.
+    """
+    class Parser(HTMLParser):
+        def __init__(self):
+            super().__init__(); self.stack = []; self.embeds = []; self.scripts = []
+        def handle_starttag(self, tag, attrs):
+            a = dict(attrs)
+            marker = ' '.join(str(a.get(k, '')) for k in ('id', 'class', 'title', 'aria-label'))
+            ad = bool(AD_MARKER.search(marker)) or any(x[1] for x in self.stack)
+            main = tag == 'main' or a.get('role') == 'main' or bool(PLAYER_MARKER.search(marker)) or any(x[2] for x in self.stack)
+            src = a.get('src') or a.get('data-src')
+            if tag == 'iframe' and src and main and not ad:
+                target = urljoin(url, src)
+                if urlsplit(target).scheme in {'http', 'https'}: self.embeds.append(target)
+            if tag == 'script' and a.get('src') and not ad:
+                self.scripts.append(urljoin(url, a['src']))
+            if tag not in {'meta','link','img','source','input','br','hr','area','base','embed','wbr','track'}:
+                self.stack.append((tag, ad, main))
+        def handle_endtag(self, tag):
+            for i in range(len(self.stack)-1, -1, -1):
+                if self.stack[i][0] == tag:
+                    del self.stack[i:]; break
+    parser = Parser(); parser.feed(html[:2_000_000])
+    embeds = list(dict.fromkeys(parser.embeds))
+    return {'page': url, 'embed': embeds[0] if len(embeds) == 1 else '',
+            'scripts': list(dict.fromkeys(parser.scripts))[:8]}
+
+
+# Prefer page-level structured metadata; otherwise require a unique main
+# player and an unambiguous source from that same frame.
 METADATA = r"""() => {
   const values = [];
   const visit = x => {
@@ -32,15 +70,16 @@ METADATA = r"""() => {
   }
   const canonical = document.querySelector('link[rel="canonical"]')?.href || location.href;
   const key = value => { try { const u = new URL(value, location.href); u.hash=''; return u.href; } catch { return ''; } };
+  if (values.some(x => x.requiresSubscription || x.isAccessibleForFree === false)) return {restricted:true};
   const candidates = values.filter(x => {
     const owner = x.mainEntityOfPage?.['@id'] || x.mainEntityOfPage || x.url;
     return typeof owner === 'string' && key(owner) === key(canonical) &&
       key(canonical) === key(location.href) && x.isAccessibleForFree !== false &&
-      typeof x.contentUrl === 'string' && !x.requiresSubscription;
+      (typeof x.contentUrl === 'string' || typeof x.embedUrl === 'string') && !x.requiresSubscription;
   });
   if (candidates.length !== 1) return null;
   const x = candidates[0];
-  return {url:key(x.contentUrl), embed:x.embedUrl ? key(x.embedUrl) : '',
+  return {url:x.contentUrl ? key(x.contentUrl) : '', embed:x.embedUrl ? key(x.embedUrl) : '',
     title:typeof x.name === 'string' ? x.name.slice(0,240) : ''};
 }"""
 
@@ -58,7 +97,7 @@ PLAYER = r"""({candidate, embedded, play}) => {
   const v=videos[0], src=v.currentSrc || v.src;
   // An identified source must match the page's content URL. Blob is accepted
   // only later, when the same frame actually requested that exact content URL.
-  if (src !== candidate && !src.startsWith('blob:')) return null;
+  if (candidate && src !== candidate && !src.startsWith('blob:')) return null;
   if (play && v.paused) { v.muted=true; v.play().catch(()=>{}); }
   return {src, drm:!!v.mediaKeys};
 }"""
@@ -67,7 +106,7 @@ RESTRICTED = r"""() => !!window.__mainVideoDRM || !!document.querySelector('inpu
  /sign in to watch|log in to watch|login required|verify you are human|checking your browser|not available in your country|access denied|ログインが必要|ログインして視聴|地域制限|人間であることを確認/i.test((document.body?.innerText||'').slice(0,100000))"""
 
 
-async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_path=None) -> dict:
+async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_path=None, plan=None) -> dict:
     # Imported only in the extra child, never on existing successful paths.
     from playwright.async_api import async_playwright
 
@@ -80,6 +119,7 @@ async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_p
     count = 0
     transferred = 0
     started = time.monotonic()
+    plan = plan or {}
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
@@ -123,7 +163,8 @@ async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_p
                         return await route.abort()
                     if req.resource_type == 'document' and req.frame != page.main_frame:
                         owner = await page.evaluate(METADATA)
-                        if not owner or owner['embed'] != target.value:
+                        embed = (owner or {}).get('embed') or plan.get('embed')
+                        if embed != target.value or req.frame.parent_frame != page.main_frame:
                             return await route.abort()
                     response = await route.fetch(
                         headers={'User-Agent': 'Mozilla/5.0', 'Accept': '*/*'},
@@ -152,9 +193,11 @@ async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_p
             while time.monotonic() - started < timeout - 0.2:
                 if failed or await page.evaluate(RESTRICTED):
                     raise ValueError('main_video_restricted')
-                metadata = await page.evaluate(METADATA)
+                metadata = await page.evaluate(METADATA) or {'url':'', 'embed':plan.get('embed',''), 'title':''}
                 if metadata:
-                    candidate = validate_url(metadata['url']).value
+                    if metadata.get('restricted'):
+                        raise ValueError('main_video_restricted')
+                    candidate = validate_url(metadata['url']).value if metadata['url'] else ''
                     matches = []
                     for frame in page.frames[:8]:
                         embedded = bool(metadata['embed'] and frame.url == metadata['embed'])
@@ -167,10 +210,15 @@ async def discover(url: str, allowed_hosts: list[str], timeout: float, browser_p
                             played = True
                             if player['drm']:
                                 raise ValueError('drm_not_supported')
-                            if any(value == candidate and owner == frame for value, owner in requests):
-                                matches.append(frame)
+                            observed = list(dict.fromkeys(value for value, owner in requests if owner == frame and
+                                urlsplit(value).path.lower().endswith(('.m3u8','.mpd','.mp4','.webm')) and
+                                not AD_MARKER.search(urlsplit(value).path.replace('/', ' '))))
+                            selected = candidate or (player['src'] if player['src'].startswith(('http://','https://')) else
+                                                     observed[0] if len(observed) == 1 else '')
+                            if selected and any(value == selected and owner == frame for value, owner in requests):
+                                matches.append(validate_url(selected).value)
                     if len(matches) == 1:
-                        return {'url': candidate, 'title': metadata['title']}
+                        return {'url': matches[0], 'title': metadata['title']}
                 await page.wait_for_timeout(50)
             raise ValueError('main_video_not_found')
         finally:
@@ -218,7 +266,8 @@ def run_phase(body: dict) -> dict:
     destroy on explicit cancellation also kills this entire group.
     """
     from resolver import ResolverError, _network_subprocess_environment
-    budget = min(10.0, max(0.0, float(body.get('budgetSeconds', 0))))
+    analyzing = body.get('phase') == 'analyze'
+    budget = min(120.0 if analyzing else 10.0, max(0.0, float(body.get('budgetSeconds', 0))))
     if body.get('expiresAtMs'):
         budget = min(budget, float(body['expiresAtMs']) / 1000 - time.time())
     if budget < 0.75:
@@ -232,22 +281,43 @@ def run_phase(body: dict) -> dict:
             text=True, env=env, start_new_session=os.name != 'nt')
         try:
             output, _ = process.communicate(json.dumps({**body, 'budgetSeconds': budget - 0.5}), timeout=budget - 0.5)
-            if process.returncode or len(output) > 65536:
+            if process.returncode or len(output) > (1_000_000 if analyzing else 65536):
                 raise ResolverError('main_video_failed')
             result = json.loads(output)
             if result.get('errorCode'):
-                raise ResolverError(result['errorCode'])
+                error = ResolverError(result['errorCode'])
+                error.page_plan = result.get('pagePlan')
+                raise error
             return result
         except subprocess.TimeoutExpired:
-            raise ResolverError('main_video_timeout') from None
+            raise ResolverError('analysis_deadline_exceeded' if analyzing else 'main_video_timeout') from None
         finally:
             stop_process_tree(process)
             process.wait()
 
 
 def main():
-    from resolver import _analyze_direct
+    from resolver import _analyze_direct, analyze, ANALYSIS_END, ANALYSIS_PLAN, _open
     body = json.loads(sys.stdin.read(16385))
+    if body.get('phase') == 'analyze':
+        ANALYSIS_END.set(time.monotonic() + float(body['budgetSeconds']) - 0.5)
+        ANALYSIS_PLAN.set({})
+        try:
+            return analyze(body['url'], int(body['maxBytes']), bool(body.get('policyRestricted')))
+        except Exception as error:
+            code = str(error)
+            return {'errorCode':code if re.fullmatch('[a-z][a-z0-9_]{0,79}',code) else 'analysis_execution_failed',
+                    'pagePlan':ANALYSIS_PLAN.get()}
+    if body.get('phase') == 'prepare':
+        ANALYSIS_END.set(time.monotonic() + float(body['budgetSeconds']) - 0.5)
+        response, final_url = _open(body['url'], method='GET', timeout=5, max_redirects=0, max_body=1_000_000)
+        try:
+            if 'html' not in response.headers.get('Content-Type','').lower():
+                raise ValueError('main_video_not_html')
+            content = response.read(1_000_001)
+            if len(content) > 1_000_000: raise ValueError('main_video_response_limit')
+            return page_plan(content.decode('utf-8','replace'), final_url)
+        finally: response.close()
     if body.get('phase') == 'validate':
         result = _analyze_direct(body['url'], int(body['maxBytes']))
         if not result or any(not m.get('downloadable') or m.get('mediaType') != 'video' for m in result['media']):
@@ -258,7 +328,7 @@ def main():
             media['_downloadRoute']['strictPublicEgress'] = True
         return result
     async def bounded():
-        return await asyncio.wait_for(discover(body['url'], body['allowedHosts'], float(body['budgetSeconds']) - 0.5),
+        return await asyncio.wait_for(discover(body['url'], body['allowedHosts'], float(body['budgetSeconds']) - 0.5, plan=body.get('plan')),
                                       max(0.05, float(body['budgetSeconds']) - 0.5))
     return asyncio.run(bounded())
 

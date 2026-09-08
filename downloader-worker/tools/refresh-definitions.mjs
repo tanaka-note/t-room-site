@@ -39,7 +39,8 @@ export function definitionTarget(configuration, image) {
 }
 
 export async function refresh({ api = cloudflareClient(), docker = command, now = () => Math.floor(Date.now() / 1000), wait = waitForRollout,
-  releaseCode = process.env.RELEASE_CONTAINER_CODE === 'true' } = {}) {
+  releaseCode = process.env.RELEASE_CONTAINER_CODE === 'true', analysisOnly = process.env.RELEASE_ANALYSIS_CODE === 'true' } = {}) {
+  if (analysisOnly && !releaseCode) throw new Error('definition_analysis_release_requires_code');
   const runId = `${process.env.GITHUB_RUN_ID || 'manual'}-${process.env.GITHUB_RUN_ATTEMPT || '1'}-${now()}`;
   const initial = await readState(api);
   const claim = await query(api, SECURITY_DB, `UPDATE security_definition_updates SET run_id=?,lease_until=?,last_attempt_at=?,last_result='running',
@@ -64,7 +65,8 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
     if (releaseCode) {
       console.log('Building the explicitly requested repository Container code');
       const context = resolve(directory, '../container');
-      run(['build', '--platform', 'linux/amd64', '-f', join(context, 'Dockerfile'), '--build-arg', `CLAMAV_DEFINITION_REFRESH=${runId}`, '-t', temporaryTag, context]);
+      run(['build', '--platform', 'linux/amd64', '-f', analysisOnly ? join(directory, 'analysis.Dockerfile') : join(context, 'Dockerfile'),
+        '--build-arg', analysisOnly ? `BASE_IMAGE=${oldImage}` : `CLAMAV_DEFINITION_REFRESH=${runId}`, '-t', temporaryTag, context]);
       console.log('Verifying small local browser fixtures and process cleanup offline');
       // Production run_phase supplies a job-local writable HOME. The direct
       // fixture runner also needs one (the image user's home is /nonexistent).
@@ -73,8 +75,8 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
       console.log('Building definition candidate from the deployed code base');
       run(['build', '--platform', 'linux/amd64', '-f', join(directory, 'definitions.Dockerfile'), '--build-arg', `BASE_IMAGE=${source}`, '--build-arg', `REFRESH_ID=${runId}`, '-t', temporaryTag, directory]);
     }
-    console.log('Verifying candidate signatures, signed timestamps, engine and harmless fixtures');
-    const raw = run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--mount', `type=bind,source=${join(directory, 'verify-definitions.py')},target=/tmp/verify-definitions.py,readonly`, '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', temporaryTag, '/tmp/verify-definitions.py']);
+    console.log(analysisOnly ? 'Rechecking inherited signatures, signed timestamps and rules; engine fixtures unchanged' : 'Verifying candidate signatures, signed timestamps, engine and harmless fixtures');
+    const raw = run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--mount', `type=bind,source=${join(directory, 'verify-definitions.py')},target=/tmp/verify-definitions.py,readonly`, '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', temporaryTag, '/tmp/verify-definitions.py', ...(analysisOnly ? ['--definitions-only'] : [])]);
     const report = candidateReport(JSON.parse(raw), now());
     console.log('Pushing verified definition candidate');
     run(['push', temporaryTag]);

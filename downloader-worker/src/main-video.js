@@ -1,6 +1,17 @@
 import { isIP } from 'node:net';
 import { normalizeSourceUrl, isBlockedIpLiteral, isPolicyRestrictedHost } from './downloader-domain.js';
 
+export function canExploreAnalysis(code) {
+  return new Set(['metadata_timeout','metadata_invalid','extractor_failed','media_not_found',
+    'browser_execution_failed','download_timeout','download_network_failed','analysis_execution_failed']).has(code);
+}
+
+export function terminalAnalysisError(code) {
+  return canExploreAnalysis(code) || new Set(['drm','drm_not_supported','encrypted_stream','encrypted_stream_not_supported',
+    'login_required','premium_required','geo_restricted','policy_restricted','extractor_intentionally_unsupported',
+    'bot_challenge','access_denied','analysis_deadline_exceeded','live_stream_not_supported']).has(code);
+}
+
 export function publicAddress(address) {
   if (!isIP(address) || isBlockedIpLiteral(address)) return false;
   if (isIP(address) === 6) {
@@ -73,7 +84,7 @@ export async function configureMainVideoEgress(container, hosts, until, bounded 
   await container.setOutboundHandler('mainVideo', {hosts:exact,until,bounded});
 }
 
-export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxBytes) {
+export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxBytes, pagePlan = null) {
   const started=Date.now();
   const until = Math.min(analysisEndsAt, Date.now()+10_000);
   if (env.MAIN_VIDEO_FALLBACK !== 'true' || until-Date.now()<1000 || isPolicyRestrictedHost(sourceUrl.hostname)) return null;
@@ -95,14 +106,33 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
     // Persistent per-analysis DO fence survives Queue redelivery and DO eviction.
     if (!await container.claimMainVideoExploration()) return null;
     remaining();
-    // Optional named site dependencies only. No wildcard or browser-discovered
-    // arbitrary script/frame host is granted network access.
+    // Static configuration is optional. The trusted resolver can supply one
+    // main iframe and scripts explicitly declared in that page; every exact
+    // host is publicly resolved before it is added, and again at each send.
     const sites=JSON.parse(env.MAIN_VIDEO_PAGE_HOSTS || '{}');
     const dependencies=Array.isArray(sites[sourceUrl.hostname]) ? sites[sourceUrl.hostname].slice(0,8) : [];
     const hosts=[sourceUrl.hostname,...dependencies];
+    const addUrls = async values => {
+      for(const value of values) {
+        const target=await assertPublicDestination(value,AbortSignal.timeout(remaining()));
+        if(!hosts.includes(target.hostname)) hosts.push(target.hostname);
+        if(hosts.length>12) throw new Error('main_video_host_limit');
+      }
+    };
+    let plan={};
+    if(pagePlan?.page && normalizeSourceUrl(pagePlan.page).href===sourceUrl.href) {
+      plan={embed:pagePlan.embed || ''};
+      await addUrls([...(pagePlan.scripts || []).slice(0,8),...(plan.embed?[plan.embed]:[])]);
+    }
     await configureMainVideoEgress(container,hosts,until);
     remaining();
-    const found=await call({phase:'discover',url:sourceUrl.href,allowedHosts:hosts});
+    if(plan.embed) {
+      const frame=await call({phase:'prepare',url:plan.embed});
+      if(frame.page!==plan.embed) throw new Error('main_video_frame_redirect');
+      await addUrls((frame.scripts || []).slice(0,8));
+      await configureMainVideoEgress(container,hosts,until);
+    }
+    const found=await call({phase:'discover',url:sourceUrl.href,allowedHosts:hosts,plan});
     const candidate=await assertPublicDestination(found.url,AbortSignal.timeout(remaining()));
     // Only the single correlated candidate's exact CDN is admitted. Its
     // manifests must pass the existing validators before the route is sealed.

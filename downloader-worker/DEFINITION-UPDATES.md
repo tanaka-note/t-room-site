@@ -102,3 +102,8 @@ Dockerを使えない開発環境では、`ClamAV daily definitions` の手動�
 - 旧mainの関数をSQLite fixtureで実行し、日次だけで`healthy`になる誤判定を再現。専用heartbeatを分離し、日次では毎時停止が復旧しないよう修正。毎時開始/完了と失敗段階を追跡可能にした。
 - 対象16件（SQLite/API mock、毎時/日次分岐、無関係cron拒否、追加migrationの履歴保持、開始/読込/完了batch失敗、停止/復旧/通知判定）と認証回帰2件PASS。構文確認とSecurity build/dry-runもPASS。Container・実検査・大容量取得・定義更新workflow・全テストは実行していない。
 - 公開と自動運転の確認を区別する。次の自然発火で専用heartbeat更新を確認し、その後の独立monitorでIssue #1の自動復旧を確認する。未到来なら確認待ちとして報告し、長時間待機や頻繁なポーリングはしない。
+
+
+## 解析コードだけの公開
+
+依存・エンジン・scanner・定義を変更しない解析修正では、手動workflowの `release_code=true, analysis_only=true` を使用できる。`tools/analysis.Dockerfile` は現在本番の検証済みdigestを継承し、resolver.py / main_video.py / server.py と対象fixtureだけをCOPYする。freshclam・OS/pip更新・ClamAV実スキャンは繰り返さず、署名・内部日時・7日期限・YARAルール整合は再検証する。小容量のLinuxブラウザfixtureが失敗した候補はpush/rolloutしない。ジョブ/drain/lease/digest照合と更新後source_image確定は通常手順と共通。scannerや依存変更にはこのモードを使わない。日次自動更新は従来どおり定義更新と実エンジンfixtureを実施する。

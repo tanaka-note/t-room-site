@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - Windows unit tests; production is Linu
 import subprocess
 import tempfile
 import time
+from contextvars import ContextVar
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -24,6 +25,65 @@ from ssrf import UnsafeUrl, validate_redirect, validate_url
 
 class ResolverError(ValueError):
     pass
+
+
+ANALYSIS_END = ContextVar('analysis_end', default=None)
+ANALYSIS_PLAN = ContextVar('analysis_plan', default=None)
+RECOVERABLE_ANALYSIS_ERRORS = frozenset({
+    'metadata_timeout', 'metadata_invalid', 'extractor_failed', 'media_not_found',
+    'browser_execution_failed', 'download_timeout', 'download_network_failed',
+})
+
+
+def analysis_timeout(maximum):
+    end = ANALYSIS_END.get()
+    remaining = maximum if end is None else min(maximum, end - time.monotonic())
+    if remaining <= 0:
+        raise ResolverError('analysis_deadline_exceeded')
+    return remaining
+
+
+def _analysis_command(command, timeout, env):
+    if ANALYSIS_END.get() is None:
+        return subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=env)
+    from main_video import stop_process_tree
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    try:
+        stdout, stderr = process.communicate(timeout=analysis_timeout(timeout))
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    finally:
+        # communicate() never kills only the leader on timeout: freeze and
+        # terminate the whole owned tree, including Chromium/deno descendants.
+        stop_process_tree(process)
+        process.wait()
+        process.stdout.close(); process.stderr.close()
+
+
+def has_specialized_extractor(url):
+    # Lazy extractor classes inspect URL patterns without making requests.
+    # Preserve the existing 90-second budget for every dedicated extractor.
+    try:
+        from yt_dlp.extractor import gen_extractor_classes
+        return any(cls.IE_NAME != 'generic' and cls.suitable(url) for cls in gen_extractor_classes())
+    except ImportError:
+        return True  # Broken/missing runtime is not evidence of an unknown site.
+
+
+def _analysis_stage(call):
+    analysis_timeout(120)
+    try:
+        return call()
+    except ResolverError as error:
+        if str(error) not in RECOVERABLE_ANALYSIS_ERRORS:
+            raise
+    except (TimeoutError, subprocess.TimeoutExpired):
+        pass
+    except OSError as error:
+        # Only a transport/execution failure; explicit access refusals and
+        # unsafe URLs are raised separately and never enter this branch.
+        if getattr(error, 'code', 0) in {401, 403, 407, 429, 451}:
+            raise ResolverError('access_denied') from None
+    return None
 
 
 MEDIA_MIMES = ("audio/", "image/", "video/", "application/vnd.apple.mpegurl", "application/dash+xml")
@@ -134,15 +194,25 @@ def analyze(source_url: str, max_bytes: int, policy_restricted: bool = False) ->
                 item["downloadable"] = False
                 item["unavailableReason"] = "このサイトは利用規約上、本体を取得できません。"
         return direct
-    metadata = _yt_dlp_metadata(safe.value, timeout=90)
+    specialized = has_specialized_extractor(safe.value) or policy_restricted
+    if not specialized:
+        generic = _analysis_stage(lambda: _analyze_html(safe.value, max_bytes, browser=False))
+        if generic:
+            return generic
+    metadata = _analysis_stage(lambda: _yt_dlp_metadata(safe.value, timeout=90 if specialized else 8))
     if metadata:
         return _normalize_ytdlp(metadata, safe.hostname, policy_restricted, safe.value)
     if policy_restricted:
         raise ResolverError("policy_restricted")
-    generic = _analyze_html(safe.value, max_bytes, browser=False)
-    if generic:
-        return generic
-    browser = _analyze_html(safe.value, max_bytes, browser=True)
+    if specialized:
+        generic = _analysis_stage(lambda: _analyze_html(safe.value, max_bytes, browser=False))
+        if generic:
+            return generic
+    # A correlated iframe needs the bounded, separately allowlisted player
+    # explorer; dump-dom cannot inspect its frame and adds another long wait.
+    if (ANALYSIS_PLAN.get() or {}).get('embed'):
+        raise ResolverError('media_not_found')
+    browser = _analysis_stage(lambda: _analyze_html(safe.value, max_bytes, browser=True))
     if browser:
         browser["browserFallbackUsed"] = True
         return browser
@@ -257,10 +327,14 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
     signature = b""
     try:
         response, final_url = _open(url, method="HEAD", timeout=20, max_redirects=5)
+    except (UnsafeUrl, ResolverError):
+        raise
     except Exception:
         try:
             response, final_url = _open(url, method="GET", timeout=20, max_redirects=5, request_headers={"Range": "bytes=0-65535"})
             signature = response.read(65_536)
+        except (UnsafeUrl, ResolverError):
+            raise
         except Exception:
             return None
     try:
@@ -331,6 +405,9 @@ def _analyze_direct(url: str, max_bytes: int) -> dict | None:
 def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
     final_url = url
     if browser:
+        browser_budget = min(60, analysis_timeout(120) - 12) if ANALYSIS_END.get() is not None else 60
+        if browser_budget < 0.5:
+            raise ResolverError('media_not_found')
         # Chromium 151+ requires writable profile/cache locations even in
         # headless mode. Keep them job-local so concurrent analyses neither
         # share browser state nor leave profiles behind in /work.
@@ -356,16 +433,12 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
                 # interceptor and re-established by Worker fetch to the origin.
                 browser_command.append("--ignore-certificate-errors")
             browser_command += ["--dump-dom", url]
-            result = subprocess.run(
-                browser_command,
-                capture_output=True, text=True, timeout=60, check=False,
-                env=browser_environment,
-            )
+            result = _analysis_command(browser_command, browser_budget, browser_environment)
         if result.returncode != 0 or len(result.stdout) > 5_000_000:
             raise ResolverError("browser_execution_failed")
         html = result.stdout
     else:
-        response, final_url = _open(url, method="GET", timeout=25, max_redirects=5, max_body=2_000_000)
+        response, final_url = _open(url, method="GET", timeout=8, max_redirects=5, max_body=2_000_000)
         try:
             content_type = response.headers.get("Content-Type") or ""
             if "html" not in content_type.lower():
@@ -375,9 +448,14 @@ def _analyze_html(url: str, max_bytes: int, browser: bool) -> dict | None:
                 return None
         finally:
             response.close()
+    if ANALYSIS_PLAN.get() is not None:
+        from main_video import page_plan
+        ANALYSIS_PLAN.get().update(page_plan(html, final_url))
     parser = MediaHtmlParser(final_url)
     parser.feed(html)
     for candidate in parser.candidates[:20]:
+        if candidate == (ANALYSIS_PLAN.get() or {}).get('embed'):
+            continue
         try:
             direct = _analyze_direct(validate_url(candidate).value, max_bytes)
         except (UnsafeUrl, OSError):
@@ -399,7 +477,7 @@ def _yt_dlp_metadata(url: str, timeout: int) -> dict | None:
         "--retries", "1", "--extractor-retries", "1", url,
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=_network_subprocess_environment())
+        result = _analysis_command(command, analysis_timeout(timeout), _network_subprocess_environment())
     except subprocess.TimeoutExpired as error:
         raise ResolverError("metadata_timeout") from error
     if len(result.stdout) > 10_000_000:
@@ -832,13 +910,22 @@ def _open(url: str, *, method: str, timeout: int, max_redirects: int, max_body: 
                 headers[name] = str(value)[:512]
         request = Request(current, method=method, headers=headers)
         try:
-            response = opener.open(request, timeout=timeout)
+            response = opener.open(request, timeout=analysis_timeout(timeout))
+            if ANALYSIS_END.get() is not None and response.headers.get('cf-mitigated') == 'challenge':
+                response.close()
+                raise ResolverError('bot_challenge')
             if max_body is not None and _safe_int(response.headers.get("Content-Length")) not in {None} and int(response.headers["Content-Length"]) > max_body:
                 response.close()
                 raise ResolverError("response_too_large")
             return response, current
         except Exception as error:
             code = getattr(error, "code", None)
+            if ANALYSIS_END.get() is not None and code in {401, 403, 407, 429, 451}:
+                headers = getattr(error, 'headers', {}) or {}
+                if headers.get('cf-mitigated') == 'challenge':
+                    raise ResolverError('bot_challenge') from None
+                if method != 'HEAD' or code != 403:
+                    raise ResolverError('access_denied') from None
             if code not in {301, 302, 303, 307, 308}:
                 raise
             current = validate_redirect(current, error.headers.get("Location")).value

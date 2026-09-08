@@ -8,6 +8,10 @@ on:
         description: 'Build and verify the checked-out Downloader Container code before rollout'
         type: boolean
         default: false
+      analysis_only:
+        description: 'With release_code: replace only analysis Python code, preserving verified runtime and definitions'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -28,6 +32,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}
           RELEASE_CONTAINER_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_code && 'true' || 'false' }}
+          RELEASE_ANALYSIS_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.analysis_only && 'true' || 'false' }}
   notify:
     needs: update
     if: always()
