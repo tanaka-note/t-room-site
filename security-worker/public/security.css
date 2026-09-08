@@ -31,6 +31,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
 .tabs button.active { background: var(--ink); color: #fff; }
 .panel { display: grid; gap: 16px; }
+.panel[hidden] { display: none; }
 .split { display: grid; grid-template-columns: minmax(280px, .9fr) minmax(320px, 1.1fr); gap: 16px; }
 fieldset { border: 1px solid var(--line); border-radius: 12px; }
 .link-row { display: grid; grid-template-columns: minmax(9rem, 1fr) minmax(14rem, 2fr) auto; gap: 8px; margin: 8px 0; }
@@ -60,8 +61,34 @@ fieldset { border: 1px solid var(--line); border-radius: 12px; }
 .status-pending_approval { color: #b54708; }
 .filters { display: grid; grid-template-columns: repeat(3, minmax(170px, 1fr)); gap: 10px; align-items: end; }
 .filter-field { gap: 4px; color: var(--muted); font-size: .84rem; }
-.filter-field select, .filter-field input { color: var(--ink); background: #fff; font-size: 1rem; }
+.filter-field select, .filter-field input { color: var(--ink); background: #fff; font-size: 1rem; min-width: 0; width: 100%; }
 .filters > button { align-self: end; }
+.audit-toolbar { margin-bottom: 18px; }
+.audit-toolbar h2 { margin-bottom: 10px; font-size: 1.15rem; }
+.audit-views { display: flex; flex-wrap: wrap; gap: 8px; }
+.audit-views button[aria-pressed="true"] { color: #fff; background: var(--accent); border-color: var(--accent); }
+.audit-toolbar p, #audit-status { color: var(--muted); font-size: .86rem; line-height: 1.6; }
+.audit-search { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px; }
+.audit-search > summary { cursor: pointer; font-weight: 650; }
+.audit-search form { margin: 16px 0 0; }
+#audit-filter-status { font-size: .85rem; font-weight: 400; }
+.audit-summary { display: grid; grid-template-columns: 135px minmax(100px, 1fr) minmax(85px, .8fr) 120px 85px minmax(130px, 1fr) 16px; grid-template-areas: "date user service method outcome device toggle" "operation operation operation operation operation operation operation"; gap: 6px 12px; align-items: center; cursor: pointer; font-size: .88rem; list-style: none; }
+.audit-summary::-webkit-details-marker { display: none; }
+.audit-summary > * { min-width: 0; overflow-wrap: anywhere; }
+.audit-summary::after { content: "＋"; grid-area: toggle; color: var(--muted); min-width: 0; }
+.audit-row[open] > .audit-summary::after { content: "−"; }
+.audit-summary .audit-chip { width: fit-content; }
+.audit-summary .audit-device { margin: 0; }
+.audit-operation { grid-area: operation; color: var(--muted); font-size: .76rem; }
+.audit-detail { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .82rem; overflow-wrap: anywhere; }
+.audit-detail dl { margin: 0; }
+.audit-detail dl > div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px; padding: 4px 0; }
+.audit-detail dt { color: var(--muted); }
+.audit-detail dd { margin: 0; white-space: pre-wrap; }
+@media (max-width: 1000px) {
+  .audit-summary { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 16px; }
+  .audit-summary { grid-template-areas: "date user service toggle" "method outcome device ." "operation operation operation operation"; }
+}
 .audit-row { border-bottom: 1px solid var(--line); border-left: 4px solid #cbd5e1; padding: 14px 12px; }
 .audit-row:last-child { border-bottom: 0; }
 .audit-success { border-left-color: #12b76a; }
@@ -127,4 +154,16 @@ output { overflow-wrap: anywhere; }
 @media (max-width: 480px) {
   .filters { grid-template-columns: 1fr; }
   .audit-row { padding: 13px 9px; }
+  .audit-views { display: grid; grid-template-columns: 1fr 1fr; }
+  .audit-views button { padding-left: 8px; padding-right: 8px; }
+  .audit-summary { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 16px; gap: 8px; }
+  .audit-summary { grid-template-areas: "date user toggle" "service method ." "outcome device ." "operation operation operation"; }
+  .audit-detail dl > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+
+.audit-summary > :nth-child(1) { grid-area: date; }
+.audit-summary > :nth-child(2) { grid-area: user; }
+.audit-summary > :nth-child(3) { grid-area: service; }
+.audit-summary > :nth-child(4) { grid-area: method; }
+.audit-summary > :nth-child(5) { grid-area: outcome; }
+.audit-summary > :nth-child(6) { grid-area: device; }

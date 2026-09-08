@@ -5,6 +5,33 @@ export const INVITE_EXPIRY_PRESETS = Object.freeze([3600, 21600, 86400, 259200, 
 export const LOGIN_SUCCESS_EVENTS = Object.freeze(["password_login_success", "passkey_login_success"]);
 export const LOGIN_FAILURE_EVENTS = Object.freeze(["password_login_failure", "passkey_authentication_failure", "bootstrap_auth_failure"]);
 export const AUDIT_PAGE_SIZE = 100;
+// Read-only history presets. Keep these separate from dashboard/session counters:
+// bootstrap is password verification (including recovery), and a service passkey
+// verification and its completed login remain distinct audit records.
+const PASSWORD_AUDIT_EVENTS = Object.freeze([
+  "password_login_success", "password_login_failure", "bootstrap_auth_success",
+  "bootstrap_auth_failure", "bootstrap_login_blocked", "login_success", "login_failure",
+  "login_blocked", "login_locked"
+]);
+const PASSKEY_AUDIT_EVENTS = Object.freeze([
+  "passkey_login_success", "passkey_authentication_success", "passkey_authentication_failure",
+  "login_success", "login_failure", "login_blocked", "login_locked"
+]);
+
+export function auditViewFilter(view = "all") {
+  if (view === "all") return { clause: "1 = 1", values: [] };
+  if (!["password", "passkey", "attention"].includes(view)) {
+    throw new RangeError("履歴の表示方法を確認してください。");
+  }
+  const events = view === "password" ? PASSWORD_AUDIT_EVENTS : view === "passkey"
+    ? PASSKEY_AUDIT_EVENTS : [...new Set([...PASSWORD_AUDIT_EVENTS, ...PASSKEY_AUDIT_EVENTS])];
+  const clause = `event_type IN (${events.map(() => "?").join(", ")})`;
+  // An auth method alone also matches session resumes, registration and admin
+  // actions. Neither those nor unrelated download failures belong in a preset.
+  return view === "attention"
+    ? { clause: `${clause} AND outcome IN ('failure', 'blocked')`, values: events }
+    : { clause: `${clause} AND auth_method = ? AND outcome IN ('success', 'failure', 'blocked')`, values: [...events, view] };
+}
 // WebAuthn Level 3 limits credential IDs to 1023 bytes.
 export const MAX_CREDENTIAL_ID_BYTES = 1023;
 

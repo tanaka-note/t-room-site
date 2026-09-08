@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta name="troom-app-build" content="security-7cc4d968c7f2">
+  <meta name="troom-app-build" content="security-08cec80ab25a">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain セキュリティセンター</title>
-  <link rel="stylesheet" href="/security/security.css?v=security-7cc4d968c7f2">
+  <link rel="stylesheet" href="/security/security.css?v=security-08cec80ab25a">
 </head>
 <body>
   <main class="shell">
@@ -83,27 +83,42 @@
         <div id="ai-budget-list"></div>
       </section>
       <section id="audit-panel" class="panel" hidden>
+        <div class="audit-toolbar">
+          <h2 id="audit-quick-title">かんたん表示</h2>
+          <div class="audit-views" role="group" aria-labelledby="audit-quick-title">
+            <button type="button" class="secondary" data-audit-view="all" aria-pressed="true">すべて</button>
+            <button type="button" class="secondary" data-audit-view="password" aria-pressed="false">ID・パスワード</button>
+            <button type="button" class="secondary" data-audit-view="passkey" aria-pressed="false">パスキー</button>
+            <button type="button" class="secondary" data-audit-view="attention" aria-pressed="false">失敗・ブロック</button>
+          </div>
+          <p id="audit-view-note">すべての監査履歴を表示します。日時は日本時間です。各履歴を開くと詳細を確認できます。</p>
+          <button id="audit-refresh" class="secondary" type="button">最新に更新</button>
+        </div>
+        <details class="audit-search" id="audit-search">
+          <summary>詳細検索<span id="audit-filter-status"></span></summary>
         <form id="audit-filter" class="filters">
           <label class="filter-field"><span>ユーザー</span><select id="audit-identity"><option value="">すべて</option></select></label>
           <label class="filter-field"><span>サービス</span><select id="audit-service"><option value="">すべて</option><option value="security">Security Center</option><option value="cloud">T-Cloud</option><option value="diary">日記</option><option value="billing">請求書</option><option value="ai">AI Chat</option><option value="downloader">T-lain Downloader</option></select></label>
-          <label class="filter-field"><span>認証方式</span><select id="audit-auth"><option value="">すべて</option><option value="password">パスワード</option><option value="passkey">パスキー</option><option value="system">システム</option></select></label>
+          <label class="filter-field"><span>認証方式</span><select id="audit-auth"><option value="">すべて</option><option value="password">ID・パスワード</option><option value="passkey">パスキー</option><option value="system">システム</option></select></label>
           <label class="filter-field"><span>結果</span><select id="audit-outcome"><option value="">すべて</option><option value="success">成功</option><option value="failure">失敗</option><option value="blocked">停止</option><option value="cancelled">キャンセル</option><option value="info">情報</option></select></label>
           <label class="filter-field"><span>操作内容</span><select id="audit-event"><option value="">すべて</option></select></label>
           <label class="filter-field"><span>開始日</span><input id="audit-from" type="date"></label>
           <label class="filter-field"><span>終了日</span><input id="audit-to" type="date"></label>
           <button>履歴を絞り込む</button>
-          <button id="audit-refresh" class="secondary" type="button">最新に更新</button>
+          <button id="audit-filter-clear" class="secondary" type="button">詳細条件を解除</button>
         </form>
+        </details>
+        <p id="audit-status" role="status" aria-live="polite"></p>
         <div id="audit-list" class="card compact"></div>
         <button id="audit-load-more" class="secondary" type="button" hidden>もっと見る</button>
       </section>
     </section>
   </main>
-  <script src="/cloud/vendor/argon2.umd.min.js?v=security-7cc4d968c7f2"></script>
-  <script src="/cloud/crypto-vault.js?v=security-7cc4d968c7f2"></script>
-  <script src="/security/passkey-client.js?v=security-7cc4d968c7f2"></script>
-  <script src="/security/security-display.js?v=security-7cc4d968c7f2"></script>
-  <script src="/assets/pwa-auto-update.js?v=security-7cc4d968c7f2" defer></script>
-  <script src="/security/security.js?v=security-7cc4d968c7f2"></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-08cec80ab25a"></script>
+  <script src="/cloud/crypto-vault.js?v=security-08cec80ab25a"></script>
+  <script src="/security/passkey-client.js?v=security-08cec80ab25a"></script>
+  <script src="/security/security-display.js?v=security-08cec80ab25a"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-08cec80ab25a" defer></script>
+  <script src="/security/security.js?v=security-08cec80ab25a"></script>
 </body>
 </html>

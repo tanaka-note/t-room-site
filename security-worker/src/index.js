@@ -13,6 +13,7 @@ import {
   LOGIN_FAILURE_EVENTS,
   LOGIN_SUCCESS_EVENTS,
   auditRetentionCutoff,
+  auditViewFilter,
   bootstrapAttemptCutoff,
   canonicalServiceLinks,
   currentJstDayBounds,
@@ -1266,6 +1267,11 @@ function retireUnregisteredInvitedIdentityIfOrphaned(env, identityId, invitation
 async function listAuditEvents(url, env) {
   const clauses = ["1 = 1"];
   const values = [];
+  let view;
+  try { view = auditViewFilter(url.searchParams.get("view") || "all"); }
+  catch { throw new HttpError(400, "履歴の表示方法を確認してください。"); }
+  clauses.push(`(${view.clause})`);
+  values.push(...view.values);
   for (const [parameter, column, normalize] of [
     ["service", "service", normalizeAuditService], ["identityId", "identity_id", normalizeIdentityId],
     ["authMethod", "auth_method", (value) => ["password", "passkey", "system"].includes(value) ? value : ""],

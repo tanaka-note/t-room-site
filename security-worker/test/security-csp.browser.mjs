@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { SECURITY_CONTENT_SECURITY_POLICY } from "../src/security-headers.js";
 
 const require = createRequire(new URL("../../diary-worker/package.json", import.meta.url));
-const { chromium, firefox } = require("playwright");
+const { chromium, firefox } = require(process.env.PLAYWRIGHT_PACKAGE || "playwright");
 const workspace = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const securityPublic = resolve(workspace, "security-worker/public");
 const cloudPublic = resolve(workspace, "cloud-worker/public");
@@ -617,21 +617,23 @@ async function verifyBrowser(browserType, name, origin) {
     assert.deepEqual(await unsupported.locator("#audit-identity option").allTextContents(),
       ["すべて", "第一管理者", "過去利用者（停止済み）"],
       `${name}: registered users remain selectable while invitation-only identities are excluded`);
-    const auditText = await unsupported.locator("#audit-list").textContent();
+    const auditText = await unsupported.locator("#audit-list").innerText();
     assert.match(auditText, /パスキーでログイン成功/, `${name}: known audit event is shown in Japanese`);
     assert.match(auditText, /パスキーの本人確認に成功/, `${name}: intermediate WebAuthn success is distinct from a completed login`);
     assert.doesNotMatch(auditText, /passkey_login_success/, `${name}: known internal event name is not the primary display`);
     assert.doesNotMatch(auditText, /passkey_authentication_success/, `${name}: intermediate internal event name is not the primary display`);
     assert.match(auditText, /Security Center/);
     assert.match(auditText, /第一管理者/);
-    assert.match(auditText, /ユーザーID: primary-admin/, `${name}: technical identity ID is subordinate detail text`);
-    assert.equal(await unsupported.locator("#audit-list details.technical-detail:not([open])").count() >= 1, true,
+    assert.doesNotMatch(auditText, /primary-admin/, `${name}: technical IDs are hidden until a row is opened`);
+    assert.equal(await unsupported.locator("#audit-list details.audit-row:not([open])").count() >= 1, true,
       `${name}: internal IDs stay inside collapsed technical details`);
     assert.match(auditText, /パスキー/);
     assert.match(auditText, /成功/);
     assert.match(auditText, /Windows \/ Edge 151/, `${name}: full User-Agent is summarized`);
     assert.match(auditText, /保存済みセッションでアクセス/, `${name}: session reuse is distinct from a new login`);
-    assert.match(auditText, /日記 \/ 田中宏知（一般ユーザー）/, `${name}: audit uses the provider-resolved human account label`);
+    await unsupported.locator("#audit-list .audit-summary").nth(1).click();
+    assert.match(await unsupported.locator("#audit-list .audit-detail").nth(1).innerText(), /田中宏知（一般ユーザー）/, `${name}: detail preserves the provider-resolved account label`);
+    await unsupported.locator("#audit-list .audit-summary").nth(1).click();
     assert.match(auditText, /未定義の操作（new_event_/, `${name}: unknown events use an explicit fallback`);
     assert.equal(await unsupported.locator("#xss-marker").count(), 0, `${name}: arbitrary audit strings remain HTML escaped`);
     assert.equal(await unsupported.locator("#audit-event option[value='passkey_registration']").textContent(), "パスキーを登録");
@@ -642,6 +644,7 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await unsupported.locator("#audit-list .audit-row").count(), 5, `${name}: next audit page appends below the current rows`);
     assert.equal(await moreButton.isVisible(), false, `${name}: audit button hides on the final page`);
     assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: the opaque audit cursor is sent for the next page`);
+    await unsupported.locator("#audit-search > summary").click();
     await unsupported.locator("#audit-identity").selectOption("primary-admin");
     await unsupported.locator("#audit-service").selectOption("cloud");
     await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();

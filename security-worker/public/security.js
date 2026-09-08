@@ -5,7 +5,7 @@
   const state = {
     adminPrf: null, adminCredentialId: null, selectedIdentity: null,
     pendingInviteCloud: null, pendingPrimarySetup: null, identityNames: new Map(),
-    auditCursor: null, auditQuery: "", auditLoading: false, services: []
+    auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: []
   };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -76,10 +76,27 @@
       finally { if (button) button.disabled = false; }
     });
     $("#audit-load-more").addEventListener("click", () => loadAudit({ append: true }).catch((error) => showMessage(error.message, true)));
+    document.querySelectorAll("[data-audit-view]").forEach((button) => button.addEventListener("click", () => {
+      state.auditView = button.dataset.auditView;
+      document.querySelectorAll("[data-audit-view]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+      const notes = {
+        all: "すべての監査履歴を表示します。",
+        password: "実際のID・パスワード認証と第一管理者の本人確認を表示します。保存済みセッションへのアクセスは含みません。",
+        passkey: "パスキーの本人確認とログイン結果を表示します。認証開始・登録・キャンセルは含みません。本人確認とサービスへのログインは別の履歴です。",
+        attention: "ログイン・本人確認の失敗や一時停止を表示します。"
+      };
+      $("#audit-view-note").textContent = `${notes[state.auditView]} 日時は日本時間です。各履歴を開くと詳細を確認できます。`;
+      loadAudit().catch((error) => showMessage(error.message, true));
+    }));
+    $("#audit-filter-clear").addEventListener("click", () => {
+      $("#audit-filter").reset();
+      loadAudit().catch((error) => showMessage(error.message, true));
+    });
     $("#audit-refresh").addEventListener("click", async (event) => {
-      event.currentTarget.disabled = true;
+      const button = event.currentTarget;
+      button.disabled = true;
       try { await loadAudit({ append: false }); } catch (error) { showMessage(error.message, true); }
-      finally { event.currentTarget.disabled = false; }
+      finally { button.disabled = false; }
     });
     document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => {
       showPanel(button.dataset.panel, button);
@@ -686,8 +703,11 @@
   }
 
   async function loadAudit({ append = false } = {}) {
-    if (state.auditLoading || (append && !state.auditCursor)) return;
+    if (append && (state.auditLoading || !state.auditCursor)) return;
+    const requestId = ++state.auditRequest;
     state.auditLoading = true;
+    $("#audit-list").setAttribute("aria-busy", "true");
+    $("#audit-status").textContent = "履歴を読み込んでいます…";
     const more = $("#audit-load-more");
     more.disabled = true;
     const params = append ? new URLSearchParams(state.auditQuery) : currentAuditQuery();
@@ -695,9 +715,13 @@
     else {
       state.auditCursor = null;
       more.hidden = true;
+      $("#audit-list").replaceChildren();
+      const filterCount = [...params.keys()].filter((key) => key !== "view").length;
+      $("#audit-filter-status").textContent = filterCount ? `（${filterCount}件の条件で絞り込み中）` : "";
     }
     try {
       const data = await get(`/audit?${params}`);
+      if (requestId !== state.auditRequest) return;
       const html = data.events.map(renderAuditEvent).join("");
       if (append) {
         if (html) $("#audit-list").insertAdjacentHTML("beforeend", html);
@@ -707,14 +731,22 @@
       if (!append) state.auditQuery = params.toString();
       state.auditCursor = data.nextCursor || null;
       more.hidden = !state.auditCursor;
+      $("#audit-status").textContent = `${$("#audit-list").querySelectorAll(".audit-row").length}件を表示${state.auditCursor ? "・続きがあります" : ""}`;
+    } catch (error) {
+      if (requestId !== state.auditRequest) return;
+      $("#audit-status").textContent = "履歴を読み込めませんでした。「最新に更新」で再試行してください。";
     } finally {
-      state.auditLoading = false;
-      more.disabled = false;
+      if (requestId === state.auditRequest) {
+        state.auditLoading = false;
+        more.disabled = false;
+        $("#audit-list").setAttribute("aria-busy", "false");
+      }
     }
   }
 
   function currentAuditQuery() {
     const params = new URLSearchParams();
+    params.set("view", state.auditView);
     [["identityId", "#audit-identity"], ["service", "#audit-service"], ["authMethod", "#audit-auth"], ["outcome", "#audit-outcome"], ["eventType", "#audit-event"], ["from", "#audit-from"], ["to", "#audit-to"]].forEach(([key, selector]) => {
       const value = $(selector).value;
       if (value) params.set(key, value);
@@ -758,27 +790,42 @@
     const identityId = String(event.identity_id || "");
     const serviceAccountId = String(event.service_account_id || "");
     const actor = display.identityLabel(identityId, state.identityNames.get(identityId), serviceAccountId, event.role);
-    const technicalId = identityId || serviceAccountId;
     const outcome = String(event.outcome || "");
     const outcomeClass = ["success", "failure", "blocked", "cancelled", "info"].includes(outcome) ? outcome : "unknown";
     const userAgent = String(event.user_agent || "");
-    const role = event.role ? `<span class="audit-chip">${escapeHtml(display.roleLabel(event.role))}</span>` : "";
-    const serviceAccount = event.service_account_label ? `<span class="audit-account">${escapeHtml(display.serviceLabel(event.service))} / ${escapeHtml(event.service_account_label)}</span>` : "";
-    const technicalValues = [identityId ? `ユーザーID: ${identityId}` : "", serviceAccountId ? `サービス内ID: ${serviceAccountId}` : ""].filter(Boolean);
-    const idDetail = technicalId ? `<details class="technical-detail"><summary>技術情報</summary><span>${technicalValues.map(escapeHtml).join(" / ")}</span></details>` : "";
-    return `<article class="audit-row audit-${outcomeClass}">
-      <div class="audit-heading"><strong>${escapeHtml(display.eventLabel(event.event_type))}</strong><time datetime="${escapeHtml(event.occurred_at || "")}">${escapeHtml(formatDate(event.occurred_at))}</time></div>
-      <div class="event-meta" aria-label="操作の概要">
-        <span class="audit-chip">${escapeHtml(display.serviceLabel(event.service))}</span>
-        <span class="audit-chip">${escapeHtml(actor)}</span>
-        ${role}
-        <span class="audit-chip">${escapeHtml(display.authMethodLabel(event.auth_method))}</span>
+    // Password audit attribution describes a service account, not necessarily a
+    // verified person. Prefer its saved label when Identity linkage is absent.
+    const user = state.identityNames.has(identityId) || identityId === "primary-admin"
+      ? actor : event.service_account_label || actor;
+    const fields = [
+      ["Identity ID", identityId], ["サービス内ID", serviceAccountId],
+      ["サービス内の表示名", event.service_account_label], ["role", event.role],
+      ["イベントID", event.event_id], ["操作内容", event.event_type],
+      ["サービス連携ID", event.service_link_id], ["セッションハッシュ", event.session_id_hash],
+      ["接続元ハッシュ", event.source_hash], ["対象種別", event.target_type],
+      ["対象ID", event.target_id], ["その他の監査情報", event.details_json]
+    ].filter(([, value]) => value != null && value !== "");
+    const method = event.auth_method === "password" ? "ID・パスワード" : display.authMethodLabel(event.auth_method);
+    const date = event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", {
+      timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"
+    }) : "日時不明";
+    return `<details class="audit-row audit-${outcomeClass}">
+      <summary class="audit-summary">
+        <time datetime="${escapeHtml(event.occurred_at || "")}">${escapeHtml(date)}</time>
+        <strong>${escapeHtml(user)}</strong>
+        <span>${escapeHtml(display.serviceLabel(event.service))}</span>
+        <span>${escapeHtml(method)}</span>
         <span class="audit-chip outcome-${outcomeClass}">${escapeHtml(display.outcomeLabel(outcome))}</span>
+        <span class="audit-device">${escapeHtml(display.formatUserAgent(userAgent))}</span>
+        <span class="audit-operation">${escapeHtml(display.eventLabel(event.event_type))}</span>
+      </summary>
+      <div class="audit-detail">
+        <p>${escapeHtml(event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "日時不明")}（日本時間）</p>
+        <dl>${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</dd></div>`).join("")}
+          <div><dt>User-Agent</dt><dd>${escapeHtml(userAgent) || "記録なし"}</dd></div>
+        </dl>
       </div>
-      ${serviceAccount}
-      ${idDetail}
-      <div class="audit-device" title="${escapeHtml(userAgent)}">利用端末: ${escapeHtml(display.formatUserAgent(userAgent))}</div>
-    </article>`;
+    </details>`;
   }
 
   function renderInvitationResult(container, result) {
