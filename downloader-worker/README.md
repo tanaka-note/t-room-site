@@ -163,3 +163,11 @@ Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工�
 対象ページの通常Chromeでは、main playerに同一ホストHLSの参照があり、明確なPlay buttonを1回押すとblob再生へ移った。関連previewとは区別して確認し、直後にページを閉じて転送を止めた。このDOMでは本編iframe必須とは確認できなかった。一方、Cookieを持たないWindows HTTPは既存/ブラウザ相当UAとも403＋`cf-mitigated: challenge`、新規Chromium contextは307→403 challengeでvideo要素へ到達しなかった。通常Chromeとの環境差の具体的原因（profile状態等）は未確定。UA/Acceptの置換だけで解決したとは扱わない。[Cloudflareのchallenge応答仕様](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)に従い、確定拒否をfallbackで回避しない。
 
 この修正は観測した診断欠落の是正であり、対象動画の取得成功やサーバーからのchallenge通過を実現したものではない。Cookie/POST/認証・通信先制限は維持し、追加待機・リクエスト・ブラウザ起動を増やさない。正常経路の変更は診断headerの付与のみで、速度差や請求増分は未計測。エンジン・定義・Container枠は変更しない。
+
+公開確認: 実装 `c8ed979880463cba577a3de21ffc09b623fe080d`、[公開workflow 34208619982](https://github.com/tanaka-note/t-room-site/actions/runs/34208619982) success。Node対象54件PASS（解析・送信境界・キャンセル/CAS/再配送・既存処理・契約）。Python unit47件中46件PASS・yt-dlp未導入による1件skip。Windows Chromiumの8ケース（3テスト）PASS。Linux候補でも実yt-dlp判定と小容量ブラウザ・子プロセス終了fixtureのコマンド成功を確認。初回Node実行はVM harnessに新importが未登録で1件失敗し、harnessの依存追加後に該当セット全件PASS。構文・build同期・Wrangler dry-run成功。既存エンジン/定義の署名・内部日時・ルールは再検証し、ClamAV実スキャンや大容量転送は繰り返していない。
+
+本番build `downloader-cac27d5cf650`、Worker `9527bd34-7527-4459-8515-ff87f4a3329d`（100%）、deployment `2e120568-7de4-497b-b609-5960da594a20`。Container14 / `sha256:26ee1cce3e0b01c5f31adcdc3f324921da942d2f0da48f23641187fb93acd80c`、rollout `0aa010a0-f906-494a-8b38-2c47e4dc942f` completed・activeなし・D1 image/source_image一致。HTML buildとdownloader.js/delete-controls.js一致、未認証jobs 401、TTL3600・10分Cron・既存D1/R2/Queue・flag=trueを読み戻し確認した。
+
+本番実取得は未実施・未達成。検証用Chromeは本人確認中のままで、Security監査には2026-09-08 08:56:22/08:58:42 UTCの認証開始だけがあり、認証完了は未記録。対象ホストの新jobも未作成。利用者から本人確認完了との連絡はあったが、このタブの認証済み画面では確認できなかった。セッションを代作せず、URL入力欄が表示されてから最小容量の取得・検査・保存・利用者ダウンロードを確認する必要がある。Windowsで観測したchallengeを本番の観測結果に置き換えない。
+
+今回の切り戻し: Worker旧版 `11ce3f56-8db9-484e-ac2e-0be8cd0d376b`。Containerまで戻す必要がある場合は、定義更新手順の署名/鮮度・job/drain・rollout確認後にprevious image `sha256:b9e49c44884574d0a266ae286bd667246761d20a2cfa1e1c72fd80a9087f8208`を使う。Workerだけのrollbackはimageを戻さない。補助探索の停止だけなら既存のMAIN_VIDEO_FALLBACK=falseを使用する。
