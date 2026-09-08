@@ -148,3 +148,10 @@ Containerコード公開は`ClamAV daily definitions`の手動入力`release_cod
 ### 2026-09-08 埋め込み解析の待ち時間修正
 
 本番旧ジョブは4分3秒後にextractor_failed。待機中もanalyzingを表示し、Queueの30/60/120秒再試行待ちが含まれていた。改修後の対象URL解析はWindowsローカル1回で0.734秒、bot_challengeで拒否（ページ側Cloudflare確認）。動画取得成功ではなく、拒否を長時間再試行しないことの確認。旧本番とローカルの数値は環境が異なり性能倍率に換算しない。Cloudflare上の同URL再実行や動画本体取得は行わない。
+
+
+公開確認: 実装 `ac05efefbfc3c432ad7bef82a0af36a68b9902d3`、[workflow 34183905397](https://github.com/tanaka-note/t-room-site/actions/runs/34183905397) success。対象Node70件、Python unit44件（resolver29・main-video9・SSRF6）、Windows実ブラウザ6ケースPASS。Windows初回の拒否fixtureはPlaywright起動timeoutで失敗し、当該ケースの再確認でPASS。Linux候補では実yt-dlpのオフライン専用extractor判定を含む12テストが成功。ClamAV実スキャンは再実施せず、本番の定義/エンジンを継承して署名・鮮度・ルール整合を再確認。全E2E・大容量転送・Cloudflare上での対象URL再投入は未実施。
+
+本番build `downloader-bc6772b65629`、Worker `11ce3f56-8db9-484e-ac2e-0be8cd0d376b`（100%）、deployment `51ea6ac2-d7f8-45b7-9d05-431067fc9087`。Container13 / digest `sha256:b9e49c44884574d0a266ae286bd667246761d20a2cfa1e1c72fd80a9087f8208`、rollout `e39fe4f9-2fb1-4a7d-ae90-da907b44eb63` completed・activeなし。mainとHTML build/配信JS一致、未認証jobs 401、TTL3600・10分Cron・D1/R2/Queue・flag=trueを確認。定義生成2026-09-07 06:24:32 UTC、期限09-14同時刻、D1 image/source_image一致。
+
+切り戻し: 補助探索だけならMAIN_VIDEO_FALLBACK=false。解析順序も戻す場合はWorker前版 `3fda4375-5ea2-4944-b287-a69efa8984ac` と、定義更新手順で鮮度を再検証したprevious image `sha256:0ddbf30cfc90877d567310eb06f6c34474188ab01c71c60ff9fe58b05ba15d38` を組み合わせる。進行中job/drain・active rollout・D1 image/source_image整合を省略しない。
