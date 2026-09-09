@@ -7,7 +7,7 @@ import {DatabaseSync} from 'node:sqlite';
 const require=createRequire(realpathSync(new URL('../node_modules/wrangler/package.json',import.meta.url)));
 const {build}=require('esbuild');
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
-const names=['ensurePrimaryAdminRecords','createIdentityAndInvite','invitationOptions','invitationVerify','approveIdentity','reinviteIdentity','addIdentityLinks','removeIdentityLink','authenticationOptions','authenticationVerify','createHandoff','redeemHandoff','validatePasskeySession'];
+const names=['identityDetail','ensurePrimaryAdminRecords','createIdentityAndInvite','invitationOptions','invitationVerify','approveIdentity','reinviteIdentity','addIdentityLinks','removeIdentityLink','authenticationOptions','authenticationVerify','createHandoff','redeemHandoff','validatePasskeySession'];
 // Only the WebAuthn device ceremony and provider descriptions are mocked. Actual
 // handlers, session signatures, authorization SQL and atomic D1 batches run.
 const result=await build({stdin:{contents:source+`\nexport {${names.join(',')}};`,resolveDir:fileURLToPath(new URL('../src/',import.meta.url)),sourcefile:'index.js'},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'test-boundaries',setup(b){
@@ -95,5 +95,12 @@ test('Downloader request validation denies missing, disabled and deleted links w
  await assert.rejects(requireSession(req({},'user-a'),env),e=>e.status===401);await requireSession(req({},'primary-admin'),env);
  f.db.prepare('DELETE FROM security_handoffs WHERE service_link_id=?').run(a.serviceLinkId);f.db.prepare('DELETE FROM security_service_links WHERE id=?').run(a.serviceLinkId);
  await assert.rejects(requireSession(req({},'user-a'),env),e=>e.status===401);await requireSession(req({},'primary-admin'),env);
+ }finally{f.close()}
+});
+
+
+test('detail API marks only the owner core link protected; general grants remain removable',async()=>{
+ const f=fixture();try{await f.seed('primary-admin');await f.seed('user-a');await worker.ensurePrimaryAdminRecords(f.env);await f.grant('user-a');
+ for(const id of ['primary-admin','user-a']){const detail=await (await worker.identityDetail(id,f.env)).json();const links=detail.links.filter(l=>l.service==='downloader');assert.equal(links.length,1);assert.equal(links[0].protected,id==='primary-admin');}
  }finally{f.close()}
 });

@@ -1576,7 +1576,7 @@ function serviceLinkKey(link) {
 }
 
 function isPrimaryAdminCoreLink(link) {
-  return PRIMARY_ADMIN_CORE_LINKS.has(serviceLinkKey({
+  return link.identity_id === PRIMARY_ADMIN_ID && PRIMARY_ADMIN_CORE_LINKS.has(serviceLinkKey({
     service: link.service,
     accountId: link.service_account_id ?? link.accountId,
     rootFolderId: link.cloud_root_folder_id ?? link.rootFolderId ?? null

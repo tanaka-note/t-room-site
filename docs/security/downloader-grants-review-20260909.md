@@ -26,6 +26,7 @@
 - invitationVerify / approveIdentity / reinviteIdentityはDownloaderを新規生成しない。承認はすでに存在するpending連携のみ更新する。
 - authenticationOptions / authenticationVerify / createHandoffは対象Identityのactiveな対象サービス連携を要求。redeemHandoffのJOINにもl.identity_id = h.identity_idを追加し、不整合なhandoffの引換を拒否。
 - Downloader requireSessionは全保護リクエストでSecurityのvalidatePasskeySessionを呼び、Identity・credential・link・service・account・epochを照合。解除はリンクをdisabledにし、対象リンクのactive-session記録を終了。旧cookieは次の保護アクセスで拒否、再追加は別link ID。オーナーsessionと他サービスは継続。
+- 本番の田中暢美の詳細でDownloaderが「基幹連携」と誤表示され、解除ボタンが隠れる不具合も確認。identityDetailのprotected判定がservice/accountだけを比較していたため、isPrimaryAdminCoreLinkにもprimary-adminのIdentity条件を加え、APIの解除保護と一致させた。一般ユーザーの明示付与は通常の解除可能な連携になる。
 - UIの現在連携はD1から返るactive/pendingリンクのみ。追加候補は別の閉じたeditorで、サービス・連携先とも初期選択なし。既存構成を維持。
 
 ## Git照合
@@ -68,6 +69,6 @@ Downloader導入commitは4ef5193。導入後、田中暢美の追加・田中千
 ## 検証
 
 - downloader-grants.test.js：実ハンドラー・実SQL・SQLite D1バッチ・署名セッションでライフサイクル、複数利用者の分離、基幹保護、migration再実行、Identity不一致handoff、失効cookie/未使用handoffを検証。WebAuthnの端末認証部分とサービスのアカウント説明RPCはfixture。
-- 既存のdomain・contract・kill switch・service session・Downloader migration・名称表示・Downloader contractと合わせて99テスト成功。
+- 既存のdomain・contract・kill switch・service session・Downloader migration・名称表示・Downloader contractと合わせて100テスト成功。
 - PC1280px / スマホ390pxで招待からの除外、詳細追加候補、空初期値、明示選択後のpayloadを確認。
 - Container起動、実ダウンロード、課金スキャン、大量データ生成は行わない。
