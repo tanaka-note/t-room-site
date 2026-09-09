@@ -667,10 +667,12 @@
   }
 
   function addLinkRow(service = null, containerSelector = "#link-rows", removable = true, excludedKeys = new Set()) {
-    const availableServices = state.services.map((item) => ({
-      ...item,
-      targets: (item.targets || []).filter((target) => !excludedKeys.has(serviceLinkKey(target.service, target.accountId, target.rootFolderId)))
-    })).filter((item) => item.targets.length);
+    const availableServices = state.services
+      .filter((item) => containerSelector !== "#link-rows" || item.id !== "downloader")
+      .map((item) => ({
+        ...item,
+        targets: (item.targets || []).filter((target) => !excludedKeys.has(serviceLinkKey(target.service, target.accountId, target.rootFolderId)))
+      })).filter((item) => item.targets.length);
     if (!availableServices.length) return false;
     const row = document.createElement("div");
     row.className = "link-row";

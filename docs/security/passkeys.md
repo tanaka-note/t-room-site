@@ -90,3 +90,7 @@ T-Cloudの`admin`は`primary-admin`の既定linkに限定し、通常の追加AP
 sessionは選択したserviceLinkId / serviceAccountId / role / rootFolderIdを保持する。サーバーはaccountとrole/rootの整合を検証し、Security Centerの現在のlink状態と照合する。再読込時の端末鍵解除は元のlinkに固定し、別linkしか利用できなければログイン画面へ戻す。一般member経路のrootチェックは未所属ファイルの直接ID取得にも適用する。共有URL発行は現在のmember仕様どおり禁止する。
 
 memberの一覧・サムネイル表示キャッシュはlink・root・sessionごとに分離し、再認証後に以前の解除状態を表示キャッシュから引き継がない。暗号化済みオフライン保存もmemberのlink・root単位とし、admin/subadminの保存領域を再利用しない。
+
+## Downloaderの利用許可
+
+初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。[2026-09-09調査記録](downloader-grants-review-20260909.md)を参照。

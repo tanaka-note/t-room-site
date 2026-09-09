@@ -1015,18 +1015,20 @@ async function createIdentityAndInvite(request, env, admin) {
   const identityId = hasIdentityId ? normalizeIdentityId(body.identityId) : crypto.randomUUID();
   if (!displayName) throw new HttpError(400, "表示名を入力してください。");
   if (!identityId) throw new HttpError(400, "Identity IDは英数字・_・-を使い64文字以内で入力してください。");
-  const links = await validateServiceLinks(env, body.links, { identityId, admin });
+  const links = await validateServiceLinks(env, body.links, { identityId, admin, invitation: true });
   if (!links.length) throw new HttpError(400, "少なくとも1つのサービス連携を指定してください。");
   assertUniqueServiceLinks(links);
   const existing = await env.DB.prepare("SELECT 1 AS ok FROM security_identities WHERE id = ?").bind(identityId).first();
   if (existing) throw new HttpError(409, "同じIdentity IDが既に存在します。");
   const invitation = await prepareInvitation(env, identityId, body, admin.identityId, await serviceLinkHashFromLinks(links));
+  const linkStatements = [];
+  for (const link of links) linkStatements.push(...await explicitServiceLinkStatements(env, identityId, link, "pending", admin, request, "identity_invitation"));
   await env.DB.batch([
     env.DB.prepare("INSERT INTO security_identities (id, display_name, status) VALUES (?, ?, 'invited')").bind(identityId, displayName),
-    ...links.map((link) => insertServiceLinkStatement(env, identityId, link)),
+    ...linkStatements,
     ...(links.some((link) => link.service === "ai") ? [insertDefaultAiBudgetPolicyStatement(env, identityId)] : []),
     insertInvitationStatement(env, invitation),
-    await localAuditStatement(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey" }, request),
+    await localAuditStatement(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey", details: { changedBy: admin.identityId } }, request),
     await localAuditStatement(env, { eventType: "invite_created", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request)
   ]);
   return json({ identityId, invitationUrl: `/security/#invite=${encodeURIComponent(invitation.token)}`, expiresAt: invitation.expiresAt }, 201);
@@ -1047,11 +1049,10 @@ async function addIdentityLinks(identityId, request, env, admin) {
     // A disabled link ID is a permanent revocation marker. Re-adding the same
     // account always creates a fresh ID so old service cookies can never revive.
     const status = identity.status === "active" && link.service !== "cloud" ? "active" : "pending";
-    statements.push(insertServiceLinkStatement(env, identityId, link, status));
+    statements.push(...await explicitServiceLinkStatements(env, identityId, link, status, admin, request, "identity_link_add"));
   }
   if (links.some((link) => link.service === "ai")) statements.push(insertDefaultAiBudgetPolicyStatement(env, identityId));
   statements.push(env.DB.prepare("UPDATE security_identities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId));
-  statements.push(await localAuditStatement(env, { eventType: "service_link_added", outcome: "success", identityId, authMethod: "passkey", details: { changedBy: admin.identityId, count: links.length } }, request));
   await env.DB.batch(statements);
   return json({ ok: true, requiresReinvite: identity.status !== "active", requiresApproval: links.some((link) => link.service === "cloud") });
 }
@@ -1063,7 +1064,7 @@ async function removeIdentityLink(linkId, request, env, admin) {
   await env.DB.batch([
     env.DB.prepare("UPDATE security_service_links SET status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(linkId),
     endActiveSessionsStatement(env, "service_link_disabled", { serviceLinkId: linkId, authMethod: "passkey" }),
-    await localAuditStatement(env, { eventType: "service_link_removed", outcome: "success", identityId: link.identity_id, service: link.service, serviceAccountId: link.service_account_id, authMethod: "passkey", details: { changedBy: admin.identityId } }, request)
+    await localAuditStatement(env, { eventType: "service_link_removed", outcome: "success", identityId: link.identity_id, service: link.service, serviceAccountId: link.service_account_id, serviceLinkId: link.id, authMethod: "passkey", details: { changedBy: admin.identityId, source: "identity_link_remove" } }, request)
   ]);
   return json({ ok: true });
 }
@@ -1317,7 +1318,7 @@ async function redeemHandoff(env, token, service) {
   const row = await env.DB.prepare(`SELECT h.id, h.identity_id, h.credential_id, i.display_name AS identityDisplayName,
       l.id AS serviceLinkId, l.service, l.service_account_id AS serviceAccountId,
       l.cloud_root_folder_id AS cloudRootFolderId, l.display_label AS displayLabel
-    FROM security_handoffs h JOIN security_service_links l ON l.id = h.service_link_id
+    FROM security_handoffs h JOIN security_service_links l ON l.id = h.service_link_id AND l.identity_id = h.identity_id
     JOIN security_identities i ON i.id = h.identity_id
     JOIN security_credentials c ON c.credential_id = h.credential_id AND c.identity_id = h.identity_id
     WHERE h.token_hash = ? AND h.consumed_at IS NULL AND h.expires_at > ? AND h.session_epoch = ?
@@ -1481,7 +1482,7 @@ async function serviceLinkHashFromLinks(links) {
   return sha256(JSON.stringify(canonicalServiceLinks(links)));
 }
 
-async function validateServiceLinks(env, input, { identityId = null, admin = null } = {}) {
+async function validateServiceLinks(env, input, { identityId = null, admin = null, invitation = false } = {}) {
   const raw = Array.isArray(input) ? input : [];
   if (raw.length > 12) throw new HttpError(400, "一度に追加できるサービス連携は12件までです。");
   const links = [];
@@ -1491,6 +1492,11 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
     const rootFolderId = item.rootFolderId == null || item.rootFolderId === "" ? null : Number(item.rootFolderId);
     if (!service || !accountId) throw new HttpError(400, "サービス連携を確認してください。");
     if (service !== "cloud" && rootFolderId !== null) throw new HttpError(400, "日記・請求書の連携にT-Cloudフォルダは指定できません。");
+    if (service === "downloader") {
+      if (invitation) throw new HttpError(400, "Downloaderはユーザー作成後、利用者詳細のサービス連携から追加してください。");
+      if (admin?.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "Downloaderの連携はオーナーだけが追加できます。");
+      requireFreshSecurityAdmin(admin);
+    }
     const integration = serviceProvider(env, service);
     const description = await integration.describeAccount({ accountId, rootFolderId, selectableOnly: true });
     if (!description?.valid) throw new HttpError(400, `${service}の連携先を確認できません。`);
@@ -1507,11 +1513,23 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
   return links;
 }
 
-function insertServiceLinkStatement(env, identityId, link, status = "pending") {
+async function explicitServiceLinkStatements(env, identityId, link, status, admin, request, source) {
+  const id = crypto.randomUUID();
+  return [
+    insertServiceLinkStatement(env, identityId, link, status, id),
+    await localAuditStatement(env, {
+      eventType: "service_link_added", outcome: "success", identityId, service: link.service,
+      serviceLinkId: id, serviceAccountId: link.accountId, serviceAccountLabel: link.displayLabel, role: link.role,
+      authMethod: "passkey", details: { changedBy: admin.identityId, source, status, count: 1 }
+    }, request)
+  ];
+}
+
+function insertServiceLinkStatement(env, identityId, link, status = "pending", id = crypto.randomUUID()) {
   return env.DB.prepare(`INSERT INTO security_service_links
     (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(crypto.randomUUID(), identityId, link.service, link.accountId, link.rootFolderId, link.displayLabel, status);
+    .bind(id, identityId, link.service, link.accountId, link.rootFolderId, link.displayLabel, status);
 }
 
 function serviceProvider(env, service) {
