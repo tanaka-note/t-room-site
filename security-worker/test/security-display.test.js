@@ -81,7 +81,7 @@ test("service, outcome and authentication values keep canonical values behind Ja
 });
 
 test("primary administrator and common account IDs use human-friendly primary labels", () => {
-  assert.equal(display.identityLabel("primary-admin"), "第一管理者");
+  assert.equal(display.identityLabel("primary-admin"), "田中宏知（オーナー）");
   assert.equal(display.identityLabel("family_user", "田中太郎"), "田中太郎");
   assert.equal(display.identityLabel("family_user"), "ユーザー");
   assert.equal(display.identityLabel("", "", "main-admin"), "管理者");

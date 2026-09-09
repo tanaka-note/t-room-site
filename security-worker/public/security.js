@@ -438,7 +438,7 @@
     const hasCredential = currentCredentials.length > 0;
     const currentLinks = data.links.filter((item) => ["pending", "active"].includes(item.status));
     const linkHistory = data.links.filter((item) => !["pending", "active"].includes(item.status));
-    const linkRow = (item, historical = false) => `<div class="link detail-item"><strong>${escapeHtml(item.display_label)}</strong>${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(display.serviceLinkStatusLabel(item.status, { identityStatus: data.identity.status, service: item.service, hasCredential }))}</small>${historical ? "" : item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`;
+    const linkRow = (item, historical = false) => `<div class="link detail-item"><strong>${escapeHtml(item.account_display_name || item.display_label)}</strong>${item.service === "cloud" && item.service_account_id === "folder-member" && item.account_display_name ? `<small> / ${escapeHtml(item.display_label)}</small>` : ""}${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(display.serviceLinkStatusLabel(item.status, { identityStatus: data.identity.status, service: item.service, hasCredential }))}</small>${historical ? "" : item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`;
     const links = currentLinks.map((item) => linkRow(item)).join("");
     const invitationRows = data.invitations.map((item) => ({ ...item, effectiveStatus: display.invitationEffectiveStatus(item) }))
       .sort((left, right) => Number(right.effectiveStatus === "active") - Number(left.effectiveStatus === "active"));
@@ -823,11 +823,10 @@
     const userAgent = String(event.user_agent || "");
     // Password audit attribution describes a service account, not necessarily a
     // verified person. Prefer its saved label when Identity linkage is absent.
-    const user = identityName || identityId === "primary-admin"
-      ? actor : event.service_account_label || actor;
+    const user = event.actor_display_name || (identityId === "primary-admin" ? "田中宏知" : identityName ? actor : event.service_account_label || actor);
     const fields = [
       ["Identity ID", identityId], ["サービス内ID", serviceAccountId],
-      ["サービス内の表示名", event.service_account_label], ["role", event.role],
+      ["サービス内の表示名", event.account_display_name || event.service_account_label], ["role", event.role],
       ["イベントID", event.event_id], ["操作内容", event.event_type],
       ["サービス連携ID", event.service_link_id], ["セッションハッシュ", event.session_id_hash],
       ["接続元ハッシュ", event.source_hash], ["対象種別", event.target_type],

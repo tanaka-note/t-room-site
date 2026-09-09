@@ -113,7 +113,7 @@
         button.type = "button";
         button.className = "troom-passkey-account-option";
         const name = document.createElement("strong");
-        name.textContent = String(link.displayLabel || "アカウント");
+        name.textContent = String(link.accountDisplayName || link.displayLabel || "アカウント");
         button.append(name);
         const details = [link.roleLabel, link.scopeLabel].filter(Boolean);
         if (details.length) {

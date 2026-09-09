@@ -1,3 +1,4 @@
+import { accountDisplayName } from "../../assets/account-display.mjs";
 import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
 import { LOGIN_LOCK_MINUTES, isLoginLocked } from "./login-limit.js";
 import {
@@ -54,7 +55,7 @@ function billingLinkTarget(account) {
   const roleLabel = account.role === "owner" ? "管理者" : "一般ユーザー";
   return {
     accountId: account.id,
-    displayLabel: `${account.display_name}（${roleLabel}）`,
+    displayLabel: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}（${roleLabel}）`),
     role: account.role,
     roleLabel,
     privileged: account.role === "owner",
@@ -111,6 +112,7 @@ async function handleApi(request, env, url, path, context) {
       role: session?.role || null,
       accountId: session?.accountId || null,
       accountName: session?.accountName || null,
+      accountDisplayName: session ? accountDisplayName({ service: "billing", accountId: session.accountId, role: session.role }, `${session.accountName}${session.role === "owner" ? "（管理者）" : ""}`) : null,
       authMethod: session?.authMethod || null
     });
   }
@@ -222,7 +224,7 @@ async function handleApi(request, env, url, path, context) {
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
     await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt, sessionVersion: billingSessionVersion(env, account.session_version) });
-    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "password" }, 200, headers);
+    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`), authMethod: "password" }, 200, headers);
   }
 
   if (path === "/api/passkey/handoff" && request.method === "POST") {
@@ -248,7 +250,7 @@ async function handleApi(request, env, url, path, context) {
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
     await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
     await recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: billingSessionVersion(env, account.session_version), passkeySessionEpoch: handoff.sessionEpoch });
-    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, authMethod: "passkey" }, 200, headers);
+    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`), authMethod: "passkey" }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {

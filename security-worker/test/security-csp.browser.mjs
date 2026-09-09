@@ -1,3 +1,4 @@
+import { auditDisplayNames } from "../../assets/account-display.mjs";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -55,6 +56,7 @@ const auditEventsBody = {
   ],
   nextCursor: "browser-page-2"
 };
+auditEventsBody.events = auditEventsBody.events.map((event) => ({ ...event, ...auditDisplayNames(event) }));
 
 const staticFiles = new Map([
   ["/security/", [resolve(securityPublic, "index.html"), "text/html; charset=utf-8"]],
@@ -84,13 +86,13 @@ const server = createServer(async (request, response) => {
       { service: "cloud", accountId: "folder-member", rootFolderId: 10, displayLabel: "動画", role: "member", roleLabel: "フォルダ利用者", privileged: false }
     ] }
   ] });
-  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: cancelledInviteIdentityVisible ? 1 : 0, pendingApproval: 0, noPasskey: cancelledInviteIdentityVisible ? 1 : 0, critical: 0, activeUsers: [{ identityId: "primary-admin", displayName: "第一管理者", services: ["cloud", "diary"] }] });
+  if (url.pathname === "/security/api/dashboard") return sendJson(response, 200, { loginSuccess: 0, loginFailure: 0, sessionResume: 2, lockouts: 0, invited: cancelledInviteIdentityVisible ? 1 : 0, pendingApproval: 0, noPasskey: cancelledInviteIdentityVisible ? 1 : 0, critical: 0, activeUsers: [{ identityId: "primary-admin", displayName: "田中宏知（オーナー）", services: ["cloud", "diary"] }] });
   if (url.pathname === "/security/api/identities" && request.method === "POST") {
     receivedCreateInviteBodies.push(JSON.parse(await readBody(request)));
     return sendJson(response, 201, { identityId: "browser-created-invite", invitationUrl: "/security/#invite=browser-new-token", expiresAt: 4102444800 });
   }
   if (url.pathname === "/security/api/identities") return sendJson(response, 200, { identities: [
-    { id: "primary-admin", displayName: "第一管理者", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" },
+    { id: "primary-admin", displayName: "田中宏知（オーナー）", status: "active", activeCredentials: 1, pendingCredentials: 0, lastLoginAt: "2026-08-22T01:02:03.000Z" },
   ], pendingIdentities: [
     ...(detailUiIdentityVisible ? [{ id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", activeCredentials: 0, pendingCredentials: 1 }] : []),
     ...(cancelledInviteIdentityVisible ? [{ id: "cancelled-invite-user", displayName: "取消テストユーザー", status: "invited", activeCredentials: 0, pendingCredentials: 0 }] : [])
@@ -108,7 +110,7 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 200, auditEventsBody);
   }
   if (url.pathname === "/security/api/identities/primary-admin") return sendJson(response, 200, {
-    identity: { id: "primary-admin", displayName: "第一管理者", status: "active", isSecurityAdmin: true },
+    identity: { id: "primary-admin", displayName: "田中宏知（オーナー）", status: "active", isSecurityAdmin: true },
     sessions: [
       { service: "cloud", available: true, loggedIn: true, sessions: [{ authMethod: "passkey", serviceAccountId: "admin", role: "admin", startedAt: "2026-08-30T00:00:00.000Z", lastSeenAt: "2026-08-30T00:05:00.000Z", expiresAt: "2026-08-30T12:00:00.000Z" }] },
       { service: "diary", available: true, loggedIn: false, sessions: [] },
@@ -180,7 +182,7 @@ const server = createServer(async (request, response) => {
       options: {
         challenge: "AAECAwQFBgcICQoLDA0ODw",
         rp: { id: "127.0.0.1", name: "T-ROOM" },
-        user: { id: "cHJpbWFyeS1hZG1pbg", name: "primary-admin", displayName: "第一管理者" },
+        user: { id: "cHJpbWFyeS1hZG1pbg", name: "primary-admin", displayName: "田中宏知（オーナー）" },
         pubKeyCredParams: [{ alg: -7, type: "public-key" }],
         authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", requireResidentKey: true, userVerification: "required" },
         timeout: 300000,
@@ -468,13 +470,13 @@ async function verifyBrowser(browserType, name, origin) {
     await page.evaluate(() => {
       window.__troomDiaryAccountChoice = null;
       TRoomPasskeys.chooseLinkDialog([
-        { id: "diary-admin", accountId: "main-admin", displayLabel: "田中宏知（管理者・全体管理）", roleLabel: "管理者・全体管理" },
+        { id: "diary-admin", accountId: "main-admin", displayLabel: "田中宏知（オーナー）", roleLabel: "管理者・全体管理" },
         { id: "diary-user", accountId: "main-user", displayLabel: "田中宏知（一般ユーザー）", roleLabel: "一般ユーザー" }
       ], "diary").then((link) => { window.__troomDiaryAccountChoice = link?.id || null; });
     });
     assert.equal(await page.getByRole("heading", { name: "利用するアカウントを選択" }).count(), 1,
       `${name}: two Diary links require an account choice`);
-    assert.equal(await page.getByRole("button", { name: /田中宏知（管理者・全体管理）/ }).count(), 1,
+    assert.equal(await page.getByRole("button", { name: /田中宏知（オーナー）/ }).count(), 1,
       `${name}: the Diary administrator choice is visibly labelled`);
     assert.equal(await page.getByRole("button", { name: /田中宏知（一般ユーザー）/ }).count(), 1,
       `${name}: the Diary ordinary-user choice is visibly labelled`);
@@ -593,7 +595,7 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(await unsupported.locator("#clamav-definitions").textContent(), /状態を取得できません/);
     assert.doesNotMatch(await unsupported.locator("#clamav-definitions").textContent(), /定義は有効/);
     assert.equal(await unsupported.locator("#admin-view").isVisible(), true, `${name}: PRF unsupported must not block Security Center`);
-    assert.match(await unsupported.locator("#dashboard-panel .active-users").textContent(), /第一管理者.*T-Cloud.*日記/s,
+    assert.match(await unsupported.locator("#dashboard-panel .active-users").textContent(), /田中宏知（オーナー）.*T-Cloud.*日記/s,
       `${name}: dashboard summarizes the services with currently valid sessions`);
     assert.equal(await unsupported.locator("#tcloud-setup-notice").isVisible(), true);
     assert.match(await unsupported.locator("#tcloud-setup-status").textContent(), /この端末ではT-Cloudのパスキー利用に対応していません/);
@@ -615,7 +617,7 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#audit-list .audit-row").first().waitFor();
     assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=/, `${name}: all users remains the default audit filter`);
     assert.deepEqual(await unsupported.locator("#audit-identity option").allTextContents(),
-      ["すべて", "第一管理者", ...(detailUiIdentityVisible ? ["詳細UIテスト"] : []), ...(cancelledInviteIdentityVisible ? ["取消テストユーザー"] : [])],
+      ["すべて", "田中宏知（オーナー）", ...(detailUiIdentityVisible ? ["詳細UIテスト"] : []), ...(cancelledInviteIdentityVisible ? ["取消テストユーザー"] : [])],
       `${name}: current and preparing users remain selectable while disabled identities are excluded`);
     const auditText = await unsupported.locator("#audit-list").innerText();
     assert.match(auditText, /パスキーでログイン成功/, `${name}: known audit event is shown in Japanese`);
@@ -623,7 +625,8 @@ async function verifyBrowser(browserType, name, origin) {
     assert.doesNotMatch(auditText, /passkey_login_success/, `${name}: known internal event name is not the primary display`);
     assert.doesNotMatch(auditText, /passkey_authentication_success/, `${name}: intermediate internal event name is not the primary display`);
     assert.match(auditText, /Security Center/);
-    assert.match(auditText, /第一管理者/);
+    assert.match(auditText, /田中宏知/);
+    assert.match(auditText, /田中宏知（一般ユーザー）/);
     assert.doesNotMatch(auditText, /primary-admin/, `${name}: technical IDs are hidden until a row is opened`);
     assert.equal(await unsupported.locator("#audit-list details.audit-row:not([open])").count() >= 1, true,
       `${name}: internal IDs stay inside collapsed technical details`);
@@ -870,12 +873,15 @@ async function verifyBrowser(browserType, name, origin) {
     await transient.addScriptTag({ url: `${origin}/security/cloud-choice-test.js` });
     await transient.evaluate(() => {
       choosePasskeyLink([
-        { id: "primary-cloud", accountId: "admin", role: "admin", rootFolderId: null, displayLabel: "T-Cloud 管理者" },
-        { id: "personal-cloud", accountId: "folder-member", role: "member", rootFolderId: 7, displayLabel: "Atsushi" }
+        { id: "primary-cloud", accountId: "admin", role: "admin", rootFolderId: null, displayLabel: "T-Cloud 管理者", accountDisplayName: "田中宏知（オーナー）" },
+        { id: "personal-cloud", accountId: "folder-member", role: "member", rootFolderId: 7, displayLabel: "Atsushi", accountDisplayName: "田中宏知（一般ユーザー）" }
       ]).then((link) => { window.__memberChoice = link; });
     });
     assert.equal(await transient.getByRole("heading", { name: "T-Cloudを開く方法を選択", exact: true }).count(), 1);
-    assert.deepEqual(await transient.locator(".troom-passkey-account-option strong").allTextContents(), ["管理者", "Atsushi"]);
+    assert.deepEqual(await transient.locator(".troom-passkey-account-option strong").allTextContents(), ["田中宏知（オーナー）", "田中宏知（一般ユーザー）"]);
+    await transient.setViewportSize({ width: 390, height: 844 });
+    assert.match(await transient.locator(".troom-passkey-account-dialog").textContent(), /田中宏知（一般ユーザー）.*Atsushiフォルダーを利用/s);
+    assert.equal(await transient.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.doesNotMatch(await transient.locator(".troom-passkey-account-dialog").textContent(), /subadmin|folder-member|副管理者|rootFolderId/);
     await transient.getByRole("button", { name: /Atsushiフォルダーを利用/ }).click();
     await transient.waitForFunction(() => window.__memberChoice?.accountId === "folder-member");

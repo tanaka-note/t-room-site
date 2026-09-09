@@ -1,3 +1,4 @@
+import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
@@ -5,7 +6,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-3b193eb38356";
+const APP_BUILD_ID = "cloud-7ab73fa63541";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -49,7 +50,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
       const account = ACCOUNTS.find((item) => item.role === accountId);
       return {
         valid: true,
-        displayLabel: `T-Cloud ${account.label}`,
+        displayLabel: accountDisplayName({ service: "cloud", accountId, role: account.role }, `T-Cloud ${account.label}`),
         rootFolderId: null,
         role: account.role,
         roleLabel: account.label,
@@ -2961,7 +2962,7 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session) { return { role: session.role, accountName: session.label, loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, serviceLinkId: session.serviceLinkId || null, serviceAccountId: session.serviceAccountId || session.role, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session) { return { role: session.role, accountName: accountDisplayName({ service: "cloud", identityId: session.identityId, accountId: session.serviceAccountId || session.role, role: session.role }, session.label), loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, serviceLinkId: session.serviceLinkId || null, serviceAccountId: session.serviceAccountId || session.role, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function configuredLoginId(env, role) {
   const roleSpecific = role === "admin" ? env.ADMIN_LOGIN_ID : env.SUBADMIN_LOGIN_ID;
   return String(roleSpecific || env.LOGIN_ID || "").trim().toLowerCase();

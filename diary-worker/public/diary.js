@@ -721,7 +721,7 @@
     const returnView = takeDiaryReturnView(state.activeHouseholdId);
     if (returnView) applyDiaryReturnView(returnView);
     state.lastSessionRefreshAt = Date.now();
-    elements.roleLabel.textContent = `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`;
+    elements.roleLabel.textContent = session.accountDisplayName || `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`;
     elements.newEntryButton.hidden = !state.canManageEntries;
     elements.draftButton.hidden = !state.canManageEntries;
     elements.trashButton.hidden = !state.canViewTrash;

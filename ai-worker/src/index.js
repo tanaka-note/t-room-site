@@ -1,3 +1,4 @@
+import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
@@ -103,7 +104,7 @@ async function completePasskeyHandoff(request, env, url) {
   const body = await readJson(request, 4096);
   const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "ai");
   if (!handoff || handoff.serviceAccountId !== "owner") throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
-  const displayName = handoff.identityId === "primary-admin" ? "田中宏知" : (handoff.identityDisplayName || "AI Chat利用者");
+  const displayName = accountDisplayName({ service: "ai", identityId: handoff.identityId, accountId: handoff.serviceAccountId, role: handoff.identityId === "primary-admin" ? "admin" : "user" }, handoff.identityDisplayName || "AI Chat利用者");
   const accountRole = handoff.identityId === "primary-admin" ? "admin" : "user";
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO ai_accounts (identity_id, display_name, role, status)
@@ -139,7 +140,7 @@ async function sessionResponse(env, session) {
   const account = await requireAccount(env, session.identityId);
   const usage = await usageSummary(env, session.identityId);
   const policy = await requireBudgetPolicy(env, session.identityId);
-  return json({ authenticated: true, user: { identityId: account.identity_id, displayName: account.display_name, role: account.role }, usage, budget: publicBudgetState({ policy, usageMicros: usage.totalCostMicrosJpy }) });
+  return json({ authenticated: true, user: { identityId: account.identity_id, displayName: accountDisplayName({ service: "ai", identityId: account.identity_id, accountId: "owner", role: account.role }, account.display_name), role: account.role }, usage, budget: publicBudgetState({ policy, usageMicros: usage.totalCostMicrosJpy }) });
 }
 
 async function listCharacters(env, session) {

@@ -154,7 +154,7 @@
 
   async function enterApp(session) {
     state.session = session;
-    el["account-label"].textContent = `${session.accountName}${session.role === "owner" ? "（管理者）" : ""}`;
+    el["account-label"].textContent = session.accountDisplayName || `${session.accountName}${session.role === "owner" ? "（管理者）" : ""}`;
     document.body.classList.toggle("is-owner", session.role === "owner");
     document.querySelectorAll(".owner-only").forEach((node) => { node.hidden = session.role !== "owner"; });
     const result = await api("/accounts");
@@ -220,7 +220,7 @@
     const options = state.accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.displayName)}</option>`).join("");
     [el["account-select"], el["entry-account"]].forEach((select) => { select.innerHTML = options; });
     const ownerOption = state.session.role === "owner"
-      ? `<option value="${escapeHtml(state.session.accountId)}">${escapeHtml(state.session.accountName)}</option>`
+      ? `<option value="${escapeHtml(state.session.accountId)}">${escapeHtml(state.session.accountDisplayName || state.session.accountName)}</option>`
       : "";
     el["logs-account-filter"].innerHTML = `<option value="">全体</option>${ownerOption}${options}`;
     if (state.session.role === "owner") {

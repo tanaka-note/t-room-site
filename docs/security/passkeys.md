@@ -9,6 +9,10 @@ Security Centerは「誰か」を表すIdentity、パスキー、招待、承認
 Security Centerの現在ログイン中表示は監査時刻から推測せず、`security_active_sessions`へHMAC済みsession識別子、開始・最終確認・期限、service、version、passkey epochだけを保持する。生のcookie／token／session IDは保存しない。表示時には各Workerのruntime versionとlocal switch、Securityのglobal epoch、Identity・credential・service linkの現在状態を再検証し、ログアウト・期限切れ・各失効条件を反映する。一意にIdentityを解決できないPW sessionは別ユーザーへ推測で結び付けない。
 開始日時は署名済みsessionのstartedAt（SecurityはauthenticatedAt）または同一sessionの成功ログイン発生時刻を根拠とし、再アクセスでは正常値を上書きしない。開始不明はNOT NULLのstarted_atへ空文字で保存し、APIはnull、画面は「不明」とする。0016 migrationはepoch・不正・空値だけを対象に、session hash・Identity・service・認証方式が一致する矛盾のない成功ログイン監査から復元する。根拠がない値を現在時刻や最終アクセスで埋めず、監査・期限・失効状態は変更しない。
 
+アカウントの画面用名称は `assets/account-display.mjs` で本人Identity・service・account ID・roleから解決する。田中宏知のメイン管理は「田中宏知（オーナー）」、日記main-userと本人のT-Cloud folder-member利用は「田中宏知（一般ユーザー）」とする。日記のaccountName・投稿者／編集者・世帯切替、T-Cloudのfolder表示名／path／scopeは正本のまま維持し、画面用名称を流用しない。監査の名称は当時のaccountとroleで表示時に解決し、権限不明や旧subadmin利用を現在のIdentity名からオーナー扱いしない。監査原本は更新しない。
+
+0017 migrationは対象IDと旧名称を限定した表示用データ補正で、再実行可能。2026-09-09の読み取り調査ではIdentity 2件、オーナー用連携5件が対象。本人の旧一般用Identityは既存main-user連携を確認して更新する。Atsushiなどfolderラベル、日記・請求書の氏名データは対象外。AI accountは調査時0件で、今後の登録と既存session応答は表示関数を通す。公開時はSecurityの0017と6 Worker（Security / Cloud / Diary / Billing / AI / Downloader）を対象にする。
+
 既存PWは移行中もすべて維持する。第一管理者PWは、パスキー紛失時に管理者パスキーとT-Cloud鍵envelopeを復旧登録する恒久経路であり、パスキー登録を理由に無効化・変更・削除しない。Security Workerの`PASSKEY_ENABLED=false`は全パスキーsessionをepochで失効するグローバル緊急停止、各サービスWorkerの同名設定はそのサービスだけをfail-closedにするローカル停止として分離し、どちらもPW経路へ影響させない。
 
 CloudflareのSecret変更とD1更新は単一トランザクションにできないため、グローバル緊急停止は必ず`security-worker`で`pnpm run passkeys:disable`を使用する。このコマンドはD1のepoch更新とpersistent runtime gate停止を同じSQL文で原子的に確定してから、Secret bindingの`PASSKEY_ENABLED=false`を反映する。Secretの反映前でもruntime gateが新規パスキーsession発行を拒否するため、停止中のアクセスが0件の場合と停止処理中の認証競合のどちらでも旧sessionは復活しない。Secret反映に失敗してもruntime gateは停止したままとし、自動的に有効へ戻さない。エラー時は`passkeys:enable`を実行せず、`passkeys:disable`を再実行して停止を完了する。

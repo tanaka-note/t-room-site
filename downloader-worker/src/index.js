@@ -1,3 +1,4 @@
+import { accountDisplayName } from "../../assets/account-display.mjs";
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
 import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound, markEgressResponse, safeAnalysisDiagnostic, normalizeRequestContext } from "./main-video.js";
@@ -293,7 +294,7 @@ async function handleRequest(request, env, context) {
   scheduleUsage(context, safeRecordUsageItems(env, session.identityId, [{ metric: "platform", dimension: "worker_request", count: 1 }]));
   if (path === "/api/session" && request.method === "GET") {
     scheduleAudit(context, audit(env, request, session, "session_resume", "success"));
-    return json({ authenticated: true, isParent: isParentUsageSession(session, SESSION_ROLE), user: { displayName: session.displayName, role: SESSION_ROLE } });
+    return json({ authenticated: true, isParent: isParentUsageSession(session, SESSION_ROLE), user: { displayName: accountDisplayName({ service: "downloader", identityId: session.identityId, accountId: session.serviceAccountId, role: SESSION_ROLE }, session.displayName), role: SESSION_ROLE } });
   }
   if (path === "/api/logout" && request.method === "POST") {
     requireMutation(request, url);
@@ -368,7 +369,7 @@ async function completePasskeyHandoff(request, env, url) {
   const token = await signSession(payload, env);
   await audit(env, request, payload, "passkey_login_success", "success");
   await safeRecordUsageItems(env, payload.identityId, [{ metric: "platform", dimension: "worker_request", count: 1 }]);
-  return json({ authenticated: true, displayName: payload.displayName, isParent: isParentUsageSession(payload, SESSION_ROLE) }, 200, {
+  return json({ authenticated: true, displayName: accountDisplayName({ service: "downloader", identityId: payload.identityId, accountId: payload.serviceAccountId, role: SESSION_ROLE }, payload.displayName), isParent: isParentUsageSession(payload, SESSION_ROLE) }, 200, {
     "Set-Cookie": sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, policy, url.protocol === "https:")
   });
 }

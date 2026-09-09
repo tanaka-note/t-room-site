@@ -1,3 +1,4 @@
+import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
 import { readDefinitionStatus, runDefinitionSchedule } from "./definition-status.js";
 import { cleanupDisabledIdentities } from "./identity-cleanup.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -282,7 +283,7 @@ async function bootstrapOptions(request, env) {
   }
   await ensurePrimaryAdminRecords(env);
   const existing = await env.DB.prepare("SELECT credential_id AS id, transports_json AS transports FROM security_credentials WHERE identity_id = ? AND status != 'revoked'").bind(PRIMARY_ADMIN_ID).all();
-  const options = await registrationOptions(env, PRIMARY_ADMIN_ID, "第一管理者", (existing.results || []).map((row) => ({ id: row.id, transports: parseJson(row.transports, []) })));
+  const options = await registrationOptions(env, PRIMARY_ADMIN_ID, OWNER_DISPLAY_NAME, (existing.results || []).map((row) => ({ id: row.id, transports: parseJson(row.transports, []) })));
   const challengeId = await storeChallenge(env, "bootstrap_registration", options.challenge, PRIMARY_ADMIN_ID, null, null);
   await writeLocalAudit(env, { eventType: "bootstrap_auth_success", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "password", serviceAccountId: "admin" }, request);
   return json({ challengeId, options });
@@ -324,7 +325,7 @@ async function invitationOptions(request, env) {
   const options = await registrationOptions(env, identity.id, identity.display_name, (existing.results || []).map((row) => ({ id: row.id, transports: parseJson(row.transports, []) })));
   const challengeId = await storeChallenge(env, "invite_registration", options.challenge, identity.id, invitation.id, null);
   const cloudLinks = await env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(identity.id).all();
-  return json({ challengeId, identity: { id: identity.id, displayName: identity.display_name }, options, cloudLinks: (cloudLinks.results || []).map((link) => ({ id: link.id, accountId: link.service_account_id, rootFolderId: link.cloud_root_folder_id })) });
+  return json({ challengeId, identity: { id: identity.id, displayName: identityDisplayName(identity.id, identity.display_name) }, options, cloudLinks: (cloudLinks.results || []).map((link) => ({ id: link.id, accountId: link.service_account_id, rootFolderId: link.cloud_root_folder_id })) });
 }
 
 async function invitationVerify(request, env, url) {
@@ -786,7 +787,7 @@ async function activeSessionState(env, identityId = null) {
   for (const row of validRows) {
     let user = users.find((item) => item.identityId === row.identity_id);
     if (!user) {
-      user = { identityId: row.identity_id, displayName: row.display_name, services: [] };
+      user = { identityId: row.identity_id, displayName: identityDisplayName(row.id || row.identity_id, row.display_name), services: [] };
       users.push(user);
     }
     if (!user.services.includes(row.service)) user.services.push(row.service);
@@ -814,7 +815,7 @@ async function listAiBudgets(env) {
   for (const row of rows.results || []) {
     let usage = null;
     try { usage = await env.AI_AUTH?.getUsageSummary(row.identity_id); } catch { /* policy remains manageable during an AI outage */ }
-    policies.push({ ...publicAiBudgetPolicy(row), displayName: row.display_name, identityStatus: row.status, usage });
+    policies.push({ ...publicAiBudgetPolicy(row), displayName: identityDisplayName(row.id || row.identity_id, row.display_name), identityStatus: row.status, usage });
   }
   return json({ policies });
 }
@@ -917,11 +918,11 @@ async function listIdentities(env, includeDisabled = false) {
       WHERE i.status = 'disabled'
       ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all() : Promise.resolve({ results: [] })
   ]);
-  const mapIdentity = (row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null });
+  const mapIdentity = (row) => ({ id: row.id, displayName: identityDisplayName(row.id || row.identity_id, row.display_name), status: row.status, isSecurityAdmin: Boolean(row.is_security_admin), lastLoginAt: normalizeUtcTimestamp(row.last_login_at), lastSeenAt: normalizeUtcTimestamp(row.last_seen_at), activeCredentials: Number(row.activeCredentials || 0), pendingCredentials: Number(row.pendingCredentials || 0), inviteExpiresAt: row.inviteExpiresAt ? Number(row.inviteExpiresAt) : null });
   return json({
     identities: (result.results || []).map(mapIdentity),
     pendingIdentities: (pendingResult.results || []).map(mapIdentity),
-    auditIdentities: (auditIdentityResult.results || []).map((row) => ({ id: row.id, displayName: row.display_name, status: row.status, isSecurityAdmin: Boolean(row.is_security_admin) }))
+    auditIdentities: (auditIdentityResult.results || []).map((row) => ({ id: row.id, displayName: identityDisplayName(row.id || row.identity_id, row.display_name), status: row.status, isSecurityAdmin: Boolean(row.is_security_admin) }))
   });
 }
 
@@ -954,6 +955,7 @@ async function identityDetail(id, env) {
     linkDetails.push({
       ...withUtcTimes(link),
       display_label: normalizeText(description?.displayLabel, 160) || link.display_label,
+      account_display_name: accountDisplayName({ service: link.service, identityId: link.identity_id, accountId: link.service_account_id, role: description?.role }, null),
       role: normalizeText(description?.role, 80) || null,
       role_label: normalizeText(description?.roleLabel, 80) || null,
       protected: isPrimaryAdminCoreLink(link),
@@ -993,7 +995,7 @@ async function identityDetail(id, env) {
   const firstCandidate = approvalCandidates[0] || null;
   const sessionState = await activeSessionState(env, id);
   return json({
-    identity: { id: identity.id, displayName: identity.display_name, status: identity.status, isSecurityAdmin: Boolean(identity.is_security_admin), lastLoginAt: normalizeUtcTimestamp(identity.last_login_at), lastSeenAt: normalizeUtcTimestamp(identity.last_seen_at) },
+    identity: { id: identity.id, displayName: identityDisplayName(identity.id, identity.display_name), status: identity.status, isSecurityAdmin: Boolean(identity.is_security_admin), lastLoginAt: normalizeUtcTimestamp(identity.last_login_at), lastSeenAt: normalizeUtcTimestamp(identity.last_seen_at) },
     links: linkDetails,
     credentials: credentialRows.map((row) => ({ ...withUtcTimes(row), backed_up: Boolean(row.backed_up), prf_enabled: Boolean(row.prf_enabled) })),
     pendingCredentialId: firstCandidate?.credentialId || null,
@@ -1300,7 +1302,7 @@ async function listAuditEvents(url, env) {
   const hasMore = rows.length > AUDIT_PAGE_SIZE;
   const page = rows.slice(0, AUDIT_PAGE_SIZE);
   return json({
-    events: page.map(withUtcTimes),
+    events: page.map((row) => ({ ...withUtcTimes(row), ...auditDisplayNames(row) })),
     nextCursor: hasMore && page.length ? encodeAuditCursor(page.at(-1)) : null
   });
 }
@@ -1570,14 +1572,14 @@ function assertUniqueServiceLinks(links) {
 
 async function ensurePrimaryAdminRecords(env) {
   await env.DB.prepare(`INSERT INTO security_identities (id, display_name, status, is_security_admin)
-    VALUES (?, '第一管理者', 'invited', 1) ON CONFLICT(id) DO NOTHING`).bind(PRIMARY_ADMIN_ID).run();
+    VALUES (?, ?, 'invited', 1) ON CONFLICT(id) DO NOTHING`).bind(PRIMARY_ADMIN_ID, OWNER_DISPLAY_NAME).run();
   const defaults = [
-    { service: "cloud", accountId: "admin", rootFolderId: null, displayLabel: "T-Cloud 管理者" },
-    { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: "日記 管理者" },
+    { service: "cloud", accountId: "admin", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
+    { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
     { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
-    { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: "請求書 owner" },
-    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: "AI Chat By T-lain" },
-    { service: "downloader", accountId: "owner", rootFolderId: null, displayLabel: "T-lain Downloader 管理者" }
+    { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
+    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
+    { service: "downloader", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME }
   ];
   for (const link of defaults) {
     const existing = await env.DB.prepare(`SELECT id FROM security_service_links
@@ -2002,6 +2004,7 @@ async function publicLink(env, row) {
     accountId: row.service_account_id,
     rootFolderId: row.cloud_root_folder_id == null ? null : Number(row.cloud_root_folder_id),
     displayLabel: normalizeText(description?.displayLabel, 160) || row.display_label,
+    accountDisplayName: accountDisplayName({ service: row.service, identityId: row.identity_id, accountId: row.service_account_id, role: description?.role }, null),
     role: normalizeText(description?.role, 80) || null,
     roleLabel: normalizeText(description?.roleLabel, 80) || null,
     scopeLabel: normalizeText(description?.scopeLabel, 200) || null

@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-3b193eb38356";
+const APP_BUILD_ID = "cloud-7ab73fa63541";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -978,7 +978,7 @@ function requirePasskeyPrf(authentication) {
 async function choosePasskeyLink(links) {
   const dialogLinks = links.map((link) => ({
     ...link,
-    displayLabel: link.accountId === "admin" ? "管理者" : link.displayLabel,
+    displayLabel: link.accountDisplayName || link.displayLabel,
     roleLabel: link.accountId === "admin" ? "T-Cloud全体を管理" : `${link.displayLabel}フォルダーを利用`,
     scopeLabel: null
   }));
@@ -2312,7 +2312,7 @@ function syncAccountIdentity() {
   const permissionText = state.session?.role === "admin" ? "すべての操作が可能" : "";
   const unlockedNames = [...state.unlockedTopFolderNames.values()];
   const accountText = state.session?.role === "admin"
-    ? "管理者"
+    ? state.session.accountName
     : state.session?.role === "member"
       ? state.session.accountName
       : (unlockedNames.length ? unlockedNames.join("\n") : "未ログイン");

@@ -158,7 +158,7 @@
 
   function identityLabel(identityId, displayName, serviceAccountId, role) {
     const id = String(identityId || "").trim();
-    if (id === "primary-admin") return "第一管理者";
+    if (id === "primary-admin") return "田中宏知（オーナー）";
     if (displayName) return String(displayName);
     if (role) return roleLabel(role);
     if (serviceAccountId === "main-admin") return "管理者";

@@ -1,3 +1,4 @@
+import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { splitSearchTerms } from "../public/diary-search.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -67,7 +68,7 @@ function securityLinkTarget(account) {
   const roleLabel = ordinaryUser ? "一般ユーザー" : (account.isGlobalOwner ? "管理者・全体管理" : "管理者");
   return {
     accountId: account.id,
-    displayLabel: `${account.name}（${roleLabel}）`,
+    displayLabel: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${roleLabel}）`),
     role: ordinaryUser ? "user" : account.role,
     roleLabel,
     householdId: account.householdId,
@@ -158,6 +159,7 @@ async function handleApi(request, env, url, path, context) {
       authenticated: Boolean(session),
       role: session?.role || null,
       accountName: session?.accountName || null,
+      accountDisplayName: session ? accountDisplayName({ service: "diary", accountId: session.accountId, role: securityAuditRole(session) }, `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`) : null,
       loginId: session?.loginId || null,
       householdId: session?.householdId || null,
       activeHouseholdId: session?.activeHouseholdId || null,
@@ -234,6 +236,7 @@ async function handleApi(request, env, url, path, context) {
       authenticated: true,
       role: account.role,
       accountName: account.name,
+      accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`),
       loginId: accountLoginId(account, env),
       householdId: account.householdId,
       activeHouseholdId: account.householdId,
@@ -268,7 +271,7 @@ async function handleApi(request, env, url, path, context) {
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
     await recordSecurityAudit(env, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: diarySessionVersion(env, account.sessionVersion), passkeySessionEpoch: handoff.sessionEpoch });
-    return json({ authenticated: true, role: account.role, accountName: account.name, loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
+    return json({ authenticated: true, role: account.role, accountName: account.name, accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`), loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -2286,6 +2289,7 @@ async function changeInitialPassword(request, env, session, url) {
     authenticated: true,
     role: account.role,
     accountName: account.name,
+    accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`),
     loginId: account.loginId,
     householdId: account.householdId,
     activeHouseholdId: account.householdId,

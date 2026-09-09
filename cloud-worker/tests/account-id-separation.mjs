@@ -30,7 +30,7 @@ const context = vm.createContext({ state, $: (selector) => {
 const start = client.indexOf("function syncAccountIdentity()");
 vm.runInContext(client.slice(start, client.indexOf("\n}", start) + 2), context);
 for (const [session, expected] of [
-  [{ role: "admin" }, "管理者"],
+  [{ role: "admin", accountName: "田中宏知（オーナー）" }, "田中宏知（オーナー）"],
   [{ role: "member", accountName: "Atsushi" }, "Atsushi"],
   [{ role: "member", accountName: "一般利用者のフォルダー" }, "一般利用者のフォルダー"],
   [{ role: "subadmin" }, "未ログイン"]
