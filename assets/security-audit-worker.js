@@ -50,6 +50,7 @@ export async function buildSecurityAuditEvent(request, input, auditSalt = "local
     authMethod: input.authMethod || null,
     credentialId: input.credentialId || null,
     expiresAt: Number.isSafeInteger(Number(input.expiresAt)) ? Number(input.expiresAt) : null,
+    startedAt: input.startedAt ?? null,
     sessionVersion: input.sessionVersion == null ? null : String(input.sessionVersion).slice(0, 80),
     passkeySessionEpoch: Number.isSafeInteger(Number(input.passkeySessionEpoch)) ? Number(input.passkeySessionEpoch) : null,
     sessionIdHash: input.sessionId ? await hmac(input.sessionId, auditSalt) : null,

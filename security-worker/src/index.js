@@ -799,7 +799,7 @@ function publicActiveSession(row) {
     authMethod: row.auth_method,
     serviceAccountId: row.service_account_id || null,
     role: row.role || null,
-    startedAt: normalizeUtcTimestamp(row.started_at),
+    startedAt: validSessionStart(normalizeUtcTimestamp(row.started_at)) || null,
     lastSeenAt: normalizeUtcTimestamp(row.last_seen_at),
     expiresAt: new Date(Number(row.expires_at) * 1000).toISOString()
   };
@@ -1830,7 +1830,8 @@ async function recordSecuritySessionResume(env, request, session) {
     authMethod: "passkey",
     credentialId: session.credentialId,
     expiresAt: Number(session.exp),
-    startedAt: new Date(Number(session.authenticatedAt || nowSeconds()) * 1000).toISOString(),
+    startedAt: Number.isSafeInteger(session.authenticatedAt) && session.authenticatedAt > 0
+      ? new Date(session.authenticatedAt * 1000).toISOString() : null,
     sessionVersion: "security-1",
     passkeySessionEpoch: Number(session.passkeySessionEpoch),
     sessionIdHash: await hmac(identifier, env.AUDIT_IP_SALT || env.SESSION_SECRET || "local-audit"),
@@ -1905,7 +1906,8 @@ function activeSessionStatements(env, event) {
   if (event.eventType === "logout") return [endActiveSessionsStatement(env, "logout", { sessionIdHash: event.sessionIdHash })];
   if (!ACTIVE_SESSION_START_EVENTS.has(event.eventType) && event.eventType !== "session_resume") return [];
   if (!event.identityId || !event.authMethod || !Number.isSafeInteger(event.expiresAt) || event.expiresAt <= nowSeconds() || !event.sessionVersion) return [];
-  const startedAt = validIso(event.startedAt) || event.occurredAt;
+  // NOT NULL storage uses an empty string for unknown starts; a resume is not a login.
+  const startedAt = validSessionStart(event.startedAt);
   return [env.DB.prepare(`INSERT INTO security_active_sessions
     (session_id_hash, identity_id, service, service_link_id, service_account_id, credential_id, role,
       auth_method, session_version, passkey_session_epoch, started_at, last_seen_at, expires_at)
@@ -1918,6 +1920,10 @@ function activeSessionStatements(env, event) {
       role = COALESCE(excluded.role, security_active_sessions.role), auth_method = excluded.auth_method,
       session_version = excluded.session_version,
       passkey_session_epoch = COALESCE(excluded.passkey_session_epoch, security_active_sessions.passkey_session_epoch),
+      started_at = CASE WHEN COALESCE(julianday(security_active_sessions.started_at), 0) <= 2440587.5
+        AND security_active_sessions.identity_id = excluded.identity_id
+        AND security_active_sessions.service = excluded.service
+        THEN excluded.started_at ELSE security_active_sessions.started_at END,
       last_seen_at = excluded.last_seen_at, expires_at = excluded.expires_at,
       ended_at = NULL, end_reason = NULL, updated_at = CURRENT_TIMESTAMP`)
     .bind(event.sessionIdHash, event.identityId, event.service, event.serviceLinkId, event.serviceAccountId,
@@ -1950,7 +1956,8 @@ function normalizeAuditEvent(input) {
     role: normalizeText(input?.role, 80) || null, authMethod,
     credentialId: validCredentialId(input?.credentialId) || null,
     expiresAt: Number.isSafeInteger(Number(input?.expiresAt)) ? Number(input.expiresAt) : null,
-    startedAt: validIso(input?.startedAt) || null,
+    startedAt: validSessionStart(input?.startedAt)
+      || (outcome === "success" && ACTIVE_SESSION_START_EVENTS.has(input?.eventType) ? validSessionStart(input?.occurredAt) : "") || null,
     sessionVersion: normalizeText(input?.sessionVersion, 80) || null,
     passkeySessionEpoch: Number.isSafeInteger(Number(input?.passkeySessionEpoch)) ? Number(input.passkeySessionEpoch) : null,
     sessionIdHash: normalizeSecretText(input?.sessionIdHash, 128) || null, sourceHash: normalizeSecretText(input?.sourceHash, 128) || null,
@@ -2023,7 +2030,8 @@ function normalizeAuthService(value) { return normalizeAuditService(value); }
 function normalizeId(value) { const text = String(value || "").trim(); return /^[A-Za-z0-9_-]{1,128}$/.test(text) ? text : ""; }
 function normalizeText(value, max) { return typeof value === "string" ? value.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, max) : ""; }
 function normalizeSecretText(value, max) { const text = typeof value === "string" ? value.trim() : ""; return text.length <= max ? text : ""; }
-function validIso(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : date.toISOString(); }
+function validIso(value) { if (typeof value !== "string" || !value.trim()) return ""; const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : date.toISOString(); }
+function validSessionStart(value) { const iso = validIso(value); return iso && Date.parse(iso) > 0 ? iso : ""; }
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
 function clampNumber(value, min, max, fallback) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback; }
 function integerRange(value, min, max) { const number = Number(value); return Number.isInteger(number) && number >= min && number <= max ? number : 0; }

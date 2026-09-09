@@ -663,7 +663,7 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
-    startedAt: auth.startedAt || new Date().toISOString(),
+    startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
     exp: Math.floor(Date.now() / 1000) + maxAge
   };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));

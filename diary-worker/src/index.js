@@ -2186,7 +2186,7 @@ async function createSessionToken(account, policy, env, activeHouseholdId = acco
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
-    startedAt: auth.startedAt || new Date().toISOString(),
+    startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
     exp: sessionExpiresAt(Math.floor(Date.now() / 1000), policy, auth.expiresAt),
     version: String(env.SESSION_VERSION || "1")
   };

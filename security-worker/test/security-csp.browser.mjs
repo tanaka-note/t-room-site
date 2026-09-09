@@ -133,7 +133,7 @@ const server = createServer(async (request, response) => {
     identity: { id: "detail-ui-user", displayName: "詳細UIテスト", status: "pending_approval", isSecurityAdmin: false },
     sessions: [
       { service: "cloud", available: true, loggedIn: false, sessions: [] },
-      { service: "diary", available: true, loggedIn: true, sessions: [{ authMethod: "passkey", serviceAccountId: "main-user", role: "user", startedAt: "2026-08-30T01:00:00.000Z", lastSeenAt: "2026-08-30T01:05:00.000Z", expiresAt: "2026-08-30T13:00:00.000Z" }] },
+      { service: "diary", available: true, loggedIn: true, sessions: [{ authMethod: "passkey", serviceAccountId: "main-user", role: "user", startedAt: null, lastSeenAt: "2026-08-30T01:05:00.000Z", expiresAt: "2026-08-30T13:00:00.000Z" }] },
       { service: "billing", available: true, loggedIn: false, sessions: [] },
       { service: "ai", available: true, loggedIn: false, sessions: [] }
     ],
@@ -721,6 +721,11 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(detailText, /期限切れ/);
     assert.match(detailText, /期限情報を取得できません/);
     assert.doesNotMatch(detailText, /1970|Invalid Date/);
+    assert.match(detailText, /ログイン開始 不明/);
+    await unsupported.setViewportSize({ width: 390, height: 844 });
+    assert.match(await unsupported.locator("#identity-detail").textContent(), /ログイン開始 不明/);
+    assert.equal(await unsupported.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await unsupported.setViewportSize({ width: 1280, height: 900 });
     assert.match(await unsupported.locator("#identity-detail .invitation").first().textContent(), /有効/,
       `${name}: currently active invitations are listed before history`);
     const identityHistory = unsupported.locator("#identity-detail details.identity-history");

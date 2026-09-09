@@ -454,7 +454,7 @@
     const loginStates = (data.sessions || []).map((item) => {
       const latest = item.sessions?.[0];
       const stateLabel = item.available === false ? "状態を確認できません" : item.loggedIn ? "ログイン中" : "未ログイン";
-      return `<div class="session-status ${item.loggedIn ? "session-active" : ""}"><div><strong>${escapeHtml(display.serviceLabel(item.service))}</strong><span>${escapeHtml(stateLabel)}</span></div>${latest ? `<small>ログイン開始 ${escapeHtml(formatDate(latest.startedAt))}<br>最終アクセス ${escapeHtml(formatDate(latest.lastSeenAt))}<br>有効期限 ${escapeHtml(formatDate(latest.expiresAt))}</small>` : ""}</div>`;
+      return `<div class="session-status ${item.loggedIn ? "session-active" : ""}"><div><strong>${escapeHtml(display.serviceLabel(item.service))}</strong><span>${escapeHtml(stateLabel)}</span></div>${latest ? `<small>ログイン開始 ${escapeHtml(latest.startedAt ? formatDate(latest.startedAt) : "不明")}<br>最終アクセス ${escapeHtml(formatDate(latest.lastSeenAt))}<br>有効期限 ${escapeHtml(formatDate(latest.expiresAt))}</small>` : ""}</div>`;
     }).join("");
     const approvals = (data.approvalCandidates || []).map((item) => {
       const cloudStatus = !item.hasCloudLinks ? ""
