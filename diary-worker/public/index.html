@@ -6,8 +6,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-0c06ba355a7e">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-0c06ba355a7e">
+  <meta name="troom-app-build" content="diary-b4d15c42d8e8">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-b4d15c42d8e8">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -15,11 +15,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-0c06ba355a7e">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-b4d15c42d8e8">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-0c06ba355a7e">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-0c06ba355a7e">
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-b4d15c42d8e8">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-b4d15c42d8e8">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -193,11 +193,14 @@
                 <p class="section-kicker">Tags</p>
                 <h2>#から見る</h2>
               </div>
-              <a id="tag-directory-link" class="tag-directory-link" href="/diary/tags/" aria-label="タグ一覧ページを開く" title="タグ一覧ページを開く">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path>
-                </svg>
-              </a>
+              <div class="tag-panel-actions">
+                <span id="tag-total-count" class="tag-total-count" aria-live="polite">タグ数 0</span>
+                <a id="tag-directory-link" class="tag-directory-link" href="/diary/tags/" aria-label="タグ一覧ページを開く" title="タグ一覧ページを開く">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path>
+                  </svg>
+                </a>
+              </div>
             </div>
             <label class="tag-search" for="tag-search-input">
               <span class="visually-hidden">タグを検索</span>
@@ -516,9 +519,9 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-0c06ba355a7e" defer></script>
-  <script src="/diary/troom-date-picker.js?v=diary-0c06ba355a7e" defer></script>
-  <script src="/security/passkey-client.js?v=diary-0c06ba355a7e" defer></script>
-  <script src="/diary/diary.js?v=diary-0c06ba355a7e" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-b4d15c42d8e8" defer></script>
+  <script src="/diary/troom-date-picker.js?v=diary-b4d15c42d8e8" defer></script>
+  <script src="/security/passkey-client.js?v=diary-b4d15c42d8e8" defer></script>
+  <script src="/diary/diary.js?v=diary-b4d15c42d8e8" defer></script>
 </body>
 </html>

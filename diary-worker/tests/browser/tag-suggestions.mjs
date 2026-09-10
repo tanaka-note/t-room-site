@@ -61,7 +61,7 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/assets/pwa-auto-update.js") return sendFile(response, updaterPath);
   if (url.pathname === "/security/passkey-client.js") return sendFile(response, passkeyClientPath);
 
-  const relativePath = url.pathname === "/diary/" ? "index.html" : url.pathname.replace(/^\/diary\//, "");
+  const relativePath = ["/diary/", "/diary/tags/"].includes(url.pathname) ? "index.html" : url.pathname.replace(/^\/diary\//, "");
   const target = resolve(publicRoot, relativePath);
   if (!target.startsWith(`${publicRoot}${sep}`) && target !== publicRoot) return response.writeHead(404).end();
   try {
@@ -152,6 +152,32 @@ async function run(browserType, name, executablePath) {
     const page = await context.newPage();
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${origin}/diary/`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#app-view:not([hidden])");
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.equal(await page.locator("#tag-total-count").textContent(), `タグ数 ${tags.length}`);
+      const geometry = await page.locator(".tag-panel-head").evaluate((head) => {
+        const count = head.querySelector("#tag-total-count").getBoundingClientRect();
+        const link = head.querySelector("#tag-directory-link").getBoundingClientRect();
+        const group = head.querySelector(".tag-panel-actions").getBoundingClientRect();
+        return { countRight: count.right, linkLeft: link.left, linkRight: link.right,
+          groupRight: group.right, headRight: head.getBoundingClientRect().right };
+      });
+      assert.ok(geometry.countRight <= geometry.linkLeft, `${name}/${width}: count stays left of expand link without overlap`);
+      assert.ok(Math.abs(geometry.linkRight - geometry.groupRight) < 1);
+      assert.ok(Math.abs(geometry.groupRight - geometry.headRight) < 1, `${name}/${width}: actions align right`);
+    }
+    await page.fill("#tag-search-input", "ふゆ");
+    assert.equal(await page.locator("#tag-list a").count(), 1);
+    assert.equal(await page.locator("#tag-total-count").textContent(), `タグ数 ${tags.length}`);
+    await page.click("#tag-directory-link");
+    await page.waitForURL("**/diary/tags/");
+    await page.waitForSelector("#app-view:not([hidden])");
+    assert.equal(await page.locator("#tag-directory-link").isHidden(), true);
+    assert.equal(await page.locator("#tag-total-count").isVisible(), true);
+    assert.equal(await page.locator("#tag-total-count").textContent(), `タグ数 ${tags.length}`);
+    await page.setViewportSize({ width: 390, height: 844 });
     await openEditor(page);
 
     await page.locator("#editor-dialog").evaluate((dialog) => {
@@ -282,7 +308,7 @@ try {
   if (!chromiumPath || !firefoxPath) throw new Error("Chromium/Firefox executable is required.");
   await run(chromium, "Chromium", chromiumPath);
   await run(firefox, "Firefox", firefoxPath);
-  process.stdout.write("Diary tag suggestions passed in Chromium and Firefox.\n");
+  process.stdout.write("Diary tag totals, responsive header, directory and suggestions passed in Chromium and Firefox.\n");
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));
 }

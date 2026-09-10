@@ -560,9 +560,26 @@ button {
 
 .tag-panel-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.tag-panel-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 10px;
+  margin-left: auto;
+  min-height: 40px;
+}
+
+.tag-total-count {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .tag-directory-link {

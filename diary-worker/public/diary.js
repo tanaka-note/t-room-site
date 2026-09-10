@@ -180,6 +180,7 @@
     archivePanel: document.querySelector("#archive-panel"),
     tagPanel: document.querySelector("#tag-panel"),
     tagList: document.querySelector("#tag-list"),
+    tagTotalCount: document.querySelector("#tag-total-count"),
     tagSearchInput: document.querySelector("#tag-search-input"),
     tagDirectoryLink: document.querySelector("#tag-directory-link"),
     tagMore: document.querySelector("#tag-more-button"),
@@ -1200,6 +1201,7 @@
 
   function renderTags(tags) {
     state.availableTags = [...tags];
+    elements.tagTotalCount.textContent = `タグ数 ${state.availableTags.length}`;
     const filteredTags = state.tagQuery
       ? tags.filter((item) => String(item.value || "").normalize("NFKC").toLocaleLowerCase("ja-JP").includes(state.tagQuery))
       : tags;
