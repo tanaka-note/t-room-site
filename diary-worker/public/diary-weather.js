@@ -13,11 +13,12 @@ export function createUnsetWeatherIcon() {
   svg.setAttribute("viewBox", "0 0 32 32");
   svg.setAttribute("aria-hidden", "true");
   for (const [d, fill] of [
-    ["m4 19 13-14a3 3 0 0 1 4 0l7 7a3 3 0 0 1 0 4L17 28H11l-7-5a3 3 0 0 1 0-4Z", "#cbd5e1"],
-    ["m4 19 6-6 14 12-3 3H11l-7-5a3 3 0 0 1 0-4Z", "#f1f5f9"]
+    ["M5 18 18 5a2 2 0 0 1 3 0l7 7a2 2 0 0 1 0 3L15 28H12l-7-7a2 2 0 0 1 0-3Z", "#94a3b8"],
+    ["m5 18 5-5 10 10-5 5h-3l-7-7a2 2 0 0 1 0-3Z", "#f1f5f9"],
+    ["M18 28h11", "none"]
   ]) {
     const path = document.createElementNS(svg.namespaceURI, "path");
-    for (const [key, value] of Object.entries({ d, fill, stroke: "#64748b", "stroke-width": "1.5", "stroke-linejoin": "round" })) path.setAttribute(key, value);
+    for (const [key, value] of Object.entries({ d, fill, stroke: "#475569", "stroke-width": "1.8", "stroke-linejoin": "round", "stroke-linecap": "round" })) path.setAttribute(key, value);
     svg.append(path);
   }
   icon.append(svg);
@@ -69,12 +70,10 @@ export function createWeatherIcon(weather) {
     shape("path", { d: "m17 17-6 8h5l-2 6 10-11h-6l3-3Z", fill: "#facc15", stroke: "#a16207", "stroke-width": 1 });
   }
   if (weather === "snow") {
-    shape("circle", { cx: 16, cy: 23, r: 8, fill: "#effaff", stroke: "#38bdf8", "stroke-width": 1.5 });
-    shape("circle", { cx: 16, cy: 11, r: 6, fill: "#fff", stroke: "#38bdf8", "stroke-width": 1.5 });
-    shape("path", { d: "M10 5h12M12 5V1h8v4", fill: "#475569", stroke: "#475569", "stroke-width": 2 });
-    shape("path", { d: "M11 17h10v3h-4v5h-3v-5h-3Z", fill: "#38bdf8" });
-    for (const [cx, cy] of [[14, 10], [19, 10], [16, 25], [16, 28]]) shape("circle", { cx, cy, r: 1, fill: "#334155" });
-    shape("path", { d: "m16 12 6 1-6 2Z", fill: "#f97316" });
+    shape("circle", { cx: 16, cy: 22, r: 8.5, fill: "#fff", stroke: "#7dd3fc", "stroke-width": 1.5 });
+    shape("circle", { cx: 16, cy: 9, r: 6, fill: "#fff", stroke: "#7dd3fc", "stroke-width": 1.5 });
+    for (const [cx, cy] of [[14, 8.5], [18, 8.5], [16, 21], [16, 25]]) shape("circle", { cx, cy, r: 1, fill: "#334155" });
+    shape("path", { d: "m16 10 4 1-4 2Z", fill: "#f97316" });
   }
   icon.append(svg);
   return icon;

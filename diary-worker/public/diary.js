@@ -3129,10 +3129,11 @@
       option.dataset.weather = id;
       option.setAttribute("role", "menuitemradio");
       option.setAttribute("aria-checked", "false");
+      option.setAttribute("aria-label", label);
+      option.title = label;
       option.tabIndex = -1;
       const icon = createWeatherIcon(id) || createUnsetWeatherIcon();
       if (icon) { icon.setAttribute("aria-hidden", "true"); option.append(icon); }
-      option.append(document.createTextNode(label));
       option.addEventListener("click", () => {
         state.editorWeather = id || null;
         renderWeatherButton();
@@ -3152,13 +3153,14 @@
         event.preventDefault();
         event.stopPropagation();
         closeWeatherMenu();
-      } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      } else if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
         event.preventDefault();
         if (elements.weatherMenu.hidden) return open();
         const options = [...elements.weatherMenu.children];
         const current = options.indexOf(document.activeElement);
+        const step = { ArrowDown: 3, ArrowUp: -3, ArrowRight: 1, ArrowLeft: -1 }[event.key] || 0;
         const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
-          : (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+          : (current + step + options.length) % options.length;
         options[next].focus();
       } else if (event.key === "Tab") closeWeatherMenu(false);
     });

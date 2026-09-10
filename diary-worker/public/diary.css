@@ -1251,13 +1251,17 @@ button:disabled {
   color: var(--ink);
   box-shadow: 0 8px 24px #27313b24;
 }
+.weather-menu:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(44px, 1fr));
+  gap: 4px;
+}
 .weather-menu button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: grid;
+  place-items: center;
   width: 100%;
-  min-height: 40px;
-  padding: 6px 10px;
+  min-height: 44px;
+  padding: 6px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -1269,6 +1273,7 @@ button:disabled {
 .weather-pictogram { display: inline-flex; width: 1.25em; height: 1.25em; flex: 0 0 1.25em; vertical-align: middle; }
 .weather-pictogram svg { width: 100%; height: 100%; }
 .weather-button .weather-pictogram, .weather-menu .weather-pictogram { font-size: 22px; }
+.weather-menu .weather-pictogram { width: 22px; height: 22px; }
 .entry-weather-title { display: flex; align-items: baseline; gap: 10px; }
 .entry-weather-title-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 

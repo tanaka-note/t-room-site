@@ -65,11 +65,44 @@ try {
   assert.equal(await weather.getAttribute('aria-label'),'天気を選択：未設定');
   const a=await weather.boundingBox(),b=await close.boundingBox();
   assert.equal(a.width,b.width); assert.equal(a.height,b.height); assert.ok(a.x+a.width<=b.x);
-  await weather.click(); assert.equal(await menu.locator('button').count(),9); assert.equal(await menu.locator('button').last().textContent(),'未設定に戻す'); assert.equal(await menu.locator('button').last().locator('svg').count(),1);
+  await weather.click();
+  const labels=['晴れ','曇り','曇り晴れ','雨くもり','雨','大雨','雷','雪だるま','未設定に戻す'];
+  assert.equal(await menu.locator('button').count(),9);
+  for (const [index,label] of labels.entries()) {
+    const option=menu.locator('button').nth(index);
+    assert.equal(await option.textContent(),'');
+    assert.equal(await option.getAttribute('aria-label'),label);
+    assert.equal(await option.getAttribute('title'),label);
+    assert.equal(await option.locator('svg').count(),1);
+  }
+  for (const width of [1100,390]) {
+    await page.setViewportSize({width,height:844});
+    const boxes=await menu.locator('button').evaluateAll(buttons=>buttons.map(button=>{
+      const rect=button.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};
+    }));
+    assert.ok(boxes.every(box=>box.width>=44 && box.height>=44));
+    assert.equal(boxes[0].y,boxes[2].y);
+    assert.ok(boxes[3].y>boxes[0].y && boxes[6].y>boxes[3].y);
+    const rect=await menu.boundingBox();
+    assert.ok(rect.x>=0 && rect.x+rect.width<=width && rect.height<180);
+  }
+  if (process.env.WEATHER_MENU_PREVIEW) await menu.screenshot({path:process.env.WEATHER_MENU_PREVIEW});
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.locator(':focus').getAttribute('aria-label'),'雨');
   await page.keyboard.press('Escape'); assert.equal(await menu.isHidden(),true); assert.equal(await editor.evaluate(e=>e.open),true);
-  await choose('sunny'); await close.click(); await page.waitForSelector('#editor-leave-dialog[open]');
+  await choose('sunny');
+  assert.equal(await weather.textContent(),'');
+  assert.equal(await weather.locator('svg').count(),1);
+  await weather.click();
+  assert.equal(await menu.locator('button[data-weather="sunny"]').getAttribute('aria-checked'),'true');
+  const backgrounds=await menu.locator('button').evaluateAll(buttons=>buttons.slice(0,2).map(button=>getComputedStyle(button).backgroundColor));
+  assert.notEqual(backgrounds[0],backgrounds[1]);
+  await page.keyboard.press('Escape');
+  await close.click(); await page.waitForSelector('#editor-leave-dialog[open]');
   await page.click('#editor-leave-cancel'); assert.equal(await weather.getAttribute('aria-label'),'天気を選択：晴れ');
-  await choose(''); await close.click(); await closed();
+  await choose(''); assert.equal(await weather.textContent(),'天気'); await close.click(); await closed();
   await create(); await page.fill('#entry-title','天気なし'); await page.fill('#entry-content','本文'); await save();
   assert.equal(entries[0].weather,null); assert.equal(await page.locator('.diary-entry-card .weather-pictogram').count(),0);
   await create(); assert.equal(await weather.getAttribute('aria-label'),'天気を選択：未設定');
