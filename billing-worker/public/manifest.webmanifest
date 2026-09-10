@@ -1,0 +1,26 @@
+{
+  "id": "/billing/",
+  "name": "請求書管理システム",
+  "short_name": "請求書管理",
+  "lang": "ja",
+  "start_url": "/billing/",
+  "scope": "/billing/",
+  "display": "standalone",
+  "background_color": "#fbfcf7",
+  "theme_color": "#577263",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/assets/site-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/site-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

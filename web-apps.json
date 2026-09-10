@@ -180,7 +180,7 @@
       "buildFiles": ["billing-worker/src/index.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js"],
       "buildMode": "content-hash",
       "serviceWorker": null,
-      "manifest": null,
+      "manifest": "billing-worker/public/manifest.webmanifest",
       "twa": null,
       "deployTarget": "t-room-billing",
       "deployCwd": "billing-worker",

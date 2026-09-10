@@ -600,6 +600,7 @@ async function listAuditLogs(url, env) {
 async function serveAsset(request, env, url, path) {
   if (!env.ASSETS) return new Response("Billing assets are not configured", { status: 503 });
   const assetPaths = new Map([
+    ["/manifest.webmanifest", "/manifest.webmanifest"],
     ["/billing.css", "/billing.css"],
     ["/billing.js", "/billing.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
