@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sources = ["troom-date-picker.js", "troom-date-picker.css"];
-const targets = ["diary-worker/public", "billing-worker/public"];
+// Diary owns its extended year/month calendar; do not overwrite it with the shared version.
+const targets = ["billing-worker/public"];
 
 for (const targetDirectory of targets) {
   const absoluteTarget = resolve(root, targetDirectory);

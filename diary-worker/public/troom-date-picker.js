@@ -2,11 +2,14 @@
   const BUTTON_SELECTOR = "[data-date-picker-target][data-date-picker-mode]";
   const MIN_YEAR = 1900;
   const MAX_YEAR = 2100;
+  const YEARS_PER_PAGE = 12;
   const state = {
     dialog: null,
     target: null,
     opener: null,
     mode: "date",
+    view: "date",
+    yearPageStart: MIN_YEAR,
     year: null,
     month: null
   };
@@ -70,7 +73,7 @@
       <section class="troom-calendar-sheet">
         <header class="troom-calendar-head">
           <button class="troom-calendar-nav" type="button" data-calendar-action="previous" aria-label="前へ">‹</button>
-          <strong id="troom-calendar-title"></strong>
+          <button id="troom-calendar-title" class="troom-calendar-title" type="button" data-calendar-action="years" aria-label="年を選択"></button>
           <button class="troom-calendar-nav" type="button" data-calendar-action="next" aria-label="次へ">›</button>
         </header>
         <div class="troom-calendar-weekdays" aria-hidden="true">
@@ -114,6 +117,7 @@
     state.target = target;
     state.opener = opener;
     state.mode = mode;
+    state.view = mode;
     state.year = selected.year;
     state.month = selected.month;
     renderCalendar();
@@ -131,6 +135,13 @@
     }
     const navigation = event.target.closest("[data-calendar-action]");
     if (navigation) {
+      if (navigation.dataset.calendarAction === "years") {
+        state.view = "year";
+        state.yearPageStart = MIN_YEAR + Math.floor((state.year - MIN_YEAR) / YEARS_PER_PAGE) * YEARS_PER_PAGE;
+        renderCalendar();
+        focusCalendarOption(String(state.year));
+        return;
+      }
       changeCalendar(navigation.dataset.calendarAction === "previous" ? -1 : 1);
       return;
     }
@@ -139,7 +150,10 @@
   }
 
   function changeCalendar(delta) {
-    if (state.mode === "month") {
+    if (state.view === "year") {
+      const lastPage = MIN_YEAR + Math.floor((MAX_YEAR - MIN_YEAR) / YEARS_PER_PAGE) * YEARS_PER_PAGE;
+      state.yearPageStart = clamp(state.yearPageStart + delta * YEARS_PER_PAGE, MIN_YEAR, lastPage);
+    } else if (state.view === "month") {
       state.year = clamp(state.year + delta, MIN_YEAR, MAX_YEAR);
     } else {
       const next = new Date(state.year, state.month - 1 + delta, 1);
@@ -156,11 +170,21 @@
     const grid = dialog.querySelector(".troom-calendar-grid");
     const selected = parseValue(state.target?.value, state.mode);
     const today = japanTodayParts();
-    dialog.dataset.mode = state.mode;
-    weekdays.hidden = state.mode === "month";
+    dialog.dataset.mode = state.view;
+    weekdays.hidden = state.view !== "date";
+    title.disabled = state.view === "year";
     grid.replaceChildren();
 
-    if (state.mode === "month") {
+    if (state.view === "year") {
+      const lastYear = Math.min(state.yearPageStart + YEARS_PER_PAGE - 1, MAX_YEAR);
+      title.textContent = `${state.yearPageStart}年～${lastYear}年`;
+      for (let year = state.yearPageStart; year <= lastYear; year += 1) {
+        grid.append(createOption({
+          value: String(year), text: `${year}年`,
+          selected: selected?.year === year, today: today.year === year
+        }));
+      }
+    } else if (state.view === "month") {
       title.textContent = `${state.year}年`;
       for (let month = 1; month <= 12; month += 1) {
         grid.append(createOption({
@@ -188,10 +212,21 @@
       }
     }
 
+    title.setAttribute("aria-label", title.textContent + (state.view === "year" ? "" : "、年を選択"));
     const previous = dialog.querySelector('[data-calendar-action="previous"]');
     const next = dialog.querySelector('[data-calendar-action="next"]');
-    previous.disabled = state.mode === "month" ? state.year <= MIN_YEAR : state.year <= MIN_YEAR && state.month <= 1;
-    next.disabled = state.mode === "month" ? state.year >= MAX_YEAR : state.year >= MAX_YEAR && state.month >= 12;
+    previous.setAttribute("aria-label", state.view === "year" ? "前の12年" : state.view === "month" ? "前年" : "前月");
+    next.setAttribute("aria-label", state.view === "year" ? "次の12年" : state.view === "month" ? "翌年" : "翌月");
+    previous.disabled = state.view === "year" ? state.yearPageStart <= MIN_YEAR
+      : state.view === "month" ? state.year <= MIN_YEAR : state.year <= MIN_YEAR && state.month <= 1;
+    next.disabled = state.view === "year" ? state.yearPageStart + YEARS_PER_PAGE > MAX_YEAR
+      : state.view === "month" ? state.year >= MAX_YEAR : state.year >= MAX_YEAR && state.month >= 12;
+  }
+
+  function focusCalendarOption(value) {
+    const grid = state.dialog.querySelector(".troom-calendar-grid");
+    (grid.querySelector(`[data-calendar-value="${value}"]`)
+      || grid.querySelector('[aria-selected="true"]') || grid.querySelector("button"))?.focus({ preventScroll: true });
   }
 
   function createOption({ value, text, selected, today }) {
@@ -208,6 +243,26 @@
 
   function selectCalendarValue(value) {
     const target = state.target;
+    if (!target) return;
+    if (state.view === "year") {
+      const year = Number(value);
+      if (!/^\d{4}$/.test(value) || year < MIN_YEAR || year > MAX_YEAR) return;
+      state.year = year;
+      state.view = "month";
+      renderCalendar();
+      focusCalendarOption(`${state.year}-${pad2(state.month)}`);
+      return;
+    }
+    if (state.view === "month" && state.mode === "date") {
+      const selected = parseValue(value, "month");
+      if (!selected) return;
+      state.year = selected.year;
+      state.month = selected.month;
+      state.view = "date";
+      renderCalendar();
+      focusCalendarOption();
+      return;
+    }
     if (!target || !parseValue(value, state.mode)) return;
     if (target.value !== value) {
       target.value = value;
@@ -226,6 +281,8 @@
     state.target = null;
     state.opener = null;
     state.mode = "date";
+    state.view = "date";
+    state.yearPageStart = MIN_YEAR;
     state.year = null;
     state.month = null;
     if (opener?.isConnected) opener.focus({ preventScroll: true });

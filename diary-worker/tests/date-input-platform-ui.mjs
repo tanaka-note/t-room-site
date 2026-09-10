@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const html = readFileSync(`${root}/public/index.html`, "utf8");
-const script = readFileSync(`${root}/public/diary.js`, "utf8");
+const script = readFileSync(`${root}/public/diary.js`, "utf8").replaceAll("\r\n", "\n");
 const style = readFileSync(`${root}/public/diary.css`, "utf8");
 const pickerScript = readFileSync(`${root}/public/troom-date-picker.js`, "utf8");
 const pickerStyle = readFileSync(`${root}/public/troom-date-picker.css`, "utf8");

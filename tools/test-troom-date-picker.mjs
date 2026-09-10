@@ -7,7 +7,8 @@ const root = resolve(import.meta.dirname, "..");
 const sourceScript = await readFile(resolve(root, "tools/shared/troom-date-picker.js"), "utf8");
 const sourceStyle = await readFile(resolve(root, "tools/shared/troom-date-picker.css"), "utf8");
 
-for (const directory of ["diary-worker/public", "billing-worker/public"]) {
+// Diary's extended calendar is covered by diary-worker's date/calendar tests.
+for (const directory of ["billing-worker/public"]) {
   assert.equal(await readFile(resolve(root, directory, "troom-date-picker.js"), "utf8"), sourceScript,
     `${directory} must use the canonical shared calendar script`);
   assert.equal(await readFile(resolve(root, directory, "troom-date-picker.css"), "utf8"), sourceStyle,

@@ -1,0 +1,62 @@
+import assert from "node:assert/strict";
+import vm from "node:vm";
+import { readFile } from "node:fs/promises";
+
+const source = await readFile(new URL("../public/troom-date-picker.js", import.meta.url), "utf8");
+const events = [];
+const context = {
+  window: {}, document: { readyState: "loading", addEventListener() {} }, Intl, Date, Event
+};
+// Exercise actual navigation/selection functions without replacing the public API.
+vm.runInNewContext(source.replace("window.TRoomDatePicker =", `
+  renderCalendar = () => {};
+  focusCalendarOption = () => {};
+  globalThis.calendar = { state, handleDialogClick, changeCalendar, selectCalendarValue, resetCalendar };
+  window.TRoomDatePicker =`), context);
+const { state, handleDialogClick, changeCalendar, selectCalendarValue } = context.calendar;
+state.target = { value: "2026-09-10", dispatchEvent: (event) => events.push([event.type, event.bubbles]) };
+state.dialog = { open: true, close() { this.open = false; } };
+state.year = 2026;
+state.month = 9;
+handleDialogClick({ target: { closest: () => ({ dataset: { calendarAction: "years" } }) } });
+assert.equal(state.view, "year");
+assert.ok(state.yearPageStart <= 2026 && state.yearPageStart + 11 >= 2026);
+changeCalendar(-1000);
+assert.equal(state.yearPageStart, 1900);
+selectCalendarValue("1899");
+assert.equal(state.view, "year");
+selectCalendarValue("1900");
+assert.equal(state.view, "month");
+assert.equal(state.year, 1900);
+selectCalendarValue("1900-02");
+assert.equal(state.view, "date");
+assert.equal(state.month, 2);
+assert.equal(state.target.value, "2026-09-10");
+assert.deepEqual(events, []);
+selectCalendarValue("1900-02-29");
+assert.deepEqual(events, [], "invalid leap day must not be committed");
+selectCalendarValue("1900-02-28");
+assert.equal(state.target.value, "1900-02-28");
+assert.deepEqual(events, [["input", true], ["change", true]]);
+assert.equal(state.dialog.open, false);
+state.view = "year";
+changeCalendar(1000);
+assert.equal(state.yearPageStart, 2092);
+selectCalendarValue("2101");
+assert.equal(state.view, "year");
+selectCalendarValue("2100");
+selectCalendarValue("2100-12");
+changeCalendar(1);
+assert.equal(state.year, 2100);
+assert.equal(state.month, 12);
+state.year = 1900;
+state.month = 1;
+changeCalendar(-1);
+assert.equal(state.year, 1900);
+assert.equal(state.month, 1);
+state.mode = state.view = "month";
+state.dialog.open = true;
+selectCalendarValue("2020-06");
+assert.equal(state.target.value, "2020-06", "existing month mode still commits YYYY-MM");
+assert.equal(state.dialog.open, false);
+console.log("Calendar year/month/day selection, events and 1900–2100 boundaries passed.");

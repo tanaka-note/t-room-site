@@ -79,8 +79,27 @@
   margin-bottom: 14px;
 }
 
-.troom-calendar-head strong {
+.troom-calendar-title {
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
   text-align: center;
+}
+
+.troom-calendar-title:not(:disabled):hover,
+.troom-calendar-title:focus-visible {
+  background: var(--soft, #edf5f2);
+  outline: 2px solid var(--accent, var(--teal, #0f766e));
+}
+
+.troom-calendar-title:disabled {
+  opacity: 1;
+  cursor: default;
 }
 
 .troom-calendar-nav {
@@ -123,7 +142,8 @@
   text-align: center;
 }
 
-.troom-calendar-dialog[data-mode="month"] .troom-calendar-grid {
+.troom-calendar-dialog[data-mode="month"] .troom-calendar-grid,
+.troom-calendar-dialog[data-mode="year"] .troom-calendar-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
@@ -142,7 +162,8 @@
   color: var(--ink, #1f2933);
 }
 
-.troom-calendar-dialog[data-mode="month"] .troom-calendar-option {
+.troom-calendar-dialog[data-mode="month"] .troom-calendar-option,
+.troom-calendar-dialog[data-mode="year"] .troom-calendar-option {
   min-height: 44px;
   border-color: var(--line, #d8dee6);
 }
