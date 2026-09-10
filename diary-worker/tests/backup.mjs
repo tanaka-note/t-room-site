@@ -42,7 +42,8 @@ const tableRows = {
     draft_excluded_photo_ids: "[]",
     client_request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     client_request_hash: "request-hash",
-    last_mutation_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    last_mutation_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    weather: "sunny"
   }],
   diary_tags: [
     { entry_id: 1, tag: "Z", created_at: "2026-08-20 00:00:00", sort_order: 0 },
@@ -245,7 +246,7 @@ async function migratedEmptyDatabase() {
     "0005_diary_photos.sql", "0006_login_attempts.sql", "0007_household_isolation.sql", "0008_chiharu_login_reset.sql",
     "0009_main_user.sql", "0010_entry_rich_text.sql", "0011_trash_scopes.sql", "0012_entry_drafts.sql",
     "0013_main_user_trash_and_media_retry.sql", "0014_diary_favorites.sql", "0015_photo_upload_staging.sql",
-    "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql"
+    "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql", "0018_diary_weather.sql"
   ];
   for (const migration of migrations) database.exec(await readFile(new URL(migration, migrationDirectory), "utf8"));
   database.exec(`
@@ -352,6 +353,14 @@ await assert.rejects(
 );
 
 const version2Payload = structuredClone(readBackup(bucket, first.dailyKey));
+const version3Payload = structuredClone(version2Payload);
+version3Payload.formatVersion = 3;
+version3Payload.tables.diary_entries.columns = version3Payload.tables.diary_entries.columns.filter((column) => column !== "weather");
+version3Payload.tables.diary_entries.rows = version3Payload.tables.diary_entries.rows.map(({ weather, ...row }) => row);
+const version3Database = await migratedEmptyDatabase();
+await restoreDiaryBackup(new SqliteD1(version3Database), version3Payload);
+assert.equal(version3Database.prepare("SELECT weather FROM diary_entries LIMIT 1").get().weather, null);
+version2Payload.tables.diary_entries = structuredClone(version3Payload.tables.diary_entries);
 version2Payload.formatVersion = 2;
 version2Payload.tables.diary_tags.columns = ["entry_id", "tag", "created_at"];
 version2Payload.tables.diary_tags.rows = version2Payload.tables.diary_tags.rows.map(({ sort_order: _sortOrder, ...row }) => row);

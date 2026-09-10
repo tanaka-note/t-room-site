@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "node ../tools/sync-web-app-builds.mjs && wrangler deploy",
-    "check": "node --check src/index.js && node --check src/backup.js && node --check public/diary.js && node --check public/diary-search.js && node --check public/investment.js",
+    "check": "node --check src/index.js && node --check src/backup.js && node --check public/diary.js && node --check public/diary-search.js && node --check public/diary-weather.js && node --check public/investment.js",
+    "test:weather": "node tests/weather.mjs && node tests/weather.e2e.mjs && node tests/browser/weather.mjs",
     "test:permissions": "node tests/permissions.e2e.mjs",
     "test:households": "node tests/household-isolation.e2e.mjs",
     "test:favorites": "node tests/favorites.e2e.mjs && node tests/favorites-ui.mjs",

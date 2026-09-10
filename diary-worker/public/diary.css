@@ -1229,6 +1229,49 @@ button:disabled {
   gap: 8px;
 }
 
+.editor-head-actions .icon-button {
+  height: 40px;
+  flex: 0 0 40px;
+}
+
+.weather-button { font-size: 0.7rem; }
+.weather-picker { position: relative; }
+.weather-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  width: 172px;
+  max-height: min(400px, 60vh);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper, #fff);
+  color: var(--ink);
+  box-shadow: 0 8px 24px #27313b24;
+}
+.weather-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.weather-menu button[aria-checked="true"] { background: var(--soft, #edf5f2); font-weight: 800; }
+.weather-menu button:hover, .weather-menu button:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+.weather-pictogram { display: inline-flex; width: 1.25em; height: 1.25em; flex: 0 0 1.25em; vertical-align: middle; }
+.weather-pictogram svg { width: 100%; height: 100%; }
+.weather-button .weather-pictogram, .weather-menu .weather-pictogram { font-size: 22px; }
+.entry-weather-title { display: flex; align-items: baseline; gap: 10px; }
+.entry-weather-title-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
 .favorite-entry-button {
   color: #8a6a21;
 }

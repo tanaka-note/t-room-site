@@ -5,6 +5,7 @@
     new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href
   );
   const BASE_PATH = "/diary";
+  const { WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = await import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href);
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
   const EDITOR_HISTORY_KEY = "troomDiaryEditor";
   const CAMERA_ROLL_HISTORY_KEY = "troomDiaryCameraRoll";
@@ -66,6 +67,7 @@
     draftCount: 0,
     activeEntry: null,
     editorDirty: false,
+    editorWeather: null,
     editorSourceEntry: null,
     editorSelection: null,
     editorSelectionOffsets: null,
@@ -206,6 +208,8 @@
     editorDialog: document.querySelector("#editor-dialog"),
     entryForm: document.querySelector("#entry-form"),
     editorTitle: document.querySelector("#editor-title"),
+    weatherButton: document.querySelector("#entry-weather-button"),
+    weatherMenu: document.querySelector("#entry-weather-menu"),
     entryId: document.querySelector("#entry-id"),
     entryRevision: document.querySelector("#entry-revision"),
     entryStatus: document.querySelector("#entry-status"),
@@ -280,7 +284,7 @@
 
   function bindEvents() {
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (state.editorDirty || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || document.querySelector("dialog[open]")) {
+      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || document.querySelector("dialog[open]")) {
         event.preventDefault();
       }
     });
@@ -411,6 +415,7 @@
     elements.entryForm.addEventListener("input", () => {
       state.editorDirty = true;
     });
+    setupWeatherPicker();
     elements.entryTags.addEventListener("input", renderEntryTagSuggestions);
     elements.entryTags.addEventListener("focus", renderEntryTagSuggestions);
     elements.entryTags.addEventListener("click", renderEntryTagSuggestions);
@@ -469,7 +474,7 @@
       cancelEditorLeave();
     });
     window.addEventListener("beforeunload", (event) => {
-      if (!state.editorDirty) return;
+      if (!hasEditorChanges()) return;
       event.preventDefault();
       event.returnValue = "";
     });
@@ -1162,6 +1167,7 @@
         || (state.drafts ? "本文はまだありません。" : "");
       highlightSearchTerms(title, searchTerms);
       highlightSearchTerms(summary, searchTerms);
+      appendTitleWeather(title, entry.weather);
       button.append(meta, title, summary);
       if (state.drafts) {
         const updated = document.createElement("span");
@@ -1481,7 +1487,8 @@
 
   function requestEditorClose() {
     if (!elements.editorDialog.open) return;
-    if (state.editorDirty) {
+    closeWeatherMenu(false);
+    if (hasEditorChanges()) {
       if (!elements.editorLeaveDialog.open) elements.editorLeaveDialog.showModal();
       return;
     }
@@ -1518,6 +1525,8 @@
   }
 
   function finishEditorClose() {
+    closeWeatherMenu(false);
+    state.editorWeather = null;
     state.editorHistoryToken = null;
     state.editorClosePending = false;
     state.editorDirty = false;
@@ -1588,7 +1597,7 @@
       return;
     }
     if (elements.editorDialog.open && state.editorHistoryToken) {
-      if (state.editorClosePending || !state.editorDirty) {
+      if (state.editorClosePending || !hasEditorChanges()) {
         finishEditorClose();
       } else {
         pushEditorHistory();
@@ -1620,6 +1629,7 @@
     renderEntryContent(entry);
     const searchTerms = state.drafts ? [] : splitSearchTerms(state.query);
     highlightSearchTerms(elements.detailTitle, searchTerms);
+    appendTitleWeather(elements.detailTitle, entry.weather);
     highlightSearchTerms(elements.detailContent, searchTerms);
     elements.detailTags.replaceChildren(...createTagElements(entry.tags));
     const isDeleted = Boolean(entry.deletedAt);
@@ -3080,6 +3090,83 @@
     return result;
   }
 
+  function hasEditorChanges() {
+    return state.editorDirty || state.editorWeather !== (state.editorSourceEntry?.weather ?? null);
+  }
+
+  function appendTitleWeather(title, weather) {
+    title.classList.remove("entry-weather-title");
+    const icon = createWeatherIcon(weather);
+    if (!icon) return;
+    const text = document.createElement("span");
+    text.className = "entry-weather-title-text";
+    text.append(...title.childNodes);
+    title.replaceChildren(text, icon);
+    title.classList.add("entry-weather-title");
+  }
+
+  function renderWeatherButton() {
+    const label = WEATHER_LABELS[state.editorWeather] || "未設定";
+    elements.weatherButton.replaceChildren(createWeatherIcon(state.editorWeather) || document.createTextNode("天気"));
+    elements.weatherButton.setAttribute("aria-label", `天気を選択：${label}`);
+    elements.weatherButton.title = `天気を選択：${label}`;
+    for (const option of elements.weatherMenu.children) {
+      option.setAttribute("aria-checked", String(option.dataset.weather === (state.editorWeather || "")));
+    }
+  }
+
+  function closeWeatherMenu(restoreFocus = true) {
+    const wasOpen = !elements.weatherMenu.hidden;
+    elements.weatherMenu.hidden = true;
+    elements.weatherButton.setAttribute("aria-expanded", "false");
+    if (wasOpen && restoreFocus) elements.weatherButton.focus();
+  }
+
+  function setupWeatherPicker() {
+    for (const [id, label] of [...Object.entries(WEATHER_LABELS), ["", "未設定に戻す"]]) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.dataset.weather = id;
+      option.setAttribute("role", "menuitemradio");
+      option.setAttribute("aria-checked", "false");
+      option.tabIndex = -1;
+      const icon = createWeatherIcon(id) || createUnsetWeatherIcon();
+      if (icon) { icon.setAttribute("aria-hidden", "true"); option.append(icon); }
+      option.append(document.createTextNode(label));
+      option.addEventListener("click", () => {
+        state.editorWeather = id || null;
+        renderWeatherButton();
+        closeWeatherMenu();
+      });
+      elements.weatherMenu.append(option);
+    }
+    const open = () => {
+      renderWeatherButton();
+      elements.weatherMenu.hidden = false;
+      elements.weatherButton.setAttribute("aria-expanded", "true");
+      elements.weatherMenu.querySelector('[aria-checked="true"]').focus();
+    };
+    elements.weatherButton.addEventListener("click", () => elements.weatherMenu.hidden ? open() : closeWeatherMenu());
+    elements.weatherButton.parentElement.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !elements.weatherMenu.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeWeatherMenu();
+      } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        if (elements.weatherMenu.hidden) return open();
+        const options = [...elements.weatherMenu.children];
+        const current = options.indexOf(document.activeElement);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+          : (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+        options[next].focus();
+      } else if (event.key === "Tab") closeWeatherMenu(false);
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!elements.weatherButton.parentElement.contains(event.target)) closeWeatherMenu(false);
+    });
+  }
+
   function openEditor(entry = null) {
     if (!state.canManageEntries) return;
     const isDraft = entry?.status === "draft";
@@ -3090,6 +3177,9 @@
     elements.entryStatus.value = isDraft ? "draft" : "published";
     elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
+    state.editorWeather = Object.hasOwn(WEATHER_LABELS, entry?.weather) ? entry.weather : null;
+    closeWeatherMenu(false);
+    renderWeatherButton();
     state.editorSelectionOffsets = null;
     state.editorComposing = false;
     state.photoInsertionOffset = null;
@@ -3130,6 +3220,7 @@
       const body = {
         entryDate: elements.entryDate.value,
         title: elements.entryTitle.value,
+        weather: state.editorWeather,
         content: editorDocument.content,
         contentFormat: editorDocument.contentFormat,
         tags: parseTags(elements.entryTags.value),
@@ -3274,6 +3365,7 @@
     if (!entry || !payload) return false;
     return String(entry.entryDate || "") === String(payload.entryDate || "")
       && String(entry.title || "") === String(payload.title || "")
+      && (entry.weather ?? null) === (payload.weather ?? null)
       && String(entry.content || "") === String(payload.content || "")
       && canonicalJson(entry.contentFormat || null) === canonicalJson(payload.contentFormat || null)
       && orderedStringList(entry.tags) === orderedStringList(payload.tags)
@@ -3298,6 +3390,8 @@
   }
 
   function setEditorSaveBusy(busy, label = "") {
+    elements.weatherButton.disabled = busy;
+    if (busy) closeWeatherMenu(false);
     elements.saveEntryButton.disabled = busy;
     elements.saveDraftButton.disabled = busy;
     elements.cancelEntryButton.disabled = busy;

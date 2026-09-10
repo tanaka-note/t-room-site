@@ -6,8 +6,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-b4d15c42d8e8">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-b4d15c42d8e8">
+  <meta name="troom-app-build" content="diary-65286173cc09">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-65286173cc09">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -15,11 +15,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-b4d15c42d8e8">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-65286173cc09">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-b4d15c42d8e8">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-b4d15c42d8e8">
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-65286173cc09">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-65286173cc09">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -339,7 +339,13 @@
           <p class="section-kicker">Write</p>
           <h2 id="editor-title">新しい日記</h2>
         </div>
-        <button class="icon-button" type="button" data-close-dialog="editor-dialog" aria-label="閉じる">×</button>
+        <div class="dialog-head-actions editor-head-actions">
+          <div class="weather-picker">
+            <button id="entry-weather-button" class="icon-button weather-button" type="button" aria-label="天気を選択：未設定" aria-haspopup="menu" aria-expanded="false" aria-controls="entry-weather-menu">天気</button>
+            <div id="entry-weather-menu" class="weather-menu" role="menu" aria-label="天気を選択" hidden></div>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog="editor-dialog" aria-label="閉じる">×</button>
+        </div>
       </div>
 
       <input id="entry-id" type="hidden">
@@ -519,9 +525,9 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-b4d15c42d8e8" defer></script>
-  <script src="/diary/troom-date-picker.js?v=diary-b4d15c42d8e8" defer></script>
-  <script src="/security/passkey-client.js?v=diary-b4d15c42d8e8" defer></script>
-  <script src="/diary/diary.js?v=diary-b4d15c42d8e8" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-65286173cc09" defer></script>
+  <script src="/diary/troom-date-picker.js?v=diary-65286173cc09" defer></script>
+  <script src="/security/passkey-client.js?v=diary-65286173cc09" defer></script>
+  <script src="/diary/diary.js?v=diary-65286173cc09" defer></script>
 </body>
 </html>
