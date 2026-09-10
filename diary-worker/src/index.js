@@ -472,6 +472,7 @@ async function serveAsset(request, env, url, path) {
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
     ["/diary-search.js", "/diary-search.js"],
+    ["/diary-weather.js", "/diary-weather.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
     ["/troom-date-picker.js", "/troom-date-picker.js"],
     ["/manifest.webmanifest", "/manifest.webmanifest"],
