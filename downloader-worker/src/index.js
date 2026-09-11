@@ -1,3 +1,4 @@
+import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
@@ -176,6 +177,8 @@ DownloaderContainer.outboundHandlers = { mainVideo: mainVideoOutbound, standard:
 
 export default class DownloaderWorker extends WorkerEntrypoint {
   async fetch(request) {
+    const browserResponse = lineBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     try {
       return await handleRequest(request, this.env, this.ctx);
     } catch (error) {

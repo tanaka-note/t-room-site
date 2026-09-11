@@ -1,3 +1,4 @@
+import { ensureLineBrowserGuard } from "./line-browser-html.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
@@ -59,7 +60,7 @@ function versionLocalAssets(html, build) {
 }
 
 export function ensureHtmlContract(html, app, contract, build) {
-  let output = upsertMeta(html, contract.buildMeta, build);
+  let output = upsertMeta(ensureLineBrowserGuard(html), contract.buildMeta, build);
   for (const meta of app.extraBuildMetas || []) output = upsertMeta(output, meta, build);
   output = upsertMeta(output, contract.autoUpdateMeta, contract.autoUpdateValue);
   if (app.serviceWorkerUrl) {
@@ -169,7 +170,7 @@ async function listFiles(root) {
 }
 
 export async function filesForApp(app) {
-  const paths = new Set([resolve(workspace, "assets/pwa-auto-update.js")]);
+  const paths = new Set([resolve(workspace, "assets/pwa-auto-update.js"), ...["line-browser-policy.mjs", "line-browser-worker.mjs", "line-browser-csp.mjs"].map(file => resolve(workspace, "assets", file))]);
   for (const root of app.buildRoots || []) {
     for (const file of await listFiles(resolve(workspace, root))) paths.add(file);
   }

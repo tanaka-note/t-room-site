@@ -1,3 +1,4 @@
+import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
@@ -19,6 +20,8 @@ const encoder = new TextEncoder();
 
 export default class AiWorker extends WorkerEntrypoint {
   async fetch(request) {
+    const browserResponse = lineBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     try {
       const url = new URL(request.url);
       if (!url.pathname.startsWith(BASE_PATH)) return json({ error: "指定された情報が見つかりません。" }, 404);

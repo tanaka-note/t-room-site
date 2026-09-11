@@ -1,3 +1,4 @@
+import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
@@ -6,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-fffffbab25ec";
+const APP_BUILD_ID = "cloud-b981860295ac";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -130,6 +131,8 @@ async function listSecurityFolderTargets(env, { topLevelOnly = false } = {}) {
 
 export default {
   async fetch(request, env, context) {
+    const browserResponse = lineBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     try {
       const url = new URL(request.url);
       if (url.pathname === `${BASE_PATH}.html`) return Response.redirect(`${url.origin}${BASE_PATH}/`, 301);

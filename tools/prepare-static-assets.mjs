@@ -2,6 +2,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureHtmlContract, expectedSiteBuild, loadWebAppRegistry } from "./web-app-registry.mjs";
+import { ensureLineBrowserGuard } from "./line-browser-html.mjs";
 
 const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = resolve(workspace, ".site-assets");
@@ -69,7 +70,14 @@ async function collectFiles(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const target = join(directory, entry.name);
     if (entry.isDirectory()) await collectFiles(target);
-    else if (entry.isFile()) publishedFiles.push(relative(output, target));
+    else if (entry.isFile()) {
+      if (extname(target) === ".html") {
+        const source = await readFile(target, "utf8");
+        const guarded = ensureLineBrowserGuard(source);
+        if (guarded !== source) await writeFile(target, guarded);
+      }
+      publishedFiles.push(relative(output, target));
+    }
   }
 }
 await collectFiles(output);

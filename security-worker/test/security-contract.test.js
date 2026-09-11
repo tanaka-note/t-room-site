@@ -332,14 +332,15 @@ test("Security status validates the live administrator identity and credential b
   assert.doesNotMatch(worker, /\/api\/status[\s\S]{0,400}readSecuritySession\(request, env, ADMIN_COOKIE/);
 });
 
-test("Security Center response permits WebAssembly without allowing JavaScript eval", async () => {
+test("Security Center response permits WebAssembly and the exact browser guard without allowing JavaScript eval", async () => {
+  const { LINE_BROWSER_SCRIPT_CSP } = await import("../../assets/line-browser-csp.mjs");
   const response = secure(new Response("ok"));
   const csp = response.headers.get("Content-Security-Policy");
   assert.equal(csp, SECURITY_CONTENT_SECURITY_POLICY);
 
   const directives = new Map(csp.split(";").map((value) => value.trim().split(/\s+/)).map(([name, ...sources]) => [name, sources]));
   const scriptSources = directives.get("script-src") || [];
-  assert.deepEqual(scriptSources, ["'self'", "'wasm-unsafe-eval'"]);
+  assert.deepEqual(scriptSources, ["'self'", "'wasm-unsafe-eval'", LINE_BROWSER_SCRIPT_CSP]);
   assert.ok(!scriptSources.includes("'unsafe-eval'"));
   assert.ok(!scriptSources.includes("'unsafe-inline'"));
   assert.deepEqual(directives.get("default-src"), ["'self'"]);

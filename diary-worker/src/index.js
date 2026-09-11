@@ -1,3 +1,4 @@
+import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
@@ -90,6 +91,8 @@ function securityAuditRole(account) {
 
 export default {
   async fetch(request, env, context) {
+    const browserResponse = lineBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     try {
       const url = new URL(request.url);
       if (url.pathname === `${BASE_PATH}.html`) {

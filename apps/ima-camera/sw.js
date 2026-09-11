@@ -1,15 +1,15 @@
-const CACHE_NAME = "t-room-ima-camera-ima-camera-ad2b498a65a1";
+const CACHE_NAME = "t-room-ima-camera-ima-camera-2606c1cee703";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=ima-camera-ad2b498a65a1",
+  "./index.html?v=ima-camera-2606c1cee703",
   "./icon-192.png",
   "./icon-512.png",
   "./icon.svg",
-  "/apps/ima-camera/ima-camera.css?v=ima-camera-ad2b498a65a1",
-  "/apps/ima-camera/ima-camera.js?v=ima-camera-ad2b498a65a1",
-  "/apps/ima-camera/manifest.webmanifest?v=ima-camera-ad2b498a65a1",
-  "/assets/pwa-auto-update.js?v=ima-camera-ad2b498a65a1"
+  "/apps/ima-camera/ima-camera.css?v=ima-camera-2606c1cee703",
+  "/apps/ima-camera/ima-camera.js?v=ima-camera-2606c1cee703",
+  "/apps/ima-camera/manifest.webmanifest?v=ima-camera-2606c1cee703",
+  "/assets/pwa-auto-update.js?v=ima-camera-2606c1cee703"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
@@ -50,6 +50,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
+          if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
@@ -64,7 +65,8 @@ self.addEventListener("fetch", (event) => {
       if (cached) return cached;
 
       return fetch(event.request).then((response) => {
-        const copy = response.clone();
+        if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
+          const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       });

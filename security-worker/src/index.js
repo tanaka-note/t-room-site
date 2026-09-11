@@ -1,3 +1,4 @@
+import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
 import { readDefinitionStatus, runDefinitionSchedule } from "./definition-status.js";
 import { cleanupDisabledIdentities } from "./identity-cleanup.js";
@@ -70,6 +71,8 @@ const decoder = new TextDecoder();
 
 export default class SecurityWorker extends WorkerEntrypoint {
   async fetch(request) {
+    const browserResponse = lineBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     try {
       const url = new URL(request.url);
       if (url.pathname === BASE_PATH) return secure(Response.redirect(`${url.origin}${BASE_PATH}/`, 308));

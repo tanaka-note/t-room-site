@@ -1,13 +1,13 @@
-const CACHE_NAME = "t-room-motivation-switch-motivation-switch-0997d5d87e0e";
+const CACHE_NAME = "t-room-motivation-switch-motivation-switch-a8f0aec15363";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=motivation-switch-0997d5d87e0e",
+  "./index.html?v=motivation-switch-a8f0aec15363",
   "./icon.svg",
   "../../assets/site-icon-192.png",
   "../../assets/apple-touch-icon.png",
-  "/apps/motivation-switch/manifest.webmanifest?v=motivation-switch-0997d5d87e0e",
-  "/assets/pwa-auto-update.js?v=motivation-switch-0997d5d87e0e"
+  "/apps/motivation-switch/manifest.webmanifest?v=motivation-switch-a8f0aec15363",
+  "/assets/pwa-auto-update.js?v=motivation-switch-a8f0aec15363"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
@@ -51,6 +51,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
+          if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
@@ -65,7 +66,8 @@ self.addEventListener("fetch", (event) => {
       if (cached) return cached;
 
       return fetch(event.request).then((response) => {
-        const copy = response.clone();
+        if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
+          const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       });

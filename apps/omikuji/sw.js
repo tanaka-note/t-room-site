@@ -1,15 +1,15 @@
-const CACHE_NAME = "t-room-omikuji-omikuji-721cf64c9842";
+const CACHE_NAME = "t-room-omikuji-omikuji-40a2d7daa621";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=omikuji-721cf64c9842",
+  "./index.html?v=omikuji-40a2d7daa621",
   "./icon-192.png",
   "./icon-512.png",
   "./icon.svg",
-  "/apps/omikuji/manifest.webmanifest?v=omikuji-721cf64c9842",
-  "/apps/omikuji/omikuji.css?v=omikuji-721cf64c9842",
-  "/apps/omikuji/omikuji.js?v=omikuji-721cf64c9842",
-  "/assets/pwa-auto-update.js?v=omikuji-721cf64c9842"
+  "/apps/omikuji/manifest.webmanifest?v=omikuji-40a2d7daa621",
+  "/apps/omikuji/omikuji.css?v=omikuji-40a2d7daa621",
+  "/apps/omikuji/omikuji.js?v=omikuji-40a2d7daa621",
+  "/assets/pwa-auto-update.js?v=omikuji-40a2d7daa621"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
@@ -50,6 +50,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
+          if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
@@ -64,7 +65,8 @@ self.addEventListener("fetch", (event) => {
       if (cached) return cached;
 
       return fetch(event.request).then((response) => {
-        const copy = response.clone();
+        if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
+          const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       });

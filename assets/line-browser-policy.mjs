@@ -1,8 +1,6 @@
-<!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8">
-  <script data-tlain-browser-guard>(function lineBrowserPolicy(scope) {
+// Support policy only, never an authentication boundary. Kept self-contained so
+// the exact same runtime can run at the edge and before any cached HTML scripts.
+export function lineBrowserPolicy(scope) {
   function isLine(userAgent) {
     return /(?:^|[\s;(])Line\/\d+(?:\.|\b)/i.test(String(userAgent || ""));
   }
@@ -38,11 +36,11 @@
   }
   const css = `:root{color-scheme:light dark;font-family:system-ui,-apple-system,sans-serif;background:#f5f6f4;color:#293831}*{box-sizing:border-box}body{margin:0;padding:24px 20px;min-height:100svh;display:grid;place-items:center}main{width:min(100%,460px);padding:32px 24px;border:1px solid #dce3dd;border-radius:18px;background:#fff}p{line-height:1.8}h1{font-size:1.25rem;line-height:1.6;margin:24px 0 16px}.brand{font-size:1.4rem;font-weight:700;letter-spacing:.06em}.actions{display:grid;gap:12px;margin:28px 0}a{display:block;padding:15px 18px;min-height:52px;border-radius:10px;text-align:center;font-weight:600;text-decoration:none;border:1px solid #587061;color:inherit;overflow-wrap:anywhere}a.primary{background:#506b59;color:#fff}a:focus-visible{outline:3px solid #8ca895;outline-offset:3px}.help{font-size:.9rem;color:#536158}.help strong{display:block}#app-note{font-size:.85rem}[hidden]{display:none!important}@media(prefers-color-scheme:dark){:root{background:#161c19;color:#e4eae5}main{background:#202923;border-color:#3b4b40}.help{color:#becbbf}a.primary{background:#536f5c}}@media(max-width:360px){main{padding:24px 18px}body{padding:16px}}`;
   function escape(value) {
-    return String(value).replace(/[&\u003c>"']/g, (char) => ({ "&": "&amp;", "\u003c": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+    return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
   }
   function contents(value, userAgent) {
     const external = externalUrl(value), app = appUrl(value, userAgent);
-    return `\u003chead>\u003cmeta charset="utf-8">\u003cmeta name="viewport" content="width=device-width,initial-scale=1">\u003cmeta name="robots" content="noindex,nofollow">\u003ctitle>T-lain | ブラウザのご案内\u003c/title>\u003cstyle>${css}\u003c/style>\u003c/head>\u003cbody>\u003cmain aria-labelledby="browser-title">\u003cdiv class="brand">T-lain\u003c/div>\u003ch1 id="browser-title">このブラウザでは\u003cbr>T-lainを利用できません。\u003c/h1>\u003cp>安全なログイン・パスキー認証のため、T-lainアプリまたは通常のブラウザで開いてください。\u003c/p>\u003cdiv class="actions">${app ? `\u003ca id="open-app" class="primary" href="${escape(app)}" rel="noreferrer">T-lainアプリで開く\u003c/a>` : ""}${external ? `\u003ca id="open-browser" class="${app ? "" : "primary"}" href="${escape(external)}" rel="noreferrer">既定のブラウザで開く\u003c/a>` : ""}\u003c/div>${app ? '\u003cp id="app-note">このページに対応する日記／T-Cloudアプリを開きます。開かない場合は、既定のブラウザをご利用ください。\u003c/p>' : ""}\u003cp class="help">\u003cstrong>うまく開かない場合\u003c/strong>LINEのメニュー「…」から「デフォルトのブラウザで開く」を選択してください。\u003cbr>ホーム画面に追加したアプリは、ホーム画面からも開けます。\u003c/p>\u003c/main>\u003c/body>`;
+    return `<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>T-lain | ブラウザのご案内</title><style>${css}</style></head><body><main aria-labelledby="browser-title"><div class="brand">T-lain</div><h1 id="browser-title">このブラウザでは<br>T-lainを利用できません。</h1><p>安全なログイン・パスキー認証のため、T-lainアプリまたは通常のブラウザで開いてください。</p><div class="actions">${app ? `<a id="open-app" class="primary" href="${escape(app)}" rel="noreferrer">T-lainアプリで開く</a>` : ""}${external ? `<a id="open-browser" class="${app ? "" : "primary"}" href="${escape(external)}" rel="noreferrer">既定のブラウザで開く</a>` : ""}</div>${app ? '<p id="app-note">このページに対応する日記／T-Cloudアプリを開きます。開かない場合は、既定のブラウザをご利用ください。</p>' : ""}<p class="help"><strong>うまく開かない場合</strong>LINEのメニュー「…」から「デフォルトのブラウザで開く」を選択してください。<br>ホーム画面に追加したアプリは、ホーム画面からも開けます。</p></main></body>`;
   }
   function enforce() {
     if (!scope || isApp() || !isLine(scope.navigator.userAgent)) return false;
@@ -56,27 +54,4 @@
     return true;
   }
   return { isLine, isApp, externalUrl, appUrl, contents, css, enforce };
-})(window).enforce();</script>
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#071426">
-  <title>オフライン | T-Cloud Storage</title>
-  <style>
-    :root { color-scheme: dark; font-family: "Noto Sans JP", system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100svh; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 50% 20%, #18385a, #071426 65%); color: #eef7fa; text-align: center; }
-    main { width: min(100%, 420px); padding: 34px 26px; border: 1px solid rgba(157, 199, 217, .24); border-radius: 24px; background: rgba(7, 20, 38, .82); box-shadow: 0 24px 60px rgba(0,0,0,.34); }
-    img { width: 96px; height: 96px; border-radius: 24px; }
-    h1 { margin: 22px 0 10px; font-size: 1.45rem; }
-    p { margin: 0 0 24px; color: #b8ccd5; line-height: 1.8; }
-    button { width: 100%; border: 0; border-radius: 999px; padding: 13px 20px; background: #58c6c0; color: #061b23; font: inherit; font-weight: 800; }
-  </style>
-</head>
-<body>
-  <main>
-    <img src="/cloud/icons/icon-192-v2.png?rev=20260810-2" alt="">
-    <h1>ネットワークに接続できません</h1>
-    <p>T-Cloud Storageは、安全にデータを取得するため通信が必要です。接続を確認して、もう一度お試しください。</p>
-    <button type="button" onclick="location.reload()">もう一度接続する</button>
-  </main>
-</body>
-</html>
+}

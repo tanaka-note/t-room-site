@@ -1,13 +1,13 @@
-const CACHE_NAME = "t-room-kokoro-tenbin-kokoro-tenbin-1d442317e6c4";
+const CACHE_NAME = "t-room-kokoro-tenbin-kokoro-tenbin-b92947626221";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=kokoro-tenbin-1d442317e6c4",
+  "./index.html?v=kokoro-tenbin-b92947626221",
   "./icon.svg",
-  "/apps/kokoro-tenbin/kokoro-tenbin.css?v=kokoro-tenbin-1d442317e6c4",
-  "/apps/kokoro-tenbin/kokoro-tenbin.js?v=kokoro-tenbin-1d442317e6c4",
-  "/apps/kokoro-tenbin/manifest.webmanifest?v=kokoro-tenbin-1d442317e6c4",
-  "/assets/pwa-auto-update.js?v=kokoro-tenbin-1d442317e6c4"
+  "/apps/kokoro-tenbin/kokoro-tenbin.css?v=kokoro-tenbin-b92947626221",
+  "/apps/kokoro-tenbin/kokoro-tenbin.js?v=kokoro-tenbin-b92947626221",
+  "/apps/kokoro-tenbin/manifest.webmanifest?v=kokoro-tenbin-b92947626221",
+  "/assets/pwa-auto-update.js?v=kokoro-tenbin-b92947626221"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
@@ -48,6 +48,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
+          if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
@@ -62,7 +63,8 @@ self.addEventListener("fetch", (event) => {
       if (cached) return cached;
 
       return fetch(event.request).then((response) => {
-        const copy = response.clone();
+        if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
+          const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       });

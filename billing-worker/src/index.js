@@ -1,3 +1,4 @@
+import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
@@ -68,6 +69,8 @@ function billingLinkTarget(account) {
 
 export default {
   async fetch(request, env, context) {
+    const browserResponse = lineBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     try {
       const url = new URL(request.url);
       if (!isAllowedProtocol(url, env)) return secureResponse(json({ error: "HTTPSでアクセスしてください。" }, 403));

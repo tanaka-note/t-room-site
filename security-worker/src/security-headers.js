@@ -1,7 +1,8 @@
+import { LINE_BROWSER_SCRIPT_CSP, LINE_BROWSER_STYLE_CSP } from "../../assets/line-browser-csp.mjs";
 export const SECURITY_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self'",
+  `script-src 'self' 'wasm-unsafe-eval' ${LINE_BROWSER_SCRIPT_CSP}`,
+  `style-src 'self' ${LINE_BROWSER_STYLE_CSP}`,
   "img-src 'self' data:",
   "connect-src 'self'",
   "base-uri 'none'",

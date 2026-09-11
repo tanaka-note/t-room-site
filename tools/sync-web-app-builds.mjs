@@ -1,4 +1,5 @@
-import { loadWebAppRegistry, syncContentHashApp } from "./web-app-registry.mjs";
+await import("./sync-line-browser-policy.mjs");
+const { loadWebAppRegistry, syncContentHashApp } = await import("./web-app-registry.mjs");
 
 const registry = await loadWebAppRegistry();
 const results = [];

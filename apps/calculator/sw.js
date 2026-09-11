@@ -1,15 +1,15 @@
-const CACHE_NAME = "t-room-calculator-calculator-593964fb532b";
+const CACHE_NAME = "t-room-calculator-calculator-1c5a2832bf14";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=calculator-593964fb532b",
+  "./index.html?v=calculator-1c5a2832bf14",
   "./icon-192.png",
   "./icon-512.png",
   "./icon.svg",
-  "/apps/calculator/calculator.css?v=calculator-593964fb532b",
-  "/apps/calculator/calculator.js?v=calculator-593964fb532b",
-  "/apps/calculator/manifest.webmanifest?v=calculator-593964fb532b",
-  "/assets/pwa-auto-update.js?v=calculator-593964fb532b"
+  "/apps/calculator/calculator.css?v=calculator-1c5a2832bf14",
+  "/apps/calculator/calculator.js?v=calculator-1c5a2832bf14",
+  "/apps/calculator/manifest.webmanifest?v=calculator-1c5a2832bf14",
+  "/assets/pwa-auto-update.js?v=calculator-1c5a2832bf14"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
@@ -50,6 +50,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
+          if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
@@ -64,7 +65,8 @@ self.addEventListener("fetch", (event) => {
       if (cached) return cached;
 
       return fetch(event.request).then((response) => {
-        const copy = response.clone();
+        if (!response.ok || response.headers.get("X-Tlain-Browser-Policy") || /no-store/i.test(response.headers.get("Cache-Control") || "")) return response;
+          const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       });

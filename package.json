@@ -6,6 +6,8 @@
     "date-picker:test": "node tools/test-troom-date-picker.mjs",
     "asset-report:test": "node tools/test-asset-report-history.mjs",
     "brand:test": "node tools/test-brand-naming.mjs",
+    "browser-policy:test": "node --test tools/test-line-browser.mjs",
+    "browser-policy:test:browser": "node tools/test-line-browser.browser.mjs",
     "password-auth:test": "node --test tools/test-password-auth.mjs",
     "web-apps:sync": "node tools/sync-web-app-builds.mjs",
     "web-apps:test": "node tools/test-web-app-contract.mjs && node tools/test-service-worker-app-shell.mjs && node tools/test-pwa-auto-update.mjs && node tools/test-web-update-blockers.mjs && node tools/test-calculator-fullscreen-layout.mjs",
