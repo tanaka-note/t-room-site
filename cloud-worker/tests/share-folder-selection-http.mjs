@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 globalThis.window = globalThis;
 await import("../public/vendor/argon2.umd.min.js");
@@ -226,10 +227,12 @@ tooMany.body.selectedFolders = Array.from({ length: 101 }, (_, position) => ({ i
 await expectStatus("101件拒否", await api("/shares", "admin", { method: "POST", body: JSON.stringify(tooMany.body) }), 400);
 
 cookies.member = await sessionCookie("member", childA.id);
-await expectStatus("member共有作成拒否", await api("/shares", "member", {
+// A role-only member Cookie is not an authenticated passkey session. The real
+// authenticated member's 403 is covered by member-api-boundary and integration.
+await expectStatus("パスキー未認証memberの共有作成拒否", await api("/shares", "member", {
   method: "POST",
   body: JSON.stringify((await sharePayload([childA, rootB])).body)
-}), 403);
+}), 401);
 
 await expectStatus("副管理者A解除", await api(`/folders/${rootA.id}/unlock`, "subadmin", {
   method: "POST", body: JSON.stringify({ authProof: rootA.payload.authProof })
@@ -250,7 +253,7 @@ if (!hundredShare.result.sharePath) throw new Error("100フォルダ共有を作
 
 const expiredShare = await createShare(hundredFolders.slice(0, 2));
 const expiredAt = Math.floor(Date.now() / 1000) - 1;
-execSync(`pnpm exec wrangler d1 execute cloud-db --local --command "UPDATE cloud_shares SET expires_at = ${expiredAt} WHERE id = ${Number(expiredShare.result.id)}"`, { stdio: "ignore" });
+execFileSync(process.execPath, [fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url)), "d1", "execute", "cloud-db", "--local", "--command", `UPDATE cloud_shares SET expires_at = ${expiredAt} WHERE id = ${Number(expiredShare.result.id)}`], { cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: "ignore" });
 await expectStatus("期限切れアクセス拒否", await publicRequest(expiredShare, ""), 410);
 
 await expectStatus("共有停止", await api(`/shares/${share.result.id}/stop`, "admin", { method: "POST", body: "{}" }), 200);

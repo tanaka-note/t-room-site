@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-5b18440c289d";
+const APP_BUILD_ID = "cloud-fffffbab25ec";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -6956,7 +6956,7 @@ function syncPreviewPlaybackModeButton(button, media, mediaKind) {
   const active = state.previewPlaybackMode !== "off";
   const label = previewPlaybackModeLabel(mediaKind);
   media.loop = state.previewPlaybackMode === "repeat-one";
-  button.textContent = state.previewPlaybackMode === "continuous-audio" ? "連続" : "↻";
+  button.innerHTML = state.previewPlaybackMode === "continuous-audio" ? "連続" : TCloudUI.icon("repeat");
   button.title = label;
   button.setAttribute("aria-label", label);
   button.setAttribute("aria-pressed", String(active));
@@ -7185,7 +7185,7 @@ function addPreviewPlayerControls(stage, video, file) {
     <button class="preview-player-button preview-player-play" type="button" aria-label="再生">${previewControlIcon("play")}</button>
     <span class="preview-player-time">0:00 / 0:00</span>
     <div class="preview-player-seek" role="slider" tabindex="-1" aria-label="再生位置" aria-valuemin="0" aria-valuemax="1000" aria-valuenow="0" aria-disabled="true"></div>
-    <button class="preview-player-button preview-playback-mode preview-player-mode" type="button" aria-label="リピート：オフ" aria-pressed="false">↻</button>
+    <button class="preview-player-button preview-playback-mode preview-player-mode" type="button" aria-label="リピート：オフ" aria-pressed="false"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/></svg></button>
     <button class="preview-player-button preview-player-mute" type="button" aria-label="消音">${previewControlIcon("volume")}</button>
     <button class="preview-player-button preview-player-fullscreen" type="button" aria-label="全画面で表示" aria-pressed="false">${previewControlIcon("fullscreen")}</button>`;
   const playButton = controls.querySelector(".preview-player-play");

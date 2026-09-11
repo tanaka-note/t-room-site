@@ -5,7 +5,7 @@ import {createRequire} from 'node:module';
 import {resolve, extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const {webkit,chromium,devices}=createRequire(new URL('../../diary-worker/package.json',import.meta.url))('playwright');
-const root=fileURLToPath(new URL('../../',import.meta.url));
+const root=process.env.TCLOUD_TEST_SOURCE_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const before=process.argv.includes('--reproduce');
 const server=createServer((req,res)=>{
  try {
@@ -14,6 +14,9 @@ const server=createServer((req,res)=>{
   if(path.startsWith('assets/')||path.startsWith('security/')) {res.setHeader('Content-Type','text/javascript');res.end('');return;}
   if(!path.startsWith('cloud-worker/public/')) {res.writeHead(404).end();return;}
   let data=readFileSync(resolve(root,path));
+  // Playwright cannot launch an installed iOS PWA. Exercise its CSS branch
+  // explicitly as well as navigator.standalone; this is emulation, not a device.
+  if(path.endsWith('.css')&&req.headers.cookie?.includes('ui-standalone=1'))data=Buffer.from(data.toString().replaceAll('@media (display-mode: standalone)','@media all'));
   if(path==='cloud-worker/public/cloud.js') {
    data=Buffer.from(data.toString().replace('document.addEventListener("DOMContentLoaded", initialize);','')+`
     globalThis.__ui={state,fileCard,folderCard,installThumbnailBlob,loadEncryptedThumbnail,displayCacheScope,resetEncryptedThumbnailLoading,rememberCurrentNavigationPosition,restoreNavigationPosition,resetFolderScrollPosition,restorePreviewOrigin,selectFile,clearFileSelection,bindEvents};
@@ -36,6 +39,7 @@ try {
    for(const standalone of [false,true]) {
     const context=await browser.newContext({...devices[name==='webkit'?'iPhone 13':'Pixel 7'],viewport:{width:390,height:740}});
     if(standalone) await context.addInitScript(()=>{Object.defineProperty(navigator,'standalone',{value:true});const match=window.matchMedia.bind(window);window.matchMedia=q=>q==='(display-mode: standalone)'?{...match(q),matches:true,addEventListener(){}}:match(q);});
+    if(standalone)await context.addCookies([{name:'ui-standalone',value:'1',url:origin}]);
     const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(origin+'/cloud/');await page.waitForFunction(()=>globalThis.__ui);await page.evaluate(()=>__show());
     const baseline=await page.evaluate(()=>{const nav=document.querySelector('.mobile-nav'),text=document.querySelector('.file-copy strong');return {color:getComputedStyle(text).color,ink:getComputedStyle(document.documentElement).color,navPosition:getComputedStyle(nav).position,invalidCss:[...document.styleSheets].flatMap(s=>[...s.cssRules]).some(r=>r.selectorText==='.troom-passkey-account-dialog'),svg:!!nav.querySelector('svg')};});
@@ -80,6 +84,8 @@ try {
       }finally {globalThis.TCloudSession=saved;}
      });
      assert.deepEqual(thumbnails,{recovered:true,recoveredRequests:2,cacheRequests:0,deniedRequests:1,failedRequests:4,preserved:'preserve',staleImage:false});
+     const formats=await page.evaluate(async()=>{const canvas=document.createElement('canvas');canvas.width=16;canvas.height=16;canvas.getContext('2d').fillRect(0,0,16,16);const results=[];for(const type of ['image/png','image/jpeg','image/webp']){const blob=await new Promise(r=>canvas.toBlob(r,type));const decoded=await TCloudUI.decodeThumbnail(blob);results.push({requested:type,actual:blob.type,width:decoded.image.naturalWidth});URL.revokeObjectURL(decoded.url);}return results;});
+     for(const format of formats)assert.equal(format.width,16,JSON.stringify(format));
      await page.evaluate(()=>__ui.resetFolderScrollPosition());
      const dialogs=await page.evaluate(()=>{const d=document.querySelector('#folder-dialog');d.showModal();const rect=d.getBoundingClientRect();const font=getComputedStyle(d.querySelector('input')).fontSize;d.close();return {top:rect.top,bottom:rect.bottom,font};});assert.ok(dialogs.top>=0&&dialogs.bottom<=740);assert.equal(dialogs.font,'16px');
      console.log('PASS mobile UI',name,{standalone,viewportChanges:5,history:restored,thumbnails});
@@ -94,6 +100,8 @@ try {
    await desktop.evaluate(()=>__ui.resetFolderScrollPosition());
    await desktop.locator('.file-select-button').first().click();assert.equal(await desktop.locator('.file-card.selected').count(),1);
    await desktop.evaluate(()=>__ui.clearFileSelection(true,false));await desktop.locator('#display-toggle').click();assert.equal(await desktop.locator('#content-grid').evaluate(e=>e.classList.contains('list-mode')),true);
+   const updateBlocks=await desktop.evaluate(()=>['uploading','activeFolderUploadOperationId','downloadActive','offlineActive','pendingSafetyUpload','filePickerActive'].map(key=>{const saved=__ui.state[key];__ui.state[key]=true;const event=new Event('troom:before-auto-update',{cancelable:true});document.dispatchEvent(event);__ui.state[key]=saved;return [key,event.defaultPrevented];}));
+   for(const [key,blocked] of updateBlocks)assert.equal(blocked,true,'auto update must defer during '+key);
    console.log('PASS desktop selection, view mode and document scrolling',name);await desktop.close();
   } finally {await browser.close();}
  }

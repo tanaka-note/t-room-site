@@ -71,7 +71,7 @@ form>.primary { margin-top:18px; }
 .file .file-select-button { position:absolute; z-index:4; top:9px; right:9px; display:grid; width:31px; height:31px; padding:0; place-items:center; border:2px solid rgba(255,255,255,.96); border-radius:50%; background:rgba(255,255,255,.92); box-shadow:0 2px 10px rgba(23,33,42,.2); }
 .file .file-select-button::before { content:""; width:12px; height:12px; border:1.5px solid #75828b; border-radius:50%; }
 .file.selected .file-select-button { background:var(--teal); }
-.file.selected .file-select-button::before { content:"✓"; width:auto; height:auto; border:0; color:white; font-size:.9rem; font-weight:900; }
+.file.selected .file-select-button::before { content:""; width:7px; height:12px; margin-top:-3px; border:solid currentColor; border-width:0 2px 2px 0; border-radius:0; transform:rotate(45deg); }
 .folder button { display:grid; grid-template-columns:46px minmax(0,1fr); align-items:center; gap:12px; min-height:86px; padding:14px; }
 .folder i,.file .symbol { display:grid; place-items:center; width:44px; height:40px; border-radius:10px; color:var(--teal-dark); background:var(--teal-soft); font-style:normal; font-weight:900; }
 .folder strong,.file strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

@@ -11,6 +11,7 @@ const b64 = (bytes) => Buffer.from(bytes).toString("base64url");
 async function cookie(role) {
   const payload = {
     role,
+    authMethod: "password",
     label: role === "admin" ? "管理者" : "副管理者",
     sessionId: webcrypto.randomUUID(),
     exp: Math.floor(Date.now() / 1000) + 3600,

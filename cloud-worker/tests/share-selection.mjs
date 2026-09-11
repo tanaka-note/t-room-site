@@ -11,7 +11,7 @@ assert.match(html, /id="share-selection-bar"/);
 assert.match(html, /id="share-selection-download"[^>]*>まとめて保存</);
 assert.match(html, /ZIPにまとめず/);
 assert.match(css, /\.file \.file-select-button/);
-assert.match(css, /\.file\.selected \.file-select-button::before \{ content:"✓"/);
+assert.match(css, /\.file\.selected \.file-select-button::before \{ content:"";[^}]*border:solid currentColor;[^}]*transform:rotate\(45deg\)/);
 assert.match(client, /selectedFiles: new Map\(\)/);
 assert.match(client, /state\.targetType === "folder"/);
 assert.match(client, /function toggleFileSelection/);

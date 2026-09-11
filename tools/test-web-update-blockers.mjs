@@ -10,7 +10,10 @@ const [diary, billing, cloud, share] = await Promise.all([
   readFile(resolve(workspace, "cloud-worker/public/share.js"), "utf8")
 ]);
 
-for (const state of ["editorDirty", "editorComposing", "photoPreparing", "photoPickerActive"]) {
+// Diary now centralizes dirty-state detection in its existing editor helper.
+assert.match(diary, /troom:before-auto-update[\s\S]{0,500}hasEditorChanges\(\)/);
+assert.match(diary, /function hasEditorChanges\(\)[\s\S]*?state\.editorDirty/);
+for (const state of ["editorComposing", "photoPreparing", "photoPickerActive"]) {
   assert.match(diary, new RegExp(`troom:before-auto-update[\\s\\S]{0,500}state\\.${state}`), `日記の${state}を保護してください`);
 }
 assert.match(diary, /troom:before-auto-update[\s\S]{0,600}dialog\[open\]/);

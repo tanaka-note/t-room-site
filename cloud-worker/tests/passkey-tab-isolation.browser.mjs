@@ -46,7 +46,9 @@ const server=createServer(async(req,res)=>{
    res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;
   }
   let path=url.pathname==='/'||url.pathname==='/cloud/'?'cloud-worker/public/index.html':url.pathname==='/cloud/offline'?'cloud-worker/public/offline.html':url.pathname.startsWith('/cloud/')?'cloud-worker/public/'+url.pathname.slice(7):url.pathname.slice(1);
-  if(path==='security/passkey-client.js') {res.setHeader('Content-Type','text/javascript');res.end('');return;}
+  // This fixture drives SW registration explicitly; the updater has a separate
+  // browser suite and would otherwise race this test's instrumented startup.
+  if(path==='security/passkey-client.js'||path==='assets/pwa-auto-update.js') {res.setHeader('Content-Type','text/javascript');res.end('');return;}
   if(!path.startsWith('cloud-worker/public/')&&!path.startsWith('assets/')) {res.writeHead(404);res.end();return;}
   let data=readFileSync(resolve(root,path));
   if(path==='cloud-worker/public/cloud.js') {
