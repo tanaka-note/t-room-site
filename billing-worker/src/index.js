@@ -1,3 +1,4 @@
+import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
 import { LOGIN_LOCK_MINUTES, isLoginLocked } from "./login-limit.js";
@@ -134,6 +135,12 @@ async function handleApi(request, env, url, path, context) {
              failed_login_attempts, locked_until
       FROM billing_accounts WHERE login_id = ? COLLATE NOCASE LIMIT 1
     `).bind(loginId).first();
+    const passwordPolicy = account ? await readPasswordAuthPolicy(env, "billing", account.id) : null;
+    if (passwordPolicy && !passwordPolicy.enabled) {
+      await writeAudit(env, { eventType: "login_failure", targetAccountId: account.id, details: { reason: "password_auth_disabled" } });
+      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { reason: "password_auth_disabled" } });
+      throw loginRejected();
+    }
     const fingerprint = await loginFingerprint(request, loginId, env);
     const sourceAttempt = await env.DB.prepare(`
       SELECT failed_count, first_failed_at, locked_until
@@ -220,7 +227,7 @@ async function handleApi(request, env, url, path, context) {
     const policy = sessionPolicy(env, "password");
     const sessionId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
-    const token = await createSessionToken(account, policy.ttlSeconds, env, { authMethod: "password", sessionId, startedAt });
+    const token = await createSessionToken(account, policy.ttlSeconds, env, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
     await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt, sessionVersion: billingSessionVersion(env, account.session_version) });
@@ -229,7 +236,7 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/passkey/handoff" && request.method === "POST") {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
-    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。ID・パスワードでログインしてください。");
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。ID・パスワードが有効なアカウントをご利用いただくか、管理者へ復旧を依頼してください。");
     const body = await readJson(request, 4096);
     const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "billing");
     if (!handoff) throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
@@ -632,6 +639,7 @@ async function readSession(request, env) {
       SELECT id, display_name, role, session_version, is_active FROM billing_accounts WHERE id = ?
     `).bind(payload.accountId).first();
     if (!account?.is_active || account.role !== payload.role || Number(account.session_version) !== Number(payload.accountVersion)) return null;
+    if (!(await validatePasswordSession(payload, env, "billing"))) return null;
     if (!(await validateServicePasskeySession(payload, env, "billing"))) return null;
     return {
       accountId: account.id,
@@ -642,6 +650,7 @@ async function readSession(request, env) {
       serviceLinkId: payload.serviceLinkId || null,
       serviceAccountId: payload.serviceAccountId || null,
       passkeySessionEpoch: payload.passkeySessionEpoch || null,
+      passwordSessionEpoch: payload.passwordSessionEpoch ?? 0,
       authMethod: payload.authMethod || "password",
       sessionId: payload.sessionId || null,
       startedAt: payload.startedAt || null,
@@ -664,6 +673,7 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     serviceLinkId: auth.serviceLinkId || null,
     serviceAccountId: auth.serviceAccountId || null,
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
+    ...passwordSessionClaims(auth),
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
@@ -700,6 +710,7 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
+    passwordSessionEpoch: session.passwordSessionEpoch,
     authMethod: session.authMethod,
     sessionId: session.sessionId,
     startedAt: session.startedAt
