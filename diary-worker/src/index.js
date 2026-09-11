@@ -1,3 +1,4 @@
+import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { splitSearchTerms } from "../public/diary-search.js";
@@ -188,6 +189,11 @@ async function handleApi(request, env, url, path, context) {
     }
 
     const requestedAccount = await findAccountByLoginId(loginId, env);
+    const passwordPolicy = requestedAccount ? await readPasswordAuthPolicy(env, "diary", requestedAccount.id) : null;
+    if (passwordPolicy && !passwordPolicy.enabled) {
+      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { reason: "password_auth_disabled" } });
+      return json({ error: "IDまたはパスワードが違います。" }, 401);
+    }
     const now = Math.floor(Date.now() / 1000);
     const fingerprint = requestedAccount ? await loginFingerprint(request, requestedAccount, env) : "";
     if (fingerprint) {
@@ -228,7 +234,7 @@ async function handleApi(request, env, url, path, context) {
     const policy = getSessionPolicy(env, "password");
     const sessionId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
-    const token = await createSessionToken(account, policy, env, account.householdId, { authMethod: "password", sessionId, startedAt });
+    const token = await createSessionToken(account, policy, env, account.householdId, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
     await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt, sessionVersion: diarySessionVersion(env, account.sessionVersion) });
@@ -251,7 +257,7 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/passkey/handoff" && request.method === "POST") {
     if (!validMutationRequest(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) return json({ error: "パスキー機能は一時停止中です。ID・パスワードでログインしてください。" }, 503);
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) return json({ error: "パスキー機能は一時停止中です。ID・パスワードが有効なアカウントをご利用いただくか、管理者へ復旧を依頼してください。" }, 503);
     const body = await readJson(request, 4096);
     const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "diary");
     if (!handoff) return json({ error: "パスキー認証の有効期限が切れています。もう一度お試しください。" }, 401);
@@ -320,6 +326,7 @@ async function handleApi(request, env, url, path, context) {
       serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.serviceAccountId,
       passkeySessionEpoch: session.passkeySessionEpoch,
+      passwordSessionEpoch: session.passwordSessionEpoch,
       authMethod: session.authMethod,
       sessionId: session.sessionId,
       startedAt: session.startedAt,
@@ -2132,6 +2139,7 @@ async function readSession(request, env) {
     if (!account || account.role !== payload.role) return null;
     if (String(payload.version || "1") !== String(env.SESSION_VERSION || "1")) return null;
     if (Number(payload.accountVersion || 1) !== Number(account.sessionVersion || 1)) return null;
+    if (!(await validatePasswordSession(payload, env, "diary"))) return null;
     if (!(await validateServicePasskeySession(payload, env, "diary"))) return null;
     const activeHouseholdId = account.isGlobalOwner && payload.activeHouseholdId
       ? payload.activeHouseholdId
@@ -2174,6 +2182,7 @@ async function withRollingSession(request, response, env, url, path) {
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
+    passwordSessionEpoch: session.passwordSessionEpoch,
     authMethod: session.authMethod,
     sessionId: session.sessionId,
     startedAt: session.startedAt
@@ -2198,6 +2207,7 @@ async function createSessionToken(account, policy, env, activeHouseholdId = acco
     serviceLinkId: auth.serviceLinkId || null,
     serviceAccountId: auth.serviceAccountId || null,
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
+    ...passwordSessionClaims(auth),
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
@@ -2289,6 +2299,7 @@ async function changeInitialPassword(request, env, session, url) {
     serviceLinkId: session.serviceLinkId,
     serviceAccountId: session.serviceAccountId,
     passkeySessionEpoch: session.passkeySessionEpoch,
+    passwordSessionEpoch: session.passwordSessionEpoch,
     authMethod: session.authMethod,
     sessionId: session.sessionId,
     startedAt: session.startedAt,
