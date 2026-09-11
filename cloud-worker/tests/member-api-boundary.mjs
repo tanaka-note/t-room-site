@@ -34,8 +34,9 @@ context.globalThis = context;
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
 vm.runInNewContext(source, context);
 async function api(cookie, path, method = "GET", body) {
+  const sessionId = cookie ? JSON.parse(Buffer.from(cookie.split("=")[1].split(".")[0], "base64url")).sessionId : null;
   const request = new Request(`https://example.test/cloud/api${path}`, { method,
-    headers: { Origin: "https://example.test", ...(cookie ? { Cookie: cookie } : {}), "Content-Type": "application/json" },
+    headers: { Origin: "https://example.test", ...(cookie ? { Cookie: cookie, "X-TCloud-Session": sessionId } : {}), "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body) });
   const response = await context.worker.fetch(request, env, { waitUntil() {} });
   return { status: response.status, body: await response.json(), cookie: response.headers.get("set-cookie")?.split(";")[0] };

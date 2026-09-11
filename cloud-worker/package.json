@@ -7,6 +7,7 @@
     "deploy": "node ../tools/sync-web-app-builds.mjs && wrangler deploy",
     "check": "node --check src/index.js && node --check src/youtube-search.js && node --check public/crypto-vault.js && node --check public/file-safety.js && node --check public/media-range.js && node --check public/offline-store.js && node --check public/display-cache.js && node --check public/display-cache-20260813-1.js && node --check public/media-client.js && node --check public/media-worker.js && node --check public/cloud.js && node --check public/share.js",
     "test:crypto": "node tests/crypto-roundtrip.mjs",
+    "test:session-browser": "node tests/passkey-tab-isolation.browser.mjs",
     "test:share-folders": "node tests/share-folder-selection.mjs",
     "test:share-folders:http": "node tests/share-folder-selection-http.mjs",
     "test:share-folders:browser": "node tests/share-folder-selection.browser.mjs",

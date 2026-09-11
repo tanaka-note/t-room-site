@@ -156,8 +156,18 @@ async function initialize() {
   updateInstallButtons();
   await restoreRememberedLogin();
   try {
+    await clearLegacyPasskeyAdminKeys();
+    if (globalThis.TCloudSession?.isBlocked()) { showLoginView(); showLoginError("別のタブでログイン状態が変わりました。利用するアカウントを選び直してください。"); return; }
     const session = await api("/session");
     if (session.authenticated) {
+      // A new tab (including one upgraded from an older client) has no saved
+      // selection. A shared passkey Cookie alone must not select its scope.
+      if (session.authMethod === "passkey" && globalThis.TCloudSession && !TCloudSession.context()) {
+        showLoginView();
+        showLoginError("利用するアカウントを選択してログインしてください。");
+        return;
+      }
+      globalThis.TCloudSession?.bind(session, false);
       state.session = session;
       if (session.authMethod === "passkey") {
         const authentication = await TRoomPasskeys.authenticate("cloud", (links) => resumePasskeyLink(links, session));
@@ -445,7 +455,7 @@ async function updateInstalledApp() {
   button.title = "更新を確認中";
   setNotice("最新版を確認しています…");
   try {
-    const versionResponse = await fetch(`${API}/app-version?app-update=${Date.now()}`, {
+    const versionResponse = await TCloudSession.fetch(`${API}/app-version?app-update=${Date.now()}`, {
       cache: "no-store",
       credentials: "same-origin"
     });
@@ -925,6 +935,7 @@ function toggleNewFolderPasswordInput() {
 
 async function login(event) {
   event.preventDefault();
+  globalThis.TCloudSession?.beginSelection();
   showLoginError("");
   const submit = event.submitter || $("#login-form button[type='submit']");
   submit.disabled = true;
@@ -951,10 +962,12 @@ async function login(event) {
 }
 
 async function loginWithPasskey() {
+  globalThis.TCloudSession?.beginSelection();
   const button = $("#passkey-login");
   showLoginError("");
   button.disabled = true;
   try {
+    await clearLegacyPasskeyAdminKeys();
     const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
     requirePasskeyPrf(authentication);
     const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
@@ -998,6 +1011,7 @@ function resumePasskeyLink(links, session) {
 }
 
 async function enterApp(session, password = "", accountKey = null, passkeyContext = null) {
+  globalThis.TCloudSession?.bind(session, false);
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
   state.session = session;
   state.loginId = String(session.loginId || $("#login-id").value || "").trim().toLowerCase();
@@ -1034,10 +1048,14 @@ async function enterApp(session, password = "", accountKey = null, passkeyContex
 }
 
 async function logout() {
+  globalThis.TCloudSession?.check();
+  await api("/logout", { method: "POST", body: "{}" });
   await stopPictureInPicturePreview();
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
-  await clearCachedAdminKeys();
-  await api("/logout", { method: "POST", body: "{}" });
+  if (state.session?.authMethod === "passkey") await clearLegacyPasskeyAdminKeys();
+  else await clearCachedAdminKeys();
+  releaseSessionState();
+  globalThis.TCloudSession?.end();
   location.reload();
 }
 
@@ -1249,8 +1267,14 @@ async function restoreNavigationPosition(entry) {
 }
 
 async function prepareCryptoSession(password = "", accountKey = null, passkeyContext = null) {
+  const selectedSession = state.session;
+  const assertSelected = () => {
+    globalThis.TCloudSession?.check();
+    if (state.session !== selectedSession) throw Object.assign(new Error("ログイン状態が変わりました。"), {status:419});
+  };
   try {
     const config = await api("/crypto-config");
+    assertSelected();
     state.crypto.config = config;
     if (!config.initialized) {
       setCryptoStatus("暗号化鍵：初期設定前", false);
@@ -1258,13 +1282,15 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
       else setNotice("管理者による暗号化の初期設定が必要です。", true);
       return;
     }
-    state.crypto.publicKey = await crypto.subtle.importKey(
+    const publicKey = await crypto.subtle.importKey(
       "jwk",
       config.publicKeyJwk,
       { name: "RSA-OAEP", hash: "SHA-256" },
       false,
       ["encrypt"]
     );
+    assertSelected();
+    state.crypto.publicKey = publicKey;
     state.crypto.fileEncryptionReady = true;
     syncAvailableActions();
     if (state.session.authMethod === "passkey") {
@@ -1272,8 +1298,10 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
       if (state.session.role === "admin") {
         if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
         if (!keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
-        state.crypto.adminPrivateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
-        await saveCachedAdminKey(config, state.crypto.adminPrivateKey);
+        const privateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
+        assertSelected();
+        state.crypto.adminPrivateKey = privateKey;
+        // Passkey-unwrapped private keys remain in this document only.
         setCryptoStatus("暗号化鍵：パスキーで解除済み", true);
         return;
       }
@@ -1282,6 +1310,7 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
         if (!keys.client_private_prf || !keys.folder_key_rsa || !state.session.rootFolderId) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
         const privateKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf);
         const folderKey = await TRoomCrypto.unlockDelegatedFolderKey(privateKey, keys.folder_key_rsa.wrappedKey);
+        assertSelected();
         state.crypto.folderKeys.set(Number(state.session.rootFolderId), folderKey);
         setCryptoStatus("暗号化鍵：パスキーで解除済み", true);
         return;
@@ -1296,6 +1325,7 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
     }
     if (!password) {
       const cachedPrivateKey = await loadCachedAdminKey(config);
+      assertSelected();
       if (cachedPrivateKey) {
         state.crypto.adminPrivateKey = cachedPrivateKey;
         setCryptoStatus("暗号化鍵：解除済み", true);
@@ -1307,11 +1337,13 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
     }
     const resolvedAccountKey = accountKey || await TRoomCrypto.deriveAccountKey(password, state.loginId, state.credentialSalt);
     const privateKey = await TRoomCrypto.unlockAdminPrivateKey(resolvedAccountKey, config);
+    assertSelected();
     state.crypto.accountKey = resolvedAccountKey;
     state.crypto.adminPrivateKey = privateKey;
     await saveCachedAdminKey(config, privateKey);
     setCryptoStatus("暗号化鍵：解除済み", true);
   } catch (error) {
+    if (error.status === 419 || state.session !== selectedSession) throw error;
     setCryptoStatus("暗号化鍵：要確認", false);
     setNotice(error.message, true);
     if (state.session?.authMethod === "passkey") throw error;
@@ -1400,6 +1432,7 @@ function openVaultCache() {
 }
 
 async function loadCachedAdminKey(config) {
+  if (state.session?.authMethod === "passkey" || state.session?.role !== "admin") return null;
   let database = null;
   try {
     database = await openVaultCache();
@@ -1419,6 +1452,7 @@ async function loadCachedAdminKey(config) {
 }
 
 async function saveCachedAdminKey(config, privateKey) {
+  if (state.session?.authMethod === "passkey" || state.session?.role !== "admin") return;
   if (!(privateKey instanceof CryptoKey) || privateKey.type !== "private" || privateKey.extractable) return;
   let database = null;
   try {
@@ -1453,6 +1487,49 @@ async function clearCachedAdminKeys() {
     database?.close();
   }
 }
+
+
+// Legacy passkey cache keys were generated only from passkey:<identityId>.
+// Folder-session keys and password-login keys are deliberately left intact.
+async function clearLegacyPasskeyAdminKeys() {
+  const database = await openVaultCache();
+  if (!database) return;
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(VAULT_CACHE_STORE, "readwrite");
+      const request = transaction.objectStore(VAULT_CACHE_STORE).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const record = cursor.value;
+        if (/^passkey:[A-Za-z0-9_-]+:/.test(String(cursor.key)) && !record?.cacheType
+          && record?.privateKey instanceof CryptoKey && record.privateKey.type === "private") cursor.delete();
+        cursor.continue();
+      };
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } finally { database.close(); }
+}
+
+function releaseSessionState() {
+  for (const controller of [state.itemLoadController, state.uploadAbort, state.downloadAbort, state.offlineAbort, ...state.thumbnailLoadControllers]) controller?.abort();
+  state.itemLoadGeneration++; state.previewGeneration++; state.thumbnailLoadGeneration++;
+  clearTimeout(state.displayCacheWriteTimer);
+  globalThis.TCloudMedia?.clearMedia?.();
+  void stopPictureInPicturePreview().catch(() => {});
+  clearPreviewUrl();
+  for (const url of state.thumbnailObjectUrls.values()) URL.revokeObjectURL(url);
+  state.thumbnailObjectUrls.clear();
+  state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
+  state.session = null; state.loginId = "";
+  state.files = []; state.folders = []; state.selectedFiles.clear(); state.selectedFolders.clear();
+  document.querySelectorAll("video,audio").forEach(media => { media.pause(); media.removeAttribute("src"); media.load(); });
+  document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
+  showLoginView();
+}
+globalThis.addEventListener?.("tcloud-session-invalid", releaseSessionState);
 
 function folderCacheKey(folderId) {
   return `${FOLDER_CACHE_PREFIX}${String(state.session?.sessionCacheId || "")}:${Number(folderId)}`;
@@ -2941,7 +3018,7 @@ function fileCard(file) {
   const thumbnail = cachedThumbnail
     ? `<img src="${escapeHtml(cachedThumbnail)}" alt="" loading="lazy">`
     : file.hasThumbnail && Number(file.cryptoVersion) !== 1
-      ? `<img src="${API}/files/${file.id}/thumbnail" alt="" loading="lazy">`
+      ? `<img src="${TCloudSession.scopedUrl(`${API}/files/${file.id}/thumbnail`)}" alt="" loading="lazy">`
       : `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
   button.innerHTML = `
     <div class="thumb">${thumbnail}</div>
@@ -3182,7 +3259,7 @@ async function loadEncryptedThumbnail(file, stage, signal, generation) {
       return;
     }
     if (file.hasDisplayThumbnail && file.mediaKind !== "video") {
-      const response = await fetch(`${API}/files/${file.id}/display-thumbnail`, { credentials: "same-origin", cache: "force-cache", signal });
+      const response = await TCloudSession.fetch(`${API}/files/${file.id}/display-thumbnail`, { credentials: "same-origin", cache: "force-cache", signal });
       if (!response.ok) return;
       const blob = await response.blob();
       if (signal.aborted || generation !== state.thumbnailLoadGeneration || !stage.isConnected) return;
@@ -3191,7 +3268,7 @@ async function loadEncryptedThumbnail(file, stage, signal, generation) {
       return;
     }
     if (!file.fileKey) return;
-    const response = await fetch(`${API}/files/${file.id}/thumbnail`, { credentials: "same-origin", cache: "no-store", signal });
+    const response = await TCloudSession.fetch(`${API}/files/${file.id}/thumbnail`, { credentials: "same-origin", cache: "no-store", signal });
     if (!response.ok) return;
     const bytes = await TRoomCrypto.decryptThumbnail(await response.arrayBuffer(), file.fileKey);
     if (signal.aborted || generation !== state.thumbnailLoadGeneration || !stage.isConnected) return;
@@ -4452,7 +4529,7 @@ async function chooseDownloadTargets(files) {
 async function downloadFile(file, signal, targetHandle) {
   if (Number(file.cryptoVersion) === 1) {
     if (!file.fileKey) throw new Error("ファイルの暗号化鍵を解除できません。");
-    const endpoint = `${API}/files/${file.id}/view`;
+    const endpoint = TCloudSession.scopedUrl(`${API}/files/${file.id}/view`);
     if (targetHandle) {
       await TCloudMedia.streamDownload(file, file.fileKey, endpoint, targetHandle, {
         signal,
@@ -4472,7 +4549,7 @@ async function downloadFile(file, signal, targetHandle) {
   // page does not have to retain gigabytes of data in memory.
   if (Number(file.sizeBytes || 0) > 64 * 1024 * 1024) {
     const link = document.createElement("a");
-    link.href = `${API}/files/${file.id}/download`;
+    link.href = TCloudSession.scopedUrl(`${API}/files/${file.id}/download`);
     link.download = file.name;
     link.style.display = "none";
     document.body.append(link);
@@ -4484,7 +4561,7 @@ async function downloadFile(file, signal, targetHandle) {
     });
     return;
   }
-  const response = await fetch(`${API}/files/${file.id}/download`, { credentials: "same-origin", cache: "no-store", signal });
+  const response = await TCloudSession.fetch(`${API}/files/${file.id}/download`, { credentials: "same-origin", cache: "no-store", signal });
   if (!response.ok) {
     let message = `通信に失敗しました（${response.status}）`;
     try { message = (await response.json()).error || message; } catch {}
@@ -6056,20 +6133,26 @@ function uploadPartRequest(path, body, signal, onProgress) {
     }
     const request = new XMLHttpRequest();
     const abort = () => request.abort();
-    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const expected = TCloudSession.check();
+    const release = TCloudSession.track({ abort });
+    const cleanup = () => { release(); signal?.removeEventListener("abort", abort); };
     request.open("PUT", `${API}${path}`, true);
+    for (const [name, value] of TCloudSession.headers()) request.setRequestHeader(name, value);
     request.withCredentials = true;
     request.responseType = "json";
     request.setRequestHeader("Content-Type", "application/octet-stream");
     request.upload.onprogress = (event) => onProgress?.(Number(event.loaded || 0), Number(event.total || body.byteLength || 0));
     request.onload = () => {
       cleanup();
+      try {
+        if (TCloudSession.check() !== expected || [401, 419].includes(request.status)) { TCloudSession.invalidate(); throw new Error("ログイン状態が変わりました。"); }
+      } catch (error) { reject(error); return; }
       const data = request.response && typeof request.response === "object" ? request.response : null;
       if (request.status >= 200 && request.status < 300) {
         resolve(data);
         return;
       }
-      if (request.status === 401 && state.session) location.reload();
+
       const error = new Error(data?.error || `通信に失敗しました（${request.status}）`);
       error.status = request.status;
       reject(error);
@@ -6706,7 +6789,7 @@ async function openPreview(file, options = {}) {
   const previewDate = previewDateDetails(file);
   $("#preview-date-label").textContent = previewDate.label;
   $("#preview-date").textContent = formatDate(previewDate.value);
-  $("#download-link").href = Number(file.cryptoVersion) === 1 ? "#" : `${API}/files/${file.id}/download`;
+  $("#download-link").href = Number(file.cryptoVersion) === 1 ? "#" : TCloudSession.scopedUrl(`${API}/files/${file.id}/download`);
   $("#edit-file-button").hidden = Boolean(file.offlineOnly) || !canRenameFile(file);
   $("#delete-file-button").hidden = Boolean(file.offlineOnly) || !canTrashFile(file);
   $("#delete-file-button").textContent = state.session.canDelete ? "ゴミ箱へ" : "削除";
@@ -6717,7 +6800,7 @@ async function openPreview(file, options = {}) {
   stage.classList.remove("has-custom-video-controls", "is-media-ready");
   stage.innerHTML = "";
   syncPreviewNavigation(file);
-  let url = `${API}/files/${file.id}/view`;
+  let url = TCloudSession.scopedUrl(`${API}/files/${file.id}/view`);
   let preparedVideo = null;
   if (Number(file.cryptoVersion) === 1) {
     if (!file.fileKey) {
@@ -8402,11 +8485,11 @@ async function loadDeletionRequestCount() {
 async function api(path, options = {}) {
   const headers = new Headers(options.headers);
   if (!options.rawBody) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${API}${path}`, { ...options, headers, credentials: "same-origin" });
+  const response = await TCloudSession.fetch(`${API}${path}`, { ...options, headers, credentials: "same-origin" });
   const type = response.headers.get("Content-Type") || "";
   const data = type.includes("application/json") ? await response.json() : null;
   if (!response.ok) {
-    if (response.status === 401 && state.session) location.reload();
+
     const error = new Error(data?.error || `通信に失敗しました（${response.status}）`);
     error.status = response.status;
     throw error;

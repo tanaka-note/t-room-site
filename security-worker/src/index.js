@@ -681,19 +681,22 @@ async function saveOwnTCloudEnvelope(request, env) {
   let alreadyExisting = false;
   if (envelopeType === "client_private_prf") {
     const fingerprint = await sha256(canonicalJwk(publicKeyJwk));
-    const existing = await env.DB.prepare("SELECT public_key_fingerprint, public_key_jwk FROM security_tcloud_client_vaults WHERE credential_id = ? AND identity_id = ?").bind(identitySession.credentialId, identitySession.identityId).first();
-    alreadyExisting = Boolean(existing);
-    const existingFingerprint = existing?.public_key_fingerprint || (existing?.public_key_jwk ? await sha256(canonicalJwk(parseJson(existing.public_key_jwk, null))) : null);
-    if (existingFingerprint && existingFingerprint !== fingerprint) {
-      throw new HttpError(409, "このパスキーのT-Cloudクライアント鍵は既に登録されています。鍵ローテーションには再招待が必要です。");
-    }
-    statements.push(env.DB.prepare(`INSERT INTO security_tcloud_client_vaults
+    // The credential PK arbitrates concurrent setup requests. Never overwrite a
+    // vault, even if a preflight read or the supplied fingerprint agrees.
+    const inserted = await env.DB.prepare(`INSERT INTO security_tcloud_client_vaults
       (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
       VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(credential_id) DO UPDATE SET
-        public_key_jwk = excluded.public_key_jwk, public_key_fingerprint = excluded.public_key_fingerprint,
-        encrypted_payload = excluded.encrypted_payload, payload_iv = excluded.payload_iv, updated_at = CURRENT_TIMESTAMP`)
-      .bind(identitySession.credentialId, identitySession.identityId, JSON.stringify(publicKeyJwk), fingerprint, encryptedPayload, payloadIv));
+      ON CONFLICT(credential_id) DO NOTHING`)
+      .bind(identitySession.credentialId, identitySession.identityId, JSON.stringify(publicKeyJwk), fingerprint, encryptedPayload, payloadIv).run();
+    const saved = await env.DB.prepare("SELECT * FROM security_tcloud_client_vaults WHERE credential_id = ?").bind(identitySession.credentialId).first();
+    const savedJwk = parseJson(saved?.public_key_jwk, null);
+    const savedFingerprint = saved?.public_key_fingerprint || (savedJwk ? await sha256(canonicalJwk(savedJwk)) : null);
+    if (!saved || saved.identity_id !== identitySession.identityId || savedFingerprint !== fingerprint
+      || !savedJwk || canonicalJwk(savedJwk) !== canonicalJwk(publicKeyJwk)
+      || saved.encrypted_payload !== encryptedPayload || saved.payload_iv !== payloadIv) {
+      throw new HttpError(409, "このパスキーのT-Cloudクライアント鍵は既に登録されています。既存の鍵を使用してください。");
+    }
+    alreadyExisting = !inserted.meta?.changes;
   } else {
     statements.push(env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
       (id, identity_id, credential_id, service_link_id, envelope_type, public_key_jwk, encrypted_payload, payload_iv)

@@ -91,6 +91,10 @@ sessionは選択したserviceLinkId / serviceAccountId / role / rootFolderIdを�
 
 memberの一覧・サムネイル表示キャッシュはlink・root・sessionごとに分離し、再認証後に以前の解除状態を表示キャッシュから引き継がない。暗号化済みオフライン保存もmemberのlink・root単位とし、admin/subadminの保存領域を再利用しない。
 
+T-Cloudの各タブは選択済みsessionの公開識別子をsessionStorageに固定する。認証が必要な通信は`X-TCloud-Session`（ブラウザーが直接開くURLは`tcloudSession`）を送り、Workerは署名Cookieのsession IDとの一致をデータ返却・更新前に検証する。識別子は権限を付与せず、role・link・rootはCookieとSecurityの検証結果だけから決める。パスキーの通常APIでは識別子省略も拒否し、既存PWクライアントは省略可能とする。別タブの再認証で旧タブを停止・再選択状態にし、再読込でも新しいCookieの権限を無条件に採用しない。Service WorkerのRange通信と復号キャッシュも同じ照合を行い、ログアウト・不一致・ページ離脱でそのタブの再生登録を解除する。
+
+member vaultの登録はcredential単位のINSERTのみとし、競合時は保存済み公開鍵・指紋・暗号文・IVを照合する。同じ内容の再送は許し、異なる内容への置換は409で拒否する。既存委譲鍵の再生成は行わない。パスキーで解除した管理者秘密鍵はメモリー内だけに保持する。過去に`passkey:<identityId>:<config作成時刻>`で保存された管理者秘密鍵レコードだけを起動時に削除し、PW用鍵キャッシュ・folder-sessionレコード・暗号化済みオフラインデータを削除しない。
+
 ## Downloaderの利用許可
 
 初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。[2026-09-09調査記録](downloader-grants-review-20260909.md)を参照。

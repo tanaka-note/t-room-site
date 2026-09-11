@@ -159,6 +159,7 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
+    assertSessionContext(request, session, false);
     if (!session) return json({ authenticated: false });
     await recordSecurityAudit(env, request, {
       service: "cloud", eventType: "session_resume", outcome: "success",
@@ -196,6 +197,7 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) throw new HttpError(403, "不正なリクエストです。");
     const session = await readSession(request, env);
+    assertSessionContext(request, session);
     if (session) await recordSecurityAudit(env, request, {
       service: "cloud", eventType: "logout", outcome: "success", identityId: session.identityId,
       serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId || session.role,
@@ -226,6 +228,7 @@ async function handleApi(request, env, url, path, context) {
   }
 
   const session = await readSession(request, env);
+  assertSessionContext(request, session);
   if (!session) throw new HttpError(401, "ログインが必要です。");
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
@@ -301,6 +304,19 @@ async function handleApi(request, env, url, path, context) {
   if (deletionApprovalMatch && request.method === "POST") return approveDeletionRequest(Number(deletionApprovalMatch[1]), env, session);
 
   throw new HttpError(404, "Not found");
+}
+
+function assertSessionContext(request, session, required = true) {
+  if (!session) return;
+  // This is an equality constraint on the authenticated Cookie, never authority
+  // supplied by the client. The session ID fixes account, link and root together.
+  const header = request.headers.get("X-TCloud-Session");
+  const query = new URL(request.url).searchParams.get("tcloudSession");
+  const expected = header || query;
+  if ((header && query && header !== query) || (expected && expected !== session?.sessionId)
+    || (required && session?.authMethod === "passkey" && !expected)) {
+    throw new HttpError(419, "別のタブでログイン状態が変わりました。利用するアカウントを選び直してください。");
+  }
 }
 
 async function login(request, env, url, context) {
@@ -2461,6 +2477,7 @@ function publicFolderRecord(folder) {
 async function serveAsset(request, env, url, path) {
   const allowed = new Map([
     ["/", "/"],
+    ["/session-guard.js", "/session-guard.js"],
     ["/cloud.css", "/cloud-runtime-20260815-1.css"],
     ["/cloud.js", "/cloud-runtime-20260816-1.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
@@ -2496,7 +2513,7 @@ async function serveAsset(request, env, url, path) {
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  const isAuthenticationAsset = ["/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/offline-store.js", "/display-cache.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
+  const isAuthenticationAsset = ["/session-guard.js", "/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/offline-store.js", "/display-cache.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
   const isPwaMetadataAsset = path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest" || path.startsWith("/icons/");
   const isVersionedAsset = url.searchParams.has("v") || url.searchParams.has("rev");
   const isServiceWorkerAsset = path === "/media-worker.js";

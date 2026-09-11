@@ -67,6 +67,18 @@ const services = {
 
 const processes = [];
 
+// Model the cloud browser's pinned session header; other services keep their
+// existing contracts. Cookies here are locally signed test fixtures only.
+function fetch(input, options = {}) {
+  const headers = new Headers(options.headers);
+  const cookie = headers.get("Cookie")?.match(/(?:^|;\s*)troom_cloud_session=([^;]+)/)?.[1];
+  if (cookie && new URL(input).pathname.startsWith("/cloud/api/")) {
+    const session = JSON.parse(Buffer.from(cookie.split(".")[0], "base64url"));
+    if (session.sessionId) headers.set("X-TCloud-Session", session.sessionId);
+  }
+  return globalThis.fetch(input, {...options, headers});
+}
+
 try {
   const serviceBindingAdminKeys = await crypto.subtle.generateKey(
     { name: "RSA-OAEP", modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
@@ -1233,6 +1245,9 @@ try {
   const removedOldDiary = await securityAdminRequest(`/security/api/service-links/${replacementLinks.diary}`, latestFreshAdminCookie, {});
   assert.equal(removedOldDiary.response.status, 200, JSON.stringify(removedOldDiary.body));
   console.log("service passkey revocation HTTP integration: ok");
+} catch (error) {
+  for (const child of processes) console.error(`Local Worker diagnostic (${child.__directory}):\n${child.__output.slice(-12000)}`);
+  throw error;
 } finally {
   for (const child of processes.splice(0).reverse()) stopProcess(child);
   cleanupSecurityFixture();

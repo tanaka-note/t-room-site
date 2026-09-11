@@ -8,6 +8,7 @@
   let workerReady = null;
 
   async function registerMedia(file, fileKey, endpoint) {
+    const session = global.TCloudSession?.check();
     if (!(fileKey instanceof CryptoKey)) throw new Error("ファイルの暗号化鍵を確認してください。");
     await ensureWorker();
     const token = randomToken();
@@ -35,9 +36,11 @@
         complete: false
       }).catch(() => {});
     }
+    if (global.TCloudSession && global.TCloudSession.check() !== session) throw new Error("ログイン状態が変わりました。");
     registrations.set(token, { descriptor, fileKey });
     const cacheLimitBytes = Number(global.TCloudOffline?.getCacheLimitBytes?.() || 0);
     await confirmMediaRegistration({ type: "REGISTER_MEDIA", token, descriptor, fileKey, cacheLimitBytes });
+    global.TCloudSession?.check();
     return { token, url: `/cloud/local-media/${token}` };
   }
 
@@ -51,13 +54,14 @@
             reject(new Error("専用プレイヤーの準備に時間がかかっています。もう一度お試しください。"));
           }, 2500);
           pendingRegistrations.set(payload.token, {
-            resolve: () => { clearTimeout(timer); resolve(); }
+            resolve: () => { clearTimeout(timer); resolve(); },
+            reject: () => { clearTimeout(timer); reject(new DOMException("中止しました", "AbortError")); }
           });
           worker.postMessage(payload);
         });
         return;
       } catch (error) {
-        if (attempt === 1) throw error;
+        if (error.name === "AbortError" || attempt === 1) throw error;
       }
     }
   }
@@ -104,6 +108,7 @@
 
   function handleWorkerMessage(event) {
     const data = event.data || {};
+    if (data.type === "MEDIA_SESSION_INVALID" && registrations.has(data.token)) { global.TCloudSession?.invalidate(); clearMedia(); return; }
     if (data.type === "MEDIA_REGISTERED") {
       const pending = pendingRegistrations.get(data.token);
       pendingRegistrations.delete(data.token);
@@ -129,6 +134,12 @@
     registrations.delete(token);
     pendingRegistrations.delete(token);
     navigator.serviceWorker?.controller?.postMessage({ type: "RELEASE_MEDIA", token });
+  }
+
+  function clearMedia() {
+    for (const pending of pendingRegistrations.values()) pending.reject?.();
+    pendingRegistrations.clear(); registrations.clear();
+    navigator.serviceWorker?.controller?.postMessage({type:"CLEAR_MEDIA"});
   }
 
   async function setCacheLimitBytes(value) {
@@ -174,6 +185,7 @@
         const plain = await pending.get(index);
         pending.delete(index);
         fillWindow();
+        global.TCloudSession?.check();
         await writable.write(plain);
         plain.fill(0);
         options.onProgress?.(Math.min(Number(file.sizeBytes), (index + 1) * Number(file.chunkSizeBytes)), Number(file.sizeBytes));
@@ -209,13 +221,17 @@
 
   async function fetchAndDecryptChunk(file, fileKey, endpoint, index, signal) {
     const envelope = await fetchEncryptedChunk(file, endpoint, index, signal);
-    return new Uint8Array(await TRoomCrypto.decryptFileChunk(fileKey, envelope, index));
+    const plain = new Uint8Array(await TRoomCrypto.decryptFileChunk(fileKey, envelope, index));
+    global.TCloudSession?.check();
+    return plain;
   }
 
   async function fetchEncryptedChunk(file, endpoint, index, signal) {
+    global.TCloudSession?.check();
     const { start, end } = TCloudRange.encryptedChunkRange(file, index);
     if (file.offlineStorageId && global.TCloudOffline?.supported()) {
       const cached = await global.TCloudOffline.getChunk(file.offlineStorageId, index).catch(() => null);
+      global.TCloudSession?.check();
       if (cached) return cached;
     }
     if (file.offlineOnly) throw new Error("端末内のオフラインデータを読み込めませんでした。再保存してください。");
@@ -224,7 +240,7 @@
       if (signal?.aborted) throw new DOMException("中止しました", "AbortError");
       if (delay) await wait(delay, signal);
       try {
-        const response = await fetch(endpoint, {
+        const response = await (global.TCloudSession?.fetch || fetch)(endpoint, {
           headers: { Range: `bytes=${start}-${end}` },
           credentials: "same-origin",
           cache: "no-store",
@@ -237,7 +253,7 @@
         }
         return envelope;
       } catch (error) {
-        if (error.name === "AbortError") throw error;
+        if (error.name === "AbortError" || error.status === 419) throw error;
         lastError = error;
       }
     }
@@ -281,6 +297,7 @@
   function descriptorFor(file, endpoint) {
     return {
       endpoint,
+      expectedSession: global.TCloudSession?.check()?.sessionCacheId || "",
       name: String(file.name || ""),
       sizeBytes: Number(file.sizeBytes),
       chunkSizeBytes: Number(file.chunkSizeBytes || 8 * 1024 * 1024),
@@ -346,6 +363,7 @@
   global.TCloudMedia = Object.freeze({
     registerMedia,
     releaseMedia,
+    clearMedia,
     setCacheLimitBytes,
     chooseDownloadTarget,
     chooseDownloadDirectory,
@@ -354,4 +372,5 @@
     saveOfflineFile,
     safeFilename
   });
+  global.addEventListener?.("pagehide", clearMedia);
 })(globalThis);

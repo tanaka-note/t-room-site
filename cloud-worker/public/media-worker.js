@@ -40,10 +40,14 @@ self.addEventListener("message", (event) => {
     event.waitUntil(self.skipWaiting());
   } else if (data.type === "REGISTER_MEDIA" && validRegistration(data)) {
     const previous = registrations.get(data.token);
-    if (previous) previous.released = true;
+    if (previous && previous.ownerClientId !== event.source?.id) return;
+    if (previous) releaseEntry(previous);
     if (Number(data.cacheLimitBytes) > 0) self.TCloudOffline?.setCacheLimitBytes(Number(data.cacheLimitBytes));
     const entry = {
       descriptor: data.descriptor,
+      ownerClientId: event.source?.id,
+      token: data.token,
+      controller: new AbortController(),
       fileKey: data.fileKey,
       decryptedChunks: new Map(),
       decryptingChunks: new Map(),
@@ -60,11 +64,11 @@ self.addEventListener("message", (event) => {
     self.TCloudOffline?.setCacheLimitBytes(Number(data.cacheLimitBytes));
   } else if (data.type === "RELEASE_MEDIA" && typeof data.token === "string") {
     const entry = registrations.get(data.token);
-    if (entry) entry.released = true;
-    registrations.delete(data.token);
+    if (entry && entry.ownerClientId === event.source?.id) { releaseEntry(entry); registrations.delete(data.token); }
   } else if (data.type === "CLEAR_MEDIA") {
-    for (const entry of registrations.values()) entry.released = true;
-    registrations.clear();
+    for (const [token, entry] of registrations) {
+      if (entry.ownerClientId === event.source?.id) { releaseEntry(entry); registrations.delete(token); }
+    }
   }
 });
 
@@ -72,7 +76,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   const match = url.pathname.match(/^\/cloud\/local-media\/([A-Za-z0-9_-]{22,64})$/);
   if (match) {
-    event.respondWith(servePlainFile(match[1], event.request));
+    event.respondWith(servePlainFile(match[1], event.request, event.clientId));
     return;
   }
   if (event.request.mode === "navigate" && url.origin === self.location.origin && url.pathname.startsWith("/cloud/")) {
@@ -80,15 +84,17 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
-async function servePlainFile(token, request) {
+async function servePlainFile(token, request, clientId) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return new Response("Method not allowed", { status: 405, headers: { ...noStoreHeaders(), "Allow": "GET, HEAD" } });
   }
-  const entry = await resolveRegistration(token);
+  const entry = await resolveRegistration(token, clientId);
   if (!entry) {
     void reportMediaFailure(token, "registration", new Error("Media key is unavailable"));
     return new Response("Media key is unavailable", { status: 410, headers: noStoreHeaders() });
   }
+  if (entry.ownerClientId !== clientId) return new Response("Media owner mismatch", {status:403, headers:noStoreHeaders()});
+  try { await verifyMediaSession(entry); } catch { return new Response("Session changed", {status:419, headers:noStoreHeaders()}); }
   entry.touchedAt = Date.now();
   const descriptor = entry.descriptor;
   const size = Number(descriptor.sizeBytes);
@@ -124,8 +130,10 @@ function decryptedRangeStream(token, entry, start, end) {
       }
       try {
         const plain = await fetchAndDecryptChunk(entry, index);
+        await verifyMediaSession(entry);
         const { from, to } = TCloudRange.plainChunkSlice(index, plain.byteLength, start, end, chunkSize);
-        controller.enqueue(plain.subarray(from, to));
+        assertActive(entry);
+        controller.enqueue(plain.slice(from, to));
         index += 1;
       } catch (error) {
         void reportMediaFailure(token, "decrypt-range", error);
@@ -137,6 +145,7 @@ function decryptedRangeStream(token, entry, start, end) {
 }
 
 async function fetchAndDecryptChunk(entry, index, options = {}) {
+  await verifyMediaSession(entry);
   const cachedPlain = entry.decryptedChunks?.get(index);
   if (cachedPlain) {
     entry.decryptedChunks.delete(index);
@@ -149,6 +158,7 @@ async function fetchAndDecryptChunk(entry, index, options = {}) {
   entry.decryptingChunks?.set(index, task);
   try {
     const plain = await task;
+    assertActive(entry);
     rememberDecryptedChunk(entry, index, plain);
     if (!options.prefetch) prefetchUpcomingChunks(entry, index, DEMAND_PREFETCH_CHUNKS);
     return plain;
@@ -166,7 +176,10 @@ function constrainOpenEndedMp4Range(entry, rangeHeader, requested) {
 
 async function loadAndDecryptChunk(entry, index, options = {}) {
   const envelope = await loadEncryptedChunk(entry, index);
-  return new Uint8Array(await TRoomCrypto.decryptFileChunk(entry.fileKey, envelope, index));
+  assertActive(entry);
+  const plain = new Uint8Array(await TRoomCrypto.decryptFileChunk(entry.fileKey, envelope, index));
+  assertActive(entry);
+  return plain;
 }
 
 async function loadEncryptedChunk(entry, index) {
@@ -195,12 +208,16 @@ async function fetchAndCacheEncryptedChunk(entry, index) {
     if (delay) await wait(delay);
     try {
       const response = await fetch(file.endpoint, {
-        headers: { Range: `bytes=${start}-${end}` },
+        headers: { Range: `bytes=${start}-${end}`, ...(file.expectedSession ? {"X-TCloud-Session":file.expectedSession} : {}) },
+        signal: entry.controller?.signal,
         credentials: "same-origin",
         cache: "no-store"
       });
+      if ([401, 419].includes(response.status)) { invalidateMediaSession(entry); throw new Error("Session changed"); }
+      assertActive(entry);
       if (response.status !== 206) throw new Error(`Encrypted range request failed (${response.status})`);
       const envelope = new Uint8Array(await response.arrayBuffer());
+      assertActive(entry);
       if (file.storageId && self.TCloudOffline?.supported()) {
         entry.cacheWriteChain = Promise.resolve(entry.cacheWriteChain)
           .catch(() => {})
@@ -208,6 +225,7 @@ async function fetchAndCacheEncryptedChunk(entry, index) {
       }
       return envelope;
     } catch (error) {
+      if (entry.released || error.name === "AbortError") throw error;
       lastError = error;
     }
   }
@@ -356,11 +374,11 @@ function rememberDecryptedChunk(entry, index, bytes) {
   }
 }
 
-async function resolveRegistration(token) {
+async function resolveRegistration(token, clientId) {
   let entry = registrations.get(token);
   if (entry) return entry;
   const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-  for (const client of clients) client.postMessage({ type: "MEDIA_KEY_REQUIRED", token });
+  for (const client of clients) if (client.id === clientId) client.postMessage({ type: "MEDIA_KEY_REQUIRED", token });
   for (let attempt = 0; attempt < 40 && !entry; attempt++) {
     await wait(50);
     entry = registrations.get(token);
@@ -374,8 +392,32 @@ function validRegistration(data) {
     && /^[A-Za-z0-9_-]{22,64}$/.test(data.token)
     && data.fileKey instanceof CryptoKey
     && file.endpoint && String(file.endpoint).startsWith("/cloud/api/")
+    && (String(file.endpoint).startsWith("/cloud/api/public/") || file.offlineOnly || typeof file.expectedSession === "string" && file.expectedSession.length > 0)
     && Number.isSafeInteger(Number(file.sizeBytes)) && Number(file.sizeBytes) >= 0
     && Number.isSafeInteger(Number(file.chunkSizeBytes)) && Number(file.chunkSizeBytes) > 0;
+}
+
+function releaseEntry(entry) {
+  entry.released = true;
+  entry.controller?.abort(); entry.fileKey = null;
+  for (const bytes of entry.decryptedChunks?.values() || []) bytes.fill(0);
+  entry.decryptedChunks?.clear(); entry.decryptingChunks?.clear(); entry.encryptedChunkTasks?.clear();
+}
+function assertActive(entry) { if (entry.released) throw new DOMException("Media released", "AbortError"); }
+function invalidateMediaSession(entry) {
+  releaseEntry(entry);
+  registrations.delete(entry.token);
+  void self.clients.get(entry.ownerClientId).then(client => client?.postMessage({type:"MEDIA_SESSION_INVALID", token:entry.token}));
+}
+async function verifyMediaSession(entry) {
+  assertActive(entry);
+  const file = entry.descriptor;
+  if (!file.expectedSession || (file.offlineOnly && self.navigator?.onLine === false)) return;
+  // Cached plaintext must also be checked. Network ranges independently carry
+  // the same constraint, so changing the Cookie after this check cannot expand access.
+  const response = await fetch("/cloud/api/session", {headers:{"X-TCloud-Session":file.expectedSession}, credentials:"same-origin", cache:"no-store", signal:entry.controller?.signal});
+  if (!response.ok || !(await response.json()).authenticated) { invalidateMediaSession(entry); throw new Error("Session changed"); }
+  assertActive(entry);
 }
 
 function noStoreHeaders() {
@@ -390,5 +432,5 @@ function wait(milliseconds) { return new Promise((resolve) => setTimeout(resolve
 
 setInterval(() => {
   const cutoff = Date.now() - 30 * 60 * 1000;
-  for (const [token, entry] of registrations) if (entry.touchedAt < cutoff) registrations.delete(token);
+  for (const [token, entry] of registrations) if (entry.touchedAt < cutoff) { releaseEntry(entry); registrations.delete(token); }
 }, 5 * 60 * 1000);
