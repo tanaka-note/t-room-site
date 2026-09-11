@@ -11,7 +11,7 @@ const helper = client.slice(helperStart, helperEnd);
 assert.match(helper, /state\.files = state\.files\.filter/);
 assert.match(helper, /state\.folders = state\.folders\.filter/);
 assert.match(helper, /syncSearchInputs\(\)/);
-assert.match(helper, /window\.scrollTo\(\{ top: scrollY, left: scrollX, behavior: "auto" \}\)/);
+assert.match(helper, /scrollAppTo\(\{ top: scrollY, left: scrollX, behavior: "auto" \}\)/);
 assert.doesNotMatch(helper, /state\.query\s*=/);
 assert.doesNotMatch(helper, /loadItems\(/);
 
@@ -48,6 +48,8 @@ const context = vm.createContext({
     scrollY: 440,
     scrollTo(options) { this.restored = options; }
   },
+  appScrollPosition() { return { x: context.window.scrollX, y: context.window.scrollY }; },
+  scrollAppTo(options) { context.window.scrollTo(options); },
   requestAnimationFrame(callback) { callback(); },
   clearSelectionWithoutRefresh() { throw new Error("選択なしでは呼ばれません"); },
   clearFileSelection() { context.selectionCleared = true; },

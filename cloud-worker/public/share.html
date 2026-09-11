@@ -6,11 +6,11 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Secure Share</title>
   <link rel="icon" href="/cloud/icons/icon-192-v2.png?rev=20260810-2" sizes="192x192" type="image/png">
-  <link rel="stylesheet" href="/cloud/share.css?v=cloud-7ab73fa63541">
-  <meta name="troom-app-build" content="cloud-7ab73fa63541">
+  <link rel="stylesheet" href="/cloud/share.css?v=cloud-5b18440c289d">
+  <meta name="troom-app-build" content="cloud-5b18440c289d">
   <meta name="troom-auto-update" content="enabled">
-  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-7ab73fa63541">
-  <meta name="tcloud-build" content="cloud-7ab73fa63541">
+  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-5b18440c289d">
+  <meta name="tcloud-build" content="cloud-5b18440c289d">
 </head>
 <body>
   <main class="share-shell">
@@ -37,11 +37,11 @@
       <div id="share-toolbar" class="share-toolbar" hidden>
         <span class="sort-label">並び順</span>
         <div id="share-sort-controls" class="sort-controls" role="group" aria-label="並び順">
-          <button class="sort-button active" type="button" data-sort-key="updated" aria-pressed="true">更新日 <span aria-hidden="true">↓</span></button>
-          <button class="sort-button" type="button" data-sort-key="name" aria-pressed="false">名前 <span aria-hidden="true">↑</span></button>
-          <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true">↓</span></button>
+          <button class="sort-button active" type="button" data-sort-key="updated" aria-pressed="true">更新日 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
+          <button class="sort-button" type="button" data-sort-key="name" aria-pressed="false">名前 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 15 7-7 7 7"/></svg></span></button>
+          <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
         </div>
-        <button id="share-display-toggle" class="secondary display-toggle" type="button" aria-label="横長表示へ切り替え" title="横長表示へ切り替え">▤</button>
+        <button id="share-display-toggle" class="secondary display-toggle" type="button" aria-label="横長表示へ切り替え" title="横長表示へ切り替え"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 3h9l5 5v13H5zM14 3v6h5M8 13h8M8 17h6"/></svg></button>
       </div>
       <div id="share-selection-bar" class="selection-bar" hidden>
         <div><strong id="share-selection-count">0件を選択中</strong><small>ZIPにまとめず、元のファイル形式のまま保存します</small></div>
@@ -63,7 +63,7 @@
   </main>
 
   <dialog id="preview-dialog">
-    <div class="dialog-head"><div><span id="preview-kind" class="badge"></span><h2 id="preview-title"></h2></div><div class="preview-head-actions"><button class="close" type="button" aria-label="閉じる">×</button></div></div>
+    <div class="dialog-head"><div><span id="preview-kind" class="badge"></span><h2 id="preview-title"></h2></div><div class="preview-head-actions"><button class="close" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div></div>
     <div id="share-preview-stage-wrap" class="preview-stage-wrap">
       <div id="preview-stage" class="preview-stage"></div>
     </div>
@@ -79,16 +79,17 @@
   </dialog>
 
   <dialog id="history-dialog" class="history-dialog">
-    <div class="dialog-head"><h2>この共有URLの利用履歴</h2><button class="close" type="button" aria-label="閉じる">×</button></div>
+    <div class="dialog-head"><h2>この共有URLの利用履歴</h2><button class="close" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <div id="history-list" class="history-list"></div>
   </dialog>
 
-  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/crypto-vault.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/media-range.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/media-client.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/share.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=cloud-7ab73fa63541" defer></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/ui.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/crypto-vault.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/media-range.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/media-client.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/share.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=cloud-5b18440c289d" defer></script>
 </body>
 </html>

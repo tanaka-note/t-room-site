@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-7ab73fa63541";
+const APP_BUILD_ID = "cloud-5b18440c289d";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -325,6 +325,7 @@ function bindEvents() {
   $("#floating-location-button").addEventListener("click", toggleFloatingLocation);
   document.addEventListener("click", closeFloatingLocationOnOutsideClick);
   window.addEventListener("scroll", queueFloatingToolbarUpdate, { passive: true });
+  $(".workspace").addEventListener("scroll", queueFloatingToolbarUpdate, { passive: true });
   window.addEventListener("resize", queueFloatingToolbarUpdate, { passive: true });
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
   $("#selection-clear").addEventListener("click", clearSelectionWithoutRefresh);
@@ -642,7 +643,7 @@ function syncSortControls() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
     const direction = active ? state.sortDirection : button.dataset.sortKey === "name" ? "asc" : "desc";
-    button.querySelector("span").textContent = direction === "asc" ? "↑" : "↓";
+    button.querySelector("span").innerHTML = TCloudUI.icon(direction === "asc" ? "up" : "down");
   });
 }
 
@@ -1042,6 +1043,7 @@ async function enterApp(session, password = "", accountKey = null, passkeyContex
   $("#boot-view").hidden = true;
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
+  document.body.classList.add("cloud-app-open");
   await restoreNavigationPosition(restoredNavigation);
   if (session.role === "admin") scheduleUsageLoad();
   scheduleLegacyFolderMigration();
@@ -1107,8 +1109,8 @@ function rememberCurrentNavigationPosition(originType = "", originId = null) {
     ...current,
     folderId: state.folderId ? Number(state.folderId) : null,
     folderName: $("#view-title").textContent,
-    scrollX: Math.max(0, window.scrollX || 0),
-    scrollY: Math.max(0, window.scrollY || 0),
+    scrollX: Math.max(0, appScrollPosition().x || 0),
+    scrollY: Math.max(0, appScrollPosition().y || 0),
     originType: ["folder", "file"].includes(originType) ? originType : "",
     originId: Number.isInteger(Number(originId)) && Number(originId) > 0 ? Number(originId) : null,
     kind: state.kind,
@@ -1148,13 +1150,23 @@ async function navigateToFolder(folderId, folderName, options = {}) {
 }
 
 function showLoginView() {
+  document.body.classList.remove("cloud-app-open");
   $("#boot-view").hidden = true;
   $("#login-view").hidden = false;
   $("#app-view").hidden = true;
 }
 
+// Mobile has one scroll container; desktop retains document scrolling.
+function appScrollRoot() {
+  return globalThis.matchMedia?.("(max-width: 900px)").matches ? $(".workspace") : null;
+}
+function appScrollPosition() {
+  const root = appScrollRoot();
+  return root ? { x: root.scrollLeft, y: root.scrollTop } : { x: window.scrollX, y: window.scrollY };
+}
+function scrollAppTo(options) { (appScrollRoot() || window).scrollTo(options); }
 function resetFolderScrollPosition() {
-  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  scrollAppTo({ top: 0, left: 0, behavior: "auto" });
   floatingToolbarState.lastScrollY = 0;
   floatingToolbarState.direction = "";
   floatingToolbarState.travel = 0;
@@ -1202,7 +1214,7 @@ function restorePreviewOrigin(fileId, scrollX = state.previewOriginScrollX, scro
   const top = Number.isFinite(Number(scrollY)) ? Math.max(0, Number(scrollY)) : null;
   const restore = () => {
     if (top !== null) {
-      window.scrollTo({ top, left, behavior: "auto" });
+      scrollAppTo({ top, left, behavior: "auto" });
       return;
     }
     const card = $(`.file-card[data-file-id="${Number(fileId)}"]`);
@@ -1255,8 +1267,8 @@ async function restoreNavigationPosition(entry) {
   const top = Math.max(0, Number(entry.scrollY) || 0);
   const selector = navigationOriginSelector(entry);
   const restore = () => {
-    window.scrollTo({ top, left, behavior: "auto" });
-    if (window.scrollY + 2 < top && selector) $(selector)?.scrollIntoView({ block: "center", inline: "nearest" });
+    scrollAppTo({ top, left, behavior: "auto" });
+    if (appScrollPosition().y + 2 < top && selector) $(selector)?.scrollIntoView({ block: "center", inline: "nearest" });
   };
   restore();
   requestAnimationFrame(() => {
@@ -2167,7 +2179,7 @@ function renderItems() {
     : state.folderId
       ? "このフォルダには、まだファイルがありません。"
       : "フォルダを作成すると、ここに表示されます。";
-  $("#display-toggle").textContent = state.listMode ? "▦" : "▤";
+  $("#display-toggle").innerHTML = TCloudUI.icon(state.listMode ? "grid" : "list");
   $("#display-toggle").setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
   $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
   $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length + state.folders.length === 0;
@@ -2223,7 +2235,7 @@ function queueFloatingToolbarUpdate() {
 }
 
 function updateFloatingToolbarFromScroll() {
-  const scrollY = Math.max(0, window.scrollY);
+  const scrollY = Math.max(0, appScrollPosition().y);
   const previousScrollY = floatingToolbarState.lastScrollY;
   const delta = scrollY - previousScrollY;
   floatingToolbarState.lastScrollY = scrollY;
@@ -2255,7 +2267,7 @@ function floatingToolbarIsBeingUsed() {
   return toolbar.contains(document.activeElement) || !$("#floating-location-panel").hidden;
 }
 
-function floatingToolbarAvailable(scrollY = Math.max(0, window.scrollY)) {
+function floatingToolbarAvailable(scrollY = Math.max(0, appScrollPosition().y)) {
   const toolbar = $("#toolbar");
   if (!state.session || $("#app-view").hidden || toolbar.hidden) return false;
   if (!$("#selection-bar").hidden || state.uploading || state.downloadActive) return false;
@@ -2286,10 +2298,10 @@ function scrollToResultsStart() {
   const grid = $("#content-grid");
   if (!grid || !floatingToolbarAvailable()) return;
   const floatingHeight = $("#floating-toolbar").offsetHeight;
-  const resultsTarget = grid.getBoundingClientRect().top + window.scrollY - floatingHeight - 16;
+  const resultsTarget = grid.getBoundingClientRect().top - (appScrollRoot()?.getBoundingClientRect().top || 0) + appScrollPosition().y - floatingHeight - 16;
   const target = Math.max(floatingToolbarTrigger() + 1, resultsTarget);
   floatingToolbarState.forceVisibleUntil = performance.now() + 700;
-  window.scrollTo({ top: target, behavior: "smooth" });
+  scrollAppTo({ top: target, behavior: "smooth" });
   showFloatingToolbar();
 }
 
@@ -2495,7 +2507,7 @@ function trashFolderCard(folder) {
   button.type = "button";
   button.title = folder.name;
   button.setAttribute("aria-label", `フォルダ「${folder.name}」の操作を開く`);
-  button.innerHTML = `<span class="folder-icon">▰</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}・${formatBytes(folder.sizeBytes)}</small><small class="folder-lock">フォルダごとゴミ箱へ移動済み</small></span>`;
+  button.innerHTML = `<span class="folder-icon">${TCloudUI.icon("folder")}</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}・${formatBytes(folder.sizeBytes)}</small><small class="folder-lock">フォルダごとゴミ箱へ移動済み</small></span>`;
   button.addEventListener("click", () => showTrashFolderActions(folder));
   card.append(button);
   return card;
@@ -2515,7 +2527,7 @@ function folderCard(folder) {
   const searchPath = state.query && folder.searchPath
     ? `<small class="search-result-path">${escapeHtml(folder.searchPath)}</small>`
     : "";
-  button.innerHTML = `<span class="folder-icon">${folder.isProtected || inheritsProtection ? "▣" : "▰"}</span><span><strong>${escapeHtml(folder.name)}</strong>${searchPath}<small class="folder-count">${formatFolderCount(folder)}</small>${lock ? `<small class="folder-lock">${escapeHtml(lock.slice(3))}</small>` : ""}</span>`;
+  button.innerHTML = `<span class="folder-icon">${TCloudUI.icon(folder.isProtected || inheritsProtection ? "locked" : "folder")}</span><span><strong>${escapeHtml(folder.name)}</strong>${searchPath}<small class="folder-count">${formatFolderCount(folder)}</small>${lock ? `<small class="folder-lock">${escapeHtml(lock.slice(3))}</small>` : ""}</span>`;
   button.addEventListener("click", () => {
     if (card.dataset.longPressed === "true") {
       card.dataset.longPressed = "false";
@@ -2676,7 +2688,7 @@ function shareCard(share) {
   const status = ({ active: "有効", expired: "期限終了", stopped: "停止済み", unavailable: "対象なし" })[share.status] || "確認中";
   const type = share.targetType === "folder-selection" ? "共有フォルダ" : share.targetType === "folder" ? "フォルダ" : share.targetType === "selection" ? "選択したファイル" : "ファイル";
   card.innerHTML = `
-    <span class="share-kind">${["folder", "folder-selection"].includes(share.targetType) ? "▰" : share.targetType === "selection" ? "▦" : kindSymbol(share.file?.mediaKind)}</span>
+    <span class="share-kind">${["folder", "folder-selection"].includes(share.targetType) ? TCloudUI.icon("folder") : share.targetType === "selection" ? TCloudUI.icon("grid") : kindSymbol(share.file?.mediaKind)}</span>
     <span class="share-main"><strong>${escapeHtml(share.targetName)}</strong><small>${type} · ${formatDateTime(share.createdAt)}に発行</small></span>
     <span class="share-meta"><strong class="share-status ${share.status}">${status}</strong><small>期限 ${formatEpoch(share.expiresAt)}</small><small>DL ${share.downloadCount}件 / エラー ${share.errorCount}件</small></span>`;
   const actions = document.createElement("div");
@@ -3015,14 +3027,14 @@ function fileCard(file) {
   button.title = file.name;
   button.setAttribute("aria-label", `ファイル「${file.name}」を開く`);
   const cachedThumbnail = state.thumbnailObjectUrls.get(Number(file.id));
-  const thumbnail = cachedThumbnail
-    ? `<img src="${escapeHtml(cachedThumbnail)}" alt="" loading="lazy">`
-    : file.hasThumbnail && Number(file.cryptoVersion) !== 1
-      ? `<img src="${TCloudSession.scopedUrl(`${API}/files/${file.id}/thumbnail`)}" alt="" loading="lazy">`
-      : `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
+  const fallbackThumbnail = `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
+  const thumbnail = cachedThumbnail ? `<img src="${escapeHtml(cachedThumbnail)}" alt="">` : fallbackThumbnail;
   button.innerHTML = `
     <div class="thumb">${thumbnail}</div>
     <div class="file-copy"><strong>${escapeHtml(file.name)}</strong>${state.query && file.searchPath ? `<small class="search-result-path">${escapeHtml(file.searchPath)}</small>` : ""}<span class="file-meta"><span class="file-size">${formatMediaDetails(file)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
+  button.querySelector(".thumb img")?.addEventListener("error", () => {
+    button.querySelector(".thumb").innerHTML = fallbackThumbnail;
+  }, { once: true });
   button.addEventListener("click", (event) => {
     if (card.dataset.longPressed === "true") {
       card.dataset.longPressed = "false";
@@ -3247,53 +3259,64 @@ async function hydrateUploadHistoryRecords(records) {
 }
 
 async function loadEncryptedThumbnail(file, stage, signal, generation) {
+  const current = () => !signal.aborted && generation === state.thumbnailLoadGeneration && stage.isConnected;
   try {
+    globalThis.TCloudSession?.check();
     const scope = displayCacheScope();
     const version = String(file.updatedAt || file.createdAt || "1");
-    const cached = scope
-      ? await TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), version).catch(() => null)
-      : null;
+    const cached = scope ? await TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), version).catch(() => null) : null;
+    if (!current()) return;
     if (cached) {
-      if (signal.aborted || generation !== state.thumbnailLoadGeneration || !stage.isConnected) return;
-      installThumbnailBlob(file, stage, cached);
-      return;
+      if (await installThumbnailBlob(file, stage, cached, signal, generation)) return;
+      if (!current()) return;
+      // Remove only this damaged display thumbnail, never offline encrypted data.
+      await TCloudDisplayCache?.removeThumbnail?.(scope, Number(file.id), version).catch(() => {});
     }
-    if (file.hasDisplayThumbnail && file.mediaKind !== "video") {
-      const response = await TCloudSession.fetch(`${API}/files/${file.id}/display-thumbnail`, { credentials: "same-origin", cache: "force-cache", signal });
-      if (!response.ok) return;
-      const blob = await response.blob();
-      if (signal.aborted || generation !== state.thumbnailLoadGeneration || !stage.isConnected) return;
-      installThumbnailBlob(file, stage, blob);
-      if (scope) TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), version, blob).catch(() => {});
-      return;
+    const sources = [];
+    if (file.hasDisplayThumbnail && file.mediaKind !== "video") sources.push("display-thumbnail");
+    if (Number(file.cryptoVersion) !== 1 || file.fileKey) sources.push("thumbnail");
+    for (const source of sources) {
+      for (let attempt = 0; attempt < 2 && current(); attempt += 1) {
+        try {
+          const response = await TCloudSession.fetch(API + "/files/" + file.id + "/" + source, { credentials: "same-origin", cache: "no-store", signal });
+          if (!current() || [401, 403, 419].includes(response.status)) return;
+          if (!response.ok) {
+            if (response.status === 408 || response.status === 429 || response.status >= 500) continue;
+            break;
+          }
+          const blob = source === "thumbnail" && Number(file.cryptoVersion) === 1
+            ? new Blob([await TRoomCrypto.decryptThumbnail(await response.arrayBuffer(), file.fileKey)], { type: "image/webp" })
+            : await response.blob();
+          if (!current()) return;
+          if (!await installThumbnailBlob(file, stage, blob, signal, generation)) break;
+          if (scope && current()) await TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), version, blob).catch(() => {});
+          return;
+        } catch (error) {
+          if (!current() || error.name === "AbortError" || [401, 403, 419].includes(error.status)) return;
+          // A transient fetch failure gets one retry; decoding failures keep the icon.
+        }
+      }
     }
-    if (!file.fileKey) return;
-    const response = await TCloudSession.fetch(`${API}/files/${file.id}/thumbnail`, { credentials: "same-origin", cache: "no-store", signal });
-    if (!response.ok) return;
-    const bytes = await TRoomCrypto.decryptThumbnail(await response.arrayBuffer(), file.fileKey);
-    if (signal.aborted || generation !== state.thumbnailLoadGeneration || !stage.isConnected) return;
-    const blob = new Blob([bytes], { type: "image/webp" });
-    installThumbnailBlob(file, stage, blob);
-    if (scope) TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), version, blob).catch(() => {});
-  } catch (error) {
-    if (error?.name !== "AbortError") console.warn("Encrypted thumbnail loading was skipped.", Number(file.id));
+  } catch {
+    // Permission, key and format failures keep the existing, accessible file icon.
   }
 }
 
-function installThumbnailBlob(file, stage, blob) {
-    const url = URL.createObjectURL(blob);
+async function installThumbnailBlob(file, stage, blob, signal, generation = state.thumbnailLoadGeneration) {
+  let decoded;
+  try {
+    decoded = await TCloudUI.decodeThumbnail(blob, signal);
+    globalThis.TCloudSession?.check();
+    if (signal?.aborted || generation !== state.thumbnailLoadGeneration || !stage.isConnected) throw new DOMException("Aborted", "AbortError");
     const previousUrl = state.thumbnailObjectUrls.get(Number(file.id));
-    if (previousUrl) URL.revokeObjectURL(previousUrl);
-    state.thumbnailObjectUrls.set(Number(file.id), url);
-    const image = new Image();
-    image.alt = "";
-    image.loading = "lazy";
-    image.onerror = () => {
-      if (state.thumbnailObjectUrls.get(Number(file.id)) === url) state.thumbnailObjectUrls.delete(Number(file.id));
-      URL.revokeObjectURL(url);
-    };
-    image.src = url;
-    stage.replaceChildren(image);
+    stage.replaceChildren(decoded.image);
+    state.thumbnailObjectUrls.set(Number(file.id), decoded.url);
+    if (previousUrl && previousUrl !== decoded.url) URL.revokeObjectURL(previousUrl);
+    return true;
+  } catch {
+    if (decoded) URL.revokeObjectURL(decoded.url);
+    return false;
+  }
 }
 
 function installLongPressSelection(card, file) {
@@ -3423,7 +3446,7 @@ function scheduleEncryptedThumbnailLoading() {
   };
   const candidates = [];
   for (const file of state.files) {
-    if (!file.hasThumbnail || Number(file.cryptoVersion) !== 1) continue;
+    if (!file.hasThumbnail) continue;
     const stage = $(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
     if (stage) candidates.push({ file, stage });
   }
@@ -3672,8 +3695,8 @@ function preserveListingAfterDeletion({ files = [], folders = [] } = {}) {
   const deletedFolderIds = new Set(folders.map((folder) => Number(folder?.id)).filter(Number.isFinite));
   if (!deletedFileIds.size && !deletedFolderIds.size) return;
 
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
+  const scrollX = appScrollPosition().x;
+  const scrollY = appScrollPosition().y;
   const removedFiles = state.files.filter((file) => deletedFileIds.has(Number(file.id)));
   const removedFolders = state.folders.filter((folder) => deletedFolderIds.has(Number(folder.id)));
   state.files = state.files.filter((file) => !deletedFileIds.has(Number(file.id)));
@@ -3708,7 +3731,7 @@ function preserveListingAfterDeletion({ files = [], folders = [] } = {}) {
   if (state.itemPageParams) {
     scheduleDisplayListingCacheWrite(displayListingCacheKey(new URLSearchParams(state.itemPageParams)));
   }
-  requestAnimationFrame(() => window.scrollTo({ top: scrollY, left: scrollX, behavior: "auto" }));
+  requestAnimationFrame(() => scrollAppTo({ top: scrollY, left: scrollX, behavior: "auto" }));
 }
 
 async function startSelectedDownloads() {
@@ -4206,7 +4229,7 @@ function renderMovePicker() {
     button.type = "button";
     button.className = "move-folder-button";
     button.dataset.folderId = String(folder.id);
-    button.innerHTML = `<span class="folder-icon" aria-hidden="true"></span><span>${escapeHtml(folder.name)}</span><span aria-hidden="true">›</span>`;
+    button.innerHTML = `<span class="folder-icon" aria-hidden="true">${TCloudUI.icon("folder")}</span><span>${escapeHtml(folder.name)}</span><span aria-hidden="true">${TCloudUI.icon("right")}</span>`;
     button.addEventListener("click", () => openMovePickerFolder(folder.id));
     list.append(button);
   }
@@ -5389,10 +5412,10 @@ function conflictGroupCategory(group) {
 
 function conflictCategoryDetails(category) {
   return ({
-    audio: { label: "音楽", symbol: "♪" },
-    video: { label: "動画", symbol: "▶" },
-    other: { label: "その他", symbol: "□" }
-  })[category] || { label: "その他", symbol: "□" };
+    audio: { label: "音楽", symbol: kindSymbol("audio") },
+    video: { label: "動画", symbol: kindSymbol("video") },
+    other: { label: "その他", symbol: kindSymbol("other") }
+  })[category] || { label: "その他", symbol: kindSymbol("other") };
 }
 
 function conflictCategoryEntries(groups) {
@@ -5416,7 +5439,7 @@ function appendConflictCategoryList(container, groups, headingTag = "h3") {
 function renderConflictOverview(grid) {
   const guidance = document.createElement("p");
   guidance.className = "conflict-overview-guidance";
-  guidance.innerHTML = '<span aria-hidden="true">⚠</span><span>競合ではないファイルが表示された場合は、T-Cloud管理者へお知らせください。</span>';
+  guidance.innerHTML = '<svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 18H2zM12 9v5M12 17h.01"/></svg><span>競合ではないファイルが表示された場合は、T-Cloud管理者へお知らせください。</span>';
   grid.append(guidance);
   if (state.conflictScanRunning) {
     const loading = document.createElement("section");
@@ -5431,7 +5454,7 @@ function renderConflictOverview(grid) {
     section.className = "conflict-overview-section";
     const heading = document.createElement("div");
     heading.className = "conflict-overview-heading";
-    heading.innerHTML = `<span aria-hidden="true">⚠</span><div><h2>${escapeHtml(topFolder.name)}</h2><p>競合データ ${groups.length.toLocaleString("ja-JP")}組</p></div>`;
+    heading.innerHTML = `<svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 18H2zM12 9v5M12 17h.01"/></svg><div><h2>${escapeHtml(topFolder.name)}</h2><p>競合データ ${groups.length.toLocaleString("ja-JP")}組</p></div>`;
     const list = document.createElement("div");
     list.className = "conflict-overview-list";
     appendConflictCategoryList(list, groups);
@@ -6682,20 +6705,7 @@ async function backfillVideoThumbnail(file, generation) {
 
 function showGeneratedThumbnail(file, thumbnail) {
   const stage = document.querySelector(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
-  if (!stage) return;
-  const url = URL.createObjectURL(thumbnail);
-  const previousUrl = state.thumbnailObjectUrls.get(Number(file.id));
-  if (previousUrl) URL.revokeObjectURL(previousUrl);
-  state.thumbnailObjectUrls.set(Number(file.id), url);
-  const image = new Image();
-  image.alt = "";
-  image.loading = "lazy";
-  image.onerror = () => {
-    if (state.thumbnailObjectUrls.get(Number(file.id)) === url) state.thumbnailObjectUrls.delete(Number(file.id));
-    URL.revokeObjectURL(url);
-  };
-  image.src = url;
-  stage.replaceChildren(image);
+  if (stage) void installThumbnailBlob(file, stage, thumbnail);
 }
 
 async function createFolder(event) {
@@ -6758,8 +6768,8 @@ async function openPreview(file, options = {}) {
   if (state.previewPictureInPictureActive) await stopPictureInPicturePreview();
   const dialog = $("#preview-dialog");
   if (!dialog.open) {
-    state.previewOriginScrollX = Math.max(0, window.scrollX || 0);
-    state.previewOriginScrollY = Math.max(0, window.scrollY || 0);
+    state.previewOriginScrollX = Math.max(0, appScrollPosition().x || 0);
+    state.previewOriginScrollY = Math.max(0, appScrollPosition().y || 0);
   }
   if (!dialog.open) state.previewPlaybackMode = "off";
   const generation = ++state.previewGeneration;
@@ -8500,7 +8510,7 @@ async function api(path, options = {}) {
 function handleError(error) { setNotice(error.message, true); }
 function showLoginError(message) { $("#login-error").textContent = message; }
 function setNotice(message, error = false) { const node = $("#notice"); node.textContent = message; node.style.color = error ? "#b63f46" : ""; }
-function kindSymbol(kind) { return ({ image: "▧", video: "▶", audio: "♪", document: "▤", other: "□" })[kind] || "□"; }
+function kindSymbol(kind) { return TCloudUI.icon(kind); }
 function kindLabel(kind) { return ({ image: "写真", video: "動画", audio: "音声", document: "書類", other: "ファイル" })[kind] || "ファイル"; }
 function usesSquareFileCard(file) { return file?.mediaKind === "image" || file?.mediaKind === "video"; }
 function previewDateDetails(file) {

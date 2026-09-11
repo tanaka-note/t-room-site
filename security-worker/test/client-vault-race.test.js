@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, readdirSync} from 'node:fs';
+import {resolve} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import vm from 'node:vm';
@@ -25,7 +26,7 @@ test('concurrent credential vault creation is immutable and preserves delegated 
       return result;
     }, async run(){const r=db.prepare(sql).run(...args);return {meta:{changes:Number(r.changes)}};}};
   }
-  const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
+  const source=readFileSync(process.env.TCLOUD_TEST_SOURCE_ROOT ? resolve(process.env.TCLOUD_TEST_SOURCE_ROOT,'security-worker/src/index.js') : new URL('../src/index.js',import.meta.url),'utf8');
   const start=source.indexOf('async function saveOwnTCloudEnvelope(');
   const fn=source.slice(start,source.indexOf('\nasync function ',start+1));
   class HttpError extends Error {constructor(status,message){super(message);this.status=status;}}

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { identityDisplayName } from "../../assets/account-display.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -141,7 +142,7 @@ test("normal Identity API excludes disabled choices; explicit audit opt-in inclu
     for (const status of ["active", "invited", "pending_approval", "disabled"]) f.identity(status, status);
     const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
     const handlerSource = source.slice(source.indexOf("async function listIdentities("), source.indexOf("async function identityDetail("));
-    const handler = new Function("json", "normalizeUtcTimestamp", `${handlerSource}; return listIdentities;`)((data) => data, normalizeUtcTimestamp);
+    const handler = new Function("json", "normalizeUtcTimestamp", "identityDisplayName", `${handlerSource}; return listIdentities;`)((data) => data, normalizeUtcTimestamp, identityDisplayName);
     const normal = await handler({ DB: f.d1 });
     assert.deepEqual(normal.identities.map((row) => row.id), ["active"]);
     assert.deepEqual(normal.pendingIdentities.map((row) => row.id).sort(), ["invited", "pending_approval"]);

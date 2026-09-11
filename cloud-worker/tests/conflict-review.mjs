@@ -12,7 +12,7 @@ for (const id of ["conflict-dialog", "conflict-group-list", "conflict-file-list"
   assert.match(html, new RegExp(`id="${id}"`), `${id} がありません。`);
 }
 assert.doesNotMatch(html, /id="(?:floating-)?conflict-count-button"/, "競合確認の進捗を並び替え欄へ表示しないでください。");
-assert.match(html, /data-view="conflicts"><span aria-hidden="true">⚠<\/span>競合<\/button>/, "履歴欄が⚠の競合メニューへ変わっていません。");
+assert.match(html, /data-view="conflicts"><span aria-hidden="true"><svg[^>]*stroke="currentColor"[\s\S]*?<\/svg><\/span>競合<\/button>/, "競合メニューはテーマ色のSVGを使います。");
 assert.doesNotMatch(html, /data-view="history"/, "操作履歴メニューを表示しないでください。");
 assert.match(css, /\.file-card \.conflict-badge \{[^}]*top: 9px;[^}]*right: 47px;/);
 assert.match(client, /if \(!state\.listMode && conflictGroupId && !file\.trashed\)/);
@@ -35,9 +35,9 @@ assert.match(client, /async function loadConflictOverview\(\)/);
 assert.match(client, /function buildConflictGroups\(files, folders/);
 assert.match(worker, /FROM cloud_files/, "競合判定はファイルだけを対象にしてください。");
 assert.match(client, /const CONFLICT_CATEGORY_ORDER = \["audio", "video", "other"\]/);
-assert.match(client, /audio: \{ label: "音楽", symbol: "♪" \}/);
-assert.match(client, /video: \{ label: "動画", symbol: "▶" \}/);
-assert.match(client, /other: \{ label: "その他", symbol: "□" \}/);
+assert.match(client, /audio: \{ label: "音楽", symbol: kindSymbol\("audio"\) \}/);
+assert.match(client, /video: \{ label: "動画", symbol: kindSymbol\("video"\) \}/);
+assert.match(client, /other: \{ label: "その他", symbol: kindSymbol\("other"\) \}/);
 assert.match(client, /appendConflictCategoryList\(list, groups\)/);
 assert.match(client, /appendConflictCategoryList\(list, groups, "h4"\)/);
 assert.match(css, /\.conflict-category-heading/);

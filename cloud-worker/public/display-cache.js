@@ -39,9 +39,12 @@
   async function getThumbnail(scope, fileId, version) {
     const key = thumbnailKey(fileId, version);
     const entry = await getEntry(entryKey("thumbnail", scope, key));
-    if (!entry || entry.kind !== "thumbnail" || !(entry.payload instanceof Blob)) return null;
+    if (!entry || entry.kind !== "thumbnail") return null;
+    const blob = entry.payload instanceof Blob ? entry.payload
+      : entry.payload instanceof ArrayBuffer ? new Blob([entry.payload], { type: entry.mimeType || "" }) : null;
+    if (!blob) return null;
     void touch(entry);
-    return entry.payload;
+    return blob;
   }
 
   async function putThumbnail(scope, fileId, version, blob) {
@@ -53,13 +56,20 @@
       scope,
       cacheKey: key,
       fileId: Number(fileId),
-      payload: blob,
+      // Byte buffers also work where WebKit cannot serialize a Blob to IDB.
+      // Existing Blob records remain readable; no database migration is needed.
+      payload: await blob.arrayBuffer(),
+      mimeType: blob.type,
       sizeBytes: Number(blob.size),
       lastAccessed: Date.now()
     });
     await removeOldThumbnailVersions(scope, Number(fileId), key);
     await trim("thumbnail", THUMBNAIL_LIMIT_BYTES);
     return true;
+  }
+
+  async function removeThumbnail(scope, fileId, version) {
+    await deleteEntries([entryKey("thumbnail", scope, thumbnailKey(fileId, version))]);
   }
 
   async function removeFile(scope, fileId) {
@@ -206,6 +216,7 @@
     putListing,
     getThumbnail,
     putThumbnail,
+    removeThumbnail,
     removeFile,
     clearScope,
     summary,

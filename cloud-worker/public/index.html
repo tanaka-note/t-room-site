@@ -5,18 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="cloud-7ab73fa63541">
-  <meta name="troom-app-build" content="cloud-7ab73fa63541">
-  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-7ab73fa63541">
+  <meta name="tcloud-build" content="cloud-5b18440c289d">
+  <meta name="troom-app-build" content="cloud-5b18440c289d">
+  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-5b18440c289d">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>T-Cloud Storage</title>
-  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-7ab73fa63541">
+  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-5b18440c289d">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-7ab73fa63541">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-5b18440c289d">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -62,14 +62,14 @@
       <a class="wordmark compact" href="/"><span>T</span> T-lain</a>
       <div class="service-name">Cloud Storage</div>
       <nav class="side-nav" aria-label="ストレージメニュー">
-        <button class="nav-item active" data-view="all"><span>▦</span>フォルダ</button>
-        <button class="nav-item" data-kind="image"><span>▧</span>写真</button>
-        <button class="nav-item" data-kind="video"><span>▶</span>動画</button>
-        <button class="nav-item" data-kind="audio"><span>♪</span>音声</button>
-        <button class="nav-item" data-kind="document"><span>▤</span>書類</button>
-        <button class="nav-item" data-view="conflicts"><span aria-hidden="true">⚠</span>競合</button>
-        <button class="nav-item" data-view="shares" hidden><span>↗</span>共有管理</button>
-        <button class="nav-item" data-view="trash"><span>♲</span>ゴミ箱</button>
+        <button class="nav-item active" data-view="all"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>フォルダ</button>
+        <button class="nav-item" data-kind="image"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg></span>写真</button>
+        <button class="nav-item" data-kind="video"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m8 4 13 8-13 8z"/></svg></span>動画</button>
+        <button class="nav-item" data-kind="audio"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 17V5l11-2v12M9 8l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="17" cy="16" rx="3" ry="2"/></svg></span>音声</button>
+        <button class="nav-item" data-kind="document"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 3h9l5 5v13H5zM14 3v6h5M8 13h8M8 17h6"/></svg></span>書類</button>
+        <button class="nav-item" data-view="conflicts"><span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 18H2zM12 9v5M12 17h.01"/></svg></span>競合</button>
+        <button class="nav-item" data-view="shares" hidden><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 4h7v7M20 4 10 14M9 5H4v15h15v-5"/></svg></span>共有管理</button>
+        <button class="nav-item" data-view="trash"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></span>ゴミ箱</button>
       </nav>
       <div id="storage-meter" class="storage-meter" hidden>
         <div class="storage-usage-row">
@@ -91,7 +91,7 @@
     <section class="workspace">
       <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true">
         <div class="drop-overlay-copy">
-          <span aria-hidden="true">↑</span>
+          <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 15 7-7 7 7"/></svg></span>
           <strong>ここにファイルまたはフォルダをドロップ</strong>
           <small>フォルダ構成を保ったまま暗号化して保存できます</small>
         </div>
@@ -107,14 +107,14 @@
           <button id="new-folder-button" class="secondary-button" type="button">新しいフォルダ</button>
           <button id="download-folder-button" class="secondary-button desktop-only" type="button">フォルダを一括DL</button>
           <button id="upload-button" class="primary-button" type="button">アップロード</button>
-          <button id="mobile-add-button" class="primary-button mobile-add-button" type="button" aria-label="追加する">＋</button>
+          <button id="mobile-add-button" class="primary-button mobile-add-button" type="button" aria-label="追加する"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v16M4 12h16"/></svg></button>
           <button id="install-app-button-top" class="secondary-button install-app-top" type="button" aria-label="ホームへ追加" title="ホームへ追加" hidden>
             <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 15v4h14v-4"/></svg>
           </button>
           <button id="update-app-button-top" class="secondary-button install-app-top" type="button" aria-label="アプリを更新" title="アプリを更新" hidden>
             <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false"><path d="M20 7v5h-5M4 17v-5h5M6.1 8.2A7 7 0 0 1 18.6 7M17.9 15.8A7 7 0 0 1 5.4 17"/></svg>
           </button>
-          <button id="logout-button" class="top-logout-button" type="button" aria-label="ログアウト" title="ログアウト"><span aria-hidden="true">↪</span><span id="logout-button-label">ログアウト</span></button>
+          <button id="logout-button" class="top-logout-button" type="button" aria-label="ログアウト" title="ログアウト"><span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 3H4v18h6M10 12h11M16 7l5 5-5 5"/></svg></span><span id="logout-button-label">ログアウト</span></button>
           <input id="file-input" type="file" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
         </div>
@@ -122,15 +122,15 @@
 
       <div id="toolbar" class="toolbar">
         <label class="search-box">
-          <span>⌕</span>
+          <span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg></span>
           <input id="search-input" type="search" placeholder="すべてのフォルダを検索">
         </label>
         <div id="sort-controls" class="sort-controls" role="group" aria-label="並び順">
-          <button class="sort-button" type="button" data-sort-key="updated" aria-pressed="false">更新日 <span aria-hidden="true">↓</span></button>
-          <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true">↑</span></button>
-          <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true">↓</span></button>
+          <button class="sort-button" type="button" data-sort-key="updated" aria-pressed="false">更新日 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
+          <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 15 7-7 7 7"/></svg></span></button>
+          <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
         </div>
-        <button id="display-toggle" class="icon-button display-toggle" type="button" aria-label="表示を切り替え">▦</button>
+        <button id="display-toggle" class="icon-button display-toggle" type="button" aria-label="表示を切り替え"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
       </div>
 
       <aside id="floating-toolbar" class="floating-toolbar" aria-hidden="true" aria-label="検索と並び替え">
@@ -138,7 +138,7 @@
           <button id="floating-location-button" class="floating-location-button" type="button" aria-expanded="false" aria-controls="floating-location-panel">
             <span class="floating-location-icon" aria-hidden="true"></span>
             <span id="floating-folder-name">すべてのファイル</span>
-            <span class="floating-location-chevron" aria-hidden="true">⌄</span>
+            <span class="floating-location-chevron" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span>
           </button>
           <div id="floating-location-panel" class="floating-location-panel" hidden>
             <small>現在の場所</small>
@@ -146,13 +146,13 @@
           </div>
         </div>
         <label class="search-box floating-search-box">
-          <span>⌕</span>
+          <span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg></span>
           <input id="floating-search-input" type="search" placeholder="すべてのフォルダを検索" aria-label="フォルダとファイルを検索">
         </label>
         <div id="floating-sort-controls" class="sort-controls floating-sort-controls" role="group" aria-label="並び順">
-          <button class="sort-button" type="button" data-sort-key="updated" aria-pressed="false">更新 <span aria-hidden="true">↓</span></button>
-          <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true">↑</span></button>
-          <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true">↓</span></button>
+          <button class="sort-button" type="button" data-sort-key="updated" aria-pressed="false">更新 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
+          <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 15 7-7 7 7"/></svg></span></button>
+          <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
         </div>
       </aside>
 
@@ -227,20 +227,20 @@
       <p id="notice" class="notice" role="status"></p>
       <div id="content-grid" class="content-grid" aria-live="polite"></div>
       <div id="empty-state" class="empty-state" hidden>
-        <span>□</span>
+        <span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 3h9l5 5v13H5zM14 3v6h5"/></svg></span>
         <h2 id="empty-title">フォルダがありません</h2>
         <p id="empty-copy">フォルダを作成すると、ここに表示されます。</p>
       </div>
     </section>
 
     <nav class="mobile-nav" aria-label="モバイルメニュー">
-      <button class="active" data-view="all"><span>▦</span>フォルダ</button>
-      <button data-kind="image"><span>▧</span>写真</button>
-      <button data-kind="video"><span>▶</span>動画</button>
-      <button data-view="conflicts"><span aria-hidden="true">⚠</span>競合</button>
-      <button data-view="shares" hidden><span>↗</span>共有</button>
-      <button data-view="trash"><span>♲</span>ゴミ箱</button>
-      <button id="mobile-account-button" type="button"><span>●</span>アカウント</button>
+      <button class="active" data-view="all"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>フォルダ</button>
+      <button data-kind="image"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg></span>写真</button>
+      <button data-kind="video"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m8 4 13 8-13 8z"/></svg></span>動画</button>
+      <button data-view="conflicts"><span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 18H2zM12 9v5M12 17h.01"/></svg></span>競合</button>
+      <button data-view="shares" hidden><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 4h7v7M20 4 10 14M9 5H4v15h15v-5"/></svg></span>共有</button>
+      <button data-view="trash"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></span>ゴミ箱</button>
+      <button id="mobile-account-button" type="button"><span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></span>アカウント</button>
     </nav>
   </div>
 
@@ -248,13 +248,13 @@
     <div class="dialog-head">
       <div><span id="preview-kind" class="file-badge"></span><h2 id="preview-title"></h2></div>
       <div class="preview-head-actions">
-        <button id="preview-close" class="dialog-close icon-button" type="button" aria-label="閉じる">×</button>
+        <button id="preview-close" class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
     </div>
     <div id="preview-stage-wrap" class="preview-stage-wrap">
-      <button id="preview-prev" class="preview-nav preview-prev" type="button" aria-label="前の写真" hidden>‹</button>
+      <button id="preview-prev" class="preview-nav preview-prev" type="button" aria-label="前の写真" hidden><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m15 4-8 8 8 8"/></svg></button>
       <div id="preview-stage" class="preview-stage"></div>
-      <button id="preview-next" class="preview-nav preview-next" type="button" aria-label="次の写真" hidden>›</button>
+      <button id="preview-next" class="preview-nav preview-next" type="button" aria-label="次の写真" hidden><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 4 8 8-8 8"/></svg></button>
       <span id="preview-counter" class="preview-counter" hidden></span>
     </div>
     <dl class="file-details">
@@ -277,7 +277,7 @@
 
   <dialog id="edit-dialog" class="form-dialog">
     <form id="edit-form" method="dialog">
-      <div class="dialog-head"><h2>ファイル情報</h2><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><h2>ファイル情報</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <input id="edit-file-id" type="hidden">
       <label><span>ファイル名</span><input id="edit-name" required maxlength="240"></label>
       <p id="edit-error" class="form-error dialog-error" role="alert"></p>
@@ -287,7 +287,7 @@
 
   <dialog id="folder-dialog" class="form-dialog">
     <form id="folder-form" method="dialog">
-      <div class="dialog-head"><h2>新しいフォルダ</h2><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><h2>新しいフォルダ</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <label><span>フォルダ名</span><input id="folder-name" required maxlength="240"></label>
       <label class="check-row"><input id="folder-password-enabled" type="checkbox"><span>このフォルダにパスワードを設定する</span></label>
       <label id="folder-password-row" hidden><span>フォルダパスワード</span><span class="password-wrap"><input id="folder-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"><button class="icon-button password-visibility-toggle" type="button" data-password-target="folder-password" aria-controls="folder-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
@@ -298,7 +298,7 @@
 
   <dialog id="folder-upload-dialog" class="form-dialog">
     <form id="folder-upload-form" method="dialog">
-      <div class="dialog-head"><div><span class="file-badge">FOLDER UPLOAD</span><h2>フォルダをアップロード</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><div><span class="file-badge">FOLDER UPLOAD</span><h2>フォルダをアップロード</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <p id="folder-upload-summary" class="dialog-note standalone-note"></p>
       <p class="dialog-note">複数のフォルダは、画面へまとめてドロップするか、下のボタンから続けて追加できます。</p>
       <label id="folder-upload-password-row" hidden><span>最上位フォルダのパスワード</span><span class="password-wrap"><input id="folder-upload-password" type="password" minlength="4" maxlength="128" autocomplete="new-password" placeholder="4文字以上"><button class="icon-button password-visibility-toggle" type="button" data-password-target="folder-upload-password" aria-controls="folder-upload-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
@@ -313,7 +313,7 @@
 
   <dialog id="unlock-dialog" class="form-dialog">
     <form id="unlock-form" method="dialog">
-      <div class="dialog-head"><div><span class="file-badge">PROTECTED FOLDER</span><h2 id="unlock-folder-name">フォルダを開く</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><div><span class="file-badge">PROTECTED FOLDER</span><h2 id="unlock-folder-name">フォルダを開く</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <input id="unlock-folder-id" type="hidden">
       <label><span>フォルダパスワード</span><span class="password-wrap"><input id="unlock-password" type="password" required maxlength="128" autocomplete="current-password"><button class="icon-button password-visibility-toggle" type="button" data-password-target="unlock-password" aria-controls="unlock-password" aria-label="パスワードを表示" aria-pressed="false"></button></span></label>
       <p id="unlock-error" class="form-error dialog-error" role="alert"></p>
@@ -323,7 +323,7 @@
 
   <dialog id="folder-settings-dialog" class="form-dialog">
     <form id="folder-settings-form" method="dialog">
-      <div class="dialog-head"><h2>フォルダ設定</h2><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><h2>フォルダ設定</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <input id="folder-settings-id" type="hidden">
       <input id="folder-settings-name" type="hidden">
       <label id="folder-password-settings-row"><span>パスワード</span><select id="folder-password-action"><option value="keep">現在の設定を維持</option><option id="folder-password-replace-option" value="replace">新しいパスワードに変更</option></select></label>
@@ -340,7 +340,7 @@
 
   <dialog id="folder-rename-dialog" class="form-dialog">
     <form id="folder-rename-form" method="dialog">
-      <div class="dialog-head"><h2>フォルダ名を変更</h2><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><h2>フォルダ名を変更</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <input id="folder-rename-id" type="hidden">
       <label><span>フォルダ名</span><input id="folder-rename-name" required maxlength="240"></label>
       <p id="folder-rename-error" class="form-error dialog-error" role="alert"></p>
@@ -350,7 +350,7 @@
 
   <dialog id="share-dialog" class="form-dialog share-dialog">
     <form id="share-form" method="dialog">
-      <div class="dialog-head"><div><span class="file-badge">SECURE SHARE</span><h2>共有URLを作成</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><div><span class="file-badge">SECURE SHARE</span><h2>共有URLを作成</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <p id="share-target" class="dialog-note standalone-note"></p>
       <label><span>有効期限</span><input id="share-expires" type="datetime-local" required></label>
       <label>
@@ -371,7 +371,7 @@
   </dialog>
 
   <dialog id="share-result-dialog" class="form-dialog share-dialog">
-    <div class="dialog-head"><div><span class="file-badge">SHARE CREATED</span><h2>共有URLを発行しました</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><div><span class="file-badge">SHARE CREATED</span><h2>共有URLを発行しました</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <label><span>共有URL</span><textarea id="share-result-url" readonly rows="3"></textarea></label>
     <label><span>共有パスワード</span><input id="share-result-password" readonly></label>
     <p class="dialog-note">この画面を閉じた後、パスワードは再表示できません。共有URLは管理画面から再コピーできます。</p>
@@ -384,21 +384,21 @@
   </dialog>
 
   <dialog id="share-events-dialog" class="preview-dialog share-events-dialog">
-    <div class="dialog-head"><div><span class="file-badge">SHARE HISTORY</span><h2 id="share-events-title">共有履歴</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><div><span class="file-badge">SHARE HISTORY</span><h2 id="share-events-title">共有履歴</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <div id="share-events-list" class="share-events-list"></div>
   </dialog>
 
   <dialog id="add-dialog" class="form-dialog compact-dialog">
-    <div class="dialog-head"><h2>追加する</h2><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><h2>追加する</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <div class="action-list">
-      <button id="mobile-upload-action" class="action-row" type="button"><span class="action-icon">↑</span><span><strong>ファイルをアップロード</strong><small>写真、動画、音声、書類を追加</small></span></button>
-      <button id="desktop-folder-upload-action" class="action-row desktop-only" type="button"><span class="action-icon">▰</span><span><strong>フォルダをアップロード</strong><small>フォルダ構成を保ったまま一括で追加</small></span></button>
-      <button id="mobile-folder-action" class="action-row" type="button"><span class="action-icon">＋</span><span><strong>新しいフォルダ</strong><small>必要な場合だけパスワードを設定できます</small></span></button>
+      <button id="mobile-upload-action" class="action-row" type="button"><span class="action-icon"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 15 7-7 7 7"/></svg></span><span><strong>ファイルをアップロード</strong><small>写真、動画、音声、書類を追加</small></span></button>
+      <button id="desktop-folder-upload-action" class="action-row desktop-only" type="button"><span class="action-icon"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5h7l2 3h9v12H3z"/></svg></span><span><strong>フォルダをアップロード</strong><small>フォルダ構成を保ったまま一括で追加</small></span></button>
+      <button id="mobile-folder-action" class="action-row" type="button"><span class="action-icon"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v16M4 12h16"/></svg></span><span><strong>新しいフォルダ</strong><small>必要な場合だけパスワードを設定できます</small></span></button>
     </div>
   </dialog>
 
   <dialog id="trash-dialog" class="form-dialog compact-dialog">
-    <div class="dialog-head"><div><span class="file-badge">TRASH</span><h2 id="trash-file-name">ファイル操作</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><div><span class="file-badge">TRASH</span><h2 id="trash-file-name">ファイル操作</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <p id="trash-action-note" class="dialog-note standalone-note">元に戻すか、完全に削除する操作を選んでください。</p>
     <div class="dialog-actions stacked-actions">
       <button id="restore-file-button" class="primary-button" type="button">元に戻す</button>
@@ -419,11 +419,11 @@
 
   <dialog id="move-dialog" class="form-dialog compact-dialog">
     <form id="move-form">
-      <div class="dialog-head"><div><span class="file-badge">MOVE</span><h2>移動先を選択</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+      <div class="dialog-head"><div><span class="file-badge">MOVE</span><h2>移動先を選択</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <p id="move-copy" class="dialog-note standalone-note"></p>
       <div class="move-picker" aria-label="移動先フォルダ">
         <div class="move-picker-location">
-          <button id="move-picker-up" class="icon-button" type="button" aria-label="1つ上のフォルダへ戻る">←</button>
+          <button id="move-picker-up" class="icon-button" type="button" aria-label="1つ上のフォルダへ戻る"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10 5-7 7 7 7M3 12h18"/></svg></button>
           <div><small>現在の移動先</small><strong id="move-current-location">読み込み中…</strong></div>
         </div>
         <nav id="move-breadcrumbs" class="move-breadcrumbs" aria-label="移動先の階層"></nav>
@@ -432,14 +432,14 @@
       </div>
       <input id="move-destination" type="hidden" value="">
       <p id="move-error" class="form-error dialog-error" role="alert"></p>
-      <div class="dialog-actions"><button class="secondary-button dialog-close" type="button">キャンセル</button><button id="move-submit" class="primary-button" type="button" autocomplete="off">ここへ移動</button></div>
+      <div class="dialog-actions"><button class="secondary-button dialog-close" type="button" aria-label="閉じる">キャンセル</button><button id="move-submit" class="primary-button" type="button" autocomplete="off">ここへ移動</button></div>
     </form>
   </dialog>
 
   <dialog id="conflict-dialog" class="preview-dialog conflict-dialog">
     <div class="dialog-head">
       <div><span class="file-badge">CONFLICT CHECK</span><h2 id="conflict-dialog-title">競合グループ</h2></div>
-      <button class="dialog-close icon-button" type="button" aria-label="閉じる">×</button>
+      <button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="conflict-dialog-toolbar">
       <button id="conflict-groups-back" class="secondary-button" type="button" hidden>競合グループ一覧へ</button>
@@ -450,13 +450,13 @@
   </dialog>
 
   <dialog id="install-guide-dialog" class="form-dialog compact-dialog">
-    <div class="dialog-head"><div><span class="file-badge">INSTALL</span><h2>ホームへ追加</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><div><span class="file-badge">INSTALL</span><h2>ホームへ追加</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <p id="install-guide-copy" class="dialog-note standalone-note"></p>
-    <div class="dialog-actions"><button class="primary-button dialog-close" type="button">閉じる</button></div>
+    <div class="dialog-actions"><button class="primary-button dialog-close" type="button" aria-label="閉じる">閉じる</button></div>
   </dialog>
 
   <dialog id="account-dialog" class="form-dialog compact-dialog">
-    <div class="dialog-head"><h2>アカウント</h2><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><h2>アカウント</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <div class="mobile-account-copy"><strong id="mobile-account-name">—</strong><span id="mobile-account-permission">—</span></div>
     <dl id="mobile-storage-summary" class="mobile-storage-summary" hidden>
       <div><dt>クラウド上</dt><dd id="mobile-active-usage">—</dd></div>
@@ -483,7 +483,7 @@
   </dialog>
 
   <dialog id="batch-rename-dialog" class="form-dialog">
-    <div class="dialog-head"><div><span class="file-badge">ADMIN MAINTENANCE</span><h2>名称の一括整理</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><div><span class="file-badge">ADMIN MAINTENANCE</span><h2>名称の一括整理</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <p class="dialog-note standalone-note">平文の名称は端末内だけで照合し、暗号化後の情報だけをまとめて送信します。</p>
     <label><span>処理定義（JSON）</span><textarea id="batch-rename-input" rows="9" spellcheck="false" autocomplete="off"></textarea></label>
     <p id="batch-rename-status" class="dialog-note standalone-note" aria-live="polite">事前確認を行ってください。</p>
@@ -495,7 +495,7 @@
   </dialog>
 
   <dialog id="offline-manager-dialog" class="form-dialog offline-manager-dialog">
-    <div class="dialog-head"><div><span class="file-badge">ON THIS DEVICE</span><h2>オフライン管理</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><div><span class="file-badge">ON THIS DEVICE</span><h2>オフライン管理</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <p id="offline-manager-scope" class="dialog-note standalone-note"></p>
     <div id="offline-manager-list" class="offline-manager-list" aria-live="polite"></div>
     <div class="dialog-actions offline-manager-actions">
@@ -506,7 +506,7 @@
   </dialog>
 
   <dialog id="usage-details-dialog" class="form-dialog usage-details-dialog">
-    <div class="dialog-head"><div><span class="file-badge">STORAGE DETAILS</span><h2>フォルダ別の使用状況</h2></div><button class="dialog-close icon-button" type="button">×</button></div>
+    <div class="dialog-head"><div><span class="file-badge">STORAGE DETAILS</span><h2>フォルダ別の使用状況</h2></div><button class="dialog-close icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <p class="dialog-note standalone-note">最上位フォルダごとに、配下を含むファイル数と容量を集計しています。</p>
     <div id="usage-details-list" class="usage-details-list" aria-live="polite"></div>
   </dialog>
@@ -540,7 +540,7 @@
     <div class="download-screen">
       <div class="dialog-head download-head">
         <div><span class="file-badge">DOWNLOAD</span><h2>ダウンロード</h2></div>
-        <button id="download-close" class="icon-button" type="button" aria-label="閉じる">×</button>
+        <button id="download-close" class="icon-button" type="button" aria-label="閉じる"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </div>
       <div class="download-body">
         <div class="download-summary">
@@ -566,17 +566,18 @@
     </div>
   </dialog>
 
-  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/crypto-vault.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/file-safety.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/media-range.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/offline-store.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/display-cache.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/session-guard.js" defer></script>
-  <script src="/cloud/media-client.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/security/passkey-client.js?v=cloud-7ab73fa63541" defer></script>
-  <script src="/cloud/cloud.js?v=cloud-7ab73fa63541" defer></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/ui.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/crypto-vault.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/file-safety.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/media-range.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/offline-store.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/display-cache.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/session-guard.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/media-client.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/security/passkey-client.js?v=cloud-5b18440c289d" defer></script>
+  <script src="/cloud/cloud.js?v=cloud-5b18440c289d" defer></script>
 </body>
 </html>

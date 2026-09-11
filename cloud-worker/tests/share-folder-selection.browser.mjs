@@ -8,10 +8,11 @@ import { join } from "node:path";
 const require = createRequire(new URL("../../diary-worker/package.json", import.meta.url));
 const { chromium, firefox } = require("playwright");
 const token = "A".repeat(43);
-const [shareHtml, shareJs, shareCss] = await Promise.all([
+const [shareHtml, shareJs, shareCss, uiJs] = await Promise.all([
   readFile(new URL("../public/share.html", import.meta.url), "utf8"),
   readFile(new URL("../public/share.js", import.meta.url), "utf8"),
-  readFile(new URL("../public/share.css", import.meta.url), "utf8")
+  readFile(new URL("../public/share.css", import.meta.url), "utf8"),
+  readFile(new URL("../public/ui.js", import.meta.url), "utf8")
 ]);
 const mockCrypto = `<script>
 globalThis.TRoomCrypto = {
@@ -26,7 +27,7 @@ globalThis.TRoomCrypto = {
 };
 globalThis.TCloudMedia = { releaseMedia() {} };
 </script>`;
-const browserHtml = shareHtml.replace(/<script\b[^>]*><\/script>/g, "").replace("</body>", `${mockCrypto}<script src="/cloud/share.js" defer></script></body>`);
+const browserHtml = shareHtml.replace(/<script\b[^>]*><\/script>/g, "").replace("</body>", `${mockCrypto}<script src="/cloud/ui.js" defer></script><script src="/cloud/share.js" defer></script></body>`);
 
 function json(response, body, status = 200, headers = {}) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
@@ -57,6 +58,10 @@ const server = createServer((request, response) => {
   if (url.pathname === "/cloud/share.css") {
     response.writeHead(200, { "content-type": "text/css" });
     return response.end(shareCss);
+  }
+  if (url.pathname === "/cloud/ui.js") {
+    response.writeHead(200, { "content-type": "text/javascript" });
+    return response.end(uiJs);
   }
   if (url.pathname === "/cloud/share.js") {
     response.writeHead(200, { "content-type": "text/javascript" });

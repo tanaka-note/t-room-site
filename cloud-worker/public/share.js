@@ -216,14 +216,14 @@ function renderItems(folders, files) {
   for (const folder of folders) {
     const article = document.createElement("article"); article.className = "folder";
     const button = document.createElement("button"); button.type = "button";
-    button.innerHTML = `<i>▰</i><span><strong>${escapeHtml(folder.name)}</strong><small>フォルダ</small></span>`;
+    button.innerHTML = `<i>${TCloudUI.icon("folder")}</i><span><strong>${escapeHtml(folder.name)}</strong><small>フォルダ</small></span>`;
     button.addEventListener("click", () => loadItems(folder.id));
     article.append(button); root.append(article);
   }
   for (const file of files) root.append(fileCard(file));
   $("#empty").hidden = folders.length + files.length > 0;
   const displayToggle = $("#share-display-toggle");
-  displayToggle.textContent = state.listMode ? "▦" : "▤";
+  displayToggle.innerHTML = TCloudUI.icon(state.listMode ? "grid" : "list");
   displayToggle.setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
   displayToggle.title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
 }
@@ -263,7 +263,7 @@ function changeSharedSort(key) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
     const direction = active ? state.sortDirection : button.dataset.sortKey === "name" ? "asc" : "desc";
-    button.querySelector("span").textContent = direction === "asc" ? "↑" : "↓";
+    button.querySelector("span").innerHTML = TCloudUI.icon(direction === "asc" ? "up" : "down");
   });
   clearFileSelection();
   renderSortedItems();
@@ -494,9 +494,9 @@ async function loadThumbnail(file, stage) {
     const response = await fetch(`${API}/files/${file.id}/thumbnail`, { credentials: "same-origin", cache: "no-store" });
     if (!response.ok) return;
     const bytes = await TRoomCrypto.decryptThumbnail(await response.arrayBuffer(), file.fileKey);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "image/webp" }));
-    const image = new Image(); image.alt = ""; image.onload = image.onerror = () => URL.revokeObjectURL(url); image.src = url;
-    stage.replaceChildren(image);
+    const decoded = await TCloudUI.decodeThumbnail(new Blob([bytes], { type: "image/webp" }));
+    if (stage.isConnected) stage.replaceChildren(decoded.image);
+    URL.revokeObjectURL(decoded.url);
   } catch {}
 }
 
@@ -1428,7 +1428,7 @@ async function api(path, options = {}) { const headers = new Headers(options.hea
 async function responseError(response) { let message = `通信に失敗しました（${response.status}）`; try { message = (await response.json()).error || message; } catch {} return new Error(message); }
 function failUnlock(message) { $("#unlock-error").textContent = message; }
 function setNotice(message, error = false) { const node = $("#notice"); node.textContent = message; node.style.color = error ? "#b44149" : ""; }
-function kindSymbol(kind) { return ({ image:"▧",video:"▶",audio:"♪",document:"▤",other:"□" })[kind] || "□"; }
+function kindSymbol(kind) { return TCloudUI.icon(kind); }
 function kindLabel(kind) { return ({ image:"写真",video:"動画",audio:"音声",document:"書類",other:"ファイル" })[kind] || "ファイル"; }
 function previewDateDetails(file) {
   const editableDocument = /\.(?:doc|docx|docm|dot|dotx|xls|xlsx|xlsm|xlsb|ods|odt|ppt|pptx|pptm|odp|rtf|txt|csv|tsv)$/i.test(String(file?.name || ""))

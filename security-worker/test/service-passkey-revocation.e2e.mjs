@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { OWNER_DISPLAY_NAME, USER_DISPLAY_NAME } from "../../assets/account-display.mjs";
 import { createHash, createHmac, pbkdf2Sync, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -441,8 +442,8 @@ try {
   assert.equal(diaryAdminChoice.body.link.roleLabel, "管理者・全体管理");
   assert.equal(diaryUserChoice.body.link.accountId, "main-user");
   assert.equal(diaryUserChoice.body.link.roleLabel, "一般ユーザー");
-  assert.match(diaryAdminChoice.body.link.displayLabel, /田中宏知.*管理者・全体管理/);
-  assert.match(diaryUserChoice.body.link.displayLabel, /田中宏知.*一般ユーザー/);
+  assert.equal(diaryAdminChoice.body.link.displayLabel, OWNER_DISPLAY_NAME);
+  assert.equal(diaryUserChoice.body.link.displayLabel, USER_DISPLAY_NAME);
   const redeemedDiaryAdminChoice = await redeemServiceHandoff("diary", diaryAdminChoice.body.handoffToken);
   const redeemedDiaryUserChoice = await redeemServiceHandoff("diary", diaryUserChoice.body.handoffToken);
   assert.equal(redeemedDiaryAdminChoice.response.status, 200, JSON.stringify(redeemedDiaryAdminChoice.body));
@@ -516,7 +517,7 @@ try {
   const serviceRegistryResponse = await securityAdminRequest("/security/api/services", freshAdminCookie);
   assert.equal(serviceRegistryResponse.response.status, 200, JSON.stringify(serviceRegistryResponse.body));
   const diaryTargets = serviceRegistryResponse.body.services.find((service) => service.id === "diary")?.targets || [];
-  assert.ok(diaryTargets.some((target) => target.accountId === "main-admin" && /田中宏知.*管理者/.test(target.displayLabel)),
+  assert.ok(diaryTargets.some((target) => target.accountId === "main-admin" && target.displayLabel === OWNER_DISPLAY_NAME),
     "Diary provider returns the existing administrator with a human label and role");
   assert.ok(diaryTargets.some((target) => target.accountId === "main-user" && /田中宏知.*一般ユーザー/.test(target.displayLabel)),
     "Diary provider distinguishes the existing ordinary account with a human label and role");

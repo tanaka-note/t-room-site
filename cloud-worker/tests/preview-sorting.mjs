@@ -30,8 +30,8 @@ assert.match(shareJs, /root\.classList\.toggle\("list-mode", state\.listMode\)/)
 assert.match(shareJs, /state\.listMode = !state\.listMode/);
 assert.match(shareCss, /\.folder \{ grid-column:1 \/ -1; \}/);
 assert.match(shareCss, /\.items\.list-mode \{ grid-template-columns:1fr/);
-assert.match(mainHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*>↑<\/span>/);
-assert.match(shareHtml, /class="sort-button active"[^>]*data-sort-key="updated"[^>]*aria-pressed="true">更新日 <span[^>]*>↓<\/span>/);
+assert.match(mainHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*><svg[^>]*stroke="currentColor"[^>]*><path d="m5 15 7-7 7 7"\/><\/svg><\/span>/);
+assert.match(shareHtml, /class="sort-button active"[^>]*data-sort-key="updated"[^>]*aria-pressed="true">更新日 <span[^>]*><svg[^>]*stroke="currentColor"[^>]*><path d="m5 9 7 7 7-7"\/><\/svg><\/span>/);
 assert.match(mainJs, /function resetTypeDefaultSort\(\)/);
 assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => a\.name\.localeCompare/);
 assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => String\(b\.createdAt/);

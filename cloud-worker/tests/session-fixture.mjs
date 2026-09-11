@@ -1,7 +1,9 @@
+import {accountDisplayName} from "../../assets/account-display.mjs";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
+import { resolve } from "node:path";
 import { pbkdf2Sync } from "node:crypto";
 import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
@@ -27,11 +29,11 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
   SECURITY: { async redeemHandoff(token) { return selected || {identityId:"primary-admin",credentialId:"credential",serviceLinkId:`primary-admin-${token}`,serviceAccountId:token,cloudRootFolderId:token === "folder-member" ? 7 : null,displayLabel:token === "admin" ? "管理者" : "Atsushi",sessionEpoch:1}; }, async validatePasskeySession(input) { return { valid: input.serviceAccountId === "admin" ? input.cloudRootFolderId == null : input.serviceAccountId === "folder-member" && input.cloudRootFolderId === 7 }; } },
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };
-const context = { WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
+const context = { accountDisplayName, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
   sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, validateServicePasskeySession,
   recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;
-const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
+const source = readFileSync(process.env.TCLOUD_TEST_SOURCE_ROOT ? resolve(process.env.TCLOUD_TEST_SOURCE_ROOT, "cloud-worker/src/index.js") : new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
 vm.runInNewContext(source, context);
 async function api(cookie, path, method = "GET", body, extraHeaders = {}) {
   const request = new Request(`https://example.test/cloud/api${path}`, { method,

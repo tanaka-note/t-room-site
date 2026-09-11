@@ -9,7 +9,7 @@ const {chromium}=createRequire(new URL('../../diary-worker/package.json',import.
 globalThis.window=globalThis;
 await import('../public/vendor/argon2.umd.min.js');
 await import('../public/crypto-vault.js');
-const root=resolve(fileURLToPath(new URL('../../',import.meta.url)));
+const root=resolve(process.env.TCLOUD_TEST_SOURCE_ROOT || fileURLToPath(new URL('../../',import.meta.url)));
 const prf=crypto.getRandomValues(new Uint8Array(32));
 const accountKey=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
 const vault=await TRoomCrypto.createVault(accountKey);
@@ -33,7 +33,9 @@ env.FILES.get = async (_key,options) => {
 db.prepare(`INSERT INTO cloud_crypto_config(id,crypto_version,public_key_jwk,admin_private_cipher,admin_private_iv,recovery_private_cipher,recovery_private_iv) VALUES(1,1,?,?,?,?,?)`).run(JSON.stringify(config.publicKeyJwk),config.adminPrivateCipher,config.adminPrivateIv,config.recoveryPrivateCipher,config.recoveryPrivateIv);
 let releaseSlow, slowStarted;
 const requests=[];
+const lifecycle=[];
 const server=createServer(async(req,res)=>{
+ const record={url:req.url,finished:false};lifecycle.push(record);res.on('finish',()=>{record.finished=true;record.status=res.statusCode;});
  try {
   const origin=`http://127.0.0.1:${server.address().port}`,url=new URL(req.url,origin);
   if(url.pathname.startsWith('/cloud/api/')) {
@@ -70,7 +72,7 @@ const pageErrors=[];
 let phase='start';
 const watchdog=setTimeout(()=>{console.error('Browser test timed out:',phase);server.closeAllConnections();void browser.close();},120000);
 watchdog.unref();
-async function page(){const p=await browserContext.newPage();p.on('pageerror',e=>pageErrors.push(e.message));await p.goto(origin+'/cloud/');await p.waitForFunction(()=>!!globalThis.__app);return p;}
+async function page(){const p=await browserContext.newPage();p.on('pageerror',e=>pageErrors.push(e.message));p.on('requestfailed',r=>lifecycle.push({failed:r.url(),reason:r.failure()}));await p.goto(origin+'/cloud/');await p.waitForFunction(()=>!!globalThis.__app);return p;}
 async function cacheKeys(p){return p.evaluate(async()=>{const db=await __app.openVaultCache();return new Promise((resolve,reject)=>{const r=db.transaction('crypto-keys','readonly').objectStore('crypto-keys').getAllKeys();r.onsuccess=()=>{db.close();resolve(r.result)};r.onerror=()=>reject(r.error);});});}
 try {
  const a=await page(), b=await page();
@@ -176,5 +178,5 @@ try {
   console.log('two real browser tabs: both directions, reload, stale API/Range/upload, in-flight responses, real SW Range/cache, selective IndexedDB cleanup and PW key resume passed');
  }
 } catch(error) {
- console.error('Browser diagnostics:',JSON.stringify({pageErrors,pages:await Promise.all(browserContext.pages().map(async p=>({url:p.url(),title:await p.title().catch(()=>''),state:await p.evaluate(()=>({loaded:!!globalThis.__app,role:globalThis.__app?.state.session?.role,blocked:globalThis.TCloudSession?.isBlocked(),body:document.body.innerText.slice(0,200)})).catch(()=>null)}))),requests:requests.slice(-12)}));throw error;
+ console.error('Browser diagnostics:',JSON.stringify({pageErrors,lifecycle:lifecycle.slice(-50),pages:await Promise.all(browserContext.pages().map(async p=>({url:p.url(),title:await p.title().catch(()=>''),state:await p.evaluate(()=>({loaded:!!globalThis.__app,role:globalThis.__app?.state.session?.role,blocked:globalThis.TCloudSession?.isBlocked(),body:document.body.innerText.slice(0,200)})).catch(()=>null)}))),requests:requests.slice(-12)}));throw error;
 } finally {clearTimeout(watchdog);releaseSlow?.();server.closeAllConnections();await browser.close();await new Promise(r=>server.close(r));db.close();}
