@@ -164,7 +164,8 @@ try {
       await page.locator("#download-button").click();
       await page.waitForFunction(() => document.querySelector("#progress-label")?.textContent === "保存しています");
       await page.locator("#ready-view").waitFor({ state: "visible" });
-      assert.match(await page.locator("#expiry-note").textContent(), /最大12時間/);
+      assert.match(await page.locator("#expiry-note").textContent(), /一時保管期限/);
+      assert.match(await page.locator("#ready-view").textContent(), /READYになってから1時間後に再ダウンロード期限が終了/);
       await page.locator("#source-url").fill("https://www.youtube.com/watch?v=jNQXAC9IVRw");
       await page.locator("#youtube-rights-notice").waitFor({ state: "visible" });
       assert.equal(await page.locator("#youtube-rights-confirmed").getAttribute("required"), "");

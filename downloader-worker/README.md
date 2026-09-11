@@ -1,6 +1,6 @@
 # T-lain Downloader
 
-権利を持つメディアをURLから解析し、明示的な確認後に隔離Containerで取得・検査して、非公開R2へ最大12時間だけ保存する非公開ツールです。公開導線、サイト内検索、sitemap、OGPは持ちません。保存期限内は、認証済みの同一利用者が履歴から何度でも再ダウンロードできます。
+権利を持つメディアをURLから解析し、明示的な確認後に隔離Containerで取得・検査して、非公開R2へ一時保存する非公開ツールです。再ダウンロード可能期間はREADYになってから1時間です。公開導線、サイト内検索、sitemap、OGPは持ちません。期限内は、認証済みの同一利用者が履歴から何度でも再ダウンロードできます。
 
 ## 構成
 
@@ -32,7 +32,7 @@ YouTubeは公式ポリシーに合わせ、公開動画のメタデータ解析�
 - 処理時間最大12分、同一Identityの同時処理1件、Container最大2 instance
 - 動画最大3時間、8K以下、stream 16本以下、動画stream 1本
 - ログイン必須、DRM・暗号化stream・ライブ配信・認証必須コンテンツは非対応
-- 一時ファイルは処理終了時に削除。R2は12時間のQueue削除と10分Cronを正本とし、1日R2 lifecycleを最終防衛線にする
+- Container内の一時ファイルは処理終了時に削除。R2成果物はREADYになってから1時間後を再ダウンロード期限とし、期限時刻に合わせてQueue削除を予約する。10分Cronで削除漏れを回収し、`downloads/`のR2 Lifecycle（3600秒）を最終防衛線にする。削除は非同期であり、1時間以内の物理削除完了を保証しない
 
 Cloudflare ContainersはWorkers Paid契約とDockerが必要です。Containerが利用できない環境ではWorkerだけで危険な代替取得をせず、公開を停止したままにします。
 
@@ -117,7 +117,7 @@ DOにも永続的な中止記録を残し、起動待ちのfetchをabortしてde
 
 内部upload grantの署名済みexpiresAtは認証用だけに使用し、processing leaseの期限を使う（既存wire形式は維持）。成果物のexpires_atには流用しない。READY確定後の正本expires_atを基準に削除Queueを予約し、waitUntilで保存応答から分離する。予約失敗はdownloader_expiry_queue_failedとして記録し、Cron/Lifecycleが回収する。同じuploadの再送でも保存期限を延長しない。早着・古い期限Queueは新しい期限前に削除せず、期限超過行はCronが回収する。
 
-期限を過ぎてもR2削除が未確認ならobject_keyを残す。削除失敗はdownloader_object_delete_failedとして記録し、Queueの既存再試行または次回Cronで再試行する。R2削除成功またはR2 object欠落の確認後にだけobject_keyを消し、deleted_atを記録する。公開jobのdeletionConfirmedと履歴では期限終了・削除未確認／削除確認済みを区別する。READY表示は「一時保管期限」と実日時を直接表示し、12時間表記のDOM置換は使用しない。Queue/Cronが主系、Lifecycleは最終保険であり、物理削除時刻の保証とは区別する。
+期限を過ぎてもR2削除が未確認ならobject_keyを残す。削除失敗はdownloader_object_delete_failedとして記録し、Queueの既存再試行または次回Cronで再試行する。R2削除成功またはR2 object欠落の確認後にだけobject_keyを消し、deleted_atを記録する。公開jobのdeletionConfirmedと履歴では期限終了・削除未確認／削除確認済みを区別する。READY表示は「一時保管期限」と実日時を直接表示し、旧表記のDOM置換は使用しない。Queue/Cronが主系、Lifecycleは最終保険であり、物理削除時刻の保証とは区別する。
 
 期限の対象テスト: `node --test test/downloader-retention.test.js test/downloader-final-metrics.test.js test/downloader-processing.test.js`。0秒・600秒処理fixture、署名grant期限、READY時刻との3600秒差、削除予約失敗・非同期応答、期限後配信拒否、古い削除イベント、upload CAS再送をローカルで確認する。
 
