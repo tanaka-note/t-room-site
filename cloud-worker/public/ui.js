@@ -95,7 +95,37 @@
       return dark / (32 * 18) >= .998;
     } catch { return false; }
   }
-  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep, highlightText, isBlankVideoFrame,
+  async function recoverVideoThumbnail(url, signal) {
+    const video = document.createElement("video");
+    video.muted = true; video.playsInline = true; video.preload = "metadata";
+    const wait = (event, action) => new Promise((resolve, reject) => {
+      const cleanup = () => { clearTimeout(timer); video.removeEventListener(event, done); video.removeEventListener("error", failed); signal?.removeEventListener("abort", aborted); };
+      const done = () => { cleanup(); resolve(); };
+      const failed = () => { cleanup(); reject(new Error("Video frame unavailable")); };
+      const aborted = () => { cleanup(); reject(new DOMException("Aborted", "AbortError")); };
+      const timer = setTimeout(failed, 12000);
+      video.addEventListener(event, done, {once:true}); video.addEventListener("error", failed, {once:true});
+      signal?.addEventListener("abort", aborted, {once:true});
+      if (signal?.aborted) { aborted(); return; }
+      try { action(); } catch { failed(); }
+    });
+    try {
+      await wait("loadedmetadata", () => { video.src = url; video.load(); });
+      const duration = Number(video.duration);
+      if (!Number.isFinite(duration) || duration <= .2) return null;
+      // Only two bounded seeks. The source is the existing device-local decrypted Range URL.
+      for (const time of new Set([Math.min(10,duration*.25), Math.min(30,duration*.5)])) {
+        await wait("seeked", () => { video.currentTime = time; });
+        if (!video.videoWidth || !video.videoHeight || video.readyState < 2 || isBlankVideoFrame(video)) continue;
+        const canvas = document.createElement("canvas"), scale = Math.min(1,640/Math.max(video.videoWidth,video.videoHeight));
+        canvas.width = Math.max(1,Math.round(video.videoWidth*scale)); canvas.height = Math.max(1,Math.round(video.videoHeight*scale));
+        canvas.getContext("2d",{alpha:false}).drawImage(video,0,0,canvas.width,canvas.height);
+        return await new Promise(resolve => canvas.toBlob(resolve,"image/webp",.78));
+      }
+      return null;
+    } finally { video.removeAttribute("src"); video.load(); }
+  }
+  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep, highlightText, isBlankVideoFrame, recoverVideoThumbnail,
     thumbnailTimings: () => thumbnailTimings.map(entry => ({...entry})),
     clearThumbnailTimings: () => { thumbnailTimings.length = 0; } });
 })(globalThis);

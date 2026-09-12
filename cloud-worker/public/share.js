@@ -4,7 +4,7 @@ const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderSelectionCount: 0, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewPlaybackMode: "off", previewGeneration: 0, previewOrientationGeneration: 0, previewVideoFullscreenActive: false, previewHistoryActive: false, previewTapCandidate: null, previewLastPointerType: "mouse", previewDoubleTapSeekTimer: 0, previewDoubleTapSeekSequence: 0, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
 Object.assign(state, {query:"", kind:"", cards:new Map(), thumbnailTasks:new Map(), thumbnailActive:0,
-  thumbnailGeneration:0, thumbnailFrame:0, thumbnailTimer:0, expiryTimer:0, loadGeneration:0,
+  thumbnailGeneration:0, thumbnailFrame:0, thumbnailTimer:0, thumbnailRepairActive:0, expiryTimer:0, loadGeneration:0,
   previewClosePending:false, previewOrigin:null});
 const $ = (selector) => document.querySelector(selector);
 const PASSWORD_VISIBILITY_ICONS = `
@@ -546,6 +546,8 @@ function resetShareThumbnails() {
   clearTimeout(state.thumbnailTimer);
   for (const task of state.thumbnailTasks.values()) {
     task.controller?.abort();
+    task.repairController?.abort();
+    if (task.mediaToken) TCloudMedia.releaseMedia(task.mediaToken);
     if (task.url) URL.revokeObjectURL(task.url);
   }
   state.thumbnailTasks.clear(); state.cards.clear();
@@ -611,6 +613,48 @@ function processShareThumbnails() {
     });
   }
   if (Number.isFinite(next)) state.thumbnailTimer = setTimeout(queueShareThumbnails, Math.max(1,next-now));
+  processShareVideoRepairs();
+}
+
+function processShareVideoRepairs() {
+  if (state.thumbnailRepairActive) return;
+  const task = [...state.thumbnailTasks.values()].filter(task => {
+    if (task.repair !== "pending" || !task.stage.isConnected) return false;
+    const rect = task.stage.getBoundingClientRect();
+    task.repairPriority = rect.bottom > 0 && rect.top < innerHeight ? 0 : 1;
+    task.repairDistance = Math.max(0,-rect.bottom,rect.top-innerHeight);
+    return rect.bottom > -360 && rect.top < innerHeight + 360;
+  }).sort((a,b) => a.repairPriority - b.repairPriority || a.repairDistance - b.repairDistance)[0];
+  if (!task) return;
+  task.repair = "active"; task.repairController = new AbortController(); state.thumbnailRepairActive += 1;
+  void recoverShareVideoThumbnail(task).catch(() => {
+    // Keep the inline video icon for unsupported media or unavailable frames.
+  }).finally(() => {
+    task.repair = "done"; task.repairController = null; state.thumbnailRepairActive -= 1;
+    queueShareThumbnails();
+  });
+}
+
+async function recoverShareVideoThumbnail(task) {
+  const signal = task.repairController.signal;
+  const current = () => !signal.aborted && task.generation === state.thumbnailGeneration
+    && Number(state.info?.expiresAt)*1000 > Date.now();
+  let mediaToken = "", decoded;
+  try {
+    const media = await TCloudMedia.registerMedia(task.file,task.file.fileKey,`${API}/files/${task.file.id}/view`);
+    mediaToken = media.token; task.mediaToken = mediaToken;
+    if (!current()) return;
+    const blob = await TCloudUI.recoverVideoThumbnail(media.url,signal);
+    if (!blob || !current()) return;
+    decoded = await TCloudUI.decodeThumbnail(blob,signal);
+    if (!current()) { URL.revokeObjectURL(decoded.url); decoded = null; return; }
+    task.url = decoded.url;
+    task.stage.replaceChildren(decoded.image);
+    task.stage.dataset.thumbnailQuality = "recovered";
+  } finally {
+    if (mediaToken) TCloudMedia.releaseMedia(mediaToken);
+    task.mediaToken = "";
+  }
 }
 
 async function loadThumbnail(task) {
@@ -656,7 +700,16 @@ async function loadThumbnail(task) {
       }
       const decoded = await TCloudUI.measureThumbnailStep("share-decode", () => TCloudUI.decodeThumbnail(blob, controller.signal));
       if (!current()) { URL.revokeObjectURL(decoded.url); return; }
+      if (file.mediaKind === "video" && TCloudUI.isBlankVideoFrame(decoded.image)) {
+        URL.revokeObjectURL(decoded.url);
+        stage.dataset.thumbnailQuality = "dark-frame";
+        // Shared viewers never upload repairs or persist decoded images. Retain the SVG
+        // until a meaningful local frame is available, using existing share permissions.
+        if (file.fileKey) task.repair = "pending";
+        return;
+      }
       task.url = decoded.url;
+      stage.dataset.thumbnailQuality = "ready";
       // A filtered card may be detached. Keep its decoded image in page memory only.
       await TCloudUI.measureThumbnailStep("share-dom", () => stage.replaceChildren(decoded.image));
       return;
