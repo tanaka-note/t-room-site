@@ -6,6 +6,8 @@ export function safeAnalysisDiagnostic(value) {
   if(['direct','html','metadata','chromium','prepare','discover','validate'].includes(value?.stage)) result.stage=value.stage;
   if(['upstream','egress','browser','resolver','unknown'].includes(value?.source)) result.source=value.source;
   if(Number.isInteger(value?.httpStatus) && value.httpStatus>=100 && value.httpStatus<=599) result.httpStatus=value.httpStatus;
+  if(['claim','configuration','dependencies','configure_egress','prepare','discover','candidate','validate'].includes(value?.operation)) result.operation=value.operation;
+  if(['Error','TypeError','RangeError','SyntaxError','AbortError','TimeoutError','DataCloneError','InvalidStateError'].includes(value?.errorName)) result.errorName=value.errorName;
   return result;
 }
 
@@ -138,6 +140,7 @@ export async function configureMainVideoEgress(container, hosts, until, bounded 
 
 export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt, maxBytes, pagePlan = null, onFailure = () => {}) {
   const started=Date.now();
+  let operation='claim';
   const until = Math.min(analysisEndsAt, Date.now()+10_000);
   if (env.MAIN_VIDEO_FALLBACK !== 'true' || until-Date.now()<1000 || isPolicyRestrictedHost(sourceUrl.hostname)) return null;
   const remaining = () => {
@@ -162,6 +165,7 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
     // Persistent per-analysis DO fence survives Queue redelivery and DO eviction.
     if (!await container.claimMainVideoExploration()) return null;
     remaining();
+    operation='configuration';
     // Static configuration is optional. The trusted resolver can supply one
     // main iframe and scripts explicitly declared in that page; every exact
     // host is publicly resolved before it is added, and again at each send.
@@ -176,25 +180,32 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
       }
     };
     let plan={};
+    operation='dependencies';
     if(pagePlan?.page && normalizeSourceUrl(pagePlan.page).origin===sourceUrl.origin) {
       plan={embed:pagePlan.embed || '',candidate:pagePlan.candidate || ''};
       if(plan.candidate) plan.embed='';
       else await addUrls([...(pagePlan.scripts || []).slice(0,8),...(plan.embed?[plan.embed]:[])]);
     }
     const context={pageOrigins:[sourceUrl.origin,...(plan.embed?[new URL(plan.embed).origin]:[])]};
+    operation='configure_egress';
     await configureMainVideoEgress(container,hosts,until,true,context);
     remaining();
     if(plan.embed) {
+      operation='prepare';
       const frame=await call({phase:'prepare',url:plan.embed});
       if(new URL(frame.page).origin!==new URL(plan.embed).origin) throw new Error('main_video_frame_redirect');
+      operation='dependencies';
       await addUrls((frame.scripts || []).slice(0,8));
+      operation='configure_egress';
       await configureMainVideoEgress(container,hosts,until,true,context);
     }
     // A sole main media element on an already-read page needs no browser.
     // No request to this CDN occurred before this public-DNS approval.
+    operation='discover';
     const found=plan.candidate ? {url:plan.candidate,refererOrigin:sourceUrl.origin,sendOrigin:false,
       metrics:{requests:0,bodyBytes:0,browserLaunches:0}} :
       await call({phase:'discover',url:sourceUrl.href,allowedHosts:hosts,plan});
+    operation='candidate';
     const candidate=await assertPublicDestination(found.url,AbortSignal.timeout(remaining()));
     // Only the single correlated candidate's exact CDN is admitted. Its
     // manifests must pass the existing validators before the route is sealed.
@@ -202,7 +213,9 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
     if(ref && !context.pageOrigins.includes(ref)) throw new Error('download_context_invalid');
     const requestContext=ref && !(candidate.protocol==='http:' && new URL(ref).protocol==='https:') ?
       [{origin:candidate.origin,refererOrigin:ref,sendOrigin:found.sendOrigin===true}] : [];
+    operation='configure_egress';
     await configureMainVideoEgress(container,[...hosts,candidate.hostname],until,true,{...context,requestContext});
+    operation='validate';
     const analysis=await call({phase:'validate',url:candidate.href,maxBytes,requestContext,browserUsed:!plan.candidate});
     remaining();
     if(found.title) analysis.title=String(found.title).slice(0,240);
@@ -214,7 +227,9 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
     return analysis;
   } catch (error) {
     const errorCode=/^[a-z][a-z0-9_]{0,79}$/.test(error?.message || '') ? error.message : 'analysis_execution_failed';
-    const diagnostic=safeAnalysisDiagnostic(error?.diagnostic);
+    // Keep fixed classifications even when the exception message contains a
+    // URL or credential and must be discarded. Never log the message/stack.
+    const diagnostic=safeAnalysisDiagnostic({...error?.diagnostic,operation,errorName:error?.name});
     onFailure({errorCode,diagnostic});
     console.log(JSON.stringify({event:'downloader_main_video',result:'failed',errorCode,...diagnostic,elapsedMs:Date.now()-started}));
     return null;

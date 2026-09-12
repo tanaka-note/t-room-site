@@ -38,6 +38,8 @@ Cloudflare ContainersはWorkers Paid契約とDockerが必要です。Container�
 
 ## 起動と再試行
 
+補助解析の`downloader_main_video`失敗ログは、既存の`errorCode`・`stage`・`source`・`httpStatus`に加え、固定分類の`operation`（開始権取得、設定、依存先検証、送信制御設定、探索、成果物候補検証など）と`errorName`を記録する。例外本文・stack・URL・Cookieは追加記録しない。`analysis_execution_failed`だけではサイト側の拒否とは判断せず、操作分類と既存の送信元診断を照合する。この診断追加は通信許可・解析期限・再試行回数を変更しない。
+
 解析は軽量な`/ready`でHTTP受付とdrain状態だけを確認し、ClamAVを起動しません。取得前の`/health`で定義署名・鮮度を確認し、必要時にclamdを起動してYARAの正常性まで確認します。実スキャンでも定義・エンジンを再確認します。`/ready`は配信許可ではありません。Containerは処理後に明示停止し、常駐時間は延長しません。
 
 検出、偽装形式、破損、サイズ・メディア制限など既知の確定拒否は、有効なprocessing tokenでD1をfailedへ確定した後に終了します。同じjobの再配送で再取得・再検査しません。未知の失敗、通信・エンジン・定義異常、timeoutは既存の最大4回／DLQ処理を維持します。

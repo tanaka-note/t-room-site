@@ -6,6 +6,27 @@ import { canExploreAnalysis, terminalAnalysisError, assertPublicDestination, pub
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const dns=addresses=>async()=>Response.json({Status:0,Answer:addresses.map(data=>({type:data.includes(':')?28:1,data}))});
 
+test('unexpected supplemental failures retain only fixed operation and exception classifications',async()=>{
+ for(const operation of ['claim','configuration','configure_egress']) {
+  const failures=[],logs=[];const previous=console.log;console.log=value=>logs.push(value);
+  const secret='https://fixture.example/?token=do-not-log';
+  const container={
+   async claimMainVideoExploration(){if(operation==='claim')throw new TypeError(secret);return true},
+   async setAllowedHosts(){if(operation==='configure_egress')throw new TypeError(secret)},
+   async setOutboundHandler(){throw new Error('unexpected_next_step')},
+   async fetch(){throw new Error('unexpected_network_request')}
+  };
+  try {
+   const env={MAIN_VIDEO_FALLBACK:'true',MAIN_VIDEO_PAGE_HOSTS:operation==='configuration'?secret:'{}'};
+   assert.equal(await exploreMainVideo(env,container,new URL('https://fixture.example'),Date.now()+120000,1024,null,f=>failures.push(f)),null);
+   assert.equal(failures.length,1);
+   assert.deepEqual(failures[0],{errorCode:'analysis_execution_failed',diagnostic:{operation,errorName:operation==='configuration'?'SyntaxError':'TypeError'}});
+   assert.doesNotMatch(JSON.stringify({failures,logs}),/fixture\.example|do-not-log|token=/);
+  } finally {console.log=previous}
+ }
+ assert.deepEqual(safeAnalysisDiagnostic({operation:'https://private.example',errorName:'secret',message:'secret',stack:'secret'}),{});
+});
+
 test('validated per-origin context survives sealing and applies to manifest/segment fetch only on that origin',async()=>{
  const entry={origin:'https://cdn.example',refererOrigin:'https://page.example',sendOrigin:true};
  assert.deepEqual(normalizeRequestContext([entry],['cdn.example']),[entry]);
@@ -91,7 +112,7 @@ test('failed explorer preserves phase, refusal and origin status instead of unav
  }};
  try {
   assert.equal(await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},container,new URL('https://example.com/?secret'),Date.now()+120000,1024,null,x=>failure=x),null);
-  assert.deepEqual(failure,{errorCode:'bot_challenge',diagnostic:{stage:'discover',source:'upstream',httpStatus:403}});
+  assert.deepEqual(failure,{errorCode:'bot_challenge',diagnostic:{stage:'discover',source:'upstream',httpStatus:403,operation:'discover',errorName:'Error'}});
   assert.ok(!logs.join('').includes('secret'));assert.ok(logs[0].includes('bot_challenge'));
  } finally {console.log=previous}
 });
