@@ -70,7 +70,9 @@ export async function assertPublicDestination(value, signal, fetcher = fetch) {
     const endpoint = new URL('https://cloudflare-dns.com/dns-query');
     endpoint.searchParams.set('name', host);
     endpoint.searchParams.set('type', type);
-    const response = await fetcher(endpoint, {headers: {Accept:'application/dns-json'}, signal, redirect:'error'});
+    // Workers rejects redirect:"error" before sending (Node accepts it).
+    // Do not follow DNS redirects; the !ok check below rejects every 3xx.
+    const response = await fetcher(endpoint, {headers: {Accept:'application/dns-json'}, signal, redirect:'manual'});
     if (!response.ok) throw new Error('main_video_dns_failed');
     const data = await response.json();
     if (data.Status !== 0) throw new Error('main_video_dns_failed');

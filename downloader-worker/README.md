@@ -201,3 +201,5 @@ Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工�
 X/Twitterの投稿URLを解析・取得する場合だけ、`x.com`、`api.x.com`、`video.twimg.com`、`cdn.syndication.twimg.com`をexact hostで追加する。これらは送信時にもpublic DNSを確認し、既存Container denylist・120秒解析期限・キャンセル・最終検査を維持する。通常の直URL/YouTubeには追加DNS処理やブラウザ探索を加えない。XのAPIパスや公開application値が変われば再検証が必要で、ログイン必須・非公開・削除済み・外部challengeの投稿まで取得可能にする変更ではない。
 
 対象テストは `node --test test/x-egress.test.js test/main-video.test.js test/downloader-cancellation.test.js test/worker-contract.test.js`。Workerだけを`--containers-rollout=none --keep-vars`で公開し、Container/定義/migrationの変更は不要。切り戻しは公開前Worker `a979c0bb-1f48-45a9-afd8-984245c60b57`。補助探索のflagとは独立した通常egress修正のため、`MAIN_VIDEO_FALLBACK=false`だけではこの変更を戻せない。
+
+補助解析の即時内部エラーは、public DNS問い合わせの`redirect: "error"`がWorkers runtimeで未対応だったことも原因。Node mockでは通る一方、実workerdでは通信前にTypeErrorとなることを再現した。`manual`に変更し、既存の`!response.ok`でDNSの3xxも拒否するため転送先の追従は許可しない。修正前TypeError→修正後同じworkerdでDNS確認成功、Nodeの3xx拒否テストを確認した。Containerなしの隔離edge-previewでもNASA公開投稿のHEAD・guest activation・投稿APIが全て200（合計1,584ms、動画本体転送なし）。これは本番Containerでの取得・保存成功とは区別する。

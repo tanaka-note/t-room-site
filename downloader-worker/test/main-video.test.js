@@ -6,6 +6,18 @@ import { canExploreAnalysis, terminalAnalysisError, assertPublicDestination, pub
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const dns=addresses=>async()=>Response.json({Status:0,Answer:addresses.map(data=>({type:data.includes(':')?28:1,data}))});
 
+test('DNS lookup uses Workers-supported manual redirects and rejects 3xx without following',async()=>{
+ const calls=[];
+ const workerFetch=async(url,init)=>{
+  assert.equal(init.redirect,'manual');
+  calls.push(String(url));
+  return new Response(null,{status:302,headers:{Location:'http://127.0.0.1/private'}});
+ };
+ await assert.rejects(assertPublicDestination('https://example.com',AbortSignal.timeout(1000),workerFetch),/main_video_dns_failed/);
+ assert.equal(calls.length,2);
+ assert.ok(calls.every(url=>url.startsWith('https://cloudflare-dns.com/dns-query?')));
+});
+
 test('unexpected supplemental failures retain only fixed operation and exception classifications',async()=>{
  for(const operation of ['claim','configuration','configure_egress']) {
   const failures=[],logs=[];const previous=console.log;console.log=value=>logs.push(value);
