@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-6621b1586a5e";
+const APP_BUILD_ID = "cloud-038e443e5b1f";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -135,6 +135,11 @@ export default {
     if (browserResponse) return browserResponse;
     try {
       const url = new URL(request.url);
+      // The media Service Worker controls /cloud/, so /cloud must enter that scope.
+      if (url.pathname === BASE_PATH && ["GET", "HEAD"].includes(request.method)) {
+        url.pathname = `${BASE_PATH}/`;
+        return secureResponse(Response.redirect(url.href, 308));
+      }
       if (url.pathname === `${BASE_PATH}.html`) return Response.redirect(`${url.origin}${BASE_PATH}/`, 301);
       if (!url.pathname.startsWith(BASE_PATH)) return new Response("Not found", { status: 404 });
       const path = url.pathname.slice(BASE_PATH.length) || "/";
