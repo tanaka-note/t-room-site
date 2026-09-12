@@ -1,7 +1,7 @@
 "use strict";
 
 const reportData = {
-  period: "2026-09-10",
+  period: "2026-09-12",
   principal: 6000000,
   realizedProfit: {
     name: "投資信託売却益",
@@ -25,8 +25,8 @@ const reportData = {
         text: "インド株式の低迷とBTC価格下落に伴い、損益が悪化。バランス改善のため国内株式および全世界株式への分散投資の比率を引き上げました。インド株式への投資については追加の売却を行う予定はありません。"
       }
     ],
-    updated: "2026-09-10",
-    updatedLabel: "2026年9月10日"
+    updated: "2026-09-12",
+    updatedLabel: "2026年9月12日"
   },
   history: [
     { period: "2026-07-31", principal: 6000000, marketValue: 6221192 },
@@ -61,84 +61,85 @@ const reportData = {
     { period: "2026-09-07", principal: 6000000, marketValue: 6620132 },
     { period: "2026-09-08", principal: 6000000, marketValue: 6526723 },
     { period: "2026-09-09", principal: 6000000, marketValue: 6509484 },
-    { period: "2026-09-10", principal: 6000000, marketValue: 6468152 }
+    { period: "2026-09-10", principal: 6000000, marketValue: 6468152 },
+    { period: "2026-09-12", principal: 6000000, marketValue: 6440352 }
   ],
   assets: [
     {
       name: "iFナス100H無",
       category: "ETF",
       principal: 2002329,
-      marketValue: 2022531,
+      marketValue: 2016315,
       color: "#ff8a61"
     },
     {
       name: "iSNIFTY50",
       category: "ETF",
       principal: 866320,
-      marketValue: 816816,
+      marketValue: 813960,
       color: "#f4ca64"
     },
     {
       name: "三菱電",
       category: "日本株",
       principal: 553200,
-      marketValue: 509500,
+      marketValue: 502700,
       color: "#52e6aa"
     },
     {
       name: "三菱HCキャピタル",
       category: "日本株",
       principal: 430200,
-      marketValue: 414150,
+      marketValue: 414600,
       color: "#68a7ff"
     },
     {
       name: "伊藤忠",
       category: "日本株",
       principal: 198100,
-      marketValue: 228300,
+      marketValue: 229400,
       color: "#ffb454"
     },
     {
       name: "アコム",
       category: "日本株",
       principal: 142500,
-      marketValue: 143940,
+      marketValue: 145290,
       color: "#50d3c2"
     },
     {
       name: "イオン",
       category: "日本株",
       principal: 135100,
-      marketValue: 136300,
+      marketValue: 133250,
       color: "#f06fa9"
     },
     {
       name: "ソフトバンク",
       category: "日本株",
       principal: 111500,
-      marketValue: 121600,
+      marketValue: 123450,
       color: "#96a7ff"
     },
     {
       name: "NTT",
       category: "日本株",
       principal: 75500,
-      marketValue: 87600,
+      marketValue: 87850,
       color: "#c6dc70"
     },
     {
       name: "ムニノバHD",
       category: "日本株",
       principal: 43900,
-      marketValue: 42400,
+      marketValue: 42900,
       color: "#7e8da1"
     },
     {
       name: "ビットコイン",
       category: "暗号資産",
       principal: 2500000,
-      marketValue: 1945015,
+      marketValue: 1930637,
       color: "#a98cff"
     }
   ]
