@@ -2,7 +2,7 @@ import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
-import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound, markEgressResponse, safeAnalysisDiagnostic, normalizeRequestContext } from "./main-video.js";
+import { canExploreAnalysis, terminalAnalysisError, configureMainVideoEgress, exploreMainVideo, mainVideoOutbound, markEgressResponse, safeAnalysisDiagnostic, normalizeRequestContext, assertPublicDestination } from "./main-video.js";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import {
   DomainError,
@@ -44,6 +44,10 @@ const decoder = new TextDecoder();
 const PRIVACY_EGRESS_USER_AGENT = "Mozilla/5.0";
 const PRIVACY_EGRESS_IP = "2a06:98c0:3600::103";
 const OUTBOUND_REQUEST_HEADERS = Object.freeze(["Accept", "Accept-Encoding", "Accept-Language", "Range", "If-Range"]);
+// The public, logged-out application bearer in pinned yt-dlp 2026.08.19.
+// Match its digest, never accept a user's bearer/session or log either token.
+const X_PUBLIC_BEARER_SHA256 = "649a93ba2684ce1486c67e6a29dec642fc198fd149679481081652ab93c9f2b8";
+const X_ANALYSIS_HOSTS = Object.freeze(["x.com", "api.x.com", "video.twimg.com", "cdn.syndication.twimg.com"]);
 const YOUTUBE_ANALYSIS_HOSTS = Object.freeze([
   "youtube.com", "*.youtube.com", "youtu.be", "youtube-nocookie.com", "*.youtube-nocookie.com",
   "youtubei.googleapis.com", "jnn-pa.googleapis.com", "i.ytimg.com", "googlevideo.com", "*.googlevideo.com"
@@ -154,20 +158,24 @@ DownloaderContainer.outbound = async (request) => {
   try {
     const url = normalizeSourceUrl(request.url);
     if (!["GET", "HEAD", "POST"].includes(request.method)) return markEgressResponse(new Response("Method Not Allowed", { status: 405 }), 'egress');
-    if (request.method === "POST" && !isAllowedExtractorPost(url)) return markEgressResponse(new Response("Method Not Allowed", { status: 405 }), 'egress');
+    const xApi = xPublicExtractorEndpoint(url);
+    if (request.method === "POST" && !isAllowedExtractorPost(url) && xApi !== 'guest') return markEgressResponse(new Response("Method Not Allowed", { status: 405 }), 'egress');
     const headers = new Headers({ "User-Agent": PRIVACY_EGRESS_USER_AGENT, "X-Real-IP": PRIVACY_EGRESS_IP });
     for (const name of OUTBOUND_REQUEST_HEADERS) {
       const value = request.headers.get(name);
       if (value) headers.set(name, value.slice(0, 512));
     }
-    if (request.method === "POST") {
+    if (xApi) {
+      if (!await applyXPublicExtractorHeaders(request, xApi, headers)) return markEgressResponse(new Response("Blocked", { status: 403 }), 'egress');
+    } else if (request.method === "POST") {
       headers.set("Content-Type", "application/json");
       headers.set("Origin", "https://www.youtube.com");
       copyYoutubeExtractorHeader(request.headers, headers, "X-Youtube-Client-Name", /^\d{1,4}$/, 4);
       copyYoutubeExtractorHeader(request.headers, headers, "X-Youtube-Client-Version", /^[A-Za-z0-9._-]{1,40}$/, 40);
       copyYoutubeExtractorHeader(request.headers, headers, "X-Goog-Visitor-Id", /^[A-Za-z0-9_%=-]{1,2048}$/, 2048);
     }
-    return fetch(new Request(url, { method: request.method, headers, body: request.method === "POST" ? request.body : null, redirect: "manual" })).then(response => markEgressResponse(response, 'upstream'));
+    if (X_ANALYSIS_HOSTS.includes(url.hostname)) await assertPublicDestination(url.href, AbortSignal.timeout(5000));
+    return fetch(new Request(url, { method: request.method, headers, body: request.method === "POST" && xApi !== 'guest' ? request.body : null, redirect: "manual" })).then(response => markEgressResponse(response, 'upstream'));
   } catch (error) {
     return markEgressResponse(new Response(error instanceof DomainError ? error.message : "Blocked", { status: error instanceof DomainError ? error.status : 403 }), error instanceof DomainError ? 'egress' : 'unknown');
   }
@@ -1319,6 +1327,7 @@ async function configureContainerEgress(container, sourceUrl, analyzedHosts = []
   addFamily(sourceUrl.hostname);
   for (const host of Array.isArray(analyzedHosts) ? analyzedHosts.slice(0, 32) : []) addFamily(host);
   if (isPolicyRestrictedHost(sourceUrl.hostname)) for (const host of YOUTUBE_ANALYSIS_HOSTS) hosts.add(host);
+  if (isXPublicPostUrl(sourceUrl)) for (const host of X_ANALYSIS_HOSTS) hosts.add(host);
   await container.setAllowedHosts([...hosts]);
 }
 
@@ -1503,6 +1512,38 @@ function queueErrorReason(error) {
 function isAllowedExtractorPost(url) {
   const hostname = String(url?.hostname || "").toLowerCase();
   return (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) && url.pathname.startsWith("/youtubei/v1/");
+}
+function isXPublicPostUrl(url) {
+  return /^(?:(?:www|m|mobile)\.)?(?:x|twitter)\.com$/.test(url.hostname) &&
+    /^\/(?:(?:i\/web|[^/]+)\/status|statuses)\/\d+(?:\/(?:video|photo)\/\d+)?\/?$/.test(url.pathname);
+}
+function xPublicExtractorEndpoint(url) {
+  if (url.protocol !== 'https:' || url.port || url.hash) return null;
+  if (url.hostname === 'api.x.com' && url.pathname === '/1.1/guest/activate.json' && !url.search) return 'guest';
+  if (url.hostname === 'x.com' && url.pathname === '/i/api/graphql/2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId') return 'tweet';
+  return null;
+}
+async function applyXPublicExtractorHeaders(request, endpoint, headers) {
+  if (request.method !== (endpoint === 'guest' ? 'POST' : 'GET')) return false;
+  const bearer = request.headers.get('Authorization') || '';
+  if (bearer.length > 256) return false;
+  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(bearer))), x => x.toString(16).padStart(2, '0')).join('');
+  if (digest !== X_PUBLIC_BEARER_SHA256) return false;
+  if (endpoint === 'guest') {
+    // Activation has no payload. Bound reading even if Content-Length is false.
+    if (request.body) {
+      const reader = request.body.getReader();
+      try { const { done, value } = await reader.read(); if (!done && value?.byteLength) return false; }
+      finally { await reader.cancel(); reader.releaseLock(); }
+    }
+    headers.set('Content-Type', 'application/x-www-form-urlencoded');
+  } else {
+    const guest = request.headers.get('x-guest-token') || '';
+    if (!/^\d{1,32}$/.test(guest)) return false;
+    headers.set('x-guest-token', guest);
+  }
+  headers.set('Authorization', bearer);
+  return true;
 }
 function copyYoutubeExtractorHeader(source, target, name, pattern, maxLength) { const value = String(source.get(name) || "").slice(0, maxLength); if (pattern.test(value)) target.set(name, value); }
 function decodeHeaderValue(value) { try { return decodeURIComponent(String(value || "")); } catch { return String(value || ""); } }

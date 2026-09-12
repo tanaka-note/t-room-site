@@ -193,3 +193,11 @@ Resolver→子プロセス→Container HTTP→Worker→監査で、固定の工�
 同じローカルJS/blob fixtureを旧/新コードで各一回、同じChrome153・毎回新規browserで比較: 起動/終了込み1,297ms→1,125ms、origin要求1→1、応答header込み送信593→593bytes。少数のローカル観測で本番性能倍率を保証しない。直URL/専用extractor成功時に追加探索は起動しない。ブラウザ二重起動や静的CDNのブラウザ起動を省ける場合は費用減が見込めるが、DNS/検証回数とサイト次第で差があり、CPU/請求額は未計測。成功ログのbrowserRequests/browserBodyBytesはブラウザ内の要求（abort含む）/読込bodyで、DNS・prepare・validate・取得全体の集計ではない。
 
 公開は既存analysis_only workflowで本番の依存/エンジン/定義を継承し、Linux小容量fixtureと定義の署名/内部日時を再検証してからrollout、続けてWorkerを--containers-rollout=noneで公開する。migration不要。検査エンジンの変更や重い実スキャンは行わない。新機能停止はMAIN_VIDEO_FALLBACK=false。今回の公開前Workerは9527bd34-7527-4459-8515-ff87f4a3329d、Container14/digest 26ee1cce3e0b01c5f31adcdc3f324921da942d2f0da48f23641187fb93acd80c。headerを必要とする今回のrouteが残る間はflag停止を優先する。完全rollbackではその解析結果の再解析が必要であり、旧Workerは新requestContextを保証しない。image rollbackは定義鮮度・進行job/drainとsource_imageの整合確認を省略しない。
+
+### Xの公開投稿APIの送信制御（2026-09-13）
+
+本番ログの `POST api.x.com/1.1/guest/activate.json` はContainerProxy自身が405で拒否していた。通常egressのPOST許可とheader処理がYouTube専用だったことが原因。固定版yt-dlp 2026.08.19の公開投稿経路について、空のguest activation POSTと固定TweetResultByRestId GETだけに公開application bearerを許可する（公開値のSHA-256と完全一致が必要）。数値guest tokenは同GETだけに転送し、利用者Cookie・CSRF token・任意Authorization・Refererは転送しない。redirectは自動追従せず、別送信先に認証情報を引き継がない。
+
+X/Twitterの投稿URLを解析・取得する場合だけ、`x.com`、`api.x.com`、`video.twimg.com`、`cdn.syndication.twimg.com`をexact hostで追加する。これらは送信時にもpublic DNSを確認し、既存Container denylist・120秒解析期限・キャンセル・最終検査を維持する。通常の直URL/YouTubeには追加DNS処理やブラウザ探索を加えない。XのAPIパスや公開application値が変われば再検証が必要で、ログイン必須・非公開・削除済み・外部challengeの投稿まで取得可能にする変更ではない。
+
+対象テストは `node --test test/x-egress.test.js test/main-video.test.js test/downloader-cancellation.test.js test/worker-contract.test.js`。Workerだけを`--containers-rollout=none --keep-vars`で公開し、Container/定義/migrationの変更は不要。切り戻しは公開前Worker `a979c0bb-1f48-45a9-afd8-984245c60b57`。補助探索のflagとは独立した通常egress修正のため、`MAIN_VIDEO_FALLBACK=false`だけではこの変更を戻せない。

@@ -93,7 +93,7 @@ test('standard egress preserves privacy, manual redirects and body while identif
  class DomainError extends Error {}
  const ctx={DownloaderContainer:{},normalizeSourceUrl:x=>new URL(x),Request,Response,Headers,DomainError,
   PRIVACY_EGRESS_USER_AGENT:'Mozilla/5.0',PRIVACY_EGRESS_IP:'2a06:98c0:3600::103',OUTBOUND_REQUEST_HEADERS:['Accept','Range'],
-  isAllowedExtractorPost:()=>false,markEgressResponse,fetch:async req=>{requests.push(req);return new Response('fixture',{status:403,headers:{'X-Tlain-Egress-Source':'egress'}})}};
+  isAllowedExtractorPost:()=>false,xPublicExtractorEndpoint:()=>null,X_ANALYSIS_HOSTS:[],markEgressResponse,fetch:async req=>{requests.push(req);return new Response('fixture',{status:403,headers:{'X-Tlain-Egress-Source':'egress'}})}};
  vm.createContext(ctx);
  vm.runInContext(source.slice(source.indexOf('DownloaderContainer.outbound ='),source.indexOf('DownloaderContainer.outboundHandlers =')),ctx);
  const response=await ctx.DownloaderContainer.outbound(new Request('https://example.com/',{headers:{Cookie:'secret',Authorization:'secret',Referer:'https://private.example',Range:'bytes=0-9'}}));
