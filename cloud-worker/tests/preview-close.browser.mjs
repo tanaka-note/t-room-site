@@ -13,7 +13,10 @@ async function openVisibleFile(page, kind) {
     })?.id;
   },kind);
   assert.ok(id,'a fully visible '+kind+' card is required');
-  await page.locator(`.file-card[data-file-id="${id}"] > button:first-child`).click();
+  // The card is already visible. Locator.click may auto-scroll a focused card
+  // in WebKit before opening it, changing the origin this test intends to measure.
+  const box=await page.locator(`.file-card[data-file-id="${id}"] > button:first-child`).boundingBox();
+  await page.mouse.click(box.x+box.width/2,box.y+box.height/2);
 }
 try {
   for(const [name,engine,launch] of engines) {

@@ -9,7 +9,7 @@
     "test:crypto": "node tests/crypto-roundtrip.mjs",
     "test:session-browser": "node tests/passkey-tab-isolation.browser.mjs",
     "test:share-display": "node tests/share-display-thumbnail.mjs",
-    "test:search-share-browser": "node tests/search-share.browser.mjs && node tests/search-controls.browser.mjs && node tests/share-thumbnails.browser.mjs && node tests/share-preview-close.browser.mjs && node tests/deep-folder-keys.browser.mjs && node tests/video-dark-thumbnail.browser.mjs && node tests/warm-video-thumbnail.browser.mjs && node tests/canonical-cloud-url.browser.mjs && node tests/share-dark-thumbnail.browser.mjs",
+    "test:search-share-browser": "node tests/search-share.browser.mjs && node tests/search-controls.browser.mjs && node tests/share-thumbnails.browser.mjs && node tests/share-preview-close.browser.mjs && node tests/deep-folder-keys.browser.mjs && node tests/video-dark-thumbnail.browser.mjs && node tests/warm-video-thumbnail.browser.mjs && node tests/canonical-cloud-url.browser.mjs && node tests/share-dark-thumbnail.browser.mjs && node tests/video-thumbnail-quality.browser.mjs && node tests/video-quality-native.browser.mjs",
     "test:thumbnail-surfaces-performance": "node tests/thumbnail-surfaces-performance.browser.mjs",
     "test:share-folders": "node tests/share-folder-selection.mjs",
     "test:share-folders:http": "node tests/share-folder-selection-http.mjs",

@@ -648,6 +648,7 @@ async function recoverShareVideoThumbnail(task) {
     if (!blob || !current()) return;
     decoded = await TCloudUI.decodeThumbnail(blob,signal);
     if (!current()) { URL.revokeObjectURL(decoded.url); decoded = null; return; }
+    if (TCloudUI.isBlankVideoFrame(decoded.image)) { URL.revokeObjectURL(decoded.url); decoded = null; return; }
     task.url = decoded.url;
     task.stage.replaceChildren(decoded.image);
     task.stage.dataset.thumbnailQuality = "recovered";

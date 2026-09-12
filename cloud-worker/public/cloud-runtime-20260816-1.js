@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-86af9ed4eec5";
+const APP_BUILD_ID = "cloud-15868b8c83ab";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -124,6 +124,7 @@ const state = {
   thumbnailBackfillObserver: null,
   thumbnailBackfillQueue: [],
   backgroundMediaTokens: new Set(),
+  thumbnailBackfillControllers: new Set(),
   durationUpdates: new Set(),
   durationAttempts: new Map(),
   durationQueue: [],
@@ -316,6 +317,7 @@ function bindEvents() {
   document.addEventListener("visibilitychange", enforceFolderPortraitOrientation);
   document.addEventListener("visibilitychange", handlePreviewBackgroundVisibility);
   window.addEventListener("pagehide", handlePreviewBackgroundVisibility);
+  window.addEventListener("pagehide", resetBackgroundMediaWork);
   document.addEventListener("freeze", handlePreviewBackgroundVisibility);
   document.addEventListener("keydown", handlePreviewKeydown);
   window.addEventListener("popstate", handleHistoryNavigation);
@@ -1560,6 +1562,7 @@ async function clearLegacyPasskeyAdminKeys() {
 
 function releaseSessionState() {
   searchPathFolders.clear();
+  resetBackgroundMediaWork();
   for (const controller of [state.itemLoadController, state.uploadAbort, state.downloadAbort, state.offlineAbort, ...state.thumbnailLoadControllers]) controller?.abort();
   state.itemLoadGeneration++; state.previewGeneration++; state.thumbnailLoadGeneration++;
   clearTimeout(state.displayCacheWriteTimer);
@@ -3118,6 +3121,10 @@ async function openFolder(folder) {
   await navigateToFolder(folder.id, folder.name, { originType: "folder", originId: folder.id });
 }
 
+function fileThumbnailFallback(file) {
+  return `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
+}
+
 function fileCard(file) {
   const card = document.createElement("article");
   card.className = "file-card";
@@ -3128,22 +3135,23 @@ function fileCard(file) {
   button.title = file.name;
   button.setAttribute("aria-label", `ファイル「${file.name}」を開く`);
   const cachedThumbnail = state.thumbnailObjectUrls.get(Number(file.id));
-  const fallbackThumbnail = `<span class="media-symbol media-symbol-${escapeHtml(file.mediaKind || "other")}" aria-label="${escapeHtml(kindLabel(file.mediaKind))}">${kindSymbol(file.mediaKind)}</span>`;
-  const thumbnail = cachedThumbnail ? `<img src="${escapeHtml(cachedThumbnail)}" alt="">` : fallbackThumbnail;
+  const fallbackThumbnail = fileThumbnailFallback(file);
+  const thumbnail = fallbackThumbnail;
   button.innerHTML = `
     <div class="thumb">${thumbnail}</div>
     <div class="file-copy"><strong>${escapeHtml(file.name)}</strong>${state.query && file.searchPath ? `<small class="search-result-path">${escapeHtml(file.searchPath)}</small>` : ""}<span class="file-meta"><span class="file-size">${formatMediaDetails(file)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
-  button.querySelector(".thumb img")?.addEventListener("error", () => {
-    button.querySelector(".thumb").innerHTML = fallbackThumbnail;
-  }, { once: true });
-  const cachedImage = button.querySelector(".thumb img");
+  const cachedImage = cachedThumbnail ? new Image() : null;
   if (cachedImage) {
     const generation = state.thumbnailLoadGeneration, scope = displayCacheScope();
     const inspect = () => {
-      if (generation !== state.thumbnailLoadGeneration || scope !== displayCacheScope() || !card.isConnected || !cachedImage.naturalWidth) return;
-      updateThumbnailQuality(file, button.querySelector(".thumb"), cachedImage);
+      if (generation !== state.thumbnailLoadGeneration || scope !== displayCacheScope() || !card.isConnected || !cachedImage.naturalWidth
+          || state.thumbnailObjectUrls.get(Number(file.id)) !== cachedThumbnail) return;
+      const stage = button.querySelector(".thumb");
+      if (updateThumbnailQuality(file, stage, cachedImage)) stage.replaceChildren(cachedImage);
     };
+    cachedImage.alt = "";
     cachedImage.addEventListener("load", inspect, {once:true});
+    cachedImage.src = cachedThumbnail;
     if (cachedImage.complete) queueMicrotask(inspect);
   }
   button.addEventListener("click", (event) => {
@@ -3441,11 +3449,14 @@ async function installThumbnailBlob(file, stage, blob, signal, generation = stat
     decoded = await TCloudUI.measureThumbnailStep("decode", () => TCloudUI.decodeThumbnail(blob, signal));
     globalThis.TCloudSession?.check();
     if (signal?.aborted || generation !== state.thumbnailLoadGeneration || scope !== displayCacheScope() || !stage.isConnected) throw new DOMException("Aborted", "AbortError");
+    if (!updateThumbnailQuality(file, stage, decoded.image)) {
+      URL.revokeObjectURL(decoded.url);
+      return false;
+    }
     const previousUrl = state.thumbnailObjectUrls.get(Number(file.id));
     void TCloudUI.measureThumbnailStep("dom", () => stage.replaceChildren(decoded.image));
     state.thumbnailObjectUrls.set(Number(file.id), decoded.url);
     if (previousUrl && previousUrl !== decoded.url) URL.revokeObjectURL(previousUrl);
-    updateThumbnailQuality(file, stage, decoded.image);
     return true;
   } catch (error) {
     if (decoded) URL.revokeObjectURL(decoded.url);
@@ -3457,10 +3468,16 @@ async function installThumbnailBlob(file, stage, blob, signal, generation = stat
 function updateThumbnailQuality(file, stage, image) {
   if (file.mediaKind === "video" && TCloudUI.isBlankVideoFrame(image)) {
     stage.dataset.thumbnailQuality = "dark-frame";
+    stage.innerHTML = fileThumbnailFallback(file);
+    const rejectedUrl = state.thumbnailObjectUrls.get(Number(file.id));
+    state.thumbnailObjectUrls.delete(Number(file.id));
+    if (rejectedUrl) URL.revokeObjectURL(rejectedUrl);
     queueVideoThumbnailRepair(file);
+    return false;
   } else {
     stage.dataset.thumbnailQuality = "ready";
     file.thumbnailNeedsRepair = false;
+    return true;
   }
 }
 
@@ -6521,38 +6538,21 @@ async function makeVideoThumbnail(file) {
   }
 }
 
-async function captureVideoThumbnail(url, file = {}) {
+async function captureVideoThumbnail(url, file = {}, signal) {
   const mpegType = mpegContainerType(file.name);
-  if (mpegType && globalThis.mpegts?.isSupported()) return captureMpegVideoThumbnail(url, file, mpegType);
-  return captureNativeVideoThumbnail(url);
+  if (mpegType && globalThis.mpegts?.isSupported()) return captureMpegVideoThumbnail(url, file, mpegType, signal);
+  return captureNativeVideoThumbnail(url, signal);
 }
 
-async function captureNativeVideoThumbnail(url) {
-  const video = document.createElement("video");
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "metadata";
-  video.src = url;
+async function captureNativeVideoThumbnail(url, signal) {
   try {
-    video.load();
-    await waitForVideoEvent(video, "loadedmetadata");
-    if (Number.isFinite(video.duration) && video.duration > 0.2) {
-      const seeked = waitForVideoEvent(video, "seeked");
-      video.currentTime = Math.min(1, video.duration * 0.1);
-      await seeked;
-    } else if (video.readyState < 2) {
-      await waitForVideoEvent(video, "loadeddata");
-    }
-    return await chooseVideoThumbnailFrame(video);
+    return await TCloudUI.recoverVideoThumbnail(url, signal);
   } catch {
     return null;
-  } finally {
-    video.removeAttribute("src");
-    video.load();
   }
 }
 
-async function captureMpegVideoThumbnail(url, file, type) {
+async function captureMpegVideoThumbnail(url, file, type, signal) {
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;
@@ -6565,18 +6565,8 @@ async function captureMpegVideoThumbnail(url, file, type) {
   });
   try {
     player.attachMediaElement(video);
-    player.load();
-    await waitForVideoEvent(video, "loadeddata", 20000);
-    if (Number.isFinite(video.duration) && video.duration > 0.5) {
-      try {
-        const seeked = waitForVideoEvent(video, "seeked", 8000);
-        video.currentTime = Math.min(1, video.duration * 0.1);
-        await seeked;
-      } catch {
-        // 最初に復号できた映像フレームを使用する。
-      }
-    }
-    return await chooseVideoThumbnailFrame(video);
+    await waitForVideoEvent(video, "loadeddata", 20000, signal, () => player.load());
+    return await chooseVideoThumbnailFrame(video, signal);
   } catch {
     return null;
   } finally {
@@ -6588,47 +6578,28 @@ async function captureMpegVideoThumbnail(url, file, type) {
   }
 }
 
-function waitForVideoEvent(video, eventName, timeout = 12000) {
+function waitForVideoEvent(video, eventName, timeout = 12000, signal, action) {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timer);
       video.removeEventListener(eventName, done);
       video.removeEventListener("error", failed);
+      signal?.removeEventListener("abort", aborted);
     };
     const done = () => { cleanup(); resolve(); };
     const failed = () => { cleanup(); reject(new Error("動画を読み込めませんでした。")); };
+    const aborted = () => { cleanup(); reject(new DOMException("Aborted", "AbortError")); };
     const timer = setTimeout(() => { cleanup(); reject(new Error("動画の読み込みがタイムアウトしました。")); }, timeout);
     video.addEventListener(eventName, done, { once: true });
     video.addEventListener("error", failed, { once: true });
+    signal?.addEventListener("abort", aborted, { once: true });
+    if (signal?.aborted) { aborted(); return; }
+    try { action?.(); } catch (error) { cleanup(); reject(error); }
   });
 }
 
-async function videoFrameToThumbnail(video) {
-  if (!video.videoWidth || !video.videoHeight || video.readyState < 2) return null;
-  const max = 640;
-  const scale = Math.min(1, max / Math.max(video.videoWidth, video.videoHeight));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-  canvas.getContext("2d", { alpha: false }).drawImage(video, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve) => canvas.toBlob(resolve, "image/webp", .78));
-}
-
-async function chooseVideoThumbnailFrame(video) {
-  if (!TCloudUI.isBlankVideoFrame(video)) return videoFrameToThumbnail(video);
-  // Intros can be black at one second. Keep reads bounded and never upload a blank replacement.
-  const duration = Number(video.duration);
-  if (!Number.isFinite(duration) || duration <= .2) return null;
-  const times = [...new Set([Math.min(10, duration * .25), Math.min(30, duration * .5)])];
-  for (const time of times) {
-    if (Math.abs(video.currentTime - time) < .1) continue;
-    try {
-      const seeked = waitForVideoEvent(video, "seeked", 8000);
-      video.currentTime = time; await seeked;
-      if (!TCloudUI.isBlankVideoFrame(video)) return videoFrameToThumbnail(video);
-    } catch { return null; }
-  }
-  return null;
+async function chooseVideoThumbnailFrame(video, signal) {
+  return TCloudUI.selectVideoThumbnailFrame(video, {signal});
 }
 
 function mpegContainerType(name) {
@@ -6639,6 +6610,8 @@ function mpegContainerType(name) {
 }
 
 function resetBackgroundMediaWork() {
+  for (const controller of state.thumbnailBackfillControllers) controller.abort();
+  state.thumbnailBackfillControllers.clear();
   state.durationScanGeneration += 1;
   state.durationObserver?.disconnect();
   state.durationObserver = null;
@@ -6877,22 +6850,28 @@ async function backfillMissingVideoThumbnails(generation) {
 
 async function backfillVideoThumbnail(file, generation) {
   let mediaToken = "";
+  const controller = new AbortController(), scope = displayCacheScope();
+  const current = () => !controller.signal.aborted && generation === state.itemLoadGeneration
+    && scope === displayCacheScope() && state.session?.role === "admin" && state.view === "all";
+  state.thumbnailBackfillControllers.add(controller);
   try {
     const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
     mediaToken = media.token;
     state.backgroundMediaTokens.add(mediaToken);
+    if (!current()) return;
     const [thumbnailResult, durationResult] = await Promise.allSettled([
-      captureVideoThumbnail(media.url, file),
+      captureVideoThumbnail(media.url, file, controller.signal),
       file.durationSeconds ? Promise.resolve(file.durationSeconds) : readMediaDurationFromUrl(media.url, file)
     ]);
-    if (generation !== state.itemLoadGeneration || state.view !== "all") return;
+    if (!current()) return;
     const duration = durationResult.status === "fulfilled" ? normalizeDurationSeconds(durationResult.value) : null;
     if (duration) await persistMediaDuration(file, duration);
     const thumbnail = thumbnailResult.status === "fulfilled" ? thumbnailResult.value : null;
     if (thumbnail) {
       const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
+      if (!current()) return;
       await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true });
-      if (generation !== state.itemLoadGeneration) return;
+      if (!current()) return;
       file.hasThumbnail = true;
       file.thumbnailNeedsRepair = false;
       await showGeneratedThumbnail(file, thumbnail);
@@ -6900,6 +6879,7 @@ async function backfillVideoThumbnail(file, generation) {
   } catch {
     // 再生できない形式では、明確な動画アイコンを残す。
   } finally {
+    state.thumbnailBackfillControllers.delete(controller);
     if (mediaToken) {
       state.backgroundMediaTokens.delete(mediaToken);
       TCloudMedia.releaseMedia(mediaToken);

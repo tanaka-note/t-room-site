@@ -83,17 +83,78 @@
     }
     element.append(document.createTextNode(text.slice(offset)));
   }
-  function isBlankVideoFrame(source) {
-    // A candidate for trying a later frame, not proof of corruption. Tiny local sample only.
+  function videoFrameQuality(source) {
+    // Fixed 576-pixel, device-only sample. No image recognition or retained pixel data.
     try {
       const canvas = document.createElement("canvas"); canvas.width = 32; canvas.height = 18;
       const context = canvas.getContext("2d", {willReadFrequently:true});
       context.drawImage(source, 0, 0, 32, 18);
       const data = context.getImageData(0, 0, 32, 18).data;
-      let dark = 0;
-      for (let i = 0; i < data.length; i += 4) if (Math.max(data[i],data[i+1],data[i+2]) <= 12) dark++;
-      return dark / (32 * 18) >= .998;
-    } catch { return false; }
+      let dark = 0, sum = 0, squared = 0, chroma = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const r=data[i],g=data[i+1],b=data[i+2],light=.2126*r+.7152*g+.0722*b;
+        if (Math.max(r,g,b) <= 16) dark++;
+        sum+=light; squared+=light*light; chroma+=Math.max(r,g,b)-Math.min(r,g,b);
+      }
+      const mean=sum/576, contrast=Math.sqrt(Math.max(0,squared/576-mean*mean)), blackRatio=dark/576;
+      const accepted=blackRatio<.98 && mean>=8 && !(mean<24 && contrast<6);
+      const score=accepted ? Math.min(35,mean*.25)+Math.min(40,contrast*1.2)+Math.min(25,chroma/576*.15) : 0;
+      return {accepted,score,good:accepted&&score>=65};
+    } catch { return {accepted:false,score:0,good:false}; }
+  }
+  function isBlankVideoFrame(source) { return !videoFrameQuality(source).accepted; }
+
+  function waitVideoFrameEvent(video,event,signal,timeout=8000,action) {
+    return new Promise((resolve,reject)=>{
+      const cleanup=()=>{clearTimeout(timer);video.removeEventListener(event,done);video.removeEventListener("error",failed);signal?.removeEventListener("abort",aborted);};
+      const done=()=>{cleanup();resolve();};
+      const failed=()=>{cleanup();reject(new Error("Video frame unavailable"));};
+      const aborted=()=>{cleanup();reject(new DOMException("Aborted","AbortError"));};
+      const timer=setTimeout(failed,timeout);
+      video.addEventListener(event,done,{once:true});video.addEventListener("error",failed,{once:true});signal?.addEventListener("abort",aborted,{once:true});
+      if(signal?.aborted){aborted();return;}
+      try{action?.();}catch{failed();}
+    });
+  }
+
+  async function selectVideoThumbnailFrame(video,{signal}={}) {
+    const check=()=>{if(signal?.aborted)throw new DOMException("Aborted","AbortError");};
+    check();
+    const duration=Number(video.duration),times=[];
+    if(Number.isFinite(duration)&&duration>.2){
+      for(const ratio of [.1,.25,.5,.75,.9]){
+        const time=Math.min(duration-.05,Math.max(.01,duration*ratio));
+        if(Math.abs(Number(video.currentTime)-time)<.08||times.some(previous=>Math.abs(previous-time)<.08))continue;
+        times.push(time);
+      }
+    }
+    // At most the current frame plus five seeks. Only the best canvas is retained,
+    // and only one final Blob is encoded. Healthy existing thumbnails never enter here.
+    let best=null,bestScore=-1;
+    const evaluate=()=>{
+      if(video.readyState<2||!video.videoWidth||!video.videoHeight)return false;
+      const quality=videoFrameQuality(video);
+      if(quality.accepted&&quality.score>bestScore){
+        const scale=Math.min(1,640/Math.max(video.videoWidth,video.videoHeight));
+        best ||= document.createElement("canvas");
+        best.width=Math.max(1,Math.round(video.videoWidth*scale));best.height=Math.max(1,Math.round(video.videoHeight*scale));
+        best.getContext("2d",{alpha:false}).drawImage(video,0,0,best.width,best.height);
+        bestScore=quality.score;
+      }
+      return quality.good;
+    };
+    try{
+      if(!evaluate())for(const time of times){
+        check();
+        try{
+          await waitVideoFrameEvent(video,"seeked",signal,8000,()=>{video.currentTime=time;});check();
+          if(evaluate())break;
+        }catch(error){if(error.name==="AbortError")throw error;break;}
+      }
+      check();
+      if(!best)return null;
+      const blob=await new Promise(resolve=>best.toBlob(resolve,"image/webp",.78));check();return blob;
+    }finally{if(best){best.width=1;best.height=1;}}
   }
   async function recoverVideoThumbnail(url, signal) {
     const video = document.createElement("video");
@@ -111,21 +172,11 @@
     });
     try {
       await wait("loadedmetadata", () => { video.src = url; video.load(); });
-      const duration = Number(video.duration);
-      if (!Number.isFinite(duration) || duration <= .2) return null;
-      // Only two bounded seeks. The source is the existing device-local decrypted Range URL.
-      for (const time of new Set([Math.min(10,duration*.25), Math.min(30,duration*.5)])) {
-        await wait("seeked", () => { video.currentTime = time; });
-        if (!video.videoWidth || !video.videoHeight || video.readyState < 2 || isBlankVideoFrame(video)) continue;
-        const canvas = document.createElement("canvas"), scale = Math.min(1,640/Math.max(video.videoWidth,video.videoHeight));
-        canvas.width = Math.max(1,Math.round(video.videoWidth*scale)); canvas.height = Math.max(1,Math.round(video.videoHeight*scale));
-        canvas.getContext("2d",{alpha:false}).drawImage(video,0,0,canvas.width,canvas.height);
-        return await new Promise(resolve => canvas.toBlob(resolve,"image/webp",.78));
-      }
-      return null;
+      if (video.readyState < 2 && !(Number.isFinite(video.duration) && video.duration > .2)) await wait("loadeddata");
+      return await selectVideoThumbnailFrame(video,{signal});
     } finally { video.removeAttribute("src"); video.load(); }
   }
-  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep, highlightText, isBlankVideoFrame, recoverVideoThumbnail,
+  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep, highlightText, isBlankVideoFrame, videoFrameQuality, selectVideoThumbnailFrame, recoverVideoThumbnail,
     thumbnailTimings: () => thumbnailTimings.map(entry => ({...entry})),
     clearThumbnailTimings: () => { thumbnailTimings.length = 0; } });
 })(globalThis);

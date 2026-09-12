@@ -12,9 +12,11 @@ try{for(const [name,engine,launch] of engines){
    const file={...__test.state.files[0],mediaKind:'video'};__test.state.files=[file];
    document.querySelector('#content-grid').replaceChildren(__test.fileCard(file));
   });
-  await page.waitForFunction(()=>document.querySelector('.thumb img')?.naturalWidth>0);
+  if(before)await page.waitForFunction(()=>document.querySelector('.thumb img')?.naturalWidth>0);
+  else await page.waitForFunction(()=>document.querySelector('.thumb')?.dataset.thumbnailQuality==='dark-frame');
   const result=await page.evaluate(()=>({quality:document.querySelector('.thumb').dataset.thumbnailQuality||'unchecked',repair:!!__test.state.files[0].thumbnailNeedsRepair}));
   assert.equal(result.quality,before?'unchecked':'dark-frame');assert.equal(result.repair,!before);
+  if(!before){assert.equal(await page.locator('.thumb img').count(),0);assert.equal(await page.locator('.thumb svg').count(),1);}
   console.log(before?'REPRODUCED cached object URL skips video quality check':'PASS cached object URL retains dark frame recovery',name,result);
  }finally{await browser.close();}
 }}finally{await fixture.close();}

@@ -3,7 +3,7 @@ import {engines,root,startUIFixture,makeVideoFixture,preparePage} from './ui-fix
 const before=process.argv.includes('--reproduce');
 const fixture=await startUIFixture(process.env.TCLOUD_TEST_SOURCE_ROOT||root);
 try{
- const video=await makeVideoFixture(fixture.origin,{durationMs:6000,darkIntroMs:2100});
+ const video=await makeVideoFixture(fixture.origin,{durationMs:6000,darkIntroMs:4100});
  const [name,engine,launch]=engines[0],browser=await engine.launch({headless:true,...launch});
  try{
   const page=await browser.newPage();await page.goto(fixture.origin+'/cloud/');await page.waitForFunction(()=>globalThis.__test);
