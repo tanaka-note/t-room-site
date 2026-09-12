@@ -1,11 +1,17 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-15868b8c83ab";
+const APP_BUILD_ID = "cloud-ccddf5c23541";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
 const LONG_PRESS_DRAG_THRESHOLD_PX = 28;
 const INITIAL_ITEM_PAGE_SIZE = 32;
 const BACKGROUND_ITEM_PAGE_SIZE = 64;
+const SEARCH_ITEM_PAGE_SIZE = 250;
+let searchPageTimer = null;
+const searchMetadataCache = new Map();
+let searchMetadataCacheScope = "";
+const SEARCH_METADATA_CACHE_LIMIT = 4096;
+const SEARCH_METADATA_CACHE_TTL = 10 * 60 * 1000;
 const ITEM_RENDER_BATCH_SIZE = 192;
 const ENCRYPTED_THUMBNAIL_CONCURRENCY = 4;
 const THUMBNAIL_RETRY_DELAYS = [500, 2000];
@@ -329,14 +335,28 @@ function bindEvents() {
     state.progressiveItemsLoading = false;
     resetEncryptedThumbnailLoading();
     resetBackgroundMediaWork();
-    $("#content-grid").replaceChildren();
+    clearTimeout(searchPageTimer);
+    const count = $("#search-result-count");
+    if (count && state.query) { count.hidden = false; count.textContent = "検索中…"; }
     searchTimer = setTimeout(async () => { const result = await loadItems(); if (result?.ok) scrollToResultsStart(); }, 250);
   };
   $$("#search-input, #floating-search-input").forEach((input) => input.addEventListener("input", (event) => {
     state.query = event.target.value.trim();
     syncSearchInputs(event.target);
+    if (event.isComposing || event.target.dataset.composing === "1") return;
     runSearch();
   }));
+  $$("#search-input, #floating-search-input").forEach((input) => {
+    input.addEventListener("compositionstart", () => {
+      input.dataset.composing = "1";
+      clearTimeout(searchTimer); clearTimeout(searchPageTimer);
+      state.itemLoadController?.abort(); state.itemLoadGeneration++;
+    });
+    input.addEventListener("compositionend", () => {
+      delete input.dataset.composing;
+      state.query = input.value.trim(); syncSearchInputs(input); runSearch();
+    });
+  });
   $$(".sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSort(button.dataset.sortKey)));
   $$("[data-search-clear]").forEach(button => button.addEventListener("click", event => {
     event.preventDefault(); state.query = ""; syncSearchInputs(); runSearch();
@@ -1561,6 +1581,8 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  clearTimeout(searchPageTimer);
+  searchMetadataCache.clear(); searchMetadataCacheScope = "";
   searchPathFolders.clear();
   resetBackgroundMediaWork();
   for (const controller of [state.itemLoadController, state.uploadAbort, state.downloadAbort, state.offlineAbort, ...state.thumbnailLoadControllers]) controller?.abort();
@@ -1834,6 +1856,7 @@ function syncAvailableActions() {
 }
 
 async function loadItems() {
+  clearTimeout(searchPageTimer);
   searchPathFolders.clear();
   const loadGeneration = ++state.itemLoadGeneration;
   state.itemLoadController?.abort();
@@ -1909,14 +1932,13 @@ async function loadItems() {
       if (state.folderId) params.set("folderId", state.folderId);
       if (state.kind) params.set("kind", state.kind);
       if (state.query) {
-        params.set("q", state.query);
-        params.set("recursive", "1");
+        params.set("searchCandidates", "1");
       }
       params.set("pageSize", String(INITIAL_ITEM_PAGE_SIZE));
       params.set("offset", "0");
-      const cacheKey = displayListingCacheKey(params);
+      const cacheKey = state.query ? "" : displayListingCacheKey(params);
       const dataPromise = api(`/items?${params}`, { signal: itemLoadSignal });
-      const cached = await readDisplayListingCache(cacheKey);
+      const cached = cacheKey ? await readDisplayListingCache(cacheKey) : null;
       if (cached && loadGeneration === state.itemLoadGeneration && !itemLoadSignal.aborted) {
         renderCachedDisplayListing(cached);
         renderedInitialItems = true;
@@ -1957,6 +1979,7 @@ async function loadItems() {
       syncUnlockedTopFolderNames();
       renderedInitialItems = true;
       scheduleDisplayListingCacheWrite(cacheKey);
+      scheduleSearchPage(loadGeneration);
     }
     if (!renderedInitialItems) renderItems();
     syncUnlockedTopFolderNames();
@@ -1966,6 +1989,7 @@ async function loadItems() {
     if (error?.name === "AbortError") return { ok: false, stale: true, error: null };
     if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
     state.progressiveItemsLoading = false;
+    if (clearDeniedSearchResults(error)) { handleError(error); return { ok: false, error }; }
     if (renderedCachedItems && [401, 403, 404, 423].includes(Number(error?.status))) {
       state.folders = [];
       state.files = [];
@@ -2002,19 +2026,21 @@ async function loadNextItemPage() {
   if (!signal || signal.aborted) return;
   state.itemPageLoading = true;
   try {
-    await nextRenderOpportunity();
+    if (state.query) await new Promise(resolve => setTimeout(resolve, 0));
+    else await nextRenderOpportunity();
     if (generation !== state.itemLoadGeneration || signal.aborted) return;
     const baseParams = new URLSearchParams(state.itemPageParams);
+    if (state.query) { baseParams.delete("q"); baseParams.delete("recursive"); baseParams.set("searchCandidates", "1"); }
     const folderPageParams = state.itemNextFolderOffset == null ? null : new URLSearchParams(baseParams);
     const filePageParams = state.itemNextFileOffset == null ? null : new URLSearchParams(baseParams);
     if (folderPageParams) {
-      folderPageParams.set("pageSize", String(BACKGROUND_ITEM_PAGE_SIZE));
+      folderPageParams.set("pageSize", String(state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE));
       folderPageParams.set("offset", String(state.itemNextFolderOffset));
       folderPageParams.set("foldersOnly", "1");
       folderPageParams.set("continuation", "1");
     }
     if (filePageParams) {
-      filePageParams.set("pageSize", String(BACKGROUND_ITEM_PAGE_SIZE));
+      filePageParams.set("pageSize", String(state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE));
       filePageParams.set("offset", String(state.itemNextFileOffset));
       filePageParams.set("filesOnly", "1");
       filePageParams.set("continuation", "1");
@@ -2062,16 +2088,39 @@ async function loadNextItemPage() {
       renderItems();
     }
     syncUnlockedTopFolderNames();
-    scheduleDisplayListingCacheWrite(displayListingCacheKey(baseParams));
+    if (!state.query) scheduleDisplayListingCacheWrite(displayListingCacheKey(baseParams));
   } catch (error) {
     if (error?.name !== "AbortError" && generation === state.itemLoadGeneration) {
       state.progressiveItemsLoading = false;
       $("#content-grid .item-render-sentinel")?.remove();
-      setNotice("残りのファイルを読み込めませんでした。通信状態を確認して、もう一度開いてください。", true);
+      if (clearDeniedSearchResults(error)) handleError(error);
+      else setNotice("残りのファイルを読み込めませんでした。通信状態を確認して、もう一度開いてください。", true);
     }
   } finally {
-    if (generation === state.itemLoadGeneration) state.itemPageLoading = false;
+    if (generation === state.itemLoadGeneration) {
+      state.itemPageLoading = false;
+      scheduleSearchPage(generation);
+    }
   }
+}
+
+function scheduleSearchPage(generation) {
+  clearTimeout(searchPageTimer);
+  if (!state.query || !state.progressiveItemsLoading || generation !== state.itemLoadGeneration) return;
+  // Complete the search even if initial matches fill the viewport; keep DOM virtualization.
+  searchPageTimer = setTimeout(() => {
+    if (generation === state.itemLoadGeneration && state.query) void loadNextItemPage();
+  }, 0);
+}
+
+function clearDeniedSearchResults(error) {
+  if (!state.query || ![401, 403, 404, 419, 423].includes(Number(error?.status))) return false;
+  state.itemLoadController?.abort();
+  searchMetadataCache.clear();
+  resetEncryptedThumbnailLoading(); resetBackgroundMediaWork();
+  state.files = []; state.folders = []; state.progressiveItemsLoading = false;
+  renderItems();
+  return true;
 }
 
 function memberCacheScope() {
@@ -2263,6 +2312,10 @@ function renderItems() {
     : state.folderId
       ? "このフォルダには、まだファイルがありません。"
       : "フォルダを作成すると、ここに表示されます。";
+  if (state.query && state.progressiveItemsLoading && !state.folders.length && !state.files.length) {
+    $("#empty-title").textContent = "検索しています…";
+    $("#empty-copy").textContent = "取得した情報から順に結果を表示します。";
+  }
   $("#display-toggle").innerHTML = TCloudUI.icon(state.listMode ? "grid" : "list");
   $("#display-toggle").setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
   $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
@@ -3262,6 +3315,8 @@ function syncVisibleConflictBadges() {
 }
 
 async function hydrateFileRecords(records, options = {}) {
+  const scope = displayCacheScope(), generation = state.itemLoadGeneration;
+  if (scope !== searchMetadataCacheScope) { searchMetadataCache.clear(); searchMetadataCacheScope = scope; }
   const hydrated = await mapWithConcurrency(records, 8, async (original) => {
     const file = { ...original };
     if (Number(file.cryptoVersion) === 1) {
@@ -3286,7 +3341,20 @@ async function hydrateFileRecords(records, options = {}) {
       } else {
         try {
           file.fileKey = await TRoomCrypto.unlockFileKey(file, folderKey);
-          const metadata = await TRoomCrypto.decryptFileMetadata(file, file.fileKey);
+          // Cache only display metadata. Each fresh server record still needs a
+          // valid folder key and authenticated file-key envelope before reuse.
+          const signature = JSON.stringify([file.folderId, file.encryptedMetadata, file.metadataIv, file.wrappedFileKey, file.fileKeyIv]);
+          const cached = scope ? searchMetadataCache.get(Number(file.id)) : null;
+          const metadata = cached?.signature === signature && Date.now() - cached.savedAt < SEARCH_METADATA_CACHE_TTL
+            ? cached.metadata : await TRoomCrypto.decryptFileMetadata(file, file.fileKey);
+          if (scope && scope === displayCacheScope() && generation === state.itemLoadGeneration) {
+            searchMetadataCache.delete(Number(file.id));
+            searchMetadataCache.set(Number(file.id), {signature, savedAt: Date.now(), metadata: {
+              name: metadata.name, mimeType: metadata.mimeType, mediaKind: metadata.mediaKind,
+              lastModified: metadata.lastModified, durationSeconds: metadata.durationSeconds
+            }});
+            while (searchMetadataCache.size > SEARCH_METADATA_CACHE_LIMIT) searchMetadataCache.delete(searchMetadataCache.keys().next().value);
+          }
           file.name = metadata.name;
           file.mimeType = metadata.mimeType;
           file.mediaKind = metadata.mediaKind;
@@ -6632,7 +6700,7 @@ function scheduleMissingMediaDurations() {
   state.durationObserver?.disconnect();
   state.durationObserver = null;
   state.durationQueue = state.durationQueue.filter((entry) => entry.generation === generation);
-  if (state.view !== "all" || state.uploading || state.downloadActive) return;
+  if (state.view !== "all" || state.uploading || state.downloadActive || (state.query && state.progressiveItemsLoading)) return;
   const eligible = state.files.filter((file) => {
     if (!["video", "audio"].includes(file.mediaKind) || file.durationSeconds || !file.fileKey || !canRenameFile(file)) return false;
     if (state.session?.role === "admin" && file.mediaKind === "video" && !file.hasThumbnail && !state.thumbnailAttempts.has(Number(file.id))) return false;
@@ -6784,7 +6852,7 @@ function scheduleMissingVideoThumbnails() {
   state.thumbnailBackfillObserver?.disconnect();
   state.thumbnailBackfillObserver = null;
   state.thumbnailBackfillQueue = [];
-  if (state.session?.role !== "admin" || state.view !== "all") return;
+  if (state.session?.role !== "admin" || state.view !== "all" || (state.query && state.progressiveItemsLoading)) return;
   const generation = state.itemLoadGeneration;
   const eligible = state.files.filter((file) => file.mediaKind === "video"
     && (!file.hasThumbnail || file.thumbnailNeedsRepair)

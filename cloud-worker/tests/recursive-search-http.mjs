@@ -199,6 +199,11 @@ assert.notEqual(decryptedCandidate.mediaKind, "image", "端末復号後の写真
 const encryptedVideo = afterRootUnlock.files.find((item) => Number(item.id) === video.id);
 const decryptedVideo = await TRoomCrypto.decryptFileMetadata(encryptedVideo, video.fileKey);
 assert.equal(decryptedVideo.name, "秘密動画・検索対象.mp4", "暗号化動画名を端末側で復号できません。");
+const localCandidates = await jsonApi(`/items?folderId=${rootA.id}&searchCandidates=1&pageSize=250`, "admin");
+assert.equal(localCandidates.recursiveSearch, true);
+assert.ok(localCandidates.files.some(item => Number(item.id) === video.id));
+assert.equal(await TRoomCrypto.decryptFileMetadata(localCandidates.files.find(item => Number(item.id) === video.id), video.fileKey).then(item => item.name), "秘密動画・検索対象.mp4");
+assert.equal(localCandidates.files.some(item => Number(item.id) === video.id && item.name.includes("秘密動画")), false, "candidate API must not reveal decrypted video names");
 
 const firstPage = await jsonApi(`/items?folderId=${rootA.id}&q=検索対象&recursive=1&pageSize=2`, "admin");
 assert.equal(firstPage.folders.length, 2, "ページ分割の先頭件数が不正です。");

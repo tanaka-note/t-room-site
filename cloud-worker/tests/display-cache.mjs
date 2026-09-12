@@ -14,7 +14,7 @@ assert.match(cache, /THUMBNAIL_LIMIT_BYTES = 1024 \* 1024 \* 1024/);
 assert.match(cache, /lastAccessed/);
 assert.match(cache, /async function trim\(kind, limitBytes\)/);
 assert.match(cache, /removeOldThumbnailVersions/);
-assert.match(client, /const cached = await readDisplayListingCache\(cacheKey\)/);
+assert.match(client, /const cached = cacheKey \? await readDisplayListingCache\(cacheKey\) : null/);
 assert.match(client, /const dataPromise = api\(`\/items\?\$\{params\}`/);
 assert.match(client, /renderCachedDisplayListing\(cached\)/);
 assert.match(client, /scheduleDisplayListingCacheWrite\(cacheKey\)/);

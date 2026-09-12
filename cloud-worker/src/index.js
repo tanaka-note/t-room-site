@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-15868b8c83ab";
+const APP_BUILD_ID = "cloud-ccddf5c23541";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -898,8 +898,10 @@ async function listItems(url, env, session) {
   const kind = ["image", "video", "audio", "document", "other"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "";
   const requestedSort = url.searchParams.get("sort") || "name-desc";
   const sort = ["updated-desc", "updated-asc", "name-asc", "name-desc", "size-desc", "size-asc", "newest", "oldest", "name", "size"].includes(requestedSort) ? requestedSort : "name-desc";
-  if (query && url.searchParams.get("recursive") === "1") {
-    return searchItems(url, env, session, { folderId, query, kind, sort });
+  const localSearch = url.searchParams.get("searchCandidates") === "1";
+  if (localSearch || (query && url.searchParams.get("recursive") === "1")) {
+    // Reuse recursive search's authenticated folder/PW scope without a phrase.
+    return searchItems(url, env, session, { folderId, query: localSearch ? "" : query, kind, sort });
   }
   const folder = folderId ? (continuation
     ? await env.DB.prepare("SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(folderId).first()

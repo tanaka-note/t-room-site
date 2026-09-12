@@ -105,7 +105,7 @@ try {
   await a.reload();await a.waitForFunction(()=>!!globalThis.__app);await a.evaluate(()=>__app.initialize());
   assert.equal(await a.evaluate(()=>__app.state.session),null,'blocked tab must not adopt the new Cookie on reload');
   // The server check holds even with cross-tab notifications absent/bypassed.
-  for(const [path,method] of [['/items','GET'],['/files/2/download','GET'],['/files/2/view','GET'],['/uploads/1/parts/1','PUT'],['/folders/9','PATCH']]) {
+  for(const [path,method] of [['/items','GET'],['/items?searchCandidates=1','GET'],['/files/2/download','GET'],['/files/2/view','GET'],['/uploads/1/parts/1','PUT'],['/folders/9','PATCH']]) {
    const response=await browserContext.request.fetch(origin+'/cloud/api'+path,{method,headers:{'X-TCloud-Session':member.sessionCacheId,'Content-Type':'application/json'},...(method==='GET'?{}:{data:'{}'})});
    assert.equal(response.status(),419,path);
   }

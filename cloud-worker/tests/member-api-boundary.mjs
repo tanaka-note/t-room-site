@@ -50,6 +50,10 @@ async function handoff(account, identity = "primary-admin") {
 }
 try {
   const admin = await handoff("admin");
+  assert.equal((await api(null, "/items?searchCandidates=1")).status, 401);
+  const adminCandidates = await api(admin.cookie, "/items?searchCandidates=1");
+  assert.equal(adminCandidates.status, 200);
+  assert.ok([1, 2, 4].every(id => adminCandidates.body.files.some(file => file.id === id)));
   assert.deepEqual((await api(admin.cookie, "/items")).body.folders.map((f) => f.id).sort(), [7, 9]);
   for (const identity of ["primary-admin", "general-user"]) {
     const member = await handoff("folder-member", identity);
@@ -71,12 +75,20 @@ try {
     assert.equal((await api(member.cookie, "/files/4")).status, 423);
     const search = await api(member.cookie, "/items?q=other&recursive=1");
     assert.equal(search.status, 200); assert.equal(search.body.files.some((file) => [2, 3, 4].includes(file.id)), false);
+    const candidates = await api(member.cookie, "/items?searchCandidates=1&role=admin");
+    assert.equal(candidates.status, 200); assert.ok(candidates.body.files.some(file => file.id === 1));
+    assert.equal(candidates.body.files.some(file => [2, 3, 4].includes(file.id)), false);
+    assert.equal((await api(member.cookie, "/items?searchCandidates=1&folderId=9")).status, 403);
+    assert.equal((await api(member.cookie, "/items?searchCandidates=1&folderId=10")).status, 423);
     assert.equal((await api(member.cookie, "/move-destinations")).body.folders.some((f) => f.id === 9), false);
     assert.equal((await api(member.cookie, "/files/1", "PATCH", { name: "own.txt", folderId: 8 })).status, 200);
     assert.equal((await api(member.cookie, "/files/1", "PATCH", { folderId: 7 })).status, 200);
     assert.equal((await api(member.cookie, "/folders/8", "PATCH", { name: "child" })).status, 200);
     assert.equal((await api(member.cookie, "/folders/10/unlock", "POST", { password: "local-proof" })).status, 200);
     assert.equal((await api(member.cookie, "/files/4")).status, 200);
+    assert.ok((await api(member.cookie, "/items?searchCandidates=1")).body.files.some(file => file.id === 4));
+    db.prepare("UPDATE cloud_folder_unlocks SET expires_at=0 WHERE folder_id=10").run();
+    assert.equal((await api(member.cookie, "/items?searchCandidates=1")).body.files.some(file => file.id === 4), false);
     const folderBody = { parentId: 8, name: "created", cryptoVersion: 1, inheritsProtection: true, encryptedName: "AA", nameIv: "AA", adminWrappedKey: "AA", parentWrappedKey: "AA", parentWrapIv: "AA" };
     const folder = await api(member.cookie, "/folders", "POST", folderBody);
     assert.equal(folder.status, 201, JSON.stringify(folder.body));
@@ -91,7 +103,11 @@ try {
   assert.equal(pw.status, 200); assert.equal(pw.body.role, "subadmin");
   assert.equal((await api(pw.cookie, "/items")).body.folders.length, 2);
   assert.equal((await api(pw.cookie, "/items?folderId=7")).status, 423);
+  assert.equal((await api(pw.cookie, "/items?searchCandidates=1")).body.files.length, 0);
   assert.equal((await api(pw.cookie, "/folders/7/unlock", "POST", { password: "local-proof" })).status, 200);
+  const subCandidates = await api(pw.cookie, "/items?searchCandidates=1");
+  assert.ok(subCandidates.body.files.some(file => file.id === 1));
+  assert.equal(subCandidates.body.files.some(file => [2, 3, 4].includes(file.id)), false);
   assert.equal((await api(pw.cookie, "/files/1", "PATCH", { name: "renamed.txt" })).status, 200);
   assert.equal((await api(pw.cookie, "/files/1", "DELETE")).status, 200);
   assert.equal((await api(pw.cookie, "/files/1/permanent", "DELETE")).status, 403);

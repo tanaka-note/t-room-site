@@ -6,9 +6,10 @@ try{for(const [name,engine,launch] of engines){
   const page=await browser.newPage({viewport:{width:390,height:740}});await preparePage(page,fixture.origin,0);
   const queries=[];let releaseOld;
   await page.route('**/cloud/api/**',async route=>{
-   const q=new URL(route.request().url()).searchParams.get('q')||'';queries.push(q);
-   if(q==='old')await new Promise(r=>releaseOld=r);
-   const names=q==='日本'?['日本 日本.txt','日本 <img src=x onerror=alert(1)>.txt']:q?[q+'.txt']:['all.txt'];
+   const params=new URL(route.request().url()).searchParams;assert.equal(params.has('q'),false);
+   const candidates=params.get('searchCandidates')==='1';queries.push(candidates);
+   if(queries.length===1)await new Promise(r=>releaseOld=r);
+   const names=candidates?['old.txt','日本 日本.txt','日本 <img src=x onerror=alert(1)>.txt']:['all.txt'];
    await route.fulfill({json:{folders:[],files:names.map((value,i)=>({id:i+1,name:value,mediaKind:'document',cryptoVersion:0,folderId:9,searchPath:'root / locked',searchDepth:1,createdAt:'2026-09-12 00:00:00'})),breadcrumbs:[],searchFolders:[{id:9,name:'locked',isProtected:true,isUnlocked:false,cryptoVersion:0}]}}).catch(()=>{});
   });
   await page.locator('#search-input').fill('old');while(!releaseOld)await page.waitForTimeout(10);
@@ -26,7 +27,13 @@ try{for(const [name,engine,launch] of engines){
   await page.locator('[data-search-clear="search-input"]').click();
   await page.waitForFunction(()=>document.querySelector('#content-grid strong')?.textContent==='all.txt');
   assert.equal(await page.locator('#floating-search-input').inputValue(),'');assert.equal(await page.locator('#search-input').inputValue(),'');
-  assert.ok(queries.includes('old')&&queries.includes('日本')&&queries.includes(''));
+  assert.ok(queries.filter(Boolean).length>=2&&queries.includes(false));
+  const previous=queries.length;
+  await page.locator('#search-input').dispatchEvent('compositionstart');
+  await page.locator('#search-input').fill('日本');
+  await page.waitForTimeout(400);assert.equal(queries.length,previous,'IME composition must not start requests');
+  await page.locator('#search-input').dispatchEvent('compositionend');
+  await page.waitForFunction(()=>document.querySelectorAll('#content-grid .file-card').length===2);
   const literal=await page.evaluate(()=>{
    const e=document.createElement('strong');TCloudUI.highlightText(e,'a[A] A[a] 日本日本','[a]');
    return {text:e.textContent,matches:[...e.querySelectorAll('mark')].map(x=>x.textContent)};
