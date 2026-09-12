@@ -1,4 +1,5 @@
 import {accountDisplayName} from "../../assets/account-display.mjs";
+import {lineBrowserResponse} from "../../assets/line-browser-worker.mjs";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -29,7 +30,7 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
   SECURITY: { async redeemHandoff(token) { return selected || {identityId:"primary-admin",credentialId:"credential",serviceLinkId:`primary-admin-${token}`,serviceAccountId:token,cloudRootFolderId:token === "folder-member" ? 7 : null,displayLabel:token === "admin" ? "管理者" : "Atsushi",sessionEpoch:1}; }, async validatePasskeySession(input) { return { valid: input.serviceAccountId === "admin" ? input.cloudRootFolderId == null : input.serviceAccountId === "folder-member" && input.cloudRootFolderId === 7 }; } },
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };
-const context = { accountDisplayName, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
+const context = { accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
   sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, validateServicePasskeySession,
   recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;

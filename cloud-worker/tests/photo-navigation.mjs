@@ -15,7 +15,7 @@ for (const marker of ["navigatePreview", "ArrowLeft", "ArrowRight", "touchstart"
 for (const marker of ["pushState", "popstate", "navigateToFolder", "handlePreviewClosed"]) {
   if (!script.includes(marker)) throw new Error(`戻る操作処理 ${marker} がありません。`);
 }
-if (!/const previewOriginId = [\s\S]*?restorePreviewOrigin\(previewOriginId\);[\s\S]*?return;/.test(script)) {
+if (!/const previewOriginId = [\s\S]*?restorePreviewOrigin\(previewOriginId, origin\.x, origin\.y\);[\s\S]*?return;/.test(script)) {
   throw new Error("同じフォルダへ戻る際に、一覧を再読込せず元のファイル位置へ戻す処理がありません。");
 }
 if (!/function restorePreviewOrigin\(fileId, scrollX = state\.previewOriginScrollX, scrollY = state\.previewOriginScrollY\)[\s\S]*?scrollAppTo\(\{ top, left, behavior: "auto" \}\)[\s\S]*?scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/.test(script)) {

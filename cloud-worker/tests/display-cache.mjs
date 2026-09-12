@@ -58,8 +58,15 @@ for (const changes of [{ serviceAccountId: "admin" }, { serviceLinkId: "" }, { r
   assert.equal(cacheContext.displayCacheScope(), "", "incomplete member context must not use shared caches");
 }
 for (const role of ["admin", "subadmin"]) {
-  cacheContext.state.session = { role, sessionCacheId: "session-a" };
-  assert.equal(cacheContext.displayCacheScope(), `${role}:shared-account-salt`);
+  cacheContext.state.session = { role, serviceAccountId: role, sessionCacheId: "session-a" };
+  const scope = cacheContext.displayCacheScope();
+  assert.ok(scope.startsWith(`${role}:`));
+  for (const changes of [{serviceAccountId: "other"}, {serviceLinkId: "other"}, {rootFolderId: 7}, {sessionCacheId: "session-b"}]) {
+    cacheContext.state.session = {role, serviceAccountId: role, sessionCacheId: "session-a", ...changes};
+    assert.notEqual(cacheContext.displayCacheScope(), scope);
+  }
+  cacheContext.state.session = {role};
+  assert.equal(cacheContext.displayCacheScope(), "");
   assert.equal(cacheContext.offlineAccountScope(), role);
 }
 console.log("device listing and thumbnail caches preserve access boundaries: ok");

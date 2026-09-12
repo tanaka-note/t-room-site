@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-b981860295ac";
+const APP_BUILD_ID = "cloud-bd6775f5bdda";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -8,6 +8,7 @@ const INITIAL_ITEM_PAGE_SIZE = 32;
 const BACKGROUND_ITEM_PAGE_SIZE = 64;
 const ITEM_RENDER_BATCH_SIZE = 192;
 const ENCRYPTED_THUMBNAIL_CONCURRENCY = 4;
+const THUMBNAIL_RETRY_DELAYS = [500, 2000];
 const APP_UPDATE_EXPECTED_BUILD_KEY = "tcloud-app-update-expected-build";
 const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
 const SORT_PREFERENCES_KEY = "tcloud-folder-sort-preferences-v1";
@@ -51,6 +52,9 @@ const state = {
   thumbnailLoadQueuedIds: new Set(),
   thumbnailLoadActive: 0,
   thumbnailLoadControllers: new Set(),
+  thumbnailLoadTasks: new Map(),
+  thumbnailLoadTimer: 0,
+  thumbnailLoadFrame: 0,
   thumbnailObjectUrls: new Map(),
   history: [],
   requests: [],
@@ -95,6 +99,8 @@ const state = {
   previewOrientationGeneration: 0,
   previewVideoFullscreenActive: false,
   previewHistoryActive: false,
+  previewClosePending: false,
+  previewCloseOrigin: null,
   previewPictureInPictureActive: false,
   previewPictureInPictureVideo: null,
   previewKeepMediaOnClose: false,
@@ -290,9 +296,11 @@ function bindEvents() {
     startSelectedDownloads();
   });
   $("#preview-dialog").addEventListener("close", handlePreviewClosed);
+  $("#preview-dialog").addEventListener("close", queueEncryptedThumbnailPump);
+  document.addEventListener("visibilitychange", queueEncryptedThumbnailPump);
   $("#preview-dialog").addEventListener("cancel", (event) => {
     event.preventDefault();
-    $("#preview-dialog").close();
+    requestPreviewClose();
   });
   $("#preview-prev").addEventListener("click", () => navigatePreview(-1));
   $("#preview-next").addEventListener("click", () => navigatePreview(1));
@@ -327,6 +335,9 @@ function bindEvents() {
   window.addEventListener("scroll", queueFloatingToolbarUpdate, { passive: true });
   $(".workspace").addEventListener("scroll", queueFloatingToolbarUpdate, { passive: true });
   window.addEventListener("resize", queueFloatingToolbarUpdate, { passive: true });
+  window.addEventListener("scroll", queueEncryptedThumbnailPump, {passive: true});
+  $(".workspace").addEventListener("scroll", queueEncryptedThumbnailPump, {passive: true});
+  window.addEventListener("resize", queueEncryptedThumbnailPump, {passive: true});
   $("#display-toggle").addEventListener("click", () => { state.listMode = !state.listMode; renderItems(); });
   $("#selection-clear").addEventListener("click", clearSelectionWithoutRefresh);
   $("#selection-all").addEventListener("click", selectAllVisibleItems);
@@ -388,9 +399,15 @@ function bindEvents() {
   $("#recovery-saved").addEventListener("change", (event) => { $("#recovery-close").disabled = !event.target.checked; });
   $("#recovery-close").addEventListener("click", closeRecoveryDialog);
   $$("[data-view], [data-kind]").forEach((button) => button.addEventListener("click", () => selectSection(button)));
-  $$(".dialog-close").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
+  $$(".dialog-close").forEach((button) => button.addEventListener("click", () => {
+    const dialog = button.closest("dialog");
+    if (dialog.id === "preview-dialog") requestPreviewClose();
+    else dialog.close();
+  }));
   $$("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
-    if (event.target === dialog && !["vault-dialog", "recovery-dialog"].includes(dialog.id)) dialog.close();
+    if (event.target !== dialog || ["vault-dialog", "recovery-dialog"].includes(dialog.id)) return;
+    if (dialog.id === "preview-dialog") requestPreviewClose();
+    else dialog.close();
   }));
 }
 
@@ -1184,18 +1201,21 @@ async function handleHistoryNavigation(event) {
       state.selectionClearBackPending = false;
       if (sameFolder && !target.previewId) return;
     }
-    const previewOriginId = $("#preview-dialog").open && sameFolder && !target.previewId
-      ? Number(state.previewFileId)
+    const previewOriginId = ($("#preview-dialog").open || state.previewCloseOrigin) && sameFolder && !target.previewId
+      ? Number(state.previewFileId || state.previewCloseOrigin?.id)
       : null;
+    const origin = state.previewCloseOrigin || {x: state.previewOriginScrollX, y: state.previewOriginScrollY};
     if (state.selectedFiles.size || state.selectedFolders.size) {
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
-      if (sameFolder && !target.previewId) return;
+      if (sameFolder && !target.previewId && !previewOriginId) return;
     }
     state.previewHistoryActive = false;
+    state.previewClosePending = false;
+    state.previewCloseOrigin = null;
     if ($("#preview-dialog").open) $("#preview-dialog").close();
     if (previewOriginId) {
-      restorePreviewOrigin(previewOriginId);
+      restorePreviewOrigin(previewOriginId, origin.x, origin.y);
       return;
     }
     await navigateToFolder(target.folderId, target.folderName, { pushHistory: false, restoreEntry: target });
@@ -1210,9 +1230,11 @@ async function handleHistoryNavigation(event) {
 }
 
 function restorePreviewOrigin(fileId, scrollX = state.previewOriginScrollX, scrollY = state.previewOriginScrollY) {
+  const generation = state.itemLoadGeneration, scope = displayCacheScope();
   const left = Number.isFinite(Number(scrollX)) ? Math.max(0, Number(scrollX)) : 0;
   const top = Number.isFinite(Number(scrollY)) ? Math.max(0, Number(scrollY)) : null;
   const restore = () => {
+    if (generation !== state.itemLoadGeneration || scope !== displayCacheScope()) return;
     if (top !== null) {
       scrollAppTo({ top, left, behavior: "auto" });
       return;
@@ -1529,6 +1551,9 @@ function releaseSessionState() {
   for (const controller of [state.itemLoadController, state.uploadAbort, state.downloadAbort, state.offlineAbort, ...state.thumbnailLoadControllers]) controller?.abort();
   state.itemLoadGeneration++; state.previewGeneration++; state.thumbnailLoadGeneration++;
   clearTimeout(state.displayCacheWriteTimer);
+  resetEncryptedThumbnailLoading();
+  state.previewHistoryActive = state.previewClosePending = false;
+  state.previewCloseOrigin = null;
   globalThis.TCloudMedia?.clearMedia?.();
   void stopPictureInPicturePreview().catch(() => {});
   clearPreviewUrl();
@@ -1537,6 +1562,7 @@ function releaseSessionState() {
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
   state.session = null; state.loginId = "";
   state.files = []; state.folders = []; state.selectedFiles.clear(); state.selectedFolders.clear();
+  $("#content-grid").replaceChildren();
   document.querySelectorAll("video,audio").forEach(media => { media.pause(); media.removeAttribute("src"); media.load(); });
   document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
   showLoginView();
@@ -2048,9 +2074,12 @@ function offlineAccountScope() {
 
 function displayCacheScope() {
   if (!state.session || !globalThis.TCloudDisplayCache?.supported?.()) return "";
-  if (state.session.role === "member") return memberCacheScope();
-  const account = String(state.credentialSalt || state.session.sessionCacheId || "default");
-  return `${state.session.role}:${account}`;
+  const session = state.session;
+  if (!session.sessionCacheId || !["admin", "subadmin", "member"].includes(session.role)) return "";
+  if (session.role === "member" && !memberCacheScope()) return "";
+  return `${session.role}:${JSON.stringify([session.serviceAccountId || session.role,
+    session.serviceLinkId || "", session.rootFolderId || null, session.sessionCacheId,
+    state.credentialSalt || session.credentialSalt || ""])}`;
 }
 
 function displayListingCacheKey(params) {
@@ -2071,7 +2100,8 @@ async function readDisplayListingCache(cacheKey) {
   if (!scope || state.view !== "all") return null;
   if (state.session?.role === "subadmin" && state.folderId && !state.crypto.folderKeys.has(Number(state.folderId))) return null;
   try {
-    return await TCloudDisplayCache.getListing(scope, cacheKey);
+    const cached = await TCloudDisplayCache.getListing(scope, cacheKey);
+    return scope === displayCacheScope() ? cached : null;
   } catch {
     return null;
   }
@@ -2094,8 +2124,10 @@ function renderCachedDisplayListing(cached) {
 function scheduleDisplayListingCacheWrite(cacheKey) {
   const scope = displayCacheScope();
   if (!scope || !cacheKey || state.view !== "all") return;
+  const generation = state.itemLoadGeneration;
   clearTimeout(state.displayCacheWriteTimer);
   state.displayCacheWriteTimer = window.setTimeout(() => {
+    if (scope !== displayCacheScope() || generation !== state.itemLoadGeneration) return;
     const payload = {
       folders: cacheSafeRecords(state.folders),
       files: cacheSafeRecords(state.files),
@@ -3258,63 +3290,84 @@ async function hydrateUploadHistoryRecords(records) {
   return hydrated;
 }
 
-async function loadEncryptedThumbnail(file, stage, signal, generation) {
-  const current = () => !signal.aborted && generation === state.thumbnailLoadGeneration && stage.isConnected;
+async function loadEncryptedThumbnail(file, stage, signal, generation, stoppedSources = new Set()) {
+  const scope = displayCacheScope();
+  const current = () => Boolean(state.session) && !signal.aborted && generation === state.thumbnailLoadGeneration && stage.isConnected && scope === displayCacheScope();
   try {
     globalThis.TCloudSession?.check();
-    const scope = displayCacheScope();
     const version = String(file.updatedAt || file.createdAt || "1");
-    const cached = scope ? await TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), version).catch(() => null) : null;
-    if (!current()) return;
+    const cached = scope ? await TCloudUI.measureThumbnailStep("cache-read", () => TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), version).catch(() => null)) : null;
+    if (!current()) return "stop";
     if (cached) {
-      if (await installThumbnailBlob(file, stage, cached, signal, generation)) return;
-      if (!current()) return;
+      if (await installThumbnailBlob(file, stage, cached, signal, generation)) return "done";
+      if (!current()) return "stop";
       // Remove only this damaged display thumbnail, never offline encrypted data.
       await TCloudDisplayCache?.removeThumbnail?.(scope, Number(file.id), version).catch(() => {});
     }
     const sources = [];
     if (file.hasDisplayThumbnail && file.mediaKind !== "video") sources.push("display-thumbnail");
-    if (Number(file.cryptoVersion) !== 1 || file.fileKey) sources.push("thumbnail");
+    if (file.hasThumbnail && (Number(file.cryptoVersion) !== 1 || file.fileKey)) sources.push("thumbnail");
+    let retry = false;
     for (const source of sources) {
-      for (let attempt = 0; attempt < 2 && current(); attempt += 1) {
-        try {
-          const response = await TCloudSession.fetch(API + "/files/" + file.id + "/" + source, { credentials: "same-origin", cache: "no-store", signal });
-          if (!current() || [401, 403, 419].includes(response.status)) return;
-          if (!response.ok) {
-            if (response.status === 408 || response.status === 429 || response.status >= 500) continue;
-            break;
-          }
-          const blob = source === "thumbnail" && Number(file.cryptoVersion) === 1
-            ? new Blob([await TRoomCrypto.decryptThumbnail(await response.arrayBuffer(), file.fileKey)], { type: "image/webp" })
-            : await response.blob();
-          if (!current()) return;
-          if (!await installThumbnailBlob(file, stage, blob, signal, generation)) break;
-          if (scope && current()) await TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), version, blob).catch(() => {});
-          return;
-        } catch (error) {
-          if (!current() || error.name === "AbortError" || [401, 403, 419].includes(error.status)) return;
-          // A transient fetch failure gets one retry; decoding failures keep the icon.
-        }
+      if (stoppedSources.has(source)) continue;
+      if (!current()) return "stop";
+      let fetched;
+      try {
+        fetched = await TCloudUI.measureThumbnailStep("fetch", async () => {
+          const response = await TCloudSession.fetch(API + "/files/" + file.id + "/" + source, {credentials: "same-origin", cache: "no-store", signal});
+          return {response, bytes: response.ok ? await response.arrayBuffer() : null};
+        });
+      } catch (error) {
+        if (!current() || error.name === "AbortError" || [401, 403, 419].includes(error.status)) return "stop";
+        retry = true;
+        continue;
       }
+      const {response, bytes} = fetched;
+      if (!current() || [401, 403, 419].includes(response.status)) return "stop";
+      if (!response.ok) {
+        const transient = response.status === 408 || response.status === 429 || response.status >= 500;
+        retry ||= transient;
+        if (!transient) stoppedSources.add(source);
+        continue;
+      }
+      // Keep crypto errors outside the transient-network catch: a wrong key is never retried.
+      const blob = source === "thumbnail" && Number(file.cryptoVersion) === 1
+        ? new Blob([await TCloudUI.measureThumbnailStep("decrypt", () => TRoomCrypto.decryptThumbnail(bytes, file.fileKey))], {type: "image/webp"})
+        : new Blob([bytes], {type: response.headers.get("Content-Type") || ""});
+      if (!current()) return "stop";
+      try {
+        if (!await installThumbnailBlob(file, stage, blob, signal, generation, true)) return "stop";
+      } catch (error) {
+        if (!current() || error.name === "AbortError") return "stop";
+        if (error.thumbnailTransient) retry = true;
+        else stoppedSources.add(source);
+        continue;
+      }
+      if (scope && current()) await TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), version, blob).catch(() => {});
+      return "done";
     }
+    return retry ? "retry" : "stop";
   } catch {
     // Permission, key and format failures keep the existing, accessible file icon.
+    return "stop";
   }
 }
 
-async function installThumbnailBlob(file, stage, blob, signal, generation = state.thumbnailLoadGeneration) {
+async function installThumbnailBlob(file, stage, blob, signal, generation = state.thumbnailLoadGeneration, strict = false) {
   let decoded;
+  const scope = displayCacheScope();
   try {
-    decoded = await TCloudUI.decodeThumbnail(blob, signal);
+    decoded = await TCloudUI.measureThumbnailStep("decode", () => TCloudUI.decodeThumbnail(blob, signal));
     globalThis.TCloudSession?.check();
-    if (signal?.aborted || generation !== state.thumbnailLoadGeneration || !stage.isConnected) throw new DOMException("Aborted", "AbortError");
+    if (signal?.aborted || generation !== state.thumbnailLoadGeneration || scope !== displayCacheScope() || !stage.isConnected) throw new DOMException("Aborted", "AbortError");
     const previousUrl = state.thumbnailObjectUrls.get(Number(file.id));
-    stage.replaceChildren(decoded.image);
+    void TCloudUI.measureThumbnailStep("dom", () => stage.replaceChildren(decoded.image));
     state.thumbnailObjectUrls.set(Number(file.id), decoded.url);
     if (previousUrl && previousUrl !== decoded.url) URL.revokeObjectURL(previousUrl);
     return true;
-  } catch {
+  } catch (error) {
     if (decoded) URL.revokeObjectURL(decoded.url);
+    if (strict) throw error;
     return false;
   }
 }
@@ -3427,6 +3480,10 @@ function resetEncryptedThumbnailLoading() {
   state.thumbnailLoadObserver = null;
   state.thumbnailLoadQueue = [];
   state.thumbnailLoadQueuedIds = new Set();
+  state.thumbnailLoadTasks.clear();
+  clearTimeout(state.thumbnailLoadTimer);
+  cancelAnimationFrame(state.thumbnailLoadFrame);
+  state.thumbnailLoadTimer = state.thumbnailLoadFrame = 0;
   state.thumbnailLoadActive = 0;
   for (const controller of state.thumbnailLoadControllers) controller.abort();
   state.thumbnailLoadControllers.clear();
@@ -3437,49 +3494,77 @@ function resetEncryptedThumbnailLoading() {
 function scheduleEncryptedThumbnailLoading() {
   const generation = state.thumbnailLoadGeneration;
   state.thumbnailLoadObserver?.disconnect();
-  const enqueueCard = (file, stage) => {
-    const id = Number(file.id);
-    if (generation !== state.thumbnailLoadGeneration || state.thumbnailLoadQueuedIds.has(id)) return;
-    state.thumbnailLoadQueuedIds.add(id);
-    state.thumbnailLoadQueue.push({ file, stage, generation });
-    processEncryptedThumbnailQueue();
-  };
-  const candidates = [];
   for (const file of state.files) {
-    if (!file.hasThumbnail) continue;
+    if (!file.hasThumbnail && !(file.hasDisplayThumbnail && file.mediaKind !== "video")) continue;
     const stage = $(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
-    if (stage) candidates.push({ file, stage });
+    if (!stage || stage.querySelector("img")) continue;
+    const id = Number(file.id), previous = state.thumbnailLoadTasks.get(id);
+    if (previous?.stage === stage && previous.key === file.fileKey) continue;
+    const task = {file, stage, generation, key: file.fileKey, attempts: 0, readyAt: 0, status: "pending", stoppedSources: new Set()};
+    state.thumbnailLoadTasks.set(id, task);
   }
-  if (!candidates.length) return;
-  if (!globalThis.IntersectionObserver) {
-    candidates.slice(0, 24).forEach(({ file, stage }) => enqueueCard(file, stage));
-    return;
+  if (globalThis.IntersectionObserver) {
+    const observer = new IntersectionObserver(queueEncryptedThumbnailPump, {root: appScrollRoot(), rootMargin: "720px 0px"});
+    state.thumbnailLoadObserver = observer;
+    for (const task of state.thumbnailLoadTasks.values()) if (task.stage.isConnected) observer.observe(task.stage);
   }
-  const byStage = new Map(candidates.map((entry) => [entry.stage, entry.file]));
-  const observer = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      observer.unobserve(entry.target);
-      const file = byStage.get(entry.target);
-      if (file) enqueueCard(file, entry.target);
-    }
-  }, { rootMargin: "720px 0px" });
-  state.thumbnailLoadObserver = observer;
-  for (const { stage } of candidates) observer.observe(stage);
+  queueEncryptedThumbnailPump();
+}
+
+function queueEncryptedThumbnailPump() {
+  if (state.thumbnailLoadFrame) return;
+  state.thumbnailLoadFrame = requestAnimationFrame(() => {
+    state.thumbnailLoadFrame = 0;
+    processEncryptedThumbnailQueue();
+  });
 }
 
 function processEncryptedThumbnailQueue() {
+  clearTimeout(state.thumbnailLoadTimer);
+  state.thumbnailLoadTimer = 0;
+  // Leave decoding capacity to active playback, and resume on close/visibilitychange.
+  if (document.hidden || $("#preview-dialog").open) return;
+  const bounds = appScrollRoot()?.getBoundingClientRect() || {top: 0, bottom: innerHeight};
+  const now = performance.now();
+  let nextRetry = Infinity;
+  const candidates = [];
+  for (const [id, task] of state.thumbnailLoadTasks) {
+    if (task.generation !== state.thumbnailLoadGeneration || !task.stage.isConnected) {
+      state.thumbnailLoadTasks.delete(id);
+      continue;
+    }
+    if (task.status !== "pending") continue;
+    if (task.readyAt > now) { nextRetry = Math.min(nextRetry, task.readyAt); continue; }
+    const rect = task.stage.getBoundingClientRect();
+    const distance = Math.max(bounds.top - rect.bottom, rect.top - bounds.bottom, 0);
+    task.priority = distance === 0 ? 0 : distance <= 720 ? 1 : 2;
+    task.distance = distance;
+    candidates.push(task);
+  }
+  // Re-evaluate geometry after scrolling; a queued background card never keeps FIFO priority.
+  state.thumbnailLoadQueue = candidates.sort((a, b) => a.priority - b.priority || a.distance - b.distance);
+  state.thumbnailLoadQueuedIds = new Set([...state.thumbnailLoadTasks.values()]
+    .filter(task => task.status === "active").map(task => Number(task.file.id)));
+  for (const task of candidates) state.thumbnailLoadQueuedIds.add(Number(task.file.id));
+  if (Number.isFinite(nextRetry)) state.thumbnailLoadTimer = setTimeout(queueEncryptedThumbnailPump, Math.max(1, nextRetry - now));
   while (state.thumbnailLoadActive < ENCRYPTED_THUMBNAIL_CONCURRENCY && state.thumbnailLoadQueue.length) {
     const task = state.thumbnailLoadQueue.shift();
-    if (task.generation !== state.thumbnailLoadGeneration || !task.stage.isConnected) continue;
     const controller = new AbortController();
+    task.status = "active";
+    task.attempts++;
     state.thumbnailLoadControllers.add(controller);
     state.thumbnailLoadActive += 1;
-    loadEncryptedThumbnail(task.file, task.stage, controller.signal, task.generation).finally(() => {
+    loadEncryptedThumbnail(task.file, task.stage, controller.signal, task.generation, task.stoppedSources).then(result => {
+      if (result === "retry" && task.attempts <= THUMBNAIL_RETRY_DELAYS.length) {
+        task.readyAt = performance.now() + THUMBNAIL_RETRY_DELAYS[task.attempts - 1];
+        task.status = "pending";
+      } else task.status = result === "done" ? "done" : "stopped";
+    }).catch(() => { task.status = "stopped"; }).finally(() => {
       state.thumbnailLoadControllers.delete(controller);
       if (task.generation !== state.thumbnailLoadGeneration) return;
+      state.thumbnailLoadQueuedIds.delete(Number(task.file.id));
       state.thumbnailLoadActive = Math.max(0, state.thumbnailLoadActive - 1);
-      processEncryptedThumbnailQueue();
+      queueEncryptedThumbnailPump();
     });
   }
 }
@@ -6750,6 +6835,7 @@ async function unlockFolder(event) {
 
 async function openPreview(file, options = {}) {
   const { pushHistory = true } = options;
+  if (state.previewClosePending) return;
   if (pushHistory && !$("#preview-dialog").open) rememberCurrentNavigationPosition("file", file.id);
   if (Number(file?.cryptoVersion) === 1 && !file.fileKey && !file.offlineOnly) {
     try {
@@ -6789,6 +6875,7 @@ async function openPreview(file, options = {}) {
       previewId: file.id
     }, "", location.href);
   }
+  if (!pushHistory && state.historyReady && history.state?.previewId) state.previewHistoryActive = true;
   clearPreviewUrl();
   state.previewFileId = Number(file.id);
   state.selected = file;
@@ -7468,13 +7555,27 @@ function handlePreviewTouchEnd(event) {
   navigatePreview(dx < 0 ? 1 : -1);
 }
 
+function requestPreviewClose() {
+  if (!$("#preview-dialog").open || state.previewClosePending) return;
+  if (state.previewHistoryActive && history.state?.previewId && !state.handlingPopState) {
+    state.previewClosePending = true;
+    history.back();
+    return;
+  }
+  state.previewCloseOrigin = {id: state.previewFileId, x: state.previewOriginScrollX, y: state.previewOriginScrollY};
+  $("#preview-dialog").close();
+}
+
 function handlePreviewClosed() {
+  // A queued close event must never destroy a newly opened preview.
+  if ($("#preview-dialog").open) return;
   if (state.previewKeepMediaOnClose && state.previewPictureInPictureActive) {
     state.previewKeepMediaOnClose = false;
     state.previewTouchStart = null;
     restoreInstalledAppPortrait({ settle: true, reason: "preview-pip" });
     return;
   }
+  const origin = {id: state.previewFileId, x: state.previewOriginScrollX, y: state.previewOriginScrollY};
   state.previewGeneration += 1;
   state.previewPlaybackMode = "off";
   clearPreviewUrl();
@@ -7483,7 +7584,13 @@ function handlePreviewClosed() {
   state.previewTouchStart = null;
   if (state.previewHistoryActive && !state.handlingPopState) {
     state.previewHistoryActive = false;
+    state.previewCloseOrigin = origin;
+    if (state.previewClosePending) return;
+    state.previewClosePending = true;
     history.back();
+  } else if (state.previewCloseOrigin && origin.id && !state.handlingPopState) {
+    state.previewCloseOrigin = null;
+    restorePreviewOrigin(origin.id, origin.x, origin.y);
   }
 }
 

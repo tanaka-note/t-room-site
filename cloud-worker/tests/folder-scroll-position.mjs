@@ -8,7 +8,7 @@ assert.match(client, /const \{ pushHistory = true, load = true, resetScroll = pu
 assert.match(client, /if \(resetScroll\) resetFolderScrollPosition\(\);[\s\S]*?if \(load\) await loadItems\(\);[\s\S]*?if \(resetScroll\) requestAnimationFrame\(resetFolderScrollPosition\)/);
 assert.match(client, /function resetFolderScrollPosition\(\) \{[\s\S]*?scrollAppTo\(\{ top: 0, left: 0, behavior: "auto" \}\);[\s\S]*?hideFloatingToolbar\(\)/);
 assert.match(client, /await navigateToFolder\(target\.folderId, target\.folderName, \{ pushHistory: false, restoreEntry: target \}\)/);
-assert.match(client, /restorePreviewOrigin\(previewOriginId\)/);
+assert.match(client, /restorePreviewOrigin\(previewOriginId, origin\.x, origin\.y\)/);
 assert.match(client, /function rememberCurrentNavigationPosition\(originType = "", originId = null\)/);
 assert.match(client, /scrollX: Math\.max\(0, appScrollPosition\(\)\.x \|\| 0\)/);
 assert.match(client, /scrollY: Math\.max\(0, appScrollPosition\(\)\.y \|\| 0\)/);

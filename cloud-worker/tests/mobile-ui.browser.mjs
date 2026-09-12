@@ -83,7 +83,8 @@ try {
        return {recovered,recoveredRequests,cacheRequests,deniedRequests,failedRequests,preserved,staleImage:!!stage.querySelector('img')};
       }finally {globalThis.TCloudSession=saved;}
      });
-     assert.deepEqual(thumbnails,{recovered:true,recoveredRequests:2,cacheRequests:0,deniedRequests:1,failedRequests:4,preserved:'preserve',staleImage:false});
+     // One queue attempt per source; the scheduler owns bounded backoff retries.
+     assert.deepEqual(thumbnails,{recovered:true,recoveredRequests:2,cacheRequests:0,deniedRequests:1,failedRequests:2,preserved:'preserve',staleImage:false});
      const formats=await page.evaluate(async()=>{const canvas=document.createElement('canvas');canvas.width=16;canvas.height=16;canvas.getContext('2d').fillRect(0,0,16,16);const results=[];for(const type of ['image/png','image/jpeg','image/webp']){const blob=await new Promise(r=>canvas.toBlob(r,type));const decoded=await TCloudUI.decodeThumbnail(blob);results.push({requested:type,actual:blob.type,width:decoded.image.naturalWidth});URL.revokeObjectURL(decoded.url);}return results;});
      for(const format of formats)assert.equal(format.width,16,JSON.stringify(format));
      await page.evaluate(()=>__ui.resetFolderScrollPosition());

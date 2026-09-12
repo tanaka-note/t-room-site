@@ -45,7 +45,7 @@
           error ? reject(error) : resolve();
         };
         const abort = () => finish(new DOMException("Aborted", "AbortError"));
-        const timer = setTimeout(() => finish(new Error("Thumbnail decode timeout")), 10000);
+        const timer = setTimeout(() => finish(Object.assign(new Error("Thumbnail decode timeout"), {thumbnailTransient: true})), 10000);
         image.onload = () => finish(image.naturalWidth ? null : new Error("Empty thumbnail"));
         image.onerror = () => finish(new Error("Invalid thumbnail"));
         signal?.addEventListener("abort", abort, { once: true });
@@ -59,5 +59,18 @@
       throw error;
     }
   }
-  global.TCloudUI = Object.freeze({ icon, decodeThumbnail });
+  const thumbnailTimings = [];
+  async function measureThumbnailStep(step, operation) {
+    if (global.TCLOUD_THUMBNAIL_DEBUG !== true) return operation();
+    const started = performance.now();
+    try { return await operation(); }
+    finally {
+      thumbnailTimings.push({step, milliseconds: performance.now() - started});
+      if (thumbnailTimings.length > 256) thumbnailTimings.shift();
+    }
+  }
+  // Opt-in, bounded, memory-only diagnostics. No names, keys, images or network telemetry.
+  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep,
+    thumbnailTimings: () => thumbnailTimings.map(entry => ({...entry})),
+    clearThumbnailTimings: () => { thumbnailTimings.length = 0; } });
 })(globalThis);
