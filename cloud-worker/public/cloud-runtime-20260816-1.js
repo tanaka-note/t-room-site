@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-f4797b97873b";
+const APP_BUILD_ID = "cloud-6621b1586a5e";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -3136,6 +3136,16 @@ function fileCard(file) {
   button.querySelector(".thumb img")?.addEventListener("error", () => {
     button.querySelector(".thumb").innerHTML = fallbackThumbnail;
   }, { once: true });
+  const cachedImage = button.querySelector(".thumb img");
+  if (cachedImage) {
+    const generation = state.thumbnailLoadGeneration, scope = displayCacheScope();
+    const inspect = () => {
+      if (generation !== state.thumbnailLoadGeneration || scope !== displayCacheScope() || !card.isConnected || !cachedImage.naturalWidth) return;
+      updateThumbnailQuality(file, button.querySelector(".thumb"), cachedImage);
+    };
+    cachedImage.addEventListener("load", inspect, {once:true});
+    if (cachedImage.complete) queueMicrotask(inspect);
+  }
   button.addEventListener("click", (event) => {
     if (card.dataset.longPressed === "true") {
       card.dataset.longPressed = "false";
@@ -3435,18 +3445,22 @@ async function installThumbnailBlob(file, stage, blob, signal, generation = stat
     void TCloudUI.measureThumbnailStep("dom", () => stage.replaceChildren(decoded.image));
     state.thumbnailObjectUrls.set(Number(file.id), decoded.url);
     if (previousUrl && previousUrl !== decoded.url) URL.revokeObjectURL(previousUrl);
-    if (file.mediaKind === "video" && TCloudUI.isBlankVideoFrame(decoded.image)) {
-      stage.dataset.thumbnailQuality = "dark-frame";
-      queueVideoThumbnailRepair(file);
-    } else {
-      stage.dataset.thumbnailQuality = "ready";
-      file.thumbnailNeedsRepair = false;
-    }
+    updateThumbnailQuality(file, stage, decoded.image);
     return true;
   } catch (error) {
     if (decoded) URL.revokeObjectURL(decoded.url);
     if (strict) throw error;
     return false;
+  }
+}
+
+function updateThumbnailQuality(file, stage, image) {
+  if (file.mediaKind === "video" && TCloudUI.isBlankVideoFrame(image)) {
+    stage.dataset.thumbnailQuality = "dark-frame";
+    queueVideoThumbnailRepair(file);
+  } else {
+    stage.dataset.thumbnailQuality = "ready";
+    file.thumbnailNeedsRepair = false;
   }
 }
 
