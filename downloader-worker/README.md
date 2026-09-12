@@ -203,3 +203,7 @@ X/Twitterの投稿URLを解析・取得する場合だけ、`x.com`、`api.x.com
 対象テストは `node --test test/x-egress.test.js test/main-video.test.js test/downloader-cancellation.test.js test/worker-contract.test.js`。Workerだけを`--containers-rollout=none --keep-vars`で公開し、Container/定義/migrationの変更は不要。切り戻しは公開前Worker `a979c0bb-1f48-45a9-afd8-984245c60b57`。補助探索のflagとは独立した通常egress修正のため、`MAIN_VIDEO_FALLBACK=false`だけではこの変更を戻せない。
 
 補助解析の即時内部エラーは、public DNS問い合わせの`redirect: "error"`がWorkers runtimeで未対応だったことも原因。Node mockでは通る一方、実workerdでは通信前にTypeErrorとなることを再現した。`manual`に変更し、既存の`!response.ok`でDNSの3xxも拒否するため転送先の追従は許可しない。修正前TypeError→修正後同じworkerdでDNS確認成功、Nodeの3xx拒否テストを確認した。Containerなしの隔離edge-previewでもNASA公開投稿のHEAD・guest activation・投稿APIが全て200（合計1,584ms、動画本体転送なし）。これは本番Containerでの取得・保存成功とは区別する。
+
+公開確認: 対象Node59件PASS、構文とWrangler dry-run成功。Worker `16a63ca8-5683-42d9-b0a4-c35f5d51a9f3`（100%）、build `downloader-f88936c80698`、配信JSのmain一致、Container digest `bcbbd4d9b85ee1d2ed26beb0188ad0e761879d356ffb6ff26a617d8d4c269437`維持・active rolloutなしを確認。2026-09-13 00:15 JST、本番で公開の短い公式プロモーション投稿（CaptainAmerica / 719944021058060289）を解析し、1280×720 HLS/MP4の選択肢と取得ボタンを表示。D1は20秒でanalyzed、token/lease解放を確認した。ローカルの同じ固定版yt-dlpは1,218ms、API/X/video.twimg.comの3ホスト、4形式を検出。本番とローカルは起動条件が異なるため速度倍率には換算しない。実動画の取得・スキャン・保存・配信はこの検証では実施していない。
+
+NASAの旧投稿623160978427936768は通常のX内動画とは異なる旧カード経路で、`amp.twimg.com`は本番allowlist対象外。直接接続の固定版yt-dlpでも同ホストがHTTP500を返したため取得成功とは扱わず、許可先追加だけで解決したとはしない。一般の公開投稿での解析成功と、この旧カードの失敗、利用者提示の個別投稿の未再検証を区別する。追加Container build・大容量転送・有料サービス導入は行っていない。DNS検証と小容量実環境確認の利用量は発生し、請求額/CPUは未計測。
