@@ -156,6 +156,50 @@ test('page-associated frame and scripts receive bounded exact permissions withou
  } finally {globalThis.fetch=previous}
 });
 
+test('non-network script references do not abort a valid iframe plan or grant their embedded host',async()=>{
+ const previous=globalThis.fetch,lookups=[],policies=[],calls=[];
+ globalThis.fetch=async url=>{lookups.push(new URL(url).searchParams.get('name'));return dns(['8.8.8.8'])()};
+ const scripts=['data:text/javascript,void%200','blob:https://unused.example/id','https://assets.example/player.js'];
+ const container={async claimMainVideoExploration(){return true},async setAllowedHosts(){},async setOutboundHandler(_name,p){policies.push(p)},async fetch(req){
+  const b=await req.json();calls.push(b);
+  return Response.json(b.phase==='prepare'?{page:'https://player.example/embed',scripts}:
+   b.phase==='discover'?{url:'https://cdn.example/main.mp4'}:{extractor:'main-video',media:[]});
+ }};
+ try {
+  const result=await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},container,new URL('https://page.example/watch'),Date.now()+120000,1024,
+   {page:'https://page.example/watch',embed:'https://player.example/embed',scripts});
+  assert.equal(result?.extractor,'main-video');
+  assert.deepEqual(calls.map(x=>x.phase),['prepare','discover','validate']);
+  assert.ok(!lookups.includes('unused.example'));
+  assert.ok(policies.every(p=>!p.hosts.includes('unused.example')));
+  assert.deepEqual(new Set(policies.at(-1).hosts),new Set(['page.example','assets.example','player.example','cdn.example']));
+  assert.equal(new Set(calls.map(x=>x.expiresAtMs)).size,1);
+ } finally {globalThis.fetch=previous}
+});
+
+test('script-only exemption never admits private HTTP, executable schemes, blob frames or media',async()=>{
+ const previous=globalThis.fetch;globalThis.fetch=dns(['8.8.8.8']);
+ try {
+  for(const plan of [
+   {scripts:['http://127.0.0.1/private.js']},
+   {scripts:['javascript:alert(1)']},
+   {embed:'blob:https://unused.example/id'},
+   {embed:'data:text/html,fixture'},
+   {candidate:'blob:https://unused.example/id'},
+   {candidate:'data:video/mp4,fixture'}
+  ]) {
+   let calls=0;
+   const c={async claimMainVideoExploration(){return true},async setAllowedHosts(){},async setOutboundHandler(){},async fetch(){calls++;throw Error('unexpected_request')}};
+   assert.equal(await exploreMainVideo({MAIN_VIDEO_FALLBACK:'true'},c,new URL('https://page.example/watch'),Date.now()+120000,1024,{page:'https://page.example/watch',...plan}),null);
+   assert.equal(calls,0);
+  }
+  for(const url of ['data:text/javascript,void%200','blob:https://unused.example/id']) {
+   const response=await mainVideoOutbound(new Request(url),{},{params:{hosts:['unused.example'],until:Date.now()+1000,bounded:true}});
+   assert.equal(response.status,403);
+  }
+ } finally {globalThis.fetch=previous}
+});
+
 test('public DNS rejects private, mixed, special-use, mapped IP and DNS failure',async()=>{
  for(const ip of ['127.0.0.1','10.0.0.1','169.254.169.254','100.64.0.1','192.168.1.1','::1','::ffff:127.0.0.1','fe80::1','fc00::1','2002:7f00:1::','2001:db8::1','192.0.2.1'])assert.equal(publicAddress(ip),false,ip);
  for(const ip of ['8.8.8.8','2606:4700:4700::1111'])assert.equal(publicAddress(ip),true,ip);

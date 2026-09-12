@@ -174,6 +174,9 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
     const sites=JSON.parse(env.MAIN_VIDEO_PAGE_HOSTS || '{}');
     const dependencies=Array.isArray(sites[sourceUrl.hostname]) ? sites[sourceUrl.hostname].slice(0,8) : [];
     const hosts=[sourceUrl.hostname,...dependencies];
+    // data/blob scripts have no outgoing request to approve. Only omit them
+    // from script dependencies; iframe/media URLs still require HTTP(S)+DNS.
+    const scriptUrls = values => (values || []).slice(0,8).filter(value => !/^\s*(?:data|blob):/i.test(value));
     const addUrls = async values => {
       for(const value of values) {
         const target=await assertPublicDestination(value,AbortSignal.timeout(remaining()));
@@ -186,7 +189,7 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
     if(pagePlan?.page && normalizeSourceUrl(pagePlan.page).origin===sourceUrl.origin) {
       plan={embed:pagePlan.embed || '',candidate:pagePlan.candidate || ''};
       if(plan.candidate) plan.embed='';
-      else await addUrls([...(pagePlan.scripts || []).slice(0,8),...(plan.embed?[plan.embed]:[])]);
+      else await addUrls([...scriptUrls(pagePlan.scripts),...(plan.embed?[plan.embed]:[])]);
     }
     const context={pageOrigins:[sourceUrl.origin,...(plan.embed?[new URL(plan.embed).origin]:[])]};
     operation='configure_egress';
@@ -197,7 +200,7 @@ export async function exploreMainVideo(env, container, sourceUrl, analysisEndsAt
       const frame=await call({phase:'prepare',url:plan.embed});
       if(new URL(frame.page).origin!==new URL(plan.embed).origin) throw new Error('main_video_frame_redirect');
       operation='dependencies';
-      await addUrls((frame.scripts || []).slice(0,8));
+      await addUrls(scriptUrls(frame.scripts));
       operation='configure_egress';
       await configureMainVideoEgress(container,hosts,until,true,context);
     }

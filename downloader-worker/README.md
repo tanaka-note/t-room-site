@@ -207,3 +207,9 @@ X/Twitterの投稿URLを解析・取得する場合だけ、`x.com`、`api.x.com
 公開確認: 対象Node59件PASS、構文とWrangler dry-run成功。Worker `16a63ca8-5683-42d9-b0a4-c35f5d51a9f3`（100%）、build `downloader-f88936c80698`、配信JSのmain一致、Container digest `bcbbd4d9b85ee1d2ed26beb0188ad0e761879d356ffb6ff26a617d8d4c269437`維持・active rolloutなしを確認。2026-09-13 00:15 JST、本番で公開の短い公式プロモーション投稿（CaptainAmerica / 719944021058060289）を解析し、1280×720 HLS/MP4の選択肢と取得ボタンを表示。D1は20秒でanalyzed、token/lease解放を確認した。ローカルの同じ固定版yt-dlpは1,218ms、API/X/video.twimg.comの3ホスト、4形式を検出。本番とローカルは起動条件が異なるため速度倍率には換算しない。実動画の取得・スキャン・保存・配信はこの検証では実施していない。
 
 NASAの旧投稿623160978427936768は通常のX内動画とは異なる旧カード経路で、`amp.twimg.com`は本番allowlist対象外。直接接続の固定版yt-dlpでも同ホストがHTTP500を返したため取得成功とは扱わず、許可先追加だけで解決したとはしない。一般の公開投稿での解析成功と、この旧カードの失敗、利用者提示の個別投稿の未再検証を区別する。追加Container build・大容量転送・有料サービス導入は行っていない。DNS検証と小容量実環境確認の利用量は発生し、請求額/CPUは未計測。
+
+### 埋め込みスクリプトとiframe探索の整合（2026-09-13）
+
+通常HTML parserは`script src`の`data:`/`blob:`も探索planへ渡す。Workerがそれを外部DNS検証へ渡すと、正常なiframeがあってもdependencies段階で解析を打ち切っていた。非性的なpage/frame fixtureで修正前の失敗を再現し、これらだけをscript通信先の候補から除外した。blob内のoriginを許可先へ追加せず、frame/media候補のdata/blob拒否とHTTP(S)のpublic DNS・送信境界検証は維持する。8件のscript候補上限・1回/10秒・全体期限は変更しない。
+
+Node対象40件（補助探索・X送信制限・中止/CAS）とPython対象5件（静的候補・iframe・転送・403/challenge・拒否維持）がPASS。ブラウザ探索・候補再検証はNode mockであり、実サイトの取得成功を示すものではない。ブラウザ/Container実起動、実動画取得、実スキャンは行わない。Workerのみ`--containers-rollout=none --keep-vars`で公開し、Container・定義・DB migrationは変更不要。切り戻しは公開前Worker `16a63ca8-5683-42d9-b0a4-c35f5d51a9f3`。
