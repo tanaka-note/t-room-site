@@ -29,7 +29,7 @@ assert.match(main, /function readStoredMediaDuration\(file\)/);
 assert.match(main, /readMediaDurationFromUrl\(media\.url, file\)/);
 assert.match(main, /durationPending[\s\S]*?確認中/);
 assert.match(main, /durationUnavailable[\s\S]*?時間不明/);
-assert.match(main, /Promise\.allSettled\(\[[\s\S]*?captureVideoThumbnail[\s\S]*?readMediaDurationFromUrl/);
+// Thumbnail recovery must not compete with a second duration decoder. Browser coverage checks this path.
 assert.match(share, /observeSharedMediaDuration\(video, file\)/);
 assert.match(share, /observeSharedMediaDuration\(audio, file\)/);
 assert.match(mainHtml, /cloud\.js\?v=cloud-[a-f0-9]{12}/);

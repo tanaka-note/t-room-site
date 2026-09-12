@@ -97,7 +97,8 @@
         sum+=light; squared+=light*light; chroma+=Math.max(r,g,b)-Math.min(r,g,b);
       }
       const mean=sum/576, contrast=Math.sqrt(Math.max(0,squared/576-mean*mean)), blackRatio=dark/576;
-      const accepted=blackRatio<.98 && mean>=8 && !(mean<24 && contrast<6);
+      // Reject a white/near-white blank poster as well as black frames.
+      const accepted=blackRatio<.98 && mean>=8 && !(mean<24 && contrast<6) && !(mean>240 && contrast<4);
       const score=accepted ? Math.min(35,mean*.25)+Math.min(40,contrast*1.2)+Math.min(25,chroma/576*.15) : 0;
       return {accepted,score,good:accepted&&score>=65};
     } catch { return {accepted:false,score:0,good:false}; }
@@ -117,13 +118,13 @@
     });
   }
 
-  async function selectVideoThumbnailFrame(video,{signal}={}) {
+  async function selectVideoThumbnailFrame(video,{signal,seek=true}={}) {
     const check=()=>{if(signal?.aborted)throw new DOMException("Aborted","AbortError");};
     check();
     const duration=Number(video.duration),times=[];
-    if(Number.isFinite(duration)&&duration>.2){
+    if(seek&&Number.isFinite(duration)&&duration>.2){
       for(const ratio of [.1,.25,.5,.75,.9]){
-        const time=Math.min(duration-.05,Math.max(.01,duration*ratio));
+        const time=Math.min(duration-.05,Math.max(.01,ratio===.1?Math.min(10,duration*ratio):duration*ratio));
         if(Math.abs(Number(video.currentTime)-time)<.08||times.some(previous=>Math.abs(previous-time)<.08))continue;
         times.push(time);
       }
@@ -149,14 +150,14 @@
         try{
           await waitVideoFrameEvent(video,"seeked",signal,8000,()=>{video.currentTime=time;});check();
           if(evaluate())break;
-        }catch(error){if(error.name==="AbortError")throw error;break;}
+        }catch(error){if(error.name==="AbortError")throw error;if(video.error)break;}
       }
       check();
       if(!best)return null;
       const blob=await new Promise(resolve=>best.toBlob(resolve,"image/webp",.78));check();return blob;
     }finally{if(best){best.width=1;best.height=1;}}
   }
-  async function recoverVideoThumbnail(url, signal) {
+  async function recoverVideoThumbnail(url, signal, onDuration) {
     const video = document.createElement("video");
     video.muted = true; video.playsInline = true; video.preload = "metadata";
     const wait = (event, action) => new Promise((resolve, reject) => {
@@ -168,10 +169,11 @@
       video.addEventListener(event, done, {once:true}); video.addEventListener("error", failed, {once:true});
       signal?.addEventListener("abort", aborted, {once:true});
       if (signal?.aborted) { aborted(); return; }
-      try { action(); } catch { failed(); }
+      try { action?.(); } catch { failed(); }
     });
     try {
       await wait("loadedmetadata", () => { video.src = url; video.load(); });
+      onDuration?.(video.duration);
       if (video.readyState < 2 && !(Number.isFinite(video.duration) && video.duration > .2)) await wait("loadeddata");
       return await selectVideoThumbnailFrame(video,{signal});
     } finally { video.removeAttribute("src"); video.load(); }

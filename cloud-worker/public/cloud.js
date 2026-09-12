@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-ccddf5c23541";
+const APP_BUILD_ID = "cloud-4de63ae0c09a";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -6606,21 +6606,21 @@ async function makeVideoThumbnail(file) {
   }
 }
 
-async function captureVideoThumbnail(url, file = {}, signal) {
+async function captureVideoThumbnail(url, file = {}, signal, onDuration) {
   const mpegType = mpegContainerType(file.name);
-  if (mpegType && globalThis.mpegts?.isSupported()) return captureMpegVideoThumbnail(url, file, mpegType, signal);
-  return captureNativeVideoThumbnail(url, signal);
+  if (mpegType && globalThis.mpegts?.isSupported()) return captureMpegVideoThumbnail(url, file, mpegType, signal, onDuration);
+  return captureNativeVideoThumbnail(url, signal, onDuration);
 }
 
-async function captureNativeVideoThumbnail(url, signal) {
+async function captureNativeVideoThumbnail(url, signal, onDuration) {
   try {
-    return await TCloudUI.recoverVideoThumbnail(url, signal);
+    return await TCloudUI.recoverVideoThumbnail(url, signal, onDuration);
   } catch {
     return null;
   }
 }
 
-async function captureMpegVideoThumbnail(url, file, type, signal) {
+async function captureMpegVideoThumbnail(url, file, type, signal, onDuration) {
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;
@@ -6634,6 +6634,7 @@ async function captureMpegVideoThumbnail(url, file, type, signal) {
   try {
     player.attachMediaElement(video);
     await waitForVideoEvent(video, "loadeddata", 20000, signal, () => player.load());
+    onDuration?.(video.duration);
     return await chooseVideoThumbnailFrame(video, signal);
   } catch {
     return null;
@@ -6680,6 +6681,8 @@ function mpegContainerType(name) {
 function resetBackgroundMediaWork() {
   for (const controller of state.thumbnailBackfillControllers) controller.abort();
   state.thumbnailBackfillControllers.clear();
+  // A cancelled folder visit must not permanently suppress its repair attempts.
+  state.thumbnailAttempts.clear();
   state.durationScanGeneration += 1;
   state.durationObserver?.disconnect();
   state.durationObserver = null;
@@ -6843,7 +6846,7 @@ async function readMediaDurationFromUrl(url, file) {
 }
 
 function queueVideoThumbnailRepair(file) {
-  if (state.session?.role !== "admin" || file.mediaKind !== "video" || !file.fileKey || state.thumbnailAttempts.has(Number(file.id))) return;
+  if (!state.session || file.mediaKind !== "video" || !file.fileKey || state.thumbnailAttempts.has(Number(file.id))) return;
   file.thumbnailNeedsRepair = true;
   scheduleMissingVideoThumbnails();
 }
@@ -6852,11 +6855,12 @@ function scheduleMissingVideoThumbnails() {
   state.thumbnailBackfillObserver?.disconnect();
   state.thumbnailBackfillObserver = null;
   state.thumbnailBackfillQueue = [];
-  if (state.session?.role !== "admin" || state.view !== "all" || (state.query && state.progressiveItemsLoading)) return;
+  if (!state.session || state.view !== "all" || (state.query && state.progressiveItemsLoading)) return;
   const generation = state.itemLoadGeneration;
   const eligible = state.files.filter((file) => file.mediaKind === "video"
     && (!file.hasThumbnail || file.thumbnailNeedsRepair)
     && file.fileKey
+    && !state.thumbnailObjectUrls.has(Number(file.id))
     && !state.thumbnailAttempts.has(Number(file.id)));
   if (!eligible.length) return;
   const enqueue = (file) => {
@@ -6912,7 +6916,7 @@ async function backfillMissingVideoThumbnails(generation) {
     }
   } finally {
     state.thumbnailBackfillRunning = false;
-    if (generation === state.itemLoadGeneration && state.thumbnailBackfillQueue.length) scheduleVideoThumbnailBackfill(generation);
+    if (state.session && state.thumbnailBackfillQueue.length) scheduleVideoThumbnailBackfill(state.itemLoadGeneration);
   }
 }
 
@@ -6920,32 +6924,32 @@ async function backfillVideoThumbnail(file, generation) {
   let mediaToken = "";
   const controller = new AbortController(), scope = displayCacheScope();
   const current = () => !controller.signal.aborted && generation === state.itemLoadGeneration
-    && scope === displayCacheScope() && state.session?.role === "admin" && state.view === "all";
+    && scope === displayCacheScope() && Boolean(state.session) && state.view === "all";
   state.thumbnailBackfillControllers.add(controller);
+  const mark = status => { if (current()) document.querySelector(`.file-card[data-file-id="${Number(file.id)}"] .thumb`)?.setAttribute("data-thumbnail-repair", status); };
   try {
+    globalThis.TCloudSession?.check();
+    // Missing server posters may already have a local repair for this exact session.
+    const cached = scope ? await TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), String(file.updatedAt || file.createdAt || "1")).catch(() => null) : null;
+    if (!current()) return;
+    if (cached && await showGeneratedThumbnail(file, cached)) { mark("cached"); return; }
+    mark("decoding");
     const media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
     mediaToken = media.token;
     state.backgroundMediaTokens.add(mediaToken);
     if (!current()) return;
-    const [thumbnailResult, durationResult] = await Promise.allSettled([
-      captureVideoThumbnail(media.url, file, controller.signal),
-      file.durationSeconds ? Promise.resolve(file.durationSeconds) : readMediaDurationFromUrl(media.url, file)
-    ]);
+    // One decoder only: do not also load the video in a duration-probe element.
+    let duration = null;
+    const thumbnail = await captureVideoThumbnail(media.url, file, controller.signal, value => { duration = normalizeDurationSeconds(value); });
     if (!current()) return;
-    const duration = durationResult.status === "fulfilled" ? normalizeDurationSeconds(durationResult.value) : null;
-    if (duration) await persistMediaDuration(file, duration);
-    const thumbnail = thumbnailResult.status === "fulfilled" ? thumbnailResult.value : null;
     if (thumbnail) {
-      const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
-      if (!current()) return;
-      await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true });
-      if (!current()) return;
-      file.hasThumbnail = true;
-      file.thumbnailNeedsRepair = false;
-      await showGeneratedThumbnail(file, thumbnail);
-    }
+      await saveRepairedVideoThumbnail(file, thumbnail, current, controller.signal);
+      mark("ready");
+    } else mark("no-frame");
+    if (current() && duration && !file.durationSeconds && state.session?.role === "admin") await persistMediaDuration(file, duration);
   } catch {
-    // 再生できない形式では、明確な動画アイコンを残す。
+    mark("failed");
+    // Unsupported media keeps its icon; playback can supply a frame later.
   } finally {
     state.thumbnailBackfillControllers.delete(controller);
     if (mediaToken) {
@@ -6955,14 +6959,46 @@ async function backfillVideoThumbnail(file, generation) {
   }
 }
 
+async function saveRepairedVideoThumbnail(file, thumbnail, current, signal) {
+  if (!current()) return;
+  // Display a valid local frame even if the optional encrypted persistence fails.
+  if (!await showGeneratedThumbnail(file, thumbnail) || !current()) return;
+  if (state.session?.role !== "admin") return;
+  const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
+  if (!current()) return;
+  await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
+  if (current()) file.hasThumbnail = true;
+}
+
+function observePlaybackThumbnail(video, file) {
+  const scope = displayCacheScope(), generation = state.itemLoadGeneration;
+  let pending = false, done = false, lastAttempt = -Infinity, samples = 0;
+  const current = () => video.isConnected && Boolean(state.session) && scope === displayCacheScope()
+    && generation === state.itemLoadGeneration && Number(state.previewFileId) === Number(file.id);
+  const capture = async () => {
+    if (done || pending || samples >= 12 || !current() || !file.fileKey || file.offlineOnly
+        || video.readyState < 2 || (file.hasThumbnail && !file.thumbnailNeedsRepair)
+        || performance.now() - lastAttempt < 2000) return;
+    pending = true; lastAttempt = performance.now(); samples++;
+    try {
+      // Reuse the already decoded frame; never seek or start another media request.
+      const thumbnail = await TCloudUI.selectVideoThumbnailFrame(video, {seek:false});
+      if (!thumbnail || !current()) return;
+      done = true;
+      await saveRepairedVideoThumbnail(file, thumbnail, current);
+    } catch {} finally { pending = false; }
+  };
+  for (const event of ["loadeddata", "seeked", "timeupdate"]) video.addEventListener(event, capture);
+}
+
 async function showGeneratedThumbnail(file, thumbnail) {
   const scope = displayCacheScope();
   const generation = state.thumbnailLoadGeneration;
   const stage = document.querySelector(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
-  if (stage && await installThumbnailBlob(file, stage, thumbnail, undefined, generation)
-      && scope && scope === displayCacheScope() && generation === state.thumbnailLoadGeneration) {
-    await TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), String(file.updatedAt || file.createdAt || "1"), thumbnail).catch(() => {});
-  }
+  if (!stage || !await installThumbnailBlob(file, stage, thumbnail, undefined, generation)
+      || scope !== displayCacheScope() || generation !== state.thumbnailLoadGeneration) return false;
+  if (scope) await TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), String(file.updatedAt || file.createdAt || "1"), thumbnail).catch(() => {});
+  return true;
 }
 
 async function createFolder(event) {
@@ -7837,6 +7873,7 @@ function prepareVideoPlayer(stage, file) {
   stage.replaceChildren(video, buffering);
   addPreviewPlayerControls(stage, video, file);
   observeAndPersistMediaDuration(video, file);
+  observePlaybackThumbnail(video, file);
   let revealed = false;
   const reveal = () => {
     if (revealed) return;
