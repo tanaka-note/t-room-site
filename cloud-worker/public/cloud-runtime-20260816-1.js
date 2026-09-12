@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-bd6775f5bdda";
+const APP_BUILD_ID = "cloud-f4797b97873b";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -319,16 +319,27 @@ function bindEvents() {
   document.addEventListener("freeze", handlePreviewBackgroundVisibility);
   document.addEventListener("keydown", handlePreviewKeydown);
   window.addEventListener("popstate", handleHistoryNavigation);
-  const runSearch = debounce(async () => {
-    await loadItems();
-    scrollToResultsStart();
-  }, 250);
+  let searchTimer;
+  const runSearch = () => {
+    clearTimeout(searchTimer);
+    state.itemLoadController?.abort();
+    state.itemLoadGeneration += 1;
+    state.progressiveItemsLoading = false;
+    resetEncryptedThumbnailLoading();
+    resetBackgroundMediaWork();
+    $("#content-grid").replaceChildren();
+    searchTimer = setTimeout(async () => { const result = await loadItems(); if (result?.ok) scrollToResultsStart(); }, 250);
+  };
   $$("#search-input, #floating-search-input").forEach((input) => input.addEventListener("input", (event) => {
     state.query = event.target.value.trim();
     syncSearchInputs(event.target);
     runSearch();
   }));
   $$(".sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSort(button.dataset.sortKey)));
+  $$("[data-search-clear]").forEach(button => button.addEventListener("click", event => {
+    event.preventDefault(); state.query = ""; syncSearchInputs(); runSearch();
+    document.getElementById(button.dataset.searchClear)?.focus({preventScroll:true});
+  }));
   $("#floating-search-input").addEventListener("focus", showFloatingToolbar);
   $("#floating-location-button").addEventListener("click", toggleFloatingLocation);
   document.addEventListener("click", closeFloatingLocationOnOutsideClick);
@@ -1548,6 +1559,7 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  searchPathFolders.clear();
   for (const controller of [state.itemLoadController, state.uploadAbort, state.downloadAbort, state.offlineAbort, ...state.thumbnailLoadControllers]) controller?.abort();
   state.itemLoadGeneration++; state.previewGeneration++; state.thumbnailLoadGeneration++;
   clearTimeout(state.displayCacheWriteTimer);
@@ -1783,6 +1795,7 @@ async function removeCachedFolderKeys(folderIds) {
 }
 
 function syncSearchInputs(source = null) {
+  $$("[data-search-clear]").forEach(button => { button.hidden = !state.query; });
   $$("#search-input, #floating-search-input").forEach((input) => {
     if (input !== source && input.value !== state.query) input.value = state.query;
   });
@@ -1818,6 +1831,7 @@ function syncAvailableActions() {
 }
 
 async function loadItems() {
+  searchPathFolders.clear();
   const loadGeneration = ++state.itemLoadGeneration;
   state.itemLoadController?.abort();
   const itemLoadController = new AbortController();
@@ -1915,10 +1929,11 @@ async function loadItems() {
         totalSizeBytes: Number(data.folder?.totalSizeBytes || 0)
       } : null;
       await hydrateSearchFolderKeyRecords(data.searchFolders || []);
-      const [initialFolders, initialFiles, breadcrumbs] = await Promise.all([
+      await hydrateSearchFolderKeyRecords(data.breadcrumbs || []);
+      const breadcrumbs = (data.breadcrumbs || []).map(folder => searchPathFolders.get(Number(folder.id)) || folder);
+      const [initialFolders, initialFiles] = await Promise.all([
         hydrateFolderRecords(data.folders || [], { preserveOrder: true }),
-        hydrateFileRecords(data.files || [], { preserveOrder: true }),
-        hydrateFolderRecords(data.breadcrumbs || [], { preserveOrder: true })
+        hydrateFileRecords(data.files || [], { preserveOrder: true })
       ]);
       if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
       state.folders = finalizeHydratedFolders(initialFolders);
@@ -2158,10 +2173,16 @@ function appendProgressiveItems(folders, files) {
   if (!remaining) return;
   const firstFileCard = grid.querySelector(".file-card");
   for (const folder of folders.slice(0, remaining)) {
-    grid.insertBefore(folderCard(folder), firstFileCard);
+    const card = folderCard(folder);
+    card.dataset.renderKey = "folder:" + folder.id; renderedCardRecords.set(card, folder);
+    grid.insertBefore(card, firstFileCard);
     remaining -= 1;
   }
-  for (const file of files.slice(0, remaining)) grid.append(fileCard(file));
+  for (const file of files.slice(0, remaining)) {
+    const card = fileCard(file);
+    card.dataset.renderKey = "file:" + file.id; renderedCardRecords.set(card, file);
+    grid.append(card);
+  }
   if (folders.length || files.length) $("#empty-state").hidden = true;
   queueFloatingToolbarUpdate();
 }
@@ -2172,12 +2193,26 @@ function normalizeNextItemOffset(value) {
   return Number.isInteger(offset) && offset >= 0 ? offset : null;
 }
 
+const renderedCardRecords = new WeakMap();
 function renderItems() {
   renderFolderSummary();
   const grid = $("#content-grid");
   grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "conflicts" || state.view === "requests" || state.view === "shares");
   grid.classList.toggle("conflict-overview", state.view === "conflicts");
-  grid.innerHTML = "";
+  const reuse = state.view === "all" && grid.dataset.renderGeneration === String(state.itemLoadGeneration);
+  const previous = new Map(reuse ? [...grid.querySelectorAll(":scope > [data-render-key]")].map(card => [card.dataset.renderKey, card]) : []);
+  if (!reuse) grid.replaceChildren();
+  grid.querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
+  grid.dataset.renderGeneration = String(state.itemLoadGeneration);
+  const desired = [];
+  const renderCard = (record, kind, create) => {
+    const key = kind + record.id;
+    let card = previous.get(key);
+    if (!card || renderedCardRecords.get(card) !== record) card = create(record);
+    card.dataset.renderKey = key; renderedCardRecords.set(card, record);
+    TCloudUI.highlightText(card.querySelector("strong"), record.name, state.query);
+    desired.push(card);
+  };
   if (state.view === "conflicts") renderConflictOverview(grid);
   if (state.view === "history") {
     for (const item of state.history) grid.append(historyCard(item));
@@ -2191,10 +2226,24 @@ function renderItems() {
   const limitItems = state.view === "all";
   let remaining = limitItems ? state.itemRenderLimit : Number.POSITIVE_INFINITY;
   for (const folder of state.folders.slice(0, remaining)) {
-    grid.append(folder.trashed ? trashFolderCard(folder) : folderCard(folder));
+    renderCard(folder, "folder:", folder.trashed ? trashFolderCard : folderCard);
     remaining -= 1;
   }
-  for (const file of state.files.slice(0, remaining)) grid.append(fileCard(file));
+  for (const file of state.files.slice(0, remaining)) renderCard(file, "file:", fileCard);
+  if (state.view === "all") {
+    const keep = new Set(desired);
+    for (const node of [...grid.children]) if (!keep.has(node)) node.remove();
+  }
+  let cursor = state.view === "all" ? grid.firstChild : null;
+  for (const card of desired) {
+    if (card !== cursor) grid.insertBefore(card, cursor);
+    cursor = card.nextSibling;
+  }
+  const count = $("#search-result-count");
+  if (count) { count.hidden = !state.query; count.textContent = state.progressiveItemsLoading
+    ? (state.folders.length + state.files.length) + "件表示中…"
+    : (state.folders.length + state.files.length) + "件"; }
+
   const conflictItemCount = state.conflictGroups.length + (state.conflictScanRunning ? 1 : 0);
   $("#empty-state").hidden = state.folders.length + state.files.length + state.history.length + state.requests.length + state.shares.length + conflictItemCount > 0;
   $("#empty-title").textContent = state.view === "requests" ? "削除申請はありません" : state.view === "conflicts" ? "競合候補はありません" : state.view === "history" ? "履歴がありません" : state.view === "shares" ? "共有URLはありません" : state.view === "trash" ? "ゴミ箱は空です" : (state.folderId ? "ファイルがありません" : "フォルダがありません");
@@ -2225,6 +2274,7 @@ function renderItems() {
 function installItemRenderSentinel() {
   state.itemRenderObserver?.disconnect();
   state.itemRenderObserver = null;
+  $("#content-grid").querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
   if (state.view !== "all") return;
   const rendered = $("#content-grid").querySelectorAll(":scope > .folder-card, :scope > .file-card").length;
   const total = state.folders.length + state.files.length;
@@ -2589,6 +2639,7 @@ function folderCard(folder) {
   });
   card.append(selectButton);
   if (state.selectedFolders.has(folder.id)) card.classList.add("selected", "selection-pass");
+  addSearchPathNavigation(card, folder, folder.parentId);
   return card;
 }
 
@@ -2643,10 +2694,13 @@ async function hydrateFolderRecords(records, options = {}) {
 }
 
 async function hydrateSearchFolderKeyRecords(records) {
+  const generation = state.itemLoadGeneration;
   const unique = new Map();
   for (const record of records || []) unique.set(Number(record.id), record);
   for (const folder of unique.values()) {
-    await hydrateFolderRecords([folder], { preserveOrder: true });
+    const [hydrated] = await hydrateFolderRecords([folder], { preserveOrder: true });
+    if (generation !== state.itemLoadGeneration) return;
+    searchPathFolders.set(Number(hydrated.id), hydrated);
   }
 }
 
@@ -2675,7 +2729,22 @@ async function ensureAdminFolderKey(folder) {
 }
 
 function findFolderRecord(id) {
-  return state.folders.find((folder) => Number(folder.id) === Number(id));
+  return state.folders.find((folder) => Number(folder.id) === Number(id)) || searchPathFolders.get(Number(id));
+}
+
+const searchPathFolders = new Map();
+function addSearchPathNavigation(card, record, folderId) {
+  if (!state.query || !record.searchPath || !searchPathFolders.has(Number(folderId))) return;
+  card.querySelector(".search-result-path")?.remove();
+  const button = document.createElement("button");
+  button.type = "button"; button.className = "search-path-button";
+  button.textContent = record.searchPath; button.title = "格納フォルダを開く";
+  button.addEventListener("click", event => {
+    event.stopPropagation();
+    const folder = findFolderRecord(folderId);
+    if (folder) void openFolder(folder);
+  });
+  card.append(button);
 }
 
 function historyCard(item) {
@@ -3103,6 +3172,7 @@ function fileCard(file) {
     card.append(selectButton);
   }
   if (state.selectedFiles.has(file.id)) card.classList.add("selected", "selection-pass");
+  addSearchPathNavigation(card, file, file.folderId);
   return card;
 }
 
@@ -3328,6 +3398,7 @@ async function loadEncryptedThumbnail(file, stage, signal, generation, stoppedSo
         const transient = response.status === 408 || response.status === 429 || response.status >= 500;
         retry ||= transient;
         if (!transient) stoppedSources.add(source);
+        if (source === "thumbnail" && response.status === 404) queueVideoThumbnailRepair(file);
         continue;
       }
       // Keep crypto errors outside the transient-network catch: a wrong key is never retried.
@@ -3340,7 +3411,7 @@ async function loadEncryptedThumbnail(file, stage, signal, generation, stoppedSo
       } catch (error) {
         if (!current() || error.name === "AbortError") return "stop";
         if (error.thumbnailTransient) retry = true;
-        else stoppedSources.add(source);
+        else { stoppedSources.add(source); if (source === "thumbnail") queueVideoThumbnailRepair(file); }
         continue;
       }
       if (scope && current()) await TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), version, blob).catch(() => {});
@@ -3364,6 +3435,13 @@ async function installThumbnailBlob(file, stage, blob, signal, generation = stat
     void TCloudUI.measureThumbnailStep("dom", () => stage.replaceChildren(decoded.image));
     state.thumbnailObjectUrls.set(Number(file.id), decoded.url);
     if (previousUrl && previousUrl !== decoded.url) URL.revokeObjectURL(previousUrl);
+    if (file.mediaKind === "video" && TCloudUI.isBlankVideoFrame(decoded.image)) {
+      stage.dataset.thumbnailQuality = "dark-frame";
+      queueVideoThumbnailRepair(file);
+    } else {
+      stage.dataset.thumbnailQuality = "ready";
+      file.thumbnailNeedsRepair = false;
+    }
     return true;
   } catch (error) {
     if (decoded) URL.revokeObjectURL(decoded.url);
@@ -3554,12 +3632,14 @@ function processEncryptedThumbnailQueue() {
     task.attempts++;
     state.thumbnailLoadControllers.add(controller);
     state.thumbnailLoadActive += 1;
+    task.stage.classList.add("thumbnail-loading");
     loadEncryptedThumbnail(task.file, task.stage, controller.signal, task.generation, task.stoppedSources).then(result => {
       if (result === "retry" && task.attempts <= THUMBNAIL_RETRY_DELAYS.length) {
         task.readyAt = performance.now() + THUMBNAIL_RETRY_DELAYS[task.attempts - 1];
         task.status = "pending";
       } else task.status = result === "done" ? "done" : "stopped";
     }).catch(() => { task.status = "stopped"; }).finally(() => {
+      task.stage.classList.remove("thumbnail-loading");
       state.thumbnailLoadControllers.delete(controller);
       if (task.generation !== state.thumbnailLoadGeneration) return;
       state.thumbnailLoadQueuedIds.delete(Number(task.file.id));
@@ -6449,7 +6529,7 @@ async function captureNativeVideoThumbnail(url) {
     } else if (video.readyState < 2) {
       await waitForVideoEvent(video, "loadeddata");
     }
-    return videoFrameToThumbnail(video);
+    return await chooseVideoThumbnailFrame(video);
   } catch {
     return null;
   } finally {
@@ -6482,7 +6562,7 @@ async function captureMpegVideoThumbnail(url, file, type) {
         // 最初に復号できた映像フレームを使用する。
       }
     }
-    return await videoFrameToThumbnail(video);
+    return await chooseVideoThumbnailFrame(video);
   } catch {
     return null;
   } finally {
@@ -6518,6 +6598,23 @@ async function videoFrameToThumbnail(video) {
   canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
   canvas.getContext("2d", { alpha: false }).drawImage(video, 0, 0, canvas.width, canvas.height);
   return new Promise((resolve) => canvas.toBlob(resolve, "image/webp", .78));
+}
+
+async function chooseVideoThumbnailFrame(video) {
+  if (!TCloudUI.isBlankVideoFrame(video)) return videoFrameToThumbnail(video);
+  // Intros can be black at one second. Keep reads bounded and never upload a blank replacement.
+  const duration = Number(video.duration);
+  if (!Number.isFinite(duration) || duration <= .2) return null;
+  const times = [...new Set([Math.min(10, duration * .25), Math.min(30, duration * .5)])];
+  for (const time of times) {
+    if (Math.abs(video.currentTime - time) < .1) continue;
+    try {
+      const seeked = waitForVideoEvent(video, "seeked", 8000);
+      video.currentTime = time; await seeked;
+      if (!TCloudUI.isBlankVideoFrame(video)) return videoFrameToThumbnail(video);
+    } catch { return null; }
+  }
+  return null;
 }
 
 function mpegContainerType(name) {
@@ -6690,6 +6787,12 @@ async function readMediaDurationFromUrl(url, file) {
   }
 }
 
+function queueVideoThumbnailRepair(file) {
+  if (state.session?.role !== "admin" || file.mediaKind !== "video" || !file.fileKey || state.thumbnailAttempts.has(Number(file.id))) return;
+  file.thumbnailNeedsRepair = true;
+  scheduleMissingVideoThumbnails();
+}
+
 function scheduleMissingVideoThumbnails() {
   state.thumbnailBackfillObserver?.disconnect();
   state.thumbnailBackfillObserver = null;
@@ -6697,7 +6800,7 @@ function scheduleMissingVideoThumbnails() {
   if (state.session?.role !== "admin" || state.view !== "all") return;
   const generation = state.itemLoadGeneration;
   const eligible = state.files.filter((file) => file.mediaKind === "video"
-    && !file.hasThumbnail
+    && (!file.hasThumbnail || file.thumbnailNeedsRepair)
     && file.fileKey
     && !state.thumbnailAttempts.has(Number(file.id)));
   if (!eligible.length) return;
@@ -6748,7 +6851,7 @@ async function backfillMissingVideoThumbnails(generation) {
     while (state.thumbnailBackfillQueue.length) {
       if (generation !== state.itemLoadGeneration || state.view !== "all") return;
       const file = state.thumbnailBackfillQueue.shift();
-      if (!file || file.hasThumbnail || !file.fileKey || state.thumbnailAttempts.has(Number(file.id))) continue;
+      if (!file || (file.hasThumbnail && !file.thumbnailNeedsRepair) || !file.fileKey || state.thumbnailAttempts.has(Number(file.id))) continue;
       state.thumbnailAttempts.add(Number(file.id));
       await backfillVideoThumbnail(file, generation);
     }
@@ -6775,8 +6878,10 @@ async function backfillVideoThumbnail(file, generation) {
     if (thumbnail) {
       const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
       await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true });
+      if (generation !== state.itemLoadGeneration) return;
       file.hasThumbnail = true;
-      showGeneratedThumbnail(file, thumbnail);
+      file.thumbnailNeedsRepair = false;
+      await showGeneratedThumbnail(file, thumbnail);
     }
   } catch {
     // 再生できない形式では、明確な動画アイコンを残す。
@@ -6788,9 +6893,14 @@ async function backfillVideoThumbnail(file, generation) {
   }
 }
 
-function showGeneratedThumbnail(file, thumbnail) {
+async function showGeneratedThumbnail(file, thumbnail) {
+  const scope = displayCacheScope();
+  const generation = state.thumbnailLoadGeneration;
   const stage = document.querySelector(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
-  if (stage) void installThumbnailBlob(file, stage, thumbnail);
+  if (stage && await installThumbnailBlob(file, stage, thumbnail, undefined, generation)
+      && scope && scope === displayCacheScope() && generation === state.thumbnailLoadGeneration) {
+    await TCloudDisplayCache?.putThumbnail?.(scope, Number(file.id), String(file.updatedAt || file.createdAt || "1"), thumbnail).catch(() => {});
+  }
 }
 
 async function createFolder(event) {

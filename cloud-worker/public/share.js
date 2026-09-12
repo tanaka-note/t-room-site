@@ -3,6 +3,9 @@ const API = `/cloud/api/public/shares/${token}`;
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const state = { info: null, targetKey: null, targetType: "", rootId: null, folderId: null, folderSelectionCount: 0, folderKeys: new Map(), path: [], folders: [], files: [], sort: "updated", sortDirection: "desc", sortUsesTypeDefaults: true, listMode: false, selected: null, selectedFiles: new Map(), selectionAnchorId: null, selectionCursorId: null, selecting: false, selectionHistoryActive: false, selectionClearBackPending: false, previewUrl: "", previewMediaToken: "", previewPlayer: null, previewPlaybackMode: "off", previewGeneration: 0, previewOrientationGeneration: 0, previewVideoFullscreenActive: false, previewHistoryActive: false, previewTapCandidate: null, previewLastPointerType: "mouse", previewDoubleTapSeekTimer: 0, previewDoubleTapSeekSequence: 0, handlingPopState: false, historyReady: false, downloadActive: false, downloadAbort: null, wakeLock: null };
+Object.assign(state, {query:"", kind:"", cards:new Map(), thumbnailTasks:new Map(), thumbnailActive:0,
+  thumbnailGeneration:0, thumbnailFrame:0, thumbnailTimer:0, expiryTimer:0, loadGeneration:0,
+  previewClosePending:false, previewOrigin:null});
 const $ = (selector) => document.querySelector(selector);
 const PASSWORD_VISIBILITY_ICONS = `
   <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
@@ -60,8 +63,21 @@ function bindEvents() {
   document.addEventListener("visibilitychange", enforceSharedFolderPortraitOrientation);
   window.addEventListener("popstate", handleShareHistoryNavigation);
   $("#history-button").addEventListener("click", openHistory);
-  document.querySelectorAll(".close").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
+  document.querySelectorAll(".close").forEach((button) => button.addEventListener("click", () => button.closest("dialog").id === "preview-dialog" ? requestPreviewClose() : button.closest("dialog").close()));
   $("#preview-dialog").addEventListener("close", handlePreviewClosed);
+  $("#preview-dialog").addEventListener("cancel", event => { event.preventDefault(); requestPreviewClose(); });
+  $("#preview-dialog").addEventListener("click", event => {
+    if (event.target !== event.currentTarget) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) requestPreviewClose();
+  });
+  $("#share-search").addEventListener("input", event => { state.query = event.target.value.trim(); filterSharedItems(); });
+  $("#share-search-clear").addEventListener("click", () => { state.query = ""; $("#share-search").value = ""; filterSharedItems(); });
+  $("#share-kind").addEventListener("change", event => { state.kind = event.target.value; filterSharedItems(); });
+  window.addEventListener("scroll", queueShareThumbnails, {passive:true});
+  window.addEventListener("resize", queueShareThumbnails, {passive:true});
+  document.addEventListener("visibilitychange", queueShareThumbnails);
+  window.addEventListener("pagehide", () => invalidateShare());
 }
 
 function bindPasswordVisibilityToggles() {
@@ -86,6 +102,7 @@ function bindPasswordVisibilityToggles() {
 
 async function unlockShare(event) {
   event.preventDefault();
+  const generation = state.loadGeneration;
   const button = event.submitter || $("#unlock-form button[type='submit']");
   button.disabled = true;
   failUnlock("");
@@ -94,6 +111,7 @@ async function unlockShare(event) {
     const authProof = await TRoomCrypto.deriveShareAuthProof(state.info, password);
     await api("/unlock", { method: "POST", body: JSON.stringify({ authProof }) });
     const unlocked = await TRoomCrypto.unlockShareKey(state.info, password);
+    if (generation !== state.loadGeneration) return;
     state.targetKey = unlocked.targetKey;
     $("#share-password").value = "";
     $("#unlock-view").hidden = true;
@@ -106,6 +124,11 @@ async function unlockShare(event) {
 
 async function loadItems(folderId = null, pathIndex = null, options = {}) {
   enforceSharedFolderPortraitOrientation();
+  const loadGeneration = ++state.loadGeneration;
+  state.loadController?.abort(); state.loadController = new AbortController();
+  const current = () => { if (loadGeneration !== state.loadGeneration) throw new DOMException("Aborted", "AbortError"); };
+  resetShareThumbnails();
+  state.query = ""; $("#share-search").value = ""; state.kind = ""; $("#share-kind").value = "";
   setNotice("");
   const replaceSelectionHistory = options.historyMode !== "none" && state.selectionHistoryActive;
   clearFileSelection(true, false);
@@ -113,9 +136,9 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
   let directFile = null;
   try {
     const query = folderId ? `?folderId=${folderId}` : "";
-    const data = await api(`/items${query}`);
+    const data = await api(`/items${query}`, {signal:state.loadController.signal}); current();
     if (data.targetType === "file") {
-      const file = await hydrateSharedFile(data.file, state.targetKey);
+      const file = await hydrateSharedFile(data.file, state.targetKey); current();
       state.files = [file];
       state.folders = [];
       state.rootId = null;
@@ -131,7 +154,7 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
         const fileKey = Number(record.id) === Number(data.rootFileId)
           ? state.targetKey
           : await TRoomCrypto.unlockFileFromShare(record, state.targetKey);
-        const metadata = await TRoomCrypto.decryptFileMetadata(record, fileKey);
+        const metadata = await TRoomCrypto.decryptFileMetadata(record, fileKey); current();
         files.push({ ...record, ...metadata, fileKey });
       }
       state.rootId = null;
@@ -148,7 +171,7 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
       for (const record of data.folders || []) {
         const folderKey = Number(record.id) === Number(data.rootFolderId)
           ? state.targetKey
-          : await TRoomCrypto.unlockFolderFromShare(record, state.targetKey);
+          : await TRoomCrypto.unlockFolderFromShare(record, state.targetKey); current();
         state.folderKeys.set(Number(record.id), folderKey);
         folders.push({ ...record, name: record.name });
       }
@@ -174,7 +197,7 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
         if (Number(folder.id) === state.rootId) throw new Error("共有フォルダの暗号化鍵を確認できません。");
         const parentKey = state.folderKeys.get(Number(folder.parentId));
         if (!parentKey) throw new Error("共有フォルダの移動情報を確認できません。");
-        folderKey = await TRoomCrypto.unlockFolderFromParent(folder, parentKey);
+        folderKey = await TRoomCrypto.unlockFolderFromParent(folder, parentKey); current();
         state.folderKeys.set(Number(folder.id), folderKey);
       }
       const folderName = folder.name;
@@ -184,12 +207,12 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
       state.folderId = Number(folder.id);
       const folders = [];
       for (const child of data.folders || []) {
-        const childKey = await TRoomCrypto.unlockFolderFromParent(child, folderKey);
+        const childKey = await TRoomCrypto.unlockFolderFromParent(child, folderKey); current();
         state.folderKeys.set(Number(child.id), childKey);
         folders.push({ ...child, name: child.name });
       }
       const files = [];
-      for (const record of data.files || []) files.push(await hydrateSharedFile(record, folderKey));
+      for (const record of data.files || []) files.push(await hydrateSharedFile(record, folderKey)); current();
       state.files = files;
       state.folders = folders;
       $("#target-title").textContent = folderName;
@@ -197,30 +220,50 @@ async function loadItems(folderId = null, pathIndex = null, options = {}) {
       renderSortedItems();
       $("#share-toolbar").hidden = false;
     }
+    current(); armShareExpiry();
+    $("#share-search-controls").hidden = data.targetType === "file";
     $("#browser-expiry").textContent = `有効期限：${formatEpoch(data.expiresAt)}`;
     if (options.historyMode !== "none") updateShareHistory(replaceSelectionHistory || options.historyMode === "replace", null);
     if (directFile) await openPreview(directFile, { pushHistory: false });
-  } catch (error) { setNotice(error.message, true); }
+  } catch (error) { if (loadGeneration === state.loadGeneration) setNotice(error.message, true); }
 }
 
 async function hydrateSharedFile(file, folderKey, directFile = state.targetType === "file") {
+  const generation = state.loadGeneration;
+  const current = () => { if (generation !== state.loadGeneration) throw new DOMException("Aborted", "AbortError"); };
   const key = directFile ? folderKey : await TRoomCrypto.unlockFileKey(file, folderKey);
-  const metadata = await TRoomCrypto.decryptFileMetadata(file, key);
+  const metadata = await TRoomCrypto.decryptFileMetadata(file, key); current();
   return { ...file, ...metadata, fileKey: key };
 }
 
 function renderItems(folders, files) {
   const root = $("#items");
   root.classList.toggle("list-mode", state.listMode);
-  root.innerHTML = "";
+  const desired = [];
+  const remember = (key, record, create) => {
+    let entry = state.cards.get(key);
+    if (!entry || entry.record !== record) {
+      entry = {record, card:create()}; state.cards.set(key, entry);
+    }
+    TCloudUI.highlightText(entry.card.querySelector("strong"), record.name, state.query);
+    desired.push(entry.card);
+  };
   for (const folder of folders) {
+    remember("folder:" + folder.id, folder, () => {
     const article = document.createElement("article"); article.className = "folder";
     const button = document.createElement("button"); button.type = "button";
     button.innerHTML = `<i>${TCloudUI.icon("folder")}</i><span><strong>${escapeHtml(folder.name)}</strong><small>フォルダ</small></span>`;
     button.addEventListener("click", () => loadItems(folder.id));
-    article.append(button); root.append(article);
+    article.append(button); return article; });
   }
-  for (const file of files) root.append(fileCard(file));
+  for (const file of files) remember("file:" + file.id, file, () => fileCard(file));
+  const keep = new Set(desired);
+  for (const node of [...root.children]) if (!keep.has(node)) node.remove();
+  let cursor = root.firstChild;
+  for (const card of desired) { if (card !== cursor) root.insertBefore(card, cursor); cursor = card.nextSibling; }
+  $("#share-search-clear").hidden = !state.query;
+  $("#share-result-count").textContent = (folders.length + files.length) + "件";
+  queueShareThumbnails();
   $("#empty").hidden = folders.length + files.length > 0;
   const displayToggle = $("#share-display-toggle");
   displayToggle.innerHTML = TCloudUI.icon(state.listMode ? "grid" : "list");
@@ -229,8 +272,9 @@ function renderItems(folders, files) {
 }
 
 function renderSortedItems() {
-  const folders = [...state.folders];
-  const files = [...state.files];
+  const matches = item => String(item.name || "").toLocaleLowerCase().includes(state.query.toLocaleLowerCase());
+  const folders = state.folders.filter(folder => !state.kind && matches(folder));
+  const files = state.files.filter(file => matches(file) && (!state.kind || file.mediaKind === state.kind));
   const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ja", { numeric: true, sensitivity: "base" });
   const direction = state.sortDirection === "asc" ? 1 : -1;
   const byUpdated = (a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
@@ -306,7 +350,10 @@ function fileCard(file) {
     });
     article.append(selectButton);
   }
-  if (file.hasThumbnail) loadThumbnail(file, article.querySelector(".thumb"));
+  if (file.hasThumbnail || file.hasDisplayThumbnail) {
+    state.thumbnailTasks.set(Number(file.id), {file, stage:article.querySelector(".thumb"), status:"pending", attempts:0,
+      generation:state.thumbnailGeneration, stopped:new Set(), readyAt:0, controller:null, url:""});
+  }
   return article;
 }
 
@@ -489,16 +536,139 @@ function syncFileSelection() {
   $("#share-selection-count").textContent = `${count}件を選択中`;
 }
 
-async function loadThumbnail(file, stage) {
-  try {
-    const response = await fetch(`${API}/files/${file.id}/thumbnail`, { credentials: "same-origin", cache: "no-store" });
-    if (!response.ok) return;
-    const bytes = await TRoomCrypto.decryptThumbnail(await response.arrayBuffer(), file.fileKey);
-    const decoded = await TCloudUI.decodeThumbnail(new Blob([bytes], { type: "image/webp" }));
-    if (stage.isConnected) stage.replaceChildren(decoded.image);
-    URL.revokeObjectURL(decoded.url);
-  } catch {}
+function filterSharedItems() {
+  clearSelectionWithoutRefresh();
+  renderSortedItems();
 }
+
+function resetShareThumbnails() {
+  state.thumbnailGeneration += 1;
+  clearTimeout(state.thumbnailTimer);
+  for (const task of state.thumbnailTasks.values()) {
+    task.controller?.abort();
+    if (task.url) URL.revokeObjectURL(task.url);
+  }
+  state.thumbnailTasks.clear(); state.cards.clear();
+  $("#items").replaceChildren();
+}
+
+function invalidateShare() {
+  state.loadGeneration += 1;
+  state.loadController?.abort();
+  clearTimeout(state.expiryTimer);
+  resetShareThumbnails();
+  state.previewGeneration += 1;
+  state.previewHistoryActive = false;
+  state.previewOrigin = null;
+  $("#preview-dialog").close(); clearPreview();
+  state.downloadAbort?.abort();
+  state.targetKey = null; state.folderKeys.clear(); state.files = []; state.folders = [];
+  state.path = []; state.selected = null; state.selectedFiles.clear();
+  $("#browser-view").hidden = true; $("#unlock-view").hidden = false;
+  $("#share-password").value = "";
+  failUnlock("共有パスワードを入力して、利用できる共有か再確認してください。");
+}
+
+function armShareExpiry() {
+  clearTimeout(state.expiryTimer);
+  const remaining = Number(state.info?.expiresAt) * 1000 - Date.now();
+  if (remaining <= 0) { invalidateShare(); return; }
+  if (Number.isFinite(remaining)) state.expiryTimer = setTimeout(armShareExpiry, Math.min(remaining, 2147483647));
+}
+
+function queueShareThumbnails() {
+  if (state.thumbnailFrame) return;
+  state.thumbnailFrame = requestAnimationFrame(() => { state.thumbnailFrame = 0; processShareThumbnails(); });
+}
+
+function processShareThumbnails() {
+  clearTimeout(state.thumbnailTimer);
+  if (document.hidden || $("#preview-dialog").open || $("#browser-view").hidden) return;
+  if (Number(state.info?.expiresAt) * 1000 <= Date.now()) { invalidateShare(); return; }
+  const now = Date.now(), candidates = [];
+  let next = Infinity;
+  for (const task of state.thumbnailTasks.values()) {
+    if (!task.stage.isConnected || task.status !== "pending") continue;
+    if (task.readyAt > now) { next = Math.min(next, task.readyAt); continue; }
+    const rect = task.stage.getBoundingClientRect();
+    task.priority = rect.bottom > 0 && rect.top < innerHeight ? 0 : rect.bottom > -720 && rect.top < innerHeight + 720 ? 1 : 2;
+    task.distance = Math.max(0, -rect.bottom, rect.top - innerHeight);
+    candidates.push(task);
+  }
+  candidates.sort((a,b) => a.priority - b.priority || a.distance - b.distance);
+  for (const task of candidates) {
+    if (state.thumbnailActive >= 4) break;
+    task.status = "active"; task.controller = new AbortController(); state.thumbnailActive += 1;
+    task.stage.classList.add("thumbnail-loading");
+    void loadThumbnail(task).then(result => {
+      if (task.generation !== state.thumbnailGeneration) return;
+      if (result === "retry" && task.attempts < 2) {
+        task.readyAt = Date.now() + [500,2000][task.attempts++]; task.status = "pending";
+      } else task.status = "done";
+    }).finally(() => {
+      state.thumbnailActive -= 1; task.controller = null;
+      task.stage.classList.remove("thumbnail-loading"); queueShareThumbnails();
+    });
+  }
+  if (Number.isFinite(next)) state.thumbnailTimer = setTimeout(queueShareThumbnails, Math.max(1,next-now));
+}
+
+async function loadThumbnail(task) {
+  const {file,stage,controller} = task;
+  const current = () => !controller.signal.aborted && task.generation === state.thumbnailGeneration
+    && Number(state.info?.expiresAt) * 1000 > Date.now();
+  const sources = file.mediaKind === "image" && file.hasDisplayThumbnail ? ["display-thumbnail", "thumbnail"] : ["thumbnail"];
+  let retry = false;
+  for (const source of sources) {
+    if (!current()) return;
+    if (task.stopped.has(source)) continue;
+    if (source === "thumbnail" && !file.fileKey) { task.stopped.add(source); continue; }
+    try {
+      let response;
+      try {
+        response = await TCloudUI.measureThumbnailStep("share-fetch", () => fetch(`${API}/files/${file.id}/${source}`, {
+          credentials:"same-origin",cache:"no-store",signal:controller.signal
+        }));
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        retry = true; continue;
+      }
+      if (!current()) return;
+      if ([401,410,419].includes(response.status)) { invalidateShare(); return; }
+      if (response.status === 403) return;
+      if (!response.ok) {
+        if ([408,429].includes(response.status) || response.status >= 500) retry = true;
+        else task.stopped.add(source);
+        continue;
+      }
+      let blob;
+      try {
+        const bytes = await response.arrayBuffer();
+        if (!current()) return;
+        blob = source === "thumbnail"
+          ? new Blob([await TCloudUI.measureThumbnailStep("share-decrypt", () => TRoomCrypto.decryptThumbnail(bytes,file.fileKey))], {type:"image/webp"})
+          : new Blob([bytes], {type:"image/webp"});
+      } catch (error) {
+        // Failed crypto/format is terminal; only interrupted network reads retry.
+        if (error instanceof TypeError) retry = true;
+        else task.stopped.add(source);
+        continue;
+      }
+      const decoded = await TCloudUI.measureThumbnailStep("share-decode", () => TCloudUI.decodeThumbnail(blob, controller.signal));
+      if (!current()) { URL.revokeObjectURL(decoded.url); return; }
+      task.url = decoded.url;
+      // A filtered card may be detached. Keep its decoded image in page memory only.
+      await TCloudUI.measureThumbnailStep("share-dom", () => stage.replaceChildren(decoded.image));
+      return;
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      if (error.thumbnailTransient) retry = true;
+      else task.stopped.add(source);
+    }
+  }
+  return retry ? "retry" : "stop";
+}
+
 
 function renderBreadcrumbs() {
   const nav = $("#breadcrumbs"); nav.innerHTML = "";
@@ -518,7 +688,11 @@ function renderBreadcrumbs() {
 }
 
 async function openPreview(file, options = {}) {
-  if (!$("#preview-dialog").open) state.previewPlaybackMode = "off";
+  if (!$("#preview-dialog").open) {
+    state.previewPlaybackMode = "off";
+    state.previewOrigin = {x:window.scrollX, y:window.scrollY};
+    if (state.historyReady) history.replaceState({...history.state, scroll:state.previewOrigin}, "", location.href);
+  }
   const generation = ++state.previewGeneration;
   clearPreview();
   state.selected = file;
@@ -1279,11 +1453,24 @@ function clearPreview() {
   stage?.replaceChildren();
 }
 
+function requestPreviewClose() {
+  if (!$("#preview-dialog").open || state.previewClosePending) return;
+  if (state.previewHistoryActive && !state.handlingPopState) {
+    state.previewClosePending = true;
+    history.back();
+  } else $("#preview-dialog").close();
+}
+
 function handlePreviewClosed() {
+  state.previewClosePending = false;
   state.previewGeneration += 1;
   state.previewPlaybackMode = "off";
   clearPreview();
   restoreInstalledAppPortrait();
+  state.selected = null;
+  const origin = state.previewOrigin;
+  if (origin) { window.scrollTo(origin.x, origin.y); requestAnimationFrame(() => { if (!$("#preview-dialog").open) window.scrollTo(origin.x, origin.y); }); }
+  queueShareThumbnails();
   if (state.previewHistoryActive && !state.handlingPopState) {
     state.previewHistoryActive = false;
     history.back();
@@ -1315,7 +1502,7 @@ async function handleShareHistoryNavigation(event) {
       state.selectionClearBackPending = false;
       if (sameFolder && !entry.previewId) return;
     }
-    if (state.selectedFiles.size) {
+    if (state.selectedFiles.size && !$("#preview-dialog").open) {
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
       if (sameFolder && !entry.previewId) return;
@@ -1424,7 +1611,7 @@ function observeSharedMediaDuration(media, file) {
   media.addEventListener("loadedmetadata", update, { once: true });
   media.addEventListener("durationchange", update);
 }
-async function api(path, options = {}) { const headers = new Headers(options.headers); if (!options.rawBody) headers.set("Content-Type", "application/json"); const response = await fetch(`${API}${path}`, { ...options, headers, credentials: "same-origin" }); if (!response.ok) throw await responseError(response); return response.json(); }
+async function api(path, options = {}) { const headers = new Headers(options.headers); if (!options.rawBody) headers.set("Content-Type", "application/json"); const response = await fetch(`${API}${path}`, { ...options, headers, credentials: "same-origin" }); if (!response.ok) { if ([401,410,419].includes(response.status)) invalidateShare(); throw await responseError(response); } return response.json(); }
 async function responseError(response) { let message = `通信に失敗しました（${response.status}）`; try { message = (await response.json()).error || message; } catch {} return new Error(message); }
 function failUnlock(message) { $("#unlock-error").textContent = message; }
 function setNotice(message, error = false) { const node = $("#notice"); node.textContent = message; node.style.color = error ? "#b44149" : ""; }

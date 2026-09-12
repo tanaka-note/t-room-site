@@ -61,11 +61,11 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>T-Cloud Secure Share</title>
   <link rel="icon" href="/cloud/icons/icon-192-v2.png?rev=20260810-2" sizes="192x192" type="image/png">
-  <link rel="stylesheet" href="/cloud/share.css?v=cloud-bd6775f5bdda">
-  <meta name="troom-app-build" content="cloud-bd6775f5bdda">
+  <link rel="stylesheet" href="/cloud/share.css?v=cloud-f4797b97873b">
+  <meta name="troom-app-build" content="cloud-f4797b97873b">
   <meta name="troom-auto-update" content="enabled">
-  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-bd6775f5bdda">
-  <meta name="tcloud-build" content="cloud-bd6775f5bdda">
+  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-f4797b97873b">
+  <meta name="tcloud-build" content="cloud-f4797b97873b">
 </head>
 <body>
   <main class="share-shell">
@@ -97,6 +97,11 @@
           <button class="sort-button" type="button" data-sort-key="size" aria-pressed="false">容量 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
         </div>
         <button id="share-display-toggle" class="secondary display-toggle" type="button" aria-label="横長表示へ切り替え" title="横長表示へ切り替え"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 3h9l5 5v13H5zM14 3v6h5M8 13h8M8 17h6"/></svg></button>
+      </div>
+      <div id="share-search-controls" class="share-search-controls">
+        <label class="share-search-box"><input id="share-search" type="search" placeholder="表示中の名前を検索" aria-label="共有データを検索"><button id="share-search-clear" type="button" aria-label="検索をクリア" hidden>×</button></label>
+        <select id="share-kind" aria-label="ファイルの種類"><option value="">すべて</option><option value="image">写真</option><option value="video">動画</option><option value="audio">音声</option><option value="document">書類</option></select>
+        <span id="share-result-count" role="status"></span>
       </div>
       <div id="share-selection-bar" class="selection-bar" hidden>
         <div><strong id="share-selection-count">0件を選択中</strong><small>ZIPにまとめず、元のファイル形式のまま保存します</small></div>
@@ -138,13 +143,13 @@
     <div id="history-list" class="history-list"></div>
   </dialog>
 
-  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-bd6775f5bdda" defer></script>
-  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-bd6775f5bdda" defer></script>
-  <script src="/cloud/ui.js?v=cloud-bd6775f5bdda" defer></script>
-  <script src="/cloud/crypto-vault.js?v=cloud-bd6775f5bdda" defer></script>
-  <script src="/cloud/media-range.js?v=cloud-bd6775f5bdda" defer></script>
-  <script src="/cloud/media-client.js?v=cloud-bd6775f5bdda" defer></script>
-  <script src="/cloud/share.js?v=cloud-bd6775f5bdda" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=cloud-bd6775f5bdda" defer></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-f4797b97873b" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-f4797b97873b" defer></script>
+  <script src="/cloud/ui.js?v=cloud-f4797b97873b" defer></script>
+  <script src="/cloud/crypto-vault.js?v=cloud-f4797b97873b" defer></script>
+  <script src="/cloud/media-range.js?v=cloud-f4797b97873b" defer></script>
+  <script src="/cloud/media-client.js?v=cloud-f4797b97873b" defer></script>
+  <script src="/cloud/share.js?v=cloud-f4797b97873b" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=cloud-f4797b97873b" defer></script>
 </body>
 </html>

@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-bd6775f5bdda";
+const APP_BUILD_ID = "cloud-f4797b97873b";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -221,6 +221,8 @@ async function handleApi(request, env, url, path, context) {
   if (publicShareItemsMatch && request.method === "GET") return listPublicShareItems(publicShareItemsMatch[1], request, env, url);
   const publicShareThumbMatch = path.match(/^\/api\/public\/shares\/([A-Za-z0-9_-]{43})\/files\/(\d+)\/thumbnail$/);
   if (publicShareThumbMatch && request.method === "GET") return getPublicShareThumbnail(publicShareThumbMatch[1], Number(publicShareThumbMatch[2]), request, env);
+  const publicShareDisplayThumbMatch = path.match(/^\/api\/public\/shares\/([A-Za-z0-9_-]{43})\/files\/(\d+)\/display-thumbnail$/);
+  if (publicShareDisplayThumbMatch && request.method === "GET") return getPublicShareDisplayThumbnail(publicShareDisplayThumbMatch[1], Number(publicShareDisplayThumbMatch[2]), request, env);
   const publicShareContentMatch = path.match(/^\/api\/public\/shares\/([A-Za-z0-9_-]{43})\/files\/(\d+)\/(view|download)$/);
   if (publicShareContentMatch && request.method === "GET") return getPublicShareContent(publicShareContentMatch[1], Number(publicShareContentMatch[2]), publicShareContentMatch[3], request, env);
   const publicShareEventsMatch = path.match(/^\/api\/public\/shares\/([A-Za-z0-9_-]{43})\/events$/);
@@ -811,6 +813,18 @@ async function getPublicShareContent(token, fileId, disposition, request, env) {
       .bind(share.id, fileId, shareSession.sessionId).run();
   }
   return objectResponse(object, disposition === "download" ? "attachment" : "inline", "encrypted-file.bin", "application/octet-stream", Boolean(rangeHeader));
+}
+
+async function getPublicShareDisplayThumbnail(token, fileId, request, env) {
+  const share = await requireAuthorizedShare(token, request, env);
+  const file = await requireSharedFile(env, share, fileId);
+  // Only existing image display assets. Never expose video through this route.
+  if (Number(file.display_metadata_version) !== 1 || file.display_media_kind !== "image" || !file.display_thumbnail_key) {
+    throw new HttpError(404, "表示用サムネイルがありません。");
+  }
+  const object = await env.FILES.get(file.display_thumbnail_key);
+  if (!object) throw new HttpError(404, "表示用サムネイルがありません。");
+  return objectResponse(object, "inline", "thumbnail.webp", "image/webp");
 }
 
 async function recordPublicShareEvent(token, request, env) {

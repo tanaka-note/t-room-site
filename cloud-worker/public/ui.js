@@ -70,7 +70,32 @@
     }
   }
   // Opt-in, bounded, memory-only diagnostics. No names, keys, images or network telemetry.
-  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep,
+  function highlightText(element, value, query) {
+    const text = String(value || ""), term = String(query || "").trim();
+    element.replaceChildren();
+    if (!term) { element.textContent = text; return; }
+    const pattern = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    let offset = 0;
+    for (const match of text.matchAll(pattern)) {
+      element.append(document.createTextNode(text.slice(offset, match.index)));
+      const mark = document.createElement("mark"); mark.textContent = match[0]; element.append(mark);
+      offset = match.index + match[0].length;
+    }
+    element.append(document.createTextNode(text.slice(offset)));
+  }
+  function isBlankVideoFrame(source) {
+    // A candidate for trying a later frame, not proof of corruption. Tiny local sample only.
+    try {
+      const canvas = document.createElement("canvas"); canvas.width = 32; canvas.height = 18;
+      const context = canvas.getContext("2d", {willReadFrequently:true});
+      context.drawImage(source, 0, 0, 32, 18);
+      const data = context.getImageData(0, 0, 32, 18).data;
+      let dark = 0;
+      for (let i = 0; i < data.length; i += 4) if (Math.max(data[i],data[i+1],data[i+2]) <= 12) dark++;
+      return dark / (32 * 18) >= .998;
+    } catch { return false; }
+  }
+  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep, highlightText, isBlankVideoFrame,
     thumbnailTimings: () => thumbnailTimings.map(entry => ({...entry})),
     clearThumbnailTimings: () => { thumbnailTimings.length = 0; } });
 })(globalThis);
