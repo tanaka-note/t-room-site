@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-017216a2ae6d";
+const APP_BUILD_ID = "cloud-200fdba75a8e";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -297,6 +297,8 @@ async function handleApi(request, env, url, path, context) {
   if (fileMatch && request.method === "PATCH") return updateFile(Number(fileMatch[1]), request, env, session);
   if (fileMatch && request.method === "DELETE") return moveFileToTrash(Number(fileMatch[1]), env, session);
   const thumbMatch = path.match(/^\/api\/files\/(\d+)\/thumbnail$/);
+  const manualThumbMatch = path.match(/^\/api\/files\/(\d+)\/thumbnail\/manual$/);
+  if (manualThumbMatch && request.method === "PUT") return putManualThumbnail(Number(manualThumbMatch[1]), request, env, session);
   if (thumbMatch && request.method === "PUT") return putThumbnail(Number(thumbMatch[1]), request, env, session);
   if (thumbMatch && request.method === "GET") return getThumbnail(Number(thumbMatch[1]), env, session);
   const displayThumbMatch = path.match(/^\/api\/files\/(\d+)\/display-thumbnail$/);
@@ -2032,10 +2034,44 @@ async function putThumbnail(id, request, env, session) {
   await requireFolderAccess(env, file.folder_id, session);
   const length = Number(request.headers.get("Content-Length") || 0);
   if (length > 2 * 1024 * 1024) throw new HttpError(413, "サムネイルが大きすぎます。");
-  const key = file.thumbnail_key || `thumbnails/${crypto.randomUUID()}.webp`;
-  await env.FILES.put(key, request.body, { httpMetadata: { contentType: Number(file.crypto_version) === 1 ? "application/octet-stream" : "image/webp" } });
-  await env.DB.prepare("UPDATE cloud_files SET thumbnail_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(key, id).run();
+  await storeThumbnail(file, request.body, env);
   return json({ ok: true });
+}
+
+async function putManualThumbnail(id, request, env, session) {
+  requireAdmin(session);
+  const file = await requireReadyFile(env, id, false);
+  await requireFolderAccess(env, file.folder_id, session);
+  if (Number(file.crypto_version) !== 1) throw new HttpError(400, "暗号化されたファイルを選択してください。");
+  const limit = 2 * 1024 * 1024;
+  if (Number(request.headers.get("Content-Length")) > limit) throw new HttpError(413, "サムネイルが大きすぎます。");
+  const reader = request.body?.getReader();
+  if (!reader) throw new HttpError(400, "サムネイルがありません。");
+  const parts = []; let length = 0;
+  try {
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > limit) { await reader.cancel(); throw new HttpError(413, "サムネイルが大きすぎます。"); }
+      parts.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  if (length < 32) throw new HttpError(400, "暗号化サムネイルを確認してください。");
+  const bytes = new Uint8Array(length); let offset = 0;
+  for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+  if (bytes[0] !== 0x54 || bytes[1] !== 0x52 || bytes[2] !== 0x54 || bytes[3] !== 0x48) throw new HttpError(400, "暗号化サムネイルを確認してください。");
+  await storeThumbnail(file, bytes, env, true);
+  await audit(env, "video_thumbnail_manual_updated", session, "file", id);
+  const saved = await env.DB.prepare("SELECT updated_at FROM cloud_files WHERE id = ?").bind(id).first();
+  return json({ ok: true, updatedAt: saved.updated_at });
+}
+
+async function storeThumbnail(file, body, env, manual = false) {
+  const key = file.thumbnail_key || `thumbnails/${crypto.randomUUID()}.webp`;
+  await env.FILES.put(key, body, { httpMetadata: { contentType: Number(file.crypto_version) === 1 ? "application/octet-stream" : "image/webp" } });
+  const timestamp = manual ? "strftime('%Y-%m-%d %H:%M:%f', 'now')" : "CURRENT_TIMESTAMP";
+  await env.DB.prepare(`UPDATE cloud_files SET thumbnail_key = ?, updated_at = ${timestamp} WHERE id = ?`).bind(key, file.id).run();
 }
 
 async function getThumbnail(id, env, session) {

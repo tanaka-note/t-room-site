@@ -121,6 +121,45 @@
     });
   }
 
+  async function captureCurrentVideoFrame(video, {signal} = {}) {
+    const time = Number(video.currentTime);
+    const check = () => {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (Math.abs(Number(video.currentTime) - time) > .001) throw new Error("位置が変わりました。もう一度設定してください。");
+    };
+    check();
+    if (video.seeking) await waitVideoFrameEvent(video, "seeked", signal);
+    if (video.readyState < 2) await waitVideoFrameEvent(video, "loadeddata", signal);
+    await new Promise((resolve, reject) => {
+      let frame, raf, timer;
+      const cleanup = () => { clearTimeout(timer); cancelAnimationFrame(raf); if (frame !== undefined) video.cancelVideoFrameCallback?.(frame); signal?.removeEventListener("abort", abort); };
+      const done = () => { cleanup(); resolve(); };
+      const abort = () => { cleanup(); reject(new DOMException("Aborted", "AbortError")); };
+      signal?.addEventListener("abort", abort, {once:true});
+      // Paused videos may have already presented the requested frame and never
+      // issue another frame callback. Allow two paints without starting playback.
+      const paint = () => { raf = requestAnimationFrame(() => { raf = requestAnimationFrame(done); }); };
+      if (video.requestVideoFrameCallback) { frame = video.requestVideoFrameCallback(done); timer = setTimeout(paint, 150); }
+      else paint();
+      if (signal?.aborted) abort();
+    });
+    check();
+    if (video.seeking || video.readyState < 2 || !video.videoWidth || !video.videoHeight || !videoFrameQuality(video).accepted) return null;
+    const canvas = document.createElement("canvas");
+    const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    try {
+      canvas.getContext("2d", {alpha:false}).drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/webp", .78));
+      check();
+      if (!blob || blob.type !== "image/webp") return null;
+      const decoded = await decodeThumbnail(blob, signal);
+      try { return videoFrameQuality(decoded.image).accepted ? blob : null; }
+      finally { URL.revokeObjectURL(decoded.url); }
+    } finally { canvas.width = 1; canvas.height = 1; }
+  }
+
   async function selectVideoThumbnailFrame(video,{signal,seek=true}={}) {
     const check=()=>{if(signal?.aborted)throw new DOMException("Aborted","AbortError");};
     check();
@@ -181,7 +220,7 @@
       return await selectVideoThumbnailFrame(video,{signal});
     } finally { video.removeAttribute("src"); video.load(); }
   }
-  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep, highlightText, isBlankVideoFrame, videoFrameQuality, selectVideoThumbnailFrame, recoverVideoThumbnail,
+  global.TCloudUI = Object.freeze({ icon, decodeThumbnail, measureThumbnailStep, highlightText, isBlankVideoFrame, videoFrameQuality, captureCurrentVideoFrame, selectVideoThumbnailFrame, recoverVideoThumbnail,
     thumbnailTimings: () => thumbnailTimings.map(entry => ({...entry})),
     clearThumbnailTimings: () => { thumbnailTimings.length = 0; } });
 })(globalThis);

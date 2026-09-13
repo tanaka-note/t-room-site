@@ -39,6 +39,7 @@ if (!/Max-Age=2592000/.test(adminSessionResponse.headers.get("Set-Cookie") || ""
 const subadminSessionResponse = await expectStatus("副管理者セッション", await request("/session", "subadmin"), 200);
 if (!/Max-Age=2592000/.test(subadminSessionResponse.headers.get("Set-Cookie") || "")) throw new Error("副管理者セッションが最終利用から30日へ更新されていません。");
 await expectStatus("副管理者のゴミ箱拒否", await request("/trash", "subadmin"), 403);
+await expectStatus("副管理者の手動サムネイル変更拒否", await request("/files/999999/thumbnail/manual", "subadmin", {method:"PUT", headers:{Origin:origin}, body:"encrypted fixture"}), 403);
 await expectStatus("副管理者の共有管理拒否", await request("/shares", "subadmin"), 403);
 await expectStatus("副管理者の削除承認一覧拒否", await request("/deletion-requests", "subadmin"), 403);
 await expectStatus("副管理者の存在しないファイル名称変更", await request("/files/999999", "subadmin", { method: "PATCH", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" }), 404);

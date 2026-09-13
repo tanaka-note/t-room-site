@@ -20,6 +20,7 @@ function requires(name, guard) {
 }
 
 requires("createShare", "requireShareCreation");
+requires("putManualThumbnail", "requireAdmin");
 for (const name of ["listShares", "stopShare", "listAdminShareEvents"]) requires(name, "requireAdmin");
 for (const name of ["createFolder", "createUpload", "uploadPart", "completeUpload", "cancelUpload", "putThumbnail"]) requires(name, "requireUpload");
 for (const name of ["restoreFolder", "restoreFile", "permanentlyDeleteFile", "listTrash"]) requires(name, "requireDelete");

@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-017216a2ae6d";
+const APP_BUILD_ID = "cloud-200fdba75a8e";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -102,6 +102,7 @@ const state = {
   previewPlayer: null,
   previewFileId: null,
   previewGeneration: 0,
+  manualThumbnail: null,
   previewOrientationGeneration: 0,
   previewVideoFullscreenActive: false,
   previewHistoryActive: false,
@@ -281,6 +282,7 @@ function bindEvents() {
   $("#delete-folder-button").addEventListener("click", deleteSelectedFolder);
   $("#edit-form").addEventListener("submit", saveFile);
   $("#edit-file-button").addEventListener("click", openEditDialog);
+  $("#manual-thumbnail-button").addEventListener("click", startManualThumbnail);
   $("#delete-file-button").addEventListener("click", deleteSelectedFile);
   $("#preview-pip").addEventListener("click", minimizePreviewToPictureInPicture);
   $("#conflict-groups-back").addEventListener("click", renderConflictGroupList);
@@ -2223,6 +2225,9 @@ function cacheSafeRecords(records) {
     delete copy.cachedDisplay;
     delete copy.offlineOnly;
     delete copy.offlineStorageId;
+    delete copy.manualThumbnailSelecting;
+    delete copy.thumbnailWriteTask;
+    delete copy.thumbnailRevision;
     return copy;
   });
 }
@@ -3457,7 +3462,8 @@ async function hydrateUploadHistoryRecords(records) {
 
 async function loadEncryptedThumbnail(file, stage, signal, generation, stoppedSources = new Set()) {
   const scope = displayCacheScope();
-  const current = () => Boolean(state.session) && !signal.aborted && generation === state.thumbnailLoadGeneration && stage.isConnected && scope === displayCacheScope();
+  const revision = file.thumbnailRevision;
+  const current = () => revision === file.thumbnailRevision && Boolean(state.session) && !signal.aborted && generation === state.thumbnailLoadGeneration && stage.isConnected && scope === displayCacheScope();
   try {
     globalThis.TCloudSession?.check();
     const version = String(file.updatedAt || file.createdAt || "1");
@@ -3521,11 +3527,12 @@ async function loadEncryptedThumbnail(file, stage, signal, generation, stoppedSo
 
 async function installThumbnailBlob(file, stage, blob, signal, generation = state.thumbnailLoadGeneration, strict = false) {
   let decoded;
+  const revision = file.thumbnailRevision;
   const scope = displayCacheScope();
   try {
     decoded = await TCloudUI.measureThumbnailStep("decode", () => TCloudUI.decodeThumbnail(blob, signal));
     globalThis.TCloudSession?.check();
-    if (signal?.aborted || generation !== state.thumbnailLoadGeneration || scope !== displayCacheScope() || !stage.isConnected) throw new DOMException("Aborted", "AbortError");
+    if (revision !== file.thumbnailRevision || signal?.aborted || generation !== state.thumbnailLoadGeneration || scope !== displayCacheScope() || !stage.isConnected) throw new DOMException("Aborted", "AbortError");
     if (!updateThumbnailQuality(file, stage, decoded.image)) {
       URL.revokeObjectURL(decoded.url);
       return false;
@@ -7008,14 +7015,100 @@ async function backfillVideoThumbnail(file, generation) {
 }
 
 async function saveRepairedVideoThumbnail(file, thumbnail, current, signal) {
-  if (!current()) return;
+  if (!current() || file.manualThumbnailSelecting || (file.hasThumbnail && !file.thumbnailNeedsRepair)) return;
+  const revision = file.thumbnailRevision;
   // Display a valid local frame even if the optional encrypted persistence fails.
   if (!await showGeneratedThumbnail(file, thumbnail) || !current()) return;
   if (state.session?.role !== "admin") return;
   const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
-  if (!current()) return;
-  await api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
+  if (!current() || file.manualThumbnailSelecting || revision !== file.thumbnailRevision) return;
+  file.thumbnailWriteTask = api(`/files/${file.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
+  try { await file.thumbnailWriteTask; } finally { file.thumbnailWriteTask = null; }
   if (current()) file.hasThumbnail = true;
+}
+
+function canManuallySetThumbnail(file) {
+  return state.session?.role === "admin" && file?.mediaKind === "video" && state.view !== "trash"
+    && !file.deletedAt && !file.offlineOnly && Number.isSafeInteger(Number(file.id)) && Number(file.id) > 0
+    && Number(file.cryptoVersion) === 1 && file.fileKey instanceof CryptoKey;
+}
+
+function stopManualThumbnail() {
+  const mode = state.manualThumbnail;
+  if (!mode) return;
+  state.manualThumbnail = null;
+  mode.controller.abort();
+  mode.file.manualThumbnailSelecting = false;
+  mode.video.removeEventListener("timeupdate", mode.update);
+  mode.video.removeEventListener("seeked", mode.update);
+  mode.video.removeEventListener("enterpictureinpicture", stopManualThumbnail);
+  mode.video.removeEventListener("webkitpresentationmodechanged", mode.presentation);
+  mode.panel.remove();
+}
+
+function startManualThumbnail() {
+  const file = state.selected;
+  const video = $("#preview-stage video");
+  if (!canManuallySetThumbnail(file) || !video || !$("#preview-dialog").open || Number(file.id) !== state.previewFileId) return;
+  stopManualThumbnail();
+  $("#preview-more").open = false;
+  video.pause();
+  const panel = document.createElement("section");
+  panel.className = "manual-thumbnail-panel";
+  panel.innerHTML = '<p>再生バーでサムネイルにしたい位置を選んでください</p><p>現在位置：<output></output></p><p class="manual-thumbnail-message" role="status"></p><div><button type="button" class="secondary-button" data-action="cancel">キャンセル</button><button type="button" class="primary-button" data-action="save">この位置をサムネイルに設定</button></div>';
+  const mode = {file, video, panel, controller:new AbortController(), generation:state.previewGeneration, scope:displayCacheScope(), saving:false};
+  mode.update = () => { panel.querySelector("output").textContent = formatPreviewPlaybackTime(video.currentTime); };
+  mode.presentation = () => { if (video.webkitPresentationMode === "picture-in-picture") stopManualThumbnail(); };
+  state.manualThumbnail = mode;
+  file.manualThumbnailSelecting = true;
+  file.thumbnailRevision = Number(file.thumbnailRevision || 0) + 1;
+  mode.update();
+  video.addEventListener("timeupdate", mode.update);
+  video.addEventListener("seeked", mode.update);
+  video.addEventListener("enterpictureinpicture", stopManualThumbnail);
+  video.addEventListener("webkitpresentationmodechanged", mode.presentation);
+  panel.querySelector('[data-action="cancel"]').addEventListener("click", stopManualThumbnail);
+  panel.querySelector('[data-action="save"]').addEventListener("click", () => { void saveManualThumbnail(mode); });
+  $("#preview-stage").after(panel);
+}
+
+async function saveManualThumbnail(mode) {
+  const {file, video, panel, controller} = mode;
+  const current = () => state.manualThumbnail === mode && !controller.signal.aborted && canManuallySetThumbnail(file)
+    && previewRequestActive(mode.generation, file.id) && mode.scope === displayCacheScope();
+  if (mode.saving || !current()) return;
+  mode.saving = true;
+  const button = panel.querySelector('[data-action="save"]'), message = panel.querySelector('[role="status"]');
+  button.disabled = true; message.textContent = "保存しています…";
+  video.pause();
+  try {
+    TCloudSession.check();
+    const thumbnail = await TCloudUI.captureCurrentVideoFrame(video, {signal:controller.signal});
+    if (!current()) return;
+    if (!thumbnail) throw new Error("この位置はサムネイルに適していません。少し位置をずらしてもう一度お試しください。");
+    const encrypted = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
+    await Promise.resolve(file.thumbnailWriteTask).catch(() => {});
+    if (!current()) return;
+    const result = await api(`/files/${file.id}/thumbnail/manual`, {method:"PUT",body:encrypted,rawBody:true,signal:controller.signal});
+    if (!current()) return;
+    file.thumbnailRevision = Number(file.thumbnailRevision || 0) + 1;
+    file.hasThumbnail = true; file.thumbnailNeedsRepair = false;
+    if (result.updatedAt) file.updatedAt = result.updatedAt;
+    state.thumbnailAttempts.delete(Number(file.id));
+    state.thumbnailBackfillQueue = state.thumbnailBackfillQueue.filter(candidate => Number(candidate.id) !== Number(file.id));
+    if (mode.scope) await TCloudDisplayCache?.putThumbnail?.(mode.scope, Number(file.id), String(file.updatedAt || file.createdAt || "1"), thumbnail).catch(() => {});
+    if (!current()) return;
+    const stage = document.querySelector(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
+    if (stage) await installThumbnailBlob(file, stage, thumbnail, controller.signal);
+    if (!current()) return;
+    scheduleDisplayListingCacheWrite(displayListingCacheKey(new URLSearchParams(state.itemPageParams)));
+    stopManualThumbnail();
+    setNotice("サムネイルを変更しました。");
+  } catch (error) {
+    if (current() && error.name !== "AbortError") message.textContent = error.message || "保存できませんでした。もう一度お試しください。";
+  } finally {
+    if (current()) { mode.saving = false; button.disabled = false; }
+  }
 }
 
 function observePlaybackThumbnail(video, file) {
@@ -7024,7 +7117,7 @@ function observePlaybackThumbnail(video, file) {
   const current = () => video.isConnected && Boolean(state.session) && scope === displayCacheScope()
     && generation === state.itemLoadGeneration && Number(state.previewFileId) === Number(file.id);
   const capture = async () => {
-    if (done || pending || samples >= 12 || !current() || !file.fileKey || file.offlineOnly
+    if (done || pending || samples >= 12 || !current() || file.manualThumbnailSelecting || !file.fileKey || file.offlineOnly
         || video.readyState < 2 || (file.hasThumbnail && !file.thumbnailNeedsRepair)
         || performance.now() - lastAttempt < 2000) return;
     pending = true; lastAttempt = performance.now(); samples++;
@@ -7147,6 +7240,7 @@ async function openPreview(file, options = {}) {
   $("#delete-file-button").hidden = Boolean(file.offlineOnly) || !canTrashFile(file);
   $("#delete-file-button").textContent = state.session.canDelete ? "ゴミ箱へ" : "削除";
   $("#share-file-button").hidden = !canShareFile(file);
+  $("#manual-thumbnail-button").hidden = !canManuallySetThumbnail(file);
   $("#preview-pip").hidden = file.mediaKind !== "video";
   $("#preview-pip").disabled = file.mediaKind === "video";
   const stage = $("#preview-stage");
@@ -7851,6 +7945,8 @@ function handlePreviewClosed() {
 }
 
 function clearPreviewUrl() {
+  stopManualThumbnail();
+  $("#manual-thumbnail-button").hidden = true;
   const stage = $("#preview-stage");
   clearPreviewTapGesture();
   state.previewPictureInPictureActive = false;
@@ -7944,6 +8040,7 @@ function prepareVideoPlayer(stage, file) {
 }
 
 async function minimizePreviewToPictureInPicture() {
+  stopManualThumbnail();
   const dialog = $("#preview-dialog");
   const button = $("#preview-pip");
   const video = $("#preview-stage video");
