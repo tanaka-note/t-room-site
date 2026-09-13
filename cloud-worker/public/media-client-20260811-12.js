@@ -136,6 +136,11 @@
     navigator.serviceWorker?.controller?.postMessage({ type: "RELEASE_MEDIA", token });
   }
 
+  function markPlaying(token) {
+    if (!registrations.has(token)) return;
+    navigator.serviceWorker?.controller?.postMessage({ type: "MEDIA_PLAYING", token });
+  }
+
   function clearMedia() {
     for (const pending of pendingRegistrations.values()) pending.reject?.();
     pendingRegistrations.clear(); registrations.clear();
@@ -363,6 +368,7 @@
   global.TCloudMedia = Object.freeze({
     registerMedia,
     releaseMedia,
+    markPlaying,
     clearMedia,
     setCacheLimitBytes,
     chooseDownloadTarget,

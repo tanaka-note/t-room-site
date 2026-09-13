@@ -1,24 +1,25 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-importScripts("/cloud/crypto-vault.js?v=cloud-9e6f0e03ce32");
-importScripts("/cloud/media-range.js?v=cloud-9e6f0e03ce32");
-importScripts("/cloud/offline-store.js?v=cloud-9e6f0e03ce32");
+importScripts("/cloud/crypto-vault.js?v=cloud-017216a2ae6d");
+importScripts("/cloud/media-range.js?v=cloud-017216a2ae6d");
+importScripts("/cloud/offline-store.js?v=cloud-017216a2ae6d");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-9e6f0e03ce32";
-const MEDIA_WORKER_BUILD_ID = "cloud-9e6f0e03ce32";
+const APP_SHELL_CACHE = "tcloud-shell-cloud-017216a2ae6d";
+const MEDIA_WORKER_BUILD_ID = "cloud-017216a2ae6d";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
-const DEMAND_PREFETCH_CHUNKS = 3;
-const BACKGROUND_PREFETCH_DELAY_MS = 30_000;
+const DEMAND_PREFETCH_CHUNKS = 4;
+const PREFETCH_CONCURRENCY = 2;
 const MP4_METADATA_WARM_CHUNKS = 4;
 const MP4_RANGE_RESPONSE_LIMIT_BYTES = 2 * 1024 * 1024;
+const MP4_PLAYING_RANGE_LIMIT_BYTES = 8 * 1024 * 1024;
 const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-  "/cloud/offline-store.js?v=cloud-9e6f0e03ce32",
+  "/cloud/offline-store.js?v=cloud-017216a2ae6d",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"
@@ -52,6 +53,10 @@ self.addEventListener("message", (event) => {
       decryptedChunks: new Map(),
       decryptingChunks: new Map(),
       encryptedChunkTasks: new Map(),
+      prefetchControllers: new Map(),
+      prefetchedChunks: new Set(),
+      demandCount: 0,
+      prefetchAnchor: 0,
       decryptedCacheBytes: 0,
       cacheWriteChain: Promise.resolve(),
       touchedAt: Date.now(),
@@ -60,6 +65,9 @@ self.addEventListener("message", (event) => {
     registrations.set(data.token, entry);
     event.source?.postMessage({ type: "MEDIA_REGISTERED", token: data.token, workerBuild: MEDIA_WORKER_BUILD_ID });
     event.waitUntil(warmMediaForPlayback(data.token, entry).catch(() => {}));
+  } else if (data.type === "MEDIA_PLAYING") {
+    const entry = registrations.get(data.token);
+    if (entry && entry.ownerClientId === event.source?.id) entry.playing = true;
   } else if (data.type === "SET_CACHE_LIMIT" && Number(data.cacheLimitBytes) > 0) {
     self.TCloudOffline?.setCacheLimitBytes(Number(data.cacheLimitBytes));
   } else if (data.type === "RELEASE_MEDIA" && typeof data.token === "string") {
@@ -145,6 +153,24 @@ function decryptedRangeStream(token, entry, start, end) {
 }
 
 async function fetchAndDecryptChunk(entry, index, options = {}) {
+  if (options.prefetch) return getDecryptedChunk(entry, index, options);
+  entry.demandCount = Number(entry.demandCount || 0) + 1;
+  entry.prefetchAnchor = index;
+  // A playback/seek request never queues behind speculative network work.
+  // Promote the same chunk; abort other speculative transfers immediately.
+  for (const [candidate, controller] of entry.prefetchControllers || []) {
+    if (candidate !== index) controller.abort();
+    else entry.prefetchControllers.delete(candidate);
+  }
+  try {
+    return await getDecryptedChunk(entry, index, options);
+  } finally {
+    entry.demandCount -= 1;
+    prefetchUpcomingChunks(entry, index, DEMAND_PREFETCH_CHUNKS);
+  }
+}
+
+async function getDecryptedChunk(entry, index, options = {}) {
   await verifyMediaSession(entry);
   const cachedPlain = entry.decryptedChunks?.get(index);
   if (cachedPlain) {
@@ -160,7 +186,6 @@ async function fetchAndDecryptChunk(entry, index, options = {}) {
     const plain = await task;
     assertActive(entry);
     rememberDecryptedChunk(entry, index, plain);
-    if (!options.prefetch) prefetchUpcomingChunks(entry, index, DEMAND_PREFETCH_CHUNKS);
     return plain;
   } finally {
     entry.decryptingChunks?.delete(index);
@@ -171,7 +196,8 @@ function constrainOpenEndedMp4Range(entry, rangeHeader, requested) {
   if (!requested?.partial || !/^bytes=\d+-$/.test(String(rangeHeader || "")) || !isMp4Descriptor(entry.descriptor)) {
     return requested;
   }
-  return { ...requested, end: Math.min(requested.end, requested.start + MP4_RANGE_RESPONSE_LIMIT_BYTES - 1) };
+  const limit = entry.playing ? MP4_PLAYING_RANGE_LIMIT_BYTES : MP4_RANGE_RESPONSE_LIMIT_BYTES;
+  return { ...requested, end: Math.min(requested.end, requested.start + limit - 1) };
 }
 
 async function loadAndDecryptChunk(entry, index, options = {}) {
@@ -182,7 +208,9 @@ async function loadAndDecryptChunk(entry, index, options = {}) {
   return plain;
 }
 
-async function loadEncryptedChunk(entry, index) {
+async function loadEncryptedChunk(entry, index, signal) {
+  assertActive(entry);
+  if (signal?.aborted) throw new DOMException("Prefetch yielded", "AbortError");
   const file = entry.descriptor;
   if (file.storageId && self.TCloudOffline?.supported()) {
     const cached = await self.TCloudOffline.getChunk(file.storageId, index).catch(() => null);
@@ -190,8 +218,14 @@ async function loadEncryptedChunk(entry, index) {
   }
   if (file.offlineOnly) throw new Error("Offline media chunk is unavailable");
   const pending = entry.encryptedChunkTasks?.get(index);
-  if (pending) return pending;
-  const task = fetchAndCacheEncryptedChunk(entry, index);
+  if (pending) {
+    try { return await pending; } catch (error) {
+      if (signal || entry.released || error.name !== "AbortError") throw error;
+      // A demand may arrive just after a speculative task was cancelled.
+      return loadEncryptedChunk(entry, index);
+    }
+  }
+  const task = fetchAndCacheEncryptedChunk(entry, index, signal);
   entry.encryptedChunkTasks?.set(index, task);
   try {
     return await task;
@@ -200,16 +234,18 @@ async function loadEncryptedChunk(entry, index) {
   }
 }
 
-async function fetchAndCacheEncryptedChunk(entry, index) {
+async function fetchAndCacheEncryptedChunk(entry, index, signal) {
   const file = entry.descriptor;
   const { start, end } = TCloudRange.encryptedChunkRange(file, index);
   let lastError;
   for (const delay of RETRY_DELAYS) {
     if (delay) await wait(delay);
     try {
+      assertActive(entry);
+      if (signal?.aborted) throw new DOMException("Prefetch yielded", "AbortError");
       const response = await fetch(file.endpoint, {
         headers: { Range: `bytes=${start}-${end}`, ...(file.expectedSession ? {"X-TCloud-Session":file.expectedSession} : {}) },
-        signal: entry.controller?.signal,
+        signal: signal || entry.controller?.signal,
         credentials: "same-origin",
         cache: "no-store"
       });
@@ -221,7 +257,9 @@ async function fetchAndCacheEncryptedChunk(entry, index) {
       if (file.storageId && self.TCloudOffline?.supported()) {
         entry.cacheWriteChain = Promise.resolve(entry.cacheWriteChain)
           .catch(() => {})
-          .then(() => self.TCloudOffline.putChunk(file.storageId, index, envelope, { expectedBytes: end - start + 1 }));
+          .then(() => { assertActive(entry); return self.TCloudOffline.putChunk(file.storageId, index, envelope, { expectedBytes: end - start + 1 }); });
+        // Backpressure speculative writes without delaying playback on storage.
+        if (signal) await entry.cacheWriteChain.catch(() => {});
       }
       return envelope;
     } catch (error) {
@@ -233,17 +271,51 @@ async function fetchAndCacheEncryptedChunk(entry, index) {
 }
 
 function prefetchUpcomingChunks(entry, index, count) {
-  if (entry.released) return;
-  const chunkCount = Number(entry.descriptor.chunkCount || 0);
-  const indexes = [];
-  for (let offset = 1; offset <= count && index + offset < chunkCount; offset += 1) indexes.push(index + offset);
-  if (!indexes.length) return;
-  void (async () => {
-    for (const nextIndex of indexes) {
-      if (entry.released) return;
-      await fetchAndDecryptChunk(entry, nextIndex, { prefetch: true }).catch(() => null);
+  if (entry.released || !entry.prefetchReady || entry.prefetchTask) return;
+  entry.prefetchTask = runEncryptedPrefetch(entry, count).catch(() => {}).finally(() => { entry.prefetchTask = null; });
+}
+
+async function runEncryptedPrefetch(entry, nearCount) {
+  const file = entry.descriptor;
+  if (file.offlineOnly) return;
+  const persistent = file.storageId && self.TCloudOffline?.supported();
+  const visited = entry.prefetchedChunks;
+  const work = async () => {
+    while (!entry.released) {
+      if (entry.demandCount) { await wait(25); continue; }
+      const chunkSize = Number(file.chunkSizeBytes || 8 * 1024 * 1024);
+      const limit = Number(self.TCloudOffline?.getCacheLimitBytes?.() || 1024 * 1024 * 1024);
+      const windowChunks = persistent ? Math.max(1, Math.floor(limit / (chunkSize + 32))) : nearCount + 1;
+      const start = Number(entry.prefetchAnchor || 0) + 1;
+      const end = Math.min(Number(file.chunkCount), start + windowChunks - 1);
+      // Nearest four first, then continue toward EOF within the cache window.
+      let index = start;
+      const nearEnd = Math.min(end, start + nearCount);
+      while (index < nearEnd && visited.has(index)) index += 1;
+      while (index < end && visited.has(index)) index += 1;
+      if (index >= end) return;
+      visited.add(index);
+      const controller = new AbortController();
+      entry.prefetchControllers.set(index, controller);
+      const abort = () => controller.abort();
+      entry.controller.signal.addEventListener("abort", abort, { once: true });
+      try {
+        const envelope = await loadEncryptedChunk(entry, index, controller.signal);
+        if (!persistent) {
+          assertActive(entry);
+          const plain = new Uint8Array(await TRoomCrypto.decryptFileChunk(entry.fileKey, envelope, index));
+          assertActive(entry);
+          rememberDecryptedChunk(entry, index, plain);
+        }
+      } catch (error) {
+        if (error.name === "AbortError") visited.delete(index);
+      } finally {
+        entry.controller.signal.removeEventListener("abort", abort);
+        entry.prefetchControllers.delete(index);
+      }
     }
-  })();
+  };
+  await Promise.all(Array.from({ length: PREFETCH_CONCURRENCY }, work));
 }
 
 async function warmMediaForPlayback(token, entry) {
@@ -255,17 +327,10 @@ async function warmMediaForPlayback(token, entry) {
   await Promise.all(edgeIndexes.map((index) => fetchAndDecryptChunk(entry, index, { prefetch: true }).catch(() => null)));
   if (isMp4Descriptor(descriptor)) await warmMp4Metadata(entry).catch(() => {});
   await Promise.resolve(entry.cacheWriteChain).catch(() => {});
-  if (entry.released || registrations.get(token) !== entry || descriptor.offlineOnly || !descriptor.storageId) return;
-  await wait(BACKGROUND_PREFETCH_DELAY_MS);
-  const chunkSize = Number(descriptor.chunkSizeBytes || 8 * 1024 * 1024);
-  const cacheLimit = Number(self.TCloudOffline?.getCacheLimitBytes?.() || 1024 * 1024 * 1024);
-  const maxChunks = Math.min(chunkCount, Math.max(1, Math.floor(cacheLimit / Math.max(1, chunkSize + 32))));
-  for (let index = 1; index < maxChunks; index += 1) {
-    if (entry.released || registrations.get(token) !== entry) return;
-    await loadEncryptedChunk(entry, index).catch(() => null);
-    await Promise.resolve(entry.cacheWriteChain).catch(() => {});
-    await wait(0);
-  }
+  if (entry.released || registrations.get(token) !== entry || descriptor.offlineOnly) return;
+  entry.prefetchReady = true;
+  prefetchUpcomingChunks(entry, entry.prefetchAnchor, DEMAND_PREFETCH_CHUNKS);
+  await entry.prefetchTask;
 }
 
 async function warmMp4Metadata(entry) {

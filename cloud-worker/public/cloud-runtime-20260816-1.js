@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-9e6f0e03ce32";
+const APP_BUILD_ID = "cloud-017216a2ae6d";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -7908,7 +7908,10 @@ function prepareVideoPlayer(stage, file) {
   const video = document.createElement("video");
   video.controls = false;
   video.playsInline = true;
-  video.preload = "metadata";
+  video.preload = "auto";
+  video.addEventListener("playing", () => {
+    if (Number(state.previewFileId) === Number(file.id)) TCloudMedia.markPlaying(state.previewMediaToken);
+  });
   video.disableRemotePlayback = true;
   video.setAttribute("disableRemotePlayback", "");
   video.setAttribute("controlsList", "noremoteplayback");
