@@ -33,6 +33,56 @@
     }
     context.putImageData(image,0,0);return canvas;
   }
+  async function recoverAvc(demux, context, stream, par, file, check, instances) {
+    // MP4's AVC configuration and compressed packets go only to the browser's
+    // local decoder. This avoids HTMLMediaElement container/audio failures.
+    const extra=par.extradata;
+    if(!global.VideoDecoder || !extra || extra.length<7 || extra[0]!==1)return null;
+    const codec='avc1.'+Array.from(extra.slice(1,4),b=>b.toString(16).padStart(2,'0')).join('');
+    file.thumbnailCodec=`${codec} (${par.width}x${par.height})`;
+    const config={codec,description:extra,codedWidth:par.width,codedHeight:par.height,optimizeForLatency:true};
+    if(!(await VideoDecoder.isConfigSupported(config)).supported)return null;
+    check();
+    const packet=await demux.av_packet_alloc(), duration=Number(stream.duration);
+    const times=Number.isFinite(duration)&&duration>.2?[Math.min(10,duration*.1),Math.min(40,duration*.25),duration*.5,duration*.75,duration*.9]:[0];
+    let decoder=null, best=null, failure=null, sampled=0;
+    const release=()=>{if(decoder?.state!=='closed')decoder?.close();decoder=null;if(best){best.width=1;best.height=1;best=null;}};
+    const resource={terminate:release};instances.add(resource);
+    try {
+      for(const time of times){
+        check();release();failure=null;sampled=0;
+        if(time>0){const [lo,hi]=demux.f64toi64(time*stream.time_base_den/stream.time_base_num);await demux.av_seek_frame(context,stream.index,lo,hi,1);}
+        decoder=new VideoDecoder({error:error=>{failure=error;},output:frame=>{
+          let canvas=null;
+          try {
+            check();if(best || sampled++%5!==0)return;
+            const scale=Math.min(1,640/Math.max(frame.displayWidth,frame.displayHeight));
+            canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(frame.displayWidth*scale));canvas.height=Math.max(1,Math.round(frame.displayHeight*scale));
+            canvas.getContext('2d',{alpha:false}).drawImage(frame,0,0,canvas.width,canvas.height);
+            if(TCloudUI.videoFrameQuality(canvas).accepted){best=canvas;canvas=null;}
+          }catch(error){failure=error;}finally{frame.close();if(canvas){canvas.width=1;canvas.height=1;}}
+        }});
+        decoder.configure(config);let started=false;
+        for(let batch=0;batch<40&&!best&&!failure;batch++){
+          check();const [result,packets]=await demux.ff_read_frame_multi(context,packet,{limit:32768});
+          for(const input of packets[stream.index]||[]){
+            check();if(best||failure)break;
+            if(!started && !(input.flags&1))continue;
+            started=true;
+            while(decoder.decodeQueueSize>=8&&!best&&!failure){await new Promise(resolve=>setTimeout(resolve,5));check();}
+            if(best||failure)break;
+            const timestamp=Math.round(demux.i64tof64(input.pts||0,input.ptshi||0)*stream.time_base_num/stream.time_base_den*1e6);
+            decoder.decode(new EncodedVideoChunk({type:input.flags&1?'key':'delta',timestamp,data:input.data}));
+          }
+          if(result===demux.AVERROR_EOF)break;
+          await new Promise(resolve=>setTimeout(resolve,0));
+        }
+        if(!failure&&decoder.state==='configured')await decoder.flush();
+        check();if(best){const blob=await new Promise(resolve=>best.toBlob(resolve,'image/webp',.78));check();return blob;}
+      }
+      return null;
+    }finally{release();instances.delete(resource);}
+  }
   async function recover(url, file, signal, onDuration) {
     const localFile=file instanceof Blob ? file : null;
     const source=new URL(url,location.href);
@@ -84,9 +134,11 @@
       // use the same worker RPC used by those shortcuts, keeping work off-thread.
       const par=await demux.c("ff_copyout_codecpar",stream.codecpar);check();
       const codec=({12:"mpeg4",17:"wmv1",18:"wmv2",71:"wmv3"})[par.codec_id];
-      file.thumbnailCodec=codec||`codec-${par.codec_id}`;
-      if(!codec || !par.width || !par.height || par.width*par.height>3840*2160)return null;
+      file.thumbnailCodec=`${codec||`codec-${par.codec_id}`} (${par.width}x${par.height})`;
+      if(!par.width || !par.height || par.width*par.height>3840*2160)return null;
       if(Number.isFinite(stream.duration)&&stream.duration>0)onDuration?.(stream.duration);
+      if(par.codec_id===27)return await recoverAvc(demux,context,stream,par,file,check,instances);
+      if(!codec)return null;
       const decoder=await instance(`decoder-${codec}`);
       const [,dc,dp,df]=await decoder.ff_init_decoder(par.codec_id,{codecpar:par,time_base:[stream.time_base_num,stream.time_base_den]});
       const packet=await demux.av_packet_alloc(), duration=Number(stream.duration);

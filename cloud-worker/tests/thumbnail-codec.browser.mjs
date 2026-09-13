@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {engines,startUIFixture,preparePage} from './ui-fixture.mjs';
 const data=Object.fromEntries(['wmv','mp4'].map(ext=>[ext,readFileSync(new URL(`./fixtures/thumbnail-codec.${ext}`,import.meta.url))]));
+data.h264=readFileSync(new URL('./fixtures/thumbnail-codec-h264.mp4',import.meta.url));
 const serverSource=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const serveAsset=new Function(serverSource.slice(serverSource.indexOf('async function serveAsset('),serverSource.indexOf('\nasync function requireReadyFile('))+'; return serveAsset;')();
 let requests=[],deny=false;
@@ -15,7 +16,7 @@ const fixture=await startUIFixture(undefined,{handleRequest:async(req,res)=>{
   }}},url,url.pathname.slice('/cloud'.length));
   res.writeHead(result.status,Object.fromEntries(result.headers));res.end(Buffer.from(await result.arrayBuffer()));return true;
  }
- const match=/^\/cloud\/local-media\/fixture\.(wmv|mp4)$/.exec(req.url);
+ const match=/^\/cloud\/local-media\/fixture\.(wmv|mp4|h264)$/.exec(req.url);
  if(!match)return false;
  assert.equal(req.method,'GET');const range=/^bytes=(\d+)-(\d+)$/.exec(req.headers.range||'');assert.ok(range);
  const bytes=data[match[1]],start=Number(range[1]),end=Math.min(Number(range[2]),bytes.length-1);requests.push({start,end});
@@ -35,14 +36,18 @@ try{for(const [name,engine,launch] of engines){
    const original=TCloudUI;globalThis.TCloudUI={...original,recoverVideoThumbnail:async()=>__thumb.blob};
    try{return !!(await __test.captureVideoThumbnail('/cloud/local-media/native',{name:'native.mp4',sizeBytes:100}));}finally{globalThis.TCloudUI=original;}
   }),true);assert.equal(workers,0,'native success never starts the fallback');
-  for(const ext of ['wmv','mp4']){
+  for(const ext of ['wmv','mp4','h264']){
    requests=[];
    const result=await page.evaluate(async({ext,size})=>{
-    const file={name:`fixture.${ext}`,sizeBytes:size};let duration=null;
+    const file={name:`fixture.${ext==='h264'?'mp4':ext}`,sizeBytes:size};let duration=null;
     const blob=await TCloudThumbnailCodec.recover(`/cloud/local-media/fixture.${ext}`,file,null,value=>duration=value);
     if(!blob)return {present:false,codec:file.thumbnailCodec,error:globalThis.__codecError};
     const decoded=await TCloudUI.decodeThumbnail(blob);try{return {present:true,codec:file.thumbnailCodec,duration,accepted:TCloudUI.videoFrameQuality(decoded.image).accepted,width:decoded.image.naturalWidth};}finally{URL.revokeObjectURL(decoded.url);}
    },{ext,size:data[ext].length});
+   if(ext==='h264'&&!await page.evaluate(async()=>typeof VideoDecoder!=='undefined'&&(await VideoDecoder.isConfigSupported({codec:'avc1.64000c'})).supported)){
+    assert.equal(result.present,false);assert.equal(result.error,undefined);
+    console.log('UNAVAILABLE native H264 WebCodecs; graceful no-thumbnail result verified',name);continue;
+   }
    assert.equal(result.present,true,JSON.stringify(result));assert.equal(result.accepted,true);assert.equal(result.width,320);assert.equal(result.duration,3);
    assert.ok(requests.length<=3);console.log('PASS software decoder uses bounded local Range, produces real content frame',name,ext,{...result,requests:requests.length});
   }

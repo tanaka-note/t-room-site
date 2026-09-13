@@ -3,6 +3,7 @@ Generated locally with FFmpeg 9.0.1:
 
 ffmpeg -f lavfi -i testsrc2=size=320x180:rate=10:duration=3 -c:v wmv2 -an thumbnail-codec.wmv
 ffmpeg -f lavfi -i testsrc2=size=320x180:rate=10:duration=3 -c:v mpeg4 -an thumbnail-codec.mp4
+ffmpeg -f lavfi -i testsrc2=size=320x180:rate=10:duration=3 -c:v libx264 -pix_fmt yuv420p -an thumbnail-codec-h264.mp4
 
 Purpose: verify legacy codec thumbnail decoding in Chromium and WebKit without
 depending on the operating system's native codec availability.
