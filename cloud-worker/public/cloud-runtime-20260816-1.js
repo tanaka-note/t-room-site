@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-d185e23bc0d5";
+const APP_BUILD_ID = "cloud-45f278abc950";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -6652,8 +6652,11 @@ async function captureVideoThumbnail(url, file = {}, signal, onDuration) {
   try {
     if (signal?.aborted) return null;
     const mpegType = mpegContainerType(file.name);
-    if (mpegType && globalThis.mpegts?.isSupported()) return await captureMpegVideoThumbnail(url, file, mpegType, signal, onDuration);
-    return await captureNativeVideoThumbnail(url, signal, onDuration);
+    const thumbnail = mpegType && globalThis.mpegts?.isSupported()
+      ? await captureMpegVideoThumbnail(url, file, mpegType, signal, onDuration)
+      : await captureNativeVideoThumbnail(url, signal, onDuration);
+    if (thumbnail || signal?.aborted) return thumbnail;
+    return await globalThis.TCloudThumbnailCodec?.recover(url,file,signal,onDuration) || null;
   } finally { release(); }
 }
 
@@ -8355,6 +8358,7 @@ function recordThumbnailMaintenanceFailure(job, file, reason) {
   if (job.failed <= 100) {
     const item = document.createElement("li");
     item.dataset.fileId = String(file.id);
+    item.dataset.codec = file.thumbnailCodec || "";
     item.textContent = `${file.name || `ファイル ${file.id}`}：${reason}`;
     $("#thumbnail-maintenance-failures").append(item);
   }

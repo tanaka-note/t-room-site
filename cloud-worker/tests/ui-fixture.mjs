@@ -46,7 +46,7 @@ export async function startUIFixture(sourceRoot = root, {handleRequest} = {}) {
           }
         };
       `);
-      res.setHeader('Content-Type', ({'.html':'text/html','.css':'text/css','.js':'text/javascript','.wasm':'application/wasm'})[extname(path)] || 'application/octet-stream');
+      res.setHeader('Content-Type', ({'.html':'text/html','.css':'text/css','.js':'text/javascript','.mjs':'text/javascript','.wasm':'application/wasm'})[extname(path)] || 'application/octet-stream');
       res.end(data);
     } catch { res.writeHead(404).end(); }
   });
