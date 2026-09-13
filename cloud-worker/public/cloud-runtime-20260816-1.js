@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-81eefad3aae4";
+const APP_BUILD_ID = "cloud-1a115697e806";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -7085,7 +7085,8 @@ async function saveManualThumbnail(mode) {
   if (mode.saving || !current()) return;
   mode.saving = true;
   const button = panel.querySelector('[data-action="save"]'), message = panel.querySelector('[role="status"]');
-  button.disabled = true; message.textContent = "保存しています…";
+  const cancelButton = panel.querySelector('[data-action="cancel"]');
+  button.disabled = true; cancelButton.disabled = true; message.textContent = "保存しています…";
   video.pause();
   try {
     TCloudSession.check();
@@ -7113,7 +7114,7 @@ async function saveManualThumbnail(mode) {
   } catch (error) {
     if (current() && error.name !== "AbortError") message.textContent = error.message || "保存できませんでした。もう一度お試しください。";
   } finally {
-    if (current()) { mode.saving = false; button.disabled = false; }
+    if (current()) { mode.saving = false; button.disabled = false; cancelButton.disabled = false; }
   }
 }
 

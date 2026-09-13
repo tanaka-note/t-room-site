@@ -61,11 +61,13 @@ try {for(const [name,engine,launch] of engines){
    await new Promise(r=>{v.addEventListener('seeked',r,{once:true});v.currentTime=1.2;});
    window.beforeTime=v.currentTime;window.beforeImage=document.querySelector('.file-card[data-file-id="2"] .thumb').innerHTML;
   });
-  fail=true;await page.locator('[data-action="save"]').click();
+  fail=true;delay=200;await page.locator('[data-action="save"]').click();
+  assert.equal(await page.locator('[data-action="cancel"]').isDisabled(),true);
   await page.getByText('fixture save failed',{exact:true}).waitFor();
+  assert.equal(await page.locator('[data-action="cancel"]').isEnabled(),true);
   assert.equal(await page.evaluate(()=>document.querySelector('.file-card[data-file-id="2"] .thumb').innerHTML===beforeImage),true);
   assert.equal(await page.evaluate(()=>cacheWrites.length),0);
-  fail=false;await page.locator('[data-action="save"]').click();
+  fail=false;delay=0;await page.locator('[data-action="save"]').click();
   await page.locator('.manual-thumbnail-panel').waitFor({state:'detached'});
   assert.equal(await page.evaluate(()=>originalVideo===document.querySelector('#preview-stage video')),true);
   assert.equal(await page.evaluate(()=>originalVideo.currentTime),1.2);
@@ -84,12 +86,17 @@ try {for(const [name,engine,launch] of engines){
   await page.locator('[data-action="save"]').click();
   await page.getByText('この位置はサムネイルに適していません。少し位置をずらしてもう一度お試しください。',{exact:true}).waitFor();
   assert.equal(bodies.length,count);assert.equal(await page.evaluate(()=>originalVideo.currentTime),.15);
-  // Close/cancel and stale response cannot update a different preview.
+  assert.equal(await page.locator('[data-action="cancel"]').isEnabled(),true);
+  await page.locator('[data-action="cancel"]').click();
+  assert.equal(await page.locator('.manual-thumbnail-panel').count(),0);
+  await page.locator('#preview-more summary').click();await page.locator('#manual-thumbnail-button').click();
+  // Cancellation is disabled during the request; preview cleanup still aborts
+  // and prevents a stale response from updating a different preview.
   await page.evaluate(async()=>{await new Promise(r=>{originalVideo.addEventListener('seeked',r,{once:true});originalVideo.currentTime=1.3;});});
   delay=300;await page.locator('[data-action="save"]').click();await page.locator('[data-action="save"]').click({force:true});
   const deadline=Date.now()+3000;while(bodies.length===count && Date.now()<deadline)await new Promise(r=>setTimeout(r,10));
   assert.equal(bodies.length,count+1);
-  await page.locator('[data-action="cancel"]').click();
+  assert.equal(await page.locator('[data-action="cancel"]').isDisabled(),true);
   await page.evaluate(()=>__test.openPreview(__test.state.files[0]));
   await new Promise(r=>setTimeout(r,400));
   assert.equal(bodies.length,count+1);assert.equal(await page.locator('.manual-thumbnail-panel').count(),0);
