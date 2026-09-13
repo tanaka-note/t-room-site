@@ -11,7 +11,7 @@ const fixture=await startUIFixture(undefined,{handleRequest:async(req,res)=>{
   const url=new URL(req.url,'http://localhost');
   const result=await serveAsset(new Request(url),{ASSETS:{fetch:async request=>{
    const path=new URL(request.url).pathname;let bytes=readFileSync(new URL('../public'+path,import.meta.url));
-   if(path==='/thumbnail-codec.js')bytes=Buffer.from(bytes.toString().replace('catch {return null;}','catch(error){globalThis.__codecError=String(error.stack);return null;}'));
+   if(path==='/thumbnail-codec.js')bytes=Buffer.from(bytes.toString().replace('if(par.codec_id===27)return await recoverAvc(', 'if(par.codec_id===27&&file.name==="broken-index.mp4")demux.av_seek_frame=async()=>{throw new Error("Fixture seek read budget exhausted");}; if(par.codec_id===27)return await recoverAvc('));
    return new Response(bytes,{headers:{'Content-Type':path.endsWith('.wasm')?'application/wasm':'text/javascript'}});
   }}},url,url.pathname.slice('/cloud'.length));
   res.writeHead(result.status,Object.fromEntries(result.headers));res.end(Buffer.from(await result.arrayBuffer()));return true;
@@ -42,13 +42,17 @@ try{for(const [name,engine,launch] of engines){
     const file={name:`fixture.${ext==='h264'?'mp4':ext}`,sizeBytes:size};let duration=null;
     const blob=await TCloudThumbnailCodec.recover(`/cloud/local-media/fixture.${ext}`,file,null,value=>duration=value);
     if(!blob)return {present:false,codec:file.thumbnailCodec,error:globalThis.__codecError};
-    const decoded=await TCloudUI.decodeThumbnail(blob);try{return {present:true,codec:file.thumbnailCodec,duration,accepted:TCloudUI.videoFrameQuality(decoded.image).accepted,width:decoded.image.naturalWidth};}finally{URL.revokeObjectURL(decoded.url);}
+    const decoded=await TCloudUI.decodeThumbnail(blob);try{return {present:true,codec:file.thumbnailCodec,trace:file.thumbnailTrace,duration,accepted:TCloudUI.videoFrameQuality(decoded.image).accepted,width:decoded.image.naturalWidth};}finally{URL.revokeObjectURL(decoded.url);}
    },{ext,size:data[ext].length});
    if(ext==='h264'&&!await page.evaluate(async()=>typeof VideoDecoder!=='undefined'&&(await VideoDecoder.isConfigSupported({codec:'avc1.64000c'})).supported)){
     assert.equal(result.present,false);assert.equal(result.error,undefined);
     console.log('UNAVAILABLE native H264 WebCodecs; graceful no-thumbnail result verified',name);continue;
    }
    assert.equal(result.present,true,JSON.stringify(result));assert.equal(result.accepted,true);assert.equal(result.width,320);assert.equal(result.duration,3);
+   if(ext==='h264'){
+    assert.ok(result.trace.frames>0);assert.equal(result.trace.seeks||0,0,'valid opening packets avoid expensive container seeking');
+    assert.equal(await page.evaluate(size=>TCloudThumbnailCodec.recover('/cloud/local-media/fixture.h264',{name:'broken-index.mp4',sizeBytes:size}).then(Boolean),data.h264.length),true,'readable opening frames survive a container whose seeks fail');
+   }
    assert.ok(requests.length<=3);console.log('PASS software decoder uses bounded local Range, produces real content frame',name,ext,{...result,requests:requests.length});
   }
   assert.ok(workers>=4,'demux and decode run off the main thread');

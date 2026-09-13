@@ -46,14 +46,17 @@
     if(!(await VideoDecoder.isConfigSupported(config)).supported){trace.stage='unsupported';return null;}
     check();
     const packet=await demux.av_packet_alloc(), duration=Number(stream.duration);
-    const times=Number.isFinite(duration)&&duration>.2?[Math.min(10,duration*.1),Math.min(40,duration*.25),duration*.5,duration*.75,duration*.9]:[0];
+    // Poorly indexed MP4s can spend the whole read budget seeking before a
+    // single frame is decoded. Try buffered opening packets first; quality
+    // checks still reject blank opening frames before later candidates.
+    const times=Number.isFinite(duration)&&duration>.2?[0,Math.min(10,duration*.1),Math.min(40,duration*.25),duration*.5,duration*.75,duration*.9]:[0];
     let decoder=null, best=null, failure=null, sampled=0;
     const release=()=>{if(decoder?.state!=='closed')decoder?.close();decoder=null;if(best){best.width=1;best.height=1;best=null;}};
     const resource={terminate:release};instances.add(resource);
     try {
       for(const time of times){
         check();release();failure=null;sampled=0;
-        if(time>0){const [lo,hi]=demux.f64toi64(time*stream.time_base_den/stream.time_base_num);await demux.av_seek_frame(context,stream.index,lo,hi,1);}
+        if(time>0){trace.stage='avc-seek';trace.seeks=(trace.seeks||0)+1;const [lo,hi]=demux.f64toi64(time*stream.time_base_den/stream.time_base_num);await demux.av_seek_frame(context,stream.index,lo,hi,1);}
         decoder=new VideoDecoder({error:error=>{failure=error;},output:frame=>{
           let canvas=null;
           try {
