@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
-import { ACCOUNT, cloudflareClient, readState, validImage, safeError, delay } from './definition-api.mjs';
+import { ACCOUNT, APPLICATION_PATH, cloudflareClient, readState, validImage, safeError, delay } from './definition-api.mjs';
 import { claimLease } from './definition-lease.mjs';
-import { configurationHash, settleObservation, reconcileRollout, saveObservation } from './definition-rollout.mjs';
+import { configurationHash, targetConfigurationHash, settleObservation, reconcileRollout, saveObservation } from './definition-rollout.mjs';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
 export function command(args, { input, ...options } = {}) {
@@ -47,7 +47,7 @@ export function definitionTarget(configuration, image) {
 }
 
 export async function refresh({ api = cloudflareClient(), docker = command, now = () => Math.floor(Date.now() / 1000), sleep = delay, maxPolls = 60,
-  heartbeatMs = 60000, reconcileOnly = process.env.RECONCILE_ONLY === 'true',
+  heartbeatMs = 60000, makeTempDirectory = mkdtempSync, reconcileOnly = process.env.RECONCILE_ONLY === 'true',
   releaseCode = process.env.RELEASE_CONTAINER_CODE === 'true', analysisOnly = process.env.RELEASE_ANALYSIS_CODE === 'true' } = {}) {
   if (analysisOnly && !releaseCode) throw new Error('definition_analysis_release_requires_code');
   if (reconcileOnly && (releaseCode || analysisOnly)) throw new Error('definition_reconcile_mode_conflict');
@@ -61,16 +61,30 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
   const deadline = now() + 38 * 60;
   const lease = await claimLease(api, now, { heartbeatMs });
   const { runId } = lease;
-  const dockerConfig = mkdtempSync(join(tmpdir(), 'clamav-registry-'));
-  const dockerOptions = { env: { ...process.env, DOCKER_CONFIG: dockerConfig }, signal: lease.signal };
-  const run = async args => { await lease.renew(); return docker(args, { ...dockerOptions,
-    timeout: Math.min(20 * 60 * 1000, Math.max(1, (deadline - now()) * 1000)) }); };
-  let temporaryTag;
+  let dockerConfig, temporaryTag;
   try {
+    dockerConfig = makeTempDirectory(join(tmpdir(), 'clamav-registry-'));
+    const dockerOptions = { env: { ...process.env, DOCKER_CONFIG: dockerConfig }, signal: lease.signal };
+    const run = async args => { await lease.renew(); return docker(args, { ...dockerOptions,
+      timeout: Math.min(20 * 60 * 1000, Math.max(1, (deadline - now()) * 1000)) }); };
     const initial = await lease.check();
     const resume = () => reconcileRollout({ api, lease, now, target: definitionTarget, sleep, maxPolls, deadline: Math.min(deadline, now() + 30 * 60) });
     // Resume before registry login, build, or any new rollout.
-    if (initial.pending_image) return await resume();
+    if (initial.pending_image) {
+      if (!initial.pending_target_configuration_hash) {
+        // Old intents retain their evidence. Recover only if replacing the
+        // observed image with the previous digest reproduces the saved baseline.
+        const current = await api(APPLICATION_PATH);
+        const baseline = { ...current, configuration: { ...current.configuration, image: initial.pending_previous_image } };
+        if (![initial.pending_previous_image, initial.pending_image].includes(current.configuration?.image) ||
+          configurationHash(baseline) !== initial.pending_configuration_hash) {
+          return await saveObservation(lease, initial, { state: 'rollout_conflict' });
+        }
+        await lease.write('pending_target_configuration_hash=?',
+          [targetConfigurationHash({ ...current.configuration, image: initial.pending_image })], initial.pending_image);
+      }
+      return await resume();
+    }
     const observed = await settleObservation(api, initial, { sleep });
     if (observed.state !== 'ready') return await saveObservation(lease, initial, observed);
     if (reconcileOnly) {
@@ -118,9 +132,10 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
     // Persist only verified digests, timestamps, version and hashes/IDs, never credentials.
     await lease.write(`pending_image=?,pending_previous_image=?,pending_source_image=?,pending_definition_unix=?,pending_verified_at=?,
       pending_started_at=?,pending_state='prepared',pending_rollout_id=NULL,pending_attempts=0,pending_reconciliations=0,
-      pending_version=?,pending_configuration_hash=?,pending_rollout_ids=?`,
+      pending_version=?,pending_configuration_hash=?,pending_target_configuration_hash=?,pending_rollout_ids=?`,
       [image, oldImage, releaseCode ? image : source, report.definitionUnix, report.verifiedAt, now(), app.version,
-        configurationHash(before.app), JSON.stringify(before.rollouts.map(r => r.id).sort())]);
+        configurationHash(before.app), targetConfigurationHash({ ...before.app.configuration, image }),
+        JSON.stringify(before.rollouts.map(r => r.id).sort())]);
     return await resume();
   } catch (error) {
     // Pending intent survives read failures, process loss and uncertain mutations.
@@ -130,7 +145,7 @@ export async function refresh({ api = cloudflareClient(), docker = command, now 
     throw error;
   } finally {
     // Only our isolated Docker login file; do not touch the user's Docker config.
-    try { await lease.release(); } finally { rmSync(dockerConfig, { recursive: true, force: true }); }
+    try { await lease.release(); } finally { if (dockerConfig) rmSync(dockerConfig, { recursive: true, force: true }); }
   }
 }
 

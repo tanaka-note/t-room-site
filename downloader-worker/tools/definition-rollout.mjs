@@ -9,6 +9,18 @@ export const ROLLOUT_STATUSES = ['pending', 'progressing', 'completed', 'reverte
 export const MAX_SUBMISSIONS = 1;
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+export const targetConfigurationHash = configuration => createHash('sha256')
+  .update(JSON.stringify(canonical(configuration))).digest('hex');
+function configurationContains(expected, patch) {
+  // ApplicationRollout uses ModifyUserDeploymentConfiguration (partial), while
+  // Application.configuration also includes retained platform-managed fields.
+  // Check every supplied field; omissions never authorize a changed Application.
+  if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+    return expected && typeof expected === 'object' && Object.entries(patch).every(([key, value]) =>
+      Object.hasOwn(expected, key) && configurationContains(expected[key], value));
+  }
+  return JSON.stringify(canonical(expected)) === JSON.stringify(canonical(patch));
+}
 export function configurationHash(app) {
   // Only a hash is stored; do not persist configuration/env/credential values.
   const { configuration, rollout_active_grace_period, max_instances, instances, constraints, scheduling_policy } = app;
@@ -40,12 +52,23 @@ export async function observeRollout(api, row) {
   if (snapshotKey(app) !== snapshotKey(after)) return outcome('rollout_ambiguous');
   const base = { app, rollouts, rollout, key: snapshotKey(app), id };
   const listed = rollouts.find(r => r.id === id);
+  const newRollouts = row.pending_image ? rollouts.filter(r => !baselineIds(row).includes(r.id)) : [];
+  if (row.pending_image) {
+    const expected = row.pending_target_configuration_hash;
+    // Compare every field, including platform-managed fields omitted from POST.
+    // While progressing, Application may still carry the previous image.
+    if (!/^[a-f0-9]{64}$/.test(expected || '') ||
+      targetConfigurationHash({ ...app.configuration, image: row.pending_image }) !== expected ||
+      [...newRollouts, listed, rollout].filter(Boolean).some(r =>
+        !r.target_configuration || !configurationContains({ ...app.configuration, image: row.pending_image }, r.target_configuration))) {
+      return outcome('rollout_conflict', base);
+    }
+  }
   if (rollout && (rollout.id !== id || (listed && (listed.target_configuration?.image !== rollout.target_configuration?.image || listed.status !== rollout.status)))) {
     return outcome('rollout_ambiguous', base);
   }
   const image = app.configuration.image;
   if (row.pending_image && ![row.pending_previous_image, row.pending_image].includes(image)) return outcome('rollout_conflict', base);
-  const newRollouts = row.pending_image ? rollouts.filter(r => !baselineIds(row).includes(r.id)) : [];
   if (newRollouts.some(r => r.target_configuration?.image !== row.pending_image) || newRollouts.length > 1) return outcome('rollout_conflict', base);
   if (app.active_rollout_id && missing) {
     // A list entry is evidence against stale, even if the individual GET is 404.
@@ -122,12 +145,15 @@ export async function reconcileRollout({ api, lease, now, target, sleep = delay,
       // Final production read and CAS precede success; acceptance alone is not success.
       await lease.renew();
       const finalApp = await api(APPLICATION_PATH);
+      if (targetConfigurationHash(finalApp.configuration) !== row.pending_target_configuration_hash) {
+        return saveObservation(lease, row, outcome('rollout_conflict'));
+      }
       if (snapshotKey(finalApp) !== snapshotKey(observation.app)) continue;
       await lease.write(`image=pending_image,previous_image=pending_previous_image,source_image=pending_source_image,
         definition_unix=pending_definition_unix,verified_at=pending_verified_at,last_success_at=?,image_checked_at=?,
         deployment_matches=1,last_result='success',failure_count=0,pending_image=NULL,pending_previous_image=NULL,pending_source_image=NULL,
         pending_definition_unix=NULL,pending_verified_at=NULL,pending_started_at=NULL,pending_rollout_id=NULL,pending_state=NULL,
-        pending_attempts=0,pending_reconciliations=0,pending_version=NULL,pending_configuration_hash=NULL,pending_rollout_ids=NULL`, [now(), now()], row.pending_image);
+        pending_attempts=0,pending_reconciliations=0,pending_version=NULL,pending_configuration_hash=NULL,pending_target_configuration_hash=NULL,pending_rollout_ids=NULL`, [now(), now()], row.pending_image);
       console.log('Verified definition image rollout completed');
       return { image: row.pending_image, verified: true, definitionUnix: row.pending_definition_unix, verifiedAt: row.pending_verified_at, maxAgeSeconds: 604800 };
     }
