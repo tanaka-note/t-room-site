@@ -14,7 +14,7 @@ try { for(const [name,engine,launch] of engines){
    else if(url.pathname.endsWith('/favorites')){
     if(req.method()==='GET')data={files:files.filter(f=>favorites.fileIds.has(f.id)),folders:folders.filter(f=>favorites.folderIds.has(f.id))};
     else {const b=req.postDataJSON();writes.push({method:req.method(),...b});for(const kind of ['fileIds','folderIds'])for(const id of b[kind])favorites[kind][req.method()==='DELETE'?'delete':'add'](id);data={ok:true};}
-   } else if(url.pathname.endsWith('/items'))data={files,folders:url.searchParams.has('folderId')?[]:folders,breadcrumbs:[],folder:null};
+   } else if(url.pathname.endsWith('/items'))data={files,folders:url.searchParams.has('folderId')?[]:folders,breadcrumbs:url.searchParams.has('folderId')?[{id:7,name:'Storage root',isUnlocked:true,cryptoVersion:0}]:[],folder:null};
    else if(url.pathname.endsWith('/shares'))data={shares:[]};
    else if(url.pathname.endsWith('/conflicts'))data={files:[],folders:[],groups:[]};
    await route.fulfill({json:data});
@@ -54,6 +54,17 @@ try { for(const [name,engine,launch] of engines){
   await page.locator('.sidebar [data-view="account"]').click();
   await page.locator('#account-view [data-view="conflicts"]').click();
   await page.waitForFunction(()=>__test.state.view==='conflicts');
+  await page.locator('.sidebar [data-view="all"]').click();
+  await page.locator('.folder-open-button').click();
+  await page.waitForFunction(()=>__test.state.folderId===8);
+  await page.evaluate(()=>__test.state.crypto.folderKeys.set(7,__thumb.key));
+  await page.locator('.sidebar [data-view="account"]').click();
+  await page.waitForFunction(()=>__test.state.view==='account'&&__test.state.breadcrumbs.length===1);
+  assert.equal(await page.evaluate(()=>__test.state.folderId),8);
+  if(await page.evaluate(()=>TCloudOffline.supported())){
+   await page.waitForFunction(()=>!document.querySelector('#device-storage-values').hidden);
+   assert.ok((await page.locator('#device-storage-scope').textContent()).includes('Storage root'));
+  } else assert.ok((await page.locator('#device-storage-scope').textContent()).includes('対応していません'));
   for(const width of [320,390,430]){
    await page.setViewportSize({width,height:740});
    assert.deepEqual(await page.locator('.mobile-nav button').allTextContents().then(a=>a.map(s=>s.trim())),['フォルダ','写真','動画','お気に入り','ゴミ箱','アカウント']);

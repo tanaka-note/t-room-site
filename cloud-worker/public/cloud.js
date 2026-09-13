@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-8ae17cc36cfe";
+const APP_BUILD_ID = "cloud-22b117afe9f1";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -1789,7 +1789,10 @@ function selectSection(button) {
   if (button.dataset.view === "all") {
     navigateToFolder(null, "フォルダ");
     return;
-  } else if (["trash", "history", "conflicts", "requests", "shares", "favorites", "account"].includes(button.dataset.view)) {
+  } else if (button.dataset.view === "account") {
+    state.kind = "";
+    clearSearch();
+  } else if (["trash", "history", "conflicts", "requests", "shares", "favorites"].includes(button.dataset.view)) {
     state.folderId = null;
     state.kind = "";
     clearSearch();
@@ -1915,6 +1918,16 @@ async function loadItems() {
   try {
     if (state.view === "account") {
       state.folders = []; state.files = []; state.history = []; state.requests = []; state.shares = [];
+      state.breadcrumbs = [];
+      if (state.folderId) {
+        // Retain the folder's device-storage controls, including when returning
+        // through History, after the normal API has rechecked its current access.
+        const data = await api(`/items?folderId=${Number(state.folderId)}&pageSize=1`, { signal: itemLoadSignal });
+        if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true };
+        await hydrateSearchFolderKeyRecords(data.breadcrumbs || []);
+        if (loadGeneration !== state.itemLoadGeneration || itemLoadSignal.aborted) return { ok: false, stale: true };
+        state.breadcrumbs = (data.breadcrumbs || []).map(folder => searchPathFolders.get(Number(folder.id)) || folder);
+      }
       renderBreadcrumbs([]);
       await refreshAccountContent();
     } else if (state.view === "favorites") {
@@ -2304,8 +2317,8 @@ function normalizeNextItemOffset(value) {
 const renderedCardRecords = new WeakMap();
 function renderItems() {
   syncAccountView();
-  if (state.view === "account") { $("#empty-state").hidden = true; return; }
   renderFolderSummary();
+  if (state.view === "account") { $("#empty-state").hidden = true; $("#empty-trash-button").hidden = true; return; }
   renderDiaryBackupMount();
   const grid = $("#content-grid");
   grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "conflicts" || state.view === "requests" || state.view === "shares");
@@ -5153,8 +5166,9 @@ async function handleTransferVisibility() {
 
 function renderBreadcrumbs(items) {
   if (["favorites", "account"].includes(state.view)) {
-    state.breadcrumbs = []; $("#breadcrumbs").textContent = state.view === "favorites" ? "現在アクセスできるお気に入りのファイルとフォルダです。" : "アカウント情報・端末保存・管理機能";
-    renderFloatingLocation([]); return;
+    if (state.view === "favorites") state.breadcrumbs = [];
+    $("#breadcrumbs").textContent = state.view === "favorites" ? "現在アクセスできるお気に入りのファイルとフォルダです。" : "アカウント情報・端末保存・管理機能";
+    renderFloatingLocation(state.breadcrumbs); return;
   }
   const nav = $("#breadcrumbs");
   if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; renderFloatingLocation([]); return; }
