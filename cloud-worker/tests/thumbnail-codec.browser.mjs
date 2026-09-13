@@ -15,7 +15,7 @@ const fixture=await startUIFixture(undefined,{handleRequest:async(req,res)=>{
    const path=new URL(request.url).pathname;let bytes=readFileSync(new URL('../public'+path,import.meta.url));
    if(path==='/thumbnail-codec.js')bytes=Buffer.from(bytes.toString()
     .replace('if(par.codec_id===27)return await recoverAvc(', 'if(par.codec_id===27&&file.name==="broken-index.mp4")demux.av_seek_frame=async()=>{throw new Error("Fixture seek read budget exhausted");}; if(par.codec_id===27)return await recoverAvc(')
-    .replace('await demux.mkblockreaderdev("input",size);check();', 'await demux.mkblockreaderdev("input",size);check(); if(file.name==="read-locality.mp4")for(let i=0;i<40;i++)await demux.onblockread("input",i%2?2*1024*1024:0,1024); if(file.name==="truncated-tail.mp4"){const read=demux.ff_read_frame_multi.bind(demux);let once=false;demux.ff_read_frame_multi=(c,p,o)=>{if(once)throw new Error("Fixture damaged tail");once=true;return read(c,p,{...o,limit:1});};}'));
+    .replace('await demux.mkblockreaderdev("input",size);check();', 'await demux.mkblockreaderdev("input",size);check(); if(format==="mp4")demux.ff_init_demuxer_file=async()=>{throw new Error("Fixture full-stream probing exhausted the read budget");}; if(file.name==="read-locality.mp4")for(let i=0;i<40;i++)await demux.onblockread("input",i%2?2*1024*1024:0,1024); if(file.name==="truncated-tail.mp4"){const read=demux.ff_read_frame_multi.bind(demux);let once=false;demux.ff_read_frame_multi=(c,p,o)=>{if(once)throw new Error("Fixture damaged tail");once=true;return read(c,p,{...o,limit:1});};}'));
    if(path==='/thumbnail-codec.js'&&process.argv.includes('--single-block-baseline'))bytes=Buffer.from(bytes.toString().replace('while(blocks.size>4)','while(blocks.size>1)'));
    return new Response(bytes,{headers:{'Content-Type':path.endsWith('.wasm')?'application/wasm':'text/javascript'}});
   }}},url,url.pathname.slice('/cloud'.length));
@@ -46,7 +46,7 @@ try{for(const [name,engine,launch] of engines){
    const result=await page.evaluate(async({ext,size})=>{
     const file={name:`fixture.${ext==='h264'?'mp4':ext}`,sizeBytes:size};let duration=null;
     const blob=await TCloudThumbnailCodec.recover(`/cloud/local-media/fixture.${ext}`,file,null,value=>duration=value);
-    if(!blob)return {present:false,codec:file.thumbnailCodec,error:globalThis.__codecError};
+    if(!blob)return {present:false,codec:file.thumbnailCodec,trace:file.thumbnailTrace,error:file.thumbnailTrace?.error};
     const decoded=await TCloudUI.decodeThumbnail(blob);try{return {present:true,codec:file.thumbnailCodec,trace:file.thumbnailTrace,duration,accepted:TCloudUI.videoFrameQuality(decoded.image).accepted,width:decoded.image.naturalWidth};}finally{URL.revokeObjectURL(decoded.url);}
    },{ext,size:data[ext].length});
    if(ext==='h264'&&!await page.evaluate(async()=>typeof VideoDecoder!=='undefined'&&(await VideoDecoder.isConfigSupported({codec:'avc1.64000c'})).supported)){

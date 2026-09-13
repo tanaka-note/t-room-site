@@ -9,6 +9,26 @@
     if (!modules.has(variant)) modules.set(variant, import(`${BASE}libav-${VERSION}-${variant}.mjs`).catch(error => { modules.delete(variant); throw error; }));
     return (await modules.get(variant)).default;
   }
+  async function openMp4Header(demux, check) {
+    // MP4 already supplies codec parameters/sample tables in its header.
+    // ff_init_demuxer_file additionally probes all streams, which can exhaust
+    // the thumbnail budget (especially for codecs absent from the demux build).
+    const call=(name,...args)=>demux.c(name,...args);
+    const context=await call('avformat_open_input_js','input',null,null);check();
+    if(!context)throw new Error('MP4 header unavailable');
+    const count=await call('AVFormatContext_nb_streams',context), streams=[];
+    if(count>64)throw new Error('Too many MP4 streams');
+    for(let index=0;index<count;index++){
+      check();const ptr=await call('AVFormatContext_streams_a',context,index);
+      const [codecpar,num,den,lo,hi]=await Promise.all([
+        call('AVStream_codecpar',ptr),call('AVStream_time_base_num',ptr),call('AVStream_time_base_den',ptr),
+        call('AVStream_duration',ptr),call('AVStream_durationhi',ptr)
+      ]);
+      const codec_type=await call('AVCodecParameters_codec_type',codecpar);
+      streams.push({index,codecpar,codec_type,time_base_num:num,time_base_den:den,duration:(lo+hi*4294967296)*num/den});
+    }
+    return [context,streams];
+  }
   function frameCanvas(frame) {
     // These legacy decoders output planar 8-bit YUV. Convert only a thumbnail,
     // rather than allocating an RGBA copy of the full decoded video frame.
@@ -151,7 +171,7 @@
         await demux.ff_block_reader_dev_send(name,pos,cache.slice(pos-cacheStart,pos-cacheStart+Math.max(length,65536)));
       };
       await demux.mkblockreaderdev("input",size);check();
-      const [context,streams]=await demux.ff_init_demuxer_file("input");check();
+      const [context,streams]=format==='mp4'?await openMp4Header(demux,check):await demux.ff_init_demuxer_file("input");check();
       const stream=streams.find(item=>item.codec_type===0);if(!stream)return null;
       // The modular frontend omits this helper from its generated shortcuts;
       // use the same worker RPC used by those shortcuts, keeping work off-thread.
