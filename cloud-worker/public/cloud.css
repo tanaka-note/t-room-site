@@ -669,3 +669,15 @@ mark { background:#fff0a8; color:inherit; border-radius:2px; }
 .manual-thumbnail-panel p { margin: 0 0 8px; }
 .manual-thumbnail-panel > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .manual-thumbnail-panel button { min-height: 44px; }
+.diary-backup-mount { margin: 0 0 20px; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.diary-backup-mount summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
+.diary-backup-mount summary small { font-weight: 400; color: var(--muted); margin-left: 8px; }
+.backup-browser-body > button { margin: 8px 0; }
+.backup-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.backup-summary dt, .backup-observed, .backup-object small, .backup-usage-breakdown { color: var(--muted); font-size: 12px; }
+.backup-summary dd { margin: 4px 0 0; }
+.backup-object, .backup-photo-summary { padding: 12px 0; border-top: 1px solid var(--line); }
+.backup-object { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; overflow-wrap: anywhere; }
+.backup-object small { grid-column: 1 / -1; }
+.backup-object-list { max-height: 440px; overflow: auto; }
+.backup-usage-breakdown { display: block; margin-top: 6px; }

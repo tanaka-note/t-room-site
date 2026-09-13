@@ -30,6 +30,11 @@
   ],
   "services": [
     {
+      "binding": "DIARY_BACKUPS",
+      "service": "t-room-diary",
+      "entrypoint": "BackupBrowserIntegration"
+    },
+    {
       "binding": "SECURITY",
       "service": "t-room-security"
     }
@@ -43,6 +48,7 @@
     ]
   },
   "vars": {
+    "DIARY_BACKUP_MOUNT_FOLDER_ID": "2850",
     "SESSION_TTL_SECONDS": "2592000",
     "SUBADMIN_SESSION_TTL_SECONDS": "2592000",
     "PASSKEY_SESSION_TTL_SECONDS": "43200",

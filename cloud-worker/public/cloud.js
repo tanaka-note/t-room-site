@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-200fdba75a8e";
+const APP_BUILD_ID = "cloud-e316bf35c6bc";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -1609,6 +1609,8 @@ function releaseSessionState() {
   state.thumbnailObjectUrls.clear();
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
   state.session = null; state.loginId = "";
+  state.backupMount = null;
+  renderDiaryBackupMount();
   state.files = []; state.folders = []; state.selectedFiles.clear(); state.selectedFolders.clear();
   $("#content-grid").replaceChildren();
   document.querySelectorAll("video,audio").forEach(media => { media.pause(); media.removeAttribute("src"); media.load(); });
@@ -1867,6 +1869,7 @@ function syncAvailableActions() {
 }
 
 async function loadItems() {
+  renderDiaryBackupMount();
   clearTimeout(searchPageTimer);
   searchPathFolders.clear();
   const loadGeneration = ++state.itemLoadGeneration;
@@ -1973,6 +1976,7 @@ async function loadItems() {
       ]);
       if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
       state.folders = finalizeHydratedFolders(initialFolders);
+      state.backupMount = data.backupMount || null;
       state.files = finalizeHydratedFiles(initialFiles);
       state.history = [];
       state.requests = [];
@@ -2262,6 +2266,7 @@ function normalizeNextItemOffset(value) {
 const renderedCardRecords = new WeakMap();
 function renderItems() {
   renderFolderSummary();
+  renderDiaryBackupMount();
   const grid = $("#content-grid");
   grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "conflicts" || state.view === "requests" || state.view === "shares");
   grid.classList.toggle("conflict-overview", state.view === "conflicts");
@@ -2312,6 +2317,7 @@ function renderItems() {
 
   const conflictItemCount = state.conflictGroups.length + (state.conflictScanRunning ? 1 : 0);
   $("#empty-state").hidden = state.folders.length + state.files.length + state.history.length + state.requests.length + state.shares.length + conflictItemCount > 0;
+  if (!$("#diary-backup-mount").hidden) $("#empty-state").hidden = true;
   $("#empty-title").textContent = state.view === "requests" ? "削除申請はありません" : state.view === "conflicts" ? "競合候補はありません" : state.view === "history" ? "履歴がありません" : state.view === "shares" ? "共有URLはありません" : state.view === "trash" ? "ゴミ箱は空です" : (state.folderId ? "ファイルがありません" : "フォルダがありません");
   $("#empty-copy").textContent = state.view === "requests"
     ? "副管理者から申請が届くと、ここに表示されます。"
@@ -9074,6 +9080,65 @@ function scheduleUsageLoad() {
   else window.setTimeout(run, 500);
 }
 
+function backupJapanTime(value) {
+  return value ? new Date(value).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "未確認";
+}
+
+function backupMediaLabel(value) {
+  return value === true ? "完了" : value === false ? "未完了" : "記録なし";
+}
+
+function renderDiaryBackupMount() {
+  const panel = $("#diary-backup-mount");
+  const visible = state.session?.role === "admin" && state.view === "all" && !state.query
+    && state.backupMount?.type === "diary-backup" && Number(state.folderId) === state.backupMount.folderId;
+  panel.hidden = !visible;
+  if (!visible) { panel.replaceChildren(); return; }
+  if (panel.childElementCount) return;
+  // Separate from folder/file cards: never selectable, draggable, shared or
+  // submitted to any ordinary cloud mutation API.
+  panel.innerHTML = '<details open><summary>日記バックアップ <small>読み取り専用</small></summary><div class="backup-browser-body"><button type="button" class="secondary-button backup-refresh">最新情報に更新</button><div class="backup-snapshot" aria-live="polite">バックアップ情報を取得しています…</div></div></details>';
+  const button = panel.querySelector(".backup-refresh");
+  const output = panel.querySelector(".backup-snapshot");
+  const load = async (refresh = false) => {
+    button.disabled = true;
+    try {
+      const data = await api(`/diary-backups${refresh ? "?refresh=1" : ""}`);
+      if (!output.isConnected || state.session?.role !== "admin") return;
+      const expanded = new Set([...output.querySelectorAll("details[open]")].map(node => node.dataset.backupGroup));
+      output.innerHTML = `<dl class="backup-summary"><div><dt>最終バックアップ（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>バックアップ容量</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>最新世代のメディアバックアップ</dt><dd>${backupMediaLabel(data.mediaComplete)}</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
+      for (const [kind, label] of [["daily", "日次バックアップ"], ["monthly", "月次バックアップ"], ["photo", "写真バックアップ"]]) {
+        const group = data[kind];
+        const section = document.createElement("details");
+        section.dataset.backupGroup = kind;
+        section.open = expanded.has(kind);
+        section.innerHTML = `<summary>${label} <small>${formatBytes(group.bytes)}・${group.objectCount.toLocaleString("ja-JP")}件</small></summary>`;
+        const content = document.createElement("div");
+        if (kind === "photo") {
+          content.className = "backup-photo-summary";
+          content.textContent = `写真バックアップ ${formatBytes(group.bytes)} / ${group.objectCount.toLocaleString("ja-JP")}オブジェクト・最終更新 ${backupJapanTime(group.lastUpdatedAt)}（日本時間）`;
+        } else {
+          content.className = "backup-object-list";
+          if (!group.objects.length) content.textContent = "バックアップがありません。";
+          for (const object of group.objects) {
+            const row = document.createElement("article");
+            row.className = "backup-object";
+            row.innerHTML = `<strong>${escapeHtml(object.name)}</strong><span>${formatBytes(object.sizeBytes)}</span><small>更新 ${escapeHtml(backupJapanTime(object.updatedAt))}（日本時間）・${escapeHtml(object.format || "形式の記録なし")}・メディア ${backupMediaLabel(object.mediaComplete)}</small>`;
+            content.append(row);
+          }
+        }
+        section.append(content);
+        output.append(section);
+      }
+      if (refresh) void loadUsage();
+    } catch {
+      if (output.isConnected) output.textContent = "バックアップ情報を取得できませんでした。通常ファイルは引き続き利用できます。";
+    } finally { button.disabled = false; }
+  };
+  button.addEventListener("click", () => { void load(true); });
+  void load();
+}
+
 async function loadUsage() {
   if (state.session?.role !== "admin") return;
   const scope = displayCacheScope();
@@ -9093,6 +9158,9 @@ function renderUsage(usage) {
   $("#trash-file-count").textContent = `${Number(usage.trashFileCount || 0).toLocaleString("ja-JP")}ファイル`;
   $("#mobile-active-usage").textContent = `${Number(usage.activeFileCount || 0).toLocaleString("ja-JP")}ファイル・${formatBytes(usage.activeBytes)}`;
   $("#mobile-trash-usage").textContent = `${Number(usage.trashFileCount || 0).toLocaleString("ja-JP")}ファイル・${formatBytes(usage.trashBytes)}`;
+  const breakdown = `通常ファイル ${formatBytes(usage.cloudBytes ?? usage.activeBytes)} / Backup-data ${usage.backupAvailable ? formatBytes(usage.backupBytes) : "取得できません（合計に未算入）"}`;
+  $("#usage-breakdown").textContent = breakdown;
+  $("#mobile-usage-breakdown").textContent = breakdown;
 }
 
 async function openUsageDetails() {
@@ -9114,6 +9182,13 @@ async function openUsageDetails() {
       const row = document.createElement("article");
       row.className = "usage-details-row";
       row.innerHTML = `<strong>${escapeHtml(folder.name || "名称なし")}</strong><span>${formatBytes(folder.sizeBytes)}</span><small>${Number(folder.fileCount || 0).toLocaleString("ja-JP")}ファイル</small>`;
+      if (Number(folder.id) === data.backup?.folderId) {
+        const detail = document.createElement("small");
+        detail.textContent = data.backup.available
+          ? `日記バックアップ ${formatBytes(data.backup.backupBytes)}（日次 ${formatBytes(data.backup.daily.bytes)} / 月次 ${formatBytes(data.backup.monthly.bytes)} / 写真 ${formatBytes(data.backup.photo.bytes)}）・集計 ${backupJapanTime(data.backup.observedAt)}`
+          : "バックアップ情報を取得できませんでした（通常ファイル容量のみ表示）";
+        row.append(detail);
+      }
       list.append(row);
     }
   } catch (error) {

@@ -60,18 +60,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="cloud-200fdba75a8e">
-  <meta name="troom-app-build" content="cloud-200fdba75a8e">
-  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-200fdba75a8e">
+  <meta name="tcloud-build" content="cloud-e316bf35c6bc">
+  <meta name="troom-app-build" content="cloud-e316bf35c6bc">
+  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-e316bf35c6bc">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>T-Cloud Storage</title>
-  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-200fdba75a8e">
+  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-e316bf35c6bc">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-200fdba75a8e">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-e316bf35c6bc">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -129,6 +129,7 @@
       <div id="storage-meter" class="storage-meter" hidden>
         <div class="storage-usage-row">
           <div class="meter-copy"><span>クラウド上</span><strong id="usage-text">—</strong></div>
+          <small id="usage-breakdown" class="backup-usage-breakdown"></small>
           <div class="storage-usage-foot"><small id="file-count">—</small><button id="usage-details-button" class="text-button" type="button">詳細</button></div>
         </div>
         <div class="storage-usage-row trash-usage-row">
@@ -282,6 +283,7 @@
       </div>
       <p id="notice" class="notice" role="status"></p>
       <p id="search-result-count" role="status" hidden></p>
+      <section id="diary-backup-mount" class="diary-backup-mount" aria-label="日記バックアップ（読み取り専用）" hidden></section>
       <div id="content-grid" class="content-grid" aria-live="polite"></div>
       <div id="empty-state" class="empty-state" hidden>
         <span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 3h9l5 5v13H5zM14 3v6h5"/></svg></span>
@@ -518,6 +520,7 @@
       <div class="mobile-account-copy"><strong id="mobile-account-name">—</strong><span id="mobile-account-permission">—</span></div>
     <dl id="mobile-storage-summary" class="mobile-storage-summary" hidden>
       <div><dt>クラウド上</dt><dd id="mobile-active-usage">—</dd></div>
+      <div><dt>通常ファイル / Backup-data</dt><dd id="mobile-usage-breakdown">—</dd></div>
       <div><dt>ゴミ箱</dt><dd id="mobile-trash-usage">—</dd></div>
       </dl>
       <section id="device-storage-summary" class="device-storage-summary">
@@ -634,19 +637,19 @@
     </div>
   </dialog>
 
-  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/ui.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/thumbnail-codec.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/crypto-vault.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/file-safety.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/media-range.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/offline-store.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/display-cache.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/session-guard.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/media-client.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/security/passkey-client.js?v=cloud-200fdba75a8e" defer></script>
-  <script src="/cloud/cloud.js?v=cloud-200fdba75a8e" defer></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/ui.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/thumbnail-codec.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/crypto-vault.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/file-safety.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/media-range.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/offline-store.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/display-cache.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/session-guard.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/media-client.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/security/passkey-client.js?v=cloud-e316bf35c6bc" defer></script>
+  <script src="/cloud/cloud.js?v=cloud-e316bf35c6bc" defer></script>
 </body>
 </html>

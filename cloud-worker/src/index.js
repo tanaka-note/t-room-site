@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-200fdba75a8e";
+const APP_BUILD_ID = "cloud-e316bf35c6bc";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -261,6 +261,12 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/trash" && request.method === "GET") return listTrash(env, session);
   if (path === "/api/trash" && request.method === "DELETE") return emptyTrash(env, session);
   if (path === "/api/usage" && request.method === "GET") return getUsage(env, session);
+  if (path === "/api/diary-backups" || path.startsWith("/api/diary-backups/")) {
+    requireAdmin(session);
+    if (path !== "/api/diary-backups" || request.method !== "GET") throw new HttpError(405, "バックアップは読み取り専用です。");
+    const backup = await readDiaryBackupMount(env, session, url.searchParams.get("refresh") === "1");
+    return json(backup, backup.available ? 200 : 503);
+  }
   if (path === "/api/usage-details" && request.method === "GET") return getUsageDetails(env, session);
   if (path === "/api/upload-history" && request.method === "GET") return listUploadHistory(env, session);
   if (path === "/api/download-events" && request.method === "POST") return recordDownloadEvent(request, env, session);
@@ -1011,6 +1017,8 @@ async function listItems(url, env, session) {
     || (session.canTrashUnlockedFiles && folderAccessGranted)));
   return json({
     folder,
+    backupMount: session.role === "admin" && folderId === Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID)
+      ? { type: "diary-backup", folderId } : null,
     canTrashContents,
     breadcrumbs: filesOnly || foldersOnly ? [] : await breadcrumbs(env, folderId, session),
     folders: visibleFolders,
@@ -2198,9 +2206,15 @@ async function getUsage(env, session) {
     active_file_count AS activeFileCount, active_bytes AS activeBytes,
     trash_file_count AS trashFileCount, trash_bytes AS trashBytes
     FROM cloud_usage_summary WHERE id = 1`).first();
+  const backup = await readDiaryBackupMount(env, session);
+  const cloudBytes = Number(row?.activeBytes || 0);
   return json({
     activeFileCount: Number(row?.activeFileCount || 0),
-    activeBytes: Number(row?.activeBytes || 0),
+    activeBytes: cloudBytes + (backup.backupBytes || 0),
+    cloudBytes,
+    backupBytes: backup.backupBytes,
+    backupAvailable: backup.available,
+    backupObservedAt: backup.observedAt || null,
     trashFileCount: Number(row?.trashFileCount || 0),
     trashBytes: Number(row?.trashBytes || 0)
   });
@@ -2224,12 +2238,34 @@ async function getUsageDetails(env, session) {
   WHERE root.parent_id IS NULL AND root.deleted_at IS NULL
   GROUP BY root.id, root.name
   ORDER BY sizeBytes DESC, root.name COLLATE NOCASE ASC`).all();
-  return json({ folders: (result.results || []).map((folder) => ({
+  const backup = await readDiaryBackupMount(env, session);
+  return json({ backup, folders: (result.results || []).map((folder) => ({
     id: Number(folder.id),
     name: folder.name,
     fileCount: Number(folder.fileCount || 0),
-    sizeBytes: Number(folder.sizeBytes || 0)
+    sizeBytes: Number(folder.sizeBytes || 0) + (Number(folder.id) === backup.folderId ? (backup.backupBytes || 0) : 0),
+    ...(Number(folder.id) === backup.folderId ? { backupBytes: backup.backupBytes } : {})
   })) });
+}
+
+async function readDiaryBackupMount(env, session, refresh = false) {
+  requireAdmin(session);
+  const folderId = Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID);
+  let timer;
+  try {
+    if (!Number.isSafeInteger(folderId) || folderId <= 0 || !env.DIARY_BACKUPS) throw new Error("Mount unavailable");
+    const folder = await env.DB.prepare("SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(folderId).first();
+    if (!folder) throw new Error("Mount unavailable");
+    const snapshot = await Promise.race([
+      env.DIARY_BACKUPS.getSnapshot({ refresh }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Backup timeout")), 15000); })
+    ]);
+    return { ...snapshot, available: true, folderId, type: "diary-backup", readOnly: true };
+  } catch {
+    return { available: false, folderId, backupBytes: null, error: "バックアップ情報を取得できませんでした" };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function listUploadHistory(env, session) {

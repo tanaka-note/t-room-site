@@ -4,6 +4,15 @@ import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { splitSearchTerms } from "../public/diary-search.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { getBackupSnapshot } from "./backup-browser.js";
+
+// Only explicitly bound Workers can call this named entrypoint. No HTTP route,
+// object bodies, storage mutations or restore operations are exposed.
+export class BackupBrowserIntegration extends WorkerEntrypoint {
+  async getSnapshot(options) {
+    return getBackupSnapshot(this.env, { refresh: options?.refresh === true });
+  }
+}
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
