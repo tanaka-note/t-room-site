@@ -22,6 +22,8 @@ export function definitionStatus(row, now = Math.floor(Date.now() / 1000)) {
     'rollout_unknown_status', 'rollout_reverted', 'rollout_replaced', 'candidate_expired', 'rollout_deferred'];
   if (row?.pending_state && rolloutStates.includes(row.pending_state)) issues.push(row.pending_state);
   else if (row?.pending_image) issues.push(row.pending_state === 'prepared' ? 'rollout_pending' : 'rollout_ambiguous');
+  if (row?.pending_image && !/^[a-f0-9]{64}$/.test(row.pending_target_configuration_hash || '') &&
+    !issues.includes('rollout_ambiguous')) issues.push('rollout_ambiguous');
   if (row?.pending_image && row.pending_started_at && now - row.pending_started_at > 36 * 3600 && !issues.includes('reconciliation_stuck')) issues.push('reconciliation_stuck');
   const hourly = Number(row?.hourly_monitor_checked_at);
   if (!Number.isSafeInteger(hourly) || hourly <= 0 || hourly > now + 300 || now - hourly > MONITOR_STALE_AFTER) issues.push('monitor_stopped');

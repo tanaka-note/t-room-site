@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { definitionStatus } from '../../security-worker/src/definition-status.js';
 import { cloudflareClient, readState, APPLICATION_PATH, SECURITY_DB, query } from './definition-api.mjs';
+import { configurationHash } from './definition-rollout.mjs';
 
 export const TITLE = '[ClamAV] 定義更新・監視の確認が必要です';
 const MARKER = '<!-- tlain-clamav-monitor -->';
@@ -25,11 +26,24 @@ export async function monitor({ api, github, now = Math.floor(Date.now() / 1000)
   let state;
   try {
     api ||= cloudflareClient();
-    const row = await readState(api);
-    const app = await api(APPLICATION_PATH);
-    const matches = Boolean(row?.image && app.configuration.image === row.image && !app.active_rollout_id);
-    await query(api, SECURITY_DB, "UPDATE security_definition_updates SET deployment_matches=?,image_checked_at=? WHERE service='downloader'", [matches ? 1 : 0, now]);
-    state = definitionStatus({ ...row, deployment_matches: matches ? 1 : 0, image_checked_at: now }, now).state;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await readState(api);
+      const app = await api(APPLICATION_PATH);
+      const confirmed = await api(APPLICATION_PATH);
+      if (app.version !== confirmed.version || app.active_rollout_id !== confirmed.active_rollout_id ||
+        configurationHash(app) !== configurationHash(confirmed)) continue;
+      const matches = Boolean(row?.image && app.configuration.image === row.image && !app.active_rollout_id);
+      // A concurrent updater/monitor invalidates this observation. NULL-safe CAS
+      // avoids overwriting its newer image or check, and retries re-read both sides.
+      const result = await query(api, SECURITY_DB, `UPDATE security_definition_updates SET deployment_matches=?,image_checked_at=?
+        WHERE service='downloader' AND image IS ? AND image_checked_at IS ? AND run_id IS ? AND pending_image IS ?
+        AND (image_checked_at IS NULL OR image_checked_at<=?)`,
+      [matches ? 1 : 0, now, row?.image ?? null, row?.image_checked_at ?? null, row?.run_id ?? null, row?.pending_image ?? null, now]);
+      if (result.meta.changes !== 1) continue;
+      state = definitionStatus(await readState(api), now).state;
+      break;
+    }
+    if (!state) throw new Error('definition_monitor_changed');
   } catch {
     state = process.env.CLOUDFLARE_API_TOKEN ? 'status_unavailable' : 'cloudflare_token_missing';
   }

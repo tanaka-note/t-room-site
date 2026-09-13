@@ -7,7 +7,7 @@ import { refresh, candidateReport, definitionTarget } from '../tools/refresh-def
 import { notifyGithub, monitor } from '../tools/monitor-definitions.mjs';
 import { ACCOUNT, SECURITY_DB, APPLICATION_PATH, cloudflareClient, CloudflareError, safeError } from '../tools/definition-api.mjs';
 
-import { configurationHash, settleObservation, ROLLOUT_STATUSES, MAX_SUBMISSIONS } from '../tools/definition-rollout.mjs';
+import { configurationHash, targetConfigurationHash, settleObservation, ROLLOUT_STATUSES, MAX_SUBMISSIONS } from '../tools/definition-rollout.mjs';
 import { claimLease, LEASE_SECONDS } from '../tools/definition-lease.mjs';
 
 const now = 1800000000;
@@ -22,7 +22,8 @@ test('rollout retains resource/log settings without writing platform-managed run
 });
 const hourlyMigration = await readFile(new URL('../../security-worker/migrations/0015_hourly_definition_heartbeat.sql', import.meta.url), 'utf8');
 const intentMigration = await readFile(new URL('../../security-worker/migrations/0018_definition_rollout_intent.sql', import.meta.url), 'utf8');
-function database() { const db = new DatabaseSync(':memory:'); db.exec(migration); db.exec(hourlyMigration); db.exec(intentMigration); return db; }
+const targetMigration = await readFile(new URL('../../security-worker/migrations/0019_definition_target_configuration_hash.sql', import.meta.url), 'utf8');
+function database() { const db = new DatabaseSync(':memory:'); db.exec(migration); db.exec(hourlyMigration); db.exec(intentMigration); db.exec(targetMigration); return db; }
 function envFor(db) { return { DB: {
   prepare(sql) { return { values: [], bind(...values) { this.values = values; return this; }, async first() { return db.prepare(sql).get(...this.values); }, async run() { return { meta: db.prepare(sql).run(...this.values) }; }, sql }; },
   async batch(statements) { db.exec('BEGIN'); try { for (const s of statements) db.prepare(s.sql).run(...s.values); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } }
@@ -96,12 +97,15 @@ function harness({ failure, jobs = 0 } = {}) {
   const db = database(); setGood(db);
   let posts = 0, builds = 0;
   const h = { db, jobs, autoComplete: true, trace: [], hooks: {},
-    app: { configuration: { image }, version: 1, rollout_active_grace_period: 900, active_rollout_id: null }, rollouts: [],
+    app: { configuration: { image, vcpu: 1, memory_mib: 6144, disk: { size_mb: 12000, size: '12GB' },
+      runtime: 'firecracker', network: { mode: 'private' }, observability: { logs: { enabled: true } } },
+      version: 1, rollout_active_grace_period: 900, active_rollout_id: null }, rollouts: [],
     row: () => db.prepare('SELECT * FROM security_definition_updates').get(), counts: () => ({ rollouts: posts, builds }),
     now: () => now, sleep: async () => {}, maxPolls: 4 };
   h.complete = () => { h.app.configuration.image = next; h.app.version = 2; h.app.active_rollout_id = null; if (h.rollouts[0]) h.rollouts[0].status = 'completed'; };
   h.create = () => {
-    const r = { id: 'rollout', status: 'progressing', current_configuration: { image }, target_configuration: { image: next }, current_version: 1, target_version: 2 };
+    const r = { id: 'rollout', status: 'progressing', current_configuration: { image },
+      target_configuration: definitionTarget(h.app.configuration, next), current_version: 1, target_version: 2 };
     h.rollouts.push(r); h.app.active_rollout_id = r.id; return structuredClone(r);
   };
   h.api = async (path, method = 'GET', body) => {
@@ -118,6 +122,7 @@ function harness({ failure, jobs = 0 } = {}) {
     if (path.endsWith('/rollouts') && method === 'POST') {
       posts++;
       assert.equal(h.row().pending_image, next, 'intent durable BEFORE POST');
+      assert.equal(h.row().pending_target_configuration_hash, targetConfigurationHash({ ...h.app.configuration, image: next }), 'full configuration hash durable BEFORE POST');
       assert.equal(h.row().pending_attempts, posts, 'dispatch marker durable BEFORE POST');
       assert.deepEqual(body.steps.map(step => step.step_size.percentage), [10, 100]);
       assert.ok(body.steps.every(step => typeof step.description === 'string'));
@@ -142,7 +147,8 @@ function harness({ failure, jobs = 0 } = {}) {
   h.seed = (overrides = {}) => {
     const values = { pending_image: next, pending_previous_image: image, pending_source_image: image,
       pending_definition_unix: report.definitionUnix, pending_verified_at: report.verifiedAt, pending_started_at: now,
-      pending_state: 'prepared', pending_version: 1, pending_configuration_hash: configurationHash(h.app), pending_rollout_ids: '[]', ...overrides };
+      pending_state: 'prepared', pending_version: 1, pending_configuration_hash: configurationHash(h.app),
+      pending_target_configuration_hash: targetConfigurationHash({ ...h.app.configuration, image: next }), pending_rollout_ids: '[]', ...overrides };
     for (const [key,value] of Object.entries(values)) db.prepare(`UPDATE security_definition_updates SET ${key}=?`).run(value);
   };
   return h;
@@ -660,5 +666,142 @@ test('pending states preserve expiry and hourly monitor alarms and deduplicate n
     for (const state of ['rollout_pending', 'expired', 'monitor_stopped', 'reconciliation_stuck']) assert.ok(status.issues.includes(state));
     await monitor({ api: h.api, github, now }); await monitor({ api: h.api, github, now });
     assert.equal(issues.length, 1); assert.equal(comments.length, 0);
+  } finally { h.db.close(); }
+});
+
+test('configuration hash normalizes object keys without dropping any settings or persisting values', async () => {
+  const h = harness(); h.autoComplete = false;
+  h.app.configuration.environment_variables = [{ name: 'PRIVATE_VALUE', value: 'private-fixture-value' }];
+  h.app.configuration.secrets = [{ name: 'private-fixture-secret', access_type: 'env' }];
+  const expected = { ...h.app.configuration, image: next };
+  assert.equal(targetConfigurationHash(expected), targetConfigurationHash(Object.fromEntries(Object.entries(expected).reverse())));
+  try {
+    await refresh(h);
+    assert.equal(h.row().pending_target_configuration_hash, targetConfigurationHash(expected));
+    assert.doesNotMatch(JSON.stringify(h.row()), /private-fixture|environment_variables|access_type/);
+    h.autoComplete = true; await refresh(h);
+    assert.equal(h.row().last_result, 'success');
+    assert.equal(h.row().pending_target_configuration_hash, null);
+  } finally { h.db.close(); }
+});
+
+const configurationChanges = {
+  vcpu: c => { c.vcpu = 2; },
+  memory: c => { c.memory_mib = 8192; },
+  disk: c => { c.disk.size_mb = 24000; },
+  observability: c => { c.observability.logs.enabled = false; },
+  other: c => { c.environment_variables = [{ name: 'EXTERNAL', value: 'changed' }]; }
+};
+for (const [field, change] of Object.entries(configurationChanges)) {
+  for (const stage of ['progressing', 'completed', 'application-only', 'final-read']) {
+    test(`same digest with changed ${field} at ${stage} is rollout_conflict, never success or another POST`, async () => {
+      const h = harness(); h.seed({ pending_attempts: 1 }); h.autoComplete = false;
+      if (stage !== 'application-only') h.create();
+      if (stage === 'progressing') change(h.rollouts[0].target_configuration);
+      if (stage === 'completed') { h.complete(); change(h.rollouts[0].target_configuration); }
+      if (stage === 'application-only') { h.complete(); change(h.app.configuration); }
+      if (stage === 'final-read') {
+        h.complete(); let reads = 0;
+        h.hooks.app = () => { if (++reads === 3) change(h.app.configuration); };
+      }
+      try {
+        assert.equal((await refresh(h)).state, 'rollout_conflict');
+        assert.equal(h.row().pending_state, 'rollout_conflict');
+        assert.equal(h.row().image, image); assert.equal(h.row().last_success_at, good.last_success_at);
+        assert.equal(h.row().pending_image, next); assert.equal(h.row().pending_attempts, 1);
+        assert.deepEqual(h.counts(), { builds: 0, rollouts: 0 });
+      } finally { h.db.close(); }
+    });
+  }
+}
+
+test('0019 preserves existing pending intent and history; missing proof is visible until safely reconciled', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(migration); db.exec(hourlyMigration); db.exec(intentMigration); setGood(db);
+    db.prepare("UPDATE security_definition_updates SET pending_image=?,pending_attempts=1,pending_state='rollout_pending',pending_rollout_id='existing'").run(next);
+    db.exec("INSERT INTO security_definition_events(occurred_at,state) VALUES (2,'rollout_pending')");
+    const before = db.prepare('SELECT * FROM security_definition_updates').get(); db.exec(targetMigration);
+    const after = db.prepare('SELECT * FROM security_definition_updates').get();
+    for (const [key, value] of Object.entries(before)) assert.equal(after[key], value, key);
+    assert.equal(after.pending_target_configuration_hash, null);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM security_definition_events').get().n, 1);
+    assert.ok(definitionStatus(after, now).issues.includes('rollout_ambiguous'));
+  } finally { db.close(); }
+});
+
+for (const applied of [false, true]) {
+  test(`legacy intent recovers full target hash only from matching saved baseline (applied=${applied})`, async () => {
+    for (const conflict of [false, true]) {
+      const h = harness(); h.seed({ pending_target_configuration_hash: null, pending_attempts: applied ? 1 : 0 });
+      if (applied) h.complete();
+      if (conflict) h.app.configuration.vcpu++;
+      try {
+        const result = await refresh(h);
+        if (conflict) { assert.equal(result.state, 'rollout_conflict'); assert.equal(h.counts().rollouts, 0); assert.equal(h.row().pending_image, next); }
+        else { assert.equal(h.row().last_result, 'success'); assert.equal(h.counts().rollouts, applied ? 0 : 1); }
+      } finally { h.db.close(); }
+    }
+  });
+}
+
+for (const stolen of [false, true]) {
+  test(`temporary directory failure releases only our lease (replacement=${stolen})`, async () => {
+    const h = harness();
+    try {
+      await assert.rejects(refresh({ ...h, makeTempDirectory: () => {
+        if (stolen) h.db.prepare('UPDATE security_definition_updates SET run_id=?,lease_until=?').run('replacement', now + 5000);
+        throw Error('fixture_mkdtemp_failure');
+      } }), /fixture_mkdtemp_failure/);
+      assert.equal(h.row().lease_until, stolen ? now + 5000 : null);
+      if (stolen) assert.equal(h.row().run_id, 'replacement');
+      assert.deepEqual(h.counts(), { builds: 0, rollouts: 0 });
+      assert.equal(h.trace.some(x => x.path.endsWith('/credentials')), false);
+    } finally { h.db.close(); }
+  });
+}
+
+for (const race of ['updater', 'monitor', 'application']) {
+  test(`monitor discards stale ${race} observation and re-evaluates before writing`, async () => {
+    const h = harness(); let raced = false, writes = 0;
+    h.hooks.sql = ({ sql }) => {
+      if (!sql.startsWith('UPDATE security_definition_updates SET deployment_matches=')) return;
+      writes++;
+      if (raced || race === 'application') return;
+      raced = true;
+      if (race === 'updater') h.db.prepare('UPDATE security_definition_updates SET image=?,run_id=?').run(next, 'new-owner');
+      else h.db.prepare('UPDATE security_definition_updates SET image_checked_at=?,deployment_matches=0').run(now - 1);
+    };
+    let reads = 0;
+    if (race === 'application') h.hooks.app = () => { if (++reads === 2) { h.app.configuration.image = next; h.app.version++; } };
+    try {
+      const state = await monitor({ api: h.api, github: async (path, method) => method ? {} : [], now });
+      assert.equal(writes, race === 'application' ? 1 : 2);
+      assert.equal(h.row().deployment_matches, race === 'monitor' ? 1 : 0);
+      assert.equal(state.includes('deployment_unknown'), race !== 'monitor');
+    } finally { h.db.close(); }
+  });
+}
+
+test('monitor repeated CAS conflicts stop after three attempts without overwriting a newer check', async () => {
+  const h = harness(); let writes = 0;
+  h.hooks.sql = ({ sql }) => {
+    if (sql.startsWith('UPDATE security_definition_updates SET deployment_matches=')) {
+      writes++; h.db.exec('UPDATE security_definition_updates SET image_checked_at=image_checked_at+1,deployment_matches=0');
+    }
+  };
+  try {
+    const state = await monitor({ api: h.api, github: async (path, method) => method ? {} : [], now });
+    assert.notEqual(state, 'healthy'); assert.equal(writes, 3);
+    assert.equal(h.row().deployment_matches, 0); assert.equal(h.row().image_checked_at, good.image_checked_at + 3);
+  } finally { h.db.close(); }
+});
+
+test('an older monitor run cannot overwrite a later observation timestamp', async () => {
+  const h = harness();
+  h.db.prepare('UPDATE security_definition_updates SET image_checked_at=?,deployment_matches=0').run(now + 1);
+  try {
+    assert.notEqual(await monitor({ api: h.api, github: async (path, method) => method ? {} : [], now }), 'healthy');
+    assert.equal(h.row().image_checked_at, now + 1); assert.equal(h.row().deployment_matches, 0);
   } finally { h.db.close(); }
 });
