@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-0c557fb1acaa";
+const APP_BUILD_ID = "cloud-75298fe09250";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -7183,6 +7183,7 @@ function startManualThumbnail() {
   const video = $("#preview-stage video");
   if (!canManuallySetThumbnail(file) || !video || !$("#preview-dialog").open || Number(file.id) !== state.previewFileId) return;
   stopManualThumbnail();
+  $("#preview-notice").hidden = true;
   $("#preview-more").open = false;
   video.pause();
   const panel = document.createElement("section");
@@ -7255,6 +7256,13 @@ async function saveManualThumbnail(mode) {
     scheduleDisplayListingCacheWrite(displayListingCacheKey(new URLSearchParams(state.itemPageParams)));
     stopManualThumbnail();
     setNotice("サムネイルを変更しました。");
+    const notice = $("#preview-notice");
+    notice.textContent = "サムネイルを変更しました。";
+    notice.hidden = false;
+    // Keep confirmation inside the modal and visible even on a scrolled dialog.
+    const bounds = mode.dialog.getBoundingClientRect(), rect = notice.getBoundingClientRect();
+    const top = Math.max(0, bounds.top) + 8, bottom = Math.min(innerHeight, bounds.bottom) - 8;
+    mode.dialog.scrollTop += rect.bottom > bottom ? rect.bottom - bottom : rect.top < top ? rect.top - top : 0;
   } catch (error) {
     if (current() && error.name !== "AbortError") message.textContent = error.message || "保存できませんでした。もう一度お試しください。";
   } finally {
@@ -8097,6 +8105,8 @@ function handlePreviewClosed() {
 
 function clearPreviewUrl() {
   stopManualThumbnail();
+  $("#preview-notice").hidden = true;
+  $("#preview-notice").textContent = "";
   $("#manual-thumbnail-button").hidden = true;
   const stage = $("#preview-stage");
   clearPreviewTapGesture();

@@ -361,7 +361,8 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
 .file-details dt { color: var(--muted); font-size: .7rem; }
 .file-details dd { margin: 0; font-size: .86rem; }
 .dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; padding: 16px 20px 20px; }
-.preview-actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: stretch; }
+.preview-actions { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: stretch; }
+.preview-notice { position: absolute; bottom: 100%; left: 16px; right: 16px; margin: 0 0 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--teal-dark); }
 .preview-actions > a, .preview-actions > button, .preview-actions > details { width: 100%; min-width: 0; box-sizing: border-box; }
 .preview-actions > a, .preview-actions > button, .preview-actions > details > summary { min-height: 42px; padding-inline: 10px; }
 .preview-more { position: relative; }

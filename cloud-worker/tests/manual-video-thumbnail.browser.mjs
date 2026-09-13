@@ -26,7 +26,8 @@ try {for(const [name,engine,launch] of engines){
    const revoke=URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=url=>{revoked.push(url);revoke(url);};
    await __test.installThumbnailBlob(__test.state.files[1],document.querySelector('.file-card[data-file-id="2"] .thumb'),__thumb.blob);
    window.oldThumbnailUrl=__test.state.thumbnailObjectUrls.get(2);
-   window.TCloudDisplayCache={...TCloudDisplayCache,putThumbnail:async(...args)=>cacheWrites.push(args)};
+   const putThumbnail=TCloudDisplayCache.putThumbnail;
+   window.TCloudDisplayCache={...TCloudDisplayCache,putThumbnail:async(...args)=>{cacheWrites.push(args);return putThumbnail(...args);}};
   },videoFixture);
   const open=async(role,changes={})=>page.evaluate(async({role,changes,synthetic})=>{
    __test.state.session.role=role;const f=__test.state.files[1];Object.assign(f,{mediaKind:'video',offlineOnly:false},changes);
@@ -82,11 +83,27 @@ try {for(const [name,engine,launch] of engines){
   const saved=await page.evaluate(async bytes=>{
    const f=__test.state.files[1],blob=new Blob([await TRoomCrypto.decryptThumbnail(new Uint8Array(bytes),f.fileKey)],{type:'image/webp'});
    const image=await TCloudUI.decodeThumbnail(blob);const accepted=TCloudUI.videoFrameQuality(image.image).accepted;URL.revokeObjectURL(image.url);
-   return {accepted,has:f.hasThumbnail,repair:f.thumbnailNeedsRepair,cache:cacheWrites.length,img:!!document.querySelector('.file-card[data-file-id="2"] .thumb img')};
+   const cached=await TCloudDisplayCache.getThumbnail(__test.displayCacheScope(),f.id,f.updatedAt);
+   const expected=new Uint8Array(await blob.arrayBuffer()),actual=new Uint8Array(await cached.arrayBuffer());
+   return {accepted,has:f.hasThumbnail,repair:f.thumbnailNeedsRepair,cache:cacheWrites.length,img:!!document.querySelector('.file-card[data-file-id="2"] .thumb img'),
+    cachedNewFrame:actual.length===expected.length&&actual.every((v,i)=>v===expected[i]),version:f.updatedAt};
   },bodies.at(-1));
-  assert.deepEqual(saved,{accepted:true,has:true,repair:false,cache:1,img:true});
+  assert.deepEqual(saved,{accepted:true,has:true,repair:false,cache:1,img:true,cachedNewFrame:true,version:'2026-09-13 12:34:56.123'});
   assert.equal(await page.evaluate(()=>revoked.includes(oldThumbnailUrl)),true);
   assert.deepEqual(bodies.at(-1).slice(0,4),[84,82,84,72]);
+  assert.equal(await page.locator('#preview-notice').textContent(),'サムネイルを変更しました。');
+  assert.equal(await page.evaluate(()=>{
+   const n=document.querySelector('#preview-notice'),r=n.getBoundingClientRect(),d=document.querySelector('#preview-dialog').getBoundingClientRect();
+   return !n.hidden&&r.top>=Math.max(0,d.top)&&r.bottom<=Math.min(innerHeight,d.bottom)&&document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===n;
+  }),true,'success is visible in the modal');
+  await page.evaluate(()=>{window.savedThumbnailUrl=document.querySelector('.file-card[data-file-id="2"] .thumb img').src;});
+  await page.locator('#preview-close').click();await page.locator('#preview-dialog').waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>document.querySelector('.file-card[data-file-id="2"] .thumb img').src===savedThumbnailUrl),true,'closing keeps the new card thumbnail');
+  await open('admin');
+  assert.equal(await page.locator('#preview-notice').isHidden(),true,'confirmation is cleared for a new preview');
+  assert.equal(await page.evaluate(()=>document.querySelector('.file-card[data-file-id="2"] .thumb img').src===savedThumbnailUrl),true,'reopening keeps the new thumbnail');
+  await page.waitForFunction(()=>document.querySelector('#preview-stage video').readyState>=2);
+  await page.evaluate(()=>{window.originalVideo=document.querySelector('#preview-stage video');originalVideo.pause();});
   // Bad selected frame does not seek to an automatic candidate or replace old data.
   await page.locator('#preview-more summary').click();await page.locator('#manual-thumbnail-button').click();
   await page.evaluate(async()=>{const v=originalVideo;await new Promise(r=>{v.addEventListener('seeked',r,{once:true});v.currentTime=.15;});});

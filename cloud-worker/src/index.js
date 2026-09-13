@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-0c557fb1acaa";
+const APP_BUILD_ID = "cloud-75298fe09250";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2114,7 +2114,8 @@ async function putManualThumbnail(id, request, env, session) {
   requireAdmin(session);
   const file = await requireReadyFile(env, id, false);
   await requireFolderAccess(env, file.folder_id, session);
-  if ((file.display_media_kind ?? file.media_kind) !== "video") throw new HttpError(400, "動画ファイルを選択してください。");
+  // Encrypted uploads keep their media kind opaque here. The admin UI validates
+  // the decrypted video kind locally; do not require plaintext display metadata.
   if (Number(file.crypto_version) !== 1) throw new HttpError(400, "暗号化されたファイルを選択してください。");
   const limit = 2 * 1024 * 1024;
   if (Number(request.headers.get("Content-Length")) > limit) throw new HttpError(413, "サムネイルが大きすぎます。");
