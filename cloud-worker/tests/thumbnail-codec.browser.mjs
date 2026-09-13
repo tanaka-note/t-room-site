@@ -15,7 +15,7 @@ const fixture=await startUIFixture(undefined,{handleRequest:async(req,res)=>{
    const path=new URL(request.url).pathname;let bytes=readFileSync(new URL('../public'+path,import.meta.url));
    if(path==='/thumbnail-codec.js')bytes=Buffer.from(bytes.toString()
     .replace('if(par.codec_id===27)return await recoverAvc(', 'if(par.codec_id===27&&file.name==="broken-index.mp4")demux.av_seek_frame=async()=>{throw new Error("Fixture seek read budget exhausted");}; if(par.codec_id===27)return await recoverAvc(')
-    .replace('await demux.mkblockreaderdev("input",size);check();', 'await demux.mkblockreaderdev("input",size);check(); if(file.name==="read-locality.mp4")for(let i=0;i<40;i++)await demux.onblockread("input",i%2?2*1024*1024:0,1024);'));
+    .replace('await demux.mkblockreaderdev("input",size);check();', 'await demux.mkblockreaderdev("input",size);check(); if(file.name==="read-locality.mp4")for(let i=0;i<40;i++)await demux.onblockread("input",i%2?2*1024*1024:0,1024); if(file.name==="truncated-tail.mp4"){const read=demux.ff_read_frame_multi.bind(demux);let once=false;demux.ff_read_frame_multi=(c,p,o)=>{if(once)throw new Error("Fixture damaged tail");once=true;return read(c,p,{...o,limit:1});};}'));
    if(path==='/thumbnail-codec.js'&&process.argv.includes('--single-block-baseline'))bytes=Buffer.from(bytes.toString().replace('while(blocks.size>4)','while(blocks.size>1)'));
    return new Response(bytes,{headers:{'Content-Type':path.endsWith('.wasm')?'application/wasm':'text/javascript'}});
   }}},url,url.pathname.slice('/cloud'.length));
@@ -58,6 +58,7 @@ try{for(const [name,engine,launch] of engines){
    if(ext==='h264'){
     assert.ok(result.trace.frames>0);assert.equal(result.trace.seeks||0,0,'valid opening packets avoid expensive container seeking');
     assert.equal(await page.evaluate(size=>TCloudThumbnailCodec.recover('/cloud/local-media/fixture.h264',{name:'broken-index.mp4',sizeBytes:size}).then(Boolean),data.h264.length),true,'readable opening frames survive a container whose seeks fail');
+    assert.equal(await page.evaluate(size=>TCloudThumbnailCodec.recover('/cloud/local-media/fixture.h264',{name:'truncated-tail.mp4',sizeBytes:size}).then(Boolean),data.h264.length),true,'a valid keyframe is flushed even when the following packet cannot be read');
     const locality=await page.evaluate(async size=>{const file={name:'read-locality.mp4',sizeBytes:size};const blob=await TCloudThumbnailCodec.recover('/cloud/local-media/fixture.locality',file);return {present:!!blob,trace:file.thumbnailTrace};},data.locality.length);
     assert.equal(locality.present,true,JSON.stringify(locality));assert.ok(locality.trace.cacheHits>=38);assert.ok(locality.trace.readBytes<=3*1024*1024);console.log('PASS alternating distant video/audio block reads remain bounded',locality.trace);
    }

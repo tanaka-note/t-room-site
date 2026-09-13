@@ -68,8 +68,15 @@
           }catch(error){failure=error;}finally{frame.close();if(canvas){canvas.width=1;canvas.height=1;}}
         }});
         decoder.configure(config);let started=false;
-        for(let batch=0;batch<40&&!best&&!failure;batch++){
-          check();trace.stage='avc-read';const [result,packets]=await demux.ff_read_frame_multi(context,packet,{limit:32768});
+        // Decode each available packet immediately. A later malformed packet
+        // must not discard an earlier usable frame buffered in a batch read.
+        for(let batch=0;batch<240&&!best&&!failure;batch++){
+          check();trace.stage='avc-read';let result,packets;
+          try {[result,packets]=await demux.ff_read_frame_multi(context,packet,{limit:1});}
+          catch(error){
+            if(started&&!failure&&decoder.state==='configured'){await decoder.flush();check();if(best)break;}
+            throw error;
+          }
           for(const input of packets[stream.index]||[]){
             check();if(best||failure)break;
             trace.videoPackets=(trace.videoPackets||0)+1;if(input.flags&1)trace.keyPackets=(trace.keyPackets||0)+1;
@@ -149,6 +156,7 @@
       // The modular frontend omits this helper from its generated shortcuts;
       // use the same worker RPC used by those shortcuts, keeping work off-thread.
       const par=await demux.c("ff_copyout_codecpar",stream.codecpar);check();
+      trace.probeReadBytes=readBytes;
       const codec=({12:"mpeg4",17:"wmv1",18:"wmv2",71:"wmv3"})[par.codec_id];
       file.thumbnailCodec=`${codec||`codec-${par.codec_id}`} (${par.width}x${par.height})`;
       if(!par.width || !par.height || par.width*par.height>3840*2160)return null;
