@@ -91,14 +91,17 @@
       context.drawImage(source, 0, 0, 32, 18);
       const data = context.getImageData(0, 0, 32, 18).data;
       let dark = 0, sum = 0, squared = 0, chroma = 0;
+      const colors = [0,0,0], colorSquares = [0,0,0];
       for (let i = 0; i < data.length; i += 4) {
         const r=data[i],g=data[i+1],b=data[i+2],light=.2126*r+.7152*g+.0722*b;
         if (Math.max(r,g,b) <= 16) dark++;
         sum+=light; squared+=light*light; chroma+=Math.max(r,g,b)-Math.min(r,g,b);
+        for(let channel=0;channel<3;channel++){colors[channel]+=data[i+channel];colorSquares[channel]+=data[i+channel]**2;}
       }
       const mean=sum/576, contrast=Math.sqrt(Math.max(0,squared/576-mean*mean)), blackRatio=dark/576;
       // Reject a white/near-white blank poster as well as black frames.
-      const accepted=blackRatio<.98 && mean>=8 && !(mean<24 && contrast<6) && !(mean>240 && contrast<4);
+      const spatialDetail=Math.max(...colors.map((total,i)=>Math.sqrt(Math.max(0,colorSquares[i]/576-(total/576)**2))));
+      const accepted=spatialDetail>=4 && blackRatio<.98 && mean>=8 && !(mean<24 && contrast<6) && !(mean>240 && contrast<4);
       const score=accepted ? Math.min(35,mean*.25)+Math.min(40,contrast*1.2)+Math.min(25,chroma/576*.15) : 0;
       return {accepted,score,good:accepted&&score>=65};
     } catch { return {accepted:false,score:0,good:false}; }
@@ -124,7 +127,7 @@
     const duration=Number(video.duration),times=[];
     if(seek&&Number.isFinite(duration)&&duration>.2){
       for(const ratio of [.1,.25,.5,.75,.9]){
-        const time=Math.min(duration-.05,Math.max(.01,ratio===.1?Math.min(10,duration*ratio):duration*ratio));
+        const time=Math.min(duration-.05,Math.max(.01,ratio===.1?Math.min(10,duration*ratio):ratio===.25?Math.min(40,duration*ratio):duration*ratio));
         if(Math.abs(Number(video.currentTime)-time)<.08||times.some(previous=>Math.abs(previous-time)<.08))continue;
         times.push(time);
       }
@@ -149,7 +152,7 @@
         check();
         try{
           await waitVideoFrameEvent(video,"seeked",signal,8000,()=>{video.currentTime=time;});check();
-          if(evaluate())break;
+          if(evaluate() || (best && time===times[Math.min(1,times.length-1)]))break;
         }catch(error){if(error.name==="AbortError")throw error;if(video.error)break;}
       }
       check();

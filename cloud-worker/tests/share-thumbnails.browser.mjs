@@ -7,7 +7,7 @@ async function prepare(browser,count=1){
  await page.goto(fixture.origin+'/cloud/share/'+'A'.repeat(43));await page.waitForFunction(()=>globalThis.__share);
  const payload=await page.evaluate(async count=>{
   __share.bindEvents();
-  const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;canvas.getContext('2d').fillStyle='#208080';canvas.getContext('2d').fillRect(0,0,64,64);
+  const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;canvas.getContext('2d').fillStyle='#208080';canvas.getContext('2d').fillRect(0,0,64,64);canvas.getContext('2d').fillStyle='#eee';canvas.getContext('2d').fillRect(32,0,32,64);
   const blob=await new Promise(r=>canvas.toBlob(r,'image/png')),key=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
   __share.prepare(Array.from({length:count},(_,i)=>({id:i+1,name:'fixture '+i,mediaKind:'video',mimeType:'video/mp4',fileKey:key,cryptoVersion:1,hasThumbnail:true,createdAt:'2026-09-12 00:00:00'})));
   return {plain:Array.from(new Uint8Array(await blob.arrayBuffer())),encrypted:Array.from(new Uint8Array(await(await TRoomCrypto.encryptThumbnail(blob,key)).arrayBuffer()))};

@@ -7,9 +7,10 @@ import {fileURLToPath} from 'node:url';
 export const {chromium, webkit, devices} = createRequire(new URL('../../diary-worker/package.json', import.meta.url))('playwright');
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const engines = [['chromium', chromium, {executablePath: ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(existsSync)}], ['webkit', webkit, {}]];
-export async function startUIFixture(sourceRoot = root) {
-  const server = createServer((req, res) => {
+export async function startUIFixture(sourceRoot = root, {handleRequest} = {}) {
+  const server = createServer(async (req, res) => {
     try {
+      if (handleRequest && await handleRequest(req,res)) return;
       const url = new URL(req.url, 'http://localhost');
       if (!url.pathname.startsWith('/cloud/')) { res.setHeader('Content-Type', 'text/javascript'); res.end(''); return; }
       const path = url.pathname === '/cloud/' ? 'index.html' : /^\/cloud\/share\//.test(url.pathname) ? 'share.html' : url.pathname.slice(7);
@@ -17,7 +18,7 @@ export async function startUIFixture(sourceRoot = root) {
       let data = readFileSync(resolve(sourceRoot, 'cloud-worker/public', path));
       if (path.endsWith('.css') && req.headers.cookie?.includes('standalone=1')) data = Buffer.from(data.toString().replaceAll('@media (display-mode: standalone)', '@media all'));
       if (path === 'cloud.js') data = Buffer.from(data.toString().replace('document.addEventListener("DOMContentLoaded", initialize);', '') + `
-        globalThis.__test = {state, bindEvents, fileCard, renderItems, loadItems, loadNextItemPage, hydrateFileRecords, hydrateFolderRecords, chooseVideoThumbnailFrame, captureNativeVideoThumbnail, backfillVideoThumbnail, backfillMissingVideoThumbnails, queueVideoThumbnailRepair, resetBackgroundMediaWork, observePlaybackThumbnail, displayCacheScope, scheduleDisplayListingCacheWrite, scheduleEncryptedThumbnailLoading, resetEncryptedThumbnailLoading, loadEncryptedThumbnail, installThumbnailBlob, openPreview, handleHistoryNavigation, appScrollPosition, scrollAppTo, resetFolderScrollPosition, releaseSessionState,
+        globalThis.__test = {state, bindEvents, fileCard, renderItems, loadItems, loadNextItemPage, hydrateFileRecords, hydrateFolderRecords, chooseVideoThumbnailFrame, captureNativeVideoThumbnail, startThumbnailMaintenance, captureVideoThumbnail, makeThumbnail, saveEncryptedUploadThumbnail, backfillVideoThumbnail, backfillMissingVideoThumbnails, queueVideoThumbnailRepair, resetBackgroundMediaWork, observePlaybackThumbnail, displayCacheScope, scheduleDisplayListingCacheWrite, scheduleEncryptedThumbnailLoading, resetEncryptedThumbnailLoading, loadEncryptedThumbnail, installThumbnailBlob, openPreview, handleHistoryNavigation, appScrollPosition, scrollAppTo, resetFolderScrollPosition, releaseSessionState,
           searchCacheSnapshot() { return [...searchMetadataCache.values()]; },
           unavailableVideo() { registerMediaWithDeviceCache = async () => { throw new Error('Local unavailable-media fixture'); }; },
           videoFixture(url) { registerMediaWithDeviceCache = async () => ({token:'local-video-fixture',url}); },
@@ -61,7 +62,7 @@ export async function preparePage(page, origin, count = 128) {
     globalThis.TCloudSession = {check:()=>({sessionCacheId:__test.state.session?.sessionCacheId}), fetch:globalThis.fetch.bind(globalThis), scopedUrl:url=>url};
     __test.bindEvents();
     const key = await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
-    const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;canvas.getContext('2d').fillStyle='#248080';canvas.getContext('2d').fillRect(0,0,64,64);
+    const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;canvas.getContext('2d').fillStyle='#248080';canvas.getContext('2d').fillRect(0,0,64,64);canvas.getContext('2d').fillStyle='#fff';canvas.getContext('2d').fillRect(32,0,32,64);
     const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
     globalThis.__thumb = {blob,key,encrypted:await TRoomCrypto.encryptThumbnail(blob,key)};
     __test.state.files.forEach(file=>file.fileKey=key);
@@ -80,7 +81,7 @@ export async function makeVideoFixture(origin, options = {}) {
       const recorder=new MediaRecorder(stream,{mimeType:type}),chunks=[];
       recorder.ondataavailable=e=>chunks.push(e.data);
       const done=new Promise(r=>recorder.onstop=r);recorder.start();
-      const start=performance.now();let frame=0;const timer=setInterval(()=>{context.fillStyle=performance.now()-start<(options.darkIntroMs||0)?'#000':frame++%2?'#248080':'#804020';context.fillRect(0,0,160,90);},100);
+      const start=performance.now();let frame=0;const timer=setInterval(()=>{context.fillStyle=performance.now()-start<(options.darkIntroMs||0)?'#000':frame++%2?'#248080':'#804020';context.fillRect(0,0,160,90);if(performance.now()-start>=(options.darkIntroMs||0)){context.fillStyle='#fff';context.fillRect(80,0,80,90);}},100);
       await new Promise(r=>setTimeout(r,options.durationMs||1200));recorder.stop();clearInterval(timer);await done;stream.getTracks().forEach(t=>t.stop());
       const blob=new Blob(chunks,{type});return {type,bytes:Array.from(new Uint8Array(await blob.arrayBuffer()))};
     },options);

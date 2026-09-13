@@ -59,8 +59,8 @@ try{for(const [name,engine,launch] of engines){
         const decoded=await TCloudUI.decodeThumbnail(blob);
         try{return {seeks,quality:TCloudUI.videoFrameQuality(decoded.image)};}finally{URL.revokeObjectURL(decoded.url);}
       });
-      assert.deepEqual(bestCandidate.seeks,[10,25,50,75,90]);assert.ok(bestCandidate.quality.score>55&&bestCandidate.quality.score<65);
-      console.log('PASS best acceptable middle candidate retained over later lower scores',name);
+      assert.deepEqual(bestCandidate.seeks,[10,25]);assert.ok(bestCandidate.quality.accepted);
+      console.log('PASS usable nearby frame ends sampling after two seeks',name);
       await preparePage(page,fixture.origin,84);
       const payload=Buffer.from(await page.evaluate(()=>__thumb.encrypted.arrayBuffer().then(bytes=>[...new Uint8Array(bytes)])));
       let requests=0;

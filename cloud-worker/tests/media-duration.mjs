@@ -16,7 +16,7 @@ for (const client of [main, share]) {
   assert.match(client, /mediaKind[\s\S]*?durationSeconds/);
 }
 
-assert.match(main, /const durationPromise = readLocalMediaDuration\(file, mediaKind\)/);
+assert.match(main, /const durationPromise = mediaKind === "video" \? thumbnailPromise\.then/);
 assert.match(main, /fileMetadataForStorage\(file, mediaKind, durationSeconds\)/);
 assert.match(main, /observeAndPersistMediaDuration\(video, file\)/);
 assert.match(main, /observeAndPersistMediaDuration\(audio, file\)/);

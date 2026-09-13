@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-4de63ae0c09a";
+const APP_BUILD_ID = "cloud-51e188e523c0";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -125,6 +125,7 @@ const state = {
   activeFolderUploadOperationId: null,
   installPrompt: null,
   thumbnailAttempts: new Set(),
+  thumbnailMaintenance: null,
   thumbnailBackfillRunning: false,
   thumbnailBackfillScheduled: false,
   thumbnailBackfillObserver: null,
@@ -323,7 +324,7 @@ function bindEvents() {
   document.addEventListener("visibilitychange", enforceFolderPortraitOrientation);
   document.addEventListener("visibilitychange", handlePreviewBackgroundVisibility);
   window.addEventListener("pagehide", handlePreviewBackgroundVisibility);
-  window.addEventListener("pagehide", resetBackgroundMediaWork);
+  window.addEventListener("pagehide", () => { state.thumbnailMaintenance?.controller.abort(); resetBackgroundMediaWork(); });
   document.addEventListener("freeze", handlePreviewBackgroundVisibility);
   document.addEventListener("keydown", handlePreviewKeydown);
   window.addEventListener("popstate", handleHistoryNavigation);
@@ -404,6 +405,11 @@ function bindEvents() {
   $("#move-form")?.addEventListener("submit", moveSelectedItems);
   $("#move-picker-up")?.addEventListener("click", movePickerUp);
   $("#selection-delete").addEventListener("click", deleteSelectedItems);
+  $("#open-thumbnail-maintenance").addEventListener("click", openThumbnailMaintenance);
+  $("#desktop-thumbnail-maintenance").addEventListener("click", openThumbnailMaintenance);
+  $("#thumbnail-maintenance-start").addEventListener("click", startThumbnailMaintenance);
+  $("#thumbnail-maintenance-cancel").addEventListener("click", () => state.thumbnailMaintenance?.controller.abort());
+  $("#thumbnail-maintenance-dialog").addEventListener("close", () => state.thumbnailMaintenance?.controller.abort());
   $("#clear-device-cache").addEventListener("click", clearCurrentDeviceCache);
   $("#device-cache-limit").addEventListener("change", changePlaybackCacheLimit);
   $("#open-offline-manager").addEventListener("click", openOfflineManager);
@@ -1069,6 +1075,7 @@ async function enterApp(session, password = "", accountKey = null, passkeyContex
   state.credentialSalt = String(session.credentialSalt || "");
   applyPlaybackCacheLimit();
   $("#account-name").textContent = session.accountName;
+  $("#desktop-thumbnail-maintenance").hidden = session.role !== "admin";
   syncAccountIdentity();
   $("#edit-file-button").hidden = !session.canEditFiles && !session.canRenameUnlockedItems;
   $("#delete-file-button").hidden = !session.canDelete && !session.canTrashUnlockedFiles;
@@ -1581,6 +1588,8 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  state.thumbnailMaintenance?.controller.abort();
+  $("#thumbnail-maintenance-failures")?.replaceChildren();
   clearTimeout(searchPageTimer);
   searchMetadataCache.clear(); searchMetadataCacheScope = "";
   searchPathFolders.clear();
@@ -6019,6 +6028,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
     $("#upload-activity").textContent = total ? "送信準備中" : "競合候補は保留しました";
     let nextFileIndex = 0;
     const deferred = [];
+    const thumbnailWarnings = [];
     const fileWorker = async () => {
       while (true) {
         if (state.uploadAbort.signal.aborted) {
@@ -6031,7 +6041,8 @@ async function uploadFiles(files, destinations = null, options = {}) {
         const destinationFolderId = destination?.folderId ?? fixedFolderId;
         const destinationFolderKey = destination?.folderKey ?? fixedFolderKey;
         try {
-          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker, safetyConfirmed);
+          const uploaded = await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker, safetyConfirmed);
+          if (uploaded?.thumbnailPending) thumbnailWarnings.push(file.name);
           completed++;
           tracker.finish(file, completed);
         } catch (error) {
@@ -6070,7 +6081,8 @@ async function uploadFiles(files, destinations = null, options = {}) {
           continue;
         }
         try {
-          await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker, safetyConfirmed);
+          const uploaded = await uploadOne(file, index + 1, total, destinationFolderId, destinationFolderKey, state.uploadAbort.signal, partLimiter, tracker, safetyConfirmed);
+          if (uploaded?.thumbnailPending) thumbnailWarnings.push(file.name);
           completed++;
           tracker.finish(file, completed);
         } catch (error) {
@@ -6136,6 +6148,12 @@ async function uploadFiles(files, destinations = null, options = {}) {
       await new Promise((resolve) => setTimeout(resolve, 900));
       panel.hidden = true;
     }
+    if (!cancelled && thumbnailWarnings.length) {
+      panel.hidden = false;
+      if (!finalFailures.length && !skippedFiles.length) $("#upload-heading").textContent = "動画の保存完了（サムネイル未生成あり）";
+      $("#upload-file-progress").textContent += ` ${thumbnailWarnings.length}件のサムネイルを作成できませんでした。再生時の作成、またはアカウントの全動画点検で再確認できます。`;
+      $("#upload-dismiss").hidden = false;
+    }
   } catch (error) {
     panel.classList.add("upload-error");
     $("#upload-heading").textContent = options.skipExisting === false ? "アップロードを開始できませんでした" : "差分確認に失敗しました";
@@ -6170,8 +6188,9 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
   if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
   const mediaKind = detectClientKind(file.type || "application/octet-stream", file.name);
   const fastDisplay = createFastDisplayMetadata(file, mediaKind, inspection);
-  const thumbnailPromise = makeThumbnail(file);
-  const durationPromise = readLocalMediaDuration(file, mediaKind);
+  let thumbnailDuration = null;
+  const thumbnailPromise = makeThumbnail(file, signal, value => { thumbnailDuration = value; });
+  const durationPromise = mediaKind === "video" ? thumbnailPromise.then(() => thumbnailDuration) : readLocalMediaDuration(file, mediaKind);
   tracker.phase(file, "暗号化準備中…");
   const encrypted = await TRoomCrypto.createFilePackage(file, folderKey, mediaKind);
   throwIfUploadCancelled(signal);
@@ -6231,11 +6250,15 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
       console.warn("Media duration metadata could not be saved", error);
     }
     tracker.phase(file, "サムネイル処理中…");
+    let thumbnailSaved = false;
     try {
       const thumbnail = await thumbnailPromise;
       if (thumbnail && !signal?.aborted) {
         const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, encrypted.fileKey);
-        if (!signal?.aborted) await api(`/files/${init.id}/thumbnail`, { method: "PUT", body: encryptedThumbnail, rawBody: true, signal });
+        if (!signal?.aborted) {
+          await saveEncryptedUploadThumbnail(init.id, encryptedThumbnail, signal);
+          thumbnailSaved = true;
+        }
         if (fastDisplay?.mediaKind === "image" && !signal?.aborted) {
           await api(`/files/${init.id}/display-thumbnail`, { method: "PUT", body: thumbnail, rawBody: true, signal });
         }
@@ -6245,12 +6268,25 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
       console.warn("Thumbnail upload failed after the file was saved", error);
     }
     tracker.phase(file, "完了");
+    return {thumbnailPending:mediaKind === "video" && !thumbnailSaved};
   } catch (error) {
     if (error.name === "AbortError" && uploadCompleted) return;
     if (init?.id && !uploadCompleted) {
       try { await api(`/uploads/${init.id}`, { method: "DELETE", body: "{}" }); } catch {}
     }
     throw error;
+  }
+}
+
+async function saveEncryptedUploadThumbnail(id, encryptedThumbnail, signal) {
+  for (let attempt=0;;attempt++) {
+    throwIfUploadCancelled(signal);
+    try { return await api(`/files/${id}/thumbnail`, {method:"PUT",body:encryptedThumbnail,rawBody:true,signal}); }
+    catch(error) {
+      const transient=error instanceof TypeError || [408,429].includes(error.status) || error.status>=500;
+      if (!transient || attempt>=2) throw error;
+      await uploadRetryDelay([500,2000][attempt],signal);
+    }
   }
 }
 
@@ -6549,9 +6585,9 @@ function throwIfUploadCancelled(signal) {
   if (signal?.aborted) throw new DOMException("アップロードを停止しました", "AbortError");
 }
 
-async function makeThumbnail(file) {
+async function makeThumbnail(file, signal, onDuration) {
   const kind = detectClientKind(file.type || "application/octet-stream", file.name);
-  if (kind === "video") return makeVideoThumbnail(file);
+  if (kind === "video") return makeVideoThumbnail(file, signal, onDuration);
   if (kind !== "image") return null;
   try {
     const image = await createImageBitmap(file);
@@ -6597,19 +6633,28 @@ async function readLocalMediaDuration(file, mediaKind) {
   }
 }
 
-async function makeVideoThumbnail(file) {
+async function makeVideoThumbnail(file, signal, onDuration) {
   const url = URL.createObjectURL(file);
   try {
-    return await captureVideoThumbnail(url, file);
+    return await captureVideoThumbnail(url, file, signal, onDuration);
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
+let videoThumbnailTail = Promise.resolve();
 async function captureVideoThumbnail(url, file = {}, signal, onDuration) {
-  const mpegType = mpegContainerType(file.name);
-  if (mpegType && globalThis.mpegts?.isSupported()) return captureMpegVideoThumbnail(url, file, mpegType, signal, onDuration);
-  return captureNativeVideoThumbnail(url, signal, onDuration);
+  // Share one background decoder across uploads and old-poster repair.
+  const previous = videoThumbnailTail;
+  let release;
+  videoThumbnailTail = new Promise(resolve => { release = resolve; });
+  await previous;
+  try {
+    if (signal?.aborted) return null;
+    const mpegType = mpegContainerType(file.name);
+    if (mpegType && globalThis.mpegts?.isSupported()) return await captureMpegVideoThumbnail(url, file, mpegType, signal, onDuration);
+    return await captureNativeVideoThumbnail(url, signal, onDuration);
+  } finally { release(); }
 }
 
 async function captureNativeVideoThumbnail(url, signal, onDuration) {
@@ -6703,7 +6748,7 @@ function scheduleMissingMediaDurations() {
   state.durationObserver?.disconnect();
   state.durationObserver = null;
   state.durationQueue = state.durationQueue.filter((entry) => entry.generation === generation);
-  if (state.view !== "all" || state.uploading || state.downloadActive || (state.query && state.progressiveItemsLoading)) return;
+  if (state.thumbnailMaintenance?.running || state.view !== "all" || state.uploading || state.downloadActive || (state.query && state.progressiveItemsLoading)) return;
   const eligible = state.files.filter((file) => {
     if (!["video", "audio"].includes(file.mediaKind) || file.durationSeconds || !file.fileKey || !canRenameFile(file)) return false;
     if (state.session?.role === "admin" && file.mediaKind === "video" && !file.hasThumbnail && !state.thumbnailAttempts.has(Number(file.id))) return false;
@@ -6855,7 +6900,7 @@ function scheduleMissingVideoThumbnails() {
   state.thumbnailBackfillObserver?.disconnect();
   state.thumbnailBackfillObserver = null;
   state.thumbnailBackfillQueue = [];
-  if (!state.session || state.view !== "all" || (state.query && state.progressiveItemsLoading)) return;
+  if (state.thumbnailMaintenance?.running || !state.session || state.view !== "all" || (state.query && state.progressiveItemsLoading)) return;
   const generation = state.itemLoadGeneration;
   const eligible = state.files.filter((file) => file.mediaKind === "video"
     && (!file.hasThumbnail || file.thumbnailNeedsRepair)
@@ -8256,9 +8301,178 @@ async function emptyTrash() {
   }
 }
 
+function openThumbnailMaintenance() {
+  if (state.session?.role !== "admin") return;
+  $("#account-dialog").close();
+  $("#thumbnail-maintenance-dialog").showModal();
+}
+
+function thumbnailMaintenanceCurrent(job) {
+  if (job.controller.signal.aborted || state.thumbnailMaintenance !== job
+      || state.session?.role !== "admin" || job.scope !== displayCacheScope()
+      || job.generation !== state.itemLoadGeneration) throw new DOMException("中止しました", "AbortError");
+  TCloudSession.check();
+}
+
+function renderThumbnailMaintenance(job, phase = "点検中") {
+  $("#thumbnail-maintenance-status").textContent = `${phase}：${job.scanned}ファイル確認／動画${job.videos}件・正常${job.healthy}件・修復${job.repaired}件・未完了${job.failed}件`;
+  $("#thumbnail-maintenance-status").dataset.running = String(job.running);
+}
+
+async function thumbnailMaintenanceRequest(job, request) {
+  for (let attempt = 0; ; attempt++) {
+    thumbnailMaintenanceCurrent(job);
+    try {
+      const result = await request();
+      thumbnailMaintenanceCurrent(job);
+      if (result instanceof Response && ([408,429].includes(result.status) || result.status >= 500)) {
+        const error = new Error(`HTTP ${result.status}`); error.status = result.status; throw error;
+      }
+      return result;
+    } catch (error) {
+      thumbnailMaintenanceCurrent(job);
+      const transient = error instanceof TypeError || [408,429].includes(error.status) || error.status >= 500;
+      if (!transient || attempt >= 2) throw error;
+      await new Promise((resolve, reject) => {
+        const signal = job.controller.signal;
+        const aborted = () => { clearTimeout(timer); reject(new DOMException("中止しました", "AbortError")); };
+        const timer = setTimeout(() => { signal.removeEventListener("abort", aborted); resolve(); }, [500,2000][attempt]);
+        signal.addEventListener("abort", aborted, {once:true});
+        if (signal.aborted) aborted();
+      });
+    }
+  }
+}
+
+function recordThumbnailMaintenanceFailure(job, file, reason) {
+  thumbnailMaintenanceCurrent(job);
+  job.failed++;
+  // Display only on this device; never put names or decrypted data in diagnostics.
+  if (job.failed <= 100) {
+    const item = document.createElement("li");
+    item.dataset.fileId = String(file.id);
+    item.textContent = `${file.name || `ファイル ${file.id}`}：${reason}`;
+    $("#thumbnail-maintenance-failures").append(item);
+  }
+}
+
+async function inspectMaintenanceThumbnail(job, file) {
+  if (!file.hasThumbnail) return false;
+  const response = await thumbnailMaintenanceRequest(job, () => TCloudSession.fetch(`${API}/files/${file.id}/thumbnail`, {
+    credentials:"same-origin", cache:"no-store", signal:job.controller.signal
+  }));
+  if (response.status === 404) return false;
+  if (!response.ok) { const error = new Error(`HTTP ${response.status}`); error.status=response.status; throw error; }
+  const encrypted = await response.arrayBuffer();
+  thumbnailMaintenanceCurrent(job);
+  const bytes = await TRoomCrypto.decryptThumbnail(encrypted, file.fileKey);
+  thumbnailMaintenanceCurrent(job);
+  let decoded;
+  try {
+    decoded = await TCloudUI.decodeThumbnail(new Blob([bytes], {type:"image/webp"}), job.controller.signal);
+    thumbnailMaintenanceCurrent(job);
+    return !TCloudUI.isBlankVideoFrame(decoded.image);
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    return false;
+  } finally { if (decoded) URL.revokeObjectURL(decoded.url); }
+}
+
+async function repairMaintenanceThumbnail(job, file) {
+  let media;
+  try {
+    thumbnailMaintenanceCurrent(job);
+    media = await TCloudMedia.registerMedia(file, file.fileKey, `${API}/files/${file.id}/view`);
+    thumbnailMaintenanceCurrent(job);
+    const thumbnail = await captureVideoThumbnail(media.url, file, job.controller.signal);
+    thumbnailMaintenanceCurrent(job);
+    if (!thumbnail) { recordThumbnailMaintenanceFailure(job,file,"動画から有効な画像を取得できません。再生できる端末での再点検が必要です。"); return; }
+    const encryptedThumbnail = await TRoomCrypto.encryptThumbnail(thumbnail, file.fileKey);
+    thumbnailMaintenanceCurrent(job);
+    await thumbnailMaintenanceRequest(job, () => api(`/files/${file.id}/thumbnail`, {
+      method:"PUT",body:encryptedThumbnail,rawBody:true,signal:job.controller.signal
+    }));
+    thumbnailMaintenanceCurrent(job);
+    job.repaired++;
+    if (job.scope) await TCloudDisplayCache?.putThumbnail?.(job.scope,Number(file.id),String(file.updatedAt||file.createdAt||"1"),thumbnail).catch(()=>{});
+    thumbnailMaintenanceCurrent(job);
+    await showGeneratedThumbnail(file,thumbnail);
+  } finally { if (media) TCloudMedia.releaseMedia(media.token); }
+}
+
+async function startThumbnailMaintenance() {
+  if (state.thumbnailMaintenance?.running || state.session?.role !== "admin") return;
+  if (state.uploading || state.downloadActive || state.offlineActive) {
+    $("#thumbnail-maintenance-status").textContent="転送が終わってから点検してください。"; return;
+  }
+  const job = {controller:new AbortController(),scope:displayCacheScope(),generation:state.itemLoadGeneration,
+    running:true,scanned:0,videos:0,healthy:0,repaired:0,failed:0};
+  state.thumbnailMaintenance=job;
+  resetBackgroundMediaWork();
+  $("#thumbnail-maintenance-failures").replaceChildren();
+  $("#thumbnail-maintenance-start").disabled=true;
+  $("#thumbnail-maintenance-cancel").disabled=false;
+  renderThumbnailMaintenance(job);
+  let phase="完了";
+  try {
+    let offset=0;
+    const seen=new Set();
+    do {
+      const params=new URLSearchParams({searchCandidates:"1",kind:"video",filesOnly:"1",pageSize:"250",offset:String(offset),sort:"updated-desc"});
+      const page=await thumbnailMaintenanceRequest(job,()=>api(`/items?${params}`,{signal:job.controller.signal}));
+      thumbnailMaintenanceCurrent(job);
+      await hydrateSearchFolderKeyRecords(page.searchFolders||[]);
+      thumbnailMaintenanceCurrent(job);
+      const files=await hydrateFileRecords(page.files||[],{preserveOrder:true});
+      thumbnailMaintenanceCurrent(job);
+      const repair=[];
+      await mapWithConcurrency(files,4,async file=>{
+        thumbnailMaintenanceCurrent(job);
+        if (seen.has(Number(file.id))) return;
+        seen.add(Number(file.id));job.scanned++;
+        if (Number(file.cryptoVersion)===1 && !file.fileKey) recordThumbnailMaintenanceFailure(job,file,"鍵を解除できないため未確認です。");
+        else if (file.mediaKind==="video") {
+          job.videos++;
+          if (Number(file.cryptoVersion)!==1 || !file.fileKey) recordThumbnailMaintenanceFailure(job,file,"この保存形式は自動修復の対象外です。");
+          else try {
+            if (await inspectMaintenanceThumbnail(job,file)) job.healthy++;
+            else repair.push(file);
+          } catch (error) {
+            if (error.name==="AbortError" || [401,403,419].includes(error.status)) throw error;
+            recordThumbnailMaintenanceFailure(job,file,"サムネイルを確認できませんでした。");
+          }
+        }
+        renderThumbnailMaintenance(job);
+      });
+      for (const file of repair) {
+        thumbnailMaintenanceCurrent(job);
+        try { await repairMaintenanceThumbnail(job,file); }
+        catch(error) {
+          if (error.name==="AbortError" || [401,403,419].includes(error.status)) throw error;
+          recordThumbnailMaintenanceFailure(job,file,"修復画像を保存できませんでした。");
+        }
+        renderThumbnailMaintenance(job);
+      }
+      const next=normalizeNextItemOffset(page.nextFileOffset);
+      if (next!==null && next<=offset) throw new Error("一覧の読み込み位置が進みません。");
+      offset=next;
+    } while(offset!==null);
+    if (job.failed) phase="点検終了（未完了あり）";
+  } catch(error) {
+    job.controller.abort();
+    phase=error.name==="AbortError"?"中止":"点検を停止しました";
+  } finally {
+    job.running=false;
+    renderThumbnailMaintenance(job,phase);
+    $("#thumbnail-maintenance-start").disabled=false;
+    $("#thumbnail-maintenance-cancel").disabled=true;
+  }
+}
+
 async function openAccountDialog() {
   const dialog = $("#account-dialog");
   $("#batch-rename-action").hidden = state.session?.role !== "admin";
+  $("#thumbnail-maintenance-action").hidden = state.session?.role !== "admin";
   if (!dialog.open) dialog.showModal();
   const context = currentOfflineContext();
   if (context && navigator.onLine && globalThis.TCloudOffline?.supported()) {

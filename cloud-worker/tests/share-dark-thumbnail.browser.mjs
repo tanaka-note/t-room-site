@@ -13,7 +13,7 @@ try{for(const [name,engine,launch] of engines){
       const payload=await page.evaluate(async scenario=>{
         __share.bindEvents();
         const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;const c=canvas.getContext('2d');
-        c.fillStyle='#208080';c.fillRect(0,0,64,64);const good=await new Promise(r=>canvas.toBlob(r,'image/png'));
+        c.fillStyle='#208080';c.fillRect(0,0,64,64);c.fillStyle='#eee';c.fillRect(32,0,32,64);const good=await new Promise(r=>canvas.toBlob(r,'image/png'));
         c.fillStyle='#000';c.fillRect(0,0,64,64);const dark=await new Promise(r=>canvas.toBlob(r,'image/png'));
         const key=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
         __share.prepare(Array.from({length:4},(_,i)=>({id:i+1,name:'fixture '+i,mediaKind:'video',mimeType:'video/mp4',fileKey:key,cryptoVersion:1,hasThumbnail:true})));

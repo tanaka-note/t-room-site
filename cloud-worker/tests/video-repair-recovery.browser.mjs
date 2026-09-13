@@ -56,7 +56,7 @@ try { for(const [name,engine,launch] of engines) {
    __test.state.previewFileId=file.id;
    const canvas=document.createElement('canvas');canvas.width=64;canvas.height=36;
    Object.assign(canvas,{readyState:4,duration:100,videoWidth:64,videoHeight:36,currentTime:40});
-   const c=canvas.getContext('2d');c.fillStyle='#248080';c.fillRect(0,0,64,36);
+   const c=canvas.getContext('2d');c.fillStyle='#248080';c.fillRect(0,0,64,36);c.fillStyle='#fff';c.fillRect(32,0,32,36);
    let seeks=0;Object.defineProperty(canvas,'currentTime',{get:()=>40,set:()=>seeks++});
    document.querySelector('#preview-stage').append(canvas);
    __test.observePlaybackThumbnail(canvas,file);canvas.dispatchEvent(new Event('seeked'));
@@ -69,7 +69,7 @@ try { for(const [name,engine,launch] of engines) {
    const canvas=document.createElement('canvas');canvas.width=64;canvas.height=36;
    Object.assign(canvas,{readyState:4,duration:8000,videoWidth:64,videoHeight:36});
    let time=0;const seeks=[];const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,64,36);
-   Object.defineProperty(canvas,'currentTime',{get:()=>time,set:v=>{time=v;seeks.push(v);c.fillStyle='#248080';c.fillRect(0,0,64,36);c.fillStyle='#fff';c.fillRect(32,0,32,36);queueMicrotask(()=>canvas.dispatchEvent(new Event('seeked')));}});
+   Object.defineProperty(canvas,'currentTime',{get:()=>time,set:v=>{time=v;seeks.push(v);c.fillStyle='#248080';c.fillRect(0,0,64,36);c.fillStyle='#fff';c.fillRect(32,0,32,36);c.fillStyle='#fff';c.fillRect(32,0,32,36);queueMicrotask(()=>canvas.dispatchEvent(new Event('seeked')));}});
    const blob=await TCloudUI.selectVideoThumbnailFrame(canvas);
    return {present:!!blob,seeks};
   });
@@ -88,7 +88,7 @@ try { for(const [name,engine,launch] of engines) {
     if(tag!=='video')return create(tag,...args);
     const canvas=create('canvas');canvas.width=64;canvas.height=36;
     Object.assign(canvas,{duration:.1,readyState:1,videoWidth:64,videoHeight:36,currentTime:0});
-    const c=canvas.getContext('2d');c.fillStyle='#248080';c.fillRect(0,0,64,36);
+    const c=canvas.getContext('2d');c.fillStyle='#248080';c.fillRect(0,0,64,36);c.fillStyle='#fff';c.fillRect(32,0,32,36);
     let loaded=false;canvas.load=()=>{if(loaded)return;loaded=true;queueMicrotask(()=>canvas.dispatchEvent(new Event('loadedmetadata')));setTimeout(()=>{canvas.readyState=4;canvas.dispatchEvent(new Event('loadeddata'));},20);};
     return canvas;
    };
