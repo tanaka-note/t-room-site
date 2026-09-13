@@ -60,18 +60,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="cloud-51e188e523c0">
-  <meta name="troom-app-build" content="cloud-51e188e523c0">
-  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-51e188e523c0">
+  <meta name="tcloud-build" content="cloud-d185e23bc0d5">
+  <meta name="troom-app-build" content="cloud-d185e23bc0d5">
+  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-d185e23bc0d5">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>T-Cloud Storage</title>
-  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-51e188e523c0">
+  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-d185e23bc0d5">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-51e188e523c0">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-d185e23bc0d5">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -140,7 +140,7 @@
         <span id="account-name">—</span>
         <small id="account-permission">—</small>
         <small id="crypto-status" class="crypto-status">暗号化鍵：確認中</small>
-        <button id="desktop-thumbnail-maintenance" type="button" hidden>全動画のサムネイルを点検</button>
+        <button id="desktop-thumbnail-maintenance" type="button" hidden>動画のサムネイルを点検</button>
       </div>
     </aside>
 
@@ -536,13 +536,14 @@
         </div>
       </section>
       <div id="mobile-usage-details-action" class="dialog-actions compact-actions" hidden><button id="mobile-usage-details-button" class="secondary-button" type="button">フォルダ別の詳細</button></div>
-      <div id="thumbnail-maintenance-action" class="dialog-actions compact-actions" hidden><button id="open-thumbnail-maintenance" class="secondary-button" type="button">全動画のサムネイルを点検</button></div>
+      <div id="thumbnail-maintenance-action" class="dialog-actions compact-actions" hidden><button id="open-thumbnail-maintenance" class="secondary-button" type="button">動画のサムネイルを点検</button></div>
       <div id="batch-rename-action" class="dialog-actions compact-actions" hidden><button id="open-batch-rename" class="secondary-button" type="button">名称の一括整理</button></div>
   </dialog>
 
   <dialog id="thumbnail-maintenance-dialog" class="form-dialog">
-    <div class="dialog-head"><h2>全動画のサムネイルを点検</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる">×</button></div>
-    <p class="dialog-note standalone-note">管理者として閲覧できる全フォルダを確認し、欠落・黒・白・単色のサムネイルだけを作り直します。動画はこの端末で読み取り、サムネイルは暗号化して保存します。画面を開いたままお待ちください。</p>
+    <div class="dialog-head"><h2>動画のサムネイルを点検</h2><button class="dialog-close icon-button" type="button" aria-label="閉じる">×</button></div>
+    <p id="thumbnail-maintenance-scope" class="dialog-note standalone-note">対象：管理者として閲覧できる全フォルダ</p>
+    <p class="dialog-note standalone-note">対象内の欠落・黒・白・単色のサムネイルだけを作り直します。動画はこの端末で読み取り、サムネイルは暗号化して保存します。画面を開いたままお待ちください。</p>
     <p id="thumbnail-maintenance-status" class="dialog-note standalone-note" aria-live="polite">点検を開始できます。</p>
     <ul id="thumbnail-maintenance-failures"></ul>
     <div class="dialog-actions"><button id="thumbnail-maintenance-start" class="primary-button" type="button">全フォルダを点検</button><button id="thumbnail-maintenance-cancel" class="secondary-button" type="button" disabled>中止</button></div>
@@ -632,18 +633,18 @@
     </div>
   </dialog>
 
-  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/ui.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/crypto-vault.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/file-safety.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/media-range.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/offline-store.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/display-cache.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/session-guard.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/media-client.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/security/passkey-client.js?v=cloud-51e188e523c0" defer></script>
-  <script src="/cloud/cloud.js?v=cloud-51e188e523c0" defer></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/ui.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/crypto-vault.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/file-safety.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/media-range.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/offline-store.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/display-cache.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/session-guard.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/media-client.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/security/passkey-client.js?v=cloud-d185e23bc0d5" defer></script>
+  <script src="/cloud/cloud.js?v=cloud-d185e23bc0d5" defer></script>
 </body>
 </html>

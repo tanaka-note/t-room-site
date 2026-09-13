@@ -22,7 +22,7 @@ try {for(const [name,engine,launch] of engines){
    globalThis.TCloudUI={...TCloudUI,recoverVideoThumbnail:async url=>{bulkActive++;bulkMax=Math.max(bulkMax,bulkActive);await new Promise(r=>setTimeout(r,10));bulkActive--;return url.endsWith('/4')?null:__thumb.blob;}};
    return {records,posters};
   });
-  const uploads=[];let pages=0,gets=0,retried=false,deny=false;
+  const uploads=[];let pages=0,gets=0,retried=false,deny=false,restricted=false;
   handleAPI=async(request,response)=>{
    const url=new URL(request.url,'http://fixture');if(!url.pathname.startsWith('/cloud/api/'))return false;
    const reply=(status,value,binary=false)=>{response.writeHead(status,{'Content-Type':binary?'application/octet-stream':'application/json'});response.end(binary?value:JSON.stringify(value));return true;};
@@ -31,7 +31,9 @@ try {for(const [name,engine,launch] of engines){
     assert.equal(request.method,'GET');assert.equal(url.searchParams.get('searchCandidates'),'1');
     if(deny)return reply(403,{error:'revoked'});
     pages++;const offset=Number(url.searchParams.get('offset')||0),size=Number(url.searchParams.get('pageSize'));
-    return reply(200,{files:input.records.slice(offset,offset+size),searchFolders:[],nextFileOffset:offset+size<input.records.length?offset+size:null});
+    if(restricted)assert.equal(url.searchParams.get('folderId'),'1');
+    const records=restricted?input.records.slice(0,6):input.records;
+    return reply(200,{files:records.slice(offset,offset+size),searchFolders:[],nextFileOffset:offset+size<records.length?offset+size:null});
    }
    const match=/\/files\/(\d+)\/thumbnail$/.exec(url.pathname);assert.ok(match,'Only thumbnail APIs are allowed');const id=Number(match[1]);
    if(request.method==='GET'){gets++;return reply(200,Buffer.from(input.posters[id]),true);}
@@ -49,6 +51,13 @@ try {for(const [name,engine,launch] of engines){
    const decoded=await TCloudUI.decodeThumbnail(new Blob([plain]));try{return !TCloudUI.isBlankVideoFrame(decoded.image)&&plain.byteLength<bytes.length;}finally{URL.revokeObjectURL(decoded.url);}
   },uploaded),true);
   console.log('PASS 257 files, offscreen persistence, skip healthy, white/solid/corrupt/missing recovery, encrypted-only PUT, retry, single decoder',name,result);
+  restricted=true;
+  await page.evaluate(()=>{__test.state.folderId=1;document.querySelector('#view-title').textContent='selected';document.querySelector('#desktop-thumbnail-maintenance').hidden=false;});
+  await page.locator('#desktop-thumbnail-maintenance').click();assert.match(await page.locator('#thumbnail-maintenance-scope').textContent(),/selected/);
+  await page.getByRole('button',{name:'このフォルダ以下を点検',exact:true}).click();await page.waitForFunction(()=>__test.state.thumbnailMaintenance.running===false);
+  assert.equal(await page.evaluate(()=>__test.state.thumbnailMaintenance.scanned),6);assert.ok(uploads.slice(4).every(x=>x.id<=6));
+  console.log('PASS real maintenance buttons restrict requests to selected folder',name);
+  restricted=false;
   deny=true;const previous=uploads.length;await page.evaluate(()=>__test.startThumbnailMaintenance());assert.equal(uploads.length,previous);assert.equal(await page.evaluate(()=>__test.state.thumbnailMaintenance.running),false);assert.match(await page.locator('#thumbnail-maintenance-status').textContent(),/停止/);console.log('PASS permission failure stops maintenance',name);
   deny=false;input.records=input.records.slice(0,1);
   const cancelled=await page.evaluate(async()=>{

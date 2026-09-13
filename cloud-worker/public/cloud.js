@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-51e188e523c0";
+const APP_BUILD_ID = "cloud-d185e23bc0d5";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -8303,6 +8303,10 @@ async function emptyTrash() {
 
 function openThumbnailMaintenance() {
   if (state.session?.role !== "admin") return;
+  $("#thumbnail-maintenance-scope").textContent = state.folderId
+    ? `対象：${$("#view-title").textContent} と、その子フォルダ`
+    : "対象：管理者として閲覧できる全フォルダ";
+  $("#thumbnail-maintenance-start").textContent = state.folderId ? "このフォルダ以下を点検" : "全フォルダを点検";
   $("#account-dialog").close();
   $("#thumbnail-maintenance-dialog").showModal();
 }
@@ -8406,6 +8410,7 @@ async function startThumbnailMaintenance() {
     $("#thumbnail-maintenance-status").textContent="転送が終わってから点検してください。"; return;
   }
   const job = {controller:new AbortController(),scope:displayCacheScope(),generation:state.itemLoadGeneration,
+    folderId:Number(state.folderId)||null,
     running:true,scanned:0,videos:0,healthy:0,repaired:0,failed:0};
   state.thumbnailMaintenance=job;
   resetBackgroundMediaWork();
@@ -8419,6 +8424,7 @@ async function startThumbnailMaintenance() {
     const seen=new Set();
     do {
       const params=new URLSearchParams({searchCandidates:"1",kind:"video",filesOnly:"1",pageSize:"250",offset:String(offset),sort:"updated-desc"});
+      if (job.folderId) params.set("folderId",String(job.folderId));
       const page=await thumbnailMaintenanceRequest(job,()=>api(`/items?${params}`,{signal:job.controller.signal}));
       thumbnailMaintenanceCurrent(job);
       await hydrateSearchFolderKeyRecords(page.searchFolders||[]);
