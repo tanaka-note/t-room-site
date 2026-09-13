@@ -25,6 +25,12 @@ const bucket = { async list({ prefix, cursor, include }) {
 } };
 const snapshot = await scanBackupMetadata(bucket);
 
+test("the JavaScript and CSS actually served by the Worker match the source", () => {
+  for (const [source, served] of [["cloud.js", "cloud-runtime-20260816-1.js"], ["cloud.css", "cloud-runtime-20260815-1.css"]]) {
+    assert.equal(readFileSync(new URL(`../public/${served}`, import.meta.url), "utf8"), readFileSync(new URL(`../public/${source}`, import.meta.url), "utf8"));
+  }
+});
+
 test("real R2 sizes, pagination, metadata and photo overview without copying", () => {
   assert.equal(snapshot.backupBytes, 1300);
   assert.equal(snapshot.backupObjectCount, 5);
