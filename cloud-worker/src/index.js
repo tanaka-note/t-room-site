@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-45f278abc950";
+const APP_BUILD_ID = "cloud-f3036dd25afa";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2503,6 +2503,7 @@ async function serveAsset(request, env, url, path) {
     ["/", "/"],
     ["/session-guard.js", "/session-guard.js"],
     ["/ui.js", "/ui.js"],
+    ["/thumbnail-codec.js", "/thumbnail-codec.js"],
     ["/cloud.css", "/cloud-runtime-20260815-1.css"],
     ["/cloud.js", "/cloud-runtime-20260816-1.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
@@ -2533,6 +2534,17 @@ async function serveAsset(request, env, url, path) {
     ["/vendor/mpegts-1.8.0.js", "/vendor/mpegts-1.8.0.js"],
     ["/vendor/mpegts-1.8.0.LICENSE.txt", "/vendor/mpegts-1.8.0.LICENSE.txt"]
   ]);
+  // Exact vendored decoder variants and corresponding sources only. Never
+  // expose the asset directory through a general path-prefix bypass.
+  for (const variant of ["demuxer-asf", "demuxer-mp4", "decoder-mpeg4", "decoder-wmv1", "decoder-wmv2", "decoder-wmv3"]) {
+    for (const extension of ["mjs", "wasm.mjs", "wasm.wasm"]) {
+      const asset = `/vendor/libav/libav-6.7.7.1.1-${variant}.${extension}`;
+      allowed.set(asset, asset);
+    }
+  }
+  for (const name of ["NOTICE.md", "sources/ffmpeg-7.1.1.tar.xz", "sources/libav.js.tar.xz", "sources/zlib-1.3.1.tar.gz", "sources/emfiberthreads-1.2.tar.gz"]) {
+    allowed.set(`/vendor/libav/${name}`, `/vendor/libav/${name}`);
+  }
   const assetPath = /^\/share\/[A-Za-z0-9_-]{43}\/?$/.test(path) ? "/share" : allowed.get(path);
   if (!assetPath) return new Response("Not found", { status: 404 });
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));

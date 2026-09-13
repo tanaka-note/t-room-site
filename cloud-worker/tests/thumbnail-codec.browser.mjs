@@ -2,9 +2,19 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {engines,startUIFixture,preparePage} from './ui-fixture.mjs';
 const data=Object.fromEntries(['wmv','mp4'].map(ext=>[ext,readFileSync(new URL(`./fixtures/thumbnail-codec.${ext}`,import.meta.url))]));
+const serverSource=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
+const serveAsset=new Function(serverSource.slice(serverSource.indexOf('async function serveAsset('),serverSource.indexOf('\nasync function requireReadyFile('))+'; return serveAsset;')();
 let requests=[],deny=false;
-const fixture=await startUIFixture(undefined,{handleRequest:(req,res)=>{
- if(req.url.startsWith('/cloud/thumbnail-codec.js')){res.setHeader('Content-Type','text/javascript');res.end(readFileSync(new URL('../public/thumbnail-codec.js',import.meta.url),'utf8').replace('catch {return null;}','catch(error){globalThis.__codecError=String(error.stack);return null;}'));return true;}
+const fixture=await startUIFixture(undefined,{handleRequest:async(req,res)=>{
+ if(req.url.startsWith('/cloud/thumbnail-codec.js')||req.url.startsWith('/cloud/vendor/libav/')){
+  const url=new URL(req.url,'http://localhost');
+  const result=await serveAsset(new Request(url),{ASSETS:{fetch:async request=>{
+   const path=new URL(request.url).pathname;let bytes=readFileSync(new URL('../public'+path,import.meta.url));
+   if(path==='/thumbnail-codec.js')bytes=Buffer.from(bytes.toString().replace('catch {return null;}','catch(error){globalThis.__codecError=String(error.stack);return null;}'));
+   return new Response(bytes,{headers:{'Content-Type':path.endsWith('.wasm')?'application/wasm':'text/javascript'}});
+  }}},url,url.pathname.slice('/cloud'.length));
+  res.writeHead(result.status,Object.fromEntries(result.headers));res.end(Buffer.from(await result.arrayBuffer()));return true;
+ }
  const match=/^\/cloud\/local-media\/fixture\.(wmv|mp4)$/.exec(req.url);
  if(!match)return false;
  assert.equal(req.method,'GET');const range=/^bytes=(\d+)-(\d+)$/.exec(req.headers.range||'');assert.ok(range);
@@ -12,6 +22,10 @@ const fixture=await startUIFixture(undefined,{handleRequest:(req,res)=>{
  if(deny){res.writeHead(403).end();return true;}
  res.writeHead(206,{'Content-Range':`bytes ${start}-${end}/${bytes.length}`,'Content-Type':'application/octet-stream'});res.end(bytes.subarray(start,end+1));return true;
 }});
+for(const path of ['/vendor/libav/private.txt','/vendor/libav/libav-6.7.7.1.1-decoder-h264.mjs','/vendor/libav/sources/private.key']){
+ const url=new URL('http://localhost/cloud'+path);
+ assert.equal((await serveAsset(new Request(url),{ASSETS:{fetch:()=>{throw new Error('unlisted asset forwarded');}}},url,path)).status,404);
+}
 try{for(const [name,engine,launch] of engines){
  const browser=await engine.launch({headless:true,...launch});
  try{
