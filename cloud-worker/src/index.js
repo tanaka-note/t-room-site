@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-76d0412cd6a5";
+const APP_BUILD_ID = "cloud-8ae17cc36cfe";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -241,6 +241,13 @@ async function handleApi(request, env, url, path, context) {
   assertSessionContext(request, session);
   if (!session) throw new HttpError(401, "ログインが必要です。");
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
+
+  if (path === "/api/favorites" && request.method === "GET") {
+    return searchItems(url, env, session, { folderId: null, query: "", kind: "", sort: "updated-desc", favoriteOwner: favoriteOwnerId(session) });
+  }
+  if ((path === "/api/favorites" || path === "/api/favorites/status") && ["POST", "DELETE"].includes(request.method)) {
+    return updateFavorites(request, env, session, path.endsWith("/status"));
+  }
 
   if (path === "/api/items" && request.method === "GET") {
     const folderId = optionalId(url.searchParams.get("folderId"));
@@ -891,6 +898,58 @@ async function shareEvents(env, shareId) {
   }));
 }
 
+function favoriteOwnerId(session) {
+  if (session.authMethod === "passkey") {
+    if (!session.identityId || !session.serviceLinkId || !session.serviceAccountId) throw new HttpError(403, "アカウントを確認できません。");
+    return JSON.stringify(["passkey", session.identityId, session.serviceLinkId, session.serviceAccountId, session.role, session.rootFolderId || null]);
+  }
+  // Legacy PW accounts are the two durable service accounts, not login sessions.
+  return JSON.stringify(["password", session.role]);
+}
+
+async function updateFavorites(request, env, session, statusOnly = false) {
+  const owner = favoriteOwnerId(session);
+  const body = await request.json();
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(400, "対象IDを確認してください。");
+  const ids = (value) => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new HttpError(400, "対象IDを確認してください。");
+    return [...new Set(value)];
+  };
+  const fileIds = ids(body.fileIds), folderIds = ids(body.folderIds);
+  if (!fileIds.length && !folderIds.length || fileIds.length + folderIds.length > 100) throw new HttpError(400, "一度に100件まで選択してください。");
+  const checked = new Set();
+  const checkFolder = async id => {
+    if (checked.has(id)) return;
+    await requireFolder(env, id);
+    await requireFolderAccess(env, id, session);
+    // Admin access does not itself check deleted ancestors.
+    let current = id, depth = 0;
+    while (current && depth++ < 100) current = (await requireFolder(env, current)).parent_id;
+    if (current) throw new HttpError(400, "フォルダ階層を確認してください。");
+    checked.add(id);
+  };
+  for (const id of folderIds) await checkFolder(id);
+  for (const id of fileIds) {
+    const file = await env.DB.prepare("SELECT folder_id FROM cloud_files WHERE id = ? AND deleted_at IS NULL AND status = 'ready'").bind(id).first();
+    if (!file?.folder_id) throw new HttpError(404, "ファイルが見つかりません。");
+    await checkFolder(file.folder_id);
+  }
+  const groups = [["cloud_favorite_files", "file_id", fileIds], ["cloud_favorite_folders", "folder_id", folderIds]];
+  if (statusOnly) {
+    const result = { fileIds: [], folderIds: [] };
+    for (const [table, column, targets] of groups) for (const id of targets) {
+      if (await env.DB.prepare(`SELECT 1 AS ok FROM ${table} WHERE owner_id = ? AND ${column} = ?`).bind(owner, id).first()) result[column === "file_id" ? "fileIds" : "folderIds"].push(id);
+    }
+    return json(result);
+  }
+  const statements = groups.flatMap(([table, column, targets]) => targets.map(id => request.method === "DELETE"
+    ? env.DB.prepare(`DELETE FROM ${table} WHERE owner_id = ? AND ${column} = ?`).bind(owner, id)
+    : env.DB.prepare(`INSERT INTO ${table}(owner_id, ${column}) VALUES (?, ?) ON CONFLICT(owner_id, ${column}) DO NOTHING`).bind(owner, id)));
+  await env.DB.batch(statements);
+  return json({ ok: true });
+}
+
 async function listItems(url, env, session) {
   const folderId = optionalId(url.searchParams.get("folderId"));
   const uploadIndex = url.searchParams.get("uploadIndex") === "1";
@@ -1028,7 +1087,7 @@ async function listItems(url, env, session) {
   });
 }
 
-async function searchItems(url, env, session, { folderId, query, kind, sort }) {
+async function searchItems(url, env, session, { folderId, query, kind, sort, favoriteOwner = null }) {
   const foldersOnly = url.searchParams.get("foldersOnly") === "1";
   const filesOnly = url.searchParams.get("filesOnly") === "1";
   const offset = Math.min(1000000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
@@ -1092,6 +1151,7 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
           AND child.deleted_at IS NULL) AS folderCount
       FROM folder_scope scope JOIN cloud_folders folder ON folder.id = scope.id
       WHERE scope.is_allowed = 1 AND ${rootExclusion} AND LOWER(folder.name) LIKE ?
+        ${favoriteOwner ? "AND EXISTS(SELECT 1 FROM cloud_favorite_folders fav WHERE fav.folder_id = folder.id AND fav.owner_id = ?)" : ""}
       ORDER BY scope.depth ASC,
         CASE
           WHEN LOWER(folder.name) = ? THEN 0
@@ -1099,7 +1159,7 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
           ELSE 2
         END ASC,
         folder.name COLLATE NOCASE ASC, folder.id ASC LIMIT ? OFFSET ?`)
-      .bind(...bindPrefix, `%${query}%`, query, `${query}%`, pageSize + 1, folderOffset).all();
+      .bind(...bindPrefix, `%${query}%`, ...(favoriteOwner ? [favoriteOwner] : []), query, `${query}%`, pageSize + 1, folderOffset).all();
     folderRows = result.results || [];
   }
 
@@ -1119,6 +1179,10 @@ async function searchItems(url, env, session, { folderId, query, kind, sort }) {
       "(file.display_metadata_version = 0 OR LOWER(COALESCE(file.display_name, file.original_name)) LIKE ?)"
     ];
     const fileValues = [...bindPrefix, `%${query}%`];
+    if (favoriteOwner) {
+      fileClauses.push("EXISTS(SELECT 1 FROM cloud_favorite_files fav WHERE fav.file_id = file.id AND fav.owner_id = ?)");
+      fileValues.push(favoriteOwner);
+    }
     if (kind) {
       fileClauses.push("(file.display_metadata_version = 0 OR COALESCE(file.display_media_kind, file.media_kind) = ?)");
       fileValues.push(kind);

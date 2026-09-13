@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-76d0412cd6a5";
+const APP_BUILD_ID = "cloud-8ae17cc36cfe";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -378,6 +378,7 @@ function bindEvents() {
   $("#selection-clear").addEventListener("click", clearSelectionWithoutRefresh);
   $("#selection-all").addEventListener("click", selectAllVisibleItems);
   $("#selection-rename").addEventListener("click", openSelectedRenameDialog);
+  $("#selection-favorite").addEventListener("click", () => { void toggleSelectedFavorites(); });
   $("#selection-password").addEventListener("click", openSelectedFolderSettings);
   $("#selection-lock").addEventListener("click", lockSelectedFolder);
   $("#selection-download").addEventListener("click", startSelectedDownloads);
@@ -1590,6 +1591,8 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  clearTimeout(favoriteSelectionTimer);
+  favoriteSelection = { key: "", ready: false, all: false, busy: false };
   state.thumbnailMaintenance?.controller.abort();
   $("#thumbnail-maintenance-failures")?.replaceChildren();
   clearTimeout(searchPageTimer);
@@ -1770,7 +1773,15 @@ function setCryptoStatus(text, ready) {
 }
 
 function selectSection(button) {
-  clearFileSelection();
+  if (button.closest("#account-content")) $("#account-dialog").close();
+  const managedNavigation = ["favorites", "account"].includes(button.dataset.view) || ["favorites", "account"].includes(state.view);
+  if (managedNavigation && button.dataset.view === "all") { navigateToFolder(null, "フォルダ"); return; }
+  const replaceSelection = managedNavigation && state.selectionHistoryActive;
+  if (managedNavigation) {
+    if (state.historyReady) rememberCurrentNavigationPosition();
+    clearFileSelection(true, false);
+    state.selectionHistoryActive = false;
+  } else clearFileSelection();
   if (button.dataset.kind && !state.folderId) {
     setNotice("写真や動画は、PWを解除してフォルダを開いてから絞り込めます。", true);
     return;
@@ -1778,7 +1789,7 @@ function selectSection(button) {
   if (button.dataset.view === "all") {
     navigateToFolder(null, "フォルダ");
     return;
-  } else if (["trash", "history", "conflicts", "requests", "shares"].includes(button.dataset.view)) {
+  } else if (["trash", "history", "conflicts", "requests", "shares", "favorites", "account"].includes(button.dataset.view)) {
     state.folderId = null;
     state.kind = "";
     clearSearch();
@@ -1787,8 +1798,12 @@ function selectSection(button) {
     restoreFolderSortPreference(state.folderId);
   }
   state.view = button.dataset.view || "all";
-  const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", conflicts: "競合", requests: "削除申請", shares: "共有管理", image: "写真", video: "動画", audio: "音声", document: "書類" };
+  const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", conflicts: "競合", requests: "削除申請", shares: "共有管理", favorites: "お気に入り", account: "アカウント", image: "写真", video: "動画", audio: "音声", document: "書類" };
   setViewTitle(labels[state.view] || labels[state.kind] || "ファイル");
+  if (managedNavigation && state.historyReady) {
+    history[replaceSelection ? "replaceState" : "pushState"](navigationEntry(state.folderId, $("#view-title").textContent), "", location.href);
+    resetFolderScrollPosition();
+  }
   syncNavigationActiveState();
   syncAvailableActions();
   loadItems();
@@ -1844,7 +1859,7 @@ function syncAvailableActions() {
   const inHistory = state.view === "history";
   const inConflicts = state.view === "conflicts";
   const inRequests = state.view === "requests";
-  const inShares = state.view === "shares";
+  const inShares = ["shares", "favorites", "account"].includes(state.view);
   const insideFolder = Boolean(state.folderId);
   const showLogoutLabel = state.view === "all" && !insideFolder && !state.kind;
   $("#logout-button-label").hidden = !showLogoutLabel;
@@ -1869,6 +1884,7 @@ function syncAvailableActions() {
 }
 
 async function loadItems() {
+  syncAccountView();
   renderDiaryBackupMount();
   clearTimeout(searchPageTimer);
   searchPathFolders.clear();
@@ -1897,7 +1913,29 @@ async function loadItems() {
   state.canTrashCurrentFolderContents = false;
   state.progressiveItemsLoading = false;
   try {
-    if (state.view === "trash") {
+    if (state.view === "account") {
+      state.folders = []; state.files = []; state.history = []; state.requests = []; state.shares = [];
+      renderBreadcrumbs([]);
+      await refreshAccountContent();
+    } else if (state.view === "favorites") {
+      const folders = [], files = [];
+      let folderOffset = 0, fileOffset = 0;
+      do {
+        const params = new URLSearchParams({ pageSize: "250", folderOffset: String(folderOffset || 0), fileOffset: String(fileOffset || 0) });
+        if (folderOffset === null) params.set("filesOnly", "1");
+        if (fileOffset === null) params.set("foldersOnly", "1");
+        const data = await api(`/favorites?${params}`, { signal: itemLoadSignal });
+        if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true };
+        await hydrateSearchFolderKeyRecords(data.searchFolders || []);
+        folders.push(...await hydrateFolderRecords(data.folders || []));
+        files.push(...await hydrateFileRecords(data.files || []));
+        folderOffset = data.nextFolderOffset ?? null; fileOffset = data.nextFileOffset ?? null;
+      } while (folderOffset !== null || fileOffset !== null);
+      if (loadGeneration !== state.itemLoadGeneration || itemLoadSignal.aborted) return { ok: false, stale: true };
+      state.folders = folders; state.files = files;
+      state.history = []; state.requests = []; state.shares = [];
+      renderBreadcrumbs([]);
+    } else if (state.view === "trash") {
       const data = await api("/trash", { signal: itemLoadSignal });
       state.folders = (await hydrateFolderRecords(data.folders || [])).map((folder) => ({ ...folder, trashed: true }));
       state.files = (await hydrateFileRecords(data.files || [])).map((file) => ({ ...file, trashed: true }));
@@ -2265,12 +2303,14 @@ function normalizeNextItemOffset(value) {
 
 const renderedCardRecords = new WeakMap();
 function renderItems() {
+  syncAccountView();
+  if (state.view === "account") { $("#empty-state").hidden = true; return; }
   renderFolderSummary();
   renderDiaryBackupMount();
   const grid = $("#content-grid");
   grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "conflicts" || state.view === "requests" || state.view === "shares");
   grid.classList.toggle("conflict-overview", state.view === "conflicts");
-  const reuse = state.view === "all" && grid.dataset.renderGeneration === String(state.itemLoadGeneration);
+  const reuse = ["all", "favorites"].includes(state.view) && grid.dataset.renderGeneration === String(state.itemLoadGeneration);
   const previous = new Map(reuse ? [...grid.querySelectorAll(":scope > [data-render-key]")].map(card => [card.dataset.renderKey, card]) : []);
   if (!reuse) grid.replaceChildren();
   grid.querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
@@ -2294,18 +2334,18 @@ function renderItems() {
   if (state.view === "shares") {
     for (const item of state.shares) grid.append(shareCard(item));
   }
-  const limitItems = state.view === "all";
+  const limitItems = ["all", "favorites"].includes(state.view);
   let remaining = limitItems ? state.itemRenderLimit : Number.POSITIVE_INFINITY;
   for (const folder of state.folders.slice(0, remaining)) {
     renderCard(folder, "folder:", folder.trashed ? trashFolderCard : folderCard);
     remaining -= 1;
   }
   for (const file of state.files.slice(0, remaining)) renderCard(file, "file:", fileCard);
-  if (state.view === "all") {
+  if (["all", "favorites"].includes(state.view)) {
     const keep = new Set(desired);
     for (const node of [...grid.children]) if (!keep.has(node)) node.remove();
   }
-  let cursor = state.view === "all" ? grid.firstChild : null;
+  let cursor = ["all", "favorites"].includes(state.view) ? grid.firstChild : null;
   for (const card of desired) {
     if (card !== cursor) grid.insertBefore(card, cursor);
     cursor = card.nextSibling;
@@ -2315,11 +2355,11 @@ function renderItems() {
     ? (state.folders.length + state.files.length) + "件表示中…"
     : (state.folders.length + state.files.length) + "件"; }
 
-  const conflictItemCount = state.conflictGroups.length + (state.conflictScanRunning ? 1 : 0);
+  const conflictItemCount = state.view === "favorites" ? 0 : state.conflictGroups.length + (state.conflictScanRunning ? 1 : 0);
   $("#empty-state").hidden = state.folders.length + state.files.length + state.history.length + state.requests.length + state.shares.length + conflictItemCount > 0;
   if (!$("#diary-backup-mount").hidden) $("#empty-state").hidden = true;
-  $("#empty-title").textContent = state.view === "requests" ? "削除申請はありません" : state.view === "conflicts" ? "競合候補はありません" : state.view === "history" ? "履歴がありません" : state.view === "shares" ? "共有URLはありません" : state.view === "trash" ? "ゴミ箱は空です" : (state.folderId ? "ファイルがありません" : "フォルダがありません");
-  $("#empty-copy").textContent = state.view === "requests"
+  $("#empty-title").textContent = state.view === "favorites" ? "お気に入りはありません" : state.view === "requests" ? "削除申請はありません" : state.view === "conflicts" ? "競合候補はありません" : state.view === "history" ? "履歴がありません" : state.view === "shares" ? "共有URLはありません" : state.view === "trash" ? "ゴミ箱は空です" : (state.folderId ? "ファイルがありません" : "フォルダがありません");
+  $("#empty-copy").textContent = state.view === "favorites" ? "ファイルやフォルダを選択して、お気に入りに追加できます。PWが必要なフォルダは解除後に表示します。" : state.view === "requests"
     ? "副管理者から申請が届くと、ここに表示されます。"
     : state.view === "conflicts"
     ? (state.session?.role === "subadmin" ? "PWを解除したトップフォルダ内に、競合候補はありません。" : "トップフォルダごとに確認しましたが、競合候補はありません。")
@@ -2351,7 +2391,7 @@ function installItemRenderSentinel() {
   state.itemRenderObserver?.disconnect();
   state.itemRenderObserver = null;
   $("#content-grid").querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
-  if (state.view !== "all") return;
+  if (!["all", "favorites"].includes(state.view)) return;
   const rendered = $("#content-grid").querySelectorAll(":scope > .folder-card, :scope > .file-card").length;
   const total = state.folders.length + state.files.length;
   if (rendered >= total && !state.progressiveItemsLoading) return;
@@ -3869,12 +3909,74 @@ function clearFileSelection(update = true, rewindHistory = update) {
   }
 }
 
+let favoriteSelection = { key: "", ready: false, all: false, busy: false };
+let favoriteSelectionTimer;
+
+function favoriteSelectionKey(files, folders) {
+  return JSON.stringify([displayCacheScope(), files.map(f => f.id).sort((a,b)=>a-b), folders.map(f => f.id).sort((a,b)=>a-b)]);
+}
+
+function favoriteBatches(files, folders) {
+  const targets = [...files.map(f => ["fileIds", Number(f.id)]), ...folders.map(f => ["folderIds", Number(f.id)])], batches = [];
+  for (let i = 0; i < targets.length; i += 100) {
+    const batch = { fileIds: [], folderIds: [] };
+    for (const [kind, id] of targets.slice(i, i + 100)) batch[kind].push(id);
+    batches.push(batch);
+  }
+  return batches;
+}
+
+function syncFavoriteSelection(files, folders) {
+  const button = $("#selection-favorite"), targets = [...files, ...folders];
+  button.hidden = !targets.length || targets.some(item => item.trashed);
+  const key = favoriteSelectionKey(files, folders);
+  if (favoriteSelection.key !== key) {
+    clearTimeout(favoriteSelectionTimer);
+    const selection = favoriteSelection = { key, ready: false, all: false, busy: false };
+    if (!button.hidden) favoriteSelectionTimer = setTimeout(async () => {
+      try {
+        let count = 0;
+        for (const batch of favoriteBatches(files, folders)) {
+          if (favoriteSelection !== selection || key !== favoriteSelectionKey([...state.selectedFiles.values()], [...state.selectedFolders.values()])) return;
+          const data = await api("/favorites/status", { method: "POST", body: JSON.stringify(batch) });
+          count += (data.fileIds || []).length + (data.folderIds || []).length;
+        }
+        if (favoriteSelection !== selection || key !== favoriteSelectionKey([...state.selectedFiles.values()], [...state.selectedFolders.values()])) return;
+        selection.all = count === targets.length; selection.ready = true;
+        syncSelectionBar();
+      } catch (error) { if (favoriteSelection === selection) handleError(error); }
+    }, 120);
+  }
+  button.disabled = !favoriteSelection.ready || favoriteSelection.busy;
+  button.textContent = !favoriteSelection.ready ? "お気に入りを確認中…" : favoriteSelection.all ? "★ お気に入りから削除" : "☆ お気に入りに追加";
+}
+
+async function toggleSelectedFavorites() {
+  const selection = favoriteSelection;
+  if (!selection.ready || selection.busy) return;
+  const files = [...state.selectedFiles.values()], folders = [...state.selectedFolders.values()];
+  if (selection.key !== favoriteSelectionKey(files, folders)) return;
+  selection.busy = true; syncSelectionBar();
+  try {
+    for (const batch of favoriteBatches(files, folders)) {
+      if (favoriteSelection !== selection) return;
+      await api("/favorites", { method: selection.all ? "DELETE" : "POST", body: JSON.stringify(batch) });
+    }
+    if (favoriteSelection !== selection) return;
+    selection.all = !selection.all;
+    setNotice(selection.all ? "お気に入りに追加しました。" : "お気に入りから削除しました。");
+    if (state.view === "favorites") await loadItems();
+  } catch (error) { handleError(error); }
+  finally { selection.busy = false; syncSelectionBar(); }
+}
+
 function syncSelectionBar() {
   const files = [...state.selectedFiles.values()];
   const folders = [...state.selectedFolders.values()];
   const fileCount = files.length;
   const folderCount = folders.length;
   const count = fileCount + folderCount;
+  syncFavoriteSelection(files, folders);
   $("#selection-count").textContent = `${count.toLocaleString("ja-JP")}件を選択中`;
   $("#selection-bar").hidden = count === 0;
   const canRenameSelection = (fileCount === 1 && folderCount === 0 && canRenameFile(files[0]))
@@ -5050,6 +5152,10 @@ async function handleTransferVisibility() {
 }
 
 function renderBreadcrumbs(items) {
+  if (["favorites", "account"].includes(state.view)) {
+    state.breadcrumbs = []; $("#breadcrumbs").textContent = state.view === "favorites" ? "現在アクセスできるお気に入りのファイルとフォルダです。" : "アカウント情報・端末保存・管理機能";
+    renderFloatingLocation([]); return;
+  }
   const nav = $("#breadcrumbs");
   if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; renderFloatingLocation([]); return; }
   if (state.view === "conflicts") { state.breadcrumbs = []; nav.textContent = state.session?.role === "subadmin" ? "PWを解除したトップフォルダごとに、配下の競合候補を確認します。" : "トップフォルダの境界を越えず、各フォルダ配下の競合候補を確認します。"; renderFloatingLocation([]); return; }
@@ -6985,7 +7091,7 @@ async function backfillVideoThumbnail(file, generation) {
   let mediaToken = "";
   const controller = new AbortController(), scope = displayCacheScope();
   const current = () => !controller.signal.aborted && generation === state.itemLoadGeneration
-    && scope === displayCacheScope() && Boolean(state.session) && state.view === "all";
+    && scope === displayCacheScope() && Boolean(state.session) && ["all", "favorites"].includes(state.view);
   state.thumbnailBackfillControllers.add(controller);
   const mark = status => { if (current()) document.querySelector(`.file-card[data-file-id="${Number(file.id)}"] .thumb`)?.setAttribute("data-thumbnail-repair", status); };
   try {
@@ -8613,9 +8719,22 @@ async function startThumbnailMaintenance() {
 
 async function openAccountDialog() {
   const dialog = $("#account-dialog");
+  dialog.append($("#account-content"));
+  if (!dialog.open) dialog.showModal();
+  await refreshAccountContent();
+}
+
+function syncAccountView() {
+  const active = state.view === "account";
+  $("#account-view").hidden = !active;
+  $("#content-grid").hidden = active;
+  if (!$("#account-dialog").open) (active ? $("#account-view") : $("#account-dialog")).append($("#account-content"));
+}
+
+async function refreshAccountContent() {
+  $$('[data-view="shares"]').forEach(button => { button.hidden = state.session?.role !== "admin"; });
   $("#batch-rename-action").hidden = state.session?.role !== "admin";
   $("#thumbnail-maintenance-action").hidden = state.session?.role !== "admin";
-  if (!dialog.open) dialog.showModal();
   const context = currentOfflineContext();
   if (context && navigator.onLine && globalThis.TCloudOffline?.supported()) {
     const entries = await TCloudOffline.listEntries(context.accountScope, context.rootFolderId, { offlineOnly: true }).catch(() => []);

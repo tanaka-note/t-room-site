@@ -499,6 +499,12 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
 .standalone-note { margin: 18px 20px 2px; }
 .stacked-actions { display: grid; grid-template-columns: 1fr 1fr; }
 .mobile-nav { display: none; }
+.account-nav-entry { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
+.account-view { max-width: 900px; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); }
+.account-view #account-content { display: grid; gap: 20px; }
+.account-view .mobile-account-copy, .account-view .mobile-storage-summary, .account-view .device-storage-summary { margin: 0; }
+.account-navigation { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; border-top: 1px solid var(--line); }
+.account-navigation button { display: inline-flex; align-items: center; gap: 8px; }
 .mobile-account-copy { display: grid; gap: 5px; padding: 22px 20px 4px; }
 .mobile-account-copy strong { white-space: pre-line; }
 .mobile-account-copy span { color: var(--muted); font-size: .82rem; }
@@ -540,7 +546,7 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
   .content-grid:not(.list-mode) .file-card.non-media-file-card .file-copy strong { font-size: .92rem; line-height: 1.4; }
   .folder-card .folder-open-button { min-height: 76px; grid-template-columns: 40px 1fr; padding: 12px 42px 12px 12px; }
   .folder-icon { width: 40px; height: 36px; }
-  .mobile-nav { position: relative; z-index: 20; display: grid; grid-template-columns: repeat(auto-fit, minmax(54px, 1fr)); padding: 7px max(5px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left)); border-top: 1px solid var(--line); background: var(--surface); }
+  .mobile-nav { position: relative; z-index: 20; display: grid; grid-template-columns: repeat(auto-fit, minmax(46px, 1fr)); padding: 7px max(5px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left)); border-top: 1px solid var(--line); background: var(--surface); }
   .mobile-nav button { position: relative; display: grid; justify-items: center; gap: 3px; min-width: 0; padding: 4px 0; border: 0; color: var(--muted); background: none; font-size: .57rem; white-space: nowrap; }
   .mobile-nav button span { font-size: 1rem; font-weight: 800; }
   .mobile-nav button.active { color: var(--teal-dark); }
