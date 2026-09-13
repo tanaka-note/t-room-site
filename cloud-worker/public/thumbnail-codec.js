@@ -69,9 +69,10 @@
         }});
         decoder.configure(config);let started=false;
         for(let batch=0;batch<40&&!best&&!failure;batch++){
-          check();const [result,packets]=await demux.ff_read_frame_multi(context,packet,{limit:32768});
+          check();trace.stage='avc-read';const [result,packets]=await demux.ff_read_frame_multi(context,packet,{limit:32768});
           for(const input of packets[stream.index]||[]){
             check();if(best||failure)break;
+            trace.videoPackets=(trace.videoPackets||0)+1;if(input.flags&1)trace.keyPackets=(trace.keyPackets||0)+1;
             if(!started && !(input.flags&1))continue;
             started=true;
             while(decoder.decodeQueueSize>=8&&!best&&!failure){await new Promise(resolve=>setTimeout(resolve,5));check();}
@@ -102,7 +103,8 @@
     if (!format || !Number.isSafeInteger(size) || size<=0 || signal?.aborted) return null;
     const controller=new AbortController(), instances=new Set();
     const trace=file.thumbnailTrace={stage:'start',reads:0,readBytes:0,packets:0,frames:0};
-    let cache=null, cacheStart=0, readBytes=0, finished=false;
+    const blocks=new Map();
+    let readBytes=0, finished=false;
     const aborted=()=>controller.abort();signal?.addEventListener("abort",aborted,{once:true});
     const timeout=setTimeout(aborted,45000);
     const check=()=>{if(controller.signal.aborted||finished)throw new DOMException("Thumbnail cancelled","AbortError");};
@@ -119,11 +121,13 @@
       demux.onblockread=async(name,pos,length)=>{
         check();
         if(pos>=size){await demux.ff_block_reader_dev_send(name,pos,new Uint8Array());return;}
-        if(!cache || pos<cacheStart || pos>=cacheStart+cache.length){
-          cache?.fill(0);cache=null;cacheStart=Math.floor(pos/BLOCK)*BLOCK;
+        const cacheStart=Math.floor(pos/BLOCK)*BLOCK;
+        let cache=blocks.get(cacheStart);
+        if(cache){blocks.delete(cacheStart);blocks.set(cacheStart,cache);trace.cacheHits=(trace.cacheHits||0)+1;}
+        else {
           const end=Math.min(size,cacheStart+BLOCK);
           trace.reads++;
-          if(readBytes+end-cacheStart>READ_LIMIT)throw new Error("Thumbnail read limit");
+          if(readBytes+end-cacheStart>READ_LIMIT){trace.error='read-limit';throw new Error("Thumbnail read limit");}
           if(localFile)cache=new Uint8Array(await localFile.slice(cacheStart,end).arrayBuffer());
           else {
             const response=await fetch(url,{headers:{Range:`bytes=${cacheStart}-${end-1}`},credentials:"same-origin",cache:"no-store",signal:controller.signal});
@@ -134,6 +138,8 @@
             if(cache.length!==end-cacheStart)throw new Error("Thumbnail range length");
           }
           check();readBytes+=cache.length;trace.readBytes=readBytes;
+          blocks.set(cacheStart,cache);
+          while(blocks.size>4){const oldest=blocks.keys().next().value;blocks.get(oldest).fill(0);blocks.delete(oldest);}
         }
         await demux.ff_block_reader_dev_send(name,pos,cache.slice(pos-cacheStart,pos-cacheStart+Math.max(length,65536)));
       };
@@ -177,8 +183,8 @@
       return null;
     })();
     try {return await Promise.race([work,stop]);}
-    catch(error) {trace.error=controller.signal.aborted?(signal?.aborted?'cancelled':'timeout'):(error.name||'DecodeError');return null;}
-    finally {finished=true;controller.abort();clearTimeout(timeout);signal?.removeEventListener("abort",aborted);for(const value of instances)value.terminate();instances.clear();cache?.fill(0);cache=null;}
+    catch(error) {trace.error=trace.error||(controller.signal.aborted?(signal?.aborted?'cancelled':'timeout'):(error.name||'DecodeError'));return null;}
+    finally {finished=true;controller.abort();clearTimeout(timeout);signal?.removeEventListener("abort",aborted);for(const value of instances)value.terminate();instances.clear();for(const bytes of blocks.values())bytes.fill(0);blocks.clear();}
   }
   global.TCloudThumbnailCodec=Object.freeze({recover});
 })(globalThis);

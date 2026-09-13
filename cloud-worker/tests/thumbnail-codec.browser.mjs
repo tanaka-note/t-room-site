@@ -3,6 +3,8 @@ import {readFileSync} from 'node:fs';
 import {engines,startUIFixture,preparePage} from './ui-fixture.mjs';
 const data=Object.fromEntries(['wmv','mp4'].map(ext=>[ext,readFileSync(new URL(`./fixtures/thumbnail-codec.${ext}`,import.meta.url))]));
 data.h264=readFileSync(new URL('./fixtures/thumbnail-codec-h264.mp4',import.meta.url));
+const padding=Buffer.alloc(4*1024*1024);padding.writeUInt32BE(padding.length);padding.write('free',4);
+data.locality=Buffer.concat([data.h264,padding]);
 const serverSource=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 const serveAsset=new Function(serverSource.slice(serverSource.indexOf('async function serveAsset('),serverSource.indexOf('\nasync function requireReadyFile('))+'; return serveAsset;')();
 let requests=[],deny=false;
@@ -11,12 +13,15 @@ const fixture=await startUIFixture(undefined,{handleRequest:async(req,res)=>{
   const url=new URL(req.url,'http://localhost');
   const result=await serveAsset(new Request(url),{ASSETS:{fetch:async request=>{
    const path=new URL(request.url).pathname;let bytes=readFileSync(new URL('../public'+path,import.meta.url));
-   if(path==='/thumbnail-codec.js')bytes=Buffer.from(bytes.toString().replace('if(par.codec_id===27)return await recoverAvc(', 'if(par.codec_id===27&&file.name==="broken-index.mp4")demux.av_seek_frame=async()=>{throw new Error("Fixture seek read budget exhausted");}; if(par.codec_id===27)return await recoverAvc('));
+   if(path==='/thumbnail-codec.js')bytes=Buffer.from(bytes.toString()
+    .replace('if(par.codec_id===27)return await recoverAvc(', 'if(par.codec_id===27&&file.name==="broken-index.mp4")demux.av_seek_frame=async()=>{throw new Error("Fixture seek read budget exhausted");}; if(par.codec_id===27)return await recoverAvc(')
+    .replace('await demux.mkblockreaderdev("input",size);check();', 'await demux.mkblockreaderdev("input",size);check(); if(file.name==="read-locality.mp4")for(let i=0;i<40;i++)await demux.onblockread("input",i%2?2*1024*1024:0,1024);'));
+   if(path==='/thumbnail-codec.js'&&process.argv.includes('--single-block-baseline'))bytes=Buffer.from(bytes.toString().replace('while(blocks.size>4)','while(blocks.size>1)'));
    return new Response(bytes,{headers:{'Content-Type':path.endsWith('.wasm')?'application/wasm':'text/javascript'}});
   }}},url,url.pathname.slice('/cloud'.length));
   res.writeHead(result.status,Object.fromEntries(result.headers));res.end(Buffer.from(await result.arrayBuffer()));return true;
  }
- const match=/^\/cloud\/local-media\/fixture\.(wmv|mp4|h264)$/.exec(req.url);
+ const match=/^\/cloud\/local-media\/fixture\.(wmv|mp4|h264|locality)$/.exec(req.url);
  if(!match)return false;
  assert.equal(req.method,'GET');const range=/^bytes=(\d+)-(\d+)$/.exec(req.headers.range||'');assert.ok(range);
  const bytes=data[match[1]],start=Number(range[1]),end=Math.min(Number(range[2]),bytes.length-1);requests.push({start,end});
@@ -49,11 +54,13 @@ try{for(const [name,engine,launch] of engines){
     console.log('UNAVAILABLE native H264 WebCodecs; graceful no-thumbnail result verified',name);continue;
    }
    assert.equal(result.present,true,JSON.stringify(result));assert.equal(result.accepted,true);assert.equal(result.width,320);assert.equal(result.duration,3);
+   assert.ok(requests.length<=3);console.log('PASS software decoder uses bounded local Range, produces real content frame',name,ext,{...result,requests:requests.length});
    if(ext==='h264'){
     assert.ok(result.trace.frames>0);assert.equal(result.trace.seeks||0,0,'valid opening packets avoid expensive container seeking');
     assert.equal(await page.evaluate(size=>TCloudThumbnailCodec.recover('/cloud/local-media/fixture.h264',{name:'broken-index.mp4',sizeBytes:size}).then(Boolean),data.h264.length),true,'readable opening frames survive a container whose seeks fail');
+    const locality=await page.evaluate(async size=>{const file={name:'read-locality.mp4',sizeBytes:size};const blob=await TCloudThumbnailCodec.recover('/cloud/local-media/fixture.locality',file);return {present:!!blob,trace:file.thumbnailTrace};},data.locality.length);
+    assert.equal(locality.present,true,JSON.stringify(locality));assert.ok(locality.trace.cacheHits>=38);assert.ok(locality.trace.readBytes<=3*1024*1024);console.log('PASS alternating distant video/audio block reads remain bounded',locality.trace);
    }
-   assert.ok(requests.length<=3);console.log('PASS software decoder uses bounded local Range, produces real content frame',name,ext,{...result,requests:requests.length});
   }
   assert.ok(workers>=4,'demux and decode run off the main thread');
   const before=requests.length;
