@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-7088b699781c";
+const APP_BUILD_ID = "cloud-0c557fb1acaa";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -1805,7 +1805,7 @@ function selectSection(button) {
   const labels = { all: state.folderId ? "ファイル" : "フォルダ", trash: "ゴミ箱", history: "操作履歴", conflicts: "競合", requests: "削除申請", shares: "共有管理", favorites: "お気に入り", account: "アカウント", image: "写真", video: "動画", audio: "音声", document: "書類" };
   setViewTitle(labels[state.view] || labels[state.kind] || "ファイル");
   if (managedNavigation && state.historyReady) {
-    history[replaceSelection ? "replaceState" : "pushState"](navigationEntry(state.folderId, $("#view-title").textContent), "", location.href);
+    history[replaceSelection ? "replaceState" : "pushState"]({ ...navigationEntry(state.folderId, $("#view-title").textContent), view: state.view, kind: state.kind, query: state.query, listMode: state.listMode }, "", location.href);
     resetFolderScrollPosition();
   }
   syncNavigationActiveState();

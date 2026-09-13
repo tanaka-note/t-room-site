@@ -34,6 +34,7 @@ try { for(const [name,engine,launch] of engines){
   await page.waitForFunction(()=>!document.querySelector('#selection-favorite').disabled);
   assert.ok((await page.locator('#selection-favorite').textContent()).includes('追加'),'mixed selection offers add');
   await page.locator('.sidebar [data-view="favorites"]').click();
+  assert.equal(await page.evaluate(()=>history.state.view),'favorites','reload must retain the virtual view');
   await page.waitForFunction(()=>__test.state.view==='favorites'&&__test.state.files.length===1&&__test.state.folders.length===1,{},{timeout:5000}).catch(async e=>{console.log(await page.evaluate(()=>({view:__test.state.view,files:__test.state.files.length,folders:__test.state.folders.length,notice:document.querySelector('#notice')?.textContent,history:history.state})));throw e;});
   await page.locator('.folder-open-button').click();
   await page.waitForFunction(()=>__test.state.folderId===8);
@@ -46,6 +47,7 @@ try { for(const [name,engine,launch] of engines){
   await page.waitForFunction(()=>__test.state.files.length===0);
   assert.equal(writes.at(-1).method,'DELETE');
   await page.locator('.sidebar [data-view="account"]').click();
+  assert.equal(await page.evaluate(()=>history.state.view),'account');
   await page.waitForFunction(()=>!document.querySelector('#account-view').hidden);
   assert.equal(await page.locator('#account-dialog').evaluate(d=>d.open),false);
   assert.equal(await page.locator('#account-view #device-cache-limit').count(),1);
