@@ -12,6 +12,10 @@ on:
         description: 'With release_code: replace only analysis Python code, preserving verified runtime and definitions'
         type: boolean
         default: false
+      reconcile_only:
+        description: 'Resume a pending definition intent without building a new candidate'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -33,6 +37,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}
           RELEASE_CONTAINER_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_code && 'true' || 'false' }}
           RELEASE_ANALYSIS_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.analysis_only && 'true' || 'false' }}
+          RECONCILE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.reconcile_only && 'true' || 'false' }}
   notify:
     needs: update
     if: always()

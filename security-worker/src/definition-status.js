@@ -18,6 +18,11 @@ export function definitionStatus(row, now = Math.floor(Date.now() / 1000)) {
   if (!row?.last_attempt_at || now - row.last_attempt_at > UPDATE_STALE_AFTER) issues.push('updater_stopped');
   if (Number(row?.failure_count) >= 2) issues.push('update_failed');
   if (row?.last_result === 'running' && now > Number(row.lease_until || 0)) issues.push('update_interrupted');
+  const rolloutStates = ['rollout_pending', 'rollout_ambiguous', 'stale_rollout', 'reconciliation_stuck', 'rollout_conflict',
+    'rollout_unknown_status', 'rollout_reverted', 'rollout_replaced', 'candidate_expired', 'rollout_deferred'];
+  if (row?.pending_state && rolloutStates.includes(row.pending_state)) issues.push(row.pending_state);
+  else if (row?.pending_image) issues.push(row.pending_state === 'prepared' ? 'rollout_pending' : 'rollout_ambiguous');
+  if (row?.pending_image && row.pending_started_at && now - row.pending_started_at > 36 * 3600 && !issues.includes('reconciliation_stuck')) issues.push('reconciliation_stuck');
   const hourly = Number(row?.hourly_monitor_checked_at);
   if (!Number.isSafeInteger(hourly) || hourly <= 0 || hourly > now + 300 || now - hourly > MONITOR_STALE_AFTER) issues.push('monitor_stopped');
   return {
@@ -26,6 +31,8 @@ export function definitionStatus(row, now = Math.floor(Date.now() / 1000)) {
     verifiedAt: verified > 0 ? verified : null, lastAttemptAt: row?.last_attempt_at || null,
     lastSuccessAt: row?.last_success_at || null, result: row?.last_result || 'unknown',
     failures: Number(row?.failure_count || 0), monitorCheckedAt: row?.monitor_checked_at || null,
+    rolloutState: row?.pending_state || null, rolloutStartedAt: row?.pending_started_at || null,
+    rolloutAttempts: Number(row?.pending_attempts || 0), rolloutReconciliations: Number(row?.pending_reconciliations || 0),
     hourlyMonitorStartedAt: row?.hourly_monitor_started_at || null,
     hourlyMonitorCheckedAt: row?.hourly_monitor_checked_at || null,
     incidentChangedAt: row?.incident_changed_at || null

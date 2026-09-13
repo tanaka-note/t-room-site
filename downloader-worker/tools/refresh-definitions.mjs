@@ -1,23 +1,31 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
-import { ACCOUNT, APPLICATION_PATH, SECURITY_DB, DOWNLOADER_DB, cloudflareClient, query, readState, validImage, waitForRollout } from './definition-api.mjs';
+import { ACCOUNT, cloudflareClient, readState, validImage, safeError, delay } from './definition-api.mjs';
+import { claimLease } from './definition-lease.mjs';
+import { configurationHash, settleObservation, reconcileRollout, saveObservation } from './definition-rollout.mjs';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
-function command(args, options = {}) {
-  const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 20 * 60 * 1000, maxBuffer: 8 * 1024 * 1024, ...options });
-  // Subprocess stderr can include registry credentials/URLs. Report fixed codes.
-  if (result.status !== 0) {
-    // Only this repository-owned, offline fixture suite: its diagnostics do
-    // not contain remote URLs, registry credentials, or user content.
-    if (args.includes('test_main_video.py')) console.error(String(result.stderr || '').slice(-8000));
+export function command(args, { input, ...options } = {}) {
+  // Async processes allow lease renewal during build/push/verification.
+  return new Promise((resolveCommand, reject) => {
     const phase = ['login', 'build', 'run', 'push', 'image'].includes(args[0]) ? args[0] : 'command';
-    throw new Error(`definition_docker_${phase}_failed`);
-  }
-  return result.stdout.trim();
+    const failure = () => reject(new Error(`definition_docker_${phase}_failed`));
+    const child = spawn('docker', args, { timeout: 20 * 60 * 1000, ...options, stdio: ['pipe', 'pipe', 'ignore'] });
+    let stdout = '', bytes = 0;
+    child.stdout.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > 8 * 1024 * 1024) { child.kill(); failure(); return; }
+      stdout += chunk.toString();
+    });
+    child.on('error', failure);
+    child.on('close', code => code === 0 ? resolveCommand(stdout.trim()) : failure());
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
 }
 export function candidateReport(value, now) {
   if (!value?.verified || value.maxAgeSeconds !== 604800 || !Number.isSafeInteger(value.definitionUnix) ||
@@ -38,83 +46,95 @@ export function definitionTarget(configuration, image) {
   return target;
 }
 
-export async function refresh({ api = cloudflareClient(), docker = command, now = () => Math.floor(Date.now() / 1000), wait = waitForRollout,
+export async function refresh({ api = cloudflareClient(), docker = command, now = () => Math.floor(Date.now() / 1000), sleep = delay, maxPolls = 60,
+  heartbeatMs = 60000, reconcileOnly = process.env.RECONCILE_ONLY === 'true',
   releaseCode = process.env.RELEASE_CONTAINER_CODE === 'true', analysisOnly = process.env.RELEASE_ANALYSIS_CODE === 'true' } = {}) {
   if (analysisOnly && !releaseCode) throw new Error('definition_analysis_release_requires_code');
-  const runId = `${process.env.GITHUB_RUN_ID || 'manual'}-${process.env.GITHUB_RUN_ATTEMPT || '1'}-${now()}`;
-  const initial = await readState(api);
-  const claim = await query(api, SECURITY_DB, `UPDATE security_definition_updates SET run_id=?,lease_until=?,last_attempt_at=?,last_result='running',
-    automation_enabled=MAX(automation_enabled,?) WHERE service='downloader' AND (lease_until IS NULL OR lease_until < ?)`,
-    [runId, now() + 45 * 60, now(), process.env.GITHUB_ACTIONS === 'true' ? 1 : 0, now()]);
-  if (claim.meta.changes !== 1) throw new Error('definition_update_already_running');
+  if (reconcileOnly && (releaseCode || analysisOnly)) throw new Error('definition_reconcile_mode_conflict');
+  if (reconcileOnly) {
+    const row = await readState(api);
+    if (!row.pending_image && !row.pending_state) {
+      const observed = await settleObservation(api, row, { sleep });
+      if (observed.state === 'ready') return { reconciled: true, pending: false };
+    }
+  }
+  const deadline = now() + 38 * 60;
+  const lease = await claimLease(api, now, { heartbeatMs });
+  const { runId } = lease;
   const dockerConfig = mkdtempSync(join(tmpdir(), 'clamav-registry-'));
-  const dockerOptions = { env: { ...process.env, DOCKER_CONFIG: dockerConfig } };
-  const run = args => docker(args, dockerOptions);
+  const dockerOptions = { env: { ...process.env, DOCKER_CONFIG: dockerConfig }, signal: lease.signal };
+  const run = async args => { await lease.renew(); return docker(args, { ...dockerOptions,
+    timeout: Math.min(20 * 60 * 1000, Math.max(1, (deadline - now()) * 1000)) }); };
   let temporaryTag;
   try {
-    const app = await api(APPLICATION_PATH);
-    if (app.active_rollout_id) throw new Error('definition_rollout_busy');
+    const initial = await lease.check();
+    const resume = () => reconcileRollout({ api, lease, now, target: definitionTarget, sleep, maxPolls, deadline: Math.min(deadline, now() + 30 * 60) });
+    // Resume before registry login, build, or any new rollout.
+    if (initial.pending_image) return await resume();
+    const observed = await settleObservation(api, initial, { sleep });
+    if (observed.state !== 'ready') return await saveObservation(lease, initial, observed);
+    if (reconcileOnly) {
+      await lease.write("last_result='reconciled',pending_state=NULL,pending_rollout_id=NULL");
+      return { reconciled: true, pending: false };
+    }
+    const { app } = observed;
+    await lease.write('pending_state=NULL,pending_rollout_id=NULL');
     const oldImage = app.configuration.image;
     if (!validImage(oldImage) || app.rollout_active_grace_period !== 900) throw new Error('definition_application_mismatch');
     // Reuse the code base, not yesterday's refreshed image, to avoid one more
     // 300 MB definition layer every day. Reset the base on ordinary code deploys.
     const source = initial.image === oldImage && validImage(initial.source_image) ? initial.source_image : oldImage;
     const registry = await api('/containers/registries/registry.cloudflare.com/credentials', 'POST', { expiration_minutes: 60, permissions: ['pull', 'push'] });
-    docker(['login', 'registry.cloudflare.com', '--username', registry.username, '--password-stdin'], { ...dockerOptions, input: registry.password });
+    await docker(['login', 'registry.cloudflare.com', '--username', registry.username, '--password-stdin'], { ...dockerOptions, input: registry.password });
     temporaryTag = `registry.cloudflare.com/${ACCOUNT}/t-room-downloader-downloadercontainer:definitions-${runId}`;
     if (releaseCode) {
       console.log('Building the explicitly requested repository Container code');
       const context = resolve(directory, '../container');
-      run(['build', '--platform', 'linux/amd64', '-f', analysisOnly ? join(directory, 'analysis.Dockerfile') : join(context, 'Dockerfile'),
+      await run(['build', '--platform', 'linux/amd64', '-f', analysisOnly ? join(directory, 'analysis.Dockerfile') : join(context, 'Dockerfile'),
         '--build-arg', analysisOnly ? `BASE_IMAGE=${oldImage}` : `CLAMAV_DEFINITION_REFRESH=${runId}`, '-t', temporaryTag, context]);
       console.log('Verifying small local browser fixtures and process cleanup offline');
       // Production run_phase supplies a job-local writable HOME. The direct
       // fixture runner also needs one (the image user's home is /nonexistent).
-      run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', '-e', 'HOME=/work', '-e', 'XDG_CONFIG_HOME=/work', '-e', 'XDG_CACHE_HOME=/work', '-e', 'MAIN_VIDEO_TEST_BROWSER=/usr/bin/chromium', temporaryTag, '-m', 'unittest', 'discover', '-s', '/app/tests', '-p', 'test_main_video.py']);
+      await run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', '-e', 'HOME=/work', '-e', 'XDG_CONFIG_HOME=/work', '-e', 'XDG_CACHE_HOME=/work', '-e', 'MAIN_VIDEO_TEST_BROWSER=/usr/bin/chromium', temporaryTag, '-m', 'unittest', 'discover', '-s', '/app/tests', '-p', 'test_main_video.py']);
     } else {
       console.log('Building definition candidate from the deployed code base');
-      run(['build', '--platform', 'linux/amd64', '-f', join(directory, 'definitions.Dockerfile'), '--build-arg', `BASE_IMAGE=${source}`, '--build-arg', `REFRESH_ID=${runId}`, '-t', temporaryTag, directory]);
+      await run(['build', '--platform', 'linux/amd64', '-f', join(directory, 'definitions.Dockerfile'), '--build-arg', `BASE_IMAGE=${source}`, '--build-arg', `REFRESH_ID=${runId}`, '-t', temporaryTag, directory]);
     }
     console.log(analysisOnly ? 'Rechecking inherited signatures, signed timestamps and rules; engine fixtures unchanged' : 'Verifying candidate signatures, signed timestamps, engine and harmless fixtures');
-    const raw = run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--mount', `type=bind,source=${join(directory, 'verify-definitions.py')},target=/tmp/verify-definitions.py,readonly`, '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', temporaryTag, '/tmp/verify-definitions.py', ...(analysisOnly ? ['--definitions-only'] : [])]);
+    const raw = await run(['run', '--rm', '--network', 'none', '--cpus', '1', '--memory', '4g', '--mount', `type=bind,source=${join(directory, 'verify-definitions.py')},target=/tmp/verify-definitions.py,readonly`, '--entrypoint', 'python', '-e', 'PYTHONPATH=/app', temporaryTag, '/tmp/verify-definitions.py', ...(analysisOnly ? ['--definitions-only'] : [])]);
     const report = candidateReport(JSON.parse(raw), now());
     console.log('Pushing verified definition candidate');
-    run(['push', temporaryTag]);
-    const digests = JSON.parse(run(['image', 'inspect', temporaryTag, '--format', '{{json .RepoDigests}}']));
+    await run(['push', temporaryTag]);
+    const digests = JSON.parse(await run(['image', 'inspect', temporaryTag, '--format', '{{json .RepoDigests}}']));
     const image = digests.find(validImage);
     if (!image) throw new Error('definition_digest_missing');
-    const before = await api(APPLICATION_PATH);
-    if (before.configuration.image !== oldImage || before.active_rollout_id) throw new Error('definition_deployment_changed');
-    const lease = await readState(api);
-    if (lease.run_id !== runId || Number(lease.lease_until) <= now()) throw new Error('definition_update_lease_expired');
-    const jobs = await query(api, DOWNLOADER_DB, "SELECT COUNT(*) AS count FROM downloader_jobs WHERE status IN ('queued','processing','analyzing')");
-    if (Number(jobs.results[0].count) > 0) {
-      await query(api, SECURITY_DB, "UPDATE security_definition_updates SET last_result='deferred',lease_until=NULL WHERE service='downloader' AND run_id=?", [runId]);
-      console.log('Deferred image rollout because jobs are active');
-      return { deferred: true };
+    await lease.renew();
+    const before = await settleObservation(api, initial, { sleep });
+    if (before.state !== 'ready' || before.app.configuration.image !== oldImage || before.app.version !== app.version ||
+      configurationHash(before.app) !== configurationHash(app) ||
+      JSON.stringify(before.rollouts.map(r => r.id).sort()) !== JSON.stringify(observed.rollouts.map(r => r.id).sort())) {
+      throw new Error('definition_deployment_changed');
     }
-    console.log('Starting image-only rollout; Worker code and existing grace period are unchanged');
-    const rollout = await api(`${APPLICATION_PATH}/rollouts`, 'POST', {
-      description: 'Daily verified ClamAV definitions', strategy: 'rolling', kind: 'full_auto',
-      steps: [10, 100].map(percentage => ({ step_size: { percentage }, description: `Rollout to ${percentage}% of instances` })),
-      target_configuration: definitionTarget(before.configuration, image)
-    });
-    await wait(api, rollout.id, image);
-    const updated = await query(api, SECURITY_DB, `UPDATE security_definition_updates SET image=?,previous_image=?,source_image=?,definition_unix=?,verified_at=?,
-      last_success_at=?,image_checked_at=?,deployment_matches=1,last_result='success',failure_count=0,lease_until=NULL WHERE service='downloader' AND run_id=?`,
-      [image, oldImage, releaseCode ? image : source, report.definitionUnix, report.verifiedAt, now(), now(), runId]);
-    if (updated.meta.changes !== 1) throw new Error('definition_completion_conflict');
-    console.log('Verified definition image rollout completed');
-    return { image, ...report };
+    // Persist only verified digests, timestamps, version and hashes/IDs, never credentials.
+    await lease.write(`pending_image=?,pending_previous_image=?,pending_source_image=?,pending_definition_unix=?,pending_verified_at=?,
+      pending_started_at=?,pending_state='prepared',pending_rollout_id=NULL,pending_attempts=0,pending_reconciliations=0,
+      pending_version=?,pending_configuration_hash=?,pending_rollout_ids=?`,
+      [image, oldImage, releaseCode ? image : source, report.definitionUnix, report.verifiedAt, now(), app.version,
+        configurationHash(before.app), JSON.stringify(before.rollouts.map(r => r.id).sort())]);
+    return await resume();
   } catch (error) {
-    await query(api, SECURITY_DB, "UPDATE security_definition_updates SET last_result='failed',failure_count=failure_count+1,lease_until=NULL WHERE service='downloader' AND run_id=?", [runId]);
+    // Pending intent survives read failures, process loss and uncertain mutations.
+    await lease.write(`last_result=CASE WHEN pending_image IS NULL THEN 'failed' ELSE 'rollout_ambiguous' END,
+      pending_state=CASE WHEN pending_image IS NULL THEN pending_state ELSE 'rollout_ambiguous' END,
+      failure_count=failure_count+1`).catch(() => {});
     throw error;
   } finally {
     // Only our isolated Docker login file; do not touch the user's Docker config.
-    rmSync(dockerConfig, { recursive: true, force: true });
+    try { await lease.release(); } finally { rmSync(dockerConfig, { recursive: true, force: true }); }
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  refresh().catch(error => { console.error(/^definition_[a-z_]+$|^cloudflare_[a-z_0-9]+$/.test(error.message) ? error.message : 'definition_update_failed'); process.exitCode = 1; });
+  refresh().then(result => console.log({ event: 'definition_update_result', state: result.state || (result.image ? 'success' : 'reconciled') }))
+    .catch(error => { console.error(safeError(error)); process.exitCode = 1; });
 }

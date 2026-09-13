@@ -6,9 +6,64 @@ GitHub Actions `ClamAV daily definitions` を毎日04:37 JSTに実行する（sc
 
 main/daily/bytecodeの欠落・署名異常・内部生成日時異常を拒否する。dailyの生成後5日以上の候補も公開しない。Docker build cacheは実行IDで無効化する。ファイルmtimeを鮮度として使わず、7日という有効期間も延長しない。候補内でネットワークを切り、実ClamAV/YARAの正常fixtureとClamAV EICAR拒否を確認する。検証失敗・build失敗では既存imageを変更しない。
 
-検証後にregistryへpushし、digestを確定する。待機・取得処理・解析中のjobがある場合はrolloutを延期する。同時更新を45分leaseで防ぎ、反映直前にもlease・本番imageを確認する。通常コード公開と並行させない。現行900秒のrollout grace、SIGTERM drain、deadlineを維持する。ジョブ確認後に来る新規処理は既存drain/retryが扱うため、更新中に一時的な待機や再試行が発生する可能性は残る。
+検証後にregistryへpushし、digestを確定する。待機・取得処理・解析中のjobがある場合はrolloutを延期する。同時更新を45分leaseで防ぎ、非同期build/push中を含め毎分CASで更新する。反映直前にもlease・本番image・version・設定・rollout履歴を確認する。通常コード公開と並行させない。現行900秒のrollout grace、SIGTERM drain、deadlineを維持する。ジョブ確認後に来る新規処理は既存drain/retryが扱うため、更新中に一時的な待機や再試行が発生する可能性は残る。
 
-imageのみのrolling rolloutがcompletedとなり、本番applicationのdigestが一致し、active rolloutがなくなった後で成功記録を確定する。API受付やWorker deploy成功だけでは完了扱いしない。途中のAPI失敗・timeoutで反映状態が不明なら成功記録を更新せず、次の監視で不一致を警告する。自動的に未検証imageへ戻さない。
+imageのみのrolling rolloutを実状態と照合し、本番applicationのdigestが検証済みpending targetと一致し、active rolloutがなくなった後で成功記録を確定する。取得できるrolloutはcompletedであることも確認し、reverted/replaced/未知状態では成功にしない。API受付やWorker deploy成功だけでは完了扱いしない。途中のAPI失敗・timeoutで反映状態が不明ならintentを保持し、次回も照合する。自動的に未検証imageへ戻さない。
+
+## Rollout障害時の照合と復旧（2026-09-13）
+
+Cloudflareが500を返しても、サーバー側の更新作成が失敗したとは限らない。response loss・network timeout・connection reset・JSON読込失敗も同じambiguous outcomeとして扱う。2026-09-13の障害は、API 500に続きApplicationのactive IDとrollout実体が不整合となったもの。Cloudflare内部の500の根本原因は未確定。旧処理にはdurable intentとreconciliationがなく、存在しないIDで毎回停止し続けていた。
+
+追加migration **0018_definition_rollout_intent.sql**は既存tableへ列を追加するだけで、成功image・previous/source・日時・監視履歴・認証データを保持する。API要求の前に、検証済みtarget/旧/source digest、署名検証・定義生成日時、開始日時、Application version、設定のSHA-256、既存rollout ID一覧、pending状態、送信数、照合数を永続化する。取得できたrollout IDも保存する。設定本文・token・registry password・生のレスポンスは保存しない。
+
+| 実状態 | 動作 |
+| --- | --- |
+| target digest反映済み・activeなし | 保存した署名検証結果と7日期限、最終Application再取得を確認し、所有runのCASだけで成功確定 |
+| 同じtargetのpending/progressing rollout | IDを引き継ぎ、追加POSTなしで監視 |
+| active IDのGETが404 | Application前後取得・全rollout一覧・個別GETを10/20秒backoffで3回照合。一時404・状態変化をstaleと即断しない |
+| 同一active ID・同一Applicationが継続し、個別GETと一覧にも不存在 | `stale_rollout`。自動修復mutationを行わずIssueへ通知 |
+| activeなし・旧digest/version/設定/履歴が一致・まだ未送信 | lease/target/ジョブ件数/本番状態/送信予算を再確認し、送信マーカーをD1へ保存して1回だけ作成 |
+| 送信済みだが繰り返し旧digestのまま、作成記録もなし | `reconciliation_stuck`。不存在という観測だけで非実行を断定せず再POSTを保留 |
+| 旧/target以外のimage、別target、versionや設定変更、別rollout | `rollout_conflict`。自動上書き・rollbackなし |
+| GET等の読込エラー | `rollout_ambiguous`。intentを残し次回の照合へ |
+| reverted / replaced | `rollout_reverted` / `rollout_replaced`。自動再送なし |
+| 未知status | `rollout_unknown_status`。待ち続けず状態を保存して通知 |
+
+通常のrollout待機は最大60回・30分、buildからの処理予算は38分を目安とし、Actionsの45分制限を維持する。各API読込にも独立したtimeout/retry上限があり、極端に遅いAPIやrunner強制終了ではその場の終了記録を保証できないが、先に保存したintentとleaseは残る。正常進行中のローカル待機期限はprovider failureに変換しない。`rollout_pending`を保存してleaseを解放し、次回の日次実行でbuild前に続行する。36時間を超えるpendingは監視で`reconciliation_stuck`も通知する。成功・pending処理で毎時monitor heartbeatを捏造しない。
+
+### API契約とretryの限界
+
+確認対象はリポジトリの`wrangler@4.128.0`、`@cloudflare/containers@0.3.7`、公式rollout文書、および**wrangler@4.128.0タグのgenerated client/model**。
+
+- `ApplicationRollout.status`は`pending / progressing / completed / reverted / replaced`。旧処理のfailed/cancelled/rolled_backはこの契約にはないため未知状態として停止する。
+- GET Application、GET rollout、GET rollout一覧を使用する。一覧のlimit省略はgenerated clientの説明で全件。古いrolloutが後からreplacedへ変わるため、baselineはstatusではなくIDで比較する。
+- 作成POSTにidempotency keyやexpected-version/If-Matchによる条件付き作成の契約は確認できない。GETの整合性が何秒で確定するという保証も確認できない。**1 intentの自動送信予算は1回**。全安全条件が成立しても、既に送信した要求を再送して安全という証明にはならないため、5xx後に旧imageが見えるだけでは自動再送しない。これは二重rollout回避を優先した代替設計。
+- 更新actionは`next / previous / revert`。削除APIは「使用中でないrolloutを清掃する」操作であり、不存在のactive IDの修復を保証しない。Application PATCHにもactive_rollout_idはない。**安全な公式のdangling ID修復契約は確認できず、自動修復には採用していない**。同一imageの新rollout作成が手動復旧で成功した実績だけを、自動修復の保証にしない。
+- 外部のDashboard/別CLIはD1 leaseに従うとは限らず、条件付き作成APIもないため、最終GETとPOSTの間の外部deployを原子的には排除できない。通常のコード公開もこの同じworkflowを使い、Dashboardからの並行変更はしない。検出できた競合は必ず停止する。
+
+参照: [公式rollout/drain](https://developers.cloudflare.com/containers/configuration/rollouts/)、[固定版のApplicationsService](https://github.com/cloudflare/workers-sdk/blob/wrangler%404.128.0/packages/containers-shared/src/client/services/ApplicationsService.ts)、[statusモデル](https://github.com/cloudflare/workers-sdk/blob/wrangler%404.128.0/packages/containers-shared/src/client/models/ApplicationRollout.ts)、[作成モデル](https://github.com/cloudflare/workers-sdk/blob/wrangler%404.128.0/packages/containers-shared/src/client/models/CreateApplicationRolloutRequest.ts)、[変更モデル](https://github.com/cloudflare/workers-sdk/blob/wrangler%404.128.0/packages/containers-shared/src/client/models/ModifyApplicationRequestBody.ts)。
+
+GETと明示的なD1 SELECTだけを最大4回、指数backoff+jitter（基準1/2/4秒）、90秒のretry予算で再試行する。429/5xx/transport/読込異常が対象。Retry-Afterの秒数またはHTTP-dateを尊重し、予算を超えれば早期再送せずそのrunの照合を保留する。D1 UPDATE、registry credential要求、rollout POSTにgeneric retryを適用しない。structured errorはHTTP status・数値エラーcode・Retry-After・検証済みcf-ray・method・固定pathカテゴリ・エラー種別だけを保持し、HTTPが非JSONでもstatusを失わない。
+
+### Leaseと安全な再開
+
+GHAのconcurrency group/cancel-in-progress=falseを維持する。run IDにはUUIDを付ける。leaseは毎分、および各重い工程・rollout操作前に`run_id=? AND lease_until>now`のCASで更新する。同期spawnを非同期spawnへ変更し、Dockerが長時間動いてもheartbeatを実行する。renew失敗/所有権喪失はstickyに扱い、新規mutationと成功書込を止め、実行中Dockerも中断する。更新・成功確定のD1書込は所有runと未失効lease、および必要時pending targetを条件にする。所有権喪失後のrunが他runのleaseを消すこともない。
+
+日次実行はpendingがあれば候補を作り直さず照合だけを続ける。手動input `reconcile_only=true` は新しい候補のbuildをしない。ただし**未送信の検証済みprepared intentがある場合は、安全条件確認後に初回rolloutを開始し得る**ため、常にread-onlyとは扱わない。intentも異常もなければ読込だけで終了し、成功日時やupdater/monitor heartbeatを進めない。`release_code / analysis_only`との併用は拒否する。
+
+### 人間の対応が必要な場合
+
+`stale_rollout / reconciliation_stuck / rollout_conflict / rollout_unknown_status / rollout_reverted / rollout_replaced / candidate_expired`は既存の単一GitHub Issueに通知する。同じ状態でIssue/commentを増やさない。5日警告、7日超過での取得停止、digest不一致、毎時heartbeat停止も同時に評価し、pendingを理由に隠さない。
+
+まずD1 pending/成功記録、Applicationのimage/version/active ID、rollout一覧/個別GET、Actions runとcf-rayを読み取り照合する。照合だけでtarget反映が確認できれば次回runが成功へ復旧する。Cloudflare側の不整合が継続する場合は管理者がproviderに確認し、無関係deployとjobがないことを確認して承認された正規手順で復旧する。Application削除・非公開PATCH・無条件rollbackは行わない。
+
+送信済みintentのカウンターやpendingを消して「再試行可能」に見せてはいけない。未反映が確認できない限り再POSTしない。別の正規deployへ移行する場合は、旧要求が進行中でないことをprovider側でも確認し、旧intentの必要なdigest/ID/状態をIssueへ記録してから、管理者が所有run不在条件付きで整理する。自動処理はこの判断を推測しない。candidateが期限切れでも未確定の旧要求は無視できない。旧intent解決後に新しい検証済み候補を作る。
+
+### 公開と検証
+
+本番へは0018 additive migration、Security Worker、main上のworkflow/scriptを整合する順序で公開する。既存Worker/旧workflowも追加列と共存可能。切り戻しでも0018の列やpendingを削除しない。未確定intentがある間はreconciliation非対応の旧updaterへ切り戻して実行しない。
+
+fault-injectionテストはSQLiteで本物のSQL/CASを実行し、5xx/timeout/response loss、POST前intent、反映済み/進行中/未確認、繰り返し404と一時404、外部変更、grace、署名/鮮度/fixture gates、lease更新中の競合、直前job、terminal/未知status、送信予算、Retry-After、秘密情報保護、次回run再開を確認する。本番で故意の500/不整合は発生させない。controlledなpending/要確認状態は更新jobを正常終了して通知jobへ渡すため、Actionsの緑色だけを定義正常と判断しない。`definition_update_result`とD1/Issueの状態を確認する。
 
 ## 初回設定
 
@@ -107,3 +162,12 @@ Dockerを使えない開発環境では、`ClamAV daily definitions` の手動�
 ## 解析コードだけの公開
 
 依存・エンジン・scanner・定義を変更しない解析修正では、手動workflowの `release_code=true, analysis_only=true` を使用できる。`tools/analysis.Dockerfile` は現在本番の検証済みdigestを継承し、resolver.py / main_video.py / server.py と対象fixtureだけをCOPYする。freshclam・OS/pip更新・ClamAV実スキャンは繰り返さず、署名・内部日時・7日期限・YARAルール整合は再検証する。小容量のLinuxブラウザfixtureが失敗した候補はpush/rolloutしない。ジョブ/drain/lease/digest照合と更新後source_image確定は通常手順と共通。scannerや依存変更にはこのモードを使わない。日次自動更新は従来どおり定義更新と実エンジンfixtureを実施する。
+
+## 2026-09-13 再発防止実装のローカル検証
+
+- `npm run check`（Downloader/Security）PASS。
+- Downloader `npm test`: Node 155件PASS。Python 136件中104件PASS・32件は環境条件によるskip（実行済みとは扱わない）。
+- `node --test downloader-worker/test/definition-updates.test.js`: 51件PASS。0018の全既存列・履歴・無関係データ保持を含む。
+- Security `node --test test/*.test.js`: 150件PASS。全migrationのSQLite/ローカルD1適用、認証/セッション/監視関連の回帰を含む。Security `wrangler deploy --dry-run` PASS。
+- Securityに絞った既存Web contractのdeploy target/build marker/auto-update検証PASS。リポジトリ全体のWeb contract/app-shell testは対象外asset-reportの既存build marker不一致で失敗。このサービスのファイルは今回変更していない。
+- 大容量の本番取得、意図的なCloudflare障害、ブラウザの全サービスE2Eは実施していない。
