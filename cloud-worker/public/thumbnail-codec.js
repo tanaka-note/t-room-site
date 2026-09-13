@@ -37,11 +37,13 @@
     // MP4's AVC configuration and compressed packets go only to the browser's
     // local decoder. This avoids HTMLMediaElement container/audio failures.
     const extra=par.extradata;
+    const trace=file.thumbnailTrace;
+    trace.stage='avc-config';
     if(!global.VideoDecoder || !extra || extra.length<7 || extra[0]!==1)return null;
     const codec='avc1.'+Array.from(extra.slice(1,4),b=>b.toString(16).padStart(2,'0')).join('');
     file.thumbnailCodec=`${codec} (${par.width}x${par.height})`;
     const config={codec,description:extra,codedWidth:par.width,codedHeight:par.height,optimizeForLatency:true};
-    if(!(await VideoDecoder.isConfigSupported(config)).supported)return null;
+    if(!(await VideoDecoder.isConfigSupported(config)).supported){trace.stage='unsupported';return null;}
     check();
     const packet=await demux.av_packet_alloc(), duration=Number(stream.duration);
     const times=Number.isFinite(duration)&&duration>.2?[Math.min(10,duration*.1),Math.min(40,duration*.25),duration*.5,duration*.75,duration*.9]:[0];
@@ -55,7 +57,7 @@
         decoder=new VideoDecoder({error:error=>{failure=error;},output:frame=>{
           let canvas=null;
           try {
-            check();if(best || sampled++%5!==0)return;
+            check();trace.frames++;if(best || sampled++%5!==0)return;
             const scale=Math.min(1,640/Math.max(frame.displayWidth,frame.displayHeight));
             canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(frame.displayWidth*scale));canvas.height=Math.max(1,Math.round(frame.displayHeight*scale));
             canvas.getContext('2d',{alpha:false}).drawImage(frame,0,0,canvas.width,canvas.height);
@@ -72,12 +74,14 @@
             while(decoder.decodeQueueSize>=8&&!best&&!failure){await new Promise(resolve=>setTimeout(resolve,5));check();}
             if(best||failure)break;
             const timestamp=Math.round(demux.i64tof64(input.pts||0,input.ptshi||0)*stream.time_base_num/stream.time_base_den*1e6);
+            trace.stage='avc-decode';trace.packets++;
             decoder.decode(new EncodedVideoChunk({type:input.flags&1?'key':'delta',timestamp,data:input.data}));
           }
           if(result===demux.AVERROR_EOF)break;
           await new Promise(resolve=>setTimeout(resolve,0));
         }
         if(!failure&&decoder.state==='configured')await decoder.flush();
+        if(failure)trace.error=failure.name||'DecodeError';
         check();if(best){const blob=await new Promise(resolve=>best.toBlob(resolve,'image/webp',.78));check();return blob;}
       }
       return null;
@@ -94,6 +98,7 @@
     const size=Number(localFile?.size||file.sizeBytes);
     if (!format || !Number.isSafeInteger(size) || size<=0 || signal?.aborted) return null;
     const controller=new AbortController(), instances=new Set();
+    const trace=file.thumbnailTrace={stage:'start',reads:0,readBytes:0,packets:0,frames:0};
     let cache=null, cacheStart=0, readBytes=0, finished=false;
     const aborted=()=>controller.abort();signal?.addEventListener("abort",aborted,{once:true});
     const timeout=setTimeout(aborted,45000);
@@ -107,12 +112,14 @@
     }
     const work=(async()=>{
       const demux=await instance(`demuxer-${format}`);
+      trace.stage='demux';
       demux.onblockread=async(name,pos,length)=>{
         check();
         if(pos>=size){await demux.ff_block_reader_dev_send(name,pos,new Uint8Array());return;}
         if(!cache || pos<cacheStart || pos>=cacheStart+cache.length){
           cache?.fill(0);cache=null;cacheStart=Math.floor(pos/BLOCK)*BLOCK;
           const end=Math.min(size,cacheStart+BLOCK);
+          trace.reads++;
           if(readBytes+end-cacheStart>READ_LIMIT)throw new Error("Thumbnail read limit");
           if(localFile)cache=new Uint8Array(await localFile.slice(cacheStart,end).arrayBuffer());
           else {
@@ -123,7 +130,7 @@
             cache=new Uint8Array(await response.arrayBuffer());
             if(cache.length!==end-cacheStart)throw new Error("Thumbnail range length");
           }
-          check();readBytes+=cache.length;
+          check();readBytes+=cache.length;trace.readBytes=readBytes;
         }
         await demux.ff_block_reader_dev_send(name,pos,cache.slice(pos-cacheStart,pos-cacheStart+Math.max(length,65536)));
       };
@@ -167,7 +174,7 @@
       return null;
     })();
     try {return await Promise.race([work,stop]);}
-    catch {return null;}
+    catch(error) {trace.error=controller.signal.aborted?(signal?.aborted?'cancelled':'timeout'):(error.name||'DecodeError');return null;}
     finally {finished=true;controller.abort();clearTimeout(timeout);signal?.removeEventListener("abort",aborted);for(const value of instances)value.terminate();instances.clear();cache?.fill(0);cache=null;}
   }
   global.TCloudThumbnailCodec=Object.freeze({recover});

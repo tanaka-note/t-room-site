@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-00d24eae500f";
+const APP_BUILD_ID = "cloud-c3fc416861bf";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -8359,6 +8359,8 @@ function recordThumbnailMaintenanceFailure(job, file, reason) {
     const item = document.createElement("li");
     item.dataset.fileId = String(file.id);
     item.dataset.codec = file.thumbnailCodec || "";
+    // Numeric/stage diagnostics stay in this local report, without media or keys.
+    if (file.thumbnailTrace) item.dataset.decodeTrace = JSON.stringify(file.thumbnailTrace);
     item.textContent = `${file.name || `ファイル ${file.id}`}：${reason}`;
     $("#thumbnail-maintenance-failures").append(item);
   }
