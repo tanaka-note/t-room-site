@@ -67,6 +67,11 @@ try { for(const [name,engine,launch] of engines){
   } else assert.ok((await page.locator('#device-storage-scope').textContent()).includes('対応していません'));
   for(const width of [320,390,430]){
    await page.setViewportSize({width,height:740});
+   if(width===320){
+    await page.locator('#mobile-account-button').click();
+    await page.locator('#account-dialog .dialog-close').click();
+    await page.waitForFunction(()=>document.querySelector('#account-view').contains(document.querySelector('#account-content')));
+   }
    assert.deepEqual(await page.locator('.mobile-nav button').allTextContents().then(a=>a.map(s=>s.trim())),['フォルダ','写真','動画','お気に入り','ゴミ箱','アカウント']);
    const rects=await page.locator('.mobile-nav button').evaluateAll(es=>es.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right};}));
    assert.ok(rects.every(r=>r.x>=0&&r.right<=width&&r.y===rects[0].y));

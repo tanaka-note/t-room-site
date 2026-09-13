@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-22b117afe9f1";
+const APP_BUILD_ID = "cloud-7088b699781c";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -231,6 +231,7 @@ function bindEvents() {
   $("#install-app-button-top").addEventListener("click", installApp);
   $("#update-app-button-top").addEventListener("click", updateInstalledApp);
   $("#mobile-account-button").addEventListener("click", openAccountDialog);
+  $("#account-dialog").addEventListener("close", syncAccountView);
   $("#open-batch-rename").addEventListener("click", openBatchRenameDialog);
   $("#batch-rename-preflight").addEventListener("click", preflightBatchRename);
   $("#batch-rename-execute").addEventListener("click", executeBatchRename);
