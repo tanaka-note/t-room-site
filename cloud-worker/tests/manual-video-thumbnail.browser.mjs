@@ -52,7 +52,15 @@ try {for(const [name,engine,launch] of engines){
   await open('admin');await page.locator('#preview-more summary').click();
   assert.equal(await page.getByText('サムネイル位置を変更',{exact:true}).count(),1);
   assert.equal(await page.locator('#preview-more #manual-thumbnail-button').count(),1);
+  await page.evaluate(()=>{window.editorVideo=document.querySelector('#preview-stage video');window.editorTime=editorVideo.currentTime;});
   await page.locator('#manual-thumbnail-button').click();
+  const visibleEditor=await page.evaluate(()=>{
+   const p=document.querySelector('.manual-thumbnail-panel'),r=p.getBoundingClientRect(),d=document.querySelector('#preview-dialog').getBoundingClientRect(),actions=document.querySelector('.preview-actions').getBoundingClientRect();
+   const bottom=Math.min(innerHeight,d.bottom,actions.top);
+   return {visible:r.top>=Math.max(0,d.top)&&r.bottom<=bottom,bg:getComputedStyle(p).backgroundColor,same:editorVideo===document.querySelector('#preview-stage video'),time:editorVideo.currentTime===editorTime,
+    buttons:[...p.querySelectorAll('button')].every(b=>{const q=b.getBoundingClientRect();return !b.disabled&&q.top>=0&&q.bottom<=bottom&&document.elementFromPoint(q.x+q.width/2,q.y+q.height/2)?.closest('button')===b;})};
+  });
+  assert.deepEqual(visibleEditor,{visible:true,bg:'rgb(255, 255, 255)',same:true,time:true,buttons:true});
   assert.equal(await page.locator('#preview-stage video').count(),1);
   assert.equal(await page.locator('.preview-player-seek').count(),1);
   await page.waitForFunction(()=>document.querySelector('#preview-stage video').readyState>=2);

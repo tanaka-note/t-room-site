@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-1a115697e806";
+const APP_BUILD_ID = "cloud-76d0412cd6a5";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -7049,7 +7049,12 @@ function stopManualThumbnail() {
   mode.video.removeEventListener("seeked", mode.update);
   mode.video.removeEventListener("enterpictureinpicture", stopManualThumbnail);
   mode.video.removeEventListener("webkitpresentationmodechanged", mode.presentation);
+  window.removeEventListener("resize", mode.ensureVisible);
   mode.panel.remove();
+  if (mode.dialog.open && Number(state.previewFileId) === Number(mode.file.id)) {
+    mode.dialog.scrollTop = mode.originScrollTop;
+    $("#preview-more summary").focus({preventScroll:true});
+  }
 }
 
 function startManualThumbnail() {
@@ -7061,8 +7066,23 @@ function startManualThumbnail() {
   video.pause();
   const panel = document.createElement("section");
   panel.className = "manual-thumbnail-panel";
+  panel.tabIndex = -1;
+  panel.setAttribute("aria-label", "サムネイル位置の選択");
   panel.innerHTML = '<p>再生バーでサムネイルにしたい位置を選んでください</p><p>現在位置：<output></output></p><p class="manual-thumbnail-message" role="status"></p><div><button type="button" class="secondary-button" data-action="cancel">キャンセル</button><button type="button" class="primary-button" data-action="save">この位置をサムネイルに設定</button></div>';
   const mode = {file, video, panel, controller:new AbortController(), generation:state.previewGeneration, scope:displayCacheScope(), saving:false};
+  mode.dialog = $("#preview-dialog");
+  mode.originScrollTop = mode.dialog.scrollTop;
+  mode.ensureVisible = () => {
+    if (state.manualThumbnail !== mode || !panel.isConnected) return;
+    const bounds = mode.dialog.getBoundingClientRect(), rect = panel.getBoundingClientRect();
+    const actions = mode.dialog.querySelector(".preview-actions");
+    const top = Math.max(0, bounds.top) + 8;
+    let bottom = Math.min(innerHeight, bounds.bottom) - 8;
+    if (getComputedStyle(actions).position === "sticky") bottom = Math.min(bottom, actions.getBoundingClientRect().top - 8);
+    // Scroll only the dialog, by the smallest amount that reveals the controls.
+    const delta = rect.bottom > bottom ? rect.bottom - bottom : rect.top < top ? rect.top - top : 0;
+    mode.dialog.scrollTop += delta;
+  };
   mode.update = () => { panel.querySelector("output").textContent = formatPreviewPlaybackTime(video.currentTime); };
   mode.presentation = () => { if (video.webkitPresentationMode === "picture-in-picture") stopManualThumbnail(); };
   state.manualThumbnail = mode;
@@ -7076,6 +7096,9 @@ function startManualThumbnail() {
   panel.querySelector('[data-action="cancel"]').addEventListener("click", stopManualThumbnail);
   panel.querySelector('[data-action="save"]').addEventListener("click", () => { void saveManualThumbnail(mode); });
   $("#preview-stage").after(panel);
+  window.addEventListener("resize", mode.ensureVisible);
+  panel.focus({preventScroll:true});
+  mode.ensureVisible();
 }
 
 async function saveManualThumbnail(mode) {
