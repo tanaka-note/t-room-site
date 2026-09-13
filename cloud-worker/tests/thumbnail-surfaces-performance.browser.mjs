@@ -19,6 +19,8 @@ try{for(const [engineName,engine,launch] of engines){
    payload=await page.evaluate(async count=>{
     __share.bindEvents();const key=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
     const c=document.createElement('canvas');c.width=64;c.height=64;c.getContext('2d').fillStyle='#208080';c.getContext('2d').fillRect(0,0,64,64);
+    // A real poster has variation; a solid frame correctly triggers video repair.
+    c.getContext('2d').fillStyle='#eee';c.getContext('2d').fillRect(32,0,32,64);
     const blob=await new Promise(r=>c.toBlob(r,'image/png'));
     __share.prepare(Array.from({length:count},(_,i)=>({id:i+1,name:'fixture '+i,fileKey:key,mediaKind:'video',hasThumbnail:true,cryptoVersion:1,createdAt:'2026-09-12 00:00:00'})));
     return Array.from(new Uint8Array(await(await TRoomCrypto.encryptThumbnail(blob,key)).arrayBuffer()));

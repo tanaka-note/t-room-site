@@ -45,7 +45,8 @@ try {
         assert.equal(route.request().method(),'GET');assert.equal(route.request().postData(),null);
         const url=route.request().url();calls.push(url);active++;maxActive=Math.max(active,maxActive);
         await new Promise(r=>setTimeout(r,50));
-        await route.fulfill(url.endsWith('/display-thumbnail')?{body:Buffer.from(image.plain),contentType:'image/png'}:{status:404,body:''});active--;
+        assert.ok(!url.endsWith('/display-thumbnail'));
+        await route.fulfill(url.endsWith('/thumbnail')?{body:Buffer.from(image.encrypted),contentType:'application/octet-stream'}:{status:404,body:''});active--;
       });
       await share.evaluate(()=>{
         __share.bindEvents();
@@ -60,7 +61,7 @@ try {
       await share.evaluate(()=>__share.changeSharedSort('name'));
       await share.waitForTimeout(200);
       assert.equal(calls.length>oldCalls,before);
-      console.log(before?'REPRODUCED display-only share 404 and unbounded duplicate loads':'PASS display-only share, four jobs, sort reuse',name,{images:count,maxActive,extraCalls:calls.length-oldCalls});
+      console.log(before?'REPRODUCED share 404 and unbounded duplicate loads':'PASS encrypted share, four jobs, sort reuse',name,{images:count,maxActive,extraCalls:calls.length-oldCalls});
       await share.close();
     } finally {await browser.close();}
   }

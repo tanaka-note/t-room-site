@@ -20,21 +20,20 @@ assert.match(client, /renderCachedDisplayListing\(cached\)/);
 assert.match(client, /scheduleDisplayListingCacheWrite\(cacheKey\)/);
 assert.match(client, /TCloudDisplayCache\?\.getThumbnail/);
 assert.match(client, /TCloudDisplayCache\?\.putThumbnail/);
-assert.match(client, /state\.session\?\.role === "subadmin" && state\.folderId && !state\.crypto\.folderKeys\.has/);
+assert.match(client, /state\.session\?\.role !== "admin" && state\.folderId && !state\.crypto\.folderKeys\.has/);
 assert.match(client, /renderedCachedItems && \[401, 403, 404, 423\]/);
 assert.match(html, /display-cache\.js\?v=cloud-[a-f0-9]{12}/);
 assert.match(worker, /\["\/display-cache\.js", "\/display-cache-20260813-1\.js"\]/);
 assert.match(worker, /if \(Number\(body\.cryptoVersion\) !== 1\).*暗号化されたファイルだけ保存できます/);
-assert.match(worker, /display_media_kind !== "image"/);
-assert.match(worker, /file\.display_media_kind === "video"/);
 assert.match(worker, /allowedSignatures = \{[\s\S]*?image:[\s\S]*?audio:[\s\S]*?document:/);
 assert.match(client, /if \(mediaKind === "video" \|\| !allowed\[mediaKind\]\?\.has\(signature\)\) return null/);
-assert.match(client, /fastDisplay\?\.mediaKind === "image"[\s\S]*?\/display-thumbnail/);
-assert.doesNotMatch(client, /fastDisplay\?\.mediaKind === "video"[\s\S]*?\/display-thumbnail/);
+assert.doesNotMatch(client, /display-thumbnail/);
+assert.match(cache, /DB_VERSION = 2/);
+assert.doesNotMatch(client, /TCloudDisplayCache\??\.clearScope/);
 
 const cacheContext = { state: { session: null, credentialSalt: "shared-account-salt" }, TCloudDisplayCache: { supported: () => true } };
 vm.createContext(cacheContext);
-for (const name of ["memberCacheScope", "displayCacheScope", "offlineAccountScope"]) {
+for (const name of ["memberCacheScope", "legacyDisplayCacheScope", "displayCacheScope", "offlineAccountScope"]) {
   const start = client.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `${name} exists`);
   const end = client.indexOf("\n}", start) + 2;
@@ -47,9 +46,11 @@ const initialScope = cacheContext.displayCacheScope();
 const initialOfflineScope = cacheContext.offlineAccountScope();
 assert.ok(initialScope.startsWith("member:"));
 assert.ok(initialOfflineScope.startsWith("member:"));
-for (const changes of [{ serviceLinkId: "member-link-b" }, { rootFolderId: 8 }, { sessionCacheId: "session-b" }]) {
+cacheContext.state.session = { ...memberSession, sessionCacheId: "session-b" };
+assert.equal(cacheContext.displayCacheScope(), initialScope, "same member reuses cache after relogin");
+for (const changes of [{ serviceLinkId: "member-link-b" }, { rootFolderId: 8 }]) {
   cacheContext.state.session = { ...memberSession, ...changes };
-  assert.notEqual(cacheContext.displayCacheScope(), initialScope, "member listing/thumbnail caches are link, root and session scoped");
+  assert.notEqual(cacheContext.displayCacheScope(), initialScope, "member listing/thumbnail caches are link and root scoped");
 }
 cacheContext.state.session = { ...memberSession, serviceLinkId: "member-link-b" };
 assert.notEqual(cacheContext.offlineAccountScope(), initialOfflineScope, "member media never reuses another link's offline scope");
@@ -61,7 +62,9 @@ for (const role of ["admin", "subadmin"]) {
   cacheContext.state.session = { role, serviceAccountId: role, sessionCacheId: "session-a" };
   const scope = cacheContext.displayCacheScope();
   assert.ok(scope.startsWith(`${role}:`));
-  for (const changes of [{serviceAccountId: "other"}, {serviceLinkId: "other"}, {rootFolderId: 7}, {sessionCacheId: "session-b"}]) {
+  cacheContext.state.session = { role, serviceAccountId: role, sessionCacheId: "session-b" };
+  assert.equal(cacheContext.displayCacheScope(), scope);
+  for (const changes of [{serviceAccountId: "other"}, {serviceLinkId: "other"}, {rootFolderId: 7}]) {
     cacheContext.state.session = {role, serviceAccountId: role, sessionCacheId: "session-a", ...changes};
     assert.notEqual(cacheContext.displayCacheScope(), scope);
   }

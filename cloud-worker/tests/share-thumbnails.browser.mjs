@@ -25,8 +25,8 @@ try{for(const [name,engine,launch] of engines){
     if(scenario==='503-limit')return route.fulfill({status:503,body:''});
     if(scenario==='network'&&calls.length===1)return route.abort('failed');
     if(typeof scenario==='number'&&(scenario<500&&![408,429].includes(scenario)||calls.length===1))return route.fulfill({status:scenario,body:''});
-    if(scenario==='display-fallback'&&url.endsWith('display-thumbnail'))return route.fulfill({body:'invalid'});
-    return route.fulfill({body:Buffer.from(url.endsWith('display-thumbnail')?payload.plain:payload.encrypted)});
+    assert.ok(!url.endsWith('display-thumbnail'),'stale display flags never trigger plaintext requests');
+    return route.fulfill({body:Buffer.from(payload.encrypted)});
    });
    await page.evaluate(async scenario=>{
     const file=__share.state.files[0];
@@ -47,7 +47,7 @@ try{for(const [name,engine,launch] of engines){
    await page.waitForTimeout(100);
    const success=['ok','display','display-fallback',500,429,408,'network','decode-timeout'].includes(scenario);
    assert.equal(await page.locator('#items .thumb img').count(),success?1:0,String(scenario));
-   const expected=['none','no-key'].includes(scenario)?0:scenario==='503-limit'?3:['display-fallback',500,429,408,'network','decode-timeout'].includes(scenario)?2:1;
+   const expected=['none','no-key'].includes(scenario)?0:scenario==='503-limit'?3:[500,429,408,'network','decode-timeout'].includes(scenario)?2:1;
    assert.equal(calls.length,expected,String(scenario));assert.equal(await page.evaluate(()=>idbOpens),0);
    if(![401,410,419].includes(scenario))assert.equal(await page.locator('#items .thumb .symbol').count(),success?0:1);
    console.log('PASS shared thumbnail',name,scenario,{requests:calls.length,persistentCacheWrites:0});await page.close();

@@ -63,7 +63,11 @@ try {
             const initial={...base,role,serviceAccountId:role==='member'?'folder-member':role};
             __test.state.session=initial;const scope=__test.displayCacheScope();
             await TCloudDisplayCache.putThumbnail(scope,1,'scope',__thumb.blob);
-            for(const change of [{serviceLinkId:'link-b'},{rootFolderId:8},{sessionCacheId:'session-b'},{serviceAccountId:'different'},{role:role==='admin'?'subadmin':'admin'}]) {
+            __test.releaseSessionState();
+            results.push(!!await TCloudDisplayCache.getThumbnail(scope,1,'scope'));
+            __test.state.session={...initial,sessionCacheId:'session-b'};
+            results.push(__test.displayCacheScope()===scope&&!!await TCloudDisplayCache.getThumbnail(__test.displayCacheScope(),1,'scope'));
+            for(const change of [{serviceLinkId:'link-b'},{rootFolderId:8},{serviceAccountId:'different'},{role:role==='admin'?'subadmin':'admin'}]) {
               __test.state.session={...initial,...change};const next=__test.displayCacheScope();
               results.push(scope!==next&&!await TCloudDisplayCache.getThumbnail(next,1,'scope'));
             }

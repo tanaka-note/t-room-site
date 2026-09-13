@@ -15,9 +15,14 @@
   function encodedSize(value) {
     try { return new TextEncoder().encode(JSON.stringify(value)).byteLength; } catch { return 0; }
   }
-  async function getListing(scope, key) {
+  async function getListing(scope, key, legacyScope = "") {
     if (!scope || !key) return null;
-    return (await getEntry(entryKey("listing", scope, key), "listing"))?.payload || null;
+    const cached = (await getEntry(entryKey("listing", scope, key), "listing"))?.payload;
+    if (cached) return cached;
+    if (!legacyScope || legacyScope === scope) return null;
+    const legacy = await getListing(legacyScope, key);
+    if (legacy) await putListing(scope, key, legacy);
+    return legacy;
   }
   async function putListing(scope, key, payload) {
     const sizeBytes = encodedSize(payload);
@@ -25,14 +30,18 @@
     return putEntry({id: entryKey("listing", scope, key), kind: "listing", scope, cacheKey: key,
       sizeBytes, lastAccessed: Date.now()}, {payload}, LISTING_LIMIT_BYTES);
   }
-  async function getThumbnail(scope, fileId, version) {
+  async function getThumbnail(scope, fileId, version, legacyScope = "") {
     if (!scope) return null;
     const id = entryKey("thumbnail", scope, thumbnailKey(fileId, version));
     const entry = await getEntry(id, "thumbnail");
     const blob = entry?.payload instanceof Blob ? entry.payload
       : entry?.payload instanceof ArrayBuffer ? new Blob([entry.payload], {type: entry.mimeType || ""}) : null;
     if (!blob?.size && entry) await deleteEntries([id]);
-    return blob?.size ? blob : null;
+    if (blob?.size) return blob;
+    if (!legacyScope || legacyScope === scope) return null;
+    const legacy = await getThumbnail(legacyScope, fileId, version);
+    if (legacy) await putThumbnail(scope, fileId, version, legacy);
+    return legacy;
   }
   async function putThumbnail(scope, fileId, version, blob) {
     if (!scope || !(blob instanceof Blob) || !blob.size || blob.size > THUMBNAIL_LIMIT_BYTES) return false;

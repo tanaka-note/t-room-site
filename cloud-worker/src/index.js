@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } 
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-75298fe09250";
+const APP_BUILD_ID = "cloud-c6bed2d8bc46";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -837,14 +837,9 @@ async function getPublicShareContent(token, fileId, disposition, request, env) {
 
 async function getPublicShareDisplayThumbnail(token, fileId, request, env) {
   const share = await requireAuthorizedShare(token, request, env);
-  const file = await requireSharedFile(env, share, fileId);
-  // Only existing image display assets. Never expose video through this route.
-  if (Number(file.display_metadata_version) !== 1 || file.display_media_kind !== "image" || !file.display_thumbnail_key) {
-    throw new HttpError(404, "表示用サムネイルがありません。");
-  }
-  const object = await env.FILES.get(file.display_thumbnail_key);
-  if (!object) throw new HttpError(404, "表示用サムネイルがありません。");
-  return objectResponse(object, "inline", "thumbnail.webp", "image/webp");
+  await requireSharedFile(env, share, fileId);
+  // Old share clients treat 410 as an expired share; 404 allows their encrypted fallback.
+  throw new HttpError(404, "暗号化サムネイルを利用してください。");
 }
 
 async function recordPublicShareEvent(token, request, env) {
@@ -1054,8 +1049,8 @@ async function listItems(url, env, session) {
         metadata_iv AS metadataIv, wrapped_file_key AS wrappedFileKey, file_key_iv AS fileKeyIv,
         encrypted_size_bytes AS encryptedSizeBytes, chunk_size_bytes AS chunkSizeBytes,
         chunk_count AS chunkCount,
-        (thumbnail_key IS NOT NULL OR display_thumbnail_key IS NOT NULL) AS hasThumbnail,
-        display_thumbnail_key IS NOT NULL AS hasDisplayThumbnail,
+        thumbnail_key IS NOT NULL AS hasThumbnail,
+        0 AS hasDisplayThumbnail,
         EXISTS(SELECT 1 FROM cloud_deletion_requests dr WHERE dr.file_id = cloud_files.id AND dr.status = 'pending') AS deletionPending,
         created_at AS createdAt, updated_at AS updatedAt
       FROM cloud_files WHERE ${clauses.join(" AND ")} ORDER BY ${order}${uploadIndex ? ", id ASC" : ""}
@@ -1199,8 +1194,8 @@ async function searchItems(url, env, session, { folderId, query, kind, sort, fav
         file.metadata_iv AS metadataIv, file.wrapped_file_key AS wrappedFileKey,
         file.file_key_iv AS fileKeyIv, file.encrypted_size_bytes AS encryptedSizeBytes,
         file.chunk_size_bytes AS chunkSizeBytes, file.chunk_count AS chunkCount,
-        (file.thumbnail_key IS NOT NULL OR file.display_thumbnail_key IS NOT NULL) AS hasThumbnail,
-        file.display_thumbnail_key IS NOT NULL AS hasDisplayThumbnail,
+        file.thumbnail_key IS NOT NULL AS hasThumbnail,
+        0 AS hasDisplayThumbnail,
         EXISTS(SELECT 1 FROM cloud_deletion_requests request
           WHERE request.file_id = file.id AND request.status = 'pending') AS deletionPending,
         file.created_at AS createdAt, file.updated_at AS updatedAt,
@@ -1320,8 +1315,8 @@ async function listPlayerMedia(url, env, session) {
       file.metadata_iv AS metadataIv, file.wrapped_file_key AS wrappedFileKey,
       file.file_key_iv AS fileKeyIv, file.encrypted_size_bytes AS encryptedSizeBytes,
       file.chunk_size_bytes AS chunkSizeBytes, file.chunk_count AS chunkCount,
-      (file.thumbnail_key IS NOT NULL OR file.display_thumbnail_key IS NOT NULL) AS hasThumbnail,
-      file.display_thumbnail_key IS NOT NULL AS hasDisplayThumbnail,
+      file.thumbnail_key IS NOT NULL AS hasThumbnail,
+      0 AS hasDisplayThumbnail,
       file.created_at AS createdAt, file.updated_at AS updatedAt,
       scope.depth AS searchDepth, scope.path_ids AS pathFolderIds
     FROM folder_scope scope JOIN cloud_files file ON file.folder_id = scope.id
@@ -2104,9 +2099,8 @@ async function putThumbnail(id, request, env, session) {
     if (!isFreshOwnUpload) throw new HttpError(403, "副管理者は既存ファイルのサムネイルを変更できません。");
   }
   await requireFolderAccess(env, file.folder_id, session);
-  const length = Number(request.headers.get("Content-Length") || 0);
-  if (length > 2 * 1024 * 1024) throw new HttpError(413, "サムネイルが大きすぎます。");
-  await storeThumbnail(file, request.body, env);
+  if (Number(file.crypto_version) !== 1) throw new HttpError(400, "暗号化されたファイルを選択してください。");
+  await storeThumbnail(file, await readEncryptedThumbnail(request), env);
   return json({ ok: true });
 }
 
@@ -2117,6 +2111,14 @@ async function putManualThumbnail(id, request, env, session) {
   // Encrypted uploads keep their media kind opaque here. The admin UI validates
   // the decrypted video kind locally; do not require plaintext display metadata.
   if (Number(file.crypto_version) !== 1) throw new HttpError(400, "暗号化されたファイルを選択してください。");
+  const bytes = await readEncryptedThumbnail(request);
+  await storeThumbnail(file, bytes, env, true);
+  await audit(env, "video_thumbnail_manual_updated", session, "file", id);
+  const saved = await env.DB.prepare("SELECT updated_at FROM cloud_files WHERE id = ?").bind(id).first();
+  return json({ ok: true, updatedAt: saved.updated_at });
+}
+
+async function readEncryptedThumbnail(request) {
   const limit = 2 * 1024 * 1024;
   if (Number(request.headers.get("Content-Length")) > limit) throw new HttpError(413, "サムネイルが大きすぎます。");
   const reader = request.body?.getReader();
@@ -2135,15 +2137,12 @@ async function putManualThumbnail(id, request, env, session) {
   const bytes = new Uint8Array(length); let offset = 0;
   for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
   if (bytes[0] !== 0x54 || bytes[1] !== 0x52 || bytes[2] !== 0x54 || bytes[3] !== 0x48) throw new HttpError(400, "暗号化サムネイルを確認してください。");
-  await storeThumbnail(file, bytes, env, true);
-  await audit(env, "video_thumbnail_manual_updated", session, "file", id);
-  const saved = await env.DB.prepare("SELECT updated_at FROM cloud_files WHERE id = ?").bind(id).first();
-  return json({ ok: true, updatedAt: saved.updated_at });
+  return bytes;
 }
 
 async function storeThumbnail(file, body, env, manual = false) {
   const key = file.thumbnail_key || `thumbnails/${crypto.randomUUID()}.webp`;
-  await env.FILES.put(key, body, { httpMetadata: { contentType: Number(file.crypto_version) === 1 ? "application/octet-stream" : "image/webp" } });
+  await env.FILES.put(key, body, { httpMetadata: { contentType: "application/octet-stream" } });
   const timestamp = manual ? "strftime('%Y-%m-%d %H:%M:%f', 'now')" : "CURRENT_TIMESTAMP";
   await env.DB.prepare(`UPDATE cloud_files SET thumbnail_key = ?, updated_at = ${timestamp} WHERE id = ?`).bind(key, file.id).run();
 }
@@ -2162,31 +2161,14 @@ async function putDisplayThumbnail(id, request, env, session) {
   requireUpload(session);
   const file = await requireReadyFile(env, id, false);
   await requireFolderAccess(env, file.folder_id, session);
-  if (Number(file.display_metadata_version) !== 1 || file.display_media_kind !== "image") {
-    throw new HttpError(403, "動画・未確認形式の表示用データはオンラインへ平文保存できません。");
-  }
-  const length = Number(request.headers.get("Content-Length") || 0);
-  if (length <= 0 || length > 2 * 1024 * 1024) throw new HttpError(413, "表示用サムネイルの容量を確認してください。");
-  const key = file.display_thumbnail_key || `display-thumbnails/${crypto.randomUUID()}.webp`;
-  await env.FILES.put(key, request.body, { httpMetadata: { contentType: "image/webp" } });
-  await env.DB.prepare("UPDATE cloud_files SET display_thumbnail_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-    .bind(key, id).run();
-  return json({ ok: true });
+  throw new HttpError(410, "平文サムネイルの保存は終了しました。アプリを更新してください。");
 }
 
 async function getDisplayThumbnail(id, env, session) {
   const file = await requireReadyFile(env, id, true);
   requireTrashVisibility(session, file);
   await requireFolderAccess(env, file.folder_id, session);
-  if (Number(file.display_metadata_version) !== 1 || file.display_media_kind === "video" || !file.display_thumbnail_key) {
-    throw new HttpError(404, "表示用サムネイルがありません。");
-  }
-  const object = await env.FILES.get(file.display_thumbnail_key);
-  if (!object) throw new HttpError(404, "表示用サムネイルがありません。");
-  const response = objectResponse(object, "inline", "thumbnail.webp", "image/webp");
-  const headers = new Headers(response.headers);
-  headers.set("Cache-Control", "private, max-age=2592000, immutable");
-  return new Response(response.body, { status: response.status, headers });
+  throw new HttpError(404, "暗号化サムネイルを利用してください。");
 }
 
 async function streamFile(id, disposition, request, env, session) {
@@ -2877,8 +2859,8 @@ function mapFile(file) {
     metadataIv: file.metadata_iv, wrappedFileKey: file.wrapped_file_key, fileKeyIv: file.file_key_iv,
     encryptedSizeBytes: file.encrypted_size_bytes, chunkSizeBytes: file.chunk_size_bytes,
     chunkCount: file.chunk_count,
-    hasThumbnail: Boolean(file.thumbnail_key || file.display_thumbnail_key),
-    hasDisplayThumbnail: Boolean(file.display_thumbnail_key), createdAt: file.created_at, updatedAt: file.updated_at,
+    hasThumbnail: Boolean(file.thumbnail_key),
+    hasDisplayThumbnail: false, createdAt: file.created_at, updatedAt: file.updated_at,
     deletedAt: file.deleted_at
   };
 }

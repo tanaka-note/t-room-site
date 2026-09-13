@@ -19,6 +19,7 @@ export async function startUIFixture(sourceRoot = root, {handleRequest} = {}) {
       if (path.endsWith('.css') && req.headers.cookie?.includes('standalone=1')) data = Buffer.from(data.toString().replaceAll('@media (display-mode: standalone)', '@media all'));
       if (path === 'cloud.js') data = Buffer.from(data.toString().replace('document.addEventListener("DOMContentLoaded", initialize);', '') + `
         globalThis.__test = {state, bindEvents, fileCard, renderItems, loadItems, loadNextItemPage, hydrateFileRecords, hydrateFolderRecords, chooseVideoThumbnailFrame, captureNativeVideoThumbnail, startThumbnailMaintenance, captureVideoThumbnail, makeThumbnail, saveEncryptedUploadThumbnail, backfillVideoThumbnail, backfillMissingVideoThumbnails, queueVideoThumbnailRepair, resetBackgroundMediaWork, observePlaybackThumbnail, displayCacheScope, scheduleDisplayListingCacheWrite, scheduleEncryptedThumbnailLoading, resetEncryptedThumbnailLoading, loadEncryptedThumbnail, installThumbnailBlob, openPreview, handleHistoryNavigation, appScrollPosition, scrollAppTo, resetFolderScrollPosition, releaseSessionState,
+          legacyDisplayCacheScope, readDisplayListingCache,
           searchCacheSnapshot() { return [...searchMetadataCache.values()]; },
           unavailableVideo() { registerMediaWithDeviceCache = async () => { throw new Error('Local unavailable-media fixture'); }; },
           videoFixture(url) { registerMediaWithDeviceCache = async () => ({token:'local-video-fixture',url}); },

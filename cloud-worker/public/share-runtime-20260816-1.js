@@ -350,7 +350,7 @@ function fileCard(file) {
     });
     article.append(selectButton);
   }
-  if (file.hasThumbnail || file.hasDisplayThumbnail) {
+  if (file.hasThumbnail) {
     state.thumbnailTasks.set(Number(file.id), {file, stage:article.querySelector(".thumb"), status:"pending", attempts:0,
       generation:state.thumbnailGeneration, stopped:new Set(), readyAt:0, controller:null, url:""});
   }
@@ -662,7 +662,7 @@ async function loadThumbnail(task) {
   const {file,stage,controller} = task;
   const current = () => !controller.signal.aborted && task.generation === state.thumbnailGeneration
     && Number(state.info?.expiresAt) * 1000 > Date.now();
-  const sources = file.mediaKind === "image" && file.hasDisplayThumbnail ? ["display-thumbnail", "thumbnail"] : ["thumbnail"];
+  const sources = ["thumbnail"];
   let retry = false;
   for (const source of sources) {
     if (!current()) return;
@@ -690,9 +690,7 @@ async function loadThumbnail(task) {
       try {
         const bytes = await response.arrayBuffer();
         if (!current()) return;
-        blob = source === "thumbnail"
-          ? new Blob([await TCloudUI.measureThumbnailStep("share-decrypt", () => TRoomCrypto.decryptThumbnail(bytes,file.fileKey))], {type:"image/webp"})
-          : new Blob([bytes], {type:"image/webp"});
+        blob = new Blob([await TCloudUI.measureThumbnailStep("share-decrypt", () => TRoomCrypto.decryptThumbnail(bytes,file.fileKey))], {type:"image/webp"});
       } catch (error) {
         // Failed crypto/format is terminal; only interrupted network reads retry.
         if (error instanceof TypeError) retry = true;

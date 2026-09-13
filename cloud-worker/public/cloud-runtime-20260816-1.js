@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-75298fe09250";
+const APP_BUILD_ID = "cloud-c6bed2d8bc46";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -1094,6 +1094,12 @@ async function enterApp(session, password = "", accountKey = null, passkeyContex
   $("#mobile-usage-details-action").hidden = session.role !== "admin";
   const restoredNavigation = initializeNavigationHistory();
   await prepareCryptoSession(password, accountKey, passkeyContext);
+  // Authentication and key preparation precede display, but /items must not
+  // hide an already available account cache behind the startup screen.
+  $("#boot-view").hidden = true;
+  $("#login-view").hidden = true;
+  $("#app-view").hidden = false;
+  document.body.classList.add("cloud-app-open");
   const loaded = await loadItems();
   if (!loaded.ok && restoredNavigation.folderId && [403, 404, 423].includes(Number(loaded.error?.status))) {
     await navigateToFolder(null, "フォルダ", { pushHistory: false, load: false });
@@ -1101,10 +1107,6 @@ async function enterApp(session, password = "", accountKey = null, passkeyContex
     await loadItems();
     setNotice("前回開いていたフォルダの再確認が必要なため、フォルダ一覧を表示しました。", true);
   }
-  $("#boot-view").hidden = true;
-  $("#login-view").hidden = true;
-  $("#app-view").hidden = false;
-  document.body.classList.add("cloud-app-open");
   await restoreNavigationPosition(restoredNavigation);
   if (session.role === "admin") scheduleUsageLoad();
   scheduleLegacyFolderMigration();
@@ -2207,6 +2209,14 @@ function offlineAccountScope() {
 }
 
 function displayCacheScope() {
+  if (!legacyDisplayCacheScope()) return "";
+  const session = state.session;
+  return `${session.role}:account-v1:${JSON.stringify([session.serviceAccountId || session.role,
+    session.serviceLinkId || "", session.rootFolderId || null,
+    state.credentialSalt || session.credentialSalt || ""])}`;
+}
+
+function legacyDisplayCacheScope() {
   if (!state.session || !globalThis.TCloudDisplayCache?.supported?.()) return "";
   const session = state.session;
   if (!session.sessionCacheId || !["admin", "subadmin", "member"].includes(session.role)) return "";
@@ -2232,9 +2242,9 @@ function displayListingCacheKey(params) {
 async function readDisplayListingCache(cacheKey) {
   const scope = displayCacheScope();
   if (!scope || state.view !== "all") return null;
-  if (state.session?.role === "subadmin" && state.folderId && !state.crypto.folderKeys.has(Number(state.folderId))) return null;
+  if (state.session?.role !== "admin" && state.folderId && !state.crypto.folderKeys.has(Number(state.folderId))) return null;
   try {
-    const cached = await TCloudDisplayCache.getListing(scope, cacheKey);
+    const cached = await TCloudDisplayCache.getListing(scope, cacheKey, legacyDisplayCacheScope());
     return scope === displayCacheScope() ? cached : null;
   } catch {
     return null;
@@ -2243,7 +2253,8 @@ async function readDisplayListingCache(cacheKey) {
 
 function renderCachedDisplayListing(cached) {
   if (!cached || state.view !== "all") return;
-  state.folders = finalizeHydratedFolders((cached.folders || []).map((folder) => ({ ...folder, cachedDisplay: true })));
+  state.folders = finalizeHydratedFolders((cached.folders || []).map((folder) => ({ ...folder, cachedDisplay: true,
+    isUnlocked: state.crypto.folderKeys.has(Number(folder.id)) })));
   state.files = finalizeHydratedFiles((cached.files || []).map((file) => ({ ...file, cachedDisplay: true })));
   state.breadcrumbs = (cached.breadcrumbs || []).map((folder) => ({ ...folder, cachedDisplay: true }));
   state.folderSummary = cached.folderSummary || null;
@@ -3527,7 +3538,7 @@ async function loadEncryptedThumbnail(file, stage, signal, generation, stoppedSo
   try {
     globalThis.TCloudSession?.check();
     const version = String(file.updatedAt || file.createdAt || "1");
-    const cached = scope ? await TCloudUI.measureThumbnailStep("cache-read", () => TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), version).catch(() => null)) : null;
+    const cached = scope ? await TCloudUI.measureThumbnailStep("cache-read", () => TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), version, legacyDisplayCacheScope()).catch(() => null)) : null;
     if (!current()) return "stop";
     if (cached) {
       if (await installThumbnailBlob(file, stage, cached, signal, generation)) return "done";
@@ -3536,7 +3547,6 @@ async function loadEncryptedThumbnail(file, stage, signal, generation, stoppedSo
       await TCloudDisplayCache?.removeThumbnail?.(scope, Number(file.id), version).catch(() => {});
     }
     const sources = [];
-    if (file.hasDisplayThumbnail && file.mediaKind !== "video") sources.push("display-thumbnail");
     if (file.hasThumbnail && (Number(file.cryptoVersion) !== 1 || file.fileKey)) sources.push("thumbnail");
     let retry = false;
     for (const source of sources) {
@@ -3748,7 +3758,7 @@ function scheduleEncryptedThumbnailLoading() {
   const generation = state.thumbnailLoadGeneration;
   state.thumbnailLoadObserver?.disconnect();
   for (const file of state.files) {
-    if (!file.hasThumbnail && !(file.hasDisplayThumbnail && file.mediaKind !== "video")) continue;
+    if (!file.hasThumbnail) continue;
     const stage = $(`.file-card[data-file-id="${Number(file.id)}"] .thumb`);
     if (!stage || stage.querySelector("img")) continue;
     const id = Number(file.id), previous = state.thumbnailLoadTasks.get(id);
@@ -6393,9 +6403,6 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
           await saveEncryptedUploadThumbnail(init.id, encryptedThumbnail, signal);
           thumbnailSaved = true;
         }
-        if (fastDisplay?.mediaKind === "image" && !signal?.aborted) {
-          await api(`/files/${init.id}/display-thumbnail`, { method: "PUT", body: thumbnail, rawBody: true, signal });
-        }
       }
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -7112,7 +7119,7 @@ async function backfillVideoThumbnail(file, generation) {
   try {
     globalThis.TCloudSession?.check();
     // Missing server posters may already have a local repair for this exact session.
-    const cached = scope ? await TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), String(file.updatedAt || file.createdAt || "1")).catch(() => null) : null;
+    const cached = scope ? await TCloudDisplayCache?.getThumbnail?.(scope, Number(file.id), String(file.updatedAt || file.createdAt || "1"), legacyDisplayCacheScope()).catch(() => null) : null;
     if (!current()) return;
     if (cached && await showGeneratedThumbnail(file, cached)) { mark("cached"); return; }
     mark("decoding");
@@ -9309,11 +9316,13 @@ function renderDiaryBackupMount() {
 
 async function loadUsage() {
   if (state.session?.role !== "admin") return;
-  const scope = displayCacheScope();
+  const scope = displayCacheScope(), session = state.session;
   try {
-    const cached = scope ? await TCloudDisplayCache?.getListing?.(scope, "system:usage").catch(() => null) : null;
+    const cached = scope ? await TCloudDisplayCache?.getListing?.(scope, "system:usage", legacyDisplayCacheScope()).catch(() => null) : null;
+    if (session !== state.session || scope !== displayCacheScope()) return;
     if (cached) renderUsage(cached);
     const usage = await api("/usage");
+    if (session !== state.session || scope !== displayCacheScope()) return;
     renderUsage(usage);
     if (scope) TCloudDisplayCache?.putListing?.(scope, "system:usage", usage).catch(() => {});
   } catch {}
