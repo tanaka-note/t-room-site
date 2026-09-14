@@ -153,7 +153,7 @@ function browserExecutable(name) {
 async function run(browserType, name, executablePath, contextOptions = {}) {
   paginationMode = false;
   isFavorite = false;
-  const browser = await browserType.launch({ headless: true, executablePath });
+  const browser = await browserType.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   try {
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
@@ -199,7 +199,7 @@ async function runPagination(browserType, name, executablePath, contextOptions =
   paginationMode = true;
   paginationFavoriteIds = new Set(paginationEntries.map((item) => item.id));
   paginationOffsets = [];
-  const browser = await browserType.launch({ headless: true, executablePath });
+  const browser = await browserType.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   try {
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
