@@ -2,6 +2,9 @@ import { expectedBuild, loadWebAppRegistry } from "./web-app-registry.mjs";
 
 const registry = await loadWebAppRegistry();
 const results = [];
+const targetIndex = process.argv.indexOf('--target');
+const target = targetIndex < 0 ? null : process.argv[targetIndex + 1];
+if (targetIndex >= 0 && (!target || !registry.apps.some(app => app.id === target || app.deployTarget === target))) throw new Error('Unknown app id or deploy target');
 
 function localShellAssetRefs(html, publicUrl) {
   const base = new URL(publicUrl);
@@ -28,6 +31,7 @@ async function verifyPublishedAsset(assetUrl, expected, kind) {
 }
 
 for (const app of registry.apps) {
+  if (target && app.id !== target && app.deployTarget !== target) continue;
   const expected = await expectedBuild(app, registry.contract);
   const publishedShellAssets = new Set();
   for (const publicUrl of app.publicUrls) {

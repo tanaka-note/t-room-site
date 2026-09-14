@@ -77,9 +77,9 @@ assert.match(worker, /DIARY_MAIN_ADMIN_LOGIN_ID/);
 assert.match(worker, /DIARY_WIFE_ADMIN_LOGIN_ID/);
 assert.doesNotMatch(worker, /DIARY_VIEW_PASSWORD_HASH/);
 assert.match(worker, /LOGIN_LIMIT = 5/);
-assert.match(wrangler, /"SESSION_TTL_SECONDS": "2592000"/);
+assert.match(wrangler, /"SESSION_TTL_SECONDS": "43200"/);
 assert.match(wrangler, /"PASSKEY_SESSION_TTL_SECONDS": "43200"/);
 assert.doesNotMatch(serviceWorker, /\/diary\/api\//);
 assert.doesNotMatch(serviceWorker, /\/diary\/photos/);
 
-process.stdout.write("Diary PWA and rolling session contract test passed.\n");
+process.stdout.write("Diary PWA and fixed twelve-hour session contract test passed.\n");

@@ -1,0 +1,57 @@
+name: Public site Preview
+on:
+  pull_request:
+    paths:
+      - '*.html'
+      - '*.css'
+      - '*.js'
+      - 'site-worker/**'
+      - 'apps/**'
+      - 'assets/**'
+      - 'learning/**'
+      - 'diary/**'
+      - 'transfer/**'
+      - 'asset-report-*/**'
+      - 'columns/**'
+      - 'images/**'
+      - 'tools/release.mjs'
+      - '.github/workflows/preview.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  preview:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    environment: preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - run: pnpm install --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false
+      - run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false
+        working-directory: security-worker
+      - name: Verify public site before uploading
+        run: node tools/verify.mjs --target site --build
+      - name: Upload version without production traffic
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'Preview not uploaded: configure preview environment CLOUDFLARE_PREVIEW_API_TOKEN. Local authenticated npm run preview remains available.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          set -o pipefail
+          node tools/release.mjs preview site | tee "$RUNNER_TEMP/preview-output.txt"
+          grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/preview-output.txt" | sort -u >> "$GITHUB_STEP_SUMMARY"

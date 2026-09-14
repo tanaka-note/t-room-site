@@ -42,6 +42,8 @@
 
 ## 4. Git・公開
 
+- 通常は `npm run verify:plan` / `npm run verify:changed` またはサービス別verifyを使う。PRのCI・Preview、失敗Trace、ローカルD1/R2、対象限定releaseは[開発フロー](docs/development-flow.md)に従う。本番bindingを持つWorkerをそのままPreview公開しない。
+
 - コミットには今回の依頼に関係するファイルだけを含める。
 - 調査・取得・比較・検証用の一時ファイルはリポジトリ直下に残さず、ignore済みの`tmp/`またはOSの一時ディレクトリへ生成する。
 - Codex自身が作成した一時ファイルは不要であることを確認し、作業完了前に削除する。作業開始前からある未追跡ファイルやユーザー作成物は、正体を確認せず削除しない。

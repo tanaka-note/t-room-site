@@ -239,14 +239,16 @@ async function runPagination(browserType, name, executablePath, contextOptions =
 try {
   const chromiumPath = browserExecutable("chromium");
   const firefoxPath = browserExecutable("firefox");
-  if (!chromiumPath || !firefoxPath) throw new Error("Chromium/Firefox executable is required.");
+  const chromiumOnly = process.env.TROOM_BROWSER === "chromium";
+  if (process.env.TROOM_BROWSER && !chromiumOnly) throw new Error("This fixture supports TROOM_BROWSER=chromium or its default full matrix.");
+  if (!chromiumOnly && (!chromiumPath || !firefoxPath)) throw new Error("Chromium/Firefox executable is required.");
   await run(chromium, "Chromium", chromiumPath);
-  await run(firefox, "Firefox", firefoxPath);
+  if (!chromiumOnly) await run(firefox, "Firefox", firefoxPath);
   await run(chromium, "Touch", chromiumPath, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await runPagination(chromium, "Chromium pagination", chromiumPath);
-  await runPagination(firefox, "Firefox pagination", firefoxPath);
+  if (!chromiumOnly) await runPagination(firefox, "Firefox pagination", firefoxPath);
   await runPagination(chromium, "Touch pagination", chromiumPath, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  process.stdout.write("Diary favorite star toggle and Back flow passed in Chromium, Firefox, and touch emulation.\n");
+  process.stdout.write("Diary favorite star toggle and Back flow passed in selected browsers and touch emulation.\n");
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));
 }

@@ -87,7 +87,9 @@ async function login(loginId, password) {
   const { response, result } = await request("/login", { method: "POST", body: { loginId, password } });
   assert.equal(response.status, 200, JSON.stringify(result));
   const setCookie = response.headers.get("set-cookie");
-  assert.match(setCookie, /Max-Age=2592000/);
+  assert.doesNotMatch(setCookie, /Max-Age=|Expires=/i, 'password login uses a browser-session cookie');
+  const payload = JSON.parse(Buffer.from(setCookie.split('=', 2)[1].split('.')[0], 'base64url'));
+  assert.ok(Math.abs(payload.exp - Date.parse(payload.startedAt) / 1000 - 43200) < 2, 'fixed twelve-hour server expiry');
   return { session: result, cookie: setCookie.split(";", 1)[0] };
 }
 
@@ -105,7 +107,7 @@ try {
   const refreshedSession = await request("/session", { cookie: wife.cookie });
   assert.equal(refreshedSession.response.status, 200);
   assert.equal(refreshedSession.result.authenticated, true);
-  assert.match(refreshedSession.response.headers.get("set-cookie"), /Max-Age=2592000/);
+  assert.equal(refreshedSession.response.headers.get("set-cookie"), null, 'session access must not roll password expiry');
 
   const title = `permission-test-${randomUUID()}`;
   const created = await request("/entries", {
