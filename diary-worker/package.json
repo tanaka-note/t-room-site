@@ -37,7 +37,7 @@
     "import:investment": "node scripts/import-investment-data.mjs"
   },
   "devDependencies": {
-    "playwright": "1.56.1",
-    "wrangler": "^4.34.0"
+    "playwright": "1.63.0",
+    "wrangler": "^4.131.1"
   }
 }
