@@ -135,6 +135,13 @@
   async function routeStatus() {
     try {
       const setup = await TRoomPasskeys.setupStatus();
+      if (setup.isPrimaryAdmin && setup.credentialStatus === "pending") {
+        $("#invite-view").hidden = false;
+        $("#invite-register").hidden = true;
+        renderPrimarySetupNotice(setup);
+        showMessage(setup.tcloudReady ? "T-Cloud管理者鍵の準備が完了しました。既存パスキーから管理者の承認を行ってください。" : "第一管理者パスキー登録処理が未完了です。T-Cloud管理者鍵の準備を続けてください。", !setup.tcloudReady);
+        return;
+      }
       if ((setup.active || setup.resumable || setup.needsTCloudSetup) && !setup.isPrimaryAdmin) {
         $("#invite-view").hidden = false;
         if (setup.tcloudReady) {
@@ -186,8 +193,8 @@
           prfEnabled: Boolean(result.prfEnabled), tcloudReady: false
         }));
         const preparationMessage = TRoomPasskeys.userMessage(preparationError, {}, "T-Cloudのパスキー利用準備を一時的に完了できませんでした。");
-        showMessage(`セキュリティセンター・日記・請求書のパスキー登録は完了しました。T-Cloudは未準備のため現在の管理者パスワードをご利用ください。${preparationMessage}`, false);
-        await showAdmin(setup);
+        showMessage(`第一管理者パスキー登録処理が未完了です。T-Cloud管理者鍵の準備を続けてください。${preparationMessage}`, true);
+        renderPrimarySetupNotice(setup);
       }
       if (tcloudReady) {
         showMessage("第一管理者の端末ロック解除を登録しました。現在の管理者パスワードは復旧手段として維持されています。");
@@ -204,22 +211,24 @@
     try {
       const setup = await TRoomPasskeys.setupStatus();
       if (!setup.active || !setup.isPrimaryAdmin || setup.tcloudReady) throw new Error("T-Cloudの準備状態が変わりました。画面を再読み込みしてください。");
-      if (!setup.prfEnabled) throw new Error("この端末ではT-Cloudのパスキー利用に対応していません。T-Cloudは現在のID・パスワードをご利用ください。");
+      const prf = await TRoomPasskeys.obtainPrf(setup.credentialId);
+      if (!prf.prfOutput) throw new Error("このパスキー方式ではT-Cloud管理者用の暗号鍵を準備できませんでした。PRFを利用できる環境で同じパスキーの準備を再試行してください。");
       const loginId = $("#tcloud-setup-id").value.trim().toLowerCase();
       const password = $("#tcloud-setup-password").value;
       const mode = await cloudApi("/auth-mode");
       const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId, mode.credentialSalt);
       await post("/setup/primary-admin/verify-password", { loginId, authProof: credentials.authProof });
-      const prf = await TRoomPasskeys.obtainPrf(setup.credentialId);
-      if (!prf.prfOutput) throw new Error("この端末ではT-Cloudのパスキー利用準備を再開できません。現在の管理者パスワードをご利用ください。");
       state.adminPrf = prf.prfOutput;
       state.adminCredentialId = setup.credentialId;
       await preparePrimaryAdminCloud(credentials.accountKey, prf.prfOutput);
       $("#tcloud-setup-password").value = "";
       $("#tcloud-setup-form").hidden = true;
       state.pendingPrimarySetup = null;
-      showMessage("同じパスキーでT-Cloudの利用準備を完了しました。現在の管理者パスワードは復旧手段として維持されています。");
-      renderPrimarySetupNotice(await TRoomPasskeys.setupStatus());
+      const completed = await TRoomPasskeys.setupStatus();
+      if (!completed.tcloudReady) throw new Error("第一管理者パスキー登録処理が未完了です。鍵の準備を再試行してください。");
+      renderPrimarySetupNotice(completed);
+      showMessage(completed.pendingApproval ? "このパスキー専用のT-Cloud管理者鍵を準備しました。既存パスキーから管理者の承認を行ってください。" : "同じパスキーでT-Cloudの利用準備を完了しました。現在の管理者パスワードは復旧手段として維持されています。");
+      if (completed.credentialStatus === "active") await showAdmin(completed);
     } catch (error) {
       showMessage(error.message, true);
     } finally {
@@ -228,9 +237,9 @@
   }
 
   async function preparePrimaryAdminCloud(accountKey, prfOutput) {
-    const [config, detail] = await Promise.all([get("/tcloud/admin-config"), get("/identities/primary-admin")]);
+    const [config, currentSetup] = await Promise.all([get("/tcloud/admin-config"), TRoomPasskeys.setupStatus()]);
     if (!config.initialized) throw new Error("T-Cloudの暗号化設定を確認できません。");
-    const link = detail.links.find((item) => item.service === "cloud" && item.service_account_id === "admin");
+    const link = currentSetup.isPrimaryAdmin && currentSetup.cloudLinks?.find((item) => item.accountId === "admin");
     if (!link) throw new Error("T-Cloud管理者連携を確認できません。");
     const envelope = await TRoomCrypto.wrapAdminPrivateKeyForPasskey(accountKey, config, prfOutput);
     await post("/tcloud/envelope", { serviceLinkId: link.id, envelopeType: "admin_private_prf", ...envelope });
@@ -271,6 +280,14 @@
     try {
       const setup = await TRoomPasskeys.setupStatus();
       if (setup.tcloudReady) return true;
+      if (setup.identityId === "primary-admin" && setup.cloudLinks?.some(link => link.accountId === "admin")) {
+        state.pendingInviteCloud = null;
+        button.hidden = true;
+        renderPrimarySetupNotice(setup);
+        $("#tcloud-setup-form").hidden = false;
+        showMessage("第一管理者パスキー登録処理が未完了です。このパスキー専用のT-Cloud管理者鍵を準備してください。", true);
+        return false;
+      }
       let prfOutput = result.prfOutput;
       if (!prfOutput && result.credentialId && (result.prfPreparationFailed || result.prfEnabled)) {
         const retried = await TRoomPasskeys.obtainPrf(result.credentialId);
@@ -355,11 +372,13 @@
     notice.hidden = !pending;
     $("#tcloud-setup-form").hidden = true;
     if (!pending) return;
-    const unsupported = !setup.prfEnabled;
-    $("#tcloud-setup-status").textContent = unsupported
-      ? "この端末ではT-Cloudのパスキー利用に対応していません。T-CloudはID・パスワードをご利用ください。セキュリティセンター・日記・請求書のパスキーはそのまま利用できます。"
-      : "T-Cloudのパスキー利用準備が完了していません。T-Cloudでは現在のID・パスワードをご利用ください。セキュリティセンターの管理機能は通常どおり利用できます。";
-    $("#tcloud-setup-resume").hidden = unsupported;
+    const existing = setup.credentialStatus === "active";
+    $("#tcloud-setup-status").textContent = existing
+      ? "このパスキーのT-Cloud利用準備を修復できます。現在のパスキーでPRFを再確認し、管理者鍵を準備してください。"
+      : "第一管理者パスキー登録処理が未完了です。PRFの確認とT-Cloud管理者鍵の準備を完了してください。";
+    $("#tcloud-setup-resume").hidden = false;
+    $("#tcloud-setup-resume").textContent = existing ? "T-Cloud利用準備を修復" : "T-Cloudの準備を再開";
+    $("#tcloud-setup-continue").hidden = !existing;
   }
 
   async function loadDashboard() {
@@ -457,7 +476,10 @@
       return `<div class="session-status ${item.loggedIn ? "session-active" : ""}"><div><strong>${escapeHtml(display.serviceLabel(item.service))}</strong><span>${escapeHtml(stateLabel)}</span></div>${latest ? `<small>ログイン開始 ${escapeHtml(latest.startedAt ? formatDate(latest.startedAt) : "不明")}<br>最終アクセス ${escapeHtml(formatDate(latest.lastSeenAt))}<br>有効期限 ${escapeHtml(formatDate(latest.expiresAt))}</small>` : ""}</div>`;
     }).join("");
     const approvals = (data.approvalCandidates || []).map((item) => {
-      const cloudStatus = !item.hasCloudLinks ? ""
+      const primaryAdmin = data.identity.id === "primary-admin" && data.links.some(link => link.service === "cloud" && link.service_account_id === "admin");
+      const cloudStatus = primaryAdmin
+        ? (data.adminKeyEnvelopes?.some(envelope => envelope.credentialId === item.credentialId) ? "（T-Cloud管理者鍵準備済み）" : "（第一管理者登録未完了・T-Cloud管理者鍵の準備待ち）")
+        : !item.hasCloudLinks ? ""
         : item.cloudClientReady
           ? `（T-Cloud ${Number(item.cloudReadyCount || 0)}件準備済み・${Number(item.cloudPendingCount || 0)}件鍵委譲待ち）`
           : item.prfEnabled ? "（T-Cloudの端末準備が未完了）" : "（この端末ではT-Cloudのパスキー利用に非対応）";

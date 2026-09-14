@@ -421,7 +421,7 @@ test("all service passkey sessions carry revocable Security identifiers and vali
   assert.match(worker, /c\.status = 'active'[\s\S]*i\.status = 'active'[\s\S]*l\.status = 'active'/);
 });
 
-test("registration partial success remains usable outside T-Cloud and T-Cloud preparation is retryable", () => {
+test("member registration remains retryable and primary-admin registration requires Cloud preparation", () => {
   assert.match(client, /obtainPrfSafely/);
   assert.match(client, /prfPreparationFailed/);
   assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service != 'cloud'/);
@@ -433,7 +433,8 @@ test("registration partial success remains usable outside T-Cloud and T-Cloud pr
   assert.match(securityUi, /T-Cloudの準備を再試行/);
   assert.match(securityUi, /resumePrimaryAdminSetup/);
   assert.match(securityUi, /TRoomPasskeys\.obtainPrf\(setup\.credentialId\)/, "第一管理者の再開は既存credentialをWebAuthn getで再認証します");
-  assert.match(securityUi, /await showAdmin\(setup\)/, "第一管理者のT-Cloud未準備は管理画面をブロックしません");
+  assert.match(securityUi, /第一管理者パスキー登録処理が未完了/);
+  assert.doesNotMatch(securityUi, /if \(!setup\.prfEnabled\) throw/);
   assert.match(securityUi, /この端末ではT-Cloudのパスキー利用に対応していません/);
   assert.match(securityHtml, /id="tcloud-setup-notice"/);
   assert.match(securityHtml, /セキュリティセンターを利用する/);
@@ -503,9 +504,10 @@ test("lost setup cookies can only be resumed from the current signed passkey ses
     "setup resume delegates to obtainPrf(), which uses the existing credential with get()");
 });
 
-test("authentication-time PRF absence never downgrades registration-time capability", () => {
+test("verified PRF capability is promoted without downgrading on a later absence", () => {
   assert.match(worker, /UPDATE security_credentials SET counter = \?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = \?/);
   assert.doesNotMatch(worker, /last_used_at = CURRENT_TIMESTAMP, prf_enabled = \?/);
+  assert.match(worker, /prf_enabled = CASE WHEN \? = 1 THEN 1 ELSE prf_enabled END/);
   assert.match(worker, /prfAvailable: Boolean\(body\.prfAvailable\)/);
 });
 

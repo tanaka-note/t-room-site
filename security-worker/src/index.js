@@ -305,7 +305,7 @@ async function bootstrapVerify(request, env, url) {
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO security_credentials
       (credential_id, identity_id, public_key, counter, transports_json, device_type, backed_up, prf_enabled, prf_salt, status, approved_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP)`)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL)`)
       .bind(credentialId, PRIMARY_ADMIN_ID, bytesToBase64Url(credential.publicKey), Number(credential.counter || 0),
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
@@ -510,7 +510,7 @@ async function setupStatus(request, env) {
     completed: Boolean(completed),
     resumable: true
   });
-  status.resumable = Boolean(status.resumable && status.needsTCloudSetup && status.prfEnabled);
+  status.resumable = Boolean(status.resumable && status.needsTCloudSetup);
   return json(status);
 }
 
@@ -524,7 +524,6 @@ async function resumeSetup(request, env, url) {
   });
   if (!status.cloudLinks.length) throw new HttpError(409, "T-Cloud連携が見つかりません。");
   if (!status.needsTCloudSetup || status.tcloudReady) throw new HttpError(409, "このパスキーのT-Cloud準備は完了済みです。");
-  if (!status.prfEnabled) throw new HttpError(409, "このパスキーはT-Cloudの端末側復号に対応していません。ID・パスワードをご利用ください。");
 
   const setup = await prepareSetupSession(env, actor.identityId, actor.credentialId);
   await env.DB.batch([
@@ -548,7 +547,7 @@ async function resumeSetup(request, env, url) {
 
 async function tcloudSetupStatus(env, identityId, credentialId, flags) {
   const [credential, cloudLinks, vault] = await Promise.all([
-    env.DB.prepare("SELECT credential_id, prf_enabled, status FROM security_credentials WHERE credential_id = ? AND identity_id = ?").bind(credentialId, identityId).first(),
+    env.DB.prepare("SELECT credential_id, prf_enabled, status, registered_via_invitation_id FROM security_credentials WHERE credential_id = ? AND identity_id = ?").bind(credentialId, identityId).first(),
     env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id, status FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(identityId).all(),
     env.DB.prepare("SELECT public_key_fingerprint FROM security_tcloud_client_vaults WHERE credential_id = ? AND identity_id = ?").bind(credentialId, identityId).first()
   ]);
@@ -565,6 +564,8 @@ async function tcloudSetupStatus(env, identityId, credentialId, flags) {
     identityId,
     credentialId,
     isPrimaryAdmin: identityId === PRIMARY_ADMIN_ID,
+    credentialStatus: credential.status,
+    pendingApproval: credential.status === "pending" && Boolean(credential.registered_via_invitation_id),
     prfEnabled: Boolean(credential.prf_enabled),
     tcloudReady: ready,
     adminKeyReady,
@@ -646,11 +647,12 @@ async function prfVerify(request, env, url) {
   const credential = await credentialForIdentity(env, credentialId, identitySession.identityId);
   const verification = await verifyAuthentication(body.response, challenge.challenge, credential, env);
   if (!verification.verified || !verification.authenticationInfo.userVerified) throw new HttpError(401, "端末のロック解除を確認できませんでした。");
-  // `prf_enabled` records registration-time credential capability. An assertion
-  // without a PRF result is a per-attempt outcome and must not downgrade it.
-  const statements = [env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ?")
-    .bind(verification.authenticationInfo.newCounter, credentialId)];
-  if (identitySession.setupId) statements.push(env.DB.prepare("UPDATE security_setup_sessions SET last_user_verification_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(nowSeconds(), identitySession.setupId));
+  // A verified, credential-bound assertion can confirm capability missed during
+  // registration. Only the availability flag crosses the wire, never PRF bytes.
+  const statements = [env.DB.prepare(`UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP,
+    prf_enabled = CASE WHEN ? = 1 THEN 1 ELSE prf_enabled END WHERE credential_id = ? AND identity_id = ?`)
+    .bind(verification.authenticationInfo.newCounter, body.prfAvailable === true ? 1 : 0, credentialId, identitySession.identityId)];
+  if (identitySession.setupId && body.prfAvailable === true) statements.push(env.DB.prepare("UPDATE security_setup_sessions SET last_user_verification_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(nowSeconds(), identitySession.setupId));
   await env.DB.batch(statements);
   const identity = await env.DB.prepare("SELECT is_security_admin FROM security_identities WHERE id = ?").bind(identitySession.identityId).first();
   const headers = await securitySessionHeaders(env, url, identitySession.identityId, credentialId, Boolean(identity?.is_security_admin));
@@ -671,6 +673,10 @@ async function saveOwnTCloudEnvelope(request, env) {
   if (envelopeType === "admin_private_prf" && !link) throw new HttpError(404, "T-Cloud連携が見つかりません。");
   if (envelopeType === "admin_private_prf" && (link.service_account_id !== "admin" || !link.is_security_admin)) {
     throw new HttpError(403, "管理者用の暗号鍵envelopeは第一管理者だけが登録できます。");
+  }
+  if (envelopeType === "admin_private_prf") {
+    const credential = await credentialForIdentity(env, identitySession.credentialId, identitySession.identityId);
+    if (identitySession.identityId !== PRIMARY_ADMIN_ID || !credential?.prf_enabled) throw new HttpError(409, "このパスキーでPRFを確認してから管理者鍵を準備してください。");
   }
   if (envelopeType === "client_private_prf") {
     const memberLink = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND cloud_root_folder_id IS NOT NULL AND status IN ('pending', 'active') LIMIT 1").bind(identitySession.identityId).first();
@@ -712,6 +718,16 @@ async function saveOwnTCloudEnvelope(request, env) {
   }
   if (envelopeType === "admin_private_prf") {
     statements.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_id = ?").bind(link.id, identitySession.identityId));
+    // Password-authorized bootstrap completes atomically with its own envelope.
+    // Invited credentials still require the existing administrator's approval.
+    statements.push(env.DB.prepare(`UPDATE security_credentials SET status = 'active', approved_at = CURRENT_TIMESTAMP
+      WHERE credential_id = ? AND identity_id = ? AND status = 'pending' AND registered_via_invitation_id IS NULL
+        AND prf_enabled = 1 AND NOT EXISTS (
+          SELECT 1 FROM security_service_links l WHERE l.identity_id = security_credentials.identity_id
+            AND l.service = 'cloud' AND l.service_account_id = 'admin' AND l.status IN ('pending', 'active')
+            AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.credential_id = security_credentials.credential_id
+              AND e.identity_id = l.identity_id AND e.service_link_id = l.id AND e.envelope_type = 'admin_private_prf'))`)
+      .bind(identitySession.credentialId, identitySession.identityId));
   }
   statements.push(await localAuditStatement(env, { eventType: "tcloud_key_envelope_saved", outcome: "success", identityId: identitySession.identityId, service: "cloud", authMethod: "passkey" }, request));
   await env.DB.batch(statements);
@@ -1083,6 +1099,12 @@ async function approveIdentity(identityId, request, env, admin) {
   const credential = await env.DB.prepare("SELECT credential_id, status FROM security_credentials WHERE identity_id = ? AND credential_id = ? AND status IN ('pending', 'active')")
     .bind(identityId, credentialId).first();
   if (!credential) throw new HttpError(409, "承認待ちのパスキーが見つかりません。");
+  if (identityId === PRIMARY_ADMIN_ID) {
+    const setup = await tcloudSetupStatus(env, identityId, credentialId, {});
+    if (!setup.cloudLinks.some(link => link.accountId === "admin") || !setup.adminKeyReady || !setup.prfEnabled) {
+      throw new HttpError(409, "第一管理者パスキー登録処理が未完了です。このパスキー専用のT-Cloud管理者鍵を準備してから承認してください。");
+    }
+  }
   const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND status IN ('pending', 'active')").bind(identityId).all();
   const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' LIMIT 1").bind(identityId).first();
   const existingFolderEnvelopes = await env.DB.prepare(`SELECT service_link_id FROM security_tcloud_key_envelopes
