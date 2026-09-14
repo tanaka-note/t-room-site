@@ -14,7 +14,7 @@ import {
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
@@ -105,14 +105,13 @@ async function handleApi(request, env, url, path, context) {
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.accountId, role: session.role,
       authMethod: session.authMethod, sessionId: session.sessionId, credentialId: session.credentialId,
-      expiresAt: session.authMethod === "password"
-        ? Math.floor(Date.now() / 1000) + sessionPolicy(env, "password").ttlSeconds
-        : session.exp,
+      expiresAt: session.exp,
       startedAt: session.startedAt,
       sessionVersion: billingSessionVersion(env, session.accountVersion), passkeySessionEpoch: session.passkeySessionEpoch
     });
     return json({
       authenticated: Boolean(session),
+      expiresAt: session?.exp || null,
       role: session?.role || null,
       accountId: session?.accountId || null,
       accountName: session?.accountName || null,
@@ -230,10 +229,11 @@ async function handleApi(request, env, url, path, context) {
     const policy = sessionPolicy(env, "password");
     const sessionId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
-    const token = await createSessionToken(account, policy.ttlSeconds, env, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt });
+    const expiresAt = sessionExpiresAt(Math.floor(Date.parse(startedAt) / 1000), policy);
+    const token = await createSessionToken(account, policy.ttlSeconds, env, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt, expiresAt });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-    await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt, sessionVersion: billingSessionVersion(env, account.session_version) });
+    await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId, expiresAt, startedAt, sessionVersion: billingSessionVersion(env, account.session_version) });
     return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`), authMethod: "password" }, 200, headers);
   }
 
@@ -636,6 +636,7 @@ async function readSession(request, env) {
   if (!constantTimeEqual(base64UrlToBytes(signature), base64UrlToBytes(expected))) return null;
   try {
     const payload = JSON.parse(decoder.decode(base64UrlToBytes(encodedPayload)));
+    if (!validSessionLifetime(payload)) return null;
     if (!payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
     if (String(payload.globalVersion) !== String(env.SESSION_VERSION || "1")) return null;
     const account = await env.DB.prepare(`
@@ -677,10 +678,11 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     serviceAccountId: auth.serviceAccountId || null,
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     ...passwordSessionClaims(auth),
+    ...passwordLifetimeClaims(auth),
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
-    exp: Math.floor(Date.now() / 1000) + maxAge
+    exp: sessionExpiresAt(Math.floor(Date.now() / 1000), sessionPolicyForAuthMethod(env, auth.authMethod, maxAge), auth.expiresAt)
   };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encoded}.${await sign(encoded, env.SESSION_SECRET)}`;

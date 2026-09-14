@@ -68,7 +68,7 @@ function fixture(service) {
         ...(body ? { body: JSON.stringify(body) } : {})
       }), env, { waitUntil: (p) => pending.push(p) });
       await Promise.all(pending.splice(0));
-      return { status: response.status, body: await response.json(), cookie: response.headers.get("set-cookie")?.split(";", 1)[0] || null };
+      return { status: response.status, body: await response.json(), setCookie: response.headers.get("set-cookie"), cookie: response.headers.get("set-cookie")?.split(";", 1)[0] || null };
     },
     login(accountId, suppliedPassword = password) {
       const loginId = service === "diary" && ["main-admin", "wife-admin"].includes(accountId)
@@ -90,6 +90,50 @@ function cookieWithPayload(cookie, payload, secret) {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return cookie.split("=",1)[0]+"="+encoded+"."+createHmac("sha256",secret).update(encoded).digest("base64url");
 }
+
+for (const service of ["diary", "billing"]) test(`${service}: fixed twelve-hour password lifetime and password-only migration`, async () => {
+  const f = fixture(service), OriginalDate = Date;
+  let now = OriginalDate.now();
+  globalThis.Date = class extends OriginalDate {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  };
+  try {
+    const id = service === "diary" ? "main-admin" : "owner";
+    const login = await f.login(id), payload = cookiePayload(login.cookie);
+    assert.equal(login.status, 200);
+    assert.equal(payload.exp, Math.floor(Date.parse(payload.startedAt) / 1000) + 43200);
+    assert.equal(payload.passwordSessionVersion, 1);
+    assert.doesNotMatch(login.setCookie, /Max-Age|Expires=/i);
+    const passkey = await f.passkey(id), pkPayload = cookiePayload(passkey.cookie);
+    assert.equal(pkPayload.passwordSessionVersion, undefined);
+    for (const extra of [{passwordSessionVersion:undefined}, {passwordSessionVersion:undefined,authMethod:undefined}, {exp:payload.exp+2592000}]) {
+      const old = cookieWithPayload(login.cookie, {...payload,...extra}, f.env.SESSION_SECRET);
+      assert.equal((await f.request("session",old)).body.authenticated, false);
+    }
+    for (const elapsed of [0,1,11*3600,43199]) {
+      now = (payload.exp - 43200 + elapsed) * 1000 + 999;
+      const resumed = await f.request("session", login.cookie);
+      assert.equal(resumed.body.authenticated,true);
+      assert.equal(resumed.cookie,null);
+      assert.equal(resumed.body.expiresAt,payload.exp);
+      assert.equal(f.audit.at(-1).expiresAt,payload.exp);
+      assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
+      if (service === "diary" && elapsed === 11*3600) {
+        const selected=await f.request("households/select",login.cookie,{householdId:"chiharu-household"});
+        assert.equal(selected.status,200);
+        assert.equal(cookiePayload(selected.cookie).exp,payload.exp,"household selection cannot extend expiry");
+      }
+    }
+    now = payload.exp * 1000;
+    assert.equal((await f.request("session", login.cookie)).body.authenticated,false);
+    assert.equal((await f.request("protected-fixture",login.cookie)).status,401);
+    now = pkPayload.exp * 1000;
+    assert.equal((await f.request("session", passkey.cookie)).body.authenticated,false);
+    const fresh=await f.login(id);assert.equal(fresh.status,200);
+    assert.equal((await f.request("logout",fresh.cookie,{})).status,200);
+  } finally { globalThis.Date = OriginalDate; f.close(); }
+});
 
 for (const target of MANAGED_PASSWORD_ACCOUNTS) test(`${target.service}/${target.accountId}: stop → recover → stop preserves Passkey and rejects every old password cookie`, async () => {
   const f = fixture(target.service);
@@ -121,10 +165,10 @@ for (const target of MANAGED_PASSWORD_ACCOUNTS) test(`${target.service}/${target
     await f.change(target.accountId,"enable",1);
     for(const cookie of [initial.cookie,legacy]) assert.equal((await f.request("session",cookie)).body.authenticated,false);
     const fresh = await f.login(target.accountId); assert.equal(fresh.status,200); assert.equal(cookiePayload(fresh.cookie).passwordSessionEpoch,2);
-    const rolled = await f.request("session",fresh.cookie); assert.equal(rolled.body.authenticated,true); assert.equal(cookiePayload(rolled.cookie).passwordSessionEpoch,2);
+    const rolled = await f.request("session",fresh.cookie); assert.equal(rolled.body.authenticated,true); assert.equal(rolled.cookie,null); assert.equal(cookiePayload(fresh.cookie).passwordSessionEpoch,2);
     assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
     await f.change(target.accountId,"disable",2);
-    assert.equal((await f.request("session",rolled.cookie)).body.authenticated,false);
+    assert.equal((await f.request("session",fresh.cookie)).body.authenticated,false);
     assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
     assert.equal(f.accounts(),baseline);
     assert.deepEqual(f.db.prepare("SELECT event_type,password_session_epoch FROM password_auth_policy_audit ORDER BY id").all().map(r=>[r.event_type,r.password_session_epoch]),[["password_auth_disabled",1],["password_auth_enabled",2],["password_auth_disabled",3]]);
@@ -132,7 +176,7 @@ for (const target of MANAGED_PASSWORD_ACCOUNTS) test(`${target.service}/${target
   } finally { f.close(); }
 });
 
-for(const service of ["diary","billing"]) test(`${service}: only the two explicit accounts change; all other accounts retain password login/rolling sessions`,async()=>{
+for(const service of ["diary","billing"]) test(`${service}: only the two explicit accounts change; all other accounts retain password login/fixed sessions`,async()=>{
   const f=fixture(service);
   try {
     const baseline=f.accounts();
@@ -144,7 +188,7 @@ for(const service of ["diary","billing"]) test(`${service}: only the two explici
       const login=await f.login(id);assert.equal(login.status,200,id);
       const p=cookiePayload(login.cookie);delete p.authMethod;delete p.passwordSessionEpoch;
       const legacy=cookieWithPayload(login.cookie,p,f.env.SESSION_SECRET);
-      const resumed=await f.request("session",legacy);assert.equal(resumed.body.authenticated,true,id);const rolled=await f.request("session",login.cookie);assert.equal(cookiePayload(rolled.cookie).passwordSessionEpoch,0);
+      const resumed=await f.request("session",legacy);assert.equal(resumed.body.authenticated,true,id);const rolled=await f.request("session",login.cookie);assert.equal(rolled.cookie,null); assert.equal(cookiePayload(login.cookie).passwordSessionEpoch,0);
     }
     assert.equal(f.accounts(),baseline);
     assert.deepEqual(f.db.prepare("SELECT service,account_id FROM password_auth_policy ORDER BY account_id").all().map(r=>`${r.service}/${r.account_id}`),MANAGED_PASSWORD_ACCOUNTS.filter(t=>t.service===service).map(t=>`${t.service}/${t.accountId}`).sort());

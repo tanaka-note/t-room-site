@@ -10,6 +10,7 @@
   let current = null;
   let blocked = false;
   let channel = null;
+  let expiryTimer = null;
   try { const saved = JSON.parse(sessionStorage.getItem(TAB_KEY) || "null"); blocked = Boolean(saved?.blocked); current = saved?.sessionCacheId ? saved : null; } catch { blocked = true; }
   try { channel = new BroadcastChannel(SHARED_KEY); channel.onmessage = event => observe(event.data); } catch {}
   global.addEventListener("storage", event => { if (event.key === SHARED_KEY) observe(event.newValue); });
@@ -23,6 +24,7 @@
   function abortPending() { epoch++; for (const controller of pending) controller.abort(); pending.clear(); }
   function invalidate() {
     if (blocked && !current) return;
+    clearTimeout(expiryTimer); expiryTimer = null;
     blocked = true; current = null; abortPending();
     try { save({blocked:true}); } catch {}
     global.dispatchEvent(new Event("tcloud-session-invalid"));
@@ -32,18 +34,26 @@
   }
   function check(snapshot = epoch) {
     if (blocked || snapshot !== epoch) throw error();
+    if (current?.expiresAt && Date.now() >= current.expiresAt * 1000) { invalidate(); throw error(); }
     if (current && shared() && shared() !== current.sessionCacheId) { invalidate(); throw error(); }
     return current;
+  }
+  function scheduleExpiry() {
+    clearTimeout(expiryTimer); expiryTimer = null;
+    if (current?.expiresAt) expiryTimer = setTimeout(() => { try { check(); scheduleExpiry(); } catch {} },
+      Math.min(2147483647, Math.max(0, current.expiresAt * 1000 - Date.now())));
   }
   function bind(session, publish = true) {
     if (!session?.sessionCacheId) throw error();
     current = {sessionCacheId:session.sessionCacheId, authMethod:session.authMethod, serviceLinkId:session.serviceLinkId,
-      serviceAccountId:session.serviceAccountId, role:session.role, rootFolderId:session.rootFolderId ?? null};
+      serviceAccountId:session.serviceAccountId, role:session.role, rootFolderId:session.rootFolderId ?? null,
+      expiresAt:Number(session.expiresAt) || null};
     blocked = false; save(current);
     if (publish) announce(current.sessionCacheId);
+    check(); scheduleExpiry();
   }
-  function beginSelection() { abortPending(); current = null; blocked = false; save(null); }
-  function end() { announce(`logout:${crypto.randomUUID()}`); current = null; blocked = true; abortPending(); save({blocked:true}); }
+  function beginSelection() { clearTimeout(expiryTimer); abortPending(); current = null; blocked = false; save(null); }
+  function end() { clearTimeout(expiryTimer); announce(`logout:${crypto.randomUUID()}`); current = null; blocked = true; abortPending(); save({blocked:true}); }
   function headers(input = {}) {
     check(); const result = new Headers(input);
     if (current) result.set(HEADER, current.sessionCacheId);
@@ -86,6 +96,7 @@
     } catch (failure) { finish(); throw failure; }
   }
   function track(controller) { check(); pending.add(controller); return () => pending.delete(controller); }
+  scheduleExpiry();
   global.TCloudSession = Object.freeze({fetch:scopedFetch, headers, scopedUrl, bind, beginSelection, end, check, invalidate, track,
     context:()=>current, isBlocked:()=>blocked});
 })(globalThis);

@@ -3,11 +3,11 @@ import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
+import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-c6bed2d8bc46";
+const APP_BUILD_ID = "cloud-cb8a51c5832a";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -175,9 +175,7 @@ async function handleApi(request, env, url, path, context) {
       serviceAccountId: session.serviceAccountId || session.role, role: session.role,
       authMethod: session.authMethod, sessionId: session.sessionId,
       credentialId: session.credentialId,
-      expiresAt: session.authMethod === "password"
-        ? Math.floor(Date.now() / 1000) + cloudSessionPolicy(env, "password", session.role).ttlSeconds
-        : session.exp,
+      expiresAt: session.exp,
       startedAt: session.startedAt,
       sessionVersion: cloudSessionVersion(env), passkeySessionEpoch: session.passkeySessionEpoch,
       details: { rootFolderId: session.rootFolderId }
@@ -403,10 +401,11 @@ async function login(request, env, url, context) {
     sessionId: crypto.randomUUID(),
     startedAt: new Date().toISOString()
   };
+  session.exp = sessionExpiresAt(Math.floor(Date.parse(session.startedAt) / 1000), policy, session.exp);
   const token = await createSessionToken(session, policy.ttlSeconds, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
   await audit(env, "login", session, null, null);
-  await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: session.startedAt, sessionVersion: cloudSessionVersion(env) });
+  await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId, expiresAt: session.exp, startedAt: session.startedAt, sessionVersion: cloudSessionVersion(env) });
   return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
 }
 
@@ -448,10 +447,11 @@ async function completePasskeyHandoff(request, env, url, context) {
     rootFolderId: handoff.cloudRootFolderId == null ? null : Number(handoff.cloudRootFolderId),
     startedAt: new Date().toISOString()
   };
+  session.exp = sessionExpiresAt(Math.floor(Date.parse(session.startedAt) / 1000), policy, session.exp);
   const token = await createSessionToken(session, policy.ttlSeconds, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
   await audit(env, "passkey_login", session, null, null);
-  await recordSecurityAudit(env, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: session.startedAt, sessionVersion: cloudSessionVersion(env), passkeySessionEpoch: handoff.sessionEpoch });
+  await recordSecurityAudit(env, request, { service: "cloud", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: handoff.serviceAccountId, role: account.role, authMethod: "passkey", sessionId: session.sessionId, credentialId: handoff.credentialId, expiresAt: session.exp, startedAt: session.startedAt, sessionVersion: cloudSessionVersion(env), passkeySessionEpoch: handoff.sessionEpoch });
   return json({ authenticated: true, ...publicSession(session) }, 200, headers);
 }
 
@@ -2900,7 +2900,7 @@ async function requestFingerprint(request, env) {
 }
 
 async function createSessionToken(session, maxAge, env) {
-  const payload = { ...session, exp: Math.floor(Date.now() / 1000) + maxAge, version: String(env.SESSION_VERSION || "1") };
+  const payload = { ...session, ...passwordLifetimeClaims(session), exp: sessionExpiresAt(Math.floor(Date.now() / 1000), sessionPolicyForAuthMethod(env, session.authMethod, maxAge), session.exp), version: String(env.SESSION_VERSION || "1") };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encoded}.${await sign(encoded, env.SESSION_SECRET)}`;
 }
@@ -2924,6 +2924,7 @@ async function readSession(request, env) {
     const [encoded, signature] = token.split(".");
     if (!encoded || !signature || !(await constantTimeText(signature, await sign(encoded, env.SESSION_SECRET)))) return null;
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded)));
+    if (!validSessionLifetime(payload)) return null;
     if (payload.exp <= Math.floor(Date.now() / 1000) || String(payload.version) !== String(env.SESSION_VERSION || "1")) return null;
     const account = payload.role === "member" ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find((item) => item.role === payload.role);
     if (!account) return null;
@@ -2947,10 +2948,6 @@ async function readSession(request, env) {
       canViewHistory: account.canViewHistory,
       canRequestDelete: account.canRequestDelete,
       canReviewDeletion: account.canReviewDeletion,
-      // Sessions issued before audit session IDs were introduced must remain
-      // usable long enough to receive a refreshed cookie.  Generate the ID
-      // before handlers use it for folder-scope queries, then preserve it in
-      // every rolling refresh.
       sessionId: payload.sessionId || crypto.randomUUID(),
       loginId: payload.authMethod === "passkey" ? payload.loginId : configuredLoginId(env, account.role),
       credentialSalt: await accountCredentialSalt(env),
@@ -3136,7 +3133,7 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session) { return { role: session.role, accountName: accountDisplayName({ service: "cloud", identityId: session.identityId, accountId: session.serviceAccountId || session.role, role: session.role }, session.label), loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, serviceLinkId: session.serviceLinkId || null, serviceAccountId: session.serviceAccountId || session.role, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session) { return { role: session.role, accountName: accountDisplayName({ service: "cloud", identityId: session.identityId, accountId: session.serviceAccountId || session.role, role: session.role }, session.label), loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, expiresAt: session.exp, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, serviceLinkId: session.serviceLinkId || null, serviceAccountId: session.serviceAccountId || session.role, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function configuredLoginId(env, role) {
   const roleSpecific = role === "admin" ? env.ADMIN_LOGIN_ID : env.SUBADMIN_LOGIN_ID;
   return String(roleSpecific || env.LOGIN_ID || "").trim().toLowerCase();
@@ -3150,7 +3147,7 @@ async function accountCredentialSalt(env) {
 }
 function sessionMaxAge(env, role) {
   const configured = role === "subadmin" ? env.SUBADMIN_SESSION_TTL_SECONDS : env.SESSION_TTL_SECONDS;
-  return clampNumber(configured, 3600, 2592000, 2592000);
+  return clampNumber(configured, 3600, 43200, 43200);
 }
 function cloudSessionVersion(env) { return String(env.SESSION_VERSION || "1"); }
 function cloudSessionPolicy(env, authMethod, role) { return sessionPolicyForAuthMethod(env, authMethod, sessionMaxAge(env, role)); }

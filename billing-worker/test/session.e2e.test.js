@@ -24,7 +24,7 @@ function sessionExpiry(cookie) {
   return payload.exp;
 }
 
-test("owner and member sessions roll forward for 30 days", async () => {
+test("owner and member sessions stay fixed for 12 hours", async () => {
   runWrangler(["d1", "migrations", "apply", "billing-db", "--local"]);
   const salt = randomBytes(16);
   const hash = pbkdf2Sync(testPassword, salt, 100000, 32, "sha256");
@@ -74,7 +74,7 @@ test("owner and member sessions roll forward for 30 days", async () => {
     });
     assert.equal(response.status, 200, await response.text());
     const cookie = response.headers.get("set-cookie");
-    assert.match(cookie, /Max-Age=2592000/);
+    assert.doesNotMatch(cookie, /Max-Age|Expires=/i);
     return cookie.split(";", 1)[0];
   }
 
@@ -87,8 +87,8 @@ test("owner and member sessions roll forward for 30 days", async () => {
       const response = await fetch(`${origin}/billing/api/session`, { headers: { Cookie: cookie } });
       assert.equal(response.status, 200);
       const refreshedCookie = response.headers.get("set-cookie");
-      assert.match(refreshedCookie, /Max-Age=2592000/);
-      assert.ok(sessionExpiry(refreshedCookie) > firstExpiry);
+      assert.equal(refreshedCookie, null);
+      assert.equal((await response.json()).expiresAt, firstExpiry);
     }
     const database = spawnSync(process.execPath, [
       wranglerPath, "d1", "execute", "billing-db", "--local", "--command",

@@ -10,11 +10,13 @@ import {
   shouldRefreshSession
 } from "../../assets/session-policy.mjs";
 
-test("password sessions remain persistent rolling 30-day sessions", () => {
+test("password sessions are fixed 12-hour browser-session cookies", () => {
   const policy = sessionPolicyForAuthMethod({ PASSKEY_SESSION_TTL_SECONDS: "43200" }, "password", PASSWORD_SESSION_TTL_SECONDS);
-  assert.deepEqual(policy, { authMethod: "password", ttlSeconds: 2592000, persistent: true, rolling: true });
-  assert.equal(shouldRefreshSession({ authMethod: "password" }), true);
-  assert.match(sessionCookieValue("session", "token", "/", policy, true), /Max-Age=2592000/);
+  assert.deepEqual(policy, { authMethod: "password", ttlSeconds: 43200, persistent: false, rolling: false });
+  assert.equal(shouldRefreshSession({ authMethod: "password" }), false);
+  assert.doesNotMatch(sessionCookieValue("session", "token", "/", policy, true), /Max-Age|Expires=/i);
+  assert.equal(sessionExpiresAt(1000, policy), 44200);
+  assert.equal(sessionExpiresAt(2000, policy, 44200), 44200);
 });
 
 test("passkey sessions are absolute 12-hour browser-session cookies", () => {
@@ -45,7 +47,7 @@ test("all passkey services declare the short policy and no passkey rolling path"
     const source = await readFile(new URL(path, root), "utf8");
     assert.match(source, /shouldRefreshSession\(session\)/, path);
     assert.match(source, /sessionPolicyForAuthMethod/, path);
-    assert.match(source, /expiresAt: session\.authMethod === "password"/, `${path}: rolling expiry must be reported to active-session tracking`);
+    assert.match(source, /expiresAt: session\.exp/, `${path}: fixed expiry must be reported to active-session tracking`);
   }
   const security = await readFile(new URL("security-worker/src/index.js", root), "utf8");
   assert.match(security, /authMethod: "passkey"/);

@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
 import { pbkdf2Sync } from "node:crypto";
-import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
+import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const db = new DatabaseSync(":memory:");
@@ -30,7 +30,7 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };
 const context = { accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
-  sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, validateServicePasskeySession,
+  sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
   recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");

@@ -37,7 +37,7 @@
     ]
   },
   "vars": {
-    "SESSION_TTL_SECONDS": "2592000",
+    "SESSION_TTL_SECONDS": "43200",
     "PASSKEY_SESSION_TTL_SECONDS": "43200",
     "SESSION_VERSION": "3",
     "PASSKEY_ENABLED": "true"

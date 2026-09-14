@@ -15,7 +15,7 @@ export class BackupBrowserIntegration extends WorkerEntrypoint {
 }
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, shouldRefreshSession } from "../../assets/session-policy.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
@@ -162,14 +162,13 @@ async function handleApi(request, env, url, path, context) {
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
       serviceAccountId: session.accountId, role: securityAuditRole(session),
       authMethod: session.authMethod, sessionId: session.sessionId, credentialId: session.credentialId,
-      expiresAt: session.authMethod === "password"
-        ? Math.floor(Date.now() / 1000) + getSessionPolicy(env, "password").ttlSeconds
-        : session.exp,
+      expiresAt: session.exp,
       startedAt: session.startedAt,
       sessionVersion: diarySessionVersion(env, session.accountVersion), passkeySessionEpoch: session.passkeySessionEpoch
     });
     return json({
       authenticated: Boolean(session),
+      expiresAt: session?.exp || null,
       role: session?.role || null,
       accountName: session?.accountName || null,
       accountDisplayName: session ? accountDisplayName({ service: "diary", accountId: session.accountId, role: securityAuditRole(session) }, `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`) : null,
@@ -246,10 +245,11 @@ async function handleApi(request, env, url, path, context) {
     const policy = getSessionPolicy(env, "password");
     const sessionId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
-    const token = await createSessionToken(account, policy, env, account.householdId, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt });
+    const expiresAt = sessionExpiresAt(Math.floor(Date.parse(startedAt) / 1000), policy);
+    const token = await createSessionToken(account, policy, env, account.householdId, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt, expiresAt });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt, sessionVersion: diarySessionVersion(env, account.sessionVersion) });
+    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId, expiresAt, startedAt, sessionVersion: diarySessionVersion(env, account.sessionVersion) });
     return json({
       authenticated: true,
       role: account.role,
@@ -2146,6 +2146,7 @@ async function readSession(request, env) {
   if (!constantTimeEqual(base64UrlToBytes(encodedSignature), base64UrlToBytes(expectedSignature))) return null;
   try {
     const payload = JSON.parse(decoder.decode(base64UrlToBytes(encodedPayload)));
+    if (!validSessionLifetime(payload)) return null;
     if (!payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
     const account = await findAccountById(payload.accountId, env);
     if (!account || account.role !== payload.role) return null;
@@ -2220,6 +2221,7 @@ async function createSessionToken(account, policy, env, activeHouseholdId = acco
     serviceAccountId: auth.serviceAccountId || null,
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
     ...passwordSessionClaims(auth),
+    ...passwordLifetimeClaims(auth),
     authMethod: auth.authMethod || "password",
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
