@@ -68,7 +68,7 @@ try {
       const stage=document.querySelector('.thumb'),scope=__ui.displayCacheScope(),version=file.createdAt;
       const load=()=>__ui.loadEncryptedThumbnail(file,stage,new AbortController().signal,__ui.state.thumbnailLoadGeneration);
       const saved=TCloudSession;let requests=[];let mode='recover';
-      globalThis.TCloudSession={check(){},async fetch(url){requests.push(url);if(mode==='denied') return new Response('',{status:403});if(mode==='fail')return new Response('',{status:503});if(url.endsWith('display-thumbnail'))return new Response('invalid',{headers:{'Content-Type':'image/webp'}});return new Response(encrypted);}};
+      globalThis.TCloudSession={check(){},async fetch(url){requests.push(url);if(mode==='denied') return new Response('',{status:403});if(mode==='fail')return new Response('',{status:503});if(url.endsWith('display-thumbnail'))throw new Error('Retired plaintext thumbnail endpoint must not be requested');return new Response(encrypted);}};
       try {
        await TCloudDisplayCache.putThumbnail(scope,file.id,version,new Blob(['corrupt'],{type:'image/webp'}));
        await TCloudDisplayCache.putThumbnail('unrelated-scope',file.id,version,new Blob(['preserve']));
@@ -84,7 +84,7 @@ try {
       }finally {globalThis.TCloudSession=saved;}
      });
      // One queue attempt per source; the scheduler owns bounded backoff retries.
-     assert.deepEqual(thumbnails,{recovered:true,recoveredRequests:2,cacheRequests:0,deniedRequests:1,failedRequests:2,preserved:'preserve',staleImage:false});
+     assert.deepEqual(thumbnails,{recovered:true,recoveredRequests:1,cacheRequests:0,deniedRequests:1,failedRequests:1,preserved:'preserve',staleImage:false});
      const formats=await page.evaluate(async()=>{const canvas=document.createElement('canvas');canvas.width=16;canvas.height=16;canvas.getContext('2d').fillRect(0,0,16,16);const results=[];for(const type of ['image/png','image/jpeg','image/webp']){const blob=await new Promise(r=>canvas.toBlob(r,type));const decoded=await TCloudUI.decodeThumbnail(blob);results.push({requested:type,actual:blob.type,width:decoded.image.naturalWidth});URL.revokeObjectURL(decoded.url);}return results;});
      for(const format of formats)assert.equal(format.width,16,JSON.stringify(format));
      await page.evaluate(()=>__ui.resetFolderScrollPosition());

@@ -53,6 +53,7 @@ try {
             else {assert.equal(name,'webkit');assert.equal(playback,'NotSupportedError');}
           }
           const prevReloads=reloads;
+          if(!before&&mobile&&action==='x')await page.locator('#preview-more summary').click();
           if(action==='x')await page.locator('#preview-dialog .dialog-close').click();
           if(action==='back')await page.goBack();
           if(action==='escape')await page.keyboard.press('Escape');

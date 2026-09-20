@@ -1101,7 +1101,13 @@ function addSharedPreviewPlayerControls(stage, video, file) {
       lastSeekValue = seekValue;
       seek.setAttribute("aria-valuenow", seekValue);
     }
-    seek.style.setProperty("--played-percent", `${duration ? Math.min(100, current / duration * 100).toFixed(2) : 0}%`);
+    const playedPercent = duration ? Math.min(100, current / duration * 100) : 0;
+    let bufferedPercent = playedPercent;
+    if (duration) for (let index = 0; index < video.buffered.length; index += 1) {
+      bufferedPercent = Math.max(bufferedPercent, Math.min(100, video.buffered.end(index) / duration * 100));
+    }
+    seek.style.setProperty("--played-percent", `${playedPercent.toFixed(2)}%`);
+    seek.style.setProperty("--buffered-percent", `${bufferedPercent.toFixed(2)}%`);
   };
   const queuePlaybackSync = () => {
     if (!playbackFrame) playbackFrame = requestAnimationFrame(syncPlayback);
@@ -1188,7 +1194,7 @@ function addSharedPreviewPlayerControls(stage, video, file) {
   for (const eventName of ["click", "dblclick", "pointerdown", "pointerup", "touchstart", "touchend"]) {
     controls.addEventListener(eventName, (event) => event.stopPropagation());
   }
-  for (const eventName of ["loadedmetadata", "durationchange", "timeupdate", "tcloud:seek-feedback"]) video.addEventListener(eventName, queuePlaybackSync);
+  for (const eventName of ["loadedmetadata", "durationchange", "timeupdate", "progress", "tcloud:seek-feedback"]) video.addEventListener(eventName, queuePlaybackSync);
   for (const eventName of ["play", "pause", "ended"]) video.addEventListener(eventName, syncPlayback);
   video.addEventListener("volumechange", syncVolume);
   stage.append(controls);
@@ -1595,7 +1601,10 @@ function sharedPreviewRequestActive(generation, fileId) {
 }
 
 function prepareSharedVideoPlayer(stage, file) {
-  const video = document.createElement("video"); video.controls = false; video.playsInline = true; video.preload = "metadata";
+  const video = document.createElement("video"); video.controls = false; video.playsInline = true; video.preload = "auto";
+  video.addEventListener("playing", () => {
+    if (Number(state.selected?.id) === Number(file.id)) TCloudMedia.markPlaying(state.previewMediaToken);
+  });
   video.disableRemotePlayback = true;
   video.setAttribute("disableRemotePlayback", "");
   video.setAttribute("controlsList", "noremoteplayback");

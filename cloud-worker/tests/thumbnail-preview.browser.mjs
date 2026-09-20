@@ -125,10 +125,13 @@ try {
           await page.route('**/cloud/api/**',async route=>{pending=route;});
           const originalScope=await page.evaluate(()=>{
             __test.state.files=__test.state.files.slice(0,1);__test.scheduleEncryptedThumbnailLoading();
-            __test.scheduleDisplayListingCacheWrite('delayed');return __test.displayCacheScope();
+            return __test.displayCacheScope();
           });
           while(!pending)await page.waitForTimeout(10);
           await page.evaluate(change=>{
+            // Queue immediately before departure: waiting for the network first
+            // must not let a valid pre-logout cache write finish nondeterministically.
+            __test.scheduleDisplayListingCacheWrite('delayed');
             if(change==='logout')__test.releaseSessionState();
             else __test.state.session={...__test.state.session,sessionCacheId:'new-session',serviceLinkId:'new-link'};
           },change);
