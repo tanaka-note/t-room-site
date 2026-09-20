@@ -62,7 +62,8 @@ export function createAuthHandler(fetchImpl = fetch) {
         return new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>T-lain Cloudflare Read-Only</title><body><h1>読み取り専用接続の確認</h1><p>接続元: ${escapeHtml(client.clientName || 'ChatGPT')}</p><p>Cloudflare構成、許可されたD1データ、Analyticsを読み取ります。Cloudflareリソースの変更は許可しません。</p><p>GitHubの許可済み本人アカウントでログインしてください。</p><form method="post" action="/consent"><input type="hidden" name="state" value="${key}"><button type="submit">読み取り接続を承認してGitHubへ進む</button></form></body></html>`, {
           headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
             'Content-Security-Policy': "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-            'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Set-Cookie': cookie(await digest(key)) }
+            // Preserve Origin on the same-origin form POST; never send a referrer cross-origin.
+            'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'Set-Cookie': cookie(await digest(key)) }
         });
       }
       if (url.pathname === '/consent' && request.method === 'POST') {

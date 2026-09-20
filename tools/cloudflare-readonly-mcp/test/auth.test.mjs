@@ -33,6 +33,7 @@ test('consent safely renders client, uses secure cookie and rejects unknown OAut
   assert.equal(r.status, 200); assert.ok(!html.includes('<script>')); assert.match(html, /&lt;script&gt;/);
   assert.match(r.headers.get('set-cookie'), /Secure; HttpOnly; SameSite=Lax; Path=\//);
   assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal(r.headers.get('referrer-policy'), 'same-origin');
   for (const patch of [{ redirectUri: 'https://evil.test/' }, { codeChallengeMethod: 'plain' }, { scope: ['write'] }]) {
     const x = fixture(); Object.assign(x.auth, patch); assert.equal((await x.authorize()).status, 400); assert.equal(x.store.size, 0);
   }
@@ -57,6 +58,17 @@ test('owner-only GitHub callback completes PKCE flow without storing upstream cr
   assert.ok(!JSON.stringify(f.grants).includes('synthetic-github-token')); assert.equal(f.store.size, 0);
   assert.equal(f.calls.length, 2); assert.ok(new URLSearchParams(f.calls[0].init.body).has('code_verifier'));
   assert.equal((await f.handler.fetch(callback, f.env)).status, 400); assert.equal(f.calls.length, 2);
+});
+
+test('consent still rejects null and foreign Origin with an otherwise valid browser flow', async () => {
+  for (const requestOrigin of ['null', 'https://evil.test', '']) {
+    const f = fixture(); const consent = await f.authorize();
+    const state = (await consent.text()).match(/name="state" value="([a-f0-9]+)"/)[1];
+    const r = await f.handler.fetch(new Request(origin + '/consent', { method: 'POST',
+      headers: { Origin: requestOrigin, 'Content-Type': 'application/x-www-form-urlencoded', Cookie: consent.headers.get('set-cookie').split(';')[0] },
+      body: new URLSearchParams({ state }) }), f.env);
+    assert.equal(r.status, 400); assert.equal(f.calls.length, 0); assert.equal(f.store.size, 1);
+  }
 });
 
 for (const [label, options] of [['different user', { userId: 43 }], ['excess GitHub scope', { scope: 'repo,read:user' }]]) {
