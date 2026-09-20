@@ -34,6 +34,7 @@ test('consent safely renders client, uses secure cookie and rejects unknown OAut
   assert.match(r.headers.get('set-cookie'), /Secure; HttpOnly; SameSite=Lax; Path=\//);
   assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal(r.headers.get('referrer-policy'), 'same-origin');
+  assert.equal(r.headers.get('content-security-policy'), "default-src 'none'; form-action 'self' https://github.com/login/oauth/authorize; frame-ancestors 'none'; base-uri 'none'");
   for (const patch of [{ redirectUri: 'https://evil.test/' }, { codeChallengeMethod: 'plain' }, { scope: ['write'] }]) {
     const x = fixture(); Object.assign(x.auth, patch); assert.equal((await x.authorize()).status, 400); assert.equal(x.store.size, 0);
   }
