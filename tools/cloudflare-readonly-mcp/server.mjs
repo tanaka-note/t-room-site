@@ -10,7 +10,7 @@ export const definitions = {
     inputSchema: z.strictObject({ path: z.string(), query: z.record(z.string(), scalar).optional() }), annotations
   },
   d1_read_query: {
-    description: 'Read D1 with one validated SQLite SELECT, WITH SELECT, EXPLAIN SELECT, or PRAGMA table_info statement. Only configured database IDs are accessible. Returns at most 200 rows.',
+    description: 'Read D1 with one validated SQLite SELECT or WITH SELECT statement. Read schema through sqlite_master SELECT. Only configured database IDs are accessible. Returns at most 200 rows. SQL comments are not supported; use params for literal values.',
     inputSchema: z.strictObject({ database_id: z.string(), sql: z.string(), params: z.array(z.union([z.string(), z.number(), z.null()])).optional() }), annotations
   },
   cloudflare_analytics_read: {

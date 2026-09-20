@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { createServer, createReader } from '../server.mjs';
 import { validateSql, validateGraphql, PolicyError, accountPaths } from '../policy.mjs';
@@ -25,11 +26,9 @@ const allowedSql = [
   'SELECT 1 UNION ALL SELECT 2',
   "SELECT 'DELETE; DROP TABLE t;' AS content",
   'SELECT ? AS content',
-  'EXPLAIN SELECT * FROM diary_entries',
-  'EXPLAIN QUERY PLAN SELECT * FROM diary_entries',
-  'PRAGMA table_info(diary_entries);',
-  'PRAGMA table_info("diary_entries")',
-  '/* harmless comment */ SELECT 1; -- end',
+  'SELECT COUNT(*) FROM diary_entries',
+  "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'diary_entries'",
+  "SELECT '/* text */ -- text; it''s data' AS content",
   "SELECT json_extract(content, '$.name') FROM diary_entries",
   "SELECT date(entry_date), coalesce(title, '') FROM diary_entries"
 ];
@@ -40,6 +39,12 @@ const deniedSql = [
   "INSERT INTO diary_entries(content) VALUES ('x')", 'DROP TABLE diary_entries',
   'CREATE TABLE x (id)', 'ALTER TABLE diary_entries ADD x TEXT', 'REPLACE INTO x VALUES (1)',
   'VACUUM', "ATTACH DATABASE 'x' AS x", 'DETACH DATABASE x', 'PRAGMA writable_schema = 1',
+  'TRUNCATE TABLE diary_entries', 'PRAGMA table_info(diary_entries)',
+  'EXPLAIN SELECT * FROM diary_entries', 'EXPLAIN QUERY PLAN SELECT * FROM diary_entries',
+  '/* harmless comment */ SELECT 1', 'SELECT 1 -- end',
+  'WITH x AS (SELECT 1) /* hidden */ SELECT * FROM x',
+  'SELECT 1; --\nDELETE FROM diary_entries', 'SELECT 1;;',
+  "SELECT 'x\\'; DELETE FROM diary_entries; --'", "SELECT 'unterminated",
   'PRAGMA journal_mode=WAL', 'PRAGMA table_info=1', 'PRAGMA optimize',
   'SELECT 1; DELETE FROM diary_entries', 'SELECT 1; /* hiding */ UPDATE x SET y=1',
   'SELECT 1; SELECT 2', 'WITH x AS (SELECT 1) DELETE FROM diary_entries',
@@ -137,9 +142,11 @@ test('real MCP tools/list exposes exactly three strict read-only tools', async (
   assert.equal(response.status, 200); assert.equal(data.result.tools.length, 3);
   for (const tool of data.result.tools) {
     assert.equal(tool.annotations.readOnlyHint, true); assert.equal(tool.annotations.destructiveHint, false);
+    assert.equal(tool.annotations.annotations, undefined);
     assert.equal(tool.inputSchema.additionalProperties, false); assert.equal(tool.inputSchema.properties.method, undefined);
     assert.equal(tool.inputSchema.properties.code, undefined);
   }
+  assert.deepEqual(data.result.tools.map(t => t.name).sort(), ['cloudflare_analytics_read', 'cloudflare_read', 'd1_read_query']);
 });
 test('real MCP tools/call rejects writes before any upstream request', async () => {
   let calls = 0;
@@ -152,17 +159,72 @@ test('real MCP tools/call rejects writes before any upstream request', async () 
     const body = await response.text();
     return JSON.parse(body.startsWith('event:') ? body.split('\n').find(l => l.startsWith('data: ')).slice(6) : body);
   }
-  for (const sql of ['DELETE FROM diary_entries', 'UPDATE diary_entries SET content=1', 'INSERT INTO x VALUES(1)', 'DROP TABLE diary_entries']) {
+  for (const sql of deniedSql) {
     const data = await call('d1_read_query', { database_id: databaseId, sql });
     assert.equal(data.result.isError, true); assert.equal(calls, 0);
     assert.ok(!JSON.stringify(data).includes(token));
   }
-  for (const method of ['PUT', 'PATCH', 'DELETE']) {
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
     const data = await call('cloudflare_read', { path: '/accounts', method });
     assert.ok(data.error || data.result?.isError); assert.equal(calls, 0);
   }
+  for (const query of ['mutation { remove }', 'subscription { changed }']) {
+    const data = await call('cloudflare_analytics_read', { query });
+    assert.equal(data.result.isError, true); assert.equal(calls, 0);
+  }
   const good = await call('d1_read_query', { database_id: databaseId, sql: 'SELECT 1 AS value' });
   assert.ok(!good.result.isError); assert.equal(calls, 1);
+});
+
+test('accepted SQL executes against local SQLite without changing schema or data', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE diary_entries (id, entry_date, title, content, deleted_at, status);
+      CREATE TABLE diary_photos (entry_id);
+      INSERT INTO diary_entries VALUES (1, '2026-01-01', 'fixture', '{"name":"ピザ"}', NULL, 'published');`);
+    const snapshot = () => JSON.stringify([
+      db.prepare('SELECT * FROM sqlite_master ORDER BY name').all(),
+      db.prepare('SELECT * FROM diary_entries').all(),
+      db.prepare('SELECT * FROM diary_photos').all(),
+      db.prepare('SELECT total_changes() AS n').get()
+    ]);
+    const before = snapshot();
+    for (const sql of allowedSql) {
+      validateSql(sql);
+      db.prepare(sql).all(...Array((sql.match(/\?/g) || []).length).fill('ピザ'));
+      assert.equal(snapshot(), before);
+    }
+  } finally { db.close(); }
+});
+
+test('real MCP successful GET, D1 count/schema and GraphQL dispatch retain read-only boundaries', async () => {
+  const calls = [];
+  const handler = createMcpHandler(() => createServer({ config, apiToken: token, fetchImpl: async (url, init) => {
+    calls.push({ url, init });
+    if (url.pathname.endsWith('/graphql')) return Response.json({ data: { viewer: {} } });
+    if (url.pathname.endsWith('/query')) return Response.json({ success: true, result: [{ results: [{ count: 1 }], meta: { rows_written: 0, changed_db: false } }] });
+    return Response.json({ success: true, result: [{ id: accountId }] });
+  } }));
+  const inputs = [
+    ['cloudflare_read', { path: '/accounts' }],
+    ['cloudflare_read', { path: `/accounts/${accountId}/d1/database` }],
+    ['d1_read_query', { database_id: databaseId, sql: 'SELECT COUNT(*) FROM diary_entries' }],
+    ['d1_read_query', { database_id: databaseId, sql: "SELECT name, sql FROM sqlite_master WHERE type = 'table'" }],
+    ['cloudflare_analytics_read', { query: analytics, variables: { id: accountId } }]
+  ];
+  for (const [name, args] of inputs) {
+    const response = await handler.fetch(new Request('http://localhost/mcp', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } }) }));
+    const body = await response.text();
+    const data = JSON.parse(body.startsWith('event:') ? body.split('\n').find(l => l.startsWith('data: ')).slice(6) : body);
+    assert.equal(response.status, 200); assert.ok(!data.error && !data.result.isError);
+  }
+  assert.deepEqual(calls.map(c => [c.init.method, c.url.pathname]), [
+    ['GET', '/client/v4/accounts'], ['GET', `/client/v4/accounts/${accountId}/d1/database`],
+    ['POST', `/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`],
+    ['POST', `/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`], ['POST', '/client/v4/graphql']
+  ]);
 });
 test('SQL/GraphQL validation does not log credentials or private literals', async () => {
   const messages = [], saved = {};

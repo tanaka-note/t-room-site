@@ -18,18 +18,35 @@ const sqlTypes = new Set(`select column_ref binary_expr unary_expr aggr_func fun
   number string single_quote_string double_quote_string bool null origin expr_list case when
   cast dataType default extract interval star ASC DESC`.split(/\s+/).filter(Boolean));
 
+// Reject ambiguous lexical forms before AST parsing. This is an additional guard,
+// not the read-only decision: the entire statement is still parsed and validated.
+function validateSqlLexemes(sql) {
+  let quote = null;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i], next = sql[i + 1];
+    if (quote) {
+      // SQLite and parsers can disagree about backslash escapes. Use params for these values.
+      if (c === '\\') fail();
+      if (c === quote) {
+        if (quote !== ']' && next === quote) i++;
+        else quote = null;
+      }
+      continue;
+    }
+    if ((c === '-' && next === '-') || (c === '/' && next === '*')) fail();
+    if (c === ';' && sql.slice(i + 1).trim()) fail();
+    if (['\'', '"', '`', '['].includes(c)) quote = c === '[' ? ']' : c;
+  }
+  if (quote) fail();
+}
+
 export function validateSql(sql, params = []) {
   if (typeof sql !== 'string' || !sql.trim() || sql.length > 16000 || /\0/.test(sql)) fail();
   if (!Array.isArray(params) || params.length > 100 || params.some(x => x !== null &&
     !(typeof x === 'string' && x.length <= 16000) && !(typeof x === 'number' && Number.isFinite(x)))) fail();
-  // A deliberately small PRAGMA grammar; assignments and arbitrary PRAGMAs never reach D1.
-  if (/^\s*PRAGMA\s+table_info\s*\(\s*(?:[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*"|'[A-Za-z_][A-Za-z0-9_]*')\s*\)\s*;?\s*$/i.test(sql)) {
-    if (params.length) fail();
-    return sql;
-  }
-  const select = sql.replace(/^\s*EXPLAIN\s+(?:QUERY\s+PLAN\s+)?/i, '');
+  validateSqlLexemes(sql);
   let ast;
-  try { ast = parser.astify(select); } catch { throw new PolicyError('Unsupported SQL syntax; nothing was sent to D1.'); }
+  try { ast = parser.astify(sql); } catch { throw new PolicyError('Unsupported SQL syntax; nothing was sent to D1.'); }
   if (Array.isArray(ast)) { if (ast.length !== 1) fail(); ast = ast[0]; }
   if (ast?.type !== 'select') fail();
   let nodes = 0;

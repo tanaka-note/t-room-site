@@ -9,14 +9,18 @@ Cloudflare Worker、route、Secretは作成していない。既存ChatGPT接続
 - Codexに接続済みの公式MCPで、accounts GET、D1一覧、sqlite_master SELECT、日記schema、
   本文検索を実行できた。全てHTTP 200。SELECTは `rows_written=0` / `changed_db=false`。
   日記本文や実際の検索結果をこのリポジトリへ保存しない。
-- ChatGPT側で報告されたOpenAI安全性ブロックはこのCodex環境では再現しなかった。
-  OpenAI内部の判定ログは参照できず、ブロック原因は未確定。
+- ChromeのChatGPTでも再現確認済み。GET /accountsは200、OpenAPI検索も成功したが、
+  「D1でピザを食べた日の日記を探して」ではD1一覧の段階でOpenAI安全性ブロックと表示された。
+  ChatGPT側のSELECTには到達していない。拒否された呼び出しの生引数やOpenAI内部ログは取得できず、
+  汎用ツール定義は要因候補だが、唯一の原因とは断定しない。
 - 現在見える `execute` は `{code: string, account_id?: string}`。HTTP method enumはJSON入力schema
   そのものではなく、説明内の `cloudflare.request` 型定義。説明はGET/POST/PUT/PATCH/DELETEと
   create/update/deleteを含む。
 - 公式公開ソース `cloudflare/mcp@76b19f116e53b1d6ad1c8b2c07d0d2e91a37abf1` の
   `src/tools/execute.ts` は `readOnlyHint:false`, `destructiveHint:true`, `openWorldHint:true`。
-  接続先が同commitで動いていることや、生のtools/listのannotationsまでは確認できていない。
+  Chromeの接続管理画面でもexecuteに「公開書き込み」「オープンワールド」「破壊的」と表示された。
+  同じ公式URLからアクション再読込を完了しても定義は変わらなかった。
+  接続先が同commitで動いていることや、公式MCPの生のtools/listのannotationsまでは未確認。
 - 同ソースのGlobalOutboundは送信先hostnameと資格情報を管理するが、method・SQLの読み取り専用
   検証は行わない。OAuth read-only presetは存在するが、ツールは汎用のまま。
 - ChatGPTプラグイン設定は「Allow read actions」を継承。これはOAuth/API Tokenの権限とは別。
@@ -40,8 +44,10 @@ GraphQL Analytics。R2 object本文、KV value、Workerソース、Secrets、任
 Analyticsは現行OpenAPIで確認できない旧REST endpointを推測で追加せずGraphQLへ分離。
 
 SQLはSQLite ASTを再帰検証。SELECT/CTE/サブクエリ/UNION/集計と許可済み関数を受理。
-EXPLAINの対象もSELECTに限定。PRAGMAは単一table_infoだけ。複数文、DML/DDL、任意PRAGMA、
-extension/file/eval関数、未知構文/未知関数は拒否する。SQL本文は書き換えずparamsを分離して送る。
+EXPLAIN、PRAGMAは全て拒否。schemaはsqlite_masterへのSELECTで確認する。
+複数文、DML/DDL、文字列・識別子外のSQLコメント、extension/file/eval関数、未知構文/未知関数を拒否。
+構文解析器とSQLiteの解釈差を避けるため、引用符内のbackslashも拒否し、そのような値にはparamsを使う。
+文字列内のコメント記号やSQLキーワードはデータとして扱う。SQL本文は書き換えずparamsを分離して送る。
 対応していない最新SQLite構文は安全側で拒否するため、分析に必要な構文は回帰試験とともに追加する。
 AST検証だけで将来のSQLite拡張まで保証しない。上流のD1 Read権限を必須の独立防御として維持する。
 
@@ -54,6 +60,14 @@ Token、SQL、params、本文、rawエラーをログ出力しない。メタデ
 このディレクトリで `npm ci --ignore-scripts`、`npm test`。
 テストは偽fetchと合成データだけを使用し、本番へ変更SQLや変更methodを送らない。
 MCP SDKの実際のtools/list応答とtools/call経路も検証する。
+
+2026-09-20のローカル確認: 100/100成功、policy/server/stdio/testの構文確認。
+tools/listは3ツールのみで、各tool直下のannotations.readOnlyHintがtrue（二重ネストなし）。
+tools/callでGET /accounts・D1一覧・COUNT・schema SELECT・GraphQL queryの正常経路と、
+変更系HTTP/SQL/GraphQLの拒否を確認した。上流はfake fetchを使用し、拒否時は呼出回数0を検証。
+許可SQLは端末内のSQLiteでも実行し、schema・fixture・total_changesが不変であることを確認。
+本番tokenを使用した修正版の実API試験、修正版のChrome/ChatGPT試験は未実施。
+このローカル成功をChatGPTでの問題解消として扱わない。
 
 ローカルstdioを接続する場合は `.env.example` の変数をプロセス環境へ安全に設定し、
 `npm start`。この実装は.envを自動読込しない。Wranglerの既存書き込み可能tokenを流用しない。
@@ -70,11 +84,15 @@ OAuth 2.1の認証済みホストが必要。stdioを公開トンネルや認証
 
 承認後の予定:
 1. 既存T-lain Workerと分離した `t-lain-cloudflare-readonly-mcp` を追加する。
-2. 既存の確立されたOAuth providerを使い、利用者限定、issuer/audience/期限/scope検証とPKCEを設定。
-   認証providerとclient登録は未構成。ここを先に完了し、認証なし・別利用者拒否を検証する。
+2. 確立されたOAuth providerを使い、利用者限定、issuer/audience/期限/scope検証とPKCEを設定。
+   候補はGitHub OAuthとCloudflare公式のOAuth provider実装。利用者は承認済みの固定GitHub user IDに限定。
+   OAuth app/client登録は未構成。ここを先に完了し、認証なし・別利用者拒否を検証する。
 3. 専用Read tokenを新WorkerのSecretへ設定（既存アプリSecretは変更しない）。
 4. 上記factoryを認証後のみ利用し、今回のallowlistを固定して公開する。
 5. ChatGPTに別接続として登録し、tools/schema再読込とGET→SELECTの再確認を行う。
+   GET /accounts、D1一覧、COUNT、sqlite_master、GraphQL queryをChromeで確認する。
+   変更命令のChrome確認は新MCPの拒否を対象とし、上流に書き込み権限を与えない。
+   新接続の合格後、読み取り用途から旧汎用execute接続を外す。現時点では旧接続を変更していない。
 
 影響: 新Worker/OAuth接続/Secret設定のみ。既存D1 schema、レコード、R2 object、既存Worker、
 契約/課金設定は変更しない。通常のWorker実行・D1 read/analytics利用量は発生し得る。
