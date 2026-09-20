@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-cb8a51c5832a";
+const APP_BUILD_ID = "cloud-688d35f2d677";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -284,6 +284,13 @@ function bindEvents() {
   $("#edit-form").addEventListener("submit", saveFile);
   $("#edit-file-button").addEventListener("click", openEditDialog);
   $("#manual-thumbnail-button").addEventListener("click", startManualThumbnail);
+  const revealPreviewMore = () => {
+    if ($("#preview-more").open && matchMedia("(max-width: 900px)").matches) {
+      $(".preview-more-menu").scrollIntoView({ block: "nearest", behavior: "instant" });
+    }
+  };
+  $("#preview-more").addEventListener("toggle", revealPreviewMore);
+  window.addEventListener("resize", revealPreviewMore);
   $("#delete-file-button").addEventListener("click", deleteSelectedFile);
   $("#preview-pip").addEventListener("click", minimizePreviewToPictureInPicture);
   $("#conflict-groups-back").addEventListener("click", renderConflictGroupList);

@@ -41,7 +41,7 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
-  return ({ tooling: ['tools/test-browser-trace.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs'],
+  return ({ tooling: ['tools/test-browser-trace.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs'],
     security: ['security-worker/test/audit-history.browser.mjs'],
     diary: ['diary-worker/tests/browser/favorites-flow.mjs'] })[target] || [];
 }
