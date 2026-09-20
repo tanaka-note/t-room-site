@@ -210,6 +210,7 @@ const server = createServer(async (request, response) => {
     registeredCredentialCount += 1;
     setupStatusBody = {
       active: true, completed: false, identityId: "primary-admin", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
+      credentialStatus: "pending", pendingApproval: false, needsTCloudSetup: true,
       isPrimaryAdmin: true, prfEnabled: Boolean(body.prfEnabled), tcloudReady: false,
       cloudLinks: [{ id: "primary-cloud", accountId: "admin", rootFolderId: null }]
     };
@@ -249,7 +250,7 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/security/api/tcloud/envelope") {
     receivedEnvelopeBodies.push(JSON.parse(await readBody(request)));
     if (failEnvelopeSave) return sendJson(response, 503, { error: "一時的なT-Cloud障害" });
-    setupStatusBody = { ...setupStatusBody, active: false, completed: true, tcloudReady: true };
+    setupStatusBody = { ...setupStatusBody, active: false, completed: true, tcloudReady: true, needsTCloudSetup: false, credentialStatus: "active" };
     return sendJson(response, 200, { ok: true });
   }
   if (url.pathname === "/assets/pwa-auto-update.js") {
@@ -570,6 +571,7 @@ async function verifyBrowser(browserType, name, origin) {
     await inviteDuplicate.close();
     setupStatusBody = {
       active: false, resumable: true, needsTCloudSetup: true, identityId: "resume_user", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
+      credentialStatus: "active", pendingApproval: false,
       isPrimaryAdmin: false, prfEnabled: true, tcloudReady: false,
       cloudLinks: [{ id: "cloud-2", accountId: "folder-member", rootFolderId: 2 }, { id: "cloud-10", accountId: "folder-member", rootFolderId: 10 }]
     };
@@ -591,6 +593,15 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.locator("#bootstrap-id").fill("admin");
     await unsupported.locator("#bootstrap-password").fill(dummyPassword);
     await unsupported.getByRole("button", { name: "端末のロック解除を登録" }).click();
+    await unsupported.locator("#tcloud-setup-notice").waitFor();
+    assert.equal(await unsupported.locator("#admin-view").isVisible(), false, `${name}: new primary-admin setup remains unfinished without its own envelope`);
+    assert.match(await unsupported.locator("#message").textContent(), /第一管理者パスキー登録処理が未完了/);
+    assert.equal(await unsupported.locator("#tcloud-setup-resume").isVisible(), true);
+    assert.equal(registeredCredentialCount, 1);
+    // A pre-existing active administrator can still use the dashboard while
+    // repairing its legacy key setup. A new pending credential cannot.
+    setupStatusBody = { ...setupStatusBody, credentialStatus: "active" };
+    await unsupported.reload({ waitUntil: "load" });
     await unsupported.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
     assert.match(await unsupported.locator("#clamav-definitions").textContent(), /状態を取得できません/);
     assert.doesNotMatch(await unsupported.locator("#clamav-definitions").textContent(), /定義は有効/);
@@ -598,9 +609,8 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(await unsupported.locator("#dashboard-panel .active-users").textContent(), /田中宏知（オーナー）.*T-Cloud.*日記/s,
       `${name}: dashboard summarizes the services with currently valid sessions`);
     assert.equal(await unsupported.locator("#tcloud-setup-notice").isVisible(), true);
-    assert.match(await unsupported.locator("#tcloud-setup-status").textContent(), /この端末ではT-Cloudのパスキー利用に対応していません/);
-    assert.equal(await unsupported.locator("#tcloud-setup-resume").isVisible(), false, `${name}: PRF unsupported must not promise a retry`);
-    assert.match(await unsupported.locator("#message").textContent(), /セキュリティセンター・日記・請求書のパスキー登録は完了しました/);
+    assert.match(await unsupported.locator("#tcloud-setup-status").textContent(), /修復できます/);
+    assert.equal(await unsupported.locator("#tcloud-setup-resume").isVisible(), true, `${name}: legacy PRF=0 can be remeasured on a supported authenticator`);
     assert.equal(registeredCredentialCount, 1);
     await unsupported.route('**/security/api/dashboard*', async route => {
       const response = await route.fetch(); const body = await response.json();
@@ -648,29 +658,36 @@ async function verifyBrowser(browserType, name, origin) {
     assert.equal(await moreButton.isVisible(), false, `${name}: audit button hides on the final page`);
     assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: the opaque audit cursor is sent for the next page`);
     await unsupported.locator("#audit-search > summary").click();
+    const applyAuditFilter = () => Promise.all([
+      unsupported.waitForResponse(response => new URL(response.url()).pathname === "/security/api/audit"),
+      unsupported.getByRole("button", { name: "履歴を絞り込む" }).click()
+    ]);
     await unsupported.locator("#audit-identity").selectOption("primary-admin");
     await unsupported.locator("#audit-service").selectOption("cloud");
-    await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
+    await applyAuditFilter();
     assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: the primary administrator filter sends its Identity ID`);
     assert.match(receivedAuditQueries.at(-1), /service=cloud/, `${name}: user and service filters are combined`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: a new user search does not reuse the prior cursor`);
     await unsupported.locator("#audit-include-disabled").check();
     await unsupported.waitForFunction(() => !!document.querySelector('#audit-identity option[value="retired-audit-user"]'));
     await unsupported.locator("#audit-identity").selectOption("retired-audit-user");
-    await unsupported.getByRole("button", { name: "もっと見る" }).click();
+    await Promise.all([
+      unsupported.waitForResponse(response => new URL(response.url()).pathname === "/security/api/audit"),
+      unsupported.getByRole("button", { name: "もっと見る" }).click()
+    ]);
     assert.match(receivedAuditQueries.at(-1), /identityId=primary-admin/, `${name}: paging keeps the submitted user filter`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=retired-audit-user/, `${name}: an unsubmitted filter change cannot mix cursor pages`);
     assert.match(receivedAuditQueries.at(-1), /service=cloud/, `${name}: paging keeps every submitted compound filter`);
     assert.match(receivedAuditQueries.at(-1), /cursor=browser-page-2/, `${name}: paging appends the cursor to the submitted query`);
     await unsupported.locator("#audit-service").selectOption("diary");
-    await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
+    await applyAuditFilter();
     assert.match(receivedAuditQueries.at(-1), /identityId=retired-audit-user/, `${name}: a previously registered stopped user can be filtered independently`);
     assert.match(receivedAuditQueries.at(-1), /service=diary/, `${name}: the historical registered-user filter combines with another service`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: changing to another user resets pagination`);
     await unsupported.locator("#audit-identity").selectOption("");
     await unsupported.locator("#audit-service").selectOption("");
     await unsupported.locator("#audit-event").selectOption("passkey_registration");
-    await unsupported.getByRole("button", { name: "履歴を絞り込む" }).click();
+    await applyAuditFilter();
     assert.match(receivedAuditQueries.at(-1), /eventType=passkey_registration/, `${name}: Japanese filter preserves canonical API value`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=/, `${name}: selecting all users omits identityId and restores the full history`);
     assert.doesNotMatch(receivedAuditQueries.at(-1), /cursor=/, `${name}: changing filters resets the prior cursor`);
@@ -812,8 +829,8 @@ async function verifyBrowser(browserType, name, origin) {
     await temporaryPrf.locator("#bootstrap-id").fill("admin");
     await temporaryPrf.locator("#bootstrap-password").fill(dummyPassword);
     await temporaryPrf.getByRole("button", { name: "端末のロック解除を登録" }).click();
-    await temporaryPrf.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
-    assert.equal(await temporaryPrf.locator("#admin-view").isVisible(), true, `${name}: a temporary PRF result miss does not block Security Center`);
+    await temporaryPrf.locator("#tcloud-setup-notice").waitFor({ timeout: 30000 });
+    assert.equal(await temporaryPrf.locator("#admin-view").isVisible(), false, `${name}: new primary-admin setup waits for its own envelope`);
     assert.equal(await temporaryPrf.locator("#tcloud-setup-resume").isVisible(), true,
       `${name}: registration-time PRF capability remains enabled after one missing assertion result`);
     assert.match(await temporaryPrf.locator("#message").textContent(), /一時的に完了できませんでした/);
@@ -829,15 +846,15 @@ async function verifyBrowser(browserType, name, origin) {
     await transient.locator("#bootstrap-id").fill("admin");
     await transient.locator("#bootstrap-password").fill(dummyPassword);
     await transient.getByRole("button", { name: "端末のロック解除を登録" }).click();
-    await transient.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
-    assert.equal(await transient.locator("#tcloud-setup-notice").isVisible(), true, `${name}: envelope failure is a non-blocking warning`);
+    await transient.locator("#tcloud-setup-notice").waitFor({ timeout: 30000 });
+    assert.equal(await transient.locator("#admin-view").isVisible(), false, `${name}: envelope failure leaves new primary-admin setup unfinished`);
     assert.equal(await transient.locator("#tcloud-setup-resume").isVisible(), true);
     assert.equal(registeredCredentialCount, 1);
 
     setupStatusBody = { ...setupStatusBody, active: false, resumable: true, needsTCloudSetup: true };
     await transient.goto(`${origin}/security/?scenario=primary-retry`, { waitUntil: "load" });
-    await transient.locator("#dashboard-panel .stats").waitFor();
-    assert.equal(await transient.locator("#admin-view").isVisible(), true, `${name}: transient setup reload opens the normal admin UI`);
+    await transient.locator("#tcloud-setup-notice").waitFor();
+    assert.equal(await transient.locator("#admin-view").isVisible(), false, `${name}: reload preserves pending primary-admin setup`);
     await transient.locator("#tcloud-setup-resume").click();
     await transient.locator("#tcloud-setup-id").fill("admin");
     await transient.locator("#tcloud-setup-password").fill(dummyPassword);
@@ -859,6 +876,7 @@ async function verifyBrowser(browserType, name, origin) {
     setupStatusBody = {
       active: false, completed: true, resumable: true, needsTCloudSetup: true,
       identityId: "primary-admin", credentialId: "cmVzdW1lLWNyZWRlbnRpYWw",
+      credentialStatus: "active", pendingApproval: false,
       isPrimaryAdmin: true, prfEnabled: true, adminKeyReady: true, clientKeyReady: false, tcloudReady: false,
       cloudLinks: [{ id: "primary-cloud", accountId: "admin", rootFolderId: null }, { id: "personal-cloud", accountId: "folder-member", rootFolderId: 7 }]
     };

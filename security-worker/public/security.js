@@ -4,7 +4,7 @@
   if (!display) throw new Error("セキュリティ画面の表示設定を読み込めませんでした。");
   const state = {
     adminPrf: null, adminCredentialId: null, selectedIdentity: null,
-    pendingInviteCloud: null, pendingPrimarySetup: null, identityNames: new Map(),
+    pendingInviteCloud: null, pendingPrimarySetup: null, inviteFlow: false, inviteRegistrationPending: false, identityNames: new Map(),
     currentIdentities: [], auditIdentities: [], auditIdentitiesRequest: 0,
     auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: []
   };
@@ -18,6 +18,8 @@
     const params = new URLSearchParams(location.hash.replace(/^#/, ""));
     const inviteToken = params.get("invite");
     if (inviteToken) {
+      state.inviteFlow = true;
+      state.inviteRegistrationPending = true;
       history.replaceState(null, "", "/security/");
       $("#invite-view").hidden = false;
       $("#invite-register").onclick = () => registerInvite(inviteToken);
@@ -27,6 +29,9 @@
   }
 
   function bind() {
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted && state.inviteFlow && !state.inviteRegistrationPending) routeStatus();
+    });
     document.addEventListener("troom:before-auto-update", (event) => {
       if (document.querySelector("button:disabled")) event.preventDefault();
     });
@@ -133,28 +138,16 @@
   }
 
   async function routeStatus() {
+    $("#invite-complete").hidden = true;
+    $("#invite-view").hidden = true;
     try {
       const setup = await TRoomPasskeys.setupStatus();
+      if (renderInviteSetup(setup)) return;
       if (setup.isPrimaryAdmin && setup.credentialStatus === "pending") {
         $("#invite-view").hidden = false;
         $("#invite-register").hidden = true;
         renderPrimarySetupNotice(setup);
         showMessage(setup.tcloudReady ? "T-Cloud管理者鍵の準備が完了しました。既存パスキーから管理者の承認を行ってください。" : "第一管理者パスキー登録処理が未完了です。T-Cloud管理者鍵の準備を続けてください。", !setup.tcloudReady);
-        return;
-      }
-      if ((setup.active || setup.resumable || setup.needsTCloudSetup) && !setup.isPrimaryAdmin) {
-        $("#invite-view").hidden = false;
-        if (setup.tcloudReady) {
-          $("#invite-register").hidden = true;
-          showMessage("パスキー登録とT-Cloudの準備は完了しています。管理者の承認をお待ちください。", false);
-        } else if (!setup.prfEnabled) {
-          $("#invite-register").hidden = true;
-          showMessage("パスキー登録は完了しています。日記・請求書では承認後に利用できます。この端末ではT-Cloudのパスキー利用に対応していないため、T-Cloudは従来のID・パスワードをご利用ください。", false);
-        } else {
-          state.pendingInviteCloud = setup;
-          $("#invite-register").textContent = "T-Cloudの準備を再開";
-          $("#invite-register").onclick = () => retryInviteCloud();
-        }
         return;
       }
       const status = await get("/status");
@@ -263,16 +256,75 @@
   async function registerInvite(token) {
     const button = $("#invite-register");
     button.disabled = true;
+    showInviteProgress("パスキーを登録しています");
     try {
       const result = await TRoomPasskeys.registerInvite(token);
+      state.inviteRegistrationPending = false;
+      // Registration consumed the invitation. Any later retry must use this
+      // credential's setup session, never create another credential.
+      state.pendingInviteCloud = { ...result, prfOutput: undefined };
+      $("#invite-title").textContent = "パスキーは登録済みです。";
+      $("#invite-description").textContent = "利用準備を進めています。";
+      button.onclick = () => retryInviteCloud();
+      button.textContent = "利用準備を再試行";
+      showInviteProgress("利用準備を行っています");
       if (result.cloudLinks?.length) {
         const prepared = await prepareInviteCloud(result);
         if (!prepared) return;
       }
-      button.hidden = true;
-      showMessage("登録が完了しました。管理者の承認をお待ちください。");
+      await finishInviteSetup();
     } catch (error) { showMessage(error.message, true); }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; $("#invite-progress").hidden = true; }
+  }
+
+  function showInviteProgress(message) {
+    $("#message").hidden = true;
+    $("#invite-progress").textContent = `${message}。続けて端末のロック解除を確認する場合があります。`;
+    $("#invite-progress").hidden = false;
+  }
+
+  function renderInviteSetup(setup) {
+    if (setup.isPrimaryAdmin || !(setup.active || setup.completed || setup.resumable || setup.needsTCloudSetup)) return false;
+    if (!["pending", "active"].includes(setup.credentialStatus)) return false;
+    state.inviteFlow = true;
+    state.inviteRegistrationPending = false;
+    $("#admin-login-view").hidden = true;
+    $("#bootstrap-view").hidden = true;
+    $("#admin-view").hidden = true;
+    $("#message").hidden = true;
+    $("#invite-progress").hidden = true;
+    if (setup.tcloudReady && !setup.needsTCloudSetup && setup.pendingApproval && setup.credentialStatus === "pending") {
+      $("#invite-view").hidden = true;
+      $("#invite-register").hidden = true;
+      $("#tcloud-setup-notice").hidden = true;
+      $("#invite-complete").hidden = false;
+      $("#invite-complete-title").focus();
+      state.pendingInviteCloud = null;
+      return true;
+    }
+    $("#invite-complete").hidden = true;
+    $("#invite-view").hidden = false;
+    $("#invite-title").textContent = "パスキーは登録済みです。";
+    $("#invite-register").hidden = !setup.needsTCloudSetup;
+    if (!setup.needsTCloudSetup) {
+      $("#invite-description").textContent = "パスキーの利用準備が整っています。";
+      return true;
+    }
+    state.pendingInviteCloud = setup;
+    $("#invite-description").textContent = setup.prfEnabled
+      ? "T-Cloudの利用準備が残っています。下のボタンから準備を再開してください。"
+      : "日記・請求書の登録は完了しています。T-Cloudは、この端末で利用準備を完了できていません。対応する端末・ブラウザで準備を再試行できます。";
+    // prfEnabled=false alone does not prove lack of support: the first
+    // verification may have been cancelled. Keep the existing safe retry.
+    $("#invite-register").textContent = "T-Cloudの準備を再開";
+    $("#invite-register").onclick = () => retryInviteCloud();
+    return true;
+  }
+
+  async function finishInviteSetup() {
+    const setup = await TRoomPasskeys.setupStatus();
+    if (setup.isPrimaryAdmin) return routeStatus();
+    if (!renderInviteSetup(setup)) throw new Error("登録後の状態を確認できませんでした。画面を再読み込みしてください。");
   }
 
   async function prepareInviteCloud(result) {
@@ -296,27 +348,28 @@
       }
       if (!prfOutput) {
         if (result.prfEnabled) {
-          state.pendingInviteCloud = result;
+          state.pendingInviteCloud = { ...result, prfOutput: undefined };
+          $("#invite-description").textContent = "T-Cloudの利用準備が残っています。";
           button.hidden = false;
           button.textContent = "T-Cloudの準備を再試行";
           button.onclick = () => retryInviteCloud();
-          showMessage("パスキー登録は完了しました。今回はPRF結果を取得できなかったため、T-Cloudの準備だけ完了していません。日記・請求書は承認後に利用できます。", true);
+          showMessage("パスキーは登録済みです。T-Cloudの利用準備を完了できませんでした。下のボタンから準備を再試行してください。", true);
           return false;
         }
-        button.hidden = true;
-        showMessage("パスキー登録は完了しました。日記・請求書では承認後に利用できます。この端末ではT-Cloudのパスキー利用に対応していないため、T-Cloudは従来のID・パスワードをご利用ください。");
+        renderInviteSetup({ ...setup, prfEnabled: false });
+        $("#invite-description").textContent = "日記・請求書のパスキー登録は完了しています。管理者の確認をお待ちください。この端末ではT-Cloudのパスキー利用に対応していません。対応する端末・ブラウザで準備を再試行できます。";
         return false;
       }
       await prepareClientVault(setup, prfOutput);
-      state.pendingInviteCloud = null;
       return true;
     } catch (error) {
-      state.pendingInviteCloud = result;
+      state.pendingInviteCloud = { ...result, prfOutput: undefined };
       button.hidden = false;
       button.textContent = "T-Cloudの準備を再試行";
       button.onclick = () => retryInviteCloud();
-      const preparationMessage = TRoomPasskeys.userMessage(error, {}, "T-Cloudのパスキー利用準備を一時的に完了できませんでした。");
-      showMessage(`パスキー登録は完了しました。T-Cloudの準備だけ完了していません。再試行してください。${preparationMessage}`, true);
+      $("#invite-title").textContent = "パスキーは登録済みです。";
+      $("#invite-description").textContent = "T-Cloudの利用準備が残っています。";
+      showMessage("パスキーは登録済みです。T-Cloudの利用準備を完了できませんでした。下のボタンから準備を再試行してください。", true);
       return false;
     }
   }
@@ -325,16 +378,21 @@
     const button = $("#invite-register");
     if (!state.pendingInviteCloud) return;
     button.disabled = true;
+    showInviteProgress("利用準備を行っています");
     try {
       let setup = await TRoomPasskeys.setupStatus();
       if (!setup.active && setup.resumable) setup = await TRoomPasskeys.resumeSetup();
       state.pendingInviteCloud = { ...state.pendingInviteCloud, ...setup, cloudLinks: setup.cloudLinks || state.pendingInviteCloud.cloudLinks };
+      state.pendingInviteCloud.prfOutput = null;
+      state.pendingInviteCloud.prfPreparationFailed = true;
       if (await prepareInviteCloud(state.pendingInviteCloud)) {
-        button.hidden = true;
-        showMessage("T-Cloudの準備が完了しました。管理者の承認をお待ちください。");
+        await finishInviteSetup();
       }
+    } catch (error) {
+      showMessage("利用準備の状態を確認できませんでした。もう一度お試しください。", true);
     } finally {
       button.disabled = false;
+      $("#invite-progress").hidden = true;
     }
   }
 

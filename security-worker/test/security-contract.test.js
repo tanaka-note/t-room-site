@@ -429,7 +429,9 @@ test("member registration remains retryable and primary-admin registration requi
   assert.match(worker, /security_setup_sessions/);
   assert.match(worker, /last_user_verification_at/);
   assert.match(worker, /security_tcloud_client_vaults/);
-  assert.match(securityUi, /パスキー登録は完了しました。日記・請求書では承認後に利用できます/);
+  assert.match(securityUi, /日記・請求書のパスキー登録は完了しています。管理者の確認をお待ちください/);
+  assert.match(securityHtml, /パスキーの登録が完了しました。/);
+  assert.match(securityHtml, /管理者の確認後、利用できるようになります。しばらくお待ちください。/);
   assert.match(securityUi, /T-Cloudの準備を再試行/);
   assert.match(securityUi, /resumePrimaryAdminSetup/);
   assert.match(securityUi, /TRoomPasskeys\.obtainPrf\(setup\.credentialId\)/, "第一管理者の再開は既存credentialをWebAuthn getで再認証します");

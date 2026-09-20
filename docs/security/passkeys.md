@@ -1,5 +1,11 @@
 # T-lain 共通Identity・パスキー仕様
 
+## 招待登録の完了表示
+
+一般利用者の招待登録では、`/security/api/setup/status` が有効な登録状態（`active` / `completed` / `resumable` / `needsTCloudSetup`）、`credentialStatus=pending`、`pendingApproval=true`、`tcloudReady=true`、`needsTCloudSetup=false` を返すと、専用の完了画面へ切り替える。T-Cloud連携がない場合も、サーバーの `tcloudReady` は準備不要としてtrueになる。表示は「パスキーの登録が完了しました。」「管理者の確認後、利用できるようになります。しばらくお待ちください。」のみで、サービスへの移動ボタンは設けない。再読み込み・BFCacheから戻った際も同APIを読み直し、ブラウザ保存領域の成功フラグには依存しない。setup cookieの期限や権限は延長しない。
+
+鍵の準備が失敗した場合は登録済みであることと未完了の利用準備を分けて表示し、同じcredentialで再開する。PRF非対応を確認した場合は日記・請求書の登録成功とT-Cloudの制限を別表示にする。再読み込み時の `prfEnabled=false` だけでは非対応とキャンセルを区別できないため、非対応と断定せず再試行を残す。第一管理者の準備・承認フロー、承認後の鍵委譲・handoffには変更を加えない。
+
 ## 境界
 
 Security Centerは「誰か」を表すIdentity、パスキー、招待、承認、サービス連携、共通監査を管理する。日記、T-Cloud、請求書管理のアカウントとroleは統合せず、認可の正本は常に各サービスとする。共通認証成功後は60秒・一回限りのhandoffを対象サービスが引き換え、サービス固有cookieを発行する。各サービスへ共通SESSION_SECRETを配布しない。

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { OWNER_DISPLAY_NAME, USER_DISPLAY_NAME } from "../../assets/account-display.mjs";
+import { passwordLifetimeClaims } from "../../assets/session-policy.mjs";
 import { createHash, createHmac, pbkdf2Sync, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -991,6 +992,18 @@ try {
   assert.equal(resumedSetupBody.active, false);
   assert.equal(resumedSetupBody.completed, true);
   assert.equal(resumedSetupBody.tcloudReady, true, "a lost success response is recoverable as a read-only completed state");
+  const priorInvitation = queryText("security-worker", "security-db", `SELECT COALESCE(registered_via_invitation_id, '') AS value FROM security_credentials WHERE credential_id = '${credentialId}'`);
+  runSecuritySql(`INSERT INTO security_invitations (id, identity_id, token_hash, link_set_hash, expires_at, status)
+    VALUES ('completion-status-invite', '${identityId}', 'completion-status-token', 'fixture-links', 4102444800, 'used');
+    UPDATE security_credentials SET status = 'pending', registered_via_invitation_id = 'completion-status-invite' WHERE credential_id = '${credentialId}'`);
+  const pendingCompletedSetup = await readSetupStatus(resumedGeneralToken);
+  assert.equal(pendingCompletedSetup.active, false);
+  assert.equal(pendingCompletedSetup.completed, true);
+  assert.equal(pendingCompletedSetup.credentialStatus, "pending");
+  assert.equal(pendingCompletedSetup.pendingApproval, true);
+  assert.equal(pendingCompletedSetup.tcloudReady, true, "admin delegation is not a missing user-side preparation step");
+  assert.equal(pendingCompletedSetup.needsTCloudSetup, false);
+  runSecuritySql(`UPDATE security_credentials SET status = 'active', registered_via_invitation_id = ${priorInvitation ? `'${priorInvitation}'` : "NULL"} WHERE credential_id = '${credentialId}'`);
   const repeatedGeneralResume = await resumeSetupWithCookie(`troom_security_identity=${oldIdentityCookie}`);
   assert.equal(repeatedGeneralResume.response.status, 409, "completed general setup cannot be elevated again");
 
@@ -1763,11 +1776,8 @@ async function assertSessionRefreshPolicies(passkeyCookies, passwordCookies) {
       headers: { Cookie: `${service.cookie}=${passwordCookies[name]}` }
     });
     assert.equal(passwordResponse.status, 200, `${name} password session remains usable`);
-    const refreshedHeader = passwordResponse.headers.get("set-cookie") || "";
-    assert.match(refreshedHeader, /Max-Age=2592000/, `${name} keeps the 30-day password cookie`);
-    const refreshed = refreshedHeader.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1];
-    assert.ok(refreshed, `${name} rolls the password session`);
-    assert.ok(decodeSignedPayload(refreshed).exp > passwordPayload.exp, `${name} extends only the password expiry`);
+    assert.equal(passwordResponse.headers.get("set-cookie"), null, `${name} does not roll or reissue a password session`);
+    assert.equal(decodeSignedPayload(passwordCookies[name]).exp, passwordPayload.exp);
   }
 }
 
@@ -1782,7 +1792,8 @@ async function assertSingleAccess(name, cookie, expected, label) {
 
 function createServiceCookies(authMethod, diaryVersion, billingVersion, passkeySessionEpoch = null, linkOverrides = {}) {
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const auth = authMethod === "passkey" ? { identityId, credentialId, authMethod, passkeySessionEpoch } : { authMethod };
+  const auth = authMethod === "passkey" ? { identityId, credentialId, authMethod, passkeySessionEpoch }
+    : { authMethod, startedAt: new Date().toISOString(), ...passwordLifetimeClaims({ authMethod }) };
   return {
     cloud: signCookie({
       role: "admin", sessionId: randomUUID(), exp, version: services.cloud.version,

@@ -19,6 +19,12 @@ h2 { margin-top: 0; }
 .eyebrow { margin: 0; color: var(--accent); font-weight: 800; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 22px; box-shadow: 0 8px 30px #16325c12; }
 .compact { padding: 16px; }
+.invite-complete { max-width: 640px; margin-inline: auto; padding: 32px 22px; text-align: center; }
+.invite-complete h2 { font-size: clamp(1.25rem, 4vw, 1.6rem); }
+.invite-complete h2:focus { outline: none; }
+.invite-complete p { line-height: 1.8; margin-bottom: 0; }
+.completion-check { display: block; color: var(--ok); font-size: 2.5rem; margin-bottom: 16px; }
+#invite-progress { color: var(--muted); line-height: 1.7; }
 .message { padding: 12px 16px; margin: 0 0 16px; border-radius: 10px; background: #eff6ff; color: #1849a9; }
 .message.error { background: #fef3f2; color: var(--danger); }
 form { display: grid; gap: 13px; }
