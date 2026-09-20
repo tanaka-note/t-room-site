@@ -56,7 +56,7 @@ test("gate uses escaped links, exact CSP hashes and no dismiss/automatic redirec
   const html = policy.contents('https://tanaka-note.com/diary/?q=%22%3E%3Cscript%3Ealert(1)%3C/script%3E', uas.androidLine);
   assert.doesNotMatch(html, /<script>|onclick|window\.location|閉じる|Chromeで|com\.android\.chrome/);
   const hash = text => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
-  assert.equal(LINE_BROWSER_BOOTSTRAP, `(${lineBrowserPolicy.toString()})(window).enforce();`.replaceAll("<", "\\u003c"), "regenerate the literal before publishing source changes");
+  assert.equal(LINE_BROWSER_BOOTSTRAP, `(${lineBrowserPolicy.toString().replace(/\r\n?/g, "\n")})(window).enforce();`.replaceAll("<", "\\u003c"), "regenerate the literal before publishing source changes");
   assert.equal(LINE_BROWSER_SCRIPT_CSP, hash(LINE_BROWSER_BOOTSTRAP)); assert.equal(LINE_BROWSER_STYLE_CSP, hash(policy.css));
   const once = ensureLineBrowserGuard('<!doctype html><html><head><meta charset="utf-8"><script src="app.js"></script></head><body></body></html>');
   assert.equal(ensureLineBrowserGuard(once), once); assert.ok(once.indexOf("data-tlain-browser-guard") < once.indexOf('src="app.js"'));

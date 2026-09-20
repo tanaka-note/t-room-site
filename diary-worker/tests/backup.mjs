@@ -24,6 +24,7 @@ const tableRows = {
   diary_entries: [{
     id: 1,
     entry_date: "2026-08-20",
+    entry_time: "14:25",
     title: "バックアップ対象",
     content: "本文",
     created_at: "2026-08-20 00:00:00",
@@ -246,7 +247,8 @@ async function migratedEmptyDatabase() {
     "0005_diary_photos.sql", "0006_login_attempts.sql", "0007_household_isolation.sql", "0008_chiharu_login_reset.sql",
     "0009_main_user.sql", "0010_entry_rich_text.sql", "0011_trash_scopes.sql", "0012_entry_drafts.sql",
     "0013_main_user_trash_and_media_retry.sql", "0014_diary_favorites.sql", "0015_photo_upload_staging.sql",
-    "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql", "0018_diary_weather.sql"
+    "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql", "0018_diary_weather.sql",
+    "0019_password_auth_policy.sql", "0020_diary_entry_time.sql"
   ];
   for (const migration of migrations) database.exec(await readFile(new URL(migration, migrationDirectory), "utf8"));
   database.exec(`
@@ -279,6 +281,7 @@ assert.equal(payload.formatVersion, BACKUP_FORMAT_VERSION);
 assert.equal(payload.japanDate, "2026-08-20");
 assert.equal(payload.source.database, "diary-db");
 assert.equal(payload.tables.diary_entries.rows[0].content, "本文");
+assert.equal(payload.tables.diary_entries.rows[0].entry_time, "14:25");
 assert.equal(payload.tables.diary_entries.rows[0].status, "draft");
 assert.deepEqual(payload.tables.diary_tags.rows.map((row) => [row.tag, row.sort_order]), [
   ["Z", 0], ["A", 1], ["ふゆ", 2]
@@ -352,8 +355,15 @@ await assert.rejects(
   "restore must fail closed instead of merging into a non-empty target"
 );
 
-const version2Payload = structuredClone(readBackup(bucket, first.dailyKey));
-const version3Payload = structuredClone(version2Payload);
+const version4Payload = structuredClone(readBackup(bucket, first.dailyKey));
+version4Payload.formatVersion = 4;
+version4Payload.tables.diary_entries.columns = version4Payload.tables.diary_entries.columns.filter((column) => column !== "entry_time");
+version4Payload.tables.diary_entries.rows = version4Payload.tables.diary_entries.rows.map(({ entry_time, ...row }) => row);
+const version4Database = await migratedEmptyDatabase();
+await restoreDiaryBackup(new SqliteD1(version4Database), version4Payload);
+assert.equal(version4Database.prepare("SELECT entry_time FROM diary_entries LIMIT 1").get().entry_time, null);
+const version2Payload = structuredClone(version4Payload);
+const version3Payload = structuredClone(version4Payload);
 version3Payload.formatVersion = 3;
 version3Payload.tables.diary_entries.columns = version3Payload.tables.diary_entries.columns.filter((column) => column !== "weather");
 version3Payload.tables.diary_entries.rows = version3Payload.tables.diary_entries.rows.map(({ weather, ...row }) => row);

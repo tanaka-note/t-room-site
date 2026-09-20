@@ -214,6 +214,7 @@
     entryRevision: document.querySelector("#entry-revision"),
     entryStatus: document.querySelector("#entry-status"),
     entryDate: document.querySelector("#entry-date"),
+    entryTime: document.querySelector("#entry-time"),
     todayButton: document.querySelector("#today-button"),
     entryTitle: document.querySelector("#entry-title"),
     entryContent: document.querySelector("#entry-content"),
@@ -1145,8 +1146,8 @@
       button.dataset.entryId = String(entry.id);
 
       const time = document.createElement("time");
-      time.dateTime = entry.entryDate;
-      time.textContent = formatDate(entry.entryDate);
+      time.dateTime = entry.entryTime ? `${entry.entryDate}T${entry.entryTime}` : entry.entryDate;
+      time.textContent = formatEntryDateTime(entry.entryDate, entry.entryTime);
       const author = document.createElement("span");
       author.className = "entry-author";
       author.textContent = `投稿者：${entry.authorName}`;
@@ -1619,7 +1620,7 @@
   }
 
   function renderEntryDetail(entry) {
-    elements.detailDate.textContent = formatDate(entry.entryDate);
+    elements.detailDate.textContent = formatEntryDateTime(entry.entryDate, entry.entryTime);
     elements.detailTitle.textContent = entry.title;
     elements.detailAuthor.textContent = `投稿者：${entry.authorName}`;
     elements.detailAuthor.hidden = !shouldShowEntryAuthor();
@@ -3178,6 +3179,7 @@
     elements.entryRevision.value = entry ? String(entry.revision) : "";
     elements.entryStatus.value = isDraft ? "draft" : "published";
     elements.entryDate.value = entry?.entryDate || japanDateString();
+    elements.entryTime.value = entry ? (entry.entryTime || "") : japanTimeString();
     elements.entryTitle.value = entry?.title || "";
     state.editorWeather = Object.hasOwn(WEATHER_LABELS, entry?.weather) ? entry.weather : null;
     closeWeatherMenu(false);
@@ -3221,6 +3223,7 @@
       const editorDocument = serializeRichEditor(true);
       const body = {
         entryDate: elements.entryDate.value,
+        entryTime: elements.entryTime.value,
         title: elements.entryTitle.value,
         weather: state.editorWeather,
         content: editorDocument.content,
@@ -3366,6 +3369,7 @@
   function entryMatchesEditorPayload(entry, payload) {
     if (!entry || !payload) return false;
     return String(entry.entryDate || "") === String(payload.entryDate || "")
+      && (entry.entryTime ?? null) === (payload.entryTime || null)
       && String(entry.title || "") === String(payload.title || "")
       && (entry.weather ?? null) === (payload.weather ?? null)
       && String(entry.content || "") === String(payload.content || "")
@@ -4237,6 +4241,12 @@
     return `${year}年${month}月${day}日（${weekday}）`;
   }
 
+  function formatEntryDateTime(entryDate, entryTime) {
+    const date = formatDate(entryDate);
+    const match = /^(\d{2}):(\d{2})$/.exec(String(entryTime || ""));
+    return match ? `${date} ${Number(match[1])}:${match[2]}` : date;
+  }
+
   function formatMonth(value) {
     const [year, month] = String(value || "").split("-").map(Number);
     return year && month ? `${year}年${month}月` : value;
@@ -4276,6 +4286,17 @@
     }).formatToParts(new Date());
     const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function japanTimeString(now = new Date()) {
+    const parts = new Intl.DateTimeFormat("en", {
+      timeZone: "Asia/Tokyo",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(now);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.hour}:${values.minute}`;
   }
 
   function currentJapanMonth() {

@@ -1368,6 +1368,23 @@ button:disabled {
   gap: 12px;
 }
 
+.entry-date-time-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(118px, 0.42fr);
+  align-items: end;
+  gap: 12px;
+}
+
+.entry-date-time-field {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+#entry-time {
+  width: 100%;
+}
+
 .today-button {
   min-height: auto;
   border: 0;
@@ -2150,6 +2167,11 @@ button:disabled {
 
   .diary-panel {
     padding: 20px;
+  }
+
+  .entry-date-time-fields {
+    grid-template-columns: minmax(0, 1fr) minmax(108px, 0.45fr);
+    gap: 8px;
   }
 
   .investment-performance-entry {

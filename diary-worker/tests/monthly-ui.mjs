@@ -30,6 +30,6 @@ assert.match(script, /function scrollToMonthlyHeadingAfterRender\(targetMonth\)[
 assert.match(script, /function returnToCurrentMonth\(\)[\s\S]*?state\.month = currentJapanMonth\(\);[\s\S]*?loadEntries\(true\)/);
 assert.match(script, /elements\.currentMonth\.disabled = state\.month === currentJapanMonth\(\)/);
 assert.doesNotMatch(script, /nextMonth > currentJapanMonth\(\)/);
-assert.match(worker, /draft \? "e\.updated_at DESC, e\.id DESC" : "e\.entry_date DESC, e\.id DESC"/);
+assert.match(worker, /draft \? "e\.updated_at DESC, e\.id DESC" : "e\.entry_date DESC, e\.entry_time DESC, e\.id DESC"/);
 
 process.stdout.write("Diary monthly entry-date-descending list contract test passed.\n");

@@ -27,7 +27,7 @@ export function commands(target) {
       'media-range', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
-    diary: tests('diary-worker', ...['request-safety', 'backup', 'search-text', 'favorites-ui', 'drafts-ui', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
+    diary: tests('diary-worker', ...['request-safety', 'backup', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
@@ -43,7 +43,7 @@ export function commands(target) {
 export function browserTests(target) {
   const existing = ({ tooling: ['tools/test-browser-trace.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs'],
     security: ['security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs'],
-    diary: ['diary-worker/tests/browser/favorites-flow.mjs'] })[target] || [];
+    diary: ['diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs'] })[target] || [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : existing;
 }

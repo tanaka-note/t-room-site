@@ -1,4 +1,4 @@
-const BACKUP_FORMAT_VERSION = 4;
+const BACKUP_FORMAT_VERSION = 5;
 const LEGACY_BACKUP_FORMAT_VERSION = 2;
 const DAILY_RETENTION = 30;
 const MONTHLY_RETENTION = 12;
@@ -20,7 +20,7 @@ const BACKUP_TABLES = [
   {
     name: "diary_entries",
     columns: [
-      "id", "entry_date", "title", "content", "created_at", "updated_at", "deleted_at", "revision",
+      "id", "entry_date", "entry_time", "title", "content", "created_at", "updated_at", "deleted_at", "revision",
       "author_id", "author_name", "deleted_by_id", "deleted_by_name", "household_id", "content_format",
       "status", "draft_of_entry_id", "draft_of_revision", "draft_excluded_photo_ids",
       "client_request_id", "client_request_hash", "last_mutation_id", "weather"
@@ -331,7 +331,7 @@ async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
 
 function validateBackupPayload(payload) {
   const formatVersion = Number(payload?.formatVersion);
-  if (!payload || ![LEGACY_BACKUP_FORMAT_VERSION, 3, BACKUP_FORMAT_VERSION].includes(formatVersion) || !payload.tables) {
+  if (!payload || ![LEGACY_BACKUP_FORMAT_VERSION, 3, 4, BACKUP_FORMAT_VERSION].includes(formatVersion) || !payload.tables) {
     throw new Error("Unsupported diary backup format");
   }
 }
@@ -341,9 +341,21 @@ function restoreTable(payload, name, expected) {
   if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)) {
     throw new Error(`Backup table is missing: ${name}`);
   }
-  if (name === "diary_entries"
-    && JSON.stringify(table.columns) === JSON.stringify(expected.columns.filter((column) => column !== "weather"))) {
-    return { ...table, columns: expected.columns, rows: table.rows.map((row) => ({ ...row, weather: null })) };
+  if (name === "diary_entries") {
+    const legacyOptionalColumns = ["entry_time", "weather"];
+    for (const omitted of [["entry_time"], legacyOptionalColumns]) {
+      if (JSON.stringify(table.columns) === JSON.stringify(expected.columns.filter((column) => !omitted.includes(column)))) {
+        return {
+          ...table,
+          columns: expected.columns,
+          rows: table.rows.map((row) => ({
+            ...row,
+            ...(omitted.includes("entry_time") ? { entry_time: null } : {}),
+            ...(omitted.includes("weather") ? { weather: null } : {})
+          }))
+        };
+      }
+    }
   }
   if (Number(payload.formatVersion) === LEGACY_BACKUP_FORMAT_VERSION && name === "diary_tags") {
     const legacyColumns = ["entry_id", "tag", "created_at"];
