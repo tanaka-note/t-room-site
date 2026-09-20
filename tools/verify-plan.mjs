@@ -41,9 +41,11 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
-  return ({ tooling: ['tools/test-browser-trace.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs'],
+  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs'],
     security: ['security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs'],
     diary: ['diary-worker/tests/browser/favorites-flow.mjs'] })[target] || [];
+  return ['cloud', 'security', 'diary', 'billing'].includes(target)
+    ? [...existing, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : existing;
 }
 
 export function affected(paths) {
@@ -97,7 +99,7 @@ export function installDirectories(selected) {
   for (const target of selected) {
     if (target === 'site') dirs.add('security-worker');
     if (services.includes(target)) dirs.add(`${target}-worker`);
-    if (['tooling', 'cloud', 'security', 'diary', 'auth'].includes(target)) dirs.add('diary-worker');
+    if (['tooling', 'cloud', 'security', 'diary', 'billing', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }
   return [...dirs];
