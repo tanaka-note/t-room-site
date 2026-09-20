@@ -13,11 +13,9 @@ Security Centerは「誰か」を表すIdentity、パスキー、招待、承認
 サービス固有sessionは認証方式ごとに明確に分離する。既存ID・PW sessionは従来どおり30日間のpersistent cookieとし、有効な保護API利用時に30日へrolling更新する。パスキーsessionは12時間の絶対期限をtoken内に持つ非persistent session cookieとし、通常API利用、ページ再読込、画面遷移、サービス内のsession再発行では期限を延長しない。ブラウザ・PWA・TWAがsession cookieを復元してもtoken側の絶対期限後は必ず再認証を要求する。12時間以内は毎操作WebAuthnを要求せず通常操作できるが、長期ログイン維持には使用しない。Security Center自身は従来のより短いIdentity 10分・管理者1時間の絶対期限を維持し、どちらも非persistent cookieとする。setup sessionの進捗保持とhandoffの60秒・一回限りという別目的の期限は変更しない。
 
 Security Centerの現在ログイン中表示は監査時刻から推測せず、`security_active_sessions`へHMAC済みsession識別子、開始・最終確認・期限、service、version、passkey epochだけを保持する。生のcookie／token／session IDは保存しない。表示時には各Workerのruntime versionとlocal switch、Securityのglobal epoch、Identity・credential・service linkの現在状態を再検証し、ログアウト・期限切れ・各失効条件を反映する。一意にIdentityを解決できないPW sessionは別ユーザーへ推測で結び付けない。
-開始日時は署名済みsessionのstartedAt（SecurityはauthenticatedAt）または同一sessionの成功ログイン発生時刻を根拠とし、再アクセスでは正常値を上書きしない。開始不明はNOT NULLのstarted_atへ空文字で保存し、APIはnull、画面は「不明」とする。0016 migrationはepoch・不正・空値だけを対象に、session hash・Identity・service・認証方式が一致する矛盾のない成功ログイン監査から復元する。根拠がない値を現在時刻や最終アクセスで埋めず、監査・期限・失効状態は変更しない。
+開始日時は署名済みsessionのstartedAt（SecurityはauthenticatedAt）または同一sessionの成功ログイン発生時刻を根拠とし、再アクセスでは正常値を上書きしない。開始不明はNOT NULLのstarted_atへ空文字で保存し、APIはnull、画面は「不明」とする。根拠がない値を現在時刻や最終アクセスで埋めず、監査・期限・失効状態は変更しない。
 
 アカウントの画面用名称は `assets/account-display.mjs` で本人Identity・service・account ID・roleから解決する。田中宏知のメイン管理は「田中宏知（オーナー）」、日記main-userと本人のT-Cloud folder-member利用は「田中宏知（一般ユーザー）」とする。日記のaccountName・投稿者／編集者・世帯切替、T-Cloudのfolder表示名／path／scopeは正本のまま維持し、画面用名称を流用しない。監査の名称は当時のaccountとroleで表示時に解決し、権限不明や旧subadmin利用を現在のIdentity名からオーナー扱いしない。監査原本は更新しない。
-
-0017 migrationは対象IDと旧名称を限定した表示用データ補正で、再実行可能。2026-09-09の読み取り調査ではIdentity 2件、オーナー用連携5件が対象。本人の旧一般用Identityは既存main-user連携を確認して更新する。Atsushiなどfolderラベル、日記・請求書の氏名データは対象外。AI accountは調査時0件で、今後の登録と既存session応答は表示関数を通す。公開時はSecurityの0017と6 Worker（Security / Cloud / Diary / Billing / AI / Downloader）を対象にする。
 
 既存PWは移行中もすべて維持する。第一管理者PWは、パスキー紛失時に管理者パスキーとT-Cloud鍵envelopeを復旧登録する恒久経路であり、パスキー登録を理由に無効化・変更・削除しない。Security Workerの`PASSKEY_ENABLED=false`は全パスキーsessionをepochで失効するグローバル緊急停止、各サービスWorkerの同名設定はそのサービスだけをfail-closedにするローカル停止として分離し、どちらもPW経路へ影響させない。
 
@@ -91,7 +89,7 @@ T-Cloudの`admin`は`primary-admin`の既定linkに限定し、通常の追加AP
 
 管理者用envelopeと一般ユーザー用vaultは既存の別テーブルで同じcredentialに併存する。鍵準備はIdentityの種類ではなくlinkに必要な鍵を判定し、後からmember linkを追加した場合も同じcredentialで不足するvaultだけを準備できる。準備済みvaultを再生成・置換しない。root folder keyの委譲は既存のcredential別承認画面を使用し、管理者鍵で端末内復号したfolder keyをmember公開鍵へwrapする。memberログイン時に管理者秘密鍵を解除・流用しない。
 
-本番の第一管理者には既存Atsushiトップフォルダー（rootFolderId=7）への通常のfolder-member linkを追加する。これは配備時のデータ対応であり、認可コードに名前や固定root IDを埋め込まない。既存linkを確認して再利用し、無効化済みIDは再活性化しない。0012 migrationは旧subadmin linkを論理無効化する。既存PWアカウント、D1/R2構成、ファイル暗号方式は変更しない。既存credentialにmember vaultがない場合はSecurity Centerの「T-Cloudの準備を再開」で本人が端末ロックを解除し、その後ユーザー詳細で同credentialのフォルダー連携を承認する。鍵委譲完了まではそのlinkをログイン候補にしない。
+既存credentialにmember vaultがない場合はSecurity Centerの「T-Cloudの準備を再開」で本人が端末ロックを解除し、その後ユーザー詳細で同credentialのフォルダー連携を承認する。鍵委譲完了まではそのlinkをログイン候補にしない。認可コードに氏名や固定root IDを埋め込まず、既存linkを確認して再利用し、無効化済みIDは再活性化しない。
 
 sessionは選択したserviceLinkId / serviceAccountId / role / rootFolderIdを保持する。サーバーはaccountとrole/rootの整合を検証し、Security Centerの現在のlink状態と照合する。再読込時の端末鍵解除は元のlinkに固定し、別linkしか利用できなければログイン画面へ戻す。一般member経路のrootチェックは未所属ファイルの直接ID取得にも適用する。共有URL発行は現在のmember仕様どおり禁止する。
 
@@ -103,4 +101,6 @@ member vaultの登録はcredential単位のINSERTのみとし、競合時は保�
 
 ## Downloaderの利用許可
 
-初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。[2026-09-09調査記録](downloader-grants-review-20260909.md)を参照。
+初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。過去の本番データ調査は[2026-09-09調査記録](../history/security/downloader-grants-review-20260909.md)を参照。
+
+過去のmigration、固定データ対応、当時の公開範囲は[Identity・Passkey移行記録](../history/security/passkey-migrations.md)へ分離している。

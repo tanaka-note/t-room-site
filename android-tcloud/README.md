@@ -13,37 +13,7 @@
 
 Android 8.0まで対応範囲を広げつつ、API 36を対象にして新しいAndroidのセキュリティ要件へ対応します。
 
-### 1.4.2 動画の相対シーク
-
-- 端末／T-Cloud動画のタッチ操作は、触れた位置へ即移動せず、タッチ開始時の再生位置から指の移動量に応じて前後へシーク
-- シークバー幅1本分のドラッグを動画全体時間相当として、`0 ～ duration`へ制限
-- マウス、キーボード、Media3標準コントローラー、YouTube公式Playerの操作は従来どおり
-
-### 1.4.1 Visual Experience 2.0 Player修正
-
-- Local／T-Cloud音楽を選ぶと、既存キューの開始後にアートワーク中心のNow Playingを表示
-- Now Playingの再生、シーク、前後移動、シャッフル、リピートは一覧側と同じPlaybackManagerへ接続
-- 写真のCrop／Fitと角丸差はShared Bounds内でfadeし、開閉時の急な見た目の切替を抑制
-
-### 1.4.0 T-Cloud Visual Experience 2.0
-
-- Material 3を基盤に、端末のライト／ダーク設定とAndroid 12以降のDynamic Colorへ追従
-- edge-to-edgeとWindow Size Classを採用し、スマートフォンの回転やタブレット等の画面幅へ適応（ヒンジ位置を使う専用2ペインレイアウトではありません）
-- Storageは画面幅に応じた2〜4列表示と、拡張幅でのNavigation Railを提供
-- Playerは音楽のアートワーク中心表示から既存の再生キューを直接操作し、動画の没入表示、既存のMedia3／YouTube公式Player操作を両立
-- フォルダ階層、選択、フィルター、音楽／動画切替に一貫した短いモーションを適用
-- 予測型Back、選択時の触覚フィードバック、IMEリサイズ、48dp以上の操作領域を共通方針として適用
-
-音楽Now Playingは一覧側と同じ`TCloudPlaybackManager`／`ExoPlayer`を利用します。認証、権限、暗号化・復号、通信、D1/R2、データモデル、検索・おすすめ、再生・保存ロジックは1.3.0から変更していません。動画をCloudflare側へ平文で渡さない原則も維持します。
-
-### 1.3.0 Visual / Motion refresh
-
-- StorageとPlayerで共通の色・余白・角丸・タイポグラフィ・モーション規則を採用
-- フォルダ／ファイル一覧を、強い枠線ではなく余白とtonal surfaceで整理する表示へ刷新
-- フォルダ階層の前進／後退、Storage／Player切り替え、選択・並び替え・絞り込みへ短い自然なモーションを追加
-- 検索、フィルター、Empty State、ローディング、メディアキューの視覚階層を統一
-
-暗号化・復号、認証、通信、データモデル、T-Cloud／YouTube／端末メディアの機能仕様は1.2.0から変更していません。
+過去バージョンの変更内容は[CHANGELOG.md](CHANGELOG.md)を参照してください。Web版との現在の比較は[FEATURE_PARITY.md](FEATURE_PARITY.md)にまとめています。
 
 ## 実装済みの基盤
 
@@ -109,7 +79,7 @@ YouTube動画はダウンロード・録画・R2保存せず、公式埋め込�
 
 ## ビルド
 
-JDK 17とAndroid SDK 36を使用します。ローカルのSDKパスは、Git管理外の `local.properties` へ設定します。
+CIと推奨の実行JDKはJava 21、Android SDKは36です。アプリのJava `sourceCompatibility`／`targetCompatibility`は17に設定しており、実行JDKの版とコンパイル対象のJava言語レベルは異なります。ローカルのSDKパスは、Git管理外の`local.properties`へ設定します。
 
 ```powershell
 ./gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleRelease

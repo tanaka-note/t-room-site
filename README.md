@@ -1,22 +1,36 @@
 # T-lain
 
-記憶と記録のプラットフォーム。
+T-lainは、公開サイト、日記、T-Cloud Storage、請求書管理、Security Center、Downloader、AI Chatなどをまとめた個人向けプラットフォームです。Web、PWA、TWA、Androidネイティブアプリを同じリポジトリで管理します。
 
-## 学習ログ検索インデックス
+## 主要サービス
 
-学習ログ検索は Pagefind で生成しています。
+- 公開サイトと小規模Webアプリ
+- T-Cloud Storage（Web／TWA／Android）
+- 日記（Web／PWA／TWA）
+- 請求書管理
+- T-lain Security Center（共通Identity／Passkey）
+- T-lain Downloader（非公開）
+- AI Chat By T-lain（Android＋API）
 
-記事を追加・更新したあとに、次のコマンドを実行すると `/pagefind/` の検索インデックスが更新されます。
+## 主要ディレクトリ
 
-```sh
-pnpm run build
-```
+- `site-worker/`、ルートのHTML、`apps/`：公開サイトとWebアプリ
+- `cloud-worker/`、`android-tcloud/`、`android-tcloud-twa/`：T-Cloud
+- `diary-worker/`、`android-diary-twa/`：日記
+- `billing-worker/`：請求書管理
+- `security-worker/`：Identity、Passkey、Security Center
+- `downloader-worker/`：Downloader
+- `ai-worker/`、`android-ai-chat/`：AI Chat
+- `assets/`：サービス間で共有する処理
+- `tools/`：検証、build、release用ツール
+- `docs/`：設計、運用、履歴
 
-Cloudflare Pages で自動生成する場合は、ビルドコマンドを `pnpm run build`、公開ディレクトリを `.` にします。
+## 開発ドキュメント
 
-検索対象は次の本文ページです。テンプレートや一覧ページは検索対象に含めません。
+- 開発・検証・公開: [docs/development-flow.md](docs/development-flow.md)
+- Identity／Passkey／T-Cloud鍵: [docs/security/passkeys.md](docs/security/passkeys.md)
+- LINE内ブラウザ、PWA、TWA: [docs/browser-support.md](docs/browser-support.md)
+- AI Chat: [docs/ai-chat-architecture.md](docs/ai-chat-architecture.md)
+- Downloader: [downloader-worker/README.md](downloader-worker/README.md)
 
-- `learning/sharoushi/logs/[0-9]*.html`：社労士学習ログ
-- `diary/entries/[0-9]*.html`：日記
-
-日記を追加するときは、本文を `diary/entries/` に追加し、一覧表示用の情報を `diary/diary-data.js` に追記します。日付の新しい順で自動表示され、`pnpm run build` で日記検索にも反映されます。
+リポジトリ全体の作業ルールと文書ルーティングは[AGENTS.md](AGENTS.md)を参照してください。
