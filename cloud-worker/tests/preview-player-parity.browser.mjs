@@ -97,7 +97,7 @@ try {for(const [name,engine,launch] of engines.filter(([n])=>!process.argv.inclu
    const muted=await page.locator('video').evaluate(v=>v.muted);await page.locator('.preview-player-mute').click();assert.equal(await page.locator('video').evaluate(v=>v.muted),!muted);
    // Deterministic media events keep UI assertions independent of OS codecs.
    await page.locator('video').evaluate(v=>{Object.defineProperty(v,'currentTime',{configurable:true,writable:true,value:0});Object.defineProperty(v,'duration',{configurable:true,value:120});Object.defineProperty(v,'buffered',{configurable:true,value:{length:1,end:()=>90}});v.dispatchEvent(new Event('progress'));v.dispatchEvent(new Event('durationchange'));});
-   await page.waitForFunction(()=>document.querySelector('.preview-player-seek')?.getAttribute('aria-disabled')==='false');
+   await page.waitForFunction(()=>document.querySelector('.preview-player-seek')?.style.getPropertyValue('--buffered-percent')==='75.00%');
    assert.equal(await page.locator('.preview-player-seek').getAttribute('aria-disabled'),'false');
    assert.equal(await page.locator('.preview-player-seek').evaluate(e=>e.style.getPropertyValue('--buffered-percent')),'75.00%');
    await page.locator('.preview-player-seek').press('ArrowRight');
