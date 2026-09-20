@@ -82,7 +82,7 @@ export function normalizeTextForHash(text, app, contract) {
   ));
   normalized = normalized.replace(/const\s+APP_BUILD_ID\s*=\s*["'][^"']+["']/g, 'const APP_BUILD_ID = "__TROOM_BUILD__"');
   normalized = normalized.replace(/const\s+MEDIA_WORKER_BUILD_ID\s*=\s*["'][^"']+["']/g, 'const MEDIA_WORKER_BUILD_ID = "__TROOM_BUILD__"');
-  return normalized;
+  return normalized.replace(/\r\n?/g, "\n");
 }
 
 function localShellReferences(html, publicUrl) {

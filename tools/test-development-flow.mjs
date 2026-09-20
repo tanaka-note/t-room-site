@@ -8,6 +8,7 @@ import { root, affected, changedFiles, commands, targets, installDirectories } f
 import { localConfig } from './local-dev.mjs';
 import { assertPreviewSafe } from './release.mjs';
 import { safeEvent } from './worker-logs.mjs';
+import { normalizeTextForHash } from './web-app-registry.mjs';
 
 test('Cloud edits do not select Android, Downloader or unrelated services', () => {
   assert.deepEqual(affected(['cloud-worker/public/cloud.js']), ['cloud']);
@@ -28,6 +29,12 @@ test('affected mapping is order independent and unknown runtime files are not si
   assert.deepEqual(affected(paths), affected([...paths].reverse()));
   assert.deepEqual(affected(['new-app/index.html']), ['site']);
   assert.deepEqual(affected(['.github/workflows/verify.yml']), ['tooling']);
+});
+test('content build hashes ignore checkout line endings', () => {
+  const app = { id: 'fixture', publicUrls: ['/fixture/'] };
+  const contract = { buildMeta: 'troom-app-build', autoUpdateMeta: 'troom-auto-update', autoUpdateValue: 'enabled' };
+  const source = '<!doctype html>\n<html>\n<head></head>\n<body></body>\n</html>\n';
+  assert.equal(normalizeTextForHash(source, app, contract), normalizeTextForHash(source.replaceAll('\n', '\r\n'), app, contract));
 });
 test('diff handles staged/unstaged/untracked files, deletion and rename without losing old owner', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 't-lain-diff-'));
