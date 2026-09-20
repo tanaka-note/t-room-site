@@ -1,3 +1,4 @@
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
 import { readDefinitionStatus, runDefinitionSchedule } from "./definition-status.js";
@@ -134,6 +135,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
 }
 
 async function handleApi(request, env, url, path, context = null) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/status" && request.method === "GET") {
     const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
     const initialized = await hasSecurityAdmin(env);
@@ -1772,18 +1774,19 @@ async function securitySessionHeaders(env, url, identityId, credentialId, admin)
 }
 
 async function signedCookie(env, name, payload, ttl, secureValue) {
-  if (!env.SESSION_SECRET) throw new HttpError(503, "Security Centerのセッション設定が完了していません。");
+  if (!isValidSessionSecret(env.SESSION_SECRET)) throw new HttpError(503, "Security Centerのセッション設定が完了していません。");
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify({ ...payload, exp: nowSeconds() + ttl })));
   const token = `${encoded}.${await hmac(encoded, env.SESSION_SECRET)}`;
   return sessionCookieValue(name, token, BASE_PATH, { persistent: false, ttlSeconds: ttl }, secureValue);
 }
 
 async function readSecuritySession(request, env, name, expectedKind) {
+  if (!isValidSessionSecret(env.SESSION_SECRET)) return null;
   try {
     const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
     if (!runtime.enabled) return null;
     const token = parseCookies(request.headers.get("Cookie") || "")[name];
-    if (!token || !env.SESSION_SECRET) return null;
+    if (!token) return null;
     const parts = token.split(".");
     if (parts.length !== 2) return null;
     const [payload, signature] = parts;

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -48,7 +49,7 @@ const server = spawn(process.execPath, [
   "--var",
   `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
   "--var",
-  "SESSION_SECRET:diary-permission-integration-test-session-secret"
+  `SESSION_SECRET:${randomBytes(32).toString("hex")}`
 ], {
   cwd: projectDirectory,
   stdio: ["ignore", "pipe", "pipe"]

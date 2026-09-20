@@ -1,3 +1,4 @@
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
@@ -295,6 +296,7 @@ async function handleRequest(request, env, context) {
   if (!url.pathname.startsWith(BASE_PATH)) throw new HttpError(404, "指定された情報が見つかりません。");
   const path = url.pathname.slice(BASE_PATH.length) || "/";
   if (!path.startsWith("/api/")) return serveAsset(request, env, url, path);
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
 
   if (path === "/api/passkey/handoff" && request.method === "POST") {
     requireMutation(request, url);
@@ -1411,13 +1413,13 @@ async function verifyInternalGrant(header, env) {
 }
 
 async function signSession(payload, env) {
-  if (!env.SESSION_SECRET) throw new HttpError(503, "Downloaderのセッション設定が未完了です。");
+  if (!isValidSessionSecret(env.SESSION_SECRET)) throw new HttpError(503, "Downloaderのセッション設定が未完了です。");
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encoded}.${await hmac(encoded, env.SESSION_SECRET)}`;
 }
 
 async function verifySession(token, env) {
-  if (!token || !env.SESSION_SECRET) return null;
+  if (!token || !isValidSessionSecret(env.SESSION_SECRET)) return null;
   const [payload, signature, extra] = String(token).split(".");
   if (!payload || !signature || extra || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
   try {

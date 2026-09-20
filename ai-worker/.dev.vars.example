@@ -1,4 +1,4 @@
-SESSION_SECRET=generate-a-random-local-only-value
+SESSION_SECRET=GENERATE_A_RANDOM_32_BYTE_OR_LONGER_SECRET
 AI_SAFETY_SALT=generate-an-independent-random-local-only-value
 AI_PROVIDER_MODE=mock
 # OPENAI_API_KEY is required only when AI_PROVIDER_MODE=openai.

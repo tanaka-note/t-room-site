@@ -42,7 +42,7 @@ test("owner and member sessions stay fixed for 12 hours", async () => {
     "--var",
     "ALLOW_LOCAL_HTTP:true",
     "--var",
-    "SESSION_SECRET:billing-session-e2e-secret",
+    `SESSION_SECRET:${randomBytes(32).toString("hex")}`,
     "--var",
     "BILLING_PASSWORD_PEPPER:billing-password-e2e-pepper",
     "--var",

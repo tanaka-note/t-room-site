@@ -51,8 +51,9 @@ for (const t of selected) {
     const cwd = t === 'site' ? root : resolve(root, `${t}-worker`);
     const cli = resolve(cwd, 'node_modules/wrangler/bin/wrangler.js');
     if (!existsSync(cli)) throw new Error(`Install dependencies in ${cwd}`);
-    // Wrangler dry-run bundles the Worker only; it does not build/deploy Container images.
-    if (run(process.execPath, [cli, 'deploy', '--dry-run'], cwd).status !== 0) process.exit(1);
+    // Newer Wrangler also builds Containers in dry-run unless explicitly disabled.
+    const buildArgs = [cli, 'deploy', '--dry-run', ...(t === 'downloader' ? ['--containers-rollout=none'] : [])];
+    if (run(process.execPath, buildArgs, cwd).status !== 0) process.exit(1);
   }
 }
 console.log(`[verify] passed: ${selected.join(', ') || 'no executable changes'}`);

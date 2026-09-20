@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { OWNER_DISPLAY_NAME, USER_DISPLAY_NAME } from "../../assets/account-display.mjs";
 import { passwordLifetimeClaims } from "../../assets/session-policy.mjs";
-import { createHash, createHmac, pbkdf2Sync, randomUUID } from "node:crypto";
+import { createHash, createHmac, pbkdf2Sync, randomUUID, randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -10,8 +10,8 @@ await import("../../cloud-worker/public/vendor/argon2.umd.min.js");
 await import("../../cloud-worker/public/crypto-vault.js");
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
-const sessionSecret = "passkey-session-integration-secret";
-const securitySessionSecret = "security-integration-secret";
+const sessionSecret = randomBytes(32).toString("hex");
+const securitySessionSecret = randomBytes(32).toString("hex");
 const identityId = "passkey_session_test";
 const credentialId = Buffer.from("passkey-session-credential").toString("base64url");
 const readinessIdentityId = "cloud_readiness_test";

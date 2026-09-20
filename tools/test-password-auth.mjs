@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { createHash, createHmac, pbkdf2Sync } from "node:crypto";
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { registerHooks } from "node:module";
 import test from "node:test";
@@ -44,7 +44,7 @@ function fixture(service) {
   }
   const env = {
     DB: { prepare: (sql) => statement(sql), batch: async (statements) => Promise.all(statements.map((s) => s.run())) },
-    SESSION_SECRET: "local-fixture-session-secret", SESSION_VERSION: "3", PASSKEY_ENABLED: "true", BILLING_PASSWORD_PEPPER: "fixture-pepper",
+    SESSION_SECRET: randomBytes(32).toString("hex"), SESSION_VERSION: "3", PASSKEY_ENABLED: "true", BILLING_PASSWORD_PEPPER: "fixture-pepper",
     DIARY_MAIN_ADMIN_LOGIN_ID: "main@example.test", DIARY_WIFE_ADMIN_LOGIN_ID: "wife@example.test",
     DIARY_MAIN_ADMIN_PASSWORD_HASH: `sha256$${createHash("sha256").update(password).digest("base64url")}`,
     DIARY_WIFE_ADMIN_PASSWORD_HASH: `sha256$${createHash("sha256").update(password).digest("base64url")}`,

@@ -182,6 +182,7 @@ test('D1 cancellation write failure never stops the Container',async()=>{
 
 test('cancel route authenticates before checking CSRF and reaching owned job',async()=>{
  const db=database();try{insert(db);const h=harness(db);Object.assign(h.context,{BASE_PATH:'/downloader',scheduleUsage(){},requireSession:async()=>{throw new h.context.HttpError(401,'login')}});
+ h.env.SESSION_SECRET=randomBytes(32).toString('hex');h.context.requireSessionSecret=requireSessionSecret;
  vm.runInContext(slice('async function handleRequest(','async function completePasskeyHandoff(')+';globalThis.route=handleRequest;',h.context);
  const request=new Request('https://example.com/downloader/api/jobs/job/cancel',{method:'POST',headers:{Origin:'https://example.com','Content-Type':'application/json'},body:'{}'});
  await assert.rejects(h.context.route(request,h.env,{}),e=>e.status===401);assert.equal(h.events.length,0);
@@ -194,3 +195,5 @@ test('cancelled redelivery needs no Container binding; cancellation during initi
  const {instance,calls}=containerClass(new Map(),()=>assert.fail('started after cancellation'));
  const pending=instance.fetch(new Request('http://container/ready'));await instance.cancelAnalysis();assert.equal((await pending).status,409);assert.ok(!calls.includes('fetch'));
 });
+import { randomBytes } from 'node:crypto';
+import { requireSessionSecret } from '../../assets/session-secret.mjs';

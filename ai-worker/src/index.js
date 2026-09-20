@@ -1,3 +1,4 @@
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -72,6 +73,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
 }
 
 async function handleApi(request, env, url, path, context) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/passkey/handoff" && request.method === "POST") {
     requireMutation(request, url);
     return completePasskeyHandoff(request, env, url);
@@ -446,8 +448,8 @@ function scheduleAudit(context, promise) { if (context?.waitUntil) context.waitU
 function requireMutation(request, url) { if (request.headers.get("Origin") !== url.origin || !String(request.headers.get("Content-Type") || "").startsWith("application/json")) throw new HttpError(403, "不正なリクエストです。"); }
 function sessionCookie(token, policy, secure) { return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, policy, secure); }
 function clearCookie(secure) { return `${SESSION_COOKIE}=; Path=${BASE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`; }
-async function signSession(payload, env) { if (!env.SESSION_SECRET) throw new HttpError(503, "AI Chatのセッション設定が未完了です。"); const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload))); return `${encoded}.${await hmac(encoded, env.SESSION_SECRET)}`; }
-async function verifySession(token, env) { if (!token || !env.SESSION_SECRET || token.split(".").length !== 2) return null; try { const [payload, signature] = token.split("."); if (!(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null; const value = JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload))); return value.authMethod === "passkey" && Number(value.expiresAt) > nowSeconds() && String(value.sessionVersion || "1") === String(env.SESSION_VERSION || "1") ? value : null; } catch { return null; } }
+async function signSession(payload, env) { if (!isValidSessionSecret(env.SESSION_SECRET)) throw new HttpError(503, "AI Chatのセッション設定が未完了です。"); const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload))); return `${encoded}.${await hmac(encoded, env.SESSION_SECRET)}`; }
+async function verifySession(token, env) { if (!token || !isValidSessionSecret(env.SESSION_SECRET) || token.split(".").length !== 2) return null; try { const [payload, signature] = token.split("."); if (!(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null; const value = JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload))); return value.authMethod === "passkey" && Number(value.expiresAt) > nowSeconds() && String(value.sessionVersion || "1") === String(env.SESSION_VERSION || "1") ? value : null; } catch { return null; } }
 async function hmac(value, secret) { const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)))); }
 async function safeEqual(left, right) { let a; let b; try { a = base64UrlToBytes(left); b = base64UrlToBytes(right); } catch { return false; } if (a.length !== b.length) return false; let result = 0; for (let i = 0; i < a.length; i += 1) result |= a[i] ^ b[i]; return result === 0; }
 function bytesToBase64Url(bytes) { let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, ""); }

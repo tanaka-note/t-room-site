@@ -1,3 +1,4 @@
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
@@ -98,6 +99,7 @@ export default {
 };
 
 async function handleApi(request, env, url, path, context) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (session) await recordSecurityAudit(env, request, {
@@ -122,7 +124,7 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/login" && request.method === "POST") {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
-    if (!env.SESSION_SECRET) throw new HttpError(503, "認証設定が完了していません。");
+    if (!isValidSessionSecret(env.SESSION_SECRET)) throw new HttpError(503, "認証設定が完了していません。");
     const body = await readJson(request, 4096);
     const loginId = canonicalLoginId(body.loginId);
     const password = typeof body.password === "string" ? body.password : "";
@@ -627,7 +629,7 @@ async function serveAsset(request, env, url, path) {
 }
 
 async function readSession(request, env) {
-  if (!env.SESSION_SECRET) return null;
+  if (!isValidSessionSecret(env.SESSION_SECRET)) return null;
   const token = parseCookies(request.headers.get("Cookie") || "")[SESSION_COOKIE];
   if (!token) return null;
   const [encodedPayload, signature] = token.split(".");
@@ -667,6 +669,7 @@ async function readSession(request, env) {
 }
 
 async function createSessionToken(account, maxAge, env, auth = {}) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   const payload = {
     accountId: account.id,
     role: account.role,

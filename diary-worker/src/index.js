@@ -1,3 +1,4 @@
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
@@ -155,6 +156,7 @@ export default {
 };
 
 async function handleApi(request, env, url, path, context) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (session) await recordSecurityAudit(env, request, {
@@ -187,7 +189,7 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/login" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (!DIARY_ACCOUNTS.every((account) => env[account.secretKey] && env[account.loginIdSecretKey]) || !env.SESSION_SECRET) {
+    if (!DIARY_ACCOUNTS.every((account) => env[account.secretKey] && env[account.loginIdSecretKey]) || !isValidSessionSecret(env.SESSION_SECRET)) {
       return json({ error: "日記の認証設定が完了していません。" }, 503);
     }
 
@@ -2136,7 +2138,7 @@ function parseContentFormat(value) {
 }
 
 async function readSession(request, env) {
-  if (!env.SESSION_SECRET) return null;
+  if (!isValidSessionSecret(env.SESSION_SECRET)) return null;
   const cookies = parseCookies(request.headers.get("Cookie") || "");
   const token = cookies[SESSION_COOKIE];
   if (!token) return null;
@@ -2210,6 +2212,7 @@ async function withRollingSession(request, response, env, url, path) {
 }
 
 async function createSessionToken(account, policy, env, activeHouseholdId = account.householdId, auth = {}) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   const payload = {
     role: account.role,
     accountId: account.id,

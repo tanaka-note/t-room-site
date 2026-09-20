@@ -1,4 +1,4 @@
-SESSION_SECRET=replace-with-a-random-local-secret
+SESSION_SECRET=GENERATE_A_RANDOM_32_BYTE_OR_LONGER_SECRET
 AUDIT_IP_SALT=replace-with-a-different-random-local-secret
 ALLOW_LOCAL_HTTP=true
 PASSKEY_ENABLED=true

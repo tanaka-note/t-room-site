@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -73,7 +74,7 @@ const server = spawn(process.execPath, [
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
   "--var", `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
-  "--var", "SESSION_SECRET:diary-tag-order-session-secret"
+  "--var", `SESSION_SECRET:${randomBytes(32).toString("hex")}`
 ], { cwd: projectDirectory, stdio: ["ignore", "pipe", "pipe"] });
 let output = "";
 server.stdout.on("data", (chunk) => { output += chunk; });

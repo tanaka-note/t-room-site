@@ -1,3 +1,4 @@
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -7,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, p
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-688d35f2d677";
+const APP_BUILD_ID = "cloud-7fad41d8a853";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -161,6 +162,7 @@ export default {
 };
 
 async function handleApi(request, env, url, path, context) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/app-version" && request.method === "GET") {
     return json({ buildId: APP_BUILD_ID });
   }
@@ -346,7 +348,7 @@ async function login(request, env, url, context) {
   const proofMode = Boolean(env.ADMIN_AUTH_PROOF_HASH && env.SUBADMIN_AUTH_PROOF_HASH);
   const configuredAccounts = ACCOUNTS.map((account) => ({ ...account, loginId: configuredLoginId(env, account.role) }));
   if ((!proofMode && (!env.ADMIN_PASSWORD_HASH || !env.SUBADMIN_PASSWORD_HASH))
-    || !env.SESSION_SECRET
+    || !isValidSessionSecret(env.SESSION_SECRET)
     || configuredAccounts.some((account) => !account.loginId)) {
     throw new HttpError(503, "Cloud Storageの認証設定が完了していません。");
   }
@@ -2502,6 +2504,7 @@ async function requireAuthorizedShare(token, request, env) {
 }
 
 async function createShareSessionToken(share, sessionId, maxAge, env) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   const payload = {
     type: "share",
     shareId: Number(share.id),
@@ -2517,7 +2520,7 @@ async function createShareSessionToken(share, sessionId, maxAge, env) {
 async function readShareSession(request, env, share) {
   try {
     const token = readCookie(request, SHARE_SESSION_COOKIE);
-    if (!token || !env.SESSION_SECRET) throw new Error();
+    if (!token || !isValidSessionSecret(env.SESSION_SECRET)) throw new Error();
     const [encoded, signature] = token.split(".");
     if (!encoded || !signature || !(await constantTimeText(signature, await sign(encoded, env.SESSION_SECRET)))) throw new Error();
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded)));
@@ -2900,6 +2903,7 @@ async function requestFingerprint(request, env) {
 }
 
 async function createSessionToken(session, maxAge, env) {
+  requireSessionSecret(env.SESSION_SECRET, HttpError);
   const payload = { ...session, ...passwordLifetimeClaims(session), exp: sessionExpiresAt(Math.floor(Date.now() / 1000), sessionPolicyForAuthMethod(env, session.authMethod, maxAge), session.exp), version: String(env.SESSION_VERSION || "1") };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encoded}.${await sign(encoded, env.SESSION_SECRET)}`;
@@ -2920,7 +2924,7 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
 async function readSession(request, env) {
   try {
     const token = readCookie(request, SESSION_COOKIE);
-    if (!token || !env.SESSION_SECRET) return null;
+    if (!token || !isValidSessionSecret(env.SESSION_SECRET)) return null;
     const [encoded, signature] = token.split(".");
     if (!encoded || !signature || !(await constantTimeText(signature, await sign(encoded, env.SESSION_SECRET)))) return null;
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded)));

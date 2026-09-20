@@ -1,5 +1,21 @@
 # 開発・検証・公開
 
+## Secret管理とセッション署名
+
+各Workerの `SESSION_SECRET` はサービスごとに独立した、暗号学的乱数32 byte以上から生成した値をWrangler Secretで設定する。同じ値を複数サービスへ配布しない。生成例（出力はGit・ログ・チャットへ貼らない）:
+
+```sh
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+`assets/session-secret.mjs` の共通検証は、UTF-8で32 byte未満、空白、制御文字、不正Unicode、既知の仮値、単純な繰り返しを拒否する。文字列から乱数の生成元やエントロピーは証明できないため、生成手順も必須。署名する値をtrim・変換せず、Cookie・有効期限・SESSION_VERSION・パスキーの仕様は維持する。不適切な設定ではAPIを503で停止し、署名・検証も拒否する。テストも同じ検証を通し、仮Secretを実行時に生成する。
+
+環境ファイルは全階層でGit除外し、`*.example` のみ管理可能とする。テンプレートの `GENERATE_A_RANDOM_32_BYTE_OR_LONGER_SECRET` は検証に通らない。`npm run secrets:test` で検証とGit除外を確認する。
+
+Wrangler 4.121.0は `secrets.required` に対応しているが、指定外のローカル環境変数を読み込まなくなるため今回は設定しない。任意Secretや既存のローカル設定を切り捨てず、別途その全体を整理してから導入する。
+
+本番Secretは読み戻さない。新しい検証を反映する前に、各Workerの現在値が適合することを値を露出せず確認できなければデプロイを保留する。自動ローテーションはしない。設定した時点の安全な確認記録がなければローテーションを推奨し、実施にはユーザーの承認が必要。新旧Secretの併用や強度検証の迂回は追加しない。
+
 通常は `git fetch origin main` → 既存差分を保護したbranch/worktree → 変更 → 差分verify → Preview/ローカルfixture → PRのCI確認 → main → 対象だけ公開 → build一致確認。全サービスの再調査・全テスト・全Worker deployを毎回行わない。
 
 ## 環境とコマンド

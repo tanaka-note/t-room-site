@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -29,7 +30,7 @@ const server = spawn(process.execPath, [wranglerPath, "dev", "--local", "--port"
   "--var", `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
   "--var", `DIARY_CHIHARU_TEMP_PASSWORD_HASH:${testHash(temporaryPassword)}`,
   "--var", "DIARY_PASSWORD_PEPPER:diary-household-test-password-pepper",
-  "--var", "SESSION_SECRET:diary-household-test-session-secret"
+  "--var", `SESSION_SECRET:${randomBytes(32).toString("hex")}`
 ], { cwd: projectDirectory, stdio: ["ignore", "pipe", "pipe"] });
 let output = "";
 server.stdout.on("data", (chunk) => { output += chunk; });

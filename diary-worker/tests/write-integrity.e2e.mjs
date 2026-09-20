@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import http from "node:http";
@@ -44,7 +45,7 @@ const server = spawn(process.execPath, [
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
   "--var", `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
   "--var", `DIARY_CHIHARU_TEMP_PASSWORD_HASH:${testHash("temporary-test")}`,
-  "--var", "SESSION_SECRET:diary-write-integrity-session-secret",
+  "--var", `SESSION_SECRET:${randomBytes(32).toString("hex")}`,
   "--var", "DIARY_ATOMICITY_TESTS:true"
 ], { cwd: projectDirectory, stdio: ["ignore", "pipe", "pipe"] });
 let output = "";

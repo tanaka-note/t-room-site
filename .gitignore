@@ -1,6 +1,13 @@
 node_modules/
+# Local credentials at any directory depth; templates remain trackable.
+.env
+.env.*
 .dev.vars
-**/.dev.vars
+.dev.vars.*
+!.env.example
+!.env.*.example
+!.dev.vars.example
+!.dev.vars.*.example
 **/.wrangler/
 **/tmp/
 **/__pycache__/

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync,readdirSync,realpathSync} from 'node:fs';
@@ -29,7 +30,7 @@ function fixture(){
  db.exec('PRAGMA foreign_keys=ON');
  const prepare=sql=>{let values=[];const stmt={bind(...v){values=v;return stmt},async first(){return db.prepare(sql).get(...values)||null},async all(){return {results:db.prepare(sql).all(...values)}},async run(){return {meta:db.prepare(sql).run(...values)}}};return stmt};
  const provider={async describeAccount({accountId,rootFolderId}){return {valid:true,accountId,rootFolderId:rootFolderId??null,displayLabel:accountId,role:accountId==='owner'?'owner':'user',privileged:accountId==='owner'}}};
- const env={DB:{prepare,async batch(statements){db.exec('BEGIN');try{const results=[];for(const s of statements)results.push(await s.run());db.exec('COMMIT');return results}catch(e){db.exec('ROLLBACK');throw e}}},PASSKEY_ENABLED:'true',SESSION_SECRET:'fixture-secret',RP_ID:'example.test',EXPECTED_ORIGIN:url.origin,DOWNLOADER_AUTH:provider,DIARY_AUTH:provider,BILLING_AUTH:provider,AI_AUTH:provider};
+ const env={DB:{prepare,async batch(statements){db.exec('BEGIN');try{const results=[];for(const s of statements)results.push(await s.run());db.exec('COMMIT');return results}catch(e){db.exec('ROLLBACK');throw e}}},PASSKEY_ENABLED:'true',SESSION_SECRET:randomBytes(32).toString('hex'),RP_ID:'example.test',EXPECTED_ORIGIN:url.origin,DOWNLOADER_AUTH:provider,DIARY_AUTH:provider,BILLING_AUTH:provider,AI_AUTH:provider};
  const admin={identityId:'primary-admin',authenticatedAt:now()};
  const count=id=>db.prepare("SELECT count(*) n FROM security_service_links WHERE identity_id=? AND service='downloader' AND status!='disabled'").get(id).n;
  const create=async id=>(await worker.createIdentityAndInvite(req({identityId:id,displayName:id,links:[{service:'diary',accountId:id}],expiresAt:now()+86400}),env,admin)).json();

@@ -1,10 +1,11 @@
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import assert from "node:assert/strict";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
-import { pbkdf2Sync } from "node:crypto";
+import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
@@ -24,12 +25,12 @@ function statement(sql, args = []) {
 let selected;
 const access = [];
 const env = { DB: { prepare: statement, async batch(statements) { return Promise.all(statements.map((s) => s.run())); } },
-  SESSION_SECRET: "local-only-test-secret", SESSION_VERSION: "5", PASSKEY_ENABLED: "true", ACCOUNT_KDF_ID: "test",
+  SESSION_SECRET: randomBytes(32).toString("hex"), SESSION_VERSION: "5", PASSKEY_ENABLED: "true", ACCOUNT_KDF_ID: "test",
   ADMIN_LOGIN_ID: "admin@test", SUBADMIN_LOGIN_ID: "subadmin@test", ADMIN_AUTH_PROOF_HASH: proofHash, SUBADMIN_AUTH_PROOF_HASH: proofHash,
   SECURITY: { async redeemHandoff() { return selected; }, async validatePasskeySession(input) { return { valid: input.serviceAccountId === "admin" ? input.cloudRootFolderId == null : input.serviceAccountId === "folder-member" && input.cloudRootFolderId === 7 }; } },
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };
-const context = { accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
+const context = { isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
   sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
   recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;
