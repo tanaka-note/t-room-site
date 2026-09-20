@@ -80,7 +80,7 @@ test('all catalog GET paths are accepted and never carry a request body', async 
   for (const path of accountPaths) await read('cloudflare_read', { path: `/accounts/${accountId}/` + path.replaceAll('{id}', 'resource-1') });
   await read('cloudflare_read', { path: `/zones/${zoneId}/workers/routes` });
   assert.equal(calls.length, accountPaths.length + 1);
-  for (const { url, init } of calls) { assert.equal(init.method, 'GET'); assert.equal(init.body, undefined); assert.equal(url.origin, 'https://api.cloudflare.com'); assert.equal(init.redirect, 'error'); }
+  for (const { url, init } of calls) { assert.equal(init.method, 'GET'); assert.equal(init.body, undefined); assert.equal(url.origin, 'https://api.cloudflare.com'); assert.equal(init.redirect, 'manual'); }
 });
 test('D1 preserves SQL/params and uses only the configured query endpoint', async () => {
   const { read, calls } = fixture({ success: true, result: [{ results: [{ content: 'ピザ' }], meta: { rows_written: 0, changed_db: false } }] });
@@ -246,4 +246,10 @@ test('D1 truncation is explicit and unexpected write metadata fails closed', asy
 test('upstream response size is bounded', async () => {
   const { read } = fixture({ success: true, result: 'x'.repeat(1048577) });
   await assert.rejects(read('cloudflare_read', { path: '/accounts' }), /Response too large/);
+});
+
+test('upstream redirects fail closed without a follow-up request', async () => {
+  const { read, calls } = fixture({}, { status: 302, headers: { Location: 'https://foreign.test/' } });
+  await assert.rejects(read('cloudflare_read', { path: '/accounts' }), /HTTP 302/);
+  assert.equal(calls.length, 1); assert.equal(calls[0].init.redirect, 'manual');
 });

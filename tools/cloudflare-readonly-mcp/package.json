@@ -5,12 +5,19 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "build": "wrangler deploy --dry-run --outdir .wrangler/build",
+    "test:worker": "npm run build && node --test test/worker.integration.mjs",
+    "deploy": "wrangler deploy",
     "start": "node stdio.mjs"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "0.10.3",
     "@modelcontextprotocol/server": "2.0.0",
     "graphql": "17.0.2",
     "node-sql-parser": "5.4.0",
     "zod": "4.3.5"
+  },
+  "devDependencies": {
+    "wrangler": "4.135.0"
   }
 }

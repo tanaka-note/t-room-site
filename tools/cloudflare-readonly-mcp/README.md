@@ -1,8 +1,9 @@
-# Cloudflare読み取り専用MCP（未公開）
+# Cloudflare読み取り専用MCP
 
 公式 `https://mcp.cloudflare.com/mcp` の設定変更ではなく、独立した読み取り専用ツール実装。
-現在はローカルstdioと、認証済みホストに組み込むserver factoryのみ。HTTP listener、OAuth、
-Cloudflare Worker、route、Secretは作成していない。既存ChatGPT接続にはまだ適用されていない。
+ローカルstdioと、独立Worker用のOAuth付きHTTP実装を含む。
+接続URL: `https://t-lain-cloudflare-readonly-mcp.atsushi-vip.workers.dev/mcp`。
+既存ChatGPT接続には適用されていない。Secret設定と新接続の実地検証が完了するまで運用開始しない。
 
 ## 調査結果（2026-09-20）
 
@@ -57,11 +58,11 @@ Token、SQL、params、本文、rawエラーをログ出力しない。メタデ
 
 ## ローカル検証
 
-このディレクトリで `npm ci --ignore-scripts`、`npm test`。
+このディレクトリで `npm ci --ignore-scripts`、`npm test`、`npm run test:worker`。
 テストは偽fetchと合成データだけを使用し、本番へ変更SQLや変更methodを送らない。
 MCP SDKの実際のtools/list応答とtools/call経路も検証する。
 
-2026-09-20のローカル確認: 100/100成功、policy/server/stdio/testの構文確認。
+2026-09-20のローカル確認: Node 108件とworkerd統合2件成功、Worker dry-run build成功。
 tools/listは3ツールのみで、各tool直下のannotations.readOnlyHintがtrue（二重ネストなし）。
 tools/callでGET /accounts・D1一覧・COUNT・schema SELECT・GraphQL queryの正常経路と、
 変更系HTTP/SQL/GraphQLの拒否を確認した。上流はfake fetchを使用し、拒否時は呼出回数0を検証。
@@ -77,24 +78,37 @@ Containers Read、Pages Read、Workers KV Read、Analytics Read等、必要な�
 確認して設定する。write/edit等は一切付与しない。permission名とgrantは公開前に実物で確認する。
 Tokenの実値を設定確認のために表示・取得・記録してはいけない。
 
-## 本番化の承認対象と戻し方
+## 本番構成と設定
 
 既存の公式MCPをユーザー側から書き換えることはできない。ChatGPT用には独立したremote MCPと
 OAuth 2.1の認証済みホストが必要。stdioを公開トンネルや認証なしWorkerで代替してはいけない。
 
-承認後の予定:
-1. 既存T-lain Workerと分離した `t-lain-cloudflare-readonly-mcp` を追加する。
-2. 確立されたOAuth providerを使い、利用者限定、issuer/audience/期限/scope検証とPKCEを設定。
-   候補はGitHub OAuthとCloudflare公式のOAuth provider実装。利用者は承認済みの固定GitHub user IDに限定。
-   OAuth app/client登録は未構成。ここを先に完了し、認証なし・別利用者拒否を検証する。
-3. 専用Read tokenを新WorkerのSecretへ設定（既存アプリSecretは変更しない）。
-4. 上記factoryを認証後のみ利用し、今回のallowlistを固定して公開する。
-5. ChatGPTに別接続として登録し、tools/schema再読込とGET→SELECTの再確認を行う。
+独立Workerと新規専用KVへの認証状態保存は承認済み。
+`wrangler.jsonc`は新Workerと専用KVだけを参照し、既存D1/R2/サービスbindingを一切持たない。
+Cloudflare参照用Tokenとデプロイ用認証を分離する。
+
+- 本人認証: GitHub OAuth app `T-lain Cloudflare Read-Only MCP`（登録済み、Client Secretは未設定）。
+  `read:user`のみ、固定GitHub user IDだけを許可。GitHub TokenはKVへ保存しない。
+- MCP OAuth: Cloudflare公式provider、S256 PKCE、固定audience、1時間access token、30日refresh token。
+  ChatGPTのコールバックのみ許可。CIMDとDCRに対応し、CSRF・ブラウザcookieとstateの照合・明示同意を必須にする。
+- KV: `t-lain-cloudflare-readonly-mcp-oauth`（新規作成済み）。OAuth stateの有効期間は10分。
+- D1 SELECTの対象は最小範囲として日記DBのみ。API metadataは設定済みaccount/zoneのみ。
+- Workerログ/トレースとPreview URLは無効。上流redirectは追従せず3xxを拒否。
+
+残る接続手順:
+1. Cloudflareで対象アカウント限定のRead専用Tokenを作成する。作成前サマリーで
+   D1、Account Settings、Account Analytics、Workers Scripts、Workers KV Storage、Workers R2 Storage、
+   Cloudflare Pages、Queues、Containersが全てReadであることを確認する。
+   Zone権限はtanaka-note.comのWorkers Routes Readだけ。Edit/Writeは一切付けない。
+2. 新Workerの暗号化Secretとして `CF_READ_API_TOKEN` と `GITHUB_CLIENT_SECRET` を入力する。
+   Secretはチャット、Git、ログへ貼り付けない。`GITHUB_CLIENT_ID`は秘密値ではなく設定済み。
+3. `npm run deploy`。未設定時は認証/データ取得をfail closedにし、`GET /health`のreadyはfalseになる。
+4. ChatGPTに別接続として登録し、tools/schema再読込とGET→SELECTの再確認を行う。
    GET /accounts、D1一覧、COUNT、sqlite_master、GraphQL queryをChromeで確認する。
    変更命令のChrome確認は新MCPの拒否を対象とし、上流に書き込み権限を与えない。
    新接続の合格後、読み取り用途から旧汎用execute接続を外す。現時点では旧接続を変更していない。
 
-影響: 新Worker/OAuth接続/Secret設定のみ。既存D1 schema、レコード、R2 object、既存Worker、
+影響: 新Worker/専用認証KV/OAuth接続/Secret設定のみ。既存D1 schema、レコード、R2 object、既存Worker、
 契約/課金設定は変更しない。通常のWorker実行・D1 read/analytics利用量は発生し得る。
 戻し方: 新ChatGPT接続を無効化して旧接続へ戻し、新Workerのrouteを無効化する。
 既存データ移行がないためDBのrollbackは不要。新token削除・revokeは別途承認後に行う。

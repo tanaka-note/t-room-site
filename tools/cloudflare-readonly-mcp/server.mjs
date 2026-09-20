@@ -37,7 +37,8 @@ export function createReader({ config, apiToken, fetchImpl = fetch }) {
     for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, String(value));
     let response;
     try {
-      response = await fetchImpl(url, { method, redirect: 'error', signal: AbortSignal.timeout(15000),
+      // Workers does not implement redirect:error. Never follow; the status check rejects 3xx.
+      response = await fetchImpl(url, { method, redirect: 'manual', signal: AbortSignal.timeout(15000),
         headers: { Authorization: `Bearer ${apiToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}) });
     } catch { throw new PolicyError('Cloudflare request failed; no upstream details were logged.'); }

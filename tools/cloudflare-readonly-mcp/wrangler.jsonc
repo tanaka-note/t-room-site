@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "t-lain-cloudflare-readonly-mcp",
+  "main": "worker.mjs",
+  "account_id": "277e86de986181599ce0db2b3ca1f186",
+  "compatibility_date": "2026-09-20",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "version_metadata": { "binding": "VERSION_METADATA" },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "e489dc64a278409494e4b5c46e63389d" }],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://t-lain-cloudflare-readonly-mcp.atsushi-vip.workers.dev",
+    "ALLOWED_GITHUB_USER_ID": "295558524",
+    "GITHUB_CLIENT_ID": "Ov23liOMuqeQQ8Bt1CBm",
+    "CF_READ_ACCOUNT_ID": "277e86de986181599ce0db2b3ca1f186",
+    "CF_READ_ZONE_IDS": "426808b5081061e25d44b3657f130ee5",
+    "CF_READ_DATABASE_IDS": "e4677259-db4b-4562-ad82-fe542a1edb75"
+  }
+}
