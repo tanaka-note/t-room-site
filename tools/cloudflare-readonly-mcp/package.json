@@ -1,0 +1,16 @@
+{
+  "name": "tlain-cloudflare-readonly-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "start": "node stdio.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "graphql": "17.0.2",
+    "node-sql-parser": "5.4.0",
+    "zod": "4.3.5"
+  }
+}
