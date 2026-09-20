@@ -177,7 +177,7 @@
         if (!result.prfOutput) throw new Error(result.prfPreparationFailed
           || result.prfEnabled
           ? "T-Cloudのパスキー利用準備を一時的に完了できませんでした。"
-          : "この端末ではT-Cloudのパスキー利用に対応していません。");
+          : "T-Cloudのパスキー利用準備は未確認です。現在のパスキーで再確認できます。");
         await preparePrimaryAdminCloud(credentials.accountKey, result.prfOutput);
         tcloudReady = true;
       } catch (preparationError) {
@@ -313,7 +313,7 @@
     state.pendingInviteCloud = setup;
     $("#invite-description").textContent = setup.prfEnabled
       ? "T-Cloudの利用準備が残っています。下のボタンから準備を再開してください。"
-      : "日記・請求書の登録は完了しています。T-Cloudは、この端末で利用準備を完了できていません。対応する端末・ブラウザで準備を再試行できます。";
+      : "日記・請求書の登録は完了しています。T-Cloudのパスキー利用準備は未確認です。現在のパスキーで再確認できます。";
     // prfEnabled=false alone does not prove lack of support: the first
     // verification may have been cancelled. Keep the existing safe retry.
     $("#invite-register").textContent = "T-Cloudの準備を再開";
@@ -357,7 +357,7 @@
           return false;
         }
         renderInviteSetup({ ...setup, prfEnabled: false });
-        $("#invite-description").textContent = "日記・請求書のパスキー登録は完了しています。管理者の確認をお待ちください。この端末ではT-Cloudのパスキー利用に対応していません。対応する端末・ブラウザで準備を再試行できます。";
+        $("#invite-description").textContent = "日記・請求書のパスキー登録は完了しています。管理者の確認をお待ちください。T-Cloudのパスキー利用準備は未確認です。対応する環境で現在のパスキーの準備を再試行できます。";
         return false;
       }
       await prepareClientVault(setup, prfOutput);
@@ -510,7 +510,7 @@
     state.selectedIdentity = data;
     const currentCredentials = data.credentials.filter((item) => ["pending", "active"].includes(item.status));
     const credentialHistory = data.credentials.filter((item) => !["pending", "active"].includes(item.status));
-    const credentialRow = (item, historical = false) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))} / ${escapeHtml(item.device_type || "端末種別不明")} / ${item.backed_up ? "複数端末で利用可能" : "この端末に保存"} / T-Cloudのパスキー利用: ${item.prf_enabled ? "対応" : "この端末では非対応"}</small>${historical ? "" : `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>`}</div>`;
+    const credentialRow = (item, historical = false) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))} / ${escapeHtml(item.device_type || "端末種別不明")} / ${item.backed_up ? "複数端末で利用可能" : "この端末に保存"} / T-Cloudのパスキー利用準備: ${item.prf_enabled ? "PRF確認済み" : "PRF未確認（現在のパスキーで再確認できます）"}</small>${historical ? "" : `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>`}</div>`;
     const credentials = currentCredentials.map((item) => credentialRow(item)).join("");
     const hasCredential = currentCredentials.length > 0;
     const currentLinks = data.links.filter((item) => ["pending", "active"].includes(item.status));
@@ -540,7 +540,7 @@
         : !item.hasCloudLinks ? ""
         : item.cloudClientReady
           ? `（T-Cloud ${Number(item.cloudReadyCount || 0)}件準備済み・${Number(item.cloudPendingCount || 0)}件鍵委譲待ち）`
-          : item.prfEnabled ? "（T-Cloudの端末準備が未完了）" : "（この端末ではT-Cloudのパスキー利用に非対応）";
+          : item.prfEnabled ? "（PRF確認済み・T-Cloudの端末準備が未完了）" : "（T-Cloudのパスキー利用準備は未確認）";
       return `<button data-approve-credential="${escapeHtml(item.credentialId)}">${escapeHtml(formatDate(item.registeredAt))}の登録を承認${cloudStatus}</button>`;
     }).join("");
     $("#identity-detail").innerHTML = `
@@ -640,7 +640,7 @@
           state.adminPrf = auth.prfOutput;
           state.adminCredentialId = auth.credentialId;
         }
-        if (!state.adminPrf) throw new Error("管理者の端末ではT-Cloudのパスキー利用に対応していません。管理者パスワードで鍵の利用準備を行ってください。");
+        if (!state.adminPrf) throw new Error("今回の本人確認ではT-Cloud用のPRF結果を取得できませんでした。対応する環境で現在のパスキーの準備を再試行してください。");
         const adminDetail = await get("/identities/primary-admin");
         const envelope = adminDetail.adminKeyEnvelopes.find((item) => item.credentialId === state.adminCredentialId);
         if (!envelope) throw new Error("この管理者パスキーではT-Cloudの利用準備が完了していません。第一管理者パスワードで復旧登録してください。");

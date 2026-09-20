@@ -437,7 +437,10 @@ test("member registration remains retryable and primary-admin registration requi
   assert.match(securityUi, /TRoomPasskeys\.obtainPrf\(setup\.credentialId\)/, "第一管理者の再開は既存credentialをWebAuthn getで再認証します");
   assert.match(securityUi, /第一管理者パスキー登録処理が未完了/);
   assert.doesNotMatch(securityUi, /if \(!setup\.prfEnabled\) throw/);
-  assert.match(securityUi, /この端末ではT-Cloudのパスキー利用に対応していません/);
+  assert.doesNotMatch(securityUi, /この端末では.*(?:非対応|対応していません)/);
+  assert.match(securityUi, /T-Cloudのパスキー利用準備は未確認/);
+  assert.match(securityUi, /item\.prf_enabled \? "PRF確認済み" : "PRF未確認（現在のパスキーで再確認できます）"/);
+  assert.match(securityUi, /item\.prfEnabled \? "（PRF確認済み・T-Cloudの端末準備が未完了）" : "（T-Cloudのパスキー利用準備は未確認）"/);
   assert.match(securityHtml, /id="tcloud-setup-notice"/);
   assert.match(securityHtml, /セキュリティセンターを利用する/);
   assert.match(securityUi, /setup\/primary-admin\/verify-password/);

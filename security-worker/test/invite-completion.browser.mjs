@@ -136,13 +136,17 @@ try {
     assert.deepEqual((await page.evaluate(() => window.fixtureSteps)).map(s => s[0]), ["get"]);
 
     reset("unsupported"); await visit(); await page.locator("#invite-register").click();
-    await page.waitForFunction(() => document.querySelector("#invite-description").textContent.includes("対応していません"));
+    await page.waitForFunction(() => document.querySelector("#invite-description").textContent.includes("T-Cloudのパスキー利用準備は未確認"));
     assert.equal(await page.locator("#invite-complete").isVisible(), false);
     assert.match(await page.locator("#invite-description").textContent(), /日記・請求書のパスキー登録は完了/);
+    assert.doesNotMatch(await page.locator("#invite-description").textContent(), /非対応|対応していません/);
+    assert.match(await page.locator("#invite-description").textContent(), /現在のパスキー.*再試行/);
     assert.equal(bodies.some(body => body.envelopeType), false);
     await page.reload(); await page.locator("#invite-register").waitFor();
     assert.equal(await page.locator("#invite-complete").isVisible(), false);
     assert.equal(registrations, 1);
+
+    assert.match(await page.locator("#invite-description").textContent(), /未確認.*現在のパスキーで再確認/);
 
     reset("prf-cancelled"); await visit(); await page.locator("#invite-register").click();
     await page.locator("#message.error").waitFor();
