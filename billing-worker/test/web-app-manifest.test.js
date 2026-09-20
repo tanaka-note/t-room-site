@@ -80,7 +80,10 @@ test("billing keeps shared automatic updates and provides no custom installation
   assert.doesNotMatch(html, /troom-service-worker/);
   for (const source of [html, script]) {
     assert.doesNotMatch(source, /beforeinstallprompt|appinstalled|deferredPrompt|installPrompt|\.prompt\s*\(/i);
-    assert.doesNotMatch(source, /アプリをインストール|ホーム画面に追加|インストール/);
+    // The shared LINE gate mentions existing home-screen apps; it is not a
+    // Billing install affordance. Keep the prompt/handler checks on all source.
+    const billingUiSource = source === html ? source.replace(/<script data-tlain-browser-guard>[\s\S]*?<\/script>/g, "") : source;
+    assert.doesNotMatch(billingUiSource, /アプリをインストール|ホーム画面に追加|インストール/);
     assert.doesNotMatch(source, /(?:id|class|data-[\w-]+)=["'][^"']*install/i);
     assert.doesNotMatch(source, /serviceWorker\s*\.\s*register\s*\(/);
   }
