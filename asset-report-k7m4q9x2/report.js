@@ -9,8 +9,10 @@ const reportData = {
   },
   operatingExpense: {
     name: "投資信託他売却損",
-    appliedFrom: "2026-08-15",
-    value: -320000
+    adjustmentHistory: [
+      { from: "2026-08-15", value: -220000 },
+      { from: "2026-09-13", value: -320000 }
+    ]
   },
   monthlyReport: {
     entries: [
@@ -203,12 +205,19 @@ function assetReturnRate(asset) {
 
 function totalMarketValue(includeAdjustment = false) {
   const baseTotal = reportData.assets.reduce((sum, asset) => sum + asset.marketValue, 0);
-  return includeAdjustment ? baseTotal + reportData.operatingExpense.value : baseTotal;
+  return includeAdjustment ? baseTotal + adjustmentForPeriod(reportData.period) : baseTotal;
+}
+
+function adjustmentForPeriod(period) {
+  let active = null;
+  for (const adjustment of reportData.operatingExpense.adjustmentHistory) {
+    if (adjustment.from <= period && (!active || adjustment.from > active.from)) active = adjustment;
+  }
+  return active?.value ?? 0;
 }
 
 function historyMarketValue(entry) {
-  const expense = reportData.operatingExpense;
-  return entry.period >= expense.appliedFrom ? entry.marketValue + expense.value : entry.marketValue;
+  return entry.marketValue + adjustmentForPeriod(entry.period);
 }
 
 function calculateHistoryScale(values) {
@@ -331,12 +340,13 @@ function renderHoldings() {
   fragment.appendChild(realizedRow);
 
   const operatingExpenseRow = document.createElement("tr");
-  const operatingExpenseClass = valueClass(reportData.operatingExpense.value);
+  const operatingExpenseValue = adjustmentForPeriod(reportData.period);
+  const operatingExpenseClass = valueClass(operatingExpenseValue);
   operatingExpenseRow.className = "realized-profit-row";
   operatingExpenseRow.innerHTML = `
     <td><span class="asset-name"><strong>${reportData.operatingExpense.name}</strong><small>運用成績調整</small></span></td>
     <td data-label="時価総額" class="unknown-value">—</td>
-    <td data-label="投資信託他売却損" class="${operatingExpenseClass}">${formatYen(reportData.operatingExpense.value, true)}</td>
+    <td data-label="投資信託他売却損" class="${operatingExpenseClass}">${formatYen(operatingExpenseValue, true)}</td>
     <td data-label="損益率" class="unknown-value">—</td>
   `;
   fragment.appendChild(operatingExpenseRow);
@@ -601,6 +611,7 @@ function exposeTestHooks() {
   if (typeof window === "undefined") return;
   window.__assetReportTestHooks = {
     calculateHistoryScale,
+    adjustmentForPeriod,
     historyMarketValue
   };
 }
