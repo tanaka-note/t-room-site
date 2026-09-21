@@ -118,3 +118,88 @@ legend { margin-bottom: 12px; font-weight: 700; }
   .usage-detail-grid { grid-template-columns: 1fr; gap: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .activity { animation-duration: 2s; } }
+
+/* Warm shared product theme. */
+:root {
+  color-scheme: light;
+  --bg: #eeece7;
+  --surface: rgba(255, 254, 250, .82);
+  --surface-strong: #fffefa;
+  --text: #343834;
+  --muted: #6e736e;
+  --accent: #748477;
+  --accent-ink: #fff;
+  --line: #d7d6d0;
+  --warning: #906d37;
+}
+body {
+  color: var(--text);
+  background:
+    radial-gradient(circle at 15% -10%, rgba(116, 132, 119, .19), transparent 38rem),
+    radial-gradient(circle at 100% 20%, rgba(197, 190, 175, .18), transparent 32rem),
+    var(--bg);
+}
+.eyebrow,
+.step-label { color: #5f7063; }
+.source-form,
+.login-panel,
+.result,
+.progress-panel,
+.ready-panel,
+.usage-section,
+.history-section {
+  border-color: var(--line);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: 0 14px 40px rgba(51, 55, 51, .06);
+  backdrop-filter: blur(18px);
+}
+input[type="url"] { border-color: var(--line); border-radius: 999px; color: var(--text); background: var(--surface-strong); }
+.primary,
+.download-link,
+.text-button,
+.period-button { border-radius: 999px; transition: background-color 320ms ease, border-color 320ms ease, color 320ms ease, box-shadow 320ms ease; }
+.primary,
+.download-link { color: #fff; background: #5f7063; }
+.media-choice,
+.usage-day { border-color: var(--line); border-radius: 20px; background: var(--surface-strong); }
+.message { color: #7e514d; background: #f2e5e3; }
+.activity { border-color: #d0d3ce; border-top-color: var(--accent); }
+.usage-alert,
+.warning { color: #7b5c2d; }
+@media (prefers-reduced-motion: no-preference) {
+  .masthead,
+  .source-form,
+  .login-panel,
+  .history-section { animation: downloader-soft-reveal 900ms cubic-bezier(.2, .7, .2, 1) both; }
+  .source-form,
+  .login-panel { animation-delay: 80ms; }
+  .history-section { animation-delay: 140ms; }
+}
+@keyframes downloader-soft-reveal {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body *, body *::before, body *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: 0s !important; }
+  .activity { animation: none; }
+}
+
+/* Match the approved open layout: rules and spacing replace framed panels. */
+.source-form,
+.login-panel,
+.history-section,
+.usage-section {
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.result,
+.progress-panel,
+.ready-panel {
+  border-color: transparent;
+  background: rgba(255, 254, 250, .64);
+  box-shadow: none;
+}

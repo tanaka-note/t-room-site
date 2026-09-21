@@ -175,3 +175,73 @@ output { overflow-wrap: anywhere; }
 .audit-summary > :nth-child(6) { grid-area: device; }
 .audit-disabled-toggle { grid-column: 1 / -1; display: flex; align-items: center; gap: .5rem; }
 .audit-disabled-toggle input { width: auto; margin: 0; }
+
+/* Warm shared product theme. */
+:root {
+  --ink: #343834;
+  --muted: #6e736e;
+  --line: #d7d6d0;
+  --surface: #fffefa;
+  --bg: #eeece7;
+  --accent: #748477;
+  --danger: #9a625f;
+  --ok: #5f7d68;
+}
+body { background: var(--bg); }
+.eyebrow { color: #5f7063; }
+.card,
+.stat,
+.session-status,
+.credential,
+.link,
+.invitation,
+.detail-editor,
+.invite-result {
+  border-color: var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: 0 12px 34px rgba(51, 55, 51, .05);
+}
+input:not([type="checkbox"]),
+select,
+button { border-color: var(--line); border-radius: 999px; }
+button { background: #5f7063; transition: background-color 320ms ease, border-color 320ms ease, color 320ms ease, box-shadow 320ms ease; }
+button.secondary,
+.tabs button { background: var(--surface); }
+.tabs button.active { background: #5f7063; color: #fff; }
+button:focus-visible,
+input:focus-visible,
+select:focus-visible { outline-color: #9aaa9d; }
+.message { border-radius: 18px; background: #e5ebe5; color: #4f6254; }
+.session-status.session-active { border-color: #b8cbbd; background: #edf3ee; }
+.setup-notice { background: #f7f1e3; }
+@media (prefers-reduced-motion: no-preference) {
+  .shell > header,
+  .shell > .card,
+  .panel { animation: security-soft-reveal 900ms cubic-bezier(.2, .7, .2, 1) both; }
+}
+@keyframes security-soft-reveal {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body *, body *::before, body *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: 0s !important; }
+}
+
+/* Approved concept: broad open sections with quiet dividers. */
+.card {
+  border-color: transparent;
+  background: rgba(255, 254, 250, .58);
+  box-shadow: none;
+}
+.stat,
+.session-status,
+.credential,
+.link,
+.invitation,
+.detail-editor {
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}

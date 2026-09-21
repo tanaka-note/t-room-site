@@ -2359,3 +2359,202 @@ mark.diary-search-match {
   font: inherit;
   text-decoration: inherit;
 }
+
+/* Warm shared product theme; the portfolio dashboard uses investment.css. */
+body {
+  --ink: #343834;
+  --muted: #6e736e;
+  --line: #d7d6d0;
+  --paper: #eeece7;
+  --surface: #fffefa;
+  --teal: #748477;
+  --teal-dark: #5f7063;
+  --amber: #9b7840;
+  --rose: #9a6e69;
+  --shadow: 0 20px 54px rgba(51, 55, 51, 0.1);
+  background: var(--paper);
+}
+
+.site-header {
+  border-bottom-color: rgba(215, 214, 208, 0.82);
+  background: rgba(248, 247, 243, 0.92);
+  transition: box-shadow 420ms ease, background-color 420ms ease;
+}
+
+.header-icon-button { transition: color 320ms ease, background-color 320ms ease, border-color 320ms ease; }
+.header-actions .header-icon-button:not(.is-create):not(.is-logout) {
+  border-color: transparent;
+  background: transparent;
+}
+.header-actions .header-icon-button:not(.is-create):not(.is-logout):hover,
+.header-actions .header-icon-button:not(.is-create):not(.is-logout):focus-visible {
+  border-color: transparent;
+  background: #e5e7e2;
+}
+.header-icon-button.is-create { border-color: var(--teal-dark); background: var(--teal-dark); }
+
+.eyebrow,
+.section-kicker { color: var(--teal-dark); }
+.diary-panel,
+.diary-search-card,
+.favorites-link,
+.archive-button {
+  border-color: var(--line);
+  border-radius: 22px;
+  background: rgba(255, 254, 250, 0.74);
+  box-shadow: 0 12px 34px rgba(51, 55, 51, 0.05);
+}
+
+.primary-button,
+.secondary-button,
+.quiet-button,
+.danger-button,
+.text-button,
+.date-picker-button,
+.today-button,
+.load-more-button,
+.troom-passkey-account-option,
+.troom-passkey-account-cancel { border-radius: 999px; transition: background-color 320ms ease, border-color 320ms ease, color 320ms ease, box-shadow 320ms ease; }
+.primary-button { background: var(--teal-dark); }
+.secondary-button { border-color: var(--line); background: var(--surface); }
+.quiet-button { color: var(--teal-dark); }
+
+.diary-entry-card { border-color: var(--line); }
+.diary-entry-button { transition: background-color 360ms ease; }
+.diary-entry-button:hover,
+.diary-entry-button:focus-visible { background: rgba(225, 230, 224, 0.55); }
+
+.troom-passkey-account-dialog { border-color: var(--line); border-radius: 24px; background: var(--surface); }
+.troom-passkey-account-dialog::backdrop { background: rgba(42, 47, 43, 0.54); backdrop-filter: blur(5px); }
+.troom-passkey-account-option { background: #f7f6f2; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .diary-layout,
+  .login-card { animation: diary-soft-reveal 900ms cubic-bezier(.2, .7, .2, 1) both; }
+}
+@keyframes diary-soft-reveal {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body *, body *::before, body *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+  }
+}
+
+/* Match the approved editorial concept: use spacing and rules, not framed cards. */
+.diary-panel,
+.diary-search-card,
+.favorites-link,
+.archive-button {
+  border-color: transparent;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.favorites-link:hover,
+.favorites-link:focus-visible,
+.archive-button:hover,
+.archive-button:focus-visible { background: rgba(255, 254, 250, .38); }
+
+/* Make tap targets legible with a thin, quiet outline. */
+.favorites-link,
+.archive-button {
+  border-color: rgba(95, 112, 99, .3);
+  border-radius: 12px;
+  background: transparent;
+}
+
+.archive-button {
+  border: 0;
+  border-bottom: 1px solid rgba(95, 112, 99, .3);
+  border-radius: 0;
+}
+
+.diary-entry-card {
+  margin-inline: -14px;
+  padding: 24px 14px;
+  border-top-color: transparent;
+  border-radius: 20px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(95, 112, 99, .3);
+  transition: background-color 320ms ease, box-shadow 320ms ease;
+}
+
+.diary-entry-card:first-child {
+  padding-top: 24px;
+}
+
+.diary-entry-card:last-child {
+  padding-bottom: 24px;
+}
+
+@media (max-width: 680px) {
+  .diary-entry-card,
+  .diary-entry-card:first-child,
+  .diary-entry-card:last-child {
+    padding-block: 20px;
+  }
+}
+
+.diary-entry-card:hover,
+.diary-entry-card:focus-within,
+.favorites-link:hover,
+.archive-button:hover {
+  border-color: rgba(95, 112, 99, .72);
+  background: rgba(116, 132, 119, .07);
+}
+
+.diary-entry-card:hover,
+.diary-entry-card:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(95, 112, 99, .72);
+}
+
+.diary-entry-button:focus-visible,
+.favorites-link:focus-visible,
+.archive-button:focus-visible {
+  outline: 2px solid var(--teal-dark);
+  outline-offset: 3px;
+}
+
+.diary-entry-button:focus-visible {
+  border-radius: 6px;
+}
+
+/* Match T-Cloud's quiet search treatment while retaining the existing field dimensions. */
+.diary-search-box input,
+.tag-search input {
+  border-color: var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: none;
+  transition: border-color 320ms ease, box-shadow 320ms ease, background-color 320ms ease;
+}
+
+.diary-search-box input:focus,
+.tag-search input:focus {
+  border-color: rgba(95, 112, 99, .72);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(116, 132, 119, .13);
+}
+
+/* Tags read as lightweight text links instead of a second layer of pills. */
+.diary-tag {
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--teal-dark);
+}
+
+.diary-tag:hover,
+.diary-tag:focus-visible,
+.diary-tag[aria-current="page"] {
+  border-color: transparent;
+  border-bottom-color: var(--teal-dark);
+  background: transparent;
+  color: var(--ink);
+  outline: 0;
+}

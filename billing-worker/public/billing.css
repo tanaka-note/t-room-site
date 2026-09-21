@@ -232,3 +232,72 @@ dialog::backdrop { background: rgba(24,31,26,.48); backdrop-filter: blur(3px); }
   background: var(--surface);
   font-weight: 600;
 }
+
+/* Warm shared product theme. */
+:root {
+  --ink: #343834;
+  --muted: #6e736e;
+  --line: #d7d6d0;
+  --paper: #eeece7;
+  --surface: #fffefa;
+  --accent: #748477;
+  --accent-dark: #5f7063;
+  --soft: #e1e6e0;
+  --danger: #9a625f;
+}
+body { background: var(--paper); }
+.login-view { background: linear-gradient(145deg, #f7f5f0, #e4e7e1); }
+.login-card { border-color: rgba(116, 132, 119, .22); background: rgba(255, 254, 250, .92); box-shadow: 0 20px 54px rgba(51, 55, 51, .1); }
+.app-header { background: transparent; }
+.toolbar { border-color: var(--line); background: var(--paper); }
+.report { border-color: var(--line); border-radius: 24px; background: var(--surface); box-shadow: 0 14px 40px rgba(51, 55, 51, .06); }
+.balance-grid article,
+.balance-card { border-radius: 18px; background: #e7e9e4; }
+.button,
+.text-button,
+.today-button,
+.troom-passkey-account-option,
+.troom-passkey-account-cancel { border-radius: 999px; transition: background-color 320ms ease, border-color 320ms ease, color 320ms ease, box-shadow 320ms ease; }
+.button.primary { background: var(--accent-dark); }
+.button.secondary { border-color: var(--line); background: var(--surface); }
+input:not([type="checkbox"]),
+select,
+textarea { border-color: var(--line); border-radius: 18px; background: var(--surface); }
+dialog { border-radius: 24px; background: var(--surface); box-shadow: 0 22px 60px rgba(51, 55, 51, .18); }
+dialog::backdrop { background: rgba(42, 47, 43, .54); backdrop-filter: blur(5px); }
+.troom-passkey-account-dialog { border-radius: 24px; background: var(--surface); }
+.troom-passkey-account-option { background: #f7f6f2; }
+@media (prefers-reduced-motion: no-preference) {
+  .login-card,
+  .app-header,
+  .toolbar,
+  .report { animation: billing-soft-reveal 900ms cubic-bezier(.2, .7, .2, 1) both; }
+  .toolbar { animation-delay: 80ms; }
+  .report { animation-delay: 140ms; }
+}
+@keyframes billing-soft-reveal {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body *, body *::before, body *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: 0s !important; }
+}
+@media print {
+  body { background: #fff; }
+  .report { border: 0; border-radius: 0; background: #fff; box-shadow: none; }
+}
+
+/* Keep the ledger open and editorial instead of enclosing it in a large card. */
+.report {
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.balance-grid article,
+.balance-card {
+  border-radius: 0;
+  border-top: 0;
+  background: transparent;
+  box-shadow: inset 0 1px var(--line);
+}

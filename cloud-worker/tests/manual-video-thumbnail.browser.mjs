@@ -61,7 +61,7 @@ try {for(const [name,engine,launch] of engines){
    return {visible:r.top>=Math.max(0,d.top)&&r.bottom<=bottom,bg:getComputedStyle(p).backgroundColor,same:editorVideo===document.querySelector('#preview-stage video'),time:editorVideo.currentTime===editorTime,
     buttons:[...p.querySelectorAll('button')].every(b=>{const q=b.getBoundingClientRect();return !b.disabled&&q.top>=0&&q.bottom<=bottom&&document.elementFromPoint(q.x+q.width/2,q.y+q.height/2)?.closest('button')===b;})};
   });
-  assert.deepEqual(visibleEditor,{visible:true,bg:'rgb(255, 255, 255)',same:true,time:true,buttons:true});
+  assert.deepEqual(visibleEditor,{visible:true,bg:'rgb(255, 254, 250)',same:true,time:true,buttons:true});
   assert.equal(await page.locator('#preview-stage video').count(),1);
   assert.equal(await page.locator('.preview-player-seek').count(),1);
   await page.waitForFunction(()=>document.querySelector('#preview-stage video').readyState>=2);
