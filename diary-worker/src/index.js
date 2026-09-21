@@ -666,7 +666,7 @@ async function listEntries(url, env, session) {
 
   const statement = `
     SELECT
-      e.id, e.entry_date, e.entry_time, e.title, e.content, e.content_format, e.weather, e.author_id, e.author_name, e.created_at, e.updated_at,
+      e.id, e.entry_date, e.last_published_at, e.title, e.content, e.content_format, e.weather, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       e.status, e.draft_of_entry_id, e.draft_of_revision, e.draft_excluded_photo_ids,
       EXISTS (SELECT 1 FROM diary_favorites current_favorite WHERE current_favorite.entry_id = e.id AND current_favorite.account_id = ?) AS is_favorite,
@@ -681,7 +681,7 @@ async function listEntries(url, env, session) {
       ), '[]') AS tags
     FROM diary_entries e
     WHERE ${conditions.join(" AND ")}
-    ORDER BY ${draft ? "e.updated_at DESC, e.id DESC" : "e.entry_date DESC, e.entry_time DESC, e.id DESC"}
+    ORDER BY ${draft ? "e.updated_at DESC, e.id DESC" : "e.entry_date DESC, e.last_published_at DESC, e.id DESC"}
     LIMIT ? OFFSET ?
   `;
   bindings.push(limit + 1, offset);
@@ -694,7 +694,7 @@ async function listEntries(url, env, session) {
 async function getEntry(id, env, session) {
   const row = await env.DB.prepare(`
     SELECT
-      e.id, e.entry_date, e.entry_time, e.title, e.content, e.content_format, e.weather, e.author_id, e.author_name, e.created_at, e.updated_at,
+      e.id, e.entry_date, e.last_published_at, e.title, e.content, e.content_format, e.weather, e.author_id, e.author_name, e.created_at, e.updated_at,
       e.deleted_at, e.deleted_by_id, e.deleted_by_name, e.revision,
       e.status, e.draft_of_entry_id, e.draft_of_revision, e.draft_excluded_photo_ids,
       EXISTS (SELECT 1 FROM diary_favorites current_favorite WHERE current_favorite.entry_id = e.id AND current_favorite.account_id = ?) AS is_favorite,
@@ -1580,20 +1580,21 @@ async function createEntry(request, env, session) {
     ? null
     : normalizeEntryRequestId(body.requestId);
   const requestId = suppliedRequestId || crypto.randomUUID().toLowerCase();
-  const requestHash = await entryCreateRequestHash(status, input, body);
+  const requestHashes = await entryCreateRequestHashes(status, input, body);
+  const requestHash = requestHashes.primary;
   const existing = await findEntryByCreateRequest(env, session, requestId);
-  if (existing) return replayCreatedEntry(existing, requestHash, env, session);
+  if (existing) return replayCreatedEntry(existing, requestHashes.accepted, env, session);
 
   const mutationId = crypto.randomUUID().toLowerCase();
   const statements = [env.DB.prepare(`
     INSERT INTO diary_entries (
-      entry_date, entry_time, title, content, content_format, weather, author_id, author_name, household_id,
-      status, draft_excluded_photo_ids, client_request_id, client_request_hash, last_mutation_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      entry_date, title, content, content_format, weather, author_id, author_name, household_id,
+      status, last_published_at, draft_excluded_photo_ids, client_request_id, client_request_hash, last_mutation_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'published' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END, ?, ?, ?, ?)
   `).bind(
-    input.entryDate, input.entryTime ?? null, input.title, input.content, input.contentFormat, input.weather,
+    input.entryDate, input.title, input.content, input.contentFormat, input.weather,
     session.accountId, session.accountName, session.activeHouseholdId,
-    status, JSON.stringify(input.excludedPhotoIds), requestId, requestHash, mutationId
+    status, status, JSON.stringify(input.excludedPhotoIds), requestId, requestHash, mutationId
   ), ...entryCreateTagStatements(env, session, requestId, requestHash, input.tags)];
   appendAtomicityTestFailure(statements, request, env, "create");
 
@@ -1602,7 +1603,7 @@ async function createEntry(request, env, session) {
     results = await env.DB.batch(statements);
   } catch (error) {
     const raced = await findEntryByCreateRequest(env, session, requestId).catch(() => null);
-    if (raced) return replayCreatedEntry(raced, requestHash, env, session);
+    if (raced) return replayCreatedEntry(raced, requestHashes.accepted, env, session);
     throw error;
   }
   if (Number(results[0]?.meta?.changes || 0) !== 1) {
@@ -1625,7 +1626,7 @@ async function updateEntry(id, request, env, session) {
   }
 
   const current = await env.DB.prepare(`
-    SELECT id, status, draft_of_entry_id, draft_of_revision, revision, entry_time, weather
+    SELECT id, status, draft_of_entry_id, draft_of_revision, revision, weather
     FROM diary_entries
     WHERE id = ? AND household_id = ? AND deleted_at IS NULL
   `).bind(id, session.activeHouseholdId).first();
@@ -1633,9 +1634,8 @@ async function updateEntry(id, request, env, session) {
     return json({ error: "別の端末で更新された可能性があります。再読み込みしてください。" }, 409);
   }
 
-  // Older clients omit these optional fields. Preserve saved values on update;
-  // an explicit null or empty entryTime clears only the diary time.
-  if (body.entryTime === undefined) input.entryTime = current.entry_time ?? null;
+  // Older clients may still send entryTime. It is intentionally ignored because
+  // publication time is server-owned and entry_date is date-only.
   if (body.weather === undefined) input.weather = current.weather ?? null;
 
   if (current.status === "published" && targetStatus === "draft") {
@@ -1648,12 +1648,13 @@ async function updateEntry(id, request, env, session) {
   const mutationId = crypto.randomUUID().toLowerCase();
   const statements = [env.DB.prepare(`
     UPDATE diary_entries
-    SET entry_date = ?, entry_time = ?, title = ?, content = ?, content_format = ?, weather = ?, status = ?,
+    SET entry_date = ?, title = ?, content = ?, content_format = ?, weather = ?, status = ?,
+        last_published_at = CASE WHEN ? = 'published' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE last_published_at END,
         draft_excluded_photo_ids = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1,
         last_mutation_id = ?
     WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NULL
   `).bind(
-    input.entryDate, input.entryTime, input.title, input.content, input.contentFormat, input.weather, targetStatus,
+    input.entryDate, input.title, input.content, input.contentFormat, input.weather, targetStatus, targetStatus,
     JSON.stringify(input.excludedPhotoIds), mutationId, id, session.activeHouseholdId, revision
   ), ...entryMutationTagStatements(env, id, mutationId, input.tags)];
   appendAtomicityTestFailure(statements, request, env, "update");
@@ -1676,13 +1677,13 @@ async function savePublishedEditDraft(source, input, request, env, session) {
   if (existing) {
     const statements = [env.DB.prepare(`
       UPDATE diary_entries
-      SET entry_date = ?, entry_time = ?, title = ?, content = ?, content_format = ?, weather = ?,
+      SET entry_date = ?, title = ?, content = ?, content_format = ?, weather = ?,
           draft_of_revision = ?, draft_excluded_photo_ids = ?,
           author_id = ?, author_name = ?, updated_at = CURRENT_TIMESTAMP, revision = revision + 1,
           last_mutation_id = ?
       WHERE id = ? AND household_id = ? AND status = 'draft' AND revision = ? AND deleted_at IS NULL
     `).bind(
-      input.entryDate, input.entryTime, input.title, input.content, input.contentFormat, input.weather,
+      input.entryDate, input.title, input.content, input.contentFormat, input.weather,
       source.revision, JSON.stringify(input.excludedPhotoIds), session.accountId, session.accountName,
       mutationId, existing.id, session.activeHouseholdId, existing.revision
     ), ...entryMutationTagStatements(env, Number(existing.id), mutationId, input.tags)];
@@ -1693,11 +1694,11 @@ async function savePublishedEditDraft(source, input, request, env, session) {
   } else {
     const statements = [env.DB.prepare(`
       INSERT INTO diary_entries (
-        entry_date, entry_time, title, content, content_format, weather, author_id, author_name, household_id,
+        entry_date, title, content, content_format, weather, author_id, author_name, household_id,
         status, draft_of_entry_id, draft_of_revision, draft_excluded_photo_ids, last_mutation_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)
     `).bind(
-      input.entryDate, input.entryTime, input.title, input.content, input.contentFormat, input.weather,
+      input.entryDate, input.title, input.content, input.contentFormat, input.weather,
       session.accountId, session.accountName, session.activeHouseholdId,
       source.id, source.revision, JSON.stringify(input.excludedPhotoIds), mutationId
     ), ...entryMutationTagStatements(env, null, mutationId, input.tags, session.activeHouseholdId)];
@@ -1715,7 +1716,8 @@ async function publishEditDraft(draft, input, request, env, session) {
   const mutationId = crypto.randomUUID().toLowerCase();
   const statements = [env.DB.prepare(`
     UPDATE diary_entries
-    SET entry_date = ?, entry_time = ?, title = ?, content = ?, content_format = ?, weather = ?,
+    SET entry_date = ?, title = ?, content = ?, content_format = ?, weather = ?,
+        last_published_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = CURRENT_TIMESTAMP, revision = revision + 1, last_mutation_id = ?
     WHERE id = ? AND household_id = ? AND status = 'published'
       AND deleted_at IS NULL AND revision = ?
@@ -1725,7 +1727,7 @@ async function publishEditDraft(draft, input, request, env, session) {
           AND draft.deleted_at IS NULL AND draft.revision = ? AND draft.draft_of_entry_id = diary_entries.id
       )
   `).bind(
-    input.entryDate, input.entryTime, input.title, input.content, input.contentFormat, input.weather,
+    input.entryDate, input.title, input.content, input.contentFormat, input.weather,
     mutationId, sourceId, session.activeHouseholdId, sourceRevision,
     draft.id, session.activeHouseholdId, draft.revision
   ), ...entryMutationTagStatements(env, sourceId, mutationId, input.tags)];
@@ -1842,6 +1844,7 @@ async function restoreEntry(id, env, session) {
   const results = await env.DB.batch([env.DB.prepare(`
     UPDATE diary_entries
     SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL,
+        last_published_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = CURRENT_TIMESTAMP, revision = revision + 1
     WHERE id = ? AND household_id = ? AND revision = ? AND deleted_at IS NOT NULL AND status = 'published'
   `).bind(id, session.activeHouseholdId, entry.revision), env.DB.prepare(`
@@ -1942,8 +1945,8 @@ async function findEntryByCreateRequest(env, session, requestId) {
   `).bind(session.activeHouseholdId, session.accountId, requestId).first();
 }
 
-function replayCreatedEntry(existing, requestHash, env, session) {
-  if (String(existing.client_request_hash || "") !== requestHash) {
+function replayCreatedEntry(existing, acceptedRequestHashes, env, session) {
+  if (!acceptedRequestHashes.has(String(existing.client_request_hash || ""))) {
     throw new HttpError(409, "同じ送信IDで異なる日記を保存することはできません。画面を開き直してください。");
   }
   return getEntry(Number(existing.id), env, session);
@@ -1955,7 +1958,7 @@ function normalizeEntryRequestId(value) {
   return requestId;
 }
 
-async function entryCreateRequestHash(status, input, body) {
+async function entryCreateRequestHashes(status, input, body) {
   const payload = {
     entryDate: input.entryDate,
     title: input.title,
@@ -1967,10 +1970,20 @@ async function entryCreateRequestHash(status, input, body) {
     pendingPhotoIds: parsePhotoIdList(body.pendingPhotoIds).sort(),
     photoUploadSessionId: body.photoUploadSessionId == null ? null : String(body.photoUploadSessionId).toLowerCase()
   };
-  // Keep request hashes from clients deployed before entryTime stable.
-  if (input.entryTime != null) payload.entryTime = input.entryTime;
+  // Server-owned timestamps and legacy entryTime are deliberately excluded so
+  // retries remain idempotent even when an older client still sends entryTime.
   // Keep legacy unset-weather request hashes stable across the deployment.
   if (input.weather != null) payload.weather = input.weather;
+  const primary = await entryRequestPayloadHash(payload);
+  const accepted = new Set([primary]);
+  const legacyEntryTime = typeof body.entryTime === "string" ? body.entryTime.trim() : "";
+  if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(legacyEntryTime)) {
+    accepted.add(await entryRequestPayloadHash({ ...payload, entryTime: legacyEntryTime }));
+  }
+  return { primary, accepted };
+}
+
+async function entryRequestPayloadHash(payload) {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(JSON.stringify(payload)));
   return bytesToBase64Url(new Uint8Array(digest));
 }
@@ -2009,7 +2022,6 @@ async function validatePendingPhotoSave(body, env, session) {
 
 function validateEntryInput(body, { draft = false, allowEmptyContent = false } = {}) {
   const entryDate = typeof body.entryDate === "string" ? body.entryDate.trim() : "";
-  const entryTime = normalizeEntryTime(body.entryTime);
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const content = typeof body.content === "string" ? body.content.trim() : "";
   if (!isValidDate(entryDate)) throw new HttpError(400, "日付を確認してください。");
@@ -2026,19 +2038,7 @@ function validateEntryInput(body, { draft = false, allowEmptyContent = false } =
   if (weather !== null && !["sunny", "cloudy", "partly_cloudy", "cloudy_rain", "rain", "heavy_rain", "thunder", "snow"].includes(weather)) {
     throw new HttpError(400, "天気を確認してください。");
   }
-  return { entryDate, entryTime, title, content, contentFormat, tags, excludedPhotoIds, weather };
-}
-
-function normalizeEntryTime(value) {
-  if (value === undefined) return undefined;
-  if (value === null) return null;
-  if (typeof value !== "string") throw new HttpError(400, "時間を確認してください。");
-  const normalized = value.trim();
-  if (!normalized) return null;
-  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalized)) {
-    throw new HttpError(400, "時間を確認してください。");
-  }
-  return normalized;
+  return { entryDate, title, content, contentFormat, tags, excludedPhotoIds, weather };
 }
 
 function normalizeEntryStatus(value) {
@@ -2123,7 +2123,7 @@ function serializeEntry(row) {
   return {
     id: Number(row.id),
     entryDate: row.entry_date,
-    entryTime: row.entry_time ?? null,
+    lastPublishedAt: row.last_published_at ?? null,
     title: row.title,
     weather: row.weather ?? null,
     content: row.content,

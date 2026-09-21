@@ -8,7 +8,7 @@ const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 const wranglerPath = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url));
 const port = 8814;
 const origin = `http://127.0.0.1:${port}`;
-const marker = `entry-time-test-${randomUUID().slice(0, 8)}`;
+const marker = `last-published-test-${randomUUID().slice(0, 8)}`;
 
 function testHash(password) {
   return `sha256$${createHash("sha256").update(password).digest("base64url")}`;
@@ -16,7 +16,7 @@ function testHash(password) {
 
 for (const args of [
   ["d1", "migrations", "apply", "diary-db", "--local"],
-  ["d1", "execute", "diary-db", "--local", "--command", `DELETE FROM diary_entries WHERE title LIKE 'entry-time-test-%';`]
+  ["d1", "execute", "diary-db", "--local", "--command", "DELETE FROM diary_entries WHERE title LIKE 'last-published-test-%';"]
 ]) {
   const result = spawnSync(process.execPath, [wranglerPath, ...args], { cwd: projectDirectory, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -66,106 +66,113 @@ function body(title, extra = {}) {
   };
 }
 
+function assertUtcTimestamp(value, message) {
+  assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, message);
+}
+
+const pause = () => new Promise((resolve) => setTimeout(resolve, 25));
+
 try {
   await waitForServer();
   const login = await request("/login", { method: "POST", body: { loginId: "main@example.test", password: "main-test" } });
   assert.equal(login.response.status, 200, JSON.stringify(login.result));
   const cookie = login.cookie;
 
-  const legacy = await request("/entries", { method: "POST", cookie, body: body(`${marker}-legacy`) });
-  assert.equal(legacy.response.status, 200, JSON.stringify(legacy.result));
-  assert.equal(legacy.result.entry.entryTime, null, "an old client create remains valid and stores NULL");
+  const requestId = randomUUID();
+  const legacyBody = body(`${marker}-legacy`, { entryTime: "09:05", requestId });
+  const created = await request("/entries", { method: "POST", cookie, body: legacyBody });
+  assert.equal(created.response.status, 200, JSON.stringify(created.result));
+  assertUtcTimestamp(created.result.entry.lastPublishedAt, "new publication uses an explicit UTC timestamp");
+  assert.equal("entryTime" in created.result.entry, false, "legacy entryTime is not a diary response field");
 
-  const morning = await request("/entries", { method: "POST", cookie, body: body(`${marker}-morning`, { entryTime: "09:05" }) });
-  const evening = await request("/entries", { method: "POST", cookie, body: body(`${marker}-evening`, { entryTime: "18:30" }) });
-  const eveningLaterId = await request("/entries", { method: "POST", cookie, body: body(`${marker}-evening-later-id`, { entryTime: "18:30" }) });
-  for (const created of [morning, evening, eveningLaterId]) assert.equal(created.response.status, 200, JSON.stringify(created.result));
-
-  const ordered = await request(`/entries?q=${encodeURIComponent(marker)}&limit=20`, { cookie });
-  assert.deepEqual(ordered.result.entries.slice(0, 4).map((entry) => entry.id), [
-    eveningLaterId.result.entry.id,
-    evening.result.entry.id,
-    morning.result.entry.id,
-    legacy.result.entry.id
-  ], "published entries sort by date, time, then id; NULL times follow timed entries");
-
-  const idempotencyKey = randomUUID();
-  const idempotentBody = body(`${marker}-idempotent`, { entryTime: "05:47", requestId: idempotencyKey });
-  const firstCreate = await request("/entries", { method: "POST", cookie, body: idempotentBody });
-  const replayCreate = await request("/entries", { method: "POST", cookie, body: idempotentBody });
-  assert.equal(replayCreate.response.status, 200, JSON.stringify(replayCreate.result));
-  assert.equal(replayCreate.result.entry.id, firstCreate.result.entry.id);
-  assert.equal(replayCreate.result.entry.entryTime, "05:47");
-  const changedTimeReplay = await request("/entries", {
-    method: "POST", cookie, body: { ...idempotentBody, entryTime: "05:48" }
+  const replay = await request("/entries", {
+    method: "POST", cookie, body: { ...legacyBody, entryTime: "23:59" }
   });
-  assert.equal(changedTimeReplay.response.status, 409, "entryTime participates in the idempotent request hash");
+  assert.equal(replay.response.status, 200, JSON.stringify(replay.result));
+  assert.equal(replay.result.entry.id, created.result.entry.id, "entryTime is excluded from idempotency");
+  assert.equal(replay.result.entry.lastPublishedAt, created.result.entry.lastPublishedAt, "a retry does not republish");
 
-  for (const entryTime of ["1:35", "24:00", "12:60", "12:34:56", "nope", 123]) {
-    const invalid = await request("/entries", { method: "POST", cookie, body: body(`${marker}-invalid-${String(entryTime)}`, { entryTime }) });
-    assert.equal(invalid.response.status, 400, `invalid time must be rejected: ${String(entryTime)}`);
-  }
-
-  const fetchedMorning = await request(`/entries/${morning.result.entry.id}`, { cookie });
-  assert.equal(fetchedMorning.result.entry.entryTime, "09:05", "detail serialization preserves time");
-  const oldClientEdit = await request(`/entries/${morning.result.entry.id}`, {
+  await pause();
+  const republished = await request(`/entries/${created.result.entry.id}`, {
     method: "PUT", cookie,
-    body: { ...body(`${marker}-morning-old-client`), revision: fetchedMorning.result.entry.revision }
+    body: body(`${marker}-republished`, {
+      entryDate: "2026-09-20",
+      entryTime: { ignored: true },
+      revision: created.result.entry.revision
+    })
   });
-  assert.equal(oldClientEdit.response.status, 200, JSON.stringify(oldClientEdit.result));
-  assert.equal(oldClientEdit.result.entry.entryTime, "09:05", "an old client update preserves stored time");
-  const changedTime = await request(`/entries/${morning.result.entry.id}`, {
-    method: "PUT", cookie,
-    body: { ...body(`${marker}-morning-changed`), entryTime: "10:15", revision: oldClientEdit.result.entry.revision }
-  });
-  assert.equal(changedTime.result.entry.entryTime, "10:15");
-  const staleUpdate = await request(`/entries/${morning.result.entry.id}`, {
-    method: "PUT", cookie,
-    body: { ...body(`${marker}-stale`), entryTime: "11:11", revision: oldClientEdit.result.entry.revision }
-  });
-  assert.equal(staleUpdate.response.status, 409);
-  assert.equal((await request(`/entries/${morning.result.entry.id}`, { cookie })).result.entry.entryTime, "10:15");
+  assert.equal(republished.response.status, 200, JSON.stringify(republished.result));
+  assert.equal(republished.result.entry.entryDate, "2026-09-20", "diary date remains editable");
+  assert.ok(republished.result.entry.lastPublishedAt > created.result.entry.lastPublishedAt, "republishing advances publication time");
 
   const draft = await request("/entries", {
-    method: "POST", cookie, body: body(`${marker}-draft`, { entryTime: "07:45", status: "draft" })
+    method: "POST", cookie, body: body(`${marker}-draft`, { status: "draft", entryTime: "07:45" })
   });
+  assert.equal(draft.response.status, 200, JSON.stringify(draft.result));
+  assert.equal(draft.result.entry.lastPublishedAt, null, "draft creation has no publication time");
+  await pause();
   const savedDraft = await request(`/entries/${draft.result.entry.id}`, {
     method: "PUT", cookie,
-    body: { ...body(`${marker}-draft-saved`), status: "draft", revision: draft.result.entry.revision }
+    body: body(`${marker}-draft-saved`, { status: "draft", revision: draft.result.entry.revision })
   });
-  assert.equal(savedDraft.result.entry.entryTime, "07:45", "draft save preserves omitted time");
+  assert.equal(savedDraft.result.entry.lastPublishedAt, null, "draft save does not publish");
   const publishedDraft = await request(`/entries/${draft.result.entry.id}`, {
     method: "PUT", cookie,
-    body: { ...body(`${marker}-draft-published`), status: "published", revision: savedDraft.result.entry.revision }
+    body: body(`${marker}-draft-published`, { status: "published", revision: savedDraft.result.entry.revision })
   });
-  assert.equal(publishedDraft.result.entry.entryTime, "07:45", "draft publish preserves time");
+  assertUtcTimestamp(publishedDraft.result.entry.lastPublishedAt, "publishing a standalone draft sets publication time");
 
-  const publishedSource = await request("/entries", {
-    method: "POST", cookie, body: body(`${marker}-published-source`, { entryTime: "11:22" })
+  const source = await request("/entries", {
+    method: "POST", cookie, body: body(`${marker}-source`, { entryDate: "2026-09-19" })
   });
-  const editDraft = await request(`/entries/${publishedSource.result.entry.id}`, {
+  await pause();
+  const editDraft = await request(`/entries/${source.result.entry.id}`, {
     method: "PUT", cookie,
-    body: { ...body(`${marker}-edit-draft`), entryTime: "12:34", status: "draft", revision: publishedSource.result.entry.revision }
+    body: body(`${marker}-edit-draft`, { entryDate: "2026-09-18", status: "draft", revision: source.result.entry.revision })
   });
-  assert.equal(editDraft.result.entry.entryTime, "12:34");
-  const editPublished = await request(`/entries/${editDraft.result.entry.id}`, {
+  assert.equal(editDraft.result.entry.lastPublishedAt, null, "edit draft itself is not published");
+  const unchangedSource = await request(`/entries/${source.result.entry.id}`, { cookie });
+  assert.equal(unchangedSource.result.entry.lastPublishedAt, source.result.entry.lastPublishedAt, "saving an edit draft preserves source publication time");
+  await pause();
+  const publishedEdit = await request(`/entries/${editDraft.result.entry.id}`, {
     method: "PUT", cookie,
-    body: { ...body(`${marker}-edit-published`), status: "published", revision: editDraft.result.entry.revision }
+    body: body(`${marker}-edit-published`, { entryDate: "2026-09-18", status: "published", revision: editDraft.result.entry.revision })
   });
-  assert.equal(editPublished.result.entry.id, publishedSource.result.entry.id);
-  assert.equal(editPublished.result.entry.entryTime, "12:34", "published edit draft carries its time back to the source");
+  assert.equal(publishedEdit.result.entry.id, source.result.entry.id);
+  assert.ok(publishedEdit.result.entry.lastPublishedAt > source.result.entry.lastPublishedAt, "publishing an edit draft republishes the source");
 
-  const otherDate = await request("/entries", {
-    method: "POST", cookie, body: body(`${marker}-other-date`, { entryDate: "2026-08-31", entryTime: "23:59" })
+  const beforeTrash = publishedEdit.result.entry.lastPublishedAt;
+  const trashed = await request(`/entries/${publishedEdit.result.entry.id}`, {
+    method: "DELETE", cookie, body: { revision: publishedEdit.result.entry.revision }
   });
-  assert.equal(otherDate.response.status, 200);
-  const exactDate = await request(`/entries?q=${encodeURIComponent(marker)}&dateFrom=2026-09-21&dateTo=2026-09-21&limit=50`, { cookie });
-  assert.ok(exactDate.result.entries.length >= 7);
-  assert.ok(exactDate.result.entries.every((entry) => entry.entryDate === "2026-09-21"));
-  const month = await request(`/entries?q=${encodeURIComponent(marker)}&month=2026-08&limit=50`, { cookie });
-  assert.deepEqual(month.result.entries.map((entry) => entry.id), [otherDate.result.entry.id], "month filtering remains entry_date based");
+  assert.equal(trashed.response.status, 200, JSON.stringify(trashed.result));
+  const inTrash = await request(`/entries/${publishedEdit.result.entry.id}`, { cookie });
+  assert.equal(inTrash.result.entry.lastPublishedAt, beforeTrash, "moving to trash preserves publication time");
+  await pause();
+  const restored = await request(`/entries/${publishedEdit.result.entry.id}/restore`, { method: "POST", cookie });
+  assert.ok(restored.result.entry.lastPublishedAt > beforeTrash, "restore is treated as the latest publication");
 
-  process.stdout.write("Diary entry time create, edit, draft, ordering, validation, idempotency, revision, and date filtering tests passed.\n");
+  const currentDate = await request("/entries", {
+    method: "POST", cookie, body: body(`${marker}-current-date`, { entryDate: "2026-09-21" })
+  });
+  await pause();
+  const olderDate = await request("/entries", {
+    method: "POST", cookie, body: body(`${marker}-older-date`, { entryDate: "2026-09-20" })
+  });
+  await pause();
+  const olderRepublished = await request(`/entries/${olderDate.result.entry.id}`, {
+    method: "PUT", cookie,
+    body: body(`${marker}-older-republished`, { entryDate: "2026-09-20", revision: olderDate.result.entry.revision })
+  });
+  const ordered = await request(`/entries?q=${encodeURIComponent(marker)}&limit=50`, { cookie });
+  const orderedIds = ordered.result.entries.map((entry) => entry.id);
+  assert.ok(orderedIds.indexOf(currentDate.result.entry.id) < orderedIds.indexOf(olderRepublished.result.entry.id),
+    "entry_date remains the primary ordering key after an older entry is republished");
+  const sameDayIds = ordered.result.entries.filter((entry) => entry.entryDate === "2026-09-20").map((entry) => entry.id);
+  assert.ok(sameDayIds.indexOf(olderRepublished.result.entry.id) < sameDayIds.indexOf(republished.result.entry.id),
+    "last_published_at orders entries within the same diary date");
+
+  process.stdout.write("Diary publication timestamp, legacy client, drafts, trash/restore, ordering, idempotency, and editable date tests passed.\n");
 } finally {
   if (server.exitCode === null) {
     server.kill();

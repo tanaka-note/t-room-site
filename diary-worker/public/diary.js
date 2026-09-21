@@ -188,6 +188,7 @@
     tagMore: document.querySelector("#tag-more-button"),
     entryDialog: document.querySelector("#entry-dialog"),
     detailDate: document.querySelector("#detail-date"),
+    detailPublishedAt: document.querySelector("#detail-published-at"),
     favoriteEntryButton: document.querySelector("#favorite-entry-button"),
     detailTitle: document.querySelector("#detail-title"),
     detailAuthor: document.querySelector("#detail-author"),
@@ -214,7 +215,6 @@
     entryRevision: document.querySelector("#entry-revision"),
     entryStatus: document.querySelector("#entry-status"),
     entryDate: document.querySelector("#entry-date"),
-    entryTime: document.querySelector("#entry-time"),
     todayButton: document.querySelector("#today-button"),
     entryTitle: document.querySelector("#entry-title"),
     entryContent: document.querySelector("#entry-content"),
@@ -1145,15 +1145,26 @@
       button.type = "button";
       button.dataset.entryId = String(entry.id);
 
-      const time = document.createElement("time");
-      time.dateTime = entry.entryTime ? `${entry.entryDate}T${entry.entryTime}` : entry.entryDate;
-      time.textContent = formatEntryDateTime(entry.entryDate, entry.entryTime);
+      const date = document.createElement("time");
+      date.className = "entry-date entry-date-primary";
+      date.dateTime = entry.entryDate;
+      date.textContent = formatDate(entry.entryDate);
+      const dateStack = document.createElement("span");
+      dateStack.className = "entry-date-stack";
+      dateStack.append(date);
+      if (entry.lastPublishedAt) {
+        const publishedAt = document.createElement("time");
+        publishedAt.className = "entry-published-at";
+        publishedAt.dateTime = entry.lastPublishedAt;
+        publishedAt.textContent = `投稿日時：${formatPublishedDateTime(entry.lastPublishedAt)}`;
+        dateStack.append(publishedAt);
+      }
       const author = document.createElement("span");
       author.className = "entry-author";
       author.textContent = `投稿者：${entry.authorName}`;
       const meta = document.createElement("div");
       meta.className = "entry-meta";
-      meta.append(time);
+      meta.append(dateStack);
       if (shouldShowEntryAuthor()) meta.append(author);
       if (state.trash && entry.deletedByName) {
         const deletedBy = document.createElement("span");
@@ -1620,7 +1631,11 @@
   }
 
   function renderEntryDetail(entry) {
-    elements.detailDate.textContent = formatEntryDateTime(entry.entryDate, entry.entryTime);
+    elements.detailDate.textContent = formatDate(entry.entryDate);
+    elements.detailPublishedAt.hidden = !entry.lastPublishedAt;
+    elements.detailPublishedAt.textContent = entry.lastPublishedAt
+      ? `投稿日時：${formatPublishedDateTime(entry.lastPublishedAt)}`
+      : "";
     elements.detailTitle.textContent = entry.title;
     elements.detailAuthor.textContent = `投稿者：${entry.authorName}`;
     elements.detailAuthor.hidden = !shouldShowEntryAuthor();
@@ -3179,7 +3194,6 @@
     elements.entryRevision.value = entry ? String(entry.revision) : "";
     elements.entryStatus.value = isDraft ? "draft" : "published";
     elements.entryDate.value = entry?.entryDate || japanDateString();
-    elements.entryTime.value = entry ? (entry.entryTime || "") : japanTimeString();
     elements.entryTitle.value = entry?.title || "";
     state.editorWeather = Object.hasOwn(WEATHER_LABELS, entry?.weather) ? entry.weather : null;
     closeWeatherMenu(false);
@@ -3223,7 +3237,6 @@
       const editorDocument = serializeRichEditor(true);
       const body = {
         entryDate: elements.entryDate.value,
-        entryTime: elements.entryTime.value,
         title: elements.entryTitle.value,
         weather: state.editorWeather,
         content: editorDocument.content,
@@ -3369,7 +3382,6 @@
   function entryMatchesEditorPayload(entry, payload) {
     if (!entry || !payload) return false;
     return String(entry.entryDate || "") === String(payload.entryDate || "")
-      && (entry.entryTime ?? null) === (payload.entryTime || null)
       && String(entry.title || "") === String(payload.title || "")
       && (entry.weather ?? null) === (payload.weather ?? null)
       && String(entry.content || "") === String(payload.content || "")
@@ -4241,10 +4253,19 @@
     return `${year}年${month}月${day}日（${weekday}）`;
   }
 
-  function formatEntryDateTime(entryDate, entryTime) {
-    const date = formatDate(entryDate);
-    const match = /^(\d{2}):(\d{2})$/.exec(String(entryTime || ""));
-    return match ? `${date} ${Number(match[1])}:${match[2]}` : date;
+  function formatPublishedDateTime(value) {
+    const source = String(value || "");
+    const date = new Date(source.replace(" ", "T") + (/[zZ]$|[+-]\d{2}:\d{2}$/.test(source) ? "" : "Z"));
+    if (Number.isNaN(date.getTime())) return value || "不明";
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(date).map((part) => [part.type, part.value]));
+    return `${parts.month}月${parts.day}日 ${parts.hour}:${parts.minute}`;
   }
 
   function formatMonth(value) {
@@ -4286,17 +4307,6 @@
     }).formatToParts(new Date());
     const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day}`;
-  }
-
-  function japanTimeString(now = new Date()) {
-    const parts = new Intl.DateTimeFormat("en", {
-      timeZone: "Asia/Tokyo",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    }).formatToParts(now);
-    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-    return `${values.hour}:${values.minute}`;
   }
 
   function currentJapanMonth() {

@@ -24,6 +24,7 @@ const tableRows = {
   diary_entries: [{
     id: 1,
     entry_date: "2026-08-20",
+    last_published_at: null,
     entry_time: "14:25",
     title: "バックアップ対象",
     content: "本文",
@@ -248,7 +249,7 @@ async function migratedEmptyDatabase() {
     "0009_main_user.sql", "0010_entry_rich_text.sql", "0011_trash_scopes.sql", "0012_entry_drafts.sql",
     "0013_main_user_trash_and_media_retry.sql", "0014_diary_favorites.sql", "0015_photo_upload_staging.sql",
     "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql", "0018_diary_weather.sql",
-    "0019_password_auth_policy.sql", "0020_diary_entry_time.sql"
+    "0019_password_auth_policy.sql", "0020_diary_entry_time.sql", "0021_diary_last_published_at.sql"
   ];
   for (const migration of migrations) database.exec(await readFile(new URL(migration, migrationDirectory), "utf8"));
   database.exec(`
@@ -281,6 +282,7 @@ assert.equal(payload.formatVersion, BACKUP_FORMAT_VERSION);
 assert.equal(payload.japanDate, "2026-08-20");
 assert.equal(payload.source.database, "diary-db");
 assert.equal(payload.tables.diary_entries.rows[0].content, "本文");
+assert.equal(payload.tables.diary_entries.rows[0].last_published_at, null);
 assert.equal(payload.tables.diary_entries.rows[0].entry_time, "14:25");
 assert.equal(payload.tables.diary_entries.rows[0].status, "draft");
 assert.deepEqual(payload.tables.diary_tags.rows.map((row) => [row.tag, row.sort_order]), [
@@ -355,7 +357,22 @@ await assert.rejects(
   "restore must fail closed instead of merging into a non-empty target"
 );
 
-const version4Payload = structuredClone(readBackup(bucket, first.dailyKey));
+const version5Payload = structuredClone(readBackup(bucket, first.dailyKey));
+version5Payload.formatVersion = 5;
+version5Payload.tables.diary_entries.columns = version5Payload.tables.diary_entries.columns.filter((column) => column !== "last_published_at");
+version5Payload.tables.diary_entries.rows = version5Payload.tables.diary_entries.rows.map(({ last_published_at, ...row }) => ({
+  ...row,
+  status: "published"
+}));
+const version5Database = await migratedEmptyDatabase();
+await restoreDiaryBackup(new SqliteD1(version5Database), version5Payload);
+assert.equal(
+  version5Database.prepare("SELECT last_published_at FROM diary_entries LIMIT 1").get().last_published_at,
+  "2026-08-20T00:00:00Z",
+  "old backups derive a conservative UTC publication time"
+);
+
+const version4Payload = structuredClone(version5Payload);
 version4Payload.formatVersion = 4;
 version4Payload.tables.diary_entries.columns = version4Payload.tables.diary_entries.columns.filter((column) => column !== "entry_time");
 version4Payload.tables.diary_entries.rows = version4Payload.tables.diary_entries.rows.map(({ entry_time, ...row }) => row);

@@ -27,7 +27,7 @@ export function commands(target) {
       'media-range', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
-    diary: tests('diary-worker', ...['request-safety', 'backup', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
+    diary: tests('diary-worker', ...['request-safety', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
