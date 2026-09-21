@@ -141,12 +141,12 @@ const server = createServer(async (request, response) => {
 });
 
 function browserExecutable() {
-  const configured = process.env.TROOM_CHROMIUM_EXECUTABLE;
-  if (configured) return configured;
   return [
+    process.env.TROOM_CHROMIUM_EXECUTABLE,
+    chromium.executablePath(),
     "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
     "C:/Program Files/Microsoft/Edge/Application/msedge.exe"
-  ].find(existsSync) || null;
+  ].filter(Boolean).find(existsSync) || null;
 }
 
 async function assertEditorLayout(page, label) {
