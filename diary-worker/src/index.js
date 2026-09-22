@@ -471,6 +471,12 @@ async function handleApi(request, env, url, path, context) {
     return moveEntryToTrash(Number(entryMatch[1]), request, env, session);
   }
 
+  const draftDeleteMatch = path.match(/^\/api\/drafts\/(\d+)$/);
+  if (draftDeleteMatch && request.method === "DELETE") {
+    requireEntryManagementAccess(session);
+    return deleteDraft(Number(draftDeleteMatch[1]), request, env, session);
+  }
+
   const restoreMatch = path.match(/^\/api\/entries\/(\d+)\/restore$/);
   if (restoreMatch && request.method === "POST") {
     requireTrashAccess(session);
@@ -1825,6 +1831,69 @@ async function moveEntryToTrash(id, request, env, session) {
   return results[0]?.meta?.changes
     ? json({ ok: true })
     : json({ error: "削除できませんでした。再読み込みしてください。" }, 409);
+}
+
+async function deleteDraft(id, request, env, session) {
+  const body = await readJson(request, 4096);
+  const revision = Number(body.revision);
+  if (!Number.isInteger(revision) || revision < 1) {
+    return json({ error: "削除情報を確認できませんでした。再読み込みしてください。" }, 400);
+  }
+
+  const draft = await env.DB.prepare(`
+    SELECT e.id, e.revision,
+      (SELECT COUNT(*) FROM diary_photos p WHERE p.entry_id = e.id) AS photo_count,
+      (SELECT COUNT(*) FROM diary_staged_photos staged
+        JOIN diary_photo_upload_sessions upload_session ON upload_session.id = staged.upload_session_id
+        WHERE upload_session.target_entry_id = e.id OR upload_session.committed_entry_id = e.id
+      ) AS staged_photo_count
+    FROM diary_entries e
+    WHERE e.id = ? AND e.household_id = ? AND e.status = 'draft' AND e.deleted_at IS NULL
+  `).bind(id, session.activeHouseholdId).first();
+  if (!draft || Number(draft.revision) !== revision) {
+    return json({ error: "下書きを削除できませんでした。再読み込みしてください。" }, 409);
+  }
+  if ((Number(draft.photo_count) > 0 || Number(draft.staged_photo_count) > 0) && !env.MEDIA) {
+    throw new HttpError(503, "画像の保存先を確認できないため、下書きの削除を中止しました。");
+  }
+
+  const uploadSessions = await env.DB.prepare(`
+    SELECT id FROM diary_photo_upload_sessions
+    WHERE household_id = ? AND (target_entry_id = ? OR committed_entry_id = ?)
+  `).bind(session.activeHouseholdId, id, id).all();
+  const now = new Date().toISOString();
+  const results = await env.DB.batch([env.DB.prepare(`
+    UPDATE diary_photo_upload_sessions
+    SET status = 'cancelled', updated_at = ?, expires_at = ?
+    WHERE household_id = ? AND status = 'active'
+      AND (target_entry_id = ? OR committed_entry_id = ?)
+      AND EXISTS (
+        SELECT 1 FROM diary_entries draft
+        WHERE draft.id = ? AND draft.household_id = ? AND draft.status = 'draft'
+          AND draft.deleted_at IS NULL AND draft.revision = ?
+      )
+  `).bind(now, now, session.activeHouseholdId, id, id, id, session.activeHouseholdId, revision), env.DB.prepare(`
+    DELETE FROM diary_entries
+    WHERE id = ? AND household_id = ? AND status = 'draft'
+      AND deleted_at IS NULL AND revision = ?
+  `).bind(id, session.activeHouseholdId, revision)]);
+  if (Number(results[1]?.meta?.changes || 0) !== 1) {
+    const remaining = await env.DB.prepare(`
+      SELECT 1 AS present FROM diary_entries WHERE id = ? AND household_id = ?
+    `).bind(id, session.activeHouseholdId).first();
+    if (remaining) return json({ error: "下書きを削除できませんでした。再読み込みしてください。" }, 409);
+  }
+
+  const stagedCleanup = await Promise.all(
+    (uploadSessions.results || []).map((row) => cleanupStagedPhotoSession(env, row.id))
+  );
+  const mediaCleanup = await drainMediaDeletionQueue(env, id, {
+    maxBatches: MEDIA_DELETION_REQUEST_MAX_BATCHES
+  });
+  return json({
+    ok: true,
+    cleanupPending: stagedCleanup.some((result) => !result.complete) || mediaCleanup.remaining > 0
+  });
 }
 
 async function restoreEntry(id, env, session) {

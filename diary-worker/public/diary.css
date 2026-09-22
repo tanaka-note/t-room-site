@@ -1376,6 +1376,10 @@ button:disabled {
   padding-top: 20px;
 }
 
+.editor-actions .draft-delete-button {
+  margin-right: auto;
+}
+
 .entry-form {
   display: grid;
   gap: 10px;
@@ -2195,6 +2199,10 @@ button:disabled {
 
   .dialog-actions button {
     width: 100%;
+  }
+
+  .editor-actions .draft-delete-button {
+    margin-right: 0;
   }
 
   .editor-photo-head,
