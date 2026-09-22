@@ -12,7 +12,7 @@
     "test:favorites": "node tests/favorites.e2e.mjs && node tests/favorites-ui.mjs",
     "test:favorite-browser": "node tests/browser/favorites-flow.mjs",
     "test:trash": "node tests/trash-isolation.e2e.mjs",
-    "test:drafts": "node tests/drafts.e2e.mjs && node tests/drafts-ui.mjs",
+    "test:drafts": "node tests/drafts.e2e.mjs && node tests/drafts-ui.mjs && node tests/browser/draft-deletion.mjs",
     "test:initial-password": "node tests/initial-password-ui.mjs",
     "test:search": "node tests/search-ui.mjs && node tests/search-text.mjs && node tests/search.e2e.mjs && node tests/browser/search.mjs",
     "test:monthly": "node tests/monthly-ui.mjs && node tests/browser/monthly-navigation.mjs",

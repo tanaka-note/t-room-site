@@ -34,6 +34,7 @@ assert.match(style, /@media \(max-width: 680px\)[\s\S]*?\.header-actions \{[\s\S
 
 assert.match(html, /id="save-draft-button"[^>]*>下書き保存<\/button>/);
 assert.match(html, /id="save-entry-button"[^>]*>投稿<\/button>/);
+assert.match(html, /id="delete-draft-button"[^>]*hidden[^>]*>下書きを削除<\/button>/);
 assert.match(html, /id="editor-leave-dialog"/);
 for (const id of ["editor-leave-cancel", "editor-leave-discard", "editor-leave-save-draft"]) {
   assert.match(html, new RegExp(`id="${id}"`));
@@ -47,12 +48,19 @@ assert.match(script, /if \(state\.drafts\) parameters\.set\("draft", "1"\)/);
 assert.match(script, /if \(state\.drafts\) openDraft/);
 assert.match(script, /無題の下書き/);
 assert.match(script, /最終編集：/);
+assert.match(script, /elements\.deleteDraftButton\.hidden = !isDraft/);
+assert.match(script, /function requestDraftDeletion\(\)/);
+assert.match(script, /この下書きを削除しますか？/);
+assert.match(script, /api\(`\/drafts\/\$\{draft\.id\}`/);
+assert.match(style, /\.editor-actions \.draft-delete-button\s*\{[\s\S]*?margin-right:\s*auto;/);
+assert.match(style, /@media \(max-width: 680px\)[\s\S]*?\.editor-actions \.draft-delete-button\s*\{[\s\S]*?margin-right:\s*0;/);
 
 assert.match(worker, /draft \? "e\.status = 'draft'" : "e\.status = 'published'"/);
 assert.match(worker, /ORDER BY \$\{draft \? "e\.updated_at DESC, e\.id DESC"/);
 assert.match(worker, /e\.status = 'published'/);
 assert.match(worker, /savePublishedEditDraft/);
 assert.match(worker, /publishEditDraft/);
+assert.match(worker, /async function deleteDraft\(/);
 assert.match(worker, /draftCount/);
 assert.match(migration, /ADD COLUMN status TEXT NOT NULL DEFAULT 'published'/);
 assert.match(migration, /draft_of_entry_id/);

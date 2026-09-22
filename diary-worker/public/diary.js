@@ -199,6 +199,7 @@
     restoreActions: document.querySelector("#restore-actions"),
     editEntryButton: document.querySelector("#edit-entry-button"),
     deleteEntryButton: document.querySelector("#delete-entry-button"),
+    deleteDraftButton: document.querySelector("#delete-draft-button"),
     restoreEntryButton: document.querySelector("#restore-entry-button"),
     permanentlyDeleteEntryButton: document.querySelector("#permanently-delete-entry-button"),
     deleteConfirmDialog: document.querySelector("#delete-confirm-dialog"),
@@ -358,6 +359,7 @@
     });
     elements.favoriteEntryButton.addEventListener("click", toggleFavorite);
     elements.deleteEntryButton.addEventListener("click", requestEntryDeletion);
+    elements.deleteDraftButton.addEventListener("click", requestDraftDeletion);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
     elements.permanentlyDeleteEntryButton.addEventListener("click", requestPermanentDeletion);
     elements.deleteConfirmNo.addEventListener("click", closeDeleteConfirmation);
@@ -3193,6 +3195,7 @@
     elements.entryId.value = entry ? String(entry.id) : "";
     elements.entryRevision.value = entry ? String(entry.revision) : "";
     elements.entryStatus.value = isDraft ? "draft" : "published";
+    elements.deleteDraftButton.hidden = !isDraft;
     elements.entryDate.value = entry?.entryDate || japanDateString();
     elements.entryTitle.value = entry?.title || "";
     state.editorWeather = Object.hasOwn(WEATHER_LABELS, entry?.weather) ? entry.weather : null;
@@ -3413,6 +3416,7 @@
     elements.saveEntryButton.disabled = busy;
     elements.saveDraftButton.disabled = busy;
     elements.cancelEntryButton.disabled = busy;
+    elements.deleteDraftButton.disabled = busy;
     elements.editorLeaveSaveDraft.disabled = busy;
     if (busy) {
       if (label) elements.editorMessage.textContent = label;
@@ -3817,6 +3821,16 @@
     elements.deleteConfirmDialog.showModal();
   }
 
+  function requestDraftDeletion() {
+    const draft = state.editorSourceEntry;
+    if (!draft || draft.status !== "draft" || !Number(elements.entryId.value || 0)) return;
+    state.deleteMode = "draft";
+    elements.deleteConfirmTitle.textContent = "この下書きを削除しますか？";
+    elements.deleteConfirmMessage.textContent = "保存済みの下書きを削除します。この操作は取り消せません。";
+    elements.deleteConfirmYes.textContent = "下書きを削除";
+    elements.deleteConfirmDialog.showModal();
+  }
+
   function requestPermanentDeletion() {
     if (!state.activeEntry || !state.canPermanentlyDelete || !state.activeEntry.deletedAt) return;
     state.deleteMode = "permanent";
@@ -3834,8 +3848,32 @@
   async function confirmEntryDeletion() {
     const mode = state.deleteMode;
     closeDeleteConfirmation();
-    if (mode === "permanent") await permanentlyDeleteActiveEntry();
+    if (mode === "draft") await deleteActiveDraft();
+    else if (mode === "permanent") await permanentlyDeleteActiveEntry();
     else if (mode === "trash") await moveActiveEntryToTrash();
+  }
+
+  async function deleteActiveDraft() {
+    const draft = state.editorSourceEntry;
+    if (!draft || draft.status !== "draft") return;
+    setEditorSaveBusy(true, "下書きを削除中...");
+    try {
+      await cancelEditorPhotoUploadSession();
+      await api(`/drafts/${draft.id}`, {
+        method: "DELETE",
+        body: { revision: Number(elements.entryRevision.value) }
+      });
+      state.editorDirty = false;
+      closeEditorDialog();
+      showToast("下書きを削除しました。");
+      state.drafts = true;
+      updateFilterControls();
+      await Promise.all([loadMeta(), loadEntries(true)]);
+    } catch (error) {
+      elements.editorMessage.textContent = error.message;
+    } finally {
+      setEditorSaveBusy(false);
+    }
   }
 
   async function moveActiveEntryToTrash() {
