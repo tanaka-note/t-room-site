@@ -36,6 +36,14 @@ const pages = [
     regions: [["law-group", ".learning-law-group:first-of-type"]],
     relations: [["search-to-map", ".learning-search-card", ".learning-map-groups"]]
   },
+  {
+    name: "learning-subjects", path: "/learning/sharoushi/subjects/", includeY: true,
+    selectors: [".learning-subject-grid", ".learning-subject-card", ".learning-mini-stats", ".learning-mini-stats dt", ".learning-mini-stats dd"],
+    dynamicSelectors: [".learning-subject-card", ".learning-mini-stats", ".learning-mini-stats dt", ".learning-mini-stats dd"],
+    zeroMarginLeftSelector: ".learning-mini-stats dd",
+    regions: [["subjects", ".learning-subject-grid"]],
+    relations: [["subject-title-to-stats", ".learning-subject-card h3", ".learning-mini-stats"], ["stats-term-to-value", ".learning-mini-stats dt", ".learning-mini-stats dd"]]
+  },
   { name: "learning-article", path: "/learning/sharoushi/logs/011.html", selectors: [".learning-article", ".learning-article-header", ".learning-article-body", ".learning-table"] },
   { name: "games", path: "/game.html", selectors: [".game-hero", ".game-library-grid", ".game-library-card"] },
   {
@@ -98,8 +106,8 @@ function round(value) {
   return Math.round(value);
 }
 
-async function visualMetrics(page, selectors, relations = []) {
-  return page.evaluate(({ selectors, relations, viewport }) => {
+async function visualMetrics(page, selectors, relations = [], includeY = false) {
+  return page.evaluate(({ selectors, relations, viewport, includeY }) => {
     const stableStyle = style => ({
       display: style.display,
       position: style.position,
@@ -133,8 +141,10 @@ async function visualMetrics(page, selectors, relations = []) {
         continue;
       }
       const rect = element.getBoundingClientRect();
+      const stableRect = { x: rect.x, width: rect.width, height: rect.height };
+      if (includeY) stableRect.y = rect.y;
       result.elements[selector] = {
-        rect: { x: rect.x, width: rect.width, height: rect.height },
+        rect: stableRect,
         style: stableStyle(getComputedStyle(element))
       };
     }
@@ -153,7 +163,7 @@ async function visualMetrics(page, selectors, relations = []) {
       };
     }
     return result;
-  }, { selectors, relations, viewport: page.viewportSize() });
+  }, { selectors, relations, viewport: page.viewportSize(), includeY });
 }
 
 async function assertWebFont(page, path) {
@@ -207,6 +217,16 @@ for (const entry of pages) {
     expect(response?.status(), entry.path).toBe(200);
     await page.locator("main").waitFor();
     await assertWebFont(page, entry.path);
+    for (const selector of entry.dynamicSelectors || []) {
+      const elements = page.locator(selector);
+      await elements.first().waitFor({ state: "visible" });
+      expect(await elements.count(), `${entry.path}: generated ${selector}`).toBeGreaterThan(0);
+    }
+    if (entry.zeroMarginLeftSelector) {
+      const margins = await page.locator(entry.zeroMarginLeftSelector).evaluateAll(elements => elements.map(element => getComputedStyle(element).marginLeft));
+      expect(margins.length, `${entry.path}: generated ${entry.zeroMarginLeftSelector}`).toBeGreaterThan(0);
+      expect([...new Set(margins)], `${entry.path}: all ${entry.zeroMarginLeftSelector} margin-left`).toEqual(["0px"]);
+    }
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
     await page.evaluate(async () => {
       await Promise.all([...document.images].filter(image => image.getBoundingClientRect().top < innerHeight * 1.5).map(image => image.complete ? image.decode().catch(() => {}) : new Promise(resolveImage => {
@@ -216,7 +236,7 @@ for (const entry of pages) {
     });
     for (const selector of entry.selectors) await expect(page.locator(selector).first(), `${entry.path}: ${selector}`).toBeVisible();
     const selectors = [".site-header", "main", "h1", ...entry.selectors, ".site-footer"];
-    const metrics = await visualMetrics(page, [...new Set(selectors)], entry.relations);
+    const metrics = await visualMetrics(page, [...new Set(selectors)], entry.relations, entry.includeY);
     for (const [selector, value] of Object.entries(metrics.elements)) expect(value, `${entry.path}: ${selector}`).not.toBeNull();
     for (const [name, value] of Object.entries(metrics.relations || {})) expect(value, `${entry.path}: ${name}`).not.toBeNull();
     expect(metrics.document.scrollWidth, `${entry.path}: horizontal overflow`).toBe(metrics.document.clientWidth);
