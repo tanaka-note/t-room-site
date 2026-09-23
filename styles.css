@@ -1,4 +1,5 @@
 ﻿:root {
+  /* 01. Foundation and site shell */
   color-scheme: light;
   --ink: #1f2933;
   --muted: #667085;
@@ -100,6 +101,7 @@ body.blocks-game-playing .site-header {
   text-decoration: none;
 }
 
+/* 02. Shared hero and controls */
 .hero {
   position: relative;
   min-height: min(760px, calc(100vh - 72px));
@@ -210,6 +212,7 @@ h1 {
   background: rgba(255, 255, 255, 0.72);
 }
 
+/* 03. Home sections and topic cards */
 .section {
   width: min(1180px, calc(100% - 36px));
   margin-inline: auto;
@@ -422,6 +425,7 @@ h1 {
   text-align: right;
 }
 
+/* 04. Archives, profile, and article content */
 .topic-card p,
 .post-card p,
 .profile-panel p,
@@ -815,6 +819,7 @@ h1 {
   padding-left: 1.3rem;
 }
 
+/* 05. Subpage hero variants */
 .sub-hero {
   display: grid;
   align-items: end;
@@ -895,6 +900,7 @@ h1 {
     linear-gradient(135deg, #eef6ff, #f8faf9 44%, #e9f5ef);
 }
 
+/* 06. Investment hub */
 .investment-layout {
   display: block;
 }
@@ -1348,6 +1354,7 @@ h1 {
   background: #fffaf0;
 }
 
+/* 07. Generic rooms */
 .room-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -1410,7 +1417,7 @@ h1 {
   background: rgba(255, 255, 255, 0.65);
 }
 
-/* Diary */
+/* 08. Public Diary */
 .diary-hero {
   background:
     linear-gradient(90deg, rgba(194, 165, 107, 0.12), transparent 44%),
@@ -1808,6 +1815,7 @@ h1 {
   }
 }
 
+/* 09. Learning */
 .learning-hero {
   background:
     radial-gradient(circle at 18% 24%, rgba(15, 118, 110, 0.1), transparent 18rem),
@@ -2604,6 +2612,7 @@ h1 {
   padding-top: 22px;
 }
 
+/* 10. Game and app catalog */
 .game-library-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2836,6 +2845,7 @@ h1 {
   line-height: 1.8;
 }
 
+/* 11. Playable games */
 .game-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -3177,6 +3187,7 @@ body.blocks-game-playing .blocks-game-canvas {
   outline-offset: 2px;
 }
 
+/* 12. Site footer */
 .site-footer {
   display: flex;
   justify-content: space-between;
@@ -3196,6 +3207,7 @@ body.blocks-game-playing .blocks-game-canvas {
   text-decoration: none;
 }
 
+/* 13. Shared responsive rules */
 @media (max-width: 920px) {
   .intro-grid,
   .posts-layout,
@@ -3457,6 +3469,7 @@ body.blocks-game-playing .blocks-game-canvas {
   }
 }
 
+/* 14. Thought theme and columns */
 .thought-page {
   color-scheme: light;
   --thought-bg: #fffaf2;
@@ -3960,6 +3973,7 @@ body.blocks-game-playing .blocks-game-canvas {
   color: #f6c95f;
 }
 
+/* 15. Small-screen exceptions */
 @media (max-width: 720px) {
   .investment-performance-entry {
     grid-template-columns: 1fr;
