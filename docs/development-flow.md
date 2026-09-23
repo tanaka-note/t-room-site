@@ -59,6 +59,16 @@ pnpm exec playwright show-trace /path/to/chromium-1.zip
 
 Traceはローカル合成fixture専用。本番ログイン、実ユーザーデータ、秘密情報を含むブラウザ操作には有効化しない。タイムアウト/強制killでTrace未確定の場合はActionsの失敗ログを確認する。
 
+公開サイトのCSS変更は、ローカル静的fixtureによるVisual Regressionも通す。代表11画面をPC・スマートフォンで確認し、基準画像、重要な下部領域、主要要素のcomputed style・寸法・安定した要素間距離・横スクロールを比較する。JavaScript生成UIは対象要素の生成と表示を待ってから検査する。Noto Sans JPが実際に読み込めない場合は失敗させる。本番APIは使わず、市場表示は固定fixture、外部埋め込みは遮断する。
+
+公開サイトの`styles.css`を整理する場合は、現行の責務境界、利用ページ、JavaScript生成クラスを[`public-site-css-responsibility-map.md`](public-site-css-responsibility-map.md)で確認する。
+
+```sh
+npm run site:visual:test
+```
+
+基準の更新は、意図した表示変更をレビューした場合か、最新mainを初めて記録する場合だけ行う。差分を通す目的で自動更新しない。PowerShellでは`$env:TROOM_UPDATE_VISUALS='1'`、shでは`TROOM_UPDATE_VISUALS=1`を付けて同じコマンドを実行し、PNGとJSONを両方確認する。
+
 ## PreviewとProduction
 
 現在、安全にremote Previewへ出せるのは、DB/R2/Queue/Service Bindingを持たない公開静的サイト `t-room-site`。次のコマンドは既存のWorkerへ **versions uploadのみ**を行い、production trafficを切り替えない。URLはWrangler出力に表示される。

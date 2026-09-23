@@ -1,0 +1,180 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "document": {
+    "clientWidth": 390,
+    "scrollWidth": 390
+  },
+  "elements": {
+    ".site-header": {
+      "rect": {
+        "x": 0,
+        "width": 390,
+        "height": 115
+      },
+      "style": {
+        "display": "flex",
+        "position": "sticky",
+        "gridTemplateColumns": "none",
+        "gap": "24px",
+        "padding": "14px 18px",
+        "margin": "0px",
+        "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "fontSize": "16px",
+        "lineHeight": "27.2px",
+        "fontWeight": "400",
+        "color": "rgb(31, 41, 51)",
+        "backgroundColor": "rgba(248, 250, 249, 0.92)",
+        "border": "",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      }
+    },
+    "main": {
+      "rect": {
+        "x": 0,
+        "width": 390,
+        "height": 4255
+      },
+      "style": {
+        "display": "block",
+        "position": "static",
+        "gridTemplateColumns": "none",
+        "gap": "normal",
+        "padding": "0px",
+        "margin": "0px",
+        "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "fontSize": "16px",
+        "lineHeight": "27.2px",
+        "fontWeight": "400",
+        "color": "rgb(31, 41, 51)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(31, 41, 51)",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      }
+    },
+    "h1": {
+      "rect": {
+        "x": 23,
+        "width": 343,
+        "height": 41
+      },
+      "style": {
+        "display": "block",
+        "position": "static",
+        "gridTemplateColumns": "none",
+        "gap": "normal",
+        "padding": "0px",
+        "margin": "0px",
+        "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "fontSize": "37.6px",
+        "lineHeight": "40.608px",
+        "fontWeight": "700",
+        "color": "rgb(31, 41, 51)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(31, 41, 51)",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      }
+    },
+    ".sub-hero": {
+      "rect": {
+        "x": 0,
+        "width": 390,
+        "height": 430
+      },
+      "style": {
+        "display": "grid",
+        "position": "static",
+        "gridTemplateColumns": "343.219px",
+        "gap": "normal",
+        "padding": "72px 23.4px 56px",
+        "margin": "0px",
+        "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "fontSize": "16px",
+        "lineHeight": "27.2px",
+        "fontWeight": "400",
+        "color": "rgb(31, 41, 51)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "border": "",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      }
+    },
+    ".section": {
+      "rect": {
+        "x": 18,
+        "width": 354,
+        "height": 3825
+      },
+      "style": {
+        "display": "block",
+        "position": "static",
+        "gridTemplateColumns": "none",
+        "gap": "normal",
+        "padding": "48px 0px",
+        "margin": "0px 18px",
+        "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "fontSize": "16px",
+        "lineHeight": "27.2px",
+        "fontWeight": "400",
+        "color": "rgb(31, 41, 51)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(31, 41, 51)",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      }
+    },
+    ".recent-list": {
+      "rect": {
+        "x": 18,
+        "width": 354,
+        "height": 3639
+      },
+      "style": {
+        "display": "grid",
+        "position": "static",
+        "gridTemplateColumns": "354px",
+        "gap": "14px",
+        "padding": "0px",
+        "margin": "0px",
+        "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "fontSize": "16px",
+        "lineHeight": "27.2px",
+        "fontWeight": "400",
+        "color": "rgb(31, 41, 51)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(31, 41, 51)",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      }
+    },
+    ".site-footer": {
+      "rect": {
+        "x": 0,
+        "width": 390,
+        "height": 120
+      },
+      "style": {
+        "display": "flex",
+        "position": "static",
+        "gridTemplateColumns": "none",
+        "gap": "18px",
+        "padding": "26px 18px",
+        "margin": "0px",
+        "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "fontSize": "14.4px",
+        "lineHeight": "24.48px",
+        "fontWeight": "400",
+        "color": "rgb(102, 112, 133)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "border": "",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      }
+    }
+  }
+}
