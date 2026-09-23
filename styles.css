@@ -2431,8 +2431,7 @@ h1 {
   margin: 16px 0 0;
 }
 
-.learning-mini-stats dt,
-.learning-mini-stats dd {
+.learning-mini-stats dt {
   margin-left: 0;
 }
 
