@@ -61,6 +61,8 @@ Traceはローカル合成fixture専用。本番ログイン、実ユーザー�
 
 公開サイトのCSS変更は、ローカル静的fixtureによるVisual Regressionも通す。代表10画面をPC・スマートフォンで確認し、基準画像、重要な下部領域、主要要素のcomputed style・寸法・安定した要素間距離・横スクロールを比較する。Noto Sans JPが実際に読み込めない場合は失敗させる。本番APIは使わず、市場表示は固定fixture、外部埋め込みは遮断する。
 
+公開サイトの`styles.css`を整理する場合は、現行の責務境界、利用ページ、JavaScript生成クラスを[`public-site-css-responsibility-map.md`](public-site-css-responsibility-map.md)で確認する。
+
 ```sh
 npm run site:visual:test
 ```
