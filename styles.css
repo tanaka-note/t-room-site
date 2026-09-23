@@ -3313,7 +3313,6 @@ body.blocks-game-playing .blocks-game-canvas {
   .learning-topic-grid,
   .learning-status-grid,
   .learning-mini-stats,
-  .market-card-grid,
   .profile-wide .profile-form {
     grid-template-columns: 1fr;
   }
