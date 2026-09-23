@@ -29,6 +29,7 @@ export default defineConfig({
   reporter: [["line"]],
   use: {
     browserName: "chromium",
+    launchOptions: { args: ["--font-render-hinting=none"] },
     colorScheme: "light",
     locale: "ja-JP",
     timezoneId: "Asia/Tokyo",
