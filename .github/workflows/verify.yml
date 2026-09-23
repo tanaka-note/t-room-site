@@ -66,7 +66,7 @@ jobs:
           for(const cwd of installDirectories([process.env.VERIFY_TARGET])) execFileSync('pnpm',['install','--ignore-workspace','--frozen-lockfile','--ignore-scripts','--config.strict-dep-builds=false'],{cwd,stdio:'inherit'});
           JS
       - name: Install Chromium only when used
-        if: contains(fromJSON('["tooling","cloud","security","diary","billing"]'), matrix.target)
+        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
       - name: Syntax, tests, browser and dry-run build
         env:

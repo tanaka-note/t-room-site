@@ -41,7 +41,7 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
-  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs'],
+  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs'],
     security: ['security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs'],
     diary: ['diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs'] })[target] || [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
