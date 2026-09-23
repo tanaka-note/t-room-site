@@ -11,6 +11,7 @@
   --amber: #c27803;
   --rose: #b7475a;
   --shadow: 0 18px 45px rgba(31, 41, 51, 0.12);
+  --focus-ring: rgba(15, 118, 110, 0.25);
 }
 
 * {
@@ -171,7 +172,7 @@ h1 {
 }
 
 .hero-statement {
-  color: #1f2933;
+  color: var(--ink);
   font-size: clamp(1.55rem, 3.5vw, 2.35rem);
   font-weight: 500;
   line-height: 1.45;
@@ -465,7 +466,7 @@ h1 {
 .post-card:focus-visible,
 .button:focus-visible,
 .text-link:focus-visible {
-  outline: 3px solid rgba(15, 118, 110, 0.25);
+  outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1018,7 +1019,7 @@ h1 {
 
 .market-mood-card p {
   margin: 4px 0 0 !important;
-  color: #667085;
+  color: var(--muted);
   font-size: 0.94rem;
   font-weight: 700;
 }
@@ -1209,13 +1210,13 @@ h1 {
   display: grid;
   gap: 1px;
   margin: 0;
-  color: #667085;
+  color: var(--muted);
   font-weight: 700;
   line-height: 1.28;
 }
 
 .market-trade-label {
-  color: #667085;
+  color: var(--muted);
   font-size: 0.64rem;
 }
 
@@ -1225,7 +1226,7 @@ h1 {
 }
 
 .market-trade-time {
-  color: #667085;
+  color: var(--muted);
   font-size: 0.72rem;
 }
 
@@ -1887,7 +1888,7 @@ h1 {
 .learning-law-card small {
   display: inline-flex;
   margin-top: 12px;
-  color: #0f766e;
+  color: var(--teal);
   font-size: 0.78rem;
   font-weight: 800;
 }
@@ -1906,7 +1907,7 @@ h1 {
 
 .learning-law-card.is-active .learning-law-status {
   background: #dff4ee;
-  color: #0f766e;
+  color: var(--teal);
 }
 
 .learning-article-visual {
@@ -3091,7 +3092,7 @@ body.blocks-game-playing .blocks-game-canvas {
 .game-start-button:focus-visible,
 .game-control-button:focus-visible,
 .sound-toggle-button:focus-visible {
-  outline: 3px solid rgba(15, 118, 110, 0.25);
+  outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
