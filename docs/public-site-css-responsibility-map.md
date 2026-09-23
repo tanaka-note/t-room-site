@@ -2,13 +2,13 @@
 
 ## 目的
 
-この文書は、公開サイトの`styles.css`を整理する前の現行責務を示す正本である。行数削減やファイル分割の計画ではなく、表示を変えずに「どのUIをどこで直すか」を判断するために使う。
+この文書は、公開サイトの`styles.css`で「どのUIをどこで直すか」を判断するための正本である。CSSの短縮や分割そのものを目的にせず、現行表示を維持しながら責務とカスケードを管理する。
 
-基準は`origin/main`の`6dc14945edf439c588e7380611150dcb8f4ac0ff`と、Visual Regression基盤を追加した`codex/css-foundation-public-site`である。調査時点の`styles.css`は4,010行で、38個のHTMLが直接参照している。
+対象はルートの`styles.css`を直接参照する38個のHTMLである。`asset-report-k7m4q9x2/`、Worker配下のDiary・T-Cloud・Billing・Security Center・Downloader、各独立Webアプリは専用CSSを使用するため対象外とする。
 
-行番号は調査時点の補助情報とし、境界セレクタを優先して判断する。CSS編集後に行番号がずれても、開始・終了セレクタと責務が同じならこの区分を維持する。
+行番号は現在位置の補助情報である。編集後は区分コメント、開始セレクタ、責務を優先して判断する。
 
-## 対象範囲
+## ページ群と所有責務
 
 | ページ群 | ページ数 | 主なファイル | 所有するCSS |
 | --- | ---: | --- | --- |
@@ -16,103 +16,126 @@
 | 記事一覧 | 1 | `articles.html` | 検索、タグ、記事カード、サイドバー |
 | 汎用Room | 2 | `work.html`、`life.html` | 汎用2カラム、空状態、Roomパネル |
 | Investment | 4 | `investment.html`、投資記事3ページ | 投資Hero、マーケット、記事一覧、分析、記事本文 |
-| 公開Diary | 3 | `diary.html`、`diary/archive.html`、`diary/tags.html` | 日記一覧、検索、年月、タグ、記事本文 |
+| 公開Diary | 3 | `diary.html`、`diary/`配下 | 日記一覧、検索、年月、タグ、記事本文 |
 | Learning | 17 | `learning/`配下 | 学習トップ、科目、トピック、ログ、検索、学習用図解 |
-| Game／App一覧 | 4 | `game.html`、`blocks-game.html`、`hop-game.html`、`apps.html` | 一覧カード、ゲーム盤面、操作UI、アプリカード |
+| Game／App | 4 | `game.html`、ゲーム2ページ、`apps.html` | 一覧カード、ゲーム盤面、操作UI、アプリカード |
 | Thought／Columns | 6 | `thought.html`、`columns/`配下 | Thought専用テーマ、一覧、シリーズ、記事本文 |
 
-`asset-report-k7m4q9x2/`、Worker配下のDiary・T-Cloud・Billing・Security Center・Downloader、各独立Webアプリは`styles.css`を参照しないため、この責務マップの対象外とする。それぞれの専用CSSは公開サイト整理へ混ぜない。
+## 15区分
 
-## 現在のカスケード順
+| 区分 | 現在位置 | 責務 | 主な注意点 |
+| --- | ---: | --- | --- |
+| 01 Foundation and site shell | 1–104 | 基本token、reset、本文、共通ヘッダー、ブランド、ナビゲーション | 全ページへ波及する。`[hidden]`とゲーム中のヘッダー制御は状態契約 |
+| 02 Shared hero and controls | 105–215 | 共通Hero、見出し、導入文、CTA、ボタン | Hero画像・overlay・contentを一つのcomponentとして扱う |
+| 03 Home sections and topic cards | 216–422 | 共通Section、ホーム概要、Roomsカード | 共通surface指定とカード固有構造を区別する |
+| 04 Archives, profile, and article content | 423–818 | 記事一覧、検索、タグ、記事カード、プロフィール、汎用記事本文 | `.post-card`は`site.js`の生成UIでもある |
+| 05 Subpage hero variants | 819–899 | 下層ページHeroとInvestment／Game／App差分 | 共通Heroとの差分だけを持つ |
+| 06 Investment hub | 900–1266 | Investmentトップ、記事導線、分析、マーケット、注意表示 | マーケットカードは`site.js`が生成する |
+| 07 Generic rooms | 1267–1329 | Work／Lifeの2カラムと空状態 | `.room-side`は構造とstickyの責務が分かれる |
+| 08 Public Diary | 1330–1727 | 公開Diaryの一覧、タグ、検索、年月、本文、固有responsive | 860px／620pxはこの区分内で完結する |
+| 09 Learning | 1728–2523 | Learning全体、検索、カード、科目、ログ、記事、表、図解 | 動的カードと種類別表現を単純な重複として削除しない |
+| 10 Game and app catalog | 2524–2756 | ゲーム／アプリ一覧カードと装飾 | 疑似要素とdata URI装飾もVisual Regression対象 |
+| 11 Playable games | 2757–3098 | BLOCKS／Garden Hopの盤面、HUD、操作、状態 | JavaScriptの状態クラスに依存する |
+| 12 Site footer | 3099–3118 | 共通フッター | Thoughtでは後続テーマが色を特化する |
+| 13 Shared responsive rules | 3119–3379 | 920px／640pxでの共通・ページ群別切替 | 影響範囲が広いため順序を変えない |
+| 14 Thought theme and columns | 3380–3883 | Thought専用token、Hero、一覧、シリーズ、本文 | `body.thought-page`を独立したテーマ境界として維持する |
+| 15 Small-screen exceptions | 3884–3922 | 720px以下のThought表示とInvestment導線 | 640px規則より後に適用される現行順を維持する |
 
-| 現在位置 | 境界セレクタ | 責務 | 主な利用先 | 整理時の注意 |
-| --- | --- | --- | --- | --- |
-| 1–102 | `:root`〜`.site-nav a` | 基本token、reset、本文、共通ヘッダー、ブランド、ナビゲーション | 全38ページ | 全ページへ波及する。`[hidden]`、`.header-hidden`、ゲーム中のヘッダー制御は状態契約でもある |
-| 103–212 | `.hero`〜`.button.secondary` | 共通Hero、見出し、導入文、CTA、ボタン | ホームと共通Hero利用ページ | Hero画像・overlay・contentは一つの部品。分割して別のoverride層を作らない |
-| 213–428 | `.section`〜`.investment-card-note` | 共通Section、ホーム概要、Roomsカード | 主に`index.html` | `.topic-card`は複数の共通surface指定にも参加する |
-| 429–817 | `.article-body`を含む共通色指定〜`.article-body ol` | 記事一覧、検索、タグ、記事カード、プロフィール、汎用記事本文 | ホーム、`articles.html`、投資記事、汎用記事 | 共通surfaceのグループセレクタと、後続の個別寸法指定を区別する |
-| 818–897 | `.sub-hero`〜`.app-hero` | 下層ページHeroとInvestment／Game／AppのHero差分 | Investment、Game、Apps、Room系 | 共通Heroとの差分だけを所有する |
-| 898–1350 | `.investment-layout`〜`.caution-panel` | Investmentトップのレイアウト、記事リンク、運用実績導線、分析、マーケット、注意表示 | `investment.html` | マーケットカードは`site.js`が生成する。末尾の720px例外にも依存する |
-| 1351–1412 | `.room-layout`〜`.empty-state` | Work／Life等の汎用Roomレイアウトと空状態 | `work.html`、`life.html` | `.room-side`はレイアウト指定とsticky指定に分かれている |
-| 1413–1810 | `/* Diary */`〜Diary用620px media query | 公開DiaryのHero、一覧、タグ、検索、年月、本文、Diary固有レスポンシブ | 公開Diary 3ページ | `diary.js`と`diary-search.js`の生成クラスを含む。860px／620px media queryはこの責務内にある |
-| 1811–2606 | `.learning-hero`〜`.learning-article-footer` | Learning全体、検索、カード、科目、ログ、記事、表、学習用図解 | Learning 17ページ | 同じセレクタをsurface・寸法・interactionに分けた定義が多い。単純な重複として削除しない |
-| 2607–2720 | `.game-library-grid`〜`.game-card-meta` | ゲーム一覧カードとカード内装飾 | `game.html` | 疑似要素の絵柄をVisual Regressionで保護する |
-| 2721–2838 | `.app-card-grid`〜`.app-install-note` | アプリ一覧カードとアプリ別イラスト | `apps.html` | data URIの装飾を含む。機能ページ側のCSSとは別責務 |
-| 2839–3179 | `.game-layout`〜ゲーム操作のfocus指定 | BLOCKS／Garden Hopの盤面、HUD、操作、メッセージ、サウンド | `blocks-game.html`、`hop-game.html` | `blocks-game.js`と`hop-game.js`の状態クラスに依存する |
-| 3180–3198 | `.site-footer`〜`.site-footer a` | 共通フッター | 全38ページ | Thoughtでは後続テーマが色を上書きする |
-| 3199–3459 | 920px／640px media query | 共通レイアウトと各ページ群のPC→SP切替 | Thought以外のほぼ全ページ | 複数責務を横断する最も影響範囲の広い層。移動・分割は個別検証なしに行わない |
-| 3460–3962 | `.thought-page`〜`.thought-page .thought-site-footer a` | Thought専用token、Hero、一覧、シリーズ、本文、埋め込み、履歴、出典、ナビゲーション | Thought／Columns 6ページ | `body.thought-page`をテーマ境界として維持する。基本tokenへ無理に統合しない |
-| 3963–4010 | 720px media query | ThoughtのSP表示とInvestment運用実績導線のSP例外 | Thought、`investment.html` | Investment指定がThoughtブロック後に置かれた越境箇所。移動時は640px規則との適用順を確認する |
+## JavaScriptとのCSS契約
 
-## JavaScriptが生成・切替するCSS契約
+静的HTMLだけで未使用判定をしない。次の生成・状態クラスも利用箇所として照合する。
 
-HTML検索だけでは使用状況を判定できないため、次のクラスはJavaScriptとの契約として扱う。
+| JavaScript | 主なクラス |
+| --- | --- |
+| `site.js` | `.header-hidden`、`.app-card*`、`.post-card*`、`.market-card*` |
+| `diary/diary.js` | `.diary-entry-card`、`.diary-tags`、`.diary-month-group`、`.diary-empty` |
+| `diary/diary-search.js` | `.diary-search-result` |
+| `learning/learning.js` | `.learning-log-card`、`.learning-subject-card`、`.learning-topic-card`、`.learning-mini-stats` |
+| `learning/learning-search.js` | `.learning-search-result`、`.learning-card-meta` |
+| `blocks-game.js` | `body.blocks-game-playing`、`.is-playing`、`.hidden`、`.active` |
+| `hop-game.js` | `.hidden` |
 
-| JavaScript | 主なクラス | CSS責務 |
-| --- | --- | --- |
-| `site.js` | `.header-hidden`、`.app-card*`、`.post-card`、`.post-meta`、`.post-tag`、`.post-arrow`、`.market-card*` | ヘッダー状態、アプリ一覧、Latest／記事一覧、マーケット表示 |
-| `diary/diary.js` | `.diary-entry-card`、`.diary-tags`、`.diary-tag`、`.diary-month-group`、`.diary-empty` | Diary一覧、タグ、年月、空状態 |
-| `diary/diary-search.js` | `.diary-search-result` | Diary検索結果 |
-| `learning/learning.js` | `.learning-log-card`、`.learning-tag`、`.learning-subject-card`、`.learning-topic-card`、`.learning-mini-stats` | 学習ログ・科目・トピックの動的カード |
-| `learning/learning-search.js` | `.learning-search-result`、`.learning-card-meta` | Learning検索結果 |
-| `blocks-game.js` | `body.blocks-game-playing`、`.is-playing`、`.hidden`、`.active` | プレイ中のヘッダー、盤面、メッセージ、サウンド状態 |
-| `hop-game.js` | `.hidden` | ゲームメッセージ状態 |
+## Design Token
 
-これらはHTMLに静的な同名クラスが見つからない場合でも、未使用CSSとして削除しない。
+`:root`のtokenは、複数の責務で同じ意味を持つ値だけを管理する。
 
-## 意図的に分かれている定義
+| token | 意味 |
+| --- | --- |
+| `--ink`、`--muted` | 基本文字色、補助文字色 |
+| `--line` | 基本境界線 |
+| `--paper`、`--surface` | ページ背景、共通surface |
+| `--teal`、`--teal-dark` | 基本accentと強調accent |
+| `--amber`、`--rose` | 共通の注意・状態色 |
+| `--shadow` | 共通surfaceの影 |
+| `--focus-ring` | 共通フォームのfocus ring |
 
-同一セレクタが複数回現れるだけでは負債と判定しない。現在は次のような責務分担がある。
+値が同じという理由だけでtoken化しない。Thoughtのtheme token、Investment・Game・Learning固有の装飾色は意味が異なるため固有値のままにする。spacing、radius、breakpointも、複数componentで同じ設計上の意味を持つと説明できる場合だけ追加する。
 
-- `.hero-image, .hero-overlay`の共通配置と、`.hero-overlay`の背景表現
-- `.topic-card`等の共通surfaceと、各カード固有の寸法・内部配置
-- `.profile-panel, .newsletter-panel`の共通surfaceと、後続のpadding・本文・リスト指定
-- `.room-main, .room-side`の共通gridと、`.room-side`のsticky指定
-- `.learning-main, .learning-side`の共通gridと、`.learning-side`のsticky指定
-- Learningカード群の共通surface、共通padding、種類別レイアウト、hover状態
-- `.learning-status-grid`の共通grid宣言と列数指定
-- `.game-card-label, .game-card-meta`の共通文字指定と、`.game-card-meta`の余白
-- Thoughtカード群の共通surfaceと、一覧カード・シリーズカード・記事本文ごとの構造
+## responsiveの適用順
 
-整理時は、同じ意味の宣言を一か所へ集約できる場合だけ統合する。異なる責務を持つ宣言は、理由が読み取れる区分へ置いたままにする。
+source orderは次の順で維持する。
 
-## カスケード上の注意点
+1. Public Diary区分内の860px
+2. Public Diary区分内の620px
+3. Shared responsive rulesの920px
+4. Shared responsive rulesの640px
+5. Thought theme
+6. Small-screen exceptionsの720px
 
-1. 現在の明示的な区分コメントはDiary開始位置だけで、他の責務境界はセレクタ名から推測する必要がある。
-2. media queryはDiary内の860px／620px、全体後方の920px／640px、末尾の720pxに分散している。並べ替えるだけでも適用順が変わる。
-3. 末尾720px media queryの先頭にInvestment指定があり、Thought責務へ越境している。これは次工程で区分を明示する対象だが、現時点では移動しない。
-4. `!important`は9件ある。`[hidden]`やゲーム中の状態制御と、Investment内部の局所指定が混在するため、一括削除しない。
-5. `site.js`が生成するマーケット・記事・アプリのクラス、Diary／Learningの動的カード、ゲーム状態クラスは静的HTMLだけでは網羅できない。
-6. 共通920px／640px media queryはInvestment、Room、Learning、Game、Appを横断する。この層をページ固有ブロックへ移す場合は、現在の後勝ち関係を一件ずつ確認する。
+Diary固有responsiveはDiaryの責務内で完結する。920px／640pxは複数ページ群を横断する共通切替である。末尾720pxはThoughtとInvestmentの小画面例外であり、現状では移動すると適用順を変えるため、その位置を意図的に維持する。breakpointの値や順序を変える場合はリファクタリングではなくresponsive設計変更として扱う。
 
-## 次工程で付ける区分名
+## 意図的に残すカスケード
 
-次の工程では、宣言値と記述順を変えず、以下の境界コメントだけを`styles.css`へ追加する。
+次は後方宣言が現在値を特化する、説明可能な責務分担である。
 
-1. Foundation and site shell
-2. Shared hero and controls
-3. Home sections and topic cards
-4. Archives, profile, and article content
-5. Subpage hero variants
-6. Investment hub
-7. Generic rooms
-8. Public Diary
-9. Learning
-10. Game and app catalog
-11. Playable games
-12. Site footer
-13. Shared responsive rules
-14. Thought theme and columns
-15. Small-screen exceptions
+- 共通surfaceから`.learning-topic-card`のgradientへ特化するbackground指定
+- `.learning-table th, td`の共通文字色から`th`を強調する色指定
+- Thoughtカード群の共通borderから、記事・シリーズ・readingの指定辺をaccent化する指定
+- `.thought-series-card dt, dd`の共通文字指定から`dd`を強くする色指定
+- 920px以下のInvestmentカード2列に対し、640px以下でgapだけを狭める指定
+- 共通フッターからThoughtテーマのフッター色へ特化する指定
 
-コメント追加後はVisual Regression 20パターン、重要領域14画像、computed style・矩形・要素間距離、`npm run verify:changed`を通す。ここで表示差分が出た場合は、CSS統合へ進まずコメント追加以外の差分を調査する。
+CSSOMではbackgroundやborderのshorthandがlonghandへ展開され、同一propertyの再指定として検出される。意味の異なる共通指定と固有指定を、検出件数だけを理由に統合しない。
 
-## 責務の判断基準
+## `!important`の扱い
 
-- 全ページで同じ意味を持つものだけをFoundationまたは共通componentへ置く。
-- 見た目が似ていても、用途や状態契約が異なるものはページ群の責務に残す。
-- Theme tokenは基本テーマとThoughtテーマを分ける。Investment、Game、Learning固有値も意味が共通でない限り基本tokenへ移さない。
-- responsive指定は対象componentの構造と後勝ち関係を確認してから移動する。
-- overrideが必要になった場合は、既存責務の定義場所で解決できない理由を先に確認する。
-- セレクタ詳細度の上昇と`!important`追加を整理の代替にしない。
-- 未使用判定は38ページのHTMLだけでなく、上記JavaScript生成クラスも含めて行う。
+最終的な記述は7件で、新規追加は原則禁止する。
+
+| 対象 | 件数 | 維持理由 |
+| --- | ---: | --- |
+| `[hidden]` | 1 | component固有の`display`よりHTMLの非表示状態を優先する契約 |
+| `body.blocks-game-playing .site-header` | 1 | ゲーム中のJavaScript状態でヘッダーを確実に退避させる契約 |
+| `.investment-hero-note` | 2 | 共通Hero本文の高い詳細度に対する既存の局所例外 |
+| `.market-mood-card p` | 1 | Investment panel共通段落余白に対する局所例外 |
+| `.market-name` | 1 | Market card共通段落余白に対する局所例外 |
+| `.market-price` | 1 | Market card共通段落余白に対する局所例外 |
+
+Investmentの5件は、削除すると現在値が変わり、解消には詳細度上昇またはshared component構造の変更が必要になるため維持する。新しい`!important`は、native属性またはJavaScript状態契約で通常の責務分離では保証できず、その理由と影響範囲を文書化できる場合だけ検討する。
+
+## 今後の編集ルール
+
+- 共通tokenは`:root`、共通componentは該当する01〜05区分、ページ固有UIは所有する06〜15区分へ置く。
+- 既存componentの変更は現在の責務位置で完結させ、ファイル末尾へ補正ルールを追加しない。
+- overrideが必要に見える場合は、共通値、固有差分、状態差のどれかを先に判定する。同じ責務の最終形が後勝ちで完成している場合は元の責務位置へ統合する。
+- selector詳細度を上げることや`!important`追加を整理の代替にしない。
+- 新しいページ固有themeは共通tokenへ混ぜず、明確なbody class等を境界にする。
+- CSS変更前に対象画面がVisual Regressionで保護されているか確認する。未保護の動的UIは、生成完了を待つ検査を独立commitで先に追加する。
+- リファクタリングで差分が出た場合、基準画像更新や許容値緩和で通さず原因を直す。
+- 未使用判定はHTML、JavaScript生成クラス、状態クラス、疑似要素、responsive条件まで確認する。
+
+## ファイル分割の判断
+
+現時点では`styles.css`を分割しない。15区分で修正場所が明確になり、38ページの読込順を変更せず責務を追えるためである。分割すると複数ファイルの読込順という新しいカスケード契約とHTML差分が生じる。
+
+将来、一つの責務が独立して再利用され、他区分との適用順へ依存せず、読込元も明確に限定できる場合にだけ分割を再検討する。
+
+## 基盤整理の結果
+
+- 640px以下の`.market-card-grid`から不要な1列指定を除去し、Investment固有の2列指定を唯一の最終定義にした。
+- `.post-card h3`の分散したmarginをArchives区分の一つの定義へ統合した。
+- `.learning-mini-stats dd`の同値`margin-left`再指定を除去した。
+- 公開サイトから参照されないDiary用Investment CSSを削除した。Worker側Diaryの専用CSSとHTMLは変更していない。
+- 基本文字色、補助文字色、Learning accent、focus ringを意味に対応するtokenへ揃えた。
+- 代表11画面をPC・スマートフォンで保護し、重要領域、computed style、矩形、要素間距離、横スクロール、Web Font、動的生成UIを検査する。
+
+`origin/main`時点の4,010行・75,216 bytes・595 style rulesから、3,922行・73,481 bytes・583 style rulesになった。行数削減は結果であり、削除内容は未使用定義と不要な重複に限定している。
