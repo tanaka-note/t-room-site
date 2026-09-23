@@ -224,5 +224,11 @@
         "boxShadow": "none"
       }
     }
+  },
+  "relations": {
+    "hud-to-frame": {
+      "verticalGap": 16,
+      "leftOffset": 237
+    }
   }
 }

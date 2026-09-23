@@ -224,5 +224,11 @@
         "boxShadow": "none"
       }
     }
+  },
+  "relations": {
+    "search-to-map": {
+      "verticalGap": 28,
+      "leftOffset": 0
+    }
   }
 }

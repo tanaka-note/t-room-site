@@ -224,5 +224,15 @@
         "boxShadow": "none"
       }
     }
+  },
+  "relations": {
+    "market-note-to-grid": {
+      "verticalGap": 20,
+      "leftOffset": 0
+    },
+    "articles-title-to-list": {
+      "verticalGap": 20,
+      "leftOffset": 0
+    }
   }
 }

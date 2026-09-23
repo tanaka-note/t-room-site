@@ -224,5 +224,15 @@
         "boxShadow": "none"
       }
     }
+  },
+  "relations": {
+    "rooms-heading-to-grid": {
+      "verticalGap": 24,
+      "leftOffset": 0
+    },
+    "latest-heading-to-list": {
+      "verticalGap": 24,
+      "leftOffset": 0
+    }
   }
 }

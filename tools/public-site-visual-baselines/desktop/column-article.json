@@ -200,5 +200,11 @@
         "boxShadow": "none"
       }
     }
+  },
+  "relations": {
+    "title-to-body": {
+      "verticalGap": 24,
+      "leftOffset": 0
+    }
   }
 }
