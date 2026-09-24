@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
-import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import {
+  applyFormatToSelection as apply,
+  findEntryTextLinks as findLinks,
+  getSelectionFormatState as inspect,
+  tokenizeEntryTextWithLinks as tokenize
+} from "../public/diary-rich-text.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const [html, script, style, worker, migration] = await Promise.all([
@@ -31,10 +36,8 @@ assert.match(script, /createFormattedTextSpan/);
 assert.doesNotMatch(script, /document\.execCommand/);
 assert.doesNotMatch(script, /typingMarker|editorTyping|installTypingFormat/);
 assert.match(script, /function captureEditorSelectionOffsets\(\)/);
-assert.match(script, /function findEntryTextLinks\(/);
-assert.match(script, /function tokenizeEntryTextWithLinks\(/);
+assert.match(script, /diary-rich-text\.js\$\{scriptUrl\.search\}/);
 assert.match(script, /function createEntryTextLink\(/);
-assert.match(script, /function applyFormatToSelection\(/);
 assert.match(script, /function restoreEditorSelectionFromOffsets\(/);
 assert.match(script, /function preserveEditorSelectionFromToolbar\(\) \{\s*rememberEditorSelection\(\);\s*captureEditorSelectionOffsets\(\);\s*\}/,
   "touching the pencil must preserve the selection without cancelling the synthesized mobile click");
@@ -49,33 +52,6 @@ assert.match(beforeInputHandler, /insertParagraph/);
 assert.match(beforeInputHandler, /insertLineBreak/);
 assert.match(beforeInputHandler, /canInsertEditorText/);
 assert.doesNotMatch(beforeInputHandler, /insertEditorLineBreak/);
-
-function extractFunction(name, nextName) {
-  const start = script.indexOf(`function ${name}`);
-  const end = script.indexOf(`function ${nextName}`, start);
-  assert.ok(start >= 0 && end > start, `${name} must exist before ${nextName}`);
-  return script.slice(start, end);
-}
-
-const linkModelStart = script.indexOf("const ENTRY_TEXT_LINK_PATTERN");
-const linkModelEnd = script.indexOf("function normalizeEntryTextRuns", linkModelStart);
-assert.ok(linkModelStart >= 0 && linkModelEnd > linkModelStart, "link model source must exist");
-const linkModelSource = script.slice(linkModelStart, linkModelEnd);
-
-const modelSource = [
-  extractFunction("normalizeEntryTextRuns", "resolveEntryTextMarks"),
-  extractFunction("resolveEntryTextMarks", "tokenizeEntryTextWithLinks"),
-  extractFunction("tokenizeEntryTextWithLinks", "appendEntryText"),
-  extractFunction("hasTextMarks", "sameTextMarks"),
-    extractFunction("sameTextMarks", "mergeRichTextRuns"),
-    extractFunction("mergeRichTextRuns", "setRichEditorDocument"),
-    extractFunction("getSelectionSegments", "getSelectionFormatState"),
-    extractFunction("getSelectionFormatState", "applyFormatToSelection"),
-    extractFunction("applyFormatToSelection", "updateEditorKeyboardOffset")
-  ].join("\n");
-const context = { URL };
-vm.runInNewContext(`${linkModelSource}\n${modelSource}; globalThis.apply = applyFormatToSelection; globalThis.inspect = getSelectionFormatState; globalThis.tokenize = tokenizeEntryTextWithLinks; globalThis.findLinks = findEntryTextLinks;`, context);
-const { apply, inspect, tokenize, findLinks } = context;
 
 let runs = apply(20, [], 2, 10, "color", "red");
 assert.deepEqual(JSON.parse(JSON.stringify(runs)), [
