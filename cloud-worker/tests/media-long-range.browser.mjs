@@ -11,8 +11,18 @@ const CHUNK_COUNT = 25;
 const FILE_SIZE = 200 * MIB;
 const root = process.env.TCLOUD_TEST_SOURCE_ROOT || fileURLToPath(new URL("../../", import.meta.url));
 const videoFixture = readFileSync(resolve(root, "cloud-worker/tests/fixtures/thumbnail-codec-h264.mp4"));
+const mdatOffset = findTopLevelBox(videoFixture, "mdat");
+const moovOffset = findTopLevelBox(videoFixture, "moov");
+const relocatedMdatOffset = 17 * CHUNK_SIZE;
+const mdatBytes = videoFixture.subarray(mdatOffset, moovOffset);
+const relocatedMoov = relocateChunkOffsets(videoFixture.subarray(moovOffset), relocatedMdatOffset - mdatOffset);
+const leadingFreeSize = relocatedMdatOffset - mdatOffset;
+const trailingFreeOffset = relocatedMdatOffset + mdatBytes.byteLength;
+const relocatedMoovOffset = FILE_SIZE - relocatedMoov.byteLength;
+const trailingFreeSize = relocatedMoovOffset - trailingFreeOffset;
+assert.ok(leadingFreeSize >= 8 && trailingFreeSize >= 8 && firstChunkOffset(relocatedMoov) > 128 * MIB);
 const longChunkRequests = new Set();
-let fixtureRequests = 0;
+const largeVideoChunkRequests = new Set();
 
 const server = createServer((req, res) => {
   try {
@@ -32,9 +42,17 @@ const server = createServer((req, res) => {
       return;
     }
     if (url.pathname === "/cloud/api/files/2/view") {
-      fixtureRequests += 1;
       res.writeHead(206, { "Content-Type": "application/octet-stream" });
       res.end(videoFixture);
+      return;
+    }
+    if (url.pathname === "/cloud/api/files/3/view") {
+      const match = /^bytes=(\d+)-(\d+)$/.exec(String(req.headers.range || ""));
+      const index = Number(match?.[1]) / (CHUNK_SIZE + 32);
+      if (!Number.isInteger(index) || index < 0 || index >= CHUNK_COUNT) throw new Error("invalid large video Range");
+      largeVideoChunkRequests.add(index);
+      res.writeHead(206, { "Content-Type": "application/octet-stream" });
+      res.end(buildLargeVideoChunk(index));
       return;
     }
     if (url.pathname === "/cloud/crypto-vault.js") {
@@ -50,6 +68,20 @@ const server = createServer((req, res) => {
     if (url.pathname === "/cloud/test.html") {
       res.setHeader("Content-Type", "text/html");
       res.end("<!doctype html><meta charset=utf-8><title>media range fixture</title>");
+      return;
+    }
+    if (url.pathname === "/cloud/fixture-h264.mp4") {
+      const match = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range || ""));
+      const start = match ? Number(match[1]) : 0;
+      const end = match && match[2] ? Number(match[2]) : videoFixture.byteLength - 1;
+      const boundedEnd = Math.min(end, videoFixture.byteLength - 1);
+      res.writeHead(match ? 206 : 200, {
+        "Content-Type": "video/mp4",
+        "Accept-Ranges": "bytes",
+        "Content-Length": boundedEnd - start + 1,
+        ...(match ? { "Content-Range": `bytes ${start}-${boundedEnd}/${videoFixture.byteLength}` } : {})
+      });
+      res.end(videoFixture.subarray(start, boundedEnd + 1));
       return;
     }
     if (url.pathname === "/cloud/media-worker.js" || url.pathname === "/cloud/media-range.js") {
@@ -74,7 +106,7 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 try {
   for (const [name, engine, launch] of engines) {
     longChunkRequests.clear();
-    fixtureRequests = 0;
+    largeVideoChunkRequests.clear();
     const browser = await engine.launch({ headless: true, ...launch });
     try {
       const context = await browser.newContext({ ...devices[name === "webkit" ? "iPhone 13" : "Pixel 7"] });
@@ -141,47 +173,164 @@ try {
       });
 
       const releaseTokens = [longToken];
-      if (name === "chromium") {
-        // Both engines always exercise the 200MiB MP4 Range stream. The optional
-        // native element smoke runs only when this Chromium build ships H.264;
-        // Playwright's Linux headless build intentionally omits that codec.
-        const supportsH264 = await page.evaluate(() => Boolean(document.createElement("video").canPlayType('video/mp4; codecs="avc1.42E01E"')));
-        if (supportsH264) {
-          const videoToken = `videotest${name}tokenfixture1234`;
+      const supportsH264 = await page.evaluate(() => Boolean(document.createElement("video").canPlayType('video/mp4; codecs="avc1.42E01E"')));
+      const h264Control = supportsH264 ? await page.evaluate(async () => {
+        const element = document.createElement("video");
+        element.muted = true;
+        element.src = "/cloud/fixture-h264.mp4";
+        document.body.append(element);
+        const result = await new Promise((resolveProbe) => {
+          const timer = setTimeout(() => resolveProbe({ ok: false, reason: "timeout" }), 10000);
+          element.addEventListener("canplay", async () => {
+            try {
+              await element.play();
+              const deadline = performance.now() + 5000;
+              while (element.currentTime <= 0.05 && performance.now() < deadline) {
+                await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+              }
+              clearTimeout(timer);
+              resolveProbe(element.currentTime > 0.05
+                ? { ok: true, reason: "" }
+                : { ok: false, reason: "currentTime did not advance" });
+            } catch (error) {
+              clearTimeout(timer);
+              resolveProbe({ ok: false, reason: String(error?.message || error) });
+            }
+          }, { once: true });
+          element.addEventListener("error", () => { clearTimeout(timer); resolveProbe({ ok: false, reason: `media error ${element.error?.code || "unknown"}` }); }, { once: true });
+          element.load();
+        });
+        element.remove();
+        return result;
+      }) : { ok: false, reason: "canPlayType returned empty" };
+      if (h264Control.ok) {
+        const smallVideoToken = `smallvideo${name}tokenfixture1234`;
+        releaseTokens.push(smallVideoToken);
+        await registerMedia(page, smallVideoToken, {
+          endpoint: "/cloud/api/files/2/view",
+          expectedSession: "A",
+          name: "small-video-control.mp4",
+          sizeBytes: videoFixture.byteLength,
+          chunkSizeBytes: videoFixture.byteLength,
+          chunkCount: 1,
+          encryptedSizeBytes: videoFixture.byteLength + 32,
+          storageId: "",
+          mimeType: "video/mp4"
+        });
+        await page.evaluate((token) => navigator.serviceWorker.controller.postMessage({ type: "MEDIA_PLAYING", token }), smallVideoToken);
+        const smallControl = await page.evaluate(async (token) => {
+          const element = document.createElement("video");
+          element.muted = true;
+          element.playsInline = true;
+          element.src = `/cloud/local-media/${token}`;
+          document.body.append(element);
+          return new Promise((resolveProbe) => {
+            const timer = setTimeout(() => resolveProbe({ ok: false, reason: "timeout" }), 10000);
+            element.addEventListener("canplay", async () => {
+              try {
+                await element.play();
+                const deadline = performance.now() + 5000;
+                while (element.currentTime <= 0.05 && performance.now() < deadline) {
+                  await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+                }
+                clearTimeout(timer);
+                resolveProbe(element.currentTime > 0.05
+                  ? { ok: true, reason: "" }
+                  : { ok: false, reason: "currentTime did not advance" });
+              } catch (error) {
+                clearTimeout(timer);
+                resolveProbe({ ok: false, reason: String(error?.message || error) });
+              }
+            }, { once: true });
+            element.addEventListener("error", () => { clearTimeout(timer); resolveProbe({ ok: false, reason: `media error ${element.error?.code || "unknown"}` }); }, { once: true });
+            element.load();
+          });
+        }, smallVideoToken);
+        if (!smallControl.ok) {
+          console.log(`UNAVAILABLE ${name} native H.264 <video> E2E: direct playback passed, but this Playwright engine cannot play the small streaming Service Worker control (${smallControl.reason})`);
+        } else {
+          const videoToken = `largevideo${name}tokenfixture1234`;
           releaseTokens.push(videoToken);
           await registerMedia(page, videoToken, {
-            endpoint: "/cloud/api/files/2/view",
+            endpoint: "/cloud/api/files/3/view",
             expectedSession: "A",
-            name: "fixture.mp4",
-            sizeBytes: videoFixture.byteLength,
-            chunkSizeBytes: 64 * 1024,
-            chunkCount: 1,
-            encryptedSizeBytes: videoFixture.byteLength + 32,
+            name: "large-video-fixture.mp4",
+            sizeBytes: FILE_SIZE,
+            chunkSizeBytes: CHUNK_SIZE,
+            chunkCount: CHUNK_COUNT,
+            encryptedSizeBytes: FILE_SIZE + CHUNK_COUNT * 32,
             storageId: "",
             mimeType: "video/mp4"
           });
+          await page.evaluate((token) => navigator.serviceWorker.controller.postMessage({ type: "MEDIA_PLAYING", token }), videoToken);
           const video = await page.evaluate(async (token) => {
             const element = document.createElement("video");
+            const events = [];
             element.preload = "auto";
             element.muted = true;
             element.playsInline = true;
             element.src = `/cloud/local-media/${token}`;
             document.body.append(element);
-            await new Promise((resolveMetadata, reject) => {
-              const timer = setTimeout(() => reject(new Error(`video metadata timeout: ${element.error?.message || element.error?.code || "unknown"}`)), 10000);
-              element.addEventListener("loadedmetadata", () => { clearTimeout(timer); resolveMetadata(); }, { once: true });
-              element.addEventListener("error", () => { clearTimeout(timer); reject(new Error(`video error ${element.error?.code || "unknown"}`)); }, { once: true });
-              element.load();
+            for (const type of ["loadedmetadata", "canplay", "playing", "seeked", "error"]) {
+              element.addEventListener(type, () => events.push(type));
+            }
+            const waitFor = (type, timeout = 15000) => new Promise((resolveEvent, reject) => {
+              if (type === "loadedmetadata" && element.readyState >= 1) return resolveEvent();
+              if (type === "canplay" && element.readyState >= 3) return resolveEvent();
+              const timer = setTimeout(() => reject(new Error(`${type} timeout: ${element.error?.message || element.error?.code || "unknown"}`)), timeout);
+              const onEvent = () => { clearTimeout(timer); resolveEvent(); };
+              const onError = () => { clearTimeout(timer); reject(new Error(`video error ${element.error?.code || "unknown"}`)); };
+              element.addEventListener(type, onEvent, { once: true });
+              element.addEventListener("error", onError, { once: true });
             });
-            return { readyState: element.readyState, duration: element.duration };
+            element.load();
+            await waitFor("loadedmetadata");
+            await waitFor("canplay");
+            await element.play();
+            const startedAt = element.currentTime;
+            await new Promise((resolveProgress, reject) => {
+              const deadline = performance.now() + 10000;
+              const poll = () => {
+                if (element.error) return reject(new Error(`video error ${element.error.code}`));
+                if (element.currentTime > startedAt + 0.05) return resolveProgress();
+                if (performance.now() >= deadline) return reject(new Error("currentTime did not advance"));
+                setTimeout(poll, 50);
+              };
+              poll();
+            });
+            const beforeSeek = element.currentTime;
+            const seekTarget = Math.min(Math.max(0.1, element.duration * 0.5), Math.max(0.1, element.duration - 0.05));
+            const seeked = waitFor("seeked");
+            element.currentTime = seekTarget;
+            await seeked;
+            await element.play();
+            const afterSeek = element.currentTime;
+            const result = {
+              readyState: element.readyState,
+              duration: element.duration,
+              beforeSeek,
+              seekTarget,
+              afterSeek,
+              events,
+              error: element.error?.code || 0
+            };
+            element.pause();
+            return result;
           }, videoToken);
-          assert.ok(video.readyState >= 1 && Number.isFinite(video.duration), "chromium <video> loads through the real Service Worker");
-          assert.ok(fixtureRequests > 0, "chromium video fixture reached the encrypted endpoint");
+          assert.ok(video.readyState >= 3 && Number.isFinite(video.duration) && video.duration > 0, `${name} <video> reaches canplay through the real Service Worker`);
+          assert.ok(video.beforeSeek > 0, `${name} <video> currentTime advances`);
+          assert.ok(Math.abs(video.afterSeek - video.seekTarget) < 0.5, `${name} <video> resumes at the seek target`);
+          assert.equal(video.error, 0, `${name} <video> has no media error`);
+          assert.ok(video.events.includes("loadedmetadata") && video.events.includes("canplay") && video.events.includes("playing") && video.events.includes("seeked"));
+          assert.ok(largeVideoChunkRequests.has(0) && largeVideoChunkRequests.has(CHUNK_COUNT - 1), `${name} large MP4 reads both media start and tail metadata`);
+          console.log(`PASS ${name} native <video> loaded, played, advanced and seeked a 200MiB sparse H.264 MP4 whose media samples start beyond 128MiB`);
         }
+      } else {
+        console.log(`UNAVAILABLE ${name} native H.264 <video> E2E: direct fixture control failed (${h264Control.reason})`);
       }
       await page.evaluate((tokens) => tokens.forEach((token) => navigator.serviceWorker.controller.postMessage({ type: "RELEASE_MEDIA", token })), releaseTokens);
       await context.close();
-      console.log(`PASS ${name} mobile-context Service Worker streamed 200MiB past 64/128MiB${name === "chromium" ? " (native H.264 <video> checked when codec is available)" : ""}`);
+      console.log(`PASS ${name} mobile-context Service Worker streamed 200MiB past 64/128MiB to EOF`);
     } finally {
       await browser.close();
     }
@@ -189,6 +338,64 @@ try {
 } finally {
   server.closeAllConnections();
   await new Promise((resolveClose) => server.close(resolveClose));
+}
+
+function findTopLevelBox(bytes, wanted) {
+  for (let offset = 0; offset + 8 <= bytes.byteLength;) {
+    let size = bytes.readUInt32BE(offset);
+    if (size === 1) size = Number(bytes.readBigUInt64BE(offset + 8));
+    if (size === 0) size = bytes.byteLength - offset;
+    const type = bytes.toString("ascii", offset + 4, offset + 8);
+    if (type === wanted) return offset;
+    if (!Number.isSafeInteger(size) || size < 8) break;
+    offset += size;
+  }
+  throw new Error(`missing top-level ${wanted} box`);
+}
+
+function buildLargeVideoChunk(index) {
+  const start = index * CHUNK_SIZE;
+  const target = Buffer.alloc(Math.min(CHUNK_SIZE, FILE_SIZE - start));
+  copyVirtualBytes(target, start, videoFixture.subarray(0, mdatOffset), 0);
+  copyVirtualBytes(target, start, freeBoxHeader(leadingFreeSize), mdatOffset);
+  copyVirtualBytes(target, start, mdatBytes, relocatedMdatOffset);
+  copyVirtualBytes(target, start, freeBoxHeader(trailingFreeSize), trailingFreeOffset);
+  copyVirtualBytes(target, start, relocatedMoov, relocatedMoovOffset);
+  return target;
+}
+
+function freeBoxHeader(size) {
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(size, 0);
+  header.write("free", 4, "ascii");
+  return header;
+}
+
+function relocateChunkOffsets(moov, delta) {
+  const relocated = Buffer.from(moov);
+  let count = 0;
+  for (let typeOffset = relocated.indexOf("stco", 0, "ascii"); typeOffset >= 0; typeOffset = relocated.indexOf("stco", typeOffset + 4, "ascii")) {
+    const entries = relocated.readUInt32BE(typeOffset + 8);
+    for (let index = 0; index < entries; index += 1) {
+      const offset = typeOffset + 12 + index * 4;
+      relocated.writeUInt32BE(relocated.readUInt32BE(offset) + delta, offset);
+      count += 1;
+    }
+  }
+  assert.ok(count > 0, "H.264 fixture must expose 32-bit MP4 chunk offsets");
+  return relocated;
+}
+
+function firstChunkOffset(moov) {
+  const typeOffset = moov.indexOf("stco", 0, "ascii");
+  return typeOffset >= 0 ? moov.readUInt32BE(typeOffset + 12) : -1;
+}
+
+function copyVirtualBytes(target, chunkStart, source, sourceStart) {
+  const from = Math.max(chunkStart, sourceStart);
+  const to = Math.min(chunkStart + target.byteLength, sourceStart + source.byteLength);
+  if (from >= to) return;
+  target.set(source.subarray(from - sourceStart, to - sourceStart), from - chunkStart);
 }
 
 async function registerMedia(page, token, descriptor) {

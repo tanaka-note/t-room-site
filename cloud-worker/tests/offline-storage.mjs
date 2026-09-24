@@ -76,6 +76,8 @@ assert.match(worker, /PREFETCH_CONCURRENCY = 4/);
 assert.doesNotMatch(worker, /demandCount/);
 assert.match(worker, /prefetchRequested: false/);
 assert.match(worker, /runRequestedPrefetch/);
+assert.match(worker, /const restart = entry\.prefetchRequested/);
+assert.match(worker, /entry\.prefetchTask = null;\s*if \(restart\) prefetchUpcomingChunks/);
 assert.match(worker, /warmMediaForPlayback\(data\.token, entry\)/);
 assert.match(worker, /await loadEncryptedChunk\(entry, index\)/);
 assert.match(worker, /cacheWriteChain/);

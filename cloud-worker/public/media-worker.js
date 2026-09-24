@@ -1,14 +1,14 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-importScripts("/cloud/crypto-vault.js?v=cloud-ea0061a735fa");
-importScripts("/cloud/media-range.js?v=cloud-ea0061a735fa");
-importScripts("/cloud/offline-store.js?v=cloud-ea0061a735fa");
+importScripts("/cloud/crypto-vault.js?v=cloud-a66c7d394612");
+importScripts("/cloud/media-range.js?v=cloud-a66c7d394612");
+importScripts("/cloud/offline-store.js?v=cloud-a66c7d394612");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-ea0061a735fa";
-const MEDIA_WORKER_BUILD_ID = "cloud-ea0061a735fa";
+const APP_SHELL_CACHE = "tcloud-shell-cloud-a66c7d394612";
+const MEDIA_WORKER_BUILD_ID = "cloud-a66c7d394612";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
 const DEMAND_PREFETCH_CHUNKS = 4;
 const PREFETCH_CONCURRENCY = 4;
@@ -18,7 +18,7 @@ const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-  "/cloud/offline-store.js?v=cloud-ea0061a735fa",
+  "/cloud/offline-store.js?v=cloud-a66c7d394612",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"
@@ -295,14 +295,26 @@ function prefetchUpcomingChunks(entry, index, count) {
     entry.prefetchRequested = true;
     return;
   }
-  entry.prefetchTask = runRequestedPrefetch(entry, count).catch(() => {}).finally(() => { entry.prefetchTask = null; });
+  entry.prefetchRequested = true;
+  entry.prefetchTask = runRequestedPrefetch(entry, count);
 }
 
 async function runRequestedPrefetch(entry, count) {
-  do {
-    entry.prefetchRequested = false;
-    await runEncryptedPrefetch(entry, count);
-  } while (entry.prefetchRequested && !entry.released && entry.playing && entry.prefetchReady);
+  try {
+    do {
+      entry.prefetchRequested = false;
+      await runEncryptedPrefetch(entry, count);
+    } while (entry.prefetchRequested && !entry.released && entry.playing && entry.prefetchReady);
+  } catch {
+    // Speculative failures must not block demand playback.
+  } finally {
+    // Clear the task in the same continuation that observes the final request.
+    // If a request arrived while the workers were settling, immediately start
+    // another pass instead of leaving prefetch dormant until a later demand.
+    const restart = entry.prefetchRequested && !entry.released && entry.playing && entry.prefetchReady;
+    entry.prefetchTask = null;
+    if (restart) prefetchUpcomingChunks(entry, entry.prefetchAnchor, count);
+  }
 }
 
 async function runEncryptedPrefetch(entry, nearCount) {

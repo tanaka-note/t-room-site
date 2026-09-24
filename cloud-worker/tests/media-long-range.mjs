@@ -10,6 +10,7 @@ const source = readFileSync(new URL("../public/media-worker.js", import.meta.url
 const events = {};
 const stored = new Map();
 const heldRequests = new Map();
+const retryFailures = new Map();
 const requests = [];
 let session = "A";
 let activeEncryptedRequests = 0;
@@ -62,6 +63,11 @@ const context = vm.createContext({
         });
       } else {
         await new Promise((resolve) => setTimeout(resolve, 4));
+      }
+      const failures = Number(retryFailures.get(index) || 0);
+      if (failures > 0) {
+        retryFailures.set(index, failures - 1);
+        return new Response(null, { status: 503 });
       }
       return new Response(Uint8Array.of(index), { status: 206 });
     } finally {
@@ -143,6 +149,16 @@ const closed = await context.test.servePlainFile(
 assert.equal(Number(closed.headers.get("Content-Length")), MIB, "explicit seek Range remains explicitly bounded");
 assert.equal((await consume(closed, seekStart, MIB)).total, MIB);
 
+const retryToken = "retryfixturetoken12345678";
+const retryStorageId = "A:retry";
+const retriesBefore = requests.filter((index) => index === 5).length;
+retryFailures.set(5, 1);
+await send("REGISTER_MEDIA", retryToken, { descriptor: { ...descriptor, storageId: retryStorageId }, fileKey });
+send("MEDIA_PLAYING", retryToken);
+await until(() => stored.has(`${retryStorageId}:5`));
+assert.equal(requests.filter((index) => index === 5).length - retriesBefore, 2, "transient encrypted range failure is retried");
+send("RELEASE_MEDIA", retryToken);
+
 const staleResponse = await context.test.servePlainFile(
   token,
   new Request(`https://local/cloud/local-media/${token}`, { headers: { Range: "bytes=0-" } }),
@@ -167,7 +183,7 @@ await new Promise((resolve) => setTimeout(resolve, 30));
 assert.equal(requests.length, requestCountAfterRelease, "RELEASE_MEDIA leaves no encrypted network work running");
 assert.equal(context.test.registrations.has(releaseToken), false);
 
-console.log("PASS 200MiB MP4 streams past 64/128MiB to EOF, seek/session/release remain safe, four-way prefetch reaches EOF, plaintext RAM stays bounded");
+console.log("PASS 200MiB MP4 streams past 64/128MiB to EOF, seek/session/retry/release remain safe, four-way prefetch reaches EOF, plaintext RAM stays bounded");
 
 async function loadRangeHelpers() {
   const savedWindow = globalThis.window;
