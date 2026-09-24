@@ -67,7 +67,7 @@ const requested={start:0,end:128*1024*1024,partial:true};
 assert.equal(context.test.constrainOpenEndedMp4Range(entry,'bytes=0-',requested).end+1,2*1024*1024);
 send('MEDIA_PLAYING',{},'other');assert.equal(entry.playing,false);
 send('MEDIA_PLAYING');
-assert.equal(context.test.constrainOpenEndedMp4Range(entry,'bytes=0-',requested).end+1,64*1024*1024);
+assert.deepEqual(context.test.constrainOpenEndedMp4Range(entry,'bytes=0-',requested),requested,'playing open-ended MP4 Range continues to EOF');
 const noStore=await context.test.servePlainFile(token,new Request('https://local/cloud/local-media/'+token,{headers:{Range:'bytes=0-0'}}),'owner');
 assert.equal(noStore.headers.get('Cache-Control'),'no-store');
 assert.equal((await context.test.servePlainFile(token,new Request('https://local/cloud/local-media/'+token),'other')).status,403);
@@ -86,5 +86,5 @@ send('RELEASE_MEDIA');const count=requests.length;
 await new Promise(r=>setTimeout(r,80));
 assert.equal(requests.length,count);assert.equal(held.size,0);
 assert.equal(context.test.registrations.size,0);
-console.log('PASS unified four-way encrypted prefetch, demand/seek priority, RAM, 64MB playing Range, owner/session isolation and release');
+console.log('PASS unified four-way encrypted prefetch, demand/seek priority, RAM, EOF playing Range, owner/session isolation and release');
 

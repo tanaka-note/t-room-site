@@ -1,25 +1,24 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-importScripts("/cloud/crypto-vault.js?v=cloud-48512ad0db2c");
-importScripts("/cloud/media-range.js?v=cloud-48512ad0db2c");
-importScripts("/cloud/offline-store.js?v=cloud-48512ad0db2c");
+importScripts("/cloud/crypto-vault.js?v=cloud-ea0061a735fa");
+importScripts("/cloud/media-range.js?v=cloud-ea0061a735fa");
+importScripts("/cloud/offline-store.js?v=cloud-ea0061a735fa");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-48512ad0db2c";
-const MEDIA_WORKER_BUILD_ID = "cloud-48512ad0db2c";
+const APP_SHELL_CACHE = "tcloud-shell-cloud-ea0061a735fa";
+const MEDIA_WORKER_BUILD_ID = "cloud-ea0061a735fa";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
 const DEMAND_PREFETCH_CHUNKS = 4;
 const PREFETCH_CONCURRENCY = 4;
 const MP4_METADATA_WARM_CHUNKS = 4;
 const MP4_RANGE_RESPONSE_LIMIT_BYTES = 2 * 1024 * 1024;
-const MP4_PLAYING_RANGE_LIMIT_BYTES = 64 * 1024 * 1024;
 const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-  "/cloud/offline-store.js?v=cloud-48512ad0db2c",
+  "/cloud/offline-store.js?v=cloud-ea0061a735fa",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"
@@ -56,6 +55,7 @@ self.addEventListener("message", (event) => {
       prefetchControllers: new Map(),
       prefetchedChunks: new Set(),
       prefetchAnchor: 0,
+      prefetchRequested: false,
       decryptedCacheBytes: 0,
       cacheWriteChain: Promise.resolve(),
       touchedAt: Date.now(),
@@ -210,8 +210,11 @@ function constrainOpenEndedMp4Range(entry, rangeHeader, requested) {
   if (!requested?.partial || !/^bytes=\d+-$/.test(String(rangeHeader || "")) || !isMp4Descriptor(entry.descriptor)) {
     return requested;
   }
-  const limit = entry.playing ? MP4_PLAYING_RANGE_LIMIT_BYTES : MP4_RANGE_RESPONSE_LIMIT_BYTES;
-  return { ...requested, end: Math.min(requested.end, requested.start + limit - 1) };
+  // Once playback starts, preserve the browser's open-ended Range through EOF.
+  // decryptedRangeStream still fetches, decrypts, and releases data one encrypted
+  // chunk at a time, so this does not buffer the complete file in plaintext RAM.
+  if (entry.playing) return requested;
+  return { ...requested, end: Math.min(requested.end, requested.start + MP4_RANGE_RESPONSE_LIMIT_BYTES - 1) };
 }
 
 async function loadAndDecryptChunk(entry, index, options = {}) {
@@ -285,8 +288,21 @@ async function fetchAndCacheEncryptedChunk(entry, index, signal) {
 }
 
 function prefetchUpcomingChunks(entry, index, count) {
-  if (entry.released || !entry.playing || !entry.prefetchReady || entry.prefetchTask) return;
-  entry.prefetchTask = runEncryptedPrefetch(entry, count).catch(() => {}).finally(() => { entry.prefetchTask = null; });
+  if (entry.released || !entry.playing || !entry.prefetchReady) return;
+  if (entry.prefetchTask) {
+    // A demand may advance the anchor while the current workers are settling.
+    // Keep that request attached to the same lifetime instead of losing it.
+    entry.prefetchRequested = true;
+    return;
+  }
+  entry.prefetchTask = runRequestedPrefetch(entry, count).catch(() => {}).finally(() => { entry.prefetchTask = null; });
+}
+
+async function runRequestedPrefetch(entry, count) {
+  do {
+    entry.prefetchRequested = false;
+    await runEncryptedPrefetch(entry, count);
+  } while (entry.prefetchRequested && !entry.released && entry.playing && entry.prefetchReady);
 }
 
 async function runEncryptedPrefetch(entry, nearCount) {
