@@ -19,8 +19,13 @@ export function commands(target) {
   const checks = services.includes(target) ? [{ cwd: `${target}-worker`, script: 'check' }] : [];
   // Downloader's existing check also compiles Python; no Docker or definition refresh.
   const suites = {
-    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-secret-ignore.mjs')],
-    site: [{ cwd: '.', script: 'brand:test' }, node('.', 'tools/verify-web-contracts.mjs'), { cwd: '.', script: 'browser-policy:test' }],
+    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
+    site: [
+      { cwd: '.', script: 'brand:test' },
+      node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-site'),
+      node('.', 'tools/verify-web-contracts.mjs'),
+      { cwd: '.', script: 'browser-policy:test' }
+    ],
     cloud: tests('cloud-worker', ...[
       'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',

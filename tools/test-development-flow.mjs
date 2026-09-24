@@ -57,6 +57,7 @@ test('profiles only reference existing scripts/tests and no production mutations
     assert.doesNotMatch(JSON.stringify(c), /--remote|refresh-definitions|r2:lifecycle|versions.*upload/);
   }
   assert.ok(installDirectories(['auth']).includes('security-worker'));
+  assert(commands('site').some((command) => command.args?.join(' ') === 'tools/check-web-app-builds.mjs --target t-room-site'));
 });
 test('site release installs every clean-worktree dependency through the shared verify plan', () => {
   const directories = installDirectories(['site']);
