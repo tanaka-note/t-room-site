@@ -58,6 +58,11 @@ assert.match(script, /String\(file\.type\)\.startsWith\("image\/"\)/);
 assert.match(script, /state\.editorPhotos = \(entry\?\.photos \|\| \[\]\)\.map/);
 assert.match(script, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);
 assert.match(script, /image\.src = photo\.thumbnailUrl \|\| photo\.previewUrl/);
+assert.match(script, /function releaseUploadedPhotoPayload\(photo/);
+assert.match(script, /photo\.originalFile = null;[\s\S]*?photo\.displayBlob = null;[\s\S]*?photo\.thumbnailBlob = null;/,
+  "successful staged uploads must release retry-only image payloads");
+assert.match(script, /photo\.uploadState = "uploaded";[\s\S]*?if \(photo\.removed\) await deleteStagedPhotoUpload[\s\S]*?releaseUploadedPhotoPayload\(photo\);/,
+  "image payloads must be released only after the staged upload succeeds");
 assert.match(script, /remove\.textContent = photo\.existing \? "削除" : "取り除く"/);
 assert.match(script, /state\.editorDeletedPhotoIds\.add\(photo\.id\)/);
 assert.match(script, /method: "DELETE"/);

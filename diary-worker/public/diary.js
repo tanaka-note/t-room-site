@@ -2910,6 +2910,16 @@
     return form;
   }
 
+  function releaseUploadedPhotoPayload(photo, { releasePreview = false } = {}) {
+    photo.originalFile = null;
+    photo.displayBlob = null;
+    photo.thumbnailBlob = null;
+    if (releasePreview && photo.previewUrl) {
+      URL.revokeObjectURL(photo.previewUrl);
+      photo.previewUrl = null;
+    }
+  }
+
   function waitForPhotoUploadRetry(attemptIndex) {
     return new Promise((resolve) => window.setTimeout(resolve, PHOTO_UPLOAD_RETRY_DELAYS_MS[attemptIndex]));
   }
@@ -2961,6 +2971,7 @@
         photo.uploadState = "uploaded";
         photo.uploadError = null;
         if (photo.removed) await deleteStagedPhotoUpload(photo, { waitForUpload: false });
+        releaseUploadedPhotoPayload(photo);
         return result;
       } catch (error) {
         photo.uploadState = "failed";
@@ -3302,6 +3313,7 @@
           for (const photo of pendingPhotos) {
             photo.existing = true;
             Object.assign(photo, committedById.get(photo.id) || {});
+            releaseUploadedPhotoPayload(photo, { releasePreview: Boolean(photo.thumbnailUrl) });
           }
           if (pendingPhotos.length) {
             setEditorSaveBusy(true, "写真を本文へ反映しています...");

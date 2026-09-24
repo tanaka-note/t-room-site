@@ -2,6 +2,9 @@ import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import http from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -11,17 +14,20 @@ const wranglerPath = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangle
 const port = 8820;
 const origin = `http://127.0.0.1:${port}`;
 const marker = `write-integrity-${randomUUID()}`;
+const persistDirectory = mkdtempSync(join(tmpdir(), "troom-diary-write-integrity-"));
+const sessionSecret = randomBytes(32).toString("hex");
 
 function testHash(password) {
   return `sha256$${createHash("sha256").update(password).digest("base64url")}`;
 }
 
 function testHmacHash(password) {
-  return `hmac-sha256$${createHmac("sha256", "diary-write-integrity-session-secret").update(password).digest("base64url")}`;
+  return `hmac-sha256$${createHmac("sha256", sessionSecret).update(password).digest("base64url")}`;
 }
 
 function wrangler(...args) {
-  const result = spawnSync(process.execPath, [wranglerPath, ...args], {
+  const localArgs = args.includes("--local") ? [...args, "--persist-to", persistDirectory] : args;
+  const result = spawnSync(process.execPath, [wranglerPath, ...localArgs], {
     cwd: projectDirectory,
     encoding: "utf8"
   });
@@ -39,13 +45,13 @@ wrangler("d1", "execute", "diary-db", "--local", "--command", `
 `);
 
 const server = spawn(process.execPath, [
-  wranglerPath, "dev", "--local", "--port", String(port),
+  wranglerPath, "dev", "--local", "--persist-to", persistDirectory, "--port", String(port),
   "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
   "--var", `DIARY_WIFE_ADMIN_PASSWORD_HASH:${testHash("wife-test")}`,
   "--var", `DIARY_CHIHARU_TEMP_PASSWORD_HASH:${testHash("temporary-test")}`,
-  "--var", `SESSION_SECRET:${randomBytes(32).toString("hex")}`,
+  "--var", `SESSION_SECRET:${sessionSecret}`,
   "--var", "DIARY_ATOMICITY_TESTS:true"
 ], { cwd: projectDirectory, stdio: ["ignore", "pipe", "pipe"] });
 let output = "";
@@ -357,4 +363,5 @@ try {
     server.kill();
     await Promise.race([once(server, "exit"), new Promise((resolve) => setTimeout(resolve, 3000))]);
   }
+  try { rmSync(persistDirectory, { recursive: true, force: true }); } catch {}
 }
