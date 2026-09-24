@@ -59,12 +59,7 @@ jobs:
       - name: Install only target dependencies
         env:
           VERIFY_TARGET: ${{ matrix.target }}
-        run: |
-          node --input-type=module <<'JS'
-          import {installDirectories} from './tools/verify-plan.mjs';
-          import {execFileSync} from 'node:child_process';
-          for(const cwd of installDirectories([process.env.VERIFY_TARGET])) execFileSync('pnpm',['install','--ignore-workspace','--frozen-lockfile','--ignore-scripts','--config.strict-dep-builds=false'],{cwd,stdio:'inherit'});
-          JS
+        run: node tools/install-verify-dependencies.mjs "$VERIFY_TARGET"
       - name: Install Chromium only when used
         if: contains(fromJSON('["tooling","site","cloud","security","diary","billing"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium

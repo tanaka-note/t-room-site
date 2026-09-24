@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { root, affected, changedFiles, commands, targets, installDirectories } from './verify-plan.mjs';
+import { dependencyInstallPlan, installArgs } from './install-verify-dependencies.mjs';
 import { localConfig } from './local-dev.mjs';
-import { assertPreviewSafe } from './release.mjs';
+import { assertPreviewSafe, prepareReleaseDependencies, releaseProfile } from './release.mjs';
 import { safeEvent } from './worker-logs.mjs';
 import { normalizeTextForHash } from './web-app-registry.mjs';
 
@@ -29,6 +30,7 @@ test('affected mapping is order independent and unknown runtime files are not si
   assert.deepEqual(affected(paths), affected([...paths].reverse()));
   assert.deepEqual(affected(['new-app/index.html']), ['site']);
   assert.deepEqual(affected(['.github/workflows/verify.yml']), ['tooling']);
+  assert.deepEqual(affected(['tools/install-verify-dependencies.mjs']), ['tooling']);
 });
 test('content build hashes ignore checkout line endings', () => {
   const app = { id: 'fixture', publicUrls: ['/fixture/'] };
@@ -55,6 +57,23 @@ test('profiles only reference existing scripts/tests and no production mutations
     assert.doesNotMatch(JSON.stringify(c), /--remote|refresh-definitions|r2:lifecycle|versions.*upload/);
   }
   assert.ok(installDirectories(['auth']).includes('security-worker'));
+});
+test('site release installs every clean-worktree dependency through the shared verify plan', () => {
+  const directories = installDirectories(['site']);
+  assert.deepEqual(directories, ['.', 'security-worker', 'diary-worker']);
+  const securityPackage = JSON.parse(readFileSync(resolve(root, 'security-worker/package.json'), 'utf8'));
+  assert.equal(securityPackage.dependencies['@simplewebauthn/server'], '13.3.2');
+  assert.match(readFileSync(resolve(root, 'security-worker/src/index.js'), 'utf8'), /from ["']@simplewebauthn\/server["']/);
+  const diaryPackage = JSON.parse(readFileSync(resolve(root, 'diary-worker/package.json'), 'utf8'));
+  assert.equal(diaryPackage.devDependencies.playwright, '1.56.1');
+  const plan = dependencyInstallPlan(['site']);
+  assert.deepEqual(plan.map(step => step.directory), directories);
+  for (const step of plan) assert.deepEqual(step.args, installArgs);
+  const calls = [];
+  const app = { deployCwd: '.' };
+  assert.equal(releaseProfile(app), 'site');
+  assert.equal(prepareReleaseDependencies(app, selected => calls.push(selected)), 'site');
+  assert.deepEqual(calls, [['site']]);
 });
 test('local config strips every production resource, service, variable and trigger', () => {
   const source = JSON.parse(readFileSync(resolve(root, 'cloud-worker/wrangler.jsonc'), 'utf8'));

@@ -88,7 +88,7 @@ npm run release -- cloud               # registry app id。security / diary / bi
 node tools/verify-web-app-builds.mjs --target t-room-cloud
 ```
 
-releaseは最新origin/main一致、対象verify、committed build marker、検証中のmain進行を確認して対象Workerだけdeployし、同deploy targetの全登録アプリの公開marker・shell・SWを照合する。markerが古ければ失敗するので、対象appのみ `syncContentHashApp`（`tools/web-app-registry.mjs`）で同期しcommitしてやり直す。Cloudのcanonicalファイルと公開runtimeコピーも既存手順どおり一致させる。全体syncを無関係なサービスへcommitしない。
+releaseは最新origin/main一致を確認後、CIと同じ`installDirectories()`を正本として対象verifyに必要な依存関係だけを上記の安全なpnpmオプションで導入する。その後、対象verify、committed build marker、検証中のmain進行を確認して対象Workerだけdeployし、同deploy targetの全登録アプリの公開marker・shell・SWを照合する。markerが古ければ失敗するので、対象appのみ `syncContentHashApp`（`tools/web-app-registry.mjs`）で同期しcommitしてやり直す。Cloudのcanonicalファイルと公開runtimeコピーも既存手順どおり一致させる。全体syncを無関係なサービスへcommitしない。
 
 DownloaderのProductionはこのコマンドで拒否し、既存の署名・lease・reconciliation付きContainer/定義手順を使う。AIには公開Web build registryがないため既存専用手順を維持する。各Workerの従来deployコマンドも削除しない。
 
