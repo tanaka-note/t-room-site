@@ -1,13 +1,13 @@
-const CACHE_NAME = "t-room-motivation-switch-motivation-switch-a8f0aec15363";
+const CACHE_NAME = "t-room-motivation-switch-motivation-switch-40ab717391e3";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=motivation-switch-a8f0aec15363",
+  "./index.html?v=motivation-switch-40ab717391e3",
   "./icon.svg",
   "../../assets/site-icon-192.png",
   "../../assets/apple-touch-icon.png",
-  "/apps/motivation-switch/manifest.webmanifest?v=motivation-switch-a8f0aec15363",
-  "/assets/pwa-auto-update.js?v=motivation-switch-a8f0aec15363"
+  "/apps/motivation-switch/manifest.webmanifest?v=motivation-switch-40ab717391e3",
+  "/assets/pwa-auto-update.js?v=motivation-switch-40ab717391e3"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
