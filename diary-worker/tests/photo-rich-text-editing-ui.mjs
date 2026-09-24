@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { insertTextIntoRichDocument as insertText } from "../public/diary-rich-text.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const script = await readFile(`${root}/public/diary.js`, "utf8");
@@ -13,25 +13,15 @@ function extractFunction(name, nextName) {
   return script.slice(start, end);
 }
 
-const modelSource = [
-  extractFunction("hasTextMarks", "sameTextMarks"),
-  extractFunction("sameTextMarks", "mergeRichTextRuns"),
-  extractFunction("mergeRichTextRuns", "shiftRichTextRunsForInsertion"),
-  extractFunction("shiftRichTextRunsForInsertion", "insertTextIntoRichDocument"),
-  extractFunction("insertTextIntoRichDocument", "setRichEditorDocument")
-].join("\n");
-const context = {};
-vm.runInNewContext(`${modelSource}; globalThis.insertText = insertTextIntoRichDocument;`, context);
-
 const marker = "[[写真:11111111-2222-3333-4444-555555555555]]";
 let documentValue = { content: "ABC", contentFormat: null };
-documentValue = context.insertText(documentValue, 3, `\n${marker}`);
-documentValue = context.insertText(documentValue, documentValue.content.length, "DEF");
+documentValue = insertText(documentValue, 3, `\n${marker}`);
+documentValue = insertText(documentValue, documentValue.content.length, "DEF");
 assert.equal(documentValue.content, `ABC\n${marker}DEF`, "文字→写真→文字で既存文字と新規文字を維持する");
 
 const firstMarker = "[[写真:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]]";
 const secondMarker = "[[写真:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb]]";
-const multiple = context.insertText(
+const multiple = insertText(
   { content: "前後", contentFormat: null },
   1,
   `${firstMarker}${secondMarker}`
@@ -39,7 +29,7 @@ const multiple = context.insertText(
 assert.equal(multiple.content, `前${firstMarker}${secondMarker}後`);
 assert.ok(multiple.content.indexOf(firstMarker) < multiple.content.indexOf(secondMarker), "複数写真の順番を維持する");
 
-const formatted = context.insertText({
+const formatted = insertText({
   content: "ABCD",
   contentFormat: {
     version: 1,

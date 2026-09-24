@@ -1079,11 +1079,10 @@ async function deleteOrQueueUnclaimedStagedObjects(env, keys, { forceQueue = fal
         await env.MEDIA.delete(objectKeys);
         if (queued) {
           try {
-            const placeholders = objectKeys.map(() => "?").join(", ");
             await env.DB.prepare(`
               DELETE FROM diary_media_deletion_queue
-              WHERE object_key IN (${placeholders})
-            `).bind(...objectKeys).run();
+              WHERE object_key IN (SELECT value FROM json_each(?))
+            `).bind(JSON.stringify(objectKeys)).run();
             queued = false;
           } catch {
             // A retained queue marker is safe: R2 deletion is idempotent and the
@@ -1200,7 +1199,7 @@ async function cancelPhotoUploadSession(uploadSessionId, env, session) {
 }
 
 async function commitPhotoUploadSession(uploadSessionId, request, env, session) {
-  const body = await readJson(request, 100000);
+  const body = await readJson(request, 1500000);
   const entryId = Number(body.entryId);
   const photoIds = [...new Set((Array.isArray(body.photoIds) ? body.photoIds : []).map((id) => String(id).toLowerCase()))];
   if (!Number.isInteger(entryId) || entryId < 1 || photoIds.some((id) => !isUuid(id))) {
@@ -1208,7 +1207,7 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
   }
   const uploadSession = await readOwnedPhotoUploadSession(uploadSessionId, env, session);
   if (uploadSession.status === "committed") {
-    const committedIds = JSON.parse(uploadSession.committed_photo_ids || "[]");
+    const committedIds = parsePhotoIdList(uploadSession.committed_photo_ids);
     if (Number(uploadSession.committed_entry_id) !== entryId || JSON.stringify(committedIds) !== JSON.stringify(photoIds)) {
       throw new HttpError(409, "画像の一時保存情報は別の日記へ確定済みです。");
     }
@@ -1227,22 +1226,22 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
     throw new HttpError(403, "画像をこの日記へ追加することはできません。");
   }
   if (photoIds.length) {
-    const placeholders = photoIds.map(() => "?").join(", ");
+    const photoIdsJson = JSON.stringify(photoIds);
     const stagingKeyPrefix = `diary/staging/${session.activeHouseholdId}/${uploadSession.id}/`;
     const count = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM (
         SELECT id FROM diary_staged_photos
         WHERE upload_session_id = ? AND household_id = ? AND account_id = ?
-          AND id IN (${placeholders})
+          AND id IN (SELECT value FROM json_each(?))
         UNION
         SELECT id FROM diary_photos
         WHERE entry_id = ? AND created_by_id = ?
           AND substr(original_key, 1, ?) = ?
-          AND id IN (${placeholders})
+          AND id IN (SELECT value FROM json_each(?))
       )
     `).bind(
-      uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds,
-      entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, ...photoIds
+      uploadSession.id, session.activeHouseholdId, session.accountId, photoIdsJson,
+      entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, photoIdsJson
     ).first();
     if (Number(count?.count || 0) !== photoIds.length) {
       throw new HttpError(409, "一部の画像アップロードが完了していません。");
@@ -1259,20 +1258,20 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
              photo.account_id, photo.created_by_name, photo.created_at
       FROM diary_staged_photos photo
       WHERE photo.upload_session_id = ? AND photo.household_id = ? AND photo.account_id = ?
-        AND photo.id IN (${placeholders})
+        AND photo.id IN (SELECT value FROM json_each(?))
         AND EXISTS (
           SELECT 1 FROM diary_photo_upload_sessions upload_session
           WHERE upload_session.id = photo.upload_session_id
             AND upload_session.status = 'active' AND upload_session.expires_at > ?
         )
-    `).bind(entryId, uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds, now).run();
+    `).bind(entryId, uploadSession.id, session.activeHouseholdId, session.accountId, photoIdsJson, now).run();
 
     const promoted = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM diary_photos
       WHERE entry_id = ? AND created_by_id = ?
         AND substr(original_key, 1, ?) = ?
-        AND id IN (${placeholders})
-    `).bind(entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, ...photoIds).first();
+        AND id IN (SELECT value FROM json_each(?))
+    `).bind(entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, photoIdsJson).first();
     if (Number(promoted?.count || 0) !== photoIds.length) {
       throw new HttpError(409, "一部の画像を日記へ反映できませんでした。もう一度お試しください。");
     }
@@ -1286,12 +1285,12 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
           SELECT COUNT(*) FROM diary_photos
           WHERE entry_id = ? AND created_by_id = ?
             AND substr(original_key, 1, ?) = ?
-            AND id IN (${placeholders})
+            AND id IN (SELECT value FROM json_each(?))
         ) = ?
     `).bind(
       entryId, JSON.stringify(photoIds), now,
       new Date(Date.now() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString(), uploadSession.id, now,
-      entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, ...photoIds, photoIds.length
+      entryId, session.accountId, stagingKeyPrefix.length, stagingKeyPrefix, photoIdsJson, photoIds.length
     ).run();
     if (!committed.meta?.changes) {
       const current = await readOwnedPhotoUploadSession(uploadSession.id, env, session);
@@ -1335,12 +1334,11 @@ async function photoUploadSessionCanCommitToEntry(uploadSession, entry, env, ses
 
 async function committedPhotoUploadResponse(entryId, photoIds, env, idempotent) {
   if (!photoIds.length) return json({ photos: [], idempotent });
-  const placeholders = photoIds.map(() => "?").join(", ");
   const result = await env.DB.prepare(`
     SELECT id, entry_id, file_name, content_type, original_size, width, height,
            created_by_name, created_at
-    FROM diary_photos WHERE entry_id = ? AND id IN (${placeholders})
-  `).bind(entryId, ...photoIds).all();
+    FROM diary_photos WHERE entry_id = ? AND id IN (SELECT value FROM json_each(?))
+  `).bind(entryId, JSON.stringify(photoIds)).all();
   const byId = new Map((result.results || []).map((row) => [row.id, serializePhoto(row)]));
   return json({ photos: photoIds.map((id) => byId.get(id)).filter(Boolean), idempotent });
 }
@@ -1737,24 +1735,23 @@ async function publishEditDraft(draft, input, request, env, session) {
     mutationId, sourceId, session.activeHouseholdId, sourceRevision,
     draft.id, session.activeHouseholdId, draft.revision
   ), ...entryMutationTagStatements(env, sourceId, mutationId, input.tags)];
-  for (const photoId of input.excludedPhotoIds) {
+  if (input.excludedPhotoIds.length) {
+    const excludedPhotoIdsJson = JSON.stringify(input.excludedPhotoIds);
     for (const keyColumn of ["original_key", "display_key", "thumbnail_key"]) {
       statements.push(env.DB.prepare(`
         INSERT OR IGNORE INTO diary_media_deletion_queue (entry_id, object_key)
         SELECT p.entry_id, p.${keyColumn}
         FROM diary_photos p
         JOIN diary_entries e ON e.id = p.entry_id
-        WHERE p.id = ? AND p.entry_id = ? AND e.last_mutation_id = ?
-      `).bind(photoId, sourceId, mutationId));
+        WHERE p.entry_id = ? AND e.last_mutation_id = ?
+          AND p.id IN (SELECT value FROM json_each(?))
+      `).bind(sourceId, mutationId, excludedPhotoIdsJson));
     }
-  }
-  if (input.excludedPhotoIds.length) {
-    const placeholders = input.excludedPhotoIds.map(() => "?").join(", ");
     statements.push(env.DB.prepare(`
       DELETE FROM diary_photos
-      WHERE entry_id = ? AND id IN (${placeholders})
+      WHERE entry_id = ? AND id IN (SELECT value FROM json_each(?))
         AND EXISTS (SELECT 1 FROM diary_entries e WHERE e.id = ? AND e.last_mutation_id = ?)
-    `).bind(sourceId, ...input.excludedPhotoIds, sourceId, mutationId));
+    `).bind(sourceId, excludedPhotoIdsJson, sourceId, mutationId));
   }
   statements.push(env.DB.prepare(`
     UPDATE diary_photos SET entry_id = ?
@@ -2077,12 +2074,11 @@ async function validatePendingPhotoSave(body, env, session) {
   if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
     throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
   }
-  const placeholders = photoIds.map(() => "?").join(", ");
   const staged = await env.DB.prepare(`
     SELECT COUNT(*) AS count FROM diary_staged_photos
     WHERE upload_session_id = ? AND household_id = ? AND account_id = ?
-      AND id IN (${placeholders})
-  `).bind(uploadSession.id, session.activeHouseholdId, session.accountId, ...photoIds).first();
+      AND id IN (SELECT value FROM json_each(?))
+  `).bind(uploadSession.id, session.activeHouseholdId, session.accountId, JSON.stringify(photoIds)).first();
   if (Number(staged?.count || 0) !== photoIds.length) {
     throw new HttpError(409, "一部の画像アップロードが完了していません。");
   }
@@ -2120,7 +2116,7 @@ function parsePhotoIdList(value) {
     try { source = JSON.parse(source); } catch { source = []; }
   }
   if (!Array.isArray(source)) return [];
-  return [...new Set(source.map((item) => String(item || "").toLowerCase()).filter(isUuid))].slice(0, 200);
+  return [...new Set(source.map((item) => String(item || "").toLowerCase()).filter(isUuid))];
 }
 
 function validateContentFormat(value, content) {
@@ -2823,21 +2819,21 @@ async function drainMediaDeletionQueue(env, entryId = null, { maxBatches = MEDIA
     batches += 1;
     try {
       await env.MEDIA.delete(rows.map((row) => row.object_key));
-      const placeholders = rows.map(() => "?").join(", ");
-      await env.DB.prepare(`DELETE FROM diary_media_deletion_queue WHERE id IN (${placeholders})`)
-        .bind(...rows.map((row) => row.id)).run();
+      await env.DB.prepare(`
+        DELETE FROM diary_media_deletion_queue
+        WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+      `).bind(JSON.stringify(rows.map((row) => row.id))).run();
       processed += rows.length;
     } catch (error) {
       failed = true;
       const message = cleanupErrorMessage(error);
-      const placeholders = rows.map(() => "?").join(", ");
       await env.DB.prepare(`
         UPDATE diary_media_deletion_queue
         SET attempt_count = attempt_count + 1,
             last_attempt_at = CURRENT_TIMESTAMP,
             last_error = ?
-        WHERE id IN (${placeholders})
-      `).bind(message, ...rows.map((row) => row.id)).run();
+        WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+      `).bind(message, JSON.stringify(rows.map((row) => row.id))).run();
       console.error("Diary media cleanup deferred", message);
       break;
     }

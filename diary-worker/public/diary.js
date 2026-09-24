@@ -4,6 +4,20 @@
   const { splitSearchTerms, createSearchExcerpt, highlightSearchTerms } = await import(
     new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href
   );
+  const { preparePhoto } = await import(new URL(`diary-photo-processing.js${scriptUrl.search}`, scriptUrl).href);
+  const { createPhotoUploadManager } = await import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href);
+  const {
+    applyFormatToSelection,
+    getSelectionFormatState,
+    hasTextMarks,
+    insertTextIntoRichDocument,
+    mergeRichTextRuns,
+    photoMarker,
+    removeTextFromRichDocument,
+    sameTextMarks,
+    tokenizeEntryTextWithLinks,
+    withoutPhotoMarkers
+  } = await import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href);
   const BASE_PATH = "/diary";
   const { WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = await import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href);
   const ENTRY_HISTORY_KEY = "troomDiaryEntry";
@@ -15,8 +29,6 @@
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const MONTH_HEADING_SCROLL_GAP_PX = 12;
-  const PHOTO_UPLOAD_RETRY_DELAYS_MS = Object.freeze([250, 750]);
-  const PHOTO_UPLOAD_CONCURRENCY = 2;
   const TAG_SUGGESTION_MAX_HEIGHT = 246;
   const RICH_TEXT_COLORS = Object.freeze({
     default: "#27313b",
@@ -263,6 +275,20 @@
     photoDownloadOriginal: document.querySelector("#photo-download-original"),
     toast: document.querySelector("#toast")
   };
+
+  const {
+    cancelEditorPhotoUploadSession,
+    commitStagedPhotos,
+    deleteStagedPhotoUpload,
+    ensurePhotosUploaded,
+    queueBackgroundPhotoUpload,
+    releaseUploadedPhotoPayload
+  } = createPhotoUploadManager({
+    state,
+    api,
+    basePath: BASE_PATH,
+    getTargetEntryId: () => Number(elements.entryId.value || 0) || null
+  });
 
   boot();
 
@@ -1724,114 +1750,6 @@
     elements.detailContent.replaceChildren(fragment);
   }
 
-  const ENTRY_TEXT_LINK_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`[\]{}()<>]+/g;
-  const ENTRY_TEXT_LINK_TRIM_TRAILING = /[.,。、!?！？)\]\}"'”』】〉》）]+$/u;
-  const ENTRY_TEXT_LINK_TEXT_BODY = /[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]/;
-
-  function findEntryTextLinks(text) {
-      const source = String(text || "");
-      const links = [];
-      ENTRY_TEXT_LINK_PATTERN.lastIndex = 0;
-      let match;
-      while ((match = ENTRY_TEXT_LINK_PATTERN.exec(source)) !== null) {
-        const matched = match[0];
-        let end = matched.length;
-        while (end > 0 && ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[end - 1])) end -= 1;
-        if (end === matched.length) {
-          for (let i = end - 1; i > 0; i -= 1) {
-            if (!ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[i])) {
-              continue;
-            }
-            if (ENTRY_TEXT_LINK_TEXT_BODY.test(matched[i + 1])) {
-              break;
-            }
-            end = i + 1;
-            while (end > 0 && ENTRY_TEXT_LINK_TRIM_TRAILING.test(matched[end - 1])) end -= 1;
-            break;
-          }
-        }
-        if (end === 0) continue;
-        const textValue = matched.slice(0, end);
-      const href = textValue.startsWith("www.")
-        ? `https://${textValue}`
-        : textValue;
-      if (!href.startsWith("http://") && !href.startsWith("https://")) continue;
-      try {
-        const parsed = new URL(href);
-        if (!["http:", "https:"].includes(parsed.protocol)) continue;
-      } catch (error) {
-        continue;
-      }
-      const valueStart = match.index;
-      links.push({
-        start: valueStart,
-        end: valueStart + textValue.length,
-        text: textValue,
-        href
-      });
-    }
-    return links;
-  }
-
-  function normalizeEntryTextRuns(textLength, runs) {
-    return (Array.isArray(runs) ? runs : []).map((run) => {
-      const start = Math.max(0, Math.min(Number(run.start) || 0, textLength));
-      const end = Math.max(start, Math.min(Number(run.end) || 0, textLength));
-      return { ...run, start, end };
-    }).filter((run) => run.end > run.start).sort((left, right) => left.start - right.start);
-  }
-
-  function resolveEntryTextMarks(runs, start, end) {
-    const marks = {
-      bold: false,
-      italic: false,
-      underline: false,
-      color: null
-    };
-    for (const run of runs) {
-      if (run.end <= start || run.start >= end) continue;
-      if (run.bold) marks.bold = true;
-      if (run.italic) marks.italic = true;
-      if (run.underline) marks.underline = true;
-      if (run.color) marks.color = run.color;
-    }
-    return hasTextMarks(marks) ? marks : null;
-  }
-
-  function tokenizeEntryTextWithLinks(text, runs = []) {
-    const source = String(text || "");
-    if (!source) return [];
-    const linkTokens = findEntryTextLinks(source);
-    const normalizedRuns = normalizeEntryTextRuns(source.length, runs);
-    const boundaries = new Set([0, source.length]);
-    for (const run of normalizedRuns) {
-      boundaries.add(run.start);
-      boundaries.add(run.end);
-    }
-    for (const link of linkTokens) {
-      boundaries.add(link.start);
-      boundaries.add(link.end);
-    }
-    const points = [...boundaries].sort((left, right) => left - right);
-    const tokens = [];
-    for (let index = 0; index < points.length - 1; index += 1) {
-      const start = points[index];
-      const end = points[index + 1];
-      if (start === end) continue;
-      const link = linkTokens.find((candidate) => candidate.start <= start && candidate.end >= end);
-      tokens.push({
-        kind: link ? "link" : "text",
-        text: source.slice(start, end),
-        start,
-        end,
-        marks: resolveEntryTextMarks(normalizedRuns, start, end),
-        href: link?.href,
-        linkText: link?.text
-      });
-    }
-    return tokens;
-  }
-
   function appendEntryText(fragment, text, contentFormat = null, baseOffset = 0) {
     if (!text) return;
     const relevantRuns = Array.isArray(contentFormat?.runs) ? contentFormat.runs.flatMap((run) => {
@@ -2008,186 +1926,6 @@
   async function waitForPhotoPreparation() {
     const preparation = state.photoPreparationPromise;
     if (preparation) await preparation;
-  }
-
-  async function preparePhoto(file) {
-    if (!(file instanceof File) || !String(file.type).startsWith("image/")) {
-      throw new Error("画像ファイルではありません。");
-    }
-    if (!file.size || file.size > 60 * 1024 * 1024) throw new Error("60MB以内の画像を選択してください。");
-    const imageSource = await preparePhotoSource(file);
-    let bitmap;
-    try {
-      bitmap = await createImageBitmap(imageSource.source);
-    } catch {
-      throw new Error("この画像形式をブラウザで読み取れませんでした。");
-    }
-    try {
-      const [displayBlob, thumbnailBlob] = await Promise.all([
-        resizePhoto(bitmap, 1800, 320 * 1024, 0.88, imageSource.orientation),
-        resizePhoto(bitmap, 480, 100 * 1024, 0.82, imageSource.orientation)
-      ]);
-      const orientedSize = orientedImageSize(bitmap.width, bitmap.height, imageSource.orientation);
-      const id = crypto.randomUUID().toLowerCase();
-      return {
-        id,
-        fileName: file.name || "photo",
-        originalFile: file,
-        displayBlob,
-        thumbnailBlob,
-        width: orientedSize.width,
-        height: orientedSize.height,
-        previewUrl: URL.createObjectURL(thumbnailBlob),
-        existing: false,
-        uploadState: "preparing",
-        uploadPromise: null,
-        uploadError: null,
-        removed: false
-      };
-    } finally {
-      bitmap.close();
-    }
-  }
-
-  async function preparePhotoSource(file) {
-    const isJpeg = /^image\/(?:jpeg|jpg)$/i.test(String(file.type || "")) || /\.jpe?g$/i.test(String(file.name || ""));
-    if (!isJpeg) return { source: file, orientation: 1 };
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const exif = readJpegOrientation(bytes);
-    if (!exif) return { source: file, orientation: 1 };
-    // arrayBuffer() returns an independent copy. Mutating it preserves the
-    // original File while avoiding a second full-size copy on memory-limited
-    // mobile browsers.
-    writeExifOrientation(bytes, exif.valueOffset, exif.littleEndian, 1);
-    return {
-      source: new Blob([bytes], { type: file.type || "image/jpeg" }),
-      orientation: exif.orientation
-    };
-  }
-
-  function readJpegOrientation(bytes) {
-    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
-    let offset = 2;
-    while (offset + 4 <= bytes.length) {
-      if (bytes[offset] !== 0xff) {
-        offset += 1;
-        continue;
-      }
-      const marker = bytes[offset + 1];
-      offset += 2;
-      if (marker === 0xd9 || marker === 0xda) break;
-      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) continue;
-      const segmentLength = readBigEndianUint16(bytes, offset);
-      if (!segmentLength || offset + segmentLength > bytes.length) break;
-      if (marker === 0xe1 && segmentLength >= 8 &&
-          bytes[offset + 2] === 0x45 && bytes[offset + 3] === 0x78 &&
-          bytes[offset + 4] === 0x69 && bytes[offset + 5] === 0x66 &&
-          bytes[offset + 6] === 0x00 && bytes[offset + 7] === 0x00) {
-        const tiffOffset = offset + 8;
-        const littleEndian = bytes[tiffOffset] === 0x49 && bytes[tiffOffset + 1] === 0x49;
-        const bigEndian = bytes[tiffOffset] === 0x4d && bytes[tiffOffset + 1] === 0x4d;
-        if (!littleEndian && !bigEndian) return null;
-        const read16 = (position) => readEndianUint16(bytes, position, littleEndian);
-        const read32 = (position) => readEndianUint32(bytes, position, littleEndian);
-        if (read16(tiffOffset + 2) !== 42) return null;
-        const ifdOffset = read32(tiffOffset + 4);
-        const ifd = tiffOffset + ifdOffset;
-        if (ifd < tiffOffset || ifd + 2 > offset + segmentLength) return null;
-        const entryCount = read16(ifd);
-        for (let index = 0; index < entryCount; index += 1) {
-          const entry = ifd + 2 + index * 12;
-          if (entry + 12 > offset + segmentLength) break;
-          if (read16(entry) !== 0x0112 || read16(entry + 2) !== 3 || read32(entry + 4) !== 1) continue;
-          const valueOffset = entry + 8;
-          const orientation = read16(valueOffset);
-          return {
-            orientation: orientation >= 1 && orientation <= 8 ? orientation : 1,
-            valueOffset,
-            littleEndian
-          };
-        }
-        return null;
-      }
-      offset += segmentLength;
-    }
-    return null;
-  }
-
-  function readBigEndianUint16(bytes, offset) {
-    return offset + 2 <= bytes.length ? (bytes[offset] << 8) | bytes[offset + 1] : 0;
-  }
-
-  function readEndianUint16(bytes, offset, littleEndian) {
-    if (offset + 2 > bytes.length) return 0;
-    return littleEndian ? bytes[offset] | (bytes[offset + 1] << 8) : (bytes[offset] << 8) | bytes[offset + 1];
-  }
-
-  function readEndianUint32(bytes, offset, littleEndian) {
-    if (offset + 4 > bytes.length) return 0;
-    return littleEndian
-      ? (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] * 0x1000000)) >>> 0
-      : ((bytes[offset] * 0x1000000) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
-  }
-
-  function writeExifOrientation(bytes, offset, littleEndian, value) {
-    if (offset < 0 || offset + 2 > bytes.length) return;
-    if (littleEndian) {
-      bytes[offset] = value & 0xff;
-      bytes[offset + 1] = value >> 8;
-    } else {
-      bytes[offset] = value >> 8;
-      bytes[offset + 1] = value & 0xff;
-    }
-  }
-
-  function orientedImageSize(width, height, orientation) {
-    return orientation >= 5 && orientation <= 8
-      ? { width: height, height: width }
-      : { width, height };
-  }
-
-  async function resizePhoto(bitmap, maxDimension, targetBytes, initialQuality, orientation = 1) {
-    const sourceSize = orientedImageSize(bitmap.width, bitmap.height, orientation);
-    const ratio = Math.min(1, maxDimension / Math.max(sourceSize.width, sourceSize.height));
-    const width = Math.max(1, Math.round(sourceSize.width * ratio));
-    const height = Math.max(1, Math.round(sourceSize.height * ratio));
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d", { alpha: false });
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, width, height);
-    drawOrientedImage(context, bitmap, orientation, width / sourceSize.width, height / sourceSize.height);
-    let quality = initialQuality;
-    let blob = await canvasToBlob(canvas, quality);
-    while (blob.size > targetBytes && quality > 0.5) {
-      quality -= 0.08;
-      blob = await canvasToBlob(canvas, quality);
-    }
-    return blob;
-  }
-
-  function drawOrientedImage(context, bitmap, orientation, scaleX, scaleY) {
-    const width = bitmap.width;
-    const height = bitmap.height;
-    switch (orientation) {
-      case 2: context.setTransform(-scaleX, 0, 0, scaleY, width * scaleX, 0); break;
-      case 3: context.setTransform(-scaleX, 0, 0, -scaleY, width * scaleX, height * scaleY); break;
-      case 4: context.setTransform(scaleX, 0, 0, -scaleY, 0, height * scaleY); break;
-      case 5: context.setTransform(0, scaleY, scaleX, 0, 0, 0); break;
-      case 6: context.setTransform(0, scaleY, -scaleX, 0, height * scaleX, 0); break;
-      case 7: context.setTransform(0, -scaleY, -scaleX, 0, height * scaleX, width * scaleY); break;
-      case 8: context.setTransform(0, -scaleY, scaleX, 0, 0, width * scaleY); break;
-      default: context.setTransform(scaleX, 0, 0, scaleY, 0, 0); break;
-    }
-    context.drawImage(bitmap, 0, 0);
-    context.setTransform(1, 0, 0, 1, 0, 0);
-  }
-
-  function canvasToBlob(canvas, quality) {
-    return new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("画像を変換できませんでした。")), "image/webp", quality);
-    });
   }
 
   function insertPhotoMarker(id) {
@@ -2516,65 +2254,6 @@
     });
   }
 
-  function getSelectionSegments(contentLength, runs, start, end) {
-    const selectionStart = Math.max(0, Math.min(contentLength, Number(start) || 0));
-    const selectionEnd = Math.max(selectionStart, Math.min(contentLength, Number(end) || 0));
-    const boundaries = new Set([0, contentLength, selectionStart, selectionEnd]);
-    for (const run of runs) {
-      boundaries.add(Math.max(0, Math.min(contentLength, Number(run.start) || 0)));
-      boundaries.add(Math.max(0, Math.min(contentLength, Number(run.end) || 0)));
-    }
-    const points = [...boundaries].sort((left, right) => left - right);
-    return points.slice(0, -1).flatMap((segmentStart, index) => {
-      const segmentEnd = points[index + 1];
-      if (segmentEnd <= segmentStart) return [];
-      const run = runs.find((candidate) => candidate.start <= segmentStart && candidate.end >= segmentEnd);
-      return [{
-        start: segmentStart,
-        end: segmentEnd,
-        selected: segmentStart >= selectionStart && segmentEnd <= selectionEnd,
-        bold: Boolean(run?.bold),
-        italic: Boolean(run?.italic),
-        underline: Boolean(run?.underline),
-        color: run?.color || null
-      }];
-    });
-  }
-
-  function getSelectionFormatState(contentLength, runs, start, end) {
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-    const selected = getSelectionSegments(contentLength, runs, start, end).filter((segment) => segment.selected);
-    if (!selected.length) return null;
-    const colors = new Set(selected.map((segment) => segment.color || "default"));
-    return {
-      bold: selected.every((segment) => segment.bold),
-      italic: selected.every((segment) => segment.italic),
-      underline: selected.every((segment) => segment.underline),
-      color: colors.size === 1 ? [...colors][0] : null
-    };
-  }
-
-  function applyFormatToSelection(contentLength, runs, start, end, command, value) {
-    const segments = getSelectionSegments(contentLength, runs, start, end);
-    const selected = segments.filter((segment) => segment.selected);
-    const enableCommand = ["bold", "italic", "underline"].includes(command)
-      ? !selected.every((segment) => segment[command])
-      : false;
-    return mergeRichTextRuns(segments.map((segment) => {
-      const marks = {
-        start: segment.start,
-        end: segment.end,
-        bold: segment.bold,
-        italic: segment.italic,
-        underline: segment.underline,
-        color: segment.color
-      };
-      if (segment.selected && command === "color") marks.color = value === "default" ? null : value;
-      if (segment.selected && ["bold", "italic", "underline"].includes(command)) marks[command] = enableCommand;
-      return marks;
-    }));
-  }
-
   function updateEditorKeyboardOffset() {
     const viewport = window.visualViewport;
     const offset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
@@ -2685,63 +2364,6 @@
     };
   }
 
-  function hasTextMarks(marks) {
-    return Boolean(marks.bold || marks.italic || marks.underline || marks.color);
-  }
-
-  function sameTextMarks(left, right) {
-    return Boolean(left?.bold) === Boolean(right?.bold)
-      && Boolean(left?.italic) === Boolean(right?.italic)
-      && Boolean(left?.underline) === Boolean(right?.underline)
-      && (left?.color || null) === (right?.color || null);
-  }
-
-  function mergeRichTextRuns(runs) {
-    const merged = [];
-    for (const run of runs) {
-      if (run.end <= run.start || !hasTextMarks(run)) continue;
-      const previous = merged.at(-1);
-      if (previous && previous.end === run.start && sameTextMarks(previous, run)) previous.end = run.end;
-      else merged.push({
-        start: run.start,
-        end: run.end,
-        bold: Boolean(run.bold),
-        italic: Boolean(run.italic),
-        underline: Boolean(run.underline),
-        color: run.color || null
-      });
-    }
-    return merged;
-  }
-
-  function shiftRichTextRunsForInsertion(runs, offset, insertedLength) {
-    return mergeRichTextRuns(runs.flatMap((run) => {
-      if (run.end <= offset) return [run];
-      if (run.start >= offset) {
-        return [{ ...run, start: run.start + insertedLength, end: run.end + insertedLength }];
-      }
-      return [
-        { ...run, end: offset },
-        { ...run, start: offset + insertedLength, end: run.end + insertedLength }
-      ];
-    }));
-  }
-
-  function insertTextIntoRichDocument(documentValue, requestedOffset, insertedText) {
-    const content = String(documentValue?.content || "");
-    const offset = Math.max(0, Math.min(content.length, Number(requestedOffset) || 0));
-    const text = String(insertedText || "");
-    const runs = shiftRichTextRunsForInsertion(
-      Array.isArray(documentValue?.contentFormat?.runs) ? documentValue.contentFormat.runs : [],
-      offset,
-      text.length
-    );
-    return {
-      content: content.slice(0, offset) + text + content.slice(offset),
-      contentFormat: runs.length ? { version: 1, runs } : null
-    };
-  }
-
   function setRichEditorDocument(content, contentFormat = null) {
     const text = String(content || "");
     const runs = Array.isArray(contentFormat?.runs) ? contentFormat.runs : [];
@@ -2773,54 +2395,6 @@
   function removePhotoMarkerFromEditor(marker) {
     const documentValue = removeTextFromRichDocument(serializeRichEditor(false), marker);
     setRichEditorDocument(documentValue.content, documentValue.contentFormat);
-  }
-
-  function removeTextFromRichDocument(documentValue, textToRemove) {
-    let content = documentValue.content;
-    let runs = documentValue.contentFormat?.runs || [];
-    let index = content.lastIndexOf(textToRemove);
-    while (index >= 0) {
-      const end = index + textToRemove.length;
-      content = content.slice(0, index) + content.slice(end);
-      runs = runs.flatMap((run) => {
-        if (run.end <= index) return [run];
-        if (run.start >= end) return [{ ...run, start: run.start - textToRemove.length, end: run.end - textToRemove.length }];
-        const newStart = run.start < index ? run.start : index;
-        const newEnd = run.end > end ? run.end - textToRemove.length : index;
-        return newEnd > newStart ? [{ ...run, start: newStart, end: newEnd }] : [];
-      });
-      index = content.lastIndexOf(textToRemove, index - 1);
-    }
-    return {
-      content,
-      contentFormat: runs.length ? { version: 1, runs: mergeRichTextRuns(runs) } : null
-    };
-  }
-
-  function withoutPhotoMarkers(documentValue, photoIds) {
-    const withoutMarkers = photoIds.reduce(
-      (current, photoId) => removeTextFromRichDocument(current, photoMarker(photoId)),
-      documentValue
-    );
-    const content = withoutMarkers.content;
-    if (!content) return withoutMarkers;
-    const leading = content.search(/\S/);
-    const trailing = content.length - content.trimEnd().length;
-    const start = leading < 0 ? content.length : leading;
-    const end = content.length - trailing;
-    const runs = (withoutMarkers.contentFormat?.runs || []).flatMap((run) => {
-      const runStart = Math.max(run.start, start);
-      const runEnd = Math.min(run.end, end);
-      return runEnd > runStart ? [{ ...run, start: runStart - start, end: runEnd - start }] : [];
-    });
-    return {
-      content: content.slice(start, end),
-      contentFormat: runs.length ? { version: 1, runs: mergeRichTextRuns(runs) } : null
-    };
-  }
-
-  function photoMarker(id) {
-    return `[[写真:${id}]]`;
   }
 
   function renderEditorPhotos() {
@@ -2897,204 +2471,6 @@
     state.photoUploading = false;
     state.photoUploadActiveTasks.clear();
     elements.editorPhotoList?.replaceChildren();
-  }
-
-  function createPhotoUploadForm(photo) {
-    const form = new FormData();
-    form.set("id", photo.id);
-    form.set("width", String(photo.width || ""));
-    form.set("height", String(photo.height || ""));
-    form.set("original", photo.originalFile, photo.fileName);
-    form.set("display", photo.displayBlob, "display.webp");
-    form.set("thumbnail", photo.thumbnailBlob, "thumbnail.webp");
-    return form;
-  }
-
-  function waitForPhotoUploadRetry(attemptIndex) {
-    return new Promise((resolve) => window.setTimeout(resolve, PHOTO_UPLOAD_RETRY_DELAYS_MS[attemptIndex]));
-  }
-
-  function logPhotoUploadRetry(uploadTarget, photoId, attempt, details) {
-    console.warn("Diary photo upload retry", {
-      stage: "photo-upload",
-      uploadTarget,
-      photoId,
-      retry: attempt,
-      ...details
-    });
-  }
-
-  async function ensurePhotoUploadSession() {
-    if (state.photoUploadSessionId) return state.photoUploadSessionId;
-    if (state.photoUploadSessionPromise) return state.photoUploadSessionPromise;
-    const targetEntryId = Number(elements.entryId.value || 0) || null;
-    state.photoUploadTargetEntryId = targetEntryId;
-    state.photoUploadSessionPromise = api("/photo-upload-sessions", {
-      method: "POST",
-      body: { targetEntryId }
-    }).then((result) => {
-      state.photoUploadSessionId = result.uploadSession.id;
-      return state.photoUploadSessionId;
-    }).finally(() => {
-      state.photoUploadSessionPromise = null;
-    });
-    return state.photoUploadSessionPromise;
-  }
-
-  function queueBackgroundPhotoUpload(photo) {
-    if (photo.existing || photo.removed || photo.uploadState === "uploaded") return Promise.resolve(photo);
-    if (photo.uploadPromise) return photo.uploadPromise;
-    photo.uploadState = "uploading";
-    photo.uploadError = null;
-    state.photoUploadPendingCount += 1;
-    state.photoUploading = true;
-    const queued = (async () => {
-      while (state.photoUploadActiveTasks.size >= PHOTO_UPLOAD_CONCURRENCY) {
-        await Promise.race(state.photoUploadActiveTasks);
-      }
-      if (photo.removed) return null;
-      const activeTask = uploadPhotoToStaging(photo);
-      const settledTask = activeTask.catch(() => null);
-      state.photoUploadActiveTasks.add(settledTask);
-      try {
-        const result = await activeTask;
-        photo.uploadState = "uploaded";
-        photo.uploadError = null;
-        if (photo.removed) await deleteStagedPhotoUpload(photo, { waitForUpload: false });
-        return result;
-      } catch (error) {
-        photo.uploadState = "failed";
-        photo.uploadError = error;
-        return null;
-      } finally {
-        state.photoUploadActiveTasks.delete(settledTask);
-      }
-    })();
-    photo.uploadPromise = queued.finally(() => {
-      photo.uploadPromise = null;
-      state.photoUploadPendingCount = Math.max(0, state.photoUploadPendingCount - 1);
-      state.photoUploading = state.photoUploadPendingCount > 0;
-    });
-    return photo.uploadPromise;
-  }
-
-  async function uploadPhotoToStaging(photo) {
-    const uploadSessionId = await ensurePhotoUploadSession();
-    const maxAttempts = PHOTO_UPLOAD_RETRY_DELAYS_MS.length + 1;
-    let lastError = null;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      let response;
-      try {
-        response = await fetch(`${BASE_PATH}/api/photo-upload-sessions/${uploadSessionId}/photos`, {
-          method: "POST",
-          headers: { "X-Diary-Request": "1" },
-          credentials: "same-origin",
-          body: createPhotoUploadForm(photo)
-        });
-      } catch {
-        lastError = new Error("画像の通信に失敗しました。");
-        if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
-        logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "network" });
-        await waitForPhotoUploadRetry(attempt);
-        continue;
-      }
-
-      let result;
-      try {
-        result = await response.json();
-      } catch {
-        result = {};
-        if (response.ok) {
-          lastError = new Error("画像の保存結果を確認できませんでした。");
-          if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
-          logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
-          await waitForPhotoUploadRetry(attempt);
-          continue;
-        }
-      }
-
-      if (response.ok && result?.photo?.id === photo.id) return result;
-      if (response.ok) {
-        lastError = new Error("画像の保存結果を確認できませんでした。");
-        if (attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) throw lastError;
-        logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "invalid-response", status: response.status });
-        await waitForPhotoUploadRetry(attempt);
-        continue;
-      }
-
-      lastError = new Error(result.error || "画像を保存できませんでした。");
-      if (response.status < 500 || response.status > 599 || attempt >= PHOTO_UPLOAD_RETRY_DELAYS_MS.length) {
-        throw lastError;
-      }
-      logPhotoUploadRetry(uploadSessionId, photo.id, attempt + 1, { errorType: "http", status: response.status });
-      await waitForPhotoUploadRetry(attempt);
-    }
-    throw lastError || new Error("画像を保存できませんでした。");
-  }
-
-  async function ensurePhotosUploaded(photos) {
-    await Promise.all(photos.map((photo) => photo.uploadPromise || Promise.resolve()));
-    const failed = photos.filter((photo) => photo.uploadState !== "uploaded");
-    if (failed.length) {
-      await Promise.all(failed.map((photo) => queueBackgroundPhotoUpload(photo)));
-    }
-    const remaining = photos.filter((photo) => photo.uploadState !== "uploaded");
-    if (remaining.length) {
-      throw new Error(remaining.map((photo) => `${photo.fileName}：${photo.uploadError?.message || "画像を保存できませんでした。"}`).join(" / "));
-    }
-  }
-
-  async function deleteStagedPhotoUpload(photo, { waitForUpload = true } = {}) {
-    photo.removed = true;
-    if (waitForUpload && photo.uploadPromise) await photo.uploadPromise;
-    if (photo.uploadState !== "uploaded" || !state.photoUploadSessionId) return;
-    state.photoUploadPendingCount += 1;
-    state.photoUploading = true;
-    try {
-      const response = await fetch(`${BASE_PATH}/api/photo-upload-sessions/${state.photoUploadSessionId}/photos/${photo.id}`, {
-        method: "DELETE",
-        headers: { "X-Diary-Request": "1" },
-        credentials: "same-origin",
-        keepalive: true
-      });
-      if (!response.ok) throw new Error("一時保存した画像を削除できませんでした。");
-      photo.uploadState = "removed";
-    } finally {
-      state.photoUploadPendingCount = Math.max(0, state.photoUploadPendingCount - 1);
-      state.photoUploading = state.photoUploadPendingCount > 0;
-    }
-  }
-
-  async function commitStagedPhotos(entryId, photos) {
-    if (!state.photoUploadSessionId) return [];
-    const result = await api(`/photo-upload-sessions/${state.photoUploadSessionId}/commit`, {
-      method: "POST",
-      body: { entryId, photoIds: photos.map((photo) => photo.id) }
-    });
-    state.photoUploadCommitted = true;
-    return result.photos || [];
-  }
-
-  async function cancelEditorPhotoUploadSession() {
-    if (!state.photoUploadSessionId && state.photoUploadSessionPromise) {
-      await state.photoUploadSessionPromise.catch(() => null);
-    }
-    const uploadSessionId = state.photoUploadSessionId;
-    if (!uploadSessionId || state.photoUploadCommitted) return;
-    await Promise.allSettled([
-      ...state.photoUploadActiveTasks,
-      ...state.editorPhotos.map((photo) => photo.uploadPromise).filter(Boolean)
-    ]);
-    try {
-      await fetch(`${BASE_PATH}/api/photo-upload-sessions/${uploadSessionId}`, {
-        method: "DELETE",
-        headers: { "X-Diary-Request": "1" },
-        credentials: "same-origin",
-        keepalive: true
-      });
-    } catch {
-      // The server-side expiry cleanup removes abandoned staging data.
-    }
   }
 
   async function deletePhoto(photoId) {
@@ -3302,6 +2678,7 @@
           for (const photo of pendingPhotos) {
             photo.existing = true;
             Object.assign(photo, committedById.get(photo.id) || {});
+            releaseUploadedPhotoPayload(photo, { releasePreview: Boolean(photo.thumbnailUrl) });
           }
           if (pendingPhotos.length) {
             setEditorSaveBusy(true, "写真を本文へ反映しています...");

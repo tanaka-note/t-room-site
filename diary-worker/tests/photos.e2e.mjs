@@ -4,17 +4,23 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 const wranglerPath = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url));
 const port = 8797;
 const origin = `http://127.0.0.1:${port}`;
+const persistDirectory = mkdtempSync(join(tmpdir(), "troom-diary-photos-"));
 
 function testHash(password) {
   return `sha256$${createHash("sha256").update(password).digest("base64url")}`;
 }
 
-const migration = spawnSync(process.execPath, [wranglerPath, "d1", "migrations", "apply", "diary-db", "--local"], {
+const migration = spawnSync(process.execPath, [
+  wranglerPath, "d1", "migrations", "apply", "diary-db", "--local", "--persist-to", persistDirectory
+], {
   cwd: projectDirectory,
   encoding: "utf8"
 });
@@ -25,6 +31,8 @@ const server = spawn(process.execPath, [
   "dev",
   "--local",
   "--test-scheduled",
+  "--persist-to",
+  persistDirectory,
   "--port",
   String(port),
   "--var",
@@ -87,6 +95,8 @@ function queryLocalDatabase(command) {
     "execute",
     "diary-db",
     "--local",
+    "--persist-to",
+    persistDirectory,
     "--json",
     "--command",
     command
@@ -824,4 +834,5 @@ try {
     server.kill();
     await Promise.race([once(server, "exit"), new Promise((resolve) => setTimeout(resolve, 2000))]);
   }
+  try { rmSync(persistDirectory, { recursive: true, force: true }); } catch {}
 }

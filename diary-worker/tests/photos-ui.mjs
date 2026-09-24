@@ -3,10 +3,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const [html, css, script, worker, wrangler, stagingMigration] = await Promise.all([
+const [html, css, script, photoProcessing, photoUpload, richText, worker, wrangler, stagingMigration] = await Promise.all([
   readFile(`${root}/public/index.html`, "utf8"),
   readFile(`${root}/public/diary.css`, "utf8"),
   readFile(`${root}/public/diary.js`, "utf8"),
+  readFile(`${root}/public/diary-photo-processing.js`, "utf8"),
+  readFile(`${root}/public/diary-photo-upload.js`, "utf8"),
+  readFile(`${root}/public/diary-rich-text.js`, "utf8"),
   readFile(`${root}/src/index.js`, "utf8"),
   readFile(`${root}/wrangler.jsonc`, "utf8"),
   readFile(`${root}/migrations/0015_photo_upload_staging.sql`, "utf8")
@@ -36,32 +39,38 @@ assert.match(html, /id="photo-drop-zone"[^>]*role="button"/);
 assert.match(html, /画像をここへドラッグ＆ドロップ/);
 assert.match(html, /元画質で保存/);
 assert.match(html, /低画質で保存/);
-assert.match(script, /resizePhoto\(bitmap, 1800, 320 \* 1024/);
+assert.match(photoProcessing, /resizePhoto\(bitmap, 1800, 320 \* 1024/);
 assert.match(script, /\["dragenter", "dragover", "dragleave", "drop"\]/);
 assert.match(script, /prepareSelectedPhotos\(\[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\], getEditorSelectionOffset\("end"\)\)/);
 assert.match(script, /photoPreparationPromise: null/);
 assert.match(script, /photoUploading: false/);
-assert.match(script, /PHOTO_UPLOAD_CONCURRENCY = 2/);
+assert.match(photoUpload, /PHOTO_UPLOAD_CONCURRENCY = 2/);
 assert.match(script, /queueBackgroundPhotoUpload\(photo\)/,
   "each prepared photo must be queued before posting");
-assert.match(script, /\/api\/photo-upload-sessions/);
+assert.match(photoUpload, /\/api\/photo-upload-sessions/);
 assert.match(script, /await ensurePhotosUploaded\(pendingPhotos\)/,
   "posting must wait for any remaining staged uploads");
 assert.match(script, /commitStagedPhotos\(saved\.entry\.id, pendingPhotos\)/,
   "posting must promote staged photos without uploading them again");
 assert.match(script, /await waitForPhotoPreparation\(\);\s*const id = Number\(elements\.entryId\.value/s,
   "entry serialization must wait for the active photo preparation task");
-assert.match(script, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[250, 750\]\)/);
-assert.match(script, /response\.status < 500 \|\| response\.status > 599/,
+assert.match(photoUpload, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[250, 750\]\)/);
+assert.match(photoUpload, /response\.status < 500 \|\| response\.status > 599/,
   "only network failures, invalid success responses, and 5xx responses may be retried");
-assert.match(script, /String\(file\.type\)\.startsWith\("image\/"\)/);
+assert.match(photoProcessing, /String\(file\.type\)\.startsWith\("image\/"\)/);
 assert.match(script, /state\.editorPhotos = \(entry\?\.photos \|\| \[\]\)\.map/);
-assert.match(script, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);
+assert.match(photoProcessing, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);
 assert.match(script, /image\.src = photo\.thumbnailUrl \|\| photo\.previewUrl/);
+assert.match(photoUpload, /function releaseUploadedPhotoPayload\(photo/);
+assert.match(photoUpload, /photo\.originalFile = null;[\s\S]*?photo\.displayBlob = null;[\s\S]*?photo\.thumbnailBlob = null;/,
+  "successful staged uploads must release retry-only image payloads");
+assert.match(photoUpload, /photo\.uploadState = "uploaded";[\s\S]*?if \(photo\.removed\) await deleteStagedPhotoUpload[\s\S]*?releaseUploadedPhotoPayload\(photo\);/,
+  "image payloads must be released only after the staged upload succeeds");
 assert.match(script, /remove\.textContent = photo\.existing \? "削除" : "取り除く"/);
 assert.match(script, /state\.editorDeletedPhotoIds\.add\(photo\.id\)/);
 assert.match(script, /method: "DELETE"/);
-assert.match(script, /\[\[写真:/);
+assert.match(photoUpload, /method: "DELETE"/);
+assert.match(richText, /\[\[写真:/);
 assert.match(script, /openPhotoViewer/);
 assert.match(script, /state\.photoEntryQuery/);
 assert.match(script, /state\.photoFileNameQuery/);
