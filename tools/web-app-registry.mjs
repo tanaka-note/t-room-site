@@ -145,7 +145,8 @@ function syncHtmlPrecacheArray(source, app, shellAssets) {
     .filter(Boolean)
     .filter((expression) => !shellPaths.has(precacheEntryPath(expression, app.publicUrls[0])));
   const entries = [...kept, ...shellAssets.map((asset) => JSON.stringify(asset))];
-  return source.replace(pattern, `const ${name} = [\n  ${entries.join(",\n  ")}\n];`);
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  return source.replace(pattern, `const ${name} = [${newline}  ${entries.join(`,${newline}  `)}${newline}];`);
 }
 
 export function syncServiceWorkerText(source, app, build, shellAssets = []) {

@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { checkWebAppBuilds } from "./check-web-app-builds.mjs";
 import { runProductionDelivery } from "./release.mjs";
 import { syncWebApps } from "./sync-web-app-builds.mjs";
-import { expectedBuild, inspectBuildFreshness, syncContentHashApp } from "./web-app-registry.mjs";
+import { expectedBuild, inspectBuildFreshness, syncContentHashApp, syncServiceWorkerText } from "./web-app-registry.mjs";
 
 const contract = {
   buildMeta: "troom-app-build",
@@ -104,6 +104,14 @@ test("content hashes normalize JavaScript module line endings", async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("service worker synchronization preserves CRLF and remains idempotent", () => {
+  const app = fixtureApp("site-app", "t-room-site");
+  const source = `const CACHE_NAME = "old";\r\nconst APP_ASSETS = [\r\n  "./"\r\n];\r\n`;
+  const synchronized = syncServiceWorkerText(source, app, "site-app-123456789abc", ["/site-app/app.js?v=site-app-123456789abc"]);
+  assert.doesNotMatch(synchronized, /(?<!\r)\n/);
+  assert.equal(syncServiceWorkerText(synchronized, app, "site-app-123456789abc", ["/site-app/app.js?v=site-app-123456789abc"]), synchronized);
 });
 
 test("production delivery stops before deploy on stale preflight and retains post-deploy verification", () => {
