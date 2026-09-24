@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { root } from './verify-plan.mjs';
+import { installVerifyDependencies } from './install-verify-dependencies.mjs';
 import { loadWebAppRegistry, expectedBuild } from './web-app-registry.mjs';
 
 export function assertPreviewSafe(config) {
@@ -9,6 +10,14 @@ export function assertPreviewSafe(config) {
   if (config.name !== 't-room-site' || config.main !== 'site-worker/index.mjs' || Object.keys(config).some(k => !allowed.has(k))) {
     throw new Error('Preview upload is limited to the public, binding-free site. Backend services use local fixtures until isolated staging bindings exist.');
   }
+}
+export function releaseProfile(app) {
+  return app.deployCwd === '.' ? 'site' : app.deployCwd.replace(/-worker$/, '');
+}
+export function prepareReleaseDependencies(app, install = installVerifyDependencies) {
+  const profile = releaseProfile(app);
+  install([profile]);
+  return profile;
 }
 if (process.argv[1] && resolve(process.argv[1]) === resolve(root, 'tools/release.mjs')) {
   const [mode, target = 'site'] = process.argv.slice(2);
@@ -29,6 +38,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(root, 'tools/release
     if (target !== 'site') throw new Error('Backend Preview is disabled: existing bindings point to production. Use local:dev and verify --browser.');
     const config = JSON.parse(readFileSync(resolve(root, 'wrangler.jsonc'), 'utf8'));
     assertPreviewSafe(config);
+    prepareReleaseDependencies(app);
     run(root, ['tools/verify.mjs', '--target', 'site']);
     run(root, ['tools/prepare-static-assets.mjs']);
     const dir = resolve(root, 'tmp/preview'); mkdirSync(dir, { recursive: true });
@@ -39,7 +49,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(root, 'tools/release
     if (app.deployTarget === 't-room-downloader') throw new Error('Downloader requires its existing verified Container/ClamAV rollout procedure.');
     git(['fetch', 'origin', 'main']);
     if (head !== git(['rev-parse', 'origin/main'])) throw new Error('Production requires HEAD exactly matching latest origin/main.');
-    const profile = app.deployCwd === '.' ? 'site' : app.deployCwd.replace(/-worker$/, '');
+    const profile = prepareReleaseDependencies(app);
     run(root, ['tools/verify.mjs', '--target', profile, '--browser', '--build']);
     const expected = await expectedBuild(app, registry.contract);
     if (app.buildMode === 'content-hash' && !readFileSync(resolve(root, app.entrypoints[0]), 'utf8').includes(expected)) throw new Error('Build markers are stale; sync the affected app and commit before release.');

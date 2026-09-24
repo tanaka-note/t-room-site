@@ -54,7 +54,7 @@ export function affected(paths) {
   for (const raw of paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
-    if (/^(tools\/(verify|test-development|test-browser|browser-|local-dev|release|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
+    if (/^(tools\/(verify|install-verify|test-development|test-browser|browser-|local-dev|release|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }
     if (path === 'tools/test-session-secret.mjs') { add('auth'); continue; }
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');
@@ -99,7 +99,7 @@ export function installDirectories(selected) {
   for (const target of selected) {
     if (target === 'site') dirs.add('security-worker');
     if (services.includes(target)) dirs.add(`${target}-worker`);
-    if (['tooling', 'cloud', 'security', 'diary', 'billing', 'auth'].includes(target)) dirs.add('diary-worker');
+    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }
   return [...dirs];
