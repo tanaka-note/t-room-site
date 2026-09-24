@@ -19,6 +19,11 @@ export function prepareReleaseDependencies(app, install = installVerifyDependenc
   install([profile]);
   return profile;
 }
+export function runProductionDelivery(app, { runCommand, rootDirectory = root, deployDirectory = resolve(root, app.deployCwd) }) {
+  runCommand(rootDirectory, ['tools/check-web-app-builds.mjs', '--target', app.deployTarget]);
+  runCommand(deployDirectory, [resolve(deployDirectory, 'node_modules/wrangler/bin/wrangler.js'), 'deploy']);
+  runCommand(rootDirectory, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]);
+}
 if (process.argv[1] && resolve(process.argv[1]) === resolve(root, 'tools/release.mjs')) {
   const [mode, target = 'site'] = process.argv.slice(2);
   if (!['preview', 'production'].includes(mode)) throw new Error('Usage: release.mjs preview site | production <registry app id>');
@@ -55,7 +60,6 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(root, 'tools/release
     if (app.buildMode === 'content-hash' && !readFileSync(resolve(root, app.entrypoints[0]), 'utf8').includes(expected)) throw new Error('Build markers are stale; sync the affected app and commit before release.');
     if (git(['status', '--porcelain'])) throw new Error('Verification changed tracked files; inspect before release.');
     if (head !== git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0]) throw new Error('main advanced during verification; rebase and verify again.');
-    run(cwd, [resolve(cwd, 'node_modules/wrangler/bin/wrangler.js'), 'deploy']);
-    run(root, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]);
+    runProductionDelivery(app, { runCommand: run, deployDirectory: cwd });
   }
 }

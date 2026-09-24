@@ -1,15 +1,15 @@
-const CACHE_NAME = "t-room-omikuji-omikuji-40a2d7daa621";
+const CACHE_NAME = "t-room-omikuji-omikuji-802b3f69f677";
 const APP_ASSETS = [
   "./",
   "./index.html",
-  "./index.html?v=omikuji-40a2d7daa621",
+  "./index.html?v=omikuji-802b3f69f677",
   "./icon-192.png",
   "./icon-512.png",
   "./icon.svg",
-  "/apps/omikuji/manifest.webmanifest?v=omikuji-40a2d7daa621",
-  "/apps/omikuji/omikuji.css?v=omikuji-40a2d7daa621",
-  "/apps/omikuji/omikuji.js?v=omikuji-40a2d7daa621",
-  "/assets/pwa-auto-update.js?v=omikuji-40a2d7daa621"
+  "/apps/omikuji/manifest.webmanifest?v=omikuji-802b3f69f677",
+  "/apps/omikuji/omikuji.css?v=omikuji-802b3f69f677",
+  "/apps/omikuji/omikuji.js?v=omikuji-802b3f69f677",
+  "/assets/pwa-auto-update.js?v=omikuji-802b3f69f677"
 ];
 const APP_ASSET_PATHS = new Set(APP_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 

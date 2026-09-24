@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 export const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const registryPath = resolve(workspace, "web-apps.json");
-const textExtensions = new Set([".css", ".html", ".js", ".json", ".svg", ".webmanifest"]);
+const textExtensions = new Set([".cjs", ".css", ".html", ".js", ".json", ".mjs", ".svg", ".webmanifest"]);
 
 export async function loadWebAppRegistry() {
   return JSON.parse(await readFile(registryPath, "utf8"));
@@ -102,11 +102,11 @@ function localShellReferences(html, publicUrl) {
   });
 }
 
-export async function collectEntrypointShellAssets(app, contract, build) {
+export async function collectEntrypointShellAssets(app, contract, build, baseDirectory = workspace) {
   const assets = new Set();
   for (let index = 0; index < app.entrypoints.length; index += 1) {
     const html = ensureHtmlContract(
-      await readFile(resolve(workspace, app.entrypoints[index]), "utf8"),
+      await readFile(resolve(baseDirectory, app.entrypoints[index]), "utf8"),
       app,
       contract,
       build
@@ -145,7 +145,8 @@ function syncHtmlPrecacheArray(source, app, shellAssets) {
     .filter(Boolean)
     .filter((expression) => !shellPaths.has(precacheEntryPath(expression, app.publicUrls[0])));
   const entries = [...kept, ...shellAssets.map((asset) => JSON.stringify(asset))];
-  return source.replace(pattern, `const ${name} = [\n  ${entries.join(",\n  ")}\n];`);
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  return source.replace(pattern, `const ${name} = [${newline}  ${entries.join(`,${newline}  `)}${newline}];`);
 }
 
 export function syncServiceWorkerText(source, app, build, shellAssets = []) {
@@ -169,19 +170,19 @@ async function listFiles(root) {
   return output;
 }
 
-export async function filesForApp(app) {
-  const paths = new Set([resolve(workspace, "assets/pwa-auto-update.js"), ...["line-browser-policy.mjs", "line-browser-worker.mjs", "line-browser-csp.mjs"].map(file => resolve(workspace, "assets", file))]);
+export async function filesForApp(app, baseDirectory = workspace) {
+  const paths = new Set([resolve(baseDirectory, "assets/pwa-auto-update.js"), ...["line-browser-policy.mjs", "line-browser-worker.mjs", "line-browser-csp.mjs"].map(file => resolve(baseDirectory, "assets", file))]);
   for (const root of app.buildRoots || []) {
-    for (const file of await listFiles(resolve(workspace, root))) paths.add(file);
+    for (const file of await listFiles(resolve(baseDirectory, root))) paths.add(file);
   }
-  for (const file of app.buildFiles || []) paths.add(resolve(workspace, file));
-  return [...paths].sort((left, right) => relative(workspace, left).localeCompare(relative(workspace, right)));
+  for (const file of app.buildFiles || []) paths.add(resolve(baseDirectory, file));
+  return [...paths].sort((left, right) => relative(baseDirectory, left).localeCompare(relative(baseDirectory, right)));
 }
 
-export async function expectedContentBuild(app, contract) {
+export async function expectedContentBuild(app, contract, baseDirectory = workspace) {
   const hash = createHash("sha256");
-  for (const file of await filesForApp(app)) {
-    const pathFromWorkspace = relative(workspace, file).replaceAll("\\", "/");
+  for (const file of await filesForApp(app, baseDirectory)) {
+    const pathFromWorkspace = relative(baseDirectory, file).replaceAll("\\", "/");
     const buffer = await readFile(file);
     hash.update(pathFromWorkspace);
     hash.update("\0");
@@ -195,54 +196,115 @@ export async function expectedContentBuild(app, contract) {
   return `${app.id}-${hash.digest("hex").slice(0, 12)}`;
 }
 
-export async function expectedBuild(app, contract) {
-  return app.buildMode === "prepared-commit" ? expectedSiteBuild() : expectedContentBuild(app, contract);
+export async function expectedBuild(app, contract, baseDirectory = workspace) {
+  return app.buildMode === "prepared-commit" ? expectedSiteBuild() : expectedContentBuild(app, contract, baseDirectory);
 }
 
-export async function syncContentHashApp(app, contract) {
-  if (app.buildMode !== "content-hash") return { app: app.id, build: await expectedBuild(app, contract), changed: [] };
+export async function syncContentHashApp(app, contract, baseDirectory = workspace) {
+  if (app.buildMode !== "content-hash") return { app: app.id, build: await expectedBuild(app, contract, baseDirectory), changed: [] };
   const changed = new Set();
   for (let iteration = 0; iteration < 5; iteration += 1) {
-    const build = await expectedContentBuild(app, contract);
+    const build = await expectedContentBuild(app, contract, baseDirectory);
     for (const entrypoint of app.entrypoints) {
-      const target = resolve(workspace, entrypoint);
+      const target = resolve(baseDirectory, entrypoint);
       const before = await readFile(target, "utf8");
       const after = ensureHtmlContract(before, app, contract, build);
-      if (after !== before) {
+      if (!sameText(after, before)) {
         await writeFile(target, after);
         changed.add(entrypoint);
       }
     }
     if (app.serviceWorker && app.cachePrefix) {
-      const target = resolve(workspace, app.serviceWorker);
+      const target = resolve(baseDirectory, app.serviceWorker);
       const before = await readFile(target, "utf8");
-      const shellAssets = app.precacheMode === "html" ? await collectEntrypointShellAssets(app, contract, build) : [];
+      const shellAssets = app.precacheMode === "html" ? await collectEntrypointShellAssets(app, contract, build, baseDirectory) : [];
       const after = syncServiceWorkerText(before, app, build, shellAssets);
-      if (after !== before) {
+      if (!sameText(after, before)) {
         await writeFile(target, after);
         changed.add(app.serviceWorker);
       }
       for (const copy of app.serviceWorkerCopies || []) {
-        const copyTarget = resolve(workspace, copy);
+        const copyTarget = resolve(baseDirectory, copy);
         const copyBefore = await readFile(copyTarget, "utf8");
-        if (copyBefore !== after) {
+        if (!sameText(copyBefore, after)) {
           await writeFile(copyTarget, after);
           changed.add(copy);
         }
       }
     }
     for (const buildConstant of app.buildConstants || []) {
-      const target = resolve(workspace, buildConstant);
+      const target = resolve(baseDirectory, buildConstant);
       const before = await readFile(target, "utf8");
       const after = replaceStringConstant(before, "APP_BUILD_ID", build);
-      if (after !== before) {
+      if (!sameText(after, before)) {
         await writeFile(target, after);
         changed.add(buildConstant);
       }
     }
-    if (await expectedContentBuild(app, contract) === build) return { app: app.id, build, changed: [...changed] };
+    if (await expectedContentBuild(app, contract, baseDirectory) === build) return { app: app.id, build, changed: [...changed] };
   }
   throw new Error(`${app.id}: build同期が安定しません。`);
+}
+
+export function appsForTarget(registry, target) {
+  if (!target) return [...registry.apps];
+  const app = registry.apps.find((candidate) => candidate.id === target);
+  if (app) return [app];
+  const apps = registry.apps.filter((candidate) => candidate.deployTarget === target);
+  if (!apps.length) throw new Error(`Unknown app id or deploy target: ${target}`);
+  return apps;
+}
+
+function currentBuildMarker(source, contract) {
+  const name = escapeRegExp(contract.buildMeta);
+  return source.match(new RegExp(`<meta\\s+[^>]*name=["']${name}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i"))?.[1]
+    || source.match(new RegExp(`<meta\\s+[^>]*content=["']([^"']*)["'][^>]*name=["']${name}["'][^>]*>`, "i"))?.[1]
+    || "missing";
+}
+
+function currentStringConstant(source, name) {
+  return source.match(new RegExp(`const\\s+${escapeRegExp(name)}\\s*=\\s*["']([^"']*)["']\\s*;`))?.[1] || "missing";
+}
+
+function sameText(left, right) {
+  return left.replace(/\r\n?/g, "\n") === right.replace(/\r\n?/g, "\n");
+}
+
+export async function inspectBuildFreshness(app, contract, baseDirectory = workspace) {
+  if (app.buildMode !== "content-hash") return { app: app.id, expected: await expectedBuild(app, contract, baseDirectory), fresh: true, skipped: true, issues: [] };
+  const expected = await expectedContentBuild(app, contract, baseDirectory);
+  const issues = [];
+  for (const entrypoint of app.entrypoints) {
+    const source = await readFile(resolve(baseDirectory, entrypoint), "utf8");
+    if (!sameText(source, ensureHtmlContract(source, app, contract, expected))) {
+      issues.push({ file: entrypoint, kind: "html-contract", actual: currentBuildMarker(source, contract) });
+    }
+  }
+  if (app.serviceWorker && app.cachePrefix) {
+    const source = await readFile(resolve(baseDirectory, app.serviceWorker), "utf8");
+    const shellAssets = app.precacheMode === "html"
+      ? await collectEntrypointShellAssets(app, contract, expected, baseDirectory)
+      : [];
+    const desired = syncServiceWorkerText(source, app, expected, shellAssets);
+    if (!sameText(source, desired)) {
+      issues.push({
+        file: app.serviceWorker,
+        kind: "service-worker-contract",
+        actual: currentStringConstant(source, app.cacheNameConstant || "CACHE_NAME")
+      });
+    }
+    for (const copy of app.serviceWorkerCopies || []) {
+      const copySource = await readFile(resolve(baseDirectory, copy), "utf8");
+      if (!sameText(copySource, desired)) issues.push({ file: copy, kind: "service-worker-copy", actual: "differs from canonical worker" });
+    }
+  }
+  for (const buildConstant of app.buildConstants || []) {
+    const source = await readFile(resolve(baseDirectory, buildConstant), "utf8");
+    if (currentStringConstant(source, "APP_BUILD_ID") !== expected) {
+      issues.push({ file: buildConstant, kind: "build-constant", actual: currentStringConstant(source, "APP_BUILD_ID") });
+    }
+  }
+  return { app: app.id, expected, fresh: issues.length === 0, skipped: false, issues };
 }
 
 export function validateAppDefinition(app) {

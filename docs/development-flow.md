@@ -44,7 +44,14 @@ Downloaderの通常verifyはNodeテスト・Python構文・Worker bundleまで�
 
 Android/TWAは該当ディレクトリの変更時だけJava 21でdebug buildとunit test。SDK 36が必要。署名鍵、release build、実機/emulatorをCIへ持ち込まない。Webだけの変更でAndroid buildは走らない。
 
-Web契約テストはOS一時ディレクトリへ現在のソースをコピーし、既存 `web-apps:sync` と `web-apps:test` を実行して生成物を検証する。元のworktreeや公開中のbuildは変更しない。これは**公開済みbuildとの一致確認ではない**。公開時は下記の厳密な照合を行う。従来の `pnpm run web-apps:test` の厳密な挙動も変更していない。
+Web契約テストはOS一時ディレクトリへ現在のソースをコピーし、既存 `web-apps:sync` と `web-apps:test` を実行して生成物を検証する。元のworktreeや公開中のbuildは変更しない。この生成テストとは別に、site verifyは実checkoutを変更しないfreshness checkを実行し、`t-room-site`に属するcontent-hash appのcommit済みmarker・updater・Service Worker・app shellが現在のhashと一致しなければCIを失敗させる。
+
+markerを同期する場合はdeploy targetまたはapp idを必ず指定し、対象外Workerのmarkerを巻き込まない。
+
+```sh
+node tools/check-web-app-builds.mjs --target t-room-site
+node tools/sync-web-app-builds.mjs --target t-room-site
+```
 
 ## CIと失敗の調査
 
@@ -88,7 +95,7 @@ npm run release -- cloud               # registry app id。security / diary / bi
 node tools/verify-web-app-builds.mjs --target t-room-cloud
 ```
 
-releaseは最新origin/main一致を確認後、CIと同じ`installDirectories()`を正本として対象verifyに必要な依存関係だけを上記の安全なpnpmオプションで導入する。その後、対象verify、committed build marker、検証中のmain進行を確認して対象Workerだけdeployし、同deploy targetの全登録アプリの公開marker・shell・SWを照合する。markerが古ければ失敗するので、対象appのみ `syncContentHashApp`（`tools/web-app-registry.mjs`）で同期しcommitしてやり直す。Cloudのcanonicalファイルと公開runtimeコピーも既存手順どおり一致させる。全体syncを無関係なサービスへcommitしない。
+releaseは最新origin/main一致を確認後、CIと同じ`installDirectories()`を正本として対象verifyに必要な依存関係だけを上記の安全なpnpmオプションで導入する。その後、対象verifyと検証中のmain進行を確認し、**deploy前preflight**で同deploy targetの全content-hash appについてcommit済みmarker・updater・Service Worker・app shellをread-only検査する。不一致時はWranglerを実行せず、target限定syncコマンドを表示して停止する。preflight成功後だけ対象Workerをdeployし、既存の**post-deploy verify**で同deploy targetの全登録アプリをproductionから読み戻して照合する。Cloudのcanonicalファイルと公開runtimeコピーも既存手順どおり一致させる。全体syncを無関係なサービスへcommitしない。
 
 DownloaderのProductionはこのコマンドで拒否し、既存の署名・lease・reconciliation付きContainer/定義手順を使う。AIには公開Web build registryがないため既存専用手順を維持する。各Workerの従来deployコマンドも削除しない。
 
