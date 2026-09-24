@@ -1,6 +1,54 @@
 const ENTRY_TEXT_LINK_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`[\]{}()<>]+/g;
 const ENTRY_TEXT_LINK_TRIM_TRAILING = /[.,。、!?！？)\]\}"'”』】〉》）]+$/u;
 const ENTRY_TEXT_LINK_TEXT_BODY = /[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]/;
+const PHOTO_MARKER_PATTERN = /\[\[写真:([0-9a-f-]{36})\]\]/gi;
+
+export function findPhotoMarkers(text) {
+  const source = String(text || "");
+  const markers = [];
+  PHOTO_MARKER_PATTERN.lastIndex = 0;
+  let match;
+  while ((match = PHOTO_MARKER_PATTERN.exec(source)) !== null) {
+    markers.push({
+      id: match[1],
+      marker: match[0],
+      start: match.index,
+      end: match.index + match[0].length
+    });
+  }
+  return markers;
+}
+
+export function tokenizeEditorDocument(text, runs = []) {
+  const source = String(text || "");
+  if (!source) return [];
+  const markers = findPhotoMarkers(source);
+  const normalizedRuns = normalizeEntryTextRuns(source.length, runs);
+  const boundaries = new Set([0, source.length]);
+  const isInsideMarker = (offset) => markers.some((marker) => marker.start < offset && offset < marker.end);
+  for (const run of normalizedRuns) {
+    if (!isInsideMarker(run.start)) boundaries.add(run.start);
+    if (!isInsideMarker(run.end)) boundaries.add(run.end);
+  }
+  for (const marker of markers) {
+    boundaries.add(marker.start);
+    boundaries.add(marker.end);
+  }
+  const points = [...boundaries].sort((left, right) => left - right);
+  return points.slice(0, -1).flatMap((start, index) => {
+    const end = points[index + 1];
+    if (end <= start) return [];
+    const marker = markers.find((candidate) => candidate.start === start && candidate.end === end);
+    if (marker) return [{ kind: "photo-marker", ...marker, text: marker.marker, marks: null }];
+    return [{
+      kind: "text",
+      text: source.slice(start, end),
+      start,
+      end,
+      marks: resolveEntryTextMarks(normalizedRuns, start, end)
+    }];
+  });
+}
 
 export function findEntryTextLinks(text) {
   const source = String(text || "");
@@ -183,28 +231,30 @@ export function mergeRichTextRuns(runs) {
   return merged;
 }
 
-export function shiftRichTextRunsForInsertion(runs, offset, insertedLength) {
-  return mergeRichTextRuns(runs.flatMap((run) => {
-    if (run.end <= offset) return [run];
-    if (run.start >= offset) return [{ ...run, start: run.start + insertedLength, end: run.end + insertedLength }];
-    return [
-      { ...run, end: offset },
-      { ...run, start: offset + insertedLength, end: run.end + insertedLength }
-    ];
-  }));
-}
-
 export function insertTextIntoRichDocument(documentValue, requestedOffset, insertedText) {
   const content = String(documentValue?.content || "");
   const offset = Math.max(0, Math.min(content.length, Number(requestedOffset) || 0));
+  return replaceTextInRichDocument(documentValue, offset, offset, insertedText);
+}
+
+export function replaceTextInRichDocument(documentValue, requestedStart, requestedEnd, insertedText) {
+  const content = String(documentValue?.content || "");
+  const start = Math.max(0, Math.min(content.length, Number(requestedStart) || 0));
+  const end = Math.max(start, Math.min(content.length, Number(requestedEnd) || 0));
   const text = String(insertedText || "");
-  const runs = shiftRichTextRunsForInsertion(
-    Array.isArray(documentValue?.contentFormat?.runs) ? documentValue.contentFormat.runs : [],
-    offset,
-    text.length
+  const delta = text.length - (end - start);
+  const runs = mergeRichTextRuns(
+    (Array.isArray(documentValue?.contentFormat?.runs) ? documentValue.contentFormat.runs : []).flatMap((run) => {
+      if (run.end <= start) return [run];
+      if (run.start >= end) return [{ ...run, start: run.start + delta, end: run.end + delta }];
+      const parts = [];
+      if (run.start < start) parts.push({ ...run, end: start });
+      if (run.end > end) parts.push({ ...run, start: start + text.length, end: run.end + delta });
+      return parts;
+    })
   );
   return {
-    content: content.slice(0, offset) + text + content.slice(offset),
+    content: content.slice(0, start) + text + content.slice(end),
     contentFormat: runs.length ? { version: 1, runs } : null
   };
 }
