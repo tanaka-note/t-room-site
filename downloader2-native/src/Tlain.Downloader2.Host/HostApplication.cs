@@ -10,9 +10,8 @@ internal sealed class HostApplication(NativeMessaging messaging)
     private readonly HistoryStore history = new();
     private readonly ToolLocator tools = new();
     private readonly PairingVerifier pairingVerifier = new();
+    private readonly PairingChallengeState pairingChallenge = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> downloads = new();
-    private string? pairingChallenge;
-    private long pairingExpiresAt;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -56,9 +55,8 @@ internal sealed class HostApplication(NativeMessaging messaging)
     private object PreparePairing()
     {
         if (credentials.Exists()) return new { paired = true, deviceId = credentials.DeviceIdOrNull(), deviceChallenge = (string?)null };
-        pairingChallenge = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        pairingExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 120;
-        return new { paired = false, deviceChallenge = pairingChallenge, expiresAt = pairingExpiresAt };
+        var issued = pairingChallenge.Issue(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        return new { paired = false, deviceChallenge = issued.Challenge, expiresAt = issued.ExpiresAt };
     }
 
     private async Task<object> PairAsync(JsonElement payload, CancellationToken cancellationToken)
@@ -67,13 +65,11 @@ internal sealed class HostApplication(NativeMessaging messaging)
         var token = RequiredString(payload, "pairingToken", 4096);
         var expiresAt = RequiredLong(payload, "expiresAt");
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var challenge = pairingChallenge;
-        if (challenge is null || pairingExpiresAt < now || expiresAt < now || expiresAt > now + 120)
+        if (!pairingChallenge.TryGet(expiresAt, now, out var challenge))
             throw new DownloaderException("pairing_invalid", "ペアリングトークンが無効または期限切れです。");
         if (!await pairingVerifier.VerifyAsync(token, challenge, expiresAt, cancellationToken).ConfigureAwait(false))
             throw new DownloaderException("pairing_invalid", "ペアリングトークンを確認できませんでした。");
-        pairingChallenge = null;
-        pairingExpiresAt = 0;
+        if (!pairingChallenge.Consume(challenge)) throw new DownloaderException("pairing_invalid", "ペアリングchallengeを再利用できません。");
         var device = credentials.GetOrCreate();
         return new { paired = true, deviceId = device.DeviceId };
     }

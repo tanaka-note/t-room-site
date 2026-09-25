@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { root, affected, changedFiles, commands, targets, installDirectories } from './verify-plan.mjs';
+import { root, affected, changedFiles, commands, targets, installDirectories, downloader2NativeAffected } from './verify-plan.mjs';
 import { dependencyInstallPlan, installArgs } from './install-verify-dependencies.mjs';
 import { localConfig } from './local-dev.mjs';
 import { assertPreviewSafe, prepareReleaseDependencies, releaseProfile } from './release.mjs';
@@ -16,7 +16,7 @@ test('Cloud edits do not select Android, Downloader or unrelated services', () =
   assert.deepEqual(affected(['cloud-worker/tests/manual-thumbnail-api.mjs']), ['cloud']);
 });
 test('shared authentication, PRF and SW changes include consumers', () => {
-  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'ai', 'auth']);
+  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'auth']);
   const auth = affected(['assets/session-policy.mjs']);
   for (const t of ['cloud', 'diary', 'billing', 'auth']) assert.ok(auth.includes(t), t);
   assert.ok(affected(['security-worker/src/index.js']).includes('auth'));
@@ -24,6 +24,19 @@ test('shared authentication, PRF and SW changes include consumers', () => {
   assert.ok(affected(['diary-worker/public/service-worker.js']).includes('site'));
   assert.deepEqual(affected(['android-ai-chat/app/build.gradle.kts']), ['android-ai-chat']);
   assert.deepEqual(affected(['AGENTS.md', 'docs/development.md']), []);
+});
+test('Downloader 2 components select only Downloader 2 while unknown files remain site-safe', () => {
+  for (const path of [
+    'downloader2-worker/src/index.js',
+    'downloader2-extension/service-worker.js',
+    'downloader2-native/src/Tlain.Downloader2.Host/Program.cs',
+    'downloader2-fixtures/server.mjs'
+  ]) assert.deepEqual(affected([path]), ['downloader2'], path);
+  assert.deepEqual(affected(['unknown-runtime/index.js']), ['site']);
+  assert.deepEqual(affected(['docs/downloader2.md']), []);
+  assert.equal(downloader2NativeAffected(['downloader2-native/src/Program.cs']), true);
+  assert.equal(downloader2NativeAffected(['downloader2-extension/service-worker.js']), false);
+  assert.equal(downloader2NativeAffected(['docs/downloader2.md']), false);
 });
 test('affected mapping is order independent and unknown runtime files are not silently skipped', () => {
   const paths = ['assets/session-policy.mjs', 'assets/pwa-auto-update.js'];
@@ -57,6 +70,9 @@ test('profiles only reference existing scripts/tests and no production mutations
     assert.doesNotMatch(JSON.stringify(c), /--remote|refresh-definitions|r2:lifecycle|versions.*upload/);
   }
   assert.ok(installDirectories(['auth']).includes('security-worker'));
+  assert.deepEqual(installDirectories(['downloader2']), ['.', 'downloader2-worker']);
+  assert.ok(commands('downloader2').some((command) => command.cwd === 'downloader2-extension' && command.script === 'check'));
+  assert.ok(commands('downloader2').some((command) => command.cwd === 'downloader2-fixtures' && command.script === 'check'));
   assert(commands('site').some((command) => command.args?.join(' ') === 'tools/check-web-app-builds.mjs --target t-room-site'));
 });
 test('site release installs every clean-worktree dependency through the shared verify plan', () => {

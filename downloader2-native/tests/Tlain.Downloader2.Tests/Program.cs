@@ -1,11 +1,12 @@
 using System.Net;
 using System.Text;
 using Tlain.Downloader2.Core;
+using Tlain.Downloader2.Host;
 
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("direct single and request context", DirectSingle),
-    ("100MB range with 4 and 8 connections", ParallelRanges),
+    ("virtual range with 4, 8 and 16 connections", ParallelRanges),
     ("range mismatch falls back to single", RangeFallback),
     ("retry and status failures", RetryAndFailures),
     ("cancel removes partial operation", Cancel),
@@ -13,6 +14,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Direct and HLS coordinator finalize local files", CoordinatorE2E),
     ("cross-origin redirect strips credentials", RedirectCredentialBoundary),
     ("history excludes secrets", HistoryPrivacy)
+    ,("Native Messaging framing limits", NativeMessagingLimits)
+    ,("pairing profiles and challenge lifetime fail closed", PairingBoundaries)
 };
 
 var failed = 0;
@@ -41,25 +44,34 @@ static async Task ParallelRanges()
 {
     await using var server = new FixtureServer();
     using var transport = new HttpTransport(TimeSpan.FromSeconds(30));
-    foreach (var connections in new[] { 4, 8 })
+    Equal(4, DirectDownloader.AdaptiveConnections(32L * 1024 * 1024), "adaptive 4");
+    Equal(8, DirectDownloader.AdaptiveConnections(256L * 1024 * 1024), "adaptive 8");
+    Equal(16, DirectDownloader.AdaptiveConnections(1024L * 1024 * 1024), "adaptive 16");
+    foreach (var connections in new[] { 4, 8, 16 })
     {
         var path = TempFile();
-        await new DirectDownloader(transport).DownloadPartAsync(new(server.Url("range100"), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, connections);
-        Equal(FixtureServer.LargeLength, new FileInfo(path).Length, $"{connections} range size");
+        server.ResetRanges();
+        await new DirectDownloader(transport).DownloadPartAsync(new(server.Url("range-virtual"), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, connections);
+        Equal(FixtureServer.VirtualRangeLength, new FileInfo(path).Length, $"{connections} range size");
+        Equal(connections + 1, server.Ranges.Count, $"{connections} probe plus range count");
+        True(server.Ranges.Skip(1).Select(item => item.Start).Distinct().Count() == connections, $"{connections} distinct ranges");
         File.Delete(path);
     }
-    True(server.RangeRequestCount >= 13, "range request count");
 }
 
 static async Task RangeFallback()
 {
     await using var server = new FixtureServer();
     using var transport = new HttpTransport();
-    var path = TempFile();
-    await new DirectDownloader(transport).DownloadPartAsync(new(server.Url("mismatch"), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, 4);
-    Equal(FixtureServer.SmallLength, new FileInfo(path).Length, "fallback size");
-    True(server.FullRequestCount > 0, "single stream fallback");
-    File.Delete(path);
+    foreach (var endpoint in new[] { "mismatch", "mismatch-total" })
+    {
+        var path = TempFile();
+        var before = server.FullRequestCount;
+        await new DirectDownloader(transport).DownloadPartAsync(new(server.Url(endpoint), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, 4);
+        Equal(FixtureServer.SmallLength, new FileInfo(path).Length, $"{endpoint} fallback size");
+        True(server.FullRequestCount > before, $"{endpoint} single stream fallback");
+        File.Delete(path);
+    }
 }
 
 static async Task RetryAndFailures()
@@ -89,7 +101,7 @@ static async Task Cancel()
     try { await new DirectDownloader(transport).DownloadPartAsync(new(server.Url("slow"), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, cancellation.Token, 1); }
     catch (OperationCanceledException) { thrown = true; }
     True(thrown, "cancelled");
-    if (File.Exists(path)) File.Delete(path);
+    True(!File.Exists(path), "cancelled partial file removed");
 }
 
 static async Task HlsAndDrm()
@@ -120,6 +132,8 @@ static async Task RedirectCredentialBoundary()
     True(target.CrossOriginCredentialsAbsent, "credentials stripped");
     var external = HeaderPolicy.ForExternalTool(new Dictionary<string, string> { ["cookie"] = "secret=yes", ["authorization"] = "Bearer secret", ["referer"] = source.Url("watch") });
     True(!external.ContainsKey("cookie") && !external.ContainsKey("authorization") && external.ContainsKey("referer"), "external tool credentials stripped");
+    var sanitized = HeaderPolicy.Normalize(new Dictionary<string, string> { ["referer"] = "https://fixture.test/watch\r\nX-Injected: yes" });
+    True(!sanitized["referer"].Contains('\r') && !sanitized["referer"].Contains('\n'), "header injection stripped");
     File.Delete(path);
 }
 
@@ -150,14 +164,60 @@ static async Task HistoryPrivacy()
     Directory.Delete(directory, true);
 }
 
+static async Task NativeMessagingLimits()
+{
+    var prefix = BitConverter.GetBytes(1024 * 1024 + 1);
+    await using var oversized = new MemoryStream(prefix);
+    await using var sink = new MemoryStream();
+    await Throws<InvalidDataException>(() => new NativeMessaging(oversized, sink).ReadAsync(CancellationToken.None), "1 MiB input limit");
+
+    var deepJson = Encoding.UTF8.GetBytes(new string('[', 20) + "0" + new string(']', 20));
+    var framed = new MemoryStream();
+    await framed.WriteAsync(BitConverter.GetBytes(deepJson.Length));
+    await framed.WriteAsync(deepJson);
+    framed.Position = 0;
+    await Throws<System.Text.Json.JsonException>(() => new NativeMessaging(framed, sink).ReadAsync(CancellationToken.None), "JSON MaxDepth");
+
+    await using var output = new MemoryStream();
+    var messaging = new NativeMessaging(Stream.Null, output);
+    await messaging.WriteAsync(new { version = 1, ok = true });
+    True(output.Length > 4, "framed output");
+}
+
+static async Task PairingBoundaries()
+{
+    EqualString("https://tanaka-note.com/downloader2/api/pairing/redeem", BuildProfile.Current.PairingEndpoint.AbsoluteUri, "Production pairing endpoint");
+    var e2e = BuildProfile.CreateE2E("https://isolated-preview.example.invalid/downloader2/api/pairing/redeem", "isolated-preview.example.invalid");
+    EqualString("e2e", e2e.Name, "E2E profile");
+    foreach (var invalid in new[] {
+        ("http://preview.example.invalid/downloader2/api/pairing/redeem", "preview.example.invalid"),
+        ("https://tanaka-note.com/downloader2/api/pairing/redeem", "tanaka-note.com"),
+        ("https://preview.example.invalid/downloader2/api/pairing/redeem", "other.example.invalid")
+    }) ThrowsSync<InvalidOperationException>(() => { _ = BuildProfile.CreateE2E(invalid.Item1, invalid.Item2); }, "invalid E2E profile");
+    var state = new PairingChallengeState();
+    var issued = state.Issue(1000);
+    Equal(1120, issued.ExpiresAt, "120 second challenge");
+    True(state.TryGet(1120, 1001, out var challenge), "fresh challenge");
+    True(state.Consume(challenge), "first challenge consume");
+    True(!state.TryGet(1120, 1001, out _), "challenge cannot be reused");
+    var handler = new RecordingHandler();
+    using var verifier = new PairingVerifier(BuildProfile.Current.PairingEndpoint, handler);
+    True(!await verifier.VerifyAsync("token", "challenge", 1120, CancellationToken.None), "pairing redirect rejected");
+    Equal(1, handler.RequestCount, "pairing redirect not followed");
+    EqualString(BuildProfile.Current.PairingEndpoint.AbsoluteUri, handler.RequestUri!.AbsoluteUri, "pairing request fixed endpoint");
+}
+
 static string TempFile() => Path.Combine(Path.GetTempPath(), $"tlain-{Guid.NewGuid():N}.tlain.part");
 static void True(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
 static void Equal(long expected, long actual, string message) { if (expected != actual) throw new InvalidOperationException($"{message}: {expected} != {actual}"); }
+static void EqualString(string expected, string actual, string message) { if (expected != actual) throw new InvalidOperationException($"{message}: {expected} != {actual}"); }
+static async Task Throws<T>(Func<Task> action, string message) where T : Exception { try { await action(); } catch (T) { return; } throw new InvalidOperationException(message); }
+static void ThrowsSync<T>(Action action, string message) where T : Exception { try { action(); } catch (T) { return; } throw new InvalidOperationException(message); }
 
 sealed class FixtureServer : IAsyncDisposable
 {
     public const int SmallLength = 2 * 1024 * 1024;
-    public const int LargeLength = 100 * 1024 * 1024;
+    public const int VirtualRangeLength = 2 * 1024 * 1024;
     private readonly HttpListener listener = new();
     private readonly CancellationTokenSource stop = new();
     private readonly Task loop;
@@ -166,6 +226,7 @@ sealed class FixtureServer : IAsyncDisposable
     public int FullRequestCount;
     public int FlakyCount;
     public bool CrossOriginCredentialsAbsent;
+    public List<(long Start, long End)> Ranges { get; } = [];
     public string Origin { get; }
 
     public FixtureServer(FixtureServer? redirectTarget = null)
@@ -179,6 +240,7 @@ sealed class FixtureServer : IAsyncDisposable
     }
 
     public string Url(string path) => $"{Origin}/{path}";
+    public void ResetRanges() { lock (Ranges) Ranges.Clear(); }
 
     private async Task ListenAsync()
     {
@@ -205,14 +267,16 @@ sealed class FixtureServer : IAsyncDisposable
             if (path == "variant.m3u8") { await Text(context, "#EXTM3U\n#EXTINF:1,\nseg1.ts\n#EXTINF:1,\nseg2.ts\n#EXT-X-ENDLIST\n", "application/vnd.apple.mpegurl"); return; }
             if (path == "drm.mpd") { await Text(context, "<MPD><ContentProtection schemeIdUri=\"urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\"/></MPD>", "application/dash+xml"); return; }
             if (path is "seg1.ts" or "seg2.ts") { context.Response.ContentType = "video/mp2t"; await WritePattern(context.Response, 188 * 10, 0, false, false); return; }
-            var length = path == "range100" ? LargeLength : SmallLength;
+            var length = path == "range-virtual" ? VirtualRangeLength : SmallLength;
             var range = context.Request.Headers["Range"];
             if (path == "slow") { context.Response.ContentLength64 = length; await WritePattern(context.Response, length, 0, true); return; }
             if (!string.IsNullOrEmpty(range) && TryRange(range, length, out var start, out var end))
             {
                 Interlocked.Increment(ref RangeRequestCount);
+                lock (Ranges) Ranges.Add((start, end));
                 context.Response.StatusCode = 206;
                 if (path == "mismatch" && start > 0) { context.Response.Headers["Content-Range"] = $"bytes {start + 1}-{end}/{length}"; }
+                else if (path == "mismatch-total" && start > 0) { context.Response.Headers["Content-Range"] = $"bytes {start}-{end}/{length + 1}"; }
                 else context.Response.Headers["Content-Range"] = $"bytes {start}-{end}/{length}";
                 context.Response.Headers["Accept-Ranges"] = "bytes";
                 await WritePattern(context.Response, end - start + 1, start, false, true);
@@ -276,4 +340,16 @@ sealed class FixtureServer : IAsyncDisposable
 sealed class CleanScanner : IDefenderScanner
 {
     public Task<DefenderResult> ScanAsync(string path, CancellationToken cancellationToken) => Task.FromResult(new DefenderResult(true, false, null));
+}
+
+sealed class RecordingHandler : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public Uri? RequestUri { get; private set; }
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        RequestCount++;
+        RequestUri = request.RequestUri;
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Redirect) { Headers = { Location = new Uri("https://untrusted.example.invalid/redeem") } });
+    }
 }

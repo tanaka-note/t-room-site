@@ -1,8 +1,10 @@
+import "./profile.js";
 import { classifyObservation, mergeCandidate } from "./capture/candidates.js";
 import { normalizeHeaders, normalizeHeaderObject, requestContext } from "./capture/request-context.js";
 
 const CHANNEL = "tlain-downloader2-v1";
 const NATIVE_HOST = "com.tlain.downloader2";
+const CONTROLLER_ORIGINS = new Set(globalThis.TLAIN_DOWNLOADER2_PROFILE?.controllerOrigins || []);
 const requests = new Map();
 const candidates = new Map();
 const nativePending = new Map();
@@ -159,7 +161,7 @@ function ensureNativePort() {
 function allowedController(sender) {
   try {
     const url = new URL(sender.tab?.url || "");
-    return url.origin === "https://tanaka-note.com" && url.pathname.startsWith("/downloader2/") && sender.frameId === 0;
+    return CONTROLLER_ORIGINS.has(url.origin) && url.pathname.startsWith("/downloader2/") && sender.frameId === 0;
   } catch { return false; }
 }
 

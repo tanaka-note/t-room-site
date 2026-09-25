@@ -1,5 +1,6 @@
 **/bin/
 **/obj/
+artifacts/
 tools/*.exe
 tools/*.dll
 tools/*.zip

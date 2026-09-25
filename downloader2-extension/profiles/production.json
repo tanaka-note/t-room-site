@@ -1,0 +1,5 @@
+{
+  "profile": "production",
+  "controllerOrigins": ["https://tanaka-note.com"],
+  "allowedControllerOrigins": ["https://tanaka-note.com"]
+}

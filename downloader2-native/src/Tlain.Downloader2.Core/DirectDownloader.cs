@@ -8,26 +8,34 @@ public sealed class DirectDownloader(HttpTransport transport)
 {
     public async Task<string> DownloadPartAsync(MediaRequest request, string partPath, IProgress<DownloadProgress>? progress, CancellationToken cancellationToken, int? forcedConnections = null)
     {
-        var source = HeaderPolicy.RequireHttpUri(request.Url);
-        var headers = HeaderPolicy.Normalize(request.Headers);
-        progress?.Report(new("probing"));
-        var probe = await ProbeAsync(source, headers, cancellationToken).ConfigureAwait(false);
-        var connections = forcedConnections ?? AdaptiveConnections(probe.Length);
-        if (probe.RangeSupported && probe.Length > 0 && connections > 1)
+        try
         {
-            try
+            var source = HeaderPolicy.RequireHttpUri(request.Url);
+            var headers = HeaderPolicy.Normalize(request.Headers);
+            progress?.Report(new("probing"));
+            var probe = await ProbeAsync(source, headers, cancellationToken).ConfigureAwait(false);
+            var connections = forcedConnections ?? AdaptiveConnections(probe.Length);
+            if (probe.RangeSupported && probe.Length > 0 && connections > 1)
             {
-                await ParallelDownloadAsync(probe.FinalUri, source, headers, partPath, probe.Length, connections, progress, cancellationToken).ConfigureAwait(false);
-                return partPath;
+                try
+                {
+                    await ParallelDownloadAsync(probe.FinalUri, source, headers, partPath, probe.Length, connections, progress, cancellationToken).ConfigureAwait(false);
+                    return partPath;
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    TryDelete(partPath);
+                    progress?.Report(new("downloading", null, "Range取得を単一streamへ切り替えました"));
+                }
             }
-            catch (Exception error) when (error is not OperationCanceledException)
-            {
-                TryDelete(partPath);
-                progress?.Report(new("downloading", null, "Range取得を単一streamへ切り替えました"));
-            }
+            await SingleDownloadAsync(probe.FinalUri, source, headers, partPath, progress, cancellationToken).ConfigureAwait(false);
+            return partPath;
         }
-        await SingleDownloadAsync(probe.FinalUri, source, headers, partPath, progress, cancellationToken).ConfigureAwait(false);
-        return partPath;
+        catch (OperationCanceledException)
+        {
+            TryDelete(partPath);
+            throw;
+        }
     }
 
     public static int AdaptiveConnections(long length) => length >= 1024L * 1024 * 1024 ? 16 : length >= 256L * 1024 * 1024 ? 8 : length >= 32L * 1024 * 1024 ? 4 : 1;
@@ -73,7 +81,8 @@ public sealed class DirectDownloader(HttpTransport transport)
             var end = Math.Min(length - 1, start + segmentSize - 1);
             if (start > end) return;
             using var response = await transport.SendAsync(uri, HttpMethod.Get, headers, credentialOrigin, new RangeHeaderValue(start, end), cancellationToken).ConfigureAwait(false);
-            if (response.StatusCode != HttpStatusCode.PartialContent || response.Content.Headers.ContentRange?.From != start || response.Content.Headers.ContentRange?.To != end)
+            if (response.StatusCode != HttpStatusCode.PartialContent || response.Content.Headers.ContentRange?.From != start ||
+                response.Content.Headers.ContentRange?.To != end || response.Content.Headers.ContentRange?.Length != length)
                 throw new DownloaderException("range_mismatch", "Range応答が要求範囲と一致しません。");
             await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             var buffer = new byte[128 * 1024];

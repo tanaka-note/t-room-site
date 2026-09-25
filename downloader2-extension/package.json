@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check service-worker.js && node --check content-script.js && node --check capture/candidates.js && node --check capture/request-context.js",
+    "check": "node --check build-profile.mjs && node --check profile.js && node --check service-worker.js && node --check content-script.js && node --check capture/candidates.js && node --check capture/request-context.js",
     "test": "node --test tests/*.test.js"
   }
 }

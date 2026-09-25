@@ -51,6 +51,22 @@ All engines write under a per-job temporary directory and use `.tlain.part` for 
 3. Build/publish the Host: `dotnet publish downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj -c Release`.
 4. Load `downloader2-extension/` unpacked in Chrome or Edge and copy its extension ID.
 5. Run `downloader2-native/scripts/Install-NativeHost.ps1` with that ID.
-6. Run the local Worker for UI/API checks and the fixture server for capture/download checks. The shipped content script intentionally accepts only `https://tanaka-note.com/downloader2/*`; therefore the complete page-to-extension browser path is verified only after an explicitly approved deployment. No localhost origin is added as a production bypass.
+6. Run the local Worker for UI/API checks and the fixture server for capture/download checks. The shipped Production extension and Host remain fixed to `https://tanaka-note.com/downloader2/*` and `https://tanaka-note.com/downloader2/api/pairing/redeem`.
 
-Tests generate the 100 MiB range stream on demand. The fixture page also creates a short WebM with Canvas and MediaRecorder, uploads it only to the loopback fixture process, and plays it back over an HTTP Range response so browser capture can observe genuinely playable media without committing a binary fixture. The server also covers direct, range/no-range, HLS master/variant, DASH, extensionless Content-Type detection, header-required 403, signed query, same/cross-origin redirect, 403, 429, timeout, separate audio/video, multiple candidates, and explicit DRM.
+Direct Downloader tests use a small virtual Range stream with forced 4/8/16-way requests and separately verify the 32 MiB/256 MiB/1 GiB adaptive thresholds, avoiding a large repository fixture. The browser fixture creates a short WebM with Canvas and MediaRecorder, uploads it only to the loopback fixture process, and plays it back over an HTTP Range response so browser capture can observe genuinely playable media without committing a binary fixture. The server also covers direct, range/no-range, HLS master/variant, DASH, extensionless Content-Type detection, header-required 403, signed query, same/cross-origin redirect, 403, 429, timeout, separate audio/video, multiple candidates, and explicit DRM.
+
+## Isolated E2E profile
+
+Production constants are not runtime-configurable. An E2E extension is generated into a separate output directory from a profile JSON whose exact HTTPS controller origin must also appear in that profile's explicit allowlist:
+
+```text
+node downloader2-extension/build-profile.mjs <isolated-profile.json> <output-directory>
+```
+
+The E2E Native Host is a separate build. It fails during startup unless the exact HTTPS pairing endpoint uses `/downloader2/api/pairing/redeem`, its hostname is in the build-time allowlist, and it is not `tanaka-note.com`:
+
+```text
+dotnet publish downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj -c Release -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://<isolated-host>/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=<isolated-host>
+```
+
+This only prepares clients. A complete remote E2E environment still requires a dedicated non-Production hostname/route, Downloader 2 Worker, Security Worker/service binding, D1 database with migrations, session secret, WebAuthn RP/origin configuration, and test Identity. None may reuse Production bindings or data. Until those resources exist, `tools/release.mjs` continues to reject backend Preview upload and no remote Preview is performed.

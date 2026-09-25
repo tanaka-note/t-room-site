@@ -8,7 +8,19 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Downloader2Profile Condition="'$(Downloader2Profile)' == ''">Production</Downloader2Profile>
+    <DefineConstants Condition="'$(Downloader2Profile)' == 'E2E'">$(DefineConstants);DOWNLOADER2_E2E</DefineConstants>
   </PropertyGroup>
+  <ItemGroup Condition="'$(Downloader2Profile)' == 'E2E'">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>Downloader2PairingEndpoint</_Parameter1>
+      <_Parameter2>$(Downloader2PairingEndpoint)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>Downloader2PairingAllowedHosts</_Parameter1>
+      <_Parameter2>$(Downloader2PairingAllowedHosts)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Tlain.Downloader2.Core/Tlain.Downloader2.Core.csproj" />
   </ItemGroup>

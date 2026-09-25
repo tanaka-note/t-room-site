@@ -1,27 +1,27 @@
 (() => {
   "use strict";
   const CHANNEL = "tlain-downloader2-v1";
-  const ALLOWED_ORIGIN = "https://tanaka-note.com";
+  const ALLOWED_ORIGINS = new Set(globalThis.TLAIN_DOWNLOADER2_PROFILE?.controllerOrigins || []);
 
   function allowedPage() {
-    return location.origin === ALLOWED_ORIGIN && location.pathname.startsWith("/downloader2/");
+    return ALLOWED_ORIGINS.has(location.origin) && location.pathname.startsWith("/downloader2/");
   }
 
   window.addEventListener("message", (event) => {
-    if (!allowedPage() || event.source !== window || event.origin !== ALLOWED_ORIGIN) return;
+    if (!allowedPage() || event.source !== window || !ALLOWED_ORIGINS.has(event.origin)) return;
     const message = event.data;
     if (!message || message.channel !== CHANNEL || message.direction !== "page-to-extension") return;
     chrome.runtime.sendMessage({ ...message, sourcePath: location.pathname }).then((response) => {
-      if (response) window.postMessage({ channel: CHANNEL, direction: "extension-to-page", requestId: message.requestId, ...response }, ALLOWED_ORIGIN);
+      if (response) window.postMessage({ channel: CHANNEL, direction: "extension-to-page", requestId: message.requestId, ...response }, location.origin);
     }).catch(() => {
-      window.postMessage({ channel: CHANNEL, direction: "extension-to-page", requestId: message.requestId, ok: false, error: "Extensionへ接続できません。" }, ALLOWED_ORIGIN);
+      window.postMessage({ channel: CHANNEL, direction: "extension-to-page", requestId: message.requestId, ok: false, error: "Extensionへ接続できません。" }, location.origin);
     });
   });
 
   chrome.runtime.onMessage.addListener((message) => {
     if (!allowedPage() || !message || message.channel !== CHANNEL) return;
-    window.postMessage({ ...message, direction: "extension-to-page" }, ALLOWED_ORIGIN);
+    window.postMessage({ ...message, direction: "extension-to-page" }, location.origin);
   });
 
-  window.postMessage({ channel: CHANNEL, direction: "extension-to-page", type: "extension.ready", browser: navigator.userAgent.includes("Edg/") ? "Edge" : "Chrome" }, ALLOWED_ORIGIN);
+  window.postMessage({ channel: CHANNEL, direction: "extension-to-page", type: "extension.ready", browser: navigator.userAgent.includes("Edg/") ? "Edge" : "Chrome" }, location.origin);
 })();

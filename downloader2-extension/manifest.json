@@ -9,7 +9,7 @@
   "background": { "service_worker": "service-worker.js", "type": "module" },
   "content_scripts": [{
     "matches": ["https://tanaka-note.com/downloader2/*"],
-    "js": ["content-script.js"],
+    "js": ["profile.js", "content-script.js"],
     "run_at": "document_start",
     "all_frames": false
   }],
