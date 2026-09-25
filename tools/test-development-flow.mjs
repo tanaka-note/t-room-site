@@ -45,6 +45,20 @@ test('affected mapping is order independent and unknown runtime files are not si
   assert.deepEqual(affected(['.github/workflows/verify.yml']), ['tooling']);
   assert.deepEqual(affected(['tools/install-verify-dependencies.mjs']), ['tooling']);
 });
+test('Downloader 2 Native CI isolates every fallible command in a fail-fast step', () => {
+  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
+  const nativeJob = workflow.slice(workflow.indexOf('  downloader2-native:'), workflow.indexOf('\n  verify:', workflow.indexOf('  downloader2-native:')));
+  for (const [name, command] of [
+    ['Build Native solution', 'dotnet build downloader2-native/Tlain.Downloader2.slnx'],
+    ['Run Native tests', 'dotnet run --project downloader2-native/tests/Tlain.Downloader2.Tests/Tlain.Downloader2.Tests.csproj'],
+    ['Publish Native Host', 'dotnet publish downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj'],
+    ['Smoke test Native Messaging', 'node downloader2-native/tests/native-host-smoke.mjs'],
+    ['Build isolated E2E profile', 'dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj']
+  ]) {
+    assert.match(nativeJob, new RegExp(`- name: ${name}\\r?\\n\\s+shell: pwsh\\r?\\n\\s+run: ${command.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`), name);
+  }
+  assert.doesNotMatch(nativeJob, /run: \|/);
+});
 test('content build hashes ignore checkout line endings', () => {
   const app = { id: 'fixture', publicUrls: ['/fixture/'] };
   const contract = { buildMeta: 'troom-app-build', autoUpdateMeta: 'troom-auto-update', autoUpdateValue: 'enabled' };

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Tlain.Downloader2.Core;
 using Tlain.Downloader2.Host;
@@ -53,9 +54,21 @@ static async Task ParallelRanges()
         server.ResetRanges();
         await new DirectDownloader(transport).DownloadPartAsync(new(server.Url("range-virtual"), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, connections);
         Equal(FixtureServer.VirtualRangeLength, new FileInfo(path).Length, $"{connections} range size");
-        Equal(connections + 1, server.Ranges.Count, $"{connections} probe plus range count");
-        True(server.Ranges.Skip(1).Select(item => item.Start).Distinct().Count() == connections, $"{connections} distinct ranges");
+        var ranges = server.RangeSnapshot();
+        Equal(connections + 1, ranges.Count, $"{connections} probe plus range count");
+        Equal(0, ranges[0].Start, $"{connections} probe start");
+        Equal(0, ranges[0].End, $"{connections} probe end");
+        var downloads = ranges.Skip(1).OrderBy(item => item.Start).ToArray();
+        Equal(connections, downloads.Select(item => item.Start).Distinct().Count(), $"{connections} distinct ranges");
+        var segmentSize = (FixtureServer.VirtualRangeLength + connections - 1L) / connections;
+        for (var index = 0; index < connections; index++)
+        {
+            Equal(index * segmentSize, downloads[index].Start, $"{connections} range {index} start");
+            Equal(Math.Min(FixtureServer.VirtualRangeLength - 1, (index + 1) * segmentSize - 1), downloads[index].End, $"{connections} range {index} end");
+        }
+        await AssertPatternFile(path, FixtureServer.VirtualRangeLength, $"{connections} range content");
         File.Delete(path);
+        True(!File.Exists(path), $"{connections} partial cleanup");
     }
 }
 
@@ -63,14 +76,16 @@ static async Task RangeFallback()
 {
     await using var server = new FixtureServer();
     using var transport = new HttpTransport();
-    foreach (var endpoint in new[] { "mismatch", "mismatch-total" })
+    foreach (var endpoint in new[] { "mismatch", "mismatch-total", "range-short", "range-overflow" })
     {
         var path = TempFile();
         var before = server.FullRequestCount;
         await new DirectDownloader(transport).DownloadPartAsync(new(server.Url(endpoint), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, 4);
         Equal(FixtureServer.SmallLength, new FileInfo(path).Length, $"{endpoint} fallback size");
         True(server.FullRequestCount > before, $"{endpoint} single stream fallback");
+        await AssertPatternFile(path, FixtureServer.SmallLength, $"{endpoint} fallback content");
         File.Delete(path);
+        True(!File.Exists(path), $"{endpoint} partial cleanup");
     }
 }
 
@@ -80,7 +95,8 @@ static async Task RetryAndFailures()
     using var transport = new HttpTransport();
     var path = TempFile();
     await new DirectDownloader(transport).DownloadPartAsync(new(server.Url("flaky"), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, 1);
-    True(server.FlakyCount >= 2, "retry count");
+    True(server.FlakyCount >= 3, "retry count");
+    await AssertPatternFile(path, FixtureServer.SmallLength, "retry content");
     File.Delete(path);
     foreach (var endpoint in new[] { "forbidden", "rate" })
     {
@@ -88,20 +104,29 @@ static async Task RetryAndFailures()
         try { await new DirectDownloader(transport).DownloadPartAsync(new(server.Url(endpoint), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, CancellationToken.None, 1); }
         catch (DownloaderException) { thrown = true; }
         True(thrown, endpoint);
+        True(!File.Exists(path), $"{endpoint} partial cleanup");
     }
 }
 
 static async Task Cancel()
 {
-    await using var server = new FixtureServer();
-    using var transport = new HttpTransport(TimeSpan.FromSeconds(30));
-    var path = TempFile();
-    using var cancellation = new CancellationTokenSource(100);
-    var thrown = false;
-    try { await new DirectDownloader(transport).DownloadPartAsync(new(server.Url("slow"), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, cancellation.Token, 1); }
-    catch (OperationCanceledException) { thrown = true; }
-    True(thrown, "cancelled");
-    True(!File.Exists(path), "cancelled partial file removed");
+    foreach (var scenario in new[] {
+        (Endpoint: "slow", Connections: 1, WaitForRequest: "full"),
+        (Endpoint: "slow-range", Connections: 16, WaitForRequest: "range"),
+        (Endpoint: "slow-fallback", Connections: 4, WaitForRequest: "full")
+    })
+    {
+        await using var server = new FixtureServer();
+        using var transport = new HttpTransport(TimeSpan.FromSeconds(30));
+        var path = TempFile();
+        using var cancellation = new CancellationTokenSource();
+        var download = new DirectDownloader(transport).DownloadPartAsync(new(server.Url(scenario.Endpoint), "direct", "video/mp4", null, new Dictionary<string, string>()), path, null, cancellation.Token, scenario.Connections);
+        if (scenario.WaitForRequest == "range") await server.WaitForParallelRangeAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        else await server.WaitForFullRequestAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await Throws<OperationCanceledException>(() => download, $"{scenario.Endpoint} cancelled");
+        True(!File.Exists(path), $"{scenario.Endpoint} partial file removed");
+    }
 }
 
 static async Task HlsAndDrm()
@@ -208,6 +233,24 @@ static async Task PairingBoundaries()
 }
 
 static string TempFile() => Path.Combine(Path.GetTempPath(), $"tlain-{Guid.NewGuid():N}.tlain.part");
+static async Task AssertPatternFile(string path, int length, string message)
+{
+    await using var stream = File.OpenRead(path);
+    Equal(length, stream.Length, $"{message} length");
+    var buffer = new byte[64 * 1024];
+    long position = 0;
+    while (true)
+    {
+        var count = await stream.ReadAsync(buffer);
+        if (count == 0) break;
+        for (var index = 0; index < count; index++, position++)
+        {
+            var expected = position is >= 4 and <= 7 ? (byte)"ftyp"[(int)position - 4] : (byte)(position % 251);
+            if (buffer[index] != expected) throw new InvalidOperationException($"{message}: byte {position} was {buffer[index]}, expected {expected}");
+        }
+    }
+    Equal(length, position, $"{message} bytes read");
+}
 static void True(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
 static void Equal(long expected, long actual, string message) { if (expected != actual) throw new InvalidOperationException($"{message}: {expected} != {actual}"); }
 static void EqualString(string expected, string actual, string message) { if (expected != actual) throw new InvalidOperationException($"{message}: {expected} != {actual}"); }
@@ -218,9 +261,13 @@ sealed class FixtureServer : IAsyncDisposable
 {
     public const int SmallLength = 2 * 1024 * 1024;
     public const int VirtualRangeLength = 2 * 1024 * 1024;
-    private readonly HttpListener listener = new();
+    private readonly HttpListener listener;
     private readonly CancellationTokenSource stop = new();
     private readonly Task loop;
+    private readonly object requestGate = new();
+    private readonly HashSet<Task> requests = [];
+    private readonly TaskCompletionSource<bool> parallelRangeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> fullRequestStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly FixtureServer? redirectTarget;
     public int RangeRequestCount;
     public int FullRequestCount;
@@ -232,23 +279,54 @@ sealed class FixtureServer : IAsyncDisposable
     public FixtureServer(FixtureServer? redirectTarget = null)
     {
         this.redirectTarget = redirectTarget;
-        var port = Random.Shared.Next(20000, 50000);
-        Origin = $"http://127.0.0.1:{port}";
-        listener.Prefixes.Add(Origin + "/");
-        listener.Start();
+        (listener, Origin) = StartListener();
         loop = Task.Run(ListenAsync);
     }
 
     public string Url(string path) => $"{Origin}/{path}";
     public void ResetRanges() { lock (Ranges) Ranges.Clear(); }
+    public IReadOnlyList<(long Start, long End)> RangeSnapshot() { lock (Ranges) return [.. Ranges]; }
+    public Task WaitForParallelRangeAsync() => parallelRangeStarted.Task;
+    public Task WaitForFullRequestAsync() => fullRequestStarted.Task;
+
+    private static (HttpListener Listener, string Origin) StartListener()
+    {
+        HttpListenerException? last = null;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            int port;
+            using (var reservation = new TcpListener(IPAddress.Loopback, 0))
+            {
+                reservation.ExclusiveAddressUse = true;
+                reservation.Start();
+                port = ((IPEndPoint)reservation.LocalEndpoint).Port;
+            }
+            var origin = $"http://127.0.0.1:{port}";
+            var candidate = new HttpListener();
+            candidate.Prefixes.Add(origin + "/");
+            try
+            {
+                candidate.Start();
+                return (candidate, origin);
+            }
+            catch (HttpListenerException error)
+            {
+                last = error;
+                candidate.Close();
+            }
+        }
+        throw new InvalidOperationException("Could not bind an ephemeral HTTP fixture port.", last);
+    }
 
     private async Task ListenAsync()
     {
         while (!stop.IsCancellationRequested)
         {
             HttpListenerContext context;
-            try { context = await listener.GetContextAsync(); } catch { break; }
-            _ = Task.Run(() => HandleAsync(context));
+            try { context = await listener.GetContextAsync(); } catch when (stop.IsCancellationRequested) { break; }
+            var request = HandleAsync(context);
+            lock (requestGate) requests.Add(request);
+            _ = request.ContinueWith(completed => { lock (requestGate) requests.Remove(completed); }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
 
@@ -269,22 +347,33 @@ sealed class FixtureServer : IAsyncDisposable
             if (path is "seg1.ts" or "seg2.ts") { context.Response.ContentType = "video/mp2t"; await WritePattern(context.Response, 188 * 10, 0, false, false); return; }
             var length = path == "range-virtual" ? VirtualRangeLength : SmallLength;
             var range = context.Request.Headers["Range"];
-            if (path == "slow") { context.Response.ContentLength64 = length; await WritePattern(context.Response, length, 0, true); return; }
+            if (path is "slow" or "slow-fallback" && string.IsNullOrEmpty(range))
+            {
+                fullRequestStarted.TrySetResult(true);
+                context.Response.ContentLength64 = length;
+                await WritePattern(context.Response, length, 0, true, true, stop.Token);
+                return;
+            }
             if (!string.IsNullOrEmpty(range) && TryRange(range, length, out var start, out var end))
             {
                 Interlocked.Increment(ref RangeRequestCount);
                 lock (Ranges) Ranges.Add((start, end));
                 context.Response.StatusCode = 206;
-                if (path == "mismatch" && start > 0) { context.Response.Headers["Content-Range"] = $"bytes {start + 1}-{end}/{length}"; }
+                if (path == "slow-range" && start > 0) parallelRangeStarted.TrySetResult(true);
+                if (path is "mismatch" or "slow-fallback" && start > 0) { context.Response.Headers["Content-Range"] = $"bytes {start + 1}-{end}/{length}"; }
                 else if (path == "mismatch-total" && start > 0) { context.Response.Headers["Content-Range"] = $"bytes {start}-{end}/{length + 1}"; }
                 else context.Response.Headers["Content-Range"] = $"bytes {start}-{end}/{length}";
                 context.Response.Headers["Accept-Ranges"] = "bytes";
-                await WritePattern(context.Response, end - start + 1, start, false, true);
+                var responseLength = end - start + 1;
+                if (path == "range-short" && start > 0) responseLength--;
+                if (path == "range-overflow" && start > 0) responseLength++;
+                await WritePattern(context.Response, responseLength, start, path == "slow-range", true, stop.Token);
                 return;
             }
             Interlocked.Increment(ref FullRequestCount);
+            fullRequestStarted.TrySetResult(true);
             context.Response.ContentType = "video/mp4";
-            await WritePattern(context.Response, length, 0, false, true);
+            await WritePattern(context.Response, length, 0, false, true, stop.Token);
         }
         catch { }
         finally { try { context.Response.Close(); } catch { } }
@@ -301,7 +390,7 @@ sealed class FixtureServer : IAsyncDisposable
         return start <= end;
     }
 
-    private static async Task WritePattern(HttpListenerResponse response, long length, long offset, bool slow, bool mp4 = true)
+    private static async Task WritePattern(HttpListenerResponse response, long length, long offset, bool slow, bool mp4 = true, CancellationToken cancellationToken = default)
     {
         response.ContentLength64 = length;
         var buffer = new byte[64 * 1024];
@@ -315,9 +404,9 @@ sealed class FixtureServer : IAsyncDisposable
                 buffer[index] = mp4 && position is >= 4 and <= 7 ? (byte)"ftyp"[(int)position - 4]
                     : !mp4 && position % 188 == 0 ? (byte)0x47 : (byte)(position % 251);
             }
-            await response.OutputStream.WriteAsync(buffer.AsMemory(0, count));
+            await response.OutputStream.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
             written += count;
-            if (slow) await Task.Delay(20);
+            if (slow) await Task.Delay(20, cancellationToken);
         }
     }
 
@@ -333,6 +422,9 @@ sealed class FixtureServer : IAsyncDisposable
     {
         stop.Cancel(); listener.Close();
         try { await loop; } catch { }
+        Task[] active;
+        lock (requestGate) active = [.. requests];
+        try { await Task.WhenAll(active); } catch { }
         stop.Dispose();
     }
 }

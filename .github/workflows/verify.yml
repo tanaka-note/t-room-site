@@ -120,14 +120,21 @@ jobs:
       - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5
         with:
           dotnet-version: '10.0.x'
-      - name: Build, test, publish and smoke Native Host
+      - name: Build Native solution
         shell: pwsh
-        run: |
-          dotnet build downloader2-native/Tlain.Downloader2.slnx --configuration Release -warnaserror
-          dotnet run --project downloader2-native/tests/Tlain.Downloader2.Tests/Tlain.Downloader2.Tests.csproj --configuration Release --no-build
-          dotnet publish downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release --no-build --output downloader2-native/artifacts/host
-          node downloader2-native/tests/native-host-smoke.mjs direct downloader2-native/artifacts/host/Tlain.Downloader2.Host.exe
-          dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
+        run: dotnet build downloader2-native/Tlain.Downloader2.slnx --configuration Release -warnaserror
+      - name: Run Native tests
+        shell: pwsh
+        run: dotnet run --project downloader2-native/tests/Tlain.Downloader2.Tests/Tlain.Downloader2.Tests.csproj --configuration Release --no-build
+      - name: Publish Native Host
+        shell: pwsh
+        run: dotnet publish downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release --no-build --output downloader2-native/artifacts/host
+      - name: Smoke test Native Messaging
+        shell: pwsh
+        run: node downloader2-native/tests/native-host-smoke.mjs direct downloader2-native/artifacts/host/Tlain.Downloader2.Host.exe
+      - name: Build isolated E2E profile
+        shell: pwsh
+        run: dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
   verify:
     if: always()
     needs: [plan, node, android, downloader2-native]
