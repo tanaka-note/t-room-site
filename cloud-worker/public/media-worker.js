@@ -1,14 +1,14 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-importScripts("/cloud/crypto-vault.js?v=cloud-dd1c724a5539");
-importScripts("/cloud/media-range.js?v=cloud-dd1c724a5539");
-importScripts("/cloud/offline-store.js?v=cloud-dd1c724a5539");
+importScripts("/cloud/crypto-vault.js?v=cloud-501277cb40ad");
+importScripts("/cloud/media-range.js?v=cloud-501277cb40ad");
+importScripts("/cloud/offline-store.js?v=cloud-501277cb40ad");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-dd1c724a5539";
-const MEDIA_WORKER_BUILD_ID = "cloud-dd1c724a5539";
+const APP_SHELL_CACHE = "tcloud-shell-cloud-501277cb40ad";
+const MEDIA_WORKER_BUILD_ID = "cloud-501277cb40ad";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
 const DEMAND_PREFETCH_CHUNKS = 4;
 const PREFETCH_CONCURRENCY = 4;
@@ -18,7 +18,7 @@ const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-  "/cloud/offline-store.js?v=cloud-dd1c724a5539",
+  "/cloud/offline-store.js?v=cloud-501277cb40ad",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"
@@ -464,7 +464,7 @@ async function reportMediaFailure(token, phase, error) {
 }
 
 function shouldWarmTail(descriptor) {
-  if (descriptor.containerType) return descriptor.containerType === "mp4" || descriptor.containerType === "quicktime";
+  if (descriptor.containerType) return descriptor.containerType === "mp4" || descriptor.containerType === "quicktime" || descriptor.containerType === "webm";
   return isMp4Descriptor(descriptor)
     || /^(video\/(quicktime|webm)|audio\/mp4)$/i.test(String(descriptor.mimeType || ""));
 }

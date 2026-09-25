@@ -106,6 +106,13 @@ const descriptor = {
 const owner = "owner";
 const token = "longrangetokenfixture1234";
 
+await assertInitialWarm("legacy-webm", { mimeType: "video/webm" }, true);
+await assertInitialWarm("detected-webm", { mimeType: "video/webm", containerType: "webm" }, true);
+await assertInitialWarm("detected-mp4", { mimeType: "video/mp4", containerType: "mp4" }, true);
+await assertInitialWarm("detected-quicktime", { mimeType: "video/quicktime", containerType: "quicktime" }, true);
+await assertInitialWarm("detected-mpeg-ts", { mimeType: "video/mp2t", containerType: "mpeg-ts" }, false);
+await assertInitialWarm("detected-flv", { mimeType: "video/x-flv", containerType: "flv" }, false);
+
 await send("REGISTER_MEDIA", token, { descriptor, fileKey });
 await send("UPDATE_MEDIA_FORMAT", token, { containerType: "mpeg-ts", mimeType: "video/mp2t" });
 assert.equal(context.test.registrations.get(token).descriptor.mimeType, "video/mp2t", "detected MPEG-TS updates the local response MIME");
@@ -190,6 +197,21 @@ assert.equal(requests.length, requestCountAfterRelease, "RELEASE_MEDIA leaves no
 assert.equal(context.test.registrations.has(releaseToken), false);
 
 console.log("PASS 200MiB MP4 streams past 64/128MiB to EOF, seek/session/retry/release remain safe, four-way prefetch reaches EOF, plaintext RAM stays bounded");
+
+async function assertInitialWarm(name, format, expectedTail) {
+  const warmToken = `warm-${name}-fixture-token`;
+  const headBefore = requests.filter((index) => index === 0).length;
+  const tailBefore = requests.filter((index) => index === CHUNK_COUNT - 1).length;
+  await send("REGISTER_MEDIA", warmToken, {
+    descriptor: { ...descriptor, ...format, name: `${name}.fixture`, storageId: `A:warm:${name}` },
+    fileKey
+  });
+  assert.equal(requests.filter((index) => index === 0).length - headBefore, 1, `${name} warms the first chunk`);
+  assert.equal(requests.filter((index) => index === CHUNK_COUNT - 1).length - tailBefore, expectedTail ? 1 : 0,
+    `${name} ${expectedTail ? "warms" : "does not warm"} the tail chunk`);
+  await send("RELEASE_MEDIA", warmToken);
+  stored.clear();
+}
 
 async function loadRangeHelpers() {
   const savedWindow = globalThis.window;
