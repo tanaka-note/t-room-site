@@ -27,7 +27,7 @@
     "test:display-browser": "node tests/thumbnail-preview.browser.mjs && node tests/display-cache.browser.mjs && node tests/preview-close.browser.mjs && node tests/manual-video-thumbnail.browser.mjs && node tests/persistent-display-cache.browser.mjs"
   },
   "devDependencies": {
-    "wrangler": "^4.34.0"
+    "wrangler": "^4.136.2"
   },
   "dependencies": {
     "hash-wasm": "4.12.0"
