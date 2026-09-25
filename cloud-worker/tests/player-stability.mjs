@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [main, share, mediaClient, mainCss, shareCss, mainHtml, shareHtml] = await Promise.all([
+const [main, share, mediaClient, mediaFormat, mainCss, shareCss, mainHtml, shareHtml] = await Promise.all([
   readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
   readFile(new URL("../public/share.js", import.meta.url), "utf8"),
   readFile(new URL("../public/media-client.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/media-format.js", import.meta.url), "utf8"),
   readFile(new URL("../public/cloud.css", import.meta.url), "utf8"),
   readFile(new URL("../public/share.css", import.meta.url), "utf8"),
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
@@ -78,6 +79,9 @@ assert.match(share, /relativeSeekTime\(seekPointerStartSeconds, seekPointerStart
 assert.match(mainHtml, /media-client\.js\?v=cloud-[a-f0-9]{12}/);
 assert.match(shareHtml, /media-client\.js\?v=cloud-[a-f0-9]{12}/);
 assert.match(mediaClient, /function playbackMimeType\(file\)/);
-assert.match(mediaClient, /mp4: "video\/mp4"/);
+assert.match(mediaClient, /TCloudMediaFormat\?\.playbackMimeType/);
+assert.match(mediaFormat, /mp4: "video\/mp4"/);
+assert.match(mainHtml, /media-format\.js\?v=cloud-[a-f0-9]{12}/);
+assert.match(shareHtml, /media-format\.js\?v=cloud-[a-f0-9]{12}/);
 
 console.log("player registration, stable rendering, and portrait recovery: ok");

@@ -118,14 +118,17 @@
       return null;
     }finally{release();instances.delete(resource);}
   }
-  async function recover(url, file, signal, onDuration) {
+  async function recover(url, file, signal, onDuration, detectedContainer = file.containerType) {
     const localFile=file instanceof Blob ? file : null;
     const source=new URL(url,location.href);
     // Network reads must terminate at the existing device-only SW gateway.
     // Never use a remote URL, a direct API URL, or a proxy for plaintext video.
     if (!localFile && (source.origin!==location.origin || !source.pathname.startsWith("/cloud/local-media/"))) return null;
     const ext=String(file.name||"").split(".").pop().toLowerCase();
-    const format=["wmv","asf"].includes(ext)?"asf":["mp4","m4v","mov"].includes(ext)?"mp4":null;
+    const container=global.TCloudMediaFormat?.normalizeContainer?.(detectedContainer)||"";
+    const format=container
+      ? (container==="asf"?"asf":["mp4","quicktime"].includes(container)?"mp4":null)
+      : (["wmv","asf"].includes(ext)?"asf":["mp4","m4v","mov"].includes(ext)?"mp4":null);
     const size=Number(localFile?.size||file.sizeBytes);
     if (!format || !Number.isSafeInteger(size) || size<=0 || signal?.aborted) return null;
     const controller=new AbortController(), instances=new Set();

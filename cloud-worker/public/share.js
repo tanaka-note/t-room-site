@@ -1637,23 +1637,76 @@ function showSharedVideoPlayerError(stage, buffering, text) {
 
 function loadSharedVideoPlayerSource(prepared, file, url, generation) {
   const { stage, video, buffering } = prepared;
-  const extension = String(file.name || "").split(".").pop().toLowerCase();
-  const mpegType = extension === "flv" ? "flv" : ["ts", "m2ts", "mts"].includes(extension) ? "m2ts" : "";
-  if (mpegType && globalThis.mpegts?.isSupported()) {
+  let fallbackAttempted = false;
+  let activeMpegPlayer = null;
+  const active = () => sharedPreviewRequestActive(generation, file.id) && $("#preview-dialog").open;
+  const finalError = (text) => {
+    if (active() && !stage.querySelector(".player-error")) showSharedVideoPlayerError(stage, buffering, text);
+  };
+  const stopMpeg = () => {
+    if (!activeMpegPlayer) return;
+    try { activeMpegPlayer.unload(); } catch {}
+    try { activeMpegPlayer.detachMediaElement(); } catch {}
+    try { activeMpegPlayer.destroy(); } catch {}
+    if (state.previewPlayer === activeMpegPlayer) state.previewPlayer = null;
+    activeMpegPlayer = null;
+  };
+  const retryFromDetectedFormat = async () => {
+    if (fallbackAttempted) {
+      return;
+    }
+    fallbackAttempted = true;
+    if (TCloudMediaFormat.normalizeContainer(file.containerType)) {
+      stopMpeg();
+      finalError("この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
+      return;
+    }
+    try {
+      const detected = await TCloudMediaFormat.detectFromUrl(url, file);
+      if (!active()) return;
+      const expected = TCloudMediaFormat.legacyContainerType(file);
+      if (detected.container === "unknown" || detected.container === expected) {
+        stopMpeg();
+        finalError(detected.container === "unknown"
+          ? "動画の実形式を安全に判定できませんでした。元の画質のままダウンロードしてご確認ください。"
+          : "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
+        return;
+      }
+      if (!await TCloudMedia.updateMediaFormat(state.previewMediaToken, detected)) throw new Error("動画形式の切り替え準備を完了できませんでした。");
+      if (!active()) return;
+      file.containerType = detected.container;
+      stopMpeg();
+      video.removeAttribute("src");
+      try { video.load(); } catch {}
+      startPlayback(true);
+    } catch (error) {
+      stopMpeg();
+      finalError(error.message || "動画の実形式を確認できませんでした。元の画質のままダウンロードしてご確認ください。");
+    }
+  };
+  const startMpeg = (mpegType, finalAttempt) => {
     const player = mpegts.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes) }, { enableWorker: false, lazyLoad: true, lazyLoadMaxDuration: 180, seekType: "range" });
     player.on(mpegts.Events.ERROR, () => {
-      if (!sharedPreviewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
-      if (stage.querySelector(".player-error")) return;
-      showSharedVideoPlayerError(stage, buffering, "このFLV・MPEG-TS動画の映像または音声方式には対応していません。元の画質のままダウンロードしてご確認ください。");
-      try { player.unload(); } catch {}
+      if (!active()) return;
+      if (finalAttempt) { stopMpeg(); finalError("このFLV・MPEG-TS動画の映像または音声方式には対応していません。元の画質のままダウンロードしてご確認ください。"); }
+      else void retryFromDetectedFormat();
     });
-    player.attachMediaElement(video); state.previewPlayer = player; player.load(); return;
+    player.attachMediaElement(video); activeMpegPlayer = player; state.previewPlayer = player; player.load();
+  };
+  const startNative = (finalAttempt) => {
+    video.addEventListener("error", () => {
+      if (!active() || !video.error) return;
+      if (finalAttempt) finalError("この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
+      else void retryFromDetectedFormat();
+    }, { once: true });
+    video.src = url;
+  };
+  function startPlayback(finalAttempt) {
+    const mpegType = TCloudMediaFormat.mpegContainerType(file);
+    if (mpegType && globalThis.mpegts?.isSupported()) startMpeg(mpegType, finalAttempt);
+    else startNative(finalAttempt);
   }
-  video.src = url;
-  video.addEventListener("error", () => {
-    if (!sharedPreviewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
-    showSharedVideoPlayerError(stage, buffering, "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
-  }, { once: true });
+  startPlayback(false);
 }
 
 function renderVideoPlayer(stage, file, url, generation) {
