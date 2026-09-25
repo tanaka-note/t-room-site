@@ -21,7 +21,7 @@ const origins = (config.controllerOrigins || []).map(exactHttpsOrigin);
 const allowlist = new Set((config.allowedControllerOrigins || []).map(exactHttpsOrigin));
 if (!origins.length || origins.some((origin) => !allowlist.has(origin))) throw new Error("Every controller origin must be present in the explicit profile allowlist");
 if (config.profile === "production" && (origins.length !== 1 || origins[0] !== productionOrigin)) throw new Error("Production profile is fixed to tanaka-note.com");
-if (config.profile === "e2e" && origins.includes(productionOrigin)) throw new Error("E2E profile must not use the Production controller origin");
+if (config.profile === "e2e" && origins.some((origin) => origin === productionOrigin)) throw new Error("E2E profile must not use the Production controller origin");
 
 const output = resolve(outputPath);
 rmSync(output, { recursive: true, force: true });
