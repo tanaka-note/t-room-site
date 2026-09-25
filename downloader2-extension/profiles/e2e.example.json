@@ -1,0 +1,5 @@
+{
+  "profile": "e2e",
+  "controllerOrigins": ["https://downloader2-preview.example.invalid"],
+  "allowedControllerOrigins": ["https://downloader2-preview.example.invalid"]
+}

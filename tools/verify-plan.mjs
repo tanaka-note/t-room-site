@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
-export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'ai'];
+export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat'];
 export const targets = ['tooling', 'site', ...services, 'auth', 'container-unit', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
@@ -35,6 +35,11 @@ export function commands(target) {
     diary: tests('diary-worker', ...['request-safety', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
+    downloader2: [
+      { cwd: 'downloader2-extension', script: 'check' },
+      { cwd: 'downloader2-fixtures', script: 'check' },
+      { cwd: 'downloader2-worker', script: 'test' }
+    ],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
     'container-unit': [node('downloader-worker', 'test/run-python.mjs', '-m', 'unittest', 'discover', '-s', 'container/tests', '-p', 'test_*.py')],
     auth: [node('.', '--test', 'tools/test-session-secret.mjs', 'tools/test-password-auth.mjs'),
@@ -68,6 +73,7 @@ export function affected(paths) {
     if (mobile) { add(mobile); continue; }
     const service = services.find(s => path.startsWith(`${s}-worker/`));
     if (service) add(service);
+    if (/^downloader2-(?:extension|native|fixtures)\//.test(path)) { add('downloader2'); continue; }
     if (/^downloader-worker\/container\//.test(path)) add('container-unit');
     // The server is monolithic: any Security runtime edit can affect handoff.
     if (/^security-worker\/(src\/|public\/passkey-client\.js)/.test(path)
@@ -86,6 +92,10 @@ export function affected(paths) {
     if (/service-worker|webmanifest|web-apps\.json|pwa-auto-update/.test(path)) add('site');
   }
   return targets.filter(t => selected.has(t));
+}
+
+export function downloader2NativeAffected(paths) {
+  return paths.some(raw => raw.replaceAll('\\', '/').startsWith('downloader2-native/'));
 }
 
 export function changedFiles(base, head, cwd = root) {

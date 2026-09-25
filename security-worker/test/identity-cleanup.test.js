@@ -73,6 +73,7 @@ const blockers = {
   "pending link": (f) => f.link("link", "pending"),
   "external AI history": (f) => f.link("link", "disabled", "ai"),
   "external Downloader history": (f) => f.link("link", "disabled", "downloader"),
+  "external Downloader 2 history": (f) => f.link("link", "disabled", "downloader2"),
   "active invitation even if expired": (f) => f.invitation("invite", "active"),
   "invitation creator reference": (f) => { f.identity("other", "active"); f.invitation("invite", "revoked", { identity_id: "other", created_by_identity_id: "retired" }); },
   "setup session even if completed": (f) => { f.credential("credential"); f.insert("security_setup_sessions", { id: "setup", token_hash: "setup", identity_id: "retired", credential_id: "credential", status: "completed", expires_at: 1 }); },

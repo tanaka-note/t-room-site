@@ -261,6 +261,25 @@
       "deployTarget": "t-room-downloader",
       "deployCwd": "downloader-worker",
       "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "downloader2",
+      "name": "T-lain Downloader 2（非公開・ローカル保存）",
+      "publicUrls": ["https://tanaka-note.com/downloader2/"],
+      "entrypoints": ["downloader2-worker/public/index.html"],
+      "buildRoots": ["downloader2-worker/public"],
+      "buildFiles": [
+        "assets/session-secret.mjs",
+        "assets/session-policy.mjs",
+        "downloader2-worker/src/index.js"
+      ],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "manifest": null,
+      "twa": null,
+      "deployTarget": "t-room-downloader2",
+      "deployCwd": "downloader2-worker",
+      "deployCommand": "pnpm run deploy"
     }
   ],
   "excludedHtml": [

@@ -41,7 +41,7 @@ function fixture(){
 }
 test('owner defaults and repeated migrations never grant Downloader to other identities',async()=>{
  const f=fixture();try{await f.seed('primary-admin');await f.seed('user-a');await f.seed('user-b');await worker.ensurePrimaryAdminRecords(f.env);await worker.ensurePrimaryAdminRecords(f.env);assert.equal(f.count('primary-admin'),1);assert.equal(f.count('user-a'),0);assert.equal(f.count('user-b'),0);
- for(let i=0;i<2;i++){f.db.exec(readFileSync(new URL('../migrations/0011_downloader_service.sql',import.meta.url),'utf8'));f.db.exec(readFileSync(new URL('../migrations/0017_account_display_names.sql',import.meta.url),'utf8'))}assert.equal(f.count('primary-admin'),1);assert.equal(f.count('user-a'),0);assert.equal(f.count('user-b'),0);assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(),[]);
+ for(let i=0;i<2;i++){f.db.exec(readFileSync(new URL('../migrations/0020_downloader2_service.sql',import.meta.url),'utf8'));f.db.exec(readFileSync(new URL('../migrations/0017_account_display_names.sql',import.meta.url),'utf8'))}assert.equal(f.count('primary-admin'),1);assert.equal(f.count('user-a'),0);assert.equal(f.count('user-b'),0);assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(),[]);
  await assert.rejects(worker.removeIdentityLink(f.db.prepare("SELECT id FROM security_service_links WHERE service='downloader'").get().id,req(),f.env,f.admin),e=>e.status===409);
  }finally{f.close()}
 });

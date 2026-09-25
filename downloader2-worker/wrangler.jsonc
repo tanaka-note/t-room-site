@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-downloader2",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-25",
+  "routes": [{ "pattern": "tanaka-note.com/downloader2*", "zone_name": "tanaka-note.com" }],
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
+  "services": [{ "binding": "SECURITY", "service": "t-room-security" }],
+  "vars": {
+    "SESSION_VERSION": "1",
+    "PASSKEY_ENABLED": "true",
+    "PASSKEY_SESSION_TTL_SECONDS": "43200"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true }
+}

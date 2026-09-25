@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "T-lain Downloader 2",
+  "version": "0.1.0",
+  "description": "ブラウザで再生した非DRMメディアをローカルCompanionへ渡します。",
+  "permissions": ["webRequest", "tabs", "nativeMessaging"],
+  "optional_permissions": ["debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "content_scripts": [{
+    "matches": ["https://tanaka-note.com/downloader2/*"],
+    "js": ["profile.js", "content-script.js"],
+    "run_at": "document_start",
+    "all_frames": false
+  }],
+  "action": { "default_title": "T-lain Downloader 2" }
+}

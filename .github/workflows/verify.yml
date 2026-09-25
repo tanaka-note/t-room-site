@@ -16,6 +16,7 @@ jobs:
     outputs:
       node: ${{ steps.plan.outputs.node }}
       android: ${{ steps.plan.outputs.android }}
+      downloader2_native: ${{ steps.plan.outputs.downloader2_native }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -30,10 +31,12 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           node --input-type=module <<'JS'
-          import {affected,changedFiles,targets,android} from './tools/verify-plan.mjs';
+          import {affected,changedFiles,targets,android,downloader2NativeAffected} from './tools/verify-plan.mjs';
           import {appendFileSync} from 'node:fs';
-          const selected=process.env.BASE_SHA ? affected(changedFiles(process.env.BASE_SHA,process.env.HEAD_SHA)) : targets;
+          const changed=process.env.BASE_SHA ? changedFiles(process.env.BASE_SHA,process.env.HEAD_SHA) : [];
+          const selected=process.env.BASE_SHA ? affected(changed) : targets;
           appendFileSync(process.env.GITHUB_OUTPUT,`node=${JSON.stringify(selected.filter(t=>!android.includes(t)))}\nandroid=${JSON.stringify(selected.filter(t=>android.includes(t)))}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT,`downloader2_native=${!process.env.BASE_SHA || downloader2NativeAffected(changed)}\n`);
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Verify plan\n${selected.join(', ') || 'Documentation only: no tests required'}\n`);
           JS
   node:
@@ -102,9 +105,39 @@ jobs:
         env:
           VERIFY_TARGET: ${{ matrix.target }}
         run: node tools/verify.mjs --target "$VERIFY_TARGET"
+  downloader2-native:
+    needs: plan
+    if: needs.plan.outputs.downloader2_native == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build Native solution
+        shell: pwsh
+        run: dotnet build downloader2-native/Tlain.Downloader2.slnx --configuration Release -warnaserror
+      - name: Run Native tests
+        shell: pwsh
+        run: dotnet run --project downloader2-native/tests/Tlain.Downloader2.Tests/Tlain.Downloader2.Tests.csproj --configuration Release --no-build
+      - name: Publish Native Host
+        shell: pwsh
+        run: dotnet publish downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release --no-build --output downloader2-native/artifacts/host
+      - name: Smoke test Native Messaging
+        shell: pwsh
+        run: node downloader2-native/tests/native-host-smoke.mjs direct downloader2-native/artifacts/host/Tlain.Downloader2.Host.exe
+      - name: Build isolated E2E profile
+        shell: pwsh
+        run: dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
   verify:
     if: always()
-    needs: [plan, node, android]
+    needs: [plan, node, android, downloader2-native]
     runs-on: ubuntu-latest
     steps:
       - name: Require selected jobs to succeed
@@ -112,4 +145,5 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           NODE: ${{ needs.node.result }}
           ANDROID: ${{ needs.android.result }}
-        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]]
+          DOWNLOADER2_NATIVE: ${{ needs.downloader2-native.result }}
+        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]

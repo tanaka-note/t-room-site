@@ -27,7 +27,8 @@ function fixture({ legacy = false, bootstrap = false } = {}) {
     INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES
       ('cloud-admin','primary-admin','cloud','admin','Cloud','active'),('diary','primary-admin','diary','main-admin','Diary','active'),
       ('billing','primary-admin','billing','main-admin','Billing','active'),('ai','primary-admin','ai','admin','AI','active'),
-      ('downloader','primary-admin','downloader','admin','Downloader','active');
+      ('downloader','primary-admin','downloader','admin','Downloader','active'),
+      ('downloader2','primary-admin','downloader2','owner','Downloader 2','active');
     INSERT INTO security_invitations(id,identity_id,token_hash,link_set_hash,expires_at,status,created_by_identity_id)
       VALUES('invite','primary-admin','token','links',9999999999,'used','primary-admin');
     INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,prf_enabled,status,registered_via_invitation_id)
@@ -86,10 +87,10 @@ test("new primary-admin B remains pending until its own PRF envelope, then share
     assert.equal(f.db.prepare("SELECT status FROM security_credentials WHERE credential_id='credential-B'").get().status, "active");
     assert.deepEqual(f.db.prepare("SELECT * FROM security_credentials WHERE credential_id='credential-A'").get(), f.beforeA);
     assert.deepEqual(f.db.prepare("SELECT * FROM security_tcloud_key_envelopes WHERE credential_id='credential-A'").get(), f.beforeEnvelopeA);
-    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM security_service_links").get().n, 5);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM security_service_links").get().n, 6);
     for (const credentialId of ["credential-A", "credential-B"]) {
       f.actor.credentialId = credentialId;
-      for (const service of ["diary", "billing", "ai", "downloader"]) {
+      for (const service of ["diary", "billing", "ai", "downloader", "downloader2"]) {
         const links = await f.context.activeLinks(f.env, "primary-admin", service, credentialId);
         assert.equal(links[0].identity_id, "primary-admin");
       }
@@ -162,7 +163,7 @@ test("reinvitation registration adds B as pending and preserves A and its shared
     assert.equal(f.db.prepare("SELECT status FROM security_credentials WHERE credential_id='credential-B'").get().status, "pending");
     assert.deepEqual(f.db.prepare("SELECT * FROM security_credentials WHERE credential_id='credential-A'").get(), f.beforeA);
     assert.deepEqual(f.db.prepare("SELECT * FROM security_tcloud_key_envelopes WHERE credential_id='credential-A'").get(), f.beforeEnvelopeA);
-    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM security_service_links").get().n, 5);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM security_service_links").get().n, 6);
   } finally { f.db.close(); }
 });
 

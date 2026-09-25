@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Tlain.Downloader2.Core/Tlain.Downloader2.Core.csproj" />
+  <Project Path="src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj" />
+  <Project Path="tests/Tlain.Downloader2.Tests/Tlain.Downloader2.Tests.csproj" />
+</Solution>
