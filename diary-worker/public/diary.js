@@ -8,13 +8,16 @@
   const { createPhotoUploadManager } = await import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href);
   const {
     applyFormatToSelection,
+    findPhotoMarkers,
     getSelectionFormatState,
     hasTextMarks,
     insertTextIntoRichDocument,
     mergeRichTextRuns,
     photoMarker,
     removeTextFromRichDocument,
+    replaceTextInRichDocument,
     sameTextMarks,
+    tokenizeEditorDocument,
     tokenizeEntryTextWithLinks,
     withoutPhotoMarkers
   } = await import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href);
@@ -1977,6 +1980,11 @@
   }
 
   function handleRichEditorBeforeInput(event) {
+    if (inputWouldModifyPhotoMarker(event.inputType)) {
+      event.preventDefault();
+      elements.editorMessage.textContent = "写真は写真一覧の操作から削除してください。";
+      return;
+    }
     if (["insertParagraph", "insertLineBreak"].includes(event.inputType)) {
       if (!canInsertEditorText("\n")) {
         event.preventDefault();
@@ -1994,6 +2002,26 @@
     event.preventDefault();
     const text = event.clipboardData?.getData("text/plain") || "";
     if (text) insertPlainTextAtEditorSelection(text.replace(/\r\n?/g, "\n"));
+  }
+
+  function inputWouldModifyPhotoMarker(inputType = "") {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return false;
+    const range = selection.getRangeAt(0);
+    if (!elements.entryContent.contains(range.commonAncestorContainer)) return false;
+    const offsets = getSerializedEditorRangeOffsets(range);
+    if (!offsets) return false;
+    const photoMarkers = findPhotoMarkers(getRichEditorPlainText());
+    const intersectsSelection = photoMarkers.some((marker) => marker.start < offsets.end && marker.end > offsets.start);
+    if (intersectsSelection) return true;
+    if (!range.collapsed || !inputType.startsWith("delete")) return false;
+    if (inputType.includes("Backward")) {
+      return photoMarkers.some((marker) => marker.start < offsets.start && offsets.start <= marker.end);
+    }
+    if (inputType.includes("Forward")) {
+      return photoMarkers.some((marker) => marker.start <= offsets.start && offsets.start < marker.end);
+    }
+    return false;
   }
 
   function handleRichEditorKeydown(event) {
@@ -2080,21 +2108,6 @@
     if (state.editorToolbarOpen) updateFormattingToolbarState();
   }
 
-  function restoreEditorSelection() {
-    elements.entryContent.focus({ preventScroll: true });
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    if (state.editorSelection && elements.entryContent.contains(state.editorSelection.commonAncestorContainer)) {
-      selection.addRange(state.editorSelection);
-      return;
-    }
-    const range = document.createRange();
-    range.selectNodeContents(elements.entryContent);
-    range.collapse(false);
-    selection.addRange(range);
-    state.editorSelection = range.cloneRange();
-  }
-
   function getEditorSelectionOffset(boundary = "start") {
     const range = state.editorSelection;
     if (!range || !elements.entryContent.contains(range.startContainer)) return getRichEditorPlainText().length;
@@ -2121,8 +2134,10 @@
   function getSerializedEditorRangeOffsets(range) {
     if (!range || !elements.entryContent.contains(range.startContainer)
       || !elements.entryContent.contains(range.endContainer)) return null;
-    const startPath = getEditorNodePath(range.startContainer);
-    const endPath = getEditorNodePath(range.endContainer);
+    const startBoundaryValue = normalizeEditorRangeBoundary(range.startContainer, range.startOffset, "start");
+    const endBoundaryValue = normalizeEditorRangeBoundary(range.endContainer, range.endOffset, "end");
+    const startPath = getEditorNodePath(startBoundaryValue.container);
+    const endPath = getEditorNodePath(endBoundaryValue.container);
     if (!startPath || !endPath) return null;
     const editorClone = elements.entryContent.cloneNode(true);
     const startContainer = getNodeAtPath(editorClone, startPath);
@@ -2136,11 +2151,11 @@
     startMarker.textContent = startToken;
     endMarker.textContent = endToken;
     const endBoundary = document.createRange();
-    endBoundary.setStart(endContainer, range.endOffset);
+    endBoundary.setStart(endContainer, endBoundaryValue.offset);
     endBoundary.collapse(true);
     endBoundary.insertNode(endMarker);
     const startBoundary = document.createRange();
-    startBoundary.setStart(startContainer, range.startOffset);
+    startBoundary.setStart(startContainer, startBoundaryValue.offset);
     startBoundary.collapse(true);
     startBoundary.insertNode(startMarker);
     const contentWithMarkers = serializeRichEditorRoot(editorClone, false).content;
@@ -2148,6 +2163,16 @@
     const endIndex = contentWithMarkers.indexOf(endToken);
     if (startIndex < 0 || endIndex < startIndex + startToken.length) return null;
     return { start: startIndex, end: endIndex - startToken.length };
+  }
+
+  function normalizeEditorRangeBoundary(container, offset, edge) {
+    const element = container.nodeType === Node.ELEMENT_NODE ? container : container.parentElement;
+    const token = element?.closest?.("[data-photo-marker]");
+    if (!token || !elements.entryContent.contains(token)) return { container, offset };
+    const parent = token.parentNode;
+    const tokenIndex = [...parent.childNodes].indexOf(token);
+    const after = edge === "end" || offset > 0;
+    return { container: parent, offset: tokenIndex + (after ? 1 : 0) };
   }
 
   function getEditorNodePath(node) {
@@ -2179,24 +2204,43 @@
   }
 
   function restoreEditorSelectionFromOffsets(offsets) {
-    const locate = (requestedOffset) => {
-      const walker = document.createTreeWalker(elements.entryContent, NodeFilter.SHOW_TEXT);
-      const maximum = getRichEditorPlainText().length;
-      let remaining = Math.max(0, Math.min(maximum, requestedOffset));
-      let node = walker.nextNode();
-      let lastNode = null;
-      while (node) {
-        lastNode = node;
-        if (remaining <= node.nodeValue.length) return { node, offset: remaining };
-        remaining -= node.nodeValue.length;
-        node = walker.nextNode();
+    const units = [];
+    const collect = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        units.push({ kind: "text", node, length: node.nodeValue.length });
+        return;
       }
-      return lastNode
-        ? { node: lastNode, offset: lastNode.nodeValue.length }
-        : { node: elements.entryContent, offset: 0 };
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      if (node.matches("[data-photo-marker]")) {
+        units.push({ kind: "photo-marker", node, length: node.dataset.photoMarker.length });
+        return;
+      }
+      [...node.childNodes].forEach(collect);
     };
-    const start = locate(offsets.start);
-    const end = locate(offsets.end);
+    [...elements.entryContent.childNodes].forEach(collect);
+    const boundaryAround = (node, after) => {
+      const parent = node.parentNode;
+      const index = [...parent.childNodes].indexOf(node);
+      return { node: parent, offset: index + (after ? 1 : 0) };
+    };
+    const locate = (requestedOffset, edge) => {
+      const maximum = units.reduce((total, unit) => total + unit.length, 0);
+      const target = Math.max(0, Math.min(maximum, Number(requestedOffset) || 0));
+      let traversed = 0;
+      for (const unit of units) {
+        const end = traversed + unit.length;
+        if (unit.kind === "photo-marker") {
+          if (target === traversed) return boundaryAround(unit.node, false);
+          if (target <= end) return boundaryAround(unit.node, edge === "end" || target === end);
+        } else if (target <= end) {
+          return { node: unit.node, offset: target - traversed };
+        }
+        traversed = end;
+      }
+      return { node: elements.entryContent, offset: elements.entryContent.childNodes.length };
+    };
+    const start = locate(offsets.start, "start");
+    const end = locate(offsets.end, "end");
     const range = document.createRange();
     range.setStart(start.node, start.offset);
     range.setEnd(end.node, end.offset);
@@ -2207,22 +2251,24 @@
   }
 
   function insertPlainTextAtEditorSelection(text) {
-    if (!canInsertEditorText(text)) {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return false;
+    const range = selection.getRangeAt(0);
+    if (!elements.entryContent.contains(range.commonAncestorContainer)) return false;
+    const offsets = getSerializedEditorRangeOffsets(range);
+    if (!offsets || inputWouldModifyPhotoMarker("insertFromPaste")) {
+      elements.editorMessage.textContent = "写真を含む範囲は置き換えられません。";
+      return false;
+    }
+    const editorDocument = serializeRichEditor(false);
+    if (editorDocument.content.length - (offsets.end - offsets.start) + String(text || "").length > 200000) {
       elements.editorMessage.textContent = "本文は20万文字以内で入力してください。";
       return false;
     }
-    restoreEditorSelection();
-    const selection = window.getSelection();
-    if (!selection?.rangeCount) return;
-    const range = selection.getRangeAt(0);
-    range.deleteContents();
-    const node = document.createTextNode(text);
-    range.insertNode(node);
-    range.setStartAfter(node);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    state.editorSelection = range.cloneRange();
+    const updatedDocument = replaceTextInRichDocument(editorDocument, offsets.start, offsets.end, text);
+    setRichEditorDocument(updatedDocument.content, updatedDocument.contentFormat);
+    const caret = offsets.start + String(text || "").length;
+    restoreEditorSelectionFromOffsets({ start: caret, end: caret });
     elements.entryContent.dispatchEvent(new Event("input", { bubbles: true }));
     return true;
   }
@@ -2342,6 +2388,10 @@
         return;
       }
       if (node.nodeType !== Node.ELEMENT_NODE) return;
+      if (node.matches("[data-photo-marker]")) {
+        append(node.dataset.photoMarker || "", { bold: false, italic: false, underline: false, color: null });
+        return;
+      }
       if (node.tagName === "BR") {
         append("\n", marksForElement(node.parentElement || root));
         return;
@@ -2368,18 +2418,29 @@
     const text = String(content || "");
     const runs = Array.isArray(contentFormat?.runs) ? contentFormat.runs : [];
     const fragment = document.createDocumentFragment();
-    let cursor = 0;
-    for (const run of runs) {
-      const start = Math.max(cursor, Math.min(text.length, Number(run.start) || 0));
-      const end = Math.max(start, Math.min(text.length, Number(run.end) || 0));
-      if (start > cursor) fragment.append(document.createTextNode(text.slice(cursor, start)));
-      if (end > start) fragment.append(createFormattedTextSpan(text.slice(start, end), run));
-      cursor = end;
+    for (const token of tokenizeEditorDocument(text, runs)) {
+      if (token.kind === "photo-marker") {
+        fragment.append(createEditorPhotoMarker(token));
+      } else if (token.marks) {
+        fragment.append(createFormattedTextSpan(token.text, token.marks));
+      } else {
+        fragment.append(document.createTextNode(token.text));
+      }
     }
-    if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
     elements.entryContent.replaceChildren(fragment);
     state.editorSelection = null;
     state.editorSelectionOffsets = null;
+  }
+
+  function createEditorPhotoMarker(token) {
+    const marker = document.createElement("span");
+    marker.className = "editor-photo-marker";
+    marker.contentEditable = "false";
+    marker.dataset.photoId = token.id;
+    marker.dataset.photoMarker = token.marker;
+    marker.textContent = token.marker;
+    marker.setAttribute("aria-label", "写真");
+    return marker;
   }
 
   function createFormattedTextSpan(text, marks) {
