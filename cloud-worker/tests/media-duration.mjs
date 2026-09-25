@@ -17,7 +17,8 @@ for (const client of [main, share]) {
 }
 
 assert.match(main, /const durationPromise = mediaKind === "video" \? thumbnailPromise\.then/);
-assert.match(main, /fileMetadataForStorage\(file, mediaKind, durationSeconds\)/);
+assert.match(main, /fileMetadataForStorage\(file, mediaKind, durationSeconds, file\.name, containerType\)/);
+assert.match(main, /if \(normalizedContainer\) metadata\.containerType = normalizedContainer/);
 assert.match(main, /observeAndPersistMediaDuration\(video, file\)/);
 assert.match(main, /observeAndPersistMediaDuration\(audio, file\)/);
 assert.match(main, /TRoomCrypto\.encryptFileMetadata\(fileMetadataForStorage/);

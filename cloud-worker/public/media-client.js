@@ -3,6 +3,7 @@
 
   const registrations = new Map();
   const pendingRegistrations = new Map();
+  const pendingFormatUpdates = new Map();
   const RETRY_DELAYS = [0, 400, 1200, 3000];
   const TRANSFER_CONCURRENCY = 2;
   let workerReady = null;
@@ -115,6 +116,12 @@
       pending?.resolve();
       return;
     }
+    if (data.type === "MEDIA_FORMAT_UPDATED") {
+      const pending = pendingFormatUpdates.get(data.token);
+      pendingFormatUpdates.delete(data.token);
+      pending?.resolve();
+      return;
+    }
     if (data.type === "MEDIA_PLAYBACK_FAILURE") {
       console.warn(`[T-Cloud media] ${data.workerBuild || "unknown"} ${data.phase || "playback"}: ${data.message || "unknown error"}`);
       return;
@@ -133,7 +140,30 @@
   function releaseMedia(token) {
     registrations.delete(token);
     pendingRegistrations.delete(token);
+    pendingFormatUpdates.get(token)?.reject?.();
+    pendingFormatUpdates.delete(token);
     navigator.serviceWorker?.controller?.postMessage({ type: "RELEASE_MEDIA", token });
+  }
+
+  async function updateMediaFormat(token, format) {
+    const saved = registrations.get(token);
+    const containerType = global.TCloudMediaFormat?.normalizeContainer?.(format?.container);
+    const mimeType = global.TCloudMediaFormat?.mimeTypeForContainer?.(containerType);
+    if (!saved || !containerType || !mimeType || mimeType === "application/octet-stream") return false;
+    const worker = await ensureWorker();
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingFormatUpdates.delete(token);
+        reject(new Error("動画形式の切り替え準備に時間がかかっています。"));
+      }, 2500);
+      pendingFormatUpdates.set(token, {
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: () => { clearTimeout(timer); reject(new DOMException("中止しました", "AbortError")); }
+      });
+      worker.postMessage({ type: "UPDATE_MEDIA_FORMAT", token, containerType, mimeType });
+    });
+    saved.descriptor = { ...saved.descriptor, containerType, mimeType };
+    return true;
   }
 
   function markPlaying(token) {
@@ -143,7 +173,9 @@
 
   function clearMedia() {
     for (const pending of pendingRegistrations.values()) pending.reject?.();
-    pendingRegistrations.clear(); registrations.clear();
+    for (const pending of pendingFormatUpdates.values()) pending.reject?.();
+    pendingRegistrations.clear(); pendingFormatUpdates.clear(); registrations.clear();
+    global.TCloudMediaFormat?.clearCache?.();
     navigator.serviceWorker?.controller?.postMessage({type:"CLEAR_MEDIA"});
   }
 
@@ -308,6 +340,7 @@
       chunkSizeBytes: Number(file.chunkSizeBytes || 8 * 1024 * 1024),
       chunkCount: Number(file.chunkCount || Math.ceil(Number(file.sizeBytes) / Number(file.chunkSizeBytes || 8 * 1024 * 1024))),
       mimeType: playbackMimeType(file),
+      containerType: global.TCloudMediaFormat?.normalizeContainer?.(file.containerType) || "",
       encryptedSizeBytes: Number(file.encryptedSizeBytes || file.sizeBytes || 0),
       storageId: file.offlineStorageId || "",
       accountScope: file.offlineAccountScope || "",
@@ -319,21 +352,9 @@
   }
 
   function playbackMimeType(file) {
-    const declared = String(file.mimeType || file.type || "").trim().toLowerCase();
-    const extension = String(file.name || "").split(".").pop().toLowerCase();
-    const byExtension = {
-      mp4: "video/mp4",
-      m4v: "video/mp4",
-      mov: "video/quicktime",
-      webm: "video/webm",
-      flv: "video/x-flv",
-      ts: "video/mp2t",
-      m2ts: "video/mp2t",
-      mts: "video/mp2t",
-      mp3: "audio/mpeg",
-      m4a: "audio/mp4"
-    }[extension];
-    return byExtension || declared || "application/octet-stream";
+    return global.TCloudMediaFormat?.playbackMimeType?.(file)
+      || String(file.mimeType || file.type || "").trim().toLowerCase()
+      || "application/octet-stream";
   }
 
   function formatBytes(bytes) {
@@ -367,6 +388,7 @@
 
   global.TCloudMedia = Object.freeze({
     registerMedia,
+    updateMediaFormat,
     releaseMedia,
     markPlaying,
     clearMedia,

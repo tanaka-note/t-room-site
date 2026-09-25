@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-a66c7d394612";
+const APP_BUILD_ID = "cloud-501277cb40ad";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -3443,13 +3443,15 @@ async function hydrateFileRecords(records, options = {}) {
             searchMetadataCache.delete(Number(file.id));
             searchMetadataCache.set(Number(file.id), {signature, savedAt: Date.now(), metadata: {
               name: metadata.name, mimeType: metadata.mimeType, mediaKind: metadata.mediaKind,
-              lastModified: metadata.lastModified, durationSeconds: metadata.durationSeconds
+              lastModified: metadata.lastModified, durationSeconds: metadata.durationSeconds,
+              containerType: metadata.containerType
             }});
             while (searchMetadataCache.size > SEARCH_METADATA_CACHE_LIMIT) searchMetadataCache.delete(searchMetadataCache.keys().next().value);
           }
           file.name = metadata.name;
           file.mimeType = metadata.mimeType;
           file.mediaKind = metadata.mediaKind;
+          file.containerType = TCloudMediaFormat.normalizeContainer(metadata.containerType);
           file.lastModified = Number(metadata.lastModified || 0);
           file.durationSeconds = normalizeDurationSeconds(metadata.durationSeconds);
         } catch {
@@ -6338,12 +6340,20 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
   const folderKey = destinationFolderKey || state.crypto.folderKeys.get(folderId);
   if (!folderKey) throw new Error("フォルダの暗号化鍵を解除してください。");
   const mediaKind = detectClientKind(file.type || "application/octet-stream", file.name);
+  const detectedFormat = mediaKind === "video" ? await TCloudMediaFormat.detectBlob(file) : null;
+  const containerType = TCloudMediaFormat.normalizeContainer(detectedFormat?.container);
   const fastDisplay = createFastDisplayMetadata(file, mediaKind, inspection);
   let thumbnailDuration = null;
-  const thumbnailPromise = makeThumbnail(file, signal, value => { thumbnailDuration = value; });
-  const durationPromise = mediaKind === "video" ? thumbnailPromise.then(() => thumbnailDuration) : readLocalMediaDuration(file, mediaKind);
+  const thumbnailPromise = makeThumbnail(file, signal, value => { thumbnailDuration = value; }, containerType);
+  const durationPromise = mediaKind === "video" ? thumbnailPromise.then(() => thumbnailDuration) : readLocalMediaDuration(file, mediaKind, containerType);
   tracker.phase(file, "暗号化準備中…");
   const encrypted = await TRoomCrypto.createFilePackage(file, folderKey, mediaKind);
+  if (containerType) {
+    Object.assign(encrypted.payload, await TRoomCrypto.encryptFileMetadata(
+      fileMetadataForStorage(file, mediaKind, null, file.name, containerType),
+      encrypted.fileKey
+    ));
+  }
   throwIfUploadCancelled(signal);
   let init = null;
   let uploadCompleted = false;
@@ -6393,7 +6403,7 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
     try {
       const durationSeconds = normalizeDurationSeconds(await durationPromise);
       if (durationSeconds) {
-        const metadata = await TRoomCrypto.encryptFileMetadata(fileMetadataForStorage(file, mediaKind, durationSeconds), encrypted.fileKey);
+        const metadata = await TRoomCrypto.encryptFileMetadata(fileMetadataForStorage(file, mediaKind, durationSeconds, file.name, containerType), encrypted.fileKey);
         await api(`/files/${init.id}`, { method: "PATCH", body: JSON.stringify({ ...metadata, fastDisplay: fastDisplay ? { ...fastDisplay, durationSeconds } : null }), signal });
       }
     } catch (error) {
@@ -6733,9 +6743,9 @@ function throwIfUploadCancelled(signal) {
   if (signal?.aborted) throw new DOMException("アップロードを停止しました", "AbortError");
 }
 
-async function makeThumbnail(file, signal, onDuration) {
+async function makeThumbnail(file, signal, onDuration, containerType = "") {
   const kind = detectClientKind(file.type || "application/octet-stream", file.name);
-  if (kind === "video") return makeVideoThumbnail(file, signal, onDuration);
+  if (kind === "video") return makeVideoThumbnail(file, signal, onDuration, containerType);
   if (kind !== "image") return null;
   try {
     const image = await createImageBitmap(file);
@@ -6750,13 +6760,13 @@ async function makeThumbnail(file, signal, onDuration) {
   } catch { return null; }
 }
 
-async function readLocalMediaDuration(file, mediaKind) {
+async function readLocalMediaDuration(file, mediaKind, containerType = "") {
   if (!["video", "audio"].includes(mediaKind)) return null;
   const url = URL.createObjectURL(file);
   const media = document.createElement(mediaKind === "audio" ? "audio" : "video");
   media.preload = "metadata";
   media.muted = true;
-  const mpegType = mediaKind === "video" ? mpegContainerType(file.name) : "";
+  const mpegType = mediaKind === "video" ? mpegContainerType({ name: file.name, containerType }) : "";
   let player = null;
   try {
     if (mpegType && globalThis.mpegts?.isSupported()) {
@@ -6781,17 +6791,17 @@ async function readLocalMediaDuration(file, mediaKind) {
   }
 }
 
-async function makeVideoThumbnail(file, signal, onDuration) {
+async function makeVideoThumbnail(file, signal, onDuration, containerType = "") {
   const url = URL.createObjectURL(file);
   try {
-    return await captureVideoThumbnail(url, file, signal, onDuration);
+    return await captureVideoThumbnail(url, file, signal, onDuration, containerType);
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
 let videoThumbnailTail = Promise.resolve();
-async function captureVideoThumbnail(url, file = {}, signal, onDuration) {
+async function captureVideoThumbnail(url, file = {}, signal, onDuration, containerType = file.containerType) {
   // Share one background decoder across uploads and old-poster repair.
   const previous = videoThumbnailTail;
   let release;
@@ -6799,12 +6809,26 @@ async function captureVideoThumbnail(url, file = {}, signal, onDuration) {
   await previous;
   try {
     if (signal?.aborted) return null;
-    const mpegType = mpegContainerType(file.name);
-    const thumbnail = mpegType && globalThis.mpegts?.isSupported()
+    let effectiveContainer = TCloudMediaFormat.normalizeContainer(containerType);
+    const mpegType = mpegContainerType({ name: file.name, containerType: effectiveContainer });
+    let thumbnail = mpegType && globalThis.mpegts?.isSupported()
       ? await captureMpegVideoThumbnail(url, file, mpegType, signal, onDuration)
       : await captureNativeVideoThumbnail(url, signal, onDuration);
     if (thumbnail || signal?.aborted) return thumbnail;
-    return await globalThis.TCloudThumbnailCodec?.recover(url,file,signal,onDuration) || null;
+    if (!effectiveContainer) {
+      try {
+        const detected = file instanceof Blob
+          ? await TCloudMediaFormat.detectBlob(file)
+          : await TCloudMediaFormat.detectFromUrl(url, file);
+        effectiveContainer = TCloudMediaFormat.normalizeContainer(detected.container);
+      } catch {}
+    }
+    const fallbackMpegType = mpegContainerType({ name: file.name, containerType: effectiveContainer });
+    if (fallbackMpegType && fallbackMpegType !== mpegType && globalThis.mpegts?.isSupported()) {
+      thumbnail = await captureMpegVideoThumbnail(url, file, fallbackMpegType, signal, onDuration);
+      if (thumbnail || signal?.aborted) return thumbnail;
+    }
+    return await globalThis.TCloudThumbnailCodec?.recover(url,file,signal,onDuration,effectiveContainer) || null;
   } finally { release(); }
 }
 
@@ -6867,11 +6891,8 @@ async function chooseVideoThumbnailFrame(video, signal) {
   return TCloudUI.selectVideoThumbnailFrame(video, {signal});
 }
 
-function mpegContainerType(name) {
-  const extension = String(name || "").split(".").pop().toLowerCase();
-  if (extension === "flv") return "flv";
-  if (["ts", "m2ts", "mts"].includes(extension)) return "m2ts";
-  return "";
+function mpegContainerType(file) {
+  return TCloudMediaFormat.mpegContainerType(typeof file === "string" ? { name: file } : file);
 }
 
 function resetBackgroundMediaWork() {
@@ -7017,7 +7038,7 @@ async function readMediaDurationFromUrl(url, file) {
   const media = document.createElement(file.mediaKind === "audio" ? "audio" : "video");
   media.preload = "metadata";
   media.muted = true;
-  const mpegType = file.mediaKind === "video" ? mpegContainerType(file.name) : "";
+  const mpegType = file.mediaKind === "video" ? mpegContainerType(file) : "";
   let player = null;
   try {
     if (mpegType && globalThis.mpegts?.isSupported()) {
@@ -8312,9 +8333,54 @@ function showVideoPlayerError(stage, buffering, text) {
 
 function loadVideoPlayerSource(prepared, file, url, generation) {
   const { stage, video, buffering } = prepared;
-  const extension = String(file.name || "").split(".").pop().toLowerCase();
-  const mpegType = extension === "flv" ? "flv" : ["ts", "m2ts", "mts"].includes(extension) ? "m2ts" : "";
-  if (mpegType && globalThis.mpegts?.isSupported()) {
+  let fallbackAttempted = false;
+  let activeMpegPlayer = null;
+  const active = () => previewRequestActive(generation, file.id) && $("#preview-dialog").open;
+  const finalError = (text) => {
+    if (active() && !stage.querySelector(".player-error")) showVideoPlayerError(stage, buffering, text);
+  };
+  const stopMpeg = () => {
+    if (!activeMpegPlayer) return;
+    try { activeMpegPlayer.unload(); } catch {}
+    try { activeMpegPlayer.detachMediaElement(); } catch {}
+    try { activeMpegPlayer.destroy(); } catch {}
+    if (state.previewPlayer === activeMpegPlayer) state.previewPlayer = null;
+    activeMpegPlayer = null;
+  };
+  const retryFromDetectedFormat = async () => {
+    if (fallbackAttempted) {
+      return;
+    }
+    fallbackAttempted = true;
+    if (TCloudMediaFormat.normalizeContainer(file.containerType)) {
+      stopMpeg();
+      finalError("この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
+      return;
+    }
+    try {
+      const detected = await TCloudMediaFormat.detectFromUrl(url, file);
+      if (!active()) return;
+      const expected = TCloudMediaFormat.legacyContainerType(file);
+      if (detected.container === "unknown" || detected.container === expected) {
+        stopMpeg();
+        finalError(detected.container === "unknown"
+          ? "動画の実形式を安全に判定できませんでした。元の画質のままダウンロードしてご確認ください。"
+          : "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
+        return;
+      }
+      if (!await TCloudMedia.updateMediaFormat(state.previewMediaToken, detected)) throw new Error("動画形式の切り替え準備を完了できませんでした。");
+      if (!active()) return;
+      file.containerType = detected.container;
+      stopMpeg();
+      video.removeAttribute("src");
+      try { video.load(); } catch {}
+      startPlayback(true);
+    } catch (error) {
+      stopMpeg();
+      finalError(error.message || "動画の実形式を確認できませんでした。元の画質のままダウンロードしてご確認ください。");
+    }
+  };
+  const startMpeg = (mpegType, finalAttempt) => {
     const offlinePlayback = Boolean(file.offlineOnly);
     const player = mpegts.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes) }, {
       enableWorker: false,
@@ -8327,22 +8393,29 @@ function loadVideoPlayerSource(prepared, file, url, generation) {
       seekType: "range"
     });
     player.on(mpegts.Events.ERROR, () => {
-      if (!previewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
-      if (stage.querySelector(".player-error")) return;
-      showVideoPlayerError(stage, buffering, "このFLV・MPEG-TS動画の映像または音声方式には対応していません。元の画質のままダウンロードしてご確認ください。");
-      try { player.unload(); } catch {}
+      if (!active()) return;
+      if (finalAttempt) { stopMpeg(); finalError("このFLV・MPEG-TS動画の映像または音声方式には対応していません。元の画質のままダウンロードしてご確認ください。"); }
+      else void retryFromDetectedFormat();
     });
     player.attachMediaElement(video);
+    activeMpegPlayer = player;
     state.previewPlayer = player;
     player.load();
-    return;
+  };
+  const startNative = (finalAttempt) => {
+    video.addEventListener("error", () => {
+      if (!active() || !video.error) return;
+      if (finalAttempt) finalError("この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
+      else void retryFromDetectedFormat();
+    }, { once: true });
+    video.src = url;
+  };
+  function startPlayback(finalAttempt) {
+    const mpegType = mpegContainerType(file);
+    if (mpegType && globalThis.mpegts?.isSupported()) startMpeg(mpegType, finalAttempt);
+    else startNative(finalAttempt);
   }
-  video.src = url;
-  video.addEventListener("error", () => {
-    if (!previewRequestActive(generation, file.id) || !$("#preview-dialog").open) return;
-    if (!video.error) return;
-    showVideoPlayerError(stage, buffering, "この動画の映像・音声方式はブラウザで再生できません。元の画質のままダウンロードしてご確認ください。");
-  }, { once: true });
+  startPlayback(false);
 }
 
 function renderVideoPlayer(stage, file, url, generation) {
@@ -8386,7 +8459,7 @@ function updateDurationDisplay(file) {
   if (Number(state.previewFileId) === Number(file.id)) $("#preview-size").textContent = formatMediaDetails(file);
 }
 
-function fileMetadataForStorage(file, mediaKind, durationSeconds = null, name = file.name) {
+function fileMetadataForStorage(file, mediaKind, durationSeconds = null, name = file.name, containerType = file.containerType) {
   const metadata = {
     name,
     mimeType: file.type || file.mimeType || "application/octet-stream",
@@ -8395,6 +8468,8 @@ function fileMetadataForStorage(file, mediaKind, durationSeconds = null, name = 
   };
   const normalized = normalizeDurationSeconds(durationSeconds);
   if (normalized) metadata.durationSeconds = normalized;
+  const normalizedContainer = TCloudMediaFormat.normalizeContainer(containerType);
+  if (normalizedContainer) metadata.containerType = normalizedContainer;
   return metadata;
 }
 
@@ -9144,6 +9219,7 @@ async function hydrateOfflineEntry(entry, context) {
       name: metadata.name,
       mimeType: metadata.mimeType || "application/octet-stream",
       mediaKind: metadata.mediaKind || detectClientKind(metadata.mimeType || "", metadata.name),
+      containerType: TCloudMediaFormat.normalizeContainer(metadata.containerType),
       lastModified: Number(metadata.lastModified || 0),
       durationSeconds: normalizeDurationSeconds(metadata.durationSeconds),
       sizeBytes: Number(entry.sizeBytes || 0),
