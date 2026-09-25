@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, p
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-a66c7d394612";
+const APP_BUILD_ID = "cloud-dd1c724a5539";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2632,6 +2632,7 @@ async function serveAsset(request, env, url, path) {
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
+    ["/media-format.js", "/media-format.js"],
     ["/offline-store.js", "/offline-store-20260811-2.js"],
     ["/display-cache.js", "/display-cache-20260813-1.js"],
     ["/media-client.js", "/media-client-20260811-12.js"],
@@ -2673,7 +2674,7 @@ async function serveAsset(request, env, url, path) {
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  const isAuthenticationAsset = ["/session-guard.js", "/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/offline-store.js", "/display-cache.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
+  const isAuthenticationAsset = ["/session-guard.js", "/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/media-format.js", "/offline-store.js", "/display-cache.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
   const isPwaMetadataAsset = path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest" || path.startsWith("/icons/");
   const isVersionedAsset = url.searchParams.has("v") || url.searchParams.has("rev");
   const isServiceWorkerAsset = path === "/media-worker.js";

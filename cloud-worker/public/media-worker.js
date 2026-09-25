@@ -1,14 +1,14 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-importScripts("/cloud/crypto-vault.js?v=cloud-a66c7d394612");
-importScripts("/cloud/media-range.js?v=cloud-a66c7d394612");
-importScripts("/cloud/offline-store.js?v=cloud-a66c7d394612");
+importScripts("/cloud/crypto-vault.js?v=cloud-dd1c724a5539");
+importScripts("/cloud/media-range.js?v=cloud-dd1c724a5539");
+importScripts("/cloud/offline-store.js?v=cloud-dd1c724a5539");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-a66c7d394612";
-const MEDIA_WORKER_BUILD_ID = "cloud-a66c7d394612";
+const APP_SHELL_CACHE = "tcloud-shell-cloud-dd1c724a5539";
+const MEDIA_WORKER_BUILD_ID = "cloud-dd1c724a5539";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
 const DEMAND_PREFETCH_CHUNKS = 4;
 const PREFETCH_CONCURRENCY = 4;
@@ -18,7 +18,7 @@ const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-  "/cloud/offline-store.js?v=cloud-a66c7d394612",
+  "/cloud/offline-store.js?v=cloud-dd1c724a5539",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"
@@ -69,6 +69,14 @@ self.addEventListener("message", (event) => {
     if (entry && entry.ownerClientId === event.source?.id) {
       entry.playing = true;
       prefetchUpcomingChunks(entry, entry.prefetchAnchor, DEMAND_PREFETCH_CHUNKS);
+    }
+  } else if (data.type === "UPDATE_MEDIA_FORMAT") {
+    const entry = registrations.get(data.token);
+    const mimeType = mediaMimeForContainer(data.containerType);
+    if (entry && entry.ownerClientId === event.source?.id && mimeType && data.mimeType === mimeType) {
+      entry.descriptor = { ...entry.descriptor, containerType: data.containerType, mimeType };
+      event.source?.postMessage({ type: "MEDIA_FORMAT_UPDATED", token: data.token, workerBuild: MEDIA_WORKER_BUILD_ID });
+      event.waitUntil(warmMediaForPlayback(data.token, entry).catch(() => {}));
     }
   } else if (data.type === "SET_CACHE_LIMIT" && Number(data.cacheLimitBytes) > 0) {
     self.TCloudOffline?.setCacheLimitBytes(Number(data.cacheLimitBytes));
@@ -456,13 +464,30 @@ async function reportMediaFailure(token, phase, error) {
 }
 
 function shouldWarmTail(descriptor) {
+  if (descriptor.containerType) return descriptor.containerType === "mp4" || descriptor.containerType === "quicktime";
   return isMp4Descriptor(descriptor)
     || /^(video\/(quicktime|webm)|audio\/mp4)$/i.test(String(descriptor.mimeType || ""));
 }
 
 function isMp4Descriptor(descriptor) {
+  if (descriptor.containerType) return descriptor.containerType === "mp4";
   return /^(video|audio)\/mp4$/i.test(String(descriptor.mimeType || ""))
     || /\.(mp4|m4v)$/i.test(String(descriptor.name || ""));
+}
+
+function mediaMimeForContainer(container) {
+  return ({
+    mp4: "video/mp4",
+    quicktime: "video/quicktime",
+    webm: "video/webm",
+    matroska: "video/x-matroska",
+    flv: "video/x-flv",
+    "mpeg-ts": "video/mp2t",
+    "mpeg-ps": "video/mpeg",
+    avi: "video/x-msvideo",
+    asf: "video/x-ms-asf",
+    ogg: "video/ogg"
+  })[String(container || "")] || "";
 }
 
 function rememberDecryptedChunk(entry, index, bytes) {

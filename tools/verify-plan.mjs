@@ -29,7 +29,7 @@ export function commands(target) {
     cloud: tests('cloud-worker', ...[
       'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
-      'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'sort-preferences-preview-cleanup'
+      'media-format', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     diary: tests('diary-worker', ...['request-safety', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
@@ -46,7 +46,7 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
-  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs'],
+  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs'],
     security: ['security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs'],
     diary: ['diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs'] })[target] || [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)

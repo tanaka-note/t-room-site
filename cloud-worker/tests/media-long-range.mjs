@@ -12,6 +12,7 @@ const stored = new Map();
 const heldRequests = new Map();
 const retryFailures = new Map();
 const requests = [];
+const workerMessages = [];
 let session = "A";
 let activeEncryptedRequests = 0;
 let maxActiveEncryptedRequests = 0;
@@ -106,6 +107,11 @@ const owner = "owner";
 const token = "longrangetokenfixture1234";
 
 await send("REGISTER_MEDIA", token, { descriptor, fileKey });
+await send("UPDATE_MEDIA_FORMAT", token, { containerType: "mpeg-ts", mimeType: "video/mp2t" });
+assert.equal(context.test.registrations.get(token).descriptor.mimeType, "video/mp2t", "detected MPEG-TS updates the local response MIME");
+assert.equal(workerMessages.at(-1)?.type, "MEDIA_FORMAT_UPDATED", "format update is acknowledged before player retry");
+await send("UPDATE_MEDIA_FORMAT", token, { containerType: "mp4", mimeType: "video/mp4" });
+assert.equal(context.test.registrations.get(token).descriptor.containerType, "mp4", "real MP4 keeps MP4 Range behavior after format confirmation");
 maxActiveEncryptedRequests = 0;
 send("MEDIA_PLAYING", token);
 await until(() => stored.size === CHUNK_COUNT);
@@ -199,7 +205,7 @@ function send(type, targetToken, extra = {}) {
   const waits = [];
   events.message({
     data: { type, token: targetToken, ...extra },
-    source: { id: owner, postMessage() {} },
+    source: { id: owner, postMessage(message) { workerMessages.push(message); } },
     waitUntil(promise) { waits.push(Promise.resolve(promise)); }
   });
   return Promise.all(waits);
