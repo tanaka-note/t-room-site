@@ -42,6 +42,7 @@ test('affected mapping is order independent and unknown runtime files are not si
   const paths = ['assets/session-policy.mjs', 'assets/pwa-auto-update.js'];
   assert.deepEqual(affected(paths), affected([...paths].reverse()));
   assert.deepEqual(affected(['new-app/index.html']), ['site']);
+  assert.ok(affected(['asset-report-k7m4q9x2/report.js']).includes('site'));
   assert.deepEqual(affected(['.github/workflows/verify.yml']), ['tooling']);
   assert.deepEqual(affected(['tools/install-verify-dependencies.mjs']), ['tooling']);
 });
@@ -87,6 +88,7 @@ test('profiles only reference existing scripts/tests and no production mutations
   assert.deepEqual(installDirectories(['downloader2']), ['.', 'downloader2-worker']);
   assert.ok(commands('downloader2').some((command) => command.cwd === 'downloader2-extension' && command.script === 'check'));
   assert.ok(commands('downloader2').some((command) => command.cwd === 'downloader2-fixtures' && command.script === 'check'));
+  assert.ok(commands('site').some((command) => command.cwd === '.' && command.script === 'asset-report:test'));
   assert(commands('site').some((command) => command.args?.join(' ') === 'tools/check-web-app-builds.mjs --target t-room-site'));
 });
 test('site release installs every clean-worktree dependency through the shared verify plan', () => {
