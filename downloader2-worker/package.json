@@ -1,0 +1,15 @@
+{
+  "name": "t-room-downloader2-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check public/passkey-client.js && node --check public/downloader2.js",
+    "test": "node --test test/*.test.js && node --test ../downloader2-extension/tests/*.test.js && node --test ../downloader2-fixtures/test/*.test.mjs",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260903.1",
+    "wrangler": "4.128.0"
+  }
+}

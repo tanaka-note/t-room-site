@@ -29,6 +29,7 @@
     "verify:diary": "node tools/verify.mjs --target diary --browser --build",
     "verify:billing": "node tools/verify.mjs --target billing --browser --build",
     "verify:downloader": "node tools/verify.mjs --target downloader --browser --build",
+    "verify:downloader2": "node tools/verify.mjs --target downloader2 --build",
     "verify:ai": "node tools/verify.mjs --target ai --browser --build"
   },
   "devDependencies": {

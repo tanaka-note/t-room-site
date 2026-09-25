@@ -28,7 +28,7 @@ test("passkey and attention presets use recorded outcomes and exclude informatio
   const f = auditFixture();
   try {
     const passkey = [], attention = [];
-    for (const service of ["security", "cloud", "diary", "billing", "ai", "downloader"]) {
+    for (const service of ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2"]) {
       passkey.push(f.add({ service, event_type: "passkey_login_success", auth_method: "passkey" }));
       passkey.push(f.add({ service, event_type: "passkey_authentication_success", auth_method: "passkey" }));
       const failed = f.add({ service, event_type: "passkey_authentication_failure", auth_method: "passkey", outcome: "failure" });
@@ -46,7 +46,7 @@ test("passkey and attention presets use recorded outcomes and exclude informatio
     assert.deepEqual((await f.query("view=passkey")).events.map((row) => row.event_id), passkey);
     assert.deepEqual((await f.query("view=attention")).events.map((row) => row.event_id), attention);
     assert.deepEqual(await f.query("view=all"), await f.query(), "legacy API without view remains unchanged");
-    assert.equal((await f.query()).events.length, 31);
+    assert.equal((await f.query()).events.length, 34);
     await assert.rejects(f.query("view=invalid"), { status: 400 });
   } finally { f.close(); }
 });

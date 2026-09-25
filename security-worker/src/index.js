@@ -48,7 +48,8 @@ const SERVICE_REGISTRY = Object.freeze({
   diary: Object.freeze({ displayName: "日記", binding: "DIARY_AUTH" }),
   billing: Object.freeze({ displayName: "請求書", binding: "BILLING_AUTH" }),
   ai: Object.freeze({ displayName: "AI Chat", binding: "AI_AUTH" }),
-  downloader: Object.freeze({ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" })
+  downloader: Object.freeze({ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" }),
+  downloader2: Object.freeze({ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
@@ -56,7 +57,8 @@ const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "diary\u0000main-user\u0000",
   "billing\u0000owner\u0000",
   "ai\u0000owner\u0000",
-  "downloader\u0000owner\u0000"
+  "downloader\u0000owner\u0000",
+  "downloader2\u0000owner\u0000"
 ]);
 const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "identity_approved",
@@ -66,7 +68,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -1522,7 +1524,7 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
     const rootFolderId = item.rootFolderId == null || item.rootFolderId === "" ? null : Number(item.rootFolderId);
     if (!service || !accountId) throw new HttpError(400, "サービス連携を確認してください。");
     if (service !== "cloud" && rootFolderId !== null) throw new HttpError(400, "日記・請求書の連携にT-Cloudフォルダは指定できません。");
-    if (service === "downloader") {
+    if (["downloader", "downloader2"].includes(service)) {
       if (invitation) throw new HttpError(400, "Downloaderはユーザー作成後、利用者詳細のサービス連携から追加してください。");
       if (admin?.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "Downloaderの連携はオーナーだけが追加できます。");
       requireFreshSecurityAdmin(admin);
@@ -1627,14 +1629,15 @@ async function ensurePrimaryAdminRecords(env) {
     { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
     { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
     { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
-    { service: "downloader", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME }
+    { service: "downloader", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
+    { service: "downloader2", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME }
   ];
   for (const link of defaults) {
     const existing = await env.DB.prepare(`SELECT id FROM security_service_links
       WHERE identity_id = ? AND service = ? AND service_account_id = ?
         AND cloud_root_folder_id IS NULL AND status IN ('pending', 'active') LIMIT 1`).bind(PRIMARY_ADMIN_ID, link.service, link.accountId).first();
     if (existing) continue;
-    const defaultStatus = ["ai", "downloader"].includes(link.service) && await hasActiveCredential(env, PRIMARY_ADMIN_ID) ? "active" : "pending";
+    const defaultStatus = ["ai", "downloader", "downloader2"].includes(link.service) && await hasActiveCredential(env, PRIMARY_ADMIN_ID) ? "active" : "pending";
     await env.DB.prepare(`INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
@@ -1995,7 +1998,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing", "ai", "downloader"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {

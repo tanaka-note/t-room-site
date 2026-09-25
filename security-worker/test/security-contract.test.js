@@ -24,9 +24,11 @@ const diary = await readFile(new URL("../../diary-worker/src/index.js", import.m
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
 const ai = await readFile(new URL("../../ai-worker/src/index.js", import.meta.url), "utf8");
 const downloader = await readFile(new URL("../../downloader-worker/src/index.js", import.meta.url), "utf8");
+const downloader2 = await readFile(new URL("../../downloader2-worker/src/index.js", import.meta.url), "utf8");
 const aiServiceMigration = await readFile(new URL("../migrations/0009_ai_chat_service_and_budgets.sql", import.meta.url), "utf8");
 const activeSessionMigration = await readFile(new URL("../migrations/0010_active_service_sessions.sql", import.meta.url), "utf8");
 const downloaderServiceMigration = await readFile(new URL("../migrations/0011_downloader_service.sql", import.meta.url), "utf8");
+const downloader2ServiceMigration = await readFile(new URL("../migrations/0020_downloader2_service.sql", import.meta.url), "utf8");
 const sessionValidator = await readFile(new URL("../../assets/passkey-session-validation.mjs", import.meta.url), "utf8");
 const globalSwitchTool = await readFile(new URL("../tools/global-passkey-switch.mjs", import.meta.url), "utf8");
 const securityConfig = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
@@ -276,6 +278,18 @@ test("Downloader is a Passkey-only service with an idempotent primary-admin link
   assert.match(downloaderServiceMigration, /service IN \('cloud', 'diary', 'billing', 'ai', 'downloader'\)/);
   assert.match(downloaderServiceMigration, /NOT EXISTS \([\s\S]*link\.service = 'downloader'/);
   assert.doesNotMatch(downloaderServiceMigration, /PRAGMA foreign_keys\s*=\s*OFF/i);
+});
+
+test("Downloader 2 is a separate owner-only Passkey service", () => {
+  assert.match(worker, /downloader2: Object\.freeze\(\{ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" \}\)/);
+  assert.match(worker, /"downloader2\\u0000owner\\u0000"/);
+  assert.match(downloader2, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), SERVICE\)/);
+  assert.match(downloader2, /identityId !== "primary-admin"/);
+  assert.match(downloader2, /validatePasskeySession/);
+  assert.doesNotMatch(downloader2, /password_login|PASSWORD_HASH/);
+  assert.match(downloader2ServiceMigration, /service IN \('cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2'\)/);
+  assert.match(downloader2ServiceMigration, /link\.service = 'downloader2'/);
+  assert.doesNotMatch(downloader2ServiceMigration, /PRAGMA foreign_keys\s*=\s*OFF/i);
 });
 
 test("privileged, exclusive, Cloud-admin and root-folder policies are server enforced", () => {
