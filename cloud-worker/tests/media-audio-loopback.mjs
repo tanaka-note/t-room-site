@@ -83,12 +83,21 @@ export async function verifyFixtureAudioOutput(page, ffmpeg) {
     return Promise.race([__video.play(), new Promise((_, reject) => setTimeout(() => reject(new Error('Loopback fixture play did not resolve')), 10000))]);
   });
   const before = await page.evaluate(() => __video.currentTime);
+  const rate = await page.evaluate(() => __video.playbackRate);
   try {
     const audible = await captureFixtureAudio(ffmpeg);
     assert.ok(audible.rms > .001, `browser outputs actual PCM: ${JSON.stringify(audible)}`);
-    assert.ok(Math.abs(audible.frequency - 440) < 20, `output contains the synthetic 440Hz fixture tone: ${JSON.stringify(audible)}`);
-    assert.ok(audible.toneFraction > .5, `fixture tone accounts for most output energy: ${JSON.stringify(audible)}`);
     assert.ok(await page.evaluate(time => __video.currentTime > time + .2 && !__video.paused, before), 'audio is measured during advancing playback');
-    console.log('PASS native audio output PCM', JSON.stringify(audible));
-  } finally { await page.evaluate(() => __video.pause()); }
+    console.log('PASS native audio output PCM at tested playback rate', rate, JSON.stringify(audible));
+    // Keep the actual audible-output gate at the tested 1.5x rate. Check the
+    // fixture's original tone separately at 1x so the assertion does not depend
+    // on a platform pitch-preservation filter's spectrum.
+    const normalStart = await page.evaluate(() => { __video.playbackRate = 1; return __video.currentTime; });
+    await page.waitForFunction(time => __video.currentTime > time + .2 && !__video.paused, normalStart, { timeout: 10000 });
+    const tone = await captureFixtureAudio(ffmpeg);
+    assert.ok(tone.rms > .001, `browser outputs actual PCM at normal rate: ${JSON.stringify(tone)}`);
+    assert.ok(Math.abs(tone.frequency - 440) < 20, `output contains the synthetic 440Hz fixture tone: ${JSON.stringify(tone)}`);
+    assert.ok(tone.toneFraction > .5, `fixture tone accounts for most output energy: ${JSON.stringify(tone)}`);
+    console.log('PASS native normal-rate fixture tone', JSON.stringify(tone));
+  } finally { await page.evaluate(rate => { __video.pause(); __video.playbackRate = rate; }, rate); }
 }
