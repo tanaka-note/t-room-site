@@ -9,7 +9,8 @@ export async function captureFixtureAudio(ffmpeg) {
   assert.equal(process.env.TROOM_AUDIO_LOOPBACK, 'BlackHole 2ch');
   const pcm = await new Promise((resolve, reject) => {
     const child = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'avfoundation',
-      '-i', ':BlackHole 2ch', '-t', '1', '-ac', '1', '-ar', '44100', '-f', 'f32le', 'pipe:1']);
+      '-i', ':BlackHole 2ch', '-af', 'aresample=44100,asetnsamples=n=44100:p=0,asetpts=N/SR/TB',
+      '-frames:a', '1', '-ac', '1', '-ar', '44100', '-f', 'f32le', 'pipe:1']);
     const chunks = []; let size = 0, stderr = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`Loopback capture did not finish: ${stderr}`)); }, 10000);
     child.stdout.on('data', chunk => {
@@ -25,7 +26,11 @@ export async function captureFixtureAudio(ffmpeg) {
       else resolve(Buffer.concat(chunks));
     });
   });
-  assert.ok(pcm.length >= 44100 * 4 * .9, 'capture contains at least 0.9s of real PCM');
+  return measureFixturePcm(pcm);
+}
+
+export function measureFixturePcm(pcm) {
+  assert.ok(pcm.length >= 44100 * 4 * .9, `capture contains at least 0.9s of real PCM (${pcm.length} bytes)`);
   let energy = 0, peak = 0, crossings = 0, previous = 0;
   for (let offset = 0; offset + 4 <= pcm.length; offset += 4) {
     const sample = pcm.readFloatLE(offset);

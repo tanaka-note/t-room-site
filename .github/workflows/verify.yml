@@ -153,6 +153,24 @@ jobs:
           npm install --prefix tmp/webkit-version --ignore-scripts --no-audit --no-fund playwright@1.63.0
           node tmp/webkit-version/node_modules/playwright/cli.js install --with-deps webkit
           cat tmp/webkit-version/node_modules/playwright-core/browsers.json
+      - name: Cloud WebKit streaming playbin3 native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          WEBKIT_GST_USE_PLAYBIN3: '1'
+          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:5'
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud WebKit streaming playbin3 full comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          WEBKIT_GST_USE_PLAYBIN3: '1'
+          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Cloud current WebKit native comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
