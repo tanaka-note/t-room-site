@@ -266,3 +266,24 @@ cleanup matrix, Cloud syntax/Node/security/200MiB Range/dry-run profile, 12
 development-flow tooling tests and Cloud build freshness (`cloud-d9ba0bfb7197`).
 Calibrated macOS regression of this fix remains pending; Linux native MP4
 remains a distinct unresolved browser-backend failure and blocks publication.
+
+Run 36232142327 confirms that the fixed adapter passes indexed and unindexed
+FLV actual seeks, changing frames, calibrated output and cleanup on macOS.
+The next failure is the disguised TS-extension/MP4 case: play resolves and
+time advances, but videoWidth/videoHeight stay zero and no frames appear.
+The fixture's updateMediaFormat stub acknowledged success without changing
+its synthetic transport's Content-Type from video/mp2t to video/mp4. Production
+already updates the owner-checked Service Worker descriptor before restarting
+native playback. The fixture now mirrors that acknowledgement and response
+change only when the real application's sniff/fallback requests it; assertions
+require exactly one update, the canonical detected format and a restarted
+request with the corrected MIME. Neither production MIME/owner checks nor
+seek/frame assertions are changed. macOS confirmation of this fixture correction
+is pending.
+
+The adapter also reconciles a settled seek when WebKit coalesces a later
+seeking notification after an obsolete reader has already opened. A reader
+opening the current target is retained while its track buffers are filling.
+Two deterministic controls cover both cases; native playback stays unchanged.
+Local Cloud syntax/Node/security/200MiB Range/dry-run verification and the
+18-case Chromium matrix pass for this adapter follow-up (cloud-bb654832ec3f).

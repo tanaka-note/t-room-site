@@ -69,6 +69,30 @@ for (const notify of [true, false]) {
 {
   const f = await loaded();
   f.seek(54); f.flush();
+  const current = f.workers.at(-1);
+  f.mediaSource.buffers[0].ranges = [];
+  f.video.dispatchEvent(new Event('seeked'));
+  f.flush();
+  assert.equal(current.terminated, false, 'current target reader continues while track buffers are still filling');
+  assert.equal(f.workers.at(-1), current);
+  f.player.destroy();
+}
+
+{
+  const f = await loaded();
+  f.seek(54); f.flush(); // The old open has already started before the final target.
+  const obsolete = f.workers.at(-1);
+  f.seek(45, false); // WebKit coalesces the second seeking notification.
+  f.video.dispatchEvent(new Event('seeked'));
+  f.flush();
+  assert.equal(obsolete.terminated, true, 'settled coalesced seek cancels an already opening reader');
+  assert.equal(f.workers.at(-1).messages[0].time, 45);
+  f.player.destroy();
+}
+
+{
+  const f = await loaded();
+  f.seek(54); f.flush();
   const obsolete = f.workers.at(-1), buffer = f.mediaSource.buffers[0];
   buffer.updating = true;
   const queuedRemoval = obsolete.deliver(f.ready());

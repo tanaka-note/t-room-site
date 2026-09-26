@@ -127,6 +127,7 @@
       seekTimer = null;
       const time = video.currentTime;
       const staleOpening = openingTime !== null && Math.abs(openingTime - time) > .3;
+      if (worker && openingTime !== null && !staleOpening) return;
       if (covered(time) && worker && !staleOpening) { pump(); return; }
       // Cancel obsolete work immediately, including an open that would later
       // clear buffers covering the latest target. WebKit can coalesce seeking
@@ -148,6 +149,7 @@
         objectUrl = URL.createObjectURL(mediaSource);
         video.src = objectUrl;
         video.addEventListener('seeking', seek);
+        video.addEventListener('seeked', seek);
         video.addEventListener('timeupdate', pump);
         timer = setInterval(pump, 250);
         mediaSource.addEventListener('sourceopen', () => void start(0), { once: true });
@@ -159,6 +161,7 @@
         stopWorker();
         clearInterval(timer); clearTimeout(seekTimer);
         video?.removeEventListener('seeking', seek);
+        video?.removeEventListener('seeked', seek);
         video?.removeEventListener('timeupdate', pump);
         legacy?.destroy();
         URL.revokeObjectURL(objectUrl);

@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, p
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-d9ba0bfb7197";
+const APP_BUILD_ID = "cloud-bb654832ec3f";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";

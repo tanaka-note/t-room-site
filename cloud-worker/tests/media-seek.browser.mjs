@@ -38,6 +38,7 @@ const cases = [
 ];
 if (process.env.TROOM_SEEK_CASE) assert.ok(cases.some(item => item[0] === process.env.TROOM_SEEK_CASE), 'selected seek case exists');
 const bytes = new Map(cases.map(([id, ext]) => [id, readFileSync(join(scratch, `sample.${ext}`))]));
+const responseTypes = new Map(cases.map(([id, , mime]) => [id, mime]));
 if (process.argv.includes('--minimal-video-only')) {
   const silent = join(scratch, 'video-only.mp4');
   generate(['-i', mp4, '-c:v', 'copy', '-an', '-movflags', '+faststart', silent]);
@@ -56,9 +57,10 @@ const fixture = await startUIFixture(undefined, { handleRequest(req, res) {
   if (!bytes.has(id)) return false;
   const body = bytes.get(id), range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
   const start = range ? Number(range[1]) : 0, end = Math.min(body.length - 1, range?.[2] ? Number(range[2]) : body.length - 1);
-  requests.push({ id, start, end, range: Boolean(range), header: req.headers.range });
+  const contentType = responseTypes.get(id);
+  requests.push({ id, start, end, range: Boolean(range), header: req.headers.range, contentType });
   if (start > end) { res.writeHead(416, { 'Content-Range': `bytes */${body.length}` }).end(); return true; }
-  res.writeHead(range ? 206 : 200, { 'Content-Type': cases.find(item => item[0] === id)[2], 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, 'Cache-Control': 'no-store', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${body.length}` } : {}) });
+  res.writeHead(range ? 206 : 200, { 'Content-Type': contentType, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, 'Cache-Control': 'no-store', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${body.length}` } : {}) });
   // Diagnostic A/B only: an ordinary immediate static-file response, keeping
   // the exact same bytes, Range headers and all playback assertions.
   if (process.env.TROOM_NATIVE_RESPONSE_MODE === 'immediate' && cases.find(item => item[0] === id)[3] === 'native') {
@@ -146,6 +148,22 @@ try {
         for (const [id, ext, mime, route] of cases.filter(item => !process.env.TROOM_SEEK_CASE || item[0] === process.env.TROOM_SEEK_CASE)) {
           const context = await browser.newContext({ viewport: touch ? { width: 390, height: 740 } : { width: 1280, height: 900 }, hasTouch: touch });
           const page = await context.newPage();
+          responseTypes.set(id, mime);
+          const requestStart = requests.length;
+          let formatUpdates = 0;
+          // The fixture replaces the encrypted Service Worker transport. Preserve
+          // its existing UPDATE_MEDIA_FORMAT acknowledgement and response MIME
+          // change, only when the real application detects a different container.
+          await page.exposeBinding('__fixtureUpdateMediaFormat', (_source, format) => {
+            assert.ok(id.startsWith('disguised-'), 'ordinary containers need no format update');
+            const container = ext === 'ts' ? 'mpeg-ts' : 'mp4';
+            assert.equal(format.container, container, 'detected actual container');
+            const detectedMime = container === 'mpeg-ts' ? 'video/mp2t' : 'video/mp4';
+            assert.equal(format.mimeType, detectedMime, 'canonical detected MIME');
+            responseTypes.set(id, detectedMime);
+            formatUpdates++;
+            return true;
+          });
           await installMediaDiagnostics(page);
           console.log(`START real seek ${engineName} ${shared ? 'share/mobile' : 'normal/desktop'} ${id}`);
           const workers = new Set();
@@ -161,7 +179,7 @@ try {
             await preparePage(page, fixture.origin, 2);
             await page.evaluate(({ file, url }) => { Object.assign(__test.state.files[1], file); __test.videoFixture(url); }, { file, url });
           }
-          await page.evaluate(() => { globalThis.TCloudMedia = { ...TCloudMedia, updateMediaFormat: async () => true, markPlaying() {} }; });
+          await page.evaluate(() => { globalThis.TCloudMedia = { ...TCloudMedia, updateMediaFormat: async (_token, format) => __fixtureUpdateMediaFormat(format), markPlaying() {} }; });
           await page.locator(shared ? '#items .file > button:first-child' : '.file-card[data-file-id="2"] > button:first-child').click();
           await page.waitForSelector('#preview-stage video');
           await page.evaluate(() => { globalThis.__video = document.querySelector('video'); __video.muted = true; });
@@ -173,6 +191,8 @@ try {
             throw error;
           });
           assert.equal(await page.evaluate(() => __video.src.startsWith('blob:')), route !== 'native', `${engineName}/${id}: native-first route`);
+          assert.equal(formatUpdates, id.startsWith('disguised-') ? 1 : 0, 'format detection updates the fixture transport exactly once');
+          if (formatUpdates) assert.ok(requests.slice(requestStart).some(request => request.id === id && request.contentType === responseTypes.get(id)), 'restarted playback requests the corrected response MIME');
           const duration = await page.evaluate(() => __video.duration);
           if (route === 'remux') assert.ok(await page.evaluate(() => __video.buffered.end(__video.buffered.length - 1)) < duration * .75, 'forward seek must cross the unbuffered region');
           try {
