@@ -36,6 +36,11 @@ const cases = [
   ['disguised-mp4', 'ts', 'video/mp4', 'remux'], ['disguised-ts', 'mp4', 'video/mp2t', 'native']
 ];
 const bytes = new Map(cases.map(([id, ext]) => [id, readFileSync(join(scratch, `sample.${ext}`))]));
+if (process.argv.includes('--minimal-video-only')) {
+  const silent = join(scratch, 'video-only.mp4');
+  generate(['-i', mp4, '-c:v', 'copy', '-an', '-movflags', '+faststart', silent]);
+  bytes.set('mp4', readFileSync(silent));
+}
 const requests = [];
 const minimalHtml = src => `<!doctype html><button id="open">Open</button><script>document.querySelector("#open").onclick=()=>{const video=document.createElement("video");video.controls=true;video.playsInline=true;video.preload=${JSON.stringify(process.env.TROOM_NATIVE_PRELOAD || 'auto')};video.src=${JSON.stringify(src)};document.body.append(video);};</script>`;
 const fixture = await startUIFixture(undefined, { handleRequest(req, res) {

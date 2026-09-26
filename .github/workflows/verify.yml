@@ -15,7 +15,38 @@ jobs:
     timeout-minutes: 5
     outputs:
       node: ${{ steps.plan.outputs.node }}
-      android: ${{ steps.plan.outputs.android }}
+      cloud-webkit-macos:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.node), 'cloud')
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install native platform comparison dependencies
+        run: |
+          node tools/install-verify-dependencies.mjs cloud
+          brew install ffmpeg
+          pnpm --dir diary-worker exec playwright install webkit
+      - name: Cloud macOS WebKit native control
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud macOS WebKit full media regression
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: node cloud-worker/tests/media-seek.browser.mjs
+  android: ${{ steps.plan.outputs.android }}
       downloader2_native: ${{ steps.plan.outputs.downloader2_native }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -124,6 +155,14 @@ jobs:
         run: |
           timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-format-fallback.browser.mjs
           timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs
+      - name: Cloud WebKit video-only native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:5'
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --minimal-video-only
       - name: Install isolated current WebKit comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         run: |
@@ -153,6 +192,37 @@ jobs:
           path: tmp/verify-artifacts/
           if-no-files-found: ignore
           retention-days: 5
+  cloud-webkit-macos:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.node), 'cloud')
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install native platform comparison dependencies
+        run: |
+          node tools/install-verify-dependencies.mjs cloud
+          brew install ffmpeg
+          pnpm --dir diary-worker exec playwright install webkit
+      - name: Cloud macOS WebKit native control
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud macOS WebKit full media regression
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: node cloud-worker/tests/media-seek.browser.mjs
   android:
     needs: plan
     if: needs.plan.outputs.android != '[]'
@@ -210,13 +280,14 @@ jobs:
         run: dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
   verify:
     if: always()
-    needs: [plan, node, android, downloader2-native]
+    needs: [plan, node, cloud-webkit-macos, android, downloader2-native]
     runs-on: ubuntu-latest
     steps:
       - name: Require selected jobs to succeed
         env:
           PLAN: ${{ needs.plan.result }}
           NODE: ${{ needs.node.result }}
+          MACOS: ${{ needs.cloud-webkit-macos.result }}
           ANDROID: ${{ needs.android.result }}
           DOWNLOADER2_NATIVE: ${{ needs.downloader2-native.result }}
-        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
+        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
