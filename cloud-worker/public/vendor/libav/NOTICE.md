@@ -3,9 +3,9 @@
 Unmodified ESM/WebAssembly files from the upstream release:
 https://github.com/Yahweasel/libav.js/releases/tag/v6.7.7.1.1
 
-Included modules: ASF/MP4/MPEG-TS demuxers and MPEG-4 Visual/WMV1/WMV2/WMV3 decoders.
-Thumbnail modules load only after native thumbnail decoding fails. The MPEG-TS
-demuxer is loaded by a dedicated device-local remux worker for static AVC/AAC
+Included modules: ASF/MP4/MPEG-TS/FLV demuxers and MPEG-4 Visual/WMV1/WMV2/WMV3 decoders.
+Thumbnail modules load only after native thumbnail decoding fails. The TS/FLV
+demuxers are loaded by a dedicated device-local remux worker for static AVC/AAC
 playback and timestamp seeking. No media or keys are sent to a third party.
 
 `../mp4-generator-1.8.0.mjs` is the unmodified MP4 box generator from mpegts.js

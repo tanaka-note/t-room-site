@@ -1685,7 +1685,7 @@ function loadSharedVideoPlayerSource(prepared, file, url, generation) {
     }
   };
   const startMpeg = (mpegType, finalAttempt) => {
-    const factory = mpegType === "m2ts" && globalThis.TCloudRemux ? TCloudRemux : mpegts;
+    const factory = globalThis.TCloudRemux || mpegts;
     const player = factory.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes) }, { enableWorker: false, lazyLoad: true, lazyLoadMaxDuration: 180, accurateSeek: true, seekType: "range" });
     player.on(mpegts.Events.ERROR, () => {
       if (!active()) return;

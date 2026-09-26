@@ -1,7 +1,7 @@
 (function (global) {
   'use strict';
 
-  // The video element and existing controls remain the player. Only static TS
+  // The video element and existing controls remain the player. Static TS/FLV
   // with supported codecs uses the local remux worker; other codecs retain the
   // existing mpegts path. MP4/WebM/MOV never enter this adapter.
   function createPlayer(source, config) {
@@ -47,7 +47,7 @@
       bufferedEnd = time;
       const current = generation;
       worker = new Worker('/cloud/media-remux-worker.mjs', { type: 'module' });
-      worker.onerror = fallback;
+      worker.onerror = () => { if (current === generation && !destroyed) fallback(); };
       worker.onmessage = async ({ data }) => {
         if (current !== generation || destroyed) return;
         try {
@@ -98,7 +98,7 @@
           }
         } catch { if (current === generation && !destroyed) fallback(); }
       };
-      worker.postMessage({ type: 'open', url: source.url, size: source.filesize, time });
+      worker.postMessage({ type: 'open', url: source.url, size: source.filesize, time, container: source.type === 'flv' ? 'flv' : 'mpeg-ts' });
     }
 
     function pump() {

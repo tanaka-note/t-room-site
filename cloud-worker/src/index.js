@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, p
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-ed004e3287fc";
+const APP_BUILD_ID = "cloud-718797bb7161";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2663,7 +2663,7 @@ async function serveAsset(request, env, url, path) {
   ]);
   // Exact vendored decoder variants and corresponding sources only. Never
   // expose the asset directory through a general path-prefix bypass.
-  for (const variant of ["demuxer-asf", "demuxer-mp4", "demuxer-mpegts", "decoder-mpeg4", "decoder-wmv1", "decoder-wmv2", "decoder-wmv3"]) {
+  for (const variant of ["demuxer-asf", "demuxer-mp4", "demuxer-mpegts", "demuxer-flv", "decoder-mpeg4", "decoder-wmv1", "decoder-wmv2", "decoder-wmv3"]) {
     for (const extension of ["mjs", "wasm.mjs", "wasm.wasm"]) {
       const asset = `/vendor/libav/libav-6.7.7.1.1-${variant}.${extension}`;
       allowed.set(asset, asset);

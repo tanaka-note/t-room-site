@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 
 export const {chromium, webkit, devices} = createRequire(new URL('../../diary-worker/package.json', import.meta.url))('playwright');
 export const root = fileURLToPath(new URL('../../', import.meta.url));
-export const engines = [['chromium', chromium, {executablePath: ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(existsSync)}], ['webkit', webkit, {}]].filter(([name]) => !process.env.TROOM_BROWSER || process.env.TROOM_BROWSER === name);
+export const engines = [['chromium', chromium, { ...(process.env.TROOM_CHROMIUM_CHANNEL ? {channel:process.env.TROOM_CHROMIUM_CHANNEL} : {}), executablePath: ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(existsSync)}], ['webkit', webkit, {}]].filter(([name]) => !process.env.TROOM_BROWSER || process.env.TROOM_BROWSER === name);
 if (!engines.length) throw new Error('Unknown TROOM_BROWSER');
 export async function startUIFixture(sourceRoot = root, {handleRequest} = {}) {
   const server = createServer(async (req, res) => {

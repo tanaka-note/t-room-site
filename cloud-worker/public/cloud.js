@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-ed004e3287fc";
+const APP_BUILD_ID = "cloud-718797bb7161";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -8382,7 +8382,7 @@ function loadVideoPlayerSource(prepared, file, url, generation) {
   };
   const startMpeg = (mpegType, finalAttempt) => {
     const offlinePlayback = Boolean(file.offlineOnly);
-    const factory = mpegType === "m2ts" && globalThis.TCloudRemux ? TCloudRemux : mpegts;
+    const factory = globalThis.TCloudRemux || mpegts;
     const player = factory.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes) }, {
       enableWorker: false,
       lazyLoad: true,

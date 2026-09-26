@@ -70,7 +70,8 @@ jobs:
         if: matrix.target == 'cloud'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg gstreamer1.0-libav
+          pnpm --dir diary-worker exec playwright install chrome
           pnpm --dir diary-worker exec playwright install --with-deps webkit
       - name: Syntax, tests, browser and dry-run build
         env:
@@ -78,6 +79,7 @@ jobs:
           CI: 'true'
           TROOM_BROWSER: chromium
           WRANGLER_SEND_METRICS: 'false'
+          TROOM_CHROMIUM_CHANNEL: ${{ matrix.target == 'cloud' && 'chrome' || '' }}
         run: node tools/verify.mjs --target "$VERIFY_TARGET" --browser --build
       - name: Cloud media WebKit regression
         if: matrix.target == 'cloud'

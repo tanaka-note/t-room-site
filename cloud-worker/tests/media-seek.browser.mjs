@@ -14,6 +14,7 @@ function generate(args) {
 const mp4 = join(scratch, 'sample.mp4');
 generate(['-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=15', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '90', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '15', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', mp4]);
 for (const ext of ['ts', 'mov', 'flv']) generate(['-i', mp4, '-c', 'copy', ...(ext === 'flv' ? ['-flvflags', 'add_keyframe_index'] : []), join(scratch, `sample.${ext}`)]);
+generate(['-i', mp4, '-c', 'copy', '-f', 'flv', join(scratch, 'sample.flv-unindexed')]);
 // Add standard M2TS arrival timestamps while preserving the AVC/AAC PMT.
 // FFmpeg's Blu-ray mode instead marks AAC as unidentified private data.
 const transport = readFileSync(join(scratch, 'sample.ts'));
@@ -29,7 +30,8 @@ generate(['-i', mp4, '-c:v', 'libvpx', '-deadline', 'realtime', '-cpu-used', '8'
 const cases = [
   ['mp4', 'mp4', 'video/mp4', 'native'], ['webm', 'webm', 'video/webm', 'native'],
   ['mov', 'mov', 'video/quicktime', 'native'], ['ts', 'ts', 'video/mp2t', 'remux'],
-  ['m2ts', 'm2ts', 'video/mp2t', 'remux'], ['flv', 'flv', 'video/x-flv', 'mpegts'],
+  ['m2ts', 'm2ts', 'video/mp2t', 'remux'], ['flv', 'flv', 'video/x-flv', 'remux'],
+  ['flv-no-index', 'flv-unindexed', 'video/x-flv', 'remux'],
   ['disguised-mp4', 'ts', 'video/mp4', 'remux'], ['disguised-ts', 'mp4', 'video/mp2t', 'native']
 ];
 const bytes = new Map(cases.map(([id, ext]) => [id, readFileSync(join(scratch, `sample.${ext}`))]));
@@ -78,7 +80,7 @@ try {
           const workers = new Set();
           page.on('worker', worker => { workers.add(worker); worker.on('close', () => workers.delete(worker)); });
           await page.route('**/cloud/api/**', route => route.fulfill({ json: {} }));
-          const file = { id: 2, name: `${id}.${id === 'disguised-mp4' ? 'mp4' : id === 'disguised-ts' ? 'ts' : ext}`, mediaKind: 'video', mimeType: mime, createdAt: '2026-09-26 00:00:00', sizeBytes: bytes.get(id).length, hasThumbnail: true };
+          const file = { id: 2, name: `${id}.${id === 'disguised-mp4' ? 'mp4' : id === 'disguised-ts' ? 'ts' : id === 'flv-no-index' ? 'flv' : ext}`, mediaKind: 'video', mimeType: mime, createdAt: '2026-09-26 00:00:00', sizeBytes: bytes.get(id).length, hasThumbnail: true };
           const url = `${fixture.origin}/cloud/local-media/seek-${id}`;
           if (shared) {
             await page.goto(`${fixture.origin}/cloud/share/${'A'.repeat(43)}`);

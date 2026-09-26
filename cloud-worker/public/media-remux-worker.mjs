@@ -1,11 +1,10 @@
-// Device-only, bounded MPEG-TS demux/remux. No decoder, encoder or remote API.
-import LibAV from './vendor/libav/libav-6.7.7.1.1-demuxer-mpegts.mjs';
+// Device-only, bounded TS/FLV demux/remux. No decoder, encoder or remote API.
 import MP4 from './vendor/mp4-generator-1.8.0.mjs';
 
 const BLOCK = 1024 * 1024;
 const controller = new AbortController();
 const blocks = new Map();
-let av, context, packet, tracks, origin, ready, initialPackets, busy = false, eof = false;
+let av, context, packet, tracks, origin, ready, initialPackets, transport, busy = false, eof = false;
 let readBudget = 24 * BLOCK;
 
 function join(parts) {
@@ -65,9 +64,12 @@ function aacFrames(bytes) {
 
 function seconds(value, high, stream) { return av.i64tof64(value, high) * stream.time_base_num / stream.time_base_den; }
 
-async function open({ url, size, time = 0 }) {
+async function open({ url, size, time = 0, container = 'mpeg-ts' }) {
   const source = new URL(url, self.location.href);
   if (source.origin !== self.location.origin || !source.pathname.startsWith('/cloud/local-media/') || !Number.isSafeInteger(size) || size <= 0) throw new Error('Invalid local media source');
+  if (!['mpeg-ts', 'flv'].includes(container)) throw new Error('Unsupported remux container');
+  transport = container === 'mpeg-ts';
+  const { default: LibAV } = await import(`./vendor/libav/libav-6.7.7.1.1-demuxer-${transport ? 'mpegts' : 'flv'}.mjs`);
   av = await LibAV.LibAV({ noworker: true, nothreads: true });
   await av.av_log_set_level(8);
   av.onblockread = async (name, position, length) => {
@@ -101,15 +103,17 @@ async function open({ url, size, time = 0 }) {
   const firstVideo = first.find(input => input.stream_index === videoStream.index && (input.flags & 1));
   if (!firstVideo) throw new Error('AVC keyframe unavailable');
   origin = seconds(firstVideo.dts, firstVideo.dtshi, videoStream);
-  const duration = Math.max(...streams.map(stream => stream.duration));
+  const contextDuration = av.i64tof64(await av.c('AVFormatContext_duration', context), await av.c('AVFormatContext_durationhi', context)) / 1e6;
+  const duration = Math.max(contextDuration, ...streams.map(stream => stream.duration));
   if (!Number.isFinite(duration) || duration <= 0 || duration > 12 * 3600) throw new Error('Static duration unavailable');
   tracks = await Promise.all(streams.map(async stream => {
     const par = await av.c('ff_copyout_codecpar', stream.codecpar);
-    const scale = stream.time_base_den / stream.time_base_num;
-    if (!Number.isInteger(scale) || scale <= 0 || scale > 90000) throw new Error('Unsupported stream time base');
+    const scale = 90000;
+    if (!(stream.time_base_num > 0) || !(stream.time_base_den > 0)) throw new Error('Unsupported stream time base');
     const meta = { id: stream.index + 1, type: stream.codec_type === 0 ? 'video' : 'audio', timescale: scale, duration: Math.ceil(duration * scale), sequenceNumber: 0 };
     if (stream.codec_type === 0) {
-      meta.avcc = avcc(firstVideo.data);
+      meta.avcc = transport ? avcc(firstVideo.data) : par.extradata;
+      if (!meta.avcc || meta.avcc[0] !== 1 || (meta.avcc[4] & 3) !== 3) throw new Error('Unsupported AVC configuration');
       meta.codecWidth = meta.presentWidth = par.width;
       meta.codecHeight = meta.presentHeight = par.height;
       meta.sarRatio = { width: 1, height: 1 };
@@ -117,7 +121,15 @@ async function open({ url, size, time = 0 }) {
     } else {
       const input = first.find(input => input.stream_index === stream.index);
       if (!input) throw new Error('AAC configuration unavailable');
-      const frame = aacFrames(input.data)[0];
+      let frame;
+      if (transport) frame = aacFrames(input.data)[0];
+      else {
+        const config = par.extradata;
+        if (!config || config.length < 2 || config[0] >> 3 !== 2) throw new Error('Unsupported AAC configuration');
+        const rateIndex = ((config[0] & 7) << 1) | (config[1] >> 7);
+        frame = { config: Array.from(config.slice(0, 2)), rate: [96000,88200,64000,48000,44100,32000,24000,22050,16000,12000,11025,8000,7350][rateIndex], channels: (config[1] >> 3) & 15 };
+        if (!frame.rate || !frame.channels || frame.channels > 7) throw new Error('Unsupported AAC configuration');
+      }
       Object.assign(meta, { config: Array.from(frame.config), codec: 'mp4a.40.2', audioSampleRate: frame.rate, channelCount: frame.channels });
       meta.timescale = frame.rate;
       meta.duration = Math.ceil(duration * frame.rate);
@@ -149,8 +161,12 @@ async function pull() {
     for (const track of tracks) {
       const samples = [], data = [];
       let base;
-      for (const input of packets[track.stream.index] || []) {
-        const frames = track.meta.type === 'audio' ? aacFrames(input.data) : [{ data: videoData(input.data) }];
+      const inputs = packets[track.stream.index] || [];
+      for (let index = 0; index < inputs.length; index++) {
+        const input = inputs[index];
+        const frames = track.meta.type === 'audio'
+          ? transport ? aacFrames(input.data) : [{ data: input.data, rate: track.meta.audioSampleRate }]
+          : [{ data: transport ? videoData(input.data) : input.data }];
         let timestamp = input.dtshi === av.AV_NOPTS_VALUE_HI ? track.nextDts : seconds(input.dts, input.dtshi, track.stream);
         if (!Number.isFinite(timestamp)) continue;
         if (track.meta.type === 'audio') {
@@ -164,7 +180,9 @@ async function pull() {
         const pts = track.meta.type === 'audio' ? dts : seconds(input.pts, input.ptshi, track.stream) - origin;
         let offset = 0;
         for (const frame of frames) {
-          const duration = track.meta.type === 'audio' ? 1024 / frame.rate : seconds(input.duration, input.durationhi, track.stream);
+          const next = inputs[index + 1];
+          const duration = track.meta.type === 'audio' ? 1024 / frame.rate
+            : next ? seconds(next.dts, next.dtshi, track.stream) - timestamp : seconds(input.duration, input.durationhi, track.stream);
           const scale = track.meta.timescale;
           const cts = Math.round((pts - dts) * scale);
           if (!(duration > 0) || cts < 0) throw new Error('Unsupported packet timeline');
