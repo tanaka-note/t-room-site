@@ -41,19 +41,23 @@ export function measureFixturePcm(pcm) {
   }
   const seconds = pcm.length / 4 / 44100;
   // Lossy codecs and pitch preservation add small zero crossings. Measure the
-  // dominant spectral tone instead; require substantial signal energy in it.
+  // dominant spectral tone and the actual fraction of energy in its band.
   let frequency = 0, strongest = 0;
   // Average overlapping short windows so capture clock discontinuities and
   // pitch-preserving playback cannot cancel a real tone across the whole second.
   const windowSize = 4096;
   const windows = [];
-  let windowEnergy = 0;
+  let windowEnergy = 0, tonePower = 0;
   for (let start = 0; start + windowSize <= samples.length; start += windowSize / 2) {
     const window = samples.slice(start, start + windowSize);
-    windowEnergy += window.reduce((sum, sample) => sum + sample * sample, 0);
-    windows.push(window.map((sample, i) => sample * (.5 - .5 * Math.cos(2 * Math.PI * i / (windowSize - 1)))));
+    const weighted = window.map((sample, i) => sample * (.5 - .5 * Math.cos(2 * Math.PI * i / (windowSize - 1))));
+    windowEnergy += weighted.reduce((sum, sample) => sum + sample * sample, 0);
+    windows.push(weighted);
   }
-  for (let hz = 100; hz <= 1500; hz += 2) {
+  // Integer DFT bins permit Parseval energy accounting, unlike the old
+  // single-bin peak estimate (whose maximum was only 0.25 after windowing).
+  for (let bin = Math.ceil(100 * windowSize / 44100); bin <= Math.floor(1500 * windowSize / 44100); bin++) {
+    const hz = bin * 44100 / windowSize;
     const coefficient = 2 * Math.cos(2 * Math.PI * hz / 44100);
     let power = 0;
     for (const window of windows) {
@@ -64,9 +68,10 @@ export function measureFixturePcm(pcm) {
       }
       power += previous * previous + older * older - coefficient * previous * older;
     }
+    if (hz >= 400 && hz <= 480) tonePower += power;
     if (power > strongest) { strongest = power; frequency = hz; }
   }
-  const toneFraction = windowEnergy ? 2 * strongest / (windowSize * windowEnergy) : 0;
+  const toneFraction = windowEnergy ? 2 * tonePower / (windowSize * windowEnergy) : 0;
   return { seconds, rms: Math.sqrt(energy / samples.length), peak, frequency, toneFraction };
 }
 
@@ -82,7 +87,7 @@ export async function verifyFixtureAudioOutput(page, ffmpeg) {
     const audible = await captureFixtureAudio(ffmpeg);
     assert.ok(audible.rms > .001, `browser outputs actual PCM: ${JSON.stringify(audible)}`);
     assert.ok(Math.abs(audible.frequency - 440) < 20, `output contains the synthetic 440Hz fixture tone: ${JSON.stringify(audible)}`);
-    assert.ok(audible.toneFraction > .1, `fixture tone accounts for substantial output energy: ${JSON.stringify(audible)}`);
+    assert.ok(audible.toneFraction > .5, `fixture tone accounts for most output energy: ${JSON.stringify(audible)}`);
     assert.ok(await page.evaluate(time => __video.currentTime > time + .2 && !__video.paused, before), 'audio is measured during advancing playback');
     console.log('PASS native audio output PCM', JSON.stringify(audible));
   } finally { await page.evaluate(() => __video.pause()); }

@@ -36,6 +36,7 @@ const cases = [
   ['flv-no-index', 'flv-unindexed', 'video/x-flv', 'remux'],
   ['disguised-mp4', 'ts', 'video/mp4', 'remux'], ['disguised-ts', 'mp4', 'video/mp2t', 'native']
 ];
+if (process.env.TROOM_SEEK_CASE) assert.ok(cases.some(item => item[0] === process.env.TROOM_SEEK_CASE), 'selected seek case exists');
 const bytes = new Map(cases.map(([id, ext]) => [id, readFileSync(join(scratch, `sample.${ext}`))]));
 if (process.argv.includes('--minimal-video-only')) {
   const silent = join(scratch, 'video-only.mp4');

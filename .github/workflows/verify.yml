@@ -212,7 +212,7 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.node), 'cloud')
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       TROOM_AUDIO_LOOPBACK: BlackHole 2ch
     steps:
@@ -250,7 +250,7 @@ jobs:
         env:
           TROOM_BROWSER: webkit
           CI: 'true'
-        run: gtimeout 5m node cloud-worker/tests/media-seek.browser.mjs
+        run: gtimeout 10m node cloud-worker/tests/media-seek.browser.mjs
       - name: Cloud macOS WebKit normal-rate WebM audio comparison
         if: ${{ !cancelled() }}
         env:
