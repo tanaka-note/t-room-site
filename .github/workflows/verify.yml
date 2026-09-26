@@ -15,38 +15,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       node: ${{ steps.plan.outputs.node }}
-      cloud-webkit-macos:
-    needs: plan
-    if: contains(fromJSON(needs.plan.outputs.node), 'cloud')
-    runs-on: macos-15
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: '11.19.0'
-      - name: Install native platform comparison dependencies
-        run: |
-          node tools/install-verify-dependencies.mjs cloud
-          brew install ffmpeg
-          pnpm --dir diary-worker exec playwright install webkit
-      - name: Cloud macOS WebKit native control
-        env:
-          TROOM_BROWSER: webkit
-          CI: 'true'
-        run: node cloud-worker/tests/media-seek.browser.mjs --minimal-native
-      - name: Cloud macOS WebKit full media regression
-        if: ${{ !cancelled() }}
-        env:
-          TROOM_BROWSER: webkit
-          CI: 'true'
-        run: node cloud-worker/tests/media-seek.browser.mjs
-  android: ${{ steps.plan.outputs.android }}
+      android: ${{ steps.plan.outputs.android }}
       downloader2_native: ${{ steps.plan.outputs.downloader2_native }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
