@@ -215,6 +215,7 @@ jobs:
     timeout-minutes: 30
     env:
       TROOM_AUDIO_LOOPBACK: BlackHole 2ch
+      TROOM_AUDIO_CAPTURE_BIN: tmp/ci-audio-loopback
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -239,6 +240,8 @@ jobs:
           SwitchAudioSource -s 'BlackHole 2ch' -t output
           SwitchAudioSource -s 'BlackHole 2ch' -t system
           SwitchAudioSource -c -t output
+          mkdir -p tmp
+          clang -O2 -std=c11 -Wall -framework CoreAudio -framework CoreFoundation cloud-worker/tests/media-audio-loopback.c -o tmp/ci-audio-loopback
           pnpm --dir diary-worker exec playwright install webkit
       - name: Calibrate actual audio output independently of WebKit
         env:

@@ -7,8 +7,9 @@ export async function captureFixtureAudio(ffmpeg) {
   assert.equal(process.platform, 'darwin');
   assert.equal(process.env.CI, 'true');
   assert.equal(process.env.TROOM_AUDIO_LOOPBACK, 'BlackHole 2ch');
+  const nativeCapture = process.env.TROOM_AUDIO_CAPTURE_BIN;
   const pcm = await new Promise((resolve, reject) => {
-    const child = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-probesize', '32', '-f', 'avfoundation',
+    const child = nativeCapture ? spawn(nativeCapture, []) : spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-probesize', '32', '-f', 'avfoundation',
       '-i', ':BlackHole 2ch', '-af', 'aresample=44100,asetnsamples=n=44100:p=0,asetpts=N/SR/TB',
       '-frames:a', '1', '-ac', '1', '-ar', '44100', '-f', 'f32le', 'pipe:1']);
     const chunks = []; let size = 0, stderr = '';
@@ -26,11 +27,20 @@ export async function captureFixtureAudio(ffmpeg) {
       else resolve(Buffer.concat(chunks));
     });
   });
+  if (nativeCapture) {
+    const boundary = pcm.indexOf(10);
+    assert.ok(boundary > 0 && boundary < 256, 'native PCM metadata is bounded');
+    const metadata = JSON.parse(pcm.subarray(0, boundary).toString('utf8'));
+    assert.equal(metadata.device, 'BlackHole 2ch');
+    assert.equal(metadata.channels, 2);
+    assert.ok([44100, 48000].includes(metadata.sampleRate), 'actual device sample rate is supported');
+    return measureFixturePcm(pcm.subarray(boundary + 1), metadata.sampleRate);
+  }
   return measureFixturePcm(pcm);
 }
 
-export function measureFixturePcm(pcm) {
-  assert.ok(pcm.length >= 44100 * 4 * .9, `capture contains at least 0.9s of real PCM (${pcm.length} bytes)`);
+export function measureFixturePcm(pcm, sampleRate = 44100) {
+  assert.ok(pcm.length >= sampleRate * 4 * .9, `capture contains at least 0.9s of real PCM (${pcm.length} bytes)`);
   let energy = 0, peak = 0;
   const samples = [];
   for (let offset = 0; offset + 4 <= pcm.length; offset += 4) {
@@ -39,7 +49,7 @@ export function measureFixturePcm(pcm) {
     energy += sample * sample; peak = Math.max(peak, Math.abs(sample));
     samples.push(sample);
   }
-  const seconds = pcm.length / 4 / 44100;
+  const seconds = pcm.length / 4 / sampleRate;
   // Lossy codecs and pitch preservation add small zero crossings. Measure the
   // dominant spectral tone and the actual fraction of energy in its band.
   let frequency = 0, strongest = 0;
@@ -56,9 +66,9 @@ export function measureFixturePcm(pcm) {
   }
   // Integer DFT bins permit Parseval energy accounting, unlike the old
   // single-bin peak estimate (whose maximum was only 0.25 after windowing).
-  for (let bin = Math.ceil(100 * windowSize / 44100); bin <= Math.floor(1500 * windowSize / 44100); bin++) {
-    const hz = bin * 44100 / windowSize;
-    const coefficient = 2 * Math.cos(2 * Math.PI * hz / 44100);
+  for (let bin = Math.ceil(100 * windowSize / sampleRate); bin <= Math.floor(1500 * windowSize / sampleRate); bin++) {
+    const hz = bin * sampleRate / windowSize;
+    const coefficient = 2 * Math.cos(2 * Math.PI * hz / sampleRate);
     let power = 0;
     for (const window of windows) {
       let previous = 0, older = 0;
