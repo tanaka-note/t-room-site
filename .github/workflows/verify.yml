@@ -132,6 +132,21 @@ jobs:
           GST_DEBUG: '2,webkitmediaplayer:5'
           CI: 'true'
         run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --minimal-video-only
+      - name: Cloud WebKit settled pause comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:5'
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --settled-pause
+      - name: Cloud WebKit independent remux regression
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_SEEK_CASE: ts
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Install isolated current WebKit comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         run: |
@@ -179,7 +194,8 @@ jobs:
       - name: Install native platform comparison dependencies
         run: |
           node tools/install-verify-dependencies.mjs cloud
-          brew install ffmpeg
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
           pnpm --dir diary-worker exec playwright install webkit
       - name: Cloud macOS WebKit native control
         env:

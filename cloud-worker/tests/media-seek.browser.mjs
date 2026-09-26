@@ -100,6 +100,15 @@ async function seek(page, target) {
     return __video.currentTime > before.time + .2 && frame.visible > 100 && frame.signature !== before.signature;
   }, before, { timeout: 10000 });
   await page.evaluate(() => __video.pause());
+  if (process.argv.includes('--settled-pause')) {
+    await page.evaluate(() => { globalThis.__pauseClock = __video.currentTime; globalThis.__pauseStableFrames = 0; });
+    await page.waitForFunction(() => {
+      const time = __video.currentTime;
+      __pauseStableFrames = __video.paused && Math.abs(time - __pauseClock) < .001 ? __pauseStableFrames + 1 : 0;
+      __pauseClock = time;
+      return __pauseStableFrames >= 4;
+    }, null, { polling: 'raf', timeout: 10000 });
+  }
   await mediaCheckpoint(page, `resumed-and-paused:${target}`);
 }
 
