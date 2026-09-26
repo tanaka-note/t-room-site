@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 
 // Disposable macOS CI only. Read the explicitly configured virtual output,
 // never a microphone or a user's default input. PCM stays in bounded RAM.
-export async function captureFixtureAudio(ffmpeg) {
+export async function captureFixtureAudio(ffmpeg, timeoutMs = 10000) {
   assert.equal(process.platform, 'darwin');
   assert.equal(process.env.CI, 'true');
   assert.equal(process.env.TROOM_AUDIO_LOOPBACK, 'BlackHole 2ch');
@@ -13,7 +13,7 @@ export async function captureFixtureAudio(ffmpeg) {
       '-i', ':BlackHole 2ch', '-af', 'aresample=44100,asetnsamples=n=44100:p=0,asetpts=N/SR/TB',
       '-frames:a', '1', '-ac', '1', '-ar', '44100', '-f', 'f32le', 'pipe:1']);
     const chunks = []; let size = 0, stderr = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`Loopback capture did not finish: ${stderr}`)); }, 10000);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`Loopback capture did not finish: ${stderr}`)); }, timeoutMs);
     child.stdout.on('data', chunk => {
       size += chunk.length;
       if (size > 256 * 1024) { child.kill('SIGKILL'); reject(new Error('Loopback capture exceeded bounded PCM budget')); }
@@ -37,6 +37,18 @@ export async function captureFixtureAudio(ffmpeg) {
     return measureFixturePcm(pcm.subarray(boundary + 1), metadata.sampleRate);
   }
   return measureFixturePcm(pcm);
+}
+
+async function captureAudibleFixtureAudio(ffmpeg) {
+  // Match the existing 10s real-PCM gate: decoder/device startup and a rate
+  // change may initially produce silence. Never retry errors or wrong content.
+  const deadline = performance.now() + 10000;
+  let capture;
+  do {
+    capture = await captureFixtureAudio(ffmpeg, Math.max(1, deadline - performance.now()));
+    if (capture.rms > .001) return capture;
+  } while (performance.now() < deadline);
+  assert.ok(capture.rms > .001, `actual PCM did not arrive within 10s: ${JSON.stringify(capture)}`);
 }
 
 export function measureFixturePcm(pcm, sampleRate = 44100) {
@@ -101,7 +113,7 @@ export async function calibrateFixtureAudioOutput(ffmpeg = 'ffmpeg') {
   // Attach immediately; a device startup error must not become an unhandled
   // promise rejection while the independently bounded capture is in progress.
   const producer = completed.then(() => ({ ok: true }), error => ({ error }));
-  const tone = await captureFixtureAudio(ffmpeg);
+  const tone = await captureAudibleFixtureAudio(ffmpeg);
   const output = await producer;
   if (output.error) throw output.error;
   assert.ok(tone.rms > .001, `known producer has real output PCM: ${JSON.stringify(tone)}`);
@@ -120,7 +132,7 @@ export async function verifyFixtureAudioOutput(page, ffmpeg) {
   const before = await page.evaluate(() => __video.currentTime);
   const rate = await page.evaluate(() => __video.playbackRate);
   try {
-    const audible = await captureFixtureAudio(ffmpeg);
+    const audible = await captureAudibleFixtureAudio(ffmpeg);
     assert.ok(audible.rms > .001, `browser outputs actual PCM: ${JSON.stringify(audible)}`);
     assert.ok(await page.evaluate(time => __video.currentTime > time + .2 && !__video.paused, before), 'audio is measured during advancing playback');
     console.log('PASS native audio output PCM at tested playback rate', rate, JSON.stringify(audible));
@@ -129,7 +141,7 @@ export async function verifyFixtureAudioOutput(page, ffmpeg) {
     // on a platform pitch-preservation filter's spectrum.
     const normalStart = await page.evaluate(() => { __video.playbackRate = 1; return __video.currentTime; });
     await page.waitForFunction(time => __video.currentTime > time + .2 && !__video.paused, normalStart, { timeout: 10000 });
-    const tone = await captureFixtureAudio(ffmpeg);
+    const tone = await captureAudibleFixtureAudio(ffmpeg);
     assert.ok(tone.rms > .001, `browser outputs actual PCM at normal rate: ${JSON.stringify(tone)}`);
     assert.ok(Math.abs(tone.frequency - 440) < 20, `output contains the synthetic 440Hz fixture tone: ${JSON.stringify(tone)}`);
     assert.ok(tone.toneFraction > .5, `fixture tone accounts for most output energy: ${JSON.stringify(tone)}`);
