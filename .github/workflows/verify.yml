@@ -93,23 +93,26 @@ jobs:
         if: matrix.target == 'cloud'
         env:
           TROOM_BROWSER: webkit
+          WEBKIT_GST_USE_PLAYBIN3: '1'
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-native
           DEBUG: pw:browser
-          GST_DEBUG: '2'
+          GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
         run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
       - name: Cloud WebKit headed native comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
+          WEBKIT_GST_USE_PLAYBIN3: '1'
           DEBUG: pw:browser
-          GST_DEBUG: '2'
+          GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
         run: timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
       - name: Cloud media WebKit regression
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
+          WEBKIT_GST_USE_PLAYBIN3: '1'
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-app
           CI: 'true'
         run: |
