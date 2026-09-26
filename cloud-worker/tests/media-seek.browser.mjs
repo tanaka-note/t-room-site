@@ -37,11 +37,12 @@ const cases = [
 ];
 const bytes = new Map(cases.map(([id, ext]) => [id, readFileSync(join(scratch, `sample.${ext}`))]));
 const requests = [];
+const minimalHtml = src => `<!doctype html><button id="open">Open</button><script>document.querySelector("#open").onclick=()=>{const video=document.createElement("video");video.controls=true;video.playsInline=true;video.preload="auto";video.src=${JSON.stringify(src)};document.body.append(video);};</script>`;
 const fixture = await startUIFixture(undefined, { handleRequest(req, res) {
   const path = new URL(req.url, 'http://localhost').pathname;
   if (path === '/cloud/minimal-seek') {
     res.setHeader('Content-Type', 'text/html');
-    res.end('<!doctype html><button id="open">Open</button><script>document.querySelector("#open").onclick=()=>{const video=document.createElement("video");video.controls=true;video.playsInline=true;video.preload="auto";video.src="/cloud/local-media/seek-mp4";document.body.append(video);};</script>');
+    res.end(minimalHtml('/cloud/local-media/seek-mp4'));
     return true;
   }
   const id = path.startsWith('/cloud/local-media/seek-') ? path.slice('/cloud/local-media/seek-'.length) : '';
@@ -77,6 +78,17 @@ async function seek(page, target) {
   ]));
   const before = await page.evaluate(() => __video.currentTime);
   await page.waitForFunction(time => __video.currentTime > time + .2, before, { timeout: 10000 });
+  {
+    const decodedPixels = await page.evaluate(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 160; canvas.height = 90;
+      const context = canvas.getContext('2d'); context.drawImage(__video, 0, 0, 160, 90);
+      const pixels = context.getImageData(0, 0, 160, 90).data;
+      let visible = 0;
+      for (let i = 0; i < pixels.length; i += 4) if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 60) visible++;
+      return visible;
+    });
+    assert.ok(decodedPixels > 100, 'seek resumes decoded test-pattern frames, not only a media clock');
+  }
   await page.evaluate(() => __video.pause());
   await mediaCheckpoint(page, `resumed-and-paused:${target}`);
 }
@@ -87,7 +99,7 @@ try {
     try {
       if (process.argv.includes('--minimal-native')) {
         const page = await browser.newPage();
-        await installMediaDiagnostics(page, process.argv.includes('--events-only'));
+        await installMediaDiagnostics(page, !process.argv.includes('--event-state'));
         try {
           await page.goto(`${fixture.origin}/cloud/minimal-seek`);
           await page.locator('#open').click();
@@ -130,6 +142,7 @@ try {
           await page.waitForFunction(() => Number.isFinite(__video.duration) && __video.duration > 80 && __video.readyState >= 2, null, { timeout: 25000 }).catch(async error => {
             console.error('RANGES', requests.filter(request => request.id === id));
             console.error('MEDIA STATE', engineName, id, await page.evaluate(() => ({ duration: __video.duration, readyState: __video.readyState, error: __video.error?.code, networkState: __video.networkState, src: __video.src, stage: document.querySelector('#preview-stage')?.textContent })));
+            await reportMediaDiagnostics(page, `${engineName}/${id}/initialization-FAIL`);
             throw error;
           });
           assert.equal(await page.evaluate(() => __video.src.startsWith('blob:')), route !== 'native', `${engineName}/${id}: native-first route`);

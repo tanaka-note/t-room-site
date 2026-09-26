@@ -1,8 +1,8 @@
 // Synthetic localhost fixtures only; never load this observer in production.
-export async function installMediaDiagnostics(page, eventsOnly = false) {
+export async function installMediaDiagnostics(page, eventsOnly = true) {
   await page.addInitScript(eventsOnly => {
     const ranges = value => Array.from({ length: value.length }, (_, i) => [value.start(i), value.end(i)]);
-    globalThis.__mediaDiagnostics = { events: [], plays: [], checkpoints: [] };
+    globalThis.__mediaDiagnostics = { events: [], plays: [], checkpoints: [], frames: [] };
     globalThis.__mediaSnapshot = video => ({
       currentTime: video.currentTime, duration: video.duration, paused: video.paused,
       ended: video.ended, seeking: video.seeking, readyState: video.readyState,
@@ -19,6 +19,18 @@ export async function installMediaDiagnostics(page, eventsOnly = false) {
         if (__mediaDiagnostics.events.length > 2000) __mediaDiagnostics.events.shift();
       }, true);
     }
+    const observed = new WeakSet();
+    document.addEventListener('loadeddata', event => {
+      const video = event.target;
+      if (!(video instanceof HTMLVideoElement) || observed.has(video) || !video.requestVideoFrameCallback) return;
+      observed.add(video);
+      const frame = (_, metadata) => {
+        __mediaDiagnostics.frames.push({ at: performance.now(), mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames });
+        if (__mediaDiagnostics.frames.length > 1000) __mediaDiagnostics.frames.shift();
+        video.requestVideoFrameCallback(frame);
+      };
+      video.requestVideoFrameCallback(frame);
+    }, true);
     const original = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function (...args) {
       const record = { at: performance.now(), status: 'pending', before: __mediaSnapshot(this) };
