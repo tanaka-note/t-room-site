@@ -180,30 +180,36 @@ try {
             console.error('RANGES', requests.filter(request => request.id === id));
             throw error;
           }
-          await page.evaluate(() => { __video.volume = .4; __video.playbackRate = 1.5; });
-          assert.deepEqual(await page.evaluate(() => [__video.volume, __video.playbackRate, __video.disableRemotePlayback]), [.4, 1.5, true]);
+          await page.evaluate(() => { __video.volume = .5; __video.playbackRate = 1.5; });
+          assert.deepEqual(await page.evaluate(() => [__video.volume, __video.playbackRate, __video.disableRemotePlayback]), [.5, 1.5, true]);
           if (engineName === 'chromium') assert.ok(await page.evaluate(() => __video.webkitAudioDecodedByteCount) > 0, `${id}: real audio is decoded`);
           if (engineName === 'webkit') {
-            // WebKit exposes no decoded-byte counter. Observe actual PCM from
-            // the media element, with a silent destination to avoid test sound.
-            await page.evaluate(async () => {
-              globalThis.__audio = new AudioContext();
-              globalThis.__analyser = __audio.createAnalyser();
-              const source = __audio.createMediaElementSource(__video);
-              const silent = __audio.createGain(); silent.gain.value = 0;
-              source.connect(__analyser); __analyser.connect(silent); silent.connect(__audio.destination);
-              __video.muted = false;
-              await Promise.race([
-                (async () => { await __audio.resume(); await __video.play(); })(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('WebKit audio did not start')), 10000))
-              ]);
-            });
-            await page.waitForFunction(() => {
-              const pcm = new Float32Array(__analyser.fftSize);
-              __analyser.getFloatTimeDomainData(pcm);
-              return pcm.some(value => Math.abs(value) > .001);
-            }, null, { timeout: 10000 });
-            await page.evaluate(async () => { __video.pause(); await __audio.close(); });
+            try {
+              if (process.argv.includes('--audio-normal-rate')) await page.evaluate(() => { __video.playbackRate = 1; });
+              // WebKit exposes no decoded-byte counter. Observe actual PCM from
+              // the media element, with a silent destination to avoid test sound.
+              await page.evaluate(async () => {
+                globalThis.__audio = new AudioContext();
+                globalThis.__analyser = __audio.createAnalyser();
+                const source = __audio.createMediaElementSource(__video);
+                const silent = __audio.createGain(); silent.gain.value = 0;
+                source.connect(__analyser); __analyser.connect(silent); silent.connect(__audio.destination);
+                __video.muted = false;
+                await Promise.race([
+                  (async () => { await __audio.resume(); await __video.play(); })(),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('WebKit audio did not start')), 10000))
+                ]);
+              });
+              await page.waitForFunction(() => {
+                const pcm = new Float32Array(__analyser.fftSize);
+                __analyser.getFloatTimeDomainData(pcm);
+                return pcm.some(value => Math.abs(value) > .001);
+              }, null, { timeout: 10000 });
+              await page.evaluate(async () => { __video.pause(); await __audio.close(); });
+            } catch (error) {
+              await reportMediaDiagnostics(page, `${engineName}/${shared ? 'share' : 'normal'}/${id}/audio-FAIL`);
+              throw error;
+            }
           }
           await page.locator(shared ? '#preview-dialog .close' : '#preview-close').click();
           await page.waitForFunction(() => !document.querySelector('video'));

@@ -208,6 +208,31 @@ jobs:
           TROOM_BROWSER: webkit
           CI: 'true'
         run: node cloud-worker/tests/media-seek.browser.mjs
+      - name: Cloud macOS WebKit normal-rate WebM audio comparison
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_SEEK_CASE: webm
+          CI: 'true'
+        run: node cloud-worker/tests/media-seek.browser.mjs --audio-normal-rate
+      - name: Cloud macOS WebKit independent remux regression
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_SEEK_CASE: ts
+          CI: 'true'
+        run: node cloud-worker/tests/media-seek.browser.mjs
+      - name: Install isolated current macOS WebKit comparison
+        if: ${{ !cancelled() }}
+        run: |
+          npm install --prefix tmp/webkit-version --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          node tmp/webkit-version/node_modules/playwright/cli.js install webkit
+      - name: Cloud current macOS WebKit full media comparison
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" node cloud-worker/tests/media-seek.browser.mjs
   android:
     needs: plan
     if: needs.plan.outputs.android != '[]'

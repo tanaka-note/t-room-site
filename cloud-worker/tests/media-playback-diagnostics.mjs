@@ -52,6 +52,15 @@ export async function mediaCheckpoint(page, phase) {
 
 export async function reportMediaDiagnostics(page, label) {
   console.error('MEDIA DIAGNOSTICS', label, JSON.stringify(await page.evaluate(() => ({
-    final: __video && __mediaSnapshot(__video), ...__mediaDiagnostics
+    final: __video && __mediaSnapshot(__video), ...__mediaDiagnostics,
+    audio: globalThis.__audio ? {
+      state: __audio.state, sampleRate: __audio.sampleRate,
+      pcmMax: globalThis.__analyser ? (() => {
+        const pcm = new Float32Array(__analyser.fftSize); __analyser.getFloatTimeDomainData(pcm);
+        return pcm.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+      })() : null,
+      decodedBytes: __video.webkitAudioDecodedByteCount ?? null,
+      tracks: Array.from(__video.audioTracks || [], track => ({ enabled: track.enabled, kind: track.kind, label: track.label }))
+    } : null
   }))));
 }
