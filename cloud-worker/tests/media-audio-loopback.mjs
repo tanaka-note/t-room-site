@@ -31,16 +31,31 @@ export async function captureFixtureAudio(ffmpeg) {
 
 export function measureFixturePcm(pcm) {
   assert.ok(pcm.length >= 44100 * 4 * .9, `capture contains at least 0.9s of real PCM (${pcm.length} bytes)`);
-  let energy = 0, peak = 0, crossings = 0, previous = 0;
+  let energy = 0, peak = 0;
+  const samples = [];
   for (let offset = 0; offset + 4 <= pcm.length; offset += 4) {
     const sample = pcm.readFloatLE(offset);
     assert.ok(Number.isFinite(sample), 'PCM samples are finite');
     energy += sample * sample; peak = Math.max(peak, Math.abs(sample));
-    if (previous <= 0 && sample > 0) crossings++;
-    previous = sample;
+    samples.push(sample);
   }
   const seconds = pcm.length / 4 / 44100;
-  return { seconds, rms: Math.sqrt(energy / (pcm.length / 4)), peak, frequency: crossings / seconds };
+  // Lossy codecs and pitch preservation add small zero crossings. Measure the
+  // dominant spectral tone instead; require substantial signal energy in it.
+  let frequency = 0, strongest = 0;
+  const windowed = samples.map((sample, i) => sample * (.5 - .5 * Math.cos(2 * Math.PI * i / (samples.length - 1))));
+  for (let hz = 100; hz <= 1500; hz += 2) {
+    const coefficient = 2 * Math.cos(2 * Math.PI * hz / 44100);
+    let previous = 0, older = 0;
+    for (const sample of windowed) {
+      const next = sample + coefficient * previous - older;
+      older = previous; previous = next;
+    }
+    const power = previous * previous + older * older - coefficient * previous * older;
+    if (power > strongest) { strongest = power; frequency = hz; }
+  }
+  const toneFraction = energy ? 2 * strongest / (samples.length * energy) : 0;
+  return { seconds, rms: Math.sqrt(energy / samples.length), peak, frequency, toneFraction };
 }
 
 export async function verifyFixtureAudioOutput(page, ffmpeg) {
@@ -55,6 +70,7 @@ export async function verifyFixtureAudioOutput(page, ffmpeg) {
     const audible = await captureFixtureAudio(ffmpeg);
     assert.ok(audible.rms > .001, `browser outputs actual PCM: ${JSON.stringify(audible)}`);
     assert.ok(Math.abs(audible.frequency - 440) < 20, `output contains the synthetic 440Hz fixture tone: ${JSON.stringify(audible)}`);
+    assert.ok(audible.toneFraction > .1, `fixture tone accounts for substantial output energy: ${JSON.stringify(audible)}`);
     assert.ok(await page.evaluate(time => __video.currentTime > time + .2 && !__video.paused, before), 'audio is measured during advancing playback');
     console.log('PASS native audio output PCM', JSON.stringify(audible));
   } finally { await page.evaluate(() => __video.pause()); }
