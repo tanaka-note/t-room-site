@@ -106,6 +106,14 @@ jobs:
           GST_DEBUG: '2'
           CI: 'true'
         run: timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
+      - name: Cloud WebKit observation comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2'
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --events-only
       - name: Cloud media WebKit regression
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:

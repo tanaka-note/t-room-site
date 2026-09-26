@@ -87,7 +87,7 @@ try {
     try {
       if (process.argv.includes('--minimal-native')) {
         const page = await browser.newPage();
-        await installMediaDiagnostics(page);
+        await installMediaDiagnostics(page, process.argv.includes('--events-only'));
         try {
           await page.goto(`${fixture.origin}/cloud/minimal-seek`);
           await page.locator('#open').click();

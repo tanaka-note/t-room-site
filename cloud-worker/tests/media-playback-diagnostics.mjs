@@ -1,6 +1,6 @@
 // Synthetic localhost fixtures only; never load this observer in production.
-export async function installMediaDiagnostics(page) {
-  await page.addInitScript(() => {
+export async function installMediaDiagnostics(page, eventsOnly = false) {
+  await page.addInitScript(eventsOnly => {
     const ranges = value => Array.from({ length: value.length }, (_, i) => [value.start(i), value.end(i)]);
     globalThis.__mediaDiagnostics = { events: [], plays: [], checkpoints: [] };
     globalThis.__mediaSnapshot = video => ({
@@ -15,7 +15,7 @@ export async function installMediaDiagnostics(page) {
       'pause', 'waiting', 'stalled', 'suspend', 'seeking', 'seeked', 'timeupdate', 'progress', 'durationchange', 'error', 'emptied', 'abort']) {
       document.addEventListener(name, event => {
         if (!(event.target instanceof HTMLVideoElement)) return;
-        __mediaDiagnostics.events.push({ event: name, at: performance.now(), state: __mediaSnapshot(event.target) });
+        __mediaDiagnostics.events.push({ event: name, at: performance.now(), ...(eventsOnly ? {} : { state: __mediaSnapshot(event.target) }) });
         if (__mediaDiagnostics.events.length > 2000) __mediaDiagnostics.events.shift();
       }, true);
     }
@@ -31,7 +31,7 @@ export async function installMediaDiagnostics(page) {
       });
       return promise;
     };
-  });
+  }, eventsOnly);
 }
 
 export async function mediaCheckpoint(page, phase) {
