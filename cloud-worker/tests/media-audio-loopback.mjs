@@ -75,6 +75,31 @@ export function measureFixturePcm(pcm) {
   return { seconds, rms: Math.sqrt(energy / samples.length), peak, frequency, toneFraction };
 }
 
+export async function calibrateFixtureAudioOutput(ffmpeg = 'ffmpeg') {
+  const quiet = await captureFixtureAudio(ffmpeg);
+  assert.ok(quiet.rms < .001, 'loopback calibration starts with silent output');
+  const child = spawn('ffplay', ['-hide_banner', '-loglevel', 'error', '-nodisp', '-autoexit',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=10'],
+  { env: { ...process.env, SDL_AUDIODRIVER: 'coreaudio' }, stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4096); });
+  const completed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Calibration output did not finish')); }, 15000);
+    child.on('error', error => { clearTimeout(timer); reject(error); });
+    child.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`Calibration output failed (${code}): ${stderr}`)); });
+  });
+  // Attach immediately; a device startup error must not become an unhandled
+  // promise rejection while the independently bounded capture is in progress.
+  const producer = completed.then(() => ({ ok: true }), error => ({ error }));
+  const tone = await captureFixtureAudio(ffmpeg);
+  const output = await producer;
+  if (output.error) throw output.error;
+  assert.ok(tone.rms > .001, `known producer has real output PCM: ${JSON.stringify(tone)}`);
+  assert.ok(Math.abs(tone.frequency - 440) < 20, `capture measures known 440Hz producer correctly: ${JSON.stringify(tone)}`);
+  assert.ok(tone.toneFraction > .5, `known producer has expected tone energy: ${JSON.stringify(tone)}`);
+  console.log('PASS independent loopback calibration', JSON.stringify(tone));
+}
+
 export async function verifyFixtureAudioOutput(page, ffmpeg) {
   const quiet = await captureFixtureAudio(ffmpeg);
   assert.ok(quiet.rms < .001, 'muted/paused fixture output is silent before playback');

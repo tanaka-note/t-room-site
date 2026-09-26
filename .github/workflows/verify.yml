@@ -240,6 +240,10 @@ jobs:
           SwitchAudioSource -s 'BlackHole 2ch' -t system
           SwitchAudioSource -c -t output
           pnpm --dir diary-worker exec playwright install webkit
+      - name: Calibrate actual audio output independently of WebKit
+        env:
+          CI: 'true'
+        run: node --input-type=module -e "import { calibrateFixtureAudioOutput } from './cloud-worker/tests/media-audio-loopback.mjs'; await calibrateFixtureAudioOutput();"
       - name: Cloud macOS WebKit native control
         env:
           TROOM_BROWSER: webkit
