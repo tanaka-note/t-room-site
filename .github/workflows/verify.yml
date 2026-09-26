@@ -93,7 +93,6 @@ jobs:
         if: matrix.target == 'cloud'
         env:
           TROOM_BROWSER: webkit
-          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-native
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
@@ -103,7 +102,6 @@ jobs:
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
-          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
@@ -121,12 +119,33 @@ jobs:
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
-          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-app
           CI: 'true'
         run: |
           timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-format-fallback.browser.mjs
           timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs
+      - name: Install isolated current WebKit comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        run: |
+          npm install --prefix tmp/webkit-version --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          node tmp/webkit-version/node_modules/playwright/cli.js install --with-deps webkit
+          cat tmp/webkit-version/node_modules/playwright-core/browsers.json
+      - name: Cloud current WebKit native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud current WebKit headed native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
