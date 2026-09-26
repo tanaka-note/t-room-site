@@ -17,7 +17,7 @@
     "test:share-folders": "node tests/share-folder-selection.mjs",
     "test:share-folders:http": "node tests/share-folder-selection-http.mjs",
     "test:share-folders:browser": "node tests/share-folder-selection.browser.mjs",
-    "test:media": "node tests/media-format.mjs && node tests/media-range.mjs && node tests/media-prefetch.mjs && node tests/media-long-range.mjs && node tests/media-download.mjs && node tests/file-safety.mjs && node tests/media-duration.mjs && node tests/player-stability.mjs && node tests/desktop-seek.mjs && node tests/video-tap-controls.mjs && node tests/video-background-playback.mjs",
+    "test:media": "node tests/media-format.mjs && node tests/media-remux-race.mjs && node tests/media-range.mjs && node tests/media-prefetch.mjs && node tests/media-long-range.mjs && node tests/media-download.mjs && node tests/file-safety.mjs && node tests/media-duration.mjs && node tests/player-stability.mjs && node tests/desktop-seek.mjs && node tests/video-tap-controls.mjs && node tests/video-background-playback.mjs",
     "test:media-long-range": "node tests/media-long-range.mjs && node tests/media-long-range.browser.mjs",
     "test:startup": "node tests/startup-view.mjs && node tests/long-name-layout.mjs && node tests/file-card-layout.mjs",
     "test:search": "node tests/search-result-ranking.mjs && node tests/recursive-search-http.mjs",
