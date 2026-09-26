@@ -147,6 +147,20 @@ jobs:
           TROOM_SEEK_CASE: ts
           CI: 'true'
         run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs
+      - name: Cloud WebKit immediate native response comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_NATIVE_RESPONSE_MODE: immediate
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud WebKit immediate full media comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_NATIVE_RESPONSE_MODE: immediate
+          CI: 'true'
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Install isolated current WebKit comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         run: |

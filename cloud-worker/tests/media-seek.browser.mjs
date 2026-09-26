@@ -58,6 +58,12 @@ const fixture = await startUIFixture(undefined, { handleRequest(req, res) {
   requests.push({ id, start, end, range: Boolean(range), header: req.headers.range });
   if (start > end) { res.writeHead(416, { 'Content-Range': `bytes */${body.length}` }).end(); return true; }
   res.writeHead(range ? 206 : 200, { 'Content-Type': cases.find(item => item[0] === id)[2], 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, 'Cache-Control': 'no-store', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${body.length}` } : {}) });
+  // Diagnostic A/B only: an ordinary immediate static-file response, keeping
+  // the exact same bytes, Range headers and all playback assertions.
+  if (process.env.TROOM_NATIVE_RESPONSE_MODE === 'immediate' && cases.find(item => item[0] === id)[3] === 'native') {
+    res.end(body.subarray(start, end + 1));
+    return true;
+  }
   // Avoid letting a tiny fixture hide seeks outside the current MSE buffer.
   let offset = start;
   const timer = setInterval(() => {

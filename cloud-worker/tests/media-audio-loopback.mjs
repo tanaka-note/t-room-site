@@ -8,7 +8,7 @@ export async function captureFixtureAudio(ffmpeg) {
   assert.equal(process.env.CI, 'true');
   assert.equal(process.env.TROOM_AUDIO_LOOPBACK, 'BlackHole 2ch');
   const pcm = await new Promise((resolve, reject) => {
-    const child = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'avfoundation',
+    const child = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-probesize', '32', '-f', 'avfoundation',
       '-i', ':BlackHole 2ch', '-af', 'aresample=44100,asetnsamples=n=44100:p=0,asetpts=N/SR/TB',
       '-frames:a', '1', '-ac', '1', '-ar', '44100', '-f', 'f32le', 'pipe:1']);
     const chunks = []; let size = 0, stderr = '';
@@ -43,18 +43,30 @@ export function measureFixturePcm(pcm) {
   // Lossy codecs and pitch preservation add small zero crossings. Measure the
   // dominant spectral tone instead; require substantial signal energy in it.
   let frequency = 0, strongest = 0;
-  const windowed = samples.map((sample, i) => sample * (.5 - .5 * Math.cos(2 * Math.PI * i / (samples.length - 1))));
+  // Average overlapping short windows so capture clock discontinuities and
+  // pitch-preserving playback cannot cancel a real tone across the whole second.
+  const windowSize = 4096;
+  const windows = [];
+  let windowEnergy = 0;
+  for (let start = 0; start + windowSize <= samples.length; start += windowSize / 2) {
+    const window = samples.slice(start, start + windowSize);
+    windowEnergy += window.reduce((sum, sample) => sum + sample * sample, 0);
+    windows.push(window.map((sample, i) => sample * (.5 - .5 * Math.cos(2 * Math.PI * i / (windowSize - 1)))));
+  }
   for (let hz = 100; hz <= 1500; hz += 2) {
     const coefficient = 2 * Math.cos(2 * Math.PI * hz / 44100);
-    let previous = 0, older = 0;
-    for (const sample of windowed) {
-      const next = sample + coefficient * previous - older;
-      older = previous; previous = next;
+    let power = 0;
+    for (const window of windows) {
+      let previous = 0, older = 0;
+      for (const sample of window) {
+        const next = sample + coefficient * previous - older;
+        older = previous; previous = next;
+      }
+      power += previous * previous + older * older - coefficient * previous * older;
     }
-    const power = previous * previous + older * older - coefficient * previous * older;
     if (power > strongest) { strongest = power; frequency = hz; }
   }
-  const toneFraction = energy ? 2 * strongest / (samples.length * energy) : 0;
+  const toneFraction = windowEnergy ? 2 * strongest / (windowSize * windowEnergy) : 0;
   return { seconds, rms: Math.sqrt(energy / samples.length), peak, frequency, toneFraction };
 }
 
