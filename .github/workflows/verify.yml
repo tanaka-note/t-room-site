@@ -86,8 +86,18 @@ jobs:
         env:
           TROOM_BROWSER: webkit
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-native
+          DEBUG: pw:browser
+          GST_DEBUG: '2'
           CI: 'true'
-        run: timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs --minimal-native
+        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud WebKit headed native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2'
+          CI: 'true'
+        run: timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
       - name: Cloud media WebKit regression
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:

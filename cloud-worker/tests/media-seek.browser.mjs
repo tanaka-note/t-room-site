@@ -83,7 +83,7 @@ async function seek(page, target) {
 
 try {
   for (const [engineName, engine, launch] of engines) {
-    const browser = await engine.launch({ headless: true, ...launch });
+    const browser = await engine.launch({ headless: !process.argv.includes('--headed'), ...launch });
     try {
       if (process.argv.includes('--minimal-native')) {
         const page = await browser.newPage();
