@@ -83,6 +83,13 @@ A final rerun also exposed a legacy FLV resume stall after repeated seeks.
 FLV was therefore moved to the same bounded remux path; both indexed and
 unindexed fixtures passed normal/shared real seek and audio checks locally.
 
+The updated CI's Cloud syntax/Node/Chromium/browser/dry-run build stage passed.
+Its WebKit stage remained running without a result, so the seek test now rejects
+a play promise that does not resume within 10s and CI bounds each WebKit command
+to 5 minutes. WebKit audio verification additionally observes nonzero PCM via
+Web Audio instead of claiming audio from the unavailable Chromium byte counter.
+Windows WebKit also lacks AudioContext; this is an explicit failure, not a skip.
+
 WMV work must wait for that gate. Existing ASF modules are thumbnail demuxers
 plus WMV1/2/3 video decoders, without the WMA/WMA Pro audio decoder/encoder
 pipeline required for audiovisual playback. No WMV playback codec was added,

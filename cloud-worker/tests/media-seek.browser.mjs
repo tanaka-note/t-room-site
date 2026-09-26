@@ -63,7 +63,10 @@ async function seek(page, target) {
     __video.currentTime = time;
   }, target);
   await page.waitForFunction(time => !__video.seeking && Math.abs(__video.currentTime - time) < .3 && __video.readyState >= 2 && __events.seeking && __events.seeked && __events.timeupdate, target, { timeout: 25000 });
-  await page.evaluate(() => __video.play());
+  await page.evaluate(() => Promise.race([
+    __video.play(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Playback did not resume after seek')), 10000))
+  ]));
   const before = await page.evaluate(() => __video.currentTime);
   await page.waitForFunction(time => __video.currentTime > time + .2, before, { timeout: 10000 });
   await page.evaluate(() => __video.pause());
@@ -113,6 +116,28 @@ try {
           await page.evaluate(() => { __video.volume = .4; __video.playbackRate = 1.5; });
           assert.deepEqual(await page.evaluate(() => [__video.volume, __video.playbackRate, __video.disableRemotePlayback]), [.4, 1.5, true]);
           if (engineName === 'chromium') assert.ok(await page.evaluate(() => __video.webkitAudioDecodedByteCount) > 0, `${id}: real audio is decoded`);
+          if (engineName === 'webkit') {
+            // WebKit exposes no decoded-byte counter. Observe actual PCM from
+            // the media element, with a silent destination to avoid test sound.
+            await page.evaluate(async () => {
+              globalThis.__audio = new AudioContext();
+              globalThis.__analyser = __audio.createAnalyser();
+              const source = __audio.createMediaElementSource(__video);
+              const silent = __audio.createGain(); silent.gain.value = 0;
+              source.connect(__analyser); __analyser.connect(silent); silent.connect(__audio.destination);
+              __video.muted = false;
+              await Promise.race([
+                (async () => { await __audio.resume(); await __video.play(); })(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('WebKit audio did not start')), 10000))
+              ]);
+            });
+            await page.waitForFunction(() => {
+              const pcm = new Float32Array(__analyser.fftSize);
+              __analyser.getFloatTimeDomainData(pcm);
+              return pcm.some(value => Math.abs(value) > .001);
+            }, null, { timeout: 10000 });
+            await page.evaluate(async () => { __video.pause(); await __audio.close(); });
+          }
           await page.locator(shared ? '#preview-dialog .close' : '#preview-close').click();
           await page.waitForFunction(() => !document.querySelector('video'));
           assert.equal(workers.size, 0, 'closing preview terminates remux workers');

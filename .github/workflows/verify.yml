@@ -87,8 +87,8 @@ jobs:
           TROOM_BROWSER: webkit
           CI: 'true'
         run: |
-          node cloud-worker/tests/media-format-fallback.browser.mjs
-          node cloud-worker/tests/media-seek.browser.mjs
+          timeout 5m node cloud-worker/tests/media-format-fallback.browser.mjs
+          timeout 5m node cloud-worker/tests/media-seek.browser.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
