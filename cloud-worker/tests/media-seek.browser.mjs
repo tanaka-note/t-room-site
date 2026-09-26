@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { engines, startUIFixture, preparePage } from './ui-fixture.mjs';
+import { installMediaDiagnostics, mediaCheckpoint, reportMediaDiagnostics } from './media-playback-diagnostics.mjs';
 
 const scratch = mkdtempSync(join(tmpdir(), 'tcloud-seek-'));
 const ffmpeg = process.env.TROOM_FFMPEG || 'ffmpeg';
@@ -38,6 +39,11 @@ const bytes = new Map(cases.map(([id, ext]) => [id, readFileSync(join(scratch, `
 const requests = [];
 const fixture = await startUIFixture(undefined, { handleRequest(req, res) {
   const path = new URL(req.url, 'http://localhost').pathname;
+  if (path === '/cloud/minimal-seek') {
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<!doctype html><button id="open">Open</button><script>document.querySelector("#open").onclick=()=>{const video=document.createElement("video");video.controls=true;video.playsInline=true;video.preload="auto";video.src="/cloud/local-media/seek-mp4";document.body.append(video);};</script>');
+    return true;
+  }
   const id = path.startsWith('/cloud/local-media/seek-') ? path.slice('/cloud/local-media/seek-'.length) : '';
   if (!bytes.has(id)) return false;
   const body = bytes.get(id), range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
@@ -57,12 +63,14 @@ const fixture = await startUIFixture(undefined, { handleRequest(req, res) {
 } });
 
 async function seek(page, target) {
+  await mediaCheckpoint(page, `before-seek:${target}`);
   await page.evaluate(time => {
     globalThis.__events = { seeking: 0, seeked: 0, timeupdate: 0 };
     for (const name of Object.keys(__events)) __video.addEventListener(name, () => __events[name]++, { once: true });
     __video.currentTime = time;
   }, target);
   await page.waitForFunction(time => !__video.seeking && Math.abs(__video.currentTime - time) < .3 && __video.readyState >= 2 && __events.seeking && __events.seeked && __events.timeupdate, target, { timeout: 25000 });
+  await mediaCheckpoint(page, `seek-completed:${target}`);
   await page.evaluate(() => Promise.race([
     __video.play(),
     new Promise((_, reject) => setTimeout(() => reject(new Error('Playback did not resume after seek')), 10000))
@@ -70,16 +78,37 @@ async function seek(page, target) {
   const before = await page.evaluate(() => __video.currentTime);
   await page.waitForFunction(time => __video.currentTime > time + .2, before, { timeout: 10000 });
   await page.evaluate(() => __video.pause());
+  await mediaCheckpoint(page, `resumed-and-paused:${target}`);
 }
 
 try {
   for (const [engineName, engine, launch] of engines) {
     const browser = await engine.launch({ headless: true, ...launch });
     try {
+      if (process.argv.includes('--minimal-native')) {
+        const page = await browser.newPage();
+        await installMediaDiagnostics(page);
+        try {
+          await page.goto(`${fixture.origin}/cloud/minimal-seek`);
+          await page.locator('#open').click();
+          await page.evaluate(() => { globalThis.__video = document.querySelector('video'); __video.muted = true; });
+          await page.waitForFunction(() => Number.isFinite(__video.duration) && __video.duration > 80 && __video.readyState >= 2);
+          for (const target of [22.5, 67.5, 22.5, 45, 89, 22.5]) await seek(page, target);
+          await reportMediaDiagnostics(page, `${engineName}/minimal-native/PASS`);
+          console.log(`PASS minimal native actual seek/resume ${engineName}`);
+        } catch (error) {
+          await reportMediaDiagnostics(page, `${engineName}/minimal-native/FAIL`);
+          console.error('RANGES', requests);
+          throw error;
+        }
+        continue;
+      }
       for (const [shared, touch] of process.argv.includes('--share-only') ? [[true, true]] : [[false, false], [true, true]]) {
         for (const [id, ext, mime, route] of cases.filter(item => !process.env.TROOM_SEEK_CASE || item[0] === process.env.TROOM_SEEK_CASE)) {
           const context = await browser.newContext({ viewport: touch ? { width: 390, height: 740 } : { width: 1280, height: 900 }, hasTouch: touch });
           const page = await context.newPage();
+          await installMediaDiagnostics(page);
+          console.log(`START real seek ${engineName} ${shared ? 'share/mobile' : 'normal/desktop'} ${id}`);
           const workers = new Set();
           page.on('worker', worker => { workers.add(worker); worker.on('close', () => workers.delete(worker)); });
           await page.route('**/cloud/api/**', route => route.fulfill({ json: {} }));
@@ -106,13 +135,19 @@ try {
           assert.equal(await page.evaluate(() => __video.src.startsWith('blob:')), route !== 'native', `${engineName}/${id}: native-first route`);
           const duration = await page.evaluate(() => __video.duration);
           if (route === 'remux') assert.ok(await page.evaluate(() => __video.buffered.end(__video.buffered.length - 1)) < duration * .75, 'forward seek must cross the unbuffered region');
-          await seek(page, duration * .25);
-          await seek(page, duration * .75);
-          await seek(page, duration * .25);
-          await page.evaluate(duration => { __video.currentTime = duration * .4; __video.currentTime = duration * .6; }, duration);
-          await seek(page, duration * .5);
-          await seek(page, duration - 1);
-          await seek(page, duration * .25);
+          try {
+            await seek(page, duration * .25);
+            await seek(page, duration * .75);
+            await seek(page, duration * .25);
+            await page.evaluate(duration => { __video.currentTime = duration * .4; __video.currentTime = duration * .6; }, duration);
+            await seek(page, duration * .5);
+            await seek(page, duration - 1);
+            await seek(page, duration * .25);
+          } catch (error) {
+            await reportMediaDiagnostics(page, `${engineName}/${shared ? 'share' : 'normal'}/${id}/FAIL`);
+            console.error('RANGES', requests.filter(request => request.id === id));
+            throw error;
+          }
           await page.evaluate(() => { __video.volume = .4; __video.playbackRate = 1.5; });
           assert.deepEqual(await page.evaluate(() => [__video.volume, __video.playbackRate, __video.disableRemotePlayback]), [.4, 1.5, true]);
           if (engineName === 'chromium') assert.ok(await page.evaluate(() => __video.webkitAudioDecodedByteCount) > 0, `${id}: real audio is decoded`);
@@ -171,5 +206,5 @@ try {
       await guarded.close();
     } finally { await browser.close(); }
   }
-  if (!process.env.TROOM_SEEK_CASE || process.env.TROOM_SEEK_CASE === 'ts') assert.ok(requests.some(request => request.id === 'ts' && request.start > 0), 'TS uses nonzero closed local Range for duration/seek');
+  if (!process.argv.includes('--minimal-native') && (!process.env.TROOM_SEEK_CASE || process.env.TROOM_SEEK_CASE === 'ts')) assert.ok(requests.some(request => request.id === 'ts' && request.start > 0), 'TS uses nonzero closed local Range for duration/seek');
 } finally { await fixture.close(); rmSync(scratch, { recursive: true, force: true }); }

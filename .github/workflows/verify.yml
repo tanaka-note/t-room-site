@@ -81,14 +81,22 @@ jobs:
           WRANGLER_SEND_METRICS: 'false'
           TROOM_CHROMIUM_CHANNEL: ${{ matrix.target == 'cloud' && 'chrome' || '' }}
         run: node tools/verify.mjs --target "$VERIFY_TARGET" --browser --build
-      - name: Cloud media WebKit regression
+      - name: Cloud WebKit minimal native control
         if: matrix.target == 'cloud'
         env:
           TROOM_BROWSER: webkit
+          TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-native
+          CI: 'true'
+        run: timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud media WebKit regression
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-app
           CI: 'true'
         run: |
-          timeout 5m node cloud-worker/tests/media-format-fallback.browser.mjs
-          timeout 5m node cloud-worker/tests/media-seek.browser.mjs
+          timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-format-fallback.browser.mjs
+          timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
