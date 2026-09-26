@@ -1685,7 +1685,8 @@ function loadSharedVideoPlayerSource(prepared, file, url, generation) {
     }
   };
   const startMpeg = (mpegType, finalAttempt) => {
-    const player = mpegts.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes) }, { enableWorker: false, lazyLoad: true, lazyLoadMaxDuration: 180, seekType: "range" });
+    const factory = globalThis.TCloudRemux || mpegts;
+    const player = factory.createPlayer({ type: mpegType, isLive: false, url, filesize: Number(file.sizeBytes) }, { enableWorker: false, lazyLoad: true, lazyLoadMaxDuration: 180, accurateSeek: true, seekType: "range" });
     player.on(mpegts.Events.ERROR, () => {
       if (!active()) return;
       if (finalAttempt) { stopMpeg(); finalError("このFLV・MPEG-TS動画の映像または音声方式には対応していません。元の画質のままダウンロードしてご確認ください。"); }

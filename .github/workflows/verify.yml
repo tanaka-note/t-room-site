@@ -66,13 +66,141 @@ jobs:
       - name: Install Chromium only when used
         if: contains(fromJSON('["tooling","site","cloud","security","diary","billing"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
+      - name: Install Cloud seek fixture and WebKit dependencies
+        if: matrix.target == 'cloud'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg gstreamer1.0-libav gstreamer1.0-gl pulseaudio pulseaudio-utils
+          pnpm --dir diary-worker exec playwright install chrome
+          pnpm --dir diary-worker exec playwright install --with-deps webkit
       - name: Syntax, tests, browser and dry-run build
         env:
           VERIFY_TARGET: ${{ matrix.target }}
           CI: 'true'
           TROOM_BROWSER: chromium
           WRANGLER_SEND_METRICS: 'false'
+          TROOM_CHROMIUM_CHANNEL: ${{ matrix.target == 'cloud' && 'chrome' || '' }}
         run: node tools/verify.mjs --target "$VERIFY_TARGET" --browser --build
+      - name: Start Cloud WebKit audio device
+        if: matrix.target == 'cloud'
+        run: |
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=tcloud_ci rate=44100 channels=2
+          pactl set-default-sink tcloud_ci
+          pactl info
+          pactl list short sinks
+      - name: Cloud WebKit minimal native control
+        if: matrix.target == 'cloud'
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-native
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud WebKit headed native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: timeout -k 10s 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
+      - name: Cloud WebKit headed metadata preload comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_NATIVE_PRELOAD: metadata
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: timeout -k 10s 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
+      - name: Cloud media WebKit regression
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-app
+          CI: 'true'
+        run: |
+          timeout -k 10s 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-format-fallback.browser.mjs
+          timeout -k 10s 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs
+      - name: Cloud WebKit video-only native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:5'
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --minimal-video-only
+      - name: Cloud WebKit settled pause comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:5'
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --settled-pause
+      - name: Cloud WebKit independent remux regression
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_SEEK_CASE: ts
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
+      - name: Cloud WebKit immediate native response comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_NATIVE_RESPONSE_MODE: immediate
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud WebKit immediate full media comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_NATIVE_RESPONSE_MODE: immediate
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
+      - name: Install isolated current WebKit comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        run: |
+          npm install --prefix tmp/webkit-version --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          node tmp/webkit-version/node_modules/playwright/cli.js install --with-deps webkit
+          cat tmp/webkit-version/node_modules/playwright-core/browsers.json
+      - name: Cloud WebKit streaming playbin3 native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          WEBKIT_GST_USE_PLAYBIN3: '1'
+          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:5'
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud WebKit streaming playbin3 full comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          WEBKIT_GST_USE_PLAYBIN3: '1'
+          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
+          CI: 'true'
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
+      - name: Cloud current WebKit native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud current WebKit headed native comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout -k 10s 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
@@ -80,6 +208,81 @@ jobs:
           path: tmp/verify-artifacts/
           if-no-files-found: ignore
           retention-days: 5
+  cloud-webkit-macos:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.node), 'cloud')
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      TROOM_AUDIO_LOOPBACK: BlackHole 2ch
+      TROOM_AUDIO_CAPTURE_BIN: tmp/ci-audio-loopback
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install native platform comparison dependencies
+        run: |
+          node tools/install-verify-dependencies.mjs cloud
+          brew install ffmpeg-full switchaudio-osx coreutils
+          brew install blackhole-2ch
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
+          sudo killall -9 coreaudiod
+          for attempt in {1..10}; do
+            if SwitchAudioSource -a -t output | grep -Fx 'BlackHole 2ch'; then break; fi
+            sleep 1
+          done
+          SwitchAudioSource -s 'BlackHole 2ch' -t output
+          SwitchAudioSource -s 'BlackHole 2ch' -t system
+          SwitchAudioSource -c -t output
+          mkdir -p tmp
+          clang -O2 -std=c11 -Wall -framework CoreAudio -framework CoreFoundation cloud-worker/tests/media-audio-loopback.c -o tmp/ci-audio-loopback
+          pnpm --dir diary-worker exec playwright install webkit
+      - name: Calibrate actual audio output independently of WebKit
+        env:
+          CI: 'true'
+        run: node --input-type=module -e "import { calibrateFixtureAudioOutput } from './cloud-worker/tests/media-audio-loopback.mjs'; await calibrateFixtureAudioOutput();"
+      - name: Cloud macOS WebKit native control
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+      - name: Cloud macOS WebKit full media regression
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
+      - name: Cloud macOS WebKit normal-rate WebM audio comparison
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_SEEK_CASE: webm
+          CI: 'true'
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --audio-normal-rate
+      - name: Cloud macOS WebKit independent remux regression
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_SEEK_CASE: ts
+          CI: 'true'
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
+      - name: Install isolated current macOS WebKit comparison
+        if: ${{ !cancelled() }}
+        run: |
+          npm install --prefix tmp/webkit-version --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          node tmp/webkit-version/node_modules/playwright/cli.js install webkit
+      - name: Cloud current macOS WebKit full media comparison
+        if: ${{ !cancelled() }}
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
   android:
     needs: plan
     if: needs.plan.outputs.android != '[]'
@@ -137,13 +340,14 @@ jobs:
         run: dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
   verify:
     if: always()
-    needs: [plan, node, android, downloader2-native]
+    needs: [plan, node, cloud-webkit-macos, android, downloader2-native]
     runs-on: ubuntu-latest
     steps:
       - name: Require selected jobs to succeed
         env:
           PLAN: ${{ needs.plan.result }}
           NODE: ${{ needs.node.result }}
+          MACOS: ${{ needs.cloud-webkit-macos.result }}
           ANDROID: ${{ needs.android.result }}
           DOWNLOADER2_NATIVE: ${{ needs.downloader2-native.result }}
-        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
+        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
