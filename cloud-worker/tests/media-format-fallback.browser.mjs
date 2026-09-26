@@ -53,6 +53,9 @@ async function installPlayerStub(page) {
       updateMediaFormat: async (token, detected) => { __formatUpdates.push({ token, ...detected }); return true; },
       markPlaying() {}
     };
+    // This routing test stubs the decoder; actual remux/seek is covered by
+    // media-seek.browser.mjs with real AVC/AAC samples and no player stubs.
+    globalThis.TCloudRemux = { createPlayer: (...args) => mpegts.createPlayer(...args) };
   });
 }
 

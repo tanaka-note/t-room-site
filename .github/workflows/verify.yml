@@ -66,6 +66,12 @@ jobs:
       - name: Install Chromium only when used
         if: contains(fromJSON('["tooling","site","cloud","security","diary","billing"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
+      - name: Install Cloud seek fixture and WebKit dependencies
+        if: matrix.target == 'cloud'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          pnpm --dir diary-worker exec playwright install --with-deps webkit
       - name: Syntax, tests, browser and dry-run build
         env:
           VERIFY_TARGET: ${{ matrix.target }}
@@ -73,6 +79,14 @@ jobs:
           TROOM_BROWSER: chromium
           WRANGLER_SEND_METRICS: 'false'
         run: node tools/verify.mjs --target "$VERIFY_TARGET" --browser --build
+      - name: Cloud media WebKit regression
+        if: matrix.target == 'cloud'
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: |
+          node cloud-worker/tests/media-format-fallback.browser.mjs
+          node cloud-worker/tests/media-seek.browser.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:

@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, p
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-501277cb40ad";
+const APP_BUILD_ID = "cloud-ed004e3287fc";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2633,6 +2633,9 @@ async function serveAsset(request, env, url, path) {
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
     ["/media-format.js", "/media-format.js"],
+    ["/media-remux.js", "/media-remux.js"],
+    ["/media-remux-worker.mjs", "/media-remux-worker.mjs"],
+    ["/vendor/mp4-generator-1.8.0.mjs", "/vendor/mp4-generator-1.8.0.mjs"],
     ["/offline-store.js", "/offline-store-20260811-2.js"],
     ["/display-cache.js", "/display-cache-20260813-1.js"],
     ["/media-client.js", "/media-client-20260811-12.js"],
@@ -2660,7 +2663,7 @@ async function serveAsset(request, env, url, path) {
   ]);
   // Exact vendored decoder variants and corresponding sources only. Never
   // expose the asset directory through a general path-prefix bypass.
-  for (const variant of ["demuxer-asf", "demuxer-mp4", "decoder-mpeg4", "decoder-wmv1", "decoder-wmv2", "decoder-wmv3"]) {
+  for (const variant of ["demuxer-asf", "demuxer-mp4", "demuxer-mpegts", "decoder-mpeg4", "decoder-wmv1", "decoder-wmv2", "decoder-wmv3"]) {
     for (const extension of ["mjs", "wasm.mjs", "wasm.wasm"]) {
       const asset = `/vendor/libav/libav-6.7.7.1.1-${variant}.${extension}`;
       allowed.set(asset, asset);
@@ -2674,7 +2677,7 @@ async function serveAsset(request, env, url, path) {
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  const isAuthenticationAsset = ["/session-guard.js", "/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/media-format.js", "/offline-store.js", "/display-cache.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
+  const isAuthenticationAsset = ["/session-guard.js", "/cloud.js", "/crypto-vault.js", "/file-safety.js", "/media-range.js", "/media-format.js", "/media-remux.js", "/media-remux-worker.mjs", "/offline-store.js", "/display-cache.js", "/media-client.js", "/media-worker.js", "/share.js"].includes(path);
   const isPwaMetadataAsset = path === "/manifest.webmanifest" || path === "/manifest-v2.webmanifest" || path.startsWith("/icons/");
   const isVersionedAsset = url.searchParams.has("v") || url.searchParams.has("rev");
   const isServiceWorkerAsset = path === "/media-worker.js";
