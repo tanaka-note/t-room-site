@@ -70,7 +70,7 @@ jobs:
         if: matrix.target == 'cloud'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg gstreamer1.0-libav
+          sudo apt-get install -y --no-install-recommends ffmpeg gstreamer1.0-libav pulseaudio pulseaudio-utils
           pnpm --dir diary-worker exec playwright install chrome
           pnpm --dir diary-worker exec playwright install --with-deps webkit
       - name: Syntax, tests, browser and dry-run build
@@ -81,6 +81,14 @@ jobs:
           WRANGLER_SEND_METRICS: 'false'
           TROOM_CHROMIUM_CHANNEL: ${{ matrix.target == 'cloud' && 'chrome' || '' }}
         run: node tools/verify.mjs --target "$VERIFY_TARGET" --browser --build
+      - name: Start Cloud WebKit audio device
+        if: matrix.target == 'cloud'
+        run: |
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=tcloud_ci rate=44100 channels=2
+          pactl set-default-sink tcloud_ci
+          pactl info
+          pactl list short sinks
       - name: Cloud WebKit minimal native control
         if: matrix.target == 'cloud'
         env:
