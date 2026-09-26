@@ -97,7 +97,7 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
       - name: Cloud WebKit headed native comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -105,7 +105,7 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
-        run: timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
+        run: timeout -k 10s 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
       - name: Cloud WebKit headed metadata preload comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -114,7 +114,7 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
-        run: timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
+        run: timeout -k 10s 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
       - name: Cloud media WebKit regression
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -122,8 +122,8 @@ jobs:
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-app
           CI: 'true'
         run: |
-          timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-format-fallback.browser.mjs
-          timeout 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs
+          timeout -k 10s 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-format-fallback.browser.mjs
+          timeout -k 10s 5m node --require ./tools/browser-trace.cjs cloud-worker/tests/media-seek.browser.mjs
       - name: Cloud WebKit video-only native comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -131,7 +131,7 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:5'
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --minimal-video-only
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --minimal-video-only
       - name: Cloud WebKit settled pause comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -139,28 +139,28 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:5'
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --settled-pause
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native --settled-pause
       - name: Cloud WebKit independent remux regression
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
           TROOM_SEEK_CASE: ts
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Cloud WebKit immediate native response comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
           TROOM_NATIVE_RESPONSE_MODE: immediate
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
       - name: Cloud WebKit immediate full media comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
           TROOM_NATIVE_RESPONSE_MODE: immediate
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Install isolated current WebKit comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         run: |
@@ -176,7 +176,7 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:5'
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
       - name: Cloud WebKit streaming playbin3 full comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -184,7 +184,7 @@ jobs:
           WEBKIT_GST_USE_PLAYBIN3: '1'
           WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
           CI: 'true'
-        run: timeout 5m node cloud-worker/tests/media-seek.browser.mjs
+        run: timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Cloud current WebKit native comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -192,7 +192,7 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
-        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
       - name: Cloud current WebKit headed native comparison
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
@@ -200,7 +200,7 @@ jobs:
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
-        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" timeout -k 10s 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
@@ -251,27 +251,27 @@ jobs:
         env:
           TROOM_BROWSER: webkit
           CI: 'true'
-        run: gtimeout 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --minimal-native
       - name: Cloud macOS WebKit full media regression
         if: ${{ !cancelled() }}
         env:
           TROOM_BROWSER: webkit
           CI: 'true'
-        run: gtimeout 10m node cloud-worker/tests/media-seek.browser.mjs
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Cloud macOS WebKit normal-rate WebM audio comparison
         if: ${{ !cancelled() }}
         env:
           TROOM_BROWSER: webkit
           TROOM_SEEK_CASE: webm
           CI: 'true'
-        run: gtimeout 5m node cloud-worker/tests/media-seek.browser.mjs --audio-normal-rate
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs --audio-normal-rate
       - name: Cloud macOS WebKit independent remux regression
         if: ${{ !cancelled() }}
         env:
           TROOM_BROWSER: webkit
           TROOM_SEEK_CASE: ts
           CI: 'true'
-        run: gtimeout 5m node cloud-worker/tests/media-seek.browser.mjs
+        run: gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
       - name: Install isolated current macOS WebKit comparison
         if: ${{ !cancelled() }}
         run: |
@@ -282,7 +282,7 @@ jobs:
         env:
           TROOM_BROWSER: webkit
           CI: 'true'
-        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" gtimeout 5m node cloud-worker/tests/media-seek.browser.mjs
+        run: TROOM_PLAYWRIGHT_PATH="$PWD/tmp/webkit-version/node_modules/playwright" gtimeout -k 10s 5m node cloud-worker/tests/media-seek.browser.mjs
   android:
     needs: plan
     if: needs.plan.outputs.android != '[]'

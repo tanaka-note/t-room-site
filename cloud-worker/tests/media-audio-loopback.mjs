@@ -8,10 +8,9 @@ export async function captureFixtureAudio(ffmpeg, timeoutMs = 10000) {
   assert.equal(process.env.CI, 'true');
   assert.equal(process.env.TROOM_AUDIO_LOOPBACK, 'BlackHole 2ch');
   const nativeCapture = process.env.TROOM_AUDIO_CAPTURE_BIN;
+  assert.ok(nativeCapture, 'a calibrated native CoreAudio recorder is required');
   const pcm = await new Promise((resolve, reject) => {
-    const child = nativeCapture ? spawn(nativeCapture, []) : spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-probesize', '32', '-f', 'avfoundation',
-      '-i', ':BlackHole 2ch', '-af', 'aresample=44100,asetnsamples=n=44100:p=0,asetpts=N/SR/TB',
-      '-frames:a', '1', '-ac', '1', '-ar', '44100', '-f', 'f32le', 'pipe:1']);
+    const child = spawn(nativeCapture, []);
     const chunks = []; let size = 0, stderr = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`Loopback capture did not finish: ${stderr}`)); }, timeoutMs);
     child.stdout.on('data', chunk => {
@@ -27,16 +26,13 @@ export async function captureFixtureAudio(ffmpeg, timeoutMs = 10000) {
       else resolve(Buffer.concat(chunks));
     });
   });
-  if (nativeCapture) {
-    const boundary = pcm.indexOf(10);
-    assert.ok(boundary > 0 && boundary < 256, 'native PCM metadata is bounded');
-    const metadata = JSON.parse(pcm.subarray(0, boundary).toString('utf8'));
-    assert.equal(metadata.device, 'BlackHole 2ch');
-    assert.equal(metadata.channels, 2);
-    assert.ok([44100, 48000].includes(metadata.sampleRate), 'actual device sample rate is supported');
-    return measureFixturePcm(pcm.subarray(boundary + 1), metadata.sampleRate);
-  }
-  return measureFixturePcm(pcm);
+  const boundary = pcm.indexOf(10);
+  assert.ok(boundary > 0 && boundary < 256, 'native PCM metadata is bounded');
+  const metadata = JSON.parse(pcm.subarray(0, boundary).toString('utf8'));
+  assert.equal(metadata.device, 'BlackHole 2ch');
+  assert.equal(metadata.channels, 2);
+  assert.ok([44100, 48000].includes(metadata.sampleRate), 'actual device sample rate is supported');
+  return measureFixturePcm(pcm.subarray(boundary + 1), metadata.sampleRate);
 }
 
 async function captureAudibleFixtureAudio(ffmpeg) {
@@ -135,16 +131,10 @@ export async function verifyFixtureAudioOutput(page, ffmpeg) {
     const audible = await captureAudibleFixtureAudio(ffmpeg);
     assert.ok(audible.rms > .001, `browser outputs actual PCM: ${JSON.stringify(audible)}`);
     assert.ok(await page.evaluate(time => __video.currentTime > time + .2 && !__video.paused, before), 'audio is measured during advancing playback');
-    console.log('PASS native audio output PCM at tested playback rate', rate, JSON.stringify(audible));
-    // Keep the actual audible-output gate at the tested 1.5x rate. Check the
-    // fixture's original tone separately at 1x so the assertion does not depend
-    // on a platform pitch-preservation filter's spectrum.
-    const normalStart = await page.evaluate(() => { __video.playbackRate = 1; return __video.currentTime; });
-    await page.waitForFunction(time => __video.currentTime > time + .2 && !__video.paused, normalStart, { timeout: 10000 });
-    const tone = await captureAudibleFixtureAudio(ffmpeg);
-    assert.ok(tone.rms > .001, `browser outputs actual PCM at normal rate: ${JSON.stringify(tone)}`);
-    assert.ok(Math.abs(tone.frequency - 440) < 20, `output contains the synthetic 440Hz fixture tone: ${JSON.stringify(tone)}`);
-    assert.ok(tone.toneFraction > .5, `fixture tone accounts for most output energy: ${JSON.stringify(tone)}`);
-    console.log('PASS native normal-rate fixture tone', JSON.stringify(tone));
-  } finally { await page.evaluate(rate => { __video.pause(); __video.playbackRate = rate; }, rate); }
+    // The calibrated HAL capture identifies the tone at the original tested
+    // 1.5x rate. It needs no compensating rate mutation for the old recorder.
+    assert.ok(Math.abs(audible.frequency - 440) < 20, `output contains the synthetic 440Hz fixture tone: ${JSON.stringify(audible)}`);
+    assert.ok(audible.toneFraction > .5, `fixture tone accounts for most output energy: ${JSON.stringify(audible)}`);
+    console.log('PASS native audio output PCM/tone at tested playback rate', rate, JSON.stringify(audible));
+  } finally { await page.evaluate(() => __video.pause()); }
 }
