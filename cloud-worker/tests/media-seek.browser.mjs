@@ -37,7 +37,7 @@ const cases = [
 ];
 const bytes = new Map(cases.map(([id, ext]) => [id, readFileSync(join(scratch, `sample.${ext}`))]));
 const requests = [];
-const minimalHtml = src => `<!doctype html><button id="open">Open</button><script>document.querySelector("#open").onclick=()=>{const video=document.createElement("video");video.controls=true;video.playsInline=true;video.preload="auto";video.src=${JSON.stringify(src)};document.body.append(video);};</script>`;
+const minimalHtml = src => `<!doctype html><button id="open">Open</button><script>document.querySelector("#open").onclick=()=>{const video=document.createElement("video");video.controls=true;video.playsInline=true;video.preload=${JSON.stringify(process.env.TROOM_NATIVE_PRELOAD || 'auto')};video.src=${JSON.stringify(src)};document.body.append(video);};</script>`;
 const fixture = await startUIFixture(undefined, { handleRequest(req, res) {
   const path = new URL(req.url, 'http://localhost').pathname;
   if (path === '/cloud/minimal-seek') {
@@ -76,19 +76,24 @@ async function seek(page, target) {
     __video.play(),
     new Promise((_, reject) => setTimeout(() => reject(new Error('Playback did not resume after seek')), 10000))
   ]));
-  const before = await page.evaluate(() => __video.currentTime);
-  await page.waitForFunction(time => __video.currentTime > time + .2, before, { timeout: 10000 });
-  {
-    const decodedPixels = await page.evaluate(() => {
+  const before = await page.evaluate(() => {
+    globalThis.__decodedFrame = () => {
       const canvas = document.createElement('canvas'); canvas.width = 160; canvas.height = 90;
       const context = canvas.getContext('2d'); context.drawImage(__video, 0, 0, 160, 90);
       const pixels = context.getImageData(0, 0, 160, 90).data;
-      let visible = 0;
-      for (let i = 0; i < pixels.length; i += 4) if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 60) visible++;
-      return visible;
-    });
-    assert.ok(decodedPixels > 100, 'seek resumes decoded test-pattern frames, not only a media clock');
-  }
+      let visible = 0, signature = 2166136261;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 60) visible++;
+        signature = Math.imul(signature ^ pixels[i], 16777619);
+      }
+      return { visible, signature };
+    };
+    return { time: __video.currentTime, ...__decodedFrame() };
+  });
+  await page.waitForFunction(before => {
+    const frame = __decodedFrame();
+    return __video.currentTime > before.time + .2 && frame.visible > 100 && frame.signature !== before.signature;
+  }, before, { timeout: 10000 });
   await page.evaluate(() => __video.pause());
   await mediaCheckpoint(page, `resumed-and-paused:${target}`);
 }
@@ -188,6 +193,14 @@ try {
           }
           await page.locator(shared ? '#preview-dialog .close' : '#preview-close').click();
           await page.waitForFunction(() => !document.querySelector('video'));
+          // Playwright reports worker close asynchronously after the DOM removal.
+          // Require the actual close notification, rather than racing its delivery.
+          await new Promise((resolve, reject) => {
+            const timer = setInterval(() => {
+              if (!workers.size) { clearInterval(timer); clearTimeout(deadline); resolve(); }
+            }, 10);
+            const deadline = setTimeout(() => { clearInterval(timer); reject(new Error('Preview remux workers did not terminate')); }, 1000);
+          });
           assert.equal(workers.size, 0, 'closing preview terminates remux workers');
           await context.close();
           console.log(`PASS real seek/events/resume/audio/cleanup ${engineName} ${shared ? 'share/mobile' : 'normal/desktop'} ${id}`);

@@ -93,7 +93,7 @@ jobs:
         if: matrix.target == 'cloud'
         env:
           TROOM_BROWSER: webkit
-          WEBKIT_GST_USE_PLAYBIN3: '1'
+          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-native
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
@@ -103,7 +103,16 @@ jobs:
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
-          WEBKIT_GST_USE_PLAYBIN3: '1'
+          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
+          DEBUG: pw:browser
+          GST_DEBUG: '2,webkitmediaplayer:4'
+          CI: 'true'
+        run: timeout 5m xvfb-run -a node cloud-worker/tests/media-seek.browser.mjs --minimal-native --headed
+      - name: Cloud WebKit headed metadata preload comparison
+        if: ${{ !cancelled() && matrix.target == 'cloud' }}
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_NATIVE_PRELOAD: metadata
           DEBUG: pw:browser
           GST_DEBUG: '2,webkitmediaplayer:4'
           CI: 'true'
@@ -112,7 +121,7 @@ jobs:
         if: ${{ !cancelled() && matrix.target == 'cloud' }}
         env:
           TROOM_BROWSER: webkit
-          WEBKIT_GST_USE_PLAYBIN3: '1'
+          WPE_SHELL_DISABLE_MEDIA_DISK_CACHE: '1'
           TROOM_TRACE_DIR: tmp/verify-artifacts/webkit-app
           CI: 'true'
         run: |
