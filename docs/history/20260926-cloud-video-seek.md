@@ -287,3 +287,30 @@ opening the current target is retained while its track buffers are filling.
 Two deterministic controls cover both cases; native playback stays unchanged.
 Local Cloud syntax/Node/security/200MiB Range/dry-run verification and the
 18-case Chromium matrix pass for this adapter follow-up (cloud-bb654832ec3f).
+
+
+## Accepted CI gate after backend isolation
+
+The Linux native-MP4 failure is isolated to the Playwright WebKit Linux
+GStreamer backend: the same generated MP4 reproduces the pending `play()`
+promise in bare HTML without T-Cloud JavaScript, Service Worker, encryption or
+remux code, while decoded frames and media time continue to advance.
+
+The release gate therefore tests product behavior without treating that
+platform-specific diagnostic as a T-Cloud failure:
+
+- Ubuntu Chromium keeps the complete normal/shared 18-case media matrix.
+- Linux WebKit keeps the independent TS/remux real seek, audio and cleanup
+  regression in both UI modes.
+- The pinned macOS WebKit runner keeps the complete 18-case WebKit regression,
+  including actual frames, actual CoreAudio output and cleanup. This runner is
+  test infrastructure for WebKit behavior and does not add macOS as a product
+  support target.
+- Linux native-MP4 backend experiments and isolated newer-WebKit comparisons
+  are diagnostics, not publication blockers. The newer macOS WebKit comparison
+  is available only on manual `workflow_dispatch` and is explicitly
+  non-blocking.
+
+No seek/play/frame/audio assertion or timeout in the required regressions is
+weakened. Production media, encryption, Range, owner/session, Service Worker
+and remux behavior are unchanged by this CI-gate correction.
