@@ -59,6 +59,16 @@ test('Downloader 2 Native CI isolates every fallible command in a fail-fast step
   }
   assert.doesNotMatch(nativeJob, /run: \|/);
 });
+test('Cloud media release gate isolates platform-specific WebKit diagnostics', () => {
+  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
+  const nodeJob = workflow.slice(workflow.indexOf('  node:'), workflow.indexOf('\n  cloud-webkit-macos:'));
+  assert.match(nodeJob, /Cloud Linux WebKit TS remux regression[\s\S]*TROOM_SEEK_CASE: ts/);
+  assert.doesNotMatch(nodeJob, /Cloud WebKit minimal native control|Cloud WebKit headed native comparison|Cloud current WebKit native comparison/);
+  const macJob = workflow.slice(workflow.indexOf('  cloud-webkit-macos:'), workflow.indexOf('\n  android:'));
+  assert.match(macJob, /Cloud macOS WebKit full media regression/);
+  assert.match(macJob, /Install isolated current macOS WebKit comparison\r?\n\s+if: github\.event_name == 'workflow_dispatch'\r?\n\s+continue-on-error: true/);
+  assert.match(macJob, /Cloud current macOS WebKit full media comparison\r?\n\s+if: github\.event_name == 'workflow_dispatch'\r?\n\s+continue-on-error: true/);
+});
 test('content build hashes ignore checkout line endings', () => {
   const app = { id: 'fixture', publicUrls: ['/fixture/'] };
   const contract = { buildMeta: 'troom-app-build', autoUpdateMeta: 'troom-auto-update', autoUpdateValue: 'enabled' };
