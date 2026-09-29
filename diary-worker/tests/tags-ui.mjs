@@ -24,6 +24,17 @@ assert.match(html, /id="tag-page-back"[^>]*href="\/diary\/"/);
 assert.match(html, /id="diary-search-panel"/);
 assert.match(html, /id="entry-tag-suggestions"[^>]*role="listbox"/);
 assert.match(html, /id="entry-tags"[^>]*aria-autocomplete="list"/);
+assert.match(html, /id="entry-tags"[^>]*maxlength="3200"/);
+assert.match(html, /読点またはカンマで区切って100個まで入力できます。/);
+assert.doesNotMatch(html, /10個まで|maxlength="320"/);
+assert.doesNotMatch(worker, /タグは10個まで/);
+const parseTagsSource = script.slice(script.indexOf("  function parseTags(value) {"), script.indexOf("  function formatDate(value) {"));
+const tagParser = vm.createContext({});
+vm.runInContext(parseTagsSource, tagParser);
+const inputTags = Array.from({ length: 101 }, (_, index) => `#tag-${index + 1}`);
+assert.deepEqual(Array.from(tagParser.parseTags(inputTags.join("、"))),
+  inputTags.slice(0, 100).map((tag) => tag.slice(1)), "the browser must submit the 11th through 100th tags in order");
+assert.deepEqual(Array.from(tagParser.parseTags("#A、B、A、#B")), ["A", "B"], "the browser must remove duplicate tags");
 assert.match(script, /Number\(right\.count \|\| 0\) - Number\(left\.count \|\| 0\)/);
 assert.match(script, /new Intl\.Collator\(\["ja-JP", "en-US"\]/);
 assert.match(script, /tagCollator\.compare\(tagSortKey\(left\.value\), tagSortKey\(right\.value\)\)/);

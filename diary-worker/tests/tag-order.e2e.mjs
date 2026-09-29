@@ -134,6 +134,94 @@ function findEntry(result, id) {
 try {
   await waitForServer();
   const cookie = await login();
+  const numberedTags = (count) => Array.from({ length: count }, (_, index) => `tag-${String(index + 1).padStart(3, "0")}`);
+  for (const count of [0, 1, 10, 11, 50, 100]) {
+    const tags = numberedTags(count);
+    const body = entryBody(`${marker}-count-${count}`, tags);
+    const saved = await request("/entries", { method: "POST", cookie, body });
+    assert.equal(saved.response.status, 200, `creating ${count} tags: ${JSON.stringify(saved.result)}`);
+    assert.deepEqual(saved.result.entry.tags, tags, `create must save all ${count} tags in order`);
+    assert.deepEqual((await request(`/entries/${saved.result.entry.id}`, { cookie })).result.entry.tags, tags,
+      `reload must preserve all ${count} tags`);
+    if (count === 100) {
+      const replay = await request("/entries", { method: "POST", cookie, body });
+      assert.equal(replay.response.status, 200);
+      assert.equal(replay.result.entry.id, saved.result.entry.id, "100-tag create retry must be idempotent");
+      const filtered = await request(`/entries?tag=${encodeURIComponent(tags[99])}&q=${encodeURIComponent(marker)}`, { cookie });
+      assert.deepEqual(findEntry(filtered.result, saved.result.entry.id).tags, tags, "100th tag must be searchable");
+      const reversed = [...tags].reverse();
+      const edited = await request(`/entries/${saved.result.entry.id}`, {
+        method: "PUT", cookie,
+        body: entryBody(body.title, reversed, { requestId: undefined, revision: saved.result.entry.revision })
+      });
+      assert.equal(edited.response.status, 200, JSON.stringify(edited.result));
+      assert.deepEqual(edited.result.entry.tags, reversed, "100-tag edit must preserve order");
+      assert.deepEqual((await request(`/entries/${saved.result.entry.id}`, { cookie })).result.entry.tags, reversed);
+      const moved = await request(`/entries/${saved.result.entry.id}`, {
+        method: "DELETE", cookie, body: { revision: edited.result.entry.revision }
+      });
+      assert.equal(moved.response.status, 200, JSON.stringify(moved.result));
+      const trash = await request(`/entries?trash=1&q=${encodeURIComponent(body.title)}`, { cookie });
+      assert.deepEqual(findEntry(trash.result, saved.result.entry.id).tags, reversed);
+      const restored = await request(`/entries/${saved.result.entry.id}/restore`, { method: "POST", cookie });
+      assert.equal(restored.response.status, 200, JSON.stringify(restored.result));
+      assert.deepEqual(restored.result.entry.tags, reversed);
+    }
+  }
+  const tooMany = await request("/entries", {
+    method: "POST", cookie, body: entryBody(`${marker}-101`, numberedTags(101))
+  });
+  assert.equal(tooMany.response.status, 400);
+  assert.equal(tooMany.result.error, "タグは100個まで、1個30文字以内で入力してください。");
+  const duplicates = await request("/entries", {
+    method: "POST", cookie, body: entryBody(`${marker}-duplicates`, ["A", "B", "A", "#B", "C"])
+  });
+  assert.equal(duplicates.response.status, 200);
+  assert.deepEqual(duplicates.result.entry.tags, ["A", "B", "C"]);
+  const maxLength = await request("/entries", {
+    method: "POST", cookie, body: entryBody(`${marker}-length-30`, ["x".repeat(30)])
+  });
+  assert.equal(maxLength.response.status, 200);
+  const tooLong = await request("/entries", {
+    method: "POST", cookie, body: entryBody(`${marker}-length-31`, ["x".repeat(31)])
+  });
+  assert.equal(tooLong.response.status, 400);
+  const hundredTagDraft = await request("/entries", {
+    method: "POST", cookie, body: entryBody(`${marker}-100-draft`, numberedTags(100), { status: "draft" })
+  });
+  assert.equal(hundredTagDraft.response.status, 200, JSON.stringify(hundredTagDraft.result));
+  assert.deepEqual(hundredTagDraft.result.entry.tags, numberedTags(100));
+  const publishedHundredTagDraft = await request(`/entries/${hundredTagDraft.result.entry.id}`, {
+    method: "PUT", cookie,
+    body: entryBody(`${marker}-100-draft`, numberedTags(100), {
+      requestId: undefined, revision: hundredTagDraft.result.entry.revision
+    })
+  });
+  assert.equal(publishedHundredTagDraft.response.status, 200, JSON.stringify(publishedHundredTagDraft.result));
+  assert.deepEqual(publishedHundredTagDraft.result.entry.tags, numberedTags(100));
+  const editedDraftTags = numberedTags(100).reverse();
+  const editDraft = await request(`/entries/${hundredTagDraft.result.entry.id}`, {
+    method: "PUT", cookie,
+    body: entryBody(`${marker}-100-draft`, editedDraftTags, {
+      requestId: undefined, status: "draft", revision: publishedHundredTagDraft.result.entry.revision
+    })
+  });
+  assert.equal(editDraft.response.status, 200, JSON.stringify(editDraft.result));
+  assert.deepEqual(editDraft.result.entry.tags, editedDraftTags, "100-tag published edit draft must save in order");
+  const publishedEditDraft = await request(`/entries/${editDraft.result.entry.id}`, {
+    method: "PUT", cookie,
+    body: entryBody(`${marker}-100-draft`, editedDraftTags, {
+      requestId: undefined, revision: editDraft.result.entry.revision
+    })
+  });
+  assert.equal(publishedEditDraft.response.status, 200, JSON.stringify(publishedEditDraft.result));
+  assert.deepEqual(publishedEditDraft.result.entry.tags, editedDraftTags, "publishing a 100-tag edit draft must preserve order");
+  const hundredTagLedger = JSON.parse(wrangler(
+    "d1", "execute", "diary-db", "--local", "--json", "--command",
+    `SELECT tag, sort_order FROM diary_tags WHERE entry_id = ${hundredTagDraft.result.entry.id} ORDER BY sort_order ASC`
+  ))[0].results;
+  assert.deepEqual(hundredTagLedger, editedDraftTags.map((tag, sort_order) => ({ tag, sort_order })),
+    "D1 must persist 100 tags with contiguous positions");
   const initialOrder = ["Z", "A", "M", "10", "2", "ふゆ"];
   const title = `${marker}-published`;
   const created = await request("/entries", {
