@@ -1978,32 +1978,27 @@ async function permanentlyDeleteEntry(id, request, env, session) {
 
 function entryMutationTagStatements(env, entryId, mutationId, tags, householdId = null) {
   const selector = entryId == null
-    ? { sql: "household_id = ? AND last_mutation_id = ?", bindings: [householdId, mutationId] }
-    : { sql: "id = ? AND last_mutation_id = ?", bindings: [entryId, mutationId] };
-  const statements = [env.DB.prepare(`
+    ? { sql: "e.household_id = ? AND e.last_mutation_id = ?", bindings: [householdId, mutationId] }
+    : { sql: "e.id = ? AND e.last_mutation_id = ?", bindings: [entryId, mutationId] };
+  return [env.DB.prepare(`
     DELETE FROM diary_tags
-    WHERE entry_id IN (SELECT id FROM diary_entries WHERE ${selector.sql})
-  `).bind(...selector.bindings)];
-  for (const [sortOrder, tag] of tags.entries()) {
-    statements.push(env.DB.prepare(`
-      INSERT INTO diary_tags (entry_id, tag, sort_order)
-      SELECT id, ?, ? FROM diary_entries WHERE ${selector.sql}
-    `).bind(tag, sortOrder, ...selector.bindings));
-  }
-  return statements;
+    WHERE entry_id IN (SELECT e.id FROM diary_entries e WHERE ${selector.sql})
+  `).bind(...selector.bindings), env.DB.prepare(`
+    INSERT INTO diary_tags (entry_id, tag, sort_order)
+    SELECT e.id, tags.value, CAST(tags.key AS INTEGER)
+    FROM diary_entries e CROSS JOIN json_each(?) AS tags
+    WHERE ${selector.sql}
+  `).bind(JSON.stringify(tags), ...selector.bindings)];
 }
 
 function entryCreateTagStatements(env, session, requestId, requestHash, tags) {
-  const statements = [];
-  for (const [sortOrder, tag] of tags.entries()) {
-    statements.push(env.DB.prepare(`
-      INSERT INTO diary_tags (entry_id, tag, sort_order)
-      SELECT id, ?, ? FROM diary_entries
-      WHERE household_id = ? AND author_id = ?
-        AND client_request_id = ? AND client_request_hash = ?
-    `).bind(tag, sortOrder, session.activeHouseholdId, session.accountId, requestId, requestHash));
-  }
-  return statements;
+  return [env.DB.prepare(`
+    INSERT INTO diary_tags (entry_id, tag, sort_order)
+    SELECT e.id, tags.value, CAST(tags.key AS INTEGER)
+    FROM diary_entries e CROSS JOIN json_each(?) AS tags
+    WHERE e.household_id = ? AND e.author_id = ?
+      AND e.client_request_id = ? AND e.client_request_hash = ?
+  `).bind(JSON.stringify(tags), session.activeHouseholdId, session.accountId, requestId, requestHash)];
 }
 
 async function findEntryByCreateRequest(env, session, requestId) {
@@ -2097,8 +2092,8 @@ function validateEntryInput(body, { draft = false, allowEmptyContent = false } =
   if ((!draft && !allowEmptyContent && !content) || content.length > 200000) throw new HttpError(400, "本文は1文字以上20万文字以内で入力してください。");
   const rawTags = Array.isArray(body.tags) ? body.tags : [];
   const tags = [...new Set(rawTags.map(normalizeTag).filter(Boolean))];
-  if (tags.length > 10 || tags.some((tag) => tag.length > 30)) {
-    throw new HttpError(400, "タグは10個まで、1個30文字以内で入力してください。");
+  if (tags.length > 100 || tags.some((tag) => tag.length > 30)) {
+    throw new HttpError(400, "タグは100個まで、1個30文字以内で入力してください。");
   }
   const contentFormat = validateContentFormat(body.contentFormat, content);
   const excludedPhotoIds = parsePhotoIdList(body.excludedPhotoIds);

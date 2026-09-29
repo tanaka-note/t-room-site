@@ -338,6 +338,17 @@ assert.equal(legacyMonthlyBucket.objects.get("monthly/2026-08.json.gz").options.
 const restoredDatabase = await migratedEmptyDatabase();
 const restoreResult = await restoreDiaryBackup(new SqliteD1(restoredDatabase), readBackup(bucket, first.dailyKey));
 assert.equal(restoreResult.complete, true);
+const hundredTagBackup = structuredClone(readBackup(bucket, first.dailyKey));
+hundredTagBackup.tables.diary_tags.rows = Array.from({ length: 100 }, (_, sort_order) => ({
+  entry_id: 1, tag: `tag-${sort_order}`, created_at: "2026-08-20 00:00:00", sort_order
+}));
+hundredTagBackup.tables.diary_tags.rowCount = 100;
+const hundredTagDatabase = await migratedEmptyDatabase();
+const hundredTagRestore = await restoreDiaryBackup(new SqliteD1(hundredTagDatabase), hundredTagBackup);
+assert.equal(hundredTagRestore.complete, true);
+assert.deepEqual(hundredTagDatabase.prepare("SELECT tag FROM diary_tags WHERE entry_id = 1 ORDER BY sort_order ASC")
+  .all().map((row) => row.tag), hundredTagBackup.tables.diary_tags.rows.map((row) => row.tag),
+  "backup restore must preserve all 100 tags and their order");
 for (const table of BACKUP_TABLES) {
   const restoredRows = restoredDatabase.prepare(`SELECT ${table.columns.join(", ")} FROM ${table.name} ORDER BY ${table.orderBy}`).all()
     .map((row) => ({ ...row }));

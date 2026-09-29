@@ -3718,7 +3718,7 @@
   }
 
   function parseTags(value) {
-    return [...new Set(String(value || "").split(/[、,，]/).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean))].slice(0, 10);
+    return [...new Set(String(value || "").split(/[、,，]/).map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean))].slice(0, 100);
   }
 
   function formatDate(value) {
