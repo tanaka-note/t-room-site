@@ -116,6 +116,31 @@ async function run(browserType, name, options = {}) {
     const normalSummary = await page.locator("#entry-list .diary-entry-button > p").first().textContent();
     assert.equal(normalSummary, "朝".repeat(130) + "…");
 
+    const input = page.locator("#diary-search-input");
+    const beforeComposition = requests.length;
+    await input.evaluate((element) => {
+      element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      element.value = "ふゆ";
+      element.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+      element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", isComposing: true }));
+    });
+    await page.waitForTimeout(200);
+    assert.equal(requests.length, beforeComposition, "IME composition must not start a search");
+    await input.evaluate((element) => {
+      element.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "ふゆ" }));
+      element.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+    await page.waitForFunction((count) => document.querySelectorAll("#entry-list [data-entry-id]").length === count, 20);
+    assert.equal(requests.at(-1).q, "ふゆ");
+    const beforeEnter = requests.length;
+    await input.fill("公園");
+    const enterResponse = page.waitForResponse((response) => response.url().includes("/diary/api/entries?") && new URL(response.url()).searchParams.get("q") === "公園");
+    await input.press("Enter");
+    await enterResponse;
+    await page.waitForTimeout(200);
+    assert.equal(requests.length, beforeEnter + 1, "Enter must search immediately without a second debounced request");
+    assert.equal(requests.at(-1).q, "公園");
+
     async function search(query, expected = 20) {
       await page.fill("#diary-search-input", query);
       await page.waitForResponse((response) => response.url().includes("/diary/api/entries?") && response.request().method() === "GET");

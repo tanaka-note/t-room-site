@@ -92,6 +92,8 @@
     dateWheelTarget: null,
     dateWheelTimers: {},
     searchTimer: null,
+    searchComposing: false,
+    entriesAbortController: null,
     requestId: 0,
     deleteMode: null,
     editorPhotos: [],
@@ -349,6 +351,7 @@
     elements.clearFilters.addEventListener("click", clearFilters);
     elements.dateReset.addEventListener("click", resetDateSearch);
     elements.searchClear.addEventListener("click", () => {
+      cancelPendingEntrySearch();
       elements.searchInput.value = "";
       state.query = "";
       state.favoritePage = false;
@@ -357,14 +360,22 @@
       loadEntries(true);
       elements.searchInput.focus();
     });
-    elements.searchInput.addEventListener("input", () => {
-      window.clearTimeout(state.searchTimer);
-      state.query = splitSearchTerms(elements.searchInput.value).join(" ");
-      state.requestId += 1;
-      state.favoritePage = false;
-      state.monthExpanded = false;
-      updateFilterControls();
-      state.searchTimer = window.setTimeout(() => loadEntries(true), 300);
+    elements.searchInput.addEventListener("compositionstart", () => {
+      state.searchComposing = true;
+      cancelPendingEntrySearch();
+    });
+    elements.searchInput.addEventListener("compositionend", () => {
+      state.searchComposing = false;
+      scheduleEntrySearch();
+    });
+    elements.searchInput.addEventListener("input", (event) => {
+      if (state.searchComposing || event.isComposing) return;
+      scheduleEntrySearch();
+    });
+    elements.searchInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || state.searchComposing || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      scheduleEntrySearch(0);
     });
     for (const input of [elements.dateFrom, elements.dateTo]) {
       bindDateInput(input);
@@ -826,7 +837,32 @@
     window.setTimeout(() => (elements.loginId.value ? elements.password : elements.loginId).focus(), 0);
   }
 
+  function cancelPendingEntrySearch() {
+    window.clearTimeout(state.searchTimer);
+    state.searchTimer = null;
+    state.entriesAbortController?.abort();
+    state.requestId += 1;
+  }
+
+  function scheduleEntrySearch(delay = 150) {
+    cancelPendingEntrySearch();
+    state.query = splitSearchTerms(elements.searchInput.value).join(" ");
+    state.favoritePage = false;
+    state.monthExpanded = false;
+    updateFilterControls();
+    if (delay === 0) {
+      loadEntries(true);
+    } else {
+      state.searchTimer = window.setTimeout(() => loadEntries(true), delay);
+    }
+  }
+
   async function loadEntries(reset) {
+    window.clearTimeout(state.searchTimer);
+    state.searchTimer = null;
+    state.entriesAbortController?.abort();
+    const abortController = new AbortController();
+    state.entriesAbortController = abortController;
     const requestId = ++state.requestId;
     const monthlyView = isMonthlyView();
     const pageSize = monthlyView ? (state.monthExpanded ? 50 : 5) : 20;
@@ -859,7 +895,7 @@
         if (state.drafts) parameters.set("draft", "1");
         if (state.favoritePage) parameters.set("favorite", "1");
 
-        const result = await api(`/entries?${parameters}`);
+        const result = await api(`/entries?${parameters}`, { signal: abortController.signal });
         if (requestId !== state.requestId) return;
         loadedEntries.push(...result.entries);
         nextOffset += result.entries.length;
@@ -879,6 +915,7 @@
       elements.entryList.replaceChildren(createEmpty(error.message));
       elements.searchStatus.textContent = error.message;
     } finally {
+      if (state.entriesAbortController === abortController) state.entriesAbortController = null;
       if (requestId === state.requestId) {
         elements.loadMore.hidden = monthlyView ? state.monthExpanded || !state.hasMore : !state.hasMore;
         setBusy(elements.loadMore, false, monthlyView ? "もっと見る" : "さらに表示");
@@ -3584,7 +3621,8 @@
     const init = {
       method: options.method || "GET",
       headers,
-      credentials: "same-origin"
+      credentials: "same-origin",
+      signal: options.signal
     };
     if (options.body !== undefined) {
       headers.set("Content-Type", "application/json");
@@ -3596,6 +3634,7 @@
     try {
       response = await fetch(`${BASE_PATH}/api${path}`, init);
     } catch (cause) {
+      if (options.signal?.aborted) throw cause;
       const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
       error.transportOutcomeUnknown = true;
       error.cause = cause;
@@ -3605,6 +3644,7 @@
     try {
       result = await response.json();
     } catch (cause) {
+      if (options.signal?.aborted) throw cause;
       if (!response.ok) result = {};
       else {
         const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
@@ -3819,6 +3859,8 @@
   }
 
   function resetState() {
+    cancelPendingEntrySearch();
+    state.searchComposing = false;
     resetHeaderVisibilityTracking();
     state.role = null;
     state.accountName = null;
