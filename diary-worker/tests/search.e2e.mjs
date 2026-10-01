@@ -120,7 +120,40 @@ try {
   const all = pages.flatMap((page) => page.entries);
   assert.equal(new Set(all.map((entry) => entry.id)).size, 46);
   assert.ok(all.every((entry, index) => !index || all[index - 1].id > entry.id));
-  console.log("Diary real D1 AND search: literal terms, spaces, filters, 20-item paging, duplicates and household isolation passed.");
+
+  const tagFixture = { tags: [prefix, "家族旅行", "旅の記録", "公園", "境界前", "境界後", "A+B%_<b>😀", "abc"] };
+  const tagOnly = await create("タグ一致日記", "海辺で過ごした。", main.cookie, tagFixture);
+  await create("タグ一致日記", "海辺で過ごした。", changed.cookie, tagFixture);
+  await create("タグ下書き", "海辺で過ごした。", main.cookie, { ...tagFixture, status: "draft" });
+  assert.deepEqual(await ids("旅行"), [tagOnly], "partial matches inside tags must be searchable");
+  assert.deepEqual(await ids("旅"), [tagOnly], "matching multiple tags must not duplicate the entry");
+  assert.deepEqual(await ids("旅行 公園 海辺 一致"), [tagOnly], "AND terms may span tags, content and title");
+  assert.deepEqual(await ids("前境"), [], "terms must not span adjacent tags");
+  assert.deepEqual(await ids("#旅行"), [], "the displayed # is not part of a saved tag");
+  assert.deepEqual(await ids("A+B %_ <b> 😀 一致"), [tagOnly], "tag matching must remain literal");
+  assert.deepEqual(await ids("Abc"), [], "tag matching must remain case-sensitive");
+  assert.equal((await search("旅行", {}, changed.cookie)).entries.length, 1, "tag search must remain household-scoped");
+  assert.deepEqual((await search("旅行", { dateFrom: "2026-08-13" })).entries, []);
+  assert.deepEqual((await search("旅行", { month: "2026-09" })).entries, []);
+  assert.deepEqual((await search("旅行", { tag: "公園" })).entries.map((entry) => entry.id), [tagOnly]);
+  assert.deepEqual((await search("旅行", { tag: "旅行" })).entries, [], "explicit tag filters remain exact");
+  assert.equal((await request(`/entries/${tagOnly}/favorite`, { method: "POST", cookie: main.cookie })).response.status, 200);
+  assert.deepEqual((await search("旅行", { favorite: "1" })).entries.map((entry) => entry.id), [tagOnly]);
+  const detail = await request(`/entries/${tagOnly}`, { cookie: main.cookie });
+  assert.equal((await request(`/entries/${tagOnly}`, { method: "DELETE", cookie: main.cookie,
+    body: { revision: detail.result.entry.revision } })).response.status, 200);
+  assert.deepEqual(await ids("旅行"), [], "deleted entries must stay out of ordinary keyword search");
+  assert.deepEqual((await search("旅行", { trash: "1" })).entries.map((entry) => entry.id), [tagOnly]);
+  for (let index = 0; index < 21; index += 1) {
+    await create("タグページ", "本文", main.cookie, { tags: [prefix, "ページ専用タグ", "ページ専用タグ追加"] });
+  }
+  const tagPages = [await search("ページ専用", { limit: "20" }), await search("ページ専用", { limit: "20", offset: "20" })];
+  assert.deepEqual(tagPages.map((page) => page.entries.length), [20, 1]);
+  assert.deepEqual(tagPages.map((page) => page.hasMore), [true, false]);
+  const tagEntries = tagPages.flatMap((page) => page.entries);
+  assert.equal(new Set(tagEntries.map((entry) => entry.id)).size, 21);
+  assert.ok(tagEntries.every((entry, index) => !index || tagEntries[index - 1].id > entry.id));
+  console.log("Diary real D1 AND search: title/content/tags, literal terms, filters, paging, favorites, trash and household isolation passed.");
 } finally {
   if (server.exitCode === null) {
     server.kill();

@@ -36,6 +36,8 @@ const entries = Array.from({ length: 43 }, (_, index) => ({
 }));
 const requests = [];
 entries.push({ ...entries[0], id: 44, title: "タイトル限定", content: "本文の先頭。".repeat(60), contentFormat: null, photos: [] });
+entries.push({ ...entries[0], id: 45, title: "タグ一致日記", content: "海辺で過ごした。", contentFormat: null, photos: [],
+  tags: ["家族旅行", "旅の記録", "境界前", "境界後", "A+B%_<b>😀", "abc"] });
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
   if (url.pathname.startsWith("/diary/api/")) {
@@ -49,7 +51,9 @@ const server = createServer(async (request, response) => {
     if (path === "/entries") {
       requests.push(Object.fromEntries(url.searchParams));
       const words = (url.searchParams.get("q") || "").trim().split(/\s+/).filter(Boolean);
-      const source = entries.filter((entry) => words.every((word) => entry.title.includes(word) || entry.content.includes(word)));
+      const tag = url.searchParams.get("tag");
+      const source = entries.filter((entry) => (!tag || entry.tags.includes(tag)) && words.every((word) =>
+        entry.title.includes(word) || entry.content.includes(word) || entry.tags.some((value) => value.includes(word))));
       const offset = Number(url.searchParams.get("offset") || 0);
       const limit = Number(url.searchParams.get("limit") || 20);
       return sendJson(response, { entries: source.slice(offset, offset + limit), hasMore: offset + limit < source.length });
@@ -60,7 +64,8 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/assets/pwa-auto-update.js") return sendFile(response, updaterPath);
   if (url.pathname === "/security/passkey-client.js") return sendFile(response, passkeyClientPath);
-  const target = resolve(publicRoot, url.pathname === "/diary/" ? "index.html" : url.pathname.replace(/^\/diary\//, ""));
+  const diaryRoute = url.pathname === "/diary/" || /^\/diary\/tag\/[^/]+\/?$/.test(url.pathname);
+  const target = resolve(publicRoot, diaryRoute ? "index.html" : url.pathname.replace(/^\/diary\//, ""));
   if (!target.startsWith(publicRoot + sep)) return response.writeHead(404).end();
   try { return await sendFile(response, target); } catch { return response.writeHead(404).end(); }
 });
@@ -222,12 +227,36 @@ async function run(browserType, name, options = {}) {
     assert.ok(titleOnlySummary.startsWith("本文の先頭。"));
     assert.equal([...titleOnlySummary].length, 160);
     assert.equal(await page.locator("#entry-list p mark").count(), 0);
+    await search("旅行 海辺 一致", 1);
+    const tagLink = page.locator('#entry-list .diary-tag[data-tag="家族旅行"]');
+    assert.equal(await tagLink.textContent(), "#家族旅行");
+    assert.deepEqual(await tagLink.locator("mark").allTextContents(), ["旅行"]);
+    assert.equal(await tagLink.getAttribute("href"), "/diary/tag/" + encodeURIComponent("家族旅行") + "/");
+    assert.equal(await tagLink.locator("mark").evaluate((mark) => getComputedStyle(mark).backgroundColor), "rgba(255, 218, 92, 0.32)");
+    await page.locator('[data-entry-id="45"]').click();
+    await page.waitForSelector("#entry-dialog[open]");
+    assert.deepEqual(await page.locator("#detail-tags mark").allTextContents(), ["旅行"]);
+    await page.goBack();
+    await page.waitForFunction(() => !document.querySelector("#entry-dialog").open);
+    await search("旅行 旅", 1);
+    assert.deepEqual(await page.locator("#entry-list .diary-tag mark").allTextContents(), ["旅行", "旅"]);
+    await search("A+B %_ <b> 😀 一致", 1);
+    assert.deepEqual(await page.locator("#entry-list .diary-tag mark").allTextContents(), ["A+B%_<b>😀"]);
+    assert.equal(await page.locator("#entry-list .diary-tag script, #entry-list .diary-tag b").count(), 0);
+    for (const query of ["前境", "#旅行", "Abc"]) await search(query, 0);
     await search("存在しない検索語", 0);
     assert.equal(await page.locator("#entry-list mark").count(), 0);
     await search(" 　 ", 5);
     assert.equal(requests.at(-1).q, undefined);
     assert.equal(await page.locator("#entry-list mark").count(), 0);
     assert.equal(await page.locator("#entry-list .diary-entry-button > p").first().textContent(), normalSummary);
+    await search("旅行", 1);
+    await page.locator('#entry-list .diary-tag[data-tag="家族旅行"] mark').click();
+    await page.waitForURL("**/diary/tag/**");
+    await page.waitForFunction(() => document.querySelectorAll("#entry-list [data-entry-id]").length === 1);
+    assert.equal(requests.at(-1).tag, "家族旅行", "highlighted tags remain clickable");
+    assert.equal(requests.at(-1).q, undefined);
+    assert.equal(await page.locator("#entry-list .diary-tag mark").count(), 0);
     assert.deepEqual(errors, []);
     await context.close();
     console.log(`${name}: search excerpts, highlight formatting/links/photos, 20-item paging and Back passed.`);
@@ -240,8 +269,10 @@ await new Promise((done) => server.listen(0, "127.0.0.1", done));
 const origin = `http://127.0.0.1:${server.address().port}`;
 try {
   await run(chromium, "Chromium");
-  await run(firefox, "Firefox");
-  await run(webkit, "WebKit");
+  if (process.env.TROOM_BROWSER !== "chromium") {
+    await run(firefox, "Firefox");
+    await run(webkit, "WebKit");
+  }
   await run(chromium, "Touch Chromium", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 } finally {
   await new Promise((done) => server.close(done));
