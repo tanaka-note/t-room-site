@@ -1155,6 +1155,7 @@
   }
 
   async function handleLoadMore() {
+    if (state.searchTimer !== null) return;
     if (isMonthlyView()) {
       const position = captureEntryListPosition();
       elements.loadMore.blur();
