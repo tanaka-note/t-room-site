@@ -596,6 +596,21 @@ async function listInvestmentHistory(env) {
   });
 }
 
+function appendEntryKeywordConditions(conditions, bindings, terms) {
+  for (const term of terms) {
+    const parameter = `?${bindings.length + 1}`;
+    conditions.push(`(
+      instr(e.title, ${parameter}) > 0
+      OR instr(e.content, ${parameter}) > 0
+      OR EXISTS (
+        SELECT 1 FROM diary_tags keyword_tag
+        WHERE keyword_tag.entry_id = e.id AND instr(keyword_tag.tag, ${parameter}) > 0
+      )
+    )`);
+    bindings.push(term);
+  }
+}
+
 async function listEntries(url, env, session) {
   const limit = clampNumber(url.searchParams.get("limit"), 1, 50, 20);
   const offset = clampNumber(url.searchParams.get("offset"), 0, 1000000, 0);
@@ -645,11 +660,7 @@ async function listEntries(url, env, session) {
     bindings.push(...trashAccess.bindings);
   }
   if (!draft) {
-    for (const term of searchTerms) {
-      const parameter = `?${bindings.length + 1}`;
-      conditions.push(`(instr(e.title, ${parameter}) > 0 OR instr(e.content, ${parameter}) > 0)`);
-      bindings.push(term);
-    }
+    appendEntryKeywordConditions(conditions, bindings, searchTerms);
   }
   if (month && !draft) {
     conditions.push("substr(e.entry_date, 1, 7) = ?");

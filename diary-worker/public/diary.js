@@ -1255,7 +1255,7 @@
         updated.textContent = `最終編集：${formatDateTime(entry.updatedAt)}`;
         button.append(updated);
       }
-      article.append(button, createTagGroup(entry.tags));
+      article.append(button, createTagGroup(entry.tags, searchTerms));
       return article;
     });
     if (canAppend) {
@@ -1715,7 +1715,7 @@
     highlightSearchTerms(elements.detailTitle, searchTerms);
     appendTitleWeather(elements.detailTitle, entry.weather);
     highlightSearchTerms(elements.detailContent, searchTerms);
-    elements.detailTags.replaceChildren(...createTagElements(entry.tags));
+    elements.detailTags.replaceChildren(...createTagElements(entry.tags, searchTerms));
     const isDeleted = Boolean(entry.deletedAt);
     elements.detailActions.hidden = !state.canManageEntries || isDeleted;
     elements.restoreActions.hidden = !state.canViewTrash || !isDeleted;
@@ -3665,10 +3665,10 @@
     return result;
   }
 
-  function createTagGroup(tags) {
+  function createTagGroup(tags, searchTerms = []) {
     const group = document.createElement("div");
     group.className = "diary-tags";
-    group.append(...createTagElements(tags));
+    group.append(...createTagElements(tags, searchTerms));
     return group;
   }
 
@@ -3679,8 +3679,17 @@
       .toLocaleLowerCase("ja-JP");
   }
 
-  function createTagElements(tags) {
-    return (tags || []).map((tag) => createTagLink(tag, `#${tag}`));
+  function createTagElements(tags, searchTerms = []) {
+    return (tags || []).map((tag) => {
+      const link = createTagLink(tag, `#${tag}`);
+      if (!searchTerms.length) return link;
+      // Match each tag independently; the display-only # is not searchable.
+      const label = document.createElement("span");
+      label.textContent = tag;
+      highlightSearchTerms(label, searchTerms);
+      link.replaceChildren(document.createTextNode("#"), label);
+      return link;
+    });
   }
 
   function createTagLink(tag, label) {
