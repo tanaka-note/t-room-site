@@ -177,7 +177,7 @@
       "publicUrls": ["https://tanaka-note.com/billing/"],
       "entrypoints": ["billing-worker/public/index.html"],
       "buildRoots": ["billing-worker/public"],
-      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js"],
+      "buildFiles": ["diary-worker/public/dialog-navigation.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js"],
       "buildMode": "content-hash",
       "serviceWorker": null,
       "manifest": "billing-worker/public/manifest.webmanifest",

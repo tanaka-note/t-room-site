@@ -23,10 +23,6 @@
   } = await import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href);
   const BASE_PATH = "/diary";
   const { WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = await import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href);
-  const ENTRY_HISTORY_KEY = "troomDiaryEntry";
-  const EDITOR_HISTORY_KEY = "troomDiaryEditor";
-  const CAMERA_ROLL_HISTORY_KEY = "troomDiaryCameraRoll";
-  const PHOTO_VIEWER_HISTORY_KEY = "troomDiaryPhotoViewer";
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
@@ -118,19 +114,8 @@
     photoSearchTimer: null,
     viewerPhotos: [],
     viewerIndex: -1,
-    cameraRollHistoryToken: null,
-    cameraRollAfterClose: null,
-    cameraRollClosePending: false,
-    photoViewerHistoryToken: null,
-    photoViewerAfterClose: null,
-    photoViewerClosePending: false,
     photoPickerActive: false,
-    entryHistoryToken: null,
-    entryAfterClose: null,
-    entryClosePending: false,
     favoriteRequestPending: false,
-    editorHistoryToken: null,
-    editorClosePending: false,
     entryCreateRequestId: null,
     deferredInstallPrompt: null,
     lastSessionRefreshAt: 0,
@@ -139,8 +124,7 @@
     headerScrollFrame: 0
   };
 
-  const DESKTOP_DIALOG_BACKDROP_MATCHER = "(min-width: 861px) and (hover: hover) and (pointer: fine)";
-  const desktopBackdropPointers = new WeakMap();
+  const dialogs = TroomDialogNavigation.create({ key: "troomDiaryDialogs" });
   let photoPickerReturnHandler = null;
   const elements = {
     bootView: document.querySelector("#boot-view"),
@@ -393,10 +377,7 @@
         closeEntryDialog(() => openEditor(entry));
       }
     });
-    elements.entryDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closeEntryDialog();
-    });
+
     elements.favoriteEntryButton.addEventListener("click", toggleFavorite);
     elements.deleteEntryButton.addEventListener("click", requestEntryDeletion);
     elements.deleteDraftButton.addEventListener("click", requestDraftDeletion);
@@ -404,10 +385,7 @@
     elements.permanentlyDeleteEntryButton.addEventListener("click", requestPermanentDeletion);
     elements.deleteConfirmNo.addEventListener("click", closeDeleteConfirmation);
     elements.deleteConfirmYes.addEventListener("click", confirmEntryDeletion);
-    elements.deleteConfirmDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closeDeleteConfirmation();
-    });
+
     elements.entryForm.addEventListener("submit", postEntry);
     elements.saveDraftButton.addEventListener("click", () => saveEntryAsDraft());
     elements.cancelEntryButton.addEventListener("click", requestEditorClose);
@@ -447,11 +425,7 @@
     bindDateInput(elements.entryDate);
     elements.dateWheelCancel.addEventListener("click", closeDateWheel);
     elements.dateWheelDone.addEventListener("click", applyDateWheel);
-    elements.dateWheelDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closeDateWheel();
-    });
-    elements.dateWheelDialog.addEventListener("click", applyDateWheelFromBackdrop);
+
     bindDateWheel(elements.dateWheelYear, "year");
     bindDateWheel(elements.dateWheelMonth, "month");
     bindDateWheel(elements.dateWheelDay, "day");
@@ -490,38 +464,21 @@
       if (event.key === "ArrowLeft") movePhotoViewer(-1);
       if (event.key === "ArrowRight") movePhotoViewer(1);
     });
-    elements.photoViewerDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closePhotoViewerDialog();
-    });
-    elements.cameraRollDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closeCameraRollDialog();
-    });
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
     });
-    elements.editorDialog.addEventListener("cancel", (event) => {
-      if (event.target !== elements.editorDialog) return;
-      event.preventDefault();
-      requestEditorClose();
-    });
-    bindDesktopBackdropClose(elements.entryDialog, closeEntryDialog);
-    bindDesktopBackdropClose(elements.editorDialog, requestEditorClose);
+
     elements.editorLeaveCancel.addEventListener("click", cancelEditorLeave);
     elements.editorLeaveDiscard.addEventListener("click", discardEditorChanges);
     elements.editorLeaveSaveDraft.addEventListener("click", () => saveEntryAsDraft({ closeAfter: true }));
-    elements.editorLeaveDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      cancelEditorLeave();
-    });
+
     window.addEventListener("beforeunload", (event) => {
       if (!hasEditorChanges()) return;
       event.preventDefault();
       event.returnValue = "";
     });
-    window.addEventListener("popstate", handleHistoryNavigation);
+    registerDialogs();
     window.addEventListener("beforeinstallprompt", (event) => {
       event.preventDefault();
       state.deferredInstallPrompt = event;
@@ -1519,97 +1476,77 @@
       const result = await api(`/entries/${id}`);
       state.activeEntry = result.entry;
       renderEntryDetail(result.entry);
-      elements.entryDialog.showModal();
-      pushEntryHistory();
+      dialogs.open("entry-dialog");
     } catch (error) {
       showToast(error.message);
     }
   }
 
-  function pushEntryHistory() {
-    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    state.entryHistoryToken = token;
-    state.entryClosePending = false;
-    window.history.pushState({
-      ...(window.history.state || {}),
-      [ENTRY_HISTORY_KEY]: token
-    }, "", window.location.href);
-  }
-
-  function pushEditorHistory() {
-    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    state.editorHistoryToken = token;
-    state.editorClosePending = false;
-    window.history.pushState({
-      ...(window.history.state || {}),
-      [EDITOR_HISTORY_KEY]: token
-    }, "", window.location.href);
-  }
-
-  function pushCameraRollHistory() {
-    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    state.cameraRollHistoryToken = token;
-    state.cameraRollClosePending = false;
-    window.history.pushState({
-      ...(window.history.state || {}),
-      [CAMERA_ROLL_HISTORY_KEY]: token
-    }, "", window.location.href);
-  }
-
-  function pushPhotoViewerHistory() {
-    const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    state.photoViewerHistoryToken = token;
-    state.photoViewerClosePending = false;
-    window.history.pushState({
-      ...(window.history.state || {}),
-      [PHOTO_VIEWER_HISTORY_KEY]: token
-    }, "", window.location.href);
+  function registerDialogs() {
+    TRoomDatePicker.setNavigation(dialogs);
+    const canView = () => !elements.appView.hidden;
+    dialogs.register("entry-dialog", {
+      capture: () => state.activeEntry,
+      restore: entry => {
+        if (!canView() || !entry || !state.entryMap.has(entry.id)) return false;
+        state.activeEntry = entry;
+        renderEntryDetail(entry);
+      },
+      onClose: finishEntryClose
+    });
+    dialogs.register("camera-roll-dialog", { restore: canView, onClose: finishCameraRollClose });
+    dialogs.register("photo-viewer-dialog", {
+      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex }),
+      restore: saved => {
+        if (!canView() || !saved.photos[saved.index]) return false;
+        state.viewerPhotos = saved.photos;
+        state.viewerIndex = saved.index;
+        renderPhotoViewer();
+      },
+      onClose: finishPhotoViewerClose
+    });
+    dialogs.register("editor-dialog", {
+      blocked: () => state.photoPickerActive,
+      guard: () => {
+        if (state.editorSaving || state.photoPreparing || state.photoPickerActive) return false;
+        closeWeatherMenu(false);
+        if (hasEditorChanges()) {
+          dialogs.open("editor-leave-dialog");
+          return false;
+        }
+        return true;
+      },
+      onClose: finishEditorClose
+    });
+    dialogs.register("editor-leave-dialog", { guard: () => !state.editorSaving });
+    dialogs.register("delete-confirm-dialog", { onClose: () => { state.deleteMode = null; } });
+    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; } });
   }
 
   function requestEditorClose() {
-    if (!elements.editorDialog.open) return;
-    closeWeatherMenu(false);
-    if (hasEditorChanges()) {
-      if (!elements.editorLeaveDialog.open) elements.editorLeaveDialog.showModal();
-      return;
-    }
-    closeEditorDialog();
+    return dialogs.close("editor-dialog");
   }
 
   function cancelEditorLeave() {
-    if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
-    window.setTimeout(() => elements.entryContent.focus(), 0);
+    return dialogs.close("editor-leave-dialog", { after: () => elements.entryContent.focus({ preventScroll: true }) });
   }
 
   async function discardEditorChanges() {
-    if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
+    if (state.editorSaving || state.photoPreparing) return;
+    if (!await dialogs.close("editor-leave-dialog")) return;
     await cancelEditorPhotoUploadSession();
     state.editorDirty = false;
-    closeEditorDialog();
+    await closeEditorDialog();
   }
 
-  function closeEditorDialog() {
-    if (state.editorClosePending) return;
-    if (!elements.editorDialog.open) {
-      finishEditorClose();
-      return;
-    }
-    if (
-      state.editorHistoryToken
-      && window.history.state?.[EDITOR_HISTORY_KEY] === state.editorHistoryToken
-    ) {
-      state.editorClosePending = true;
-      window.history.back();
-      return;
-    }
-    finishEditorClose();
+  async function closeEditorDialog() {
+    if (elements.editorLeaveDialog.open) await dialogs.close("editor-leave-dialog", { force: true });
+    return dialogs.close("editor-dialog", { force: true });
   }
 
   function finishEditorClose() {
     closeWeatherMenu(false);
     state.editorWeather = null;
-    state.editorHistoryToken = null;
-    state.editorClosePending = false;
     state.editorDirty = false;
     state.editorSourceEntry = null;
     if (elements.editorLeaveDialog.open) elements.editorLeaveDialog.close();
@@ -1619,84 +1556,12 @@
   }
 
   function closeEntryDialog(afterClose = null) {
-    if (typeof afterClose === "function") state.entryAfterClose = afterClose;
-    if (state.entryClosePending) return;
-    if (!elements.entryDialog.open) {
-      finishEntryClose();
-      return;
-    }
-    if (
-      state.entryHistoryToken
-      && window.history.state?.[ENTRY_HISTORY_KEY] === state.entryHistoryToken
-    ) {
-      state.entryClosePending = true;
-      window.history.back();
-      return;
-    }
-    finishEntryClose();
-  }
-
-  function isDesktopDialogBackdropEnabled() {
-    return window.matchMedia(DESKTOP_DIALOG_BACKDROP_MATCHER).matches;
-  }
-
-  function bindDesktopBackdropClose(dialog, onClose) {
-    dialog.addEventListener("pointerdown", (event) => {
-      if (!isDesktopDialogBackdropPointer(event, dialog)) return;
-      desktopBackdropPointers.set(dialog, event.pointerId);
-    });
-    dialog.addEventListener("pointerup", (event) => {
-      const pointerId = desktopBackdropPointers.get(dialog);
-      desktopBackdropPointers.delete(dialog);
-      if (pointerId !== event.pointerId) return;
-      if (!isDesktopDialogBackdropPointer(event, dialog)) return;
-      onClose();
-    });
-    dialog.addEventListener("pointercancel", () => desktopBackdropPointers.delete(dialog));
-  }
-
-  function isDesktopDialogBackdropPointer(event, dialog) {
-    if (state.photoPickerActive) return false;
-    if (!isDesktopDialogBackdropEnabled()) return false;
-    if (event.target !== dialog) return false;
-    const content = dialog.firstElementChild;
-    if (!content) return true;
-    const rect = content.getBoundingClientRect();
-    return event.clientX < rect.left
-      || event.clientX > rect.right
-      || event.clientY < rect.top
-      || event.clientY > rect.bottom;
-  }
-
-  function handleHistoryNavigation() {
-    if (elements.photoViewerDialog.open && state.photoViewerHistoryToken) {
-      finishPhotoViewerClose();
-      return;
-    }
-    if (elements.cameraRollDialog.open && state.cameraRollHistoryToken) {
-      finishCameraRollClose();
-      return;
-    }
-    if (elements.editorDialog.open && state.editorHistoryToken) {
-      if (state.editorClosePending || !hasEditorChanges()) {
-        finishEditorClose();
-      } else {
-        pushEditorHistory();
-        if (!elements.editorLeaveDialog.open) elements.editorLeaveDialog.showModal();
-      }
-      return;
-    }
-    if (state.entryHistoryToken && elements.entryDialog.open) finishEntryClose();
+    return dialogs.close("entry-dialog", { after: typeof afterClose === "function" ? afterClose : undefined });
   }
 
   function finishEntryClose() {
-    const afterClose = state.entryAfterClose;
-    state.entryAfterClose = null;
-    state.entryHistoryToken = null;
-    state.entryClosePending = false;
     if (elements.entryDialog.open) elements.entryDialog.close();
     state.activeEntry = null;
-    if (afterClose) afterClose();
   }
 
   function renderEntryDetail(entry) {
@@ -2368,7 +2233,6 @@
     return serializeRichEditor(false).content;
   }
 
-
   function serializeRichEditor(trim = true) {
     return serializeRichEditorRoot(elements.entryContent, trim);
   }
@@ -2691,8 +2555,7 @@
     renderEditorPhotos();
     state.editorDirty = false;
     closeEntryFormatToolbar();
-    elements.editorDialog.showModal();
-    pushEditorHistory();
+    dialogs.open("editor-dialog");
     updateEditorKeyboardOffset();
     window.setTimeout(() => elements.entryTitle.focus(), 0);
   }
@@ -2803,7 +2666,7 @@
       if (targetStatus === "published") state.drafts = false;
       else if (!closeAfter) state.drafts = true;
       updateFilterControls();
-      closeEditorDialog();
+      await closeEditorDialog();
       await Promise.all([loadMeta(), loadEntries(true)]);
       return true;
     } catch (error) {
@@ -2887,6 +2750,7 @@
   }
 
   function setEditorSaveBusy(busy, label = "") {
+    state.editorSaving = busy;
     elements.weatherButton.disabled = busy;
     if (busy) closeWeatherMenu(false);
     elements.saveEntryButton.disabled = busy;
@@ -2902,8 +2766,7 @@
   }
 
   async function openCameraRoll() {
-    elements.cameraRollDialog.showModal();
-    pushCameraRollHistory();
+    dialogs.open("camera-roll-dialog");
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
       await Promise.all([loadPhotoMeta(), loadPhotos(true)]);
@@ -2997,62 +2860,25 @@
     state.viewerPhotos = photos;
     state.viewerIndex = index;
     renderPhotoViewer();
-    elements.photoViewerDialog.showModal();
-    pushPhotoViewerHistory();
+    dialogs.open("photo-viewer-dialog");
   }
 
   function closeCameraRollDialog(afterClose = null) {
-    if (typeof afterClose === "function") state.cameraRollAfterClose = afterClose;
-    if (state.cameraRollClosePending) return;
-    if (!elements.cameraRollDialog.open) {
-      finishCameraRollClose();
-      return;
-    }
-    if (
-      state.cameraRollHistoryToken
-      && window.history.state?.[CAMERA_ROLL_HISTORY_KEY] === state.cameraRollHistoryToken
-    ) {
-      state.cameraRollClosePending = true;
-      window.history.back();
-      return;
-    }
-    finishCameraRollClose();
+    return dialogs.close("camera-roll-dialog", { after: typeof afterClose === "function" ? afterClose : undefined });
   }
 
   function finishCameraRollClose() {
-    const afterClose = state.cameraRollAfterClose;
-    state.cameraRollAfterClose = null;
-    state.cameraRollHistoryToken = null;
-    state.cameraRollClosePending = false;
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
-    if (afterClose) afterClose();
+
   }
 
   function closePhotoViewerDialog(afterClose = null) {
-    if (typeof afterClose === "function") state.photoViewerAfterClose = afterClose;
-    if (state.photoViewerClosePending) return;
-    if (!elements.photoViewerDialog.open) {
-      finishPhotoViewerClose();
-      return;
-    }
-    if (
-      state.photoViewerHistoryToken
-      && window.history.state?.[PHOTO_VIEWER_HISTORY_KEY] === state.photoViewerHistoryToken
-    ) {
-      state.photoViewerClosePending = true;
-      window.history.back();
-      return;
-    }
-    finishPhotoViewerClose();
+    return dialogs.close("photo-viewer-dialog", { after: typeof afterClose === "function" ? afterClose : undefined });
   }
 
   function finishPhotoViewerClose() {
-    const afterClose = state.photoViewerAfterClose;
-    state.photoViewerAfterClose = null;
-    state.photoViewerHistoryToken = null;
-    state.photoViewerClosePending = false;
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
-    if (afterClose) afterClose();
+
   }
 
   function renderPhotoViewer() {
@@ -3146,16 +2972,11 @@
     state.dateWheelTarget = target;
     setDateDraft(target.value || japanDateString());
     renderDateWheel();
-    elements.dateWheelDialog.showModal();
+    dialogs.open("date-wheel-dialog");
   }
 
   function closeDateWheel() {
-    if (elements.dateWheelDialog.open) elements.dateWheelDialog.close();
-    state.dateWheelTarget = null;
-  }
-
-  function applyDateWheelFromBackdrop(event) {
-    if (event.target === elements.dateWheelDialog) applyDateWheel();
+    return dialogs.close("date-wheel-dialog");
   }
 
   function applyDateWheel() {
@@ -3294,7 +3115,7 @@
       ? `「${state.activeEntry.title}」をゴミ箱へ移動します。`
       : "";
     elements.deleteConfirmYes.textContent = "はい";
-    elements.deleteConfirmDialog.showModal();
+    dialogs.open("delete-confirm-dialog");
   }
 
   function requestDraftDeletion() {
@@ -3304,7 +3125,7 @@
     elements.deleteConfirmTitle.textContent = "この下書きを削除しますか？";
     elements.deleteConfirmMessage.textContent = "保存済みの下書きを削除します。この操作は取り消せません。";
     elements.deleteConfirmYes.textContent = "下書きを削除";
-    elements.deleteConfirmDialog.showModal();
+    dialogs.open("delete-confirm-dialog");
   }
 
   function requestPermanentDeletion() {
@@ -3313,17 +3134,16 @@
     elements.deleteConfirmTitle.textContent = "本当に完全削除しますか？";
     elements.deleteConfirmMessage.textContent = "この操作は取り消せません。";
     elements.deleteConfirmYes.textContent = "完全に削除";
-    elements.deleteConfirmDialog.showModal();
+    dialogs.open("delete-confirm-dialog");
   }
 
   function closeDeleteConfirmation() {
-    state.deleteMode = null;
-    if (elements.deleteConfirmDialog.open) elements.deleteConfirmDialog.close();
+    return dialogs.close("delete-confirm-dialog");
   }
 
   async function confirmEntryDeletion() {
     const mode = state.deleteMode;
-    closeDeleteConfirmation();
+    if (!await closeDeleteConfirmation()) return;
     if (mode === "draft") await deleteActiveDraft();
     else if (mode === "permanent") await permanentlyDeleteActiveEntry();
     else if (mode === "trash") await moveActiveEntryToTrash();
@@ -3340,7 +3160,7 @@
         body: { revision: Number(elements.entryRevision.value) }
       });
       state.editorDirty = false;
-      closeEditorDialog();
+      await closeEditorDialog();
       showToast("下書きを削除しました。");
       state.drafts = true;
       updateFilterControls();
@@ -3869,6 +3689,7 @@
   }
 
   function resetState() {
+    dialogs.reset();
     cancelPendingEntrySearch();
     state.searchComposing = false;
     resetHeaderVisibilityTracking();
@@ -3910,24 +3731,13 @@
     state.photoFileNameQuery = "";
     state.viewerPhotos = [];
     state.viewerIndex = -1;
-    state.cameraRollHistoryToken = null;
-    state.cameraRollAfterClose = null;
-    state.cameraRollClosePending = false;
-    state.photoViewerHistoryToken = null;
-    state.photoViewerAfterClose = null;
-    state.photoViewerClosePending = false;
     finishPhotoPickerInteraction();
     state.editorDirty = false;
     state.editorSourceEntry = null;
     state.entryCreateRequestId = null;
     state.dateDraft = null;
     state.dateWheelTarget = null;
-    state.entryAfterClose = null;
-    state.entryHistoryToken = null;
-    state.entryClosePending = false;
     state.favoriteRequestPending = false;
-    state.editorHistoryToken = null;
-    state.editorClosePending = false;
     elements.searchInput.value = "";
     elements.dateFrom.value = "";
     elements.dateTo.value = "";

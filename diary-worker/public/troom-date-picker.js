@@ -6,6 +6,7 @@
   const state = {
     dialog: null,
     target: null,
+    navigation: null,
     opener: null,
     mode: "date",
     view: "date",
@@ -82,7 +83,11 @@
         <div class="troom-calendar-grid" role="grid"></div>
       </section>`;
     dialog.addEventListener("click", handleDialogClick);
-    dialog.addEventListener("cancel", () => closeCalendar());
+    dialog.addEventListener("cancel", event => {
+      if (state.navigation) return;
+      event.preventDefault();
+      closeCalendar();
+    });
     dialog.addEventListener("close", resetCalendar);
     document.body.append(dialog);
     return dialog;
@@ -122,7 +127,10 @@
     state.month = selected.month;
     renderCalendar();
     const dialog = ensureDialog();
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      if (state.navigation) state.navigation.open(dialog.id);
+      else dialog.showModal();
+    }
     window.setTimeout(() => {
       dialog.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
     }, 0);
@@ -130,6 +138,7 @@
 
   function handleDialogClick(event) {
     if (event.target === state.dialog) {
+      if (state.navigation) return;
       closeCalendar();
       return;
     }
@@ -273,6 +282,7 @@
   }
 
   function closeCalendar() {
+    if (state.navigation) return state.navigation.close("troom-calendar-dialog");
     if (state.dialog?.open) state.dialog.close();
   }
 
@@ -288,7 +298,12 @@
     if (opener?.isConnected) opener.focus({ preventScroll: true });
   }
 
-  window.TRoomDatePicker = Object.freeze({ initialize, parseValue, formatValue, calendarCells });
+  function setNavigation(navigation) {
+    state.navigation = navigation;
+    navigation.register("troom-calendar-dialog", { dialog: ensureDialog() });
+  }
+
+  window.TRoomDatePicker = Object.freeze({ setNavigation, initialize, parseValue, formatValue, calendarCells });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => initialize());
   else initialize();
 })();

@@ -17,7 +17,7 @@
     invoice: ["purchase", "discount", "income", "offset", "other"],
     payment_notice: ["purchase", "offset", "income", "other"]
   };
-  const DESKTOP_DIALOG_BACKDROP_MATCHER = "(min-width: 861px) and (hover: hover) and (pointer: fine)";
+  const dialogs = TroomDialogNavigation.create({ key: "troomBillingDialogs" });
   const settlementDirectionLabels = { incoming: "入金", outgoing: "着金" };
   const settlementMethodLabels = {
     bank_transfer: "振込", cash: "現金", offset: "相殺", other: "その他", unspecified: "未設定"
@@ -44,6 +44,14 @@
   }
 
   function bindEvents() {
+    TRoomDatePicker.setNavigation(dialogs);
+    dialogs.register("entry-dialog", { guard: canCloseEntry });
+    dialogs.register("settlements-dialog", {
+      capture: () => ({ account: state.summary.account.id, month: state.summary.month }),
+      restore: saved => !!state.session && saved.account === state.summary?.account.id && saved.month === state.summary?.month
+    });
+    dialogs.register("logs-dialog", { restore: () => !!state.session });
+    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; state.dateWheelMode = "date"; } });
     document.addEventListener("troom:before-auto-update", (event) => {
       if (document.querySelector("dialog[open]")) event.preventDefault();
     });
@@ -69,11 +77,7 @@
     bindDateInput(el["entry-date"]);
     el["date-wheel-cancel"].addEventListener("click", closeDateWheel);
     el["date-wheel-done"].addEventListener("click", applyDateWheel);
-    el["date-wheel-dialog"].addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closeDateWheel();
-    });
-    el["date-wheel-dialog"].addEventListener("click", applyDateWheelFromBackdrop);
+
     bindDateWheel(el["date-wheel-year"], "year");
     bindDateWheel(el["date-wheel-month"], "month");
     bindDateWheel(el["date-wheel-day"], "day");
@@ -83,13 +87,9 @@
         closeEntryDialog();
         return;
       }
-      document.getElementById(button.dataset.closeDialog).close();
+      dialogs.close(button.dataset.closeDialog);
     }));
-    el["entry-dialog"].addEventListener("click", closeEntryFromDesktopBackdrop);
-    el["entry-dialog"].addEventListener("cancel", (event) => {
-      event.preventDefault();
-      closeEntryDialog();
-    });
+
     el["entries-body"].addEventListener("click", handleEntryAction);
     el["settlements-card"].addEventListener("click", openSettlements);
     el["settlements-body"].addEventListener("click", handleSettlementAction);
@@ -147,6 +147,7 @@
   }
 
   async function logout() {
+    dialogs.reset();
     try { await api("/logout", { method: "POST", body: {} }); } catch { /* local view still closes */ }
     state.session = null;
     showLogin();
@@ -312,55 +313,64 @@
     el["settlement-method"].value = settlement?.method === "unspecified" ? "other" : (settlement?.method || "bank_transfer");
     updateEntryMode();
     state.entryInitialSnapshot = entryFormSnapshot();
-    el["entry-dialog"].showModal();
+    dialogs.open("entry-dialog");
   }
 
   async function saveEntry(event) {
     event.preventDefault();
-    const id = el["entry-id"].value;
-    const isSettlement = el["entry-category"].value === "income" || el["entry-record-type"].value === "settlement";
-    const accountId = el["entry-account"].value;
-    const entryDate = el["entry-date"].value;
-    if (isSettlement) {
+    if (state.entrySaving) return;
+    state.entrySaving = true;
+    const controls = [...el["entry-form"].querySelectorAll("input, select, textarea, button")].map(control => [control, control.disabled]);
+    for (const [control] of controls) control.disabled = true;
+    try {
+      const id = el["entry-id"].value;
+      const isSettlement = el["entry-category"].value === "income" || el["entry-record-type"].value === "settlement";
+      const accountId = el["entry-account"].value;
+      const entryDate = el["entry-date"].value;
+      if (isSettlement) {
+        const payload = {
+          accountId,
+          settlementDate: entryDate,
+          direction: el["settlement-direction"].value,
+          method: el["settlement-method"].value,
+          amountYen: parseYenInput(el["entry-amount"].value),
+          note: el["entry-note"].value
+        };
+        try {
+          await api(id ? `/settlements/${id}` : "/settlements", { method: id ? "PUT" : "POST", body: payload });
+          await dialogs.close("entry-dialog", { force: true });
+          el["account-select"].value = payload.accountId;
+          el["month-input"].value = payload.settlementDate.slice(0, 7);
+          await loadSummary();
+          if (el["settlements-dialog"].open) renderSettlements();
+        } catch (error) {
+          el["entry-error"].textContent = error.message;
+        }
+        return;
+      }
       const payload = {
         accountId,
-        settlementDate: entryDate,
-        direction: el["settlement-direction"].value,
-        method: el["settlement-method"].value,
+        documentType: el["entry-document-type"].value,
+        entryDate,
+        category: el["entry-category"].value,
+        otherDirection: el["other-direction"].value,
         amountYen: parseYenInput(el["entry-amount"].value),
+        description: el["entry-description"].value,
         note: el["entry-note"].value
       };
       try {
-        await api(id ? `/settlements/${id}` : "/settlements", { method: id ? "PUT" : "POST", body: payload });
-        el["entry-dialog"].close();
+        await api(id ? `/entries/${id}` : "/entries", { method: id ? "PUT" : "POST", body: payload });
+        await dialogs.close("entry-dialog", { force: true });
         el["account-select"].value = payload.accountId;
-        el["month-input"].value = payload.settlementDate.slice(0, 7);
+        el["document-filter"].value = payload.documentType;
+        el["month-input"].value = payload.entryDate.slice(0, 7);
         await loadSummary();
-        if (el["settlements-dialog"].open) renderSettlements();
       } catch (error) {
         el["entry-error"].textContent = error.message;
       }
-      return;
-    }
-    const payload = {
-      accountId,
-      documentType: el["entry-document-type"].value,
-      entryDate,
-      category: el["entry-category"].value,
-      otherDirection: el["other-direction"].value,
-      amountYen: parseYenInput(el["entry-amount"].value),
-      description: el["entry-description"].value,
-      note: el["entry-note"].value
-    };
-    try {
-      await api(id ? `/entries/${id}` : "/entries", { method: id ? "PUT" : "POST", body: payload });
-      el["entry-dialog"].close();
-      el["account-select"].value = payload.accountId;
-      el["document-filter"].value = payload.documentType;
-      el["month-input"].value = payload.entryDate.slice(0, 7);
-      await loadSummary();
-    } catch (error) {
-      el["entry-error"].textContent = error.message;
+    } finally {
+      state.entrySaving = false;
+      for (const [control, disabled] of controls) control.disabled = disabled;
     }
   }
 
@@ -385,7 +395,7 @@
 
   function openSettlements() {
     renderSettlements();
-    el["settlements-dialog"].showModal();
+    dialogs.open("settlements-dialog");
   }
 
   function renderSettlements() {
@@ -427,7 +437,7 @@
   }
 
   async function openLogs() {
-    el["logs-dialog"].showModal();
+    dialogs.open("logs-dialog");
     await loadLogs();
   }
 
@@ -601,23 +611,11 @@
     state.dateWheelMode = mode;
     setDateDraft(target.value || (mode === "month" ? japanToday().slice(0, 7) : japanToday()));
     renderDateWheel();
-    el["date-wheel-dialog"].showModal();
+    dialogs.open("date-wheel-dialog");
   }
 
   function closeDateWheel() {
-    if (el["date-wheel-dialog"].open) el["date-wheel-dialog"].close();
-    state.dateWheelTarget = null;
-    state.dateWheelMode = "date";
-  }
-
-  function applyDateWheelFromBackdrop(event) {
-    if (event.target === el["date-wheel-dialog"]) applyDateWheel();
-  }
-
-  function closeEntryFromDesktopBackdrop(event) {
-    if (event.target !== el["entry-dialog"]) return;
-    if (!window.matchMedia(DESKTOP_DIALOG_BACKDROP_MATCHER).matches) return;
-    closeEntryDialog();
+    return dialogs.close("date-wheel-dialog");
   }
 
   function entryFormSnapshot() {
@@ -627,11 +625,14 @@
     ]));
   }
 
+  function canCloseEntry() {
+    if (state.entrySaving) return false;
+    return entryFormSnapshot() === state.entryInitialSnapshot
+      || confirm("入力内容が保存されていません。破棄して閉じますか？");
+  }
+
   function closeEntryDialog() {
-    if (!el["entry-dialog"]?.open) return;
-    if (entryFormSnapshot() !== state.entryInitialSnapshot
-      && !confirm("入力内容が保存されていません。破棄して閉じますか？")) return;
-    el["entry-dialog"].close();
+    return dialogs.close("entry-dialog");
   }
 
   function applyDateWheel() {
