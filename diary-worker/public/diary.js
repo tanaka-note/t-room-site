@@ -927,7 +927,8 @@
     }
     if (destination.origin !== window.location.origin) return;
     if (!destination.pathname.startsWith(`${BASE_PATH}/`)) return;
-    if (link === elements.tagPageBack && hasDiaryReturnNavigation(destination.pathname)) {
+    if ((link === elements.tagPageBack || (link === elements.favoritesLink && state.favoritePage))
+      && hasDiaryReturnNavigation(destination.pathname)) {
       event.preventDefault();
       window.history.back();
       return;
@@ -3311,8 +3312,15 @@
       if (button.dataset.tag === state.tag) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
-    if (state.favoritePage) elements.favoritesLink?.setAttribute("aria-current", "page");
-    else elements.favoritesLink?.removeAttribute("aria-current");
+    updateFavoritesLink();
+  }
+
+  function updateFavoritesLink() {
+    if (!elements.favoritesLink) return;
+    elements.favoritesLink.href = state.favoritePage ? `${BASE_PATH}/` : `${BASE_PATH}/favorites/`;
+    elements.favoritesLink.setAttribute("aria-label", state.favoritePage ? "お気に入り表示を解除して日記へ戻る" : "お気に入りを開く");
+    if (state.favoritePage) elements.favoritesLink.setAttribute("aria-current", "page");
+    else elements.favoritesLink.removeAttribute("aria-current");
   }
 
   function updateListHeading() {
@@ -3555,8 +3563,7 @@
       elements.diaryTitle.textContent = "お気に入り";
       document.title = "お気に入り";
     }
-    if (onFavoritePage) elements.favoritesLink?.setAttribute("aria-current", "page");
-    else elements.favoritesLink?.removeAttribute("aria-current");
+    updateFavoritesLink();
     configureDiaryReturnNavigation();
   }
 

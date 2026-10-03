@@ -18,6 +18,6 @@ assert.match(script, /function captureTagListPosition\(\)[\s\S]*?tag: visibleTag
 assert.match(script, /function restoreTagListPosition\(position\)[\s\S]*?elements\.tagList\.scrollTo[\s\S]*?elements\.tagList\.scrollBy/s);
 assert.match(script, /function restoreDiaryReturnPosition\(returnView\)[\s\S]*?const restore = \(\) => \{[\s\S]*?restoreEntryListPosition\(returnView\.position\);[\s\S]*?restoreTagListPosition\(returnView\.tagListPosition\);[\s\S]*?window\.setTimeout\(restore, 120\);[\s\S]*?window\.setTimeout\(restore, 400\);/s);
 assert.match(script, /if \(returnView\.householdId && householdId && returnView\.householdId !== householdId\) return false;/);
-assert.match(script, /link === elements\.tagPageBack && hasDiaryReturnNavigation\(destination\.pathname\)[\s\S]*?window\.history\.back\(\)/s);
+assert.match(script, /link === elements\.tagPageBack \|\| \(link === elements\.favoritesLink && state\.favoritePage\)[\s\S]*?hasDiaryReturnNavigation\(destination\.pathname\)[\s\S]*?window\.history\.back\(\)/s);
 
 process.stdout.write("Diary navigation return-state test passed.\n");
