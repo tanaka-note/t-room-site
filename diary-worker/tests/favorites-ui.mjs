@@ -38,8 +38,8 @@ assert.match(script, /state\.favoritePage/);
 assert.match(script, /state\.entries = state\.entries\.filter\(\(item\) => item\.id !== entry\.id\);[\s\S]{0,220}state\.offset = state\.entries\.length;/);
 assert.match(script, /parameters\.set\("favorite", "1"\)/);
 assert.ok(script.includes("const onFavoritePage = /^\\/diary\\/favorites\\/?$/.test"));
-assert.match(script, /elements\.entryDialog\.showModal\(\);\s*pushEntryHistory\(\);/);
-assert.match(script, /window\.addEventListener\("popstate", handleHistoryNavigation\)/);
+assert.ok(script.includes('dialogs.open("entry-dialog")'));
+assert.ok(script.includes('dialogs.register("entry-dialog"'));
 assert.match(script, /お気に入りの日記はまだありません。/);
 
 process.stdout.write("Diary favorite UI, route, history, and auto-update-safe client contracts passed.\n");

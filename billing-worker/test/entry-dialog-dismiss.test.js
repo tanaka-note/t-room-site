@@ -35,8 +35,12 @@ function setup(entry = null, settlement = null) {
     updateCategoryOptions: (category) => { el["entry-category"].value = category; }, updateEntryMode: () => {},
     Option: function (label, value) { this.value = value; }
   };
+  context.dialogs = {
+    open() { dialog.showModal(); },
+    close() { if (context.canCloseEntry()) dialog.close(); }
+  };
   vm.createContext(context);
-  vm.runInContext(["entryFormSnapshot", "openEntryDialog", "closeEntryDialog", "closeEntryFromDesktopBackdrop"].map(source).join("\n"), context);
+  vm.runInContext(["entryFormSnapshot", "openEntryDialog", "closeEntryDialog", "canCloseEntry"].map(source).join("\n"), context);
   context.openEntryDialog(entry, settlement);
   return { context, el, dialog, confirmations };
 }
@@ -85,32 +89,12 @@ test("approving discard closes; reverting a change does not prompt", () => {
   assert.equal(confirmations.length, 1);
 });
 
-test("buttons, desktop backdrop and Escape use the guard; successful saves close directly", () => {
-  assert.match(script, /if \(button\.dataset\.closeDialog === "entry-dialog"\) \{\s*closeEntryDialog\(\);\s*return;/);
-  assert.match(script, /el\["entry-dialog"\]\.addEventListener\("click", closeEntryFromDesktopBackdrop\)/);
-  const cancelHandler = script.match(/el\["entry-dialog"\]\.addEventListener\("cancel", \(event\) => \{([^]*?)\n    \}\);/);
-  assert.ok(cancelHandler);
-  const { context, el, dialog, confirmations } = setup();
-  context.closeEntryFromDesktopBackdrop({ target: {} });
-  assert.equal(dialog.closeCount, 0);
-  context.window.matchMedia = () => ({ matches: false });
-  context.closeEntryFromDesktopBackdrop({ target: dialog });
-  assert.equal(dialog.closeCount, 0, "touch backdrop remains unchanged");
-  context.window.matchMedia = () => ({ matches: true });
-  el["entry-note"].value = "入力中";
-  context.closeEntryFromDesktopBackdrop({ target: dialog });
-  assert.equal(dialog.closeCount, 0);
-  assert.equal(confirmations.length, 1);
-  let prevented = 0;
-  context.event = { preventDefault() { prevented += 1; } };
-  vm.runInContext(cancelHandler[1], context);
-  assert.equal(prevented, 1);
-  assert.equal(confirmations.length, 2);
+test("saving blocks discard and the shared guard covers all close requests", () => {
+  const { context, dialog, confirmations } = setup();
+  context.state.entrySaving = true;
+  context.closeEntryDialog();
   assert.equal(dialog.open, true);
-  context.approve = true;
-  vm.runInContext(cancelHandler[1], context);
-  assert.equal(dialog.closeCount, 1);
-  const save = source("saveEntry");
-  assert.equal((save.match(/el\["entry-dialog"\]\.close\(\)/g) || []).length, 2, "entry and settlement success paths bypass discard confirmation");
-  assert.doesNotMatch(save, /closeEntryDialog|confirm\(/);
+  assert.deepEqual(confirmations, []);
+  assert.ok(script.includes('dialogs.register("entry-dialog", { guard: canCloseEntry })'));
+  assert.equal((source("saveEntry").match(/await dialogs.close/g) || []).length, 2);
 });

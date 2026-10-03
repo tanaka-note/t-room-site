@@ -12,6 +12,7 @@ const markerPattern = /\[\[写真:[0-9a-f-]{36}\]\]/g;
 const staticFiles = new Map([
   ["/diary/", ["index.html", "text/html; charset=utf-8"]],
   ["/diary/diary.js", ["diary.js", "text/javascript; charset=utf-8"]],
+  ["/diary/dialog-navigation.js", ["dialog-navigation.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-search.js", ["diary-search.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-weather.js", ["diary-weather.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-photo-processing.js", ["diary-photo-processing.js", "text/javascript; charset=utf-8"]],

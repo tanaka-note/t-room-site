@@ -42,8 +42,8 @@ for (const id of ["editor-leave-cancel", "editor-leave-discard", "editor-leave-s
 assert.doesNotMatch(script, /入力中の内容を破棄しますか/);
 assert.match(script, /function requestEditorClose\(\)/);
 assert.match(script, /function saveEntryAsDraft/);
-assert.match(script, /function pushEditorHistory\(\)/);
-assert.match(script, /\[EDITOR_HISTORY_KEY\]: token/);
+assert.ok(script.includes('dialogs.open("editor-dialog")'));
+assert.ok(script.includes('dialogs.register("editor-dialog"'));
 assert.match(script, /if \(state\.drafts\) parameters\.set\("draft", "1"\)/);
 assert.match(script, /if \(state\.drafts\) openDraft/);
 assert.match(script, /無題の下書き/);

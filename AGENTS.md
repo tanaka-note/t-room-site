@@ -51,6 +51,7 @@
 - Identity／Passkey／T-Cloud鍵：[`docs/security/passkeys.md`](docs/security/passkeys.md)
 - Password停止・復旧：[`docs/security/password-auth-policy.md`](docs/security/password-auth-policy.md)
 - LINE／PWA／TWAのブラウザ挙動：[`docs/browser-support.md`](docs/browser-support.md)
+- 画面遷移／モーダル／戻る・閉じる：[`docs/navigation-and-dialogs.md`](docs/navigation-and-dialogs.md)
 - AI：[`docs/ai-chat-architecture.md`](docs/ai-chat-architecture.md)
 - Downloader：[`downloader-worker/README.md`](downloader-worker/README.md)
 
@@ -95,6 +96,7 @@
 
 ## 12. 画面遷移・戻る操作
 
+- 重ねて表示する画面は、戻る操作、背景クリック／タップ、閉じるボタン、Escを共通の閉じる処理へ接続し、一番手前の画面だけを閉じる。未保存入力の確認、処理中の保護、履歴整合性を保つ。詳細と既存画面の移行範囲は[`docs/navigation-and-dialogs.md`](docs/navigation-and-dialogs.md)に従う。
 - 詳細、検索結果、フォルダ、子画面等から戻る場合は、遷移元の表示位置と表示状態を復元する。意味のある内部スクロール領域も対象とする。
 - 動的リストは安定したitem ID等をアンカーにし、検索、filter、sort、表示mode、読み込み済み範囲を再現して描画後に位置を復元する。標準History／BFCache／scroll restorationで十分なら利用し、明示的な新規遷移と戻る操作を区別する。
 - Password、復号鍵、秘密情報、危険操作の承認状態、意図しない再送信につながるform状態は保存しない。
