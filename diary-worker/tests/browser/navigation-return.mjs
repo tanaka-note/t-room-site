@@ -186,6 +186,7 @@ async function run(browserType, name, executablePath) {
       page.locator(`#tag-list [data-tag="${appBackContext.tag}"]`).click()
     ]);
     const appBackStoredContext = await storedTagContext(page);
+    await waitForDiary(page);
     assert.equal(await page.locator("#tag-page-back").textContent(), "← 前の画面へ戻る", `${name}: 遷移元を示す戻る導線`);
     await page.locator("#tag-page-back").click();
     await page.waitForURL(/\/diary\/?$/);
@@ -201,6 +202,7 @@ async function run(browserType, name, executablePath) {
       page.locator('#tag-list [data-tag="タグ065"]').click()
     ]);
     const directoryReturn = await page.evaluate(() => JSON.parse(sessionStorage.getItem("troom-diary-return-view-v1")));
+    await waitForDiary(page);
     assert.equal(await page.locator("#tag-page-back").getAttribute("href"), "/diary/tags/", `${name}: タグ詳細の戻り先`);
     await page.locator("#tag-page-back").click();
     await page.waitForURL(/\/diary\/tags\/?$/);

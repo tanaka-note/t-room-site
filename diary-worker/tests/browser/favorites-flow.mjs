@@ -189,6 +189,45 @@ async function run(browserType, name, executablePath, contextOptions = {}) {
     await page.goBack();
     await page.waitForURL(/\/diary\/?$/);
     assert.match(page.url(), /\/diary\/?$/i, `${name}: 2回目Backで日記`);
+
+    const favoriteLink = page.locator("#favorites-link");
+    await page.mouse.move(0, 0);
+    const offColor = await favoriteLink.evaluate((link) => getComputedStyle(link).backgroundColor);
+    assert.equal(await favoriteLink.getAttribute("aria-current"), null, `${name}: 日記ではオフ`);
+    await page.click("#previous-month-button");
+    const originalHeading = await page.locator("#diary-recent-title").textContent();
+    await favoriteLink.click();
+    await page.waitForURL(/\/diary\/favorites\/?$/);
+    await page.waitForSelector('#favorites-link[aria-current="page"]');
+    assert.equal(await favoriteLink.getAttribute("href"), "/diary/", `${name}: オンでは日記へ戻るリンク`);
+    const onColor = await favoriteLink.evaluate((link) => getComputedStyle(link).backgroundColor);
+    assert.notEqual(onColor, offColor, `${name}: オンとオフの背景色を区別`);
+    await favoriteLink.click();
+    await page.waitForURL(/\/diary\/?$/);
+    await page.waitForFunction((heading) => document.querySelector("#diary-recent-title")?.textContent === heading, originalHeading);
+    await page.mouse.move(0, 0);
+    assert.equal(await favoriteLink.getAttribute("aria-current"), null, `${name}: 再押下で解除`);
+    assert.equal(await favoriteLink.evaluate((link) => getComputedStyle(link).backgroundColor), offColor, `${name}: 解除後の色`);
+
+    await favoriteLink.click();
+    await page.waitForURL(/\/diary\/favorites\/?$/);
+    await page.waitForSelector('#favorites-link[aria-current="page"]');
+    await page.click("#draft-button");
+    await page.waitForSelector('#draft-button[aria-pressed="true"]');
+    assert.equal(await favoriteLink.getAttribute("aria-current"), null, `${name}: 下書きではオフ`);
+    assert.equal(await favoriteLink.getAttribute("href"), "/diary/favorites/", `${name}: 下書きではお気に入りを開くリンク`);
+    await favoriteLink.click();
+    await page.waitForSelector('#favorites-link[aria-current="page"]');
+    assert.equal(await page.locator("#draft-button").getAttribute("aria-pressed"), "false", `${name}: 下書きからお気に入りへ`);
+    assert.equal(await page.locator("#diary-recent-title").textContent(), "お気に入りの日記", `${name}: お気に入りが再び開く`);
+
+    const directPage = await context.newPage();
+    await directPage.goto(`${origin}/diary/favorites/`, { waitUntil: "networkidle" });
+    await directPage.waitForSelector('#favorites-link[aria-current="page"]');
+    await directPage.click("#favorites-link");
+    await directPage.waitForURL(/\/diary\/?$/);
+    await directPage.waitForSelector("#app-view:not([hidden])");
+    assert.equal(await directPage.locator("#favorites-link").getAttribute("aria-current"), null, `${name}: 直接アクセスからも解除可能`);
     await context.close();
   } finally {
     await browser.close();

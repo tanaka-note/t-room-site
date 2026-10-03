@@ -303,10 +303,15 @@ button {
 }
 
 .favorites-link:hover,
-.favorites-link:focus-visible,
-.favorites-link[aria-current="page"] {
+.favorites-link:focus-visible {
   border-color: rgba(194, 165, 107, 0.58);
   background: #fff8df;
+  color: #614b13;
+}
+
+.favorites-link[aria-current="page"] {
+  border-color: #b99643;
+  background: #ead18b;
   color: #614b13;
 }
 
