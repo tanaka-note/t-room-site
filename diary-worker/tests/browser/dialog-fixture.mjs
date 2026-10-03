@@ -4,7 +4,14 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerHooks } from 'node:module';
 import { chromium } from 'playwright';
+
+registerHooks({ resolve(specifier, context, next) {
+  if (specifier === 'cloudflare:workers') return { url: 'data:text/javascript,export class WorkerEntrypoint {}', shortCircuit: true };
+  return next(specifier, context);
+} });
+const diaryWorker = (await import('../../src/index.js')).default;
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const entry = { id: 1, entryDate: '2026-10-01', title: '戻る確認', content: '保存済みの本文', authorName: 'fixture', tags: [], status: 'published', revision: 1, photos: [] };
@@ -42,6 +49,14 @@ export async function runDialogs(service) {
     }
     if (url.pathname === '/previous') { response.writeHead(200, { 'content-type': 'text/html' }); return response.end('<p>previous</p>'); }
     if (url.pathname === '/fixture.svg') { response.writeHead(200, { 'content-type': 'image/svg+xml' }); return response.end('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="blue"/></svg>'); }
+    if (url.pathname === '/diary/dialog-navigation.js') {
+      const result = await diaryWorker.fetch(new Request(url.href), { ASSETS: { async fetch(assetRequest) {
+        assert.equal(new URL(assetRequest.url).pathname, '/dialog-navigation.js');
+        return new Response(await readFile(resolve(root, 'diary-worker/public/dialog-navigation.js')), { headers: { 'content-type': 'text/javascript' } });
+      } } }, {});
+      response.writeHead(result.status, Object.fromEntries(result.headers));
+      return response.end(await result.text());
+    }
     const prefix = ['/diary/', '/billing/', '/security/', '/assets/'].find(p => url.pathname.startsWith(p));
     if (!prefix) return response.writeHead(404).end();
     let base = prefix === '/assets/' ? resolve(root, 'assets') : resolve(root, `${prefix.slice(1,-1)}-worker/public`);

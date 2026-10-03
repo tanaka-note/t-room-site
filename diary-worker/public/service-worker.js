@@ -1,25 +1,25 @@
-const CACHE_NAME = "troom-diary-shell-diary-b765ae683d74";
+const CACHE_NAME = "troom-diary-shell-diary-2e28502efa65";
 const STATIC_ASSETS = [
-  "/diary/diary-photo-processing.js?v=diary-b765ae683d74",
-  "/diary/diary-photo-upload.js?v=diary-b765ae683d74",
-  "/diary/diary-rich-text.js?v=diary-b765ae683d74",
-  "/diary/diary-weather.js?v=diary-b765ae683d74",
+  "/diary/diary-photo-processing.js?v=diary-2e28502efa65",
+  "/diary/diary-photo-upload.js?v=diary-2e28502efa65",
+  "/diary/diary-rich-text.js?v=diary-2e28502efa65",
+  "/diary/diary-weather.js?v=diary-2e28502efa65",
   "/diary/icons/icon-192-v4.png?v=5",
   "/diary/icons/icon-512-v4.png?v=5",
   "/diary/icons/icon-maskable-512-v4.png?v=5",
   "/diary/icons/apple-touch-icon-v3.png?v=4",
   "/diary/icons/favicon-64-v4.png?v=5",
-  "/diary/diary-search.js?v=diary-b765ae683d74",
-  "/assets/pwa-auto-update.js?v=diary-b765ae683d74",
-  "/diary/dialog-navigation.js?v=diary-b765ae683d74",
-  "/diary/diary.css?v=diary-b765ae683d74",
-  "/diary/diary.js?v=diary-b765ae683d74",
-  "/diary/investment.css?v=diary-b765ae683d74",
-  "/diary/investment.js?v=diary-b765ae683d74",
-  "/diary/manifest.webmanifest?v=diary-b765ae683d74",
-  "/diary/troom-date-picker.css?v=diary-b765ae683d74",
-  "/diary/troom-date-picker.js?v=diary-b765ae683d74",
-  "/security/passkey-client.js?v=diary-b765ae683d74"
+  "/diary/diary-search.js?v=diary-2e28502efa65",
+  "/assets/pwa-auto-update.js?v=diary-2e28502efa65",
+  "/diary/dialog-navigation.js?v=diary-2e28502efa65",
+  "/diary/diary.css?v=diary-2e28502efa65",
+  "/diary/diary.js?v=diary-2e28502efa65",
+  "/diary/investment.css?v=diary-2e28502efa65",
+  "/diary/investment.js?v=diary-2e28502efa65",
+  "/diary/manifest.webmanifest?v=diary-2e28502efa65",
+  "/diary/troom-date-picker.css?v=diary-2e28502efa65",
+  "/diary/troom-date-picker.js?v=diary-2e28502efa65",
+  "/security/passkey-client.js?v=diary-2e28502efa65"
 ];
 const STATIC_PATHS = new Set(STATIC_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
