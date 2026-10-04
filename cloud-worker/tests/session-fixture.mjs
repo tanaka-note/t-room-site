@@ -1,3 +1,4 @@
+import { attachPasskeyLedger } from "./passkey-ledger-fixture.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import {accountDisplayName} from "../../assets/account-display.mjs";
 import {lineBrowserResponse} from "../../assets/line-browser-worker.mjs";
@@ -7,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
 import { resolve } from "node:path";
 import { pbkdf2Sync, randomBytes } from "node:crypto";
-import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
+import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
 const db = new DatabaseSync(":memory:");
@@ -31,8 +32,9 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
   SECURITY: { async redeemHandoff(token) { return selected || {identityId:"primary-admin",credentialId:"credential",serviceLinkId:`primary-admin-${token}`,serviceAccountId:token,cloudRootFolderId:token === "folder-member" ? 7 : null,displayLabel:token === "admin" ? "管理者" : "Atsushi",sessionEpoch:1}; }, async validatePasskeySession(input) { return { valid: input.serviceAccountId === "admin" ? input.cloudRootFolderId == null : input.serviceAccountId === "folder-member" && input.cloudRootFolderId === 7 }; } },
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };
+const securityDb = attachPasskeyLedger(env);
 const context = { isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
-  sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
+  sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
   recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;
 const source = readFileSync(process.env.TCLOUD_TEST_SOURCE_ROOT ? resolve(process.env.TCLOUD_TEST_SOURCE_ROOT, "cloud-worker/src/index.js") : new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
@@ -49,4 +51,4 @@ async function handoff(account, identity = "primary-admin") {
   const result = await api(null, "/passkey/handoff", "POST", { handoffToken: "fixture" });
   assert.equal(result.status, 200, JSON.stringify(result.body)); return result;
 }
-export {db, env, context, api, handoff};
+export {db, securityDb, env, context, api, handoff};

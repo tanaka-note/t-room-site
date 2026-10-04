@@ -126,6 +126,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
     return validatePasskeySession(this.env, input);
   }
 
+  async cloudPasskeySession(input) {
+    return cloudPasskeySession(this.env, input);
+  }
+
   async recordAuditEvent(input) {
     await storeAuditEvent(this.env, input);
     return { stored: true };
@@ -1436,6 +1440,56 @@ async function validCloudFolderScopes(env, identityId, credentialId, scopes, anc
     && link.service_account_id === "folder-member" && Number(link.cloud_root_folder_id) === scope.rootFolderId));
 }
 
+// Cloud alone opts into server-tracked rolling sessions. No raw token/session ID
+// or key material crosses this binding; the identifier uses Cloud's audit HMAC.
+async function cloudPasskeySession(env, input) {
+  if (input?.service !== "cloud" || !/^[A-Za-z0-9_-]{43}$/.test(input.sessionIdHash || "")
+    || !["register", "read", "touch", "end"].includes(input.action)) return { valid: false };
+  // Ending a correctly bound session remains possible after credential/Identity
+  // revocation. Only read/register/touch can grant authority or extend expiry.
+  const validation = input.action === "end" ? null : await validatePasskeySession(env, input);
+  if (input.action !== "end" && validation?.valid !== true) return { valid: false };
+  const now = nowSeconds();
+  const role = input.serviceAccountId === "admin" ? "admin" : "member";
+  if (input.role !== role || !input.sessionVersion) return { valid: false };
+  if (input.action === "register") {
+    if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now || input.expiresAt > now + 43200
+      || !validSessionStart(input.startedAt)) return { valid: false };
+    await env.DB.prepare(`INSERT INTO security_active_sessions
+      (session_id_hash, identity_id, service, service_link_id, service_account_id, credential_id,
+       role, auth_method, session_version, passkey_session_epoch, started_at, last_seen_at, expires_at, cloud_folder_scopes)
+      VALUES (?, ?, 'cloud', ?, ?, ?, ?, 'passkey', ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id_hash) DO NOTHING`)
+      .bind(input.sessionIdHash, input.identityId, input.serviceLinkId, input.serviceAccountId, input.credentialId,
+        role, String(input.sessionVersion), input.sessionEpoch, input.startedAt, new Date().toISOString(), input.expiresAt, validation.folderScopes ? JSON.stringify(validation.folderScopes) : null).run();
+  }
+  const row = input.action === "end"
+    ? await env.DB.prepare("SELECT * FROM security_active_sessions WHERE session_id_hash = ?").bind(input.sessionIdHash).first()
+    : await env.DB.prepare(`SELECT * FROM security_active_sessions WHERE session_id_hash = ?
+      AND service = 'cloud' AND auth_method = 'passkey' AND ended_at IS NULL AND expires_at > ?`)
+      .bind(input.sessionIdHash, now).first();
+  if (!row && input.action === "end") return { valid: true };
+  if (!row || row.identity_id !== input.identityId || row.credential_id !== input.credentialId
+    || row.service !== "cloud" || row.auth_method !== "passkey"
+    || row.service_link_id !== input.serviceLinkId || row.service_account_id !== input.serviceAccountId
+    || row.role !== role || row.session_version !== String(input.sessionVersion)
+    || Number(row.passkey_session_epoch) !== Number(input.sessionEpoch)
+    || (validation && (row.cloud_folder_scopes || null) !== (validation.folderScopes ? JSON.stringify(validation.folderScopes) : null))) return { valid: false };
+  if (input.action === "end") {
+    await env.DB.prepare(`UPDATE security_active_sessions SET ended_at = ?, end_reason = 'logout'
+      WHERE session_id_hash = ? AND ended_at IS NULL`).bind(new Date().toISOString(), input.sessionIdHash).run();
+    return { valid: true };
+  }
+  if (input.action === "touch") {
+    if (!Number.isSafeInteger(input.ttlSeconds) || input.ttlSeconds < 900 || input.ttlSeconds > 43200) return { valid: false };
+    const result = await env.DB.prepare(`UPDATE security_active_sessions SET expires_at = MAX(expires_at, ?), last_seen_at = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE session_id_hash = ? AND ended_at IS NULL AND expires_at > ?`)
+      .bind(now + input.ttlSeconds, new Date().toISOString(), input.sessionIdHash, now).run();
+    if (!result.meta?.changes) return { valid: false };
+    return { valid: true, expiresAt: Math.max(Number(row.expires_at), now + input.ttlSeconds) };
+  }
+  return { valid: true, expiresAt: Number(row.expires_at) };
+}
+
 async function registrationOptions(env, identityId, displayName, excludeCredentials) {
   const options = await generateRegistrationOptions({
     rpName: env.RP_NAME || "T-ROOM", rpID: rpId(env), userID: encoder.encode(identityId),
@@ -2033,8 +2087,12 @@ function activeSessionStatements(env, event) {
         AND security_active_sessions.identity_id = excluded.identity_id
         AND security_active_sessions.service = excluded.service
         THEN excluded.started_at ELSE security_active_sessions.started_at END,
-      last_seen_at = excluded.last_seen_at, expires_at = excluded.expires_at,
-      ended_at = NULL, end_reason = NULL, updated_at = CURRENT_TIMESTAMP`)
+      last_seen_at = excluded.last_seen_at,
+      expires_at = CASE WHEN security_active_sessions.service = 'cloud' AND security_active_sessions.auth_method = 'passkey'
+        THEN MAX(security_active_sessions.expires_at, excluded.expires_at) ELSE excluded.expires_at END,
+      ended_at = NULL, end_reason = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE NOT (security_active_sessions.service = 'cloud' AND security_active_sessions.auth_method = 'passkey'
+        AND security_active_sessions.ended_at IS NOT NULL)`)
     .bind(event.sessionIdHash, event.identityId, event.service, event.serviceLinkId, event.serviceAccountId,
       event.credentialId, event.role, event.authMethod, event.sessionVersion, event.passkeySessionEpoch,
       startedAt, event.occurredAt, event.expiresAt, event.service === "cloud" && event.authMethod === "passkey" ? event.details.cloudScopeId || null : null, event.identityId, event.credentialId, event.serviceLinkId)];

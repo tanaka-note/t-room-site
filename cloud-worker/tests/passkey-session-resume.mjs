@@ -11,11 +11,11 @@ assert.equal(runtime, source, "公開用とruntime用のCloudクライアント�
 assert.equal((source.match(/requirePasskeyPrf\(authentication\);/g) || []).length, 2,
   "初回ログインとsession再開が同じPRF判定を利用していません。");
 
-async function resumePasskeySession(accountId, prfOutput = null, returnedAccountId = accountId, chooseFromMultiple = false) {
-  const calls = { handoff: 0, logout: 0, enterApp: [], errors: [] };
+async function resumePasskeySession(accountId, prfOutput = null, returnedAccountId = accountId, chooseFromMultiple = false, cached = null, authenticated = true, vaultFails = false) {
+  const calls = { authenticate: 0, handoff: 0, logout: 0, enterApp: [], errors: [] };
   const role = accountId === "folder-member" ? "member" : accountId;
   const rootFolderId = role === "member" ? 7 : null;
-  const session = { authenticated: true, authMethod: "passkey", role, serviceAccountId: accountId, serviceLinkId: `cloud-${accountId}`, rootFolderId };
+  const session = { sessionCacheId: "same-session", expiresAt: Math.floor(Date.now()/1000)+43200, authenticated, authMethod: "passkey", role, serviceAccountId: accountId, serviceLinkId: `cloud-${accountId}`, rootFolderId };
   const context = {
     console,
     URL,
@@ -33,6 +33,7 @@ async function resumePasskeySession(accountId, prfOutput = null, returnedAccount
     TCloudOffline: { async cleanupExpired() {} },
     TRoomPasskeys: {
       async authenticate(_service, chooseLink) {
+        calls.authenticate += 1;
         const link = { id: `cloud-${returnedAccountId}`, accountId: returnedAccountId, role: returnedAccountId === "folder-member" ? "member" : returnedAccountId, rootFolderId: returnedAccountId === "folder-member" ? 7 : null };
         const selected = chooseFromMultiple ? await chooseLink([
           { id: "cloud-admin", accountId: "admin", role: "admin", rootFolderId: null }, link
@@ -46,6 +47,7 @@ async function resumePasskeySession(accountId, prfOutput = null, returnedAccount
     },
     __api: async (path) => {
       if (path === "/session") return session;
+      if (path === "/crypto-config") return {initialized:true};
       if (path === "/passkey/handoff") {
         calls.handoff += 1;
         return session;
@@ -61,6 +63,8 @@ async function resumePasskeySession(accountId, prfOutput = null, returnedAccount
     },
     __showLoginError: (message) => calls.errors.push(message)
   };
+  context.__vaultFails = vaultFails;
+  context.__cached = cached;
   context.globalThis = context;
   vm.runInNewContext(`${source}\n
     bindEvents = () => {};
@@ -72,6 +76,8 @@ async function resumePasskeySession(accountId, prfOutput = null, returnedAccount
     showLoginError = globalThis.__showLoginError;
     enterApp = globalThis.__enterApp;
     api = globalThis.__api;
+    loadCachedPasskeyKeys = async () => globalThis.__cached;
+    if (globalThis.__vaultFails) openVaultCache = async () => { throw new Error("IndexedDBUnavailable"); };
     globalThis.__initialize = initialize;
     globalThis.__state = state;
   `, vm.createContext(context), { filename: "cloud.js" });
@@ -107,4 +113,16 @@ const multiple = await resumePasskeySession("folder-member", new Uint8Array(32),
 assert.equal(multiple.calls.handoff, 1, "複数候補では既存member linkだけを選ぶ");
 assert.equal(multiple.calls.enterApp[0].session.role, "member");
 
-process.stdout.write("Cloud passkey session resume PRF role boundary passed.\n");
+for (const account of ["admin", "folder-member"]) {
+ const resumed = await resumePasskeySession(account, null, account, false, {privateKey:"opaque-fixture"});
+ assert.equal(resumed.calls.authenticate, 0);
+ assert.equal(resumed.calls.handoff, 0);
+ assert.equal(resumed.calls.enterApp.length, 1);
+ assert.equal(resumed.calls.enterApp[0].session.sessionCacheId, "same-session");
+ const expired = await resumePasskeySession(account, null, account, false, {}, false);
+ assert.equal(expired.calls.enterApp.length, 0, "a cache cannot bypass an invalid server session");
+}
+const unavailable = await resumePasskeySession("admin", new Uint8Array(32), "admin", false, null, true, true);
+assert.equal(unavailable.calls.authenticate, 1);
+assert.equal(unavailable.calls.enterApp.length, 1, "IndexedDB failure must not prevent PRF login");
+process.stdout.write("Cloud passkey resume: cache skips WebAuthn/handoff and preserves session; PRF miss/role fallback passed.\n");

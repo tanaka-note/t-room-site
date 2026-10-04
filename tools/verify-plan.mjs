@@ -27,7 +27,7 @@ export function commands(target) {
       { cwd: '.', script: 'browser-policy:test' }
     ],
     cloud: tests('cloud-worker', ...[
-      'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'permission-guards', 'password-session-lifetime',
+      'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),

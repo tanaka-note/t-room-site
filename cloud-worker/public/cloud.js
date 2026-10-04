@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-848019817584";
+const APP_BUILD_ID = "cloud-f3877e28a447";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -170,21 +170,24 @@ async function initialize() {
   await restoreInstalledAppPortrait();
   updateInstallButtons();
   await restoreRememberedLogin();
+  const previousSessionId = startupPasskeySessionId();
   try {
     await clearLegacyPasskeyAdminKeys();
     if (globalThis.TCloudSession?.isBlocked()) { showLoginView(); showLoginError("別のタブでログイン状態が変わりました。利用するアカウントを選び直してください。"); return; }
     const session = await api("/session");
+    await cleanupPasskeyCaches(session.authenticated ? session : null, previousSessionId);
     if (session.authenticated) {
-      // A new tab (including one upgraded from an older client) has no saved
-      // selection. A shared passkey Cookie alone must not select its scope.
-      if (session.authMethod === "passkey" && globalThis.TCloudSession && !TCloudSession.context()) {
-        showLoginView();
-        showLoginError("利用するアカウントを選択してログインしてください。");
-        return;
-      }
       globalThis.TCloudSession?.bind(session, false);
       state.session = session;
       if (session.authMethod === "passkey") {
+        const config = await api("/crypto-config");
+        const cached = await loadCachedPasskeyKeys(session, config);
+        globalThis.TCloudSession?.check();
+        if (cached) {
+          await enterApp(session, "", null, { cached, config });
+          reportCompletedAppUpdate();
+          return;
+        }
         const authentication = await TRoomPasskeys.authenticate("cloud", (links) => resumePasskeyLink(links, session));
         resumePasskeyLink([authentication.link], session);
         requirePasskeyPrf(authentication);
@@ -205,6 +208,7 @@ async function initialize() {
       showLoginView();
     }
   } catch (error) {
+    if ([401, 419].includes(error.status) || state.session?.authMethod === "passkey") await clearCachedPasskeyKeys(state.session?.sessionCacheId || previousSessionId);
     if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
     state.session = null;
     showLoginView();
@@ -1165,7 +1169,10 @@ async function logout() {
   await api("/logout", { method: "POST", body: "{}" });
   await stopPictureInPicturePreview();
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
-  if (state.session?.authMethod === "passkey") await clearLegacyPasskeyAdminKeys();
+  if (state.session?.authMethod === "passkey") {
+    await clearCachedPasskeyKeys(state.session.sessionCacheId);
+    await clearLegacyPasskeyAdminKeys();
+  }
   else await clearCachedAdminKeys();
   releaseSessionState();
   globalThis.TCloudSession?.end();
@@ -1423,22 +1430,25 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
     syncAvailableActions();
     if (state.session.authMethod === "passkey") {
       const keys = passkeyContext?.tcloudKey || {};
+      const cached = passkeyContext?.cached;
+      if (cached && cached.binding !== passkeyCacheBinding(state.session, config)) throw new Error("端末内の暗号鍵を再確認してください。");
       if (state.session.role === "admin") {
-        if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
-        if (!keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
-        const privateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
+        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        if (!cached && !keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
+        const privateKey = cached?.privateKey || await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
         assertSelected();
         state.crypto.adminPrivateKey = privateKey;
-        // Passkey-unwrapped private keys remain in this document only.
+        await saveCachedPasskeyKeys(selectedSession, config, privateKey);
+        assertSelected();
         setCryptoStatus("暗号化鍵：パスキーで解除済み", true);
         return;
       }
       if (state.session.role === "member") {
-        if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
         const scopes = memberFolderScopes();
-        const wrappedKeys = keys.folder_keys_rsa || (keys.folder_key_rsa ? [{ ...scopes[0], wrappedKey: keys.folder_key_rsa.wrappedKey }] : []);
-        if (!keys.client_private_prf || !scopes.length || scopes.length !== wrappedKeys.length) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
-        const privateKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf);
+        const wrappedKeys = cached?.wrappedFolderKeys || keys.folder_keys_rsa || (keys.folder_key_rsa ? [{ ...scopes[0], wrappedKey: keys.folder_key_rsa.wrappedKey }] : []);
+        if ((!cached && !keys.client_private_prf) || !scopes.length || scopes.length !== wrappedKeys.length) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
+        const privateKey = cached?.privateKey || await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf);
         const unlocked = new Map();
         for (const scope of scopes) {
           const wrapped = wrappedKeys.find((item) => item.serviceLinkId === scope.serviceLinkId && Number(item.rootFolderId) === scope.rootFolderId);
@@ -1447,6 +1457,8 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
         }
         assertSelected();
         for (const [id, key] of unlocked) state.crypto.folderKeys.set(id, key);
+        await saveCachedPasskeyKeys(selectedSession, config, privateKey, wrappedKeys);
+        assertSelected();
         setCryptoStatus("暗号化鍵：パスキーで解除済み", true);
         return;
       }
@@ -1554,6 +1566,137 @@ function vaultCacheKey(config) {
   return `${state.loginId}:${String(config?.createdAt || "v1")}`;
 }
 
+function passkeyCacheBinding(session, config) {
+  if (session?.authMethod !== "passkey" || !["admin", "member"].includes(session.role)
+    || !session.sessionCacheId || !session.identityId || !session.credentialId || !session.serviceLinkId
+    || !session.serviceAccountId || !session.sessionVersion || !session.passkeySessionEpoch
+    || !config?.initialized) return "";
+  if (session.role === "admin" && (session.rootFolderId != null || session.folderScopes?.length)) return "";
+  if (session.role === "member" && !validWrappedFolderScopes(memberFolderScopes(session))) return "";
+  return JSON.stringify([1, session.sessionCacheId, session.credentialId, session.identityId, "passkey",
+    session.role, session.serviceAccountId, session.serviceLinkId, session.cloudScopeId,
+    session.rootFolderId ?? null, session.role === "member" ? memberFolderScopes(session) : [], session.sessionVersion, session.passkeySessionEpoch,
+    config.cryptoVersion, config.createdAt, config.publicKeyJwk]);
+}
+
+function validPasskeyPrivateKey(key) {
+  return key instanceof CryptoKey && key.type === "private" && key.extractable === false
+    && key.algorithm.name === "RSA-OAEP" && key.algorithm.hash.name === "SHA-256"
+    && key.usages.length === 1 && key.usages[0] === "decrypt";
+}
+
+async function passkeyCacheOperation(mode, operation) {
+  let database;
+  try {
+    database = await openVaultCache();
+    if (!database) return null;
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction(VAULT_CACHE_STORE, mode);
+      const request = operation(transaction.objectStore(VAULT_CACHE_STORE));
+      transaction.oncomplete = () => resolve(request.result || null);
+      transaction.onerror = transaction.onabort = () => reject(transaction.error);
+    });
+  } catch { return null; }
+  finally { database?.close(); }
+}
+
+async function loadCachedPasskeyKeys(session, config) {
+  const binding = passkeyCacheBinding(session, config);
+  if (!binding || !(session.expiresAt * 1000 > Date.now())) return null;
+  const record = await passkeyCacheOperation("readonly", store => store.get(`passkey-session:${session.sessionCacheId}`));
+  try {
+    if (!record || record.cacheType !== "passkey-session" || record.binding !== binding
+      || !Number.isSafeInteger(record.expiresAt) || !validPasskeyPrivateKey(record.privateKey)) throw new Error("CacheMismatch");
+    // Verify the opaque key before app entry; corrupt records fall back to PRF.
+    if (session.role === "admin") {
+      const publicKey = await crypto.subtle.importKey("jwk", config.publicKeyJwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      const encrypted = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, challenge);
+      const plain = new Uint8Array(await crypto.subtle.decrypt({ name: "RSA-OAEP" }, record.privateKey, encrypted));
+      if (!plain.every((value, index) => value === challenge[index]) || plain.length !== challenge.length) throw new Error("CacheCorrupt");
+    } else {
+      const scopes = memberFolderScopes(session);
+      if (!validWrappedFolderScopes(record.wrappedFolderKeys) || record.wrappedFolderKeys.length !== scopes.length) throw new Error("CacheMismatch");
+      for (const scope of scopes) {
+        const wrapped = record.wrappedFolderKeys.find(item => item.serviceLinkId === scope.serviceLinkId && item.rootFolderId === scope.rootFolderId);
+        if (!wrapped?.wrappedKey) throw new Error("CacheMismatch");
+        await TRoomCrypto.unlockDelegatedFolderKey(record.privateKey, wrapped.wrappedKey);
+      }
+    }
+    await updateCachedPasskeyExpiry(session.sessionCacheId, session.expiresAt);
+    return { ...record, expiresAt: session.expiresAt };
+  } catch {
+    await clearCachedPasskeyKeys(session.sessionCacheId);
+    return null;
+  }
+}
+
+function validWrappedFolderScopes(scopes) {
+  return Array.isArray(scopes) && scopes.length > 0 && scopes.length <= 16
+    && scopes.every(item => typeof item?.serviceLinkId === "string" && item.serviceLinkId
+      && Number.isSafeInteger(item.rootFolderId) && item.rootFolderId > 0)
+    && new Set(scopes.map(item => item.serviceLinkId)).size === scopes.length
+    && new Set(scopes.map(item => item.rootFolderId)).size === scopes.length;
+}
+
+async function saveCachedPasskeyKeys(session, config, privateKey, wrappedFolderKeys = null) {
+  const binding = passkeyCacheBinding(session, config);
+  if (!binding || !validPasskeyPrivateKey(privateKey) || !(session.expiresAt * 1000 > Date.now())) return;
+  const scopes = memberFolderScopes(session);
+  if (session.role === "member" && (!validWrappedFolderScopes(wrappedFolderKeys) || wrappedFolderKeys.length !== scopes.length
+    || !scopes.every(scope => wrappedFolderKeys.some(item => item.serviceLinkId === scope.serviceLinkId && item.rootFolderId === scope.rootFolderId && typeof item.wrappedKey === "string")))) return;
+  globalThis.TCloudSession?.check();
+  await passkeyCacheOperation("readwrite", store => {
+    const key = "passkey-session:" + session.sessionCacheId, request = store.get(key);
+    request.onsuccess = () => {
+      globalThis.TCloudSession?.check();
+      const existing = request.result;
+      store.put({ cacheType: "passkey-session", binding, privateKey,
+        wrappedFolderKeys: session.role === "member" ? scopes.map(scope => ({ ...scope, wrappedKey: wrappedFolderKeys.find(item => item.serviceLinkId === scope.serviceLinkId && item.rootFolderId === scope.rootFolderId).wrappedKey })) : null,
+        sessionCacheId: session.sessionCacheId, expiresAt: Math.max(session.expiresAt, existing?.binding === binding ? existing.expiresAt || 0 : 0) }, key);
+    };
+    return request;
+  });
+}
+
+async function updateCachedPasskeyExpiry(sessionCacheId, expiresAt) {
+  if (!sessionCacheId || !Number.isSafeInteger(expiresAt) || expiresAt * 1000 <= Date.now()) return;
+  await passkeyCacheOperation("readwrite", store => {
+    const key = "passkey-session:" + sessionCacheId, request = store.get(key);
+    request.onsuccess = () => {
+      const record = request.result;
+      if (record?.cacheType === "passkey-session" && record.sessionCacheId === sessionCacheId)
+        store.put({ ...record, expiresAt: Math.max(record.expiresAt || 0, expiresAt) }, key);
+    };
+    return request;
+  });
+}
+
+function startupPasskeySessionId() {
+  try { return globalThis.TCloudSession?.context()?.sessionCacheId || localStorage.getItem("tcloud-current-session-v1"); }
+  catch { return null; }
+}
+
+async function cleanupPasskeyCaches(session, previousSessionId) {
+  if (!session?.authenticated && previousSessionId) await clearCachedPasskeyKeys(previousSessionId);
+  await passkeyCacheOperation("readwrite", store => {
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const record = cursor.value;
+      if (record?.cacheType === "passkey-session" && record.sessionCacheId !== session?.sessionCacheId
+        && (!Number.isSafeInteger(record.expiresAt) || record.expiresAt * 1000 <= Date.now())) cursor.delete();
+      cursor.continue();
+    };
+    return request;
+  });
+}
+
+async function clearCachedPasskeyKeys(sessionCacheId) {
+  if (sessionCacheId) await passkeyCacheOperation("readwrite", store => store.delete(`passkey-session:${sessionCacheId}`));
+}
+
 function openVaultCache() {
   if (!globalThis.indexedDB) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
@@ -1627,7 +1770,8 @@ async function clearCachedAdminKeys() {
 // Legacy passkey cache keys were generated only from passkey:<identityId>.
 // Folder-session keys and password-login keys are deliberately left intact.
 async function clearLegacyPasskeyAdminKeys() {
-  const database = await openVaultCache();
+  let database;
+  try { database = await openVaultCache(); } catch { return; }
   if (!database) return;
   try {
     await new Promise((resolve, reject) => {
@@ -1649,6 +1793,7 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  if (state.session?.authMethod === "passkey") void clearCachedPasskeyKeys(state.session.sessionCacheId);
   clearTimeout(favoriteSelectionTimer);
   favoriteSelection = { key: "", ready: false, all: false, busy: false };
   state.thumbnailMaintenance?.controller.abort();
@@ -1679,6 +1824,12 @@ function releaseSessionState() {
   showLoginView();
 }
 globalThis.addEventListener?.("tcloud-session-invalid", releaseSessionState);
+globalThis.addEventListener?.("tcloud-session-renewed", event => {
+  if (state.session?.sessionCacheId === event.detail.sessionCacheId) {
+    state.session.expiresAt = event.detail.expiresAt;
+    if (state.session.authMethod === "passkey") void updateCachedPasskeyExpiry(event.detail.sessionCacheId, event.detail.expiresAt);
+  }
+});
 
 function folderCacheKey(folderId) {
   return `${FOLDER_CACHE_PREFIX}${String(state.session?.sessionCacheId || "")}:${Number(folderId)}`;
@@ -6687,6 +6838,7 @@ function uploadPartRequest(path, body, signal, onProgress) {
       cleanup();
       try {
         if (TCloudSession.check() !== expected || [401, 419].includes(request.status)) { TCloudSession.invalidate(); throw new Error("ログイン状態が変わりました。"); }
+        if (request.status >= 200 && request.status < 300) TCloudSession.renew(request.getResponseHeader("X-TCloud-Session"), Number(request.getResponseHeader("X-TCloud-Session-Expires")));
       } catch (error) { reject(error); return; }
       const data = request.response && typeof request.response === "object" ? request.response : null;
       if (request.status >= 200 && request.status < 300) {

@@ -7,6 +7,7 @@ import {
   sessionCookieValue,
   sessionExpiresAt,
   sessionPolicyForAuthMethod,
+  cloudSessionPolicyForAuthMethod,
   shouldRefreshSession
 } from "../../assets/session-policy.mjs";
 
@@ -34,7 +35,14 @@ test("passkey TTL configuration fails safe at twelve hours", () => {
   assert.equal(sessionPolicyForAuthMethod({ PASSKEY_SESSION_TTL_SECONDS: "60" }, "passkey").ttlSeconds, 900);
 });
 
-test("all passkey services declare the short policy and no passkey rolling path", async () => {
+test("only the explicit Cloud passkey policy opts into persistent rolling sessions", () => {
+  assert.deepEqual(cloudSessionPolicyForAuthMethod({}, "passkey"), {authMethod:"passkey",ttlSeconds:43200,persistent:true,rolling:true});
+  assert.deepEqual(cloudSessionPolicyForAuthMethod({}, "password", 43200), sessionPolicyForAuthMethod({}, "password", 43200));
+  assert.equal(sessionPolicyForAuthMethod({}, "passkey").rolling, false);
+  assert.equal(cloudSessionPolicyForAuthMethod({PASSKEY_SESSION_TTL_SECONDS:"900"}, "passkey").ttlSeconds, 43200);
+});
+
+test("all passkey services declare twelve hours; Cloud explicitly selects its rolling policy", async () => {
   const root = new URL("../../", import.meta.url);
   const paths = [
     "diary-worker/wrangler.jsonc", "billing-worker/wrangler.jsonc", "cloud-worker/wrangler.jsonc", "ai-worker/wrangler.jsonc"
@@ -45,7 +53,7 @@ test("all passkey services declare the short policy and no passkey rolling path"
   }
   for (const path of ["diary-worker/src/index.js", "billing-worker/src/index.js", "cloud-worker/src/index.js"]) {
     const source = await readFile(new URL(path, root), "utf8");
-    assert.match(source, /shouldRefreshSession\(session\)/, path);
+    assert.match(source, path.startsWith("cloud") ? /cloudSessionPolicyForAuthMethod/ : /shouldRefreshSession\(session\)/, path);
     assert.match(source, /sessionPolicyForAuthMethod/, path);
     assert.match(source, /expiresAt: session\.exp/, `${path}: fixed expiry must be reported to active-session tracking`);
   }

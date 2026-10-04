@@ -1767,7 +1767,7 @@ async function assertSessionRefreshPolicies(passkeyCookies, passwordCookies) {
     const passkeyResponse = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
       headers: { Cookie: `${service.cookie}=${passkeyCookies[name]}` }
     });
-    assert.equal(passkeyResponse.status, 200, `${name} passkey session remains usable inside its absolute TTL`);
+    assert.equal(passkeyResponse.status, 200, `${name} passkey session remains usable inside its TTL without foreground renewal`);
     assert.equal(passkeyResponse.headers.get("set-cookie"), null, `${name} does not roll or reissue a passkey session`);
     assert.equal(decodeSignedPayload(passkeyCookies[name]).exp, passkeyPayload.exp);
 
@@ -1794,7 +1794,7 @@ function createServiceCookies(authMethod, diaryVersion, billingVersion, passkeyS
   const exp = Math.floor(Date.now() / 1000) + 3600;
   const auth = authMethod === "passkey" ? { identityId, credentialId, authMethod, passkeySessionEpoch }
     : { authMethod, startedAt: new Date().toISOString(), ...passwordLifetimeClaims({ authMethod }) };
-  return {
+  const cookies = {
     cloud: signCookie({
       role: "admin", sessionId: randomUUID(), exp, version: services.cloud.version,
       ...auth, serviceLinkId: authMethod === "passkey" ? (linkOverrides.cloud || services.cloud.linkId) : null,
@@ -1813,6 +1813,18 @@ function createServiceCookies(authMethod, diaryVersion, billingVersion, passkeyS
       serviceAccountId: authMethod === "passkey" ? services.billing.accountId : null
     })
   };
+  if (authMethod === "passkey") {
+    const payload = decodeSignedPayload(cookies.cloud);
+    const hash = createHmac("sha256", sessionSecret).update(payload.sessionId).digest("base64url");
+    // Synthetic signed tokens now need the same server ledger as real handoffs.
+    runSecuritySql(`INSERT INTO security_active_sessions
+      (session_id_hash,identity_id,service,service_link_id,service_account_id,credential_id,role,
+       auth_method,session_version,passkey_session_epoch,started_at,last_seen_at,expires_at)
+      VALUES ('${hash}','${identityId}','cloud','${payload.serviceLinkId}','admin','${credentialId}',
+        'admin','passkey','${services.cloud.version}',${passkeySessionEpoch},'${new Date().toISOString()}',
+        '${new Date().toISOString()}',${exp})`);
+  }
+  return cookies;
 }
 
 function signCookie(payload) {
