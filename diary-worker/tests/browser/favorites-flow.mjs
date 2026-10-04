@@ -46,6 +46,11 @@ let paginationOffsets = [];
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
+  if (url.pathname === "/other-page/") {
+    response.writeHead(200, { "content-type": contentTypes[".html"] });
+    response.end("<!doctype html><title>Other page</title>");
+    return;
+  }
   if (url.pathname.startsWith("/diary/api/")) {
     const apiPath = url.pathname.slice("/diary/api".length);
     if (apiPath === "/session") return sendJson(response, {
@@ -196,18 +201,41 @@ async function run(browserType, name, executablePath, contextOptions = {}) {
     assert.equal(await favoriteLink.getAttribute("aria-current"), null, `${name}: 日記ではオフ`);
     await page.click("#previous-month-button");
     const originalHeading = await page.locator("#diary-recent-title").textContent();
-    await favoriteLink.click();
+    await page.evaluate(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      document.querySelector("#favorites-link").click();
+    });
     await page.waitForURL(/\/diary\/favorites\/?$/);
     await page.waitForSelector('#favorites-link[aria-current="page"]');
+    const originalPosition = await page.evaluate(() => JSON.parse(sessionStorage.getItem("troom-diary-return-view-v1")).position);
+    assert.ok(originalPosition.scrollY > 0, `${name}: 復元対象のスクロール位置`);
     assert.equal(await favoriteLink.getAttribute("href"), "/diary/", `${name}: オンでは日記へ戻るリンク`);
     const onColor = await favoriteLink.evaluate((link) => getComputedStyle(link).backgroundColor);
     assert.notEqual(onColor, offColor, `${name}: オンとオフの背景色を区別`);
     await favoriteLink.click();
     await page.waitForURL(/\/diary\/?$/);
     await page.waitForFunction((heading) => document.querySelector("#diary-recent-title")?.textContent === heading, originalHeading);
+    await page.waitForFunction((position) => Math.abs(window.scrollY - position.scrollY) <= 3, originalPosition);
     await page.mouse.move(0, 0);
     assert.equal(await favoriteLink.getAttribute("aria-current"), null, `${name}: 再押下で解除`);
     assert.equal(await favoriteLink.evaluate((link) => getComputedStyle(link).backgroundColor), offColor, `${name}: 解除後の色`);
+
+    // 同じPageで保存したreturn viewを残したまま、お気に入りへ直接アクセスする。
+    await favoriteLink.click();
+    await page.waitForURL(/\/diary\/favorites\/?$/);
+    await page.waitForSelector('#favorites-link[aria-current="page"]');
+    const staleReturnView = await page.evaluate(() => sessionStorage.getItem("troom-diary-return-view-v1"));
+    assert.equal(JSON.parse(staleReturnView).routePath, "/diary/", `${name}: 古い日記の戻り先`);
+    await page.goto(`${origin}/other-page/`, { waitUntil: "networkidle" });
+    await page.goto(`${origin}/diary/favorites/`, { waitUntil: "networkidle" });
+    await page.waitForSelector('#favorites-link[aria-current="page"]');
+    assert.equal(await page.evaluate(() => sessionStorage.getItem("troom-diary-return-view-v1")), staleReturnView, `${name}: 同じタブに古いreturn viewが残る`);
+    await Promise.all([
+      page.waitForURL((url) => url.pathname !== "/diary/favorites/"),
+      favoriteLink.click()
+    ]);
+    assert.equal(new URL(page.url()).pathname, "/diary/", `${name}: 直接アクセス後の再押下で別ページへ戻らない`);
+    await page.waitForSelector("#app-view:not([hidden])");
 
     await favoriteLink.click();
     await page.waitForURL(/\/diary\/favorites\/?$/);
