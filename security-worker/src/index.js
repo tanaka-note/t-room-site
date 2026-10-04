@@ -473,7 +473,13 @@ async function createHandoff(request, env) {
   const service = normalizeService(body.service);
   const links = await activeLinks(env, identitySession.identityId, service, identitySession.credentialId);
   if (!links.length) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
-  const selected = body.linkId ? links.find((link) => link.id === body.linkId) : (links.length === 1 ? links[0] : null);
+  // This reserved selection represents ordinary Cloud use, never an admin link.
+  const memberMode = service === "cloud" && body.linkId === "cloud-member";
+  const members = memberMode ? links.filter((link) => link.service_account_id === "folder-member") : [];
+  const folderScopes = memberMode ? normalizeCloudFolderScopes(members.map((link) => ({ serviceLinkId: link.id, rootFolderId: Number(link.cloud_root_folder_id) }))) : null;
+  if (memberMode && !folderScopes) throw new HttpError(409, "通常利用のフォルダ連携を確認できません。");
+  const selected = memberMode ? members.find((link) => link.id === folderScopes[0].serviceLinkId)
+    : body.linkId ? links.find((link) => link.id === body.linkId) : (links.length === 1 ? links[0] : null);
   if (!selected) throw new HttpError(409, "利用するアカウントを選択してください。");
   const envelopes = service === "cloud"
     ? await tcloudEnvelopeBundle(env, identitySession.identityId, identitySession.credentialId, selected.id, selected.service_account_id)
@@ -484,11 +490,21 @@ async function createHandoff(request, env) {
       : selected.service_account_id === "folder-member" && Boolean(envelopes.client_private_prf && envelopes.folder_key_rsa);
     if (!ready) throw new HttpError(409, "この端末ではT-Cloudのパスキー復号準備が完了していません。従来のID・パスワードをご利用ください。");
   }
+  if (folderScopes) {
+    const folderKeys = [];
+    for (const scope of folderScopes) {
+      const bundle = await tcloudEnvelopeBundle(env, identitySession.identityId, identitySession.credentialId, scope.serviceLinkId, "folder-member");
+      if (!bundle.client_private_prf || !bundle.folder_key_rsa) throw new HttpError(409, "フォルダの鍵委譲を確認できません。");
+      folderKeys.push({ ...scope, wrappedKey: bundle.folder_key_rsa.wrappedKey });
+    }
+    envelopes.folder_keys_rsa = folderKeys;
+    delete envelopes.folder_key_rsa;
+  }
   const rawToken = randomToken(32);
   await env.DB.prepare(`INSERT INTO security_handoffs
-    (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(crypto.randomUUID(), await sha256(rawToken), identitySession.identityId, selected.id, identitySession.credentialId, runtime.epoch, nowSeconds() + HANDOFF_TTL_SECONDS).run();
+    (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at, cloud_folder_scopes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(crypto.randomUUID(), await sha256(rawToken), identitySession.identityId, selected.id, identitySession.credentialId, runtime.epoch, nowSeconds() + HANDOFF_TTL_SECONDS, folderScopes ? JSON.stringify(folderScopes) : null).run();
   return json({ handoffToken: rawToken, link: await publicLink(env, selected), tcloudKey: envelopes });
 }
 
@@ -802,6 +818,11 @@ async function activeSessionState(env, identityId = null) {
       if (!globalRuntime.enabled || runtime.passkeyEnabled !== true) continue;
       if (Number(row.passkey_session_epoch) !== Number(globalRuntime.epoch)) continue;
       if (row.credential_status !== "active" || row.link_status !== "active") continue;
+    }
+    if (row.cloud_folder_scopes != null) {
+      const scopes = normalizeCloudFolderScopes(parseJson(row.cloud_folder_scopes, null));
+      if (row.service !== "cloud" || row.auth_method !== "passkey" || row.service_account_id !== "folder-member" || !scopes
+        || !await validCloudFolderScopes(env, row.identity_id, row.credential_id, scopes, row.service_link_id, scopes[0].rootFolderId)) continue;
     }
     validRows.push(row);
   }
@@ -1347,7 +1368,7 @@ async function redeemHandoff(env, token, service) {
   const tokenHash = await sha256(normalizeSecretText(token, 512));
   if (!normalizedService || !tokenHash) return null;
   const now = nowSeconds();
-  const row = await env.DB.prepare(`SELECT h.id, h.identity_id, h.credential_id, i.display_name AS identityDisplayName,
+  const row = await env.DB.prepare(`SELECT h.id, h.identity_id, h.credential_id, h.cloud_folder_scopes, i.display_name AS identityDisplayName,
       l.id AS serviceLinkId, l.service, l.service_account_id AS serviceAccountId,
       l.cloud_root_folder_id AS cloudRootFolderId, l.display_label AS displayLabel
     FROM security_handoffs h JOIN security_service_links l ON l.id = h.service_link_id AND l.identity_id = h.identity_id
@@ -1357,9 +1378,11 @@ async function redeemHandoff(env, token, service) {
       AND l.service = ? AND l.status = 'active' AND i.status = 'active' AND c.status = 'active'`)
     .bind(tokenHash, now, runtime.epoch, normalizedService).first();
   if (!row || (row.service === "cloud" && row.serviceAccountId === "subadmin")) return null;
+  const folderScopes = row.cloud_folder_scopes == null ? null : normalizeCloudFolderScopes(parseJson(row.cloud_folder_scopes, null));
+  if (row.cloud_folder_scopes != null && (!folderScopes || !await validCloudFolderScopes(env, row.identity_id, row.credential_id, folderScopes, row.serviceLinkId, row.cloudRootFolderId))) return null;
   const update = await env.DB.prepare("UPDATE security_handoffs SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(now, row.id).run();
   if (!update.meta?.changes) return null;
-  return { identityId: row.identity_id, identityDisplayName: row.identityDisplayName, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel, sessionEpoch: runtime.epoch };
+  return { identityId: row.identity_id, identityDisplayName: row.identityDisplayName, credentialId: row.credential_id, serviceLinkId: row.serviceLinkId, service: row.service, serviceAccountId: row.serviceAccountId, cloudRootFolderId: row.cloudRootFolderId == null ? null : Number(row.cloudRootFolderId), displayLabel: row.displayLabel, sessionEpoch: runtime.epoch, ...(folderScopes ? { folderScopes, cloudScopeId: row.id } : {}) };
 }
 
 async function validatePasskeySession(env, input) {
@@ -1380,7 +1403,37 @@ async function validatePasskeySession(env, input) {
     WHERE c.credential_id = ? AND c.identity_id = ? AND c.status = 'active'
       AND i.status = 'active' AND l.id = ? AND l.service = ? AND l.status = 'active'`)
     .bind(runtime.epoch, credentialId, identityId, serviceLinkId, service).first();
-  return { valid: passkeySessionStateMatches({ ...input, identityId, credentialId, serviceLinkId, service, serviceAccountId, sessionEpoch }, row, runtime.enabled) };
+  let valid = passkeySessionStateMatches({ ...input, identityId, credentialId, serviceLinkId, service, serviceAccountId, sessionEpoch }, row, runtime.enabled);
+  let folderScopes = input.folderScopes == null ? null : normalizeCloudFolderScopes(input.folderScopes);
+  if (input.cloudScopeId != null) {
+    const snapshot = await env.DB.prepare("SELECT cloud_folder_scopes FROM security_handoffs WHERE id = ? AND identity_id = ? AND credential_id = ? AND service_link_id = ? AND session_epoch = ? AND consumed_at IS NOT NULL")
+      .bind(normalizeId(input.cloudScopeId), identityId, credentialId, serviceLinkId, sessionEpoch).first();
+    folderScopes = normalizeCloudFolderScopes(parseJson(snapshot?.cloud_folder_scopes, null));
+  }
+  if (input.folderScopes != null || input.cloudScopeId != null) {
+    valid = valid && service === "cloud" && serviceAccountId === "folder-member" && Boolean(folderScopes)
+      && await validCloudFolderScopes(env, identityId, credentialId, folderScopes, serviceLinkId, input.cloudRootFolderId);
+  }
+  return { valid, ...(valid && folderScopes ? { folderScopes } : {}) };
+}
+
+function normalizeCloudFolderScopes(value) {
+  if (!Array.isArray(value) || !value.length || value.length > 16) return null;
+  const ids = new Set(), roots = new Set();
+  const scopes = [];
+  for (const item of value) {
+    const serviceLinkId = normalizeId(item?.serviceLinkId), rootFolderId = Number(item?.rootFolderId);
+    if (!serviceLinkId || !Number.isSafeInteger(rootFolderId) || rootFolderId <= 0 || ids.has(serviceLinkId) || roots.has(rootFolderId)) return null;
+    ids.add(serviceLinkId); roots.add(rootFolderId); scopes.push({ serviceLinkId, rootFolderId });
+  }
+  return scopes.sort((a, b) => a.rootFolderId - b.rootFolderId);
+}
+
+async function validCloudFolderScopes(env, identityId, credentialId, scopes, anchorId, anchorRoot) {
+  if (scopes[0].serviceLinkId !== anchorId || scopes[0].rootFolderId !== Number(anchorRoot)) return false;
+  const links = await activeLinks(env, identityId, "cloud", credentialId);
+  return scopes.every((scope) => links.some((link) => link.id === scope.serviceLinkId
+    && link.service_account_id === "folder-member" && Number(link.cloud_root_folder_id) === scope.rootFolderId));
 }
 
 async function registrationOptions(env, identityId, displayName, excludeCredentials) {
@@ -1964,8 +2017,9 @@ function activeSessionStatements(env, event) {
   const startedAt = validSessionStart(event.startedAt);
   return [env.DB.prepare(`INSERT INTO security_active_sessions
     (session_id_hash, identity_id, service, service_link_id, service_account_id, credential_id, role,
-      auth_method, session_version, passkey_session_epoch, started_at, last_seen_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      auth_method, session_version, passkey_session_epoch, started_at, last_seen_at, expires_at, cloud_folder_scopes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      (SELECT cloud_folder_scopes FROM security_handoffs WHERE id = ? AND identity_id = ? AND credential_id = ? AND service_link_id = ?))
     ON CONFLICT(session_id_hash) DO UPDATE SET
       identity_id = excluded.identity_id, service = excluded.service,
       service_link_id = COALESCE(excluded.service_link_id, security_active_sessions.service_link_id),
@@ -1974,6 +2028,7 @@ function activeSessionStatements(env, event) {
       role = COALESCE(excluded.role, security_active_sessions.role), auth_method = excluded.auth_method,
       session_version = excluded.session_version,
       passkey_session_epoch = COALESCE(excluded.passkey_session_epoch, security_active_sessions.passkey_session_epoch),
+      cloud_folder_scopes = COALESCE(excluded.cloud_folder_scopes, security_active_sessions.cloud_folder_scopes),
       started_at = CASE WHEN COALESCE(julianday(security_active_sessions.started_at), 0) <= 2440587.5
         AND security_active_sessions.identity_id = excluded.identity_id
         AND security_active_sessions.service = excluded.service
@@ -1982,7 +2037,7 @@ function activeSessionStatements(env, event) {
       ended_at = NULL, end_reason = NULL, updated_at = CURRENT_TIMESTAMP`)
     .bind(event.sessionIdHash, event.identityId, event.service, event.serviceLinkId, event.serviceAccountId,
       event.credentialId, event.role, event.authMethod, event.sessionVersion, event.passkeySessionEpoch,
-      startedAt, event.occurredAt, event.expiresAt)];
+      startedAt, event.occurredAt, event.expiresAt, event.service === "cloud" && event.authMethod === "passkey" ? event.details.cloudScopeId || null : null, event.identityId, event.credentialId, event.serviceLinkId)];
 }
 
 function endActiveSessionsStatement(env, reason, filter) {
@@ -1991,8 +2046,10 @@ function endActiveSessionsStatement(env, reason, filter) {
   const columns = { sessionIdHash: "session_id_hash", identityId: "identity_id", serviceLinkId: "service_link_id", credentialId: "credential_id", authMethod: "auth_method" };
   for (const [key, column] of Object.entries(columns)) {
     if (filter?.[key] == null) continue;
-    clauses.push(`${column} = ?`);
-    bindings.push(filter[key]);
+    if (key === "serviceLinkId") {
+      clauses.push("(service_link_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(cloud_folder_scopes, '[]')) scope WHERE json_extract(scope.value, '$.serviceLinkId') = ?))");
+      bindings.push(filter[key], filter[key]);
+    } else { clauses.push(`${column} = ?`); bindings.push(filter[key]); }
   }
   return env.DB.prepare(`UPDATE security_active_sessions SET ended_at = ?, end_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE ${clauses.join(" AND ")}`).bind(...bindings);
 }

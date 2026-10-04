@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-bb654832ec3f";
+const APP_BUILD_ID = "cloud-848019817584";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -1056,20 +1056,61 @@ function requirePasskeyPrf(authentication) {
   }
 }
 
+function ordinaryPasskeyLink(links) {
+  const members = links.filter((link) => link.accountId === "folder-member").sort((a, b) => Number(a.rootFolderId) - Number(b.rootFolderId));
+  if (!members.length) return null;
+  return { ...members[0], id: "cloud-member", accountDisplayName: "通常利用", displayLabel: "通常利用",
+    roleLabel: "承認されたフォルダを利用", scopeLabel: null,
+    folderScopes: members.map((link) => ({ serviceLinkId: link.id, rootFolderId: Number(link.rootFolderId) })) };
+}
+
 async function choosePasskeyLink(links) {
-  const dialogLinks = links.map((link) => ({
-    ...link,
-    displayLabel: link.accountDisplayName || link.displayLabel,
-    roleLabel: link.accountId === "admin" ? "T-Cloud全体を管理" : `${link.displayLabel}フォルダーを利用`,
-    scopeLabel: null
-  }));
-  const selection = TRoomPasskeys.chooseLinkDialog(dialogLinks, "cloud");
+  const ordinary = ordinaryPasskeyLink(links);
+  const admins = links.filter((link) => link.accountId === "admin").map((link) => ({ ...link,
+    accountDisplayName: "管理者として利用", displayLabel: "管理者として利用", roleLabel: "T-Cloud全体を管理", scopeLabel: null }));
+  if (!admins.length && ordinary) return ordinary;
+  const selection = TRoomPasskeys.chooseLinkDialog([...admins, ...(ordinary ? [ordinary] : [])], "cloud");
   const title = document.querySelector("#troom-passkey-account-title");
   if (title) title.textContent = "T-Cloudを開く方法を選択";
-  return selection;
+  const dialog = title?.closest("dialog");
+  if (!dialog) return selection;
+  const marker = crypto.randomUUID();
+  history.pushState({ ...history.state, tcloudLoginMode: marker }, "", location.href);
+  const cancel = () => dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+  const back = (event) => { event.stopImmediatePropagation(); cancel(); };
+  const outside = (event) => {
+    const rect = dialog.getBoundingClientRect();
+    return event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
+  };
+  let pointer = null;
+  dialog.addEventListener("pointerdown", (event) => { pointer = outside(event) ? event.pointerId : null; });
+  dialog.addEventListener("pointercancel", () => { pointer = null; });
+  dialog.addEventListener("pointerup", (event) => {
+    const dismiss = pointer === event.pointerId && outside(event);
+    pointer = null;
+    if (dismiss) { event.preventDefault(); event.stopPropagation(); cancel(); }
+  });
+  window.addEventListener("popstate", back, true);
+  try { return await selection; }
+  finally {
+    window.removeEventListener("popstate", back, true);
+    if (history.state?.tcloudLoginMode === marker) {
+      await new Promise((resolve) => {
+        const finish = (event) => { event?.stopImmediatePropagation(); clearTimeout(timer); window.removeEventListener("popstate", finish, true); resolve(); };
+        const timer = window.setTimeout(() => finish(), 1000);
+        window.addEventListener("popstate", finish, true);
+        history.back();
+      });
+    }
+  }
 }
 
 function resumePasskeyLink(links, session) {
+  if (session.folderScopes) {
+    const ordinary = links.find((link) => link.id === "cloud-member") || ordinaryPasskeyLink(links);
+    if (!ordinary || JSON.stringify(ordinary.folderScopes) !== JSON.stringify(session.folderScopes)) throw new Error("前回の利用範囲を再開できません。ログイン画面から選び直してください。");
+    return ordinary;
+  }
   const link = links.find((item) => item?.id === session.serviceLinkId
     && item.accountId === session.serviceAccountId
     && item.role === session.role
@@ -1394,11 +1435,18 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
       }
       if (state.session.role === "member") {
         if (!passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
-        if (!keys.client_private_prf || !keys.folder_key_rsa || !state.session.rootFolderId) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
+        const scopes = memberFolderScopes();
+        const wrappedKeys = keys.folder_keys_rsa || (keys.folder_key_rsa ? [{ ...scopes[0], wrappedKey: keys.folder_key_rsa.wrappedKey }] : []);
+        if (!keys.client_private_prf || !scopes.length || scopes.length !== wrappedKeys.length) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
         const privateKey = await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf);
-        const folderKey = await TRoomCrypto.unlockDelegatedFolderKey(privateKey, keys.folder_key_rsa.wrappedKey);
+        const unlocked = new Map();
+        for (const scope of scopes) {
+          const wrapped = wrappedKeys.find((item) => item.serviceLinkId === scope.serviceLinkId && Number(item.rootFolderId) === scope.rootFolderId);
+          if (!wrapped?.wrappedKey) throw new Error("フォルダの鍵委譲を確認できません。");
+          unlocked.set(scope.rootFolderId, await TRoomCrypto.unlockDelegatedFolderKey(privateKey, wrapped.wrappedKey));
+        }
         assertSelected();
-        state.crypto.folderKeys.set(Number(state.session.rootFolderId), folderKey);
+        for (const [id, key] of unlocked) state.crypto.folderKeys.set(id, key);
         setCryptoStatus("暗号化鍵：パスキーで解除済み", true);
         return;
       }
@@ -2199,18 +2247,25 @@ function clearDeniedSearchResults(error) {
   return true;
 }
 
-function memberCacheScope() {
-  const session = state.session;
-  if (session?.role !== "member" || session.serviceAccountId !== "folder-member"
-    || !session.serviceLinkId || !session.sessionCacheId
-    || !Number.isSafeInteger(session.rootFolderId) || session.rootFolderId <= 0) return "";
-  return `member:${session.serviceLinkId}:${session.rootFolderId}:${session.sessionCacheId}`;
+function memberFolderScopes(session = state.session) {
+  if (session?.role !== "member") return [];
+  return session.folderScopes || [{ serviceLinkId: session.serviceLinkId, rootFolderId: Number(session.rootFolderId) }];
 }
 
-function offlineAccountScope() {
+function memberCacheScope() {
+  const session = state.session;
+  if (session?.role !== "member" || session.serviceAccountId !== "folder-member" || !session.sessionCacheId) return "";
+  const scopes = memberFolderScopes();
+  if (!scopes.length || scopes.some((scope) => !scope.serviceLinkId || !Number.isSafeInteger(scope.rootFolderId) || scope.rootFolderId <= 0)) return "";
+  return session.folderScopes ? `member:${JSON.stringify(scopes)}:${session.sessionCacheId}`
+    : `member:${session.serviceLinkId}:${session.rootFolderId}:${session.sessionCacheId}`;
+}
+
+function offlineAccountScope(rootFolderId = Number(state.breadcrumbs[0]?.id || state.session?.rootFolderId)) {
   if (state.session?.role === "member") {
     if (!memberCacheScope()) return "";
-    return `member:${state.session.serviceLinkId}:${state.session.rootFolderId}`;
+    const scope = memberFolderScopes().find((item) => item.rootFolderId === rootFolderId);
+    return scope ? `member:${scope.serviceLinkId}:${scope.rootFolderId}` : "";
   }
   return state.session?.role === "admin" ? "admin" : "subadmin";
 }
@@ -2219,7 +2274,7 @@ function displayCacheScope() {
   if (!legacyDisplayCacheScope()) return "";
   const session = state.session;
   return `${session.role}:account-v1:${JSON.stringify([session.serviceAccountId || session.role,
-    session.serviceLinkId || "", session.rootFolderId || null,
+    session.folderScopes || session.serviceLinkId || "", session.folderScopes ? null : session.rootFolderId || null,
     state.credentialSalt || session.credentialSalt || ""])}`;
 }
 
@@ -2229,7 +2284,7 @@ function legacyDisplayCacheScope() {
   if (!session.sessionCacheId || !["admin", "subadmin", "member"].includes(session.role)) return "";
   if (session.role === "member" && !memberCacheScope()) return "";
   return `${session.role}:${JSON.stringify([session.serviceAccountId || session.role,
-    session.serviceLinkId || "", session.rootFolderId || null, session.sessionCacheId,
+    session.folderScopes || session.serviceLinkId || "", session.folderScopes ? null : session.rootFolderId || null, session.sessionCacheId,
     state.credentialSalt || session.credentialSalt || ""])}`;
 }
 
@@ -2706,6 +2761,10 @@ function canTrashFolder(folder) {
 }
 
 function unlockedMoveScopeRoot() {
+  if (state.session?.role === "member") {
+    const roots = new Set(memberFolderScopes().map((scope) => scope.rootFolderId));
+    return state.breadcrumbs.find((folder) => roots.has(Number(folder.id)) && state.crypto.folderKeys.has(Number(folder.id))) || null;
+  }
   return state.breadcrumbs.find((folder) => folder.isProtected && state.crypto.folderKeys.has(Number(folder.id))) || null;
 }
 
@@ -2720,6 +2779,7 @@ function canMoveFile(file) {
 }
 
 function canMoveFolder(folder) {
+  if (state.session?.role === "member" && memberFolderScopes().some((scope) => scope.rootFolderId === Number(folder?.id))) return false;
   if (state.session?.canEditFolders) return !folder?.trashed;
   return Boolean(state.session?.canRenameUnlockedItems
     && state.canTrashCurrentFolderContents
@@ -4174,7 +4234,7 @@ function currentOfflineContext() {
   const rootFolderId = Number(rootFolder?.id || 0);
   const rootFolderKey = state.crypto.folderKeys.get(rootFolderId);
   if (!rootFolderId || !(rootFolderKey instanceof CryptoKey) || !rootFolder.isUnlocked) return null;
-  const accountScope = offlineAccountScope();
+  const accountScope = offlineAccountScope(rootFolderId);
   if (!accountScope) return null;
   return {
     accountScope,
@@ -9307,7 +9367,8 @@ async function removeDeviceCopiesForFiles(files) {
   if (!globalThis.TCloudOffline?.supported() || !state.session) return;
   const accountScope = offlineAccountScope();
   if (!accountScope) return;
-  await Promise.all((files || []).map((file) => TCloudOffline.removeFile(accountScope, Number(file.id)).catch(() => 0)));
+  const scopes = state.session.role === "member" ? memberFolderScopes().map((scope) => offlineAccountScope(scope.rootFolderId)) : [accountScope];
+  await Promise.all(scopes.flatMap((scope) => (files || []).map((file) => TCloudOffline.removeFile(scope, Number(file.id)).catch(() => 0))));
 }
 
 async function removeDeviceCopiesForFolders(folders) {
