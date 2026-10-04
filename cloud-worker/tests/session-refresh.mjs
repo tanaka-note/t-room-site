@@ -12,7 +12,7 @@ assert.match(config, /"SUBADMIN_SESSION_TTL_SECONDS"\s*:\s*"43200"/, "副管理�
 assert.match(config, /"PASSKEY_SESSION_TTL_SECONDS"\s*:\s*"43200"/, "パスキーの絶対期限が12時間ではありません。");
 assert.match(config, /"SESSION_VERSION"\s*:\s*"5"/, "旧共通IDセッションを無効化する世代更新がありません。");
 assert.match(worker, /refreshAuthenticatedSession\(request, response, env, url, path\)/, "認証済みAPI利用時の期限更新がありません。");
-assert.match(worker, /!shouldRefreshSession\(session\)/, "パスキーsessionをrolling更新から除外していません。");
+assert.match(worker, /session.authMethod !== "passkey"/, "T-Cloudパスキーだけをrolling更新します。");
 assert.match(worker, /cloudSessionPolicy\(env, "password"/, "PW session policyがありません。");
 assert.match(worker, /cloudSessionPolicy\(env, "passkey"/, "passkey session policyがありません。");
 assert.match(worker, /clampNumber\(configured, 3600, 43200, 43200\)/, "セッション上限が12時間に固定されていません。");
@@ -23,4 +23,4 @@ assert.match(client, /await loadCachedFolderKeys\(\)/, "副管理者の解除済
 assert.match(client, /await saveCachedFolderKey\(id, unlocked\.folderKey\)/, "フォルダ解除後の鍵をセッションへ保存していません。");
 assert.match(client, /await clearCachedAdminKeys\(\)/, "ログアウト時に端末内の鍵を削除していません。");
 
-console.log("password and passkey absolute session policy: ok");
+console.log("password fixed and Cloud passkey rolling session policy: ok");

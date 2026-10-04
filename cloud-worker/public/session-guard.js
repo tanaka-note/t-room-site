@@ -3,6 +3,7 @@
   // Only public session metadata is stored; no Cookie, PRF or decryption key.
   const TAB_KEY = "tcloud-tab-session-v1";
   const SHARED_KEY = "tcloud-current-session-v1";
+  const EXPIRY_KEY = "tcloud-current-expiry-v1";
   const HEADER = "X-TCloud-Session";
   const nativeFetch = global.fetch.bind(global);
   const pending = new Set();
@@ -11,9 +12,13 @@
   let blocked = false;
   let channel = null;
   let expiryTimer = null;
+  let validated = false;
   try { const saved = JSON.parse(sessionStorage.getItem(TAB_KEY) || "null"); blocked = Boolean(saved?.blocked); current = saved?.sessionCacheId ? saved : null; } catch { blocked = true; }
   try { channel = new BroadcastChannel(SHARED_KEY); channel.onmessage = event => observe(event.data); } catch {}
-  global.addEventListener("storage", event => { if (event.key === SHARED_KEY) observe(event.newValue); });
+  global.addEventListener("storage", event => {
+    if (event.key === SHARED_KEY) observe(event.newValue);
+    if (event.key === EXPIRY_KEY && current) { try { check(); scheduleExpiry(); } catch {} }
+  });
   global.addEventListener("pageshow", () => { if (current) { try { check(); } catch {} } });
   global.addEventListener("focus", () => { if (current) { try { check(); } catch {} } });
   function shared() { try { return localStorage.getItem(SHARED_KEY); } catch { return null; } }
@@ -34,13 +39,24 @@
   }
   function check(snapshot = epoch) {
     if (blocked || snapshot !== epoch) throw error();
-    if (current?.expiresAt && Date.now() >= current.expiresAt * 1000) { invalidate(); throw error(); }
+    // Other tabs may renew this same Cookie/session. Public expiry metadata is
+    // only a local timer hint; every protected API still verifies the server.
+    if (current?.authMethod === "passkey") {
+      try {
+        const value = JSON.parse(localStorage.getItem(EXPIRY_KEY) || "null");
+        if (value?.sessionCacheId === current.sessionCacheId && Number.isSafeInteger(value.expiresAt)
+          && value.expiresAt > current.expiresAt && value.expiresAt <= Math.floor(Date.now() / 1000) + 43200) {
+          current.expiresAt = value.expiresAt; save(current);
+        }
+      } catch {}
+    }
+    if (validated && current?.expiresAt && Date.now() >= current.expiresAt * 1000) { invalidate(); throw error(); }
     if (current && shared() && shared() !== current.sessionCacheId) { invalidate(); throw error(); }
     return current;
   }
   function scheduleExpiry() {
     clearTimeout(expiryTimer); expiryTimer = null;
-    if (current?.expiresAt) expiryTimer = setTimeout(() => { try { check(); scheduleExpiry(); } catch {} },
+    if (validated && current?.expiresAt) expiryTimer = setTimeout(() => { try { check(); scheduleExpiry(); } catch {} },
       Math.min(2147483647, Math.max(0, current.expiresAt * 1000 - Date.now())));
   }
   function bind(session, publish = true) {
@@ -49,16 +65,34 @@
       serviceAccountId:session.serviceAccountId, role:session.role, rootFolderId:session.rootFolderId ?? null,
       expiresAt:Number(session.expiresAt) || null};
     blocked = false; save(current);
+    validated = true;
     if (publish) announce(current.sessionCacheId);
     check(); scheduleExpiry();
+  }
+  function renew(sessionCacheId, expiresAt) {
+    check();
+    if (!current || current.sessionCacheId !== sessionCacheId || !Number.isSafeInteger(expiresAt)) return;
+    if (expiresAt > current.expiresAt) { current.expiresAt = expiresAt; save(current); scheduleExpiry(); }
+    if (current.authMethod === "passkey") {
+      try { localStorage.setItem(EXPIRY_KEY, JSON.stringify({sessionCacheId, expiresAt:current.expiresAt})); } catch {}
+    }
+    global.dispatchEvent(new CustomEvent("tcloud-session-renewed", {detail:{sessionCacheId, expiresAt:current.expiresAt}}));
   }
   function beginSelection() { clearTimeout(expiryTimer); abortPending(); current = null; blocked = false; save(null); }
   function end() { clearTimeout(expiryTimer); announce(`logout:${crypto.randomUUID()}`); current = null; blocked = true; abortPending(); save({blocked:true}); }
   function headers(input = {}) {
     check(); const result = new Headers(input);
     if (current) result.set(HEADER, current.sessionCacheId);
+    result.delete("X-TCloud-Activity");
+    // A bounded interaction window prevents unattended foreground polling from
+    // keeping sessions alive. Startup gets one foreground operation window.
+    if (global.document?.visibilityState === "visible" && Date.now() < activeUntil) result.set("X-TCloud-Activity", "foreground");
     return result;
   }
+  let activeUntil = Date.now() + 60000;
+  for (const name of ["pointerdown", "keydown", "touchstart", "wheel"]) global.addEventListener(name, event => {
+    if (event.isTrusted) activeUntil = Date.now() + 60000;
+  }, {capture:true, passive:true});
   function scopedUrl(input) {
     check(); const url = new URL(input, global.location.href);
     if (current && privateApi(url)) url.searchParams.set("tcloudSession", current.sessionCacheId);
@@ -82,6 +116,7 @@
       check(snapshot);
       if (response.status === 419 || (response.status === 401 && current && !selecting)) { invalidate(); throw error(); }
       if (selecting && response.ok) bind(await response.clone().json());
+      if (response.ok) renew(response.headers.get(HEADER), Number(response.headers.get("X-TCloud-Session-Expires")));
       const bodyEpoch = epoch;
       const reader = response.body?.getReader();
       if (!reader) { finish(); return response; }
@@ -97,6 +132,6 @@
   }
   function track(controller) { check(); pending.add(controller); return () => pending.delete(controller); }
   scheduleExpiry();
-  global.TCloudSession = Object.freeze({fetch:scopedFetch, headers, scopedUrl, bind, beginSelection, end, check, invalidate, track,
+  global.TCloudSession = Object.freeze({fetch:scopedFetch, headers, scopedUrl, bind, renew, beginSelection, end, check, invalidate, track,
     context:()=>current, isBlocked:()=>blocked});
 })(globalThis);

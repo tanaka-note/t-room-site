@@ -4,11 +4,11 @@ import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
+import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-501277cb40ad";
+const APP_BUILD_ID = "cloud-ed729ff7effb";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -205,7 +205,13 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) throw new HttpError(403, "不正なリクエストです。");
     const session = await readSession(request, env);
-    assertSessionContext(request, session);
+    // A revoked credential may already fail authorization, but explicit logout
+    // must still end its correctly signed session so later re-enabling cannot
+    // restore a copied token. This path grants no read/decryption authority.
+    const logoutSession = session || await readSignedSession(request, env);
+    assertSessionContext(request, logoutSession);
+    if (logoutSession?.authMethod === "passkey" && logoutSession.sessionId
+      && !(await cloudPasskeySession(env, logoutSession, "end")).valid) throw new HttpError(503, "ログアウトを完了できません。もう一度お試しください。");
     if (session) await recordSecurityAudit(env, request, {
       service: "cloud", eventType: "logout", outcome: "success", identityId: session.identityId,
       serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId || session.role,
@@ -450,6 +456,8 @@ async function completePasskeyHandoff(request, env, url, context) {
     startedAt: new Date().toISOString()
   };
   session.exp = sessionExpiresAt(Math.floor(Date.parse(session.startedAt) / 1000), policy, session.exp);
+  session.version = cloudSessionVersion(env);
+  if (!(await cloudPasskeySession(env, session, "register")).valid) throw new HttpError(503, "セッションを開始できません。もう一度お試しください。");
   const token = await createSessionToken(session, policy.ttlSeconds, env);
   const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
   await audit(env, "passkey_login", session, null, null);
@@ -2905,7 +2913,7 @@ async function requestFingerprint(request, env) {
 
 async function createSessionToken(session, maxAge, env) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
-  const payload = { ...session, ...passwordLifetimeClaims(session), exp: sessionExpiresAt(Math.floor(Date.now() / 1000), sessionPolicyForAuthMethod(env, session.authMethod, maxAge), session.exp), version: String(env.SESSION_VERSION || "1") };
+  const payload = { ...session, ...passwordLifetimeClaims(session), exp: session.exp ?? sessionExpiresAt(Math.floor(Date.now() / 1000), sessionPolicyForAuthMethod(env, session.authMethod, maxAge)), version: String(env.SESSION_VERSION || "1") };
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encoded}.${await sign(encoded, env.SESSION_SECRET)}`;
 }
@@ -2913,22 +2921,37 @@ async function createSessionToken(session, maxAge, env) {
 async function refreshAuthenticatedSession(request, response, env, url, path) {
   if (["/api/login", "/api/passkey/handoff", "/api/logout", "/api/auth-mode", "/api/app-version"].includes(path)
     || path.startsWith("/api/public/")) return response;
+  // Only successful foreground app operations count. Session/config/version,
+  // maintenance, static assets and hidden-tab polling never renew a passkey.
+  if (!response.ok || request.headers.get("X-TCloud-Activity") !== "foreground"
+    || !(/^\/api\/(items|favorites|folders|files|uploads|shares)(\/|$)/.test(path))) return response;
   const session = await readSession(request, env);
-  if (!session || !shouldRefreshSession(session)) return response;
+  if (!session || session.authMethod !== "passkey") return response;
+  assertSessionContext(request, session);
   const policy = cloudSessionPolicy(env, session.authMethod, session.role);
-  const token = await createSessionToken({ ...session, sessionId: session.sessionId || crypto.randomUUID() }, policy.ttlSeconds, env);
+  const renewed = await cloudPasskeySession(env, session, "touch", policy.ttlSeconds);
+  if (!renewed.valid) throw new HttpError(401, "ログインし直してください。");
+  const token = await createSessionToken({ ...session, exp: renewed.expiresAt }, policy.ttlSeconds, env);
   const headers = new Headers(response.headers);
   headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
+  headers.set("X-TCloud-Session", session.sessionId);
+  headers.set("X-TCloud-Session-Expires", String(renewed.expiresAt));
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-async function readSession(request, env) {
+async function readSignedSession(request, env) {
   try {
     const token = readCookie(request, SESSION_COOKIE);
     if (!token || !isValidSessionSecret(env.SESSION_SECRET)) return null;
     const [encoded, signature] = token.split(".");
     if (!encoded || !signature || !(await constantTimeText(signature, await sign(encoded, env.SESSION_SECRET)))) return null;
-    const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded)));
+    return JSON.parse(new TextDecoder().decode(base64UrlToBytes(encoded)));
+  } catch { return null; }
+}
+
+async function readSession(request, env) {
+  try {
+    const payload = await readSignedSession(request, env);
     if (!validSessionLifetime(payload)) return null;
     if (payload.exp <= Math.floor(Date.now() / 1000) || String(payload.version) !== String(env.SESSION_VERSION || "1")) return null;
     const account = payload.role === "member" ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find((item) => item.role === payload.role);
@@ -2939,8 +2962,10 @@ async function readSession(request, env) {
       } else if (payload.serviceAccountId === "folder-member") {
         if (payload.role !== "member" || !optionalId(payload.rootFolderId)) return null;
       } else return null;
+      if (payload.rootFolderId != null) await requireFolder(env, Number(payload.rootFolderId));
     } else if (payload.role === "member") return null;
     if (!(await validateServicePasskeySession(payload, env, "cloud", payload.rootFolderId == null ? null : Number(payload.rootFolderId)))) return null;
+    if (payload.authMethod === "passkey" && (!payload.sessionId || !(await cloudPasskeySession(env, payload, "read")).valid)) return null;
     return {
       role: account.role,
       label: payload.authMethod === "passkey" ? payload.label || account.label : account.label,
@@ -2961,6 +2986,7 @@ async function readSession(request, env) {
       serviceLinkId: payload.serviceLinkId || null,
       serviceAccountId: payload.serviceAccountId || null,
       passkeySessionEpoch: payload.passkeySessionEpoch || null,
+      version: payload.version,
       authMethod: payload.authMethod || "password",
       startedAt: payload.startedAt || null,
       exp: Number(payload.exp),
@@ -3138,7 +3164,7 @@ function validateRsaPublicJwk(value) {
   return { kty: "RSA", alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"], n, e };
 }
 function optionalId(value) { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; }
-function publicSession(session) { return { role: session.role, accountName: accountDisplayName({ service: "cloud", identityId: session.identityId, accountId: session.serviceAccountId || session.role, role: session.role }, session.label), loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, expiresAt: session.exp, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, serviceLinkId: session.serviceLinkId || null, serviceAccountId: session.serviceAccountId || session.role, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
+function publicSession(session) { return { identityId: session.identityId || null, credentialId: session.credentialId || null, sessionVersion: session.version || null, passkeySessionEpoch: session.passkeySessionEpoch || null, cloudScopeId: session.rootFolderId == null ? "admin" : "folder:" + session.rootFolderId, folderScopes: session.rootFolderId == null ? [] : [session.rootFolderId], role: session.role, accountName: accountDisplayName({ service: "cloud", identityId: session.identityId, accountId: session.serviceAccountId || session.role, role: session.role }, session.label), loginId: session.loginId, credentialSalt: session.credentialSalt, sessionCacheId: session.sessionId, expiresAt: session.exp, authMethod: session.authMethod || "password", rootFolderId: session.rootFolderId || null, serviceLinkId: session.serviceLinkId || null, serviceAccountId: session.serviceAccountId || session.role, canUpload: session.canUpload, canDelete: session.canDelete, canTrashUnlockedFiles: session.canTrashUnlockedFiles, canEditFiles: session.canEditFiles, canEditFolders: session.canEditFolders, canRenameUnlockedItems: session.canRenameUnlockedItems, canViewHistory: session.canViewHistory, canRequestDelete: session.canRequestDelete, canReviewDeletion: session.canReviewDeletion }; }
 function configuredLoginId(env, role) {
   const roleSpecific = role === "admin" ? env.ADMIN_LOGIN_ID : env.SUBADMIN_LOGIN_ID;
   return String(roleSpecific || env.LOGIN_ID || "").trim().toLowerCase();
@@ -3155,7 +3181,19 @@ function sessionMaxAge(env, role) {
   return clampNumber(configured, 3600, 43200, 43200);
 }
 function cloudSessionVersion(env) { return String(env.SESSION_VERSION || "1"); }
-function cloudSessionPolicy(env, authMethod, role) { return sessionPolicyForAuthMethod(env, authMethod, sessionMaxAge(env, role)); }
+function cloudSessionPolicy(env, authMethod, role) { return cloudSessionPolicyForAuthMethod(env, authMethod, sessionMaxAge(env, role)); }
+
+async function cloudPasskeySession(env, session, action, ttlSeconds = undefined) {
+  try {
+    return await env.SECURITY.cloudPasskeySession({ service: "cloud", action,
+      sessionIdHash: await sign(session.sessionId, env.AUDIT_IP_SALT || env.SESSION_SECRET),
+      identityId: session.identityId, credentialId: session.credentialId,
+      serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId,
+      cloudRootFolderId: session.rootFolderId, sessionEpoch: session.passkeySessionEpoch,
+      role: session.role, sessionVersion: session.version, expiresAt: session.exp,
+      startedAt: session.startedAt, ttlSeconds });
+  } catch { return { valid: false }; }
+}
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireShareCreation(session) { if (!["admin", "subadmin"].includes(session.role)) throw new HttpError(403, "共有URLを発行できません。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }

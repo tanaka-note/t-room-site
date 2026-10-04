@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {readFileSync,existsSync} from 'node:fs';
+import {readFileSync,existsSync,mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {createRequire} from 'node:module';
 import {resolve,extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -55,8 +57,8 @@ const server=createServer(async(req,res)=>{
    let source=data.toString().replace('document.addEventListener("DOMContentLoaded", initialize);','');
    source+=`\nbindEvents=()=>{}; restoreInstalledAppPortrait=async()=>{}; updateInstallButtons=()=>{}; restoreRememberedLogin=async()=>{}; reportCompletedAppUpdate=()=>{};
     globalThis.__fixtures=${JSON.stringify(fixtures)};
-    globalThis.TRoomPasskeys={authenticate:async(_service,choose)=>{const links=['admin','folder-member'].map(accountId=>({id:'primary-admin-'+accountId,accountId,role:accountId==='admin'?'admin':'member',rootFolderId:accountId==='admin'?null:7}));const link=await choose(links);return {link,prfOutput:new Uint8Array(__fixtures.prf),handoff:{handoffToken:link.accountId,tcloudKey:__fixtures.keys[link.accountId]}};}};
-    enterApp=async(session)=>{state.session=session;state.loginId=session.loginId;globalThis.TCloudSession?.bind(session,false);await prepareCryptoSession('',null,{prfOutput:new Uint8Array(__fixtures.prf),tcloudKey:__fixtures.keys[session.serviceAccountId]});document.querySelector('#account-name').textContent=session.role;};
+    globalThis.__authCalls=0;globalThis.TRoomPasskeys={authenticate:async(_service,choose)=>{__authCalls++;const links=['admin','folder-member'].map(accountId=>({id:'primary-admin-'+accountId,accountId,role:accountId==='admin'?'admin':'member',rootFolderId:accountId==='admin'?null:7}));const link=await choose(links);return {link,prfOutput:new Uint8Array(__fixtures.prf),handoff:{handoffToken:link.accountId,tcloudKey:__fixtures.keys[link.accountId]}};}};
+    enterApp=async(session,_password,_accountKey,passkeyContext)=>{state.session=session;state.loginId=session.loginId;globalThis.TCloudSession?.bind(session,false);await prepareCryptoSession('',null,passkeyContext||{prfOutput:new Uint8Array(__fixtures.prf),tcloudKey:__fixtures.keys[session.serviceAccountId]});document.querySelector('#account-name').textContent=session.role;};
     globalThis.__app={state,api,initialize,logout,prepareCryptoSession,uploadPartRequest,clearLegacyPasskeyAdminKeys:typeof clearLegacyPasskeyAdminKeys==='function'?clearLegacyPasskeyAdminKeys:null,saveCachedAdminKey,loadCachedAdminKey,openVaultCache};
     globalThis.__login=async(account)=>{globalThis.TCloudSession?.beginSelection();const session=await api('/passkey/handoff',{method:'POST',body:JSON.stringify({handoffToken:account})});await enterApp(session);return session;};
    `;
@@ -67,8 +69,10 @@ const server=createServer(async(req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const executablePath=['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Google/Chrome/Application/chrome.exe'].find(existsSync);
-const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
-const browserContext=await browser.newContext();
+const profile=mkdtempSync(join(tmpdir(),'tcloud-passkey-'));
+const launchOptions={headless:true,...(executablePath?{executablePath}:{})};
+let browserContext=await chromium.launchPersistentContext(profile,launchOptions);
+const browser={close:()=>browserContext.close()};
 const origin=`http://127.0.0.1:${server.address().port}`;
 const pageErrors=[];
 let phase='start';
@@ -89,7 +93,7 @@ try {
  phase='new tab shared Cookie';
  if(!process.argv.includes('--reproduce')) {
   const newTab=await page();await newTab.evaluate(()=>__app.initialize());
-  assert.equal(await newTab.evaluate(()=>__app.state.session),null,'new or upgraded tab cannot adopt a shared passkey Cookie without its own selection');await newTab.close();
+  assert.equal(await newTab.evaluate(()=>__app.state.session.sessionCacheId),admin.sessionCacheId,'new tab resumes only the current server session and its exactly bound opaque cache');assert.equal(await newTab.evaluate(()=>__authCalls),0);await newTab.close();
  }
  if(process.argv.includes('--reproduce')) {
   const leaked=await a.evaluate(()=>__app.api('/items'));
@@ -161,10 +165,12 @@ try {
   });
   assert.equal(cleanup.memberOrPasskeyRead,true);
   phase='passkey logout';
-  assert.deepEqual((await cacheKeys(b)).sort(),['admin@test:pw-preserved','folder-session:fixture:7']);
+  assert.deepEqual((await cacheKeys(b)).filter(k=>!k.startsWith('passkey-session:')).sort(),['admin@test:pw-preserved','folder-session:fixture:7']);
+  const loggedOutId=await b.evaluate(()=>__app.state.session.sessionCacheId);
   await b.evaluate(()=>__app.logout()).catch(()=>{});
   await b.waitForFunction(()=>globalThis.__app && !__app.state.session);
-  assert.deepEqual((await cacheKeys(b)).sort(),['admin@test:pw-preserved','folder-session:fixture:7'],'passkey logout preserves unrelated PW and folder cache');
+  assert.ok(!(await cacheKeys(b)).includes('passkey-session:'+loggedOutId),'logout deletes its own passkey cache');
+  assert.deepEqual((await cacheKeys(b)).filter(k=>!k.startsWith('passkey-session:')).sort(),['admin@test:pw-preserved','folder-session:fixture:7'],'passkey logout preserves unrelated PW and folder cache');
   const pwResult=await b.evaluate(async()=>{
     TCloudSession.beginSelection();
     const session=await __app.api('/login',{method:'POST',body:JSON.stringify({loginId:'admin@test',authProof:'local-proof'})});
@@ -177,8 +183,38 @@ try {
     return {cached:loaded?.type==='private',resumed:__app.state.crypto.adminPrivateKey?.type==='private'};
   });
   assert.deepEqual(pwResult,{cached:true,resumed:true});
-  console.log('two real browser tabs: both directions, reload, stale API/Range/upload, in-flight responses, real SW Range/cache, selective IndexedDB cleanup and PW key resume passed');
+  phase='real persistent browser restart';
+  for(const account of ['admin','folder-member']) {
+    const activePage=await page();
+    const active=await activePage.evaluate(account=>__login(account),account);
+    const before=requests.filter(r=>r.path==='/cloud/api/passkey/handoff').length;
+    await activePage.reload();await activePage.waitForFunction(()=>!!globalThis.__app);await activePage.evaluate(()=>__app.initialize());
+    assert.equal(await activePage.evaluate(()=>__app.state.session.sessionCacheId),active.sessionCacheId);
+    assert.equal(await activePage.evaluate(()=>__authCalls),0);
+    // Close all tabs and the entire browser, then launch a new process/profile.
+    for(const p of browserContext.pages())await p.close();await browserContext.close();
+    browserContext=await chromium.launchPersistentContext(profile,launchOptions);
+    const reboot=await page();await reboot.evaluate(()=>__app.initialize());
+    assert.equal(await reboot.evaluate(()=>__app.state.session.sessionCacheId),active.sessionCacheId);
+    assert.equal(await reboot.evaluate(()=>__authCalls),0);
+    assert.equal(requests.filter(r=>r.path==='/cloud/api/passkey/handoff').length,before);
+    const stored=await reboot.evaluate(async()=>{const db=await __app.openVaultCache();return new Promise(r=>{const q=db.transaction('crypto-keys','readonly').objectStore('crypto-keys').get('passkey-session:'+__app.state.session.sessionCacheId);q.onsuccess=()=>{db.close();r({extractable:q.result.privateKey.extractable,type:q.result.privateKey.type,fields:Object.keys(q.result).sort()})}})});
+    assert.equal(stored.extractable,false);assert.equal(stored.type,'private');
+    assert.deepEqual(stored.fields,['binding','cacheType','privateKey','sessionCacheId','wrappedFolderKey']);
+  }
+  phase='real IndexedDB corruption and unavailable fallback';
+  const recovery=await page();await recovery.evaluate(()=>__app.initialize());
+  const originalId=await recovery.evaluate(()=>__app.state.session.sessionCacheId);
+  await recovery.evaluate(async()=>{const db=await __app.openVaultCache();await new Promise((resolve,reject)=>{const t=db.transaction('crypto-keys','readwrite'),s=t.objectStore('crypto-keys'),key='passkey-session:'+__app.state.session.sessionCacheId;const q=s.get(key);q.onsuccess=()=>s.put({...q.result,privateKey:'corrupt'},key);t.oncomplete=resolve;t.onerror=()=>reject(t.error)});db.close()});
+  await recovery.reload();await recovery.waitForFunction(()=>!!globalThis.__app);await recovery.evaluate(()=>__app.initialize());
+  assert.equal(await recovery.evaluate(()=>__authCalls),1);
+  assert.notEqual(await recovery.evaluate(()=>__app.state.session.sessionCacheId),originalId);
+  const missing=await page();await missing.evaluate(()=>{Object.defineProperty(globalThis,'indexedDB',{value:undefined,configurable:true})});
+  await missing.evaluate(()=>__app.initialize());
+  assert.equal(await missing.evaluate(()=>__authCalls),1);
+  assert.ok(await missing.evaluate(()=>__app.state.session));
+  console.log('two real browser tabs: both directions, reload, stale API/Range/upload, in-flight responses, real SW Range/cache, selective IndexedDB cleanup, real browser restart, cache corruption/unavailability fallback and PW key resume passed');
  }
 } catch(error) {
  console.error('Browser diagnostics:',JSON.stringify({pageErrors,lifecycle:lifecycle.slice(-50),pages:await Promise.all(browserContext.pages().map(async p=>({url:p.url(),title:await p.title().catch(()=>''),state:await p.evaluate(()=>({loaded:!!globalThis.__app,role:globalThis.__app?.state.session?.role,blocked:globalThis.TCloudSession?.isBlocked(),body:document.body.innerText.slice(0,200)})).catch(()=>null)}))),requests:requests.slice(-12)}));throw error;
-} finally {clearTimeout(watchdog);releaseSlow?.();server.closeAllConnections();await browser.close();await new Promise(r=>server.close(r));db.close();}
+} finally {clearTimeout(watchdog);releaseSlow?.();server.closeAllConnections();await browser.close();await new Promise(r=>server.close(r));db.close();if(profile.startsWith(join(tmpdir(),'tcloud-passkey-')))rmSync(profile,{recursive:true,force:true});}

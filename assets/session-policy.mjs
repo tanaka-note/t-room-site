@@ -3,6 +3,12 @@ export const PASSWORD_SESSION_TTL_SECONDS = 12 * 60 * 60;
 export const PASSWORD_SESSION_VERSION = 1;
 export const PASSKEY_SESSION_TTL_SECONDS = 12 * 60 * 60;
 
+// Explicit opt-in: other services and password sessions retain their policy.
+export function cloudSessionPolicyForAuthMethod(env, authMethod, passwordTtlSeconds) {
+  const policy = sessionPolicyForAuthMethod(env, authMethod, passwordTtlSeconds);
+  return authMethod === "passkey" ? { ...policy, persistent: true, rolling: true } : policy;
+}
+
 export function sessionPolicyForAuthMethod(env, authMethod, passwordTtlSeconds = PASSWORD_SESSION_TTL_SECONDS) {
   if (authMethod === "passkey") {
     return {

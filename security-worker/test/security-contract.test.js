@@ -323,8 +323,8 @@ test("session resume audit is distinct, deduplicated, human-labelled, and tracks
   assert.match(worker, /last_login_at = CASE WHEN last_login_at IS NULL OR last_login_at < \?/);
   assert.match(worker, /last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < \?/);
   assert.match(worker, /WHERE id = \? AND \(last_seen_at IS NULL OR last_seen_at < \?\)/);
-  assert.match(cloud, /sessionId: session\.sessionId \|\| crypto\.randomUUID\(\)/,
-    "legacy Cloud sessions gain one stable random session ID on rolling refresh");
+  assert.match(cloud, /session\.sessionId\);\n\s*headers\.set\("X-TCloud-Session-Expires"/,
+    "Cloud rolling reports the existing session ID alongside its renewed expiry");
 });
 
 test("async service-link labels are resolved before every JSON response", () => {
