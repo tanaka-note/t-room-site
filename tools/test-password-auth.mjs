@@ -176,13 +176,13 @@ for (const target of MANAGED_PASSWORD_ACCOUNTS) test(`${target.service}/${target
   } finally { f.close(); }
 });
 
-for(const service of ["diary","billing"]) test(`${service}: only the two explicit accounts change; all other accounts retain password login/fixed sessions`,async()=>{
+for(const service of ["diary","billing"]) test(`${service}: only the explicitly managed accounts change; all other accounts retain password login/fixed sessions`,async()=>{
   const f=fixture(service);
   try {
     const baseline=f.accounts();
     for(const t of MANAGED_PASSWORD_ACCOUNTS.filter(t=>t.service===service)) await f.change(t.accountId,"disable",0);
     assert.equal(f.accounts(),baseline);
-    const ids=service==="diary"?["main-admin","main-user","future-user"]:["owner","hideaki","yuuka","machiko","future-user"];
+    const ids=service==="diary"?["main-admin","main-user","future-user"]:["owner","yuuka","machiko","future-user"];
     for(const id of ids){
       assert.deepEqual(await readPasswordAuthPolicy(f.env,service,id),{enabled:true,epoch:0});
       const login=await f.login(id);assert.equal(login.status,200,id);
@@ -218,32 +218,38 @@ for (const service of ["diary", "billing"]) test(`${service}: missing policy sch
 });
 
 test("operator rejects protected accounts, mismatched names, missing Passkey and stale generations; schema cannot reset cookies",async()=>{
-  for(const [s,ids] of [["cloud",["admin","subadmin","folder-member"]],["diary",["main-admin","main-user","future-user","*"]],["billing",["owner","hideaki","yuuka","machiko","future-user","chi%"]],["ai",["owner"]],["downloader",["owner"]]]) for(const id of ids) assert.throws(()=>managedPasswordAccount(s,id));
-  const f=fixture("billing"),t=managedPasswordAccount("billing","chiharu");
-  try{
-    const options={expectName:t.displayName,expectEpoch:0,reason:"test"};
-    await assert.rejects(setPasswordAccount(t,"disable",{...options,expectName:"別人"},f.query));
-    await assert.rejects(setPasswordAccount(t,"disable",{...options,expectEpoch:3},f.query));
-    const noPasskey=async(s,sql)=>s==="security"?[]:f.query(s,sql);
-    await assert.rejects(setPasswordAccount(t,"disable",options,noPasskey));
-    assert.equal(f.db.prepare("SELECT COUNT(*) n FROM password_auth_policy").get().n,0);
-    await f.change(t.accountId,"disable",0);
-    assert.equal((await f.change(t.accountId,"disable",1)).changed,false,"idempotent stop does not advance epoch");
-    assert.throws(()=>f.db.exec("DELETE FROM password_auth_policy"));
-    assert.throws(()=>f.db.exec("UPDATE password_auth_policy SET password_session_epoch=0"));
-    assert.equal(f.db.prepare(updatePasswordPolicySql(t,true,0,"stale")).all().length,0);
-    assert.equal(f.db.prepare(changePasswordPolicySql(t,false,0,"stale")).all().length,0);
-    const recovered=await setPasswordAccount(t,"enable",{...options,expectEpoch:1},noPasskey);
-    assert.equal(recovered.after.passwordAuthEnabled,true,"emergency recovery works without a Passkey");
-    f.db.exec("UPDATE billing_accounts SET display_name='different' WHERE id='chiharu'");
-    await assert.rejects(inspectPasswordAccount(t,f.query));
-  }finally{f.close();}
+  assert.deepEqual(MANAGED_PASSWORD_ACCOUNTS.map(t=>[t.service,t.accountId,t.displayName]),[
+    ["diary","chiharu-admin","田中千晴"],["diary","wife-admin","田中暢美"],
+    ["billing","chiharu","田中千晴"],["billing","masami","田中暢美"],["billing","hideaki","田中秀晃"]
+  ]);
+  for(const [s,ids] of [["cloud",["admin","subadmin","folder-member","hideaki"]],["diary",["main-admin","main-user","future-user","*","hideaki"]],["billing",["owner","yuuka","machiko","future-user","chi%","Hideaki","hideaki "]],["ai",["owner","hideaki"]],["downloader",["owner","hideaki"]]]) for(const id of ids) assert.throws(()=>managedPasswordAccount(s,id));
+  for (const accountId of ["chiharu", "hideaki"]) {
+    const f=fixture("billing"),t=managedPasswordAccount("billing",accountId);
+    try{
+      const options={expectName:t.displayName,expectEpoch:0,reason:"test"};
+      await assert.rejects(setPasswordAccount(t,"disable",{...options,expectName:"別人"},f.query));
+      await assert.rejects(setPasswordAccount(t,"disable",{...options,expectEpoch:3},f.query));
+      const noPasskey=async(s,sql)=>s==="security"?[]:f.query(s,sql);
+      await assert.rejects(setPasswordAccount(t,"disable",options,noPasskey));
+      assert.equal(f.db.prepare("SELECT COUNT(*) n FROM password_auth_policy").get().n,0);
+      await f.change(t.accountId,"disable",0);
+      assert.equal((await f.change(t.accountId,"disable",1)).changed,false,"idempotent stop does not advance epoch");
+      assert.throws(()=>f.db.exec("DELETE FROM password_auth_policy"));
+      assert.throws(()=>f.db.exec("UPDATE password_auth_policy SET password_session_epoch=0"));
+      assert.equal(f.db.prepare(updatePasswordPolicySql(t,true,0,"stale")).all().length,0);
+      assert.equal(f.db.prepare(changePasswordPolicySql(t,false,0,"stale")).all().length,0);
+      const recovered=await setPasswordAccount(t,"enable",{...options,expectEpoch:1},noPasskey);
+      assert.equal(recovered.after.passwordAuthEnabled,true,"emergency recovery works without a Passkey");
+      f.db.prepare("UPDATE billing_accounts SET display_name='different' WHERE id=?").run(accountId);
+      await assert.rejects(inspectPasswordAccount(t,f.query));
+    }finally{f.close();}
+  }
 });
 
 test("migrations contain no initial stops or account/credential writes and only the named services import the policy",()=>{
   for(const service of ["diary","billing"]){
     const sql=schema(service);assert.doesNotMatch(sql,/UPDATE\s+(?:diary_accounts|billing_accounts)|DELETE FROM|INSERT INTO\s+(?:diary_accounts|billing_accounts)/i);
-    assert.doesNotMatch(sql,/(?:chiharu|wife-admin|masami)/);
+    assert.doesNotMatch(sql,/(?:chiharu|wife-admin|masami|hideaki)/);
   }
   for(const service of ["cloud","security","ai","downloader"]){
     assert.doesNotMatch(readFileSync(new URL(`../${service}-worker/src/index.js`,import.meta.url),"utf8"),/assets\/password-auth-policy/);
