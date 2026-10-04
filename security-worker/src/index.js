@@ -1447,12 +1447,14 @@ async function cloudPasskeySession(env, input) {
     || !["register", "read", "touch", "end"].includes(input.action)) return { valid: false };
   // Ending a correctly bound session remains possible after credential/Identity
   // revocation. Only read/register/touch can grant authority or extend expiry.
-  const validation = input.action === "end" ? null : await validatePasskeySession(env, input);
-  if (input.action !== "end" && validation?.valid !== true) return { valid: false };
+  let validation = null;
   const now = nowSeconds();
   const role = input.serviceAccountId === "admin" ? "admin" : "member";
   if (input.role !== role || !input.sessionVersion) return { valid: false };
   if (input.action === "register") {
+    // Only registration depends on the consumed, strictly validated handoff.
+    validation = await validatePasskeySession(env, input);
+    if (validation?.valid !== true) return { valid: false };
     if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now || input.expiresAt > now + 43200
       || !validSessionStart(input.startedAt)) return { valid: false };
     await env.DB.prepare(`INSERT INTO security_active_sessions
@@ -1472,22 +1474,29 @@ async function cloudPasskeySession(env, input) {
     || row.service !== "cloud" || row.auth_method !== "passkey"
     || row.service_link_id !== input.serviceLinkId || row.service_account_id !== input.serviceAccountId
     || row.role !== role || row.session_version !== String(input.sessionVersion)
-    || Number(row.passkey_session_epoch) !== Number(input.sessionEpoch)
-    || (validation && (row.cloud_folder_scopes || null) !== (validation.folderScopes ? JSON.stringify(validation.folderScopes) : null))) return { valid: false };
+    || Number(row.passkey_session_epoch) !== Number(input.sessionEpoch)) return { valid: false };
   if (input.action === "end") {
     await env.DB.prepare(`UPDATE security_active_sessions SET ended_at = ?, end_reason = 'logout'
       WHERE session_id_hash = ? AND ended_at IS NULL`).bind(new Date().toISOString(), input.sessionIdHash).run();
     return { valid: true };
   }
+  // The immutable active-session snapshot outlives its one-use handoff. Never
+  // replace it with current links or any scope claims supplied by the caller.
+  const folderScopes = row.cloud_folder_scopes == null ? null : normalizeCloudFolderScopes(parseJson(row.cloud_folder_scopes, null));
+  if ((row.cloud_folder_scopes != null && !folderScopes)
+    || (input.cloudScopeId != null) !== Boolean(folderScopes)
+    || (validation && (row.cloud_folder_scopes || null) !== (validation.folderScopes ? JSON.stringify(validation.folderScopes) : null))) return { valid: false };
+  validation = await validatePasskeySession(env, { ...input, cloudScopeId: undefined, folderScopes: folderScopes || undefined });
+  if (validation?.valid !== true) return { valid: false };
   if (input.action === "touch") {
     if (!Number.isSafeInteger(input.ttlSeconds) || input.ttlSeconds < 900 || input.ttlSeconds > 43200) return { valid: false };
     const result = await env.DB.prepare(`UPDATE security_active_sessions SET expires_at = MAX(expires_at, ?), last_seen_at = ?, updated_at = CURRENT_TIMESTAMP
       WHERE session_id_hash = ? AND ended_at IS NULL AND expires_at > ?`)
       .bind(now + input.ttlSeconds, new Date().toISOString(), input.sessionIdHash, now).run();
     if (!result.meta?.changes) return { valid: false };
-    return { valid: true, expiresAt: Math.max(Number(row.expires_at), now + input.ttlSeconds) };
+    return { valid: true, expiresAt: Math.max(Number(row.expires_at), now + input.ttlSeconds), ...(folderScopes ? { folderScopes } : {}) };
   }
-  return { valid: true, expiresAt: Number(row.expires_at) };
+  return { valid: true, expiresAt: Number(row.expires_at), ...(folderScopes ? { folderScopes } : {}) };
 }
 
 async function registrationOptions(env, identityId, displayName, excludeCredentials) {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import vm from "node:vm";
 import {readFileSync} from "node:fs";
+import { attachPasskeyLedger, seedMultiFolderHandoff } from "./passkey-ledger-fixture.mjs";
 import { context, env, handoff, securityDb } from "./session-fixture.mjs";
 
 const OriginalDate = Date;
@@ -87,6 +88,56 @@ try {
   env.SECURITY.cloudPasskeySession=rpc;
   console.log("PASS Cloud rolling: foreground success, fixed ID/start, persistent Cookie, inactivity timeout, logout replay, binding/revoke rejection");
 } finally { globalThis.Date = OriginalDate; context.Date = OriginalDate; }
+
+// Both actual Workers' authorization functions, signed Cookies and real SQL.
+const originalSecurity = { ...env.SECURITY };
+globalThis.Date = FixedDate; context.Date = FixedDate;
+try {
+  for (const revoke of [null, "link", "envelope", "vault", "credential", "identity", "epoch", "version", "logout"]) {
+    now=OriginalDate.now();const started=now;
+    const ledger=attachPasskeyLedger(env,{realValidation:true});
+    try {
+      const scopes=seedMultiFolderHandoff(ledger);
+      const login=await request(null,"/passkey/handoff",null,false,{handoffToken:"cloud-member"});
+      assert.equal(login.status,200,JSON.stringify(login.body));
+      let cookie=login.cookie;const initial=decode(cookie), id=initial.sessionId;
+      const stored=()=>ledger.prepare("SELECT * FROM security_active_sessions").get();
+      assert.equal(stored().cloud_folder_scopes,JSON.stringify(scopes));
+      for(const hour of [10,20]) {
+        now=started+hour*3600000;
+        const response=await request(cookie,"/items",id);
+        assert.equal(response.status,200);cookie=response.cookie;
+        assert.equal(response.expires,Math.floor(now/1000)+43200);
+        assert.equal(decode(cookie).sessionId,id);assert.equal(decode(cookie).startedAt,initial.startedAt);
+      }
+      now=started+26*3600000;
+      // Exactly the scheduled cleanup predicate, after more than a day.
+      ledger.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").run(Math.floor(now/1000)-86400);
+      assert.equal(ledger.prepare("SELECT count(*) n FROM security_handoffs").get().n,0);
+      const session=await request(cookie,"/session",id);
+      assert.equal(session.body.authenticated,true);assert.deepEqual(session.body.folderScopes,scopes);
+      assert.equal(session.body.sessionCacheId,id);assert.equal(session.setCookie,null);
+      const items=await request(cookie,"/items",id);assert.equal(items.status,200);cookie=items.cookie;
+      assert.deepEqual(items.body.folders.map(f=>f.id),[7,9]);
+      assert.equal(decode(cookie).startedAt,initial.startedAt);assert.equal(stored().cloud_folder_scopes,JSON.stringify(scopes));
+      // A newly ready link never expands the existing active-session snapshot.
+      ledger.exec("INSERT INTO security_service_links(id,identity_id,service,service_account_id,cloud_root_folder_id,display_label,status) VALUES('added','primary-admin','cloud','folder-member',101,'Added','active'); INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,wrapped_key) VALUES('added-envelope','primary-admin','Y3JlZGVudGlhbA','added','folder_key_rsa','encrypted-fixture')");
+      assert.deepEqual((await request(cookie,"/session",id)).body.folderScopes,scopes);
+      const rpcInput={service:"cloud",action:"touch",sessionIdHash:stored().session_id_hash,identityId:initial.identityId,credentialId:initial.credentialId,serviceLinkId:initial.serviceLinkId,serviceAccountId:initial.serviceAccountId,role:initial.role,cloudRootFolderId:initial.rootFolderId,cloudScopeId:initial.cloudScopeId,sessionVersion:initial.version,sessionEpoch:initial.passkeySessionEpoch,ttlSeconds:43200};
+      const sql={link:"UPDATE security_service_links SET status='disabled' WHERE id='primary-admin-second'",envelope:"DELETE FROM security_tcloud_key_envelopes WHERE service_link_id='primary-admin-second'",vault:"DELETE FROM security_tcloud_client_vaults",credential:"UPDATE security_credentials SET status='revoked'",identity:"UPDATE security_identities SET status='disabled'",epoch:"UPDATE security_runtime_state SET passkey_session_epoch=2"};
+      if(sql[revoke])ledger.exec(sql[revoke]);
+      if(revoke==="version")env.SESSION_VERSION="changed";
+      if(revoke==="logout")assert.equal((await request(cookie,"/logout",id,false,{})).status,200);
+      if(revoke) {
+        assert.equal((await request(cookie,"/session",id)).body.authenticated,false,revoke);
+        assert.equal((await request(cookie,"/items",id)).status,401,revoke);
+        if(revoke==="version")rpcInput.sessionVersion="changed";
+        assert.equal((await env.SECURITY.cloudPasskeySession(rpcInput)).valid,false,revoke);
+      } else assert.equal((await env.SECURITY.cloudPasskeySession(rpcInput)).valid,true);
+    } finally {ledger.close();env.SESSION_VERSION="5";Object.assign(env.SECURITY,originalSecurity)}
+  }
+  console.log("PASS actual Cloud/Security multi-folder: 26-hour rolling, scheduled handoff cleanup, fixed ID/start/snapshot, new-link exclusion, non-anchor revoke, envelope/vault/credential/Identity/epoch/version/logout rejection");
+} finally {globalThis.Date=OriginalDate;context.Date=OriginalDate;Object.assign(env.SECURITY,originalSecurity)}
 
 // Exercise the real browser guard's bounded activity window and same-session
 // expiry propagation without any server polling or user credential ceremony.

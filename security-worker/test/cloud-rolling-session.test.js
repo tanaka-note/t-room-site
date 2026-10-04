@@ -87,19 +87,57 @@ function multiFixture() {
 }
 
 test("multi-folder Cloud ledger binds the complete snapshot and denies any revoked scope",async()=>{
-  for(const sql of ["UPDATE security_service_links SET status='disabled' WHERE id='second'", "UPDATE security_service_links SET cloud_root_folder_id=11 WHERE id='second'", "DELETE FROM security_tcloud_key_envelopes WHERE service_link_id='second'", "DELETE FROM security_tcloud_client_vaults", "DELETE FROM security_handoffs", "UPDATE security_active_sessions SET cloud_folder_scopes='[]'"]) {
+  for(const sql of ["UPDATE security_service_links SET status='disabled' WHERE id='second'", "UPDATE security_service_links SET cloud_root_folder_id=11 WHERE id='second'", "DELETE FROM security_tcloud_key_envelopes WHERE service_link_id='second'", "DELETE FROM security_tcloud_client_vaults", "UPDATE security_active_sessions SET cloud_folder_scopes='[]'"]) {
     const f=multiFixture();try {
       assert.equal((await f.call('register')).valid,true);
       assert.equal(f.db.prepare('SELECT cloud_folder_scopes FROM security_active_sessions').get().cloud_folder_scopes,JSON.stringify(f.scopes));
       assert.equal((await f.call('touch')).valid,true);
+      f.db.exec('DELETE FROM security_handoffs');
       f.db.exec(sql);assert.equal((await f.call('read')).valid,false,sql);assert.equal((await f.call('touch')).valid,false,sql);
       assert.equal((await f.call('end')).valid,true,'logout still works after scope revocation');
     }finally{f.db.close()}
   }
   const f=multiFixture();try {
     await f.call('register');
-    assert.equal((await runtime.cloudPasskeySession(f.env,{...f.input,cloudScopeId:'missing',action:'read'})).valid,false);
+    assert.equal((await runtime.cloudPasskeySession(f.env,{...f.input,sessionIdHash:'B'.repeat(43),action:'read'})).valid,false);
     await runtime.endActiveSessionsStatement(f.env,'service_link_disabled',{serviceLinkId:'second'}).run();
     assert.equal((await f.call('read')).valid,false,'revoking a non-anchor link ends the ledger');
+  }finally{f.db.close()}
+});
+
+
+test("multi-folder rolling session survives handoff cleanup after login", async()=>{
+  const f=multiFixture();try {
+    assert.equal((await f.call('register')).valid,true);
+    f.db.exec('DELETE FROM security_handoffs');
+    const read=await f.call('read');
+    assert.equal(read.valid,true,'active-session snapshot must survive deletion of its consumed handoff');
+    assert.deepEqual(read.folderScopes,f.scopes);
+    assert.equal((await f.call('touch')).valid,true);
+  }finally{f.db.close()}
+});
+
+
+test("registration still requires a valid consumed handoff before pinning scopes",async()=>{
+  for(const sql of ["DELETE FROM security_handoffs","UPDATE security_handoffs SET consumed_at=NULL","DELETE FROM security_tcloud_key_envelopes WHERE service_link_id='second'","DELETE FROM security_tcloud_client_vaults"]) {
+    const f=multiFixture();try {
+      f.db.exec(sql);assert.equal((await f.call('register')).valid,false,sql);
+      assert.equal(f.db.prepare('SELECT count(*) n FROM security_active_sessions').get().n,0);
+    }finally{f.db.close()}
+  }
+});
+
+test("ready links only enter new authentication snapshots, never an existing session",async()=>{
+  const f=multiFixture();try {
+    await f.call('register');f.db.exec('DELETE FROM security_handoffs');
+    f.db.exec("INSERT INTO security_service_links(id,identity_id,service,service_account_id,cloud_root_folder_id,display_label,status) VALUES('added','user','cloud','folder-member',11,'Added','active'); INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,wrapped_key) VALUES('added','user','Y3JlZGVudGlhbA','added','folder_key_rsa','encrypted')");
+    assert.deepEqual((await f.call('read')).folderScopes,f.scopes);
+    assert.deepEqual((await f.call('touch')).folderScopes,f.scopes);
+    const expanded=[...f.scopes,{serviceLinkId:'added',rootFolderId:11}];
+    f.db.prepare("INSERT INTO security_handoffs(id,token_hash,identity_id,credential_id,service_link_id,session_epoch,expires_at,consumed_at,cloud_folder_scopes) VALUES('new-snapshot','new-hash','user','Y3JlZGVudGlhbA','link',1,1,CURRENT_TIMESTAMP,?)").run(JSON.stringify(expanded));
+    const fresh={...f.input,sessionIdHash:'B'.repeat(43),cloudScopeId:'new-snapshot',action:'register'};
+    assert.deepEqual((await runtime.cloudPasskeySession(f.env,fresh)).folderScopes,expanded);
+    assert.equal((await runtime.cloudPasskeySession(f.env,{...fresh,sessionIdHash:f.input.sessionIdHash})).valid,false,'same session cannot be registered with a wider snapshot');
+    assert.deepEqual((await f.call('read')).folderScopes,f.scopes);
   }finally{f.db.close()}
 });

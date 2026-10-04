@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createRequire} from 'node:module';
 import {resolve,extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {attachPasskeyLedger,seedMultiFolderHandoff} from './passkey-ledger-fixture.mjs';
 import {db,securityDb,env,context} from './session-fixture.mjs';
 const RealDate=Date;
 const {chromium}=createRequire(new URL('../../diary-worker/package.json',import.meta.url))('playwright');
@@ -28,7 +29,7 @@ fixtures.keys['cloud-member']={client_private_prf:fixtures.keys['folder-member']
 fixtures.rootProofs=await Promise.all([[7,rootKey],[9,secondRootKey]].map(async([id,key])=>{const iv=crypto.getRandomValues(new Uint8Array(12));const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode('folder '+id));return {id,iv:[...iv],cipher:[...new Uint8Array(cipher)]}}));
 const redeem=env.SECURITY.redeemHandoff,validate=env.SECURITY.validatePasskeySession;
 env.SECURITY.redeemHandoff=async token=>token==='cloud-member'?{identityId:'primary-admin',credentialId:'credential',serviceLinkId:folderScopes[0].serviceLinkId,serviceAccountId:'folder-member',cloudRootFolderId:7,displayLabel:'通常利用',sessionEpoch:1,cloudScopeId:'multi-snapshot',folderScopes}:redeem(token);
-env.SECURITY.validatePasskeySession=async input=>input.cloudScopeId?{valid:input.cloudScopeId==='multi-snapshot',folderScopes}:validate(input);
+env.SECURITY.validatePasskeySession=async input=>input.cloudScopeId||input.folderScopes?{valid:(!input.cloudScopeId||input.cloudScopeId==='multi-snapshot'),folderScopes:input.folderScopes||folderScopes}:validate(input);
 fixtures.accountKey = [...new Uint8Array(await crypto.subtle.exportKey('raw',accountKey))];
 const mediaKey = await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
 const plainMedia = new TextEncoder().encode('local encrypted video fixture');
@@ -222,6 +223,45 @@ try {
       assert.equal(await reboot.evaluate(()=>__app.state.session.sessionCacheId),active.sessionCacheId);
 
     }
+  }
+  phase='actual 26-hour rolling session after scheduled handoff cleanup';
+  const savedSecurity={...env.SECURITY};
+  const continuationDb=attachPasskeyLedger(env,{realValidation:true});
+  let rollingClock=RealDate.now();const rollingStart=rollingClock;
+  const RollingDate=class extends RealDate {constructor(...args){super(...(args.length?args:[rollingClock]));}static now(){return rollingClock}};
+  globalThis.Date=RollingDate;context.Date=RollingDate;
+  try {
+    const scopes=seedMultiFolderHandoff(continuationDb);
+    const continued=await page();
+    await continued.evaluate(now=>{globalThis.__rollingClock=now;const NativeDate=Date;globalThis.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[globalThis.__rollingClock]));}static now(){return globalThis.__rollingClock}}},rollingClock);
+    const login=await continued.evaluate(()=>__login('cloud-member'));
+    const startedAt=continuationDb.prepare('SELECT started_at FROM security_active_sessions').get().started_at;
+    const before=requests.filter(r=>r.path==='/cloud/api/passkey/handoff').length;
+    for(const hour of [10,20]) {
+      rollingClock=rollingStart+hour*3600000;
+      await continued.evaluate(now=>{__rollingClock=now},rollingClock);
+      await continued.mouse.click(5,5); // Trusted foreground interaction.
+      await continued.evaluate(()=>__app.api('/items'));
+      assert.equal(await continued.evaluate(()=>__app.state.session.sessionCacheId),login.sessionCacheId);
+    }
+    rollingClock=rollingStart+26*3600000;
+    continuationDb.prepare('DELETE FROM security_handoffs WHERE expires_at < ?').run(Math.floor(rollingClock/1000)-86400);
+    assert.equal(continuationDb.prepare('SELECT count(*) n FROM security_handoffs').get().n,0);
+    await browserContext.addInitScript(now=>{const NativeDate=Date;globalThis.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[now]));}static now(){return now}}},rollingClock);
+    await continued.reload();await continued.waitForFunction(()=>!!globalThis.__app);await continued.evaluate(()=>__app.initialize());
+    assert.equal(await continued.evaluate(()=>__app.state.session.sessionCacheId),login.sessionCacheId);
+    assert.deepEqual(await continued.evaluate(()=>__app.state.session.folderScopes),scopes);
+    assert.equal(await continued.evaluate(()=>__authCalls),0);
+    assert.equal(requests.filter(r=>r.path==='/cloud/api/passkey/handoff').length,before);
+    assert.deepEqual(await continued.evaluate(()=>Promise.all(__fixtures.rootProofs.map(async proof=>new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(proof.iv)},__app.state.crypto.folderKeys.get(proof.id),new Uint8Array(proof.cipher)))))),['folder 7','folder 9']);
+    assert.equal(continuationDb.prepare('SELECT started_at FROM security_active_sessions').get().started_at,startedAt);
+    await continued.mouse.click(5,5);await continued.evaluate(()=>__app.api('/items'));
+    assert.equal(continuationDb.prepare('SELECT cloud_folder_scopes FROM security_active_sessions').get().cloud_folder_scopes,JSON.stringify(scopes));
+    await continued.evaluate(()=>__app.logout());
+    console.log('PASS browser + actual Security SQL: 26-hour rolling after handoff cleanup, same session/start/scopes, both folders decrypt, WebAuthn/handoff 0');
+  }finally {
+    globalThis.Date=RealDate;context.Date=RealDate;Object.assign(env.SECURITY,savedSecurity);continuationDb.close();
+    for(const p of browserContext.pages())await p.close();await browserContext.close();browserContext=await chromium.launchPersistentContext(profile,launchOptions);
   }
   phase='expired and revoked session cache deletion after real browser restart';
   for(const reason of ['expired','cookie-expired','revoked','version','epoch','logout']) {

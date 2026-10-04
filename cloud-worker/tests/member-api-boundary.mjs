@@ -33,8 +33,9 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
     const folderScopes = [{serviceLinkId:"general-user-folder-member",rootFolderId:7},{serviceLinkId:"general-user-nas",rootFolderId:101}];
     const valid = input.serviceAccountId === "admin" ? input.cloudRootFolderId == null
       : input.serviceAccountId === "folder-member" && input.cloudRootFolderId === 7
-      && (input.cloudScopeId == null || input.cloudScopeId === "fixture-cloud-scope" && folderScopes.every(scope => scope.serviceLinkId !== revokedScope));
-    return {valid, ...(input.cloudScopeId && valid ? {folderScopes} : {})};
+      && (input.cloudScopeId == null || input.cloudScopeId === "fixture-cloud-scope")
+      && (input.folderScopes || (input.cloudScopeId ? folderScopes : [])).every(scope => scope.serviceLinkId !== revokedScope);
+    return {valid, ...((input.cloudScopeId || input.folderScopes) && valid ? {folderScopes: input.folderScopes || folderScopes} : {})};
   } },
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };

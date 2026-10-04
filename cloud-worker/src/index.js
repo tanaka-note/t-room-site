@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-f3877e28a447";
+const APP_BUILD_ID = "cloud-7eb46dd656f4";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -3024,16 +3024,15 @@ async function readSession(request, env) {
       if (payload.rootFolderId != null) await requireFolder(env, Number(payload.rootFolderId));
     } else if (payload.role === "member") return null;
     let folderScopes = null;
+    let trackedSession = null;
     if (payload.cloudScopeId != null) {
       if (payload.authMethod !== "passkey" || payload.role !== "member" || String(env.PASSKEY_ENABLED || "true") !== "true") return null;
-      const result = await env.SECURITY?.validatePasskeySession({ service: "cloud", identityId: payload.identityId,
-        credentialId: payload.credentialId, serviceLinkId: payload.serviceLinkId, serviceAccountId: payload.serviceAccountId,
-        cloudRootFolderId: payload.rootFolderId, sessionEpoch: payload.passkeySessionEpoch, cloudScopeId: payload.cloudScopeId });
+      const result = trackedSession = await cloudPasskeySession(env, payload, "read");
       folderScopes = normalizeMemberFolderScopes(result?.folderScopes);
       if (result?.valid !== true || !folderScopes || folderScopes[0].serviceLinkId !== payload.serviceLinkId || folderScopes[0].rootFolderId !== Number(payload.rootFolderId)) return null;
     } else if (payload.folderScopes != null || !(await validateServicePasskeySession(payload, env, "cloud", payload.rootFolderId == null ? null : Number(payload.rootFolderId)))) return null;
     if (folderScopes) for (const scope of folderScopes) await requireFolder(env, scope.rootFolderId);
-    if (payload.authMethod === "passkey" && (!payload.sessionId || !(await cloudPasskeySession(env, payload, "read")).valid)) return null;
+    if (payload.authMethod === "passkey" && (!payload.sessionId || !(trackedSession || await cloudPasskeySession(env, payload, "read")).valid)) return null;
     return {
       role: account.role,
       label: payload.authMethod === "passkey" ? payload.label || account.label : account.label,
