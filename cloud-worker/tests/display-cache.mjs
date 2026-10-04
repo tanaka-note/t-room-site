@@ -31,9 +31,9 @@ assert.doesNotMatch(client, /display-thumbnail/);
 assert.match(cache, /DB_VERSION = 2/);
 assert.doesNotMatch(client, /TCloudDisplayCache\??\.clearScope/);
 
-const cacheContext = { state: { session: null, credentialSalt: "shared-account-salt" }, TCloudDisplayCache: { supported: () => true } };
+const cacheContext = { state: { session: null, breadcrumbs: [], credentialSalt: "shared-account-salt" }, TCloudDisplayCache: { supported: () => true } };
 vm.createContext(cacheContext);
-for (const name of ["memberCacheScope", "legacyDisplayCacheScope", "displayCacheScope", "offlineAccountScope"]) {
+for (const name of ["memberFolderScopes", "memberCacheScope", "legacyDisplayCacheScope", "displayCacheScope", "offlineAccountScope"]) {
   const start = client.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `${name} exists`);
   const end = client.indexOf("\n}", start) + 2;

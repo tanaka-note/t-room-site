@@ -23,11 +23,18 @@ function statement(sql, args = []) {
   return { bind(...values) { return statement(sql, values); }, async first() { return prepared.get(...args) || null; }, async all() { return { results: prepared.all(...args) }; }, async run() { const result = prepared.run(...args); return { meta: { changes: Number(result.changes), last_row_id: Number(result.lastInsertRowid) } }; } };
 }
 let selected;
+let revokedScope = null;
 const access = [];
 const env = { DB: { prepare: statement, async batch(statements) { return Promise.all(statements.map((s) => s.run())); } },
   SESSION_SECRET: randomBytes(32).toString("hex"), SESSION_VERSION: "5", PASSKEY_ENABLED: "true", ACCOUNT_KDF_ID: "test",
   ADMIN_LOGIN_ID: "admin@test", SUBADMIN_LOGIN_ID: "subadmin@test", ADMIN_AUTH_PROOF_HASH: proofHash, SUBADMIN_AUTH_PROOF_HASH: proofHash,
-  SECURITY: { async redeemHandoff() { return selected; }, async validatePasskeySession(input) { return { valid: input.serviceAccountId === "admin" ? input.cloudRootFolderId == null : input.serviceAccountId === "folder-member" && input.cloudRootFolderId === 7 }; } },
+  SECURITY: { async redeemHandoff() { return selected; }, async validatePasskeySession(input) {
+    const folderScopes = [{serviceLinkId:"general-user-folder-member",rootFolderId:7},{serviceLinkId:"general-user-nas",rootFolderId:101}];
+    const valid = input.serviceAccountId === "admin" ? input.cloudRootFolderId == null
+      : input.serviceAccountId === "folder-member" && input.cloudRootFolderId === 7
+      && (input.cloudScopeId == null || input.cloudScopeId === "fixture-cloud-scope" && folderScopes.every(scope => scope.serviceLinkId !== revokedScope));
+    return {valid, ...(input.cloudScopeId && valid ? {folderScopes} : {})};
+  } },
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };
 const context = { isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
@@ -44,8 +51,8 @@ async function api(cookie, path, method = "GET", body) {
   const response = await context.worker.fetch(request, env, { waitUntil() {} });
   return { status: response.status, body: await response.json(), cookie: response.headers.get("set-cookie")?.split(";")[0] };
 }
-async function handoff(account, identity = "primary-admin") {
-  selected = { identityId: identity, credentialId: "credential", serviceLinkId: `${identity}-${account}`, serviceAccountId: account, cloudRootFolderId: account === "folder-member" ? 7 : null, displayLabel: account === "folder-member" ? "Atsushi" : "管理者", sessionEpoch: 1 };
+async function handoff(account, identity = "primary-admin", folderScopes = null) {
+  selected = { identityId: identity, credentialId: "credential", serviceLinkId: `${identity}-${account}`, serviceAccountId: account, cloudRootFolderId: account === "folder-member" ? 7 : null, displayLabel: account === "folder-member" ? "Atsushi" : "管理者", sessionEpoch: 1, ...(folderScopes ? { folderScopes, cloudScopeId: "fixture-cloud-scope" } : {}) };
   const result = await api(null, "/passkey/handoff", "POST", { handoffToken: "fixture" });
   assert.equal(result.status, 200, JSON.stringify(result.body)); return result;
 }
@@ -112,5 +119,38 @@ try {
   assert.equal((await api(pw.cookie, "/files/1", "PATCH", { name: "renamed.txt" })).status, 200);
   assert.equal((await api(pw.cookie, "/files/1", "DELETE")).status, 200);
   assert.equal((await api(pw.cookie, "/files/1/permanent", "DELETE")).status, 403);
+  // Extend the same actual-handler fixture only after the legacy regressions.
+  db.prepare("INSERT INTO cloud_folders(id,parent_id,name,password_hash,created_by) VALUES(101,NULL,'NAS',?,'admin'),(102,101,'NAS child',NULL,'admin')").run(proofHash);
+  db.exec("INSERT INTO cloud_files(id,folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by) VALUES(100,101,'nas','NAS.txt','text/plain','document',1,'ready','member'); UPDATE cloud_files SET deleted_at=NULL WHERE id=1;");
+  const old = await handoff("folder-member", "general-user");
+  assert.equal((await api(old.cookie, "/favorites", "POST", {fileIds:[1]})).status, 200);
+  const nasOwner = JSON.stringify(["passkey", "general-user", "general-user-nas", "folder-member", "member", 101]);
+  db.prepare("INSERT INTO cloud_favorite_files(owner_id,file_id) VALUES(?,100)").run(nasOwner);
+  const scopes = [{serviceLinkId:"general-user-folder-member",rootFolderId:7},{serviceLinkId:"general-user-nas",rootFolderId:101}];
+  const group = await handoff("folder-member", "general-user", scopes);
+  assert.deepEqual(group.body.folderScopes, scopes);
+  assert.deepEqual((await api(group.cookie,"/items")).body.folders.map(f=>f.id),[7,101]);
+  assert.equal((await api(group.cookie,"/items?folderId=101")).status,200,"delegated protected roots need no folder PW");
+  const all = await api(group.cookie,"/items?searchCandidates=1");
+  assert.ok([1,100].every(id=>all.body.files.some(file=>file.id===id)));
+  assert.ok(!all.body.files.some(file=>[2,3,4].includes(file.id)),"other roots and separately locked children stay excluded");
+  assert.deepEqual((await api(group.cookie,"/favorites")).body.files.map(f=>f.id).sort((a,b)=>a-b),[1,100],"both legacy favorite namespaces survive");
+  assert.equal((await api(group.cookie,"/favorites","DELETE",{fileIds:[100]})).status,200);
+  assert.equal((await api(group.cookie,"/favorites","POST",{fileIds:[100]})).status,200);
+  assert.equal(db.prepare("SELECT owner_id FROM cloud_favorite_files WHERE file_id=100").get().owner_id,nasOwner);
+  assert.equal((await api(group.cookie,"/files/100","PATCH",{name:"NAS.txt",folderId:102})).status,200);
+  assert.equal((await api(group.cookie,"/files/100","PATCH",{folderId:7})).status,403,"cross-root file move is denied");
+  assert.equal(db.prepare("SELECT folder_id FROM cloud_files WHERE id=100").get().folder_id,102);
+  assert.equal((await api(group.cookie,"/folders/102","PATCH",{name:"child",parentId:7})).status,403,"cross-root folder move is denied");
+  assert.equal((await api(group.cookie,"/folders/101","PATCH",{name:"NAS",parentId:7})).status,403,"assigned root itself cannot move");
+  assert.deepEqual((await api(group.cookie,"/move-destinations?scopeRootId=101")).body.folders.map(f=>f.id).sort((a,b)=>a-b),[101,102]);
+  assert.equal((await api(group.cookie,"/move-destinations")).status,400,"multi-root move picker requires its source root");
+  assert.equal((await api(group.cookie,"/items?folderId=9")).status,403);
+  assert.equal((await api(group.cookie,"/files/3")).status,403);
+  assert.equal((await api(group.cookie,"/items?folderId=10")).status,423);
+  assert.equal((await api(group.cookie,"/session")).body.sessionCacheId,group.body.sessionCacheId,"ordinary folder navigation retains the session");
+  revokedScope="general-user-nas";
+  assert.equal((await api(group.cookie,"/items")).status,401,"non-anchor link revoke rejects the next request");
+  assert.equal((await api(old.cookie,"/items")).status,200,"an old single-root session is not widened");
   console.log("member API boundary: primary and general member use identical scope; PW subadmin regression passed");
 } finally { db.close(); }

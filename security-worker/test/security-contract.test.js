@@ -103,11 +103,11 @@ test("existing services keep password login while every service uses one-time ha
   assert.match(downloader, /redeemHandoff/);
 });
 
-test("a T-Cloud member is constrained to the linked root on direct ID access", () => {
+test("a T-Cloud member is constrained to the linked roots on direct ID access", () => {
   assert.match(cloud, /session\.role === "member"/);
-  assert.match(cloud, /folderWithinShare\(env, folderId, session\.rootFolderId\)/);
+  assert.match(cloud, /await requireMemberFolderScope\(env, folderId, session\)/);
   assert.match(cloud, /このフォルダへアクセスする権限がありません/);
-  assert.match(cloud, /effectiveRootId = folderId \|\| \(session\.role === "member" \? session\.rootFolderId : null\)/);
+  assert.match(cloud, /memberFolderScopes\(session\)\.map\(\(scope\) => scope\.rootFolderId\)/);
   assert.match(cloud, /requireMemberFolderScope/);
   assert.match(cloud, /cloud_folder_unlocks WHERE session_id = \? AND folder_id = \? AND expires_at > \?/);
   assert.match(cloud, /adminWrappedKey: folder\.adminWrappedKey/, "管理者端末でのみフォルダ鍵を委譲できる暗号化済みkeyを内部bindingへ返します");
