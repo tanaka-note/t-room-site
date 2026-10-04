@@ -2,7 +2,7 @@
 
 通常は指定利用者のPasskeyを使用する。管理者がCodexへサービスとアカウントを明示して依頼した場合だけ、以下のスクリプトで個別に停止・復旧する。操作UIは設けない。
 
-許可対象は `diary/chiharu-admin`（田中千晴）、`diary/wife-admin`（田中暢美）、`billing/chiharu`（田中千晴）、`billing/masami`（田中暢美）の4組だけ。スクリプトは完全一致のallowlistでCloud・第一管理者・その他アカウントを拒否する。対象拡張は別途レビューが必要。
+許可対象は `diary/chiharu-admin`（田中千晴）、`diary/wife-admin`（田中暢美）、`billing/chiharu`（田中千晴）、`billing/masami`（田中暢美）、`billing/hideaki`（田中秀晃）の5組だけ。スクリプトは完全一致のallowlistでCloud・第一管理者・その他アカウントを拒否する。対象拡張は別途レビューが必要。
 
 ## 仕組み
 
@@ -40,6 +40,6 @@ node tools/password-auth.mjs disable diary chiharu-admin --remote --apply --expe
 
 ## 公開・検証
 
-新規migrationはDiary `0019_password_auth_policy.sql`、Billing `0008_password_auth_policy.sql`。どちらも空のテーブル・trigger追加のみで、既存アカウントや履歴を更新しない。初期停止は本番レコードを確認した上で上記4組へ1件ずつdisableする。
+新規migrationはDiary `0019_password_auth_policy.sql`、Billing `0008_password_auth_policy.sql`。どちらも空のテーブル・trigger追加のみで、既存アカウントや履歴を更新しない。個別停止は本番レコードを確認した上で許可対象へ1件ずつdisableする。`billing/hideaki` の追加にmigrationやWorker再公開は不要。停止前に有効なIdentity・Billing連携・Passkeyと承認後のPasskeyログイン成功実績を確認し、Passkey承認後にPasswordログイン成功があれば停止を中止する。
 
-`pnpm run password-auth:test` はローカルSQLite・実際のWorker handlerを使い、4組の停止／復旧、旧cookie失効、rolling、Passkey handoff、他アカウント非影響、migrationの安全性を検証する。本番の本人端末でのWebAuthn操作は別の手動確認であり、このテストの成功で代用しない。
+`pnpm run password-auth:test` はローカルSQLite・実際のWorker handlerを使い、5組の停止／復旧、旧cookie失効、rolling、Passkey handoff、他アカウント非影響、migrationの安全性を検証する。本番の本人端末でのWebAuthn操作は別の手動確認であり、このテストの成功で代用しない。
