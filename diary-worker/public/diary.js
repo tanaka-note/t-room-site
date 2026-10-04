@@ -26,6 +26,7 @@
   const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
+  const RETURN_NAVIGATION_KEY = "troomDiaryReturnNavigation";
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const MONTH_HEADING_SCROLL_GAP_PX = 12;
   const TAG_SUGGESTION_MAX_HEIGHT = 246;
@@ -968,6 +969,9 @@
     }
     try {
       window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
+      window.sessionStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
+        savedAt: returnView.savedAt, destinationPath
+      }));
     } catch {
       // 保存領域が利用できない場合はブラウザ標準の戻る位置復元へ委ねます。
     }
@@ -1109,6 +1113,7 @@
     return returnView?.version === 2
       && returnView.destinationPath === window.location.pathname
       && returnView.routePath === destinationPath
+      && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
   }
 
@@ -3568,6 +3573,18 @@
   }
 
   function configureDiaryReturnNavigation() {
+    try {
+      const navigation = JSON.parse(window.sessionStorage.getItem(RETURN_NAVIGATION_KEY) || "null");
+      window.sessionStorage.removeItem(RETURN_NAVIGATION_KEY);
+      if (navigation?.destinationPath === window.location.pathname) {
+        window.history.replaceState({
+          ...(window.history.state || {}),
+          [RETURN_NAVIGATION_KEY]: navigation.savedAt
+        }, "", window.location.href);
+      }
+    } catch {
+      // 遷移を確認できない場合は通常のリンクで戻ります。
+    }
     if (elements.tagPageBack.hidden) return;
     let returnView = null;
     try {
