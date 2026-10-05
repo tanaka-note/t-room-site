@@ -2,13 +2,13 @@ import { isValidSessionSecret, requireSessionSecret } from "../../assets/session
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
+import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-7eb46dd656f4";
+const APP_BUILD_ID = "cloud-250f43df0a37";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -145,13 +145,13 @@ export default {
       if (!url.pathname.startsWith(BASE_PATH)) return new Response("Not found", { status: 404 });
       const path = url.pathname.slice(BASE_PATH.length) || "/";
       if (path.startsWith("/api/")) {
-        const response = await handleApi(request, env, url, path, context);
+        const response = await withPasswordLoginAudit(env, request, "cloud", () => handleApi(request, env, url, path, context));
         return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
       }
       return secureResponse(await serveAsset(request, env, url, path));
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
-      if (status === 500) console.error(error);
+      if (status === 500) console.error(new URL(request.url).pathname.endsWith("/api/login") ? "Cloud password login request failed" : error);
       return secureResponse(json({ error: status === 500 ? "処理中に問題が発生しました。" : error.message }, status));
     }
   },
@@ -163,6 +163,7 @@ export default {
 
 async function handleApi(request, env, url, path, context) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
+  if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "cloud");
   if (path === "/api/app-version" && request.method === "GET") {
     return json({ buildId: APP_BUILD_ID });
   }
@@ -364,7 +365,7 @@ async function login(request, env, url, context) {
   const authProof = String(body.authProof || "");
   const matchingAccounts = configuredAccounts.filter((account) => account.loginId === loginId);
   if (!matchingAccounts.length || (proofMode ? !authProof || authProof.length > 256 : !password || password.length > 256)) {
-    enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
+    await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "request_validation", reason: !matchingAccounts.length && loginId && loginId.length <= 254 ? "invalid_credentials" : "invalid_request", counterUpdated: false } });
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
 
@@ -372,7 +373,7 @@ async function login(request, env, url, context) {
   const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
   const now = Math.floor(Date.now() / 1000);
   if (Number(attempt?.locked_until || 0) > now) {
-    enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "login_blocked", outcome: "blocked", authMethod: "password" });
+    await recordSecurityAudit(env, request, { service: "cloud", eventType: "login_blocked", outcome: "blocked", authMethod: "password", details: { stage: "authentication", reason: "login_locked", counterUpdated: false } });
     throw new HttpError(429, "ログインが一時停止されています。しばらくしてからお試しください。");
   }
 
@@ -387,7 +388,7 @@ async function login(request, env, url, context) {
   }
   if (!account) {
     await recordFailedLogin(env, fingerprint, attempt, now);
-    enqueueSecurityAudit(env, context, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
+    await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", serviceAccountId: matchingAccounts.length === 1 ? matchingAccounts[0].role : null, authMethod: "password", details: { stage: "authentication", reason: "invalid_credentials", counterUpdated: true } });
     throw new HttpError(401, "IDまたはパスワードが違います。");
   }
   await env.DB.prepare("DELETE FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
@@ -2657,6 +2658,7 @@ async function serveAsset(request, env, url, path) {
     ["/thumbnail-codec.js", "/thumbnail-codec.js"],
     ["/cloud.css", "/cloud-runtime-20260815-1.css"],
     ["/cloud.js", "/cloud-runtime-20260816-1.js"],
+    ["/password-login-audit.js", "/password-login-audit.js"],
     ["/crypto-vault.js", "/crypto-vault.js"],
     ["/file-safety.js", "/file-safety.js"],
     ["/media-range.js", "/media-range.js"],
@@ -2978,7 +2980,7 @@ async function createSessionToken(session, maxAge, env) {
 }
 
 async function refreshAuthenticatedSession(request, response, env, url, path) {
-  if (["/api/login", "/api/passkey/handoff", "/api/logout", "/api/auth-mode", "/api/app-version"].includes(path)
+  if (["/api/login", "/api/password-login-audit", "/api/passkey/handoff", "/api/logout", "/api/auth-mode", "/api/app-version"].includes(path)
     || path.startsWith("/api/public/")) return response;
   // Only successful foreground app operations count. Session/config/version,
   // maintenance, static assets and hidden-tab polling never renew a passkey.

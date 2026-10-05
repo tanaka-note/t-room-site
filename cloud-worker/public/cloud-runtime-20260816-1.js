@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-7eb46dd656f4";
+const APP_BUILD_ID = "cloud-250f43df0a37";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -227,6 +227,7 @@ function bindEvents() {
   });
   window.addEventListener("beforeinstallprompt", handleInstallPrompt);
   window.addEventListener("appinstalled", handleAppInstalled);
+  state.passwordLoginAudit = TRoomPasswordLoginAudit.create({ service: "cloud", apiBase: API, form: $("#login-form"), loginIdInput: $("#login-id") });
   $("#login-form").addEventListener("submit", login);
   $("#passkey-login").addEventListener("click", loginWithPasskey);
   $("#remember-login").addEventListener("change", syncLoginAutocomplete);
@@ -1011,22 +1012,41 @@ async function login(event) {
   showLoginError("");
   const submit = event.submitter || $("#login-form button[type='submit']");
   submit.disabled = true;
+  const trace = state.passwordLoginAudit.begin();
+  let stage = "form_validation";
+  let failureReason = "unexpected_client_error";
   try {
+    await trace.report("form_submit", "submitted");
     const loginId = $("#login-id").value.trim().toLowerCase();
     const password = $("#login-password").value;
-    const mode = await api("/auth-mode");
+    stage = "auth_mode";
+    const mode = await api("/auth-mode", { headers: trace.headers });
+    stage = "credential_derivation";
+    failureReason = !globalThis.crypto?.subtle || !globalThis.hashwasm?.argon2id ? "crypto_unavailable"
+      : password.length < 8 || password.length > 256 ? "password_length_invalid"
+      : !loginId || loginId.length > 254 ? "login_id_invalid" : "credential_derivation_failed";
     const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId, mode.credentialSalt);
     const loginBody = mode.mode === "proof"
       ? { loginId, authProof: credentials.authProof }
       : { loginId, password };
+    stage = "login_request";
     const session = await api("/login", {
+      headers: trace.headers,
       method: "POST",
       body: JSON.stringify(loginBody)
     });
+    stage = "login_response";
     await updateRememberedLogin(loginId, password);
     await enterApp(session, password, credentials.accountKey);
     $("#login-password").value = "";
   } catch (error) {
+    // HTTP authentication rejections already have a server audit.
+    if (!(stage === "login_request" && error.status && error.status < 500)) {
+      const reason = stage === "credential_derivation" ? failureReason
+        : stage === "auth_mode" ? (error.status ? "request_failed" : "network_error")
+        : stage === "login_request" ? (error.status ? "request_failed" : "network_error") : "unexpected_client_error";
+      await trace.report(stage === "login_request" && error.status ? "login_response" : stage, reason);
+    }
     showLoginError(error.message);
   } finally {
     submit.disabled = false;

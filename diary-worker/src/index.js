@@ -14,7 +14,7 @@ export class BackupBrowserIntegration extends WorkerEntrypoint {
     return getBackupSnapshot(this.env, { refresh: options?.refresh === true });
   }
 }
-import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
+import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime } from "../../assets/session-policy.mjs";
 
@@ -117,7 +117,7 @@ export default {
       }
 
       if (path.startsWith("/api/")) {
-        const response = await handleApi(request, env, url, path, context);
+        const response = await withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context));
         return secureResponse(await withRollingSession(request, response, env, url, path));
       }
 
@@ -140,7 +140,7 @@ export default {
       if (error instanceof HttpError) {
         return secureResponse(json({ error: error.message }, error.status));
       }
-      console.error("Diary request failed", error instanceof Error ? error.message : "unknown error");
+      console.error("Diary request failed", new URL(request.url).pathname.endsWith("/api/login") ? "password_login_error" : (error instanceof Error ? error.message : "unknown error"));
       return secureResponse(json({ error: "日記を読み込めませんでした。時間を置いてもう一度お試しください。" }, 500));
     }
   },
@@ -157,6 +157,7 @@ export default {
 
 async function handleApi(request, env, url, path, context) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
+  if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "diary");
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (session) await recordSecurityAudit(env, request, {
@@ -197,14 +198,14 @@ async function handleApi(request, env, url, path, context) {
     const loginId = normalizeLoginId(body.loginId);
     const password = typeof body.password === "string" ? body.password : "";
     if (!loginId || !password || password.length > 256) {
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
+      await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "authentication", reason: "invalid_request", counterUpdated: false } });
       return json({ error: "IDまたはパスワードを確認してください。" }, 400);
     }
 
     const requestedAccount = await findAccountByLoginId(loginId, env);
     const passwordPolicy = requestedAccount ? await readPasswordAuthPolicy(env, "diary", requestedAccount.id) : null;
     if (passwordPolicy && !passwordPolicy.enabled) {
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { reason: "password_auth_disabled" } });
+      await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false } });
       return json({ error: "IDまたはパスワードが違います。" }, 401);
     }
     const now = Math.floor(Date.now() / 1000);
@@ -212,7 +213,7 @@ async function handleApi(request, env, url, path, context) {
     if (fingerprint) {
       const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
       if (Number(attempt?.locked_until || 0) > now) {
-        enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "login_blocked", outcome: "blocked", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password" });
+        await recordSecurityAudit(env, request, { service: "diary", eventType: "login_blocked", outcome: "blocked", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { stage: "authentication", reason: "login_locked", counterUpdated: false } });
         return json({ error: "ログインが一時停止されています。15分ほど待ってからお試しください。" }, 429);
       }
     }
@@ -224,7 +225,12 @@ async function handleApi(request, env, url, path, context) {
       : null;
     if (!account) {
       if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password" });
+      let inactiveAccount = null;
+      if (!requestedAccount) {
+        try { inactiveAccount = await env.DB.prepare("SELECT id FROM diary_accounts WHERE login_id = ? AND active = 0").bind(loginId).first(); }
+        catch { /* Classification is ancillary; preserve the authentication rejection. */ }
+      }
+      await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id || inactiveAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { stage: "authentication", reason: inactiveAccount ? "account_disabled" : "invalid_credentials", counterUpdated: Boolean(requestedAccount && fingerprint) } });
       return json({ error: "IDまたはパスワードが違います。" }, 401);
     }
     if (requestedAccount.passwordHash && passwordHashNeedsUpgrade(passwordHash)) {
@@ -498,6 +504,7 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/password-login-audit.js", "/password-login-audit.js"],
     ["/dialog-navigation.js", "/dialog-navigation.js"],
     ["/diary-photo-processing.js", "/diary-photo-processing.js"],
     ["/diary-photo-upload.js", "/diary-photo-upload.js"],
@@ -2276,7 +2283,7 @@ function getSessionPolicy(env, authMethod) {
 }
 
 async function withRollingSession(request, response, env, url, path) {
-  if (path === "/api/login" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
+  if (path === "/api/login" || path === "/api/password-login-audit" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
     || path === "/api/households/select" || response.status === 401) return response;
   const session = await readSession(request, env);
   if (!session || !shouldRefreshSession(session)) return response;

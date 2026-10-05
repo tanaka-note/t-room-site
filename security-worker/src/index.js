@@ -2146,7 +2146,7 @@ function normalizeAuditEvent(input) {
 
 function sanitizeDetails(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const forbidden = /password|secret|token|cookie|proof|key|content|title|body|recovery/i;
+  const forbidden = /password|secret|token|cookie|proof|key|content|title|body|recovery|credential.?master|prf.?output|login.?id/i;
   return Object.fromEntries(Object.entries(value).filter(([key]) => !forbidden.test(key)).slice(0, 20).map(([key, item]) => [key, typeof item === "string" ? item.slice(0, 200) : (typeof item === "number" || typeof item === "boolean" ? item : null)]));
 }
 

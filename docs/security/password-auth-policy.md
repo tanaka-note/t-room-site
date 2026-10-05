@@ -1,5 +1,7 @@
 # 個別ID・パスワード認証の停止・緊急復旧
 
+Password拒否・端末側の送信前失敗・同期監査とQueue fallbackの現行仕様は[Passwordログインの失敗監査](password-login-audit.md)を参照する。
+
 通常は指定利用者のPasskeyを使用する。管理者がCodexへサービスとアカウントを明示して依頼した場合だけ、以下のスクリプトで個別に停止・復旧する。操作UIは設けない。
 
 許可対象は `diary/chiharu-admin`（田中千晴）、`diary/wife-admin`（田中暢美）、`billing/chiharu`（田中千晴）、`billing/masami`（田中暢美）、`billing/hideaki`（田中秀晃）の5組だけ。スクリプトは完全一致のallowlistでCloud・第一管理者・その他アカウントを拒否する。対象拡張は別途レビューが必要。

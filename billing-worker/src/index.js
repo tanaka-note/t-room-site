@@ -13,7 +13,7 @@ import {
   verifyPasswordRecord
 } from "./auth-security.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
+import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 
@@ -83,7 +83,7 @@ export default {
         : url.pathname;
 
       if (path.startsWith("/api/")) {
-        const response = await handleApi(request, env, url, path, context);
+        const response = await withPasswordLoginAudit(env, request, "billing", () => handleApi(request, env, url, path, context));
         return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -92,7 +92,7 @@ export default {
       return secureResponse(await serveAsset(request, env, url, path));
     } catch (error) {
       if (error instanceof HttpError) return secureResponse(json({ error: error.message }, error.status));
-      console.error("Billing request failed", error instanceof Error ? error.message : "unknown error");
+      console.error("Billing request failed", new URL(request.url).pathname.endsWith("/api/login") ? "password_login_error" : (error instanceof Error ? error.message : "unknown error"));
       return secureResponse(json({ error: "読み込みに失敗しました。時間を置いてもう一度お試しください。" }, 500));
     }
   }
@@ -100,6 +100,7 @@ export default {
 
 async function handleApi(request, env, url, path, context) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
+  if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "billing");
   if (path === "/api/session" && request.method === "GET") {
     const session = await readSession(request, env);
     if (session) await recordSecurityAudit(env, request, {
@@ -129,7 +130,7 @@ async function handleApi(request, env, url, path, context) {
     const loginId = canonicalLoginId(body.loginId);
     const password = typeof body.password === "string" ? body.password : "";
     if (!loginId || !password || password.length > 256) {
-      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
+      await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "authentication", reason: "invalid_request", counterUpdated: false } });
       throw new HttpError(400, "IDとパスワードを確認してください。");
     }
 
@@ -142,7 +143,7 @@ async function handleApi(request, env, url, path, context) {
     const passwordPolicy = account ? await readPasswordAuthPolicy(env, "billing", account.id) : null;
     if (passwordPolicy && !passwordPolicy.enabled) {
       await writeAudit(env, { eventType: "login_failure", targetAccountId: account.id, details: { reason: "password_auth_disabled" } });
-      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { reason: "password_auth_disabled" } });
+      await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false } });
       throw loginRejected();
     }
     const fingerprint = await loginFingerprint(request, loginId, env);
@@ -154,26 +155,24 @@ async function handleApi(request, env, url, path, context) {
       await writeAudit(env, {
         eventType: "login_blocked",
         targetAccountId: account?.id || null,
-        attemptedLoginId: loginId,
         details: { scope: "source" }
       });
-      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account?.id, role: account?.role, authMethod: "password" });
+      await recordSecurityAudit(env, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account?.id, role: account?.role, authMethod: "password", details: { stage: "authentication", reason: "rate_limited", counterUpdated: false } });
       throw loginRejected();
     }
     if (!account?.is_active) {
       await recordSourceLoginFailure(env, fingerprint, sourceAttempt);
-      await writeAudit(env, { eventType: "login_failure", attemptedLoginId: loginId });
-      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
+      await writeAudit(env, { eventType: "login_failure" });
+      await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", serviceAccountId: account?.id, role: account?.role, authMethod: "password", details: { stage: "authentication", reason: account?.is_active === 0 ? "account_disabled" : typeof body.loginId === "string" && body.loginId.trim().length > 120 ? "invalid_request" : "invalid_credentials", counterUpdated: true } });
       throw loginRejected();
     }
     if (isLoginLocked(account.locked_until)) {
       await writeAudit(env, {
         eventType: "login_blocked",
         targetAccountId: account.id,
-        attemptedLoginId: loginId,
         details: { lockedUntil: account.locked_until }
       });
-      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account.id, role: account.role, authMethod: "password" });
+      await recordSecurityAudit(env, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { stage: "authentication", reason: "login_locked", counterUpdated: false } });
       throw loginRejected();
     }
 
@@ -199,14 +198,13 @@ async function handleApi(request, env, url, path, context) {
       await writeAudit(env, {
         eventType: accountLocked || sourceLocked ? "login_locked" : "login_failure",
         targetAccountId: account.id,
-        attemptedLoginId: loginId,
         details: {
           accountFailedAttempts: Number(failedState?.failed_login_attempts || 0),
           sourceFailedAttempts: nextSource.failedCount,
           scope: accountLocked ? "account" : (sourceLocked ? "source" : null)
         }
       });
-      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: accountLocked || sourceLocked ? "login_locked" : "password_login_failure", outcome: accountLocked || sourceLocked ? "blocked" : "failure", serviceAccountId: account.id, role: account.role, authMethod: "password" });
+      await recordSecurityAudit(env, request, { service: "billing", eventType: accountLocked || sourceLocked ? "login_locked" : "password_login_failure", outcome: accountLocked || sourceLocked ? "blocked" : "failure", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { stage: "authentication", reason: accountLocked || sourceLocked ? "login_locked" : "invalid_credentials", counterUpdated: true } });
       throw loginRejected();
     }
 
@@ -219,13 +217,12 @@ async function handleApi(request, env, url, path, context) {
       await upgradePasswordAfterLogin(env, account, password);
     } catch (error) {
       // 認証済みの利用者を、補助的なハッシュ更新の失敗だけで締め出さないようにします。
-      console.error("Billing password upgrade failed", error instanceof Error ? error.message : "unknown error");
+      console.error("Billing password upgrade failed", "password_hash_upgrade_failed");
     }
     await writeAudit(env, {
       eventType: "login_success",
       actorAccountId: account.id,
       targetAccountId: account.id,
-      attemptedLoginId: loginId
     });
 
     const policy = sessionPolicy(env, "password");
@@ -615,6 +612,7 @@ async function serveAsset(request, env, url, path) {
     ["/manifest.webmanifest", "/manifest.webmanifest"],
     ["/billing.css", "/billing.css"],
     ["/billing.js", "/billing.js"],
+    ["/password-login-audit.js", "/password-login-audit.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
     ["/troom-date-picker.js", "/troom-date-picker.js"]
   ]);
@@ -702,7 +700,7 @@ function sessionPolicy(env, authMethod) {
 function billingSessionVersion(env, accountVersion) { return `${String(env.SESSION_VERSION || "1")}:${Number(accountVersion || 1)}`; }
 
 async function refreshAuthenticatedSession(request, response, env, url, path) {
-  if (path === "/api/login" || path === "/api/passkey/handoff" || path === "/api/logout" || response.status === 401) return response;
+  if (path === "/api/login" || path === "/api/password-login-audit" || path === "/api/passkey/handoff" || path === "/api/logout" || response.status === 401) return response;
   const session = await readSession(request, env);
   if (!session || !shouldRefreshSession(session)) return response;
 
