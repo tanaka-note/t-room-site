@@ -54,20 +54,130 @@
   }
   return { isLine, isApp, externalUrl, appUrl, contents, css, enforce };
 })(window).enforce();</script>
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>体調管理 | T-lain</title><link rel="stylesheet" href="/health/health.css?v=health-5acc24b28c36">  <meta name="troom-app-build" content="health-5acc24b28c36">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>体調管理 | T-lain</title>
+  <link rel="stylesheet" href="/health/health.css?v=health-9b5de631476b">
+  <meta name="troom-app-build" content="health-9b5de631476b">
   <meta name="troom-auto-update" content="enabled">
 </head>
-<body><main><header><div><p class="eyebrow">T-lain</p><h1>体調管理</h1><p>田中暢美</p></div><a href="/">T-lainへ</a></header>
-<section id="login" class="card"><h2>パスキーでログイン</h2><p>暢美さん・宏知さんそれぞれのパスキーで、同じ記録を開きます。</p><button id="sign-in">体調管理を開く</button><p><a href="/security/health.html">Security Centerで利用準備・復旧</a></p></section>
-<p id="message" role="status" aria-live="polite"></p>
-<section id="app" hidden><div class="card summary"><div><span class="label">次回の生理予測</span><strong id="prediction"></strong><p id="prediction-range"></p></div><div><span class="label">直近の周期</span><strong id="latest-cycle"></strong></div></div>
-<p class="hint">予測は記録に基づく目安です。未入力は「症状なし」とは扱いません。</p>
-<nav class="tabs" aria-label="表示切替"><button id="calendar-tab" aria-pressed="true">カレンダー</button><button id="list-tab" aria-pressed="false">記録一覧</button></nav>
-<section id="calendar-panel" class="card"><div class="month-controls"><button id="previous" aria-label="前の月">‹</button><h2 id="month"></h2><button id="next" aria-label="次の月">›</button><button id="today">今日</button></div><div id="calendar" class="calendar"></div><p class="legend"><span>● 記録あり</span><span class="period-label">生理期間</span><span class="predicted-label">予測期間</span><span>開始のみ：終了未記録</span></p></section>
-<section id="list-panel" class="card" hidden><h2>記録一覧</h2><div id="records"></div></section>
-<footer><button id="settings-open" class="secondary">予測設定</button><button id="export-open" class="secondary">CSV出力</button><button id="refresh" class="secondary">最新の記録を読み込む</button><button id="logout" class="secondary">ログアウト</button></footer></section>
-</main>
-<dialog id="editor" class="sheet"><form id="record-form"><div class="sheet-header"><h2 id="record-date"></h2><button type="button" id="editor-close" class="secondary">閉じる</button></div><p id="period-status" class="hint"></p><fieldset><legend>生理（任意）</legend><button type="button" id="start-period" aria-pressed="false">生理開始</button><button type="button" id="end-period" aria-pressed="false">生理終了</button><p class="hint">終了は、選択した日を「出血があった最後の日」として登録します。</p></fieldset><fieldset><legend>体調（任意）</legend><div id="symptoms" class="symptoms"></div></fieldset><label>経血量（任意）<select id="flow"><option value="">未入力</option><option>少ない</option><option>普通</option><option>多い</option></select></label><label>備考（任意）<textarea id="note" rows="4" maxlength="10000"></textarea></label><p id="editor-error" role="alert"></p><div class="sheet-actions"><button type="submit" id="save">保存</button><button type="button" id="delete" class="danger">記録を削除</button></div></form></dialog>
-<dialog id="settings" class="sheet"><form id="settings-form"><div class="sheet-header"><h2>予測設定</h2><button type="button" id="settings-close" class="secondary">閉じる</button></div><p>3周期分の実績がそろうまでは、この設定で仮予測します。すべて任意です。</p><label>普段の周期日数<input id="cycle-days" type="number" min="1" max="180" placeholder="未入力の場合は28日"></label><label>直近の生理開始日<input id="last-start" type="date"></label><p class="hint">実績がそろった後は直近最大6周期の中央値と、最短・最長の間隔で予測します。</p><p id="settings-error" role="alert"></p><button type="submit">保存</button></form></dialog>
-<dialog id="export" class="sheet"><form id="export-form"><div class="sheet-header"><h2>CSV出力</h2><button type="button" id="export-close" class="secondary">閉じる</button></div><label>開始日<input id="export-from" type="date" required></label><label>終了日<input id="export-to" type="date" required></label><p>CSVは端末内で作成します。出力ファイルは暗号化されていません。</p><p id="export-error" role="alert"></p><button type="submit">ダウンロード</button></form></dialog>
-<script src="/security/passkey-client.js?v=health-5acc24b28c36"></script><script src="/diary/dialog-navigation.js?v=health-5acc24b28c36"></script><script src="/assets/pwa-auto-update.js?v=health-5acc24b28c36" defer></script><script type="module" src="/health/health.js?v=health-5acc24b28c36"></script></body></html>
+<body>
+  <main>
+    <header class="app-header">
+      <div><p class="eyebrow">T-lain</p><h1>体調管理</h1><p class="account-name">田中暢美</p></div>
+      <a href="/">T-lainへ</a>
+    </header>
+
+    <section id="login" class="card login-card">
+      <h2>いつもの体調を、気軽に記録</h2>
+      <p>体調や備考を残しながら、生理の開始・終了と次回の目安も確認できます。記録はすべて任意です。</p>
+      <button id="sign-in">体調管理を開く</button>
+      <p class="hint">暢美さん・宏知さんそれぞれのパスキーで、同じ記録を開きます。</p>
+      <a href="/security/health.html">Security Centerで利用準備・復旧</a>
+    </section>
+    <p id="message" class="error" role="status" aria-live="polite"></p>
+
+    <section id="app" hidden>
+      <section class="card today-card" aria-labelledby="today-title">
+        <div class="today-content">
+          <p id="today-date" class="eyebrow"></p>
+          <h2 id="today-title">今日の体調</h2>
+          <p id="today-status" class="today-status"></p>
+          <p class="hint">気になることだけ、残しておけます。</p>
+        </div>
+        <button id="record-today">今日の体調を記録</button>
+      </section>
+
+      <section class="card cycle-card" aria-label="生理の目安">
+        <div class="cycle-overview">
+          <div><span class="label">次回の生理の目安</span><strong id="prediction-window"></strong></div>
+          <div><span class="label">前回の開始日</span><strong id="last-period-start"></strong></div>
+        </div>
+        <div id="period-reminder" class="period-reminder" hidden>
+          <div><p id="period-reminder-message"></p><p class="hint">今日以外の終了日は、カレンダーでその日を選んで記録できます。</p></div>
+          <button id="record-end" class="secondary">終了を記録</button>
+        </div>
+        <details id="cycle-details" class="cycle-details">
+          <summary>周期と予測の詳細</summary>
+          <div class="cycle-detail-content">
+            <dl class="cycle-facts">
+              <div><dt>次回の開始予測</dt><dd id="prediction"></dd></div>
+              <div><dt>直近の周期</dt><dd id="latest-cycle"></dd></div>
+            </dl>
+            <p id="prediction-range" class="hint"></p>
+            <p class="hint">予測は記録に基づく目安です。</p>
+            <button id="settings-open" class="secondary">予測設定</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="card journal-card" aria-label="体調の記録">
+        <nav class="tabs" aria-label="表示切替">
+          <button id="calendar-tab" aria-pressed="true">カレンダー</button>
+          <button id="list-tab" aria-pressed="false">記録一覧</button>
+        </nav>
+        <section id="calendar-panel">
+          <div class="month-controls">
+            <button id="previous" class="secondary" aria-label="前の月">‹</button>
+            <h2 id="month"></h2>
+            <button id="next" class="secondary" aria-label="次の月">›</button>
+            <button id="today" class="secondary">今日</button>
+          </div>
+          <div id="calendar" class="calendar"></div>
+          <p class="legend"><span class="record-label">● 体調・備考などの記録</span><span class="period-label">生理期間</span><span class="predicted-label">予測期間</span></p>
+        </section>
+        <section id="list-panel" hidden><h2 class="list-title">記録一覧</h2><div id="records"></div></section>
+      </section>
+      <footer class="app-footer">
+        <button id="refresh" class="secondary">最新の記録を読み込む</button>
+        <button id="export-open" class="secondary">CSV出力</button>
+        <button id="logout" class="secondary">ログアウト</button>
+      </footer>
+    </section>
+  </main>
+
+  <dialog id="editor" class="sheet" aria-labelledby="editor-title">
+    <form id="record-form">
+      <div class="sheet-header"><div><p id="record-date" class="eyebrow"></p><h2 id="editor-title">体調の記録</h2></div><button type="button" id="editor-close" class="secondary">閉じる</button></div>
+      <p class="hint">すべて任意です。未入力は「症状なし」とは扱いません。</p>
+      <fieldset class="symptom-fieldset"><legend>気になる体調</legend><div id="symptoms" class="symptoms"></div></fieldset>
+      <label class="field">備考<textarea id="note" rows="4" maxlength="10000" placeholder="今日の体調や、気づいたこと"></textarea></label>
+      <details id="period-details" class="period-details">
+        <summary>生理の記録<span class="optional">任意</span></summary>
+        <div class="period-fields">
+          <p id="period-status" class="hint"></p>
+          <div class="period-actions"><button type="button" id="start-period" aria-pressed="false">生理開始</button><button type="button" id="end-period" aria-pressed="false">生理終了</button></div>
+          <p class="hint">選択した日の開始・終了を記録します。終了は「出血があった最後の日」です。</p>
+          <label class="field">経血量<select id="flow"><option value="">未入力</option><option>少ない</option><option>普通</option><option>多い</option></select></label>
+        </div>
+      </details>
+      <p id="editor-error" class="error" role="alert"></p>
+      <div class="sheet-actions"><button type="submit" id="save">保存</button><button type="button" id="delete" class="danger">記録を削除</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="settings" class="sheet" aria-labelledby="settings-title">
+    <form id="settings-form">
+      <div class="sheet-header"><h2 id="settings-title">予測設定</h2><button type="button" id="settings-close" class="secondary">閉じる</button></div>
+      <p class="hint">3周期分の実績がそろうまでは、この設定で仮予測します。すべて任意です。</p>
+      <label class="field">普段の周期日数<input id="cycle-days" type="number" min="1" max="180" placeholder="未入力の場合は28日"></label>
+      <label class="field">直近の生理開始日<input id="last-start" type="date"></label>
+      <p class="hint">実績がそろった後は直近最大6周期の中央値と、最短・最長の間隔で予測します。</p>
+      <p id="settings-error" class="error" role="alert"></p><button type="submit">保存</button>
+    </form>
+  </dialog>
+
+  <dialog id="export" class="sheet" aria-labelledby="export-title">
+    <form id="export-form">
+      <div class="sheet-header"><h2 id="export-title">CSV出力</h2><button type="button" id="export-close" class="secondary">閉じる</button></div>
+      <label class="field">開始日<input id="export-from" type="date" required></label>
+      <label class="field">終了日<input id="export-to" type="date" required></label>
+      <p class="hint">CSVは端末内で作成します。出力ファイルは暗号化されていません。</p>
+      <p id="export-error" class="error" role="alert"></p><button type="submit">ダウンロード</button>
+    </form>
+  </dialog>
+  <script src="/security/passkey-client.js?v=health-9b5de631476b"></script>
+  <script src="/diary/dialog-navigation.js?v=health-9b5de631476b"></script>
+  <script src="/assets/pwa-auto-update.js?v=health-9b5de631476b" defer></script>
+  <script type="module" src="/health/health.js?v=health-9b5de631476b"></script>
+</body>
+</html>
