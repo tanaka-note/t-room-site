@@ -32,6 +32,8 @@
     if (!packageName) return null;
     url.searchParams.delete("openExternalBrowser");
     url.searchParams.delete("openInAppBrowser");
+    // HTTPS data + a fixed existing package, not a new application URL scheme.
+    // Android parses the last #Intent block; URL fragments stay in the data URI.
     return `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=https;package=${packageName};S.browser_fallback_url=${encodeURIComponent(externalUrl(value))};end`;
   }
   const css = `:root{color-scheme:light dark;font-family:system-ui,-apple-system,sans-serif;background:#f5f6f4;color:#293831}*{box-sizing:border-box}body{margin:0;padding:24px 20px;min-height:100svh;display:grid;place-items:center}main{width:min(100%,460px);padding:32px 24px;border:1px solid #dce3dd;border-radius:18px;background:#fff}p{line-height:1.8}h1{font-size:1.25rem;line-height:1.6;margin:24px 0 16px}.brand{font-size:1.4rem;font-weight:700;letter-spacing:.06em}.actions{display:grid;gap:12px;margin:28px 0}a{display:block;padding:15px 18px;min-height:52px;border-radius:10px;text-align:center;font-weight:600;text-decoration:none;border:1px solid #587061;color:inherit;overflow-wrap:anywhere}a.primary{background:#506b59;color:#fff}a:focus-visible{outline:3px solid #8ca895;outline-offset:3px}.help{font-size:.9rem;color:#536158}.help strong{display:block}#app-note{font-size:.85rem}[hidden]{display:none!important}@media(prefers-color-scheme:dark){:root{background:#161c19;color:#e4eae5}main{background:#202923;border-color:#3b4b40}.help{color:#becbbf}a.primary{background:#536f5c}}@media(max-width:360px){main{padding:24px 18px}body{padding:16px}}`;
@@ -47,6 +49,7 @@
     scope.stop();
     scope.document.documentElement.lang = "ja";
     scope.document.documentElement.innerHTML = contents(scope.location.href, scope.navigator.userAgent);
+    // Restoring this document must keep the gate, never resume the old UI.
     scope.addEventListener("pageshow", () => {
       if (!scope.document.getElementById("browser-title")) enforce();
     }, { once: true });
@@ -54,7 +57,7 @@
   }
   return { isLine, isApp, externalUrl, appUrl, contents, css, enforce };
 })(window).enforce();</script>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
   <title>くりまんじゅうの「だし割り」が現実に。ちいかわ×玉乃光酒造の日本酒セットが11月10日発売 | T-lain</title>
   <meta name="description" content="ちいかわのくりまんじゅうが作中で嗜んでいた「だし割り」を自宅で楽しめる、玉乃光酒造の日本酒セットを紹介。2026年10月5日予約開始、11月10日発売。">
   <meta property="og:type" content="article">
