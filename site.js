@@ -139,6 +139,15 @@
   const recentPosts = [
     ...learningPosts,
     {
+      theme: "生活",
+      genre: "ちいかわ",
+      date: "2026.10.05",
+      publishedAt: "2026-10-05T12:39:00+09:00",
+      title: "くりまんじゅうの「だし割り」が現実に。ちいかわ×玉乃光酒造の日本酒セットが11月10日発売",
+      excerpt: "作中でくりまんじゅうが嗜んでいた「だし割り」を家で再現。セット内容、価格、予約・発売情報をまとめます。",
+      url: "./life-chiikawa-kurimanju-dashiwari.html",
+    },
+    {
       theme: "コラム",
       genre: "音楽",
       date: "2026.07.19",
