@@ -14,7 +14,7 @@
       "publicUrls": ["https://tanaka-note.com/"],
       "entrypoints": [
         "index.html", "apps.html", "articles.html", "work.html", "game.html", "investment.html",
-        "life.html", "thought.html", "diary.html", "diary/archive.html", "diary/tags.html",
+        "life.html", "life-chiikawa-kurimanju-dashiwari.html", "thought.html", "diary.html", "diary/archive.html", "diary/tags.html",
         "investment-performance.html", "investment-bitcoin-decline.html", "investment-boj-rate-hike.html",
         "investment-btc-four-year-cycle.html", "blocks-game.html", "hop-game.html", "oni-type.html",
         "oni-type-en.html", "stone-stack.html", "learning.html", "learning/index.html",
