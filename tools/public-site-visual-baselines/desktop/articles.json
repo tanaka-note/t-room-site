@@ -36,7 +36,7 @@
       "rect": {
         "x": 0,
         "width": 1440,
-        "height": 2081
+        "height": 2083
       },
       "style": {
         "display": "block",
@@ -108,7 +108,7 @@
       "rect": {
         "x": 130,
         "width": 1180,
-        "height": 1651
+        "height": 1653
       },
       "style": {
         "display": "block",
@@ -132,7 +132,7 @@
       "rect": {
         "x": 130,
         "width": 1180,
-        "height": 1357
+        "height": 1359
       },
       "style": {
         "display": "grid",
