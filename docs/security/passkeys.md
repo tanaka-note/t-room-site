@@ -71,7 +71,7 @@ WebAuthn credential登録とT-Cloud鍵準備は別状態として扱う。PRF非
 
 `disabled_identity_cleanup`監査は実行時刻、削除件数、保持期限、policyVersionのみを保存し、削除したIdentity ID・氏名・対応表を再保存しない。この記録にも通常の監査保持期限が適用される。外部サービスのアカウント・履歴・T-Cloudの実ファイルは一切削除しない。鍵や外部参照が残るIdentityは自動削除せず保持し、必要性を判断せず鍵を破棄しない。
 
-各サービスの既存監査ログを維持したまま、ログイン成功と有効sessionの復帰はSecurity Service BindingでSecurity D1へ同期反映する。同期処理が失敗した場合だけ、同一event IDのイベントをQueueへ送り後から補完するため、監査障害だけで通常ログインを停止しない。失敗・停止・キャンセルや通常の管理操作は従来どおりQueueで非同期送信する。成功・失敗・停止・キャンセル、PW/パスキー、Identity、サービスaccount、role、時刻、salt/hash化したアクセス元、User-Agent、安全なsession識別子、重要な管理操作を記録する。
+各サービスの既存監査ログを維持したまま、ログイン成功と有効sessionの復帰はSecurity Service BindingでSecurity D1へ同期反映する。同期処理が失敗した場合だけ、同一event IDのイベントをQueueへ送り後から補完するため、監査障害だけで通常ログインを停止しない。Passwordログインの拒否は同期保存と同一event IDのQueue fallbackを使用する（[Passwordログインの失敗監査](password-login-audit.md)）。その他の失敗・停止・キャンセルや通常の管理操作は従来どおりQueueで非同期送信する。成功・失敗・停止・キャンセル、PW/パスキー、Identity、サービスaccount、role、時刻、salt/hash化したアクセス元、User-Agent、安全なsession識別子、重要な管理操作を記録する。
 
 `passkey_authentication_success`はSecurity WorkerがWebAuthn本人確認まで完了した中間イベント、`passkey_login_success`は対象サービスが一回限りのhandoffを引き換えてサービス固有sessionを発行したログイン完了イベント、`session_resume`は保存済みの有効なsessionによるアクセスとして分離する。Security Center自身はhandoffを使わないため、WebAuthn本人確認とSecurity session発行の完了を1件の`passkey_login_success`として記録する。`password_login_success`と`passkey_login_success`だけをログイン成功件数へ含め、中間本人確認と`session_resume`は含めない。
 

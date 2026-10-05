@@ -61,8 +61,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-fd0a5ae8b290">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-fd0a5ae8b290">
+  <meta name="troom-app-build" content="diary-0609d4c6837f">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-0609d4c6837f">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,11 +70,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-fd0a5ae8b290">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-0609d4c6837f">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-fd0a5ae8b290">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-fd0a5ae8b290">
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-0609d4c6837f">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-0609d4c6837f">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -90,7 +90,8 @@
       <p class="eyebrow">Private diary</p>
       <h1 id="login-title">日記を開く</h1>
       <p class="login-description">ログインIDとパスワードを入力してください。</p>
-      <form id="login-form" class="login-form">
+      <p class="login-note">Passkeyへ移行済みの場合は「端末のロック解除でログイン」をご利用ください。</p>
+        <form id="login-form" class="login-form">
         <label class="login-field" for="login-id">
           <span>ログインID</span>
           <input id="login-id" name="loginId" type="email" autocomplete="off" required maxlength="254">
@@ -585,10 +586,11 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-fd0a5ae8b290" defer></script>
-  <script src="/diary/troom-date-picker.js?v=diary-fd0a5ae8b290" defer></script>
-  <script src="/security/passkey-client.js?v=diary-fd0a5ae8b290" defer></script>
-  <script src="/diary/dialog-navigation.js?v=diary-fd0a5ae8b290" defer></script>
-  <script src="/diary/diary.js?v=diary-fd0a5ae8b290" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-0609d4c6837f" defer></script>
+  <script src="/diary/troom-date-picker.js?v=diary-0609d4c6837f" defer></script>
+  <script src="/security/passkey-client.js?v=diary-0609d4c6837f" defer></script>
+  <script src="/diary/dialog-navigation.js?v=diary-0609d4c6837f" defer></script>
+  <script src="/diary/password-login-audit.js?v=diary-0609d4c6837f" defer></script>
+  <script src="/diary/diary.js?v=diary-0609d4c6837f" defer></script>
 </body>
 </html>

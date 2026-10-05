@@ -55,6 +55,7 @@
     document.addEventListener("troom:before-auto-update", (event) => {
       if (document.querySelector("dialog[open]")) event.preventDefault();
     });
+    state.passwordLoginAudit = TRoomPasswordLoginAudit.create({ service: "billing", apiBase: `${basePath()}/api`, form: el["login-form"], loginIdInput: el["login-id"] });
     el["login-form"].addEventListener("submit", login);
     el["passkey-login"].addEventListener("click", loginWithPasskey);
     el["logout-button"].addEventListener("click", logout);
@@ -108,16 +109,26 @@
     submit.disabled = true;
     submit.textContent = "確認中…";
     submit.setAttribute("aria-busy", "true");
+    const trace = state.passwordLoginAudit.begin();
+    let stage = "form_validation";
     try {
+      await trace.report("form_submit", "submitted");
+      stage = "login_request";
       const session = await api("/login", {
+        headers: trace.headers,
         method: "POST",
         body: { loginId, password }
       });
+      stage = "login_response";
       el["login-password"].value = "";
       await enterApp(session);
       // ブラウザのパスワード保存確認が長引いても、ログイン後の画面表示を止めません。
       saveLoginPreference(loginId, password).catch(() => {});
     } catch (error) {
+      if (!(stage === "login_request" && error.status && error.status < 500)) {
+        await trace.report(stage === "login_request" && error.status ? "login_response" : stage,
+          stage === "login_request" ? (error.status ? "request_failed" : "network_error") : "unexpected_client_error");
+      }
       el["login-error"].textContent = error.message;
     } finally {
       submit.disabled = false;
@@ -777,14 +788,16 @@
   async function api(path, options = {}) {
     const response = await fetch(`${basePath()}/api${path}`, {
       method: options.method || "GET",
-      headers: options.body ? { "Content-Type": "application/json" } : undefined,
+      headers: { ...options.headers, ...(options.body ? { "Content-Type": "application/json" } : {}) },
       body: options.body ? JSON.stringify(options.body) : undefined,
       credentials: "same-origin"
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 401 && path !== "/login" && path !== "/passkey/handoff") showLogin();
-      throw new Error(data.error || "処理に失敗しました。");
+      const error = new Error(data.error || "処理に失敗しました。");
+      error.status = response.status;
+      throw error;
     }
     return data;
   }

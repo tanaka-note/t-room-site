@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile as readFileBytes } from "node:fs/promises";
 import test from "node:test";
 import { secure, SECURITY_CONTENT_SECURITY_POLICY } from "../src/security-headers.js";
+
+// Git checkouts on Windows use CRLF; source contracts describe logical lines.
+const readFile = async (...args) => (await readFileBytes(...args)).replace(/\r\n/g, "\n");
 
 const worker = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const migration = await readFile(new URL("../migrations/0001_identity_passkeys.sql", import.meta.url), "utf8");

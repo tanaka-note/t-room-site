@@ -1,25 +1,26 @@
-const CACHE_NAME = "troom-diary-shell-diary-fd0a5ae8b290";
+const CACHE_NAME = "troom-diary-shell-diary-0609d4c6837f";
 const STATIC_ASSETS = [
-  "/diary/diary-photo-processing.js?v=diary-fd0a5ae8b290",
-  "/diary/diary-photo-upload.js?v=diary-fd0a5ae8b290",
-  "/diary/diary-rich-text.js?v=diary-fd0a5ae8b290",
-  "/diary/diary-weather.js?v=diary-fd0a5ae8b290",
+  "/diary/diary-photo-processing.js?v=diary-0609d4c6837f",
+  "/diary/diary-photo-upload.js?v=diary-0609d4c6837f",
+  "/diary/diary-rich-text.js?v=diary-0609d4c6837f",
+  "/diary/diary-weather.js?v=diary-0609d4c6837f",
   "/diary/icons/icon-192-v4.png?v=5",
   "/diary/icons/icon-512-v4.png?v=5",
   "/diary/icons/icon-maskable-512-v4.png?v=5",
   "/diary/icons/apple-touch-icon-v3.png?v=4",
   "/diary/icons/favicon-64-v4.png?v=5",
-  "/diary/diary-search.js?v=diary-fd0a5ae8b290",
-  "/assets/pwa-auto-update.js?v=diary-fd0a5ae8b290",
-  "/diary/dialog-navigation.js?v=diary-fd0a5ae8b290",
-  "/diary/diary.css?v=diary-fd0a5ae8b290",
-  "/diary/diary.js?v=diary-fd0a5ae8b290",
-  "/diary/investment.css?v=diary-fd0a5ae8b290",
-  "/diary/investment.js?v=diary-fd0a5ae8b290",
-  "/diary/manifest.webmanifest?v=diary-fd0a5ae8b290",
-  "/diary/troom-date-picker.css?v=diary-fd0a5ae8b290",
-  "/diary/troom-date-picker.js?v=diary-fd0a5ae8b290",
-  "/security/passkey-client.js?v=diary-fd0a5ae8b290"
+  "/diary/diary-search.js?v=diary-0609d4c6837f",
+  "/assets/pwa-auto-update.js?v=diary-0609d4c6837f",
+  "/diary/dialog-navigation.js?v=diary-0609d4c6837f",
+  "/diary/diary.css?v=diary-0609d4c6837f",
+  "/diary/diary.js?v=diary-0609d4c6837f",
+  "/diary/investment.css?v=diary-0609d4c6837f",
+  "/diary/investment.js?v=diary-0609d4c6837f",
+  "/diary/manifest.webmanifest?v=diary-0609d4c6837f",
+  "/diary/password-login-audit.js?v=diary-0609d4c6837f",
+  "/diary/troom-date-picker.css?v=diary-0609d4c6837f",
+  "/diary/troom-date-picker.js?v=diary-0609d4c6837f",
+  "/security/passkey-client.js?v=diary-0609d4c6837f"
 ];
 const STATIC_PATHS = new Set(STATIC_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 

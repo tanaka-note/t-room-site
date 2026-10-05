@@ -1,3 +1,4 @@
+import { withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { attachPasskeyLedger } from "./passkey-ledger-fixture.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import assert from "node:assert/strict";
@@ -42,7 +43,7 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
 attachPasskeyLedger(env);
 const context = { isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
   sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
-  recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
+  withPasswordLoginAudit, handlePasswordLoginClientAudit, recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
 vm.runInNewContext(source, context);

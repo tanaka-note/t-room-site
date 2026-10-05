@@ -309,6 +309,7 @@
     window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
     document.addEventListener("click", rememberDiaryReturnViewFromNavigation, true);
     window.addEventListener("pageshow", restoreDiaryReturnViewFromPageCache);
+    state.passwordLoginAudit = TRoomPasswordLoginAudit.create({ service: "diary", apiBase: `${BASE_PATH}/api`, form: elements.loginForm, loginIdInput: elements.loginId });
     elements.loginForm.addEventListener("submit", handleLogin);
     document.querySelector("#passkey-login")?.addEventListener("click", handlePasskeyLogin);
     elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
@@ -566,13 +567,19 @@
     const submit = elements.loginForm.querySelector('button[type="submit"]');
     setBusy(submit, true, "確認中...");
     elements.loginMessage.textContent = "";
+    const trace = state.passwordLoginAudit.begin();
+    let stage = "form_validation";
     try {
+      await trace.report("form_submit", "submitted");
       const loginId = elements.loginId.value.trim().toLowerCase();
       const password = elements.password.value;
+      stage = "login_request";
       const result = await api("/login", {
+        headers: trace.headers,
         method: "POST",
         body: { loginId, password }
       });
+      stage = "login_response";
       elements.password.value = "";
       if (result.mustChangePassword) {
         state.pendingLoginId = loginId;
@@ -582,6 +589,10 @@
         await enterDiary(result);
       }
     } catch (error) {
+      if (!(stage === "login_request" && error.status && error.status < 500)) {
+        await trace.report(stage === "login_request" && error.status ? "login_response" : stage,
+          stage === "login_request" ? (error.status ? "request_failed" : "network_error") : "unexpected_client_error");
+      }
       elements.loginMessage.textContent = error.message;
       elements.password.select();
     } finally {
