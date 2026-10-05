@@ -33,8 +33,41 @@ try {
   await other.getByRole('button',{name:'カレンダー',exact:true}).click();
   await other.screenshot({path:new URL('../../tmp/health-review/desktop.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1'),fullPage:true});
   await page.getByRole('button',{name:'ログアウト',exact:true}).click(); await page.locator('#login').waitFor({state:'visible'}); assert.equal(await page.locator('#note').inputValue(),'');
+  await page.getByRole('button',{name:'体調管理を開く',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('.day.current').click(); await page.locator('#note').fill('画面離脱と保存完了の競合');
+  let releaseSave; const delayedSave=new Promise(resolve=>releaseSave=resolve); let saveReached; const saveRequest=new Promise(resolve=>saveReached=resolve);
+  await page.route('**/health/api/records/*',async route=>{if(route.request().method()!=='PUT')return route.continue();const response=await route.fetch();saveReached();await delayedSave;await route.fulfill({response});});
+  await page.getByRole('button',{name:'保存',exact:true}).click(); await saveRequest; await page.evaluate(()=>dispatchEvent(new Event('pagehide'))); releaseSave(); await page.getByRole('button',{name:'体調管理を開く',exact:true}).waitFor({state:'visible'}); await page.waitForFunction(()=>!document.getElementById('sign-in').disabled); assert.equal(await page.locator('#calendar').textContent(),''); assert.equal(await page.locator('#records').textContent(),''); await page.unroute('**/health/api/records/*');
+  // Completion after pagehide must not restore a key or decrypted records.
+  for (const phase of ['authenticate', 'unwrap', 'decrypt']) {
+    if (phase === 'decrypt') { await page.locator('#sign-in').click(); await page.locator('#app').waitFor({state:'visible'}); }
+    await page.evaluate(phase => {
+      const target = phase === 'authenticate' ? TRoomPasskeys : crypto.subtle;
+      const name = phase === 'authenticate' ? 'authenticate' : 'decrypt';
+      const original = target[name].bind(target); let restore;
+      window.healthRaceReady = false;
+      const gate = new Promise(resolve => { window.releaseHealthRace = resolve; });
+      target[name] = async (...args) => {
+        const result = await original(...args);
+        if (phase === 'authenticate' || args[0].name === (phase === 'unwrap' ? 'RSA-OAEP' : 'AES-GCM')) {
+          target[name] = restore; window.healthRaceReady = true; await gate;
+          if (phase === 'authenticate') window.healthRacePrf = result.prfOutput;
+        }
+        return result;
+      };
+      restore = original;
+    }, phase);
+    await page.locator(phase === 'decrypt' ? '#refresh' : '#sign-in').click();
+    await page.waitForFunction(() => window.healthRaceReady);
+    await page.evaluate(() => { dispatchEvent(new Event('pagehide')); window.releaseHealthRace(); });
+    await page.waitForFunction(() => !document.getElementById('sign-in').disabled);
+    assert.ok(await page.locator('#login').isVisible(), phase);
+    assert.equal(await page.locator('#calendar').textContent(), '', phase);
+    assert.equal(await page.locator('#records').textContent(), '', phase);
+    assert.equal(await page.locator('#note').inputValue(), '', phase);
+    if (phase === 'authenticate') assert.ok(await page.evaluate(() => window.healthRacePrf.every(byte => byte === 0)));
+  }
   await page.route('**/health/api/passkey/handoff',async route=>{const response=await route.fetch();const value=await response.json();await route.fulfill({response,json:{...value,expiresAt:Date.now()/1000+2}});});
   await page.getByRole('button',{name:'体調管理を開く',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('#login').waitFor({state:'visible'}); assert.equal(await page.locator('#calendar').textContent(),'');
   review.fixture.revoke(); await other.getByRole('button',{name:'最新の記録を読み込む',exact:true}).click(); await other.locator('#login').waitFor({state:'visible'}); assert.equal(await other.locator('#records').textContent(),'');
-  assert.deepEqual(failures,[]); console.log('Health mobile/desktop: shared encrypted CRUD, unsaved guard, Back/Esc, settings, CSV and logout passed.');
+  assert.deepEqual(failures,[]); console.log('Health mobile/desktop: shared encrypted CRUD, unsaved guard, Back/Esc, settings, CSV, logout and pagehide races during save/authentication/key unwrap/decryption passed.');
 } finally { await browser.close(); await review.close(); }

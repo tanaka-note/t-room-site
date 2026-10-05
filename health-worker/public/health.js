@@ -1,41 +1,49 @@
 import { SYMPTOMS, today, validDate, normalizeRecord, periods, predict, toCsv } from './health-domain.mjs';
 import { unlockClient, unwrapMaster, recordId, encryptRecord, decryptRecord } from './health-crypto.mjs';
 const $ = id => document.getElementById(id);
-const state = { master: null, session: null, records: [], settings: {}, selected: null, original: '', busy: false, month: today().slice(0, 7) };
+const state = { master: null, session: null, records: [], settings: {}, selected: null, original: '', busy: false, generation: 0, month: today().slice(0, 7) };
 let expiryTimer;
 const nav = TroomDialogNavigation.create({ key: 'health-dialogs' });
 function formValue() { return { date: state.selected, start: $('start-period').getAttribute('aria-pressed') === 'true', end: $('end-period').getAttribute('aria-pressed') === 'true', symptoms: [...document.querySelectorAll('#symptoms input:checked')].map(c => Number(c.value)), flow: $('flow').value || null, note: $('note').value }; }
 function dirty() { return $('editor').open && JSON.stringify(formValue()) !== state.original || $('settings').open && JSON.stringify(settingsValue()) !== state.original; }
 for (const id of ['editor', 'settings', 'export']) nav.register(id, { guard: () => !state.busy && (!dirty() || confirm('入力を破棄しますか？')), blocked: () => state.busy });
-async function api(path, options = {}) {
+function checkCurrent(generation) { if (generation !== state.generation) throw new Error('画面を離れたため処理を中止しました。'); }
+async function api(path, options = {}, generation = state.generation) {
+  checkCurrent(generation);
   const r = await fetch(`/health/api${path}`, { credentials: 'same-origin', ...options, headers: { 'Content-Type': 'application/json', ...(state.session ? { 'X-Health-Session': state.session } : {}), ...options.headers } });
-  const v = await r.json(); if (!r.ok && [401, 403, 409].includes(r.status) && state.session) lock(); if (!r.ok) throw new Error(v.error || '処理を完了できませんでした。'); return v;
+  const v = await r.json(); checkCurrent(generation); if (!r.ok && [401, 403, 409].includes(r.status) && state.session) lock(); if (!r.ok) throw new Error(v.error || '処理を完了できませんでした。'); return v;
 }
 async function task(fn, errorId = 'message') {
   if (state.busy) return; state.busy = true; $(errorId).textContent = '';
+  const generation = state.generation;
   document.querySelectorAll('button').forEach(b => b.disabled = true);
-  try { await fn(); } catch (e) { $(errorId).textContent = e.message; }
+  try { await fn(generation); } catch (e) { if (generation === state.generation) $(errorId).textContent = e.message; }
   finally { state.busy = false; document.querySelectorAll('button').forEach(b => b.disabled = false); }
 }
-async function load() {
-  const response = await api('/records'); const records = []; let settings = {};
+async function load(generation) {
+  const response = await api('/records', {}, generation); const records = []; let settings = {};
   for (const row of response.records) {
     const v = await decryptRecord(state.master, row.id, row);
+    checkCurrent(generation);
     if (v.kind === 'settings') { if (row.id !== await recordId(state.master, 'settings')) throw new Error('設定の暗号化識別子が一致しません。'); settings = v; }
     else { const record = normalizeRecord(v); if (row.id !== await recordId(state.master, record.date)) throw new Error('記録の暗号化識別子が一致しません。'); records.push(record); }
   }
-  periods(records); state.records = records; state.settings = settings; render();
+  checkCurrent(generation); periods(records); state.records = records; state.settings = settings; render();
 }
-async function store(id, value) { const encrypted = await encryptRecord(state.master, id, value); await api(`/records/${id}`, { method: 'PUT', body: JSON.stringify(encrypted) }); }
-$('sign-in').onclick = () => task(async () => {
+async function store(id, value, generation) { checkCurrent(generation); const encrypted = await encryptRecord(state.master, id, value); await api(`/records/${id}`, { method: 'PUT', body: JSON.stringify(encrypted) }, generation); }
+$('sign-in').onclick = () => task(async generation => {
   const auth = await TRoomPasskeys.authenticate('health');
   try {
+    checkCurrent(generation);
     if (!auth.prfOutput) throw new Error('この環境ではパスキーによる暗号鍵の解除を利用できません。平文での保存は行いません。');
-    const result = await api('/passkey/handoff', { method: 'POST', body: JSON.stringify({ handoffToken: auth.handoff.handoffToken }) });
+    const result = await api('/passkey/handoff', { method: 'POST', body: JSON.stringify({ handoffToken: auth.handoff.handoffToken }) }, generation);
     const key = await unlockClient(auth.prfOutput, result.keyBundle.vault);
-    state.master?.fill(0); state.master = await unwrapMaster(key, result.keyBundle.wrappedKey); state.session = result.sessionId;
-    await load(); clearTimeout(expiryTimer); expiryTimer = setTimeout(lock, Math.max(0, result.expiresAt * 1000 - Date.now())); $('login').hidden = true; $('app').hidden = false;
-  } catch (e) { lock(); throw e; } finally { auth.prfOutput?.fill(0); }
+    checkCurrent(generation);
+    const master = await unwrapMaster(key, result.keyBundle.wrappedKey);
+    if (generation !== state.generation) { master.fill(0); checkCurrent(generation); }
+    state.master?.fill(0); state.master = master; state.session = result.sessionId;
+    await load(generation); checkCurrent(generation); clearTimeout(expiryTimer); expiryTimer = setTimeout(lock, Math.max(0, result.expiresAt * 1000 - Date.now())); $('login').hidden = true; $('app').hidden = false;
+  } catch (e) { if (generation === state.generation) { lock(); $('message').textContent = e.message; } throw e; } finally { auth.prfOutput?.fill(0); }
 });
 function render() {
   const p = predict(state.records, state.settings);
@@ -82,21 +90,21 @@ function edit(date) {
 }
 for (const [i, name] of SYMPTOMS.entries()) { const label = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.value = i; label.append(input, document.createTextNode(name)); $('symptoms').append(label); }
 for (const id of ['start-period', 'end-period']) $(id).onclick = () => $(id).setAttribute('aria-pressed', String($(id).getAttribute('aria-pressed') !== 'true'));
-$('record-form').onsubmit = e => { e.preventDefault(); task(async () => {
+$('record-form').onsubmit = e => { e.preventDefault(); task(async generation => {
   const r = normalizeRecord(formValue()); if (r.date > today()) throw new Error('未来の日付を実績として保存することはできません。');
   const next = state.records.filter(v => v.date !== r.date).concat(r); periods(next);
-  await store(await recordId(state.master, r.date), r); state.records = next; state.original = JSON.stringify(formValue()); render();
+  await store(await recordId(state.master, r.date), r, generation); checkCurrent(generation); state.records = next; state.original = JSON.stringify(formValue()); render();
   state.busy = false; await nav.close('editor', { force: true });
 }, 'editor-error'); };
-$('delete').onclick = () => { if (!confirm('この日の記録を削除しますか？削除した内容は復元できません。')) return; task(async () => {
+$('delete').onclick = () => { if (!confirm('この日の記録を削除しますか？削除した内容は復元できません。')) return; task(async generation => {
   const next = state.records.filter(r => r.date !== state.selected); periods(next);
-  await api(`/records/${await recordId(state.master, state.selected)}`, { method: 'DELETE', body: '{}' }); state.records = next; render(); state.busy = false; await nav.close('editor', { force: true });
+  await api(`/records/${await recordId(state.master, state.selected)}`, { method: 'DELETE', body: '{}' }, generation); checkCurrent(generation); state.records = next; render(); state.busy = false; await nav.close('editor', { force: true });
 }, 'editor-error'); };
 function settingsValue() { return { kind: 'settings', cycleDays: $('cycle-days').value ? Number($('cycle-days').value) : null, lastStart: $('last-start').value || null }; }
 $('settings-open').onclick = () => { $('cycle-days').value = state.settings.cycleDays || ''; $('last-start').value = state.settings.lastStart || ''; $('settings-error').textContent = ''; state.original = JSON.stringify(settingsValue()); nav.open('settings'); };
-$('settings-form').onsubmit = e => { e.preventDefault(); task(async () => {
+$('settings-form').onsubmit = e => { e.preventDefault(); task(async generation => {
   const v = settingsValue(); if (v.cycleDays != null && (!Number.isInteger(v.cycleDays) || v.cycleDays < 1 || v.cycleDays > 180) || v.lastStart && (!validDate(v.lastStart) || v.lastStart > today())) throw new Error('周期日数・開始日を確認してください。');
-  await store(await recordId(state.master, 'settings'), v); state.settings = v; state.original = JSON.stringify(v); render(); state.busy = false; await nav.close('settings', { force: true });
+  await store(await recordId(state.master, 'settings'), v, generation); checkCurrent(generation); state.settings = v; state.original = JSON.stringify(v); render(); state.busy = false; await nav.close('settings', { force: true });
 }, 'settings-error'); };
 $('export-open').onclick = () => { $('export-from').value = [...state.records].map(r => r.date).sort()[0] || today(); $('export-to').value = today(); $('export-error').textContent = ''; nav.open('export'); };
 $('export-form').onsubmit = e => { e.preventDefault(); task(async () => { const content = toCsv(state.records, $('export-from').value, $('export-to').value); const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = '体調管理.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); state.busy = false; await nav.close('export', { force: true }); }, 'export-error'); };
@@ -105,8 +113,8 @@ function moveMonth(delta) { const d = new Date(`${state.month}-01T00:00:00Z`); d
 $('previous').onclick = () => moveMonth(-1); $('next').onclick = () => moveMonth(1); $('today').onclick = () => { state.month = today().slice(0, 7); render(); };
 for (const name of ['calendar', 'list']) $(`${name}-tab`).onclick = () => { for (const tab of ['calendar', 'list']) { $(`${tab}-panel`).hidden = tab !== name; $(`${tab}-tab`).setAttribute('aria-pressed', String(tab === name)); } };
 $('refresh').onclick = () => task(load);
-function lock() { clearTimeout(expiryTimer); state.master?.fill(0); state.master = null; state.session = null; state.records = []; state.settings = {}; state.original = ''; state.selected = null; nav.reset(); $('app').hidden = true; $('login').hidden = false; $('records').replaceChildren(); $('calendar').replaceChildren(); $('note').value = ''; $('note').defaultValue = ''; $('flow').value = ''; $('cycle-days').value = ''; $('last-start').value = ''; $('export-from').value = ''; $('export-to').value = ''; document.querySelectorAll('#symptoms input').forEach(c => c.checked = false); $('prediction').textContent = ''; $('prediction-range').textContent = ''; $('latest-cycle').textContent = ''; $('record-date').textContent = ''; $('period-status').textContent = ''; }
-$('logout').onclick = () => task(async () => { try { await api('/logout', { method: 'POST', body: '{}' }); } finally { lock(); } });
+function lock() { state.generation++; clearTimeout(expiryTimer); state.master?.fill(0); state.master = null; state.session = null; state.records = []; state.settings = {}; state.original = ''; state.selected = null; nav.reset(); $('app').hidden = true; $('login').hidden = false; $('records').replaceChildren(); $('calendar').replaceChildren(); $('note').value = ''; $('note').defaultValue = ''; $('flow').value = ''; $('cycle-days').value = ''; $('last-start').value = ''; $('export-from').value = ''; $('export-to').value = ''; document.querySelectorAll('#symptoms input').forEach(c => c.checked = false); $('prediction').textContent = ''; $('prediction-range').textContent = ''; $('latest-cycle').textContent = ''; $('record-date').textContent = ''; $('period-status').textContent = ''; }
+$('logout').onclick = () => task(async generation => { try { await api('/logout', { method: 'POST', body: '{}' }, generation); } finally { if (generation === state.generation) lock(); } });
 window.addEventListener('pagehide', lock);
 window.addEventListener('beforeunload', e => { if (dirty() || state.busy) { e.preventDefault(); e.returnValue = ''; } });
 document.addEventListener('troom:before-auto-update', e => { if (dirty() || state.busy || $('export').open) e.preventDefault(); });
