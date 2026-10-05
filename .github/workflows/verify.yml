@@ -64,7 +64,7 @@ jobs:
           VERIFY_TARGET: ${{ matrix.target }}
         run: node tools/install-verify-dependencies.mjs "$VERIFY_TARGET"
       - name: Install Chromium only when used
-        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing"]'), matrix.target)
+        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
       - name: Install Cloud seek fixture and WebKit dependencies
         if: matrix.target == 'cloud'

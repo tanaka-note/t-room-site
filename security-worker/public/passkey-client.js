@@ -3,7 +3,7 @@
 
   const API = "/security/api";
 
-  async function authenticate(service, chooseLink) {
+  async function authenticate(service, chooseLink, options = {}) {
     ensureSupport();
     try {
       const start = await api("/auth/options", { service });
@@ -12,7 +12,7 @@
       const verified = await api("/auth/verify", { service, challengeId: start.challengeId, response: serializeCredential(credential) });
       const link = verified.links.length === 1 ? verified.links[0] : await (chooseLink || chooseLinkDialog)(verified.links, service);
       if (service !== "security" && !link) throw new Error("利用するアカウントを選択してください。");
-      const handoff = service === "security" ? null : await api("/auth/handoff", { service, linkId: link.id });
+      const handoff = service === "security" || options.handoff === false ? null : await api("/auth/handoff", { service, linkId: link.id });
       return { verified, link, handoff, credentialId: verified.credentialId, prfOutput };
     } catch (error) {
       if (error?.name === "PasskeyCancelledError") {

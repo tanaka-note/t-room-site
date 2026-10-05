@@ -1,8 +1,5 @@
 <!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8">
-  <script data-tlain-browser-guard>(function lineBrowserPolicy(scope) {
+<html lang="ja"><head><meta charset="utf-8"><script data-tlain-browser-guard>(function lineBrowserPolicy(scope) {
   function isLine(userAgent) {
     return /(?:^|[\s;(])Line\/\d+(?:\.|\b)/i.test(String(userAgent || ""));
   }
@@ -57,96 +54,20 @@
   }
   return { isLine, isApp, externalUrl, appUrl, contents, css, enforce };
 })(window).enforce();</script>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow,noarchive">
-  <meta name="referrer" content="no-referrer">
-  <title>My Investment Performance</title>
-  <link rel="stylesheet" href="/diary/investment.css?v=diary-fed9f2ce25e0">
-  <meta name="troom-app-build" content="diary-fed9f2ce25e0">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>体調管理 | T-lain</title><link rel="stylesheet" href="/health/health.css?v=health-940c97602048">  <meta name="troom-app-build" content="health-940c97602048">
   <meta name="troom-auto-update" content="enabled">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-fed9f2ce25e0">
 </head>
-<body>
-  <header class="investment-header">
-    <a class="back-link" href="/diary/" aria-label="日記へ戻る">← <span>日記へ戻る</span></a>
-    <p id="header-as-of" class="header-as-of">読み込み中</p>
-  </header>
-
-  <main class="investment-shell">
-    <section class="investment-hero" aria-labelledby="investment-title">
-      <div>
-        <p class="eyebrow">Private portfolio</p>
-        <h1 id="investment-title">My Investment<br>Performance</h1>
-      </div>
-    </section>
-
-    <div id="loading-message" class="loading-message" role="status">資産データを読み込んでいます。</div>
-
-    <div id="dashboard" hidden>
-      <section class="kpi-grid" aria-label="資産状況">
-        <article class="kpi-card kpi-primary">
-          <p>資産総額</p>
-          <strong id="current-total">—</strong>
-        </article>
-        <article class="kpi-card">
-          <p id="change-label">期間中の増減</p>
-          <strong id="period-change">—</strong>
-        </article>
-        <article class="kpi-card">
-          <p id="rate-label">期間中の増減率</p>
-          <strong id="period-rate">—</strong>
-        </article>
-        <article class="kpi-card">
-          <p>過去最高</p>
-          <strong id="all-time-high">—</strong>
-          <span id="all-time-high-date" class="kpi-note"></span>
-        </article>
-      </section>
-
-      <section class="dashboard-card chart-card" aria-labelledby="chart-title">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">Asset history</p>
-            <h2 id="chart-title">資産推移</h2>
-          </div>
-          <p id="chart-period" class="chart-period"></p>
-        </div>
-
-        <div id="range-controls" class="range-controls" aria-label="表示期間"></div>
-
-        <div class="chart-wrap">
-          <canvas id="asset-chart" role="img" aria-label="資産総額の推移"></canvas>
-          <div id="chart-tooltip" class="chart-tooltip" hidden></div>
-        </div>
-        <p id="chart-summary" class="sr-only"></p>
-        <div class="chart-legend"><span aria-hidden="true"></span>資産総額</div>
-      </section>
-
-      <section class="dashboard-card composition-card" aria-labelledby="composition-title">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">Current allocation</p>
-            <h2 id="composition-title">資産構成</h2>
-          </div>
-          <p id="composition-as-of" class="chart-period"></p>
-        </div>
-        <div class="composition-layout">
-          <div class="donut-wrap">
-            <canvas id="composition-chart" role="img" aria-label="最新の資産構成"></canvas>
-            <div class="donut-center">
-              <span>合計</span>
-              <strong id="donut-total">—</strong>
-            </div>
-          </div>
-          <div id="composition-list" class="composition-list"></div>
-        </div>
-      </section>
-
-      <p class="data-note">表示金額は資産管理データをもとに集計しています。</p>
-    </div>
-  </main>
-
-  <script src="/diary/investment.js?v=diary-fed9f2ce25e0" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=diary-fed9f2ce25e0" defer></script>
-</body>
-</html>
+<body><main><header><div><p class="eyebrow">T-lain</p><h1>体調管理</h1><p>田中暢美</p></div><a href="/">T-lainへ</a></header>
+<section id="login" class="card"><h2>パスキーでログイン</h2><p>暢美さん・宏知さんそれぞれのパスキーで、同じ記録を開きます。</p><button id="sign-in">体調管理を開く</button><p><a href="/security/health.html">Security Centerで利用準備・復旧</a></p></section>
+<p id="message" role="status" aria-live="polite"></p>
+<section id="app" hidden><div class="card summary"><div><span class="label">次回の生理予測</span><strong id="prediction"></strong><p id="prediction-range"></p></div><div><span class="label">直近の周期</span><strong id="latest-cycle"></strong></div></div>
+<p class="hint">予測は記録に基づく目安です。未入力は「症状なし」とは扱いません。</p>
+<nav class="tabs" aria-label="表示切替"><button id="calendar-tab" aria-pressed="true">カレンダー</button><button id="list-tab" aria-pressed="false">記録一覧</button></nav>
+<section id="calendar-panel" class="card"><div class="month-controls"><button id="previous" aria-label="前の月">‹</button><h2 id="month"></h2><button id="next" aria-label="次の月">›</button><button id="today">今日</button></div><div id="calendar" class="calendar"></div><p class="legend"><span>● 記録あり</span><span class="period-label">生理期間</span><span class="predicted-label">予測期間</span><span>開始のみ：終了未記録</span></p></section>
+<section id="list-panel" class="card" hidden><h2>記録一覧</h2><div id="records"></div></section>
+<footer><button id="settings-open" class="secondary">予測設定</button><button id="export-open" class="secondary">CSV出力</button><button id="refresh" class="secondary">最新の記録を読み込む</button><button id="logout" class="secondary">ログアウト</button></footer></section>
+</main>
+<dialog id="editor" class="sheet"><form id="record-form"><div class="sheet-header"><h2 id="record-date"></h2><button type="button" id="editor-close" class="secondary">閉じる</button></div><p id="period-status" class="hint"></p><fieldset><legend>生理（任意）</legend><button type="button" id="start-period" aria-pressed="false">生理開始</button><button type="button" id="end-period" aria-pressed="false">生理終了</button><p class="hint">終了は、選択した日を「出血があった最後の日」として登録します。</p></fieldset><fieldset><legend>体調（任意）</legend><div id="symptoms" class="symptoms"></div></fieldset><label>経血量（任意）<select id="flow"><option value="">未入力</option><option>少ない</option><option>普通</option><option>多い</option></select></label><label>備考（任意）<textarea id="note" rows="4" maxlength="10000"></textarea></label><p id="editor-error" role="alert"></p><div class="sheet-actions"><button type="submit" id="save">保存</button><button type="button" id="delete" class="danger">記録を削除</button></div></form></dialog>
+<dialog id="settings" class="sheet"><form id="settings-form"><div class="sheet-header"><h2>予測設定</h2><button type="button" id="settings-close" class="secondary">閉じる</button></div><p>3周期分の実績がそろうまでは、この設定で仮予測します。すべて任意です。</p><label>普段の周期日数<input id="cycle-days" type="number" min="1" max="180" placeholder="未入力の場合は28日"></label><label>直近の生理開始日<input id="last-start" type="date"></label><p class="hint">実績がそろった後は直近最大6周期の中央値と、最短・最長の間隔で予測します。</p><p id="settings-error" role="alert"></p><button type="submit">保存</button></form></dialog>
+<dialog id="export" class="sheet"><form id="export-form"><div class="sheet-header"><h2>CSV出力</h2><button type="button" id="export-close" class="secondary">閉じる</button></div><label>開始日<input id="export-from" type="date" required></label><label>終了日<input id="export-to" type="date" required></label><p>CSVは端末内で作成します。出力ファイルは暗号化されていません。</p><p id="export-error" role="alert"></p><button type="submit">ダウンロード</button></form></dialog>
+<script src="/security/passkey-client.js?v=health-940c97602048"></script><script src="/diary/dialog-navigation.js?v=health-940c97602048"></script><script src="/assets/pwa-auto-update.js?v=health-940c97602048" defer></script><script type="module" src="/health/health.js?v=health-940c97602048"></script></body></html>

@@ -190,9 +190,9 @@
       "id": "security",
       "name": "T-lain Security Center",
       "publicUrls": ["https://tanaka-note.com/security/"],
-      "entrypoints": ["security-worker/public/index.html"],
+      "entrypoints": ["security-worker/public/index.html", "security-worker/public/health.html"],
       "buildRoots": ["security-worker/public"],
-      "buildFiles": ["assets/session-secret.mjs", "security-worker/src/index.js", "security-worker/src/security-domain.js", "security-worker/src/security-headers.js", "security-worker/src/definition-status.js", "security-worker/src/identity-cleanup.js", "assets/account-display.mjs"],
+      "buildFiles": ["assets/session-secret.mjs", "security-worker/src/index.js", "security-worker/src/security-domain.js", "security-worker/src/security-headers.js", "security-worker/src/definition-status.js", "security-worker/src/identity-cleanup.js", "assets/account-display.mjs", "security-worker/src/health-keys.js", "health-worker/public/health-crypto.mjs"],
       "buildMode": "content-hash",
       "serviceWorker": null,
       "manifest": null,
@@ -279,6 +279,38 @@
       "twa": null,
       "deployTarget": "t-room-downloader2",
       "deployCwd": "downloader2-worker",
+      "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "health",
+      "name": "体調管理",
+      "publicUrls": [
+        "https://tanaka-note.com/health/"
+      ],
+      "entrypoints": [
+        "health-worker/public/index.html"
+      ],
+      "buildRoots": [
+        "health-worker/public"
+      ],
+      "buildFiles": [
+        "health-worker/src/index.js",
+        "health-worker/src/worker.js",
+        "assets/security-audit-worker.js",
+        "assets/line-browser-worker.mjs",
+        "assets/line-browser-policy.mjs",
+        "assets/line-browser-csp.mjs",
+        "assets/session-secret.mjs",
+        "assets/session-policy.mjs",
+        "security-worker/public/passkey-client.js",
+        "diary-worker/public/dialog-navigation.js"
+      ],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "manifest": null,
+      "twa": null,
+      "deployTarget": "t-room-health",
+      "deployCwd": "health-worker",
       "deployCommand": "pnpm run deploy"
     }
   ],

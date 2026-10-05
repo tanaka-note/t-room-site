@@ -28,7 +28,8 @@
     { "binding": "BILLING_AUTH", "service": "t-room-billing", "entrypoint": "SecurityIntegration" },
     { "binding": "AI_AUTH", "service": "t-room-ai", "entrypoint": "SecurityIntegration" },
     { "binding": "DOWNLOADER_AUTH", "service": "t-room-downloader", "entrypoint": "SecurityIntegration" },
-    { "binding": "DOWNLOADER2_AUTH", "service": "t-room-downloader2", "entrypoint": "SecurityIntegration" }
+    { "binding": "DOWNLOADER2_AUTH", "service": "t-room-downloader2", "entrypoint": "SecurityIntegration" },
+    { "binding": "HEALTH_AUTH", "service": "t-room-health", "entrypoint": "SecurityIntegration" }
   ],
   "queues": {
     "consumers": [

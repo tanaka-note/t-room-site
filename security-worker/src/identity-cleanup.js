@@ -1,10 +1,12 @@
 // A disabled Identity is an audit attribution record until every guard passes.
 // Only Security DB metadata is touched; never call a service or an R2 binding.
+const KNOWN_TRIGGERS = new Set(["health_members_only", "health_members_only_update"]);
 const KNOWN_TABLES = new Set([
   "security_identities", "security_credentials", "security_service_links",
   "security_invitations", "security_setup_sessions", "security_challenges",
   "security_handoffs", "security_tcloud_client_vaults", "security_tcloud_key_envelopes",
   "security_active_sessions", "security_audit_events", "security_ai_budget_policies",
+  "security_health_members", "security_health_config", "security_health_vaults", "security_health_grants",
   "security_runtime_state", "security_definition_events", "security_definition_updates"
 ]);
 
@@ -20,9 +22,12 @@ export const DISABLED_IDENTITY_CLEANUP_GUARD = `
   AND (identity.last_seen_at IS NULL OR datetime(identity.last_seen_at) < datetime(?1))
   AND NOT EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = identity.id AND c.status != 'revoked')
   AND NOT EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = identity.id
-    AND (l.status != 'disabled' OR l.service IN ('ai', 'downloader', 'downloader2')))
+    AND (l.status != 'disabled' OR l.service IN ('ai', 'downloader', 'downloader2', 'health')))
   AND NOT EXISTS (SELECT 1 FROM security_invitations v WHERE v.identity_id = identity.id AND v.status NOT IN ('used', 'revoked', 'expired'))
   AND NOT EXISTS (SELECT 1 FROM security_invitations v WHERE v.created_by_identity_id = identity.id)
+  AND NOT EXISTS (SELECT 1 FROM security_health_members WHERE identity_id=identity.id)
+  AND NOT EXISTS (SELECT 1 FROM security_health_vaults WHERE identity_id=identity.id)
+  AND NOT EXISTS (SELECT 1 FROM security_health_grants WHERE identity_id=identity.id)
   AND NOT EXISTS (SELECT 1 FROM security_ai_budget_policies p WHERE p.identity_id = identity.id)
   AND NOT EXISTS (SELECT 1 FROM security_setup_sessions s WHERE s.identity_id = identity.id
     OR s.credential_id IN (SELECT credential_id FROM security_credentials WHERE identity_id = identity.id))
@@ -57,7 +62,7 @@ export async function cleanupDisabledIdentities(db, retentionCutoff) {
   if (!Number.isFinite(Date.parse(retentionCutoff))) throw new Error("Invalid Identity retention cutoff");
   // New tables/triggers require a new dependency review before enabling deletion.
   const schema = await db.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'trigger') AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*' AND name != 'd1_migrations'").all();
-  if ((schema.results || []).some((row) => row.type !== "table" || !KNOWN_TABLES.has(row.name))
+  if ((schema.results || []).some((row) => row.type === "trigger" ? !KNOWN_TRIGGERS.has(row.name) : !KNOWN_TABLES.has(row.name))
     || [...KNOWN_TABLES].some((name) => !(schema.results || []).some((row) => row.name === name))) {
     console.warn("Identity cleanup skipped: schema requires dependency review");
     return { deleted: 0, skipped: "schema" };
