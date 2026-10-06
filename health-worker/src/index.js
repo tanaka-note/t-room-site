@@ -3,7 +3,7 @@ import { handleRequest, linkTarget } from './worker.js';
 export default class HealthWorker extends WorkerEntrypoint {
   async fetch(request) {
     try { return await handleRequest(request, this.env, this.ctx); }
-    catch (error) { return Response.json({ error: error.status ? error.message : '体調管理の処理を完了できませんでした。' }, { status: error.status || 500, headers: { 'Cache-Control': 'no-store' } }); }
+    catch (error) { return Response.json({ code: error.code, error: error.status ? error.message : '体調管理の処理を完了できませんでした。' }, { status: error.status || 500, headers: { 'Cache-Control': 'no-store' } }); }
   }
 }
 export class SecurityIntegration extends WorkerEntrypoint {

@@ -56,8 +56,8 @@
 })(window).enforce();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>体調管理 | T-lain</title>
-  <link rel="stylesheet" href="/health/health.css?v=health-9b5de631476b">
-  <meta name="troom-app-build" content="health-9b5de631476b">
+  <link rel="stylesheet" href="/health/health.css?v=health-34d0176017d8">
+  <meta name="troom-app-build" content="health-34d0176017d8">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -89,7 +89,7 @@
 
       <section class="card cycle-card" aria-label="生理の目安">
         <div class="cycle-overview">
-          <div><span class="label">次回の生理の目安</span><strong id="prediction-window"></strong></div>
+          <div><span class="label">次回の目安（中心日）</span><strong id="prediction-window"></strong></div>
           <div><span class="label">前回の開始日</span><strong id="last-period-start"></strong></div>
         </div>
         <div id="period-reminder" class="period-reminder" hidden>
@@ -103,6 +103,7 @@
               <div><dt>次回の開始予測</dt><dd id="prediction"></dd></div>
               <div><dt>直近の周期</dt><dd id="latest-cycle"></dd></div>
             </dl>
+            <p id="prediction-basis" class="hint"></p>
             <p id="prediction-range" class="hint"></p>
             <p class="hint">予測は記録に基づく目安です。</p>
             <button id="settings-open" class="secondary">予測設定</button>
@@ -112,10 +113,11 @@
 
       <section class="card journal-card" aria-label="体調の記録">
         <nav class="tabs" aria-label="表示切替">
-          <button id="calendar-tab" aria-pressed="true">カレンダー</button>
-          <button id="list-tab" aria-pressed="false">記録一覧</button>
+          <button id="calendar-tab" aria-controls="calendar-panel" aria-pressed="true">カレンダー</button>
+          <button id="list-tab" aria-controls="list-panel" aria-pressed="false">記録一覧</button>
+          <button id="insights-tab" aria-controls="insights-panel" aria-pressed="false">振り返り</button>
         </nav>
-        <section id="calendar-panel">
+        <section id="calendar-panel" aria-labelledby="calendar-tab">
           <div class="month-controls">
             <button id="previous" class="secondary" aria-label="前の月">‹</button>
             <h2 id="month"></h2>
@@ -125,7 +127,35 @@
           <div id="calendar" class="calendar"></div>
           <p class="legend"><span class="record-label">● 体調・備考などの記録</span><span class="period-label">生理期間</span><span class="predicted-label">予測期間</span></p>
         </section>
-        <section id="list-panel" hidden><h2 class="list-title">記録一覧</h2><div id="records"></div></section>
+        <section id="list-panel" aria-labelledby="list-tab" hidden><h2 class="list-title">記録一覧</h2><div id="records"></div></section>
+        <section id="insights-panel" aria-labelledby="insights-tab" hidden>
+          <header class="insight-header"><h2>過去30日の記録</h2><p id="insight-range" class="hint"></p></header>
+          <dl class="insight-totals">
+            <div><dt>記録した日</dt><dd id="insight-recorded"></dd></div>
+            <div><dt>記録のない日</dt><dd id="insight-unrecorded"></dd></div>
+            <div><dt>備考がある日</dt><dd id="insight-notes"></dd></div>
+          </dl>
+          <section class="insight-section" aria-labelledby="condition-title">
+            <h3 id="condition-title">今日の調子</h3><dl id="insight-conditions" class="insight-counts"></dl>
+          </section>
+          <section class="insight-section" aria-labelledby="symptom-title">
+            <h3 id="symptom-title">気になる体調</h3>
+            <table class="insight-table"><caption class="hint">症状を記録した日数（同じ日は1日として集計）</caption><thead><tr><th scope="col">症状</th><th scope="col">直近30日</th><th scope="col">前の30日</th></tr></thead><tbody id="insight-symptoms"></tbody></table>
+          </section>
+          <p id="insight-previous" class="hint"></p>
+          <p class="hint">未入力は「普通」や「症状なし」として数えません。表示は入力した記録の集計です。</p>
+          <details id="insight-cycles" class="insight-details" hidden>
+            <summary>生理・周期の実績</summary>
+            <dl id="insight-cycle-facts" class="insight-counts"></dl><ul id="insight-cycle-history" class="cycle-history"></ul>
+            <p class="hint">開始日の間隔を表示しています。外れ値は除外せず、終了日は自動補完しません。予測とは別の実績です。</p>
+          </details>
+          <details class="insight-details">
+            <summary>この期間の記録をまとめて見る</summary>
+            <p class="hint">受診時などに、この画面で入力した内容をそのまま確認できます。</p>
+            <h3>生理の記録</h3><ul id="insight-periods" class="cycle-history"></ul>
+            <h3>日別記録</h3><div id="insight-daily"></div>
+          </details>
+        </section>
       </section>
       <footer class="app-footer">
         <button id="refresh" class="secondary">最新の記録を読み込む</button>
@@ -139,6 +169,7 @@
     <form id="record-form">
       <div class="sheet-header"><div><p id="record-date" class="eyebrow"></p><h2 id="editor-title">体調の記録</h2></div><button type="button" id="editor-close" class="secondary">閉じる</button></div>
       <p class="hint">すべて任意です。未入力は「症状なし」とは扱いません。</p>
+      <fieldset class="condition-fieldset"><legend>今日の調子 <span class="optional">任意</span></legend><div id="conditions" class="conditions"></div><p class="hint">もう一度押すと未選択に戻ります。</p></fieldset>
       <fieldset class="symptom-fieldset"><legend>気になる体調</legend><div id="symptoms" class="symptoms"></div></fieldset>
       <label class="field">備考<textarea id="note" rows="4" maxlength="10000" placeholder="今日の体調や、気づいたこと"></textarea></label>
       <details id="period-details" class="period-details">
@@ -175,9 +206,9 @@
       <p id="export-error" class="error" role="alert"></p><button type="submit">ダウンロード</button>
     </form>
   </dialog>
-  <script src="/security/passkey-client.js?v=health-9b5de631476b"></script>
-  <script src="/diary/dialog-navigation.js?v=health-9b5de631476b"></script>
-  <script src="/assets/pwa-auto-update.js?v=health-9b5de631476b" defer></script>
-  <script type="module" src="/health/health.js?v=health-9b5de631476b"></script>
+  <script src="/security/passkey-client.js?v=health-34d0176017d8"></script>
+  <script src="/diary/dialog-navigation.js?v=health-34d0176017d8"></script>
+  <script src="/assets/pwa-auto-update.js?v=health-34d0176017d8" defer></script>
+  <script type="module" src="/health/health.js?v=health-34d0176017d8"></script>
 </body>
 </html>

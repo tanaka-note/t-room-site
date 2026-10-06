@@ -6,9 +6,9 @@ export function d1(database) {
   const query = (sql, args = []) => ({ bind: (...values) => query(sql, values), first: async () => database.prepare(sql).get(...args) || null, all: async () => ({ results: database.prepare(sql).all(...args) }), run: async () => ({ meta: { changes: Number(database.prepare(sql).run(...args).changes) } }) });
   return { prepare: query, batch: async statements => { database.exec('BEGIN'); try { const out = []; for (const s of statements) out.push(await s.run()); database.exec('COMMIT'); return out; } catch (e) { database.exec('ROLLBACK'); throw e; } } };
 }
-export async function fixture() {
+export async function fixture({ master: importedMaster } = {}) {
   const db = new DatabaseSync(':memory:'); db.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
-  const master = randomBytes(32); const users = {};
+  const master = importedMaster ? new Uint8Array(importedMaster) : randomBytes(32); const users = {};
   for (const person of ['owner', 'subject']) {
     const prf = new Uint8Array(randomBytes(32)); const vault = await createClientVault(prf);
     users[person] = { prf, bundle: { vault, wrappedKey: await wrapMaster(master, vault.publicKey) }, handoff: { identityId: person === 'owner' ? 'primary-admin' : 'fixture-subject', credentialId: `fixture-${person}`, serviceLinkId: `link-${person}`, serviceAccountId: 'nobumi', sessionEpoch: 1 } };

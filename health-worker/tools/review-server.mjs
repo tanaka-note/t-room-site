@@ -1,13 +1,23 @@
 // Local synthetic review only. This file is outside the Worker bundle and assets.
 import { createServer } from 'node:http';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture } from '../test/fixture.js';
+import { importReview } from './review-import.mjs';
 import { handleRequest, CONTENT_SECURITY_POLICY } from '../src/worker.js';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-export async function startReview(port = 0) {
-  const f = await fixture(); const issued = new Map();
+export async function startReview(port = 0, { source } = {}) {
+  const snapshot = source ? await importReview(source) : null;
+  let f;
+  try {
+    f = await fixture(snapshot ? { master: snapshot.master } : {});
+    if (snapshot) {
+      const insert = f.db.prepare("INSERT INTO health_records(record_id,account_id,iv,ciphertext,revision) VALUES(?,'nobumi',?,?,?)");
+      for (const row of snapshot.records) insert.run(row.id, row.iv, row.ciphertext, row.revision);
+    }
+  } catch (error) { f?.master.fill(0); f?.db.close(); throw error; }
+  finally { snapshot?.master.fill(0); }
   const server = createServer(async (incoming, outgoing) => {
     try {
       const origin = `http://127.0.0.1:${server.address().port}`;
@@ -31,20 +41,20 @@ export async function startReview(port = 0) {
         const relative = mapping.get(url.pathname) || (url.pathname.startsWith('/health/') ? `health-worker/public/${url.pathname.slice(8) || 'index.html'}` : null);
         if (!relative || relative.includes('..')) { outgoing.writeHead(404); outgoing.end(); return; }
         let data = await readFile(resolve(root, relative));
-        if (relative.endsWith('index.html')) data = Buffer.from(data.toString().replace('<body>', '<body><div class="card" id="review-banner"><strong>ローカル確認用・合成データのみ／終了すると記録は消えます</strong><label>操作する利用者<select id="review-person"><option value="owner">田中宏知（確認用）</option><option value="subject">田中暢美（確認用）</option></select></label></div>'));
+        if (relative.endsWith('index.html')) data = Buffer.from(data.toString().replace('<body>', '<body><div class="card review-banner" id="review-banner"><strong>ローカル確認用・合成データのみ／終了すると記録は消えます</strong><label>操作する利用者<select id="review-person"><option value="owner">田中宏知（確認用）</option><option value="subject">田中暢美（確認用）</option></select></label></div>'));
         outgoing.writeHead(200, { 'Content-Type': relative.endsWith('.html') ? 'text/html;charset=utf-8' : relative.endsWith('.css') ? 'text/css' : 'text/javascript', 'Cache-Control': 'no-store', 'Content-Security-Policy': CONTENT_SECURITY_POLICY }); outgoing.end(data); return;
       }
       const chunks = []; for await (const chunk of incoming) chunks.push(chunk);
       const request = new Request(url, { method: incoming.method, headers: incoming.headers, ...(['GET','HEAD'].includes(incoming.method) ? {} : { body: Buffer.concat(chunks) }) });
       const response = await handleRequest(request, f.env);
       outgoing.writeHead(response.status, Object.fromEntries(response.headers)); outgoing.end(Buffer.from(await response.arrayBuffer()));
-    } catch (e) { outgoing.writeHead(e.status || 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); outgoing.end(JSON.stringify({ error: e.status ? e.message : '確認環境で処理に失敗しました。' })); }
+    } catch (e) { outgoing.writeHead(e.status || 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); outgoing.end(JSON.stringify({ code: e.code, error: e.status ? e.message : '確認環境で処理に失敗しました。' })); }
   });
   await new Promise(resolve => server.listen(port, '127.0.0.1', resolve));
   return { url: `http://127.0.0.1:${server.address().port}/health/`, fixture: f, close: async () => { await new Promise(resolve => server.close(resolve)); f.master.fill(0); f.db.close(); } };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const instance = await startReview(Number(process.env.HEALTH_REVIEW_PORT || 8793));
+  const instance = await startReview(Number(process.env.HEALTH_REVIEW_PORT || 8793), { source: process.env.HEALTH_REVIEW_IMPORT_URL });
   console.log(`Local synthetic review: ${instance.url}`);
   process.once('SIGINT', async () => { await instance.close(); process.exit(0); });
 }

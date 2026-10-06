@@ -8,7 +8,7 @@ export const linkTarget = Object.freeze({ accountId: 'nobumi', displayLabel: '�
 const COOKIE = 'troom_health_session';
 const BASE = '/health';
 const enc = new TextEncoder();
-export class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+export class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
 const json = (value, status = 200, headers = {}) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers } });
 const enabled = env => env.PASSKEY_ENABLED === 'true';
 const now = () => Math.floor(Date.now() / 1000);
@@ -55,7 +55,7 @@ async function authorized(request, env) {
   if (result?.valid !== true) throw new HttpError(401, 'もう一度パスキーでログインしてください。');
   const key = await env.SECURITY.getHealthKeyBundle({ identityId: session.identityId, credentialId: session.credentialId, serviceLinkId: session.serviceLinkId });
   if (!key) throw new HttpError(403, 'Security Centerで利用準備と承認を完了してください。');
-  if (request.headers.get('X-Health-Session') !== session.sessionId) throw new HttpError(409, '別のログインに切り替わりました。もう一度ログインしてください。');
+  if (request.headers.get('X-Health-Session') !== session.sessionId) throw new HttpError(409, '別のログインに切り替わりました。もう一度ログインしてください。', 'session_changed');
   return session;
 }
 export async function handleRequest(request, env, context) {
@@ -87,17 +87,28 @@ export async function handleRequest(request, env, context) {
   }
   const session = await authorized(request, env);
   if (path === '/api/logout' && request.method === 'POST') { await recordSecurityAudit(env, request, {service:'health',eventType:'logout',outcome:'success',identityId:session.identityId,credentialId:session.credentialId,serviceLinkId:session.serviceLinkId,serviceAccountId:'nobumi',role:'member',authMethod:'passkey',sessionId:session.sessionId}); return json({ ok: true }, 200, { 'Set-Cookie': `${COOKIE}=; Path=${BASE}; Max-Age=0; HttpOnly; SameSite=Strict${url.protocol === 'https:' ? '; Secure' : ''}` }); }
-  if (path === '/api/records' && request.method === 'GET') return json({ records: (await env.DB.prepare("SELECT record_id AS id, iv, ciphertext, revision FROM health_records WHERE account_id = 'nobumi' ORDER BY record_id").all()).results });
+  if (path === '/api/records' && request.method === 'GET') return json({ records: (await env.DB.prepare("SELECT record_id AS id, iv, ciphertext, revision FROM health_records WHERE account_id = 'nobumi' AND ciphertext != '' ORDER BY record_id").all()).results });
   if (path.startsWith('/api/records/')) {
     const id = path.slice('/api/records/'.length);
     if (!/^[A-Za-z0-9_-]{43}$/.test(id)) throw new HttpError(400, '記録の識別子を確認してください。');
     if (request.method === 'PUT') {
       const v = await body(request);
-      if (Object.keys(v).sort().join(',') !== 'ciphertext,iv' || !/^[A-Za-z0-9_-]{16}$/.test(v.iv) || typeof v.ciphertext !== 'string' || !/^[A-Za-z0-9_-]{22,180000}$/.test(v.ciphertext)) throw new HttpError(400, '暗号化された記録だけを保存できます。');
-      await env.DB.prepare("INSERT INTO health_records (record_id, account_id, iv, ciphertext) VALUES (?, 'nobumi', ?, ?) ON CONFLICT(record_id) DO UPDATE SET iv=excluded.iv, ciphertext=excluded.ciphertext, revision=health_records.revision+1, updated_at=CURRENT_TIMESTAMP").bind(id, v.iv, v.ciphertext).run();
-      return json({ ok: true });
+      if (Object.keys(v).sort().join(',') !== 'ciphertext,expectedRevision,iv' || !/^[A-Za-z0-9_-]{16}$/.test(v.iv) || typeof v.ciphertext !== 'string' || !/^[A-Za-z0-9_-]{22,180000}$/.test(v.ciphertext) || !Number.isSafeInteger(v.expectedRevision) || v.expectedRevision < 0) throw new HttpError(400, '暗号化された記録と更新番号を確認してください。');
+      // One atomic statement checks the revision and writes. Deleted rows retain only
+      // their opaque ID/counter, preventing an old editor from overwriting a recreation.
+      const result = v.expectedRevision === 0
+        ? await env.DB.prepare("INSERT INTO health_records (record_id, account_id, iv, ciphertext) VALUES (?, 'nobumi', ?, ?) ON CONFLICT(record_id) DO UPDATE SET iv=excluded.iv, ciphertext=excluded.ciphertext, revision=health_records.revision+1, updated_at=CURRENT_TIMESTAMP WHERE health_records.account_id='nobumi' AND health_records.ciphertext='' RETURNING revision").bind(id, v.iv, v.ciphertext).first()
+        : await env.DB.prepare("UPDATE health_records SET iv=?, ciphertext=?, revision=revision+1, updated_at=CURRENT_TIMESTAMP WHERE account_id='nobumi' AND record_id=? AND revision=? AND ciphertext!='' RETURNING revision").bind(v.iv, v.ciphertext, id, v.expectedRevision).first();
+      if (!result) throw new HttpError(409, '別の端末で記録が変更されました。入力内容は保持しています。閉じて最新の記録を読み込み、再度編集してください。', 'revision_conflict');
+      return json({ ok: true, revision: result.revision });
     }
-    if (request.method === 'DELETE') { await env.DB.prepare("DELETE FROM health_records WHERE account_id='nobumi' AND record_id=?").bind(id).run(); return json({ ok: true }); }
+    if (request.method === 'DELETE') {
+      const v = await body(request, 4096);
+      if (Object.keys(v).join(',') !== 'expectedRevision' || !Number.isSafeInteger(v.expectedRevision) || v.expectedRevision < 1) throw new HttpError(400, '削除する記録の更新番号を確認してください。');
+      const result = await env.DB.prepare("UPDATE health_records SET iv='', ciphertext='', revision=revision+1, updated_at=CURRENT_TIMESTAMP WHERE account_id='nobumi' AND record_id=? AND revision=? AND ciphertext!='' RETURNING revision").bind(id, v.expectedRevision).first();
+      if (!result) throw new HttpError(409, '別の端末で記録が変更されました。閉じて最新の記録を読み込み、再度確認してください。', 'revision_conflict');
+      return json({ ok: true, revision: result.revision });
+    }
   }
   throw new HttpError(404, '見つかりません。');
 }

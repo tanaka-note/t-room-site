@@ -3,11 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/worker.js && node --check public/health.js && node --check public/health-crypto.mjs && node --check public/health-domain.mjs",
+    "check": "node tools/check.mjs",
     "test": "node --test test/*.test.js",
     "test:browser": "node test/health.browser.mjs",
     "review": "node tools/review-server.mjs",
     "deploy": "wrangler deploy"
   },
-  "devDependencies": { "wrangler": "4.121.0" }
+  "devDependencies": {
+    "wrangler": "4.121.0"
+  }
 }
