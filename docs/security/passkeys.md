@@ -21,7 +21,7 @@ Security Centerの現在ログイン中表示は監査時刻から推測せず�
 
 アカウントの画面用名称は `assets/account-display.mjs` で本人Identity・service・account ID・roleから解決する。田中宏知のメイン管理は「田中宏知（オーナー）」、日記main-userと本人のT-Cloud folder-member利用は「田中宏知（一般ユーザー）」とする。日記のaccountName・投稿者／編集者・世帯切替、T-Cloudのfolder表示名／path／scopeは正本のまま維持し、画面用名称を流用しない。監査の名称は当時のaccountとroleで表示時に解決し、権限不明や旧subadmin利用を現在のIdentity名からオーナー扱いしない。監査原本は更新しない。
 
-既存PWは移行中もすべて維持する。第一管理者PWは、パスキー紛失時に管理者パスキーとT-Cloud鍵envelopeを復旧登録する恒久経路であり、パスキー登録を理由に無効化・変更・削除しない。Security Workerの`PASSKEY_ENABLED=false`は全パスキーsessionをepochで失効するグローバル緊急停止、各サービスWorkerの同名設定はそのサービスだけをfail-closedにするローカル停止として分離し、どちらもPW経路へ影響させない。
+既存PWの記録は維持する。日記の`main-admin`・`main-user`と請求書の`owner`は、本人の指示によりID/PWログインを廃止しPasskey専用とする（[Password認証ポリシー](password-auth-policy.md)）。Security Center／T-Cloudの第一管理者PWは、パスキー紛失時に管理者パスキーとT-Cloud鍵envelopeを復旧登録する恒久経路であり、無効化・変更・削除しない。Security Workerの`PASSKEY_ENABLED=false`は全パスキーsessionをepochで失効するグローバル緊急停止、各サービスWorkerの同名設定はそのサービスだけをfail-closedにするローカル停止として分離する。これらの設定で廃止済みPWログインを復活させない。
 
 CloudflareのSecret変更とD1更新は単一トランザクションにできないため、グローバル緊急停止は必ず`security-worker`で`pnpm run passkeys:disable`を使用する。このコマンドはD1のepoch更新とpersistent runtime gate停止を同じSQL文で原子的に確定してから、Secret bindingの`PASSKEY_ENABLED=false`を反映する。Secretの反映前でもruntime gateが新規パスキーsession発行を拒否するため、停止中のアクセスが0件の場合と停止処理中の認証競合のどちらでも旧sessionは復活しない。Secret反映に失敗してもruntime gateは停止したままとし、自動的に有効へ戻さない。エラー時は`passkeys:enable`を実行せず、`passkeys:disable`を再実行して停止を完了する。
 

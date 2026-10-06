@@ -24,7 +24,7 @@ function sessionExpiry(cookie) {
   return payload.exp;
 }
 
-test("owner and member sessions stay fixed for 12 hours", async () => {
+test("owner passwords are retired; other password sessions stay fixed for 12 hours", async () => {
   runWrangler(["d1", "migrations", "apply", "billing-db", "--local"]);
   const salt = randomBytes(16);
   const hash = pbkdf2Sync(testPassword, salt, 100000, 32, "sha256");
@@ -80,7 +80,15 @@ test("owner and member sessions stay fixed for 12 hours", async () => {
 
   try {
     await waitForServer();
-    for (const loginId of ["contact@a-tanaka.jp", "sub@a-tanaka.jp", "chiharu", "hideaki", "machiko", "masami", "yuuka"]) {
+    for (const loginId of ["contact@a-tanaka.jp", "sub@a-tanaka.jp"]) {
+      const owner = await fetch(`${origin}/billing/api/login`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: origin },
+        body: JSON.stringify({ loginId, password: testPassword })
+      });
+      assert.equal(owner.status,401);
+      assert.equal(owner.headers.get("set-cookie"),null);
+    }
+    for (const loginId of ["chiharu", "hideaki", "machiko", "masami", "yuuka"]) {
       const cookie = await login(loginId);
       const firstExpiry = sessionExpiry(cookie);
       await new Promise((resolve) => setTimeout(resolve, 1100));

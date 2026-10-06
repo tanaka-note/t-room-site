@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -36,7 +37,7 @@ assert.equal(clearLoginAttempts.status, 0, clearLoginAttempts.stderr || clearLog
 
 const server = spawn(process.execPath, [
   wranglerPath,
-  "dev",
+  "dev", ...passkeyFixtureArgs,
   "--local",
   "--port",
   String(port),
@@ -85,12 +86,12 @@ async function request(path, { method = "GET", body, cookie } = {}) {
 }
 
 async function login(loginId, password) {
-  const { response, result } = await request("/login", { method: "POST", body: { loginId, password } });
+  const { response, result } = await diaryFixtureLogin(request, loginId, password);
   assert.equal(response.status, 200, JSON.stringify(result));
   const setCookie = response.headers.get("set-cookie");
-  assert.doesNotMatch(setCookie, /Max-Age=|Expires=/i, 'password login uses a browser-session cookie');
+  if (result.authMethod !== "passkey") assert.doesNotMatch(setCookie, /Max-Age=|Expires=/i, 'password login uses a browser-session cookie');
   const payload = JSON.parse(Buffer.from(setCookie.split('=', 2)[1].split('.')[0], 'base64url'));
-  assert.ok(Math.abs(payload.exp - Date.parse(payload.startedAt) / 1000 - 43200) < 2, 'fixed twelve-hour server expiry');
+  if (result.authMethod !== "passkey") assert.ok(Math.abs(payload.exp - Date.parse(payload.startedAt) / 1000 - 43200) < 2, 'fixed twelve-hour server expiry');
   return { session: result, cookie: setCookie.split(";", 1)[0] };
 }
 
@@ -175,10 +176,10 @@ try {
   assert.equal(missing.response.status, 404);
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const wrongPassword = await request("/login", { method: "POST", body: { loginId: "main@example.test", password: "wrong" } });
+    const wrongPassword = await request("/login", { method: "POST", body: { loginId: "wife@example.test", password: "wrong" } });
     assert.equal(wrongPassword.response.status, 401);
   }
-  const locked = await request("/login", { method: "POST", body: { loginId: "main@example.test", password: "main-test" } });
+  const locked = await request("/login", { method: "POST", body: { loginId: "wife@example.test", password: "wife-test" } });
   assert.equal(locked.response.status, 429);
 
   process.stdout.write("Diary permission integration test passed.\n");

@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -45,7 +46,7 @@ wrangler("d1", "execute", "diary-db", "--local", "--command", `
 `);
 
 const server = spawn(process.execPath, [
-  wranglerPath, "dev", "--local", "--persist-to", persistDirectory, "--port", String(port),
+  wranglerPath, "dev", ...passkeyFixtureArgs, "--local", "--persist-to", persistDirectory, "--port", String(port),
   "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
@@ -82,7 +83,7 @@ async function request(path, { method = "GET", body, cookie, atomicFailure } = {
 }
 
 async function login(loginId, password) {
-  const result = await request("/login", { method: "POST", body: { loginId, password } });
+  const result = await diaryFixtureLogin(request, loginId, password);
   assert.equal(result.response.status, 200, JSON.stringify(result.result));
   return result.cookie;
 }

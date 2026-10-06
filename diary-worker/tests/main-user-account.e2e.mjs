@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -38,7 +39,7 @@ for (const args of [
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
-const server = spawn(process.execPath, [wranglerPath, "dev", "--local", "--port", String(port),
+const server = spawn(process.execPath, [wranglerPath, "dev", ...passkeyFixtureArgs, "--local", "--port", String(port),
   "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main-admin@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
@@ -75,7 +76,7 @@ async function request(path, { method = "GET", body, cookie } = {}) {
 }
 
 async function login(loginId, password) {
-  return request("/login", { method: "POST", body: { loginId, password } });
+  return diaryFixtureLogin(request, loginId, password);
 }
 
 try {
@@ -87,21 +88,22 @@ try {
   assert.equal(first.result.isGlobalOwner, false);
   assert.equal(first.result.role, "user");
   assert.equal(first.result.canManageEntries, true);
-  assert.equal(first.result.mustChangePassword, true);
+  assert.equal(first.result.mustChangePassword, false);
   assert.equal(first.result.canViewTrash, true);
   assert.equal(first.result.canPermanentlyDelete, true);
   assert.equal(first.result.canViewInvestment, true);
 
-  const blockedBeforeChange = await request("/entries", { cookie: first.cookie });
-  assert.equal(blockedBeforeChange.response.status, 428);
+  const entriesBeforeChange = await request("/entries", { cookie: first.cookie });
+  assert.equal(entriesBeforeChange.response.status, 200);
 
   const changed = await request("/password/initial", {
     method: "POST", cookie: first.cookie,
     body: { password: replacementPassword, confirmation: replacementPassword }
   });
-  assert.equal(changed.response.status, 200, JSON.stringify(changed.result));
-  assert.equal(changed.result.mustChangePassword, false);
-  assert.equal(changed.result.canViewTrash, true);
+  assert.equal(changed.response.status, 409, JSON.stringify(changed.result));
+  const passwordLogin = await request("/login", { method: "POST", body: { loginId: "sub@a-tanaka.jp", password: temporaryPassword } });
+  assert.equal(passwordLogin.response.status, 401);
+  assert.equal(passwordLogin.cookie, undefined);
 
   const loggedIn = await login("sub@a-tanaka.jp", replacementPassword);
   assert.equal(loggedIn.response.status, 200, JSON.stringify(loggedIn.result));
@@ -190,7 +192,7 @@ try {
   assert.equal(searchLeak.response.status, 200);
   assert.equal(searchLeak.result.entries.length, 0);
 
-  process.stdout.write("Diary main user permissions and initial password test passed.\n");
+  process.stdout.write("Diary main user Passkey permissions and retired password test passed.\n");
 } finally {
   if (server.exitCode === null) {
     server.kill();
