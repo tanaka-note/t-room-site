@@ -1,7 +1,15 @@
 // Local, password-only policy. No cross-service/Identity fallback and no cache:
 // every protected password request observes the current D1 generation.
+export function isPasswordAuthRetired(service, accountId) {
+  return (service === "diary" && ["main-admin", "main-user"].includes(accountId))
+    || (service === "billing" && accountId === "owner");
+}
+
 export async function readPasswordAuthPolicy(env, service, accountId) {
   if (!["diary", "billing"].includes(service) || !accountId) throw new Error("InvalidPasswordPolicyAccount");
+  // Permanent retirement takes precedence over absent or enabled DB policy.
+  // Keep accounts/credentials intact for Passkey and Security Center recovery.
+  if (isPasswordAuthRetired(service, accountId)) return { enabled: false, epoch: 0 };
   const row = await env.DB.prepare(`SELECT password_auth_enabled, password_session_epoch
     FROM password_auth_policy WHERE service = ? AND account_id = ?`).bind(service, accountId).first();
   if (!row) return { enabled: true, epoch: 0 };

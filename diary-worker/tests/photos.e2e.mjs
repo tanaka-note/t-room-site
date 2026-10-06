@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -28,7 +29,7 @@ assert.equal(migration.status, 0, migration.stderr || migration.stdout);
 
 const server = spawn(process.execPath, [
   wranglerPath,
-  "dev",
+  "dev", ...passkeyFixtureArgs,
   "--local",
   "--test-scheduled",
   "--persist-to",
@@ -83,7 +84,7 @@ async function jsonRequest(path, { method = "GET", body, cookie } = {}) {
 }
 
 async function login(loginId, password) {
-  const { response, result } = await jsonRequest("/login", { method: "POST", body: { loginId, password } });
+  const { response, result } = await diaryFixtureLogin(jsonRequest, loginId, password);
   assert.equal(response.status, 200, JSON.stringify(result));
   return response.headers.get("set-cookie").split(";", 1)[0];
 }

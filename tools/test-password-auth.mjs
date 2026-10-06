@@ -99,7 +99,7 @@ for (const service of ["diary", "billing"]) test(`${service}: fixed twelve-hour 
     static now() { return now; }
   };
   try {
-    const id = service === "diary" ? "main-admin" : "owner";
+    const id = service === "diary" ? "wife-admin" : "chiharu";
     const login = await f.login(id), payload = cookiePayload(login.cookie);
     assert.equal(login.status, 200);
     assert.equal(payload.exp, Math.floor(Date.parse(payload.startedAt) / 1000) + 43200);
@@ -119,11 +119,6 @@ for (const service of ["diary", "billing"]) test(`${service}: fixed twelve-hour 
       assert.equal(resumed.body.expiresAt,payload.exp);
       assert.equal(f.audit.at(-1).expiresAt,payload.exp);
       assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
-      if (service === "diary" && elapsed === 11*3600) {
-        const selected=await f.request("households/select",login.cookie,{householdId:"chiharu-household"});
-        assert.equal(selected.status,200);
-        assert.equal(cookiePayload(selected.cookie).exp,payload.exp,"household selection cannot extend expiry");
-      }
     }
     now = payload.exp * 1000;
     assert.equal((await f.request("session", login.cookie)).body.authenticated,false);
@@ -182,7 +177,7 @@ for(const service of ["diary","billing"]) test(`${service}: only the explicitly 
     const baseline=f.accounts();
     for(const t of MANAGED_PASSWORD_ACCOUNTS.filter(t=>t.service===service)) await f.change(t.accountId,"disable",0);
     assert.equal(f.accounts(),baseline);
-    const ids=service==="diary"?["main-admin","main-user","future-user"]:["owner","yuuka","machiko","future-user"];
+    const ids=service==="diary"?["future-user"]:["yuuka","machiko","future-user"];
     for(const id of ids){
       assert.deepEqual(await readPasswordAuthPolicy(f.env,service,id),{enabled:true,epoch:0});
       const login=await f.login(id);assert.equal(login.status,200,id);
@@ -194,6 +189,54 @@ for(const service of ["diary","billing"]) test(`${service}: only the explicitly 
     assert.deepEqual(f.db.prepare("SELECT service,account_id FROM password_auth_policy ORDER BY account_id").all().map(r=>`${r.service}/${r.account_id}`),MANAGED_PASSWORD_ACCOUNTS.filter(t=>t.service===service).map(t=>`${t.service}/${t.accountId}`).sort());
   } finally{f.close();}
 });
+
+for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["billing", "owner"]]) {
+  test(`${service}/${id}: permanently rejects passwords and existing cookies, preserving Passkey access and account data`, async () => {
+    const f = fixture(service);
+    try {
+      if (id === "main-user") f.db.exec("UPDATE diary_accounts SET must_change_password = 1 WHERE id = 'main-user'");
+      const baseline = f.accounts();
+      for (const enabled of [null, 1, 0]) {
+        if (enabled !== null) f.db.prepare("INSERT INTO password_auth_policy (service,account_id,password_auth_enabled,password_session_epoch,changed_by,reason) VALUES (?,?,?,1,'test','test') ON CONFLICT(service,account_id) DO UPDATE SET password_auth_enabled=excluded.password_auth_enabled,password_session_epoch=password_auth_policy.password_session_epoch+1").run(service,id,enabled);
+        assert.equal((await readPasswordAuthPolicy(f.env,service,id)).enabled,false,"DB cannot re-enable retired password auth");
+        const blocked = await f.login(id);
+        assert.equal(blocked.status,401); assert.equal(blocked.cookie,null);
+        assert.deepEqual(blocked.body,(await f.login(id,"wrong-local-password")).body);
+      }
+      assert.ok(f.audit.some(e=>e.details?.reason === "password_auth_disabled"));
+      if (service === "billing") {
+        const legacyId = await f.request("login",null,{loginId:"sub@a-tanaka.jp",password});
+        assert.equal(legacyId.status,401); assert.equal(legacyId.cookie,null);
+      }
+      const pk = await f.passkey(id); assert.equal(pk.status,200);
+      assert.equal(pk.body.role,service === "billing" ? "owner" : id === "main-admin" ? "admin" : "user");
+      for (const authMethod of ["password", undefined]) {
+        const payload = { ...cookiePayload(pk.cookie), authMethod, passwordSessionVersion: 1, passwordSessionEpoch: 0 };
+        for (const key of ["identityId","credentialId","serviceLinkId","serviceAccountId","passkeySessionEpoch"]) delete payload[key];
+        if (!authMethod) delete payload.passwordSessionEpoch;
+        const old = cookieWithPayload(pk.cookie,payload,f.env.SESSION_SECRET);
+        assert.equal((await f.request("session",old)).body.authenticated,false);
+        assert.equal((await f.request(service === "diary" ? "households" : "accounts",old)).status,401);
+      }
+      const session = await f.request("session",pk.cookie);
+      assert.equal(session.body.authenticated,true);
+      assert.equal((await f.request(service === "diary" ? "households" : "accounts",pk.cookie)).status,200);
+      if (id === "main-admin") {
+        assert.equal(session.body.isGlobalOwner,true);
+        const selected = await f.request("households/select",pk.cookie,{householdId:"chiharu-household"});
+        assert.equal(selected.status,200);
+        assert.equal((await f.request("session",selected.cookie)).body.activeHouseholdId,"chiharu-household");
+      }
+      if (id === "main-user") {
+        assert.equal(session.body.mustChangePassword,false,"retired password setup never blocks Passkey business APIs");
+        assert.equal((await f.request("password/initial",pk.cookie,{password:"unused-new-password",confirmation:"unused-new-password"})).status,409);
+      }
+      assert.equal(f.accounts(),baseline,"credentials, flags, roles and versions are unchanged");
+      f.invalidatePasskey();
+      assert.equal((await f.request("session",pk.cookie)).body.authenticated,false);
+    } finally { f.close(); }
+  });
+}
 
 test("policy lookups fail closed; Passkey bypasses only password policy; rolling never adopts a new epoch",async()=>{
   const broken={DB:{prepare(){throw Error("D1 unavailable");}}};

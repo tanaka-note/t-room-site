@@ -1,6 +1,6 @@
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
-import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
+import { isPasswordAuthRetired, readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { splitSearchTerms } from "../public/diary-search.js";
@@ -2382,7 +2382,7 @@ function databaseAccount(row) {
     temporarySecretKey: row.must_change_password ? (temporarySecretKeys[row.id] || null) : null,
     role: row.role,
     isGlobalOwner: false,
-    mustChangePassword: Boolean(row.must_change_password),
+    mustChangePassword: !isPasswordAuthRetired("diary", row.id) && Boolean(row.must_change_password),
     canManageEntries: Boolean(row.can_manage_entries),
     canViewTrash: Boolean(row.can_view_trash),
     canPermanentlyDelete: Boolean(row.can_permanently_delete),
@@ -2392,6 +2392,7 @@ function databaseAccount(row) {
 }
 
 async function changeInitialPassword(request, env, session, url) {
+  if (isPasswordAuthRetired("diary", session.accountId)) return json({ error: "このアカウントはパスキーを使用してください。" }, 409);
   if (!session.mustChangePassword) return json({ error: "初回パスワード設定は完了しています。" }, 409);
   const body = await readJson(request, 4096);
   const password = typeof body.password === "string" ? body.password : "";

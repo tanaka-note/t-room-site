@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -31,7 +32,7 @@ wrangler("d1", "migrations", "apply", "diary-db", "--local");
 wrangler("d1", "execute", "diary-db", "--local", "--command", "DELETE FROM diary_entries WHERE title LIKE 'weather-%';");
 
 const server = spawn(process.execPath, [
-  wranglerPath, "dev", "--local", "--port", String(port),
+  wranglerPath, "dev", ...passkeyFixtureArgs, "--local", "--port", String(port),
   "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
@@ -65,10 +66,7 @@ async function request(path, { method = "GET", body, cookie } = {}) {
 }
 
 async function login() {
-  const result = await request("/login", {
-    method: "POST",
-    body: { loginId: "main@example.test", password: "main-test" }
-  });
+  const result = await diaryFixtureLogin(request, "main@example.test", "main-test");
   assert.equal(result.response.status, 200, JSON.stringify(result.result));
   return result.cookie;
 }

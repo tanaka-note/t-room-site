@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -22,7 +23,7 @@ for (const args of [
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
-const server = spawn(process.execPath, [wranglerPath, "dev", "--local", "--port", String(port),
+const server = spawn(process.execPath, [wranglerPath, "dev", ...passkeyFixtureArgs, "--local", "--port", String(port),
   "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
@@ -74,7 +75,7 @@ const pause = () => new Promise((resolve) => setTimeout(resolve, 25));
 
 try {
   await waitForServer();
-  const login = await request("/login", { method: "POST", body: { loginId: "main@example.test", password: "main-test" } });
+  const login = await diaryFixtureLogin(request, "main@example.test", "main-test");
   assert.equal(login.response.status, 200, JSON.stringify(login.result));
   const cookie = login.cookie;
 

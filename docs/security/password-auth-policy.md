@@ -1,5 +1,15 @@
 # 個別ID・パスワード認証の停止・緊急復旧
 
+## 田中宏知アカウントのPassword認証廃止
+
+`diary/main-admin`（管理者）、`diary/main-user`（一般利用）、`billing/owner`（オーナー）はPasskey専用とする。`assets/password-auth-policy.mjs`でPassword認証を常に拒否し、DBポリシーの有無・有効値に関係なく適用する。既存のPassword cookie（認証方式の記録がない旧cookieも含む）は次の検証で無効になる。DB migrationや個別停止操作は不要で、対象Worker公開時に反映する。
+
+アカウント・保存データ・権限・Identity連携・Password記録・Secretは削除しない。日記の初回Password設定フラグが残っていても、この2アカウントのPasskey利用を妨げず、初回設定APIによるPassword更新は拒否する。通常の停止・復旧スクリプトでこの3組を再有効化することはできない。
+
+Security CenterとT-CloudのPassword認証・第一管理者の復旧経路・暗号化／鍵処理は変更しない。他の利用者が使用する日記・請求書の共通ID・Password入力フォームは維持する。本人端末でのPasskey利用は公開前に確認する。GitHubへのpushだけでは本番のログイン方式は変わらない。
+
+## その他の利用者の個別停止・復旧
+
 Password拒否・端末側の送信前失敗・同期監査とQueue fallbackの現行仕様は[Passwordログインの失敗監査](password-login-audit.md)を参照する。
 
 通常は指定利用者のPasskeyを使用する。管理者がCodexへサービスとアカウントを明示して依頼した場合だけ、以下のスクリプトで個別に停止・復旧する。操作UIは設けない。
@@ -8,7 +18,7 @@ Password拒否・端末側の送信前失敗・同期監査とQueue fallbackの�
 
 ## 仕組み
 
-- 各サービスのD1に `password_auth_policy` を置く。行なしはPassword有効・epoch 0。Diary固定アカウントも同じテーブルで管理する。
+- 各サービスのD1に `password_auth_policy` を置く。廃止対象の3組を除き、行なしはPassword有効・epoch 0。Diary固定アカウントも同じテーブルで管理する。
 - Passwordの新規ログインと署名済みcookie検証にだけ適用する。Passkey、アカウント本体の有効状態、既存session version、role、household、鍵・認証情報は変更しない。
 - 停止・復旧の各状態変更で `password_session_epoch` を増加させる。古いcookieのepoch省略は0として扱う。rolling更新や画面切替は検証済みの世代を引き継ぎ、最新世代へ昇格させない。
 - キャッシュを挟まずPasswordリクエストごとにD1を確認する。停止後の次の検証から無効になる。既に実行中のリクエストや端末に表示済みのデータを撤回する機能ではない。
