@@ -6,7 +6,10 @@ export const passkeyFixtureArgs = ["--config", fileURLToPath(new URL("../wrangle
 
 export function diaryFixtureLogin(request, loginId, password) {
   const accountId = ["main@example.test", "main-admin@example.test"].includes(loginId) ? "main-admin"
-    : loginId === "sub@a-tanaka.jp" ? "main-user" : null;
+    : loginId === "sub@a-tanaka.jp" ? "main-user"
+    : loginId === "wife@example.test" ? "wife-admin"
+    : loginId === "giantz3031@gmail.com" ? "chiharu-admin"
+    : /^[a-z0-9-]+@example\.test$/.test(loginId) ? loginId.split("@")[0] : null;
   return accountId
     ? request("/passkey/handoff", { method: "POST", body: { handoffToken: `fixture-${accountId}` } })
     : request("/login", { method: "POST", body: { loginId, password } });

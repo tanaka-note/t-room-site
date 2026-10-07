@@ -32,7 +32,7 @@ export function commands(target) {
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
-    diary: tests('diary-worker', ...['dialog-assets', 'request-safety', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
+    diary: tests('diary-worker', ...['dialog-assets', 'request-safety', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     downloader2: [
@@ -53,7 +53,7 @@ export function commands(target) {
 export function browserTests(target) {
   const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
     security: ['security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
-    diary: ['diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs'],
+    diary: ['diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'] })[target] || [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : existing;

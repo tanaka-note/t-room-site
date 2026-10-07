@@ -180,7 +180,8 @@ try {
     assert.equal(wrongPassword.response.status, 401);
   }
   const locked = await request("/login", { method: "POST", body: { loginId: "wife@example.test", password: "wife-test" } });
-  assert.equal(locked.response.status, 429);
+  assert.equal(locked.response.status, 401, "password login is always retired");
+  assert.equal((await diaryFixtureLogin(request, "wife@example.test", "unused")).response.status, 200, "password attempts cannot lock a Passkey account");
 
   process.stdout.write("Diary permission integration test passed.\n");
 } finally {
