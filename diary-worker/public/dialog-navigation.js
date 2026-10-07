@@ -9,8 +9,11 @@
     const targetStack = () => win.history.state?.[key]?.page === page ? win.history.state[key].stack : null;
     win.history.replaceState(state(), "", win.location.href);
 
-    function positions(root) {
-      return [root, ...root.querySelectorAll("*")].filter(node => node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)
+    function positions(record) {
+      const root = record.dialog;
+      const nodes = record.scrollRoots ? [root, ...record.scrollRoots()] : [root, ...root.querySelectorAll("*")];
+      return [...new Set(nodes)].filter(node => node?.isConnected && (node === root || root.contains(node)))
+        .filter(node => node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth)
         .map(node => [node, node.scrollLeft, node.scrollTop]);
     }
     function restorePosition(saved) {
@@ -19,7 +22,7 @@
     function snapshot() {
       for (const visit of stack) {
         const record = registered.get(visit.id), saved = visits.get(visit.token);
-        saved.positions = positions(record.dialog);
+        saved.positions = positions(record);
         if (record.capture) saved.data = record.capture();
       }
     }

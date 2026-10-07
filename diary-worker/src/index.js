@@ -117,8 +117,14 @@ export default {
       }
 
       if (path.startsWith("/api/")) {
-        const response = await withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context));
-        return secureResponse(await withRollingSession(request, response, env, url, path));
+        // Share validation only within this read request. Mutations still revalidate
+        // after their handler, and a subsequent request always checks current policy.
+        let sessionPromise;
+        const getSession = () => request.method === "GET"
+          ? (sessionPromise ??= readSession(request, env))
+          : readSession(request, env);
+        const response = await withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context, getSession));
+        return secureResponse(await withRollingSession(request, response, env, url, path, getSession));
       }
 
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -155,11 +161,11 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path, context) {
+async function handleApi(request, env, url, path, context, getSession) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "diary");
   if (path === "/api/session" && request.method === "GET") {
-    const session = await readSession(request, env);
+    const session = await getSession();
     if (session) await recordSecurityAudit(env, request, {
       service: "diary", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
@@ -302,14 +308,14 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    const session = await readSession(request, env);
+    const session = await getSession();
     if (session) await recordSecurityAudit(env, request, { service: "diary", eventType: "logout", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: securityAuditRole(session), authMethod: session.authMethod, sessionId: session.sessionId });
     const headers = new Headers();
     headers.set("Set-Cookie", clearSessionCookie(url.protocol === "https:"));
     return json({ ok: true }, 200, headers);
   }
 
-  const session = await readSession(request, env);
+  const session = await getSession();
   if (!session) return json({ error: "ログインが必要です。" }, 401);
 
   if (path === "/api/password/initial" && request.method === "POST") {
@@ -2282,10 +2288,10 @@ function getSessionPolicy(env, authMethod) {
   return sessionPolicyForAuthMethod(env, authMethod, clampNumber(env.SESSION_TTL_SECONDS, 3600, PASSWORD_SESSION_TTL_SECONDS, PASSWORD_SESSION_TTL_SECONDS));
 }
 
-async function withRollingSession(request, response, env, url, path) {
+async function withRollingSession(request, response, env, url, path, getSession) {
   if (path === "/api/login" || path === "/api/password-login-audit" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
     || path === "/api/households/select" || response.status === 401) return response;
-  const session = await readSession(request, env);
+  const session = await getSession();
   if (!session || !shouldRefreshSession(session)) return response;
   const account = await findAccountById(session.accountId, env);
   if (!account) return response;

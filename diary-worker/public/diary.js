@@ -115,6 +115,8 @@
     photoSearchTimer: null,
     viewerPhotos: [],
     viewerIndex: -1,
+    viewerImageRequestId: 0,
+    viewerImageLoad: null,
     photoPickerActive: false,
     favoriteRequestPending: false,
     entryCreateRequestId: null,
@@ -257,6 +259,7 @@
     photoViewerDate: document.querySelector("#photo-viewer-date"),
     photoViewerTitle: document.querySelector("#photo-viewer-title"),
     photoViewerImage: document.querySelector("#photo-viewer-image"),
+    photoViewerStatus: document.querySelector("#photo-viewer-status"),
     photoViewerFile: document.querySelector("#photo-viewer-file"),
     photoPrevious: document.querySelector("#photo-previous"),
     photoNext: document.querySelector("#photo-next"),
@@ -1503,6 +1506,7 @@
     TRoomDatePicker.setNavigation(dialogs);
     const canView = () => !elements.appView.hidden;
     dialogs.register("entry-dialog", {
+      scrollRoots: () => [elements.detailContent],
       capture: () => state.activeEntry,
       restore: entry => {
         if (!canView() || !entry || !state.entryMap.has(entry.id)) return false;
@@ -1511,8 +1515,9 @@
       },
       onClose: finishEntryClose
     });
-    dialogs.register("camera-roll-dialog", { restore: canView, onClose: finishCameraRollClose });
+    dialogs.register("camera-roll-dialog", { scrollRoots: () => [], restore: canView, onClose: finishCameraRollClose });
     dialogs.register("photo-viewer-dialog", {
+      scrollRoots: () => [],
       capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex }),
       restore: saved => {
         if (!canView() || !saved.photos[saved.index]) return false;
@@ -2826,17 +2831,20 @@
     if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
     const result = await api(`/photos?${parameters}`);
     if (requestId !== state.photoRequestId) return;
+    const appendFrom = state.photos.length;
     state.photos.push(...result.photos);
     state.photoOffset += result.photos.length;
     state.photoHasMore = Boolean(result.hasMore);
-    renderCameraRoll();
+    renderCameraRoll(appendFrom);
   }
 
-  function renderCameraRoll() {
+  function renderCameraRoll(appendFrom = 0) {
     if (!state.photos.length) {
       elements.cameraRollGrid.replaceChildren(createEmpty("該当する写真はありません。"));
     } else {
-      elements.cameraRollGrid.replaceChildren(...state.photos.map((photo, index) => {
+      if (!appendFrom) elements.cameraRollGrid.replaceChildren();
+      const cards = state.photos.slice(appendFrom).map((photo, offset) => {
+        const index = appendFrom + offset;
         const button = document.createElement("button");
         button.className = "camera-roll-item";
         button.type = "button";
@@ -2858,7 +2866,8 @@
         caption.append(date, title);
         button.append(image, caption);
         return button;
-      }));
+      });
+      elements.cameraRollGrid.append(...cards);
     }
     elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`;
     elements.cameraRollMore.hidden = !state.photoHasMore;
@@ -2894,8 +2903,65 @@
   }
 
   function finishPhotoViewerClose() {
+    cancelPhotoViewerImageLoad();
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
+    elements.photoViewerImage.removeAttribute("src");
+    elements.photoViewerImage.hidden = true;
+    elements.photoViewerStatus.hidden = true;
+  }
 
+  function cancelPhotoViewerImageLoad() {
+    state.viewerImageRequestId++;
+    if (state.viewerImageLoad) {
+      state.viewerImageLoad.onload = null;
+      state.viewerImageLoad.onerror = null;
+      state.viewerImageLoad.removeAttribute("src");
+      state.viewerImageLoad = null;
+    }
+  }
+
+  function loadPhotoViewerImage(photo) {
+    cancelPhotoViewerImageLoad();
+    const requestId = state.viewerImageRequestId;
+    // A new element cannot paint the previous photo while this source loads.
+    const preview = new Image();
+    preview.id = "photo-viewer-image";
+    preview.alt = photo.fileName || "日記の写真";
+    preview.hidden = !photo.thumbnailUrl;
+    if (photo.thumbnailUrl) preview.src = photo.thumbnailUrl;
+    elements.photoViewerImage.replaceWith(preview);
+    elements.photoViewerImage = preview;
+    elements.photoViewerStatus.textContent = "写真を読み込んでいます...";
+    elements.photoViewerStatus.hidden = false;
+
+    const image = new Image();
+    image.id = preview.id;
+    image.alt = preview.alt;
+    image.decoding = "async";
+    state.viewerImageLoad = image;
+    const isCurrent = () => requestId === state.viewerImageRequestId;
+    preview.onerror = () => { if (isCurrent()) preview.hidden = true; };
+    const failed = () => {
+      if (!isCurrent()) return;
+      state.viewerImageLoad = null;
+      elements.photoViewerStatus.textContent = "写真を読み込めませんでした。";
+    };
+    image.onerror = failed;
+    image.onload = async () => {
+      try {
+        await image.decode();
+        if (!isCurrent()) return;
+        image.onload = null;
+        image.onerror = null;
+        state.viewerImageLoad = null;
+        elements.photoViewerImage.replaceWith(image);
+        elements.photoViewerImage = image;
+        elements.photoViewerStatus.hidden = true;
+      } catch {
+        failed();
+      }
+    };
+    image.src = photo.displayUrl;
   }
 
   function renderPhotoViewer() {
@@ -2903,8 +2969,7 @@
     if (!photo) return;
     elements.photoViewerDate.textContent = formatDate(photo.entryDate);
     elements.photoViewerTitle.textContent = photo.entryTitle || "日記の写真";
-    elements.photoViewerImage.src = photo.displayUrl;
-    elements.photoViewerImage.alt = photo.fileName;
+    loadPhotoViewerImage(photo);
     const dimensions = photo.width && photo.height ? ` / ${photo.width}×${photo.height}` : "";
     elements.photoViewerFile.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
     elements.photoDownloadLow.href = `${photo.displayUrl}?download=1`;
@@ -3724,6 +3789,7 @@
   }
 
   function resetState() {
+    finishPhotoViewerClose();
     dialogs.reset();
     cancelPendingEntrySearch();
     state.searchComposing = false;

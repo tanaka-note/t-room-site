@@ -1,26 +1,26 @@
-const CACHE_NAME = "troom-diary-shell-diary-347bdd30dadb";
+const CACHE_NAME = "troom-diary-shell-diary-dc09ac3fd488";
 const STATIC_ASSETS = [
-  "/diary/diary-photo-processing.js?v=diary-347bdd30dadb",
-  "/diary/diary-photo-upload.js?v=diary-347bdd30dadb",
-  "/diary/diary-rich-text.js?v=diary-347bdd30dadb",
-  "/diary/diary-weather.js?v=diary-347bdd30dadb",
+  "/diary/diary-photo-processing.js?v=diary-dc09ac3fd488",
+  "/diary/diary-photo-upload.js?v=diary-dc09ac3fd488",
+  "/diary/diary-rich-text.js?v=diary-dc09ac3fd488",
+  "/diary/diary-weather.js?v=diary-dc09ac3fd488",
   "/diary/icons/icon-192-v4.png?v=5",
   "/diary/icons/icon-512-v4.png?v=5",
   "/diary/icons/icon-maskable-512-v4.png?v=5",
   "/diary/icons/apple-touch-icon-v3.png?v=4",
   "/diary/icons/favicon-64-v4.png?v=5",
-  "/diary/diary-search.js?v=diary-347bdd30dadb",
-  "/assets/pwa-auto-update.js?v=diary-347bdd30dadb",
-  "/diary/dialog-navigation.js?v=diary-347bdd30dadb",
-  "/diary/diary.css?v=diary-347bdd30dadb",
-  "/diary/diary.js?v=diary-347bdd30dadb",
-  "/diary/investment.css?v=diary-347bdd30dadb",
-  "/diary/investment.js?v=diary-347bdd30dadb",
-  "/diary/manifest.webmanifest?v=diary-347bdd30dadb",
-  "/diary/password-login-audit.js?v=diary-347bdd30dadb",
-  "/diary/troom-date-picker.css?v=diary-347bdd30dadb",
-  "/diary/troom-date-picker.js?v=diary-347bdd30dadb",
-  "/security/passkey-client.js?v=diary-347bdd30dadb"
+  "/diary/diary-search.js?v=diary-dc09ac3fd488",
+  "/assets/pwa-auto-update.js?v=diary-dc09ac3fd488",
+  "/diary/dialog-navigation.js?v=diary-dc09ac3fd488",
+  "/diary/diary.css?v=diary-dc09ac3fd488",
+  "/diary/diary.js?v=diary-dc09ac3fd488",
+  "/diary/investment.css?v=diary-dc09ac3fd488",
+  "/diary/investment.js?v=diary-dc09ac3fd488",
+  "/diary/manifest.webmanifest?v=diary-dc09ac3fd488",
+  "/diary/password-login-audit.js?v=diary-dc09ac3fd488",
+  "/diary/troom-date-picker.css?v=diary-dc09ac3fd488",
+  "/diary/troom-date-picker.js?v=diary-dc09ac3fd488",
+  "/security/passkey-client.js?v=diary-dc09ac3fd488"
 ];
 const STATIC_PATHS = new Set(STATIC_ASSETS.map((value) => new URL(value, self.location.origin).pathname));
 
