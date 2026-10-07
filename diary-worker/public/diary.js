@@ -23,7 +23,6 @@
   } = await import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href);
   const BASE_PATH = "/diary";
   const { WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = await import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href);
-  const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_NAVIGATION_KEY = "troomDiaryReturnNavigation";
@@ -53,8 +52,6 @@
     householdId: null,
     activeHouseholdId: null,
     isGlobalOwner: false,
-    mustChangePassword: false,
-    pendingLoginId: "",
     canManageEntries: false,
     canViewTrash: false,
     canPermanentlyDelete: false,
@@ -134,19 +131,7 @@
     loginView: document.querySelector("#login-view"),
     appView: document.querySelector("#app-view"),
     siteHeader: document.querySelector("#site-header"),
-    loginForm: document.querySelector("#login-form"),
-    loginId: document.querySelector("#login-id"),
-    password: document.querySelector("#password"),
-    passwordToggle: document.querySelector("#password-toggle"),
-    rememberLogin: document.querySelector("#remember-login"),
     loginMessage: document.querySelector("#login-message"),
-    initialPasswordDialog: document.querySelector("#initial-password-dialog"),
-    initialPasswordForm: document.querySelector("#initial-password-form"),
-    initialPassword: document.querySelector("#initial-password"),
-    initialPasswordConfirmation: document.querySelector("#initial-password-confirmation"),
-    initialPasswordMessage: document.querySelector("#initial-password-message"),
-    initialPasswordSubmit: document.querySelector("#initial-password-submit"),
-    initialPasswordCancel: document.querySelector("#initial-password-cancel"),
     diaryKicker: document.querySelector("#diary-kicker"),
     diaryTitle: document.querySelector("#diary-title"),
     tagPageBack: document.querySelector("#tag-page-back"),
@@ -288,13 +273,11 @@
   async function boot() {
     applyRouteState();
     bindEvents();
-    restoreRememberedLogin();
     updateInstallButtonVisibility();
     try {
       const session = await api("/session");
       if (session.authenticated) {
-        if (session.mustChangePassword) await showInitialPasswordSetup(session);
-        else await enterDiary(session);
+        await enterDiary(session);
       } else {
         showLogin();
       }
@@ -312,20 +295,7 @@
     window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
     document.addEventListener("click", rememberDiaryReturnViewFromNavigation, true);
     window.addEventListener("pageshow", restoreDiaryReturnViewFromPageCache);
-    state.passwordLoginAudit = TRoomPasswordLoginAudit.create({ service: "diary", apiBase: `${BASE_PATH}/api`, form: elements.loginForm, loginIdInput: elements.loginId });
-    elements.loginForm.addEventListener("submit", handleLogin);
     document.querySelector("#passkey-login")?.addEventListener("click", handlePasskeyLogin);
-    elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
-    elements.passwordToggle.addEventListener("click", togglePassword);
-    elements.initialPasswordForm.addEventListener("submit", handleInitialPasswordChange);
-    elements.initialPasswordCancel.addEventListener("click", leaveInitialPasswordSetup);
-    elements.initialPasswordDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      leaveInitialPasswordSetup();
-    });
-    document.querySelectorAll("[data-password-toggle]").forEach((button) => {
-      button.addEventListener("click", () => togglePasswordField(button.dataset.passwordToggle, button));
-    });
     elements.householdSwitcher.addEventListener("change", changeActiveHousehold);
     elements.logoutButton.addEventListener("click", handleLogout);
     elements.installButtons.forEach((button) => button.addEventListener("click", requestAppInstall));
@@ -565,44 +535,6 @@
     }
   }
 
-  async function handleLogin(event) {
-    event.preventDefault();
-    const submit = elements.loginForm.querySelector('button[type="submit"]');
-    setBusy(submit, true, "確認中...");
-    elements.loginMessage.textContent = "";
-    const trace = state.passwordLoginAudit.begin();
-    let stage = "form_validation";
-    try {
-      await trace.report("form_submit", "submitted");
-      const loginId = elements.loginId.value.trim().toLowerCase();
-      const password = elements.password.value;
-      stage = "login_request";
-      const result = await api("/login", {
-        headers: trace.headers,
-        method: "POST",
-        body: { loginId, password }
-      });
-      stage = "login_response";
-      elements.password.value = "";
-      if (result.mustChangePassword) {
-        state.pendingLoginId = loginId;
-        await showInitialPasswordSetup(result);
-      } else {
-        await updateRememberedLogin(loginId, password);
-        await enterDiary(result);
-      }
-    } catch (error) {
-      if (!(stage === "login_request" && error.status && error.status < 500)) {
-        await trace.report(stage === "login_request" && error.status ? "login_response" : stage,
-          stage === "login_request" ? (error.status ? "request_failed" : "network_error") : "unexpected_client_error");
-      }
-      elements.loginMessage.textContent = error.message;
-      elements.password.select();
-    } finally {
-      setBusy(submit, false, "開く");
-    }
-  }
-
   async function handlePasskeyLogin() {
     const button = document.querySelector("#passkey-login");
     setBusy(button, true, "確認中...");
@@ -610,43 +542,18 @@
     try {
       const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
-      elements.password.value = "";
-      if (session.mustChangePassword) await showInitialPasswordSetup(session);
-      else await enterDiary(session);
+      await enterDiary(session);
     } catch (error) {
-      elements.loginMessage.textContent = error.message;
+      elements.loginMessage.textContent = /ID・パスワード/.test(error.message)
+        ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
+        : error.message;
     } finally {
-      setBusy(button, false, "端末のロック解除でログイン");
+      setBusy(button, false, "パスキーでログイン");
     }
   }
 
   async function choosePasskeyLink(links) {
     return TRoomPasskeys.chooseLinkDialog(links, "diary");
-  }
-
-  function restoreRememberedLogin() {
-    elements.rememberLogin.checked = localStorage.getItem(REMEMBER_LOGIN_KEY) === "1";
-    syncLoginAutocomplete();
-  }
-
-  function syncLoginAutocomplete() {
-    const remember = elements.rememberLogin.checked;
-    elements.loginId.setAttribute("autocomplete", remember ? "username" : "off");
-    elements.password.setAttribute("autocomplete", remember ? "current-password" : "off");
-  }
-
-  async function updateRememberedLogin(loginId, password) {
-    if (!elements.rememberLogin.checked) {
-      localStorage.removeItem(REMEMBER_LOGIN_KEY);
-      return;
-    }
-    localStorage.setItem(REMEMBER_LOGIN_KEY, "1");
-    if (!navigator.credentials?.store || !globalThis.PasswordCredential) return;
-    try {
-      await navigator.credentials.store(new PasswordCredential({ id: loginId, password, name: "日記" }));
-    } catch {
-      // 保存可否はブラウザのパスワード管理機能へ委ねる。
-    }
   }
 
   async function handleLogout() {
@@ -661,80 +568,12 @@
     setBusyIconButton(elements.logoutButton, false, "ログアウト処理中", "ログアウト");
   }
 
-  function togglePassword() {
-    togglePasswordField("password", elements.passwordToggle);
-  }
-
-  function togglePasswordField(inputId, button) {
-    const input = document.getElementById(inputId);
-    if (!input) return;
-    const show = input.type === "password";
-    input.type = show ? "text" : "password";
-    const label = show ? "パスワードを隠す" : "パスワードを表示";
-    button.setAttribute("aria-label", label);
-    button.title = label;
-    button.setAttribute("aria-pressed", String(show));
-  }
-
-  async function showInitialPasswordSetup(session) {
-    state.role = session.role;
-    state.accountName = session.accountName;
-    state.mustChangePassword = true;
-    elements.bootView.hidden = true;
-    elements.loginView.hidden = true;
-    elements.appView.hidden = true;
-    elements.initialPasswordForm.reset();
-    elements.initialPasswordMessage.textContent = "";
-    if (!elements.initialPasswordDialog.open) elements.initialPasswordDialog.showModal();
-    window.setTimeout(() => elements.initialPassword.focus(), 0);
-  }
-
-  async function handleInitialPasswordChange(event) {
-    event.preventDefault();
-    const password = elements.initialPassword.value;
-    const confirmation = elements.initialPasswordConfirmation.value;
-    elements.initialPasswordMessage.textContent = "";
-    if (password !== confirmation) {
-      elements.initialPasswordMessage.textContent = "確認用パスワードが一致しません。";
-      elements.initialPasswordConfirmation.focus();
-      return;
-    }
-    setBusy(elements.initialPasswordSubmit, true, "設定中…");
-    try {
-      const session = await api("/password/initial", { method: "POST", body: { password, confirmation } });
-      await updateRememberedLogin(state.pendingLoginId || elements.loginId.value.trim().toLowerCase(), password);
-      state.pendingLoginId = "";
-      elements.initialPasswordForm.reset();
-      elements.initialPasswordDialog.close();
-      await enterDiary(session);
-      showToast("新しいパスワードを設定しました。");
-    } catch (error) {
-      elements.initialPasswordMessage.textContent = error.message;
-    } finally {
-      setBusy(elements.initialPasswordSubmit, false, "パスワードを設定");
-    }
-  }
-
-  async function leaveInitialPasswordSetup() {
-    elements.initialPasswordCancel.disabled = true;
-    try {
-      await api("/logout", { method: "POST" });
-    } catch {
-      // ログアウト応答に失敗しても、初回設定画面から安全に戻します。
-    }
-    resetState();
-    showLogin();
-    elements.initialPasswordCancel.disabled = false;
-  }
-
   async function enterDiary(session) {
     state.role = session.role;
     state.accountName = session.accountName;
     state.householdId = session.householdId;
     state.activeHouseholdId = session.activeHouseholdId || session.householdId;
     state.isGlobalOwner = Boolean(session.isGlobalOwner);
-    state.mustChangePassword = false;
-    state.pendingLoginId = "";
     state.canManageEntries = Boolean(session.canManageEntries);
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
@@ -801,12 +640,11 @@
   }
 
   function showLogin(message = "") {
-    if (elements.initialPasswordDialog.open) elements.initialPasswordDialog.close();
     elements.bootView.hidden = true;
     elements.loginView.hidden = false;
     elements.appView.hidden = true;
     elements.loginMessage.textContent = message;
-    window.setTimeout(() => (elements.loginId.value ? elements.password : elements.loginId).focus(), 0);
+    window.setTimeout(() => document.querySelector("#passkey-login").focus(), 0);
   }
 
   function cancelPendingEntrySearch() {
@@ -3799,8 +3637,6 @@
     state.householdId = null;
     state.activeHouseholdId = null;
     state.isGlobalOwner = false;
-    state.mustChangePassword = false;
-    state.pendingLoginId = "";
     state.canManageEntries = false;
     state.canViewTrash = false;
     state.canPermanentlyDelete = false;

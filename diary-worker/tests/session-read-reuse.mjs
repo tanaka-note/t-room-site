@@ -7,7 +7,7 @@ registerHooks({ resolve(specifier, context, next) {
   return next(specifier, context);
 } });
 const worker = (await import("../src/index.js")).default;
-let validPasskey = true, passwordEnabled = true, passkeyChecks = 0, passwordChecks = 0;
+let validPasskey = true, passkeyChecks = 0, passwordChecks = 0;
 const env = {
   SESSION_SECRET: randomBytes(32).toString("hex"), SESSION_VERSION: "3", PASSKEY_ENABLED: "true",
   SECURITY: { async validatePasskeySession() { passkeyChecks++; return { valid: validPasskey }; } },
@@ -16,7 +16,7 @@ const env = {
     return {
       bind(...values) { bindings = values; return this; },
       async first() {
-        if (sql.includes("password_auth_policy")) { passwordChecks++; return { password_auth_enabled: Number(passwordEnabled), password_session_epoch: 0 }; }
+        if (sql.includes("password_auth_policy")) { passwordChecks++; return { password_auth_enabled: 1, password_session_epoch: 0 }; }
         if (sql.includes("FROM diary_photos")) return bindings[0] === "11111111-1111-4111-8111-111111111111" ? {
           file_name: "fixture.webp", display_key: "fixture/display", status: "published", deleted_at: null
         } : null;
@@ -60,10 +60,7 @@ assert.equal(response.status, 200);
 assert.equal(passkeyChecks, 4, "mutations must retain the second validation after the handler");
 const passwordRequest = new Request(`https://fixture.test${path}`, { headers: { Cookie: cookie("password") } });
 response = await worker.fetch(passwordRequest, env, {});
-assert.equal(response.status, 200);
-assert.equal(passwordChecks, 1, "password policy must also be checked once per read request");
-await response.arrayBuffer();
-passwordEnabled = false;
-assert.equal((await worker.fetch(passwordRequest, env, {})).status, 401, "the next request must observe password suspension");
-assert.equal(passwordChecks, 2);
+assert.equal(response.status, 401, "main's passkey-only policy must reject retired password cookies");
+assert.equal((await worker.fetch(passwordRequest, env, {})).status, 401, "request reuse must never restore password access");
+assert.equal(passwordChecks, 0, "retired password access cannot be enabled by a DB policy row");
 console.log("Diary request-scoped session validation tests passed.");

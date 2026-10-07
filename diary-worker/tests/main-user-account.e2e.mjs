@@ -100,7 +100,7 @@ try {
     method: "POST", cookie: first.cookie,
     body: { password: replacementPassword, confirmation: replacementPassword }
   });
-  assert.equal(changed.response.status, 409, JSON.stringify(changed.result));
+  assert.equal(changed.response.status, 410, JSON.stringify(changed.result));
   const passwordLogin = await request("/login", { method: "POST", body: { loginId: "sub@a-tanaka.jp", password: temporaryPassword } });
   assert.equal(passwordLogin.response.status, 401);
   assert.equal(passwordLogin.cookie, undefined);

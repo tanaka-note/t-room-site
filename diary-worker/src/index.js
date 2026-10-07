@@ -1,6 +1,6 @@
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
-import { isPasswordAuthRetired, readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
+import { validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { splitSearchTerms } from "../public/diary-search.js";
@@ -20,8 +20,6 @@ import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, ses
 
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
-const LOGIN_LIMIT = 5;
-const LOGIN_WINDOW_SECONDS = 15 * 60;
 const MEDIA_DELETION_BATCH_SIZE = 300;
 const MEDIA_DELETION_REQUEST_MAX_BATCHES = 4;
 const MEDIA_DELETION_SCHEDULED_MAX_BATCHES = 10;
@@ -29,9 +27,6 @@ const PHOTO_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const STAGED_PHOTO_CLEANUP_BATCH_SIZE = 100;
 const PHOTO_REQUEST_MAX_BYTES = 80 * 1024 * 1024;
 const PHOTO_PARTS_MAX_BYTES = 64 * 1024 * 1024;
-const PASSWORD_PBKDF2_ITERATIONS = 600000;
-const PASSWORD_HASH_BYTES = 32;
-const PASSWORD_SALT_BYTES = 16;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAIN_ADMIN_ACCOUNT_ID = "main-admin";
@@ -41,8 +36,8 @@ const CHIHARU_ADMIN_ACCOUNT_ID = "chiharu-admin";
 const TANAKA_HOUSEHOLD_ID = "tanaka-household";
 const CHIHARU_HOUSEHOLD_ID = "chiharu-household";
 const DIARY_ACCOUNTS = [
-  { id: MAIN_ADMIN_ACCOUNT_ID, name: "田中宏知", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: true, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH", sessionVersion: 1 },
-  { id: WIFE_ADMIN_ACCOUNT_ID, name: "田中暢美", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: false, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH", sessionVersion: 1 }
+  { id: MAIN_ADMIN_ACCOUNT_ID, name: "田中宏知", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: true, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", sessionVersion: 1 },
+  { id: WIFE_ADMIN_ACCOUNT_ID, name: "田中暢美", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: false, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", sessionVersion: 1 }
 ];
 
 export class SecurityIntegration extends WorkerEntrypoint {
@@ -196,94 +191,13 @@ async function handleApi(request, env, url, path, context, getSession) {
 
   if (path === "/api/login" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (!DIARY_ACCOUNTS.every((account) => env[account.secretKey] && env[account.loginIdSecretKey]) || !isValidSessionSecret(env.SESSION_SECRET)) {
-      return json({ error: "日記の認証設定が完了していません。" }, 503);
-    }
-
-    const body = await readJson(request, 4096);
-    const loginId = normalizeLoginId(body.loginId);
-    const password = typeof body.password === "string" ? body.password : "";
-    if (!loginId || !password || password.length > 256) {
-      await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "authentication", reason: "invalid_request", counterUpdated: false } });
-      return json({ error: "IDまたはパスワードを確認してください。" }, 400);
-    }
-
-    const requestedAccount = await findAccountByLoginId(loginId, env);
-    const passwordPolicy = requestedAccount ? await readPasswordAuthPolicy(env, "diary", requestedAccount.id) : null;
-    if (passwordPolicy && !passwordPolicy.enabled) {
-      await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false } });
-      return json({ error: "IDまたはパスワードが違います。" }, 401);
-    }
-    const now = Math.floor(Date.now() / 1000);
-    const fingerprint = requestedAccount ? await loginFingerprint(request, requestedAccount, env) : "";
-    if (fingerprint) {
-      const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
-      if (Number(attempt?.locked_until || 0) > now) {
-        await recordSecurityAudit(env, request, { service: "diary", eventType: "login_blocked", outcome: "blocked", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { stage: "authentication", reason: "login_locked", counterUpdated: false } });
-        return json({ error: "ログインが一時停止されています。15分ほど待ってからお試しください。" }, 429);
-      }
-    }
-    const passwordHash = requestedAccount
-      ? (requestedAccount.passwordHash || (requestedAccount.temporarySecretKey ? env[requestedAccount.temporarySecretKey] : env[requestedAccount.secretKey]))
-      : null;
-    const account = requestedAccount && passwordHash && await verifyPassword(password, passwordHash, env)
-      ? requestedAccount
-      : null;
-    if (!account) {
-      if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
-      let inactiveAccount = null;
-      if (!requestedAccount) {
-        try { inactiveAccount = await env.DB.prepare("SELECT id FROM diary_accounts WHERE login_id = ? AND active = 0").bind(loginId).first(); }
-        catch { /* Classification is ancillary; preserve the authentication rejection. */ }
-      }
-      await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id || inactiveAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { stage: "authentication", reason: inactiveAccount ? "account_disabled" : "invalid_credentials", counterUpdated: Boolean(requestedAccount && fingerprint) } });
-      return json({ error: "IDまたはパスワードが違います。" }, 401);
-    }
-    if (requestedAccount.passwordHash && passwordHashNeedsUpgrade(passwordHash)) {
-      try {
-        const upgradedHash = await createPasswordHash(password, env);
-        await env.DB.prepare(`
-          UPDATE diary_accounts
-          SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ? AND password_hash = ? AND active = 1
-        `).bind(upgradedHash, requestedAccount.id, passwordHash).run();
-      } catch (error) {
-        console.error("Diary password hash upgrade failed", {
-          stage: "password-hash-upgrade",
-          errorType: error instanceof Error ? error.name : "unknown"
-        });
-      }
-    }
-    await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
-
-    const policy = getSessionPolicy(env, "password");
-    const sessionId = crypto.randomUUID();
-    const startedAt = new Date().toISOString();
-    const expiresAt = sessionExpiresAt(Math.floor(Date.parse(startedAt) / 1000), policy);
-    const token = await createSessionToken(account, policy, env, account.householdId, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt, expiresAt });
-    const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId, expiresAt, startedAt, sessionVersion: diarySessionVersion(env, account.sessionVersion) });
-    return json({
-      authenticated: true,
-      role: account.role,
-      accountName: account.name,
-      accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`),
-      loginId: accountLoginId(account, env),
-      householdId: account.householdId,
-      activeHouseholdId: account.householdId,
-      isGlobalOwner: Boolean(account.isGlobalOwner),
-      mustChangePassword: Boolean(account.mustChangePassword),
-      canManageEntries: Boolean(account.canManageEntries),
-      canViewTrash: account.canViewTrash,
-      canPermanentlyDelete: account.canPermanentlyDelete,
-      canViewInvestment: account.canViewInvestment
-    }, 200, headers);
+    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false } });
+    return json({ error: "日記はパスキーでログインしてください。" }, 401);
   }
 
   if (path === "/api/passkey/handoff" && request.method === "POST") {
     if (!validMutationRequest(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) return json({ error: "パスキー機能は一時停止中です。ID・パスワードが有効なアカウントをご利用いただくか、管理者へ復旧を依頼してください。" }, 503);
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) return json({ error: "パスキー機能は一時停止中です。管理者へ復旧を依頼してください。" }, 503);
     const body = await readJson(request, 4096);
     const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "diary");
     if (!handoff) return json({ error: "パスキー認証の有効期限が切れています。もう一度お試しください。" }, 401);
@@ -320,11 +234,7 @@ async function handleApi(request, env, url, path, context, getSession) {
 
   if (path === "/api/password/initial" && request.method === "POST") {
     if (!validMutationRequest(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    return changeInitialPassword(request, env, session, url);
-  }
-
-  if (session.mustChangePassword) {
-    return json({ error: "最初にパスワードを再設定してください。", mustChangePassword: true }, 428);
+    return json({ error: "日記のパスワード設定は廃止されています。" }, 410);
   }
 
   if (path === "/api/households" && request.method === "GET") {
@@ -2352,23 +2262,12 @@ function accountLoginId(account, env) {
   return normalizeLoginId(account.loginId || env[account.loginIdSecretKey]);
 }
 
-async function findAccountByLoginId(loginId, env) {
-  const row = await env.DB.prepare(`
-    SELECT id, household_id, display_name, login_id, password_hash, role,
-           must_change_password, can_view_trash, can_permanently_delete,
-           can_view_investment, can_manage_entries, session_version
-    FROM diary_accounts WHERE login_id = ? AND active = 1
-  `).bind(loginId).first();
-  if (row) return databaseAccount(row);
-  return DIARY_ACCOUNTS.find((account) => accountLoginId(account, env) === loginId) || null;
-}
-
 async function findAccountById(id, env) {
   const staticAccount = DIARY_ACCOUNTS.find((account) => account.id === id);
   if (staticAccount) return staticAccount;
   const row = await env.DB.prepare(`
-    SELECT id, household_id, display_name, login_id, password_hash, role,
-           must_change_password, can_view_trash, can_permanently_delete,
+    SELECT id, household_id, display_name, login_id, role,
+           can_view_trash, can_permanently_delete,
            can_view_investment, can_manage_entries, session_version
     FROM diary_accounts WHERE id = ? AND active = 1
   `).bind(id).first();
@@ -2376,19 +2275,14 @@ async function findAccountById(id, env) {
 }
 
 function databaseAccount(row) {
-  const temporarySecretKeys = {
-    "chiharu-admin": "DIARY_CHIHARU_TEMP_PASSWORD_HASH"
-  };
   return {
     id: row.id,
     name: row.display_name,
     loginId: row.login_id,
     householdId: row.household_id,
-    passwordHash: row.password_hash || null,
-    temporarySecretKey: row.must_change_password ? (temporarySecretKeys[row.id] || null) : null,
     role: row.role,
     isGlobalOwner: false,
-    mustChangePassword: !isPasswordAuthRetired("diary", row.id) && Boolean(row.must_change_password),
+    mustChangePassword: false,
     canManageEntries: Boolean(row.can_manage_entries),
     canViewTrash: Boolean(row.can_view_trash),
     canPermanentlyDelete: Boolean(row.can_permanently_delete),
@@ -2397,141 +2291,9 @@ function databaseAccount(row) {
   };
 }
 
-async function changeInitialPassword(request, env, session, url) {
-  if (isPasswordAuthRetired("diary", session.accountId)) return json({ error: "このアカウントはパスキーを使用してください。" }, 409);
-  if (!session.mustChangePassword) return json({ error: "初回パスワード設定は完了しています。" }, 409);
-  const body = await readJson(request, 4096);
-  const password = typeof body.password === "string" ? body.password : "";
-  const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
-  if (password !== confirmation) return json({ error: "確認用パスワードが一致しません。" }, 400);
-  if (!isStrongPassword(password)) {
-    return json({ error: "パスワードは6文字以上で入力してください。" }, 400);
-  }
-  const passwordHash = await createPasswordHash(password, env);
-  const result = await env.DB.prepare(`
-    UPDATE diary_accounts
-    SET password_hash = ?, must_change_password = 0,
-        session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND must_change_password = 1 AND active = 1
-  `).bind(passwordHash, session.accountId).run();
-  if (!result.meta?.changes) return json({ error: "パスワードを更新できませんでした。再度ログインしてください。" }, 409);
-  const account = await findAccountById(session.accountId, env);
-  const policy = getSessionPolicy(env, session.authMethod);
-  const token = await createSessionToken(account, policy, env, session.activeHouseholdId, {
-    identityId: session.identityId,
-    credentialId: session.credentialId,
-    serviceLinkId: session.serviceLinkId,
-    serviceAccountId: session.serviceAccountId,
-    passkeySessionEpoch: session.passkeySessionEpoch,
-    passwordSessionEpoch: session.passwordSessionEpoch,
-    authMethod: session.authMethod,
-    sessionId: session.sessionId,
-    startedAt: session.startedAt,
-    expiresAt: session.exp
-  });
-  const headers = new Headers();
-  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-  return json({
-    authenticated: true,
-    role: account.role,
-    accountName: account.name,
-    accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`),
-    loginId: account.loginId,
-    householdId: account.householdId,
-    activeHouseholdId: account.householdId,
-    isGlobalOwner: false,
-    mustChangePassword: false,
-    canManageEntries: Boolean(account.canManageEntries),
-    canViewTrash: account.canViewTrash,
-    canPermanentlyDelete: account.canPermanentlyDelete,
-    canViewInvestment: account.canViewInvestment
-  }, 200, headers);
-}
-
-function isStrongPassword(password) {
-  return password.length >= 6 && password.length <= 128;
-}
-
-async function createPasswordHash(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(PASSWORD_SALT_BYTES));
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const derived = new Uint8Array(await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations: PASSWORD_PBKDF2_ITERATIONS },
-    key,
-    PASSWORD_HASH_BYTES * 8
-  ));
-  return `pbkdf2-sha256$${PASSWORD_PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${bytesToBase64Url(derived)}`;
-}
-
-function passwordHashNeedsUpgrade(encodedHash) {
-  const value = String(encodedHash || "");
-  if (!value.startsWith("pbkdf2-sha256$")) return true;
-  try {
-    const [, iterationsText, saltText, hashText] = value.split("$");
-    return Number(iterationsText) < PASSWORD_PBKDF2_ITERATIONS
-      || base64UrlToBytes(saltText).length < PASSWORD_SALT_BYTES
-      || base64UrlToBytes(hashText).length < PASSWORD_HASH_BYTES;
-  } catch {
-    return true;
-  }
-}
-
-async function loginFingerprint(request, account, env) {
-  const ip = request.headers.get("CF-Connecting-IP") || "local";
-  const secret = env.LOGIN_FINGERPRINT_SECRET || env.SESSION_SECRET;
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(`${ip}:${account.id}:${secret}`));
-  return bytesToBase64Url(new Uint8Array(digest));
-}
-
-async function recordFailedLogin(env, fingerprint, now) {
-  const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
-  const inWindow = attempt && now - Number(attempt.first_failed_at) <= LOGIN_WINDOW_SECONDS;
-  const failedCount = inWindow ? Number(attempt.failed_count) + 1 : 1;
-  const firstFailedAt = inWindow ? Number(attempt.first_failed_at) : now;
-  const lockedUntil = failedCount >= LOGIN_LIMIT ? now + LOGIN_WINDOW_SECONDS : null;
-  await env.DB.prepare(`INSERT INTO diary_login_attempts (fingerprint, failed_count, first_failed_at, locked_until)
-    VALUES (?, ?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET failed_count = excluded.failed_count,
-    first_failed_at = excluded.first_failed_at, locked_until = excluded.locked_until`)
-    .bind(fingerprint, failedCount, firstFailedAt, lockedUntil).run();
-}
-
 async function sign(value, secret) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
-}
-
-async function verifyPassword(password, encodedHash, env = {}) {
-  try {
-    if (String(encodedHash).startsWith("hmac-sha256$")) {
-      const [, hashText] = String(encodedHash).split("$");
-      const pepper = env.DIARY_PASSWORD_PEPPER || env.SESSION_SECRET;
-      if (!pepper) return false;
-      const actual = await sign(password, pepper);
-      return constantTimeEqual(base64UrlToBytes(actual), base64UrlToBytes(hashText));
-    }
-    if (String(encodedHash).startsWith("sha256$")) {
-      const [, hashText] = String(encodedHash).split("$");
-      const expected = base64UrlToBytes(hashText);
-      const actual = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(password)));
-      return constantTimeEqual(actual, expected);
-    }
-    const [algorithm, iterationsText, saltText, hashText] = String(encodedHash).split("$");
-    if (algorithm !== "pbkdf2-sha256") return false;
-    const iterations = Number(iterationsText);
-    if (!Number.isInteger(iterations) || iterations < 100000 || iterations > 2000000) return false;
-    const salt = base64UrlToBytes(saltText);
-    const expected = base64UrlToBytes(hashText);
-    const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-    const derived = new Uint8Array(await crypto.subtle.deriveBits(
-      { name: "PBKDF2", hash: "SHA-256", salt, iterations },
-      key,
-      expected.length * 8
-    ));
-    return constantTimeEqual(derived, expected);
-  } catch (error) {
-    console.error("Password verification failed", error instanceof Error ? error.name : "unknown error");
-    return false;
-  }
 }
 
 function sessionCookie(token, policy, secure) {
@@ -3003,13 +2765,10 @@ class HttpError extends Error {
 
 export {
   cleanupStagedPhotoSession,
-  createPasswordHash,
   drainMediaDeletionQueue,
   limitedRequestBodyResponse,
-  passwordHashNeedsUpgrade,
   readJson,
   readMultipartForm,
   runScheduledMediaDeletionCleanup,
   runScheduledStagedPhotoCleanup,
-  verifyPassword
 };

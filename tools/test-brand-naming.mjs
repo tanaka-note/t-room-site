@@ -65,7 +65,7 @@ assert.match(cloud, /<div class="service-name">Cloud Storage<\/div>/);
 assert.match(await read("cloud-worker/public/manifest.webmanifest"), /"name": "T-Cloud Storage"/);
 
 assert.match(await read("billing-worker/public/index.html"), /T-lain PRIVATE/);
-assert.match(await read("diary-worker/public/index.html"), /T-lain管理者/);
+assert.match(await read("diary-worker/public/index.html"), /<div class="brand" aria-label="日記">/);
 assert.match(await read("tools/learning-visuals/render_learning_visuals.py"), /"T-lain"/);
 assert.match(await read("tools/learning-visuals/render_004.py"), /"T-lain"/);
 

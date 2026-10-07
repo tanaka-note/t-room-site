@@ -122,7 +122,9 @@ test("Security Center is first-admin-only and audits success and failure", () =>
   assert.match(worker, /passkey_authentication_success/);
   assert.match(worker, /passkey_authentication_failure/);
   assert.match(cloud, /password_login_success/);
-  assert.match(diary, /password_login_success/);
+  assert.doesNotMatch(diary, /password_login_success/);
+  assert.match(diary, /password_login_failure/);
+  assert.match(diary, /passkey_login_success/);
   assert.match(billing, /password_login_success/);
 });
 

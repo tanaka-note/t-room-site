@@ -1,7 +1,7 @@
 import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,10 +20,6 @@ const sessionSecret = randomBytes(32).toString("hex");
 
 function testHash(password) {
   return `sha256$${createHash("sha256").update(password).digest("base64url")}`;
-}
-
-function testHmacHash(password) {
-  return `hmac-sha256$${createHmac("sha256", sessionSecret).update(password).digest("base64url")}`;
 }
 
 function wrangler(...args) {
@@ -146,38 +142,21 @@ try {
   const mainCookie = await login("main@example.test", "main-test");
   const wifeCookie = await login("wife@example.test", "wife-test");
 
-  const temporaryCookie = await login("giantz3031@gmail.com", "temporary-test");
+  const accountBefore = query("SELECT * FROM diary_accounts WHERE id = 'chiharu-admin'");
+  const chiharuCookie = await login("giantz3031@gmail.com", "unused");
   const initialPassword = await request("/password/initial", {
-    method: "POST",
-    cookie: temporaryCookie,
-    body: { password: "new-pbkdf2-password", confirmation: "new-pbkdf2-password" }
+    method: "POST", cookie: chiharuCookie,
+    body: {password: "unused-new-password", confirmation: "unused-new-password"}
   });
-  assert.equal(initialPassword.response.status, 200, JSON.stringify(initialPassword.result));
-  const savedPbkdf2 = query("SELECT password_hash FROM diary_accounts WHERE id = 'chiharu-admin'")[0].password_hash;
-  assert.match(savedPbkdf2, /^pbkdf2-sha256\$600000\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/,
-    "new passwords must use a random 16-byte salt and a 32-byte PBKDF2-SHA256 hash");
-  await login("giantz3031@gmail.com", "new-pbkdf2-password");
-  wrangler("d1", "execute", "diary-db", "--local", "--command",
-    "UPDATE diary_accounts SET password_hash = NULL, must_change_password = 1, session_version = session_version + 1 WHERE id = 'chiharu-admin'");
-  const secondTemporaryCookie = await login("giantz3031@gmail.com", "temporary-test");
-  const repeatedInitialPassword = await request("/password/initial", {
-    method: "POST",
-    cookie: secondTemporaryCookie,
-    body: { password: "new-pbkdf2-password", confirmation: "new-pbkdf2-password" }
-  });
-  assert.equal(repeatedInitialPassword.response.status, 200, JSON.stringify(repeatedInitialPassword.result));
-  const repeatedPbkdf2 = query("SELECT password_hash FROM diary_accounts WHERE id = 'chiharu-admin'")[0].password_hash;
-  assert.notEqual(repeatedPbkdf2, savedPbkdf2, "the same password must receive a new cryptographically random salt");
-  wrangler("d1", "execute", "diary-db", "--local", "--command",
-    `UPDATE diary_accounts SET password_hash = '${testHash("legacy-upgrade")}', must_change_password = 0 WHERE id = 'chiharu-admin'`);
-  await login("giantz3031@gmail.com", "legacy-upgrade");
-  assert.match(query("SELECT password_hash FROM diary_accounts WHERE id = 'chiharu-admin'")[0].password_hash, /^pbkdf2-sha256\$600000\$/,
-    "a successful legacy-password login must opportunistically upgrade the stored hash");
-  wrangler("d1", "execute", "diary-db", "--local", "--command",
-    `UPDATE diary_accounts SET password_hash = '${testHmacHash("legacy-hmac-upgrade")}' WHERE id = 'chiharu-admin'`);
-  await login("giantz3031@gmail.com", "legacy-hmac-upgrade");
-  assert.match(query("SELECT password_hash FROM diary_accounts WHERE id = 'chiharu-admin'")[0].password_hash, /^pbkdf2-sha256\$600000\$/,
-    "legacy HMAC hashes must remain verifiable and upgrade after a successful login");
+  assert.equal(initialPassword.response.status, 410);
+  for (const password of ["temporary-test", "wrong-password"]) {
+    const rejected = await request("/login", {method: "POST", body: {loginId: "giantz3031@gmail.com", password}});
+    assert.equal(rejected.response.status, 401);
+    assert.equal(rejected.response.headers.get("set-cookie"), null);
+  }
+  assert.deepEqual(query("SELECT * FROM diary_accounts WHERE id = 'chiharu-admin'"), accountBefore,
+    "retired password paths do not change credentials, flags or account versions");
+  assert.equal((await request("/entries", {cookie: chiharuCookie})).response.status, 200);
 
   const idempotencyKey = randomUUID();
   const idempotentBody = entryBody(`${marker}-idempotent`, { requestId: idempotencyKey, tags: ["alpha", "beta"] });

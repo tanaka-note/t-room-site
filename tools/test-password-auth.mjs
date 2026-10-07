@@ -91,7 +91,7 @@ function cookieWithPayload(cookie, payload, secret) {
   return cookie.split("=",1)[0]+"="+encoded+"."+createHmac("sha256",secret).update(encoded).digest("base64url");
 }
 
-for (const service of ["diary", "billing"]) test(`${service}: fixed twelve-hour password lifetime and password-only migration`, async () => {
+for (const service of ["billing"]) test(`${service}: fixed twelve-hour password lifetime and password-only migration`, async () => {
   const f = fixture(service), OriginalDate = Date;
   let now = OriginalDate.now();
   globalThis.Date = class extends OriginalDate {
@@ -171,7 +171,7 @@ for (const target of MANAGED_PASSWORD_ACCOUNTS) test(`${target.service}/${target
   } finally { f.close(); }
 });
 
-for(const service of ["diary","billing"]) test(`${service}: only the explicitly managed accounts change; all other accounts retain password login/fixed sessions`,async()=>{
+for(const service of ["billing"]) test(`${service}: only the explicitly managed accounts change; all other accounts retain password login/fixed sessions`,async()=>{
   const f=fixture(service);
   try {
     const baseline=f.accounts();
@@ -190,17 +190,19 @@ for(const service of ["diary","billing"]) test(`${service}: only the explicitly 
   } finally{f.close();}
 });
 
-for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["billing", "owner"]]) {
+for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["diary", "wife-admin"], ["diary", "chiharu-admin"], ["diary", "future-user"], ["billing", "owner"]]) {
   test(`${service}/${id}: permanently rejects passwords and existing cookies, preserving Passkey access and account data`, async () => {
     const f = fixture(service);
     try {
-      if (id === "main-user") f.db.exec("UPDATE diary_accounts SET must_change_password = 1 WHERE id = 'main-user'");
+      if (service === "diary") f.db.exec("UPDATE diary_accounts SET must_change_password = 1");
       const baseline = f.accounts();
       for (const enabled of [null, 1, 0]) {
         if (enabled !== null) f.db.prepare("INSERT INTO password_auth_policy (service,account_id,password_auth_enabled,password_session_epoch,changed_by,reason) VALUES (?,?,?,1,'test','test') ON CONFLICT(service,account_id) DO UPDATE SET password_auth_enabled=excluded.password_auth_enabled,password_session_epoch=password_auth_policy.password_session_epoch+1").run(service,id,enabled);
         assert.equal((await readPasswordAuthPolicy(f.env,service,id)).enabled,false,"DB cannot re-enable retired password auth");
+        const beforeQueries=f.queries.length;
         const blocked = await f.login(id);
         assert.equal(blocked.status,401); assert.equal(blocked.cookie,null);
+        if(service==="diary") assert.equal(f.queries.length,beforeQueries,"retired login does not read credentials or mutate counters");
         assert.deepEqual(blocked.body,(await f.login(id,"wrong-local-password")).body);
       }
       assert.ok(f.audit.some(e=>e.details?.reason === "password_auth_disabled"));
@@ -209,7 +211,7 @@ for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["
         assert.equal(legacyId.status,401); assert.equal(legacyId.cookie,null);
       }
       const pk = await f.passkey(id); assert.equal(pk.status,200);
-      assert.equal(pk.body.role,service === "billing" ? "owner" : id === "main-admin" ? "admin" : "user");
+      assert.equal(pk.body.role,service === "billing" ? "owner" : ["main-admin", "wife-admin", "chiharu-admin"].includes(id) ? "admin" : "user");
       for (const authMethod of ["password", undefined]) {
         const payload = { ...cookiePayload(pk.cookie), authMethod, passwordSessionVersion: 1, passwordSessionEpoch: 0 };
         for (const key of ["identityId","credentialId","serviceLinkId","serviceAccountId","passkeySessionEpoch"]) delete payload[key];
@@ -227,9 +229,9 @@ for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["
         assert.equal(selected.status,200);
         assert.equal((await f.request("session",selected.cookie)).body.activeHouseholdId,"chiharu-household");
       }
-      if (id === "main-user") {
+      if (service === "diary") {
         assert.equal(session.body.mustChangePassword,false,"retired password setup never blocks Passkey business APIs");
-        assert.equal((await f.request("password/initial",pk.cookie,{password:"unused-new-password",confirmation:"unused-new-password"})).status,409);
+        assert.equal((await f.request("password/initial",pk.cookie,{password:"unused-new-password",confirmation:"unused-new-password"})).status,410);
       }
       assert.equal(f.accounts(),baseline,"credentials, flags, roles and versions are unchanged");
       f.invalidatePasskey();
@@ -237,6 +239,24 @@ for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["
     } finally { f.close(); }
   });
 }
+
+test("Diary: Passkey lifetime, rolling and revocation remain independent of retired password records",async()=>{
+  const f=fixture("diary"),OriginalDate=Date;
+  let now=OriginalDate.now();
+  globalThis.Date=class extends OriginalDate {constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}};
+  try {
+    const pk=await f.passkey("wife-admin"),payload=cookiePayload(pk.cookie);
+    assert.equal(pk.status,200);
+    assert.equal(payload.passwordSessionEpoch,undefined);
+    assert.equal(payload.passwordSessionVersion,undefined);
+    assert.equal((await f.request("session",pk.cookie)).body.authenticated,true);
+    now=payload.exp*1000;
+    assert.equal((await f.request("session",pk.cookie)).body.authenticated,false);
+    assert.equal((await f.request("households",pk.cookie)).status,401);
+    const fresh=await f.passkey("wife-admin");assert.equal(fresh.status,200);
+    f.invalidatePasskey();assert.equal((await f.request("session",fresh.cookie)).body.authenticated,false);
+  } finally {globalThis.Date=OriginalDate;f.close();}
+});
 
 test("policy lookups fail closed; Passkey bypasses only password policy; rolling never adopts a new epoch",async()=>{
   const broken={DB:{prepare(){throw Error("D1 unavailable");}}};
@@ -262,10 +282,9 @@ for (const service of ["diary", "billing"]) test(`${service}: missing policy sch
 
 test("operator rejects protected accounts, mismatched names, missing Passkey and stale generations; schema cannot reset cookies",async()=>{
   assert.deepEqual(MANAGED_PASSWORD_ACCOUNTS.map(t=>[t.service,t.accountId,t.displayName]),[
-    ["diary","chiharu-admin","田中千晴"],["diary","wife-admin","田中暢美"],
     ["billing","chiharu","田中千晴"],["billing","masami","田中暢美"],["billing","hideaki","田中秀晃"]
   ]);
-  for(const [s,ids] of [["cloud",["admin","subadmin","folder-member","hideaki"]],["diary",["main-admin","main-user","future-user","*","hideaki"]],["billing",["owner","yuuka","machiko","future-user","chi%","Hideaki","hideaki "]],["ai",["owner","hideaki"]],["downloader",["owner","hideaki"]]]) for(const id of ids) assert.throws(()=>managedPasswordAccount(s,id));
+  for(const [s,ids] of [["cloud",["admin","subadmin","folder-member","hideaki"]],["diary",["main-admin","main-user","wife-admin","chiharu-admin","future-user","*","hideaki"]],["billing",["owner","yuuka","machiko","future-user","chi%","Hideaki","hideaki "]],["ai",["owner","hideaki"]],["downloader",["owner","hideaki"]]]) for(const id of ids) assert.throws(()=>managedPasswordAccount(s,id));
   for (const accountId of ["chiharu", "hideaki"]) {
     const f=fixture("billing"),t=managedPasswordAccount("billing",accountId);
     try{

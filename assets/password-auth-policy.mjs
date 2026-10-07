@@ -1,7 +1,7 @@
 // Local, password-only policy. No cross-service/Identity fallback and no cache:
 // every protected password request observes the current D1 generation.
 export function isPasswordAuthRetired(service, accountId) {
-  return (service === "diary" && ["main-admin", "main-user"].includes(accountId))
+  return service === "diary"
     || (service === "billing" && accountId === "owner");
 }
 

@@ -7,8 +7,6 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 // Intentional exact allowlist. Adding a person/service requires a reviewed change.
 // Cloud, the primary administrator, other/current/future accounts are protected.
 export const MANAGED_PASSWORD_ACCOUNTS = Object.freeze([
-  Object.freeze({ service: "diary", accountId: "chiharu-admin", displayName: "田中千晴" }),
-  Object.freeze({ service: "diary", accountId: "wife-admin", displayName: "田中暢美", static: true }),
   Object.freeze({ service: "billing", accountId: "chiharu", displayName: "田中千晴" }),
   Object.freeze({ service: "billing", accountId: "masami", displayName: "田中暢美" }),
   Object.freeze({ service: "billing", accountId: "hideaki", displayName: "田中秀晃" })
