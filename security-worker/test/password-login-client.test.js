@@ -39,7 +39,7 @@ function fixture(service, {password='short', loginId='user@example.test', apiFai
 }
 
 test('helper copies and HTML execution order match each service',()=>{
-  for(const service of ['cloud','diary','billing']) {
+  for(const service of ['cloud','billing']) {
     assert.equal(read(`${service}-worker/public/password-login-audit.js`),helper);
     const html=read(`${service}-worker/public/index.html`);
     const scripts=[...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(match=>match[1]);
@@ -68,7 +68,7 @@ test('Cloud auth-mode HTTP and network failures remain distinct from derive fail
     assert.equal(f.sent.at(-1).stage,'auth_mode');assert.equal(f.sent.at(-1).reason,reason);
   }
 });
-for(const service of ['cloud','diary','billing']) {
+for(const service of ['cloud','billing']) {
   test(`${service}: login network failure is correlated, server 401 is not double-counted`,async()=>{
     const network=fixture(service,{password:'long-fixture',apiFailure:{path:'/login',error:{}}});await network.login();
     assert.equal(network.sent.at(-1).stage,'login_request');assert.equal(network.sent.at(-1).reason,'network_error');

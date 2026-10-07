@@ -144,7 +144,7 @@ try {
   const search = await request('/entries?limit=50&q='+encodeURIComponent(marker),{cookie});
   assert.ok(search.result.entries.some(entry=>entry.weather==='sunny'), JSON.stringify(search.result));
   const ownId=old.id;
-  const wife=await request('/login',{method:'POST',body:{loginId:'wife@example.test',password:'wife-test'}});
+  const wife=await diaryFixtureLogin(request,'wife@example.test','wife-test');
   assert.equal((await request('/entries/'+ownId,{cookie:wife.cookie})).response.status,200, 'existing same-household sharing is preserved');
   console.log('Weather API: all IDs, null, omitted fields, draft publication, idempotency, validation, search, delete/restore and household sharing passed.');
 } finally {

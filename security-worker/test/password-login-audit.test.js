@@ -9,7 +9,7 @@ const telemetry = (stage = 'credential_derivation', reason = 'credential_derivat
   stage, reason, requestCorrelationId: crypto.randomUUID(), isPwa: false
 });
 
-for (const service of ['cloud', 'diary', 'billing']) {
+for (const service of ['cloud', 'billing']) {
   test(`${service}: audit client script is publicly served through the real asset allowlist`,async()=>{
     const f=fixture(service);
     try {
@@ -156,7 +156,7 @@ for (const service of ['cloud', 'diary', 'billing']) {
   });
 }
 
-for (const service of ['diary', 'billing']) test(`${service}: disabled password with an active Passkey link rejects generically`, async () => {
+for (const service of ['billing']) test(`${service}: disabled password with an active Passkey link rejects generically`, async () => {
   const f = fixture(service);
   try {
     f.disablePassword();
@@ -172,6 +172,36 @@ for (const service of ['diary', 'billing']) test(`${service}: disabled password 
   } finally { f.close(); }
 });
 
+test('Diary: retired password requests preserve Security history, synchronous audit and Queue fallback without account writes', async () => {
+  const f=fixture('diary'),s=await securityDatabase(f,'diary');
+  try {
+    const accounts=JSON.stringify(f.db.prepare('SELECT * FROM diary_accounts ORDER BY id').all());
+    for(const body of [{loginId:f.loginId,password:fixturePassword},{loginId:'unknown@example.test',password:'wrong'},'{malformed']) {
+      const r=await f.request('login',body);
+      assert.equal(r.status,401);assert.equal(r.cookie,null);
+      assert.equal(f.stored.at(-1).details.reason,'password_auth_disabled');
+      assert.equal(f.stored.at(-1).details.counterUpdated,false);
+    }
+    assert.equal(s.db.prepare("SELECT COUNT(*) n FROM security_audit_events WHERE service='diary' AND auth_method='password' AND event_type='password_login_failure'").get().n,3);
+    const event=f.stored[0];
+    await s.worker.queue({messages:[{body:event,ack(){},retry:()=>assert.fail('Replay should persist')}]});
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM security_audit_events').get().n,3);
+    assert.equal(f.db.prepare('SELECT COUNT(*) n FROM diary_login_attempts').get().n,0);
+    assert.equal(JSON.stringify(f.db.prepare('SELECT * FROM diary_accounts ORDER BY id').all()),accounts);
+    assert.doesNotMatch(JSON.stringify(f.stored),/unknown@example\.test|local-audit-fixture-password/);
+    // Old cached forms may still report metadata; it cannot create an authenticated session.
+    assert.equal((await f.request('password-login-audit',telemetry())).status,204);
+    f.env.SECURITY.recordAuditEvent=async()=>{throw Error('local RPC outage');};
+    assert.equal((await f.request('login',{loginId:f.loginId,password:fixturePassword})).status,401);
+    assert.equal(f.queued.length,1);
+    await s.worker.queue({messages:[{body:f.queued[0],ack(){},retry:()=>assert.fail('Fallback should persist')}]});
+    assert.equal(s.db.prepare("SELECT COUNT(*) n FROM security_audit_events WHERE event_type='password_login_failure'").get().n,4);
+    const before=f.stored.length;
+    assert.equal((await f.request('login',{password:fixturePassword},{Origin:'https://foreign.test'})).status,403);
+    assert.equal(f.stored.length,before);
+  } finally {s.close();f.close();}
+});
+
 test('Billing source rate limit has a separate audit reason and a generic response', async () => {
   const f = fixture('billing');
   try {
@@ -184,7 +214,7 @@ test('Billing source rate limit has a separate audit reason and a generic respon
   } finally { f.close(); }
 });
 
-for(const service of ['diary','billing']) test(`${service}: inactive accounts are classified internally with a generic rejection`,async()=>{
+for(const service of ['billing']) test(`${service}: inactive accounts are classified internally with a generic rejection`,async()=>{
   const f=fixture(service);
   try {
     if(service==='diary') f.db.exec("INSERT INTO diary_accounts(id,household_id,display_name,login_id,role,active) VALUES ('inactive-fixture','tanaka-household','Fixture','inactive@example.test','user',0)");
