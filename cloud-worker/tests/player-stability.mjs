@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const [main, share, mediaClient, mediaFormat, mainCss, shareCss, mainHtml, shareHtml] = await Promise.all([
-  readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
+  Promise.all(["cloud.js", "preview-controls.js"].map(file => readFile(new URL(`../public/${file}`, import.meta.url), "utf8"))).then(parts => parts.join("\n")),
   readFile(new URL("../public/share.js", import.meta.url), "utf8"),
   readFile(new URL("../public/media-client.js", import.meta.url), "utf8"),
   readFile(new URL("../public/media-format.js", import.meta.url), "utf8"),
@@ -45,7 +45,8 @@ assert.match(main, /seek\.addEventListener\("pointerdown"/);
 assert.match(main, /seek\.addEventListener\("pointermove"/);
 assert.match(main, /seek\.addEventListener\("pointerup", finishRelativeSeek\)/);
 assert.match(main, /relativeSeekTime\(seekPointerStartSeconds, seekPointerStartX, event\.clientX/);
-assert.match(main, /state\.previewPlayer\.currentTime = target/);
+assert.match(main, /getPlayer: \(\) => state\.previewPlayer/);
+assert.match(main, /if \(player\) player\.currentTime = target/);
 assert.doesNotMatch(main, /seek\.addEventListener\("input", \(\) => \{[\s\S]*?video\.currentTime/);
 assert.match(main, /bufferedEnd\(duration\)/);
 assert.match(main, /contiguousCachedPlaybackPercent\(file, entry\)/);

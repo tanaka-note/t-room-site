@@ -95,7 +95,7 @@ npm run release -- cloud               # registry app id。security / diary / bi
 node tools/verify-web-app-builds.mjs --target t-room-cloud
 ```
 
-releaseは最新origin/main一致を確認後、CIと同じ`installDirectories()`を正本として対象verifyに必要な依存関係だけを上記の安全なpnpmオプションで導入する。その後、対象verifyと検証中のmain進行を確認し、**deploy前preflight**で同deploy targetの全content-hash appについてcommit済みmarker・updater・Service Worker・app shellをread-only検査する。不一致時はWranglerを実行せず、target限定syncコマンドを表示して停止する。preflight成功後だけ対象Workerをdeployし、既存の**post-deploy verify**で同deploy targetの全登録アプリをproductionから読み戻して照合する。Cloudのcanonicalファイルと公開runtimeコピーも既存手順どおり一致させる。全体syncを無関係なサービスへcommitしない。
+releaseは最新origin/main一致を確認後、CIと同じ`installDirectories()`を正本として対象verifyに必要な依存関係だけを上記の安全なpnpmオプションで導入する。その後、対象verifyと検証中のmain進行を確認し、**deploy前preflight**で同deploy targetの全content-hash appについてcommit済みmarker・updater・Service Worker・app shellをread-only検査する。不一致時はWranglerを実行せず、target限定syncコマンドを表示して停止する。preflight成功後だけ対象Workerをdeployし、既存の**post-deploy verify**で同deploy targetの全登録アプリをproductionから読み戻して照合する。Cloudのcanonicalファイルと公開runtimeコピーは`web-apps.json`の`assetCopies`を正本とし、target限定syncで自動的に一致させる。freshness検査はmarkerが一致していてもコピーの差分を拒否する。全体syncを無関係なサービスへcommitしない。
 
 DownloaderのProductionはこのコマンドで拒否し、既存の署名・lease・reconciliation付きContainer/定義手順を使う。AIには公開Web build registryがないため既存専用手順を維持する。各Workerの従来deployコマンドも削除しない。
 

@@ -1,3 +1,4 @@
+import { createDiaryEntryDomain } from "./entry-domain.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
@@ -112,8 +113,14 @@ export default {
       }
 
       if (path.startsWith("/api/")) {
-        const response = await withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context));
-        return secureResponse(await withRollingSession(request, response, env, url, path));
+        // Share validation only within this read request. Mutations still revalidate
+        // after their handler, and a subsequent request always checks current policy.
+        let sessionPromise;
+        const getSession = () => request.method === "GET"
+          ? (sessionPromise ??= readSession(request, env))
+          : readSession(request, env);
+        const response = await withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context, getSession));
+        return secureResponse(await withRollingSession(request, response, env, url, path, getSession));
       }
 
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -150,11 +157,11 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path, context) {
+async function handleApi(request, env, url, path, context, getSession) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "diary");
   if (path === "/api/session" && request.method === "GET") {
-    const session = await readSession(request, env);
+    const session = await getSession();
     if (session) await recordSecurityAudit(env, request, {
       service: "diary", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
@@ -216,14 +223,14 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    const session = await readSession(request, env);
+    const session = await getSession();
     if (session) await recordSecurityAudit(env, request, { service: "diary", eventType: "logout", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: securityAuditRole(session), authMethod: session.authMethod, sessionId: session.sessionId });
     const headers = new Headers();
     headers.set("Set-Cookie", clearSessionCookie(url.protocol === "https:"));
     return json({ ok: true }, 200, headers);
   }
 
-  const session = await readSession(request, env);
+  const session = await getSession();
   if (!session) return json({ error: "ログインが必要です。" }, 401);
 
   if (path === "/api/password/initial" && request.method === "POST") {
@@ -2012,141 +2019,6 @@ async function validatePendingPhotoSave(body, env, session) {
   return true;
 }
 
-function validateEntryInput(body, { draft = false, allowEmptyContent = false } = {}) {
-  const entryDate = typeof body.entryDate === "string" ? body.entryDate.trim() : "";
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  const content = typeof body.content === "string" ? body.content.trim() : "";
-  if (!isValidDate(entryDate)) throw new HttpError(400, "日付を確認してください。");
-  if ((!draft && !title) || title.length > 200) throw new HttpError(400, "タイトルは1文字以上200文字以内で入力してください。");
-  if ((!draft && !allowEmptyContent && !content) || content.length > 200000) throw new HttpError(400, "本文は1文字以上20万文字以内で入力してください。");
-  const rawTags = Array.isArray(body.tags) ? body.tags : [];
-  const tags = [...new Set(rawTags.map(normalizeTag).filter(Boolean))];
-  if (tags.length > 100 || tags.some((tag) => tag.length > 30)) {
-    throw new HttpError(400, "タグは100個まで、1個30文字以内で入力してください。");
-  }
-  const contentFormat = validateContentFormat(body.contentFormat, content);
-  const excludedPhotoIds = parsePhotoIdList(body.excludedPhotoIds);
-  const weather = body.weather ?? null;
-  if (weather !== null && !["sunny", "cloudy", "partly_cloudy", "cloudy_rain", "rain", "heavy_rain", "thunder", "snow"].includes(weather)) {
-    throw new HttpError(400, "天気を確認してください。");
-  }
-  return { entryDate, title, content, contentFormat, tags, excludedPhotoIds, weather };
-}
-
-function normalizeEntryStatus(value) {
-  return value === "draft" ? "draft" : "published";
-}
-
-function parsePhotoIdList(value) {
-  let source = value;
-  if (typeof source === "string") {
-    try { source = JSON.parse(source); } catch { source = []; }
-  }
-  if (!Array.isArray(source)) return [];
-  return [...new Set(source.map((item) => String(item || "").toLowerCase()).filter(isUuid))];
-}
-
-function validateContentFormat(value, content) {
-  if (value == null || value === "") return null;
-  if (!value || typeof value !== "object" || value.version !== 1 || !Array.isArray(value.runs)) {
-    throw new HttpError(400, "本文の書式情報を確認してください。");
-  }
-  if (value.runs.length > 5000) {
-    throw new HttpError(400, "本文の書式が多すぎます。");
-  }
-  const colors = new Set(["red", "blue", "green", "orange", "purple", "gray", "light-blue", "brown"]);
-  const normalized = [];
-  let previousEnd = 0;
-  for (const run of value.runs) {
-    const start = Number(run?.start);
-    const end = Number(run?.end);
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < previousEnd || start < 0 || end <= start || end > content.length) {
-      throw new HttpError(400, "本文の書式範囲を確認してください。");
-    }
-    const color = run.color == null || run.color === "" ? null : String(run.color);
-    if (color && !colors.has(color)) {
-      throw new HttpError(400, "本文の文字色を確認してください。");
-    }
-    const item = {
-      start,
-      end,
-      bold: run.bold === true,
-      italic: run.italic === true,
-      underline: run.underline === true,
-      color
-    };
-    if (!item.bold && !item.italic && !item.underline && !item.color) {
-      throw new HttpError(400, "本文の書式情報を確認してください。");
-    }
-    normalized.push(item);
-    previousEnd = end;
-  }
-  return normalized.length ? JSON.stringify({ version: 1, runs: normalized }) : null;
-}
-
-function serializePhoto(row) {
-  return {
-    id: row.id,
-    entryId: Number(row.entry_id),
-    entryDate: row.entry_date || null,
-    entryTitle: row.entry_title || null,
-    authorId: row.author_id || null,
-    authorName: row.author_name || null,
-    fileName: row.file_name,
-    contentType: row.content_type,
-    originalSize: Number(row.original_size || 0),
-    width: row.width == null ? null : Number(row.width),
-    height: row.height == null ? null : Number(row.height),
-    createdByName: row.created_by_name,
-    createdAt: row.created_at,
-    thumbnailUrl: `${BASE_PATH}/api/photos/${row.id}/thumbnail`,
-    displayUrl: `${BASE_PATH}/api/photos/${row.id}/display`,
-    originalUrl: `${BASE_PATH}/api/photos/${row.id}/original`
-  };
-}
-
-function serializeEntry(row) {
-  let tags = [];
-  try {
-    tags = JSON.parse(row.tags || "[]");
-  } catch {
-    tags = [];
-  }
-  return {
-    id: Number(row.id),
-    entryDate: row.entry_date,
-    lastPublishedAt: row.last_published_at ?? null,
-    title: row.title,
-    weather: row.weather ?? null,
-    content: row.content,
-    contentFormat: parseContentFormat(row.content_format),
-    authorId: row.author_id,
-    authorName: row.author_name,
-    tags,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    deletedAt: row.deleted_at,
-    deletedById: row.deleted_by_id || null,
-    deletedByName: row.deleted_by_name || null,
-    status: row.status || "published",
-    isFavorite: Number(row.is_favorite || 0) === 1,
-    draftOfEntryId: row.draft_of_entry_id == null ? null : Number(row.draft_of_entry_id),
-    draftOfRevision: row.draft_of_revision == null ? null : Number(row.draft_of_revision),
-    excludedPhotoIds: parsePhotoIdList(row.draft_excluded_photo_ids),
-    revision: Number(row.revision)
-  };
-}
-
-function parseContentFormat(value) {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed?.version === 1 && Array.isArray(parsed.runs) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 async function readSession(request, env) {
   if (!isValidSessionSecret(env.SESSION_SECRET)) return null;
   const cookies = parseCookies(request.headers.get("Cookie") || "");
@@ -2192,10 +2064,10 @@ function getSessionPolicy(env, authMethod) {
   return sessionPolicyForAuthMethod(env, authMethod, clampNumber(env.SESSION_TTL_SECONDS, 3600, PASSWORD_SESSION_TTL_SECONDS, PASSWORD_SESSION_TTL_SECONDS));
 }
 
-async function withRollingSession(request, response, env, url, path) {
+async function withRollingSession(request, response, env, url, path, getSession) {
   if (path === "/api/login" || path === "/api/password-login-audit" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
     || path === "/api/households/select" || response.status === 401) return response;
-  const session = await readSession(request, env);
+  const session = await getSession();
   if (!session || !shouldRefreshSession(session)) return response;
   const account = await findAccountById(session.accountId, env);
   if (!account) return response;
@@ -2680,14 +2552,6 @@ function validateDateRange(dateFrom, dateTo) {
   return { from, to };
 }
 
-function normalizeTag(value) {
-  return String(value || "").trim().replace(/^#+/, "").replace(/\s+/g, " ");
-}
-
-function isUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
-}
-
 function normalizeFileName(value) {
   const normalized = String(value || "photo").normalize("NFC").replace(/[\u0000-\u001f\u007f]/g, "").trim();
   return (normalized || "photo").slice(0, 240);
@@ -2700,12 +2564,6 @@ function stripExtension(value) {
 function contentDisposition(fileName) {
   const fallback = normalizeFileName(fileName).replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(normalizeFileName(fileName))}`;
-}
-
-function isValidDate(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -2756,6 +2614,11 @@ class HttpError extends Error {
     this.status = status;
   }
 }
+
+const {
+  validateEntryInput, normalizeEntryStatus, parsePhotoIdList,
+  serializePhoto, serializeEntry, normalizeTag, isUuid, isValidDate
+} = createDiaryEntryDomain({ HttpError, basePath: BASE_PATH });
 
 export {
   cleanupStagedPhotoSession,

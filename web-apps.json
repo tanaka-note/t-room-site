@@ -157,7 +157,7 @@
       "publicUrls": ["https://tanaka-note.com/diary/", "https://tanaka-note.com/diary/investment/", "https://tanaka-note.com/diary/favorites/"],
       "entrypoints": ["diary-worker/public/index.html", "diary-worker/public/investment.html"],
       "buildRoots": ["diary-worker/public"],
-      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "diary-worker/src/index.js", "assets/password-auth-policy.mjs", "diary-worker/src/backup.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js"],
+      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "diary-worker/src/index.js", "diary-worker/src/entry-domain.js", "assets/password-auth-policy.mjs", "diary-worker/src/backup.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js"],
       "buildMode": "content-hash",
       "serviceWorker": "diary-worker/public/service-worker.js",
       "serviceWorkerUrl": "/diary/service-worker.js",
@@ -203,6 +203,36 @@
     },
     {
       "id": "cloud",
+      "assetCopies": [
+        {
+          "source": "cloud-worker/public/cloud.js",
+          "copy": "cloud-worker/public/cloud-runtime-20260816-1.js"
+        },
+        {
+          "source": "cloud-worker/public/share.js",
+          "copy": "cloud-worker/public/share-runtime-20260816-1.js"
+        },
+        {
+          "source": "cloud-worker/public/cloud.css",
+          "copy": "cloud-worker/public/cloud-runtime-20260815-1.css"
+        },
+        {
+          "source": "cloud-worker/public/share.css",
+          "copy": "cloud-worker/public/share-runtime-20260814-6.css"
+        },
+        {
+          "source": "cloud-worker/public/offline-store.js",
+          "copy": "cloud-worker/public/offline-store-20260811-2.js"
+        },
+        {
+          "source": "cloud-worker/public/display-cache.js",
+          "copy": "cloud-worker/public/display-cache-20260813-1.js"
+        },
+        {
+          "source": "cloud-worker/public/media-client.js",
+          "copy": "cloud-worker/public/media-client-20260811-12.js"
+        }
+      ],
       "name": "T-Cloud Web",
       "publicUrls": ["https://tanaka-note.com/cloud/", "https://tanaka-note.com/cloud/share/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
       "entrypoints": ["cloud-worker/public/index.html", "cloud-worker/public/share.html"],

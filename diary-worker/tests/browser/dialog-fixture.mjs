@@ -22,6 +22,9 @@ const json = (response, value) => { response.writeHead(200, { 'content-type': 'a
 
 export async function runDialogs(service) {
   let writes = 0, releaseSave;
+  const delayedPhotos = new Set(), pendingPhotos = new Map(), photoWaiters = new Map(), photoRequests = new Map();
+  const waitForPhoto = id => pendingPhotos.has(id) ? Promise.resolve() : new Promise(resolve => photoWaiters.set(id, resolve));
+  const releasePhoto = id => { pendingPhotos.get(id)?.(); pendingPhotos.delete(id); };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname.startsWith('/diary/api/')) {
@@ -31,7 +34,11 @@ export async function runDialogs(service) {
       if (path === '/entries') return json(response, { entries: [entry], hasMore: false });
       if (path === '/entries/1') return json(response, { entry });
       if (path === '/photos/meta') return json(response, { months: [] });
-      if (path === '/photos') return json(response, { photos: Array.from({ length: 48 }, (_, i) => ({ ...photo, id: i + 1 })), hasMore: false });
+      if (path === '/photos') {
+        const offset = Number(url.searchParams.get('offset') || 0);
+        return json(response, { photos: Array.from({ length: 48 }, (_, i) => ({ ...photo, id: offset + i + 1,
+          displayUrl: `/display/${offset + i + 1}.svg`, fileName: `fixture-${offset + i + 1}.svg` })), hasMore: offset === 0 });
+      }
       if (request.method !== 'GET') writes++;
       return json(response, {});
     }
@@ -49,6 +56,20 @@ export async function runDialogs(service) {
     }
     if (url.pathname === '/previous') { response.writeHead(200, { 'content-type': 'text/html' }); return response.end('<p>previous</p>'); }
     if (url.pathname === '/fixture.svg') { response.writeHead(200, { 'content-type': 'image/svg+xml' }); return response.end('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="blue"/></svg>'); }
+    if (url.pathname.startsWith('/display/')) {
+      const id = Number(url.pathname.match(/\d+/)[0]);
+      photoRequests.set(id, (photoRequests.get(id) || 0) + 1);
+      const send = () => {
+        if (id === 5) return response.writeHead(503).end();
+        response.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'private, max-age=3600' });
+        response.end(`<svg xmlns="http://www.w3.org/2000/svg" width="${100 + id}" height="100"><rect width="100%" height="100%" fill="red"/></svg>`);
+      };
+      if (!delayedPhotos.has(id)) return send();
+      pendingPhotos.set(id, send);
+      photoWaiters.get(id)?.();
+      photoWaiters.delete(id);
+      return;
+    }
     if (url.pathname === '/diary/dialog-navigation.js') {
       const result = await diaryWorker.fetch(new Request(url.href), { ASSETS: { async fetch(assetRequest) {
         assert.equal(new URL(assetRequest.url).pathname, '/dialog-navigation.js');
@@ -149,6 +170,62 @@ export async function runDialogs(service) {
         await page.keyboard.press('Escape');
         await closed('entry-dialog');
         assert.equal(writes, 0, 'closing and discard must not write');
+
+        await page.click('#camera-roll-button');
+        await page.waitForSelector('[data-photo-index="47"]');
+        await page.evaluate(() => {
+          window.retainedPhotoCard = document.querySelector('[data-photo-index="0"]');
+          const roll = document.getElementById('camera-roll-dialog');
+          window.photoWildcardScans = 0;
+          const query = roll.querySelectorAll.bind(roll);
+          roll.querySelectorAll = selector => { if (selector === '*') window.photoWildcardScans++; return query(selector); };
+        });
+        await page.click('#camera-roll-more');
+        await page.waitForSelector('[data-photo-index="95"]');
+        assert.equal(await page.evaluate(() => retainedPhotoCard === document.querySelector('[data-photo-index="0"]')), true,
+          'adding a page must preserve existing image elements');
+        const clickPhoto = index => page.locator(`[data-photo-index="${index}"]`).evaluate(button => button.click());
+        const displayed = id => page.waitForFunction(id => {
+          const image = document.getElementById('photo-viewer-image');
+          return image.complete && image.naturalWidth > 0 && image.getAttribute('src') === `/display/${id}.svg`;
+        }, id);
+        for (const id of [2, 3, 4]) delayedPhotos.add(id);
+        await clickPhoto(1);
+        await opened('photo-viewer-dialog');
+        await waitForPhoto(2);
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'show the selected thumbnail while full image is pending');
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-2.svg');
+        await page.click('#photo-next');
+        await waitForPhoto(3);
+        releasePhoto(3);
+        await displayed(3);
+        releasePhoto(2);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/display/3.svg', 'late image must not replace the current selection');
+        await page.click('#photo-next');
+        await waitForPhoto(4);
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
+        await closed('photo-viewer-dialog');
+        await clickPhoto(0);
+        await displayed(1);
+        releasePhoto(4);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/display/1.svg', 'closing invalidates a pending image');
+        const requestsBeforeReopen = photoRequests.get(1);
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
+        await closed('photo-viewer-dialog');
+        await clickPhoto(0);
+        await displayed(1);
+        assert.equal(photoRequests.get(1), requestsBeforeReopen, 'reopening a cached image must not fetch again');
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
+        await closed('photo-viewer-dialog');
+        await clickPhoto(4);
+        await page.waitForFunction(() => document.getElementById('photo-viewer-status').textContent === '写真を読み込めませんでした。');
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'a failed full image retains the selected thumbnail');
+        await back('photo-viewer-dialog');
+        assert.equal(await page.evaluate(() => photoWildcardScans), 0, 'opening/closing photos must not scan the entire parent grid');
+        await back('camera-roll-dialog');
+        delayedPhotos.clear();
       } else {
         await page.click('#settlements-card');
         await opened('settlements-dialog');
@@ -213,6 +290,7 @@ export async function runDialogs(service) {
     }
   } finally {
     await browser.close();
+    for (const release of pendingPhotos.values()) release();
     releaseSave?.();
     await new Promise(resolveClose => server.close(resolveClose));
   }

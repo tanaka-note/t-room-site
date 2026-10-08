@@ -1827,6 +1827,17 @@ button:disabled {
   font-size: 2rem;
 }
 
+.photo-viewer-status {
+  position: absolute;
+  bottom: 12px;
+  margin: 0 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.85rem;
+}
+
 .photo-nav:disabled {
   opacity: 0.25;
 }
