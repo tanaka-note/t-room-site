@@ -919,17 +919,9 @@ try {
   const adminItems = await cloudRequest(redeemedPrimaryAdmin.cookie, "/cloud/api/items");
   assert.ok(adminItems.body.folders.some((folder) => Number(folder.id) === cloudUnselectedRootId));
   const passwordSubadmin = await loginCloudSubadmin();
-  assert.equal(passwordSubadmin.response.status, 200, JSON.stringify(passwordSubadmin.body));
-  assert.equal(passwordSubadmin.body.role, "subadmin");
-  assert.equal(passwordSubadmin.body.canDelete, false);
-  assert.equal(passwordSubadmin.body.canViewHistory, true);
-  assert.equal((await cloudRequest(passwordSubadmin.cookie, "/cloud/api/usage")).response.status, 403);
-  const subadminItems = await cloudRequest(passwordSubadmin.cookie, "/cloud/api/items");
-  assert.ok(subadminItems.body.folders.some((folder) => Number(folder.id) === cloudUnselectedRootId));
-  await assertCloudFolderAccess(passwordSubadmin.cookie, cloudSelectedRootId, 423, "PW subadmin still needs the folder password");
-  assert.equal((await cloudRequest(passwordSubadmin.cookie, `/cloud/api/folders/${cloudSelectedRootId}/unlock`, { method: "POST", body: { authProof: cloudRootAuthProof } })).response.status, 200);
-  await assertCloudFolderAccess(passwordSubadmin.cookie, cloudChildId, 200, "PW subadmin retains unlocked child access");
-  assert.equal((await cloudRequest(passwordSubadmin.cookie, `/cloud/api/files/${cloudRootFileId}`, { method: "PATCH", body: { name: cloudRootFileName } })).response.status, 200);
+  assert.equal(passwordSubadmin.response.status, 401, "Cloud password login is retired for subadmins too");
+  assert.equal(passwordSubadmin.response.headers.get("set-cookie"), null);
+  assert.equal((await cloudRequest(passwordSubadmin.cookie, "/cloud/api/items")).response.status, 401);
   const completedPrimaryResume = await resumeSetupWithCookie(`troom_security_admin=${primaryAdminCookie}`);
   assert.equal(completedPrimaryResume.response.status, 409, "no setup authority when all required keys already exist");
 

@@ -13,8 +13,45 @@ try {
   for (const mobile of [false, true]) {
     const context = await browser.newContext(mobile ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } : {});
     const page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
     await page.goto(fixture.origin + "/cloud/");
     await page.waitForFunction(() => globalThis.__test && globalThis.TRoomPasskeys);
+    // Run the real startup and event binding with the removed PW fields absent.
+    // Only server/WebAuthn responses are replaced with local fixture responses.
+    await page.evaluate(async () => {
+      globalThis.api = async path => {
+        if (path === "/session") return { authenticated: false };
+        throw new Error(`Unexpected login fixture API: ${path}`);
+      };
+      globalThis.__passkeyCalls = 0;
+      globalThis.__passkeyError = new Error("認証をキャンセルしました。");
+      globalThis.TRoomPasskeys = { ...TRoomPasskeys, authenticate: async service => {
+        if (service !== "cloud") throw new Error("Unexpected service");
+        __passkeyCalls += 1;
+        throw __passkeyError;
+      } };
+      await __test.initialize();
+    });
+    await page.locator("#login-view").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#login-id, #login-password, #remember-login, #login-form").count(), 0);
+    assert.equal(await page.locator("#login-view button").count(), 1);
+    await page.getByRole("button", { name: "パスキーでログイン", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#login-error").textContent.includes("キャンセル"));
+    assert.equal(await page.evaluate(() => __passkeyCalls), 1);
+    assert.equal(await page.locator("#passkey-login").isEnabled(), true);
+    for (const kind of ["options", "unsupported"]) {
+      await page.evaluate(kind => {
+        __passkeyError = kind === "options" ? new TRoomPasskeys.PasskeyOptionsError()
+          : new Error("このブラウザは端末のロック解除ログインに対応していません。ID・パスワードでログインしてください。");
+      }, kind);
+      await page.getByRole("button", { name: "パスキーでログイン", exact: true }).click();
+      await page.waitForFunction(() => !document.querySelector("#passkey-login").disabled);
+      const message = await page.locator("#login-error").textContent();
+      assert.match(message, kind === "options" ? /再読み込み/ : /対応するブラウザ/);
+      assert.doesNotMatch(message, /ID・パスワード/);
+    }
+    assert.deepEqual(errors, [], "startup/button binding must not reference deleted PW elements");
     await page.evaluate(() => {
       globalThis.__members = [
         { id: "one", accountId: "folder-member", role: "member", rootFolderId: 7 },

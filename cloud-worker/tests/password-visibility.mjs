@@ -11,7 +11,6 @@ const [mainHtml, mainClient, mainCss, shareHtml, shareClient, shareCss] = await 
 ]);
 
 const protectedInputs = [
-  "login-password",
   "folder-password",
   "folder-upload-password",
   "unlock-password",

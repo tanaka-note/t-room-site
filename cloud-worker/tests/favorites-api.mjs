@@ -104,17 +104,8 @@ try {
   db.exec('UPDATE cloud_files SET folder_id=8 WHERE id=1; UPDATE cloud_folders SET parent_id=7 WHERE id=8');
   assert.equal((await read(a2.cookie)).files.length,1);
   const pw=await api(null,"/login","POST",{loginId:'subadmin@test',authProof:'local-proof'});
-  assert.equal(pw.status,200);
-  assert.equal((await read(pw.cookie)).files.length,0);
-  assert.equal((await edit(pw.cookie,{fileIds:[1]})).status,423);
-  await api(pw.cookie,"/folders/7/unlock","POST",{password:'local-proof'});
-  assert.equal((await edit(pw.cookie,{fileIds:[1]})).status,200);
-  const pw2=await api(null,"/login","POST",{loginId:'subadmin@test',authProof:'local-proof'});
-  assert.equal((await read(pw2.cookie)).files.length,0,'PW locks apply to each session');
-  await api(pw2.cookie,"/folders/7/unlock","POST",{password:'local-proof'});
-  assert.equal((await read(pw2.cookie)).files.length,1,'PW favorites survive login');
-  db.exec('UPDATE cloud_folder_unlocks SET expires_at=0');
-  assert.equal((await read(pw2.cookie)).files.length,0,'expired unlock hides favorites');
+  assert.equal(pw.status,401); assert.equal(pw.cookie,undefined);
+  assert.equal((await api(pw.cookie,"/favorites")).status,401);
   await edit(admin.cookie,{fileIds:[1],folderIds:[8]});
   assert.equal((await read(admin.cookie)).files.length,1);
   // Foreign keys cover every existing physical-delete path, without new hooks.
