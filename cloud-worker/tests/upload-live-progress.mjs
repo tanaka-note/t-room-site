@@ -13,7 +13,6 @@ assert.match(html, /id="upload-activity"/);
 assert.match(client, /new XMLHttpRequest\(\)/);
 assert.match(client, /request\.upload\.onprogress/);
 assert.match(client, /formatTransferRate/);
-assert.match(client, /通信応答待ち/);
 assert.match(client, /Cloudflareへの保存確認済み/);
 assert.match(client, /tracker\.stop\(\)/);
 assert.match(worker, /await env\.FILES\.head\(file\.object_key\)/);

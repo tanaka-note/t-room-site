@@ -3,11 +3,12 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const [html, css, script, worker, migration] = await Promise.all([
+const [html, css, script, worker, domain, migration] = await Promise.all([
   readFile(`${root}/public/index.html`, "utf8"),
   readFile(`${root}/public/diary.css`, "utf8"),
   readFile(`${root}/public/diary.js`, "utf8"),
   readFile(`${root}/src/index.js`, "utf8"),
+  readFile(`${root}/src/entry-domain.js`, "utf8"),
   readFile(`${root}/migrations/0014_diary_favorites.sql`, "utf8")
 ]);
 
@@ -30,7 +31,8 @@ assert.match(worker, /favoriteMatch = path\.match/);
 assert.match(worker, /session\.activeHouseholdId/);
 assert.match(worker, /session\.accountId/);
 assert.match(worker, /searchParams\.get\("favorite"\)/);
-assert.match(worker, /isFavorite: Number\(row\.is_favorite \|\| 0\) === 1/);
+assert.match(worker, /createDiaryEntryDomain\(\{ HttpError, basePath: BASE_PATH \}\)/);
+assert.match(domain, /isFavorite: Number\(row\.is_favorite \|\| 0\) === 1/);
 
 assert.match(script, /\/entries\/\$\{entry\.id\}\/favorite/);
 assert.match(script, /state\.favoriteRequestPending/);

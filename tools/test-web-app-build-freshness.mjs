@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { checkWebAppBuilds } from "./check-web-app-builds.mjs";
 import { runProductionDelivery } from "./release.mjs";
 import { syncWebApps } from "./sync-web-app-builds.mjs";
-import { expectedBuild, inspectBuildFreshness, syncContentHashApp, syncServiceWorkerText } from "./web-app-registry.mjs";
+import { expectedBuild, inspectBuildFreshness, syncContentHashApp, syncServiceWorkerText, validateAppDefinition } from "./web-app-registry.mjs";
 
 const contract = {
   buildMeta: "troom-app-build",
@@ -53,6 +53,43 @@ async function createFixture() {
   }
   return directory;
 }
+
+test("published copies follow canonical changes and freshness rejects copy drift", async () => {
+  const directory = await createFixture();
+  const app = fixtureApp("site-app", "t-room-site");
+  app.assetCopies = [{ source: "site-app/app.js", copy: "site-app/published.js" }];
+  try {
+    const destination = resolve(directory, app.assetCopies[0].copy);
+    await writeFile(destination, "console.log('stale');\n");
+    await syncContentHashApp(app, contract, directory);
+    assert.equal(await readFile(destination, "utf8"), await readFile(resolve(directory, app.assetCopies[0].source), "utf8"));
+    assert.equal((await inspectBuildFreshness(app, contract, directory)).fresh, true);
+    const otherBefore = await readFile(resolve(directory, "other-app/build.js"), "utf8");
+    await writeFile(resolve(directory, app.assetCopies[0].source), "console.log('new canonical');\n");
+    const drift = await inspectBuildFreshness(app, contract, directory);
+    assert.equal(drift.fresh, false);
+    assert(drift.issues.some(issue => issue.kind === "asset-copy" && issue.file === app.assetCopies[0].copy));
+    const synced = await syncContentHashApp(app, contract, directory);
+    assert(synced.changed.includes(app.assetCopies[0].copy));
+    assert.equal(await readFile(destination, "utf8"), "console.log('new canonical');\n");
+    assert.equal((await inspectBuildFreshness(app, contract, directory)).fresh, true);
+    assert.deepEqual((await syncContentHashApp(app, contract, directory)).changed, []);
+    assert.equal(await readFile(resolve(directory, "other-app/build.js"), "utf8"), otherBefore);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("copy definitions reject invalid destinations and duplicate outputs", () => {
+  const app = fixtureApp("site-app", "t-room-site");
+  for (const copy of ["../outside.js", "/outside.js", "C:/outside.js", "site-app\\outside.js", "site-app/app.js"]) {
+    assert.throws(() => validateAppDefinition({ ...app, assetCopies: [{ source: "site-app/app.js", copy }] }), /assetCopies/);
+  }
+  assert.throws(() => validateAppDefinition({ ...app, assetCopies: [
+    { source: "site-app/app.js", copy: "site-app/published.js" },
+    { source: "site-app/build.js", copy: "site-app/published.js" }
+  ] }), /assetCopies/);
+});
 
 test("read-only freshness fails for stale markers and passes after synchronization", async () => {
   const directory = await createFixture();
