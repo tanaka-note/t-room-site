@@ -176,6 +176,10 @@ export async function filesForApp(app, baseDirectory = workspace) {
     for (const file of await listFiles(resolve(baseDirectory, root))) paths.add(file);
   }
   for (const file of app.buildFiles || []) paths.add(resolve(baseDirectory, file));
+  for (const { source, copy } of app.assetCopies || []) {
+    paths.add(resolve(baseDirectory, source));
+    paths.add(resolve(baseDirectory, copy));
+  }
   return [...paths].sort((left, right) => relative(baseDirectory, left).localeCompare(relative(baseDirectory, right)));
 }
 
@@ -202,8 +206,17 @@ export async function expectedBuild(app, contract, baseDirectory = workspace) {
 
 export async function syncContentHashApp(app, contract, baseDirectory = workspace) {
   if (app.buildMode !== "content-hash") return { app: app.id, build: await expectedBuild(app, contract, baseDirectory), changed: [] };
+  validateAppDefinition(app);
   const changed = new Set();
   for (let iteration = 0; iteration < 5; iteration += 1) {
+    for (const { source, copy } of app.assetCopies || []) {
+      const canonical = await readFile(resolve(baseDirectory, source), "utf8");
+      const published = await readFile(resolve(baseDirectory, copy), "utf8");
+      if (!sameText(canonical, published)) {
+        await writeFile(resolve(baseDirectory, copy), canonical);
+        changed.add(copy);
+      }
+    }
     const build = await expectedContentBuild(app, contract, baseDirectory);
     for (const entrypoint of app.entrypoints) {
       const target = resolve(baseDirectory, entrypoint);
@@ -274,6 +287,11 @@ export async function inspectBuildFreshness(app, contract, baseDirectory = works
   if (app.buildMode !== "content-hash") return { app: app.id, expected: await expectedBuild(app, contract, baseDirectory), fresh: true, skipped: true, issues: [] };
   const expected = await expectedContentBuild(app, contract, baseDirectory);
   const issues = [];
+  for (const { source, copy } of app.assetCopies || []) {
+    const canonical = await readFile(resolve(baseDirectory, source), "utf8");
+    const published = await readFile(resolve(baseDirectory, copy), "utf8");
+    if (!sameText(canonical, published)) issues.push({ file: copy, kind: "asset-copy", actual: `differs from ${source}` });
+  }
   for (const entrypoint of app.entrypoints) {
     const source = await readFile(resolve(baseDirectory, entrypoint), "utf8");
     if (!sameText(source, ensureHtmlContract(source, app, contract, expected))) {
@@ -317,6 +335,19 @@ export function validateAppDefinition(app) {
   if (!app.buildMode) throw new Error(`${app.id}: 自動build方式がありません。`);
   if (app.serviceWorker && (!app.cachePrefix || !app.precacheConstant || !["html", "existing"].includes(app.precacheMode))) {
     throw new Error(`${app.id}: Service Workerのcache/precache定義が不足しています。`);
+  }
+  if (app.assetCopies != null) {
+    if (!Array.isArray(app.assetCopies)) throw new Error(`${app.id}: assetCopiesは配列で指定してください。`);
+    const destinations = new Set();
+    for (const pair of app.assetCopies) {
+      const validPath = (path) => typeof path === "string" && path.length > 0
+        && !path.includes("\\") && !path.startsWith("/") && !path.includes(":")
+        && !path.split("/").some((part) => !part || part === "." || part === "..");
+      if (!validPath(pair?.source) || !validPath(pair?.copy) || pair.source === pair.copy || destinations.has(pair.copy)) {
+        throw new Error(`${app.id}: assetCopiesのsource/copyが不正または重複しています。`);
+      }
+      destinations.add(pair.copy);
+    }
   }
   return true;
 }

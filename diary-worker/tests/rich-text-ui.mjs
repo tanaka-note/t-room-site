@@ -9,11 +9,12 @@ import {
 } from "../public/diary-rich-text.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const [html, script, style, worker, migration] = await Promise.all([
+const [html, script, style, worker, domain, migration] = await Promise.all([
   readFile(`${root}/public/index.html`, "utf8"),
   readFile(`${root}/public/diary.js`, "utf8"),
   readFile(`${root}/public/diary.css`, "utf8"),
   readFile(`${root}/src/index.js`, "utf8"),
+  readFile(`${root}/src/entry-domain.js`, "utf8"),
   readFile(`${root}/migrations/0010_entry_rich_text.sql`, "utf8")
 ]);
 
@@ -160,7 +161,8 @@ assert.match(style, /\.entry-format-commands \{[^}]*grid-template-columns: repea
 assert.match(style, /\.entry-content a\.entry-content-link/);
 assert.doesNotMatch(style, /\.format-clear/);
 assert.match(style, /\.diary-text-color-light-blue/);
-assert.match(worker, /validateContentFormat/);
+assert.match(worker, /createDiaryEntryDomain\(\{ HttpError, basePath: BASE_PATH \}\)/);
+assert.match(domain, /validateContentFormat/);
 assert.match(worker, /content_format/);
 assert.match(migration, /ADD COLUMN content_format TEXT/);
 
