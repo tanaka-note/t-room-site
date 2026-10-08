@@ -56,7 +56,12 @@ try{for(const [name,engine,launch] of engines){
   records[0]={...records[0],encryptedMetadata:'AAAA'};const changed=await search('fixture 0');assert.equal(changed.matches,0);assert.equal(changed.decrypts,1);
   for(const [field,value] of [['sessionCacheId','new-session'],['serviceLinkId','new-link'],['rootFolderId',2],['serviceAccountId','other-account']]){
    await page.evaluate(({field,value})=>{__test.state.session[field]=value;},{field,value});
-   const result=await search('fixture');assert.equal(result.decrypts,499,field+' must separate metadata caches');
+   const result=await search('fixture');
+   // Admin metadata uses account identity, while every search rechecks server
+   // candidates and the device key. Renewing a session alone preserves it.
+   assert.equal(result.decrypts,field==='sessionCacheId'?1:499,field==='sessionCacheId'
+    ? 'admin session renewal preserves account metadata; invalid encrypted metadata is still retried'
+    : field+' must separate metadata caches');
   }
   deny=true;const denied=await search('fixture');assert.equal(denied.matches,0);
   assert.equal(await page.evaluate(()=>__test.searchCacheSnapshot().length),0,'permission denial must clear retained search results and cache');deny=false;

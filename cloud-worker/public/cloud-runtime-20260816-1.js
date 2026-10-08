@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-c8904e0f95ce";
+const APP_BUILD_ID = "cloud-6c87a0de7fde";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -42,7 +42,6 @@ const state = {
   itemLoadGeneration: 0,
   itemLoadController: null,
   itemRenderLimit: ITEM_RENDER_BATCH_SIZE,
-  itemRenderObserver: null,
   itemPageParams: "",
   itemNextFolderOffset: null,
   itemNextFileOffset: null,
@@ -335,6 +334,7 @@ function bindEvents() {
     clearTimeout(searchTimer);
     state.itemLoadController?.abort();
     state.itemLoadGeneration += 1;
+    listingView?.reset();
     state.progressiveItemsLoading = false;
     resetEncryptedThumbnailLoading();
     resetBackgroundMediaWork();
@@ -353,7 +353,7 @@ function bindEvents() {
     input.addEventListener("compositionstart", () => {
       input.dataset.composing = "1";
       clearTimeout(searchTimer); clearTimeout(searchPageTimer);
-      state.itemLoadController?.abort(); state.itemLoadGeneration++;
+      state.itemLoadController?.abort(); state.itemLoadGeneration++; listingView?.reset();
     });
     input.addEventListener("compositionend", () => {
       delete input.dataset.composing;
@@ -1694,6 +1694,7 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  listingView?.reset();
   if (state.session?.authMethod === "passkey") void clearCachedPasskeyKeys(state.session.sessionCacheId);
   clearTimeout(favoriteSelectionTimer);
   favoriteSelection = { key: "", ready: false, all: false, busy: false };
@@ -2006,8 +2007,7 @@ async function loadItems() {
   const itemLoadController = new AbortController();
   state.itemLoadController = itemLoadController;
   const itemLoadSignal = itemLoadController.signal;
-  state.itemRenderObserver?.disconnect();
-  state.itemRenderObserver = null;
+  listingView?.reset();
   state.itemRenderLimit = ITEM_RENDER_BATCH_SIZE;
   state.itemPageParams = "";
   state.itemNextFolderOffset = null;
@@ -2413,23 +2413,34 @@ function cacheSafeRecords(records) {
   });
 }
 
+let listingView = null;
+const listingRecordRevisions = new WeakMap();
+let nextListingRevision = 0;
+function getListingView() {
+  return listingView ||= TCloudListingView.create({ grid: $("#content-grid"), highlight: TCloudUI.highlightText });
+}
+
+function listingDisplayRecords(records) {
+  return Object.freeze(records.map(record => {
+    if (!listingRecordRevisions.has(record)) listingRecordRevisions.set(record, ++nextListingRevision);
+    return Object.freeze({ id: record.id, name: record.name, revision: listingRecordRevisions.get(record) });
+  }));
+}
+
+function listingCardFactory(folders, files) {
+  const folderRecords = new Map(folders.map(record => [record.id, record]));
+  const fileRecords = new Map(files.map(record => [record.id, record]));
+  return (kind, id) => {
+    if (kind === "file") return fileCard(fileRecords.get(id));
+    const folder = folderRecords.get(id);
+    return folder.trashed ? trashFolderCard(folder) : folderCard(folder);
+  };
+}
+
 function appendProgressiveItems(folders, files) {
-  const grid = $("#content-grid");
-  const renderedCount = grid.querySelectorAll(":scope > .folder-card, :scope > .file-card").length;
-  let remaining = Math.max(0, state.itemRenderLimit - renderedCount);
-  if (!remaining) return;
-  const firstFileCard = grid.querySelector(".file-card");
-  for (const folder of folders.slice(0, remaining)) {
-    const card = folderCard(folder);
-    card.dataset.renderKey = "folder:" + folder.id; renderedCardRecords.set(card, folder);
-    grid.insertBefore(card, firstFileCard);
-    remaining -= 1;
-  }
-  for (const file of files.slice(0, remaining)) {
-    const card = fileCard(file);
-    card.dataset.renderKey = "file:" + file.id; renderedCardRecords.set(card, file);
-    grid.append(card);
-  }
+  getListingView().append(Object.freeze({
+    folders: listingDisplayRecords(folders), files: listingDisplayRecords(files), limit: state.itemRenderLimit
+  }), { createCard: listingCardFactory(folders, files) });
   if (folders.length || files.length) $("#empty-state").hidden = true;
   queueFloatingToolbarUpdate();
 }
@@ -2440,55 +2451,23 @@ function normalizeNextItemOffset(value) {
   return Number.isInteger(offset) && offset >= 0 ? offset : null;
 }
 
-const renderedCardRecords = new WeakMap();
 function renderItems() {
   syncAccountView();
   renderFolderSummary();
-  if (state.view === "account") { $("#empty-state").hidden = true; $("#empty-trash-button").hidden = true; return; }
+  if (state.view === "account") { listingView?.reset(); $("#empty-state").hidden = true; $("#empty-trash-button").hidden = true; return; }
   renderDiaryBackupMount();
-  const grid = $("#content-grid");
-  grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "conflicts" || state.view === "requests" || state.view === "shares");
-  grid.classList.toggle("conflict-overview", state.view === "conflicts");
-  const reuse = ["all", "favorites"].includes(state.view) && grid.dataset.renderGeneration === String(state.itemLoadGeneration);
-  const previous = new Map(reuse ? [...grid.querySelectorAll(":scope > [data-render-key]")].map(card => [card.dataset.renderKey, card]) : []);
-  if (!reuse) grid.replaceChildren();
-  grid.querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
-  grid.dataset.renderGeneration = String(state.itemLoadGeneration);
-  const desired = [];
-  const renderCard = (record, kind, create) => {
-    const key = kind + record.id;
-    let card = previous.get(key);
-    if (!card || renderedCardRecords.get(card) !== record) card = create(record);
-    card.dataset.renderKey = key; renderedCardRecords.set(card, record);
-    TCloudUI.highlightText(card.querySelector("strong"), record.name, state.query);
-    desired.push(card);
-  };
-  if (state.view === "conflicts") renderConflictOverview(grid);
-  if (state.view === "history") {
-    for (const item of state.history) grid.append(historyCard(item));
-  }
-  if (state.view === "requests") {
-    for (const item of state.requests) grid.append(deletionRequestCard(item));
-  }
-  if (state.view === "shares") {
-    for (const item of state.shares) grid.append(shareCard(item));
-  }
-  const limitItems = ["all", "favorites"].includes(state.view);
-  let remaining = limitItems ? state.itemRenderLimit : Number.POSITIVE_INFINITY;
-  for (const folder of state.folders.slice(0, remaining)) {
-    renderCard(folder, "folder:", folder.trashed ? trashFolderCard : folderCard);
-    remaining -= 1;
-  }
-  for (const file of state.files.slice(0, remaining)) renderCard(file, "file:", fileCard);
-  if (["all", "favorites"].includes(state.view)) {
-    const keep = new Set(desired);
-    for (const node of [...grid.children]) if (!keep.has(node)) node.remove();
-  }
-  let cursor = ["all", "favorites"].includes(state.view) ? grid.firstChild : null;
-  for (const card of desired) {
-    if (card !== cursor) grid.insertBefore(card, cursor);
-    cursor = card.nextSibling;
-  }
+  getListingView().render(Object.freeze({
+    view: state.view, generation: state.itemLoadGeneration, listMode: state.listMode, query: state.query,
+    limit: state.itemRenderLimit, folders: listingDisplayRecords(state.folders), files: listingDisplayRecords(state.files)
+  }), {
+    createCard: listingCardFactory(state.folders, state.files),
+    renderOther: grid => {
+      if (state.view === "conflicts") renderConflictOverview(grid);
+      if (state.view === "history") for (const item of state.history) grid.append(historyCard(item));
+      if (state.view === "requests") for (const item of state.requests) grid.append(deletionRequestCard(item));
+      if (state.view === "shares") for (const item of state.shares) grid.append(shareCard(item));
+    }
+  });
   const count = $("#search-result-count");
   if (count) { count.hidden = !state.query; count.textContent = state.progressiveItemsLoading
     ? (state.folders.length + state.files.length) + "件表示中…"
@@ -2527,40 +2506,17 @@ function renderItems() {
 }
 
 function installItemRenderSentinel() {
-  state.itemRenderObserver?.disconnect();
-  state.itemRenderObserver = null;
-  $("#content-grid").querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
-  if (!["all", "favorites"].includes(state.view)) return;
-  const rendered = $("#content-grid").querySelectorAll(":scope > .folder-card, :scope > .file-card").length;
-  const total = state.folders.length + state.files.length;
-  if (rendered >= total && !state.progressiveItemsLoading) return;
-  const sentinel = document.createElement("div");
-  sentinel.className = "item-render-sentinel";
-  sentinel.setAttribute("aria-hidden", "true");
-  $("#content-grid").append(sentinel);
-  const reveal = () => {
-    state.itemRenderObserver?.disconnect();
-    if (rendered < total) {
+  const generation = state.itemLoadGeneration;
+  getListingView().observe(Object.freeze({
+    view: state.view, total: state.folders.length + state.files.length, progressive: state.progressiveItemsLoading
+  }), {
+    reveal: () => {
+      if (generation !== state.itemLoadGeneration) return;
       state.itemRenderLimit += ITEM_RENDER_BATCH_SIZE;
       renderItems();
-      return;
-    }
-    void loadNextItemPage();
-  };
-  if (!globalThis.IntersectionObserver) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary-button";
-    button.textContent = "さらに表示";
-    button.addEventListener("click", reveal);
-    sentinel.append(button);
-    return;
-  }
-  const observer = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) reveal();
-  }, { rootMargin: "800px 0px" });
-  state.itemRenderObserver = observer;
-  observer.observe(sentinel);
+    },
+    loadMore: () => { if (generation === state.itemLoadGeneration) void loadNextItemPage(); }
+  });
 }
 
 function queueFloatingToolbarUpdate() {
@@ -2964,20 +2920,7 @@ async function hydrateSearchFolderKeyRecords(records) {
   }
 }
 
-function finalizeHydratedFolders(hydrated) {
-  let result = [...hydrated];
-  if (state.query) {
-    result = result.filter((folder) => matchesActiveSearchFolder(folder));
-    result.sort((left, right) => compareSearchResults(left, right));
-    return result;
-  }
-  const direction = state.sortDirection === "asc" ? 1 : -1;
-  if (state.sortUsesTypeDefaults) result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else if (state.sort === "updated") result.sort((a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  else result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  return result;
-}
+function finalizeHydratedFolders(hydrated) { return finalizeListingRecords(hydrated, TCloudListing.finalizeFolders); }
 
 async function ensureAdminFolderKey(folder) {
   let key = state.crypto.folderKeys.get(folder.id);
@@ -3579,13 +3522,29 @@ async function hydrateFileRecords(records, options = {}) {
   return finalizeHydratedFiles(hydrated);
 }
 
-function finalizeHydratedFiles(hydrated) { return TCloudListing.finalizeFiles(hydrated, state); }
+function listingPreferences() {
+  return Object.freeze({ query: state.query, kind: state.kind, sort: state.sort,
+    sortDirection: state.sortDirection, sortUsesTypeDefaults: state.sortUsesTypeDefaults });
+}
 
-function compareSearchResults(left, right) { return TCloudListing.compareSearchResults(left, right, state.query); }
+function listingMetadata(record) {
+  // Sorting needs display metadata only; keep device keys and authority in the host.
+  return Object.freeze({ name: record.name, mediaKind: record.mediaKind, searchDepth: record.searchDepth,
+    sizeBytes: record.sizeBytes, createdAt: record.createdAt });
+}
 
-function matchesActiveSearchFolder(folder) { return TCloudListing.matchesSearchFolder(folder, state.query); }
+function finalizeListingRecords(hydrated, finalize) {
+  const displayRecords = Object.freeze(hydrated.map((record, sourceIndex) => Object.freeze({ ...listingMetadata(record), sourceIndex })));
+  return finalize(displayRecords, listingPreferences()).map(record => hydrated[record.sourceIndex]);
+}
 
-function matchesActiveSearchFile(file) { return TCloudListing.matchesSearchFile(file, state.query, state.kind); }
+function finalizeHydratedFiles(hydrated) { return finalizeListingRecords(hydrated, TCloudListing.finalizeFiles); }
+
+function compareSearchResults(left, right) { return TCloudListing.compareSearchResults(listingMetadata(left), listingMetadata(right), state.query); }
+
+function matchesActiveSearchFolder(folder) { return TCloudListing.matchesSearchFolder(listingMetadata(folder), state.query); }
+
+function matchesActiveSearchFile(file) { return TCloudListing.matchesSearchFile(listingMetadata(file), state.query, state.kind); }
 
 async function hydrateDeletionRequestRecords(records) {
   const hydrated = [];

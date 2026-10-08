@@ -6,7 +6,7 @@ import "../public/preview-controls.js";
 const [mainHtml, mainCss, mainJs, shareHtml, shareCss, shareJs] = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   readFile(new URL("../public/cloud.css", import.meta.url), "utf8"),
-  Promise.all(["cloud.js", "preview-controls.js"].map(file => readFile(new URL(`../public/${file}`, import.meta.url), "utf8"))).then(parts => parts.join("\n")),
+  Promise.all(["cloud.js", "listing-model.js", "preview-controls.js"].map(file => readFile(new URL(`../public/${file}`, import.meta.url), "utf8"))).then(parts => parts.join("\n")),
   readFile(new URL("../public/share.html", import.meta.url), "utf8"),
   readFile(new URL("../public/share.css", import.meta.url), "utf8"),
   readFile(new URL("../public/share.js", import.meta.url), "utf8")
@@ -34,8 +34,8 @@ assert.match(shareCss, /\.items\.list-mode \{ grid-template-columns:1fr/);
 assert.match(mainHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*><svg[^>]*stroke="currentColor"[^>]*><path d="m5 15 7-7 7 7"\/><\/svg><\/span>/);
 assert.match(shareHtml, /class="sort-button active"[^>]*data-sort-key="updated"[^>]*aria-pressed="true">更新日 <span[^>]*><svg[^>]*stroke="currentColor"[^>]*><path d="m5 9 7 7 7-7"\/><\/svg><\/span>/);
 assert.match(mainJs, /function resetTypeDefaultSort\(\)/);
-assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => a\.name\.localeCompare/);
-assert.match(mainJs, /TCloudListing\.finalizeFiles\(hydrated, state\)/);
+assert.match(mainJs, /if \(preferences\.sortUsesTypeDefaults\) result\.sort\(byName\)/);
+assert.match(mainJs, /finalizeListingRecords\(hydrated, TCloudListing\.finalizeFiles\)/);
 assert.doesNotMatch(mainJs, /state\.sort === "updated"[^\n]+updatedAt/, "更新日順に名称変更日時を使用しないでください。");
 assert.match(shareJs, /const byUpdated = \(a, b\) => direction \* String\(a\.createdAt/);
 assert.match(workerJs, /"updated-desc": "created_at DESC", "updated-asc": "created_at ASC"/);
