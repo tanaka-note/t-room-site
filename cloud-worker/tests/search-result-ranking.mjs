@@ -14,7 +14,7 @@ assert.match(client, /function matchesActiveSearchFile\(file\)/,
   "the web client must remove encrypted search candidates after decryption");
 assert.match(client, /pageFilesRaw\.filter\(\(file\) => matchesActiveSearchFile\(file\)\)/,
   "progressively loaded encrypted candidates must be filtered before rendering");
-assert.match(client, /TCloudListing\.finalizeFiles\(hydrated, state\)/,
-  "the web client must use the tested listing model after decryption");
+assert.match(client, /finalizeListingRecords\(hydrated, TCloudListing\.finalizeFiles\)/,
+  "the web client must use the tested listing model through its metadata boundary after decryption");
 
 console.log("recursive search ranking and decrypted-candidate filtering: ok");

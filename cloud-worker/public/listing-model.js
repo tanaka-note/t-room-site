@@ -1,5 +1,21 @@
 /* Pure listing decisions; callers provide filters instead of sharing UI state. */
 (() => {
+  function finalizeFolders(hydrated, preferences) {
+    let result = [...hydrated];
+    if (preferences.query) {
+      result = result.filter(folder => matchesSearchFolder(folder, preferences.query));
+      result.sort((left, right) => compareSearchResults(left, right, preferences.query));
+      return result;
+    }
+    const direction = preferences.sortDirection === "asc" ? 1 : -1;
+    const byName = (a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" });
+    if (preferences.sortUsesTypeDefaults) result.sort(byName);
+    else if (preferences.sort === "name") result.sort((a, b) => direction * byName(a, b));
+    else if (preferences.sort === "updated") result.sort((a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    else result.sort(byName);
+    return result;
+  }
+
   function finalizeFiles(hydrated, preferences) {
     let result = [...hydrated];
     if (preferences.query) {
@@ -88,5 +104,5 @@
     return merged;
   }
 
-  globalThis.TCloudListing = Object.freeze({ finalizeFiles, compareSearchResults, matchesSearchFolder, matchesSearchFile, searchNameMatchRank, normalizeFolderSelection, normalizeRelativePath, compareFolderPaths, mergeFolderSelections });
+  globalThis.TCloudListing = Object.freeze({ finalizeFolders, finalizeFiles, compareSearchResults, matchesSearchFolder, matchesSearchFile, searchNameMatchRank, normalizeFolderSelection, normalizeRelativePath, compareFolderPaths, mergeFolderSelections });
 })();
