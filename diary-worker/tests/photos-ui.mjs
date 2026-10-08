@@ -16,7 +16,7 @@ const [html, css, script, photoProcessing, photoUpload, richText, worker, wrangl
 ]);
 
 assert.match(html, /id="camera-roll-button"/);
-assert.match(html, /id="camera-roll-button"[^>]*aria-label="画像まとめ"[^>]*title="画像まとめ"/);
+assert.match(html, /id="camera-roll-button"[^>]*aria-label="アルバム"[^>]*title="アルバム"/);
 const filters = html.slice(html.indexOf('<div class="camera-roll-filters">'), html.indexOf('<p id="camera-roll-status"'));
 const entrySearchIndex = filters.indexOf('id="photo-entry-search"');
 const monthIndex = filters.indexOf('id="photo-month-filter"');

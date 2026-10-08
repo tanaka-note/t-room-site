@@ -109,6 +109,7 @@
     photoMonth: "",
     photoFileNameQuery: "",
     photoRequestId: 0,
+    photoLoading: false,
     photoSearchTimer: null,
     viewerPhotos: [],
     viewerIndex: -1,
@@ -423,12 +424,14 @@
       loadPhotos(true);
     });
     elements.photoEntrySearch.addEventListener("input", () => {
-      window.clearTimeout(state.photoSearchTimer);
+      cancelCameraRollLoad();
+      elements.cameraRollMore.disabled = true;
       state.photoEntryQuery = elements.photoEntrySearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
     elements.photoFileNameSearch.addEventListener("input", () => {
-      window.clearTimeout(state.photoSearchTimer);
+      cancelCameraRollLoad();
+      elements.cameraRollMore.disabled = true;
       state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
@@ -2655,25 +2658,54 @@
     return option;
   }
 
+  function cancelCameraRollLoad() {
+    window.clearTimeout(state.photoSearchTimer);
+    state.photoRequestId++;
+    state.photoLoading = false;
+    elements.cameraRollMore.disabled = false;
+  }
+
   async function loadPhotos(reset) {
+    if (!reset && state.photoLoading) return;
     const requestId = ++state.photoRequestId;
+    state.photoLoading = true;
+    elements.cameraRollMore.disabled = true;
     if (reset) {
       state.photoOffset = 0;
       state.photos = [];
+      state.photoHasMore = false;
+      elements.cameraRollMore.hidden = true;
       elements.cameraRollGrid.replaceChildren();
       elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     }
-    const parameters = new URLSearchParams({ limit: "48", offset: String(state.photoOffset) });
+    // Keep the initial request and each page small; one click expands a month
+    // completely, or adds at most three pages when all months are selected.
+    const maxAdditional = reset ? 48 : (state.photoMonth ? Infinity : 144);
+    const parameters = new URLSearchParams({ limit: "48" });
     if (state.photoEntryQuery) parameters.set("entryQuery", state.photoEntryQuery);
     if (state.photoMonth) parameters.set("month", state.photoMonth);
     if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
-    const result = await api(`/photos?${parameters}`);
-    if (requestId !== state.photoRequestId) return;
-    const appendFrom = state.photos.length;
-    state.photos.push(...result.photos);
-    state.photoOffset += result.photos.length;
-    state.photoHasMore = Boolean(result.hasMore);
-    renderCameraRoll(appendFrom);
+    let added = 0;
+    try {
+      do {
+        parameters.set("offset", String(state.photoOffset));
+        const result = await api(`/photos?${parameters}`);
+        if (requestId !== state.photoRequestId) return;
+        const appendFrom = state.photos.length;
+        state.photos.push(...result.photos);
+        state.photoOffset += result.photos.length;
+        added += result.photos.length;
+        state.photoHasMore = Boolean(result.hasMore) && result.photos.length > 0;
+        renderCameraRoll(appendFrom);
+      } while (state.photoHasMore && added < maxAdditional);
+    } catch (error) {
+      if (requestId === state.photoRequestId) elements.cameraRollStatus.textContent = error.message;
+    } finally {
+      if (requestId === state.photoRequestId) {
+        state.photoLoading = false;
+        elements.cameraRollMore.disabled = false;
+      }
+    }
   }
 
   function renderCameraRoll(appendFrom = 0) {
@@ -2732,6 +2764,7 @@
   }
 
   function finishCameraRollClose() {
+    cancelCameraRollLoad();
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
 
   }
@@ -3663,6 +3696,7 @@
     state.photoOffset = 0;
     state.photos = [];
     state.photoHasMore = false;
+    cancelCameraRollLoad();
     state.photoEntryQuery = "";
     state.photoMonth = "";
     state.photoFileNameQuery = "";
