@@ -6,7 +6,7 @@ import { fixture, fixturePassword, securityDatabase } from './password-login-aud
 const {chromium}=createRequire(new URL('../../diary-worker/package.json',import.meta.url))('playwright');
 const read=path=>readFileSync(new URL(`../../${path}`,import.meta.url),'utf8');
 const fixtures={};
-for(const service of ['cloud','billing']) {
+for(const service of ['billing']) {
   const f=fixture(service); f.security=await securityDatabase(f,service);
   if(service!=='cloud') f.disablePassword();fixtures[service]=f;
 }
@@ -38,6 +38,9 @@ function script(service) {
 const server=createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,'http://localhost'),service=url.pathname.split('/')[1];
+    if (url.pathname === '/cloud/vendor/argon2.umd.min.js' || url.pathname === '/cloud/crypto-vault.js') {
+      res.setHeader('Content-Type','text/javascript');res.end(read(url.pathname.slice(1)));return;
+    }
     if(!fixtures[service]) {res.writeHead(404).end();return;}
     const file=url.pathname.split('/').slice(2).join('/');
     if(file.startsWith('api/')) {
@@ -64,7 +67,7 @@ const server=createServer(async(req,res)=>{
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`,browser=await chromium.launch({headless:true});
 try {
-  for(const service of ['cloud','billing']) {
+  for(const service of ['billing']) {
     const page=await browser.newPage(),f=fixtures[service];
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.goto(`${origin}/${service}/`);await page.waitForFunction(()=>globalThis.fixtureReady);

@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-250f43df0a37";
+const APP_BUILD_ID = "cloud-dfb03df7bf98";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -16,7 +16,6 @@ const ITEM_RENDER_BATCH_SIZE = 192;
 const ENCRYPTED_THUMBNAIL_CONCURRENCY = 4;
 const THUMBNAIL_RETRY_DELAYS = [500, 2000];
 const APP_UPDATE_EXPECTED_BUILD_KEY = "tcloud-app-update-expected-build";
-const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
 const SORT_PREFERENCES_KEY = "tcloud-folder-sort-preferences-v1";
 const SORT_PREFERENCE_LIMIT = 1000;
 const PLAYBACK_CACHE_LIMIT_KEY = "tcloud-playback-cache-limit-v1";
@@ -169,14 +168,13 @@ async function initialize() {
   window.setInterval(() => TCloudOffline?.cleanupExpired?.().catch(() => {}), 15 * 60 * 1000);
   await restoreInstalledAppPortrait();
   updateInstallButtons();
-  await restoreRememberedLogin();
   const previousSessionId = startupPasskeySessionId();
   try {
     await clearLegacyPasskeyAdminKeys();
     if (globalThis.TCloudSession?.isBlocked()) { showLoginView(); showLoginError("別のタブでログイン状態が変わりました。利用するアカウントを選び直してください。"); return; }
     const session = await api("/session");
     await cleanupPasskeyCaches(session.authenticated ? session : null, previousSessionId);
-    if (session.authenticated) {
+    if (session.authenticated && session.authMethod === "passkey") {
       globalThis.TCloudSession?.bind(session, false);
       state.session = session;
       if (session.authMethod === "passkey") {
@@ -196,14 +194,6 @@ async function initialize() {
         reportCompletedAppUpdate();
         return;
       }
-      const rememberedId = $("#login-id").value.trim().toLowerCase();
-      const rememberedPassword = $("#login-password").value;
-      let accountKey = null;
-      if (session.role === "admin" && rememberedPassword && rememberedId === String(session.loginId || "").trim().toLowerCase()) {
-        accountKey = (await TRoomCrypto.deriveAccountCredentials(rememberedPassword, rememberedId, session.credentialSalt)).accountKey;
-      }
-      await enterApp(session, rememberedPassword, accountKey);
-      $("#login-password").value = "";
     } else {
       showLoginView();
     }
@@ -212,7 +202,7 @@ async function initialize() {
     if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
     state.session = null;
     showLoginView();
-    showLoginError(error.message);
+    showLoginError(passkeyLoginErrorMessage(error));
   }
   reportCompletedAppUpdate();
 }
@@ -227,10 +217,7 @@ function bindEvents() {
   });
   window.addEventListener("beforeinstallprompt", handleInstallPrompt);
   window.addEventListener("appinstalled", handleAppInstalled);
-  state.passwordLoginAudit = TRoomPasswordLoginAudit.create({ service: "cloud", apiBase: API, form: $("#login-form"), loginIdInput: $("#login-id") });
-  $("#login-form").addEventListener("submit", login);
   $("#passkey-login").addEventListener("click", loginWithPasskey);
-  $("#remember-login").addEventListener("change", syncLoginAutocomplete);
   $("#logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
   $("#install-app-button-top").addEventListener("click", installApp);
@@ -641,12 +628,6 @@ async function installApp() {
   $("#install-guide-dialog").showModal();
 }
 
-function syncLoginAutocomplete() {
-  const remember = $("#remember-login").checked;
-  $("#login-id").setAttribute("autocomplete", remember ? "username" : "off");
-  $("#login-password").setAttribute("autocomplete", remember ? "current-password" : "off");
-}
-
 async function changeSort(key) {
   if (!["updated", "name", "size"].includes(key)) return;
   if (state.sort === key) state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
@@ -717,30 +698,6 @@ function syncSortControls() {
     const direction = active ? state.sortDirection : button.dataset.sortKey === "name" ? "asc" : "desc";
     button.querySelector("span").innerHTML = TCloudUI.icon(direction === "asc" ? "up" : "down");
   });
-}
-
-async function restoreRememberedLogin() {
-  const remember = localStorage.getItem(REMEMBER_LOGIN_KEY) === "1";
-  $("#remember-login").checked = remember;
-  syncLoginAutocomplete();
-}
-
-async function updateRememberedLogin(loginId, password) {
-  if (!$("#remember-login").checked) {
-    localStorage.removeItem(REMEMBER_LOGIN_KEY);
-    return;
-  }
-  localStorage.setItem(REMEMBER_LOGIN_KEY, "1");
-  if (!navigator.credentials?.store || !globalThis.PasswordCredential) return;
-  try {
-    await navigator.credentials.store(new PasswordCredential({
-      id: loginId,
-      password,
-      name: "T-Cloud Storage"
-    }));
-  } catch {
-    // 保存の許可や管理はブラウザ側に委ね、ログイン自体は失敗させない。
-  }
 }
 
 function openAddAction() {
@@ -1006,53 +963,6 @@ function toggleNewFolderPasswordInput() {
   if (!enabled) $("#folder-password").value = "";
 }
 
-async function login(event) {
-  event.preventDefault();
-  globalThis.TCloudSession?.beginSelection();
-  showLoginError("");
-  const submit = event.submitter || $("#login-form button[type='submit']");
-  submit.disabled = true;
-  const trace = state.passwordLoginAudit.begin();
-  let stage = "form_validation";
-  let failureReason = "unexpected_client_error";
-  try {
-    await trace.report("form_submit", "submitted");
-    const loginId = $("#login-id").value.trim().toLowerCase();
-    const password = $("#login-password").value;
-    stage = "auth_mode";
-    const mode = await api("/auth-mode", { headers: trace.headers });
-    stage = "credential_derivation";
-    failureReason = !globalThis.crypto?.subtle || !globalThis.hashwasm?.argon2id ? "crypto_unavailable"
-      : password.length < 8 || password.length > 256 ? "password_length_invalid"
-      : !loginId || loginId.length > 254 ? "login_id_invalid" : "credential_derivation_failed";
-    const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId, mode.credentialSalt);
-    const loginBody = mode.mode === "proof"
-      ? { loginId, authProof: credentials.authProof }
-      : { loginId, password };
-    stage = "login_request";
-    const session = await api("/login", {
-      headers: trace.headers,
-      method: "POST",
-      body: JSON.stringify(loginBody)
-    });
-    stage = "login_response";
-    await updateRememberedLogin(loginId, password);
-    await enterApp(session, password, credentials.accountKey);
-    $("#login-password").value = "";
-  } catch (error) {
-    // HTTP authentication rejections already have a server audit.
-    if (!(stage === "login_request" && error.status && error.status < 500)) {
-      const reason = stage === "credential_derivation" ? failureReason
-        : stage === "auth_mode" ? (error.status ? "request_failed" : "network_error")
-        : stage === "login_request" ? (error.status ? "request_failed" : "network_error") : "unexpected_client_error";
-      await trace.report(stage === "login_request" && error.status ? "login_response" : stage, reason);
-    }
-    showLoginError(error.message);
-  } finally {
-    submit.disabled = false;
-  }
-}
-
 async function loginWithPasskey() {
   globalThis.TCloudSession?.beginSelection();
   const button = $("#passkey-login");
@@ -1063,12 +973,11 @@ async function loginWithPasskey() {
     const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
     requirePasskeyPrf(authentication);
     const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
-    $("#login-password").value = "";
     await enterApp(session, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
   } catch (error) {
     if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
     state.session = null;
-    showLoginError(error.message);
+    showLoginError(passkeyLoginErrorMessage(error));
   } finally {
     button.disabled = false;
   }
@@ -1076,8 +985,18 @@ async function loginWithPasskey() {
 
 function requirePasskeyPrf(authentication) {
   if (!authentication.prfOutput || !["admin", "folder-member"].includes(authentication.link?.accountId)) {
-    throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
+    throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
   }
+}
+
+function passkeyLoginErrorMessage(error) {
+  if (error.name === "PasskeyOptionsError") {
+    return "パスキーの認証情報を読み取れませんでした。画面を再読み込みして、もう一度お試しください。";
+  }
+  if (error.message === "このブラウザは端末のロック解除ログインに対応していません。ID・パスワードでログインしてください。") {
+    return "このブラウザはパスキーログインに対応していません。対応するブラウザ・端末でパスキーを使用してください。";
+  }
+  return error.message;
 }
 
 function ordinaryPasskeyLink(links) {
@@ -1453,7 +1372,7 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
       const cached = passkeyContext?.cached;
       if (cached && cached.binding !== passkeyCacheBinding(state.session, config)) throw new Error("端末内の暗号鍵を再確認してください。");
       if (state.session.role === "admin") {
-        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
         if (!cached && !keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
         const privateKey = cached?.privateKey || await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
         assertSelected();
@@ -1464,7 +1383,7 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
         return;
       }
       if (state.session.role === "member") {
-        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
         const scopes = memberFolderScopes();
         const wrappedKeys = cached?.wrappedFolderKeys || keys.folder_keys_rsa || (keys.folder_key_rsa ? [{ ...scopes[0], wrappedKey: keys.folder_key_rsa.wrappedKey }] : []);
         if ((!cached && !keys.client_private_prf) || !scopes.length || scopes.length !== wrappedKeys.length) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");

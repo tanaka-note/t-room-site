@@ -95,7 +95,7 @@ test("WebAuthn and API errors have a Japanese-only user boundary", () => {
   assert.doesNotMatch(worker, /new HttpError\(404, "Not found"\)/);
 });
 
-test("existing services keep password login while every service uses one-time handoff", () => {
+test("services preserve legacy login routing and use one-time passkey handoff", () => {
   for (const source of [cloud, diary, billing]) {
     assert.match(source, /\/api\/login/);
     assert.match(source, /\/api\/passkey\/handoff/);
@@ -121,7 +121,9 @@ test("Security Center is first-admin-only and audits success and failure", () =>
   assert.match(worker, /passkey_login_success/);
   assert.match(worker, /passkey_authentication_success/);
   assert.match(worker, /passkey_authentication_failure/);
-  assert.match(cloud, /password_login_success/);
+  assert.doesNotMatch(cloud, /password_login_success/);
+  assert.match(cloud, /password_login_failure/);
+  assert.match(cloud, /passkey_login_success/);
   assert.doesNotMatch(diary, /password_login_success/);
   assert.match(diary, /password_login_failure/);
   assert.match(diary, /passkey_login_success/);

@@ -6,9 +6,19 @@
 
 日記のログイン画面は「パスキーでログイン」ボタンのみとし、ID・Password入力、記憶・保存、初回Password設定は廃止する。`POST /diary/api/login`は入力内容を検証せず常に401、認証済み利用者の初回Password設定APIは410を返す。アカウント・保存データ・権限・Identity連携・Password記録・Secretは削除しない。初回設定フラグが残っていてもPasskeyで既存の業務APIを利用できる。日記を個別停止・復旧スクリプトでPasswordへ戻すことはできない。
 
-Security CenterとT-CloudのPassword認証・第一管理者の復旧経路・暗号化／鍵処理は変更しない。Security CenterのIDPW履歴・検索項目は維持し、日記への古いPasswordログイン要求も `password_login_failure` / `password_auth_disabled` で記録する。日記は入力されたIDでアカウントを特定せず、Passwordや認証用DBカウンタも扱わない。旧キャッシュ画面からの安全な監査メタデータ受付は維持するが、認証機能は持たない。
+Security Centerの第一管理者本人確認・復旧経路・暗号化／鍵処理は維持する。T-Cloudの公開ログインは次節のPasskey専用方針に従う。Security CenterのIDPW履歴・検索項目は維持し、日記への古いPasswordログイン要求も `password_login_failure` / `password_auth_disabled` で記録する。日記は入力されたIDでアカウントを特定せず、Passwordや認証用DBカウンタも扱わない。旧キャッシュ画面からの安全な監査メタデータ受付は維持するが、認証機能は持たない。
 
 請求書の他の利用者のID・Password入力フォームは維持する。日記のPasskey登録・復旧は従来のSecurity Centerの招待・承認手順に従う。本人端末でのPasskey利用は公開前に確認する。GitHubへのpushだけでは本番のログイン方式は変わらない。
+
+## T-CloudのPasskey専用ログイン
+
+T-Cloud Web／PWA／TWAの通常入口は「パスキーでログイン」だけとする。管理者・副管理者のID/PW入力、保存、ログイン送信を廃止する。`POST /cloud/api/login`は入力された資格情報を照合せず401を返し、`password_login_failure` / `password_auth_disabled`を既存のSecurity監査へ送る。試行カウンタ・アカウント・過去の監査は変更しない。旧画面の安全な失敗監査メタデータ受付は維持する。
+
+既存のPW cookieと認証方式を省略した旧cookieは、Cloudの保護APIで次の検証から拒否する。PasskeyのSESSION_VERSION・epoch・credential・Identity・連携・role・root scope・rolling期限・暗号鍵は変更しない。PASSKEY_ENABLED停止時にもPWログインへ戻さない。
+
+Security Centerの初期登録・復旧は、Cloudの公開ログインではなく`SecurityIntegration.verifyPrimaryAdmin`による内部本人確認を継続する。管理者ID、認証用Secret、互換用credential salt、`getPrimaryAdminCryptoConfig`、PWで包んだ管理者秘密鍵・緊急復旧鍵は保存し、暗号処理とSecurity Workerは変更しない。副管理者の過去データ・role定義も削除しない。DB migration・Secret更新・パスキー再登録・ファイル再暗号化は不要。
+
+PRF非対応端末は対応環境へ案内する。管理者の鍵準備・パスキー復旧はSecurity Centerを使用する。ID/PWだけに対応した旧Androidネイティブクライアントは新規ログインできないため、Web／PWA／TWAのパスキー入口を使用する。反映にはCloud Workerの公開が必要であり、GitHub pushだけでは本番は変わらない。
 
 ## その他の利用者の個別停止・復旧
 

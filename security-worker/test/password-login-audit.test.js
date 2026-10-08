@@ -9,7 +9,7 @@ const telemetry = (stage = 'credential_derivation', reason = 'credential_derivat
   stage, reason, requestCorrelationId: crypto.randomUUID(), isPwa: false
 });
 
-for (const service of ['cloud', 'billing']) {
+for (const service of ['billing']) {
   test(`${service}: audit client script is publicly served through the real asset allowlist`,async()=>{
     const f=fixture(service);
     try {
@@ -232,4 +232,23 @@ test('Audit sanitization never serializes credentials, keys, raw sessions or req
     service: 'cloud', eventType: 'password_login_failure', authMethod: 'password', outcome: 'failure', details: body
   });
   assert.doesNotMatch(JSON.stringify(event), /secret-|raw-cookie|raw-secret/);
+});
+
+test('retired Cloud login preserves Security audit ingestion without credentials or counter writes',async()=>{
+ const f=fixture('cloud'),s=await securityDatabase(f,'cloud');
+ try {
+  for(const supplied of [fixturePassword,'wrong-local-fixture']) {
+   const r=await f.request('login',{loginId:f.loginId,password:supplied});
+   assert.equal(r.status,401);assert.equal(r.cookie,null);
+   assert.equal(f.stored.at(-1).details.reason,'password_auth_disabled');
+   assert.equal(f.stored.at(-1).details.counterUpdated,false);
+  }
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM cloud_login_attempts').get().n,0);
+  const rows=s.db.prepare("SELECT identity_id,details_json FROM security_audit_events WHERE event_type='password_login_failure'").all();
+  assert.equal(rows.length,2);assert.ok(rows.every(r=>r.identity_id===null&&JSON.parse(r.details_json).reason==='password_auth_disabled'));
+  await s.worker.queue({messages:[{body:f.stored[0],ack(){},retry:()=>assert.fail('audit replay')}]});
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM security_audit_events').get().n,2);
+  assert.equal((await f.request('password-login-audit',telemetry())).status,204,'old cached UI can report safe metadata');
+  assert.equal((await f.request('password-login-audit',{...telemetry(),password:'never-store'})).status,400);
+ }finally{s.close();f.close();}
 });

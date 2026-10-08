@@ -39,7 +39,7 @@ function fixture(service, {password='short', loginId='user@example.test', apiFai
 }
 
 test('helper copies and HTML execution order match each service',()=>{
-  for(const service of ['cloud','billing']) {
+  for(const service of ['billing']) {
     assert.equal(read(`${service}-worker/public/password-login-audit.js`),helper);
     const html=read(`${service}-worker/public/index.html`);
     const scripts=[...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(match=>match[1]);
@@ -47,28 +47,13 @@ test('helper copies and HTML execution order match each service',()=>{
     assert.match(html,/Passkeyへ移行済みの場合/);
   }
 });
-test('Cloud short password fails in the real derive function before /login, without credential telemetry',async()=>{
-  const f=fixture('cloud');await f.login();
-  assert.deepEqual(f.calls.map(c=>c.path),['/auth-mode']);
-  assert.equal(f.sent[0].eventType,'password_login_submit');
-  assert.equal(f.sent[1].stage,'credential_derivation');assert.equal(f.sent[1].reason,'password_length_invalid');
-  assert.equal(f.sent[0].requestCorrelationId,f.sent[1].requestCorrelationId);
-  assert.doesNotMatch(JSON.stringify(f.sent),/short|user@example\.test|authProof|accountKey/);
+test('Cloud retires its password form while Security Center retains its recovery form',()=>{
+  assert.doesNotMatch(read('cloud-worker/public/index.html'), /id="login-form"|id="login-password"|remember-login|password-login-audit\.js/);
+  assert.doesNotMatch(read('cloud-worker/public/cloud.js'), /async function login\(event\)|PasswordCredential/);
+  assert.match(read('security-worker/public/index.html'), /id="bootstrap-form"/);
+  assert.match(read('security-worker/public/security.js'), /TRoomPasskeys\.bootstrap/);
 });
-test('Cloud derive, Crypto availability and login ID failures have fixed reasons',async()=>{
-  for(const [config,reason] of [[{password:'long-fixture',deriveFailure:true},'credential_derivation_failed'],[{loginId:'x'.repeat(255),password:'long-fixture'},'login_id_invalid']]) {
-    const f=fixture('cloud',config);await f.login();assert.equal(f.sent.at(-1).reason,reason);assert.equal(f.calls.length,1);
-  }
-  const f=fixture('cloud',{password:'long-fixture'});f.context.crypto={randomUUID:crypto.randomUUID.bind(crypto)};await f.login();
-  assert.equal(f.sent.at(-1).reason,'crypto_unavailable');
-});
-test('Cloud auth-mode HTTP and network failures remain distinct from derive failures',async()=>{
-  for(const [error,reason] of [[{status:503},'request_failed'],[{},'network_error']]) {
-    const f=fixture('cloud',{apiFailure:{path:'/auth-mode',error}});await f.login();
-    assert.equal(f.sent.at(-1).stage,'auth_mode');assert.equal(f.sent.at(-1).reason,reason);
-  }
-});
-for(const service of ['cloud','billing']) {
+for(const service of ['billing']) {
   test(`${service}: login network failure is correlated, server 401 is not double-counted`,async()=>{
     const network=fixture(service,{password:'long-fixture',apiFailure:{path:'/login',error:{}}});await network.login();
     assert.equal(network.sent.at(-1).stage,'login_request');assert.equal(network.sent.at(-1).reason,'network_error');

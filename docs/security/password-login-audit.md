@@ -1,6 +1,6 @@
 # Passwordログインの失敗監査
 
-Cloud・BillingのPassword認証結果、HTTP status、既存の試行制限・停止ポリシーは維持する。Diaryは[Password認証の廃止方針](password-auth-policy.md)に従って全アカウントのPasswordログインを拒否し、拒否試行の監査を残す。Passkeyの認証処理・権限、暗号方式・鍵管理は変更しない。
+BillingのPassword認証結果、HTTP status、既存の試行制限・停止ポリシーは維持する。Cloud・Diaryは[Password認証の廃止方針](password-auth-policy.md)に従って全アカウントのPasswordログインを拒否し、拒否試行の監査を残す。Passkeyの認証処理・権限、暗号方式・鍵管理は変更しない。
 
 ## 配送と追跡
 
@@ -8,7 +8,7 @@ Password拒否は`await recordSecurityAudit`でSecurity Service Bindingへ同期
 
 ブラウザは送信ごとにランダムUUIDを生成し、`X-Login-Correlation-ID`でauth-mode／loginへ渡す。Service Workerは既存のPOST通信をネットワークへ通し、WorkerはUUID v4形式だけを監査detailsへ追加する。相関IDは認証・認可には使用しない。
 
-T-Cloud・請求書と日記の旧キャッシュ画面向け`POST /api/password-login-audit`は、同一Origin、JSON、実body最大1024 byte、固定schema・enum、UUIDを要求する。サービスはURLから決まり、ID・Password・authProof・自由文・例外・form bodyは受け付けない。`PASSWORD_AUDIT_RATE_LIMITER`はサービス別namespaceで接続元ごと30件/60秒を設定する。認証用のD1カウンタとは独立する。binding障害では503、上限超過では429で監査受付を止める。この制限はWorkersのrate limit bindingの範囲で働く。
+請求書とT-Cloud・日記の旧キャッシュ画面向け`POST /api/password-login-audit`は、同一Origin、JSON、実body最大1024 byte、固定schema・enum、UUIDを要求する。サービスはURLから決まり、ID・Password・authProof・自由文・例外・form bodyは受け付けない。`PASSWORD_AUDIT_RATE_LIMITER`はサービス別namespaceで接続元ごと30件/60秒を設定する。認証用のD1カウンタとは独立する。binding障害では503、上限超過では429で監査受付を止める。この制限はWorkersのrate limit bindingの範囲で働く。
 
 イベントは次のとおり。
 
@@ -33,7 +33,7 @@ T-Cloud・請求書と日記の旧キャッシュ画面向け`POST /api/password
 | `login_response` | `request_failed`, `unexpected_client_error` |
 | `request_validation` / `authentication` (Worker) | `invalid_request`, `invalid_credentials`, `password_auth_disabled`, `account_disabled`, `login_locked`, `rate_limited`, `authentication_error` |
 
-Cloudの8文字未満／256文字超、空／254文字超ID、Crypto・Argon2・salt等の異常は既存のcredential deriveで拒否され、`/login`に届かない。CloudのPassword accountはadmin/subadminであり、folder-memberにはPasswordログインを追加しない。停止ポリシーの`password_auth_disabled`は対象Diary／Billing accountで記録する。
+Cloudの公開Passwordログインはadmin/subadminとも廃止し、入力・credential derive・照合をせず`password_auth_disabled`を記録する。入力IDから本人を推測せず、試行カウンタは更新しない。Security Centerの管理者PW本人確認は維持する。停止ポリシーの`password_auth_disabled`はCloud／Diaryと対象Billing accountで記録する。
 
 ## カウンタと秘密情報
 

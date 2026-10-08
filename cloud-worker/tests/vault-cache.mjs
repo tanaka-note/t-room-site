@@ -12,7 +12,8 @@ assert.match(client, /await saveCachedAdminKey\(config, privateKey\)/);
 assert.match(client, /await saveCachedAdminKey\(state\.crypto\.config, privateKey\)/);
 assert.match(client, /async function clearCachedAdminKeys/);
 assert.match(client, /async function logout\(\)[\s\S]*?await clearCachedAdminKeys\(\)/);
-assert.match(client, /session\.authenticated[\s\S]*?rememberedPassword[\s\S]*?enterApp\(session, rememberedPassword, accountKey\)/);
+assert.match(client, /session\.authenticated && session\.authMethod === "passkey"/);
+assert.doesNotMatch(client, /rememberedPassword|enterApp\(session, rememberedPassword, accountKey\)/);
 
 console.log("admin device vault reuse and logout cleanup: ok");
 

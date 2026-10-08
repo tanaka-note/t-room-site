@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-250f43df0a37";
+const APP_BUILD_ID = "cloud-dfb03df7bf98";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -351,75 +351,15 @@ function assertSessionContext(request, session, required = true) {
   }
 }
 
-async function login(request, env, url, context) {
-  const proofMode = Boolean(env.ADMIN_AUTH_PROOF_HASH && env.SUBADMIN_AUTH_PROOF_HASH);
-  const configuredAccounts = ACCOUNTS.map((account) => ({ ...account, loginId: configuredLoginId(env, account.role) }));
-  if ((!proofMode && (!env.ADMIN_PASSWORD_HASH || !env.SUBADMIN_PASSWORD_HASH))
-    || !isValidSessionSecret(env.SESSION_SECRET)
-    || configuredAccounts.some((account) => !account.loginId)) {
-    throw new HttpError(503, "Cloud Storageの認証設定が完了していません。");
-  }
-  const body = await readJson(request, 4096);
-  const loginId = String(body.loginId || "").trim().toLowerCase();
-  const password = String(body.password || "");
-  const authProof = String(body.authProof || "");
-  const matchingAccounts = configuredAccounts.filter((account) => account.loginId === loginId);
-  if (!matchingAccounts.length || (proofMode ? !authProof || authProof.length > 256 : !password || password.length > 256)) {
-    await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "request_validation", reason: !matchingAccounts.length && loginId && loginId.length <= 254 ? "invalid_credentials" : "invalid_request", counterUpdated: false } });
-    throw new HttpError(401, "IDまたはパスワードが違います。");
-  }
-
-  const fingerprint = await requestFingerprint(request, env);
-  const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
-  const now = Math.floor(Date.now() / 1000);
-  if (Number(attempt?.locked_until || 0) > now) {
-    await recordSecurityAudit(env, request, { service: "cloud", eventType: "login_blocked", outcome: "blocked", authMethod: "password", details: { stage: "authentication", reason: "login_locked", counterUpdated: false } });
-    throw new HttpError(429, "ログインが一時停止されています。しばらくしてからお試しください。");
-  }
-
-  let account = null;
-  for (const candidate of matchingAccounts) {
-    const credential = proofMode ? authProof : password;
-    const hash = env[proofMode ? candidate.proofSecretKey : candidate.secretKey];
-    if (await verifyPassword(credential, hash)) {
-      account = candidate;
-      break;
-    }
-  }
-  if (!account) {
-    await recordFailedLogin(env, fingerprint, attempt, now);
-    await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", serviceAccountId: matchingAccounts.length === 1 ? matchingAccounts[0].role : null, authMethod: "password", details: { stage: "authentication", reason: "invalid_credentials", counterUpdated: true } });
-    throw new HttpError(401, "IDまたはパスワードが違います。");
-  }
-  await env.DB.prepare("DELETE FROM cloud_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
-  const policy = cloudSessionPolicy(env, "password", account.role);
-  const session = {
-    role: account.role,
-    label: account.label,
-    loginId,
-    credentialSalt: await accountCredentialSalt(env),
-    canUpload: account.canUpload,
-    canDelete: account.canDelete,
-    canTrashUnlockedFiles: account.canTrashUnlockedFiles,
-    canEditFiles: account.canEditFiles,
-    canEditFolders: account.canEditFolders,
-    canRenameUnlockedItems: account.canRenameUnlockedItems,
-    canViewHistory: account.canViewHistory,
-    canRequestDelete: account.canRequestDelete,
-    canReviewDeletion: account.canReviewDeletion,
-    sessionId: crypto.randomUUID(),
-    startedAt: new Date().toISOString()
-  };
-  session.exp = sessionExpiresAt(Math.floor(Date.parse(session.startedAt) / 1000), policy, session.exp);
-  const token = await createSessionToken(session, policy.ttlSeconds, env);
-  const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
-  await audit(env, "login", session, null, null);
-  await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_success", outcome: "success", serviceAccountId: account.role, role: account.role, authMethod: "password", sessionId: session.sessionId, expiresAt: session.exp, startedAt: session.startedAt, sessionVersion: cloudSessionVersion(env) });
-  return json({ authenticated: true, ...publicSession(session, env) }, 200, headers);
+async function login(request, env) {
+  // Retire only the public Cloud login. SecurityIntegration.verifyPrimaryAdmin
+  // and the password-wrapped recovery keys remain available to Security Center.
+  await recordSecurityAudit(env, request, { service: "cloud", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false } });
+  throw new HttpError(401, "T-Cloudはパスキーでログインしてください。");
 }
 
 async function completePasskeyHandoff(request, env, url, context) {
-  if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。ID・パスワードでログインしてください。");
+  if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。管理者による復旧後に再度お試しください。");
   const body = await readJson(request, 4096);
   const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "cloud");
   if (!handoff) throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
@@ -3013,7 +2953,7 @@ async function readSignedSession(request, env) {
 async function readSession(request, env) {
   try {
     const payload = await readSignedSession(request, env);
-    if (!validSessionLifetime(payload)) return null;
+    if (payload?.authMethod !== "passkey" || !validSessionLifetime(payload)) return null;
     if (payload.exp <= Math.floor(Date.now() / 1000) || String(payload.version) !== String(env.SESSION_VERSION || "1")) return null;
     const account = payload.role === "member" ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find((item) => item.role === payload.role);
     if (!account) return null;
