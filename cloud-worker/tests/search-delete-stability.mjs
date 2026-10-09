@@ -26,7 +26,6 @@ for (const functionName of ["deleteSelectedFolder", "deleteSelectedItems", "dele
 }
 
 assert.match(client, /closePreviewForAction\(\);[\s\S]*?preserveListingAfterDeletion\(\{ files: \[file\] \}\)/);
-assert.match(client, /if \(task\.type === "file"\) deletedFiles\.push\(task\.item\);[\s\S]*?else deletedFolders\.push\(task\.item\);/);
 
 const context = vm.createContext({
   state: {

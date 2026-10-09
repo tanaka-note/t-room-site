@@ -3,13 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import '../public/selection-state.js';
+import '../public/bulk-delete.js';
 
 const client = await readFile(new URL('../public/cloud.js', import.meta.url), 'utf8');
 const adapter = client.slice(client.indexOf('let selectionState = null;'), client.indexOf('function selectFile('));
 const action = (name, next) => client.slice(client.indexOf(`async function ${name}(`), client.indexOf(next, client.indexOf(`async function ${name}(`)));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function makeContext(extra = {}) {
-  const context = vm.createContext({ TCloudSelection, ...extra });
+  const context = vm.createContext({ TCloudSelection, TCloudBulkDelete, ...extra });
   vm.runInContext(adapter, context); return context;
 }
 function choose(context, files, folders = []) {
