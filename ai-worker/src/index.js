@@ -1,3 +1,4 @@
+import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
@@ -18,6 +19,7 @@ import {
 const BASE_PATH = "/ai";
 const SESSION_COOKIE = "troom_ai_session";
 const encoder = new TextEncoder();
+const authorizedSessions = new WeakMap();
 
 export default class AiWorker extends WorkerEntrypoint {
   async fetch(request) {
@@ -28,7 +30,7 @@ export default class AiWorker extends WorkerEntrypoint {
       if (!url.pathname.startsWith(BASE_PATH)) return json({ error: "指定された情報が見つかりません。" }, 404);
       const path = url.pathname.slice(BASE_PATH.length) || "/";
       if (!path.startsWith("/api/")) return json({ error: "AI ChatはAndroidアプリからご利用ください。" }, 404);
-      return await handleApi(request, this.env, url, path, this.ctx);
+      return await renewAuthenticatedSession(request, await handleApi(request, this.env, url, path, this.ctx), this.env);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       if (status === 500) console.error(JSON.stringify({ event: "ai_request_failed", error: safeErrorName(error) }));
@@ -85,6 +87,7 @@ async function handleApi(request, env, url, path, context) {
   }
   if (path === "/api/logout" && request.method === "POST") {
     requireMutation(request, url);
+    if (!(await serviceRollingSession(env, "ai", session, "end")).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
     scheduleAudit(context, audit(env, request, session, "logout", "success"));
     return json({ ok: true }, 200, { "Set-Cookie": clearCookie(url.protocol === "https:") });
   }
@@ -129,11 +132,13 @@ async function completePasskeyHandoff(request, env, url) {
     serviceAccountId: handoff.serviceAccountId,
     passkeySessionEpoch: handoff.sessionEpoch,
     authMethod: "passkey",
+    rollingSessionVersion: ROLLING_SESSION_VERSION,
     sessionId: crypto.randomUUID(),
     startedAt: new Date().toISOString(),
     sessionVersion: String(env.SESSION_VERSION || "1"),
     expiresAt: nowSeconds() + policy.ttlSeconds
   };
+  if (!(await serviceRollingSession(env, "ai", payload, "register")).valid) throw new HttpError(503, "セッションを開始できませんでした。");
   const token = await signSession(payload, env);
   await audit(env, request, payload, "passkey_login_success", "success");
   return json({ authenticated: true, displayName, identityId: handoff.identityId }, 200, {
@@ -381,7 +386,9 @@ async function requireSession(request, env) {
   const token = parseCookies(request.headers.get("Cookie") || "")[SESSION_COOKIE];
   const session = await verifySession(token, env);
   if (!session) throw new HttpError(401, "パスキーでログインしてください。");
-  const valid = await env.SECURITY?.validatePasskeySession({
+  const valid = session.rollingSessionVersion != null
+    ? await serviceRollingSession(env, "ai", session, "read")
+    : await env.SECURITY?.validatePasskeySession({
     service: "ai",
     identityId: session.identityId,
     credentialId: session.credentialId,
@@ -390,6 +397,7 @@ async function requireSession(request, env) {
     sessionEpoch: session.passkeySessionEpoch
   });
   if (valid?.valid !== true) throw new HttpError(401, "パスキーセッションの有効期限が切れました。もう一度ログインしてください。");
+  authorizedSessions.set(request, session);
   return session;
 }
 
@@ -436,7 +444,7 @@ async function audit(env, request, session, eventType, outcome, details = {}) {
     await env.SECURITY?.recordAuditEvent({
       service: "ai", eventType, outcome, identityId: session.identityId,
       serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId,
-      role: session.identityId === "primary-admin" ? "admin" : "user", authMethod: "passkey", sessionId: session.sessionId,
+      role: session.identityId === "primary-admin" ? "admin" : "user", authMethod: "passkey", sessionIdHash: session.sessionId ? await hmac(session.sessionId, env.SESSION_SECRET) : null,
       credentialId: session.credentialId, expiresAt: session.expiresAt, startedAt: session.startedAt,
       sessionVersion: session.sessionVersion || "1", passkeySessionEpoch: session.passkeySessionEpoch,
       userAgent: request.headers.get("User-Agent"), details
@@ -462,3 +470,12 @@ async function readJson(request, max) { const size = Number(request.headers.get(
 function safeErrorName(error) { return error instanceof Error ? `${error.name}:${String(error.message || "").slice(0, 120)}` : "unknown"; }
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+
+async function renewAuthenticatedSession(request, response, env) {
+  const session = authorizedSessions.get(request);
+  const url = new URL(request.url);
+  return renewServiceSession(request, response, env, "ai", url.pathname.slice(BASE_PATH.length), session, async expiresAt => {
+    const token = await signSession({ ...session, expiresAt }, env);
+    return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, sessionPolicyForAuthMethod(env, "passkey"), url.protocol === "https:");
+  });
+}

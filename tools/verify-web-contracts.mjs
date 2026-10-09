@@ -17,11 +17,11 @@ try {
   }
   const git = args => execFileSync('git', args, { cwd: scratch, stdio: 'pipe' });
   git(['init', '--quiet']); git(['-c', 'core.autocrlf=false', 'add', '.']);
-  git(['-c', 'user.name=Local fixture', '-c', 'user.email=fixture@example.test', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Local generated artifact fixture']);
+  git(['-c', 'maintenance.auto=false', '-c', 'gc.auto=0', '-c', 'user.name=Local fixture', '-c', 'user.email=fixture@example.test', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Local generated artifact fixture']);
   execFileSync(process.execPath, ['tools/sync-web-app-builds.mjs'], { cwd: scratch, stdio: 'inherit' });
   const script = JSON.parse(readFileSync(resolve(scratch, 'package.json'), 'utf8')).scripts['web-apps:test'];
   for (const command of script.split(' && ')) {
     if (!/^node tools\/[\w-]+\.mjs$/.test(command)) throw new Error('Review changed web-apps:test command before executing it in the fixture');
     execFileSync(process.execPath, [command.slice(5)], { cwd: scratch, stdio: 'inherit' });
   }
-} finally { rmSync(scratch, { recursive: true, force: true }); }
+} finally { rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }

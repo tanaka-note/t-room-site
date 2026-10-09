@@ -42,7 +42,7 @@ export function commands(target) {
     ],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
     'container-unit': [node('downloader-worker', 'test/run-python.mjs', '-m', 'unittest', 'discover', '-s', 'container/tests', '-p', 'test_*.py')],
-    auth: [node('.', '--test', 'tools/test-session-secret.mjs', 'tools/test-password-auth.mjs'),
+    auth: [node('.', '--test', 'tools/test-session-secret.mjs', 'tools/test-password-auth.mjs', 'tools/test-passkey-rolling.mjs'),
       node('security-worker', '--test', 'test/service-passkey-session.test.js', 'test/security-contract.test.js', 'test/primary-admin-setup.test.js'),
       ...tests('cloud-worker', 'tests/passkey-session-resume.mjs', 'tests/password-session-lifetime.mjs', 'tests/permission-guards.mjs'),
       node('diary-worker', 'tests/permissions.e2e.mjs'), { cwd: 'billing-worker', script: 'test' }, { cwd: 'ai-worker', script: 'test' }]
@@ -67,7 +67,7 @@ export function affected(paths) {
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
     if (/^(tools\/(verify|install-verify|test-development|test-browser|browser-|local-dev|release|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }
-    if (path === 'tools/test-session-secret.mjs') { add('auth'); continue; }
+    if (['tools/test-session-secret.mjs', 'tools/test-passkey-rolling.mjs', 'tools/fixtures/passkey-rolling-binding.mjs'].includes(path)) { add('auth'); continue; }
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');
     if (/^(package\.json$|pnpm-)/.test(path)) { add('tooling', 'site'); continue; }
     const mobile = android.find(d => path.startsWith(`${d}/`));

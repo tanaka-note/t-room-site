@@ -1,3 +1,4 @@
+import { rollingBinding } from "../../tools/fixtures/passkey-rolling-binding.mjs";
 import assert from "node:assert/strict";
 import { readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -37,6 +38,7 @@ function environment(handoff = {}) {
         serviceLinkId: "link", serviceAccountId: "owner", sessionEpoch: 3, ...handoff
       }),
       validatePasskeySession: async (input) => ({ valid: input.service === "downloader2" && input.identityId === "primary-admin" && input.serviceAccountId === "owner" }),
+      passkeyRollingSession: rollingBinding(input => input.service === "downloader2" && input.identityId === "primary-admin" && input.serviceAccountId === "owner"),
       recordAuditEvent: async () => ({ ok: true })
     }
   };

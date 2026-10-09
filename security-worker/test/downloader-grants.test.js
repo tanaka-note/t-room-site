@@ -86,7 +86,7 @@ test('Downloader request validation denies missing, disabled and deleted links w
  const sessions={};for(const id of ['primary-admin','user-a']){const cookie=await f.signIn(id,'downloader');const h=await (await worker.createHandoff(req({service:'downloader'},cookie),f.env)).json();sessions[id]=await worker.redeemHandoff(f.env,h.handoffToken,'downloader')}
  const src=readFileSync(new URL('../../downloader-worker/src/index.js',import.meta.url),'utf8');const body=src.slice(src.indexOf('async function requireSession('),src.indexOf('async function analyzeSource('));
  class HttpError extends Error{constructor(status,message){super(message);this.status=status}}
- const requireSession=new Function('verifySession','passkeysEnabled','parseCookies','HttpError','SESSION_COOKIE',body+';return requireSession;')(async token=>sessions[token],()=>true,raw=>({fixture:raw}),HttpError,'fixture');
+ const requireSession=new Function('verifySession','passkeysEnabled','parseCookies','HttpError','SESSION_COOKIE','authorizedSessions',body+';return requireSession;')(async token=>sessions[token],()=>true,raw=>({fixture:raw}),HttpError,'fixture',new WeakMap());
  const env={SECURITY:{validatePasskeySession:input=>worker.validatePasskeySession(f.env,input)}};
  // Downloader cookies use passkeySessionEpoch; Security handoffs use sessionEpoch.
  for(const s of Object.values(sessions))s.passkeySessionEpoch=s.sessionEpoch;

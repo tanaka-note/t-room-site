@@ -1,3 +1,4 @@
+import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
@@ -15,7 +16,7 @@ import {
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
@@ -253,6 +254,7 @@ async function handleApi(request, env, url, path, context) {
       serviceAccountId: handoff.serviceAccountId,
       passkeySessionEpoch: handoff.sessionEpoch,
       authMethod: "passkey",
+      rollingSessionVersion: ROLLING_SESSION_VERSION,
       sessionId,
       startedAt: new Date().toISOString()
     });
@@ -265,6 +267,7 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/logout" && request.method === "POST") {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
     const session = await readSession(request, env);
+    if (session?.rollingSessionVersion != null && !(await serviceRollingSession(env, "billing", session, "end")).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
     if (session) {
       await writeAudit(env, { eventType: "logout", actorAccountId: session.accountId });
       await recordSecurityAudit(env, request, { service: "billing", eventType: "logout", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: session.role, authMethod: session.authMethod, sessionId: session.sessionId });
@@ -659,6 +662,7 @@ async function readSession(request, env) {
       sessionId: payload.sessionId || null,
       startedAt: payload.startedAt || null,
       exp: Number(payload.exp),
+      rollingSessionVersion: payload.rollingSessionVersion,
       accountVersion: Number(payload.accountVersion || 1)
     };
   } catch {
@@ -681,10 +685,13 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     ...passwordSessionClaims(auth),
     ...passwordLifetimeClaims(auth),
     authMethod: auth.authMethod || "password",
+    ...(auth.rollingSessionVersion != null ? { rollingSessionVersion: auth.rollingSessionVersion } : {}),
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
     exp: sessionExpiresAt(Math.floor(Date.now() / 1000), sessionPolicyForAuthMethod(env, auth.authMethod, maxAge), auth.expiresAt)
   };
+  if (payload.rollingSessionVersion === ROLLING_SESSION_VERSION && auth.expiresAt == null
+    && !(await serviceRollingSession(env, "billing", payload, "register")).valid) throw new HttpError(503, "セッションを開始できませんでした。");
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encoded}.${await sign(encoded, env.SESSION_SECRET)}`;
 }
@@ -700,33 +707,13 @@ function sessionPolicy(env, authMethod) {
 function billingSessionVersion(env, accountVersion) { return `${String(env.SESSION_VERSION || "1")}:${Number(accountVersion || 1)}`; }
 
 async function refreshAuthenticatedSession(request, response, env, url, path) {
-  if (path === "/api/login" || path === "/api/password-login-audit" || path === "/api/passkey/handoff" || path === "/api/logout" || response.status === 401) return response;
+  if (!response.ok || request.headers.get("X-Troom-Activity") !== "foreground") return response;
   const session = await readSession(request, env);
-  if (!session || !shouldRefreshSession(session)) return response;
-
-  const account = await env.DB.prepare(`
-    SELECT id, role, session_version FROM billing_accounts WHERE id = ? AND is_active = 1
-  `).bind(session.accountId).first();
-  if (!account) return response;
-
-  const policy = sessionPolicy(env, session.authMethod);
-  const token = await createSessionToken(account, policy.ttlSeconds, env, {
-    identityId: session.identityId,
-    credentialId: session.credentialId,
-    serviceLinkId: session.serviceLinkId,
-    serviceAccountId: session.serviceAccountId,
-    passkeySessionEpoch: session.passkeySessionEpoch,
-    passwordSessionEpoch: session.passwordSessionEpoch,
-    authMethod: session.authMethod,
-    sessionId: session.sessionId,
-    startedAt: session.startedAt
-  });
-  const headers = new Headers(response.headers);
-  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
+  return renewServiceSession(request, response, env, "billing", path, session, async expiresAt => {
+    const account = await env.DB.prepare("SELECT id, role, session_version FROM billing_accounts WHERE id = ? AND is_active = 1").bind(session.accountId).first();
+    const policy = sessionPolicy(env, "passkey");
+    const token = await createSessionToken(account, policy.ttlSeconds, env, { ...session, expiresAt });
+    return sessionCookie(token, policy, url.protocol === "https:");
   });
 }
 

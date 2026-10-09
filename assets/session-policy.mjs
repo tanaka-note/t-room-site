@@ -3,19 +3,18 @@ export const PASSWORD_SESSION_TTL_SECONDS = 12 * 60 * 60;
 export const PASSWORD_SESSION_VERSION = 1;
 export const PASSKEY_SESSION_TTL_SECONDS = 12 * 60 * 60;
 
-// Explicit opt-in: other services and password sessions retain their policy.
+// Kept as an alias for Cloud callers. Every passkey uses the same policy.
 export function cloudSessionPolicyForAuthMethod(env, authMethod, passwordTtlSeconds) {
-  const policy = sessionPolicyForAuthMethod(env, authMethod, passwordTtlSeconds);
-  return authMethod === "passkey" ? { ...policy, ttlSeconds: PASSKEY_SESSION_TTL_SECONDS, persistent: true, rolling: true } : policy;
+  return sessionPolicyForAuthMethod(env, authMethod, passwordTtlSeconds);
 }
 
 export function sessionPolicyForAuthMethod(env, authMethod, passwordTtlSeconds = PASSWORD_SESSION_TTL_SECONDS) {
   if (authMethod === "passkey") {
     return {
       authMethod: "passkey",
-      ttlSeconds: clampNumber(env?.PASSKEY_SESSION_TTL_SECONDS, 15 * 60, PASSKEY_SESSION_TTL_SECONDS, PASSKEY_SESSION_TTL_SECONDS),
-      persistent: false,
-      rolling: false
+      ttlSeconds: PASSKEY_SESSION_TTL_SECONDS,
+      persistent: true,
+      rolling: true
     };
   }
   return {
@@ -50,7 +49,7 @@ export function sessionCookieValue(name, token, path, policy, secure) {
 }
 
 export function sessionExpiresAt(nowSeconds, policy, existingExpiresAt = null) {
-  if (policy?.rolling === false && existingExpiresAt != null && Number.isSafeInteger(Number(existingExpiresAt))) {
+  if (existingExpiresAt != null && Number.isSafeInteger(Number(existingExpiresAt))) {
     return Number(existingExpiresAt);
   }
   return Number(nowSeconds) + Number(policy?.ttlSeconds || 0);

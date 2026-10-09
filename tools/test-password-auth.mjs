@@ -1,3 +1,4 @@
+import { rollingBinding } from "./fixtures/passkey-rolling-binding.mjs";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
@@ -51,6 +52,7 @@ function fixture(service) {
     SECURITY: {
       recordAuditEvent: async (event) => audit.push(event),
       validatePasskeySession: async () => ({ valid: validPasskey }),
+      passkeyRollingSession: rollingBinding(() => validPasskey),
       redeemHandoff: async (token, requestedService) => { if (requestedService !== service) return null; const result = handoffs.get(token); handoffs.delete(token); return result; }
     }, SECURITY_AUDIT: { send: async (event) => audit.push(event) }
   };

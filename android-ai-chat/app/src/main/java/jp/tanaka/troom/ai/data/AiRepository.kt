@@ -41,8 +41,9 @@ class AiRepository(
     }
 
     suspend fun logout() {
-        secureStore.readSessionCookie()?.let { runCatching { http.post("/ai/api/logout", JSONObject(), it) } }
+        val cookie = secureStore.readSessionCookie()
         secureStore.clearSession()
+        cookie?.let { runCatching { http.post("/ai/api/logout", JSONObject(), it) } }
         secureStore.clearPending()
     }
 

@@ -1,3 +1,4 @@
+import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
@@ -41,6 +42,7 @@ const BASE_PATH = "/downloader";
 const SESSION_COOKIE = "troom_downloader_session";
 const SESSION_ROLE = "owner";
 const encoder = new TextEncoder();
+const authorizedSessions = new WeakMap();
 const decoder = new TextDecoder();
 const PRIVACY_EGRESS_USER_AGENT = "Mozilla/5.0";
 const PRIVACY_EGRESS_IP = "2a06:98c0:3600::103";
@@ -189,7 +191,7 @@ export default class DownloaderWorker extends WorkerEntrypoint {
     const browserResponse = lineBrowserResponse(request);
     if (browserResponse) return browserResponse;
     try {
-      return await handleRequest(request, this.env, this.ctx);
+      return await renewAuthenticatedSession(request, await handleRequest(request, this.env, this.ctx), this.env);
     } catch (error) {
       const status = Number(error?.status || 500);
       if (status >= 500) console.error(JSON.stringify({ event: "downloader_request_failed", error: safeErrorName(error) }));
@@ -311,6 +313,7 @@ async function handleRequest(request, env, context) {
   }
   if (path === "/api/logout" && request.method === "POST") {
     requireMutation(request, url);
+    if (!(await serviceRollingSession(env, "downloader", session, "end")).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
     scheduleAudit(context, audit(env, request, session, "logout", "success"));
     return json({ ok: true }, 200, { "Set-Cookie": clearCookie(url.protocol === "https:") });
   }
@@ -374,11 +377,13 @@ async function completePasskeyHandoff(request, env, url) {
     serviceAccountId: handoff.serviceAccountId,
     passkeySessionEpoch: handoff.sessionEpoch,
     authMethod: "passkey",
+    rollingSessionVersion: ROLLING_SESSION_VERSION,
     sessionId: crypto.randomUUID(),
     startedAt: new Date().toISOString(),
     sessionVersion: String(env.SESSION_VERSION || "1"),
     expiresAt: nowSeconds() + policy.ttlSeconds
   };
+  if (!(await serviceRollingSession(env, "downloader", payload, "register")).valid) throw new HttpError(503, "セッションを開始できませんでした。");
   const token = await signSession(payload, env);
   await audit(env, request, payload, "passkey_login_success", "success");
   await safeRecordUsageItems(env, payload.identityId, [{ metric: "platform", dimension: "worker_request", count: 1 }]);
@@ -391,7 +396,9 @@ async function requireSession(request, env) {
   const token = parseCookies(request.headers.get("Cookie") || "")[SESSION_COOKIE];
   const session = await verifySession(token, env);
   if (!session || !passkeysEnabled(env)) throw new HttpError(401, "パスキーでログインしてください。");
-  const valid = await env.SECURITY?.validatePasskeySession({
+  const valid = session.rollingSessionVersion != null
+    ? await serviceRollingSession(env, "downloader", session, "read")
+    : await env.SECURITY?.validatePasskeySession({
     service: "downloader",
     identityId: session.identityId,
     credentialId: session.credentialId,
@@ -400,6 +407,7 @@ async function requireSession(request, env) {
     sessionEpoch: session.passkeySessionEpoch
   });
   if (valid?.valid !== true) throw new HttpError(401, "パスキーセッションの有効期限が切れました。もう一度ログインしてください。");
+  authorizedSessions.set(request, session);
   return session;
 }
 
@@ -1576,4 +1584,13 @@ class HttpError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+async function renewAuthenticatedSession(request, response, env) {
+  const session = authorizedSessions.get(request);
+  const url = new URL(request.url);
+  return renewServiceSession(request, response, env, "downloader", url.pathname.slice(BASE_PATH.length), session, async expiresAt => {
+    const token = await signSession({ ...session, expiresAt }, env);
+    return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, sessionPolicyForAuthMethod(env, "passkey"), url.protocol === "https:");
+  });
 }

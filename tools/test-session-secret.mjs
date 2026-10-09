@@ -103,8 +103,7 @@ for (const service of Object.keys(exportsByService)) {
     const env = { SESSION_SECRET: randomBytes(32).toString('hex'), PASSKEY_ENABLED: 'true', DB: { prepare: () => ({ run: async () => {}, first: async () => ({ passkey_session_epoch: epoch, switch_observed_enabled: 1 }) }) } };
     const payload = { kind: 'admin', identityId: 'fixture', authMethod: 'passkey', passkeySessionEpoch: 1 };
     const cookie = await module.signedCookie(env, 'session', payload, 60, true);
-    assert.match(cookie, /Path=\/security; HttpOnly; SameSite=Strict; Secure$/);
-    assert.doesNotMatch(cookie, /Max-Age|Expires=/);
+    assert.match(cookie, /Path=\/security; Max-Age=43200; HttpOnly; SameSite=Strict; Secure$/);
     const read = value => module.readSecuritySession(new Request('https://example.test/', { headers: { Cookie: value.split(';')[0] } }), env, 'session', 'admin');
     assert.equal((await read(cookie)).identityId, 'fixture');
     const token = cookie.split(';')[0].slice('session='.length);
