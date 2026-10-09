@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import "../public/selection-state.js";
 
 const client = await readFile(new URL("../public/cloud.js", import.meta.url), "utf8");
 
@@ -37,12 +38,11 @@ const context = vm.createContext({
     itemNextFileOffset: 12,
     itemNextFolderOffset: 8,
     folderSummary: { fileCount: 2, folderCount: 2, totalFileCount: 2, totalSizeBytes: 420 },
-    selectedFiles: new Map(),
-    selectedFolders: new Map(),
     selected: { id: 1 },
     selectedFolder: { id: 3 },
     itemPageParams: ""
   },
+  getSelection: () => selection,
   window: {
     scrollX: 5,
     scrollY: 440,
@@ -59,6 +59,7 @@ const context = vm.createContext({
   displayListingCacheKey() { return ""; },
   URLSearchParams
 });
+const selection = TCloudSelection.create();
 vm.runInContext(helper, context);
 vm.runInContext("preserveListingAfterDeletion({ files: [{ id: 1, sizeBytes: 120 }], folders: [{ id: 3 }] })", context);
 assert.equal(context.state.query, "報告書");

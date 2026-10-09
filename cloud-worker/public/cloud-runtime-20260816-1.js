@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-6c87a0de7fde";
+const APP_BUILD_ID = "cloud-fddd7483cb86";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -74,8 +74,6 @@ const state = {
   selectedFolder: null,
   shareTarget: null,
   listMode: false,
-  selectedFiles: new Map(),
-  selectedFolders: new Map(),
   selectionHistoryActive: false,
   selectionClearBackPending: false,
   moveDestinations: new Map(),
@@ -301,7 +299,7 @@ function bindEvents() {
   $("#download-link").addEventListener("click", (event) => {
     if (Number(state.selected?.cryptoVersion) !== 1) return;
     event.preventDefault();
-    state.selectedFiles = new Map([[state.selected.id, state.selected]]);
+    replaceSelectedFiles([state.selected]);
     startSelectedDownloads();
   });
   $("#preview-dialog").addEventListener("close", handlePreviewClosed);
@@ -384,8 +382,7 @@ function bindEvents() {
   $("#selection-download").addEventListener("click", startSelectedDownloads);
   $("#selection-offline").addEventListener("click", saveSelectedOffline);
   $("#selection-share").addEventListener("click", () => {
-    const files = [...state.selectedFiles.values()];
-    const folders = [...state.selectedFolders.values()];
+    const { files, folders } = selectedItems();
     if (files.length && folders.length) {
       setNotice("ファイルとフォルダは同時に共有できません。", true);
       return;
@@ -1207,7 +1204,7 @@ async function handleHistoryNavigation(event) {
       ? Number(state.previewFileId || state.previewCloseOrigin?.id)
       : null;
     const origin = state.previewCloseOrigin || {x: state.previewOriginScrollX, y: state.previewOriginScrollY};
-    if (state.selectedFiles.size || state.selectedFolders.size) {
+    if (getSelection().count("file") || getSelection().count("folder")) {
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
       if (sameFolder && !target.previewId && !previewOriginId) return;
@@ -1719,7 +1716,7 @@ function releaseSessionState() {
   state.session = null; state.loginId = "";
   state.backupMount = null;
   renderDiaryBackupMount();
-  state.files = []; state.folders = []; state.selectedFiles.clear(); state.selectedFolders.clear();
+  state.files = []; state.folders = []; clearSelectedRecords();
   $("#content-grid").replaceChildren();
   document.querySelectorAll("video,audio").forEach(media => { media.pause(); media.removeAttribute("src"); media.load(); });
   document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
@@ -2831,7 +2828,7 @@ function folderCard(folder) {
       card.dataset.longPressed = "false";
       return;
     }
-    if (state.selectedFiles.size || state.selectedFolders.size) {
+    if (getSelection().count("file") || getSelection().count("folder")) {
       toggleFolderSelection(folder, card);
       return;
     }
@@ -2847,14 +2844,14 @@ function folderCard(folder) {
   selectButton.className = "folder-select-button";
   selectButton.type = "button";
   selectButton.setAttribute("aria-label", `${folder.name}を選択`);
-  selectButton.setAttribute("aria-pressed", state.selectedFolders.has(folder.id) ? "true" : "false");
+  selectButton.setAttribute("aria-pressed", getSelection().has("folder", folder.id) ? "true" : "false");
   selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
   selectButton.addEventListener("click", (event) => {
     event.stopPropagation();
     toggleFolderSelection(folder, card);
   });
   card.append(selectButton);
-  if (state.selectedFolders.has(folder.id)) card.classList.add("selected", "selection-pass");
+  if (getSelection().has("folder", folder.id)) card.classList.add("selected", "selection-pass");
   addSearchPathNavigation(card, folder, folder.parentId);
   return card;
 }
@@ -3359,7 +3356,7 @@ function fileCard(file) {
       card.dataset.longPressed = "false";
       return;
     }
-    if (state.selectedFiles.size || state.selectedFolders.size || event.ctrlKey || event.metaKey || event.shiftKey) {
+    if (getSelection().count("file") || getSelection().count("folder") || event.ctrlKey || event.metaKey || event.shiftKey) {
       toggleFileSelection(file, card);
       return;
     }
@@ -3381,7 +3378,7 @@ function fileCard(file) {
     selectButton.className = "file-select-button";
     selectButton.type = "button";
     selectButton.setAttribute("aria-label", `${file.name}を選択`);
-    selectButton.setAttribute("aria-pressed", state.selectedFiles.has(file.id) ? "true" : "false");
+    selectButton.setAttribute("aria-pressed", getSelection().has("file", file.id) ? "true" : "false");
     selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
     selectButton.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -3389,7 +3386,7 @@ function fileCard(file) {
     });
     card.append(selectButton);
   }
-  if (state.selectedFiles.has(file.id)) card.classList.add("selected", "selection-pass");
+  if (getSelection().has("file", file.id)) card.classList.add("selected", "selection-pass");
   addSearchPathNavigation(card, file, file.folderId);
   return card;
 }
@@ -3878,10 +3875,44 @@ function processEncryptedThumbnailQueue() {
   }
 }
 
+let selectionState = null;
+const selectedRecordStore = { file: new Map(), folder: new Map() };
+function getSelection() { return selectionState ||= TCloudSelection.create(); }
+
+function rememberSelectedRecord(kind, record) {
+  getSelection().add(kind, record.id);
+  selectedRecordStore[kind].set(record.id, record);
+}
+
+function removeSelectedRecord(kind, id) {
+  getSelection().remove(kind, id);
+  selectedRecordStore[kind].delete(id);
+}
+
+function replaceSelectedFiles(files) {
+  getSelection().replace("file", files.map(file => file.id));
+  selectedRecordStore.file.clear();
+  for (const file of files) selectedRecordStore.file.set(file.id, file);
+}
+
+function clearSelectedRecords() {
+  getSelection().clear();
+  selectedRecordStore.file.clear(); selectedRecordStore.folder.clear();
+}
+
+function selectedItems() {
+  const ids = getSelection().snapshot();
+  // Capture both kinds together; asynchronous actions keep their starting targets.
+  return Object.freeze({
+    files: Object.freeze(ids.fileIds.map(id => selectedRecordStore.file.get(id))),
+    folders: Object.freeze(ids.folderIds.map(id => selectedRecordStore.folder.get(id)))
+  });
+}
+
 function selectFile(file, card) {
-  if (file.trashed || state.selectedFiles.has(file.id)) return;
+  if (file.trashed || getSelection().has("file", file.id)) return;
   beginSelectionHistory();
-  state.selectedFiles.set(file.id, file);
+  rememberSelectedRecord("file", file);
   card.classList.add("selected", "selection-pass");
   card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
   syncSelectionBar();
@@ -3889,46 +3920,46 @@ function selectFile(file, card) {
 
 function toggleFileSelection(file, card) {
   if (file.trashed) return;
-  if (state.selectedFiles.has(file.id)) {
-    state.selectedFiles.delete(file.id);
+  if (getSelection().has("file", file.id)) {
+    removeSelectedRecord("file", file.id);
     card.classList.remove("selected", "selection-pass");
     card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "false");
   } else {
     selectFile(file, card);
   }
   syncSelectionBar();
-  if (!state.selectedFiles.size && !state.selectedFolders.size && state.selectionHistoryActive) {
+  if (!getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
     state.selectionHistoryActive = false;
     history.back();
   }
 }
 
 function selectFolder(folder, card) {
-  if (state.selectedFolders.has(folder.id)) return;
+  if (getSelection().has("folder", folder.id)) return;
   beginSelectionHistory();
-  state.selectedFolders.set(folder.id, folder);
+  rememberSelectedRecord("folder", folder);
   card.classList.add("selected", "selection-pass");
   card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "true");
   syncSelectionBar();
 }
 
 function toggleFolderSelection(folder, card) {
-  if (state.selectedFolders.has(folder.id)) {
-    state.selectedFolders.delete(folder.id);
+  if (getSelection().has("folder", folder.id)) {
+    removeSelectedRecord("folder", folder.id);
     card.classList.remove("selected", "selection-pass");
     card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "false");
   } else {
     selectFolder(folder, card);
   }
   syncSelectionBar();
-  if (!state.selectedFiles.size && !state.selectedFolders.size && state.selectionHistoryActive) {
+  if (!getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
     state.selectionHistoryActive = false;
     history.back();
   }
 }
 
 function beginSelectionHistory() {
-  if (!state.historyReady || state.selectionHistoryActive || state.selectedFiles.size || state.selectedFolders.size) return;
+  if (!state.historyReady || state.selectionHistoryActive || getSelection().count("file") || getSelection().count("folder")) return;
   history.pushState({
     tcloud: true,
     folderId: state.folderId,
@@ -3944,7 +3975,7 @@ function selectAllVisibleItems() {
   for (const card of $$("#content-grid .file-card[data-file-id]")) {
     const file = state.files.find((item) => String(item.id) === card.dataset.fileId);
     if (file && !file.trashed) {
-      state.selectedFiles.set(file.id, file);
+      rememberSelectedRecord("file", file);
       card.classList.add("selected", "selection-pass");
       card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
     }
@@ -3952,7 +3983,7 @@ function selectAllVisibleItems() {
   for (const card of $$("#content-grid .folder-card[data-folder-id]")) {
     const folder = state.folders.find((item) => String(item.id) === card.dataset.folderId);
     if (folder) {
-      state.selectedFolders.set(folder.id, folder);
+      rememberSelectedRecord("folder", folder);
       card.classList.add("selected", "selection-pass");
       card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "true");
     }
@@ -3961,9 +3992,8 @@ function selectAllVisibleItems() {
 }
 
 function clearFileSelection(update = true, rewindHistory = update) {
-  const hadSelection = Boolean(state.selectedFiles.size || state.selectedFolders.size);
-  state.selectedFiles.clear();
-  state.selectedFolders.clear();
+  const hadSelection = Boolean(getSelection().count("file") || getSelection().count("folder"));
+  clearSelectedRecords();
   state.selecting = false;
   $$(".file-card.selected, .file-card.selection-pass, .folder-card.selected, .folder-card.selection-pass").forEach((card) => {
     card.classList.remove("selected", "selection-pass");
@@ -4005,11 +4035,11 @@ function syncFavoriteSelection(files, folders) {
       try {
         let count = 0;
         for (const batch of favoriteBatches(files, folders)) {
-          if (favoriteSelection !== selection || key !== favoriteSelectionKey([...state.selectedFiles.values()], [...state.selectedFolders.values()])) return;
+          if (favoriteSelection !== selection || key !== favoriteSelectionKey(selectedItems().files, selectedItems().folders)) return;
           const data = await api("/favorites/status", { method: "POST", body: JSON.stringify(batch) });
           count += (data.fileIds || []).length + (data.folderIds || []).length;
         }
-        if (favoriteSelection !== selection || key !== favoriteSelectionKey([...state.selectedFiles.values()], [...state.selectedFolders.values()])) return;
+        if (favoriteSelection !== selection || key !== favoriteSelectionKey(selectedItems().files, selectedItems().folders)) return;
         selection.all = count === targets.length; selection.ready = true;
         syncSelectionBar();
       } catch (error) { if (favoriteSelection === selection) handleError(error); }
@@ -4022,7 +4052,7 @@ function syncFavoriteSelection(files, folders) {
 async function toggleSelectedFavorites() {
   const selection = favoriteSelection;
   if (!selection.ready || selection.busy) return;
-  const files = [...state.selectedFiles.values()], folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   if (selection.key !== favoriteSelectionKey(files, folders)) return;
   selection.busy = true; syncSelectionBar();
   try {
@@ -4039,8 +4069,7 @@ async function toggleSelectedFavorites() {
 }
 
 function syncSelectionBar() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   const fileCount = files.length;
   const folderCount = folders.length;
   const count = fileCount + folderCount;
@@ -4087,8 +4116,7 @@ function syncSelectionBar() {
 }
 
 function openSelectedRenameDialog() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   if (files.length === 1 && folders.length === 0 && canRenameFile(files[0])) {
     state.selected = files[0];
     openEditDialog();
@@ -4100,16 +4128,16 @@ function openSelectedRenameDialog() {
 }
 
 function openSelectedFolderSettings() {
-  const folders = [...state.selectedFolders.values()];
+  const folders = selectedItems().folders;
   if (folders.length !== 1
-    || state.selectedFiles.size
+    || getSelection().count("file")
     || !canChangeFolderPassword(folders[0])) return;
   openFolderSettings(folders[0]);
 }
 
 async function lockSelectedFolder() {
-  const folders = [...state.selectedFolders.values()];
-  const folder = folders.length === 1 && !state.selectedFiles.size ? folders[0] : null;
+  const folders = selectedItems().folders;
+  const folder = folders.length === 1 && !getSelection().count("file") ? folders[0] : null;
   if (!canRelockFolder(folder)) return;
   if (state.offlineActive) {
     setNotice("オフライン保存の完了または停止後にロックしてください。", true);
@@ -4136,7 +4164,7 @@ async function lockSelectedFolder() {
 }
 
 function clearSelectionWithoutRefresh() {
-  const shouldRewind = Boolean((state.selectedFiles.size || state.selectedFolders.size)
+  const shouldRewind = Boolean((getSelection().count("file") || getSelection().count("folder"))
     && state.selectionHistoryActive
     && !state.handlingPopState);
   clearFileSelection(true, false);
@@ -4177,7 +4205,7 @@ function preserveListingAfterDeletion({ files = [], folders = [] } = {}) {
     };
   }
 
-  if (state.selectedFiles.size || state.selectedFolders.size) clearSelectionWithoutRefresh();
+  if (getSelection().count("file") || getSelection().count("folder")) clearSelectionWithoutRefresh();
   else clearFileSelection(true, false);
   if (state.selected && deletedFileIds.has(Number(state.selected.id))) state.selected = null;
   if (state.selectedFolder && deletedFolderIds.has(Number(state.selectedFolder.id))) state.selectedFolder = null;
@@ -4191,7 +4219,7 @@ function preserveListingAfterDeletion({ files = [], folders = [] } = {}) {
 }
 
 async function startSelectedDownloads() {
-  const files = [...state.selectedFiles.values()];
+  const files = selectedItems().files;
   if (!files.length || state.downloadActive) return;
   let targets;
   try {
@@ -4267,9 +4295,9 @@ async function offlineStorageRecord(file, context) {
 }
 
 async function saveSelectedOffline() {
-  const files = [...state.selectedFiles.values()];
+  const files = selectedItems().files;
   const context = offlineSelectionContext(files);
-  if (!files.length || state.selectedFolders.size || state.offlineActive) return;
+  if (!files.length || getSelection().count("folder") || state.offlineActive) return;
   if (!context) {
     setNotice("オフライン保存するには、対象ファイルがあるフォルダのPWを解除してください。", true);
     syncSelectionBar();
@@ -4474,8 +4502,7 @@ function syncOfflineStatusDisplay() {
 }
 
 async function deleteSelectedItems() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   const count = files.length + folders.length;
   if (!count) return;
   if (!files.every(canTrashFile) || !folders.every(canTrashFolder)) {
@@ -4542,8 +4569,7 @@ async function deleteSelectedItems() {
 }
 
 async function openMoveDialog() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   if (!files.length && !folders.length) return;
   if (!files.every(canMoveFile) || !folders.every(canMoveFolder)) {
     setNotice("PWで解除した最上位フォルダの配下だけ移動できます。", true);
@@ -4739,8 +4765,7 @@ async function loadMoveDestination(folderId) {
 
 async function moveSelectedItems(event) {
   event.preventDefault();
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   const picker = state.movePicker;
   if (!picker) {
     $("#move-error").textContent = "移動先をもう一度選択してください。";
