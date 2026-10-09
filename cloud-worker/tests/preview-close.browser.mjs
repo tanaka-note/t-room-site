@@ -82,7 +82,7 @@ try {
             await __test.openPreview(__test.state.files.find(f=>f.mediaKind==='image'));
             // An offline preview can coexist with a list selection; closing it
             // must not consume only the selection branch and leave the dialog open.
-            __test.state.selectedFiles.set(__test.state.files[0].id,__test.state.files[0]);
+            __test.rememberSelectedRecord("file",__test.state.files[0]);
             const back=history.back.bind(history);globalThis.__backCalls=0;history.back=()=>{__backCalls++;back();};
             document.querySelector('#preview-dialog .dialog-close').click();document.querySelector('#preview-dialog .dialog-close').click();
           });

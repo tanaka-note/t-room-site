@@ -148,6 +148,11 @@ jobs:
           TROOM_BROWSER: webkit
           CI: 'true'
         run: gtimeout -k 10s 2m node cloud-worker/tests/listing-boundary.browser.mjs
+      - name: Cloud macOS WebKit selection isolation
+        env:
+          TROOM_BROWSER: webkit
+          CI: 'true'
+        run: gtimeout -k 10s 2m node cloud-worker/tests/selection-boundary.browser.mjs
       - name: Cloud macOS WebKit native control
         env:
           TROOM_BROWSER: webkit
