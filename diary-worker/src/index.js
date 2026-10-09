@@ -1,3 +1,4 @@
+import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { createDiaryEntryDomain } from "./entry-domain.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
@@ -17,7 +18,7 @@ export class BackupBrowserIntegration extends WorkerEntrypoint {
 }
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime } from "../../assets/session-policy.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
@@ -213,6 +214,7 @@ async function handleApi(request, env, url, path, context, getSession) {
       serviceAccountId: handoff.serviceAccountId,
       passkeySessionEpoch: handoff.sessionEpoch,
       authMethod: "passkey",
+      rollingSessionVersion: ROLLING_SESSION_VERSION,
       sessionId,
       startedAt: new Date().toISOString()
     });
@@ -224,6 +226,7 @@ async function handleApi(request, env, url, path, context, getSession) {
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
     const session = await getSession();
+    if (session?.rollingSessionVersion != null && !(await serviceRollingSession(env, "diary", session, "end")).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
     if (session) await recordSecurityAudit(env, request, { service: "diary", eventType: "logout", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: securityAuditRole(session), authMethod: session.authMethod, sessionId: session.sessionId });
     const headers = new Headers();
     headers.set("Set-Cookie", clearSessionCookie(url.protocol === "https:"));
@@ -257,6 +260,9 @@ async function handleApi(request, env, url, path, context, getSession) {
     }
     const account = await findAccountById(session.accountId, env);
     const policy = getSessionPolicy(env, session.authMethod);
+    const renewed = session.rollingSessionVersion === ROLLING_SESSION_VERSION && request.headers.get("X-Troom-Activity") === "foreground"
+      ? await serviceRollingSession(env, "diary", session, "touch") : { valid: true, expiresAt: session.exp };
+    if (!renewed.valid) throw new HttpError(401, "パスキーでログインし直してください。");
     const token = await createSessionToken(account, policy, env, householdId, {
       identityId: session.identityId,
       credentialId: session.credentialId,
@@ -267,7 +273,8 @@ async function handleApi(request, env, url, path, context, getSession) {
       authMethod: session.authMethod,
       sessionId: session.sessionId,
       startedAt: session.startedAt,
-      expiresAt: session.exp
+      rollingSessionVersion: session.rollingSessionVersion,
+      expiresAt: renewed.expiresAt
     });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
@@ -2065,31 +2072,16 @@ function getSessionPolicy(env, authMethod) {
 }
 
 async function withRollingSession(request, response, env, url, path, getSession) {
-  if (path === "/api/login" || path === "/api/password-login-audit" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
-    || path === "/api/households/select" || response.status === 401) return response;
+  if (["/api/login", "/api/password-login-audit", "/api/passkey/handoff", "/api/logout", "/api/password/initial", "/api/households/select"].includes(path) || response.status === 401) return response;
+  // Reads reuse their request-local validation; mutations retain the existing
+  // second check after the handler, without renewing background activity.
   const session = await getSession();
-  if (!session || !shouldRefreshSession(session)) return response;
-  const account = await findAccountById(session.accountId, env);
-  if (!account) return response;
-
-  const policy = getSessionPolicy(env, session.authMethod);
-  const token = await createSessionToken(account, policy, env, session.activeHouseholdId, {
-    identityId: session.identityId,
-    credentialId: session.credentialId,
-    serviceLinkId: session.serviceLinkId,
-    serviceAccountId: session.serviceAccountId,
-    passkeySessionEpoch: session.passkeySessionEpoch,
-    passwordSessionEpoch: session.passwordSessionEpoch,
-    authMethod: session.authMethod,
-    sessionId: session.sessionId,
-    startedAt: session.startedAt
-  });
-  const headers = new Headers(response.headers);
-  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
+  if (!response.ok || request.headers.get("X-Troom-Activity") !== "foreground") return response;
+  return renewServiceSession(request, response, env, "diary", path, session, async expiresAt => {
+    const account = await findAccountById(session.accountId, env);
+    const policy = getSessionPolicy(env, "passkey");
+    const token = await createSessionToken(account, policy, env, session.activeHouseholdId, { ...session, expiresAt });
+    return sessionCookie(token, policy, url.protocol === "https:");
   });
 }
 
@@ -2108,11 +2100,15 @@ async function createSessionToken(account, policy, env, activeHouseholdId = acco
     ...passwordSessionClaims(auth),
     ...passwordLifetimeClaims(auth),
     authMethod: auth.authMethod || "password",
+    ...(auth.rollingSessionVersion != null ? { rollingSessionVersion: auth.rollingSessionVersion } : {}),
+    auditRole: securityAuditRole(account),
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
     exp: sessionExpiresAt(Math.floor(Date.now() / 1000), policy, auth.expiresAt),
     version: String(env.SESSION_VERSION || "1")
   };
+  if (payload.rollingSessionVersion === ROLLING_SESSION_VERSION && auth.expiresAt == null
+    && !(await serviceRollingSession(env, "diary", payload, "register")).valid) throw new HttpError(503, "セッションを開始できませんでした。");
   const encodedPayload = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encodedPayload}.${await sign(encodedPayload, env.SESSION_SECRET)}`;
 }

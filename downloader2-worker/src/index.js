@@ -1,3 +1,4 @@
+import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
@@ -10,6 +11,7 @@ const SESSION_ROLE = "owner";
 const PAIRING_TOKEN_BYTES = 32;
 const PAIRING_TTL_SECONDS = 120;
 const encoder = new TextEncoder();
+const authorizedSessions = new WeakMap();
 const decoder = new TextDecoder();
 
 export default class Downloader2Worker extends WorkerEntrypoint {
@@ -17,7 +19,7 @@ export default class Downloader2Worker extends WorkerEntrypoint {
     const blocked = lineBrowserResponse(request);
     if (blocked) return blocked;
     try {
-      return await handleRequest(request, this.env, this.ctx);
+      return await renewAuthenticatedSession(request, await handleRequest(request, this.env, this.ctx), this.env);
     } catch (error) {
       const status = Number(error?.status || 500);
       if (status >= 500) console.error(JSON.stringify({ event: "downloader2_request_failed", error: safeErrorName(error) }));
@@ -80,6 +82,7 @@ export async function handleRequest(request, env, context) {
   }
   if (path === "/api/logout" && request.method === "POST") {
     requireMutation(request, url);
+    if (!(await serviceRollingSession(env, "downloader2", session, "end")).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
     scheduleAudit(context, audit(env, request, session, "logout", "success"));
     return json({ ok: true }, 200, { "Set-Cookie": clearCookie(url.protocol === "https:") });
   }
@@ -124,11 +127,13 @@ async function completePasskeyHandoff(request, env, url) {
     serviceAccountId: handoff.serviceAccountId,
     passkeySessionEpoch: handoff.sessionEpoch,
     authMethod: "passkey",
+    rollingSessionVersion: ROLLING_SESSION_VERSION,
     sessionId: crypto.randomUUID(),
     startedAt: new Date().toISOString(),
     sessionVersion: String(env.SESSION_VERSION || "1"),
     expiresAt: nowSeconds() + policy.ttlSeconds
   };
+  if (!(await serviceRollingSession(env, "downloader2", payload, "register")).valid) throw new HttpError(503, "セッションを開始できませんでした。");
   const token = await signSession(payload, env);
   await audit(env, request, payload, "passkey_login_success", "success");
   return json({ authenticated: true, displayName: displayName(payload) }, 200, {
@@ -140,7 +145,9 @@ async function requireSession(request, env) {
   const token = parseCookies(request.headers.get("Cookie") || "")[SESSION_COOKIE];
   const session = await verifySession(token, env);
   if (!session || !passkeysEnabled(env)) throw new HttpError(401, "パスキーでログインしてください。");
-  const valid = await env.SECURITY?.validatePasskeySession({
+  const valid = session.rollingSessionVersion != null
+    ? await serviceRollingSession(env, "downloader2", session, "read")
+    : await env.SECURITY?.validatePasskeySession({
     service: SERVICE,
     identityId: session.identityId,
     credentialId: session.credentialId,
@@ -149,6 +156,7 @@ async function requireSession(request, env) {
     sessionEpoch: session.passkeySessionEpoch
   });
   if (valid?.valid !== true) throw new HttpError(401, "パスキーセッションの有効期限が切れました。もう一度ログインしてください。");
+  authorizedSessions.set(request, session);
   return session;
 }
 
@@ -238,4 +246,13 @@ class HttpError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+async function renewAuthenticatedSession(request, response, env) {
+  const session = authorizedSessions.get(request);
+  const url = new URL(request.url);
+  return renewServiceSession(request, response, env, "downloader2", url.pathname.slice(BASE_PATH.length), session, async expiresAt => {
+    const token = await signSession({ ...session, expiresAt }, env);
+    return sessionCookieValue(SESSION_COOKIE, token, BASE_PATH, sessionPolicyForAuthMethod(env, "passkey"), url.protocol === "https:");
+  });
 }

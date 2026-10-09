@@ -335,3 +335,32 @@
     PasskeyCancelledError, PasskeyOptionsError, PasskeyUserError
   });
 })();
+
+// Classify activity only for the service currently open. Background requests
+// and synthetic events never keep an idle passkey session alive.
+(() => {
+  const service = /^\/(security|diary|billing|downloader2|downloader)(?:\/|$)/.exec(location.pathname)?.[1];
+  if (!service || typeof window.fetch !== "function") return;
+  let lastActivity = document.visibilityState === "visible" ? performance.now() : -Infinity;
+  for (const type of ["pointerdown", "keydown", "touchstart", "wheel"]) {
+    document.addEventListener(type, event => {
+      if (event.isTrusted && document.visibilityState === "visible") lastActivity = performance.now();
+    }, { capture: true, passive: true });
+  }
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, location.href);
+    const ownApi = url.origin === location.origin && url.pathname.startsWith('/' + service + '/api/');
+    if (ownApi) {
+      const headers = new Headers(input instanceof Request ? input.headers : undefined);
+      new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+      headers.delete("X-Troom-Activity");
+      if (document.visibilityState === "visible" && performance.now() - lastActivity <= 60_000) headers.set("X-Troom-Activity", "foreground");
+      init = { ...init, headers };
+    }
+    const response = await originalFetch(input, init);
+    if (ownApi && response.headers.get("X-Troom-Session-Expires")) window.dispatchEvent(new CustomEvent("troom-session-renewed", { detail: { expiresAt: Number(response.headers.get("X-Troom-Session-Expires")) } }));
+    if (ownApi && response.status === 401 && !/\/api\/(auth|passkey|setup|bootstrap|invite)(\/|$)/.test(url.pathname)) window.dispatchEvent(new Event("troom-session-expired"));
+    return response;
+  };
+})();

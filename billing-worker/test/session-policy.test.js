@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("billing uses fixed password and passkey sessions", async () => {
+test("billing keeps password sessions fixed and rolls only tracked passkeys", async () => {
   const [worker, config, migration] = await Promise.all([
     readFile(new URL("../src/index.js", import.meta.url), "utf8"),
     readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"),
@@ -11,7 +11,7 @@ test("billing uses fixed password and passkey sessions", async () => {
 
   assert.match(worker, /const MAX_SESSION_SECONDS = PASSWORD_SESSION_TTL_SECONDS/);
   assert.match(worker, /refreshAuthenticatedSession\(request, response, env, url, path\)/);
-  assert.match(worker, /!shouldRefreshSession\(session\)/);
+  assert.match(worker, /renewServiceSession\(request, response, env, "billing", path, session/);
   assert.match(worker, /sessionPolicy\(env, "password"\)/);
   assert.match(worker, /sessionPolicy\(env, "passkey"\)/);
   assert.match(config, /"SESSION_TTL_SECONDS": "43200"/);

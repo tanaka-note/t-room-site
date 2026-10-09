@@ -8,7 +8,10 @@ import java.net.URL
 
 data class HttpResult(val body: JSONObject, val cookies: List<String>)
 
-class AiHttpClient(private val baseUrl: String) {
+class AiHttpClient(
+    private val baseUrl: String,
+    private val onSessionCookie: (String, String) -> Unit = { _, _ -> },
+) {
     suspend fun get(path: String, cookie: String? = null): HttpResult = request("GET", path, null, cookie)
     suspend fun post(path: String, body: JSONObject, cookie: String? = null): HttpResult = request("POST", path, body, cookie)
 
@@ -21,6 +24,7 @@ class AiHttpClient(private val baseUrl: String) {
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "AI-Chat-By-T-ROOM-Android/0.1.0")
             if (cookie != null) setRequestProperty("Cookie", cookie)
+            if (path.startsWith("/ai/api/") && AiUserActivity.window.isActive()) setRequestProperty("X-Troom-Activity", "foreground")
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -38,6 +42,9 @@ class AiHttpClient(private val baseUrl: String) {
                 .filter { it.key?.equals("Set-Cookie", ignoreCase = true) == true }
                 .flatMap { it.value ?: emptyList() }
                 .map { it.substringBefore(';') }
+            if (cookie != null && path.startsWith("/ai/api/")) {
+                cookies.firstOrNull { it.startsWith("troom_ai_session=") }?.let { onSessionCookie(cookie, it) }
+            }
             HttpResult(json, cookies)
         } finally {
             connection.disconnect()

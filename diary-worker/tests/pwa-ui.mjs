@@ -81,7 +81,7 @@ assert.match(worker, /\["\/diary-photo-processing\.js", "\/diary-photo-processin
 assert.match(worker, /\["\/diary-photo-upload\.js", "\/diary-photo-upload\.js"\]/);
 assert.match(worker, /\["\/diary-rich-text\.js", "\/diary-rich-text\.js"\]/);
 assert.match(worker, /PASSWORD_SESSION_TTL_SECONDS/);
-assert.match(worker, /!shouldRefreshSession\(session\)/);
+assert.match(worker, /renewServiceSession\(request, response, env, "diary", path, session/);
 assert.match(worker, /DIARY_MAIN_ADMIN_LOGIN_ID/);
 assert.match(worker, /DIARY_WIFE_ADMIN_LOGIN_ID/);
 assert.doesNotMatch(worker, /DIARY_VIEW_PASSWORD_HASH/);

@@ -1,5 +1,26 @@
 (() => {
   "use strict";
+  let sessionExpiryTimer;
+  function observeSessionExpiry(expiresAt) {
+    clearTimeout(sessionExpiryTimer);
+    if (expiresAt) sessionExpiryTimer = setTimeout(async () => {
+      // Another tab may have renewed this same service cookie in the meantime.
+      try {
+        const status = await get("/status");
+        if (status.adminAuthenticated && status.expiresAt * 1000 > Date.now()) return observeSessionExpiry(status.expiresAt);
+      } catch { /* no authority is assumed while the server cannot confirm it */ }
+      expireAdminSession();
+    }, Math.max(0, expiresAt * 1000 - Date.now()));
+  }
+  function expireAdminSession() {
+    clearTimeout(sessionExpiryTimer);
+    $("#admin-view").hidden = true;
+    $("#admin-login-view").hidden = false;
+    for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+    showMessage("ログインの有効期限が切れました。パスキーでログインしてください。", true);
+  }
+  window.addEventListener("troom-session-renewed", event => observeSessionExpiry(event.detail.expiresAt));
+  window.addEventListener("troom-session-expired", expireAdminSession);
   const display = globalThis.TRoomSecurityDisplay;
   if (!display) throw new Error("セキュリティ画面の表示設定を読み込めませんでした。");
   const state = {
@@ -153,7 +174,7 @@
       const status = await get("/status");
       if (!status.enabled) return showMessage("パスキー機能は現在停止中です。各サービスのID・パスワードをご利用ください。", true);
       if (!status.initialized) $("#bootstrap-view").hidden = false;
-      else if (status.adminAuthenticated) await showAdmin(setup);
+      else if (status.adminAuthenticated) { observeSessionExpiry(status.expiresAt); await showAdmin(setup); }
       else $("#admin-login-view").hidden = false;
     } catch (error) { showMessage(error.message, true); }
   }
