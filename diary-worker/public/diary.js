@@ -599,6 +599,7 @@
     elements.appView.hidden = false;
     resetHeaderVisibilityTracking();
     if (returnView) restoreDiaryReturnPosition(returnView);
+    else if (isNewDiaryNavigation()) restoreEntryListPosition({ scrollY: 0 });
   }
 
   async function loadHouseholdSwitcher() {
@@ -832,7 +833,29 @@
     }
   }
 
-  function takeDiaryReturnView(householdId) {
+  function isNewDiaryNavigation() {
+    const navigationType = window.performance.getEntriesByType("navigation")[0]?.type;
+    return navigationType !== "back_forward" && navigationType !== "reload";
+  }
+
+  function takeDiaryReturnView(householdId, fromPageCache = false) {
+    if (!fromPageCache && isNewDiaryNavigation()) {
+      // Reopening the same start URL can retain the previous history.state.
+      // Discard only this page's return snapshot; child pages still need the source snapshot.
+      try {
+        if (window.history.state?.[RETURN_VIEW_HISTORY_KEY]) {
+          const historyState = { ...window.history.state };
+          delete historyState[RETURN_VIEW_HISTORY_KEY];
+          window.history.replaceState(historyState, "", window.location.href);
+        }
+        const storedView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+        const routePath = storedView?.version === 1 ? `${BASE_PATH}/` : storedView?.routePath;
+        if (routePath === window.location.pathname) window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+      } catch {
+        // A fresh opening must not restore a position even when storage is unavailable.
+      }
+      return null;
+    }
     const historyView = window.history.state?.[RETURN_VIEW_HISTORY_KEY];
     if (isUsableDiaryReturnView(historyView, householdId, window.location.pathname)) {
       return historyView;
@@ -946,7 +969,7 @@
 
   function restoreDiaryReturnViewFromPageCache(event) {
     if (!event.persisted || !isDiaryListRoute()) return;
-    const returnView = takeDiaryReturnView(state.activeHouseholdId);
+    const returnView = takeDiaryReturnView(state.activeHouseholdId, true);
     if (returnView) restoreDiaryReturnPosition(returnView);
   }
 

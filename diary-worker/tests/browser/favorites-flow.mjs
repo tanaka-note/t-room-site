@@ -256,9 +256,64 @@ async function run(browserType, name, executablePath, contextOptions = {}) {
     await directPage.waitForURL(/\/diary\/?$/);
     await directPage.waitForSelector("#app-view:not([hidden])");
     assert.equal(await directPage.locator("#favorites-link").getAttribute("aria-current"), null, `${name}: 直接アクセスからも解除可能`);
+    await assertFreshDiaryStartup(page, name);
     await context.close();
   } finally {
     await browser.close();
+  }
+}
+
+async function assertFreshDiaryStartup(page, name) {
+  await page.bringToFront();
+  for (const source of ["pwa", "twa"]) {
+    const startUrl = `${origin}/diary/?source=${source}`;
+    await page.goto(startUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector("#app-view:not([hidden])");
+    const initialHeading = await page.locator("#diary-recent-title").textContent();
+    await page.click("#previous-month-button");
+    await page.waitForFunction((heading) => document.querySelector("#diary-recent-title").textContent !== heading, initialHeading);
+    const previousHeading = await page.locator("#diary-recent-title").textContent();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(250);
+    await page.evaluate(() => document.querySelector("#favorites-link").click());
+    await page.waitForURL(/\/diary\/favorites\/?$/);
+    await page.waitForSelector("#app-view:not([hidden])");
+    const savedView = await page.evaluate(() => JSON.parse(sessionStorage.getItem("troom-diary-return-view-v1")));
+    assert.ok(savedView.position.scrollY > 100, `${name} ${source}: トップ以外の戻り位置を保存`);
+    await page.goBack({ waitUntil: "networkidle" });
+    await page.waitForSelector("#app-view:not([hidden])");
+    await page.waitForTimeout(650);
+    assert.equal(await page.locator("#diary-recent-title").textContent(), previousHeading, `${name} ${source}: Backで表示月を復元`);
+    const restoredY = await page.evaluate(() => scrollY);
+    assert.ok(Math.abs(restoredY - savedView.position.scrollY) <= 3, `${name} ${source}: Backでスクロールを復元 expected=${savedView.position.scrollY} actual=${restoredY}`);
+    await page.evaluate(() => {
+      history.replaceState({ ...history.state, unrelatedStartupState: "keep" }, "");
+      window.scrollTo(0, 0);
+    });
+    // Chromium can retain history.state when reopening the identical app start URL.
+    await page.goto(startUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector("#app-view:not([hidden])");
+    await page.waitForTimeout(650);
+    assert.equal(await page.evaluate(() => scrollY), 0, `${name} ${source}: 開き直しはトップ`);
+    assert.equal(await page.locator("#diary-recent-title").textContent(), initialHeading, `${name} ${source}: 開き直しは今月`);
+    assert.equal(await page.evaluate(() => history.state?.troomDiaryReturnView), undefined, `${name} ${source}: 古い戻り位置を除去`);
+    if (name !== "Firefox") {
+      assert.equal(await page.evaluate(() => history.state?.unrelatedStartupState), "keep", `${name} ${source}: 他の履歴状態を維持`);
+    }
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector("#app-view:not([hidden])");
+    await page.waitForTimeout(650);
+    assert.equal(await page.evaluate(() => scrollY), 0, `${name} ${source}: 開き直した後のreloadもトップ`);
+    assert.equal(await page.locator("#diary-recent-title").textContent(), initialHeading, `${name} ${source}: reloadで古い表示月が復活しない`);
+    // Old app versions also saved a position without a route/referrer boundary.
+    await page.evaluate((view) => {
+      sessionStorage.setItem("troom-diary-return-view-v1", JSON.stringify({ ...view, version: 1 }));
+    }, savedView);
+    await page.goto(startUrl, { waitUntil: "networkidle" });
+    await page.waitForSelector("#app-view:not([hidden])");
+    await page.waitForTimeout(650);
+    assert.equal(await page.evaluate(() => scrollY), 0, `${name} ${source}: 旧保存形式でも開き直しはトップ`);
+    assert.equal(await page.locator("#diary-recent-title").textContent(), initialHeading, `${name} ${source}: 旧保存形式の表示月を誤適用しない`);
   }
 }
 
