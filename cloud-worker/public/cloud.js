@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-480d4b173db8";
+const APP_BUILD_ID = "cloud-3db436610588";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -4518,45 +4518,30 @@ async function deleteSelectedItems() {
   const button = $("#selection-delete");
   button.disabled = true;
   button.textContent = `削除中 0 / ${count}`;
-  let completed = 0;
-  let movedEntries = 0;
-  let processed = 0;
-  const deletedFiles = [];
-  const deletedFolders = [];
-  const failures = [];
+  const failureNames = [];
   try {
-    const deletionQueue = [
-      ...folders.map((folder) => ({ type: "folder", item: folder })),
-      ...files.map((file) => ({ type: "file", item: file }))
-    ];
-    let nextDeletionIndex = 0;
-    const deletionWorker = async () => {
-      while (nextDeletionIndex < deletionQueue.length) {
-        const task = deletionQueue[nextDeletionIndex++];
-        try {
-          const result = await api(`/${task.type === "folder" ? "folders" : "files"}/${task.item.id}`, {
-            method: "DELETE",
-            body: "{}"
-          });
-          completed += 1;
-          movedEntries += task.type === "folder" ? Number(result.deleted || 1) : 1;
-          if (task.type === "file") deletedFiles.push(task.item);
-          else deletedFolders.push(task.item);
-        } catch (error) {
-          failures.push({ name: task.item.name, error });
-        }
-        processed += 1;
-        button.textContent = `削除中 ${processed} / ${count}`;
-      }
+    const records = {
+      file: new Map(files.map(file => [file.id, file])),
+      folder: new Map(folders.map(folder => [folder.id, folder]))
     };
-    await Promise.all(Array.from({ length: Math.min(4, deletionQueue.length) }, () => deletionWorker()));
-    const failedNames = failures.slice(0, 3).map((item) => item.name).join("、");
+    const result = await TCloudBulkDelete.run(Object.freeze({
+      fileIds: Object.freeze(files.map(file => file.id)), folderIds: Object.freeze(folders.map(folder => folder.id))
+    }), {
+      remove: task => api(`/${task.type === "folder" ? "folders" : "files"}/${records[task.type].get(task.id).id}`, { method: "DELETE", body: "{}" }),
+      onFailure: task => failureNames.push(records[task.type].get(task.id).name),
+      onProgress: ({ processed, total }) => { button.textContent = `削除中 ${processed} / ${total}`; }
+    });
+    const { completed, movedEntries } = result;
+    const deletedFiles = result.deletedFileIds.map(id => records.file.get(id));
+    const deletedFolders = result.deletedFolderIds.map(id => records.folder.get(id));
+    const failedCount = result.failures.length;
+    const failedNames = failureNames.slice(0, 3).join("、");
     const successMessage = state.session?.canDelete
       ? `${completed}件の選択から、合計${movedEntries.toLocaleString("ja-JP")}件をゴミ箱へ移動しました。`
       : `${completed}件を削除しました。`;
-    setNotice(failures.length
-      ? `${completed}件を処理しました。削除できなかった${failures.length}件：${failedNames}${failures.length > 3 ? " ほか" : ""}`
-      : successMessage, Boolean(failures.length));
+    setNotice(failedCount
+      ? `${completed}件を処理しました。削除できなかった${failedCount}件：${failedNames}${failedCount > 3 ? " ほか" : ""}`
+      : successMessage, Boolean(failedCount));
     if (completed) invalidateStoredConflicts();
     if (deletedFiles.length) await removeDeviceCopiesForFiles(deletedFiles);
     if (deletedFolders.length) await removeDeviceCopiesForFolders(deletedFolders);
