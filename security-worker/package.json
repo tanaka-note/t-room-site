@@ -13,7 +13,7 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@simplewebauthn/server": "13.3.2"
+    "@simplewebauthn/server": "14.0.1"
   },
   "devDependencies": {
     "wrangler": "^4.121.0"
