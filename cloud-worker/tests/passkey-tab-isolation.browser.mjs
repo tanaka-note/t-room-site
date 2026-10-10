@@ -180,18 +180,11 @@ try {
   await b.waitForFunction(()=>globalThis.__app && !__app.state.session);
   assert.ok(!(await cacheKeys(b)).includes('passkey-session:'+loggedOutId),'logout deletes its own passkey cache');
   assert.deepEqual((await cacheKeys(b)).filter(k=>!k.startsWith('passkey-session:')).sort(),['admin@test:pw-preserved','folder-session:fixture:7'],'passkey logout preserves unrelated PW and folder cache');
-  const pwResult=await b.evaluate(async()=>{
-    TCloudSession.beginSelection();
-    const session=await __app.api('/login',{method:'POST',body:JSON.stringify({loginId:'admin@test',authProof:'local-proof'})});
-    __app.state.session=session;__app.state.loginId=session.loginId;
-    const accountKey=await crypto.subtle.importKey('raw',new Uint8Array(__fixtures.accountKey),{name:'AES-GCM'},false,['decrypt','encrypt']);
-    await __app.prepareCryptoSession('local-password',accountKey);
-    const loaded=await __app.loadCachedAdminKey(__app.state.crypto.config);
-    __app.state.crypto.adminPrivateKey=null;
-    await __app.prepareCryptoSession('');
-    return {cached:loaded?.type==='private',resumed:__app.state.crypto.adminPrivateKey?.type==='private'};
+  const pwResult=await browserContext.request.post(origin+'/cloud/api/login', {
+    headers:{Origin:origin}, data:{loginId:'admin@test',authProof:'local-proof'}
   });
-  assert.deepEqual(pwResult,{cached:true,resumed:true});
+  assert.equal(pwResult.status(),401,'PW login stays retired after passkey logout');
+  assert.equal(pwResult.headers()['set-cookie'],undefined);
   phase='real persistent browser restart';
   for(const account of ['admin','folder-member','cloud-member']) {
     const activePage=await page();
@@ -298,7 +291,7 @@ try {
   await missing.evaluate(()=>__app.initialize());
   assert.equal(await missing.evaluate(()=>__authCalls),1);
   assert.ok(await missing.evaluate(()=>__app.state.session));
-  console.log('two real browser tabs: both directions, reload, stale API/Range/upload, in-flight responses, real SW Range/cache, selective IndexedDB cleanup, multi-folder reload/restart without WebAuthn/handoff, actual rolling cache expiry, expiry/revoke/version/epoch/logout cache deletion after browser restart, cache corruption/unavailability fallback and PW key resume passed');
+console.log('two real browser tabs: both directions, reload, stale API/Range/upload, in-flight responses, real SW Range/cache, selective IndexedDB cleanup, multi-folder reload/restart without WebAuthn/handoff, actual rolling cache expiry, expiry/revoke/version/epoch/logout cache deletion after browser restart, cache corruption/unavailability fallback and retired PW login passed');
  }
 } catch(error) {
  console.error('Browser diagnostics:',JSON.stringify({pageErrors,lifecycle:lifecycle.slice(-50),pages:await Promise.all(browserContext.pages().map(async p=>({url:p.url(),title:await p.title().catch(()=>''),state:await p.evaluate(()=>({loaded:!!globalThis.__app,role:globalThis.__app?.state.session?.role,blocked:globalThis.TCloudSession?.isBlocked(),body:document.body.innerText.slice(0,200)})).catch(()=>null)}))),requests:requests.slice(-12)}));throw error;

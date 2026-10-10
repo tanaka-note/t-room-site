@@ -9,7 +9,7 @@ export const AUDIT_PAGE_SIZE = 100;
 // bootstrap is password verification (including recovery), and a service passkey
 // verification and its completed login remain distinct audit records.
 const PASSWORD_AUDIT_EVENTS = Object.freeze([
-  "password_login_success", "password_login_failure", "bootstrap_auth_success",
+  "password_login_success", "password_login_failure", "password_login_submit", "password_login_client_failure", "bootstrap_auth_success",
   "bootstrap_auth_failure", "bootstrap_login_blocked", "login_success", "login_failure",
   "login_blocked", "login_locked"
 ]);

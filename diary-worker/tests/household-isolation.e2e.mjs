@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -23,7 +24,7 @@ for (const args of [
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
-const server = spawn(process.execPath, [wranglerPath, "dev", "--local", "--port", String(port),
+const server = spawn(process.execPath, [wranglerPath, "dev", ...passkeyFixtureArgs, "--local", "--port", String(port),
   "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
@@ -57,7 +58,7 @@ async function request(path, { method = "GET", body, cookie } = {}) {
 }
 
 async function login(loginId, password) {
-  const result = await request("/login", { method: "POST", body: { loginId, password } });
+  const result = await diaryFixtureLogin(request, loginId, password);
   assert.equal(result.response.status, 200, JSON.stringify(result.result));
   return { session: result.result, cookie: result.cookie };
 }
@@ -67,18 +68,14 @@ try {
   const main = await login("main@example.test", "main-test");
   const wife = await login("wife@example.test", "wife-test");
   const chiharuFirst = await login("giantz3031@gmail.com", temporaryPassword);
-  assert.equal(chiharuFirst.session.mustChangePassword, true);
-
-  const blockedBeforeChange = await request("/entries", { cookie: chiharuFirst.cookie });
-  assert.equal(blockedBeforeChange.response.status, 428);
-
+  assert.equal(chiharuFirst.session.mustChangePassword, false);
+  assert.equal((await request("/entries", {cookie: chiharuFirst.cookie})).response.status, 200);
   const changed = await request("/password/initial", {
     method: "POST", cookie: chiharuFirst.cookie,
-    body: { password: "ちはるの日記", confirmation: "ちはるの日記" }
+    body: {password: "unused-password", confirmation: "unused-password"}
   });
-  assert.equal(changed.response.status, 200, JSON.stringify(changed.result));
-  assert.equal(changed.result.mustChangePassword, false);
-  await request("/logout", { method: "POST", cookie: changed.cookie });
+  assert.equal(changed.response.status, 410);
+  await request("/logout", {method: "POST", cookie: chiharuFirst.cookie});
   const chiharuAfterReset = await login("giantz3031@gmail.com", "ちはるの日記");
   assert.equal(chiharuAfterReset.session.mustChangePassword, false);
   const chiharuCookie = chiharuAfterReset.cookie;

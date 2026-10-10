@@ -50,8 +50,7 @@
     "RP_NAME": "T-ROOM",
     "EXPECTED_ORIGIN": "https://tanaka-note.com,android:apk-key-hash:NMjpYcsdNTFmflccwgJaOy4a_EgajHQS3t4SiP_lBVY",
     "MAX_INVITE_DAYS": "30",
-    "IDENTITY_SESSION_TTL_SECONDS": "600",
-    "ADMIN_SESSION_TTL_SECONDS": "3600",
+    "PASSKEY_SESSION_TTL_SECONDS": "43200",
     "AUDIT_RETENTION_DAYS": "180"
   }
 }

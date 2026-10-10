@@ -4,6 +4,7 @@ import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import jp.tanaka.troom.ai.auth.PasskeyAuthenticator
+import jp.tanaka.troom.ai.data.ApiException
 import jp.tanaka.troom.ai.data.AiRepository
 import jp.tanaka.troom.ai.model.*
 import jp.tanaka.troom.ai.voice.VoiceEngine
@@ -51,7 +52,7 @@ class MainViewModel(
         mutableState.value = mutableState.value.copy(loading = true, error = null)
         runCatching { repository.conversation(conversation.id) }
             .onSuccess { (loaded, messages) -> mutableState.value = mutableState.value.copy(loading = false, activeConversation = loaded, messages = messages) }
-            .onFailure { mutableState.value = mutableState.value.copy(loading = false, error = userMessage(it)) }
+            .onFailure { mutableState.value = failureState(it) }
     }
 
     fun send(content: String, mode: ConversationMode = ConversationMode.CHAT) = viewModelScope.launch {
@@ -70,7 +71,7 @@ class MainViewModel(
             mutableState.value = mutableState.value.copy(loading = false, messages = messages, pending = null)
             refreshSessionAndHistory()
         }.onFailure { error ->
-            mutableState.value = mutableState.value.copy(loading = false, pending = repository.pendingMessage(), error = userMessage(error))
+            mutableState.value = failureState(error).copy(pending = repository.pendingMessage())
         }
     }
 
@@ -82,7 +83,7 @@ class MainViewModel(
                 .onSuccess { response ->
                     mutableState.value = mutableState.value.copy(loading = false, pending = null, messages = mutableState.value.messages + response)
                     refreshSessionAndHistory()
-                }.onFailure { mutableState.value = mutableState.value.copy(loading = false, error = userMessage(it)) }
+                }.onFailure { mutableState.value = failureState(it) }
         }
     }
 
@@ -121,6 +122,10 @@ class MainViewModel(
         runCatching { repository.session() }.onSuccess { mutableState.value = mutableState.value.copy(session = it) }
         runCatching { repository.conversations() }.onSuccess { mutableState.value = mutableState.value.copy(conversations = it) }
     }
+
+    private fun failureState(error: Throwable): AiUiState =
+        if (error is ApiException && error.status == 401) AiUiState(loading = false, pending = repository.pendingMessage(), error = userMessage(error))
+        else mutableState.value.copy(loading = false, error = userMessage(error))
 
     private fun userMessage(error: Throwable): String = error.message?.takeIf { it.isNotBlank() }
         ?: "処理を完了できませんでした。通信状態を確認してください。"

@@ -1,3 +1,4 @@
+import { withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { attachPasskeyLedger } from "./passkey-ledger-fixture.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import assert from "node:assert/strict";
@@ -42,7 +43,7 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
 attachPasskeyLedger(env);
 const context = { isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
   sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
-  recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
+  withPasswordLoginAudit, handlePasswordLoginClientAudit, recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
 vm.runInNewContext(source, context);
@@ -111,17 +112,8 @@ try {
     assert.equal((await api(member.cookie, `/uploads/${upload.body.id}`, "DELETE")).status, 200);
   }
   const pw = await api(null, "/login", "POST", { loginId: "subadmin@test", authProof: "local-proof" });
-  assert.equal(pw.status, 200); assert.equal(pw.body.role, "subadmin");
-  assert.equal((await api(pw.cookie, "/items")).body.folders.length, 2);
-  assert.equal((await api(pw.cookie, "/items?folderId=7")).status, 423);
-  assert.equal((await api(pw.cookie, "/items?searchCandidates=1")).body.files.length, 0);
-  assert.equal((await api(pw.cookie, "/folders/7/unlock", "POST", { password: "local-proof" })).status, 200);
-  const subCandidates = await api(pw.cookie, "/items?searchCandidates=1");
-  assert.ok(subCandidates.body.files.some(file => file.id === 1));
-  assert.equal(subCandidates.body.files.some(file => [2, 3, 4].includes(file.id)), false);
-  assert.equal((await api(pw.cookie, "/files/1", "PATCH", { name: "renamed.txt" })).status, 200);
-  assert.equal((await api(pw.cookie, "/files/1", "DELETE")).status, 200);
-  assert.equal((await api(pw.cookie, "/files/1/permanent", "DELETE")).status, 403);
+  assert.equal(pw.status, 401); assert.equal(pw.cookie, undefined);
+  assert.equal((await api(pw.cookie, "/items")).status, 401);
   // Extend the same actual-handler fixture only after the legacy regressions.
   db.prepare("INSERT INTO cloud_folders(id,parent_id,name,password_hash,created_by) VALUES(101,NULL,'NAS',?,'admin'),(102,101,'NAS child',NULL,'admin')").run(proofHash);
   db.exec("INSERT INTO cloud_files(id,folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by) VALUES(100,101,'nas','NAS.txt','text/plain','document',1,'ready','member'); UPDATE cloud_files SET deleted_at=NULL WHERE id=1;");

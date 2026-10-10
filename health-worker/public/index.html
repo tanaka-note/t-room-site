@@ -56,23 +56,19 @@
 })(window).enforce();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>体調管理 | T-lain</title>
-  <link rel="stylesheet" href="/health/health.css?v=health-34d0176017d8">
-  <meta name="troom-app-build" content="health-34d0176017d8">
+  <link rel="stylesheet" href="/health/health.css?v=health-0a238ac7d8fe">
+  <meta name="troom-app-build" content="health-0a238ac7d8fe">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
   <main>
     <header class="app-header">
-      <div><p class="eyebrow">T-lain</p><h1>体調管理</h1><p class="account-name">田中暢美</p></div>
+      <div><p class="eyebrow">T-lain</p><h1>体調管理</h1></div>
       <a href="/">T-lainへ</a>
     </header>
 
-    <section id="login" class="card login-card">
-      <h2>いつもの体調を、気軽に記録</h2>
-      <p>体調や備考を残しながら、生理の開始・終了と次回の目安も確認できます。記録はすべて任意です。</p>
-      <button id="sign-in">体調管理を開く</button>
-      <p class="hint">暢美さん・宏知さんそれぞれのパスキーで、同じ記録を開きます。</p>
-      <a href="/security/health.html">Security Centerで利用準備・復旧</a>
+    <section id="login" class="card login-card" aria-label="体調管理へのログイン">
+      <button id="sign-in" type="button">パスキーでログイン</button>
     </section>
     <p id="message" class="error" role="status" aria-live="polite"></p>
 
@@ -206,9 +202,9 @@
       <p id="export-error" class="error" role="alert"></p><button type="submit">ダウンロード</button>
     </form>
   </dialog>
-  <script src="/security/passkey-client.js?v=health-34d0176017d8"></script>
-  <script src="/diary/dialog-navigation.js?v=health-34d0176017d8"></script>
-  <script src="/assets/pwa-auto-update.js?v=health-34d0176017d8" defer></script>
-  <script type="module" src="/health/health.js?v=health-34d0176017d8"></script>
+  <script src="/security/passkey-client.js?v=health-0a238ac7d8fe"></script>
+  <script src="/diary/dialog-navigation.js?v=health-0a238ac7d8fe"></script>
+  <script src="/assets/pwa-auto-update.js?v=health-0a238ac7d8fe" defer></script>
+  <script type="module" src="/health/health.js?v=health-0a238ac7d8fe"></script>
 </body>
 </html>

@@ -92,7 +92,12 @@ test("all service login and resume success paths await synchronous Security deli
   for (const relative of ["../../cloud-worker/src/index.js", "../../diary-worker/src/index.js", "../../billing-worker/src/index.js"]) {
     const source = await readFile(new URL(relative, import.meta.url), "utf8");
     assert.match(source, /await recordSecurityAudit\(env, request, \{[\s\S]{0,240}eventType: "session_resume"/);
-    assert.match(source, /await recordSecurityAudit\(env, request, \{[^\n]*eventType: "password_login_success"/);
+    if (relative.includes("diary-worker") || relative.includes("cloud-worker")) {
+      assert.doesNotMatch(source, /eventType: "password_login_success"/);
+      assert.match(source, /await recordSecurityAudit\(env, request, \{[^\n]*eventType: "password_login_failure"/);
+    } else {
+      assert.match(source, /await recordSecurityAudit\(env, request, \{[^\n]*eventType: "password_login_success"/);
+    }
     assert.match(source, /await recordSecurityAudit\(env, request, \{[^\n]*eventType: "passkey_login_success"/);
   }
 });

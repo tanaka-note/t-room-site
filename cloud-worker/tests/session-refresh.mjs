@@ -13,7 +13,7 @@ assert.match(config, /"PASSKEY_SESSION_TTL_SECONDS"\s*:\s*"43200"/, "パスキ�
 assert.match(config, /"SESSION_VERSION"\s*:\s*"5"/, "旧共通IDセッションを無効化する世代更新がありません。");
 assert.match(worker, /refreshAuthenticatedSession\(request, response, env, url, path\)/, "認証済みAPI利用時の期限更新がありません。");
 assert.match(worker, /session.authMethod !== "passkey"/, "T-Cloudパスキーだけをrolling更新します。");
-assert.match(worker, /cloudSessionPolicy\(env, "password"/, "PW session policyがありません。");
+assert.match(worker, /payload\?\.authMethod !== "passkey"/, "廃止済みPW sessionを拒否していません。");
 assert.match(worker, /cloudSessionPolicy\(env, "passkey"/, "passkey session policyがありません。");
 assert.match(worker, /clampNumber\(configured, 3600, 43200, 43200\)/, "セッション上限が12時間に固定されていません。");
 assert.match(worker, /sessionCacheId:\s*session\.sessionId/, "解除済み鍵をログインセッションへ関連付けていません。");

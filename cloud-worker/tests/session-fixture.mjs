@@ -1,3 +1,4 @@
+import { withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { attachPasskeyLedger } from "./passkey-ledger-fixture.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import {accountDisplayName} from "../../assets/account-display.mjs";
@@ -7,7 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
 import { resolve } from "node:path";
-import { pbkdf2Sync, randomBytes } from "node:crypto";
+import { pbkdf2Sync, randomBytes, createHmac } from "node:crypto";
 import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 
@@ -35,10 +36,21 @@ const env = { DB: { prepare: statement, async batch(statements) { return Promise
 const securityDb = attachPasskeyLedger(env);
 const context = { isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
   sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
-  recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
+  withPasswordLoginAudit, handlePasswordLoginClientAudit, recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;
 const source = readFileSync(process.env.TCLOUD_TEST_SOURCE_ROOT ? resolve(process.env.TCLOUD_TEST_SOURCE_ROOT, "cloud-worker/src/index.js") : new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
 vm.runInNewContext(source, context);
+context.SecurityIntegration = vm.runInNewContext("SecurityIntegration", context);
+// Historical signed cookies exercise the real retirement boundary; they do not
+// bypass readSession or reinstate the removed login route.
+function legacyPasswordSession(role) {
+  const startedAt = new Date().toISOString();
+  const payload = { role, authMethod: "password", passwordSessionVersion: 1,
+    sessionId: crypto.randomUUID(), startedAt, exp: Math.floor(Date.parse(startedAt) / 1000) + 43200, version: env.SESSION_VERSION };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = createHmac("sha256", env.SESSION_SECRET).update(encoded).digest("base64url");
+  return { cookie: `troom_cloud_session=${encoded}.${signature}`, body: { sessionCacheId: payload.sessionId }, payload };
+}
 async function api(cookie, path, method = "GET", body, extraHeaders = {}) {
   const request = new Request(`https://example.test/cloud/api${path}`, { method,
     headers: { Origin: "https://example.test", ...(cookie ? { Cookie: cookie } : {}), "Content-Type": "application/json", ...extraHeaders },
@@ -51,4 +63,4 @@ async function handoff(account, identity = "primary-admin") {
   const result = await api(null, "/passkey/handoff", "POST", { handoffToken: "fixture" });
   assert.equal(result.status, 200, JSON.stringify(result.body)); return result;
 }
-export {db, securityDb, env, context, api, handoff};
+export {db, securityDb, env, context, api, handoff, legacyPasswordSession};

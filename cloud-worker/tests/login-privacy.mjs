@@ -9,9 +9,7 @@ const [html, client, cryptoClient] = await Promise.all([
 
 assert.doesNotMatch(html, /value="sub@a-tanaka\.jp"/);
 assert.doesNotMatch(cryptoClient, /sub@a-tanaka\.jp/);
-assert.match(html, /id="remember-login"/);
-assert.match(client, /navigator\.credentials\.store/);
-assert.doesNotMatch(client, /navigator\.credentials\.get/);
-assert.match(client, /REMEMBER_LOGIN_KEY/);
-
-console.log("login privacy and opt-in credential storage: ok");
+assert.doesNotMatch(html, /id="(?:login-form|login-id|login-password|remember-login)"|password-login-audit\.js/);
+assert.doesNotMatch(client, /PasswordCredential|navigator\.credentials\.store|REMEMBER_LOGIN_KEY|api\("\/login"/);
+assert.match(html, /id="passkey-login"[^>]*type="button"/);
+console.log("passkey-only login without stored password credentials: ok");

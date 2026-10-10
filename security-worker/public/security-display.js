@@ -7,6 +7,8 @@
     ["bootstrap_login_blocked", "第一管理者の本人確認を一時停止", "ログイン"],
     ["password_login_success", "パスワードでログイン成功", "ログイン"],
     ["password_login_failure", "パスワードでログイン失敗", "ログイン"],
+    ["password_login_submit", "パスワードログインを送信（端末申告）", "ログイン"],
+    ["password_login_client_failure", "パスワードログインが端末側で失敗（端末申告）", "ログイン"],
     ["passkey_login_success", "パスキーでログイン成功", "ログイン"],
     ["passkey_authentication_success", "パスキーの本人確認に成功", "ログイン"],
     ["session_resume", "保存済みセッションでアクセス", "ログイン"],

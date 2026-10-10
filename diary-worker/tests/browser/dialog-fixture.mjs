@@ -22,6 +22,11 @@ const json = (response, value) => { response.writeHead(200, { 'content-type': 'a
 
 export async function runDialogs(service) {
   let writes = 0, releaseSave;
+  let albumSize = 96, failAlbumOffset = -1, pauseAlbumOffset = -1, releaseAlbum;
+  const albumRequests = [];
+  const delayedPhotos = new Set(), pendingPhotos = new Map(), photoWaiters = new Map(), photoRequests = new Map();
+  const waitForPhoto = id => pendingPhotos.has(id) ? Promise.resolve() : new Promise(resolve => photoWaiters.set(id, resolve));
+  const releasePhoto = id => { pendingPhotos.get(id)?.(); pendingPhotos.delete(id); };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname.startsWith('/diary/api/')) {
@@ -30,8 +35,21 @@ export async function runDialogs(service) {
       if (path === '/meta') return json(response, { months: [], tags: [], draftCount: 0 });
       if (path === '/entries') return json(response, { entries: [entry], hasMore: false });
       if (path === '/entries/1') return json(response, { entry });
-      if (path === '/photos/meta') return json(response, { months: [] });
-      if (path === '/photos') return json(response, { photos: Array.from({ length: 48 }, (_, i) => ({ ...photo, id: i + 1 })), hasMore: false });
+      if (path === '/photos/meta') return json(response, { months: [{ value: '2026-10', count: 317 }, { value: '2026-09', count: 7 }] });
+      if (path === '/photos') {
+        const offset = Number(url.searchParams.get('offset') || 0);
+        const month = url.searchParams.get('month') || '';
+        const size = month === '2026-09' ? 7 : albumSize;
+        albumRequests.push({ offset, month, entryQuery: url.searchParams.get('entryQuery'), fileName: url.searchParams.get('fileName'), limit: url.searchParams.get('limit') });
+        if (offset === pauseAlbumOffset) await new Promise(resolve => { releaseAlbum = resolve; });
+        if (offset === failAlbumOffset) {
+          failAlbumOffset = -1;
+          response.writeHead(503, { 'content-type': 'application/json' });
+          return response.end(JSON.stringify({ error: 'fixture album failure' }));
+        }
+        return json(response, { photos: Array.from({ length: Math.max(0, Math.min(48, size - offset)) }, (_, i) => ({ ...photo, id: offset + i + 1,
+          displayUrl: `/display/${offset + i + 1}.svg`, fileName: `fixture-${offset + i + 1}.svg` })), hasMore: offset + 48 < size });
+      }
       if (request.method !== 'GET') writes++;
       return json(response, {});
     }
@@ -49,6 +67,20 @@ export async function runDialogs(service) {
     }
     if (url.pathname === '/previous') { response.writeHead(200, { 'content-type': 'text/html' }); return response.end('<p>previous</p>'); }
     if (url.pathname === '/fixture.svg') { response.writeHead(200, { 'content-type': 'image/svg+xml' }); return response.end('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="blue"/></svg>'); }
+    if (url.pathname.startsWith('/display/')) {
+      const id = Number(url.pathname.match(/\d+/)[0]);
+      photoRequests.set(id, (photoRequests.get(id) || 0) + 1);
+      const send = () => {
+        if (id === 5) return response.writeHead(503).end();
+        response.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'private, max-age=3600' });
+        response.end(`<svg xmlns="http://www.w3.org/2000/svg" width="${100 + id}" height="100"><rect width="100%" height="100%" fill="red"/></svg>`);
+      };
+      if (!delayedPhotos.has(id)) return send();
+      pendingPhotos.set(id, send);
+      photoWaiters.get(id)?.();
+      photoWaiters.delete(id);
+      return;
+    }
     if (url.pathname === '/diary/dialog-navigation.js') {
       const result = await diaryWorker.fetch(new Request(url.href), { ASSETS: { async fetch(assetRequest) {
         assert.equal(new URL(assetRequest.url).pathname, '/dialog-navigation.js');
@@ -149,6 +181,131 @@ export async function runDialogs(service) {
         await page.keyboard.press('Escape');
         await closed('entry-dialog');
         assert.equal(writes, 0, 'closing and discard must not write');
+
+        await page.click('#camera-roll-button');
+        await page.waitForSelector('[data-photo-index="47"]');
+        await page.evaluate(() => {
+          window.retainedPhotoCard = document.querySelector('[data-photo-index="0"]');
+          const roll = document.getElementById('camera-roll-dialog');
+          window.photoWildcardScans = 0;
+          const query = roll.querySelectorAll.bind(roll);
+          roll.querySelectorAll = selector => { if (selector === '*') window.photoWildcardScans++; return query(selector); };
+        });
+        await page.click('#camera-roll-more');
+        await page.waitForSelector('[data-photo-index="95"]');
+        assert.equal(await page.evaluate(() => retainedPhotoCard === document.querySelector('[data-photo-index="0"]')), true,
+          'adding a page must preserve existing image elements');
+        const clickPhoto = index => page.locator(`[data-photo-index="${index}"]`).evaluate(button => button.click());
+        const displayed = id => page.waitForFunction(id => {
+          const image = document.getElementById('photo-viewer-image');
+          return image.complete && image.naturalWidth > 0 && image.getAttribute('src') === `/display/${id}.svg`;
+        }, id);
+        for (const id of [2, 3, 4]) delayedPhotos.add(id);
+        await clickPhoto(1);
+        await opened('photo-viewer-dialog');
+        await waitForPhoto(2);
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'show the selected thumbnail while full image is pending');
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-2.svg');
+        await page.click('#photo-next');
+        await waitForPhoto(3);
+        releasePhoto(3);
+        await displayed(3);
+        releasePhoto(2);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/display/3.svg', 'late image must not replace the current selection');
+        await page.click('#photo-next');
+        await waitForPhoto(4);
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
+        await closed('photo-viewer-dialog');
+        await clickPhoto(0);
+        await displayed(1);
+        releasePhoto(4);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/display/1.svg', 'closing invalidates a pending image');
+        const requestsBeforeReopen = photoRequests.get(1);
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
+        await closed('photo-viewer-dialog');
+        await clickPhoto(0);
+        await displayed(1);
+        assert.equal(photoRequests.get(1), requestsBeforeReopen, 'reopening a cached image must not fetch again');
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
+        await closed('photo-viewer-dialog');
+        await clickPhoto(4);
+        await page.waitForFunction(() => document.getElementById('photo-viewer-status').textContent === '写真を読み込めませんでした。');
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'a failed full image retains the selected thumbnail');
+        await back('photo-viewer-dialog');
+        assert.equal(await page.evaluate(() => photoWildcardScans), 0, 'opening/closing photos must not scan the entire parent grid');
+        await back('camera-roll-dialog');
+        delayedPhotos.clear();
+        // Keep initial loading small, then add three pages or the entire month.
+        albumSize = 317;
+        albumRequests.length = 0;
+        await page.click('#camera-roll-button');
+        await page.waitForSelector('[data-photo-index="47"]');
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 48);
+        assert.equal(await page.locator('#camera-roll-button').getAttribute('aria-label'), 'アルバム');
+        assert.equal(await page.locator('#camera-roll-dialog h2').textContent(), 'アルバム');
+        await page.evaluate(() => { window.retainedPhotoCard = document.querySelector('[data-photo-index="0"]'); });
+        await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
+        await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 192, 'all months adds exactly 144 photos');
+        assert.deepEqual(albumRequests.map(request => request.offset), [0, 48, 96, 144], 'double click must not duplicate requests');
+        assert.equal(await page.evaluate(() => retainedPhotoCard === document.querySelector('[data-photo-index="0"]')), true);
+        assert.equal(await page.locator('#camera-roll-more').isVisible(), true);
+        await page.selectOption('#photo-month-filter', '2026-10');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
+        albumRequests.length = 0;
+        await page.click('#camera-roll-more');
+        await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 317, 'one click loads every photo in the month');
+        assert.deepEqual(albumRequests.map(request => request.offset), [48, 96, 144, 192, 240, 288]);
+        assert.ok(albumRequests.every(request => request.month === '2026-10' && request.limit === '48'));
+        assert.equal(await page.locator('#camera-roll-grid img[loading="lazy"]').count(), 317);
+        const expandedPosition = await page.locator('#camera-roll-dialog').evaluate(dialog => { dialog.scrollTop = 900; return dialog.scrollTop; });
+        await clickPhoto(0);
+        await opened('photo-viewer-dialog');
+        await back('photo-viewer-dialog');
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
+        assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.scrollTop), expandedPosition);
+
+        // A failed page can resume without losing or duplicating earlier pages.
+        await page.fill('#photo-entry-search', 'tag');
+        await page.fill('#photo-file-name-search', 'fixture');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
+        failAlbumOffset = 96;
+        await page.click('#camera-roll-more');
+        await page.waitForFunction(() => document.getElementById('camera-roll-status').textContent === 'fixture album failure');
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 96);
+        albumRequests.length = 0;
+        await page.click('#camera-roll-more');
+        await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
+        assert.equal(albumRequests[0].offset, 96);
+        assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === 'fixture'));
+
+        // Switching months invalidates a late page and stops its remaining loop.
+        await page.selectOption('#photo-month-filter', '');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
+        pauseAlbumOffset = 48;
+        releaseAlbum = null;
+        await page.click('#camera-roll-more');
+        while (!releaseAlbum) await new Promise(resolve => setTimeout(resolve, 10));
+        await page.selectOption('#photo-month-filter', '2026-09');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 7);
+        const requestsBeforeRelease = albumRequests.length;
+        const staleResponse = page.waitForResponse(response => {
+          const url = new URL(response.url());
+          return url.pathname === '/diary/api/photos' && url.searchParams.get('offset') === '48' && !url.searchParams.get('month');
+        });
+        releaseAlbum();
+        pauseAlbumOffset = -1;
+        await staleResponse;
+        await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 7);
+        assert.equal(albumRequests.length, requestsBeforeRelease, 'stale response must not request another page');
+        await back('camera-roll-dialog');
+        albumSize = 96;
       } else {
         await page.click('#settlements-card');
         await opened('settlements-dialog');
@@ -213,7 +370,9 @@ export async function runDialogs(service) {
     }
   } finally {
     await browser.close();
+    for (const release of pendingPhotos.values()) release();
     releaseSave?.();
+    releaseAlbum?.();
     await new Promise(resolveClose => server.close(resolveClose));
   }
 }

@@ -16,7 +16,7 @@
     "web-apps:verify": "node tools/verify-web-app-builds.mjs",
     "site:prepare": "node tools/prepare-static-assets.mjs",
     "site:visual:test": "node tools/test-public-site-visual.mjs",
-    "site:deploy": "pnpm run web-apps:sync && pnpm run site:prepare && wrangler deploy",
+    "site:deploy": "node tools/sync-web-app-builds.mjs --target t-room-site && pnpm run site:prepare && wrangler deploy",
     "verify": "node tools/verify.mjs --browser --build",
     "verify:changed": "node tools/verify.mjs --changed --browser --build",
     "verify:plan": "node tools/verify.mjs --changed --plan",

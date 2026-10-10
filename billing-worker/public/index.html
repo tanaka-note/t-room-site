@@ -62,13 +62,14 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-35cc878a43c3">
-  <link rel="stylesheet" href="./billing.css?v=billing-35cc878a43c3">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-35cc878a43c3">
-  <script src="./troom-date-picker.js?v=billing-35cc878a43c3" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-35cc878a43c3" defer></script>
-  <script src="./billing.js?v=billing-35cc878a43c3" defer></script>
-  <meta name="troom-app-build" content="billing-35cc878a43c3">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-d8185e776dc7">
+  <link rel="stylesheet" href="./billing.css?v=billing-d8185e776dc7">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-d8185e776dc7">
+  <script src="./troom-date-picker.js?v=billing-d8185e776dc7" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-d8185e776dc7" defer></script>
+  <script src="/billing/password-login-audit.js?v=billing-d8185e776dc7" defer></script>
+  <script src="./billing.js?v=billing-d8185e776dc7" defer></script>
+  <meta name="troom-app-build" content="billing-d8185e776dc7">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -86,6 +87,7 @@
         <p class="eyebrow">T-lain PRIVATE</p>
         <h1 id="login-title">請求書管理システム</h1>
         <p class="login-copy">IDとパスワードを入力してください。</p>
+        <p class="login-note">Passkeyへ移行済みの場合は「端末のロック解除でログイン」をご利用ください。</p>
         <form id="login-form" class="form-stack">
           <label>ID<input id="login-id" name="loginId" type="text" autocomplete="username" required></label>
           <label>パスワード
@@ -268,7 +270,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-35cc878a43c3" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-35cc878a43c3" defer></script>
+  <script src="/security/passkey-client.js?v=billing-d8185e776dc7" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-d8185e776dc7" defer></script>
 </body>
 </html>

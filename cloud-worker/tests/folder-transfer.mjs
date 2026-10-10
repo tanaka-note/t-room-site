@@ -15,6 +15,7 @@ const context = vm.createContext({
     }
   }
 });
+vm.runInContext(await fs.readFile(new URL("../public/listing-model.js", import.meta.url), "utf8"), context);
 vm.runInContext(source, context);
 
 context.folderRecords = [

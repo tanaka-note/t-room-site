@@ -23,7 +23,6 @@
   } = await import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href);
   const BASE_PATH = "/diary";
   const { WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = await import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href);
-  const REMEMBER_LOGIN_KEY = "troom-diary-login-remember";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_NAVIGATION_KEY = "troomDiaryReturnNavigation";
@@ -53,8 +52,6 @@
     householdId: null,
     activeHouseholdId: null,
     isGlobalOwner: false,
-    mustChangePassword: false,
-    pendingLoginId: "",
     canManageEntries: false,
     canViewTrash: false,
     canPermanentlyDelete: false,
@@ -112,9 +109,12 @@
     photoMonth: "",
     photoFileNameQuery: "",
     photoRequestId: 0,
+    photoLoading: false,
     photoSearchTimer: null,
     viewerPhotos: [],
     viewerIndex: -1,
+    viewerImageRequestId: 0,
+    viewerImageLoad: null,
     photoPickerActive: false,
     favoriteRequestPending: false,
     entryCreateRequestId: null,
@@ -132,19 +132,7 @@
     loginView: document.querySelector("#login-view"),
     appView: document.querySelector("#app-view"),
     siteHeader: document.querySelector("#site-header"),
-    loginForm: document.querySelector("#login-form"),
-    loginId: document.querySelector("#login-id"),
-    password: document.querySelector("#password"),
-    passwordToggle: document.querySelector("#password-toggle"),
-    rememberLogin: document.querySelector("#remember-login"),
     loginMessage: document.querySelector("#login-message"),
-    initialPasswordDialog: document.querySelector("#initial-password-dialog"),
-    initialPasswordForm: document.querySelector("#initial-password-form"),
-    initialPassword: document.querySelector("#initial-password"),
-    initialPasswordConfirmation: document.querySelector("#initial-password-confirmation"),
-    initialPasswordMessage: document.querySelector("#initial-password-message"),
-    initialPasswordSubmit: document.querySelector("#initial-password-submit"),
-    initialPasswordCancel: document.querySelector("#initial-password-cancel"),
     diaryKicker: document.querySelector("#diary-kicker"),
     diaryTitle: document.querySelector("#diary-title"),
     tagPageBack: document.querySelector("#tag-page-back"),
@@ -257,6 +245,7 @@
     photoViewerDate: document.querySelector("#photo-viewer-date"),
     photoViewerTitle: document.querySelector("#photo-viewer-title"),
     photoViewerImage: document.querySelector("#photo-viewer-image"),
+    photoViewerStatus: document.querySelector("#photo-viewer-status"),
     photoViewerFile: document.querySelector("#photo-viewer-file"),
     photoPrevious: document.querySelector("#photo-previous"),
     photoNext: document.querySelector("#photo-next"),
@@ -285,13 +274,11 @@
   async function boot() {
     applyRouteState();
     bindEvents();
-    restoreRememberedLogin();
     updateInstallButtonVisibility();
     try {
       const session = await api("/session");
       if (session.authenticated) {
-        if (session.mustChangePassword) await showInitialPasswordSetup(session);
-        else await enterDiary(session);
+        await enterDiary(session);
       } else {
         showLogin();
       }
@@ -309,19 +296,7 @@
     window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
     document.addEventListener("click", rememberDiaryReturnViewFromNavigation, true);
     window.addEventListener("pageshow", restoreDiaryReturnViewFromPageCache);
-    elements.loginForm.addEventListener("submit", handleLogin);
     document.querySelector("#passkey-login")?.addEventListener("click", handlePasskeyLogin);
-    elements.rememberLogin.addEventListener("change", syncLoginAutocomplete);
-    elements.passwordToggle.addEventListener("click", togglePassword);
-    elements.initialPasswordForm.addEventListener("submit", handleInitialPasswordChange);
-    elements.initialPasswordCancel.addEventListener("click", leaveInitialPasswordSetup);
-    elements.initialPasswordDialog.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      leaveInitialPasswordSetup();
-    });
-    document.querySelectorAll("[data-password-toggle]").forEach((button) => {
-      button.addEventListener("click", () => togglePasswordField(button.dataset.passwordToggle, button));
-    });
     elements.householdSwitcher.addEventListener("change", changeActiveHousehold);
     elements.logoutButton.addEventListener("click", handleLogout);
     elements.installButtons.forEach((button) => button.addEventListener("click", requestAppInstall));
@@ -449,12 +424,14 @@
       loadPhotos(true);
     });
     elements.photoEntrySearch.addEventListener("input", () => {
-      window.clearTimeout(state.photoSearchTimer);
+      cancelCameraRollLoad();
+      elements.cameraRollMore.disabled = true;
       state.photoEntryQuery = elements.photoEntrySearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
     elements.photoFileNameSearch.addEventListener("input", () => {
-      window.clearTimeout(state.photoSearchTimer);
+      cancelCameraRollLoad();
+      elements.cameraRollMore.disabled = true;
       state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
@@ -561,34 +538,6 @@
     }
   }
 
-  async function handleLogin(event) {
-    event.preventDefault();
-    const submit = elements.loginForm.querySelector('button[type="submit"]');
-    setBusy(submit, true, "確認中...");
-    elements.loginMessage.textContent = "";
-    try {
-      const loginId = elements.loginId.value.trim().toLowerCase();
-      const password = elements.password.value;
-      const result = await api("/login", {
-        method: "POST",
-        body: { loginId, password }
-      });
-      elements.password.value = "";
-      if (result.mustChangePassword) {
-        state.pendingLoginId = loginId;
-        await showInitialPasswordSetup(result);
-      } else {
-        await updateRememberedLogin(loginId, password);
-        await enterDiary(result);
-      }
-    } catch (error) {
-      elements.loginMessage.textContent = error.message;
-      elements.password.select();
-    } finally {
-      setBusy(submit, false, "開く");
-    }
-  }
-
   async function handlePasskeyLogin() {
     const button = document.querySelector("#passkey-login");
     setBusy(button, true, "確認中...");
@@ -596,43 +545,18 @@
     try {
       const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
-      elements.password.value = "";
-      if (session.mustChangePassword) await showInitialPasswordSetup(session);
-      else await enterDiary(session);
+      await enterDiary(session);
     } catch (error) {
-      elements.loginMessage.textContent = error.message;
+      elements.loginMessage.textContent = /ID・パスワード/.test(error.message)
+        ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
+        : error.message;
     } finally {
-      setBusy(button, false, "端末のロック解除でログイン");
+      setBusy(button, false, "パスキーでログイン");
     }
   }
 
   async function choosePasskeyLink(links) {
     return TRoomPasskeys.chooseLinkDialog(links, "diary");
-  }
-
-  function restoreRememberedLogin() {
-    elements.rememberLogin.checked = localStorage.getItem(REMEMBER_LOGIN_KEY) === "1";
-    syncLoginAutocomplete();
-  }
-
-  function syncLoginAutocomplete() {
-    const remember = elements.rememberLogin.checked;
-    elements.loginId.setAttribute("autocomplete", remember ? "username" : "off");
-    elements.password.setAttribute("autocomplete", remember ? "current-password" : "off");
-  }
-
-  async function updateRememberedLogin(loginId, password) {
-    if (!elements.rememberLogin.checked) {
-      localStorage.removeItem(REMEMBER_LOGIN_KEY);
-      return;
-    }
-    localStorage.setItem(REMEMBER_LOGIN_KEY, "1");
-    if (!navigator.credentials?.store || !globalThis.PasswordCredential) return;
-    try {
-      await navigator.credentials.store(new PasswordCredential({ id: loginId, password, name: "日記" }));
-    } catch {
-      // 保存可否はブラウザのパスワード管理機能へ委ねる。
-    }
   }
 
   async function handleLogout() {
@@ -647,80 +571,12 @@
     setBusyIconButton(elements.logoutButton, false, "ログアウト処理中", "ログアウト");
   }
 
-  function togglePassword() {
-    togglePasswordField("password", elements.passwordToggle);
-  }
-
-  function togglePasswordField(inputId, button) {
-    const input = document.getElementById(inputId);
-    if (!input) return;
-    const show = input.type === "password";
-    input.type = show ? "text" : "password";
-    const label = show ? "パスワードを隠す" : "パスワードを表示";
-    button.setAttribute("aria-label", label);
-    button.title = label;
-    button.setAttribute("aria-pressed", String(show));
-  }
-
-  async function showInitialPasswordSetup(session) {
-    state.role = session.role;
-    state.accountName = session.accountName;
-    state.mustChangePassword = true;
-    elements.bootView.hidden = true;
-    elements.loginView.hidden = true;
-    elements.appView.hidden = true;
-    elements.initialPasswordForm.reset();
-    elements.initialPasswordMessage.textContent = "";
-    if (!elements.initialPasswordDialog.open) elements.initialPasswordDialog.showModal();
-    window.setTimeout(() => elements.initialPassword.focus(), 0);
-  }
-
-  async function handleInitialPasswordChange(event) {
-    event.preventDefault();
-    const password = elements.initialPassword.value;
-    const confirmation = elements.initialPasswordConfirmation.value;
-    elements.initialPasswordMessage.textContent = "";
-    if (password !== confirmation) {
-      elements.initialPasswordMessage.textContent = "確認用パスワードが一致しません。";
-      elements.initialPasswordConfirmation.focus();
-      return;
-    }
-    setBusy(elements.initialPasswordSubmit, true, "設定中…");
-    try {
-      const session = await api("/password/initial", { method: "POST", body: { password, confirmation } });
-      await updateRememberedLogin(state.pendingLoginId || elements.loginId.value.trim().toLowerCase(), password);
-      state.pendingLoginId = "";
-      elements.initialPasswordForm.reset();
-      elements.initialPasswordDialog.close();
-      await enterDiary(session);
-      showToast("新しいパスワードを設定しました。");
-    } catch (error) {
-      elements.initialPasswordMessage.textContent = error.message;
-    } finally {
-      setBusy(elements.initialPasswordSubmit, false, "パスワードを設定");
-    }
-  }
-
-  async function leaveInitialPasswordSetup() {
-    elements.initialPasswordCancel.disabled = true;
-    try {
-      await api("/logout", { method: "POST" });
-    } catch {
-      // ログアウト応答に失敗しても、初回設定画面から安全に戻します。
-    }
-    resetState();
-    showLogin();
-    elements.initialPasswordCancel.disabled = false;
-  }
-
   async function enterDiary(session) {
     state.role = session.role;
     state.accountName = session.accountName;
     state.householdId = session.householdId;
     state.activeHouseholdId = session.activeHouseholdId || session.householdId;
     state.isGlobalOwner = Boolean(session.isGlobalOwner);
-    state.mustChangePassword = false;
-    state.pendingLoginId = "";
     state.canManageEntries = Boolean(session.canManageEntries);
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
@@ -743,6 +599,7 @@
     elements.appView.hidden = false;
     resetHeaderVisibilityTracking();
     if (returnView) restoreDiaryReturnPosition(returnView);
+    else if (isNewDiaryNavigation()) restoreEntryListPosition({ scrollY: 0 });
   }
 
   async function loadHouseholdSwitcher() {
@@ -787,12 +644,11 @@
   }
 
   function showLogin(message = "") {
-    if (elements.initialPasswordDialog.open) elements.initialPasswordDialog.close();
     elements.bootView.hidden = true;
     elements.loginView.hidden = false;
     elements.appView.hidden = true;
     elements.loginMessage.textContent = message;
-    window.setTimeout(() => (elements.loginId.value ? elements.password : elements.loginId).focus(), 0);
+    window.setTimeout(() => document.querySelector("#passkey-login").focus(), 0);
   }
 
   function cancelPendingEntrySearch() {
@@ -977,7 +833,29 @@
     }
   }
 
-  function takeDiaryReturnView(householdId) {
+  function isNewDiaryNavigation() {
+    const navigationType = window.performance.getEntriesByType("navigation")[0]?.type;
+    return navigationType !== "back_forward" && navigationType !== "reload";
+  }
+
+  function takeDiaryReturnView(householdId, fromPageCache = false) {
+    if (!fromPageCache && isNewDiaryNavigation()) {
+      // Reopening the same start URL can retain the previous history.state.
+      // Discard only this page's return snapshot; child pages still need the source snapshot.
+      try {
+        if (window.history.state?.[RETURN_VIEW_HISTORY_KEY]) {
+          const historyState = { ...window.history.state };
+          delete historyState[RETURN_VIEW_HISTORY_KEY];
+          window.history.replaceState(historyState, "", window.location.href);
+        }
+        const storedView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+        const routePath = storedView?.version === 1 ? `${BASE_PATH}/` : storedView?.routePath;
+        if (routePath === window.location.pathname) window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+      } catch {
+        // A fresh opening must not restore a position even when storage is unavailable.
+      }
+      return null;
+    }
     const historyView = window.history.state?.[RETURN_VIEW_HISTORY_KEY];
     if (isUsableDiaryReturnView(historyView, householdId, window.location.pathname)) {
       return historyView;
@@ -1091,7 +969,7 @@
 
   function restoreDiaryReturnViewFromPageCache(event) {
     if (!event.persisted || !isDiaryListRoute()) return;
-    const returnView = takeDiaryReturnView(state.activeHouseholdId);
+    const returnView = takeDiaryReturnView(state.activeHouseholdId, true);
     if (returnView) restoreDiaryReturnPosition(returnView);
   }
 
@@ -1492,6 +1370,7 @@
     TRoomDatePicker.setNavigation(dialogs);
     const canView = () => !elements.appView.hidden;
     dialogs.register("entry-dialog", {
+      scrollRoots: () => [elements.detailContent],
       capture: () => state.activeEntry,
       restore: entry => {
         if (!canView() || !entry || !state.entryMap.has(entry.id)) return false;
@@ -1500,8 +1379,9 @@
       },
       onClose: finishEntryClose
     });
-    dialogs.register("camera-roll-dialog", { restore: canView, onClose: finishCameraRollClose });
+    dialogs.register("camera-roll-dialog", { scrollRoots: () => [], restore: canView, onClose: finishCameraRollClose });
     dialogs.register("photo-viewer-dialog", {
+      scrollRoots: () => [],
       capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex }),
       restore: saved => {
         if (!canView() || !saved.photos[saved.index]) return false;
@@ -2801,31 +2681,63 @@
     return option;
   }
 
+  function cancelCameraRollLoad() {
+    window.clearTimeout(state.photoSearchTimer);
+    state.photoRequestId++;
+    state.photoLoading = false;
+    elements.cameraRollMore.disabled = false;
+  }
+
   async function loadPhotos(reset) {
+    if (!reset && state.photoLoading) return;
     const requestId = ++state.photoRequestId;
+    state.photoLoading = true;
+    elements.cameraRollMore.disabled = true;
     if (reset) {
       state.photoOffset = 0;
       state.photos = [];
+      state.photoHasMore = false;
+      elements.cameraRollMore.hidden = true;
       elements.cameraRollGrid.replaceChildren();
       elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     }
-    const parameters = new URLSearchParams({ limit: "48", offset: String(state.photoOffset) });
+    // Keep the initial request and each page small; one click expands a month
+    // completely, or adds at most three pages when all months are selected.
+    const maxAdditional = reset ? 48 : (state.photoMonth ? Infinity : 144);
+    const parameters = new URLSearchParams({ limit: "48" });
     if (state.photoEntryQuery) parameters.set("entryQuery", state.photoEntryQuery);
     if (state.photoMonth) parameters.set("month", state.photoMonth);
     if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
-    const result = await api(`/photos?${parameters}`);
-    if (requestId !== state.photoRequestId) return;
-    state.photos.push(...result.photos);
-    state.photoOffset += result.photos.length;
-    state.photoHasMore = Boolean(result.hasMore);
-    renderCameraRoll();
+    let added = 0;
+    try {
+      do {
+        parameters.set("offset", String(state.photoOffset));
+        const result = await api(`/photos?${parameters}`);
+        if (requestId !== state.photoRequestId) return;
+        const appendFrom = state.photos.length;
+        state.photos.push(...result.photos);
+        state.photoOffset += result.photos.length;
+        added += result.photos.length;
+        state.photoHasMore = Boolean(result.hasMore) && result.photos.length > 0;
+        renderCameraRoll(appendFrom);
+      } while (state.photoHasMore && added < maxAdditional);
+    } catch (error) {
+      if (requestId === state.photoRequestId) elements.cameraRollStatus.textContent = error.message;
+    } finally {
+      if (requestId === state.photoRequestId) {
+        state.photoLoading = false;
+        elements.cameraRollMore.disabled = false;
+      }
+    }
   }
 
-  function renderCameraRoll() {
+  function renderCameraRoll(appendFrom = 0) {
     if (!state.photos.length) {
       elements.cameraRollGrid.replaceChildren(createEmpty("該当する写真はありません。"));
     } else {
-      elements.cameraRollGrid.replaceChildren(...state.photos.map((photo, index) => {
+      if (!appendFrom) elements.cameraRollGrid.replaceChildren();
+      const cards = state.photos.slice(appendFrom).map((photo, offset) => {
+        const index = appendFrom + offset;
         const button = document.createElement("button");
         button.className = "camera-roll-item";
         button.type = "button";
@@ -2847,7 +2759,8 @@
         caption.append(date, title);
         button.append(image, caption);
         return button;
-      }));
+      });
+      elements.cameraRollGrid.append(...cards);
     }
     elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`;
     elements.cameraRollMore.hidden = !state.photoHasMore;
@@ -2874,6 +2787,7 @@
   }
 
   function finishCameraRollClose() {
+    cancelCameraRollLoad();
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
 
   }
@@ -2883,8 +2797,65 @@
   }
 
   function finishPhotoViewerClose() {
+    cancelPhotoViewerImageLoad();
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
+    elements.photoViewerImage.removeAttribute("src");
+    elements.photoViewerImage.hidden = true;
+    elements.photoViewerStatus.hidden = true;
+  }
 
+  function cancelPhotoViewerImageLoad() {
+    state.viewerImageRequestId++;
+    if (state.viewerImageLoad) {
+      state.viewerImageLoad.onload = null;
+      state.viewerImageLoad.onerror = null;
+      state.viewerImageLoad.removeAttribute("src");
+      state.viewerImageLoad = null;
+    }
+  }
+
+  function loadPhotoViewerImage(photo) {
+    cancelPhotoViewerImageLoad();
+    const requestId = state.viewerImageRequestId;
+    // A new element cannot paint the previous photo while this source loads.
+    const preview = new Image();
+    preview.id = "photo-viewer-image";
+    preview.alt = photo.fileName || "日記の写真";
+    preview.hidden = !photo.thumbnailUrl;
+    if (photo.thumbnailUrl) preview.src = photo.thumbnailUrl;
+    elements.photoViewerImage.replaceWith(preview);
+    elements.photoViewerImage = preview;
+    elements.photoViewerStatus.textContent = "写真を読み込んでいます...";
+    elements.photoViewerStatus.hidden = false;
+
+    const image = new Image();
+    image.id = preview.id;
+    image.alt = preview.alt;
+    image.decoding = "async";
+    state.viewerImageLoad = image;
+    const isCurrent = () => requestId === state.viewerImageRequestId;
+    preview.onerror = () => { if (isCurrent()) preview.hidden = true; };
+    const failed = () => {
+      if (!isCurrent()) return;
+      state.viewerImageLoad = null;
+      elements.photoViewerStatus.textContent = "写真を読み込めませんでした。";
+    };
+    image.onerror = failed;
+    image.onload = async () => {
+      try {
+        await image.decode();
+        if (!isCurrent()) return;
+        image.onload = null;
+        image.onerror = null;
+        state.viewerImageLoad = null;
+        elements.photoViewerImage.replaceWith(image);
+        elements.photoViewerImage = image;
+        elements.photoViewerStatus.hidden = true;
+      } catch {
+        failed();
+      }
+    };
+    image.src = photo.displayUrl;
   }
 
   function renderPhotoViewer() {
@@ -2892,8 +2863,7 @@
     if (!photo) return;
     elements.photoViewerDate.textContent = formatDate(photo.entryDate);
     elements.photoViewerTitle.textContent = photo.entryTitle || "日記の写真";
-    elements.photoViewerImage.src = photo.displayUrl;
-    elements.photoViewerImage.alt = photo.fileName;
+    loadPhotoViewerImage(photo);
     const dimensions = photo.width && photo.height ? ` / ${photo.width}×${photo.height}` : "";
     elements.photoViewerFile.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
     elements.photoDownloadLow.href = `${photo.displayUrl}?download=1`;
@@ -3713,6 +3683,7 @@
   }
 
   function resetState() {
+    finishPhotoViewerClose();
     dialogs.reset();
     cancelPendingEntrySearch();
     state.searchComposing = false;
@@ -3722,8 +3693,6 @@
     state.householdId = null;
     state.activeHouseholdId = null;
     state.isGlobalOwner = false;
-    state.mustChangePassword = false;
-    state.pendingLoginId = "";
     state.canManageEntries = false;
     state.canViewTrash = false;
     state.canPermanentlyDelete = false;
@@ -3750,6 +3719,7 @@
     state.photoOffset = 0;
     state.photos = [];
     state.photoHasMore = false;
+    cancelCameraRollLoad();
     state.photoEntryQuery = "";
     state.photoMonth = "";
     state.photoFileNameQuery = "";

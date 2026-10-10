@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-761746a733e4";
+const APP_BUILD_ID = "cloud-1733a73f3d01";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -16,7 +16,6 @@ const ITEM_RENDER_BATCH_SIZE = 192;
 const ENCRYPTED_THUMBNAIL_CONCURRENCY = 4;
 const THUMBNAIL_RETRY_DELAYS = [500, 2000];
 const APP_UPDATE_EXPECTED_BUILD_KEY = "tcloud-app-update-expected-build";
-const REMEMBER_LOGIN_KEY = "tcloud-login-remember";
 const SORT_PREFERENCES_KEY = "tcloud-folder-sort-preferences-v1";
 const SORT_PREFERENCE_LIMIT = 1000;
 const PLAYBACK_CACHE_LIMIT_KEY = "tcloud-playback-cache-limit-v1";
@@ -43,7 +42,6 @@ const state = {
   itemLoadGeneration: 0,
   itemLoadController: null,
   itemRenderLimit: ITEM_RENDER_BATCH_SIZE,
-  itemRenderObserver: null,
   itemPageParams: "",
   itemNextFolderOffset: null,
   itemNextFileOffset: null,
@@ -76,8 +74,6 @@ const state = {
   selectedFolder: null,
   shareTarget: null,
   listMode: false,
-  selectedFiles: new Map(),
-  selectedFolders: new Map(),
   selectionHistoryActive: false,
   selectionClearBackPending: false,
   moveDestinations: new Map(),
@@ -169,14 +165,13 @@ async function initialize() {
   window.setInterval(() => TCloudOffline?.cleanupExpired?.().catch(() => {}), 15 * 60 * 1000);
   await restoreInstalledAppPortrait();
   updateInstallButtons();
-  await restoreRememberedLogin();
   const previousSessionId = startupPasskeySessionId();
   try {
     await clearLegacyPasskeyAdminKeys();
     if (globalThis.TCloudSession?.isBlocked()) { showLoginView(); showLoginError("別のタブでログイン状態が変わりました。利用するアカウントを選び直してください。"); return; }
     const session = await api("/session");
     await cleanupPasskeyCaches(session.authenticated ? session : null, previousSessionId);
-    if (session.authenticated) {
+    if (session.authenticated && session.authMethod === "passkey") {
       globalThis.TCloudSession?.bind(session, false);
       state.session = session;
       if (session.authMethod === "passkey") {
@@ -196,14 +191,6 @@ async function initialize() {
         reportCompletedAppUpdate();
         return;
       }
-      const rememberedId = $("#login-id").value.trim().toLowerCase();
-      const rememberedPassword = $("#login-password").value;
-      let accountKey = null;
-      if (session.role === "admin" && rememberedPassword && rememberedId === String(session.loginId || "").trim().toLowerCase()) {
-        accountKey = (await TRoomCrypto.deriveAccountCredentials(rememberedPassword, rememberedId, session.credentialSalt)).accountKey;
-      }
-      await enterApp(session, rememberedPassword, accountKey);
-      $("#login-password").value = "";
     } else {
       showLoginView();
     }
@@ -212,7 +199,7 @@ async function initialize() {
     if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
     state.session = null;
     showLoginView();
-    showLoginError(error.message);
+    showLoginError(passkeyLoginErrorMessage(error));
   }
   reportCompletedAppUpdate();
 }
@@ -227,9 +214,7 @@ function bindEvents() {
   });
   window.addEventListener("beforeinstallprompt", handleInstallPrompt);
   window.addEventListener("appinstalled", handleAppInstalled);
-  $("#login-form").addEventListener("submit", login);
   $("#passkey-login").addEventListener("click", loginWithPasskey);
-  $("#remember-login").addEventListener("change", syncLoginAutocomplete);
   $("#logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
   $("#install-app-button-top").addEventListener("click", installApp);
@@ -314,7 +299,7 @@ function bindEvents() {
   $("#download-link").addEventListener("click", (event) => {
     if (Number(state.selected?.cryptoVersion) !== 1) return;
     event.preventDefault();
-    state.selectedFiles = new Map([[state.selected.id, state.selected]]);
+    replaceSelectedFiles([state.selected]);
     startSelectedDownloads();
   });
   $("#preview-dialog").addEventListener("close", handlePreviewClosed);
@@ -347,6 +332,7 @@ function bindEvents() {
     clearTimeout(searchTimer);
     state.itemLoadController?.abort();
     state.itemLoadGeneration += 1;
+    listingView?.reset();
     state.progressiveItemsLoading = false;
     resetEncryptedThumbnailLoading();
     resetBackgroundMediaWork();
@@ -365,7 +351,7 @@ function bindEvents() {
     input.addEventListener("compositionstart", () => {
       input.dataset.composing = "1";
       clearTimeout(searchTimer); clearTimeout(searchPageTimer);
-      state.itemLoadController?.abort(); state.itemLoadGeneration++;
+      state.itemLoadController?.abort(); state.itemLoadGeneration++; listingView?.reset();
     });
     input.addEventListener("compositionend", () => {
       delete input.dataset.composing;
@@ -396,8 +382,7 @@ function bindEvents() {
   $("#selection-download").addEventListener("click", startSelectedDownloads);
   $("#selection-offline").addEventListener("click", saveSelectedOffline);
   $("#selection-share").addEventListener("click", () => {
-    const files = [...state.selectedFiles.values()];
-    const folders = [...state.selectedFolders.values()];
+    const { files, folders } = selectedItems();
     if (files.length && folders.length) {
       setNotice("ファイルとフォルダは同時に共有できません。", true);
       return;
@@ -640,12 +625,6 @@ async function installApp() {
   $("#install-guide-dialog").showModal();
 }
 
-function syncLoginAutocomplete() {
-  const remember = $("#remember-login").checked;
-  $("#login-id").setAttribute("autocomplete", remember ? "username" : "off");
-  $("#login-password").setAttribute("autocomplete", remember ? "current-password" : "off");
-}
-
 async function changeSort(key) {
   if (!["updated", "name", "size"].includes(key)) return;
   if (state.sort === key) state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
@@ -716,30 +695,6 @@ function syncSortControls() {
     const direction = active ? state.sortDirection : button.dataset.sortKey === "name" ? "asc" : "desc";
     button.querySelector("span").innerHTML = TCloudUI.icon(direction === "asc" ? "up" : "down");
   });
-}
-
-async function restoreRememberedLogin() {
-  const remember = localStorage.getItem(REMEMBER_LOGIN_KEY) === "1";
-  $("#remember-login").checked = remember;
-  syncLoginAutocomplete();
-}
-
-async function updateRememberedLogin(loginId, password) {
-  if (!$("#remember-login").checked) {
-    localStorage.removeItem(REMEMBER_LOGIN_KEY);
-    return;
-  }
-  localStorage.setItem(REMEMBER_LOGIN_KEY, "1");
-  if (!navigator.credentials?.store || !globalThis.PasswordCredential) return;
-  try {
-    await navigator.credentials.store(new PasswordCredential({
-      id: loginId,
-      password,
-      name: "T-Cloud Storage"
-    }));
-  } catch {
-    // 保存の許可や管理はブラウザ側に委ね、ログイン自体は失敗させない。
-  }
 }
 
 function openAddAction() {
@@ -922,49 +877,11 @@ async function collectDroppedEntry(entry, parentPath, records, directories) {
   }
 }
 
-function normalizeFolderSelection(records, explicitDirectories = new Set()) {
-  const directories = new Set([...explicitDirectories].map(normalizeRelativePath).filter(Boolean));
-  const files = [];
-  for (const record of records) {
-    const relativePath = normalizeRelativePath(record.relativePath || record.file?.name);
-    if (!record.file || !relativePath) continue;
-    const parts = relativePath.split("/");
-    if (parts.length < 2) continue;
-    files.push({ file: record.file, relativePath });
-    for (let depth = 1; depth < parts.length; depth++) directories.add(parts.slice(0, depth).join("/"));
-  }
-  const roots = [...directories].filter((path) => !path.includes("/")).sort((a, b) => a.localeCompare(b, "ja"));
-  if (!roots.length) throw new Error("アップロードするフォルダを確認してください。");
-  return { files, directories: [...directories].sort(compareFolderPaths), roots };
-}
+function normalizeFolderSelection(records, explicitDirectories = new Set()) { return TCloudListing.normalizeFolderSelection(records, explicitDirectories); }
 
-function normalizeRelativePath(value) {
-  return String(value || "").replace(/\\/g, "/").split("/").filter((part) => part && part !== ".").join("/");
-}
+function normalizeRelativePath(value) { return TCloudListing.normalizeRelativePath(value); }
 
-function compareFolderPaths(left, right) {
-  const depth = left.split("/").length - right.split("/").length;
-  return depth || left.localeCompare(right, "ja");
-}
-
-function mergeFolderSelections(current, incoming) {
-  if (!current) return incoming;
-  const directories = new Set([...current.directories, ...incoming.directories]);
-  const files = new Map();
-  for (const record of [...current.files, ...incoming.files]) {
-    const file = record.file;
-    const identity = [record.relativePath, Number(file?.size || 0), Number(file?.lastModified || 0)].join("\u0000");
-    if (!files.has(identity)) files.set(identity, record);
-  }
-  const merged = normalizeFolderSelection([...files.values()], directories);
-  const looseFiles = new Map();
-  for (const file of [...(current.looseFiles || []), ...(incoming.looseFiles || [])]) {
-    const identity = [file.name, Number(file.size || 0), Number(file.lastModified || 0)].join("\u0000");
-    if (!looseFiles.has(identity)) looseFiles.set(identity, file);
-  }
-  merged.looseFiles = [...looseFiles.values()];
-  return merged;
-}
+function mergeFolderSelections(current, incoming) { return TCloudListing.mergeFolderSelections(current, incoming); }
 
 function openFolderUploadDialog(selection, { append = false } = {}) {
   if (!selection?.roots?.length) return;
@@ -1005,34 +922,6 @@ function toggleNewFolderPasswordInput() {
   if (!enabled) $("#folder-password").value = "";
 }
 
-async function login(event) {
-  event.preventDefault();
-  globalThis.TCloudSession?.beginSelection();
-  showLoginError("");
-  const submit = event.submitter || $("#login-form button[type='submit']");
-  submit.disabled = true;
-  try {
-    const loginId = $("#login-id").value.trim().toLowerCase();
-    const password = $("#login-password").value;
-    const mode = await api("/auth-mode");
-    const credentials = await TRoomCrypto.deriveAccountCredentials(password, loginId, mode.credentialSalt);
-    const loginBody = mode.mode === "proof"
-      ? { loginId, authProof: credentials.authProof }
-      : { loginId, password };
-    const session = await api("/login", {
-      method: "POST",
-      body: JSON.stringify(loginBody)
-    });
-    await updateRememberedLogin(loginId, password);
-    await enterApp(session, password, credentials.accountKey);
-    $("#login-password").value = "";
-  } catch (error) {
-    showLoginError(error.message);
-  } finally {
-    submit.disabled = false;
-  }
-}
-
 async function loginWithPasskey() {
   globalThis.TCloudSession?.beginSelection();
   const button = $("#passkey-login");
@@ -1043,12 +932,11 @@ async function loginWithPasskey() {
     const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
     requirePasskeyPrf(authentication);
     const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
-    $("#login-password").value = "";
     await enterApp(session, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
   } catch (error) {
     if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
     state.session = null;
-    showLoginError(error.message);
+    showLoginError(passkeyLoginErrorMessage(error));
   } finally {
     button.disabled = false;
   }
@@ -1056,8 +944,18 @@ async function loginWithPasskey() {
 
 function requirePasskeyPrf(authentication) {
   if (!authentication.prfOutput || !["admin", "folder-member"].includes(authentication.link?.accountId)) {
-    throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。ID・パスワードでログインしてください。");
+    throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
   }
+}
+
+function passkeyLoginErrorMessage(error) {
+  if (error.name === "PasskeyOptionsError") {
+    return "パスキーの認証情報を読み取れませんでした。画面を再読み込みして、もう一度お試しください。";
+  }
+  if (error.message === "このブラウザは端末のロック解除ログインに対応していません。ID・パスワードでログインしてください。") {
+    return "このブラウザはパスキーログインに対応していません。対応するブラウザ・端末でパスキーを使用してください。";
+  }
+  return error.message;
 }
 
 function ordinaryPasskeyLink(links) {
@@ -1306,7 +1204,7 @@ async function handleHistoryNavigation(event) {
       ? Number(state.previewFileId || state.previewCloseOrigin?.id)
       : null;
     const origin = state.previewCloseOrigin || {x: state.previewOriginScrollX, y: state.previewOriginScrollY};
-    if (state.selectedFiles.size || state.selectedFolders.size) {
+    if (getSelection().count("file") || getSelection().count("folder")) {
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
       if (sameFolder && !target.previewId && !previewOriginId) return;
@@ -1433,7 +1331,7 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
       const cached = passkeyContext?.cached;
       if (cached && cached.binding !== passkeyCacheBinding(state.session, config)) throw new Error("端末内の暗号鍵を再確認してください。");
       if (state.session.role === "admin") {
-        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
         if (!cached && !keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
         const privateKey = cached?.privateKey || await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
         assertSelected();
@@ -1444,7 +1342,7 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
         return;
       }
       if (state.session.role === "member") {
-        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。ID・パスワードでログインしてください。");
+        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
         const scopes = memberFolderScopes();
         const wrappedKeys = cached?.wrappedFolderKeys || keys.folder_keys_rsa || (keys.folder_key_rsa ? [{ ...scopes[0], wrappedKey: keys.folder_key_rsa.wrappedKey }] : []);
         if ((!cached && !keys.client_private_prf) || !scopes.length || scopes.length !== wrappedKeys.length) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
@@ -1793,6 +1691,7 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  listingView?.reset();
   if (state.session?.authMethod === "passkey") void clearCachedPasskeyKeys(state.session.sessionCacheId);
   clearTimeout(favoriteSelectionTimer);
   favoriteSelection = { key: "", ready: false, all: false, busy: false };
@@ -1817,7 +1716,7 @@ function releaseSessionState() {
   state.session = null; state.loginId = "";
   state.backupMount = null;
   renderDiaryBackupMount();
-  state.files = []; state.folders = []; state.selectedFiles.clear(); state.selectedFolders.clear();
+  state.files = []; state.folders = []; clearSelectedRecords();
   $("#content-grid").replaceChildren();
   document.querySelectorAll("video,audio").forEach(media => { media.pause(); media.removeAttribute("src"); media.load(); });
   document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
@@ -2105,8 +2004,7 @@ async function loadItems() {
   const itemLoadController = new AbortController();
   state.itemLoadController = itemLoadController;
   const itemLoadSignal = itemLoadController.signal;
-  state.itemRenderObserver?.disconnect();
-  state.itemRenderObserver = null;
+  listingView?.reset();
   state.itemRenderLimit = ITEM_RENDER_BATCH_SIZE;
   state.itemPageParams = "";
   state.itemNextFolderOffset = null;
@@ -2512,23 +2410,34 @@ function cacheSafeRecords(records) {
   });
 }
 
+let listingView = null;
+const listingRecordRevisions = new WeakMap();
+let nextListingRevision = 0;
+function getListingView() {
+  return listingView ||= TCloudListingView.create({ grid: $("#content-grid"), highlight: TCloudUI.highlightText });
+}
+
+function listingDisplayRecords(records) {
+  return Object.freeze(records.map(record => {
+    if (!listingRecordRevisions.has(record)) listingRecordRevisions.set(record, ++nextListingRevision);
+    return Object.freeze({ id: record.id, name: record.name, revision: listingRecordRevisions.get(record) });
+  }));
+}
+
+function listingCardFactory(folders, files) {
+  const folderRecords = new Map(folders.map(record => [record.id, record]));
+  const fileRecords = new Map(files.map(record => [record.id, record]));
+  return (kind, id) => {
+    if (kind === "file") return fileCard(fileRecords.get(id));
+    const folder = folderRecords.get(id);
+    return folder.trashed ? trashFolderCard(folder) : folderCard(folder);
+  };
+}
+
 function appendProgressiveItems(folders, files) {
-  const grid = $("#content-grid");
-  const renderedCount = grid.querySelectorAll(":scope > .folder-card, :scope > .file-card").length;
-  let remaining = Math.max(0, state.itemRenderLimit - renderedCount);
-  if (!remaining) return;
-  const firstFileCard = grid.querySelector(".file-card");
-  for (const folder of folders.slice(0, remaining)) {
-    const card = folderCard(folder);
-    card.dataset.renderKey = "folder:" + folder.id; renderedCardRecords.set(card, folder);
-    grid.insertBefore(card, firstFileCard);
-    remaining -= 1;
-  }
-  for (const file of files.slice(0, remaining)) {
-    const card = fileCard(file);
-    card.dataset.renderKey = "file:" + file.id; renderedCardRecords.set(card, file);
-    grid.append(card);
-  }
+  getListingView().append(Object.freeze({
+    folders: listingDisplayRecords(folders), files: listingDisplayRecords(files), limit: state.itemRenderLimit
+  }), { createCard: listingCardFactory(folders, files) });
   if (folders.length || files.length) $("#empty-state").hidden = true;
   queueFloatingToolbarUpdate();
 }
@@ -2539,55 +2448,23 @@ function normalizeNextItemOffset(value) {
   return Number.isInteger(offset) && offset >= 0 ? offset : null;
 }
 
-const renderedCardRecords = new WeakMap();
 function renderItems() {
   syncAccountView();
   renderFolderSummary();
-  if (state.view === "account") { $("#empty-state").hidden = true; $("#empty-trash-button").hidden = true; return; }
+  if (state.view === "account") { listingView?.reset(); $("#empty-state").hidden = true; $("#empty-trash-button").hidden = true; return; }
   renderDiaryBackupMount();
-  const grid = $("#content-grid");
-  grid.classList.toggle("list-mode", state.listMode || state.view === "history" || state.view === "conflicts" || state.view === "requests" || state.view === "shares");
-  grid.classList.toggle("conflict-overview", state.view === "conflicts");
-  const reuse = ["all", "favorites"].includes(state.view) && grid.dataset.renderGeneration === String(state.itemLoadGeneration);
-  const previous = new Map(reuse ? [...grid.querySelectorAll(":scope > [data-render-key]")].map(card => [card.dataset.renderKey, card]) : []);
-  if (!reuse) grid.replaceChildren();
-  grid.querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
-  grid.dataset.renderGeneration = String(state.itemLoadGeneration);
-  const desired = [];
-  const renderCard = (record, kind, create) => {
-    const key = kind + record.id;
-    let card = previous.get(key);
-    if (!card || renderedCardRecords.get(card) !== record) card = create(record);
-    card.dataset.renderKey = key; renderedCardRecords.set(card, record);
-    TCloudUI.highlightText(card.querySelector("strong"), record.name, state.query);
-    desired.push(card);
-  };
-  if (state.view === "conflicts") renderConflictOverview(grid);
-  if (state.view === "history") {
-    for (const item of state.history) grid.append(historyCard(item));
-  }
-  if (state.view === "requests") {
-    for (const item of state.requests) grid.append(deletionRequestCard(item));
-  }
-  if (state.view === "shares") {
-    for (const item of state.shares) grid.append(shareCard(item));
-  }
-  const limitItems = ["all", "favorites"].includes(state.view);
-  let remaining = limitItems ? state.itemRenderLimit : Number.POSITIVE_INFINITY;
-  for (const folder of state.folders.slice(0, remaining)) {
-    renderCard(folder, "folder:", folder.trashed ? trashFolderCard : folderCard);
-    remaining -= 1;
-  }
-  for (const file of state.files.slice(0, remaining)) renderCard(file, "file:", fileCard);
-  if (["all", "favorites"].includes(state.view)) {
-    const keep = new Set(desired);
-    for (const node of [...grid.children]) if (!keep.has(node)) node.remove();
-  }
-  let cursor = ["all", "favorites"].includes(state.view) ? grid.firstChild : null;
-  for (const card of desired) {
-    if (card !== cursor) grid.insertBefore(card, cursor);
-    cursor = card.nextSibling;
-  }
+  getListingView().render(Object.freeze({
+    view: state.view, generation: state.itemLoadGeneration, listMode: state.listMode, query: state.query,
+    limit: state.itemRenderLimit, folders: listingDisplayRecords(state.folders), files: listingDisplayRecords(state.files)
+  }), {
+    createCard: listingCardFactory(state.folders, state.files),
+    renderOther: grid => {
+      if (state.view === "conflicts") renderConflictOverview(grid);
+      if (state.view === "history") for (const item of state.history) grid.append(historyCard(item));
+      if (state.view === "requests") for (const item of state.requests) grid.append(deletionRequestCard(item));
+      if (state.view === "shares") for (const item of state.shares) grid.append(shareCard(item));
+    }
+  });
   const count = $("#search-result-count");
   if (count) { count.hidden = !state.query; count.textContent = state.progressiveItemsLoading
     ? (state.folders.length + state.files.length) + "件表示中…"
@@ -2626,40 +2503,17 @@ function renderItems() {
 }
 
 function installItemRenderSentinel() {
-  state.itemRenderObserver?.disconnect();
-  state.itemRenderObserver = null;
-  $("#content-grid").querySelectorAll(":scope > .item-render-sentinel").forEach(node => node.remove());
-  if (!["all", "favorites"].includes(state.view)) return;
-  const rendered = $("#content-grid").querySelectorAll(":scope > .folder-card, :scope > .file-card").length;
-  const total = state.folders.length + state.files.length;
-  if (rendered >= total && !state.progressiveItemsLoading) return;
-  const sentinel = document.createElement("div");
-  sentinel.className = "item-render-sentinel";
-  sentinel.setAttribute("aria-hidden", "true");
-  $("#content-grid").append(sentinel);
-  const reveal = () => {
-    state.itemRenderObserver?.disconnect();
-    if (rendered < total) {
+  const generation = state.itemLoadGeneration;
+  getListingView().observe(Object.freeze({
+    view: state.view, total: state.folders.length + state.files.length, progressive: state.progressiveItemsLoading
+  }), {
+    reveal: () => {
+      if (generation !== state.itemLoadGeneration) return;
       state.itemRenderLimit += ITEM_RENDER_BATCH_SIZE;
       renderItems();
-      return;
-    }
-    void loadNextItemPage();
-  };
-  if (!globalThis.IntersectionObserver) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary-button";
-    button.textContent = "さらに表示";
-    button.addEventListener("click", reveal);
-    sentinel.append(button);
-    return;
-  }
-  const observer = new IntersectionObserver((entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) reveal();
-  }, { rootMargin: "800px 0px" });
-  state.itemRenderObserver = observer;
-  observer.observe(sentinel);
+    },
+    loadMore: () => { if (generation === state.itemLoadGeneration) void loadNextItemPage(); }
+  });
 }
 
 function queueFloatingToolbarUpdate() {
@@ -2974,7 +2828,7 @@ function folderCard(folder) {
       card.dataset.longPressed = "false";
       return;
     }
-    if (state.selectedFiles.size || state.selectedFolders.size) {
+    if (getSelection().count("file") || getSelection().count("folder")) {
       toggleFolderSelection(folder, card);
       return;
     }
@@ -2990,14 +2844,14 @@ function folderCard(folder) {
   selectButton.className = "folder-select-button";
   selectButton.type = "button";
   selectButton.setAttribute("aria-label", `${folder.name}を選択`);
-  selectButton.setAttribute("aria-pressed", state.selectedFolders.has(folder.id) ? "true" : "false");
+  selectButton.setAttribute("aria-pressed", getSelection().has("folder", folder.id) ? "true" : "false");
   selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
   selectButton.addEventListener("click", (event) => {
     event.stopPropagation();
     toggleFolderSelection(folder, card);
   });
   card.append(selectButton);
-  if (state.selectedFolders.has(folder.id)) card.classList.add("selected", "selection-pass");
+  if (getSelection().has("folder", folder.id)) card.classList.add("selected", "selection-pass");
   addSearchPathNavigation(card, folder, folder.parentId);
   return card;
 }
@@ -3063,20 +2917,7 @@ async function hydrateSearchFolderKeyRecords(records) {
   }
 }
 
-function finalizeHydratedFolders(hydrated) {
-  let result = [...hydrated];
-  if (state.query) {
-    result = result.filter((folder) => matchesActiveSearchFolder(folder));
-    result.sort((left, right) => compareSearchResults(left, right));
-    return result;
-  }
-  const direction = state.sortDirection === "asc" ? 1 : -1;
-  if (state.sortUsesTypeDefaults) result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else if (state.sort === "updated") result.sort((a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  else result.sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  return result;
-}
+function finalizeHydratedFolders(hydrated) { return finalizeListingRecords(hydrated, TCloudListing.finalizeFolders); }
 
 async function ensureAdminFolderKey(folder) {
   let key = state.crypto.folderKeys.get(folder.id);
@@ -3515,7 +3356,7 @@ function fileCard(file) {
       card.dataset.longPressed = "false";
       return;
     }
-    if (state.selectedFiles.size || state.selectedFolders.size || event.ctrlKey || event.metaKey || event.shiftKey) {
+    if (getSelection().count("file") || getSelection().count("folder") || event.ctrlKey || event.metaKey || event.shiftKey) {
       toggleFileSelection(file, card);
       return;
     }
@@ -3537,7 +3378,7 @@ function fileCard(file) {
     selectButton.className = "file-select-button";
     selectButton.type = "button";
     selectButton.setAttribute("aria-label", `${file.name}を選択`);
-    selectButton.setAttribute("aria-pressed", state.selectedFiles.has(file.id) ? "true" : "false");
+    selectButton.setAttribute("aria-pressed", getSelection().has("file", file.id) ? "true" : "false");
     selectButton.addEventListener("pointerdown", (event) => event.stopPropagation());
     selectButton.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -3545,7 +3386,7 @@ function fileCard(file) {
     });
     card.append(selectButton);
   }
-  if (state.selectedFiles.has(file.id)) card.classList.add("selected", "selection-pass");
+  if (getSelection().has("file", file.id)) card.classList.add("selected", "selection-pass");
   addSearchPathNavigation(card, file, file.folderId);
   return card;
 }
@@ -3678,49 +3519,29 @@ async function hydrateFileRecords(records, options = {}) {
   return finalizeHydratedFiles(hydrated);
 }
 
-function finalizeHydratedFiles(hydrated) {
-  let result = [...hydrated];
-  if (state.query) {
-    result = result.filter((file) => matchesActiveSearchFile(file));
-    result.sort((left, right) => compareSearchResults(left, right));
-    return result;
-  }
-  if (state.kind) result = result.filter((file) => file.mediaKind === state.kind);
-  const direction = state.sortDirection === "asc" ? 1 : -1;
-  if (state.sortUsesTypeDefaults) result.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  else if (state.sort === "name") result.sort((a, b) => direction * a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else if (state.sort === "size") result.sort((a, b) => direction * (Number(a.sizeBytes || 0) - Number(b.sizeBytes || 0)) || a.name.localeCompare(b.name, "ja", { numeric: true, sensitivity: "base" }));
-  else result.sort((a, b) => direction * String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  return result;
+function listingPreferences() {
+  return Object.freeze({ query: state.query, kind: state.kind, sort: state.sort,
+    sortDirection: state.sortDirection, sortUsesTypeDefaults: state.sortUsesTypeDefaults });
 }
 
-function compareSearchResults(left, right) {
-  const depthDifference = Number(left?.searchDepth || 0) - Number(right?.searchDepth || 0);
-  if (depthDifference) return depthDifference;
-  const rankDifference = searchNameMatchRank(left?.name, state.query) - searchNameMatchRank(right?.name, state.query);
-  if (rankDifference) return rankDifference;
-  return String(left?.name || "").localeCompare(String(right?.name || ""), "ja", { numeric: true, sensitivity: "base" });
+function listingMetadata(record) {
+  // Sorting needs display metadata only; keep device keys and authority in the host.
+  return Object.freeze({ name: record.name, mediaKind: record.mediaKind, searchDepth: record.searchDepth,
+    sizeBytes: record.sizeBytes, createdAt: record.createdAt });
 }
 
-function matchesActiveSearchFolder(folder) {
-  if (!state.query) return true;
-  return String(folder?.name || "").toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja"));
+function finalizeListingRecords(hydrated, finalize) {
+  const displayRecords = Object.freeze(hydrated.map((record, sourceIndex) => Object.freeze({ ...listingMetadata(record), sourceIndex })));
+  return finalize(displayRecords, listingPreferences()).map(record => hydrated[record.sourceIndex]);
 }
 
-function matchesActiveSearchFile(file) {
-  if (state.query && !String(file?.name || "").toLocaleLowerCase("ja").includes(state.query.toLocaleLowerCase("ja"))) return false;
-  return !state.kind || file?.mediaKind === state.kind;
-}
+function finalizeHydratedFiles(hydrated) { return finalizeListingRecords(hydrated, TCloudListing.finalizeFiles); }
 
-function searchNameMatchRank(name, query) {
-  const normalizedName = String(name || "").trim().toLocaleLowerCase("ja");
-  const normalizedQuery = String(query || "").trim().toLocaleLowerCase("ja");
-  if (!normalizedQuery) return 0;
-  if (normalizedName === normalizedQuery) return 0;
-  if (normalizedName.startsWith(normalizedQuery)) return 1;
-  if (normalizedName.includes(normalizedQuery)) return 2;
-  return 3;
-}
+function compareSearchResults(left, right) { return TCloudListing.compareSearchResults(listingMetadata(left), listingMetadata(right), state.query); }
+
+function matchesActiveSearchFolder(folder) { return TCloudListing.matchesSearchFolder(listingMetadata(folder), state.query); }
+
+function matchesActiveSearchFile(file) { return TCloudListing.matchesSearchFile(listingMetadata(file), state.query, state.kind); }
 
 async function hydrateDeletionRequestRecords(records) {
   const hydrated = [];
@@ -4054,10 +3875,44 @@ function processEncryptedThumbnailQueue() {
   }
 }
 
+let selectionState = null;
+const selectedRecordStore = { file: new Map(), folder: new Map() };
+function getSelection() { return selectionState ||= TCloudSelection.create(); }
+
+function rememberSelectedRecord(kind, record) {
+  getSelection().add(kind, record.id);
+  selectedRecordStore[kind].set(record.id, record);
+}
+
+function removeSelectedRecord(kind, id) {
+  getSelection().remove(kind, id);
+  selectedRecordStore[kind].delete(id);
+}
+
+function replaceSelectedFiles(files) {
+  getSelection().replace("file", files.map(file => file.id));
+  selectedRecordStore.file.clear();
+  for (const file of files) selectedRecordStore.file.set(file.id, file);
+}
+
+function clearSelectedRecords() {
+  getSelection().clear();
+  selectedRecordStore.file.clear(); selectedRecordStore.folder.clear();
+}
+
+function selectedItems() {
+  const ids = getSelection().snapshot();
+  // Capture both kinds together; asynchronous actions keep their starting targets.
+  return Object.freeze({
+    files: Object.freeze(ids.fileIds.map(id => selectedRecordStore.file.get(id))),
+    folders: Object.freeze(ids.folderIds.map(id => selectedRecordStore.folder.get(id)))
+  });
+}
+
 function selectFile(file, card) {
-  if (file.trashed || state.selectedFiles.has(file.id)) return;
+  if (file.trashed || getSelection().has("file", file.id)) return;
   beginSelectionHistory();
-  state.selectedFiles.set(file.id, file);
+  rememberSelectedRecord("file", file);
   card.classList.add("selected", "selection-pass");
   card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
   syncSelectionBar();
@@ -4065,46 +3920,46 @@ function selectFile(file, card) {
 
 function toggleFileSelection(file, card) {
   if (file.trashed) return;
-  if (state.selectedFiles.has(file.id)) {
-    state.selectedFiles.delete(file.id);
+  if (getSelection().has("file", file.id)) {
+    removeSelectedRecord("file", file.id);
     card.classList.remove("selected", "selection-pass");
     card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "false");
   } else {
     selectFile(file, card);
   }
   syncSelectionBar();
-  if (!state.selectedFiles.size && !state.selectedFolders.size && state.selectionHistoryActive) {
+  if (!getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
     state.selectionHistoryActive = false;
     history.back();
   }
 }
 
 function selectFolder(folder, card) {
-  if (state.selectedFolders.has(folder.id)) return;
+  if (getSelection().has("folder", folder.id)) return;
   beginSelectionHistory();
-  state.selectedFolders.set(folder.id, folder);
+  rememberSelectedRecord("folder", folder);
   card.classList.add("selected", "selection-pass");
   card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "true");
   syncSelectionBar();
 }
 
 function toggleFolderSelection(folder, card) {
-  if (state.selectedFolders.has(folder.id)) {
-    state.selectedFolders.delete(folder.id);
+  if (getSelection().has("folder", folder.id)) {
+    removeSelectedRecord("folder", folder.id);
     card.classList.remove("selected", "selection-pass");
     card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "false");
   } else {
     selectFolder(folder, card);
   }
   syncSelectionBar();
-  if (!state.selectedFiles.size && !state.selectedFolders.size && state.selectionHistoryActive) {
+  if (!getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
     state.selectionHistoryActive = false;
     history.back();
   }
 }
 
 function beginSelectionHistory() {
-  if (!state.historyReady || state.selectionHistoryActive || state.selectedFiles.size || state.selectedFolders.size) return;
+  if (!state.historyReady || state.selectionHistoryActive || getSelection().count("file") || getSelection().count("folder")) return;
   history.pushState({
     tcloud: true,
     folderId: state.folderId,
@@ -4120,7 +3975,7 @@ function selectAllVisibleItems() {
   for (const card of $$("#content-grid .file-card[data-file-id]")) {
     const file = state.files.find((item) => String(item.id) === card.dataset.fileId);
     if (file && !file.trashed) {
-      state.selectedFiles.set(file.id, file);
+      rememberSelectedRecord("file", file);
       card.classList.add("selected", "selection-pass");
       card.querySelector(".file-select-button")?.setAttribute("aria-pressed", "true");
     }
@@ -4128,7 +3983,7 @@ function selectAllVisibleItems() {
   for (const card of $$("#content-grid .folder-card[data-folder-id]")) {
     const folder = state.folders.find((item) => String(item.id) === card.dataset.folderId);
     if (folder) {
-      state.selectedFolders.set(folder.id, folder);
+      rememberSelectedRecord("folder", folder);
       card.classList.add("selected", "selection-pass");
       card.querySelector(".folder-select-button")?.setAttribute("aria-pressed", "true");
     }
@@ -4137,9 +3992,8 @@ function selectAllVisibleItems() {
 }
 
 function clearFileSelection(update = true, rewindHistory = update) {
-  const hadSelection = Boolean(state.selectedFiles.size || state.selectedFolders.size);
-  state.selectedFiles.clear();
-  state.selectedFolders.clear();
+  const hadSelection = Boolean(getSelection().count("file") || getSelection().count("folder"));
+  clearSelectedRecords();
   state.selecting = false;
   $$(".file-card.selected, .file-card.selection-pass, .folder-card.selected, .folder-card.selection-pass").forEach((card) => {
     card.classList.remove("selected", "selection-pass");
@@ -4181,11 +4035,11 @@ function syncFavoriteSelection(files, folders) {
       try {
         let count = 0;
         for (const batch of favoriteBatches(files, folders)) {
-          if (favoriteSelection !== selection || key !== favoriteSelectionKey([...state.selectedFiles.values()], [...state.selectedFolders.values()])) return;
+          if (favoriteSelection !== selection || key !== favoriteSelectionKey(selectedItems().files, selectedItems().folders)) return;
           const data = await api("/favorites/status", { method: "POST", body: JSON.stringify(batch) });
           count += (data.fileIds || []).length + (data.folderIds || []).length;
         }
-        if (favoriteSelection !== selection || key !== favoriteSelectionKey([...state.selectedFiles.values()], [...state.selectedFolders.values()])) return;
+        if (favoriteSelection !== selection || key !== favoriteSelectionKey(selectedItems().files, selectedItems().folders)) return;
         selection.all = count === targets.length; selection.ready = true;
         syncSelectionBar();
       } catch (error) { if (favoriteSelection === selection) handleError(error); }
@@ -4198,7 +4052,7 @@ function syncFavoriteSelection(files, folders) {
 async function toggleSelectedFavorites() {
   const selection = favoriteSelection;
   if (!selection.ready || selection.busy) return;
-  const files = [...state.selectedFiles.values()], folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   if (selection.key !== favoriteSelectionKey(files, folders)) return;
   selection.busy = true; syncSelectionBar();
   try {
@@ -4215,8 +4069,7 @@ async function toggleSelectedFavorites() {
 }
 
 function syncSelectionBar() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   const fileCount = files.length;
   const folderCount = folders.length;
   const count = fileCount + folderCount;
@@ -4263,8 +4116,7 @@ function syncSelectionBar() {
 }
 
 function openSelectedRenameDialog() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   if (files.length === 1 && folders.length === 0 && canRenameFile(files[0])) {
     state.selected = files[0];
     openEditDialog();
@@ -4276,16 +4128,16 @@ function openSelectedRenameDialog() {
 }
 
 function openSelectedFolderSettings() {
-  const folders = [...state.selectedFolders.values()];
+  const folders = selectedItems().folders;
   if (folders.length !== 1
-    || state.selectedFiles.size
+    || getSelection().count("file")
     || !canChangeFolderPassword(folders[0])) return;
   openFolderSettings(folders[0]);
 }
 
 async function lockSelectedFolder() {
-  const folders = [...state.selectedFolders.values()];
-  const folder = folders.length === 1 && !state.selectedFiles.size ? folders[0] : null;
+  const folders = selectedItems().folders;
+  const folder = folders.length === 1 && !getSelection().count("file") ? folders[0] : null;
   if (!canRelockFolder(folder)) return;
   if (state.offlineActive) {
     setNotice("オフライン保存の完了または停止後にロックしてください。", true);
@@ -4312,7 +4164,7 @@ async function lockSelectedFolder() {
 }
 
 function clearSelectionWithoutRefresh() {
-  const shouldRewind = Boolean((state.selectedFiles.size || state.selectedFolders.size)
+  const shouldRewind = Boolean((getSelection().count("file") || getSelection().count("folder"))
     && state.selectionHistoryActive
     && !state.handlingPopState);
   clearFileSelection(true, false);
@@ -4353,7 +4205,7 @@ function preserveListingAfterDeletion({ files = [], folders = [] } = {}) {
     };
   }
 
-  if (state.selectedFiles.size || state.selectedFolders.size) clearSelectionWithoutRefresh();
+  if (getSelection().count("file") || getSelection().count("folder")) clearSelectionWithoutRefresh();
   else clearFileSelection(true, false);
   if (state.selected && deletedFileIds.has(Number(state.selected.id))) state.selected = null;
   if (state.selectedFolder && deletedFolderIds.has(Number(state.selectedFolder.id))) state.selectedFolder = null;
@@ -4367,7 +4219,7 @@ function preserveListingAfterDeletion({ files = [], folders = [] } = {}) {
 }
 
 async function startSelectedDownloads() {
-  const files = [...state.selectedFiles.values()];
+  const files = selectedItems().files;
   if (!files.length || state.downloadActive) return;
   let targets;
   try {
@@ -4443,9 +4295,9 @@ async function offlineStorageRecord(file, context) {
 }
 
 async function saveSelectedOffline() {
-  const files = [...state.selectedFiles.values()];
+  const files = selectedItems().files;
   const context = offlineSelectionContext(files);
-  if (!files.length || state.selectedFolders.size || state.offlineActive) return;
+  if (!files.length || getSelection().count("folder") || state.offlineActive) return;
   if (!context) {
     setNotice("オフライン保存するには、対象ファイルがあるフォルダのPWを解除してください。", true);
     syncSelectionBar();
@@ -4650,8 +4502,7 @@ function syncOfflineStatusDisplay() {
 }
 
 async function deleteSelectedItems() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   const count = files.length + folders.length;
   if (!count) return;
   if (!files.every(canTrashFile) || !folders.every(canTrashFolder)) {
@@ -4718,8 +4569,7 @@ async function deleteSelectedItems() {
 }
 
 async function openMoveDialog() {
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   if (!files.length && !folders.length) return;
   if (!files.every(canMoveFile) || !folders.every(canMoveFolder)) {
     setNotice("PWで解除した最上位フォルダの配下だけ移動できます。", true);
@@ -4915,8 +4765,7 @@ async function loadMoveDestination(folderId) {
 
 async function moveSelectedItems(event) {
   event.preventDefault();
-  const files = [...state.selectedFiles.values()];
-  const folders = [...state.selectedFolders.values()];
+  const { files, folders } = selectedItems();
   const picker = state.movePicker;
   if (!picker) {
     $("#move-error").textContent = "移動先をもう一度選択してください。";
@@ -6677,129 +6526,25 @@ function getUploadFileLimit() {
   return mobile ? 1 : 2;
 }
 
-function connectionLimitForFile(limit, totalFiles) {
-  return totalFiles > 1 ? Math.max(1, Math.ceil(limit / 2)) : limit;
-}
+function connectionLimitForFile(limit, totalFiles) { return TCloudTransfer.connectionLimitForFile(limit, totalFiles); }
 
-function createUploadLimiter(limit) {
-  let active = 0;
-  const queue = [];
-  const runNext = () => {
-    if (active >= limit || !queue.length) return;
-    active++;
-    const { task, resolve, reject } = queue.shift();
-    Promise.resolve().then(task).then(resolve, reject).finally(() => {
-      active--;
-      runNext();
-    });
-  };
-  const limiter = (task) => new Promise((resolve, reject) => {
-    queue.push({ task, resolve, reject });
-    runNext();
-  });
-  limiter.limit = limit;
-  return limiter;
-}
+function createUploadLimiter(limit) { return TCloudTransfer.createLimiter(limit); }
 
 function createUploadTracker(files, totalBytes) {
-  const startedAt = performance.now();
-  const active = new Map();
-  const partsByFile = new Map(files.map((file) => [file, new Map()]));
-  const networkAttemptsByFile = new Map(files.map((file) => [file, new Map()]));
-  const completedFiles = new Set();
-  const samples = [];
-  let networkBytes = 0;
-  let lastActivityAt = 0;
-  let phaseStartedAt = startedAt;
-  let currentPhase = "送信準備中";
-  let stopped = false;
-  const uploadedFor = (file) => {
-    if (completedFiles.has(file)) return Number(file.size || 0);
-    return [...(partsByFile.get(file)?.values() || [])].reduce((sum, part) => sum + Math.min(Number(part.size || 0), Number(part.loaded || 0)), 0);
-  };
-  const refresh = () => {
-    if (stopped) return;
-    const now = performance.now();
-    const uploadedBytes = files.reduce((sum, file) => sum + uploadedFor(file), 0);
-    const percent = totalBytes ? Math.min(100, (uploadedBytes / totalBytes) * 100) : 100;
-    while (samples.length > 2 && samples[0].time < now - 8000) samples.shift();
-    const firstSample = samples[0];
-    const lastSample = samples.at(-1);
-    const sampleSeconds = firstSample && lastSample ? Math.max(.25, (lastSample.time - firstSample.time) / 1000) : 0;
-    const bytesPerSecond = sampleSeconds > 0 ? Math.max(0, (lastSample.bytes - firstSample.bytes) / sampleSeconds) : 0;
-    const remainingSeconds = bytesPerSecond > 0 ? Math.max(0, totalBytes - uploadedBytes) / bytesPerSecond : 0;
-    $("#upload-progress").style.width = `${percent}%`;
-    $("#upload-file-progress").textContent = `${percent.toFixed(percent >= 10 ? 1 : 2)}%`;
-    $("#upload-speed").textContent = bytesPerSecond > 0 ? formatTransferRate(bytesPerSecond) : "速度計測中";
-    $("#upload-bytes").textContent = `${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)}`;
-    $("#upload-eta").textContent = bytesPerSecond > 0 && uploadedBytes < totalBytes ? `残り約${formatTransferDuration(remainingSeconds)}` : (uploadedBytes >= totalBytes ? "送信完了" : "残り時間：計算中");
-    const secondsSinceActivity = lastActivityAt ? Math.max(0, Math.floor((now - lastActivityAt) / 1000)) : 0;
-    const communicating = currentPhase === "Cloudflareへ送信中";
-    const waiting = communicating && lastActivityAt && secondsSinceActivity >= 15;
-    const phaseElapsed = Math.max(0, Math.floor((now - phaseStartedAt) / 1000));
-    const activity = waiting
-      ? `通信応答待ち・最終通信${secondsSinceActivity}秒前`
-      : communicating
-      ? (lastActivityAt ? `通信中・最終通信${secondsSinceActivity}秒前` : "通信開始待ち")
-      : phaseElapsed >= 2 ? `${currentPhase}（${phaseElapsed}秒経過）` : currentPhase;
-    $("#upload-activity").textContent = activity;
-    $("#upload-activity").classList.toggle("waiting", Boolean(waiting || currentPhase.startsWith("通信再試行中")));
-    const names = [...active.keys()].map((file) => file.name);
-    $("#upload-file-name").textContent = names.length > 1 ? `${names[0]} ほか${names.length - 1}件` : (names[0] || "");
-  };
-  const timer = setInterval(refresh, 1000);
-  return {
-    start(file) { active.set(file, true); refresh(); },
-    partProgress(file, partNumber, attempt, loaded, size, completed = false) {
-      const parts = partsByFile.get(file);
-      if (!parts) return;
-      const attemptKey = `${partNumber}:${attempt}`;
-      const attempts = networkAttemptsByFile.get(file);
-      if (!(completed && attempt === 0)) {
-        const previousNetworkLoaded = Number(attempts.get(attemptKey) || 0);
-        const currentNetworkLoaded = Math.max(previousNetworkLoaded, Number(loaded || 0));
-        attempts.set(attemptKey, currentNetworkLoaded);
-        networkBytes += Math.max(0, currentNetworkLoaded - previousNetworkLoaded);
-      }
-      if (completed) parts.set(partNumber, { attempt, loaded: size, size, completed: true });
-      else if (!parts.get(partNumber)?.completed) parts.set(partNumber, { attempt, loaded, size, completed: false });
-      lastActivityAt = performance.now();
-      currentPhase = "Cloudflareへ送信中";
-      phaseStartedAt = lastActivityAt;
-      samples.push({ time: lastActivityAt, bytes: networkBytes });
-      refresh();
+  return TCloudTransfer.createTracker(files, totalBytes, {
+    formatBytes,
+    render(view) {
+      $("#upload-progress").style.width = view.width;
+      $("#upload-file-progress").textContent = view.percent;
+      $("#upload-speed").textContent = view.speed;
+      $("#upload-bytes").textContent = view.bytes;
+      $("#upload-eta").textContent = view.eta;
+      $("#upload-activity").textContent = view.activity;
+      $("#upload-activity").classList.toggle("waiting", view.waiting);
+      $("#upload-file-name").textContent = view.fileName;
     },
-    retry(file, partNumber, nextAttempt, maxAttempts) {
-      const parts = partsByFile.get(file);
-      const current = parts?.get(partNumber);
-      if (parts && !current?.completed) parts.set(partNumber, { attempt: nextAttempt, loaded: 0, size: Number(current?.size || 0), completed: false });
-      currentPhase = `通信再試行中 ${nextAttempt}/${maxAttempts}回`;
-      phaseStartedAt = performance.now();
-      refresh();
-    },
-    phase(file, label) {
-      if (!active.has(file)) return;
-      currentPhase = label.replace(/…$/, "");
-      phaseStartedAt = performance.now();
-      refresh();
-    },
-    finish(file, completed) {
-      completedFiles.add(file);
-      active.delete(file);
-      $("#upload-status").textContent = `${completed} / ${files.length}件完了`;
-      refresh();
-    },
-    defer(file) {
-      partsByFile.set(file, new Map());
-      completedFiles.delete(file);
-      active.delete(file);
-      refresh();
-    },
-    stop() {
-      stopped = true;
-      clearInterval(timer);
-    }
-  };
+    completed(count, total) { $("#upload-status").textContent = `${count} / ${total}件完了`; }
+  });
 }
 
 async function uploadPartWithRetry(path, body, signal, callbacks = {}) {
@@ -6857,19 +6602,9 @@ function uploadPartRequest(path, body, signal, onProgress) {
   });
 }
 
-function formatTransferRate(bytesPerSecond) {
-  const mbps = (Number(bytesPerSecond || 0) * 8) / 1_000_000;
-  return `${mbps.toFixed(mbps >= 10 ? 1 : 2)} Mbps（${formatBytes(bytesPerSecond)}/秒）`;
-}
+function formatTransferRate(bytesPerSecond) { return TCloudTransfer.formatRate(bytesPerSecond, formatBytes); }
 
-function formatTransferDuration(seconds) {
-  const value = Math.max(0, Math.round(Number(seconds || 0)));
-  if (value < 60) return `${Math.max(1, value)}秒`;
-  if (value < 3600) return `${Math.ceil(value / 60)}分`;
-  const hours = Math.floor(value / 3600);
-  const minutes = Math.ceil((value % 3600) / 60);
-  return minutes ? `${hours}時間${minutes}分` : `${hours}時間`;
-}
+function formatTransferDuration(seconds) { return TCloudTransfer.formatDuration(seconds); }
 
 function uploadRetryDelay(milliseconds, signal) {
   return new Promise((resolve, reject) => {
@@ -7982,236 +7717,17 @@ function syncPreviewSeekbarFullscreenControl(fullscreenElement = document.fullsc
   button.setAttribute("aria-pressed", String(active));
 }
 
-function previewControlIcon(name) {
-  const paths = {
-    play: '<path d="M8 5v14l11-7z"/>',
-    pause: '<path d="M6.5 5h4v14h-4zm7 0h4v14h-4z"/>',
-    volume: '<path d="M4 9v6h4l5 4V5L8 9zm11.5-.8v7.6a5 5 0 0 0 0-7.6zm0-3.2v2.1a7 7 0 0 1 0 9.8V19a9 9 0 0 0 0-14z"/>',
-    muted: '<path d="M4 9v6h4l5 4V5L8 9zm12.2 1.6 2.1-2.1 1.4 1.4-2.1 2.1 2.1 2.1-1.4 1.4-2.1-2.1-2.1 2.1-1.4-1.4 2.1-2.1-2.1-2.1 1.4-1.4z"/>',
-    fullscreen: '<path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/>',
-    "fullscreen-exit": '<path d="M8 4h2v6H4V8h4zm6 0h2v4h4v2h-6zM4 14h6v6H8v-4H4zm10 0h6v2h-4v4h-2z"/>'
-  };
-  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || ""}</svg>`;
-}
+function previewControlIcon(name) { return TCloudPreviewControls.previewControlIcon(name); }
 
-function formatPreviewPlaybackTime(value) {
-  const total = Number.isFinite(Number(value)) && Number(value) > 0 ? Math.floor(Number(value)) : 0;
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  return hours
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-    : `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function relativeSeekTime(startSeconds, pointerStartX, pointerCurrentX, trackWidth, duration) {
-  if (!Number.isFinite(duration) || duration <= 0) return 0;
-  const width = Math.max(1, Number(trackWidth) || 1);
-  const deltaSeconds = (Number(pointerCurrentX) - Number(pointerStartX)) / width * duration;
-  return Math.max(0, Math.min(duration, Number(startSeconds || 0) + deltaSeconds));
-}
-
-function absoluteSeekTime(pointerX, trackLeft, trackWidth, duration) {
-  if (!Number.isFinite(duration) || duration <= 0) return 0;
-  const width = Math.max(1, Number(trackWidth) || 1);
-  const ratio = (Number(pointerX) - Number(trackLeft)) / width;
-  return Math.max(0, Math.min(duration, ratio * duration));
-}
+function formatPreviewPlaybackTime(value) { return TCloudPreviewControls.formatPreviewPlaybackTime(value); }
 
 function addPreviewPlayerControls(stage, video, file) {
-  stage.classList.add("has-custom-video-controls");
-  const controls = document.createElement("div");
-  controls.className = "preview-player-controls";
-  controls.setAttribute("role", "group");
-  controls.setAttribute("aria-label", "動画の再生操作");
-  controls.innerHTML = `
-    <button class="preview-player-button preview-player-play" type="button" aria-label="再生">${previewControlIcon("play")}</button>
-    <span class="preview-player-time">0:00 / 0:00</span>
-    <div class="preview-player-seek" role="slider" tabindex="-1" aria-label="再生位置" aria-valuemin="0" aria-valuemax="1000" aria-valuenow="0" aria-disabled="true"></div>
-    <button class="preview-player-button preview-playback-mode preview-player-mode" type="button" aria-label="リピート：オフ" aria-pressed="false"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/></svg></button>
-    <button class="preview-player-button preview-player-mute" type="button" aria-label="消音">${previewControlIcon("volume")}</button>
-    <button class="preview-player-button preview-player-fullscreen" type="button" aria-label="全画面で表示" aria-pressed="false">${previewControlIcon("fullscreen")}</button>`;
-  const playButton = controls.querySelector(".preview-player-play");
-  const timeLabel = controls.querySelector(".preview-player-time");
-  const seek = controls.querySelector(".preview-player-seek");
-  const modeButton = controls.querySelector(".preview-player-mode");
-  const muteButton = controls.querySelector(".preview-player-mute");
-  const fullscreenButton = controls.querySelector(".preview-player-fullscreen");
-  let playbackFrame = 0;
-  let lastPaused = null;
-  let lastTimeText = "";
-  let lastSeekValue = "";
-  let lastBufferedPercent = "";
-  let cachedPlaybackPercent = file?.offlineOnly ? 100 : 0;
-  let seekPreviewActive = false;
-  let pendingSeekSeconds = 0;
-  let seekPointerId = null;
-  let seekPointerStartX = 0;
-  let seekPointerStartSeconds = 0;
-  let seekPointerUsesAbsolutePosition = false;
-  const bufferedEnd = (duration) => {
-    if (!duration || !video.buffered?.length) return 0;
-    let end = 0;
-    for (let index = 0; index < video.buffered.length; index += 1) end = Math.max(end, video.buffered.end(index));
-    return Math.min(duration, end);
-  };
-  const syncPlayback = () => {
-    playbackFrame = 0;
-    if (!controls.isConnected && stage.isConnected) return;
-    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
-    const current = seekPreviewActive
-      ? pendingSeekSeconds
-      : (Number.isFinite(video.currentTime) ? video.currentTime : 0);
-    if (lastPaused !== video.paused) {
-      lastPaused = video.paused;
-      playButton.innerHTML = previewControlIcon(video.paused ? "play" : "pause");
-      playButton.setAttribute("aria-label", video.paused ? "再生" : "一時停止");
-    }
-    const timeText = `${formatPreviewPlaybackTime(current)} / ${formatPreviewPlaybackTime(duration)}`;
-    if (lastTimeText !== timeText) {
-      lastTimeText = timeText;
-      timeLabel.textContent = timeText;
-      seek.setAttribute("aria-valuetext", timeText);
-    }
-    seek.setAttribute("aria-disabled", String(!duration));
-    seek.tabIndex = duration ? 0 : -1;
-    const seekValue = duration ? String(Math.min(1000, Math.round(current / duration * 1000))) : "0";
-    if (!seekPreviewActive && lastSeekValue !== seekValue) {
-      lastSeekValue = seekValue;
-      seek.setAttribute("aria-valuenow", seekValue);
-    }
-    const playedPercent = duration ? Math.min(100, current / duration * 100) : 0;
-    const bufferedPercent = duration ? Math.max(playedPercent, bufferedEnd(duration) / duration * 100, cachedPlaybackPercent) : 0;
-    const bufferedValue = bufferedPercent.toFixed(2);
-    seek.style.setProperty("--played-percent", `${playedPercent.toFixed(2)}%`);
-    if (lastBufferedPercent !== bufferedValue) {
-      lastBufferedPercent = bufferedValue;
-      seek.style.setProperty("--buffered-percent", `${bufferedValue}%`);
-    }
-  };
-  const queuePlaybackSync = () => {
-    if (!playbackFrame) playbackFrame = requestAnimationFrame(syncPlayback);
-  };
-  const refreshCachedPlayback = async () => {
-    if (!controls.isConnected) return;
-    if (file?.offlineOnly) {
-      cachedPlaybackPercent = 100;
-    } else if (file?.offlineStorageId && globalThis.TCloudOffline?.supported()) {
-      const entry = await TCloudOffline.getEntry(file.offlineStorageId).catch(() => null);
-      cachedPlaybackPercent = contiguousCachedPlaybackPercent(file, entry);
-    }
-    queuePlaybackSync();
-    if (controls.isConnected) setTimeout(refreshCachedPlayback, 800);
-  };
-  const syncVolume = () => {
-    muteButton.innerHTML = previewControlIcon(video.muted || video.volume === 0 ? "muted" : "volume");
-    muteButton.setAttribute("aria-label", video.muted || video.volume === 0 ? "音声を出す" : "消音");
-  };
-  playButton.addEventListener("click", () => {
-    if (video.paused) video.play().catch(() => {});
-    else video.pause();
+  return TCloudPreviewControls.attach(stage, video, file, {
+    getPlayer: () => state.previewPlayer,
+    bindPreviewPlaybackMode,
+    togglePreviewPlayerFullscreen,
+    syncPreviewSeekbarFullscreenControl
   });
-  const previewSeek = (targetSeconds) => {
-    if (!Number.isFinite(video.duration) || video.duration <= 0) return;
-    seekPreviewActive = true;
-    pendingSeekSeconds = Math.max(0, Math.min(video.duration, Number(targetSeconds) || 0));
-    lastSeekValue = String(Math.min(1000, Math.round(pendingSeekSeconds / video.duration * 1000)));
-    seek.setAttribute("aria-valuenow", lastSeekValue);
-    syncPlayback();
-  };
-  const commitSeek = () => {
-    if (!seekPreviewActive || !Number.isFinite(video.duration) || video.duration <= 0) return;
-    const target = Math.max(0, Math.min(video.duration, pendingSeekSeconds));
-    seekPreviewActive = false;
-    try {
-      if (state.previewPlayer) state.previewPlayer.currentTime = target;
-      else video.currentTime = target;
-    } catch {
-      video.currentTime = target;
-    }
-    queuePlaybackSync();
-  };
-  seek.addEventListener("pointerdown", (event) => {
-    if (seek.getAttribute("aria-disabled") === "true") return;
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    event.preventDefault();
-    seekPointerId = event.pointerId;
-    seekPointerStartX = event.clientX;
-    seekPointerStartSeconds = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-    seekPointerUsesAbsolutePosition = event.pointerType === "mouse";
-    const bounds = seek.getBoundingClientRect();
-    previewSeek(seekPointerUsesAbsolutePosition
-      ? absoluteSeekTime(event.clientX, bounds.left, bounds.width, video.duration)
-      : seekPointerStartSeconds);
-    seek.classList.add("is-scrubbing");
-    seek.focus({ preventScroll: true });
-    try { seek.setPointerCapture(event.pointerId); } catch {}
-  });
-  seek.addEventListener("pointermove", (event) => {
-    if (seekPointerId === null || event.pointerId !== seekPointerId) return;
-    event.preventDefault();
-    const bounds = seek.getBoundingClientRect();
-    previewSeek(seekPointerUsesAbsolutePosition
-      ? absoluteSeekTime(event.clientX, bounds.left, bounds.width, video.duration)
-      : relativeSeekTime(seekPointerStartSeconds, seekPointerStartX, event.clientX, bounds.width, video.duration));
-  });
-  const finishRelativeSeek = (event) => {
-    if (seekPointerId === null || event.pointerId !== seekPointerId) return;
-    event.preventDefault();
-    if (event.type === "pointerup") {
-      const bounds = seek.getBoundingClientRect();
-      previewSeek(seekPointerUsesAbsolutePosition
-        ? absoluteSeekTime(event.clientX, bounds.left, bounds.width, video.duration)
-        : relativeSeekTime(seekPointerStartSeconds, seekPointerStartX, event.clientX, bounds.width, video.duration));
-    }
-    try { seek.releasePointerCapture(seekPointerId); } catch {}
-    seekPointerId = null;
-    seekPointerUsesAbsolutePosition = false;
-    seek.classList.remove("is-scrubbing");
-    commitSeek();
-  };
-  seek.addEventListener("pointerup", finishRelativeSeek);
-  seek.addEventListener("pointercancel", finishRelativeSeek);
-  seek.addEventListener("keydown", (event) => {
-    if (seek.getAttribute("aria-disabled") === "true") return;
-    const step = event.shiftKey ? 30 : 5;
-    let target = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-    if (event.key === "ArrowLeft" || event.key === "ArrowDown") target -= step;
-    else if (event.key === "ArrowRight" || event.key === "ArrowUp") target += step;
-    else if (event.key === "Home") target = 0;
-    else if (event.key === "End") target = video.duration;
-    else return;
-    event.preventDefault();
-    previewSeek(target);
-    commitSeek();
-  });
-  muteButton.addEventListener("click", () => { video.muted = !video.muted; });
-  bindPreviewPlaybackMode(modeButton, video, file);
-  fullscreenButton.addEventListener("click", togglePreviewPlayerFullscreen);
-  for (const eventName of ["click", "dblclick", "pointerdown", "pointerup", "touchstart", "touchend"]) {
-    controls.addEventListener(eventName, (event) => event.stopPropagation());
-  }
-  for (const eventName of ["loadedmetadata", "durationchange", "timeupdate", "progress", "canplay", "seeked", "tcloud:seek-feedback"]) video.addEventListener(eventName, queuePlaybackSync);
-  for (const eventName of ["play", "pause", "ended"]) video.addEventListener(eventName, syncPlayback);
-  video.addEventListener("volumechange", syncVolume);
-  stage.append(controls);
-  syncPlayback();
-  syncVolume();
-  syncPreviewSeekbarFullscreenControl();
-  setTimeout(refreshCachedPlayback, 250);
-}
-
-function contiguousCachedPlaybackPercent(file, entry) {
-  if (!entry) return 0;
-  if (file?.offlineOnly && entry.complete) return 100;
-  const sizeBytes = Number(file?.sizeBytes || entry.sizeBytes || 0);
-  const chunkSizeBytes = Number(file?.chunkSizeBytes || entry.chunkSizeBytes || 8 * 1024 * 1024);
-  const chunkCount = Number(file?.chunkCount || entry.chunkCount || Math.ceil(sizeBytes / chunkSizeBytes));
-  if (!sizeBytes || !chunkCount || !entry.chunks) return 0;
-  let contiguousChunks = 0;
-  while (contiguousChunks < chunkCount && entry.chunks[contiguousChunks]) contiguousChunks += 1;
-  const cachedPlainBytes = Math.min(sizeBytes, contiguousChunks * chunkSizeBytes);
-  return Math.min(100, cachedPlainBytes / sizeBytes * 100);
 }
 
 function previewVideoTapAction(pointerType, isDoubleTap) {

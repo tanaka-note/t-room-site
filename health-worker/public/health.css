@@ -58,8 +58,8 @@ button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visibl
 /* Page header and daily entry */
 .app-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .account-name { color: var(--muted); font-size: 14px; margin-top: 4px; }
-.login-card { padding: 28px; display: grid; gap: 18px; line-height: 1.8; }
-.login-card button { justify-self: start; }
+.login-card { padding: 28px; display: grid; place-items: center; }
+.login-card button { width: min(100%, 320px); }
 .today-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px; }
 .today-content { min-width: 0; }
 .today-content h2 { margin: 4px 0 10px; font-size: 24px; }

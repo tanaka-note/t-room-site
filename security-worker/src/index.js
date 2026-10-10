@@ -5,7 +5,9 @@ import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPL
 import { readDefinitionStatus, runDefinitionSchedule } from "./definition-status.js";
 import { cleanupDisabledIdentities } from "./identity-cleanup.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { sessionCookieValue } from "../../assets/session-policy.mjs";
+import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
+import { rollingSessionInput, foregroundSessionActivity, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
+import { trackedPasskeySession } from "./rolling-sessions.js";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -83,7 +85,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
       if (url.pathname === BASE_PATH) return secure(Response.redirect(`${url.origin}${BASE_PATH}/`, 308));
       if (!url.pathname.startsWith(BASE_PATH)) return secure(new Response("ページが見つかりません。", { status: 404 }));
       const path = url.pathname.slice(BASE_PATH.length) || "/";
-      if (path.startsWith("/api/")) return secure(await handleApi(request, this.env, url, path, this.ctx));
+      if (path.startsWith("/api/")) return secure(await refreshSecuritySessions(request, await handleApi(request, this.env, url, path, this.ctx), this.env, url, path));
       return secure(await serveAsset(request, this.env, url, path));
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
@@ -132,6 +134,12 @@ export default class SecurityWorker extends WorkerEntrypoint {
     return cloudPasskeySession(this.env, input);
   }
 
+  async passkeyRollingSession(input) {
+    // Security's own sessions never accept claims from other services.
+    if (input?.service === "security") return { valid: false };
+    return passkeyRollingSession(this.env, input);
+  }
+
   async recordAuditEvent(input) {
     await storeAuditEvent(this.env, input);
     return { stored: true };
@@ -153,17 +161,19 @@ async function handleApi(request, env, url, path, context = null) {
     const initialized = await hasSecurityAdmin(env);
     const admin = await activeSecurityAdminSession(request, env);
     if (admin) scheduleAudit(context, recordSecuritySessionResume(env, request, admin));
-    return json({ enabled: runtime.enabled, initialized, adminAuthenticated: Boolean(admin) });
+    return json({ enabled: runtime.enabled, initialized, adminAuthenticated: Boolean(admin), expiresAt: admin?.exp || null });
   }
 
   if (path === "/api/logout" && request.method === "POST") {
     requireMutation(request, url);
-    const session = await readSecuritySession(request, env, ADMIN_COOKIE, "admin")
-      || await readSecuritySession(request, env, IDENTITY_COOKIE, "identity");
-    if (session) await writeLocalAudit(env, {
+    const sessions = await Promise.all([readSecuritySession(request, env, ADMIN_COOKIE, "admin"), readSecuritySession(request, env, IDENTITY_COOKIE, "identity")]);
+    for (const session of sessions.filter(Boolean)) {
+      if (session.rollingSessionVersion === ROLLING_SESSION_VERSION && !(await passkeyRollingSession(env, await rollingSessionInput(env, "security", session, "end"))).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
+      await writeLocalAudit(env, {
       eventType: "logout", outcome: "success", identityId: session.identityId, authMethod: "passkey",
       sessionIdHash: await hmac(session.sessionId || `${session.kind}:${session.identityId}:${session.credentialId}:${session.exp}`, env.AUDIT_IP_SALT || env.SESSION_SECRET || "local-audit")
-    }, request);
+      }, request);
+    }
     const headers = new Headers();
     headers.append("Set-Cookie", clearCookie(ADMIN_COOKIE, url.protocol === "https:"));
     headers.append("Set-Cookie", clearCookie(IDENTITY_COOKIE, url.protocol === "https:"));
@@ -1517,6 +1527,34 @@ async function cloudPasskeySession(env, input) {
   return { valid: true, expiresAt: Number(row.expires_at), ...(folderScopes ? { folderScopes } : {}) };
 }
 
+async function passkeyRollingSession(env, input) {
+  return trackedPasskeySession(env, input, async (claims) => {
+    if (claims.service !== "security") return (await validatePasskeySession(env, claims)).valid === true;
+    const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+    if (!runtime.enabled || runtime.epoch !== claims.sessionEpoch || !["identity", "security-admin"].includes(claims.role)
+      || claims.serviceAccountId !== claims.role || claims.serviceLinkId != null) return false;
+    const row = await env.DB.prepare(`SELECT i.status, i.is_security_admin, c.status AS credential_status
+      FROM security_identities i JOIN security_credentials c ON c.identity_id = i.id
+      WHERE i.id = ? AND c.credential_id = ?`).bind(claims.identityId, claims.credentialId).first();
+    return Boolean(row && row.status !== "disabled" && row.credential_status !== "revoked"
+      && (claims.role === "identity" || (row.status === "active" && row.credential_status === "active" && row.is_security_admin)));
+  });
+}
+
+async function refreshSecuritySessions(request, response, env, url, path) {
+  if (!foregroundSessionActivity(request, response, path)) return response;
+  const headers = new Headers(response.headers);
+  for (const [name, kind] of [[ADMIN_COOKIE, "admin"], [IDENTITY_COOKIE, "identity"]]) {
+    const session = await readSecuritySession(request, env, name, kind);
+    if (session?.rollingSessionVersion !== ROLLING_SESSION_VERSION) continue;
+    const renewed = await passkeyRollingSession(env, await rollingSessionInput(env, "security", session, "touch"));
+    if (!renewed.valid) throw new HttpError(401, "パスキーでログインし直してください。");
+    headers.append("Set-Cookie", await signedCookie(env, name, { ...session, exp: renewed.expiresAt }, 43200, url.protocol === "https:"));
+    if (kind === "admin") headers.set("X-Troom-Session-Expires", String(renewed.expiresAt));
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 async function registrationOptions(env, identityId, displayName, excludeCredentials) {
   const options = await generateRegistrationOptions({
     rpName: env.RP_NAME || "T-ROOM", rpID: rpId(env), userID: encoder.encode(identityId),
@@ -1906,21 +1944,23 @@ async function securitySessionHeaders(env, url, identityId, credentialId, admin)
   if (!runtime.enabled) throw new HttpError(503, "パスキー機能は一時停止中です。");
   const headers = new Headers();
   const authenticatedAt = nowSeconds();
-  const sessionId = crypto.randomUUID();
-  const identityTtl = clampNumber(env.IDENTITY_SESSION_TTL_SECONDS, 60, 900, 600);
-  headers.append("Set-Cookie", await signedCookie(env, IDENTITY_COOKIE, { kind: "identity", identityId, credentialId, passkeySessionEpoch: runtime.epoch, authenticatedAt, authMethod: "passkey", sessionId }, identityTtl, url.protocol === "https:"));
-  if (admin) {
-    const adminTtl = clampNumber(env.ADMIN_SESSION_TTL_SECONDS, 300, 7200, 3600);
-    headers.append("Set-Cookie", await signedCookie(env, ADMIN_COOKIE, { kind: "admin", identityId, credentialId, passkeySessionEpoch: runtime.epoch, authenticatedAt, authMethod: "passkey", sessionId }, adminTtl, url.protocol === "https:"));
+  const policy = sessionPolicyForAuthMethod(env, "passkey");
+  for (const kind of admin ? ["identity", "admin"] : ["identity"]) {
+    const session = { kind, identityId, credentialId, passkeySessionEpoch: runtime.epoch, authenticatedAt,
+      authMethod: "passkey", sessionId: crypto.randomUUID(), rollingSessionVersion: ROLLING_SESSION_VERSION,
+      exp: authenticatedAt + policy.ttlSeconds };
+    if (!(await passkeyRollingSession(env, await rollingSessionInput(env, "security", session, "register"))).valid) throw new HttpError(503, "セッションを開始できませんでした。");
+    headers.append("Set-Cookie", await signedCookie(env, kind === "admin" ? ADMIN_COOKIE : IDENTITY_COOKIE, session, policy.ttlSeconds, url.protocol === "https:"));
+    if (kind === "admin") headers.set("X-Troom-Session-Expires", String(session.exp));
   }
   return headers;
 }
 
 async function signedCookie(env, name, payload, ttl, secureValue) {
   if (!isValidSessionSecret(env.SESSION_SECRET)) throw new HttpError(503, "Security Centerのセッション設定が完了していません。");
-  const encoded = bytesToBase64Url(encoder.encode(JSON.stringify({ ...payload, exp: nowSeconds() + ttl })));
+  const encoded = bytesToBase64Url(encoder.encode(JSON.stringify({ ...payload, exp: payload.exp ?? nowSeconds() + ttl })));
   const token = `${encoded}.${await hmac(encoded, env.SESSION_SECRET)}`;
-  return sessionCookieValue(name, token, BASE_PATH, { persistent: false, ttlSeconds: ttl }, secureValue);
+  return sessionCookieValue(name, token, BASE_PATH, sessionPolicyForAuthMethod(env, "passkey"), secureValue);
 }
 
 async function readSecuritySession(request, env, name, expectedKind) {
@@ -1935,9 +1975,12 @@ async function readSecuritySession(request, env, name, expectedKind) {
     const [payload, signature] = parts;
     if (!payload || !signature || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
     const value = JSON.parse(decoder.decode(base64UrlToBytes(payload)));
-    return value.kind === expectedKind && value.authMethod === "passkey" && value.exp > nowSeconds()
+    if (!(value.kind === expectedKind && value.authMethod === "passkey" && value.exp > nowSeconds()
       && Number.isInteger(Number(value.passkeySessionEpoch))
-      && Number(value.passkeySessionEpoch) === runtime.epoch ? value : null;
+      && Number(value.passkeySessionEpoch) === runtime.epoch)) return null;
+    if (value.rollingSessionVersion != null && (value.rollingSessionVersion !== ROLLING_SESSION_VERSION
+      || !(await passkeyRollingSession(env, await rollingSessionInput(env, "security", value, "read"))).valid)) return null;
+    return value;
   } catch { return null; }
 }
 
@@ -2121,10 +2164,10 @@ function activeSessionStatements(env, event) {
         AND security_active_sessions.service = excluded.service
         THEN excluded.started_at ELSE security_active_sessions.started_at END,
       last_seen_at = excluded.last_seen_at,
-      expires_at = CASE WHEN security_active_sessions.service = 'cloud' AND security_active_sessions.auth_method = 'passkey'
+      expires_at = CASE WHEN security_active_sessions.auth_method = 'passkey'
         THEN MAX(security_active_sessions.expires_at, excluded.expires_at) ELSE excluded.expires_at END,
       ended_at = NULL, end_reason = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE NOT (security_active_sessions.service = 'cloud' AND security_active_sessions.auth_method = 'passkey'
+      WHERE NOT (security_active_sessions.auth_method = 'passkey'
         AND security_active_sessions.ended_at IS NOT NULL)`)
     .bind(event.sessionIdHash, event.identityId, event.service, event.serviceLinkId, event.serviceAccountId,
       event.credentialId, event.role, event.authMethod, event.sessionVersion, event.passkeySessionEpoch,
@@ -2170,7 +2213,7 @@ function normalizeAuditEvent(input) {
 
 function sanitizeDetails(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const forbidden = /password|secret|token|cookie|proof|key|content|title|body|recovery/i;
+  const forbidden = /password|secret|token|cookie|proof|key|content|title|body|recovery|credential.?master|prf.?output|login.?id/i;
   return Object.fromEntries(Object.entries(value).filter(([key]) => !forbidden.test(key)).slice(0, 20).map(([key, item]) => [key, typeof item === "string" ? item.slice(0, 200) : (typeof item === "number" || typeof item === "boolean" ? item : null)]));
 }
 

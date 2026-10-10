@@ -18,11 +18,13 @@ fixture.add({ event_type: "password_login_failure", outcome: "failure", identity
 fixture.add({ event_type: "entry_created", service: "billing", details_json: '{"note":"<img id=xss-marker src=x>"}' });
 let delayPassword = false;
 let failNext = false;
+let expiredSession = false;
 const queries = [];
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
   const send = (body, status = 200) => { response.writeHead(status, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); };
   if (url.pathname === "/security/api/audit") {
+    if (expiredSession) return send({ error: "ログインの有効期限が切れました。" }, 401);
     queries.push(url.search);
     if (delayPassword && url.searchParams.get("view") === "password") await new Promise((resolve) => setTimeout(resolve, 200));
     if (failNext) { failNext = false; return send({ error: "一時的に確認できません" }, 503); }
@@ -155,6 +157,11 @@ try {
   await page.screenshot({ path: process.env.AUDIT_SCREENSHOT || "../tmp/security-audit-desktop.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: process.env.AUDIT_MOBILE_SCREENSHOT || "../tmp/security-audit-mobile.png" });
+  expiredSession = true;
+  await page.locator("#audit-refresh").click();
+  await page.locator("#admin-login-view").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#admin-view").isVisible(), false);
+  assert.match(await page.locator("#message").innerText(), /有効期限|ログイン/);
   assert.deepEqual(errors, []);
   console.log("Audit UI passed: all presets, details/XSS, filters, paging, races, retry, JST, desktop/mobile and CSP.");
 } finally {

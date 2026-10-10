@@ -19,7 +19,13 @@ try {
   for (const surface of [page, other]) surface.on('pageerror', e => failures.push(e.message));
   page.on('console', message => { if (message.type()==='error' && /Content Security Policy|Refused to execute|Refused to load/.test(message.text())) failures.push(message.text()); });
   page.on('request', r => { if (r.method() === 'PUT') writes.push(r.postData()); });
-  await page.goto(review.url); await page.getByRole('button', { name: '体調管理を開く', exact: true }).click(); await page.locator('#app').waitFor({ state: 'visible' });
+  await mkdir(new URL('../../tmp/health-review/',import.meta.url),{recursive:true});
+  const unauthenticated=await (await page.request.get(review.url)).text();
+  assert.doesNotMatch(unauthenticated,/田中|暢美|宏知/);
+  await page.goto(review.url);
+  assert.equal(await page.locator('#login').innerText(),'パスキーでログイン');
+  assert.equal(await page.locator('#app').isVisible(),false);
+  await page.screenshot({path:new URL('../../tmp/health-review/login.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')}); await page.getByRole('button', { name: 'パスキーでログイン', exact: true }).click(); await page.locator('#app').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#insight-cycles').isVisible(),false);
   assert.equal(review.fixture.db.prepare('SELECT ciphertext FROM health_records WHERE record_id=?').get(legacyId).ciphertext,legacyCipher.ciphertext);
   await page.locator('#record-today').click();
@@ -31,7 +37,7 @@ try {
   assert.ok(await good.evaluate(node=>node.getBoundingClientRect().height >= 44));
   assert.equal(await page.locator('#period-details').evaluate(element=>element.open), false);
   await page.locator('#note').fill('頭痛についての自由メモ'); await page.getByLabel('頭痛', { exact: true }).check();
-  await mkdir(new URL('../../tmp/health-review/',import.meta.url),{recursive:true});
+
   await page.screenshot({path:new URL('../../tmp/health-review/editor.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
   await page.getByRole('button',{name:'保存',exact:true}).click(); await page.locator('#editor').waitFor({state:'hidden'});
   assert.match(await page.locator('#today-status').textContent(), /頭痛についての自由メモ/);
@@ -42,7 +48,7 @@ try {
   assert.ok(await page.locator('#period-reminder').isVisible());
   assert.notEqual(await page.locator('#prediction-window').textContent(), '開始日を記録すると表示');
   assert.ok(writes.length); assert.ok(writes.every(v => !/頭痛|自由メモ|symptoms|date/.test(v)));
-  await other.goto(review.url); await other.locator('#review-person').selectOption('subject'); await other.getByRole('button',{name:'体調管理を開く',exact:true}).click(); await other.locator('#app').waitFor({state:'visible'});
+  await other.goto(review.url); await other.locator('#review-person').selectOption('subject'); await other.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await other.locator('#app').waitFor({state:'visible'});
   await other.getByRole('button',{name:'記録一覧',exact:true}).click(); await other.locator('.entry').first().click(); assert.equal(await other.locator('#note').inputValue(),'頭痛についての自由メモ');
   await other.locator('#note').fill('共同編集後の備考'); await other.getByRole('button',{name:'保存',exact:true}).click(); await other.locator('#editor').waitFor({state:'hidden'});
   // The first person still has the old revision. A conflict keeps the draft and login.
@@ -118,10 +124,10 @@ try {
   await other.locator('#refresh').click(); await other.waitForFunction(()=>!document.getElementById('refresh').disabled);
   await other.screenshot({path:new URL('../../tmp/health-review/desktop.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1'),fullPage:true});
   await page.getByRole('button',{name:'ログアウト',exact:true}).click(); await page.locator('#login').waitFor({state:'visible'}); assert.equal(await page.locator('#note').inputValue(),'');
-  await page.getByRole('button',{name:'体調管理を開く',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('.day.current').click(); await page.locator('#note').fill('画面離脱と保存完了の競合');
+  await page.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('.day.current').click(); await page.locator('#note').fill('画面離脱と保存完了の競合');
   let releaseSave; const delayedSave=new Promise(resolve=>releaseSave=resolve); let saveReached; const saveRequest=new Promise(resolve=>saveReached=resolve);
   await page.route('**/health/api/records/*',async route=>{if(route.request().method()!=='PUT')return route.continue();const response=await route.fetch();saveReached();await delayedSave;await route.fulfill({response});});
-  await page.getByRole('button',{name:'保存',exact:true}).click(); await saveRequest; assert.ok(await page.locator('#note').isDisabled()); await page.evaluate(()=>dispatchEvent(new Event('pagehide'))); releaseSave(); await page.getByRole('button',{name:'体調管理を開く',exact:true}).waitFor({state:'visible'}); await page.waitForFunction(()=>!document.getElementById('sign-in').disabled); assert.equal(await page.locator('#calendar').textContent(),''); assert.equal(await page.locator('#records').textContent(),''); assert.equal(await page.locator('#today-status').textContent(),''); assert.equal(await page.locator('#prediction-window').textContent(),''); await page.unroute('**/health/api/records/*');
+  await page.getByRole('button',{name:'保存',exact:true}).click(); await saveRequest; assert.ok(await page.locator('#note').isDisabled()); await page.evaluate(()=>dispatchEvent(new Event('pagehide'))); releaseSave(); await page.getByRole('button',{name:'パスキーでログイン',exact:true}).waitFor({state:'visible'}); await page.waitForFunction(()=>!document.getElementById('sign-in').disabled); assert.equal(await page.locator('#calendar').textContent(),''); assert.equal(await page.locator('#records').textContent(),''); assert.equal(await page.locator('#today-status').textContent(),''); assert.equal(await page.locator('#prediction-window').textContent(),''); await page.unroute('**/health/api/records/*');
   // Completion after pagehide must not restore a key or decrypted records.
   for (const phase of ['authenticate', 'unwrap', 'decrypt']) {
     if (phase === 'decrypt') { await page.locator('#sign-in').click(); await page.locator('#app').waitFor({state:'visible'}); }
@@ -154,7 +160,7 @@ try {
     if (phase === 'authenticate') assert.ok(await page.evaluate(() => window.healthRacePrf.every(byte => byte === 0)));
   }
   await page.route('**/health/api/passkey/handoff',async route=>{const response=await route.fetch();const value=await response.json();await route.fulfill({response,json:{...value,expiresAt:Date.now()/1000+2}});});
-  await page.getByRole('button',{name:'体調管理を開く',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('#login').waitFor({state:'visible'}); assert.equal(await page.locator('#calendar').textContent(),'');
+  await page.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('#login').waitFor({state:'visible'}); assert.equal(await page.locator('#calendar').textContent(),'');
   review.fixture.revoke(); await other.getByRole('button',{name:'最新の記録を読み込む',exact:true}).click(); await other.locator('#login').waitFor({state:'visible'}); assert.equal(await other.locator('#records').textContent(),'');
   assert.deepEqual(failures,[]); console.log('Health conditions, insights 320/390/1280, legacy upgrade/intensity preservation, future rejection, OCC draft retention; mobile/desktop: daily health first, optional period fields, explicit end, shared encrypted CRUD, unsaved guard, Back/Esc, settings, CSV, logout and pagehide races passed.');
 } finally { await browser.close(); await review.close(); }

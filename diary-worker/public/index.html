@@ -61,8 +61,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-fed9f2ce25e0">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-fed9f2ce25e0">
+  <meta name="troom-app-build" content="diary-3ac21b651bde">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-3ac21b651bde">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,11 +70,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-fed9f2ce25e0">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-3ac21b651bde">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-fed9f2ce25e0">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-fed9f2ce25e0">
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-3ac21b651bde">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-3ac21b651bde">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -89,32 +89,11 @@
     <section class="login-card">
       <p class="eyebrow">Private diary</p>
       <h1 id="login-title">日記を開く</h1>
-      <p class="login-description">ログインIDとパスワードを入力してください。</p>
-      <form id="login-form" class="login-form">
-        <label class="login-field" for="login-id">
-          <span>ログインID</span>
-          <input id="login-id" name="loginId" type="email" autocomplete="off" required maxlength="254">
-        </label>
-        <label for="password">パスワード</label>
-        <div class="password-field">
-          <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
-          <button id="password-toggle" class="password-toggle" type="button" aria-controls="password" aria-pressed="false" aria-label="パスワードを表示" title="パスワードを表示">
-            <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path>
-              <circle cx="12" cy="12" r="2.5"></circle>
-            </svg>
-            <svg class="password-eye password-eye-closed" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path>
-              <path d="M4 4l16 16"></path>
-            </svg>
-          </button>
-        </div>
-        <label class="remember-login"><input id="remember-login" type="checkbox"><span>ログインID・パスワードを記録する</span></label>
-        <button class="primary-button full-button" type="submit">開く</button>
-        <div class="auth-divider"><span>または</span></div>
-        <button id="passkey-login" class="quiet-button full-button" type="button">端末のロック解除でログイン</button>
+      <p class="login-description">端末のロック解除で日記を開きます。</p>
+      <div class="login-actions">
+        <button id="passkey-login" class="primary-button full-button login-button" type="button">パスキーでログイン</button>
         <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
-      </form>
+      </div>
     </section>
   </main>
 
@@ -133,7 +112,7 @@
         <button class="install-app-button header-icon-button" type="button" aria-label="ホーム画面に追加" title="ホーム画面に追加">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V21h-6v-6h-4v6H4Z"></path><path d="M18 3v5M15.5 5.5h5"></path></svg>
         </button>
-        <button id="camera-roll-button" class="header-icon-button" type="button" aria-label="画像まとめ" title="画像まとめ">
+        <button id="camera-roll-button" class="header-icon-button" type="button" aria-label="アルバム" title="アルバム">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m5 17 4-4 3 3 2-2 5 3"></path></svg>
         </button>
         <button id="draft-button" class="header-icon-button" type="button" aria-label="下書き" title="下書き" hidden>
@@ -280,43 +259,6 @@
       </section>
     </main>
   </div>
-
-  <dialog id="initial-password-dialog" class="entry-dialog initial-password-dialog" aria-labelledby="initial-password-title">
-    <form id="initial-password-form" class="entry-form initial-password-form">
-      <div>
-        <p class="section-kicker">First login</p>
-        <h2 id="initial-password-title">新しいパスワードを設定</h2>
-        <p class="field-help">仮パスワードに代わる、ご本人専用のパスワードを設定してください。</p>
-      </div>
-
-      <label for="initial-password">新しいパスワード</label>
-      <div class="password-field">
-        <input id="initial-password" type="password" autocomplete="new-password" required minlength="6" maxlength="128">
-        <button class="password-toggle" type="button" data-password-toggle="initial-password" aria-pressed="false" aria-label="パスワードを表示" title="パスワードを表示">
-          <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
-          <svg class="password-eye password-eye-closed" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><path d="M4 4l16 16"></path></svg>
-        </button>
-      </div>
-
-      <label for="initial-password-confirmation">新しいパスワード（確認）</label>
-      <div class="password-field">
-        <input id="initial-password-confirmation" type="password" autocomplete="new-password" required minlength="6" maxlength="128">
-        <button class="password-toggle" type="button" data-password-toggle="initial-password-confirmation" aria-pressed="false" aria-label="パスワードを表示" title="パスワードを表示">
-          <svg class="password-eye password-eye-open" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
-          <svg class="password-eye password-eye-closed" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><path d="M4 4l16 16"></path></svg>
-        </button>
-      </div>
-      <p class="password-requirements">パスワードは6文字以上で設定してください。</p>
-      <aside class="initial-password-notice">
-        初回設定後は、登録したパスワードを確認し、安全な場所に保管してください。パスワードを紛失するとログインできません。お忘れの場合は、T-lain管理者へ再発行をご依頼ください。
-      </aside>
-      <p id="initial-password-message" class="form-message" role="status" aria-live="polite"></p>
-      <div class="initial-password-actions">
-        <button id="initial-password-cancel" class="quiet-button" type="button">ログイン画面へ戻る</button>
-        <button id="initial-password-submit" class="primary-button" type="submit">パスワードを設定</button>
-      </div>
-    </form>
-  </dialog>
 
   <dialog id="entry-dialog" class="entry-dialog">
     <article class="entry-detail">
@@ -504,8 +446,8 @@
     <section class="camera-roll-shell">
       <header class="camera-roll-head">
         <div>
-          <p class="section-kicker">Image collection</p>
-          <h2>画像まとめ</h2>
+          <p class="section-kicker">Album</p>
+          <h2>アルバム</h2>
         </div>
         <button class="icon-button" type="button" data-close-dialog="camera-roll-dialog" aria-label="閉じる">×</button>
       </header>
@@ -543,6 +485,7 @@
       <div class="photo-stage">
         <button id="photo-previous" class="photo-nav photo-nav-previous" type="button" aria-label="前の写真">‹</button>
         <img id="photo-viewer-image" alt="">
+        <p id="photo-viewer-status" class="photo-viewer-status" role="status" aria-live="polite" hidden></p>
         <button id="photo-next" class="photo-nav photo-nav-next" type="button" aria-label="次の写真">›</button>
       </div>
       <div class="photo-viewer-meta">
@@ -585,10 +528,10 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-fed9f2ce25e0" defer></script>
-  <script src="/diary/troom-date-picker.js?v=diary-fed9f2ce25e0" defer></script>
-  <script src="/security/passkey-client.js?v=diary-fed9f2ce25e0" defer></script>
-  <script src="/diary/dialog-navigation.js?v=diary-fed9f2ce25e0" defer></script>
-  <script src="/diary/diary.js?v=diary-fed9f2ce25e0" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-3ac21b651bde" defer></script>
+  <script src="/diary/troom-date-picker.js?v=diary-3ac21b651bde" defer></script>
+  <script src="/security/passkey-client.js?v=diary-3ac21b651bde" defer></script>
+  <script src="/diary/dialog-navigation.js?v=diary-3ac21b651bde" defer></script>
+  <script src="/diary/diary.js?v=diary-3ac21b651bde" defer></script>
 </body>
 </html>

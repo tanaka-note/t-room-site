@@ -41,7 +41,7 @@ export async function startReview(port = 0, { source } = {}) {
         const relative = mapping.get(url.pathname) || (url.pathname.startsWith('/health/') ? `health-worker/public/${url.pathname.slice(8) || 'index.html'}` : null);
         if (!relative || relative.includes('..')) { outgoing.writeHead(404); outgoing.end(); return; }
         let data = await readFile(resolve(root, relative));
-        if (relative.endsWith('index.html')) data = Buffer.from(data.toString().replace('<body>', '<body><div class="card review-banner" id="review-banner"><strong>ローカル確認用・合成データのみ／終了すると記録は消えます</strong><label>操作する利用者<select id="review-person"><option value="owner">田中宏知（確認用）</option><option value="subject">田中暢美（確認用）</option></select></label></div>'));
+        if (relative.endsWith('index.html')) data = Buffer.from(data.toString().replace('<body>', '<body><div class="card review-banner" id="review-banner"><strong>ローカル確認用・合成データのみ／終了すると記録は消えます</strong><label>操作する利用者<select id="review-person"><option value="owner">利用者A（確認用）</option><option value="subject">利用者B（確認用）</option></select></label></div>'));
         outgoing.writeHead(200, { 'Content-Type': relative.endsWith('.html') ? 'text/html;charset=utf-8' : relative.endsWith('.css') ? 'text/css' : 'text/javascript', 'Cache-Control': 'no-store', 'Content-Security-Policy': CONTENT_SECURITY_POLICY }); outgoing.end(data); return;
       }
       const chunks = []; for await (const chunk of incoming) chunks.push(chunk);

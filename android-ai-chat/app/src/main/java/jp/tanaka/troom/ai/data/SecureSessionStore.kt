@@ -20,6 +20,10 @@ class SecureSessionStore(context: Context) {
     @Synchronized fun saveSessionCookie(cookie: String) = save(KEY_COOKIE, cookie)
     @Synchronized fun readSessionCookie(): String? = read(KEY_COOKIE)
     @Synchronized fun clearSession() = preferences.edit().remove(KEY_COOKIE).apply()
+    // A late request cannot restore a logged-out or replaced login.
+    @Synchronized fun renewSessionCookie(expected: String, renewed: String) {
+        if (readSessionCookie() == expected) saveSessionCookie(renewed)
+    }
 
     @Synchronized
     fun savePending(message: PendingMessage) = save(KEY_PENDING, JSONObject()

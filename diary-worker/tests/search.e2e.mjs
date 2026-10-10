@@ -1,3 +1,4 @@
+import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -23,7 +24,7 @@ for (const args of [
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
-const server = spawn(process.execPath, [wranglerPath, "dev", "--local", "--port", String(port),
+const server = spawn(process.execPath, [wranglerPath, "dev", ...passkeyFixtureArgs, "--local", "--port", String(port),
   "--var", "DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test",
   "--var", "DIARY_WIFE_ADMIN_LOGIN_ID:wife@example.test",
   "--var", `DIARY_MAIN_ADMIN_PASSWORD_HASH:${testHash("main-test")}`,
@@ -57,7 +58,7 @@ async function request(path, { method = "GET", body, cookie } = {}) {
 }
 
 async function login(loginId, password) {
-  const result = await request("/login", { method: "POST", body: { loginId, password } });
+  const result = await diaryFixtureLogin(request, loginId, password);
   assert.equal(result.response.status, 200, JSON.stringify(result.result));
   return { session: result.result, cookie: result.cookie };
 }
@@ -74,7 +75,7 @@ try {
     method: "POST", cookie: chiharu.cookie,
     body: { password: "ちはるの日記", confirmation: "ちはるの日記" }
   });
-  assert.equal(changed.response.status, 200);
+  assert.equal(changed.response.status, 410);
   const prefix = "search-test-" + randomUUID().slice(0, 12);
   async function create(title, content, cookie = main.cookie, extra = {}) {
     const result = await request("/entries", { method: "POST", cookie,
@@ -94,7 +95,7 @@ try {
   const one = await create("ふゆ", "家で過ごした。");
   const titleOnly = await create("ふゆと公園とお弁当", "本文だけ。");
   const special = await create("特殊", "<b> 100%_ A+B 😀 👨‍👩‍👧‍👦 O'Reilly & abc ABC");
-  await create("ふゆ公園お弁当", "別世帯の日記", changed.cookie);
+  await create("ふゆ公園お弁当", "別世帯の日記", chiharu.cookie);
   const ids = async (q) => (await search(q)).entries.map((entry) => entry.id).sort((a, b) => a - b);
   assert.deepEqual(await ids("ふゆ"), [scattered, reversed, two, one, titleOnly]);
   for (const q of ["ふゆ 公園", "ふゆ　公園", " ふゆ　  公園  ふゆ ", "公園 ふゆ"]) {
@@ -108,7 +109,7 @@ try {
   assert.equal((await search(" 　 ")).entries.length, 6);
   assert.deepEqual((await search("ふゆ 公園", { dateFrom: "2026-08-13" })).entries, []);
   assert.equal((await search("ふゆ 公園", { dateFrom: "2026-08-12", dateTo: "2026-08-12" })).entries.length, 4);
-  assert.equal((await search("ふゆ 公園", {}, changed.cookie)).entries.length, 1);
+  assert.equal((await search("ふゆ 公園", {}, chiharu.cookie)).entries.length, 1);
   const manyWords = Array.from({ length: 50 }, (_, index) => String.fromCharCode(0x4e00 + index));
   const manyWordsId = await create("50語", manyWords.join(""));
   assert.deepEqual(await ids(manyWords.join(" ")), [manyWordsId]);
@@ -123,7 +124,7 @@ try {
 
   const tagFixture = { tags: [prefix, "家族旅行", "旅の記録", "公園", "境界前", "境界後", "A+B%_<b>😀", "abc"] };
   const tagOnly = await create("タグ一致日記", "海辺で過ごした。", main.cookie, tagFixture);
-  await create("タグ一致日記", "海辺で過ごした。", changed.cookie, tagFixture);
+  await create("タグ一致日記", "海辺で過ごした。", chiharu.cookie, tagFixture);
   await create("タグ下書き", "海辺で過ごした。", main.cookie, { ...tagFixture, status: "draft" });
   assert.deepEqual(await ids("旅行"), [tagOnly], "partial matches inside tags must be searchable");
   assert.deepEqual(await ids("旅"), [tagOnly], "matching multiple tags must not duplicate the entry");
@@ -132,7 +133,7 @@ try {
   assert.deepEqual(await ids("#旅行"), [], "the displayed # is not part of a saved tag");
   assert.deepEqual(await ids("A+B %_ <b> 😀 一致"), [tagOnly], "tag matching must remain literal");
   assert.deepEqual(await ids("Abc"), [], "tag matching must remain case-sensitive");
-  assert.equal((await search("旅行", {}, changed.cookie)).entries.length, 1, "tag search must remain household-scoped");
+  assert.equal((await search("旅行", {}, chiharu.cookie)).entries.length, 1, "tag search must remain household-scoped");
   assert.deepEqual((await search("旅行", { dateFrom: "2026-08-13" })).entries, []);
   assert.deepEqual((await search("旅行", { month: "2026-09" })).entries, []);
   assert.deepEqual((await search("旅行", { tag: "公園" })).entries.map((entry) => entry.id), [tagOnly]);

@@ -13,6 +13,7 @@ class AiChatApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        repository = AiRepository(AiHttpClient(BuildConfig.SERVER_BASE_URL), SecureSessionStore(this))
+        val store = SecureSessionStore(this)
+        repository = AiRepository(AiHttpClient(BuildConfig.SERVER_BASE_URL, store::renewSessionCookie), store)
     }
 }

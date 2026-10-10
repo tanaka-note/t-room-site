@@ -49,6 +49,7 @@
   "triggers": {
     "crons": ["25 18 * * *"]
   },
+  "ratelimits": [{ "name": "PASSWORD_AUDIT_RATE_LIMITER", "namespace_id": "1102", "simple": { "limit": 30, "period": 60 } }],
   "vars": {
     "SESSION_TTL_SECONDS": "43200",
     "PASSKEY_SESSION_TTL_SECONDS": "43200",

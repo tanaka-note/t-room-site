@@ -16,7 +16,8 @@ assert.doesNotMatch(client, /while \(nextFolderOffset != null \|\| nextFileOffse
 assert.match(client, /async function loadNextItemPage/);
 assert.match(client, /if \(state\.itemPageLoading \|\| !state\.progressiveItemsLoading/);
 assert.match(client, /function installItemRenderSentinel/);
-assert.match(client, /new IntersectionObserver[\s\S]*?rootMargin: "800px 0px"/);
+const view = await readFile(new URL("../public/listing-view.js", import.meta.url), "utf8");
+assert.match(view, /new IntersectionObserver[\s\S]*?rootMargin: "800px 0px"/);
 assert.match(client, /pageParams\.set|folderPageParams\.set/);
 assert.match(client, /folderPageParams\.set\("foldersOnly", "1"\)/);
 assert.match(client, /filePageParams\.set\("filesOnly", "1"\)/);

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import "../public/preview-controls.js";
 
 const [mainHtml, mainCss, mainJs, shareHtml, shareCss, shareJs] = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   readFile(new URL("../public/cloud.css", import.meta.url), "utf8"),
-  readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
+  Promise.all(["cloud.js", "listing-model.js", "preview-controls.js"].map(file => readFile(new URL(`../public/${file}`, import.meta.url), "utf8"))).then(parts => parts.join("\n")),
   readFile(new URL("../public/share.html", import.meta.url), "utf8"),
   readFile(new URL("../public/share.css", import.meta.url), "utf8"),
   readFile(new URL("../public/share.js", import.meta.url), "utf8")
@@ -33,8 +34,8 @@ assert.match(shareCss, /\.items\.list-mode \{ grid-template-columns:1fr/);
 assert.match(mainHtml, /class="sort-button active"[^>]*data-sort-key="name"[^>]*aria-pressed="true">名前 <span[^>]*><svg[^>]*stroke="currentColor"[^>]*><path d="m5 15 7-7 7 7"\/><\/svg><\/span>/);
 assert.match(shareHtml, /class="sort-button active"[^>]*data-sort-key="updated"[^>]*aria-pressed="true">更新日 <span[^>]*><svg[^>]*stroke="currentColor"[^>]*><path d="m5 9 7 7 7-7"\/><\/svg><\/span>/);
 assert.match(mainJs, /function resetTypeDefaultSort\(\)/);
-assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => a\.name\.localeCompare/);
-assert.match(mainJs, /if \(state\.sortUsesTypeDefaults\) result\.sort\(\(a, b\) => String\(b\.createdAt/);
+assert.match(mainJs, /if \(preferences\.sortUsesTypeDefaults\) result\.sort\(byName\)/);
+assert.match(mainJs, /finalizeListingRecords\(hydrated, TCloudListing\.finalizeFiles\)/);
 assert.doesNotMatch(mainJs, /state\.sort === "updated"[^\n]+updatedAt/, "更新日順に名称変更日時を使用しないでください。");
 assert.match(shareJs, /const byUpdated = \(a, b\) => direction \* String\(a\.createdAt/);
 assert.match(workerJs, /"updated-desc": "created_at DESC", "updated-asc": "created_at ASC"/);
@@ -162,15 +163,15 @@ function verifyRelativeSeek(source, nextFunctionMarker, shared = false) {
   const start = source.indexOf("function relativeSeekTime");
   const end = source.indexOf(nextFunctionMarker, start);
   assert.ok(start >= 0 && end > start, `${shared ? "共有" : "管理"}画面に相対シーク計算を実装してください。`);
-  const context = { Number, Math };
-  vm.runInNewContext(`${source.slice(start, end)}; globalThis.relativeSeek = relativeSeekTime;`, context);
+  const context = { Number, Math, relativeSeek: globalThis.TCloudPreviewControls.relativeSeekTime };
+  if (shared) vm.runInNewContext(`${source.slice(start, end)}; globalThis.relativeSeek = relativeSeekTime;`, context);
   assert.equal(context.relativeSeek(50, 100, 100, 200, 120), 50, "押しただけでは再生位置を移動しないでください。");
   assert.equal(context.relativeSeek(50, 100, 200, 200, 120), 110, "右へ動かした距離に応じて進めてください。");
   assert.equal(context.relativeSeek(50, 100, 0, 200, 120), 0, "左端を超えないようにしてください。");
   assert.equal(context.relativeSeek(110, 100, 200, 200, 120), 120, "動画の終端を超えないようにしてください。");
 }
 
-verifyRelativeSeek(mainJs, "function addPreviewPlayerControls");
+verifyRelativeSeek(await readFile(new URL("../public/preview-controls.js", import.meta.url), "utf8"), "function attach");
 verifyRelativeSeek(shareJs, "function addSharedPreviewPlayerControls", true);
 
 async function verifyClosedPreviewWinsOrientationRace(source, startMarker, endMarker, shared = false) {

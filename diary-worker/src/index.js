@@ -1,6 +1,8 @@
+import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
+import { createDiaryEntryDomain } from "./entry-domain.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
-import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
+import { validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
 import { splitSearchTerms } from "../public/diary-search.js";
@@ -14,14 +16,12 @@ export class BackupBrowserIntegration extends WorkerEntrypoint {
     return getBackupSnapshot(this.env, { refresh: options?.refresh === true });
   }
 }
-import { enqueueSecurityAudit, recordSecurityAudit } from "../../assets/security-audit-worker.js";
+import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime } from "../../assets/session-policy.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionExpiresAt, sessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/diary";
 const SESSION_COOKIE = "troom_diary_session";
-const LOGIN_LIMIT = 5;
-const LOGIN_WINDOW_SECONDS = 15 * 60;
 const MEDIA_DELETION_BATCH_SIZE = 300;
 const MEDIA_DELETION_REQUEST_MAX_BATCHES = 4;
 const MEDIA_DELETION_SCHEDULED_MAX_BATCHES = 10;
@@ -29,9 +29,6 @@ const PHOTO_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const STAGED_PHOTO_CLEANUP_BATCH_SIZE = 100;
 const PHOTO_REQUEST_MAX_BYTES = 80 * 1024 * 1024;
 const PHOTO_PARTS_MAX_BYTES = 64 * 1024 * 1024;
-const PASSWORD_PBKDF2_ITERATIONS = 600000;
-const PASSWORD_HASH_BYTES = 32;
-const PASSWORD_SALT_BYTES = 16;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const MAIN_ADMIN_ACCOUNT_ID = "main-admin";
@@ -41,8 +38,8 @@ const CHIHARU_ADMIN_ACCOUNT_ID = "chiharu-admin";
 const TANAKA_HOUSEHOLD_ID = "tanaka-household";
 const CHIHARU_HOUSEHOLD_ID = "chiharu-household";
 const DIARY_ACCOUNTS = [
-  { id: MAIN_ADMIN_ACCOUNT_ID, name: "田中宏知", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: true, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", secretKey: "DIARY_MAIN_ADMIN_PASSWORD_HASH", sessionVersion: 1 },
-  { id: WIFE_ADMIN_ACCOUNT_ID, name: "田中暢美", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: false, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", secretKey: "DIARY_WIFE_ADMIN_PASSWORD_HASH", sessionVersion: 1 }
+  { id: MAIN_ADMIN_ACCOUNT_ID, name: "田中宏知", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: true, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_MAIN_ADMIN_LOGIN_ID", sessionVersion: 1 },
+  { id: WIFE_ADMIN_ACCOUNT_ID, name: "田中暢美", householdId: TANAKA_HOUSEHOLD_ID, role: "admin", isGlobalOwner: false, canManageEntries: true, canViewTrash: true, canPermanentlyDelete: true, canViewInvestment: true, loginIdSecretKey: "DIARY_WIFE_ADMIN_LOGIN_ID", sessionVersion: 1 }
 ];
 
 export class SecurityIntegration extends WorkerEntrypoint {
@@ -117,8 +114,14 @@ export default {
       }
 
       if (path.startsWith("/api/")) {
-        const response = await handleApi(request, env, url, path, context);
-        return secureResponse(await withRollingSession(request, response, env, url, path));
+        // Share validation only within this read request. Mutations still revalidate
+        // after their handler, and a subsequent request always checks current policy.
+        let sessionPromise;
+        const getSession = () => request.method === "GET"
+          ? (sessionPromise ??= readSession(request, env))
+          : readSession(request, env);
+        const response = await withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context, getSession));
+        return secureResponse(await withRollingSession(request, response, env, url, path, getSession));
       }
 
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -140,7 +143,7 @@ export default {
       if (error instanceof HttpError) {
         return secureResponse(json({ error: error.message }, error.status));
       }
-      console.error("Diary request failed", error instanceof Error ? error.message : "unknown error");
+      console.error("Diary request failed", new URL(request.url).pathname.endsWith("/api/login") ? "password_login_error" : (error instanceof Error ? error.message : "unknown error"));
       return secureResponse(json({ error: "日記を読み込めませんでした。時間を置いてもう一度お試しください。" }, 500));
     }
   },
@@ -155,10 +158,11 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path, context) {
+async function handleApi(request, env, url, path, context, getSession) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
+  if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "diary");
   if (path === "/api/session" && request.method === "GET") {
-    const session = await readSession(request, env);
+    const session = await getSession();
     if (session) await recordSecurityAudit(env, request, {
       service: "diary", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
@@ -189,89 +193,13 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/login" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (!DIARY_ACCOUNTS.every((account) => env[account.secretKey] && env[account.loginIdSecretKey]) || !isValidSessionSecret(env.SESSION_SECRET)) {
-      return json({ error: "日記の認証設定が完了していません。" }, 503);
-    }
-
-    const body = await readJson(request, 4096);
-    const loginId = normalizeLoginId(body.loginId);
-    const password = typeof body.password === "string" ? body.password : "";
-    if (!loginId || !password || password.length > 256) {
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", authMethod: "password" });
-      return json({ error: "IDまたはパスワードを確認してください。" }, 400);
-    }
-
-    const requestedAccount = await findAccountByLoginId(loginId, env);
-    const passwordPolicy = requestedAccount ? await readPasswordAuthPolicy(env, "diary", requestedAccount.id) : null;
-    if (passwordPolicy && !passwordPolicy.enabled) {
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount.id, role: securityAuditRole(requestedAccount), authMethod: "password", details: { reason: "password_auth_disabled" } });
-      return json({ error: "IDまたはパスワードが違います。" }, 401);
-    }
-    const now = Math.floor(Date.now() / 1000);
-    const fingerprint = requestedAccount ? await loginFingerprint(request, requestedAccount, env) : "";
-    if (fingerprint) {
-      const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at, locked_until FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
-      if (Number(attempt?.locked_until || 0) > now) {
-        enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "login_blocked", outcome: "blocked", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password" });
-        return json({ error: "ログインが一時停止されています。15分ほど待ってからお試しください。" }, 429);
-      }
-    }
-    const passwordHash = requestedAccount
-      ? (requestedAccount.passwordHash || (requestedAccount.temporarySecretKey ? env[requestedAccount.temporarySecretKey] : env[requestedAccount.secretKey]))
-      : null;
-    const account = requestedAccount && passwordHash && await verifyPassword(password, passwordHash, env)
-      ? requestedAccount
-      : null;
-    if (!account) {
-      if (requestedAccount && fingerprint) await recordFailedLogin(env, fingerprint, now);
-      enqueueSecurityAudit(env, context, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", serviceAccountId: requestedAccount?.id, role: securityAuditRole(requestedAccount), authMethod: "password" });
-      return json({ error: "IDまたはパスワードが違います。" }, 401);
-    }
-    if (requestedAccount.passwordHash && passwordHashNeedsUpgrade(passwordHash)) {
-      try {
-        const upgradedHash = await createPasswordHash(password, env);
-        await env.DB.prepare(`
-          UPDATE diary_accounts
-          SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ? AND password_hash = ? AND active = 1
-        `).bind(upgradedHash, requestedAccount.id, passwordHash).run();
-      } catch (error) {
-        console.error("Diary password hash upgrade failed", {
-          stage: "password-hash-upgrade",
-          errorType: error instanceof Error ? error.name : "unknown"
-        });
-      }
-    }
-    await env.DB.prepare("DELETE FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
-
-    const policy = getSessionPolicy(env, "password");
-    const sessionId = crypto.randomUUID();
-    const startedAt = new Date().toISOString();
-    const expiresAt = sessionExpiresAt(Math.floor(Date.parse(startedAt) / 1000), policy);
-    const token = await createSessionToken(account, policy, env, account.householdId, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt, expiresAt });
-    const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "password", sessionId, expiresAt, startedAt, sessionVersion: diarySessionVersion(env, account.sessionVersion) });
-    return json({
-      authenticated: true,
-      role: account.role,
-      accountName: account.name,
-      accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`),
-      loginId: accountLoginId(account, env),
-      householdId: account.householdId,
-      activeHouseholdId: account.householdId,
-      isGlobalOwner: Boolean(account.isGlobalOwner),
-      mustChangePassword: Boolean(account.mustChangePassword),
-      canManageEntries: Boolean(account.canManageEntries),
-      canViewTrash: account.canViewTrash,
-      canPermanentlyDelete: account.canPermanentlyDelete,
-      canViewInvestment: account.canViewInvestment
-    }, 200, headers);
+    await recordSecurityAudit(env, request, { service: "diary", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false } });
+    return json({ error: "日記はパスキーでログインしてください。" }, 401);
   }
 
   if (path === "/api/passkey/handoff" && request.method === "POST") {
     if (!validMutationRequest(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) return json({ error: "パスキー機能は一時停止中です。ID・パスワードが有効なアカウントをご利用いただくか、管理者へ復旧を依頼してください。" }, 503);
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) return json({ error: "パスキー機能は一時停止中です。管理者へ復旧を依頼してください。" }, 503);
     const body = await readJson(request, 4096);
     const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "diary");
     if (!handoff) return json({ error: "パスキー認証の有効期限が切れています。もう一度お試しください。" }, 401);
@@ -286,6 +214,7 @@ async function handleApi(request, env, url, path, context) {
       serviceAccountId: handoff.serviceAccountId,
       passkeySessionEpoch: handoff.sessionEpoch,
       authMethod: "passkey",
+      rollingSessionVersion: ROLLING_SESSION_VERSION,
       sessionId,
       startedAt: new Date().toISOString()
     });
@@ -296,23 +225,20 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    const session = await readSession(request, env);
+    const session = await getSession();
+    if (session?.rollingSessionVersion != null && !(await serviceRollingSession(env, "diary", session, "end")).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
     if (session) await recordSecurityAudit(env, request, { service: "diary", eventType: "logout", outcome: "success", identityId: session.identityId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.accountId, role: securityAuditRole(session), authMethod: session.authMethod, sessionId: session.sessionId });
     const headers = new Headers();
     headers.set("Set-Cookie", clearSessionCookie(url.protocol === "https:"));
     return json({ ok: true }, 200, headers);
   }
 
-  const session = await readSession(request, env);
+  const session = await getSession();
   if (!session) return json({ error: "ログインが必要です。" }, 401);
 
   if (path === "/api/password/initial" && request.method === "POST") {
     if (!validMutationRequest(request, url)) return json({ error: "不正なリクエストです。" }, 403);
-    return changeInitialPassword(request, env, session, url);
-  }
-
-  if (session.mustChangePassword) {
-    return json({ error: "最初にパスワードを再設定してください。", mustChangePassword: true }, 428);
+    return json({ error: "日記のパスワード設定は廃止されています。" }, 410);
   }
 
   if (path === "/api/households" && request.method === "GET") {
@@ -334,6 +260,9 @@ async function handleApi(request, env, url, path, context) {
     }
     const account = await findAccountById(session.accountId, env);
     const policy = getSessionPolicy(env, session.authMethod);
+    const renewed = session.rollingSessionVersion === ROLLING_SESSION_VERSION && request.headers.get("X-Troom-Activity") === "foreground"
+      ? await serviceRollingSession(env, "diary", session, "touch") : { valid: true, expiresAt: session.exp };
+    if (!renewed.valid) throw new HttpError(401, "パスキーでログインし直してください。");
     const token = await createSessionToken(account, policy, env, householdId, {
       identityId: session.identityId,
       credentialId: session.credentialId,
@@ -344,7 +273,8 @@ async function handleApi(request, env, url, path, context) {
       authMethod: session.authMethod,
       sessionId: session.sessionId,
       startedAt: session.startedAt,
-      expiresAt: session.exp
+      rollingSessionVersion: session.rollingSessionVersion,
+      expiresAt: renewed.expiresAt
     });
     const headers = new Headers();
     headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
@@ -498,6 +428,7 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/password-login-audit.js", "/password-login-audit.js"],
     ["/dialog-navigation.js", "/dialog-navigation.js"],
     ["/diary-photo-processing.js", "/diary-photo-processing.js"],
     ["/diary-photo-upload.js", "/diary-photo-upload.js"],
@@ -2095,141 +2026,6 @@ async function validatePendingPhotoSave(body, env, session) {
   return true;
 }
 
-function validateEntryInput(body, { draft = false, allowEmptyContent = false } = {}) {
-  const entryDate = typeof body.entryDate === "string" ? body.entryDate.trim() : "";
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  const content = typeof body.content === "string" ? body.content.trim() : "";
-  if (!isValidDate(entryDate)) throw new HttpError(400, "日付を確認してください。");
-  if ((!draft && !title) || title.length > 200) throw new HttpError(400, "タイトルは1文字以上200文字以内で入力してください。");
-  if ((!draft && !allowEmptyContent && !content) || content.length > 200000) throw new HttpError(400, "本文は1文字以上20万文字以内で入力してください。");
-  const rawTags = Array.isArray(body.tags) ? body.tags : [];
-  const tags = [...new Set(rawTags.map(normalizeTag).filter(Boolean))];
-  if (tags.length > 100 || tags.some((tag) => tag.length > 30)) {
-    throw new HttpError(400, "タグは100個まで、1個30文字以内で入力してください。");
-  }
-  const contentFormat = validateContentFormat(body.contentFormat, content);
-  const excludedPhotoIds = parsePhotoIdList(body.excludedPhotoIds);
-  const weather = body.weather ?? null;
-  if (weather !== null && !["sunny", "cloudy", "partly_cloudy", "cloudy_rain", "rain", "heavy_rain", "thunder", "snow"].includes(weather)) {
-    throw new HttpError(400, "天気を確認してください。");
-  }
-  return { entryDate, title, content, contentFormat, tags, excludedPhotoIds, weather };
-}
-
-function normalizeEntryStatus(value) {
-  return value === "draft" ? "draft" : "published";
-}
-
-function parsePhotoIdList(value) {
-  let source = value;
-  if (typeof source === "string") {
-    try { source = JSON.parse(source); } catch { source = []; }
-  }
-  if (!Array.isArray(source)) return [];
-  return [...new Set(source.map((item) => String(item || "").toLowerCase()).filter(isUuid))];
-}
-
-function validateContentFormat(value, content) {
-  if (value == null || value === "") return null;
-  if (!value || typeof value !== "object" || value.version !== 1 || !Array.isArray(value.runs)) {
-    throw new HttpError(400, "本文の書式情報を確認してください。");
-  }
-  if (value.runs.length > 5000) {
-    throw new HttpError(400, "本文の書式が多すぎます。");
-  }
-  const colors = new Set(["red", "blue", "green", "orange", "purple", "gray", "light-blue", "brown"]);
-  const normalized = [];
-  let previousEnd = 0;
-  for (const run of value.runs) {
-    const start = Number(run?.start);
-    const end = Number(run?.end);
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < previousEnd || start < 0 || end <= start || end > content.length) {
-      throw new HttpError(400, "本文の書式範囲を確認してください。");
-    }
-    const color = run.color == null || run.color === "" ? null : String(run.color);
-    if (color && !colors.has(color)) {
-      throw new HttpError(400, "本文の文字色を確認してください。");
-    }
-    const item = {
-      start,
-      end,
-      bold: run.bold === true,
-      italic: run.italic === true,
-      underline: run.underline === true,
-      color
-    };
-    if (!item.bold && !item.italic && !item.underline && !item.color) {
-      throw new HttpError(400, "本文の書式情報を確認してください。");
-    }
-    normalized.push(item);
-    previousEnd = end;
-  }
-  return normalized.length ? JSON.stringify({ version: 1, runs: normalized }) : null;
-}
-
-function serializePhoto(row) {
-  return {
-    id: row.id,
-    entryId: Number(row.entry_id),
-    entryDate: row.entry_date || null,
-    entryTitle: row.entry_title || null,
-    authorId: row.author_id || null,
-    authorName: row.author_name || null,
-    fileName: row.file_name,
-    contentType: row.content_type,
-    originalSize: Number(row.original_size || 0),
-    width: row.width == null ? null : Number(row.width),
-    height: row.height == null ? null : Number(row.height),
-    createdByName: row.created_by_name,
-    createdAt: row.created_at,
-    thumbnailUrl: `${BASE_PATH}/api/photos/${row.id}/thumbnail`,
-    displayUrl: `${BASE_PATH}/api/photos/${row.id}/display`,
-    originalUrl: `${BASE_PATH}/api/photos/${row.id}/original`
-  };
-}
-
-function serializeEntry(row) {
-  let tags = [];
-  try {
-    tags = JSON.parse(row.tags || "[]");
-  } catch {
-    tags = [];
-  }
-  return {
-    id: Number(row.id),
-    entryDate: row.entry_date,
-    lastPublishedAt: row.last_published_at ?? null,
-    title: row.title,
-    weather: row.weather ?? null,
-    content: row.content,
-    contentFormat: parseContentFormat(row.content_format),
-    authorId: row.author_id,
-    authorName: row.author_name,
-    tags,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    deletedAt: row.deleted_at,
-    deletedById: row.deleted_by_id || null,
-    deletedByName: row.deleted_by_name || null,
-    status: row.status || "published",
-    isFavorite: Number(row.is_favorite || 0) === 1,
-    draftOfEntryId: row.draft_of_entry_id == null ? null : Number(row.draft_of_entry_id),
-    draftOfRevision: row.draft_of_revision == null ? null : Number(row.draft_of_revision),
-    excludedPhotoIds: parsePhotoIdList(row.draft_excluded_photo_ids),
-    revision: Number(row.revision)
-  };
-}
-
-function parseContentFormat(value) {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed?.version === 1 && Array.isArray(parsed.runs) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 async function readSession(request, env) {
   if (!isValidSessionSecret(env.SESSION_SECRET)) return null;
   const cookies = parseCookies(request.headers.get("Cookie") || "");
@@ -2275,32 +2071,17 @@ function getSessionPolicy(env, authMethod) {
   return sessionPolicyForAuthMethod(env, authMethod, clampNumber(env.SESSION_TTL_SECONDS, 3600, PASSWORD_SESSION_TTL_SECONDS, PASSWORD_SESSION_TTL_SECONDS));
 }
 
-async function withRollingSession(request, response, env, url, path) {
-  if (path === "/api/login" || path === "/api/passkey/handoff" || path === "/api/logout" || path === "/api/password/initial"
-    || path === "/api/households/select" || response.status === 401) return response;
-  const session = await readSession(request, env);
-  if (!session || !shouldRefreshSession(session)) return response;
-  const account = await findAccountById(session.accountId, env);
-  if (!account) return response;
-
-  const policy = getSessionPolicy(env, session.authMethod);
-  const token = await createSessionToken(account, policy, env, session.activeHouseholdId, {
-    identityId: session.identityId,
-    credentialId: session.credentialId,
-    serviceLinkId: session.serviceLinkId,
-    serviceAccountId: session.serviceAccountId,
-    passkeySessionEpoch: session.passkeySessionEpoch,
-    passwordSessionEpoch: session.passwordSessionEpoch,
-    authMethod: session.authMethod,
-    sessionId: session.sessionId,
-    startedAt: session.startedAt
-  });
-  const headers = new Headers(response.headers);
-  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
+async function withRollingSession(request, response, env, url, path, getSession) {
+  if (["/api/login", "/api/password-login-audit", "/api/passkey/handoff", "/api/logout", "/api/password/initial", "/api/households/select"].includes(path) || response.status === 401) return response;
+  // Reads reuse their request-local validation; mutations retain the existing
+  // second check after the handler, without renewing background activity.
+  const session = await getSession();
+  if (!response.ok || request.headers.get("X-Troom-Activity") !== "foreground") return response;
+  return renewServiceSession(request, response, env, "diary", path, session, async expiresAt => {
+    const account = await findAccountById(session.accountId, env);
+    const policy = getSessionPolicy(env, "passkey");
+    const token = await createSessionToken(account, policy, env, session.activeHouseholdId, { ...session, expiresAt });
+    return sessionCookie(token, policy, url.protocol === "https:");
   });
 }
 
@@ -2319,11 +2100,15 @@ async function createSessionToken(account, policy, env, activeHouseholdId = acco
     ...passwordSessionClaims(auth),
     ...passwordLifetimeClaims(auth),
     authMethod: auth.authMethod || "password",
+    ...(auth.rollingSessionVersion != null ? { rollingSessionVersion: auth.rollingSessionVersion } : {}),
+    auditRole: securityAuditRole(account),
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
     exp: sessionExpiresAt(Math.floor(Date.now() / 1000), policy, auth.expiresAt),
     version: String(env.SESSION_VERSION || "1")
   };
+  if (payload.rollingSessionVersion === ROLLING_SESSION_VERSION && auth.expiresAt == null
+    && !(await serviceRollingSession(env, "diary", payload, "register")).valid) throw new HttpError(503, "セッションを開始できませんでした。");
   const encodedPayload = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encodedPayload}.${await sign(encodedPayload, env.SESSION_SECRET)}`;
 }
@@ -2339,23 +2124,12 @@ function accountLoginId(account, env) {
   return normalizeLoginId(account.loginId || env[account.loginIdSecretKey]);
 }
 
-async function findAccountByLoginId(loginId, env) {
-  const row = await env.DB.prepare(`
-    SELECT id, household_id, display_name, login_id, password_hash, role,
-           must_change_password, can_view_trash, can_permanently_delete,
-           can_view_investment, can_manage_entries, session_version
-    FROM diary_accounts WHERE login_id = ? AND active = 1
-  `).bind(loginId).first();
-  if (row) return databaseAccount(row);
-  return DIARY_ACCOUNTS.find((account) => accountLoginId(account, env) === loginId) || null;
-}
-
 async function findAccountById(id, env) {
   const staticAccount = DIARY_ACCOUNTS.find((account) => account.id === id);
   if (staticAccount) return staticAccount;
   const row = await env.DB.prepare(`
-    SELECT id, household_id, display_name, login_id, password_hash, role,
-           must_change_password, can_view_trash, can_permanently_delete,
+    SELECT id, household_id, display_name, login_id, role,
+           can_view_trash, can_permanently_delete,
            can_view_investment, can_manage_entries, session_version
     FROM diary_accounts WHERE id = ? AND active = 1
   `).bind(id).first();
@@ -2363,19 +2137,14 @@ async function findAccountById(id, env) {
 }
 
 function databaseAccount(row) {
-  const temporarySecretKeys = {
-    "chiharu-admin": "DIARY_CHIHARU_TEMP_PASSWORD_HASH"
-  };
   return {
     id: row.id,
     name: row.display_name,
     loginId: row.login_id,
     householdId: row.household_id,
-    passwordHash: row.password_hash || null,
-    temporarySecretKey: row.must_change_password ? (temporarySecretKeys[row.id] || null) : null,
     role: row.role,
     isGlobalOwner: false,
-    mustChangePassword: Boolean(row.must_change_password),
+    mustChangePassword: false,
     canManageEntries: Boolean(row.can_manage_entries),
     canViewTrash: Boolean(row.can_view_trash),
     canPermanentlyDelete: Boolean(row.can_permanently_delete),
@@ -2384,140 +2153,9 @@ function databaseAccount(row) {
   };
 }
 
-async function changeInitialPassword(request, env, session, url) {
-  if (!session.mustChangePassword) return json({ error: "初回パスワード設定は完了しています。" }, 409);
-  const body = await readJson(request, 4096);
-  const password = typeof body.password === "string" ? body.password : "";
-  const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
-  if (password !== confirmation) return json({ error: "確認用パスワードが一致しません。" }, 400);
-  if (!isStrongPassword(password)) {
-    return json({ error: "パスワードは6文字以上で入力してください。" }, 400);
-  }
-  const passwordHash = await createPasswordHash(password, env);
-  const result = await env.DB.prepare(`
-    UPDATE diary_accounts
-    SET password_hash = ?, must_change_password = 0,
-        session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND must_change_password = 1 AND active = 1
-  `).bind(passwordHash, session.accountId).run();
-  if (!result.meta?.changes) return json({ error: "パスワードを更新できませんでした。再度ログインしてください。" }, 409);
-  const account = await findAccountById(session.accountId, env);
-  const policy = getSessionPolicy(env, session.authMethod);
-  const token = await createSessionToken(account, policy, env, session.activeHouseholdId, {
-    identityId: session.identityId,
-    credentialId: session.credentialId,
-    serviceLinkId: session.serviceLinkId,
-    serviceAccountId: session.serviceAccountId,
-    passkeySessionEpoch: session.passkeySessionEpoch,
-    passwordSessionEpoch: session.passwordSessionEpoch,
-    authMethod: session.authMethod,
-    sessionId: session.sessionId,
-    startedAt: session.startedAt,
-    expiresAt: session.exp
-  });
-  const headers = new Headers();
-  headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-  return json({
-    authenticated: true,
-    role: account.role,
-    accountName: account.name,
-    accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`),
-    loginId: account.loginId,
-    householdId: account.householdId,
-    activeHouseholdId: account.householdId,
-    isGlobalOwner: false,
-    mustChangePassword: false,
-    canManageEntries: Boolean(account.canManageEntries),
-    canViewTrash: account.canViewTrash,
-    canPermanentlyDelete: account.canPermanentlyDelete,
-    canViewInvestment: account.canViewInvestment
-  }, 200, headers);
-}
-
-function isStrongPassword(password) {
-  return password.length >= 6 && password.length <= 128;
-}
-
-async function createPasswordHash(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(PASSWORD_SALT_BYTES));
-  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const derived = new Uint8Array(await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations: PASSWORD_PBKDF2_ITERATIONS },
-    key,
-    PASSWORD_HASH_BYTES * 8
-  ));
-  return `pbkdf2-sha256$${PASSWORD_PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${bytesToBase64Url(derived)}`;
-}
-
-function passwordHashNeedsUpgrade(encodedHash) {
-  const value = String(encodedHash || "");
-  if (!value.startsWith("pbkdf2-sha256$")) return true;
-  try {
-    const [, iterationsText, saltText, hashText] = value.split("$");
-    return Number(iterationsText) < PASSWORD_PBKDF2_ITERATIONS
-      || base64UrlToBytes(saltText).length < PASSWORD_SALT_BYTES
-      || base64UrlToBytes(hashText).length < PASSWORD_HASH_BYTES;
-  } catch {
-    return true;
-  }
-}
-
-async function loginFingerprint(request, account, env) {
-  const ip = request.headers.get("CF-Connecting-IP") || "local";
-  const secret = env.LOGIN_FINGERPRINT_SECRET || env.SESSION_SECRET;
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(`${ip}:${account.id}:${secret}`));
-  return bytesToBase64Url(new Uint8Array(digest));
-}
-
-async function recordFailedLogin(env, fingerprint, now) {
-  const attempt = await env.DB.prepare("SELECT failed_count, first_failed_at FROM diary_login_attempts WHERE fingerprint = ?").bind(fingerprint).first();
-  const inWindow = attempt && now - Number(attempt.first_failed_at) <= LOGIN_WINDOW_SECONDS;
-  const failedCount = inWindow ? Number(attempt.failed_count) + 1 : 1;
-  const firstFailedAt = inWindow ? Number(attempt.first_failed_at) : now;
-  const lockedUntil = failedCount >= LOGIN_LIMIT ? now + LOGIN_WINDOW_SECONDS : null;
-  await env.DB.prepare(`INSERT INTO diary_login_attempts (fingerprint, failed_count, first_failed_at, locked_until)
-    VALUES (?, ?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET failed_count = excluded.failed_count,
-    first_failed_at = excluded.first_failed_at, locked_until = excluded.locked_until`)
-    .bind(fingerprint, failedCount, firstFailedAt, lockedUntil).run();
-}
-
 async function sign(value, secret) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
-}
-
-async function verifyPassword(password, encodedHash, env = {}) {
-  try {
-    if (String(encodedHash).startsWith("hmac-sha256$")) {
-      const [, hashText] = String(encodedHash).split("$");
-      const pepper = env.DIARY_PASSWORD_PEPPER || env.SESSION_SECRET;
-      if (!pepper) return false;
-      const actual = await sign(password, pepper);
-      return constantTimeEqual(base64UrlToBytes(actual), base64UrlToBytes(hashText));
-    }
-    if (String(encodedHash).startsWith("sha256$")) {
-      const [, hashText] = String(encodedHash).split("$");
-      const expected = base64UrlToBytes(hashText);
-      const actual = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(password)));
-      return constantTimeEqual(actual, expected);
-    }
-    const [algorithm, iterationsText, saltText, hashText] = String(encodedHash).split("$");
-    if (algorithm !== "pbkdf2-sha256") return false;
-    const iterations = Number(iterationsText);
-    if (!Number.isInteger(iterations) || iterations < 100000 || iterations > 2000000) return false;
-    const salt = base64UrlToBytes(saltText);
-    const expected = base64UrlToBytes(hashText);
-    const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-    const derived = new Uint8Array(await crypto.subtle.deriveBits(
-      { name: "PBKDF2", hash: "SHA-256", salt, iterations },
-      key,
-      expected.length * 8
-    ));
-    return constantTimeEqual(derived, expected);
-  } catch (error) {
-    console.error("Password verification failed", error instanceof Error ? error.name : "unknown error");
-    return false;
-  }
 }
 
 function sessionCookie(token, policy, secure) {
@@ -2910,14 +2548,6 @@ function validateDateRange(dateFrom, dateTo) {
   return { from, to };
 }
 
-function normalizeTag(value) {
-  return String(value || "").trim().replace(/^#+/, "").replace(/\s+/g, " ");
-}
-
-function isUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
-}
-
 function normalizeFileName(value) {
   const normalized = String(value || "photo").normalize("NFC").replace(/[\u0000-\u001f\u007f]/g, "").trim();
   return (normalized || "photo").slice(0, 240);
@@ -2930,12 +2560,6 @@ function stripExtension(value) {
 function contentDisposition(fileName) {
   const fallback = normalizeFileName(fileName).replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(normalizeFileName(fileName))}`;
-}
-
-function isValidDate(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -2987,15 +2611,17 @@ class HttpError extends Error {
   }
 }
 
+const {
+  validateEntryInput, normalizeEntryStatus, parsePhotoIdList,
+  serializePhoto, serializeEntry, normalizeTag, isUuid, isValidDate
+} = createDiaryEntryDomain({ HttpError, basePath: BASE_PATH });
+
 export {
   cleanupStagedPhotoSession,
-  createPasswordHash,
   drainMediaDeletionQueue,
   limitedRequestBodyResponse,
-  passwordHashNeedsUpgrade,
   readJson,
   readMultipartForm,
   runScheduledMediaDeletionCleanup,
   runScheduledStagedPhotoCleanup,
-  verifyPassword
 };

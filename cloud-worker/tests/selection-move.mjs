@@ -22,7 +22,6 @@ assert.match(html, /id="move-submit"[^>]*type="button"/);
 assert.doesNotMatch(html, /<select id="move-destination"/);
 assert.match(client, /if \(!file\.trashed\) \{/);
 assert.match(client, /function installFolderLongPressSelection/);
-assert.doesNotMatch(client, /state\.selectedFiles\.size \|\| state\.selectedFolders\.size \? 80 : 380/);
 assert.match(client, /function installLongPressSelection[\s\S]*?\}, 380\);[\s\S]*?setTimeout\(\(\) => \{ card\.dataset\.longPressed = "false"; \}, 0\)/);
 assert.match(client, /const LONG_PRESS_DRAG_THRESHOLD_PX = 28/);
 assert.match(client, /const distance = Math\.hypot\(event\.clientX - startX, event\.clientY - startY\)/);
@@ -86,6 +85,7 @@ const context = vm.createContext({
   document: { addEventListener() {}, elementFromPoint() { return null; } },
   TCloudMedia: {}
 });
+vm.runInContext(await readFile(new URL("../public/selection-state.js", import.meta.url), "utf8"), context);
 vm.runInContext(client, context);
 context.movePickerRecords = [
   { id: 1, parentId: null, name: "Atsushi" },
@@ -170,18 +170,17 @@ const longPressResult = await vm.runInContext(`(async () => {
   const firstFile = { id: 201, name: "first.mp4" };
   const secondFile = { id: 202, name: "second.mp4" };
   state.files = [firstFile, secondFile];
-  state.selectedFiles.clear();
-  state.selectedFolders.clear();
+  clearSelectedRecords();
   syncSelectionBar = () => {};
   document.elementFromPoint = () => secondCard;
   installLongPressSelection(firstCard, firstFile);
   listeners.get("pointerdown")({ pointerType: "touch", button: 0, pointerId: 9, clientX: 10, clientY: 10 });
   await new Promise((resolve) => setTimeout(resolve, 400));
-  const afterLongPress = state.selectedFiles.size;
+  const afterLongPress = getSelection().count("file");
   listeners.get("pointermove")({ pointerId: 9, clientX: 16, clientY: 10, preventDefault() {} });
-  const afterFingerJitter = state.selectedFiles.size;
+  const afterFingerJitter = getSelection().count("file");
   listeners.get("pointermove")({ pointerId: 9, clientX: 45, clientY: 10, preventDefault() {} });
-  const afterDeliberateDrag = state.selectedFiles.size;
+  const afterDeliberateDrag = getSelection().count("file");
   listeners.get("pointerup")({ pointerId: 9, preventDefault() {} });
   return { afterLongPress, afterFingerJitter, afterDeliberateDrag };
 })()`, context);

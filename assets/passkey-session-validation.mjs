@@ -1,3 +1,5 @@
+import { serviceRollingSession } from "./passkey-rolling.mjs";
+
 export async function validateServicePasskeySession(payload, env, service, cloudRootFolderId = null) {
   const hasPasskeyBinding = Boolean(payload?.identityId || payload?.credentialId || payload?.serviceLinkId || payload?.passkeySessionEpoch);
   if (payload?.authMethod !== "passkey") {
@@ -7,6 +9,7 @@ export async function validateServicePasskeySession(payload, env, service, cloud
   if (!env.SECURITY) return false;
   if (!payload.identityId || !payload.credentialId || !payload.serviceLinkId || !payload.serviceAccountId || !payload.passkeySessionEpoch) return false;
   try {
+    if (service !== "cloud" && payload.rollingSessionVersion != null) return (await serviceRollingSession(env, service, payload, "read")).valid === true;
     const result = await env.SECURITY.validatePasskeySession({
       service,
       identityId: payload.identityId,

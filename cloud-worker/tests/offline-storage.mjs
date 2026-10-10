@@ -24,7 +24,7 @@ assert.match(store, /entry\.expiresAt/);
 assert.match(store, /createWritable\(\{ keepExistingData: false \}\)/);
 
 assert.match(client, /folderCount === 0/);
-assert.match(client, /state\.selectedFolders\.size/);
+assert.match(client, /getSelection\(\)\.count\("folder"\)/);
 assert.match(client, /files\.every\(\(file\) => !file\.trashed/);
 assert.match(client, /&& offlineSelectionContext\(files\)/);
 assert.match(client, /function offlineSelectionContext\(files = \[\]\)/);

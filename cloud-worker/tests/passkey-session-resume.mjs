@@ -70,7 +70,6 @@ async function resumePasskeySession(accountId, prfOutput = null, returnedAccount
     bindEvents = () => {};
     restoreInstalledAppPortrait = async () => {};
     updateInstallButtons = () => {};
-    restoreRememberedLogin = async () => {};
     reportCompletedAppUpdate = () => {};
     showLoginView = () => {};
     showLoginError = globalThis.__showLoginError;
@@ -97,7 +96,7 @@ for (const accountId of ["admin", "folder-member"]) {
   assert.equal(rejected.calls.enterApp.length, 0, `PRFなし${accountId}でCloud sessionが開始されました。`);
   assert.equal(rejected.calls.logout, 1, `PRFなし${accountId}の既存sessionがlogoutされていません。`);
   assert.equal(rejected.state.session, null, `PRFなし${accountId}のsession状態が残っています。`);
-  assert.match(rejected.calls.errors.at(-1) || "", /ID・パスワードでログインしてください/);
+  assert.match(rejected.calls.errors.at(-1) || "", /PRF対応のブラウザ・端末/);
 }
 
 for (const accountId of ["admin", "folder-member"]) {

@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+const html=readFileSync(new URL("../public/index.html",import.meta.url),"utf8");
+const script=readFileSync(new URL("../public/diary.js",import.meta.url),"utf8");
+assert.doesNotMatch(html,/initial-password|type="password"|id="login-id"|remember-login|password-login-audit\.js/);
+assert.doesNotMatch(script,/initialPassword|PasswordCredential|rememberLogin|api\("\/login"/);
+assert.match(html,/id="passkey-login"[^>]*type="button"/);
+assert.match(script,/TRoomPasskeys\.authenticate\("diary", choosePasskeyLink\)/);
+assert.match(script,/elements\.investmentSection\.hidden = !state\.canViewInvestment/);
+console.log("Diary passkey-only UI contract passed (password setup retired).");

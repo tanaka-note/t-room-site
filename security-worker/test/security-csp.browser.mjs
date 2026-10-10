@@ -266,7 +266,7 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/security/cloud-choice-test.js") {
     const source = await readFile(join(cloudPublic, "cloud.js"), "utf8");
     response.writeHead(200, responseHeaders("text/javascript; charset=utf-8"));
-    response.end(source.slice(source.indexOf("async function choosePasskeyLink("), source.indexOf("function resumePasskeyLink(")));
+    response.end(source.slice(source.indexOf("function ordinaryPasskeyLink("), source.indexOf("function resumePasskeyLink(")));
     return;
   }
   const staticFile = staticFiles.get(url.pathname);
@@ -895,15 +895,18 @@ async function verifyBrowser(browserType, name, origin) {
         { id: "personal-cloud", accountId: "folder-member", role: "member", rootFolderId: 7, displayLabel: "Atsushi", accountDisplayName: "田中宏知（一般ユーザー）" }
       ]).then((link) => { window.__memberChoice = link; });
     });
-    assert.equal(await transient.getByRole("heading", { name: "T-Cloudを開く方法を選択", exact: true }).count(), 1);
-    assert.deepEqual(await transient.locator(".troom-passkey-account-option strong").allTextContents(), ["田中宏知（オーナー）", "田中宏知（一般ユーザー）"]);
+    const choiceHeading = transient.getByRole("heading", { name: "T-Cloudを開く方法を選択", exact: true });
+    await choiceHeading.waitFor({ state: "visible" });
+    assert.equal(await choiceHeading.count(), 1);
+    assert.deepEqual(await transient.locator(".troom-passkey-account-option strong").allTextContents(), ["管理者として利用", "通常利用"]);
     await transient.setViewportSize({ width: 390, height: 844 });
-    assert.match(await transient.locator(".troom-passkey-account-dialog").textContent(), /田中宏知（一般ユーザー）.*Atsushiフォルダーを利用/s);
+    assert.match(await transient.locator(".troom-passkey-account-dialog").textContent(), /通常利用.*承認されたフォルダを利用/s);
     assert.equal(await transient.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.doesNotMatch(await transient.locator(".troom-passkey-account-dialog").textContent(), /subadmin|folder-member|副管理者|rootFolderId/);
-    await transient.getByRole("button", { name: /Atsushiフォルダーを利用/ }).click();
+    await transient.getByRole("button", { name: /通常利用/ }).click();
     await transient.waitForFunction(() => window.__memberChoice?.accountId === "folder-member");
     assert.equal((await transient.evaluate(() => window.__memberChoice)).rootFolderId, 7);
+    assert.deepEqual((await transient.evaluate(() => window.__memberChoice)).folderScopes, [{ serviceLinkId: "personal-cloud", rootFolderId: 7 }]);
     setupStatusBody = { active: false };
     return `${name}: pass`;
   } finally {
