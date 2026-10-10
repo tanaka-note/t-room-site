@@ -78,6 +78,10 @@ npm run site:visual:test
 
 ## PreviewとProduction
 
+ルートの `pnpm run build` は検索インデックスを生成した後、`site:prepare` でWranglerの配信元 `.site-assets` を作る。生成物のないcheckoutからbuildとWrangler dry-runが成功することを `tools/test-site-build.mjs` で検証する。CloudflareのBuild commandがこのコマンドの場合にもアセット準備が完了するが、外部Buildの設定・失敗原因は実ログで別途確認する。
+
+横断認証・失効のHTTP E2Eは `pnpm --dir security-worker run test:revocation` で明示実行する。ローカルのSecurity／Cloud／Diary／Billing等と合成データを使い、現行のPasskey専用サービスで旧Passwordログイン・cookieを拒否する。通常のSecurity unit verifyとは別の試験で、実端末WebAuthn／PRFの確認を代替しない。
+
 現在、安全にremote Previewへ出せるのは、DB/R2/Queue/Service Bindingを持たない公開静的サイト `t-room-site`。次のコマンドは既存のWorkerへ **versions uploadのみ**を行い、production trafficを切り替えない。URLはWrangler出力に表示される。
 
 ```sh

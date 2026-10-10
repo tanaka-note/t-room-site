@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-health",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-20",
+  "routes": [
+    {
+      "pattern": "tanaka-note.com/health*",
+      "zone_name": "tanaka-note.com"
+    }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "health-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "vars": {
+    "PASSKEY_ENABLED": "false",
+    "SESSION_VERSION": "1"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "SECURITY_AUDIT",
+        "queue": "t-room-security-audit"
+      }
+    ]
+  }
+}

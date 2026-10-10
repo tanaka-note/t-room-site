@@ -1,3 +1,4 @@
+import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -51,7 +52,8 @@ const SERVICE_REGISTRY = Object.freeze({
   billing: Object.freeze({ displayName: "請求書", binding: "BILLING_AUTH" }),
   ai: Object.freeze({ displayName: "AI Chat", binding: "AI_AUTH" }),
   downloader: Object.freeze({ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" }),
-  downloader2: Object.freeze({ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" })
+  downloader2: Object.freeze({ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" }),
+  health: Object.freeze({ displayName: "体調管理", binding: "HEALTH_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
@@ -70,7 +72,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "health"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -141,6 +143,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
   async recordAuditEvent(input) {
     await storeAuditEvent(this.env, input);
     return { stored: true };
+  }
+
+  async getHealthKeyBundle(input) {
+    return healthKeyBundle(this.env, input);
   }
 
   async getAiBudgetPolicy(identityId) {
@@ -234,6 +240,17 @@ async function handleApi(request, env, url, path, context = null) {
   if (path === "/api/tcloud/envelope" && request.method === "POST") {
     requireMutation(request, url);
     return saveOwnTCloudEnvelope(request, env);
+  }
+  if (path.startsWith("/api/health/")) {
+    if (request.method !== "GET") requireMutation(request, url);
+    const actor = await requireActiveIdentitySession(request, env);
+    if (!["/api/health/own", "/api/health/vault"].includes(path)) {
+      const admin = await requireSecurityAdmin(request, env);
+      if (admin.identityId !== actor.identityId || admin.credentialId !== actor.credentialId) throw new HttpError(403, "管理者の本人確認が一致しません。");
+      requireFreshSecurityAdmin(admin);
+    }
+    return handleHealthKeys(path, request, env, actor, { HttpError, readJson, json,
+      audit: (eventType, identityId) => writeLocalAudit(env, { eventType, identityId, service: "health", outcome: "success", authMethod: "passkey" }, request) });
   }
   const admin = await requireSecurityAdmin(request, env);
   if (path === "/api/services" && request.method === "GET") return listServiceRegistry(env);
@@ -431,7 +448,7 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const extensions = ["security", "cloud"].includes(service)
+  const extensions = ["security", "cloud", "health"].includes(service)
     ? prfAuthenticationExtensions(rows.results)
     : undefined;
   const options = await generateAuthenticationOptions({
@@ -514,6 +531,7 @@ async function createHandoff(request, env) {
     envelopes.folder_keys_rsa = folderKeys;
     delete envelopes.folder_key_rsa;
   }
+  if (service === "health" && !await healthKeyBundle(env, { identityId: identitySession.identityId, credentialId: identitySession.credentialId, serviceLinkId: selected.id })) throw new HttpError(409, "Security Centerで体調管理の鍵の準備・承認を完了してください。");
   const rawToken = randomToken(32);
   await env.DB.prepare(`INSERT INTO security_handoffs
     (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at, cloud_folder_scopes)
@@ -1683,6 +1701,11 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
       if (admin?.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "Downloaderの連携はオーナーだけが追加できます。");
       requireFreshSecurityAdmin(admin);
     }
+    if (service === "health") {
+      if (admin?.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "体調管理の連携はオーナーだけが追加できます。");
+      requireFreshSecurityAdmin(admin);
+      await assertHealthMemberAvailable(env.DB, identityId, HttpError);
+    }
     const integration = serviceProvider(env, service);
     const description = await integration.describeAccount({ accountId, rootFolderId, selectableOnly: true });
     if (!description?.valid) throw new HttpError(400, `${service}の連携先を確認できません。`);
@@ -1702,6 +1725,7 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
 async function explicitServiceLinkStatements(env, identityId, link, status, admin, request, source) {
   const id = crypto.randomUUID();
   return [
+    ...(link.service === "health" ? [healthMembershipStatement(env.DB, identityId)] : []),
     insertServiceLinkStatement(env, identityId, link, status, id),
     await localAuditStatement(env, {
       eventType: "service_link_added", outcome: "success", identityId, service: link.service,
@@ -2199,6 +2223,7 @@ async function sourceHash(request, env) {
 }
 
 async function serveAsset(request, env, url, path) {
+  if (path === "/health-crypto.mjs") return env.HEALTH_AUTH.fetch(new Request(new URL("/health/health-crypto.mjs", url.origin), request));
   const assetPath = path === "/" || path === "/invite" ? "/" : path;
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);

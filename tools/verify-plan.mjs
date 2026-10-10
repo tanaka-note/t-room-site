@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
-export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai'];
+export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'health'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat'];
 export const targets = ['tooling', 'site', ...services, 'auth', 'container-unit', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
@@ -22,6 +22,7 @@ export function commands(target) {
     tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
     site: [
       { cwd: '.', script: 'brand:test' },
+      node('.', '--test', 'tools/test-site-build.mjs'),
       node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-site'),
       node('.', 'tools/verify-web-contracts.mjs'),
       { cwd: '.', script: 'browser-policy:test' }
@@ -41,6 +42,7 @@ export function commands(target) {
       { cwd: 'downloader2-worker', script: 'test' }
     ],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
+    health: [{ cwd: 'health-worker', script: 'test' }],
     'container-unit': [node('downloader-worker', 'test/run-python.mjs', '-m', 'unittest', 'discover', '-s', 'container/tests', '-p', 'test_*.py')],
     auth: [node('.', '--test', 'tools/test-session-secret.mjs', 'tools/test-password-auth.mjs', 'tools/test-passkey-rolling.mjs'),
       node('security-worker', '--test', 'test/service-passkey-session.test.js', 'test/security-contract.test.js', 'test/primary-admin-setup.test.js'),
@@ -51,7 +53,7 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
-  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
+  const existing = ({ health: ['health-worker/test/health.browser.mjs'], tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
     security: ['security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
     diary: ['diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'] })[target] || [];
@@ -115,7 +117,7 @@ export function installDirectories(selected) {
   for (const target of selected) {
     if (target === 'site') dirs.add('security-worker');
     if (services.includes(target)) dirs.add(`${target}-worker`);
-    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'auth'].includes(target)) dirs.add('diary-worker');
+    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }
   return [...dirs];

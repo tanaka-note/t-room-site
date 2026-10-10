@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><script data-tlain-browser-guard>(function lineBrowserPolicy(scope) {
+  function isLine(userAgent) {
+    return /(?:^|[\s;(])Line\/\d+(?:\.|\b)/i.test(String(userAgent || ""));
+  }
+  function isApp() {
+    return Boolean(scope?.navigator?.standalone === true || ["standalone", "fullscreen", "minimal-ui"]
+      .some((mode) => scope?.matchMedia?.(`(display-mode: ${mode})`).matches));
+  }
+  function safeUrl(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.hostname !== "tanaka-note.com" || url.port || url.username || url.password) return null;
+      return url;
+    } catch { return null; }
+  }
+  function externalUrl(value) {
+    const url = safeUrl(value);
+    if (!url) return null;
+    url.searchParams.delete("openInAppBrowser");
+    url.searchParams.set("openExternalBrowser", "1");
+    return url.href;
+  }
+  function appUrl(value, userAgent) {
+    const url = safeUrl(value);
+    if (!url || !/Android/i.test(userAgent || "")) return null;
+    const packageName = url.pathname.startsWith("/diary/") ? "jp.tanaka.troom.diary.twa"
+      : url.pathname.startsWith("/cloud/") ? "jp.tanaka.tcloud.twa" : null;
+    if (!packageName) return null;
+    url.searchParams.delete("openExternalBrowser");
+    url.searchParams.delete("openInAppBrowser");
+    // HTTPS data + a fixed existing package, not a new application URL scheme.
+    // Android parses the last #Intent block; URL fragments stay in the data URI.
+    return `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=https;package=${packageName};S.browser_fallback_url=${encodeURIComponent(externalUrl(value))};end`;
+  }
+  const css = `:root{color-scheme:light dark;font-family:system-ui,-apple-system,sans-serif;background:#f5f6f4;color:#293831}*{box-sizing:border-box}body{margin:0;padding:24px 20px;min-height:100svh;display:grid;place-items:center}main{width:min(100%,460px);padding:32px 24px;border:1px solid #dce3dd;border-radius:18px;background:#fff}p{line-height:1.8}h1{font-size:1.25rem;line-height:1.6;margin:24px 0 16px}.brand{font-size:1.4rem;font-weight:700;letter-spacing:.06em}.actions{display:grid;gap:12px;margin:28px 0}a{display:block;padding:15px 18px;min-height:52px;border-radius:10px;text-align:center;font-weight:600;text-decoration:none;border:1px solid #587061;color:inherit;overflow-wrap:anywhere}a.primary{background:#506b59;color:#fff}a:focus-visible{outline:3px solid #8ca895;outline-offset:3px}.help{font-size:.9rem;color:#536158}.help strong{display:block}#app-note{font-size:.85rem}[hidden]{display:none!important}@media(prefers-color-scheme:dark){:root{background:#161c19;color:#e4eae5}main{background:#202923;border-color:#3b4b40}.help{color:#becbbf}a.primary{background:#536f5c}}@media(max-width:360px){main{padding:24px 18px}body{padding:16px}}`;
+  function escape(value) {
+    return String(value).replace(/[&\u003c>"']/g, (char) => ({ "&": "&amp;", "\u003c": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  }
+  function contents(value, userAgent) {
+    const external = externalUrl(value), app = appUrl(value, userAgent);
+    return `\u003chead>\u003cmeta charset="utf-8">\u003cmeta name="viewport" content="width=device-width,initial-scale=1">\u003cmeta name="robots" content="noindex,nofollow">\u003ctitle>T-lain | ブラウザのご案内\u003c/title>\u003cstyle>${css}\u003c/style>\u003c/head>\u003cbody>\u003cmain aria-labelledby="browser-title">\u003cdiv class="brand">T-lain\u003c/div>\u003ch1 id="browser-title">このブラウザでは\u003cbr>T-lainを利用できません。\u003c/h1>\u003cp>安全なログイン・パスキー認証のため、T-lainアプリまたは通常のブラウザで開いてください。\u003c/p>\u003cdiv class="actions">${app ? `\u003ca id="open-app" class="primary" href="${escape(app)}" rel="noreferrer">T-lainアプリで開く\u003c/a>` : ""}${external ? `\u003ca id="open-browser" class="${app ? "" : "primary"}" href="${escape(external)}" rel="noreferrer">既定のブラウザで開く\u003c/a>` : ""}\u003c/div>${app ? '\u003cp id="app-note">このページに対応する日記／T-Cloudアプリを開きます。開かない場合は、既定のブラウザをご利用ください。\u003c/p>' : ""}\u003cp class="help">\u003cstrong>うまく開かない場合\u003c/strong>LINEのメニュー「…」から「デフォルトのブラウザで開く」を選択してください。\u003cbr>ホーム画面に追加したアプリは、ホーム画面からも開けます。\u003c/p>\u003c/main>\u003c/body>`;
+  }
+  function enforce() {
+    if (!scope || isApp() || !isLine(scope.navigator.userAgent)) return false;
+    scope.stop();
+    scope.document.documentElement.lang = "ja";
+    scope.document.documentElement.innerHTML = contents(scope.location.href, scope.navigator.userAgent);
+    // Restoring this document must keep the gate, never resume the old UI.
+    scope.addEventListener("pageshow", () => {
+      if (!scope.document.getElementById("browser-title")) enforce();
+    }, { once: true });
+    return true;
+  }
+  return { isLine, isApp, externalUrl, appUrl, contents, css, enforce };
+})(window).enforce();</script>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>体調管理 | T-lain</title>
+  <link rel="stylesheet" href="/health/health.css?v=health-eecb092d70db">
+  <meta name="troom-app-build" content="health-eecb092d70db">
+  <meta name="troom-auto-update" content="enabled">
+</head>
+<body>
+  <main>
+    <header class="app-header">
+      <h1>体調管理</h1>
+    </header>
+
+    <section id="login" class="card login-card" aria-label="体調管理へのログイン">
+      <button id="sign-in" type="button">パスキーでログイン</button>
+    </section>
+    <p id="message" class="error" role="status" aria-live="polite"></p>
+
+    <section id="app" hidden>
+      <section class="card today-card" aria-labelledby="today-title">
+        <div class="today-content">
+          <p id="today-date" class="eyebrow"></p>
+          <h2 id="today-title">今日の体調</h2>
+          <p id="today-status" class="today-status"></p>
+          <p class="hint">気になることだけ、残しておけます。</p>
+        </div>
+        <button id="record-today">今日の体調を記録</button>
+      </section>
+
+      <section class="card cycle-card" aria-label="生理の目安">
+        <div class="cycle-overview">
+          <div><span class="label">次回の目安（中心日）</span><strong id="prediction-window"></strong></div>
+          <div><span class="label">前回の開始日</span><strong id="last-period-start"></strong></div>
+        </div>
+        <div id="period-reminder" class="period-reminder" hidden>
+          <div><p id="period-reminder-message"></p><p class="hint">今日以外の終了日は、カレンダーでその日を選んで記録できます。</p></div>
+          <button id="record-end" class="secondary">終了を記録</button>
+        </div>
+        <details id="cycle-details" class="cycle-details">
+          <summary>周期と予測の詳細</summary>
+          <div class="cycle-detail-content">
+            <dl class="cycle-facts">
+              <div><dt>次回の開始予測</dt><dd id="prediction"></dd></div>
+              <div><dt>直近の周期</dt><dd id="latest-cycle"></dd></div>
+            </dl>
+            <p id="prediction-basis" class="hint"></p>
+            <p id="prediction-range" class="hint"></p>
+            <p class="hint">予測は記録に基づく目安です。</p>
+            <button id="settings-open" class="secondary">予測設定</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="card journal-card" aria-label="体調の記録">
+        <nav class="tabs" aria-label="表示切替">
+          <button id="calendar-tab" aria-controls="calendar-panel" aria-pressed="true">カレンダー</button>
+          <button id="list-tab" aria-controls="list-panel" aria-pressed="false">記録一覧</button>
+          <button id="insights-tab" aria-controls="insights-panel" aria-pressed="false">振り返り</button>
+        </nav>
+        <section id="calendar-panel" aria-labelledby="calendar-tab">
+          <div class="month-controls">
+            <button id="previous" class="secondary" aria-label="前の月">‹</button>
+            <h2 id="month"></h2>
+            <button id="next" class="secondary" aria-label="次の月">›</button>
+            <button id="today" class="secondary">今日</button>
+          </div>
+          <div id="calendar" class="calendar"></div>
+          <p class="legend"><span class="record-label">● 体調・備考などの記録</span><span class="period-label">生理期間</span><span class="predicted-label">予測期間</span></p>
+        </section>
+        <section id="list-panel" aria-labelledby="list-tab" hidden><h2 class="list-title">記録一覧</h2><div id="records"></div></section>
+        <section id="insights-panel" aria-labelledby="insights-tab" hidden>
+          <header class="insight-header"><h2>過去30日の記録</h2><p id="insight-range" class="hint"></p></header>
+          <dl class="insight-totals">
+            <div><dt>記録した日</dt><dd id="insight-recorded"></dd></div>
+            <div><dt>記録のない日</dt><dd id="insight-unrecorded"></dd></div>
+            <div><dt>備考がある日</dt><dd id="insight-notes"></dd></div>
+          </dl>
+          <section class="insight-section" aria-labelledby="condition-title">
+            <h3 id="condition-title">今日の調子</h3><dl id="insight-conditions" class="insight-counts"></dl>
+          </section>
+          <section class="insight-section" aria-labelledby="symptom-title">
+            <h3 id="symptom-title">気になる体調</h3>
+            <table class="insight-table"><caption class="hint">症状を記録した日数（同じ日は1日として集計）</caption><thead><tr><th scope="col">症状</th><th scope="col">直近30日</th><th scope="col">前の30日</th></tr></thead><tbody id="insight-symptoms"></tbody></table>
+          </section>
+          <p id="insight-previous" class="hint"></p>
+          <p class="hint">未入力は「普通」や「症状なし」として数えません。表示は入力した記録の集計です。</p>
+          <details id="insight-cycles" class="insight-details" hidden>
+            <summary>生理・周期の実績</summary>
+            <dl id="insight-cycle-facts" class="insight-counts"></dl><ul id="insight-cycle-history" class="cycle-history"></ul>
+            <p class="hint">開始日の間隔を表示しています。外れ値は除外せず、終了日は自動補完しません。予測とは別の実績です。</p>
+          </details>
+          <details class="insight-details">
+            <summary>この期間の記録をまとめて見る</summary>
+            <p class="hint">受診時などに、この画面で入力した内容をそのまま確認できます。</p>
+            <h3>生理の記録</h3><ul id="insight-periods" class="cycle-history"></ul>
+            <h3>日別記録</h3><div id="insight-daily"></div>
+          </details>
+        </section>
+      </section>
+      <footer class="app-footer">
+        <button id="refresh" class="secondary">最新の記録を読み込む</button>
+        <button id="export-open" class="secondary">CSV出力</button>
+        <button id="logout" class="secondary">ログアウト</button>
+      </footer>
+    </section>
+  </main>
+
+  <dialog id="editor" class="sheet" aria-labelledby="editor-title">
+    <form id="record-form">
+      <div class="sheet-header"><div><p id="record-date" class="eyebrow"></p><h2 id="editor-title">体調の記録</h2></div><button type="button" id="editor-close" class="secondary">閉じる</button></div>
+      <p class="hint">すべて任意です。未入力は「症状なし」とは扱いません。</p>
+      <fieldset class="condition-fieldset"><legend>今日の調子 <span class="optional">任意</span></legend><div id="conditions" class="conditions"></div><p class="hint">もう一度押すと未選択に戻ります。</p></fieldset>
+      <fieldset class="symptom-fieldset"><legend>気になる体調</legend><div id="symptoms" class="symptoms"></div></fieldset>
+      <label class="field">備考<textarea id="note" rows="4" maxlength="10000" placeholder="今日の体調や、気づいたこと"></textarea></label>
+      <details id="period-details" class="period-details">
+        <summary>生理の記録<span class="optional">任意</span></summary>
+        <div class="period-fields">
+          <p id="period-status" class="hint"></p>
+          <div class="period-actions"><button type="button" id="start-period" aria-pressed="false">生理開始</button><button type="button" id="end-period" aria-pressed="false">生理終了</button></div>
+          <p class="hint">選択した日の開始・終了を記録します。終了は「出血があった最後の日」です。</p>
+          <label class="field">経血量<select id="flow"><option value="">未入力</option><option>少ない</option><option>普通</option><option>多い</option></select></label>
+        </div>
+      </details>
+      <p id="editor-error" class="error" role="alert"></p>
+      <div class="sheet-actions"><button type="submit" id="save">保存</button><button type="button" id="delete" class="danger">記録を削除</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="settings" class="sheet" aria-labelledby="settings-title">
+    <form id="settings-form">
+      <div class="sheet-header"><h2 id="settings-title">予測設定</h2><button type="button" id="settings-close" class="secondary">閉じる</button></div>
+      <p class="hint">3周期分の実績がそろうまでは、この設定で仮予測します。すべて任意です。</p>
+      <label class="field">普段の周期日数<input id="cycle-days" type="number" min="1" max="180" placeholder="未入力の場合は28日"></label>
+      <label class="field">直近の生理開始日<input id="last-start" type="date"></label>
+      <p class="hint">実績がそろった後は直近最大6周期の中央値と、最短・最長の間隔で予測します。</p>
+      <p id="settings-error" class="error" role="alert"></p><button type="submit">保存</button>
+    </form>
+  </dialog>
+
+  <dialog id="export" class="sheet" aria-labelledby="export-title">
+    <form id="export-form">
+      <div class="sheet-header"><h2 id="export-title">CSV出力</h2><button type="button" id="export-close" class="secondary">閉じる</button></div>
+      <label class="field">開始日<input id="export-from" type="date" required></label>
+      <label class="field">終了日<input id="export-to" type="date" required></label>
+      <p class="hint">CSVは端末内で作成します。出力ファイルは暗号化されていません。</p>
+      <p id="export-error" class="error" role="alert"></p><button type="submit">ダウンロード</button>
+    </form>
+  </dialog>
+  <script src="/security/passkey-client.js?v=health-eecb092d70db"></script>
+  <script src="/diary/dialog-navigation.js?v=health-eecb092d70db"></script>
+  <script src="/assets/pwa-auto-update.js?v=health-eecb092d70db" defer></script>
+  <script type="module" src="/health/health.js?v=health-eecb092d70db"></script>
+</body>
+</html>
