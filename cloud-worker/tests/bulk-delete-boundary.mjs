@@ -9,8 +9,8 @@ const start = source.indexOf('async function deleteSelectedItems(');
 const body = source.slice(start, source.indexOf('\nasync function openMoveDialog', start));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function setup({ files = [], folders = [], admin = true, confirmed = true, remove = async () => ({ deleted: 3 }), afterDeletion } = {}) {
-  const log = { calls: [], progress: [], disabled: [], notices: [], effects: [], confirmations: [], refreshed: 0 }, button = {};
-  Object.defineProperties(button, { textContent: { set: value => log.progress.push(value) }, disabled: { set: value => log.disabled.push(value) } });
+  const log = { calls: [], progress: [], disabled: [], notices: [], effects: [], confirmations: [], refreshed: 0 }, button = {}, buttonState = { textContent: '削除', disabled: false };
+  Object.defineProperties(button, { textContent: { get: () => buttonState.textContent, set: value => { buttonState.textContent = value; log.progress.push(value); } }, disabled: { get: () => buttonState.disabled, set: value => { buttonState.disabled = value; log.disabled.push(value); } } });
   const selection = { files, folders };
   const context = vm.createContext({ TCloudBulkDelete, state: { session: { role: admin ? 'admin' : 'subadmin', canDelete: admin } },
     selectedItems: () => selection,
@@ -27,17 +27,20 @@ function setup({ files = [], folders = [], admin = true, confirmed = true, remov
     loadUsage: () => log.effects.push(['usage']), syncSelectionBar: () => log.refreshed++
   });
   vm.runInContext(body, context);
-  return { log, context, selection, run: () => vm.runInContext('deleteSelectedItems()', context) };
+  return { log, context, selection, button, run: () => vm.runInContext('deleteSelectedItems()', context) };
 }
 
 test('empty, denied mixed selection and cancelled confirmation make no deletion requests', async () => {
-  for (const options of [{}, { files: [{ id: 1 }], folders: [{ id: 2, allowed: false }] }, { files: [{ id: 1 }], confirmed: false }]) {
+  for (const options of [{}, { files: [{ id: 1 }], folders: [{ id: 2, allowed: false }] }]) {
     const fixture = setup(options); await fixture.run();
     assert.deepEqual(fixture.log.calls, []); assert.deepEqual(fixture.log.disabled, []); assert.equal(fixture.log.refreshed, 0);
   }
   const denied = setup({ files: [{ id: 1, allowed: false }] }); await denied.run();
   assert.deepEqual(denied.log.confirmations, []);
   assert.equal(denied.log.notices[0].message, 'PWで解除した最初のフォルダ配下だけ削除できます。');
+  const cancelled = setup({ files: [{ id: 1 }], confirmed: false }); await cancelled.run();
+  assert.deepEqual(cancelled.log.calls, []); assert.deepEqual(cancelled.log.progress, []);
+  assert.deepEqual(cancelled.log.disabled, [true, false]); assert.equal(cancelled.log.refreshed, 1);
 });
 
 test('admin mixed deletion retains request shape, progress, totals and host cleanup order', async () => {
@@ -75,6 +78,8 @@ test('partial and total failures preserve successful records and first three fai
   await allFailed.run();
   assert.deepEqual(allFailed.log.effects.map(([name]) => name), ['listing', 'usage']);
   assert.deepEqual(Array.from(allFailed.log.effects[0][1].files), []);
+  assert.equal(allFailed.button.disabled, false);
+  await allFailed.run(); assert.equal(allFailed.log.calls.length, 2, 'API failure releases the guard for a retry');
 });
 
 test('post-deletion failure still restores the button and synchronizes the toolbar', async () => {
@@ -103,4 +108,50 @@ test('runner rejection still restores the button and synchronizes the toolbar', 
   fixture.context.TCloudBulkDelete = { run: async () => { throw new Error('fixture runner failure'); } };
   await assert.rejects(fixture.run(), /fixture runner failure/);
   assert.deepEqual(fixture.log.disabled, [true, false]); assert.equal(fixture.log.refreshed, 1);
+});
+
+test('pending subadmin confirmation cannot be opened twice and cancellation permits a later retry', async () => {
+  const confirmation = deferred(), fixture = setup({ files: [{ id: 1 }], admin: false, confirmed: confirmation.promise });
+  const first = fixture.run(), duplicate = fixture.run();
+  try {
+    assert.equal(fixture.log.confirmations.length, 1, 'one confirmation per operation');
+    assert.deepEqual(fixture.log.calls, []);
+  } finally { confirmation.resolve(false); await Promise.all([first, duplicate]); }
+  assert.equal(fixture.button.disabled, false);
+  fixture.context.confirmSubadminDeletion = async () => true;
+  await fixture.run(); assert.equal(fixture.log.calls.length, 1);
+});
+
+test('duplicate calls are ignored through API execution and awaited cache cleanup', async () => {
+  const api = deferred(), cleanup = deferred(), cleanupStarted = deferred();
+  const fixture = setup({ files: [{ id: 1 }], remove: () => api.promise });
+  fixture.context.removeDeviceCopiesForFiles = () => { cleanupStarted.resolve(); return cleanup.promise; };
+  const first = fixture.run(), duplicate = fixture.run();
+  try {
+    assert.equal(fixture.log.confirmations.length, 1); assert.equal(fixture.log.calls.length, 1);
+    assert.equal(fixture.button.disabled, true);
+    api.resolve({}); await cleanupStarted.promise;
+    await fixture.run(); assert.equal(fixture.log.calls.length, 1, 'cleanup is still part of the operation');
+    assert.equal(fixture.button.disabled, true);
+  } finally { api.resolve({}); cleanup.resolve(); await Promise.all([first, duplicate]); }
+  assert.equal(fixture.button.disabled, false);
+  await fixture.run(); assert.equal(fixture.log.calls.length, 2, 'completed operation releases the guard');
+});
+
+test('confirmation errors release the operation so a fresh confirmation can succeed', async () => {
+  const fixture = setup({ files: [{ id: 1 }], admin: false });
+  fixture.context.confirmSubadminDeletion = async () => { throw new Error('fixture confirmation failure'); };
+  await assert.rejects(fixture.run(), /fixture confirmation failure/);
+  assert.deepEqual(fixture.log.calls, []); assert.equal(fixture.button.disabled, false);
+  fixture.context.confirmSubadminDeletion = async () => true;
+  await fixture.run(); assert.equal(fixture.log.calls.length, 1);
+});
+
+test('failed cleanup releases the operation and a later deletion remains available', async () => {
+  const fixture = setup({ files: [{ id: 1 }] });
+  fixture.context.removeDeviceCopiesForFiles = async () => { throw new Error('fixture cache failure'); };
+  await assert.rejects(fixture.run(), /fixture cache failure/);
+  assert.equal(fixture.button.disabled, false);
+  fixture.context.removeDeviceCopiesForFiles = async () => {};
+  await fixture.run(); assert.equal(fixture.log.calls.length, 2);
 });

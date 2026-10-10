@@ -7,15 +7,21 @@ try { for (const [name, engine, launch] of engines) {
   const browser = await engine.launch({ headless: true, ...launch });
   try { for (const mobile of [false, true]) {
     const page = await browser.newPage({ viewport: mobile ? { width: 390, height: 740 } : { width: 1280, height: 900 }, hasTouch: mobile });
-    const gate = deferred(), ready = deferred(), writes = [], requests = [], errors = [];
+    const gate = deferred(), firstGate = deferred(), ready = deferred(), favoriteGate = deferred(), favoriteReady = deferred(), writes = [], requests = [], errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/cloud/api/**', async route => {
       const request = route.request(), path = new URL(request.url()).pathname; requests.push(path);
       if (request.method() === 'DELETE') {
         writes.push({ path, body: request.postData() }); if (writes.length === 3) ready.resolve();
-        await gate.promise;
+        await (path.endsWith('/files/1') ? firstGate.promise : gate.promise);
         await route.fulfill(path.endsWith('/files/2') ? { status: 500, json: { error: 'fixture failure' } } : { json: { deleted: 3 } });
-      } else await route.fulfill({ json: { fileIds: [], folderIds: [], folders: [], totalBytes: 4000, totalFiles: 40 } });
+      } else {
+        if (path.endsWith('/favorites/status')) {
+          const body = request.postDataJSON();
+          if (body.fileIds.length === 2 && body.folderIds.includes(9)) { favoriteReady.resolve(); await favoriteGate.promise; }
+        }
+        await route.fulfill({ json: { fileIds: [], folderIds: [], folders: [], totalBytes: 4000, totalFiles: 40 } });
+      }
     });
     await preparePage(page, fixture.origin, 40);
     await page.evaluate(() => {
@@ -42,8 +48,10 @@ try { for (const [name, engine, launch] of engines) {
     assert.equal(writes.length, 0);
     page.once('dialog', dialog => dialog.dismiss()); await click('#selection-delete'); assert.equal(writes.length, 0);
     await click('.file-card[data-file-id="2"] .file-select-button'); await click('.folder-card[data-folder-id="9"] .folder-select-button');
-    // Finish the existing favorites toolbar refresh before checking deletion progress.
-    await page.waitForFunction(() => !document.querySelector('#selection-favorite').disabled);
+    // Hold this real toolbar response until the deletion has started.
+    let favoriteTimer;
+    try { await Promise.race([favoriteReady.promise, new Promise((_, reject) => { favoriteTimer = setTimeout(() => reject(new Error('Favorite status request did not start')), 5000); })]); }
+    finally { clearTimeout(favoriteTimer); }
     await page.evaluate(() => __test.scrollAppTo({ top: 400, left: 0, behavior: 'auto' }));
     const position = await page.evaluate(() => __test.appScrollPosition().y);
     page.once('dialog', dialog => dialog.accept());
@@ -52,9 +60,23 @@ try { for (const [name, engine, launch] of engines) {
     let timer; try { await Promise.race([ready.promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Deletion requests did not start')), 5000); })]); } finally { clearTimeout(timer); }
     assert.equal(await page.locator('#selection-delete').isDisabled(), true);
     assert.equal(await page.locator('#selection-delete').textContent(), '削除中 0 / 3');
-    await page.evaluate(() => __test.rememberSelectedRecord('file', __test.state.files.find(file => file.id === 5)));
+    favoriteGate.resolve();
+    await page.waitForFunction(() => !document.querySelector('#selection-favorite').disabled);
+    assert.equal(await page.locator('#selection-delete').isDisabled(), true, 'favorite completion cannot enable deletion');
+    assert.equal(await page.locator('#selection-delete').textContent(), '削除中 0 / 3');
+    firstGate.resolve();
+    await page.waitForFunction(() => document.querySelector('#selection-delete').textContent === '削除中 1 / 3');
+    // A later selection/favorites refresh must retain the starting total and completed progress.
+    await page.evaluate(() => document.querySelector('.file-card[data-file-id="5"] .file-select-button').click());
+    await page.waitForFunction(() => !document.querySelector('#selection-favorite').disabled);
+    assert.equal(await page.locator('#selection-count').textContent(), '4件を選択中');
+    assert.equal(await page.locator('#selection-delete').isDisabled(), true);
+    assert.equal(await page.locator('#selection-delete').textContent(), '削除中 1 / 3');
+    await page.evaluate(async () => { document.querySelector('#selection-delete').click(); await __test.deleteSelectedItems(); });
+    assert.equal(writes.length, 3, 'DOM and direct duplicate calls issue no additional requests');
     gate.resolve();
     await page.waitForFunction(() => !__test.state.files.some(file => file.id === 1) && !__test.state.folders.length && !__test.state.selectionClearBackPending);
+    await page.waitForFunction(() => document.querySelector('#selection-delete').textContent === '削除');
     // Scroll restoration is scheduled after the history traversal and rendering.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const result = await page.evaluate(() => {
