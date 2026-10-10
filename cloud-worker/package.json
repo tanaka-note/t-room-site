@@ -28,7 +28,7 @@
     "test:media-seek": "node tests/media-seek.browser.mjs"
   },
   "devDependencies": {
-    "wrangler": "^4.34.0"
+    "wrangler": "^4.148.0"
   },
   "dependencies": {
     "hash-wasm": "4.12.0"
