@@ -32,12 +32,18 @@ try { for (const [name, engine, launch] of engines) {
         node: document.querySelector('.file-card[data-file-id="3"]') };
     });
     const click = async selector => mobile ? page.locator(selector).tap() : page.locator(selector).click();
-    await click('.file-card[data-file-id="1"] .file-select-button');
+    // Save the same position in the origin history entry before selection starts.
+    await page.evaluate(() => {
+      __test.scrollAppTo({ top: 400, left: 0, behavior: 'auto' });
+      document.querySelector('.file-card[data-file-id="1"] .file-select-button').click();
+    });
     // Denied permissions and cancelled confirmation must leave the list untouched.
     await page.evaluate(async () => { const state = __test.state; state.session.canDelete = false; await __test.deleteSelectedItems(); state.session.canDelete = true; });
     assert.equal(writes.length, 0);
     page.once('dialog', dialog => dialog.dismiss()); await click('#selection-delete'); assert.equal(writes.length, 0);
     await click('.file-card[data-file-id="2"] .file-select-button'); await click('.folder-card[data-folder-id="9"] .folder-select-button');
+    // Finish the existing favorites toolbar refresh before checking deletion progress.
+    await page.waitForFunction(() => !document.querySelector('#selection-favorite').disabled);
     await page.evaluate(() => __test.scrollAppTo({ top: 400, left: 0, behavior: 'auto' }));
     const position = await page.evaluate(() => __test.appScrollPosition().y);
     page.once('dialog', dialog => dialog.accept());
@@ -49,6 +55,8 @@ try { for (const [name, engine, launch] of engines) {
     await page.evaluate(() => __test.rememberSelectedRecord('file', __test.state.files.find(file => file.id === 5)));
     gate.resolve();
     await page.waitForFunction(() => !__test.state.files.some(file => file.id === 1) && !__test.state.folders.length && !__test.state.selectionClearBackPending);
+    // Scroll restoration is scheduled after the history traversal and rendering.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const result = await page.evaluate(() => {
       const state = __test.state, before = __deleteBefore;
       return { remaining: state.files.filter(file => [1, 2, 5].includes(file.id)).map(file => file.id), query: state.query, sort: state.sort, direction: state.sortDirection, listMode: state.listMode,
