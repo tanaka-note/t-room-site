@@ -23,6 +23,9 @@ try {
   const unauthenticated=await (await page.request.get(review.url)).text();
   assert.doesNotMatch(unauthenticated,/田中|暢美|宏知/);
   await page.goto(review.url);
+  assert.equal(await page.locator('#review-person').count(),0);
+  assert.equal(await page.locator('#login select, #login input').count(),0);
+  assert.equal((await page.locator('main').innerText()).replace(/\s+/g,' ').trim(),'体調管理 パスキーでログイン');
   assert.equal(await page.locator('#login').innerText(),'パスキーでログイン');
   assert.equal(await page.locator('#app').isVisible(),false);
   await page.screenshot({path:new URL('../../tmp/health-review/login.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')}); await page.getByRole('button', { name: 'パスキーでログイン', exact: true }).click(); await page.locator('#app').waitFor({ state: 'visible' });
@@ -39,7 +42,7 @@ try {
   await page.locator('#note').fill('頭痛についての自由メモ'); await page.getByLabel('頭痛', { exact: true }).check();
 
   // Structurally invalid 200 JSON cannot close the editor or advance local revisions.
-  for (const value of [{}, {ok:true}, {ok:true,revision:'1'}, {ok:true,revision:1.5}, {ok:true,revision:2}]) {
+  for (const value of [{}, {ok:true}, {ok:true,revision:'1'}, {ok:true,revision:1.5}, {ok:true,revision:0}, {ok:true,revision:Number.MAX_SAFE_INTEGER+1}]) {
     await page.route('**/health/api/records/*',route=>route.request().method()==='PUT' ? route.fulfill({status:200,json:value}) : route.continue());
     await page.locator('#save').click(); await page.waitForFunction(()=>document.getElementById('editor-error').textContent.length>0);
     assert.equal(await page.locator('#editor').isVisible(),true);
@@ -55,11 +58,21 @@ try {
   assert.match(await page.locator('#today-status').textContent(), /今日の調子：良い/);
   assert.equal(await page.locator('#period-reminder').isVisible(), false);
   await page.locator('#record-today').click(); await page.locator('#period-details > summary').click();
-  await page.getByRole('button',{name:'生理開始',exact:true}).click(); await page.getByRole('button',{name:'保存',exact:true}).click(); await page.locator('#editor').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'生理開始',exact:true}).click();
+  for(const revision of [1,3]){
+    await page.route('**/health/api/records/*',route=>route.request().method()==='PUT'?route.fulfill({status:200,json:{ok:true,revision}}):route.continue());
+    await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('editor-error').textContent.includes('保存結果'));
+    assert.equal(await page.locator('#editor').isVisible(),true);assert.equal(await page.locator('#start-period').getAttribute('aria-pressed'),'true');
+    await page.unroute('**/health/api/records/*');
+  }
+  await page.getByRole('button',{name:'保存',exact:true}).click(); await page.locator('#editor').waitFor({state:'hidden'});
   assert.ok(await page.locator('#period-reminder').isVisible());
   assert.notEqual(await page.locator('#prediction-window').textContent(), '開始日を記録すると表示');
   assert.ok(writes.length); assert.ok(writes.every(v => !/頭痛|自由メモ|symptoms|date/.test(v)));
-  await other.goto(review.url); await other.locator('#review-person').selectOption('subject'); await other.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await other.locator('#app').waitFor({state:'visible'});
+  // Model a different credential in the test harness; the login UI stays identical.
+  await other.route('**/review/auth',route=>route.fulfill({json:{prf:Array.from(review.fixture.users.subject.prf),handoffToken:review.fixture.issue('subject')}}));
+  await other.goto(review.url); await other.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await other.locator('#app').waitFor({state:'visible'});
+  assert.equal(review.fixture.auditEvents.filter(event=>event.eventType==='passkey_login_success').at(-1).identityId,'fixture-subject');
   await other.getByRole('button',{name:'記録一覧',exact:true}).click(); await other.locator('.entry').first().click(); assert.equal(await other.locator('#note').inputValue(),'頭痛についての自由メモ');
   await other.locator('#note').fill('共同編集後の備考'); await other.getByRole('button',{name:'保存',exact:true}).click(); await other.locator('#editor').waitFor({state:'hidden'});
   // The first person still has the old revision. A conflict keeps the draft and login.
@@ -102,6 +115,25 @@ try {
     await page.screenshot({path:new URL('../../tmp/health-review/insights-'+width+'.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1'),fullPage:true});
   }
   await page.setViewportSize({width:390,height:844}); await page.locator('#calendar-tab').click();
+  // Delete and recreate the same date after refresh: the server preserves its counter.
+  const dailyId=await recordId(review.fixture.master,previousDate,'nobumi');
+  const dailyRow=()=>review.fixture.db.prepare('SELECT iv,ciphertext,revision FROM health_records WHERE record_id=?').get(dailyId);
+  if(previousDate.slice(0,7)!==today().slice(0,7))await page.locator('#previous').click();
+  const openDaily=()=>page.locator(`.day[aria-label~="${previousDate}"]`).click();
+  await openDaily();await page.locator('#note').fill('再登録前の更新');await page.locator('#save').click();await page.locator('#editor').waitFor({state:'hidden'});
+  assert.equal(dailyRow().revision,2);
+  await openDaily();page.once('dialog',dialog=>dialog.accept());await page.locator('#delete').click();await page.locator('#editor').waitFor({state:'hidden'});
+  assert.deepEqual({...dailyRow()},{iv:'',ciphertext:'',revision:3});
+  await page.locator('#refresh').click();await page.waitForFunction(()=>!document.getElementById('refresh').disabled);
+  await openDaily();assert.equal(await page.locator('#delete').isVisible(),false);
+  await page.locator('#note').fill('削除した日の再登録');await page.locator('#save').click();await page.locator('#editor').waitFor({state:'hidden'});
+  assert.equal(dailyRow().revision,4);assert.equal((await decryptRecord(review.fixture.master,dailyId,dailyRow(),'nobumi')).note,'削除した日の再登録');
+  await openDaily();await page.locator('#note').fill('再登録後の更新');await page.locator('#save').click();await page.locator('#editor').waitFor({state:'hidden'});
+  assert.equal(dailyRow().revision,5);
+  await page.reload();await page.locator('#sign-in').click();await page.locator('#app').waitFor({state:'visible'});
+  if(previousDate.slice(0,7)!==today().slice(0,7))await page.locator('#previous').click();
+  await openDaily();assert.equal(await page.locator('#note').inputValue(),'再登録後の更新');
+  await page.locator('#editor-close').click();await page.locator('#editor').waitFor({state:'hidden'});await page.locator('#today').click();
   // Opening/decrypting old records does not rewrite them; an explicit save upgrades only that row.
   await page.locator('#list-tab').click();
   await page.locator('.entry').filter({hasText:legacyDate}).click();
@@ -173,5 +205,5 @@ try {
   await page.route('**/health/api/passkey/handoff',async route=>{const response=await route.fetch();const value=await response.json();await route.fulfill({response,json:{...value,expiresAt:Math.floor(Date.now()/1000)+2}});});
   await page.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('#login').waitFor({state:'visible'}); assert.equal(await page.locator('#calendar').textContent(),'');
   review.fixture.revoke(); await other.getByRole('button',{name:'最新の記録を読み込む',exact:true}).click(); await other.locator('#login').waitFor({state:'visible'}); assert.equal(await other.locator('#records').textContent(),'');
-  assert.deepEqual(failures,[]); console.log('Health conditions, insights 320/390/1280, legacy upgrade/intensity preservation, future rejection, OCC draft retention; mobile/desktop: daily health first, optional period fields, explicit end, shared encrypted CRUD, unsaved guard, Back/Esc, settings, CSV, logout and pagehide races passed.');
+  assert.deepEqual(failures,[]); console.log('Health minimal passkey login, delete/recreate revisions 1-5, conditions, insights 320/390/1280, legacy upgrade/intensity preservation, future rejection, OCC draft retention; mobile/desktop: daily health first, optional period fields, explicit end, shared encrypted CRUD, unsaved guard, Back/Esc, settings, CSV, logout and pagehide races passed.');
 } finally { await browser.close(); await review.close(); }

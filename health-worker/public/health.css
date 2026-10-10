@@ -160,11 +160,6 @@ legend { padding: 0; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .period-actions button[aria-pressed="false"] { background: var(--surface); color: var(--ink); border-color: var(--line); }
 .sheet-actions { display: flex; gap: 12px; justify-content: space-between; margin-top: 22px; }
 
-/* Synthetic local review banner, never shipped as app markup */
-.review-banner { max-width: 860px; margin: 16px auto 0; padding: 12px 18px; color: var(--muted); font-size: 12px; }
-.review-banner label { display: block; margin-top: 8px; }
-.review-banner select { margin-top: 4px; font-size: 13px; }
-
 /* Narrow screens */
 @media (max-width: 520px) {
   main { padding: 20px 12px 36px; }
@@ -195,5 +190,4 @@ legend { padding: 0; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   .legend { gap: var(--space-small); }
   .sheet { padding: 20px 16px; }
   .symptoms label { padding: 9px 8px; font-size: 12px; }
-  .review-banner { margin: 12px 12px 0; }
 }

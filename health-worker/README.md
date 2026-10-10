@@ -31,7 +31,7 @@ conditionのnullは普通と異なる。intensityはnull／light／normal／stro
 
 PUTは暗号化envelopeとexpectedRevisionのみを受け取り、0は新規作成、1以上は既存の同番号への更新。DELETEもexpectedRevisionが必須。単一SQLの条件付き書き込みで並行更新を防ぐ。削除時は暗号文とIVを消去し、既存テーブルに不透明なHMAC識別子と単調増加revisionのみの削除目印を残す。GETには返さず、削除後の再作成に古い編集画面が上書きすることも防ぐ。平文migrationや新しいD1 migrationは不要。健康内容の履歴は保持しない。revision_conflictの409とsession_changedの409を区別し、後者のみ再ログインへ戻す。
 
-APIのHTML・text/plain・空本文・不正JSON応答は、HTTP statusに応じた共通エラーへ変換する。非JSONの401／403でも画面をロックし、遅延応答はgenerationで拒否する。200のJSONもAPIごとの構造を検証し、PUT／DELETEはok=true・安全な整数revision・送信時の更新番号+1を確認してから端末状態を更新する。GETは暗号化記録の配列、handoffはsessionId・有効期限・暗号化鍵bundleを検証する。確認できない場合は保存成功と扱わず、入力を保持する。
+APIのHTML・text/plain・空本文・不正JSON応答は、HTTP statusに応じた共通エラーへ変換する。非JSONの401／403でも画面をロックし、遅延応答はgenerationで拒否する。200のJSONもAPIごとの構造を検証し、PUT／DELETEはok=true・正の安全な整数revisionを確認してから端末状態を更新する。既存記録の更新と削除は送信時の更新番号+1を必須とする。expectedRevision=0の新規作成は、GETに現れない削除目印のcounterから再開するため、1以外の正のrevisionも受け入れる。GETは暗号化記録の配列、handoffはsessionId・有効期限・暗号化鍵bundleを検証する。確認できない場合は保存成功と扱わず、入力を保持する。
 
 アカウントIDは公開JavaScriptに固定せず、認証後の鍵bundleまたはSecurity Centerの認証済みAPIから取得する。IDの値、既存AAD・HMAC・RSAラベルは変えず、既存暗号文の互換性を維持する。画面ロック時にIDも端末状態から消去する。
 
@@ -59,7 +59,7 @@ Vanilla JSを維持し、新しいライブラリは追加していない。
 
 記録鍵はランダム32バイト。パスキーごとのRSA-OAEP-3072公開鍵に包んで委譲する。その秘密鍵はパスキーPRFからHKDFで導出した鍵で暗号化する。PRF結果、復号鍵、平文秘密鍵をCloudflareへ送らない。ログアウト・画面離脱時はブラウザ内の記録と鍵を消去する。PRF非対応時は平文へ切り替えず停止する。
 
-Security CenterがIdentity、招待・連携、パスキー承認、鍵準備を管理する。共通Identityと体調管理アカウントは別の概念。本人枠は最初にオーナーが連携したIdentityに固定し、第三者追加をAPIとDB triggerで拒否する。2人それぞれの追加パスキーは利用者鍵準備後にオーナーが承認する。
+Security CenterがIdentity、招待・連携、パスキー承認、鍵準備を管理する。共通Identityと体調管理アカウントは別の概念。本人枠は最初にオーナーが連携したIdentityに固定し、第三者追加をAPIとDB triggerで拒否する。2人それぞれの追加パスキーは利用者鍵準備後にオーナーが承認する。ログイン画面に利用者選択は設けない。パスキーのcredentialからSecurity Centerが解決したIdentityをhandoff・署名session・監査へ引き継ぎ、両者が同じ共有アカウントへ同じ権限で書き込む。登録名は表示用であり、名前の選択や一致を認可の根拠にしない。
 
 復旧用の記録鍵は既存T-Cloud管理者公開鍵で暗号化してSecurity Centerへ保存する。管理者復旧でT-Cloud管理者秘密鍵を端末で解除し、新しいパスキーへ再委譲する。サービス独自のPWはない。既存管理者鍵・復旧手段が失われた場合は暗号文から復元できない。失効した端末へ新たなAPIアクセスは許可しないが、既に取得・書き出した記録を遠隔消去するものではない。
 
@@ -74,7 +74,7 @@ node tools/verify.mjs --target security --browser --build
 node health-worker/tools/review-server.mjs
 ```
 
-http://127.0.0.1:8793/health/ で確認できる。レビューサーバーはローカル専用で、仮の2人・仮のPRF・メモリ内SQLiteを使う。実際の暗号化と記録APIを使用するが、本物のWebAuthn・Security Center復旧を試す環境ではない。終了するとテスト記録は消える。テスト認証コードはレビュー用Nodeサーバーのみで提供し、Workerの公開資産には含めない。
+http://127.0.0.1:8793/health/ で確認できる。レビューサーバーはローカル専用で、仮の2人・仮のPRF・メモリ内SQLiteを使う。実際の暗号化と記録APIを使用するが、本物のWebAuthn・Security Center復旧を試す環境ではない。終了するとテスト記録は消える。ログイン画面は本番と同じHTMLを配信し、利用者選択や確認用バナーを挿入しない。仮のcredentialは起動時のHEALTH_REVIEW_PERSON（ownerが既定、subjectも指定可）で設定し、画面やPOST本文からの利用者指定は使用しない。共同編集のブラウザ試験はテスト側で別credentialを渡す。テスト認証コードはレビュー用Nodeサーバーのみで提供し、Workerの公開資産には含めない。
 
 以前のレビューサーバーを終了せず別ポートへ記録を引き継ぐ場合は以下を使う。暗号文と鍵はメモリ内だけで引き継ぎ、ファイルへ出さない。起動時点のコピーで、以後は2つの環境の記録は独立する。元のサーバーは停止しない。
 

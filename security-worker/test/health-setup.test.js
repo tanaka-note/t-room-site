@@ -41,3 +41,25 @@ test('Health setup uses the authenticated account for linking, initialization, r
     assert.match(nodes.get('status').textContent,/鍵の状態/);
   } finally {master?.fill(0);prf.fill(0);}
 });
+
+test('Health setup turns unconfirmed API responses into safe messages and does not continue linking',async()=>{
+  const cases=[
+    ['<html>gateway error</html>','text/html',200],['','application/json',200],['{','application/json',200],
+    ['[]','application/json',200],['null','application/json',200],['<html>gateway error</html>','text/html',502],
+    ['<html>login expired</html>','text/html',401],['{"error":"連携を確認してください。"}','application/json',409],
+    ['{"error":""}','application/json',502],['','network',0],
+  ];
+  for(const [body,type,status] of cases){
+    const nodes=new Map(['prepare','owner-link','manage','members','status'].map(id=>[id,{textContent:''}]));let requests=0;
+    runInNewContext(readFileSync(new URL('../public/health-setup.mjs',import.meta.url),'utf8').replace(/^import[^\n]+\n/,''),{
+      document:{getElementById:id=>nodes.get(id),querySelectorAll:()=>['prepare','owner-link','manage'].map(id=>nodes.get(id))},
+      fetch:async()=>{requests++;if(type==='network')throw new TypeError('Failed to fetch');return new Response(body,{status,headers:{'Content-Type':type}});},
+      TRoomPasskeys:{authenticate:async()=>({prfOutput:new Uint8Array(32)})},
+    });
+    await nodes.get('owner-link').onclick();
+    assert.equal(requests,1,'an unconfirmed service-list response cannot create a link');
+    assert.match(nodes.get('status').textContent,status===401?/パスキー/:status===409?/連携を確認/:/処理結果を確認/);
+    assert.doesNotMatch(nodes.get('status').textContent,/Unexpected|JSON|gateway|<html>/);
+    for(const id of ['prepare','owner-link','manage'])assert.equal(nodes.get(id).disabled,false);
+  }
+});

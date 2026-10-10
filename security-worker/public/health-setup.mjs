@@ -1,8 +1,17 @@
 import { createClientVault, wrapMaster, unwrapMaster } from '/security/health-crypto.mjs';
 const $ = id => document.getElementById(id);
 async function api(path, value) {
-  const r = await fetch(`/security/api${path}`, { credentials: 'same-origin', ...(value ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) } : {}) });
-  const v = await r.json(); if (!r.ok) throw new Error(v.error || '処理を完了できませんでした。'); return v;
+  const fallback = '処理結果を確認できませんでした。時間を置いてもう一度お試しください。';
+  let r, v;
+  try { r = await fetch(`/security/api${path}`, { credentials: 'same-origin', ...(value ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) } : {}) }); }
+  catch { throw new Error(fallback); }
+  if (/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(r.headers.get('content-type') || '')) {
+    try { v = await r.json(); } catch { /* Unconfirmed responses use the same safe message below. */ }
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) v = null;
+  if (!r.ok) throw new Error(typeof v?.error === 'string' && v.error.length > 0 && v.error.length <= 500 ? v.error : [401, 403].includes(r.status) ? 'もう一度パスキーで本人確認してください。' : fallback);
+  if (!v) throw new Error(fallback);
+  return v;
 }
 async function run(task) {
   document.querySelectorAll('button').forEach(b => b.disabled = true);

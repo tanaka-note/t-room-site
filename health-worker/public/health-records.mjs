@@ -32,7 +32,8 @@ export function createRepository(state, api) {
     state.check(generation);
     const result = await api(`/records/${id}`, { method: 'PUT', body: JSON.stringify({ ...encrypted, expectedRevision }) }, generation);
     state.check(generation);
-    if (result.ok !== true || !Number.isSafeInteger(result.revision) || result.revision !== expectedRevision + 1) throw new Error('保存結果を確認できませんでした。入力を残したまま、最新の記録を確認してください。');
+    // Creation may revive a tombstone whose counter is hidden from GET /records.
+    if (result.ok !== true || !Number.isSafeInteger(result.revision) || result.revision < 1 || expectedRevision !== 0 && result.revision !== expectedRevision + 1) throw new Error('保存結果を確認できませんでした。入力を残したまま、最新の記録を確認してください。');
     state.data.revisions.set(key, result.revision);
   }
   async function remove(key, expectedRevision, generation) {

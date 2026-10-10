@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startReview } from '../tools/review-server.mjs';
 import { importReview } from '../tools/review-import.mjs';
+import { readFileSync } from 'node:fs';
 import { encryptRecord, decryptRecord, recordId, unlockClient, unwrapMaster } from '../public/health-crypto.mjs';
 test('review handover preserves ciphertext and grants new fixture passkeys without writing keys to disk', async () => {
   const old = await startReview();
@@ -25,4 +26,23 @@ test('review handover preserves ciphertext and grants new fixture passkeys witho
 });
 test('review handover rejects remote origins and ambiguous source URLs', async () => {
   for (const source of ['https://tanaka-note.com/health/','http://127.0.0.1:8793/health/?x=1','http://localhost:8793/health/']) await assert.rejects(importReview(source),/ローカル/);
+});
+
+test('review login serves the actual app without a person selector and uses the configured synthetic credential',async()=>{
+  for(const person of ['owner','subject']){
+    const review=await startReview(0,{person});
+    try {
+      const html=await (await fetch(review.url)).text();
+      assert.equal(html,readFileSync(new URL('../public/index.html',import.meta.url),'utf8'));
+      assert.doesNotMatch(html,/review-person|操作する利用者/);
+      const origin=new URL(review.url).origin;
+      const auth=await (await fetch(origin+'/review/auth',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({person:person==='owner'?'subject':'owner'})})).json();
+      const login=await fetch(origin+'/health/api/passkey/handoff',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({handoffToken:auth.handoffToken})});
+      assert.equal(login.status,200);
+      const session=JSON.parse(Buffer.from(login.headers.get('set-cookie').split('=')[1].split('.')[0],'base64url'));
+      assert.equal(session.identityId,review.fixture.users[person].handoff.identityId);
+      assert.equal(review.fixture.auditEvents[0].identityId,session.identityId);
+      auth.prf.fill(0);
+    } finally {await review.close();}
+  }
 });
