@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-5707cbd4a861";
+const APP_BUILD_ID = "cloud-59e42195e27f";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -76,6 +76,7 @@ const state = {
   listMode: false,
   selectionHistoryActive: false,
   selectionClearBackPending: false,
+  selectionDeletion: null,
   moveDestinations: new Map(),
   movePicker: null,
   selecting: false,
@@ -4109,9 +4110,11 @@ function syncSelectionBar() {
   const canDeleteSelection = Boolean(count
     && files.every(canTrashFile)
     && folders.every(canTrashFolder));
+  const deletion = state.selectionDeletion;
   $("#selection-delete").hidden = !canDeleteSelection;
-  $("#selection-delete").disabled = count === 0;
-  $("#selection-delete").textContent = "削除";
+  $("#selection-delete").disabled = Boolean(deletion) || count === 0;
+  $("#selection-delete").textContent = deletion?.started
+    ? `削除中 ${deletion.processed} / ${deletion.total}` : "削除";
   if (count) hideFloatingToolbar();
 }
 
@@ -4502,6 +4505,7 @@ function syncOfflineStatusDisplay() {
 }
 
 async function deleteSelectedItems() {
+  if (state.selectionDeletion) return;
   const { files, folders } = selectedItems();
   const count = files.length + folders.length;
   if (!count) return;
@@ -4513,13 +4517,15 @@ async function deleteSelectedItems() {
   const message = state.session?.canDelete
     ? `${count}件を削除しますか？ファイルはゴミ箱へ移動します。${folderNote}`
     : "本当に削除しますか？";
-  const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
-  if (!confirmed) return;
   const button = $("#selection-delete");
-  button.disabled = true;
-  button.textContent = `削除中 0 / ${count}`;
+  const deletion = state.selectionDeletion = { processed: 0, total: count, started: false };
   const failureNames = [];
   try {
+    button.disabled = true;
+    const confirmed = state.session?.canDelete ? confirm(message) : await confirmSubadminDeletion(message);
+    if (!confirmed) return;
+    deletion.started = true;
+    button.textContent = `削除中 0 / ${count}`;
     const records = {
       file: new Map(files.map(file => [file.id, file])),
       folder: new Map(folders.map(folder => [folder.id, folder]))
@@ -4529,7 +4535,11 @@ async function deleteSelectedItems() {
     }), {
       remove: task => api(`/${task.type === "folder" ? "folders" : "files"}/${records[task.type].get(task.id).id}`, { method: "DELETE", body: "{}" }),
       onFailure: task => failureNames.push(records[task.type].get(task.id).name),
-      onProgress: ({ processed, total }) => { button.textContent = `削除中 ${processed} / ${total}`; }
+      onProgress: ({ processed, total }) => {
+        deletion.processed = processed;
+        deletion.total = total;
+        button.textContent = `削除中 ${processed} / ${total}`;
+      }
     });
     const { completed, movedEntries } = result;
     const deletedFiles = result.deletedFileIds.map(id => records.file.get(id));
@@ -4548,6 +4558,7 @@ async function deleteSelectedItems() {
     preserveListingAfterDeletion({ files: deletedFiles, folders: deletedFolders });
     if (state.session?.role === "admin") await loadUsage();
   } finally {
+    state.selectionDeletion = null;
     button.disabled = false;
     syncSelectionBar();
   }
