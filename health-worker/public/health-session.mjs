@@ -10,10 +10,11 @@ export function createSession(state, api, load, lock) {
       const result = await api('/passkey/handoff', { method: 'POST', body: JSON.stringify({ handoffToken: auth.handoff.handoffToken }) }, generation);
       const key = await unlockClient(auth.prfOutput, result.keyBundle.vault);
       state.check(generation);
-      const master = await unwrapMaster(key, result.keyBundle.wrappedKey);
+      const master = await unwrapMaster(key, result.keyBundle.wrappedKey, result.keyBundle.accountId);
       if (generation !== state.auth.generation) { master.fill(0); state.check(generation); }
       state.auth.master?.fill(0);
       state.auth.master = master;
+      state.auth.accountId = result.keyBundle.accountId;
       state.auth.session = result.sessionId;
       await load(generation);
       state.check(generation);

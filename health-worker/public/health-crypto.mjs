@@ -1,6 +1,10 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder('utf-8', { fatal: true });
 const PREFIX = 'T-lain health v1';
+function account(value) {
+  if (typeof value !== 'string' || !/^[a-z0-9_-]{1,128}$/.test(value)) throw new Error('記録のアカウントを確認できません。');
+  return value;
+}
 export function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', ''); }
 export function unb64(text) {
   if (typeof text !== 'string' || !/^[A-Za-z0-9_-]+$/.test(text) || text.length % 4 === 1) throw new Error('暗号化データの形式が不正です。');
@@ -29,19 +33,19 @@ export async function unlockClient(prf, vault) {
   try { return await crypto.subtle.importKey('pkcs8', bytes, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']); }
   finally { bytes.fill(0); }
 }
-export async function wrapMaster(master, publicKey) {
+export async function wrapMaster(master, publicKey, accountId) {
   const key = await crypto.subtle.importKey('jwk', publicKey, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
-  return b64(await crypto.subtle.encrypt({ name: 'RSA-OAEP', label: enc.encode(`${PREFIX}|nobumi|master`) }, key, master));
+  return b64(await crypto.subtle.encrypt({ name: 'RSA-OAEP', label: enc.encode(`${PREFIX}|${account(accountId)}|master`) }, key, master));
 }
-export async function unwrapMaster(privateKey, wrapped) {
-  const bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'RSA-OAEP', label: enc.encode(`${PREFIX}|nobumi|master`) }, privateKey, unb64(wrapped)));
+export async function unwrapMaster(privateKey, wrapped, accountId) {
+  const bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'RSA-OAEP', label: enc.encode(`${PREFIX}|${account(accountId)}|master`) }, privateKey, unb64(wrapped)));
   if (bytes.length !== 32) throw new Error('記録用の鍵を確認できません。');
   return bytes;
 }
-export async function recordId(master, date) {
+export async function recordId(master, date, accountId) {
   const material = await crypto.subtle.importKey('raw', master, 'HKDF', false, ['deriveKey']);
   const key = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: enc.encode(PREFIX), info: enc.encode('record-index') }, material, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  return b64(await crypto.subtle.sign('HMAC', key, enc.encode(`nobumi|${date}`)));
+  return b64(await crypto.subtle.sign('HMAC', key, enc.encode(`${account(accountId)}|${date}`)));
 }
-export async function encryptRecord(master, id, value) { return seal(await aes(master, 'records'), enc.encode(JSON.stringify(value)), `${PREFIX}|nobumi|${id}`); }
-export async function decryptRecord(master, id, envelope) { return JSON.parse(dec.decode(await open(await aes(master, 'records'), envelope, `${PREFIX}|nobumi|${id}`))); }
+export async function encryptRecord(master, id, value, accountId) { return seal(await aes(master, 'records'), enc.encode(JSON.stringify(value)), `${PREFIX}|${account(accountId)}|${id}`); }
+export async function decryptRecord(master, id, envelope, accountId) { return JSON.parse(dec.decode(await open(await aes(master, 'records'), envelope, `${PREFIX}|${account(accountId)}|${id}`))); }

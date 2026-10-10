@@ -38,3 +38,27 @@ test('an invalidated generation cannot process a late non-JSON authorization res
   t.mock.method(globalThis,'fetch',async()=>{f.state.erase();return new Response('expired',{status:401});});
   await assert.rejects(f.api('/records',{},generation),/画面を離れた/);assert.deepEqual(f.invalidations,[]);
 });
+
+test('200 JSON with invalid record/write/logout schemas is rejected without invalidating the session',async t=>{
+  const row={id:'a'.repeat(43),iv:'a'.repeat(16),ciphertext:'a'.repeat(24),revision:1};
+  const cases=[['/records','GET',[{}, {records:null},{records:{}},{records:[null]}, {records:[{...row,revision:'1'}]}]],
+    ...['PUT','DELETE'].map(method=>['/records/'+row.id,method,[{}, {ok:false,revision:1},{revision:1},...[0,-1,1.5,'1',null,Number.MAX_SAFE_INTEGER+1].map(revision=>({ok:true,revision}))]]),
+    ['/logout','POST',[{}, {ok:false}]]];
+  for(const [path,method,values] of cases)for(const value of values){
+    const f=setup(t,Response.json(value));await assert.rejects(f.api(path,{method}),/応答/);
+    assert.deepEqual(f.invalidations,[]);assert.equal(f.state.auth.session,'fixture-session');t.mock.restoreAll();
+  }
+  for(const [path,method,value] of [['/records','GET',{records:[row]}],['/records/'+row.id,'PUT',{ok:true,revision:1}],['/records/'+row.id,'DELETE',{ok:true,revision:2}],['/logout','POST',{ok:true}]]){
+    const f=setup(t,Response.json(value));assert.deepEqual(await f.api(path,{method}),value);t.mock.restoreAll();
+  }
+});
+
+test('handoff requires a usable session, expiry, account context and encrypted key bundle',async t=>{
+  const bundle={accountId:'fixture-account',wrappedKey:'a'.repeat(512),vault:{iv:'a'.repeat(16),ciphertext:'a'.repeat(2400),publicKey:{kty:'RSA',n:'a'.repeat(512),e:'AQAB'}}};
+  const valid={sessionId:'fixture-session-123',expiresAt:Math.floor(Date.now()/1000)+60,keyBundle:bundle};
+  const malformed=[{}, {...valid,sessionId:''},{...valid,expiresAt:0},{...valid,expiresAt:valid.expiresAt+0.5},{...valid,keyBundle:null},
+    {...valid,keyBundle:{...bundle,accountId:null}},{...valid,keyBundle:{...bundle,wrappedKey:''}},
+    {...valid,keyBundle:{...bundle,vault:{...bundle.vault,iv:'bad'}}},{...valid,keyBundle:{...bundle,vault:{...bundle.vault,publicKey:{kty:'EC'}}}}];
+  for(const value of malformed){const f=setup(t,Response.json(value));await assert.rejects(f.api('/passkey/handoff',{method:'POST'}),/応答/);t.mock.restoreAll();}
+  const f=setup(t,Response.json(valid));assert.deepEqual(await f.api('/passkey/handoff',{method:'POST'}),valid);
+});

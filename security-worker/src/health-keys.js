@@ -22,7 +22,7 @@ export async function healthKeyBundle(env, input) {
     WHERE v.identity_id=? AND v.credential_id=? AND l.id=? AND l.service='health' AND l.service_account_id='nobumi'
       AND l.status='active' AND c.status='active' AND i.status='active'`)
     .bind(input.identityId, input.credentialId, input.serviceLinkId).first();
-  return row ? { vault: { publicKey: JSON.parse(row.public_key_json), iv: row.iv, ciphertext: row.ciphertext }, wrappedKey: row.wrapped_key } : null;
+  return row ? { accountId: ACCOUNT, vault: { publicKey: JSON.parse(row.public_key_json), iv: row.iv, ciphertext: row.ciphertext }, wrappedKey: row.wrapped_key } : null;
 }
 export async function handleHealthKeys(path, request, env, actor, helpers) {
   const { HttpError, readJson, json, audit } = helpers;
@@ -32,7 +32,7 @@ export async function handleHealthKeys(path, request, env, actor, helpers) {
   if (!ownLink) fail(HttpError, 403, '体調管理への連携を先に追加してください。');
   if (path === '/api/health/own' && request.method === 'GET') {
     const vault = await env.DB.prepare('SELECT iv,ciphertext,public_key_json FROM security_health_vaults WHERE identity_id=? AND credential_id=?').bind(actor.identityId, actor.credentialId).first();
-    return json({ prepared: Boolean(vault), ready: Boolean(await healthKeyBundle(env, { ...actor, serviceLinkId: ownLink.id })) });
+    return json({ accountId: ACCOUNT, prepared: Boolean(vault), ready: Boolean(await healthKeyBundle(env, { ...actor, serviceLinkId: ownLink.id })) });
   }
   if (path === '/api/health/vault' && request.method === 'POST') {
     if (Date.now() / 1000 - actor.authenticatedAt > 300) fail(HttpError, 401, 'もう一度パスキーで本人確認してください。');
@@ -58,7 +58,7 @@ export async function handleHealthKeys(path, request, env, actor, helpers) {
       JOIN security_service_links l ON l.identity_id=v.identity_id AND l.service='health' AND l.service_account_id='nobumi' AND l.status='active'
       JOIN security_credentials c ON c.credential_id=v.credential_id AND c.status='active'
       JOIN security_identities i ON i.id=v.identity_id AND i.status='active'`).all()).results;
-    return json({ config, recoveryPublicKey: cloudConfig?.publicKeyJwk || null, adminEnvelope: envelope, members: members.map(m => ({ ...m, publicKey: JSON.parse(m.publicKeyJson), publicKeyJson: undefined })) });
+    return json({ accountId: ACCOUNT, config, recoveryPublicKey: cloudConfig?.publicKeyJwk || null, adminEnvelope: envelope, members: members.map(m => ({ ...m, publicKey: JSON.parse(m.publicKeyJson), publicKeyJson: undefined })) });
   }
   if (path === '/api/health/initialize' && request.method === 'POST') {
     const v = await readJson(request, 3000);

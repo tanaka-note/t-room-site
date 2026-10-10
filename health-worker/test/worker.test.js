@@ -8,9 +8,9 @@ const origin='https://tanaka-note.com';
 async function login(f,person='owner') {const r=await handleRequest(new Request(`${origin}/health/api/passkey/handoff`,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({handoffToken:f.issue(person)})}),f.env);const v=await r.json();return {Cookie:r.headers.get('Set-Cookie').split(';')[0],'X-Health-Session':v.sessionId};}
 function req(path,headers,method='GET',body){return new Request(`${origin}/health/api${path}`,{method,headers:{Origin:origin,'Content-Type':'application/json',...headers},...(body?{body:JSON.stringify(body)}:{})});}
 test('actual handler shares encrypted records with revision checks and no history',async()=>{
-  const f=await fixture();try{const a=await login(f);const b=await login(f,'subject');const id=await recordId(f.master,'2026-01-01');
+  const f=await fixture();try{const a=await login(f);const b=await login(f,'subject');const id=await recordId(f.master,'2026-01-01', 'nobumi');
   assert.equal(f.auditEvents.length,2); for(const event of f.auditEvents){assert.match(event.eventId,/^[a-f0-9-]{36}$/);assert.ok(Number.isFinite(Date.parse(event.occurredAt)));assert.equal(event.service,'health');assert.equal(event.eventType,'passkey_login_success');assert.equal(event.sessionId,undefined);assert.ok(event.sessionIdHash);}
-  const first=await encryptRecord(f.master,id,{note:'first'});const last=await encryptRecord(f.master,id,{note:'last'});
+  const first=await encryptRecord(f.master,id,{note:'first'}, 'nobumi');const last=await encryptRecord(f.master,id,{note:'last'}, 'nobumi');
   await handleRequest(req(`/records/${id}`,a,'PUT',{...first,expectedRevision:0}),f.env);await handleRequest(req(`/records/${id}`,b,'PUT',{...last,expectedRevision:1}),f.env);
   const result=await(await handleRequest(req('/records',a),f.env)).json();assert.equal(result.records.length,1);assert.equal(result.records[0].ciphertext,last.ciphertext);assert.equal(result.records[0].revision,2);
   await assert.rejects(handleRequest(req(`/records/${id}`,a,'PUT',{...last,expectedRevision:2,note:'plaintext'}),f.env),e=>e.status===400);
@@ -24,7 +24,7 @@ test('actual handler shares encrypted records with revision checks and no histor
   }finally{f.db.close();}
 });
 test('JSON mutations reject oversized streams and non-object inputs',async()=>{
-  const f=await fixture();try{const headers=await login(f);const id=await recordId(f.master,'2026-01-01');
+  const f=await fixture();try{const headers=await login(f);const id=await recordId(f.master,'2026-01-01', 'nobumi');
     await assert.rejects(handleRequest(req(`/records/${id}`,headers,'PUT',[]),f.env),e=>e.status===400);
     const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('x'.repeat(200001)));controller.close();}});
     await assert.rejects(handleRequest(new Request(`${origin}/health/api/records/${id}`,{method:'PUT',headers:{...headers,Origin:origin,'Content-Type':'application/json'},body:stream,duplex:'half'}),f.env),e=>e.status===413);
@@ -40,8 +40,8 @@ test('third party and expired sessions cannot read; handoffs are consumed once',
 test('atomic OCC rejects stale updates/deletes, creation races and deletion/recreation ABA', async () => {
   const f = await fixture();
   try {
-    const a = await login(f), b = await login(f, 'subject'), id = await recordId(f.master, '2026-02-01');
-    const encrypted = await encryptRecord(f.master, id, { note: 'encrypted fixture' });
+    const a = await login(f), b = await login(f, 'subject'), id = await recordId(f.master, '2026-02-01', 'nobumi');
+    const encrypted = await encryptRecord(f.master, id, { note: 'encrypted fixture' }, 'nobumi');
     const put = (headers, revision) => handleRequest(req('/records/' + id, headers, 'PUT', { ...encrypted, expectedRevision: revision }), f.env);
     const remove = (headers, revision) => handleRequest(req('/records/' + id, headers, 'DELETE', { expectedRevision: revision }), f.env);
     const conflict = promise => assert.rejects(promise, e => e.status === 409 && e.code === 'revision_conflict');

@@ -8,9 +8,9 @@ const require = createRequire(new URL('../../diary-worker/package.json', import.
 const { chromium } = require('playwright');
 const review = await startReview();
 const legacyDate = addDays(today(), -70);
-const legacyId = await recordId(review.fixture.master, legacyDate);
+const legacyId = await recordId(review.fixture.master, legacyDate, 'nobumi');
 const legacyValue = {date:legacyDate, start:false, end:false, symptoms:[0,5],flow:null,note:'旧形式の備考'};
-const legacyCipher = await encryptRecord(review.fixture.master, legacyId, legacyValue);
+const legacyCipher = await encryptRecord(review.fixture.master, legacyId, legacyValue, 'nobumi');
 review.fixture.db.prepare("INSERT INTO health_records(record_id,account_id,iv,ciphertext) VALUES(?,'nobumi',?,?)").run(legacyId,legacyCipher.iv,legacyCipher.ciphertext);
 const browser = await chromium.launch({ headless: true });
 try {
@@ -37,6 +37,17 @@ try {
   assert.ok(await good.evaluate(node=>node.getBoundingClientRect().height >= 44));
   assert.equal(await page.locator('#period-details').evaluate(element=>element.open), false);
   await page.locator('#note').fill('頭痛についての自由メモ'); await page.getByLabel('頭痛', { exact: true }).check();
+
+  // Structurally invalid 200 JSON cannot close the editor or advance local revisions.
+  for (const value of [{}, {ok:true}, {ok:true,revision:'1'}, {ok:true,revision:1.5}, {ok:true,revision:2}]) {
+    await page.route('**/health/api/records/*',route=>route.request().method()==='PUT' ? route.fulfill({status:200,json:value}) : route.continue());
+    await page.locator('#save').click(); await page.waitForFunction(()=>document.getElementById('editor-error').textContent.length>0);
+    assert.equal(await page.locator('#editor').isVisible(),true);
+    assert.equal(await page.locator('#note').inputValue(),'頭痛についての自由メモ');
+    assert.equal(await page.locator('#app').isVisible(),true);
+    assert.equal(review.fixture.db.prepare('SELECT COUNT(*) AS n FROM health_records').get().n,1);
+    await page.unroute('**/health/api/records/*');
+  }
 
   await page.screenshot({path:new URL('../../tmp/health-review/editor.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
   await page.getByRole('button',{name:'保存',exact:true}).click(); await page.locator('#editor').waitFor({state:'hidden'});
@@ -99,15 +110,15 @@ try {
   assert.equal(await page.locator('#conditions [aria-pressed="true"]').count(),0);
   await page.locator('#note').fill('旧形式を編集'); await page.locator('#save').click(); await page.locator('#editor').waitFor({state:'hidden'});
   const upgradedRow=review.fixture.db.prepare('SELECT iv,ciphertext,revision FROM health_records WHERE record_id=?').get(legacyId);
-  const upgraded=await decryptRecord(review.fixture.master,legacyId,upgradedRow);
+  const upgraded=await decryptRecord(review.fixture.master,legacyId,upgradedRow, 'nobumi');
   assert.equal(upgraded.schemaVersion,2);assert.equal(upgraded.condition,null);assert.deepEqual(upgraded.symptoms.map(item=>item.id),['abdominal_pain','low_mood']);
   // Stronger optional symptom metadata survives a note-only edit.
   const intensityValue={...upgraded,symptoms:upgraded.symptoms.map(item=>({...item,intensity:'strong'}))};
-  const intensityCipher=await encryptRecord(review.fixture.master,legacyId,intensityValue);
+  const intensityCipher=await encryptRecord(review.fixture.master,legacyId,intensityValue, 'nobumi');
   review.fixture.db.prepare('UPDATE health_records SET iv=?,ciphertext=?,revision=revision+1 WHERE record_id=?').run(intensityCipher.iv,intensityCipher.ciphertext,legacyId);
   await page.locator('#refresh').click(); await page.waitForFunction(()=>!document.getElementById('refresh').disabled);
   await page.locator('.entry').filter({hasText:legacyDate}).click(); await page.locator('#note').fill('強度は保持'); await page.locator('#save').click(); await page.locator('#editor').waitFor({state:'hidden'});
-  const preserved=await decryptRecord(review.fixture.master,legacyId,review.fixture.db.prepare('SELECT iv,ciphertext FROM health_records WHERE record_id=?').get(legacyId));
+  const preserved=await decryptRecord(review.fixture.master,legacyId,review.fixture.db.prepare('SELECT iv,ciphertext FROM health_records WHERE record_id=?').get(legacyId), 'nobumi');
   assert.ok(preserved.symptoms.every(item=>item.intensity==='strong'));
   await page.locator('#calendar-tab').click();
   // A future date can be inspected, but cannot be saved as actual history.
@@ -159,7 +170,7 @@ try {
     assert.equal(await page.locator('#last-period-start').textContent(), '', phase);
     if (phase === 'authenticate') assert.ok(await page.evaluate(() => window.healthRacePrf.every(byte => byte === 0)));
   }
-  await page.route('**/health/api/passkey/handoff',async route=>{const response=await route.fetch();const value=await response.json();await route.fulfill({response,json:{...value,expiresAt:Date.now()/1000+2}});});
+  await page.route('**/health/api/passkey/handoff',async route=>{const response=await route.fetch();const value=await response.json();await route.fulfill({response,json:{...value,expiresAt:Math.floor(Date.now()/1000)+2}});});
   await page.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await page.locator('#app').waitFor({state:'visible'}); await page.locator('#login').waitFor({state:'visible'}); assert.equal(await page.locator('#calendar').textContent(),'');
   review.fixture.revoke(); await other.getByRole('button',{name:'最新の記録を読み込む',exact:true}).click(); await other.locator('#login').waitFor({state:'visible'}); assert.equal(await other.locator('#records').textContent(),'');
   assert.deepEqual(failures,[]); console.log('Health conditions, insights 320/390/1280, legacy upgrade/intensity preservation, future rejection, OCC draft retention; mobile/desktop: daily health first, optional period fields, explicit end, shared encrypted CRUD, unsaved guard, Back/Esc, settings, CSV, logout and pagehide races passed.');

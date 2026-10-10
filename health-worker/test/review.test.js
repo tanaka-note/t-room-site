@@ -7,17 +7,18 @@ test('review handover preserves ciphertext and grants new fixture passkeys witho
   const old = await startReview();
   let next;
   try {
-    const id = await recordId(old.fixture.master,'2026-01-01');
+    const id = await recordId(old.fixture.master,'2026-01-01', 'nobumi');
     const value = {date:'2026-01-01',symptoms:[1],note:'synthetic',start:false,end:false,flow:null};
-    const envelope = await encryptRecord(old.fixture.master,id,value);
+    const envelope = await encryptRecord(old.fixture.master,id,value, 'nobumi');
     old.fixture.db.prepare("INSERT INTO health_records(record_id,account_id,iv,ciphertext,revision) VALUES(?,'nobumi',?,?,7)").run(id,envelope.iv,envelope.ciphertext);
+    delete old.fixture.users.owner.bundle.accountId; // Previous review handoff shape.
     next = await startReview(0,{source:old.url});
     const row = next.fixture.db.prepare('SELECT iv,ciphertext,revision FROM health_records WHERE record_id=?').get(id);
     assert.equal(row.ciphertext,envelope.ciphertext); assert.equal(row.revision,7);
     for (const person of ['owner','subject']) {
       const {prf,bundle} = next.fixture.users[person];
-      const master = await unwrapMaster(await unlockClient(prf,bundle.vault),bundle.wrappedKey);
-      try { assert.deepEqual(await decryptRecord(master,id,row),value); } finally { master.fill(0); }
+      const master = await unwrapMaster(await unlockClient(prf,bundle.vault),bundle.wrappedKey, 'nobumi');
+      try { assert.deepEqual(await decryptRecord(master,id,row, 'nobumi'),value); } finally { master.fill(0); }
     }
     assert.equal(old.fixture.db.prepare('SELECT ciphertext FROM health_records WHERE record_id=?').get(id).ciphertext,envelope.ciphertext);
   } finally { if(next) await next.close(); await old.close(); }

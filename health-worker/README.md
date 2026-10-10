@@ -31,7 +31,9 @@ conditionのnullは普通と異なる。intensityはnull／light／normal／stro
 
 PUTは暗号化envelopeとexpectedRevisionのみを受け取り、0は新規作成、1以上は既存の同番号への更新。DELETEもexpectedRevisionが必須。単一SQLの条件付き書き込みで並行更新を防ぐ。削除時は暗号文とIVを消去し、既存テーブルに不透明なHMAC識別子と単調増加revisionのみの削除目印を残す。GETには返さず、削除後の再作成に古い編集画面が上書きすることも防ぐ。平文migrationや新しいD1 migrationは不要。健康内容の履歴は保持しない。revision_conflictの409とsession_changedの409を区別し、後者のみ再ログインへ戻す。
 
-APIのHTML・text/plain・空本文・不正JSON応答は、HTTP statusに応じた共通エラーへ変換する。非JSONの401／403でも画面をロックし、遅延応答はgenerationで拒否する。200の不正な本文を保存成功と扱わない。一時的な障害はログインや入力を保持し、再試行を案内する。
+APIのHTML・text/plain・空本文・不正JSON応答は、HTTP statusに応じた共通エラーへ変換する。非JSONの401／403でも画面をロックし、遅延応答はgenerationで拒否する。200のJSONもAPIごとの構造を検証し、PUT／DELETEはok=true・安全な整数revision・送信時の更新番号+1を確認してから端末状態を更新する。GETは暗号化記録の配列、handoffはsessionId・有効期限・暗号化鍵bundleを検証する。確認できない場合は保存成功と扱わず、入力を保持する。
+
+アカウントIDは公開JavaScriptに固定せず、認証後の鍵bundleまたはSecurity Centerの認証済みAPIから取得する。IDの値、既存AAD・HMAC・RSAラベルは変えず、既存暗号文の互換性を維持する。画面ロック時にIDも端末状態から消去する。
 
 ## フロントエンドの構造
 

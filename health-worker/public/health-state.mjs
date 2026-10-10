@@ -4,7 +4,7 @@ import { today } from './health-domain.mjs';
 // locking invalidates all asynchronous work and erases the decrypted state.
 export function createState() {
   const state = {
-    auth: { master: null, session: null, generation: 0 },
+    auth: { master: null, accountId: null, session: null, generation: 0 },
     data: { records: [], settings: {}, revisions: new Map() },
     ui: { busy: false, month: today().slice(0, 7), tab: 'calendar' },
   };
@@ -17,6 +17,7 @@ export function createState() {
       state.auth.generation++;
       state.auth.master?.fill(0);
       state.auth.master = null;
+      state.auth.accountId = null;
       state.auth.session = null;
       state.replaceData([], {}, new Map());
     },

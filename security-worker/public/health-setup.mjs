@@ -22,7 +22,11 @@ $('prepare').onclick = () => run(async () => {
 });
 $('owner-link').onclick = () => run(async () => {
   const auth = await TRoomPasskeys.authenticate('security');
-  try { await api('/identities/primary-admin/links', { links: [{ service: 'health', accountId: 'nobumi', rootFolderId: null }] }); $('status').textContent = 'オーナーの連携を追加しました。次に鍵の準備・承認を行ってください。'; }
+  try {
+    const services = await api('/services');
+    const targets = services.services?.find(service => service.id === 'health')?.targets;
+    if (!Array.isArray(targets) || targets.length !== 1 || typeof targets[0].accountId !== 'string') throw new Error('体調管理の連携先を確認できません。');
+    await api('/identities/primary-admin/links', { links: [{ service: 'health', accountId: targets[0].accountId, rootFolderId: null }] }); $('status').textContent = 'オーナーの連携を追加しました。次に鍵の準備・承認を行ってください。'; }
   finally { auth.prfOutput?.fill(0); }
 });
 $('manage').onclick = () => run(async () => {
@@ -34,9 +38,9 @@ $('manage').onclick = () => run(async () => {
     const privateKey = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput, status.adminEnvelope);
     if (!status.config) {
       master = crypto.getRandomValues(new Uint8Array(32));
-      await api('/health/initialize', { recoveryWrappedKey: await wrapMaster(master, status.recoveryPublicKey) });
+      await api('/health/initialize', { recoveryWrappedKey: await wrapMaster(master, status.recoveryPublicKey, status.accountId) });
       status = await api('/health/admin');
-    } else master = await unwrapMaster(privateKey, status.config.recoveryWrappedKey);
+    } else master = await unwrapMaster(privateKey, status.config.recoveryWrappedKey, status.accountId);
     $('members').replaceChildren();
     for (const member of status.members) {
       const line = document.createElement('p');
@@ -44,7 +48,7 @@ $('manage').onclick = () => run(async () => {
       if (!member.granted) {
         const button = document.createElement('button'); button.textContent = 'このパスキーの鍵を承認';
         // Keep only the encrypted grant in the closure; plaintext master is wiped below.
-        const wrappedKey = await wrapMaster(master, member.publicKey);
+        const wrappedKey = await wrapMaster(master, member.publicKey, status.accountId);
         button.onclick = () => run(async () => {
           const fresh = await TRoomPasskeys.authenticate('security');
           try { await api('/health/grant', { credentialId: member.credentialId, serviceLinkId: member.serviceLinkId, wrappedKey }); line.replaceChildren(document.createTextNode(`${member.displayName}：承認済み`)); $('status').textContent = '鍵の利用を承認しました。'; }

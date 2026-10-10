@@ -11,7 +11,7 @@ export async function fixture({ master: importedMaster } = {}) {
   const master = importedMaster ? new Uint8Array(importedMaster) : randomBytes(32); const users = {};
   for (const person of ['owner', 'subject']) {
     const prf = new Uint8Array(randomBytes(32)); const vault = await createClientVault(prf);
-    users[person] = { prf, bundle: { vault, wrappedKey: await wrapMaster(master, vault.publicKey) }, handoff: { identityId: person === 'owner' ? 'primary-admin' : 'fixture-subject', credentialId: `fixture-${person}`, serviceLinkId: `link-${person}`, serviceAccountId: 'nobumi', sessionEpoch: 1 } };
+    users[person] = { prf, bundle: { accountId: 'nobumi', vault, wrappedKey: await wrapMaster(master, vault.publicKey, 'nobumi') }, handoff: { identityId: person === 'owner' ? 'primary-admin' : 'fixture-subject', credentialId: `fixture-${person}`, serviceLinkId: `link-${person}`, serviceAccountId: 'nobumi', sessionEpoch: 1 } };
   }
   const auditEvents=[]; const tokens = new Map(); let revoked = false;
   const env = { DB: d1(db), SESSION_SECRET: randomBytes(32).toString('hex'), SESSION_VERSION: '1', PASSKEY_ENABLED: 'true', SECURITY: {
