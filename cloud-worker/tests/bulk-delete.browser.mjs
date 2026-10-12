@@ -38,9 +38,9 @@ try { for (const [name, engine, launch] of engines) {
         node: document.querySelector('.file-card[data-file-id="3"]') };
     });
     const click = async selector => mobile ? page.locator(selector).tap() : page.locator(selector).click();
-    // Save the same position in the origin history entry before selection starts.
+    // Select at the top, then scroll during selection: history has a different position.
     await page.evaluate(() => {
-      __test.scrollAppTo({ top: 400, left: 0, behavior: 'auto' });
+      __test.scrollAppTo({ top: 0, left: 0, behavior: 'auto' });
       document.querySelector('.file-card[data-file-id="1"] .file-select-button').click();
     });
     // Denied permissions and cancelled confirmation must leave the list untouched.

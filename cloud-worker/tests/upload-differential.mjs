@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-const [client, worker, html] = await Promise.all([
+const [client, worker, html, listing] = await Promise.all([
   readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
   readFile(new URL("../src/index.js", import.meta.url), "utf8"),
-  readFile(new URL("../public/index.html", import.meta.url), "utf8")
+  readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  readFile(new URL("../public/listing-model.js", import.meta.url), "utf8")
 ]);
 
 const context = vm.createContext({
@@ -13,6 +14,7 @@ const context = vm.createContext({
   document: { addEventListener() {} },
   TCloudMedia: { safeFilename: (value) => String(value || "download") }
 });
+vm.runInContext(listing, context);
 vm.runInContext(client, context);
 
 const composed = vm.runInContext('uploadFileIdentity("é.jpg", 1024)', context);

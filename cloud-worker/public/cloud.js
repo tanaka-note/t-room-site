@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-cecffc2b562a";
+const APP_BUILD_ID = "cloud-09a5fb97793d";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -76,6 +76,7 @@ const state = {
   listMode: false,
   selectionHistoryActive: false,
   selectionClearBackPending: false,
+  selectionClearScrollPosition: null,
   selectionDeletion: null,
   moveDestinations: new Map(),
   movePicker: null,
@@ -1191,6 +1192,20 @@ function resetFolderScrollPosition() {
   hideFloatingToolbar();
 }
 
+function selectionScrollPosition() {
+  return { ...appScrollPosition(), folderId: state.folderId, generation: state.itemLoadGeneration };
+}
+
+function restoreSelectionScrollPosition(position) {
+  const restore = () => {
+    if (!position || position.folderId !== state.folderId || position.generation !== state.itemLoadGeneration
+      || history.state?.selection || history.state?.previewId) return;
+    scrollAppTo({ top: position.y, left: position.x, behavior: "auto" });
+  };
+  // Native history scroll restoration runs after popstate; restore in the following frames.
+  requestAnimationFrame(() => { restore(); requestAnimationFrame(restore); });
+}
+
 async function handleHistoryNavigation(event) {
   const target = event.state;
   if (!target?.tcloud) return;
@@ -1198,17 +1213,26 @@ async function handleHistoryNavigation(event) {
   try {
     const sameFolder = Number(target.folderId || 0) === Number(state.folderId || 0);
     if (state.selectionClearBackPending) {
+      const position = state.selectionClearScrollPosition;
       state.selectionClearBackPending = false;
-      if (sameFolder && !target.previewId) return;
+      state.selectionClearScrollPosition = null;
+      if (sameFolder && !target.previewId) {
+        restoreSelectionScrollPosition(position);
+        return;
+      }
     }
     const previewOriginId = ($("#preview-dialog").open || state.previewCloseOrigin) && sameFolder && !target.previewId
       ? Number(state.previewFileId || state.previewCloseOrigin?.id)
       : null;
     const origin = state.previewCloseOrigin || {x: state.previewOriginScrollX, y: state.previewOriginScrollY};
     if (getSelection().count("file") || getSelection().count("folder")) {
+      const position = selectionScrollPosition();
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
-      if (sameFolder && !target.previewId && !previewOriginId) return;
+      if (sameFolder && !target.previewId && !previewOriginId) {
+        restoreSelectionScrollPosition(position);
+        return;
+      }
     }
     state.previewHistoryActive = false;
     state.previewClosePending = false;
@@ -4170,10 +4194,12 @@ function clearSelectionWithoutRefresh() {
   const shouldRewind = Boolean((getSelection().count("file") || getSelection().count("folder"))
     && state.selectionHistoryActive
     && !state.handlingPopState);
+  const position = selectionScrollPosition();
   clearFileSelection(true, false);
   if (!shouldRewind) return;
   state.selectionHistoryActive = false;
   state.selectionClearBackPending = true;
+  state.selectionClearScrollPosition = position;
   history.back();
 }
 
@@ -5389,13 +5415,13 @@ async function uploadSelectedFolder(event) {
       panel.classList.add("upload-error");
       $("#upload-heading").textContent = "フォルダの準備に失敗しました";
       $("#upload-file-progress").textContent = "開始できませんでした";
-      $("#upload-dismiss").hidden = false;
       setNotice(`フォルダの保存に失敗しました：${error.message}`, true);
     }
   } finally {
     if (state.activeFolderUploadOperationId === operationId) {
       state.activeFolderUploadOperationId = null;
       state.uploading = false;
+      syncUploadMessageActions();
       submitButton.disabled = false;
       submitButton.textContent = "まとめて保存する";
       syncAvailableActions();
@@ -6346,7 +6372,6 @@ async function uploadFiles(files, destinations = null, options = {}) {
       $("#upload-heading").textContent = "差分アップロード完了";
       $("#upload-status").textContent = `${completed}件保存・${duplicateSkipped.length}件を競合候補として保留`;
       $("#upload-file-progress").textContent = completed ? "競合しないデータだけ保存しました" : "競合候補のため保存を保留しました";
-      $("#upload-dismiss").hidden = false;
       setNotice(completed
         ? `${completed}件を追加し、競合候補の${duplicateSkipped.length}件は保留しました。`
         : `競合候補の${duplicateSkipped.length}件は保存せず保留しました。`);
@@ -6361,14 +6386,12 @@ async function uploadFiles(files, destinations = null, options = {}) {
       panel.hidden = false;
       if (!finalFailures.length && !skippedFiles.length) $("#upload-heading").textContent = "動画の保存完了（サムネイル未生成あり）";
       $("#upload-file-progress").textContent += ` ${thumbnailWarnings.length}件のサムネイルを作成できませんでした。再生時の作成、またはアカウントの全動画点検で再確認できます。`;
-      $("#upload-dismiss").hidden = false;
     }
   } catch (error) {
     panel.classList.add("upload-error");
     $("#upload-heading").textContent = options.skipExisting === false ? "アップロードを開始できませんでした" : "差分確認に失敗しました";
     $("#upload-status").textContent = "データは追加していません";
     $("#upload-file-progress").textContent = error.message;
-    $("#upload-dismiss").hidden = false;
     setNotice(error.message, true);
   } finally {
     tracker.stop();
@@ -6376,7 +6399,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
     state.uploadAbort = null;
     $("#upload-cancel").hidden = true;
     $("#upload-cancel").disabled = false;
-    $("#upload-dismiss").hidden = $("#upload-failure-summary").hidden && !duplicateSkipped.length && !skippedFiles.length && !panel.classList.contains("upload-error");
+    syncUploadMessageActions();
     syncAvailableActions();
     await syncTransferWakeLock();
   }
@@ -6637,6 +6660,10 @@ function createFastDisplayMetadata(file, mediaKind, inspection, durationSeconds 
   const normalized = normalizeDurationSeconds(durationSeconds);
   if (normalized) metadata.durationSeconds = normalized;
   return metadata;
+}
+
+function syncUploadMessageActions() {
+  $("#upload-dismiss").hidden = state.uploading || Boolean(state.activeFolderUploadOperationId) || $("#upload-panel").hidden;
 }
 
 function dismissUploadMessage() {
