@@ -2665,7 +2665,9 @@
   async function loadPhotoMeta() {
     const result = await api("/photos/meta");
     const monthValue = state.photoMonth;
-    elements.photoMonthFilter.replaceChildren(createOption("", "すべて"), ...(result.months || []).map((item) => (
+    const months = result.months || [];
+    const totalCount = months.reduce((total, item) => total + Number(item.count || 0), 0);
+    elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount}）`), ...months.map((item) => (
       createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
     )));
     elements.photoMonthFilter.value = monthValue;
