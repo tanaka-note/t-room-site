@@ -123,6 +123,23 @@ export async function runDialogs(service) {
         else await page.mouse.click(point.x, point.y);
       };
       if (service === 'diary') {
+        const touchSession = touch ? await context.newCDPSession(page) : null;
+        const swipe = async (dx, dy = 0, { cancel = false, secondFinger = false, edge = false } = {}) => {
+          const box = await page.locator('.photo-stage').boundingBox();
+          const x = edge ? box.x + 2 : box.x + box.width / 2;
+          const y = box.y + box.height / 2;
+          const points = offset => [
+            { id: 1, x: x + dx * offset, y: y + dy * offset },
+            ...(secondFinger ? [{ id: 2, x: x + 30 + dx * offset, y: y + 30 + dy * offset }] : [])
+          ];
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0).slice(0, 1) });
+          if (secondFinger) await touchSession.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0) });
+          for (const offset of [0.25, 0.5, 0.75, 1]) {
+            await touchSession.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(offset) });
+          }
+          await touchSession.send('Input.dispatchTouchEvent', { type: cancel ? 'touchCancel' : 'touchEnd', touchPoints: [] });
+        };
+        const navigate = direction => touch ? swipe(direction > 0 ? -140 : 140) : page.keyboard.press(direction > 0 ? 'ArrowRight' : 'ArrowLeft');
         await page.click('#camera-roll-button');
         await opened('camera-roll-dialog');
         await page.waitForSelector('[data-photo-index="47"]');
@@ -206,14 +223,14 @@ export async function runDialogs(service) {
         await waitForPhoto(2);
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'show the selected thumbnail while full image is pending');
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-2.svg');
-        await page.click('#photo-next');
+        await navigate(1);
         await waitForPhoto(3);
         releasePhoto(3);
         await displayed(3);
         releasePhoto(2);
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/display/3.svg', 'late image must not replace the current selection');
-        await page.click('#photo-next');
+        await navigate(1);
         await waitForPhoto(4);
         await page.click('[data-close-dialog="photo-viewer-dialog"]');
         await closed('photo-viewer-dialog');
@@ -264,6 +281,47 @@ export async function runDialogs(service) {
         const expandedPosition = await page.locator('#camera-roll-dialog').evaluate(dialog => { dialog.scrollTop = 900; return dialog.scrollTop; });
         await clickPhoto(0);
         await opened('photo-viewer-dialog');
+        await displayed(1);
+        assert.equal(await page.locator('#photo-previous, #photo-next, .photo-nav').count(), 0, 'photo arrows are removed');
+        assert.equal(await page.locator('.photo-stage').evaluate(stage => getComputedStyle(stage).touchAction), 'pan-y pinch-zoom');
+        assert.equal(await page.locator('#photo-viewer-image').evaluate(image => image.draggable), false);
+        const viewerHistory = await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length }));
+        await navigate(-1);
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'first photo does not wrap');
+        if (touch) {
+          for (const [dx, dy, options] of [
+            [10, 0, {}], [0, -120, {}], [-80, -160, {}],
+            [-140, 0, { secondFinger: true }], [-140, 0, { cancel: true }], [140, 0, { edge: true }]
+          ]) {
+            await swipe(dx, dy, options);
+            assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'tap, vertical/diagonal, multi-touch, canceled and edge gestures must not navigate');
+          }
+          const box = await page.locator('.photo-stage').boundingBox();
+          await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+          assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'a tap does not navigate');
+        } else {
+          await page.keyboard.press('Shift+ArrowRight');
+          assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'modified arrows retain their normal meaning');
+          const scrollBefore = await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop);
+          await page.locator('#photo-download-low').focus();
+          await page.keyboard.press('ArrowRight');
+          await displayed(2);
+          assert.equal(await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop), scrollBefore, 'arrow navigation must not also scroll the viewer');
+          await page.keyboard.press('ArrowLeft');
+          await displayed(1);
+        }
+        const boxBeforeDrag = await page.locator('.photo-stage').boundingBox();
+        await page.mouse.move(boxBeforeDrag.x + boxBeforeDrag.width / 2, boxBeforeDrag.y + boxBeforeDrag.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(boxBeforeDrag.x + boxBeforeDrag.width / 2 - 140, boxBeforeDrag.y + boxBeforeDrag.height / 2);
+        await page.mouse.up();
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'mouse dragging is not photo navigation');
+        await navigate(1);
+        await displayed(2);
+        assert.equal(await page.locator('#photo-download-low').getAttribute('href'), '/display/2.svg?download=1', 'download follows the selected photo');
+        await navigate(-1);
+        await displayed(1);
+        assert.deepEqual(await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length })), viewerHistory, 'photo navigation must not add or replace dialog history');
         await back('photo-viewer-dialog');
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
         assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.scrollTop), expandedPosition);
@@ -304,6 +362,23 @@ export async function runDialogs(service) {
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert.equal(await page.locator('#camera-roll-grid button').count(), 7);
         assert.equal(albumRequests.length, requestsBeforeRelease, 'stale response must not request another page');
+        await clickPhoto(6);
+        await displayed(7);
+        await navigate(1);
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-7.svg', 'last photo does not wrap');
+        await back('photo-viewer-dialog');
+        await back('camera-roll-dialog');
+        albumSize = 1;
+        await page.click('#camera-roll-button');
+        await page.selectOption('#photo-month-filter', '');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 1);
+        await clickPhoto(0);
+        await displayed(1);
+        await navigate(1);
+        await navigate(-1);
+        assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'a single photo stays selected');
+        await page.keyboard.press('Escape');
+        await closed('photo-viewer-dialog');
         await back('camera-roll-dialog');
         albumSize = 96;
       } else {

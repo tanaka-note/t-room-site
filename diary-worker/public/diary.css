@@ -1802,6 +1802,7 @@ button:disabled {
   overflow: hidden;
   border-radius: 8px;
   background: #080b0a;
+  touch-action: pan-y pinch-zoom;
 }
 
 .photo-stage img {
@@ -1810,21 +1811,7 @@ button:disabled {
   height: 100%;
   max-height: calc(100vh - 220px);
   object-fit: contain;
-}
-
-.photo-nav {
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  width: 46px;
-  height: 56px;
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 8px;
-  padding: 0;
-  transform: translateY(-50%);
-  background: rgba(0, 0, 0, 0.52);
-  color: #fff;
-  font-size: 2rem;
+  user-select: none;
 }
 
 .photo-viewer-status {
@@ -1836,18 +1823,6 @@ button:disabled {
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
   font-size: 0.85rem;
-}
-
-.photo-nav:disabled {
-  opacity: 0.25;
-}
-
-.photo-nav-previous {
-  left: 12px;
-}
-
-.photo-nav-next {
-  right: 12px;
 }
 
 .photo-viewer-meta {
