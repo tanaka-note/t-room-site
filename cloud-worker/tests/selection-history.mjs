@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 
 const [mainHtml, shareHtml, main, share, styles] = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
@@ -17,7 +18,7 @@ for (const client of [main, share]) {
   assert.match(client, /sameFolder/);
   assert.match(client, /function clearSelectionWithoutRefresh\(\)/);
   assert.match(client, /selectionClearBackPending = true/);
-  assert.match(client, /if \(state\.selectionClearBackPending\)[\s\S]*?if \(sameFolder && !.*previewId\) return/);
+  assert.match(client, /if \(state\.selectionClearBackPending\)/);
 }
 
 assert.match(mainHtml, /id="selection-all"/);
@@ -31,4 +32,24 @@ assert.match(main, /const canDownloadSelection = fileCount > 0 && folderCount ==
 assert.match(main, /\$\("#selection-download"\)\.hidden = !canDownloadSelection;/);
 assert.match(main, /\$\("#selection-download"\)\.disabled = !canDownloadSelection;/);
 
-console.log("selection back navigation and select all: ok");
+// A queued restoration must not move a new folder, refreshed listing, preview or selection.
+const restoreSource = main.slice(main.indexOf("function selectionScrollPosition"), main.indexOf("async function handleHistoryNavigation"));
+for (const [name, navigate] of [
+  ["folder", context => { context.state.folderId = 9; }],
+  ["listing refresh", context => { context.state.itemLoadGeneration++; }],
+  ["preview", context => { context.history.state.previewId = 2; }],
+  ["new selection", context => { context.history.state.selection = true; }]
+]) {
+  const frames = [], scrolls = [];
+  const context = vm.createContext({
+    state: { folderId: 8, itemLoadGeneration: 4 }, history: { state: { tcloud: true } },
+    appScrollPosition: () => ({ x: 12, y: 600 }), scrollAppTo: value => scrolls.push(value),
+    requestAnimationFrame: callback => frames.push(callback)
+  });
+  vm.runInContext(restoreSource + "; restoreSelectionScrollPosition(selectionScrollPosition());", context);
+  navigate(context);
+  while (frames.length) frames.shift()();
+  assert.deepEqual(scrolls, [], name + " cancels stale position restoration");
+}
+
+console.log("selection back navigation, select all and stale scroll restoration guards: ok");
