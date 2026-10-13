@@ -2,13 +2,13 @@ name: Verify changed services
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'codex/**']
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: verify-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: verify-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -27,16 +27,17 @@ jobs:
           node-version: '24'
       - id: plan
         env:
+          VERIFY_EVENT: ${{ github.event_name }}
+          VERIFY_REF: ${{ github.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           node --input-type=module <<'JS'
-          import {affected,changedFiles,targets,android,downloader2NativeAffected} from './tools/verify-plan.mjs';
+          import {ciPlan,android} from './tools/verify-plan.mjs';
           import {appendFileSync} from 'node:fs';
-          const changed=process.env.BASE_SHA ? changedFiles(process.env.BASE_SHA,process.env.HEAD_SHA) : [];
-          const selected=process.env.BASE_SHA ? affected(changed) : targets;
+          const {selected,native}=ciPlan({event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,base:process.env.BASE_SHA,head:process.env.HEAD_SHA});
           appendFileSync(process.env.GITHUB_OUTPUT,`node=${JSON.stringify(selected.filter(t=>!android.includes(t)))}\nandroid=${JSON.stringify(selected.filter(t=>android.includes(t)))}\n`);
-          appendFileSync(process.env.GITHUB_OUTPUT,`downloader2_native=${!process.env.BASE_SHA || downloader2NativeAffected(changed)}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT,`downloader2_native=${native}\n`);
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Verify plan\n${selected.join(', ') || 'Documentation only: no tests required'}\n`);
           JS
   node:

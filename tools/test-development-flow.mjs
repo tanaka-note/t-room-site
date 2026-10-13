@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { root, affected, changedFiles, commands, targets, installDirectories, downloader2NativeAffected } from './verify-plan.mjs';
+import { root, affected, changedFiles, ciPlan, commands, targets, installDirectories, downloader2NativeAffected } from './verify-plan.mjs';
 import { dependencyInstallPlan, installArgs } from './install-verify-dependencies.mjs';
 import { localConfig } from './local-dev.mjs';
 import { assertPreviewSafe, prepareReleaseDependencies, releaseProfile } from './release.mjs';
@@ -85,6 +85,45 @@ test('diff handles staged/unstaged/untracked files, deletion and rename without 
     assert.deepEqual(changedFiles(undefined, undefined, dir).sort(), ['after.js', 'before.js', 'untracked.js']);
     assert.throws(() => changedFiles('missing-ref', 'HEAD', dir));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('CI plans keep cumulative branch changes and main reversions without selecting unrelated services', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 't-lain-ci-plan-'));
+  const git = args => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+  const commit = (path, content) => {
+    mkdirSync(resolve(dir, path, '..'), { recursive: true });
+    writeFileSync(resolve(dir, path), content);
+    git(['add', '.']); git(['commit', '-m', path]);
+    return git(['rev-parse', 'HEAD']);
+  };
+  try {
+    git(['init', '-b', 'main']); git(['config', 'user.email', 'fixture@example.test']); git(['config', 'user.name', 'fixture']);
+    const base = commit('docs/base.md', 'base');
+    git(['checkout', '-b', 'codex/fixture']);
+    const cloud = commit('cloud-worker/public/cloud.js', 'cloud');
+    const head = commit('docs/follow-up.md', 'docs after unverified cloud push');
+    const branch = { event: 'push', ref: 'refs/heads/codex/fixture', head, defaultBranch: 'main' };
+    assert.deepEqual(ciPlan({ ...branch, base: '0'.repeat(40) }, dir), { selected: ['cloud'], native: false });
+    assert.deepEqual(ciPlan({ ...branch, base: cloud }, dir), { selected: ['cloud'], native: false });
+    assert.deepEqual(ciPlan({ event: 'pull_request', base, head }, dir), { selected: ['cloud'], native: false });
+    const main = { event: 'push', ref: 'refs/heads/main' };
+    assert.deepEqual(ciPlan({ ...main, base, head: cloud }, dir), { selected: ['cloud'], native: false });
+    assert.deepEqual(ciPlan({ ...main, base: cloud, head: base }, dir), { selected: ['cloud'], native: false });
+    assert.deepEqual(ciPlan({ ...main, base: cloud, head }, dir), { selected: [], native: false });
+    const native = commit('downloader2-native/src/fixture.cs', 'fixture');
+    assert.deepEqual(ciPlan({ ...branch, head: native }, dir), { selected: ['cloud', 'downloader2'], native: true });
+    assert.deepEqual(ciPlan({ event: 'workflow_dispatch' }, dir), { selected: targets, native: true });
+    assert.throws(() => ciPlan({ ...branch, defaultBranch: 'missing-ref' }, dir));
+    assert.throws(() => ciPlan({ ...main, base: 'missing-ref', head }, dir));
+    assert.throws(() => ciPlan({ event: 'pull_request', head }, dir));
+    assert.throws(() => ciPlan({ event: 'unsupported', head }, dir));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('CI automatically checks development pushes and never supersedes main push validation', () => {
+  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
+  assert.match(workflow, /pull_request:\r?\n\s+push:\r?\n\s+branches: \[main, 'codex\/\*\*'\]/);
+  assert.match(workflow, /group: verify-\$\{\{ github\.ref == 'refs\/heads\/main' && github\.run_id \|\|/);
+  assert.match(workflow, /cancel-in-progress: \$\{\{ github\.ref != 'refs\/heads\/main' \}\}/);
+  assert.match(workflow, /ciPlan\(\{event:process\.env\.VERIFY_EVENT,ref:process\.env\.VERIFY_REF,base:process\.env\.BASE_SHA,head:process\.env\.HEAD_SHA\}\)/);
 });
 test('profiles only reference existing scripts/tests and no production mutations', () => {
   for (const target of targets) for (const c of commands(target)) {
