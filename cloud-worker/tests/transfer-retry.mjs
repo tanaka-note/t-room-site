@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [indexHtml, shareHtml, client, shareClient] = await Promise.all([
+const [indexHtml, shareHtml, client, shareClient, uploadView] = await Promise.all([
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   readFile(new URL("../public/share.html", import.meta.url), "utf8"),
   readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
-  readFile(new URL("../public/share.js", import.meta.url), "utf8")
+  readFile(new URL("../public/share.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/upload-view.js", import.meta.url), "utf8")
 ]);
 
 assert.match(indexHtml, /id="upload-failure-summary"/);
@@ -17,14 +18,15 @@ assert.match(shareHtml, /id="share-download-failure-summary"/);
 
 assert.match(client, /const deferred = \[\];/);
 assert.match(client, /deferred\.push\(\{[\s\S]*?destinationFolderId,[\s\S]*?destinationFolderKey,[\s\S]*?displayName:/);
-assert.match(client, /エラー分を再試行中/);
+assert.match(uploadView, /エラー分を再試行中/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "後で再試行"/);
 assert.match(client, /updateDownloadQueueItem\(file\.id, "再試行中"/);
-assert.match(client, /renderTransferFailures\("#upload-failure-summary"/);
+assert.match(client, /renderUploadFailures\(unavailable\)/);
 assert.match(client, /function continuePendingSafetyUpload\(\)/);
 assert.match(client, /safetyConfirmed: true/);
 assert.match(client, /function isSafetyConfirmationError\(error\)/);
-assert.match(client, /function dismissUploadMessage\(\)[\s\S]*?renderTransferFailures\("#upload-failure-summary"[\s\S]*?panel\.hidden = true/);
+assert.match(client, /function dismissUploadMessage\(\)[\s\S]*?getUploadView\(\)\.dismiss\(\)/);
+assert.match(uploadView, /dismiss\(\)[\s\S]*?renderFailures\(\[\]\)[\s\S]*?panel\.hidden = true/);
 assert.match(client, /renderTransferFailures\("#download-failure-summary"/);
 assert.match(client, /recordDownloadEvent\(activeFile\.id, "download_failed", "cancelled"\)/);
 assert.doesNotMatch(client, /if \(!state\.uploadAbort\.signal\.aborted\) state\.uploadAbort\.abort\(\)/);

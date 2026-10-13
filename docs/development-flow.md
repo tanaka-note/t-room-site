@@ -55,7 +55,7 @@ node tools/sync-web-app-builds.mjs --target t-room-site
 
 ## CIと失敗の調査
 
-PR/main pushで **Verify changed services** が差分を判定し、構文→既存テスト→選択したブラウザ→dry-runを実行する。`verify` が集約結果。docsのみなら実行対象なしで成功する。fork PRにもSecretを渡さない。PRコードを `pull_request_target` で実行しない。
+PRとmain・`codex/**`へのpushで **Verify changed services** が差分を判定し、構文→既存テスト→選択したブラウザ→dry-runを実行する。`verify` が集約結果。作業ブランチはmainとの共通祖先からの変更全体を毎回対象にするため、初回pushの全サービス実行を避け、前回のCIが中止されても未検証の変更を取りこぼさない。mainはpush前後の差分を検証し、runごとに別のconcurrency groupを使って後続pushによる中止・待機置換を防ぐ。PRはマージ結果の検証として維持する。対象差分がdocsのみなら実行対象なしで成功する。fork PRにもSecretを渡さない。PRコードを `pull_request_target` で実行しない。
 
 ブラウザは通常Chromiumのみ（PC/タッチfixtureは維持）。必要な時だけ既存コマンドでWebKit等を追加する。共通preloadが既存Playwrightのcontextを記録し、成功時のTrace/画像は一時領域ごと削除。失敗時だけ `tmp/verify-artifacts/<test>/` のTrace ZIP・screenshot・failure.logを **verify-failure-対象** Artifactへ5日間保存する。CIの該当run → Artifactsから取得し、次で開く。
 
