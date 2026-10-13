@@ -27,7 +27,8 @@
     adminPrf: null, adminCredentialId: null, selectedIdentity: null,
     pendingInviteCloud: null, pendingPrimarySetup: null, inviteFlow: false, inviteRegistrationPending: false, identityNames: new Map(),
     currentIdentities: [], auditIdentities: [], auditIdentitiesRequest: 0,
-    auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: []
+    auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: [],
+    servicesPromise: null, dashboardLoading: false, dashboardLoaded: false, dashboardRequest: 0
   };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -93,7 +94,9 @@
     });
     $("#tcloud-setup-form").addEventListener("submit", resumePrimaryAdminSetup);
     $("#invite-form").addEventListener("submit", createInvite);
-    $("#add-link").addEventListener("click", () => addLinkRow());
+    $("#add-link").addEventListener("click", async () => {
+      try { await loadServices(); addLinkRow(); } catch (error) { showMessage(error.message, true); }
+    });
     $("#invite-expiry").addEventListener("change", () => { $("#custom-expiry-row").hidden = $("#invite-expiry").value !== "custom"; });
     $("#audit-filter").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -152,6 +155,8 @@
     });
     document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => {
       showPanel(button.dataset.panel, button);
+      if (button.dataset.panel === "dashboard-panel" && !state.dashboardLoaded && !state.dashboardLoading) loadDashboard().catch(() => {});
+      if (button.dataset.panel === "users-panel") prepareServiceLinks().catch((error) => showMessage(error.message, true));
       if (button.dataset.panel === "audit-panel") loadAudit({ append: false }).catch((error) => showMessage(error.message, true));
       if (button.dataset.panel === "ai-panel") loadAiBudgets().catch((error) => showMessage(error.message, true));
     }));
@@ -162,7 +167,7 @@
     $("#invite-complete").hidden = true;
     $("#invite-view").hidden = true;
     try {
-      const setup = await TRoomPasskeys.setupStatus();
+      const setup = await get("/setup/status");
       if (renderInviteSetup(setup)) return;
       if (setup.isPrimaryAdmin && setup.credentialStatus === "pending") {
         $("#invite-view").hidden = false;
@@ -430,18 +435,31 @@
     $("#bootstrap-view").hidden = true;
     $("#admin-login-view").hidden = true;
     $("#admin-view").hidden = false;
-    const setupResult = setup || await TRoomPasskeys.setupStatus().catch(() => ({ active: false }));
-    renderPrimarySetupNotice(setupResult);
-    await loadServices();
-    if (!$("#link-rows .link-row")) addLinkRow();
-    await Promise.all([loadDashboard(), loadIdentities()]);
-    await loadAudit({ append: false });
+    if (setup) renderPrimarySetupNotice(setup);
+    // Overview, users and link targets must not block one another's first paint.
+    const results = await Promise.allSettled([
+      loadDashboard(),
+      prepareServiceLinks({ refresh: true }),
+      loadIdentities().then(() => loadAudit({ append: false })),
+      setup ? Promise.resolve() : get("/setup/status").then(renderPrimarySetupNotice)
+    ]);
+    for (const result of results.slice(1)) if (result.status === "rejected") showMessage(result.reason.message, true);
   }
 
-  async function loadServices() {
-    const data = await get("/services");
-    state.services = Array.isArray(data.services) ? data.services : [];
-    if (!state.services.length) throw new Error("サービス連携候補を取得できません。");
+  async function loadServices({ refresh = false } = {}) {
+    if (!refresh && state.services.length) return state.services;
+    if (!state.servicesPromise) state.servicesPromise = get("/services").then((data) => {
+      const services = Array.isArray(data.services) ? data.services : [];
+      if (!services.length) throw new Error("サービス連携候補を取得できません。");
+      state.services = services;
+      return services;
+    }).finally(() => { state.servicesPromise = null; });
+    return state.servicesPromise;
+  }
+
+  async function prepareServiceLinks(options) {
+    await loadServices(options);
+    if (!$("#link-rows .link-row")) addLinkRow();
   }
 
   function renderPrimarySetupNotice(setup) {
@@ -461,15 +479,36 @@
   }
 
   async function loadDashboard() {
-    const data = await get("/dashboard");
-    const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
-    const activeUsers = (data.activeUsers || []).map((user) => `<div class="active-user-row"><strong>${escapeHtml(display.identityLabel(user.identityId, user.displayName))}</strong><span>${user.services.map((service) => escapeHtml(display.serviceLabel(service))).join(" / ")}</span></div>`).join("");
-    const definitions = data.clamavDefinitions || { issues: ["unknown"], result: "unknown" };
-    const definitionLabels = { rollout_pending: "定義の本番反映を確認中です（次回も確認を継続します）", rollout_ambiguous: "更新要求の成否を確認中です。重複更新を防ぐため再送を保留しています", stale_rollout: "Cloudflareの更新IDと更新履歴が不整合です。管理者の確認が必要です", reconciliation_stuck: "更新の成否を確定できません。管理者の確認が必要です", rollout_conflict: "別の本番更新を検出しました。自動上書きを停止しています", rollout_unknown_status: "Cloudflareが未対応の更新状態を返しました", rollout_reverted: "Cloudflare側で更新が切り戻されました", rollout_replaced: "別の更新に置き換えられました", candidate_expired: "保留中の候補定義が有効な期間を過ぎました", rollout_deferred: "処理中のジョブがあるため定義の反映を延期しています", deployment_unknown: "本番imageとの一致を確認できません", unknown: "状態を取得できません", expired: "定義が期限切れです（取得停止）", expiring: "定義が生成から5日以上経過しています", not_configured: "自動更新の設定・初回実行が未完了です", updater_stopped: "更新処理の実行を36時間以上確認できません", update_failed: "更新失敗が継続しています", update_interrupted: "更新処理が中断しています", monitor_stopped: "毎時定義監視が未確認、または完了を3時間以上確認できません" };
-    const definitionTime = value => value ? new Date(value * 1000).toLocaleString("ja-JP") : "未確認";
-    const definitionResults = { success: "更新・本番反映確認済み", failed: "更新失敗（本番反映状態を要確認）", running: "更新中", unknown: "未確認", deferred: "処理中ジョブのため延期" };
-    const definitionPanel = `<section class="card compact" id="clamav-definitions"><h3>DownloaderのClamAV定義</h3><p>${escapeHtml((definitions.issues || ["unknown"]).map(key => definitionLabels[key] || "未確認").join(" / ") || "確認済み定義は有効です")}</p><dl>${[["定義の生成日時", definitions.generatedAt],["有効期限（7日）", definitions.expiresAt],["最終更新確認", definitions.verifiedAt],["更新処理の最終実行", definitions.lastAttemptAt],["毎時監視の最終起動", definitions.hourlyMonitorStartedAt],["毎時監視の最終完了", definitions.hourlyMonitorCheckedAt],["定義状態の最終確認（日次含む）", definitions.monitorCheckedAt],["状態の最終変化", definitions.incidentChangedAt]].map(([label,value])=>`<dt>${label}</dt><dd>${escapeHtml(definitionTime(value))}</dd>`).join("")}</dl><p>更新結果: ${escapeHtml(definitionResults[definitions.result] || "未確認")} / 連続失敗 ${Number(definitions.failures || 0)}回</p><p>署名を検証した本番imageの記録です。実際の取得時にも定義を検証します。通知はGitHubの定義監視Issueを確認してください。</p></section>`;
-    $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div><section class="card compact active-users"><h3>現在ログイン中のユーザー</h3>${activeUsers || "<p>現在ログイン中のユーザーはいません。</p>"}</section>${definitionPanel}`;
+    const requestId = ++state.dashboardRequest;
+    const panel = $("#dashboard-panel");
+    state.dashboardLoading = true;
+    state.dashboardLoaded = false;
+    panel.setAttribute("aria-busy", "true");
+    panel.innerHTML = '<section class="card compact" role="status"><p>セキュリティ概要を読み込んでいます。</p></section>';
+    try {
+      const data = await get("/dashboard");
+      if (requestId !== state.dashboardRequest) return;
+      const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
+      const activeUsers = (data.activeUsers || []).map((user) => `<div class="active-user-row"><strong>${escapeHtml(display.identityLabel(user.identityId, user.displayName))}</strong><span>${user.services.map((service) => escapeHtml(display.serviceLabel(service))).join(" / ")}</span></div>`).join("");
+      const definitions = data.clamavDefinitions || { issues: ["unknown"], result: "unknown" };
+      const definitionLabels = { rollout_pending: "定義の本番反映を確認中です（次回も確認を継続します）", rollout_ambiguous: "更新要求の成否を確認中です。重複更新を防ぐため再送を保留しています", stale_rollout: "Cloudflareの更新IDと更新履歴が不整合です。管理者の確認が必要です", reconciliation_stuck: "更新の成否を確定できません。管理者の確認が必要です", rollout_conflict: "別の本番更新を検出しました。自動上書きを停止しています", rollout_unknown_status: "Cloudflareが未対応の更新状態を返しました", rollout_reverted: "Cloudflare側で更新が切り戻されました", rollout_replaced: "別の更新に置き換えられました", candidate_expired: "保留中の候補定義が有効な期間を過ぎました", rollout_deferred: "処理中のジョブがあるため定義の反映を延期しています", deployment_unknown: "本番imageとの一致を確認できません", unknown: "状態を取得できません", expired: "定義が期限切れです（取得停止）", expiring: "定義が生成から5日以上経過しています", not_configured: "自動更新の設定・初回実行が未完了です", updater_stopped: "更新処理の実行を36時間以上確認できません", update_failed: "更新失敗が継続しています", update_interrupted: "更新処理が中断しています", monitor_stopped: "毎時定義監視が未確認、または完了を3時間以上確認できません" };
+      const definitionTime = value => value ? new Date(value * 1000).toLocaleString("ja-JP") : "未確認";
+      const definitionResults = { success: "更新・本番反映確認済み", failed: "更新失敗（本番反映状態を要確認）", running: "更新中", unknown: "未確認", deferred: "処理中ジョブのため延期" };
+      const definitionPanel = `<section class="card compact" id="clamav-definitions"><h3>DownloaderのClamAV定義</h3><p>${escapeHtml((definitions.issues || ["unknown"]).map(key => definitionLabels[key] || "未確認").join(" / ") || "確認済み定義は有効です")}</p><dl>${[["定義の生成日時", definitions.generatedAt],["有効期限（7日）", definitions.expiresAt],["最終更新確認", definitions.verifiedAt],["更新処理の最終実行", definitions.lastAttemptAt],["毎時監視の最終起動", definitions.hourlyMonitorStartedAt],["毎時監視の最終完了", definitions.hourlyMonitorCheckedAt],["定義状態の最終確認（日次含む）", definitions.monitorCheckedAt],["状態の最終変化", definitions.incidentChangedAt]].map(([label,value])=>`<dt>${label}</dt><dd>${escapeHtml(definitionTime(value))}</dd>`).join("")}</dl><p>更新結果: ${escapeHtml(definitionResults[definitions.result] || "未確認")} / 連続失敗 ${Number(definitions.failures || 0)}回</p><p>署名を検証した本番imageの記録です。実際の取得時にも定義を検証します。通知はGitHubの定義監視Issueを確認してください。</p></section>`;
+      $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div><section class="card compact active-users"><h3>現在ログイン中のユーザー</h3>${activeUsers || "<p>現在ログイン中のユーザーはいません。</p>"}</section>${definitionPanel}`;
+      state.dashboardLoaded = true;
+    } catch (error) {
+      if (requestId === state.dashboardRequest) {
+        panel.innerHTML = `<section class="card compact" role="alert"><p>セキュリティ概要を読み込めませんでした。</p><p>${escapeHtml(error.message)}</p><button id="dashboard-retry" class="secondary" type="button">再試行</button></section>`;
+        $("#dashboard-retry").addEventListener("click", () => loadDashboard().catch(() => {}));
+      }
+      throw error;
+    } finally {
+      if (requestId === state.dashboardRequest) {
+        state.dashboardLoading = false;
+        panel.setAttribute("aria-busy", "false");
+      }
+    }
   }
 
   async function loadAiBudgets() {
@@ -582,7 +621,7 @@
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));
     if ($("#disable-identity-button")) $("#disable-identity-button").onclick = (event) => disableIdentity(id, event.currentTarget);
-    $("#detail-open-link").onclick = () => openDetailLinkEditor();
+    $("#detail-open-link").onclick = () => openDetailLinkEditor().catch((error) => showMessage(error.message, true));
     $("#detail-cancel-link").onclick = () => closeDetailLinkEditor();
     $("#detail-add-link").onclick = (event) => addDetailLink(id, event.currentTarget);
   }
@@ -603,7 +642,8 @@
     return `${service}\u0000${accountId}\u0000${rootFolderId ?? ""}`;
   }
 
-  function openDetailLinkEditor() {
+  async function openDetailLinkEditor() {
+    await loadServices();
     const editor = $("#detail-link-editor");
     const rowContainer = $("#detail-link-row");
     const excluded = currentServiceLinkKeys();
@@ -1003,9 +1043,18 @@
   async function get(path) { return request(path); }
   async function post(path, body) { return request(path, body); }
   async function request(path, body) {
-    const response = await fetch(`/security/api${path}`, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers: body === undefined ? {} : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(TRoomPasskeys.safeJapaneseMessage(payload.error, "Security Centerの処理に失敗しました。"));
-    return payload;
+    // Bound reads only. A mutation is never aborted or automatically resent.
+    const controller = body === undefined ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 15000) : null;
+    try {
+      const response = await fetch(`/security/api${path}`, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers: body === undefined ? {} : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), ...(controller ? { signal: controller.signal } : {}) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(TRoomPasskeys.safeJapaneseMessage(payload.error, "Security Centerの処理に失敗しました。"));
+      return payload;
+    } catch (error) {
+      if (controller?.signal.aborted) throw new Error("読み込みに時間がかかっています。時間を置いて再度お試しください。");
+      if (error instanceof SyntaxError) throw new Error("取得した情報を確認できませんでした。再度お試しください。");
+      throw error;
+    } finally { clearTimeout(timer); }
   }
 })();

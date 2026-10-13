@@ -774,27 +774,25 @@ async function dashboard(env) {
   const today = currentJstDayBounds();
   const successPlaceholders = LOGIN_SUCCESS_EVENTS.map(() => "?").join(", ");
   const failurePlaceholders = LOGIN_FAILURE_EVENTS.map(() => "?").join(", ");
-  const counts = await env.DB.prepare(`SELECT
-    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND outcome = 'success' AND event_type IN (${successPlaceholders}) THEN 1 ELSE 0 END) AS loginSuccess,
-    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND outcome = 'failure' AND event_type IN (${failurePlaceholders}) THEN 1 ELSE 0 END) AS loginFailure,
-    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND outcome = 'blocked' THEN 1 ELSE 0 END) AS lockouts,
-    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND event_type = 'session_resume' THEN 1 ELSE 0 END) AS sessionResume,
-    SUM(CASE WHEN occurred_at >= ? AND occurred_at < ? AND event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END) AS critical
-    FROM security_audit_events`).bind(
-      today.start, today.end, ...LOGIN_SUCCESS_EVENTS,
-      today.start, today.end, ...LOGIN_FAILURE_EVENTS,
-      today.start, today.end,
-      today.start, today.end,
-      today.start, today.end
-    ).first();
-  const identityCounts = await env.DB.prepare(`SELECT
+  const [counts, identityCounts, sessionState, clamavDefinitions] = await Promise.all([
+    env.DB.prepare(`SELECT
+    SUM(CASE WHEN outcome = 'success' AND event_type IN (${successPlaceholders}) THEN 1 ELSE 0 END) AS loginSuccess,
+    SUM(CASE WHEN outcome = 'failure' AND event_type IN (${failurePlaceholders}) THEN 1 ELSE 0 END) AS loginFailure,
+    SUM(CASE WHEN outcome = 'blocked' THEN 1 ELSE 0 END) AS lockouts,
+    SUM(CASE WHEN event_type = 'session_resume' THEN 1 ELSE 0 END) AS sessionResume,
+    SUM(CASE WHEN event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END) AS critical
+    FROM security_audit_events WHERE occurred_at >= ? AND occurred_at < ?`)
+      .bind(...LOGIN_SUCCESS_EVENTS, ...LOGIN_FAILURE_EVENTS, today.start, today.end).first(),
+    env.DB.prepare(`SELECT
     SUM(CASE WHEN EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'pending') THEN 1 ELSE 0 END) AS pendingApproval,
     SUM(CASE WHEN status = 'invited' THEN 1 ELSE 0 END) AS invited,
     SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'active') THEN 1 ELSE 0 END) AS noPasskey
     FROM security_identities i
-    WHERE i.status != 'disabled'`).first();
-  const sessionState = await activeSessionState(env);
-  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0), activeUsers: sessionState.users, clamavDefinitions: await readDefinitionStatus(env) });
+    WHERE i.status != 'disabled'`).first(),
+    activeSessionState(env),
+    readDefinitionStatus(env)
+  ]);
+  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0), activeUsers: sessionState.users, clamavDefinitions });
 }
 
 async function activeSessionState(env, identityId = null) {
@@ -812,18 +810,24 @@ async function activeSessionState(env, identityId = null) {
     ORDER BY session.last_seen_at DESC`).bind(...bindings).all();
   const globalRuntime = await observePasskeyRuntime(env, passkeysEnabled(env));
   const runtimeCache = new Map();
+  // Resolve each account once per request, without serial cross-Worker waits.
+  for (const row of rows.results || []) {
+    if (!ACTIVE_SESSION_SERVICE_IDS.includes(row.service)) continue;
+    const runtimeKey = `${row.service}\u0000${row.service_account_id || ""}`;
+    if (!runtimeCache.has(runtimeKey)) runtimeCache.set(runtimeKey, (async () => {
+      try {
+        const runtime = await serviceProvider(env, row.service).getSessionRuntimeState({ serviceAccountId: row.service_account_id });
+        return runtime && typeof runtime === "object" ? runtime : null;
+      } catch { return null; }
+    })());
+  }
+  await Promise.all(runtimeCache.values());
   const validRows = [];
   const serviceAvailability = new Map();
   for (const row of rows.results || []) {
     if (!ACTIVE_SESSION_SERVICE_IDS.includes(row.service)) continue;
     const runtimeKey = `${row.service}\u0000${row.service_account_id || ""}`;
-    if (!runtimeCache.has(runtimeKey)) {
-      try {
-        const runtime = await serviceProvider(env, row.service).getSessionRuntimeState({ serviceAccountId: row.service_account_id });
-        runtimeCache.set(runtimeKey, runtime && typeof runtime === "object" ? runtime : null);
-      } catch { runtimeCache.set(runtimeKey, null); }
-    }
-    const runtime = runtimeCache.get(runtimeKey);
+    const runtime = await runtimeCache.get(runtimeKey);
     if (runtime) serviceAvailability.set(row.service, true);
     else if (!serviceAvailability.has(row.service)) serviceAvailability.set(row.service, false);
     if (!runtime) continue;
@@ -936,12 +940,10 @@ function publicAiBudgetPolicy(row) {
 }
 
 async function listServiceRegistry(env) {
-  const services = [];
-  for (const [id, descriptor] of Object.entries(SERVICE_REGISTRY)) {
-    const provider = serviceProvider(env, id);
+  const services = await Promise.all(Object.entries(SERVICE_REGISTRY).map(async ([id, descriptor]) => {
     let response;
     try {
-      response = await provider.listLinkTargets();
+      response = await serviceProvider(env, id).listLinkTargets();
     } catch {
       throw new HttpError(503, `${descriptor.displayName}の連携候補を取得できません。時間を置いて再度お試しください。`);
     }
@@ -949,8 +951,8 @@ async function listServiceRegistry(env) {
       const normalized = publicServiceTarget(id, target);
       return normalized ? { service: id, ...normalized } : null;
     }).filter(Boolean) : [];
-    services.push({ id, displayName: normalizeText(response?.displayName, 80) || descriptor.displayName, targets });
-  }
+    return { id, displayName: normalizeText(response?.displayName, 80) || descriptor.displayName, targets };
+  }));
   return json({ services });
 }
 

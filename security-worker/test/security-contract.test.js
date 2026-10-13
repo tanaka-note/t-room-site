@@ -242,7 +242,7 @@ test("service links come from an explicit provider registry and never from free-
   assert.match(cloud, /targets: await listSecurityFolderTargets/);
   assert.match(cloud, /listSecurityFolderTargets\(this\.env, \{ topLevelOnly: true \}\)/,
     "T-Cloud selection candidates are limited to top-level folders");
-  assert.match(cloud, /!topLevelOnly \|\| folder\.parentId == null/,
+  assert.match(cloud, /WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY name COLLATE NOCASE, id/,
     "the provider filters candidates using the existing parent relationship");
   assert.match(worker, /describeAccount\(\{ accountId, rootFolderId, selectableOnly: true \}\)/,
     "new service links are revalidated against selectable top-level targets on the server");
