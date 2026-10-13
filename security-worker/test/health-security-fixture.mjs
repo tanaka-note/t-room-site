@@ -27,7 +27,7 @@ export async function healthSecurityFixture() {
     db.prepare('INSERT INTO security_health_vaults VALUES (?,?,?,?,?)').run(credentialId,identityId,JSON.stringify(vault.publicKey),vault.iv,vault.ciphertext);
     db.prepare('INSERT INTO security_health_grants VALUES (?,?,?,?)').run(identityId,credentialId,serviceLinkId,user.bundle.wrappedKey);
   }
-  db.exec("INSERT INTO security_health_config VALUES ('nobumi','encrypted-recovery-fixture','{}'); INSERT INTO security_identities(id,display_name,status) VALUES ('fixture-third','Fixture third','active'); INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status) VALUES ('fixture-third-key','fixture-third','public-fixture','salt-fixture','active'); INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES ('third-link','fixture-third','diary','fixture-third','Fixture Diary','active')");
+  db.exec("INSERT INTO security_health_config VALUES ('nobumi','encrypted-recovery-fixture','{}'); INSERT INTO security_identities(id,display_name,status) VALUES ('fixture-third','Fixture third','active'); INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status) VALUES ('fixture-third-AA','fixture-third','public-fixture','salt-fixture','active'); INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES ('third-link','fixture-third','diary','fixture-third','Fixture Diary','active')");
   health.env.SECURITY=security;
   const worker=new HealthWorker();worker.env=health.env;
   return {health,db,security,worker,close(){health.master.fill(0);for(const user of Object.values(health.users))user.prf.fill(0);health.db.close();db.close();},

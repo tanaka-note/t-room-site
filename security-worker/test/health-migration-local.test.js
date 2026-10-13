@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
@@ -69,5 +69,8 @@ test('actual Wrangler local D1 migrations roll back a mid-0022 failure and prese
     result=apply();assert.equal(result.status,0,result.stderr);
     const after=read();assert.deepEqual(Object.fromEntries(before.tables.map(table=>[table,after.data[table]])),before.data);
     assert.equal(after.applied.length,22);assert.equal(after.applied.at(-1).name,'0022_health_service.sql');assert.deepEqual(after.foreignKeys,[]);
-  } finally { rmSync(directory,{recursive:true,force:true}); }
+  } finally {
+    assert.equal(dirname(resolve(directory)),resolve(tmpdir()));assert.match(basename(directory),/^health-migration-/);
+    rmSync(directory,{recursive:true,force:true});
+  }
 });

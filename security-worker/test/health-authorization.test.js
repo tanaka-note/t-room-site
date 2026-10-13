@@ -39,6 +39,9 @@ test('real Identity/link/member/grant authorization fails closed for revocation,
   const f=await healthSecurityFixture();try {
     const signed=async claims=>({Cookie:'troom_health_session='+await signSession({expiresAt:Math.floor(Date.now()/1000)+60,sessionVersion:'1',authMethod:'passkey',sessionId:'authorization-fixture',passkeySessionEpoch:1,...claims},f.health.env),'X-Health-Session':'authorization-fixture'});
     const owner=f.health.users.owner.handoff;
+    const third={identityId:'fixture-third',credentialId:'fixture-third-AA',serviceLinkId:'third-link'};
+    assert.equal((await f.security.validatePasskeySession({service:'diary',...third,serviceAccountId:'fixture-third',sessionEpoch:1})).valid,true);
+    assert.equal(await f.security.redeemHandoff(f.issue('owner',third),'health'),null);
     const cases=[
       {label:'revoked credential',sql:"UPDATE security_credentials SET status='revoked' WHERE credential_id='fixture-owner-AA'"},
       {label:'disabled identity',sql:"UPDATE security_identities SET status='disabled' WHERE id='primary-admin'"},
@@ -49,7 +52,7 @@ test('real Identity/link/member/grant authorization fails closed for revocation,
       {label:'wrong link',claims:{serviceLinkId:'link-subject'}},
       {label:'wrong identity',claims:{identityId:'fixture-subject'}},
       {label:'old epoch',claims:{passkeySessionEpoch:0},keyAvailable:true},
-      {label:'third party',claims:{identityId:'fixture-third',credentialId:'fixture-third-key',serviceLinkId:'third-link'}},
+      {label:'third party',claims:{identityId:'fixture-third',credentialId:'fixture-third-AA',serviceLinkId:'third-link'}},
       {label:'wrong service',claims:{service:'diary'},rpcOnly:true,keyAvailable:true},
     ];
     for(const item of cases) {
