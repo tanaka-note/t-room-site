@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-09a5fb97793d";
+const APP_BUILD_ID = "cloud-5ae69dd4d2fa";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -5126,17 +5126,40 @@ function renderTransferFailures(summarySelector, listSelector, failures) {
   list.innerHTML = failures.map(({ file, error, displayName }) => `<li><strong>${escapeHtml(displayName || file.downloadDisplayName || file.name)}</strong>${error?.message ? ` — ${escapeHtml(error.message)}` : ""}</li>`).join("");
 }
 
+let uploadView = null;
+
+function getUploadView() {
+  return uploadView ||= TCloudUploadView.create({ panel: $("#upload-panel"), formatBytes, escapeHtml });
+}
+
+function prepareUploadView() {
+  try {
+    const view = getUploadView();
+    view.assertReady();
+    return view;
+  } catch {
+    setNotice("アップロード画面を準備できませんでした。ページを再読み込みしてください。", true);
+    return null;
+  }
+}
+
+function uploadConflictDisplayRecords(conflicts) {
+  return conflicts.map(item => ({
+    name: item.displayName || item.file?.name || "名称なし",
+    reason: item.reason || "競合候補です。",
+    details: item.kind === "selection" ? [`${Number(item.duplicateCount || 2)}件すべてを保留しました。`]
+      : (item.existingLocations || []).map(location => `保存済み：${location}`)
+  }));
+}
+
 function renderUploadConflicts(conflicts) {
-  const summary = $("#upload-conflict-summary");
-  const list = $("#upload-conflict-list");
-  if (!summary || !list) return;
-  summary.hidden = !conflicts.length;
-  list.innerHTML = conflicts.map((item) => {
-    const details = item.kind === "selection"
-      ? [`${Number(item.duplicateCount || 2)}件すべてを保留しました。`]
-      : (item.existingLocations || []).map((location) => `保存済み：${location}`);
-    return `<li><strong>${escapeHtml(item.displayName || item.file?.name || "名称なし")}</strong><span>${escapeHtml(item.reason || "競合候補です。")}</span>${details.map((detail) => `<span>${escapeHtml(detail)}</span>`).join("")}</li>`;
-  }).join("");
+  getUploadView().renderConflicts(uploadConflictDisplayRecords(conflicts));
+}
+
+function renderUploadFailures(failures) {
+  getUploadView().renderFailures(failures.map(({ file, error, displayName }) => ({
+    name: displayName || file.downloadDisplayName || file.name, message: error?.message || ""
+  })));
 }
 
 function updateDownloadQueueItem(id, label, className) {
@@ -5310,31 +5333,24 @@ async function uploadSelectedFolder(event) {
     setNotice(message, true);
     return;
   }
+  const view = prepareUploadView();
+  if (!view) return;
   const operationId = ++state.folderUploadOperationSequence;
   const topLevelPassword = state.folderId ? "" : $("#folder-upload-password").value;
   state.activeFolderUploadOperationId = operationId;
   state.uploading = true;
-  submitButton.disabled = true;
-  submitButton.textContent = "準備中…";
-  state.folderUploadSelection = null;
-  $("#folder-upload-dialog").close();
-  $("#folder-upload-password").value = "";
-  $("#folder-upload-error").textContent = "";
-  syncAvailableActions();
-  const panel = $("#upload-panel");
-  panel.hidden = false;
-  panel.classList.remove("upload-complete", "upload-error");
-  $("#upload-heading").textContent = "アップロード内容を確認中";
-  $("#upload-status").textContent = `0 / ${selection.directories.length}フォルダ確認`;
-  $("#upload-file-name").textContent = selection.roots.join("、");
-  $("#upload-file-progress").textContent = "準備中…";
-  $("#upload-progress").style.width = "0%";
-  $("#upload-plan-summary").hidden = true;
-  renderUploadConflicts([]);
-  $("#upload-dismiss").hidden = true;
-  await syncTransferWakeLock();
-  await waitForInterfacePaint();
   try {
+    submitButton.disabled = true;
+    submitButton.textContent = "準備中…";
+    state.folderUploadSelection = null;
+    $("#folder-upload-dialog").close();
+    $("#folder-upload-password").value = "";
+    $("#folder-upload-error").textContent = "";
+    state.pendingSafetyUpload = null;
+    syncAvailableActions();
+    view.beginFolder(selection.directories.length, selection.roots.join("、"));
+    await syncTransferWakeLock();
+    await waitForInterfacePaint();
     if (state.activeFolderUploadOperationId !== operationId) return;
     if (!state.crypto.publicKey || !state.crypto.fileEncryptionReady) throw new Error("暗号化の初期設定を完了してください。");
     const baseParentId = state.folderId ? Number(state.folderId) : null;
@@ -5345,12 +5361,9 @@ async function uploadSelectedFolder(event) {
     if (state.activeFolderUploadOperationId !== operationId) return;
     const zeroByteCount = plan.pendingFiles.filter((file) => Number(file.size) === 0).length;
     const actualFileCount = plan.pendingFiles.length - zeroByteCount;
-    $("#upload-heading").textContent = "差分確認完了";
-    $("#upload-status").textContent = `${plan.newFolderCount}フォルダ・${actualFileCount}ファイルを追加`;
-    $("#upload-file-progress").textContent = `${plan.reusedFolderCount}フォルダを再利用・${plan.duplicateSkipped.length}ファイルを競合候補として保留${zeroByteCount ? `・${zeroByteCount}件は空ファイル` : ""}`;
+    view.folderChecked(plan.newFolderCount, actualFileCount, plan.reusedFolderCount, plan.duplicateSkipped.length, zeroByteCount);
     showUploadPlanSummary(plan.newFolderCount, actualFileCount, plan.reusedFolderCount, plan.duplicateSkipped.length, zeroByteCount);
     renderUploadConflicts(plan.duplicateSkipped);
-    $("#upload-progress").style.width = "100%";
     await waitForInterfacePaint();
 
     const foldersByPath = new Map();
@@ -5366,12 +5379,12 @@ async function uploadSelectedFolder(event) {
       const parentPath = folderPlan.parentPath;
       const inheritedParent = parentPath ? foldersByPath.get(parentPath) : { id: baseParentId, key: baseParentKey };
       if (!inheritedParent) throw new Error(`${path} の親フォルダを作成できませんでした。`);
-      $("#upload-heading").textContent = "新しいフォルダを作成中";
+      view.creatingFolders();
       const folderPassword = !baseParentId && !folderPlan.parentPath ? topLevelPassword : "";
       const created = await createEncryptedFolder(folderPlan.name, inheritedParent.id, inheritedParent.key, folderPassword);
       foldersByPath.set(path, created);
       createdFolderCount++;
-      $("#upload-status").textContent = `${createdFolderCount} / ${plan.newFolderCount}フォルダ作成`;
+      view.folderCreated(createdFolderCount, plan.newFolderCount);
     }
 
     const destinations = new Map();
@@ -5405,16 +5418,12 @@ async function uploadSelectedFolder(event) {
         reusedFolderCount: plan.reusedFolderCount
       });
     } else {
-      panel.classList.add("upload-complete");
-      $("#upload-heading").textContent = "フォルダ作成完了";
-      $("#upload-file-progress").textContent = "保存完了";
+      view.folderComplete();
       await Promise.all([loadItems(), loadUsage()]);
     }
   } catch (error) {
     if (state.activeFolderUploadOperationId === operationId) {
-      panel.classList.add("upload-error");
-      $("#upload-heading").textContent = "フォルダの準備に失敗しました";
-      $("#upload-file-progress").textContent = "開始できませんでした";
+      view.folderFailure();
       setNotice(`フォルダの保存に失敗しました：${error.message}`, true);
     }
   } finally {
@@ -5517,8 +5526,7 @@ async function planFolderUpload(selection, baseParentId, baseParentKey, operatio
     }
     foldersByPath.set(path, folderPlan);
     const completed = index + 1;
-    $("#upload-status").textContent = `${completed} / ${selection.directories.length}フォルダ確認`;
-    $("#upload-file-progress").textContent = `${Math.round(completed / selection.directories.length * 100)}%`;
+    getUploadView().folderInspection(completed, selection.directories.length);
   }
 
   const filesToCheck = [];
@@ -6153,7 +6161,7 @@ async function excludeExistingUploadFiles(files, destinations) {
 
   const remaining = files.filter((file) => !skippedSet.has(file));
   if (remaining.length) {
-    $("#upload-activity").textContent = "保存済みデータの競合候補を確認中";
+    getUploadView().checkingStoredFiles();
     const filesByDestination = new Map();
     for (const file of remaining) {
       const folderId = Number(destinations?.get(file)?.folderId ?? state.folderId);
@@ -6182,12 +6190,7 @@ async function excludeExistingUploadFiles(files, destinations) {
 }
 
 function showUploadPlanSummary(newFolderCount, uploadFileCount, reusedFolderCount, skippedFileCount, zeroByteCount = 0) {
-  const added = `${Number(newFolderCount || 0)}フォルダ・${Number(uploadFileCount || 0)}ファイルを追加`;
-  const existing = `${Number(reusedFolderCount || 0)}フォルダを再利用・${Number(skippedFileCount || 0)}ファイルを競合候補として保留`;
-  const excluded = Number(zeroByteCount || 0) ? `・${Number(zeroByteCount)}件は空ファイル` : "";
-  const summary = $("#upload-plan-summary");
-  summary.textContent = `差分確認：${added}／${existing}${excluded}`;
-  summary.hidden = false;
+  getUploadView().planSummary(newFolderCount, uploadFileCount, reusedFolderCount, skippedFileCount, zeroByteCount);
 }
 
 async function uploadFiles(files, destinations = null, options = {}) {
@@ -6201,6 +6204,8 @@ async function uploadFiles(files, destinations = null, options = {}) {
     setNotice("暗号化の初期設定を完了してください。", true);
     return;
   }
+  const view = prepareUploadView();
+  if (!view) return;
   const requestedTotal = files.length;
   const safetyConfirmed = options.safetyConfirmed === true;
   const skippedFiles = files
@@ -6214,37 +6219,19 @@ async function uploadFiles(files, destinations = null, options = {}) {
   $("#file-input").value = "";
   state.uploading = true;
   state.uploadAbort = new AbortController();
-  syncAvailableActions();
-  const panel = $("#upload-panel");
   const fixedFolderId = state.folderId ? Number(state.folderId) : null;
   const fixedFolderKey = fixedFolderId ? state.crypto.folderKeys.get(fixedFolderId) : null;
   let duplicateSkipped = [...precheckedSkipped];
   let tracker = { stop() {} };
   let completed = 0;
   let cancelled = false;
-  panel.hidden = false;
-  panel.classList.remove("upload-complete", "upload-error");
-  $("#upload-plan-summary").hidden = true;
-  $("#upload-heading").textContent = options.skipExisting === false ? "アップロード中" : "アップロード内容を確認中";
-  $("#upload-status").textContent = `0 / ${files.length}件完了`;
-  $("#upload-progress").style.width = "0%";
-  $("#upload-speed").textContent = "";
-  $("#upload-bytes").textContent = `0 B / ${formatBytes(files.reduce((sum, file) => sum + file.size, 0))}`;
-  $("#upload-eta").textContent = "残り時間：計算中";
-  $("#upload-activity").textContent = "送信準備中";
-  $("#upload-activity").classList.remove("waiting");
-  renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
-  renderUploadConflicts(precheckedSkipped);
-  state.pendingSafetyUpload = null;
-  $("#upload-safety-actions").hidden = true;
-  $("#upload-dismiss").hidden = true;
-  $("#upload-cancel").hidden = false;
-  $("#upload-cancel").disabled = false;
-  await syncTransferWakeLock();
   try {
+    state.pendingSafetyUpload = null;
+    syncAvailableActions();
+    view.beginFiles(files.length, files.reduce((sum, file) => sum + file.size, 0), options.skipExisting !== false, uploadConflictDisplayRecords(precheckedSkipped));
+    await syncTransferWakeLock();
     if (options.skipExisting !== false && files.length) {
-      $("#upload-heading").textContent = "競合候補を確認中";
-      $("#upload-file-progress").textContent = "差分を確認しています";
+      view.checkingConflicts();
       const differential = await excludeExistingUploadFiles(files, destinations);
       files = differential.files;
       duplicateSkipped = [...precheckedSkipped, ...differential.skipped];
@@ -6256,11 +6243,8 @@ async function uploadFiles(files, destinations = null, options = {}) {
     const fileLimit = Math.min(getUploadFileLimit(), total);
     const partLimiter = createUploadLimiter(connectionLimit);
     tracker = createUploadTracker(files, totalBytes);
-    $("#upload-heading").textContent = total ? "アップロード中" : "差分確認完了";
-    $("#upload-status").textContent = `0 / ${total}件完了`;
+    view.preparedFiles(total, totalBytes);
     showUploadPlanSummary(options.newFolderCount, total, options.reusedFolderCount, duplicateSkipped.length, skippedFiles.length);
-    $("#upload-bytes").textContent = `0 B / ${formatBytes(totalBytes)}`;
-    $("#upload-activity").textContent = total ? "送信準備中" : "競合候補は保留しました";
     let nextFileIndex = 0;
     const deferred = [];
     const thumbnailWarnings = [];
@@ -6297,14 +6281,12 @@ async function uploadFiles(files, destinations = null, options = {}) {
     await Promise.allSettled(Array.from({ length: fileLimit }, fileWorker));
     if (state.uploadAbort.signal.aborted) {
       cancelled = true;
-      $("#upload-heading").textContent = "アップロードを停止しました";
-      $("#upload-status").textContent = `${completed} / ${total}件完了`;
-      $("#upload-file-progress").textContent = "未完了分は保存されていません";
+      view.stopped(completed, total);
       setNotice(`アップロードを停止しました。完了済みの${completed}件は保存されています。`);
     }
     let finalFailures = [];
     if (!cancelled && deferred.length) {
-      $("#upload-heading").textContent = "エラー分を再試行中";
+      view.retrying();
       for (const item of deferred.sort((a, b) => a.index - b.index)) {
         if (state.uploadAbort.signal.aborted) {
           cancelled = true;
@@ -6331,9 +6313,7 @@ async function uploadFiles(files, destinations = null, options = {}) {
       }
     }
     if (cancelled) {
-      $("#upload-heading").textContent = "アップロードを停止しました";
-      $("#upload-status").textContent = `${completed} / ${total}件完了`;
-      $("#upload-file-progress").textContent = "未完了分は保存されていません";
+      view.stopped(completed, total);
       setNotice(`アップロードを停止しました。完了済みの${completed}件は保存されています。`);
     } else if (finalFailures.length) {
       const unavailable = [...finalFailures, ...skippedFiles];
@@ -6346,59 +6326,38 @@ async function uploadFiles(files, destinations = null, options = {}) {
           displayName: item.displayName
         });
         state.pendingSafetyUpload = { files: safetyFailures.map((item) => item.file), destinations: retryDestinations };
-        $("#upload-safety-actions").hidden = false;
+        view.showSafety(true);
       }
-      panel.classList.add("upload-error");
-      $("#upload-heading").textContent = safetyFailures.length ? "アップロードの確認が必要です" : "一部のアップロードに失敗しました";
-      $("#upload-status").textContent = duplicateSkipped.length
-        ? `${completed}件保存・${duplicateSkipped.length}件を競合候補として保留`
-        : `${completed} / ${requestedTotal}件保存`;
-      $("#upload-file-progress").textContent = `${unavailable.length}件を保存できませんでした`;
-      renderTransferFailures("#upload-failure-summary", "#upload-failed-list", unavailable);
+      view.filesFailed(completed, requestedTotal, duplicateSkipped.length, unavailable.length, Boolean(safetyFailures.length));
+      renderUploadFailures(unavailable);
       setNotice(`${completed}件を保存しました。保存できなかったデータを一覧に表示しています。`, true);
     } else if (skippedFiles.length) {
-      panel.classList.add("upload-complete");
-      $("#upload-heading").textContent = completed ? "アップロード完了（対象外あり）" : "アップロード対象を確認してください";
-      $("#upload-status").textContent = duplicateSkipped.length
-        ? `${completed}件保存・${duplicateSkipped.length}件を競合候補として保留`
-        : `${completed} / ${requestedTotal}件保存`;
-      $("#upload-file-progress").textContent = `${skippedFiles.length}件は対象外`;
-      renderTransferFailures("#upload-failure-summary", "#upload-failed-list", skippedFiles);
+      view.filesExcluded(completed, requestedTotal, duplicateSkipped.length, skippedFiles.length);
+      renderUploadFailures(skippedFiles);
       setNotice(completed
         ? `${completed}件を保存しました。空ファイルは理由とともに一覧へ表示しています。`
         : "空ファイルは保存せず、理由を一覧へ表示しています。", true);
     } else if (duplicateSkipped.length) {
-      panel.classList.add("upload-complete");
-      $("#upload-heading").textContent = "差分アップロード完了";
-      $("#upload-status").textContent = `${completed}件保存・${duplicateSkipped.length}件を競合候補として保留`;
-      $("#upload-file-progress").textContent = completed ? "競合しないデータだけ保存しました" : "競合候補のため保存を保留しました";
+      view.conflictsComplete(completed, duplicateSkipped.length);
       setNotice(completed
         ? `${completed}件を追加し、競合候補の${duplicateSkipped.length}件は保留しました。`
         : `競合候補の${duplicateSkipped.length}件は保存せず保留しました。`);
     } else {
-      panel.classList.add("upload-complete");
-      $("#upload-heading").textContent = "アップロード完了";
-      $("#upload-file-progress").textContent = "Cloudflareへの保存確認済み";
+      view.filesComplete();
       await new Promise((resolve) => setTimeout(resolve, 900));
-      panel.hidden = true;
+      view.hide();
     }
     if (!cancelled && thumbnailWarnings.length) {
-      panel.hidden = false;
-      if (!finalFailures.length && !skippedFiles.length) $("#upload-heading").textContent = "動画の保存完了（サムネイル未生成あり）";
-      $("#upload-file-progress").textContent += ` ${thumbnailWarnings.length}件のサムネイルを作成できませんでした。再生時の作成、またはアカウントの全動画点検で再確認できます。`;
+      view.thumbnailWarnings(thumbnailWarnings.length, !finalFailures.length && !skippedFiles.length);
     }
   } catch (error) {
-    panel.classList.add("upload-error");
-    $("#upload-heading").textContent = options.skipExisting === false ? "アップロードを開始できませんでした" : "差分確認に失敗しました";
-    $("#upload-status").textContent = "データは追加していません";
-    $("#upload-file-progress").textContent = error.message;
+    view.startFailure(error.message, options.skipExisting !== false);
     setNotice(error.message, true);
   } finally {
     tracker.stop();
     state.uploading = false;
     state.uploadAbort = null;
-    $("#upload-cancel").hidden = true;
-    $("#upload-cancel").disabled = false;
+    view.finishFiles();
     syncUploadMessageActions();
     syncAvailableActions();
     await syncTransferWakeLock();
@@ -6550,19 +6509,9 @@ function connectionLimitForFile(limit, totalFiles) { return TCloudTransfer.conne
 function createUploadLimiter(limit) { return TCloudTransfer.createLimiter(limit); }
 
 function createUploadTracker(files, totalBytes) {
+  const view = getUploadView();
   return TCloudTransfer.createTracker(files, totalBytes, {
-    formatBytes,
-    render(view) {
-      $("#upload-progress").style.width = view.width;
-      $("#upload-file-progress").textContent = view.percent;
-      $("#upload-speed").textContent = view.speed;
-      $("#upload-bytes").textContent = view.bytes;
-      $("#upload-eta").textContent = view.eta;
-      $("#upload-activity").textContent = view.activity;
-      $("#upload-activity").classList.toggle("waiting", view.waiting);
-      $("#upload-file-name").textContent = view.fileName;
-    },
-    completed(count, total) { $("#upload-status").textContent = `${count} / ${total}件完了`; }
+    formatBytes, render: view.progress, completed: view.completed
   });
 }
 
@@ -6637,8 +6586,7 @@ function uploadRetryDelay(milliseconds, signal) {
 
 function cancelUploads() {
   if (!state.uploadAbort || state.uploadAbort.signal.aborted) return;
-  $("#upload-cancel").disabled = true;
-  $("#upload-file-progress").textContent = "停止処理中…";
+  getUploadView().stopping();
   state.uploadAbort.abort();
 }
 
@@ -6663,20 +6611,13 @@ function createFastDisplayMetadata(file, mediaKind, inspection, durationSeconds 
 }
 
 function syncUploadMessageActions() {
-  $("#upload-dismiss").hidden = state.uploading || Boolean(state.activeFolderUploadOperationId) || $("#upload-panel").hidden;
+  getUploadView().syncActions(state.uploading || Boolean(state.activeFolderUploadOperationId));
 }
 
 function dismissUploadMessage() {
   if (state.uploading) return;
   state.pendingSafetyUpload = null;
-  $("#upload-safety-actions").hidden = true;
-  const panel = $("#upload-panel");
-  renderTransferFailures("#upload-failure-summary", "#upload-failed-list", []);
-  renderUploadConflicts([]);
-  panel.classList.remove("upload-complete", "upload-error");
-  panel.hidden = true;
-  $("#upload-plan-summary").hidden = true;
-  $("#upload-dismiss").hidden = true;
+  getUploadView().dismiss();
   setNotice("");
 }
 
@@ -6684,9 +6625,7 @@ function cancelPendingSafetyUpload() {
   if (state.uploading) return;
   const count = state.pendingSafetyUpload?.files?.length || 0;
   state.pendingSafetyUpload = null;
-  $("#upload-safety-actions").hidden = true;
-  $("#upload-heading").textContent = "確認対象のアップロードをキャンセルしました";
-  $("#upload-file-progress").textContent = `${count}件は保存されていません`;
+  getUploadView().safetyCancelled(count);
   setNotice("確認対象のデータは保存していません。");
 }
 
@@ -6694,7 +6633,7 @@ async function continuePendingSafetyUpload() {
   if (state.uploading || !state.pendingSafetyUpload?.files?.length) return;
   const pending = state.pendingSafetyUpload;
   state.pendingSafetyUpload = null;
-  $("#upload-safety-actions").hidden = true;
+  getUploadView().showSafety(false);
   await uploadFiles(pending.files, pending.destinations, { safetyConfirmed: true, skipExisting: false });
 }
 

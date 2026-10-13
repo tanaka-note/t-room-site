@@ -27,7 +27,7 @@ export function commands(target) {
       { cwd: '.', script: 'browser-policy:test' }
     ],
     cloud: tests('cloud-worker', ...[
-      'listing-model', 'listing-boundary', 'selection-state', 'selection-boundary', 'bulk-delete', 'bulk-delete-boundary', 'selection-move', 'selection-history', 'selection-toolbar-stability', 'search-delete-stability', 'transfer-progress', 'folder-transfer', 'search-result-ranking', 'upload-live-progress', 'upload-differential', 'transfer-cancel', 'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
+      'listing-model', 'listing-boundary', 'selection-state', 'selection-boundary', 'bulk-delete', 'bulk-delete-boundary', 'selection-move', 'selection-history', 'selection-toolbar-stability', 'search-delete-stability', 'transfer-progress', 'upload-view-boundary', 'folder-transfer', 'search-result-ranking', 'upload-live-progress', 'upload-differential', 'transfer-cancel', 'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
@@ -108,6 +108,26 @@ export function changedFiles(base, head, cwd = root) {
     return git(['diff', '--no-renames', '--name-only', '-z', comparison, '--']);
   }
   return [...new Set([...git(['diff', '--no-renames', '--name-only', '-z', 'HEAD', '--']), ...git(['ls-files', '--others', '--exclude-standard', '-z'])])];
+}
+
+export function ciPlan({ event, ref, base, head, defaultBranch = 'origin/main' }, cwd = root) {
+  if (event === 'workflow_dispatch') return { selected: targets, native: true };
+  if (!head) throw new Error('CI requires a head commit');
+  let changed;
+  if (event === 'push' && ref === 'refs/heads/main') {
+    if (!base) throw new Error('Main push requires its previous commit');
+    // Main runs are never superseded. Compare snapshots, including force-push reversions.
+    changed = /^0+$/.test(base) ? changedFiles(base, head, cwd)
+      : execFileSync('git', ['diff', '--no-renames', '--name-only', '-z', base, head, '--'], { cwd, encoding: 'utf8' }).split('\0').filter(Boolean);
+  } else if (event === 'push') {
+    if (!ref?.startsWith('refs/heads/')) throw new Error('Push requires a branch ref');
+    // Include every outstanding branch change, even on first push or after cancellation.
+    changed = changedFiles(defaultBranch, head, cwd);
+  } else if (event === 'pull_request') {
+    if (!base || /^0+$/.test(base)) throw new Error('Pull request requires a base commit');
+    changed = changedFiles(base, head, cwd);
+  } else throw new Error(`Unsupported CI event: ${event}`);
+  return { selected: affected(changed), native: downloader2NativeAffected(changed) };
 }
 
 export function installDirectories(selected) {

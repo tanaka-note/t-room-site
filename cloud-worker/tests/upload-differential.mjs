@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-const [client, worker, html, listing] = await Promise.all([
+const [client, worker, html, listing, uploadView] = await Promise.all([
   readFile(new URL("../public/cloud.js", import.meta.url), "utf8"),
   readFile(new URL("../src/index.js", import.meta.url), "utf8"),
   readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-  readFile(new URL("../public/listing-model.js", import.meta.url), "utf8")
+  readFile(new URL("../public/listing-model.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/upload-view.js", import.meta.url), "utf8")
 ]);
 
 const context = vm.createContext({
@@ -56,9 +57,9 @@ assert.match(client, /\/upload-conflict-candidates/);
 assert.match(client, /if \(options\.skipExisting !== false && files\.length\)/);
 assert.match(client, /const precheckedSkipped = Array\.isArray\(options\.precheckedSkipped\)/);
 assert.match(client, /showUploadPlanSummary\(options\.newFolderCount, total, options\.reusedFolderCount, duplicateSkipped\.length, skippedFiles\.length\)/);
-assert.match(client, /差分確認：\$\{added\}／\$\{existing\}/);
-assert.match(client, /競合候補を確認中/);
-assert.match(client, /差分アップロード完了/);
+assert.match(uploadView, /差分確認：\$\{added\}／\$\{existing\}/);
+assert.match(uploadView, /競合候補を確認中/);
+assert.match(uploadView, /差分アップロード完了/);
 assert.match(client, /displayName \|\| file\.downloadDisplayName \|\| file\.name/);
 assert.match(client, /復号できない既存データは誤って保留せず/);
 assert.match(client, /今回選択したデータ内に同名・同容量のファイルがあります/);
