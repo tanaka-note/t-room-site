@@ -242,13 +242,12 @@
     cameraRollGrid: document.querySelector("#camera-roll-grid"),
     cameraRollMore: document.querySelector("#camera-roll-more"),
     photoViewerDialog: document.querySelector("#photo-viewer-dialog"),
+    photoStage: document.querySelector("#photo-viewer-dialog .photo-stage"),
     photoViewerDate: document.querySelector("#photo-viewer-date"),
     photoViewerTitle: document.querySelector("#photo-viewer-title"),
     photoViewerImage: document.querySelector("#photo-viewer-image"),
     photoViewerStatus: document.querySelector("#photo-viewer-status"),
     photoViewerFile: document.querySelector("#photo-viewer-file"),
-    photoPrevious: document.querySelector("#photo-previous"),
-    photoNext: document.querySelector("#photo-next"),
     photoOpenEntry: document.querySelector("#photo-open-entry"),
     photoDownloadLow: document.querySelector("#photo-download-low"),
     photoDownloadOriginal: document.querySelector("#photo-download-original"),
@@ -435,12 +434,14 @@
       state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
-    elements.photoPrevious.addEventListener("click", () => movePhotoViewer(-1));
-    elements.photoNext.addEventListener("click", () => movePhotoViewer(1));
+    bindPhotoViewerSwipe();
     elements.photoOpenEntry.addEventListener("click", openViewerEntry);
     elements.photoViewerDialog.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowLeft") movePhotoViewer(-1);
-      if (event.key === "ArrowRight") movePhotoViewer(1);
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      movePhotoViewer(event.key === "ArrowLeft" ? -1 : 1);
     });
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
@@ -2664,7 +2665,9 @@
   async function loadPhotoMeta() {
     const result = await api("/photos/meta");
     const monthValue = state.photoMonth;
-    elements.photoMonthFilter.replaceChildren(createOption("", "すべて"), ...(result.months || []).map((item) => (
+    const months = result.months || [];
+    const totalCount = months.reduce((total, item) => total + Number(item.count || 0), 0);
+    elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount}）`), ...months.map((item) => (
       createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
     )));
     elements.photoMonthFilter.value = monthValue;
@@ -2774,6 +2777,46 @@
     openPhotoViewer(state.photos, index);
   }
 
+  function bindPhotoViewerSwipe() {
+    const stage = elements.photoStage;
+    let gesture = null;
+    // A second finger anywhere in the viewer belongs to pinch/zoom, not navigation.
+    elements.photoViewerDialog.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "touch" && !event.isPrimary) gesture = null;
+    }, { capture: true });
+    stage.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "touch" || !event.isPrimary || !elements.photoViewerDialog.open) return;
+      if ((window.visualViewport?.scale || 1) > 1) return;
+      // Leave edge gestures to the OS/browser Back navigation.
+      if (event.clientX < 24 || event.clientX > window.innerWidth - 24) return;
+      gesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      stage.setPointerCapture(event.pointerId);
+    });
+    stage.addEventListener("pointermove", (event) => {
+      if (gesture?.pointerId !== event.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) gesture = null;
+    });
+    stage.addEventListener("pointerup", (event) => {
+      if (gesture?.pointerId !== event.pointerId) return;
+      const start = gesture;
+      gesture = null;
+      if (!elements.photoViewerDialog.open || (window.visualViewport?.scale || 1) > 1) return;
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      const threshold = Math.max(40, Math.min(80, stage.clientWidth * 0.12));
+      if (Math.abs(dx) < threshold || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      movePhotoViewer(dx < 0 ? 1 : -1);
+    });
+    const cancel = (event) => {
+      if (gesture?.pointerId === event.pointerId) gesture = null;
+    };
+    stage.addEventListener("pointercancel", cancel);
+    stage.addEventListener("lostpointercapture", cancel);
+    elements.photoViewerDialog.addEventListener("close", () => { gesture = null; });
+  }
+
   function openPhotoViewer(photos, index) {
     if (!photos?.length || index < 0 || index >= photos.length) return;
     state.viewerPhotos = photos;
@@ -2820,6 +2863,7 @@
     // A new element cannot paint the previous photo while this source loads.
     const preview = new Image();
     preview.id = "photo-viewer-image";
+    preview.draggable = false;
     preview.alt = photo.fileName || "日記の写真";
     preview.hidden = !photo.thumbnailUrl;
     if (photo.thumbnailUrl) preview.src = photo.thumbnailUrl;
@@ -2830,6 +2874,7 @@
 
     const image = new Image();
     image.id = preview.id;
+    image.draggable = false;
     image.alt = preview.alt;
     image.decoding = "async";
     state.viewerImageLoad = image;
@@ -2868,8 +2913,6 @@
     elements.photoViewerFile.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
     elements.photoDownloadLow.href = `${photo.displayUrl}?download=1`;
     elements.photoDownloadOriginal.href = `${photo.originalUrl}?download=1`;
-    elements.photoPrevious.disabled = state.viewerIndex <= 0;
-    elements.photoNext.disabled = state.viewerIndex >= state.viewerPhotos.length - 1;
   }
 
   function movePhotoViewer(direction) {
