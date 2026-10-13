@@ -17,9 +17,12 @@ test('root build creates deployable static assets from a checkout without genera
     await writeFile(join(fixture,'asset-report-k7m4q9x2/index.html'),'<!doctype html><html><head></head><body>fixture</body></html>');
     await mkdir(join(fixture,'site-worker'));await cp(join(root,'site-worker/index.mjs'),join(fixture,'site-worker/index.mjs'));
     await symlink(resolve(root,'node_modules'),join(fixture,'node_modules'),process.platform==='win32'?'junction':'dir');
+    await writeFile(join(fixture,'pnpm-workspace.yaml'),(await readFile(join(root,'pnpm-workspace.yaml'),'utf8'))+'\nverifyDepsBeforeRun: false\n');
     spawnSync('git',['init','--quiet'],{cwd:fixture});
     // Execute the actual root build script and the same Wrangler asset preflight used by deploy.
     const shell=process.platform==='win32'?'cmd.exe':'sh';
+    // Dependencies are already supplied by the fixture junction. pnpm 11 must
+    // not reinstall through it or change the source checkout during this test.
     const run=command=>spawnSync(shell,process.platform==='win32'?['/d','/c',command]:['-c',command],{cwd:fixture,encoding:'utf8',env:{...process.env,WRANGLER_SEND_METRICS:'false'}});
     const build=run('pnpm run build');assert.equal(build.status,0,build.stdout+build.stderr);
     assert.equal((await stat(join(fixture,'.site-assets/index.html'))).isFile(),true);

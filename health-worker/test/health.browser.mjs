@@ -28,7 +28,15 @@ try {
   assert.equal((await page.locator('main').innerText()).replace(/\s+/g,' ').trim(),'体調管理 パスキーでログイン');
   assert.equal(await page.locator('#login').innerText(),'パスキーでログイン');
   assert.equal(await page.locator('#app').isVisible(),false);
-  await page.screenshot({path:new URL('../../tmp/health-review/login.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')}); await page.getByRole('button', { name: 'パスキーでログイン', exact: true }).click(); await page.locator('#app').waitFor({ state: 'visible' });
+  await page.screenshot({path:new URL('../../tmp/health-review/login.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
+  // Unsupported PRF stops before any handoff or record request; no plaintext fallback.
+  let handoffRequests=0;
+  page.on('request',request=>{if(request.url().includes('/health/api/passkey/handoff'))handoffRequests++;});
+  await page.evaluate(()=>{globalThis.fixtureAuthenticate=TRoomPasskeys.authenticate;TRoomPasskeys.authenticate=async()=>({handoff:{handoffToken:'unused-fixture'}});});
+  await page.locator('#sign-in').click();await page.waitForFunction(()=>document.getElementById('message').textContent.includes('暗号鍵'));
+  assert.equal(handoffRequests,0);assert.equal(await page.locator('#app').isVisible(),false);
+  await page.evaluate(()=>{TRoomPasskeys.authenticate=globalThis.fixtureAuthenticate;delete globalThis.fixtureAuthenticate;});
+  await page.getByRole('button', { name: 'パスキーでログイン', exact: true }).click(); await page.locator('#app').waitFor({ state: 'visible' });
   assert.equal(await page.locator('#insight-cycles').isVisible(),false);
   assert.equal(review.fixture.db.prepare('SELECT ciphertext FROM health_records WHERE record_id=?').get(legacyId).ciphertext,legacyCipher.ciphertext);
   await page.locator('#record-today').click();
@@ -42,12 +50,26 @@ try {
   await page.locator('#note').fill('頭痛についての自由メモ'); await page.getByLabel('頭痛', { exact: true }).check();
 
   // Structurally invalid 200 JSON cannot close the editor or advance local revisions.
-  for (const value of [{}, {ok:true}, {ok:true,revision:'1'}, {ok:true,revision:1.5}, {ok:true,revision:0}, {ok:true,revision:Number.MAX_SAFE_INTEGER+1}]) {
+  for (const value of [{}, {ok:true}, {ok:true,revision:'1'}, {ok:true,revision:1.5}, {ok:true,revision:0}, {ok:true,revision:-1}, {ok:true,revision:Number.MAX_SAFE_INTEGER+1}]) {
     await page.route('**/health/api/records/*',route=>route.request().method()==='PUT' ? route.fulfill({status:200,json:value}) : route.continue());
     await page.locator('#save').click(); await page.waitForFunction(()=>document.getElementById('editor-error').textContent.length>0);
     assert.equal(await page.locator('#editor').isVisible(),true);
     assert.equal(await page.locator('#note').inputValue(),'頭痛についての自由メモ');
     assert.equal(await page.locator('#app').isVisible(),true);
+    assert.equal(review.fixture.db.prepare('SELECT COUNT(*) AS n FROM health_records').get().n,1);
+    await page.unroute('**/health/api/records/*');
+  }
+  for(const [body,contentType] of [['','application/json'],['<html>proxy</html>','text/html'],['unavailable','text/plain'],['{','application/json']]) {
+    await page.route('**/health/api/records/*',route=>route.request().method()==='PUT'?route.fulfill({status:200,body,contentType}):route.continue());
+    await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('editor-error').textContent.length>0);
+    assert.equal(await page.locator('#note').inputValue(),'頭痛についての自由メモ');assert.equal(await page.locator('#editor').isVisible(),true);
+    assert.equal(review.fixture.db.prepare('SELECT COUNT(*) AS n FROM health_records').get().n,1);
+    await page.unroute('**/health/api/records/*');
+  }
+  for(const failure of ['server','network']) {
+    await page.route('**/health/api/records/*',route=>route.request().method()!=='PUT'?route.continue():failure==='server'?route.fulfill({status:500,body:'<html>temporary failure</html>',contentType:'text/html'}):route.abort('failed'));
+    await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('editor-error').textContent.length>0);
+    assert.equal(await page.locator('#note').inputValue(),'頭痛についての自由メモ');assert.equal(await page.locator('#editor').isVisible(),true);
     assert.equal(review.fixture.db.prepare('SELECT COUNT(*) AS n FROM health_records').get().n,1);
     await page.unroute('**/health/api/records/*');
   }
@@ -69,6 +91,7 @@ try {
   assert.ok(await page.locator('#period-reminder').isVisible());
   assert.notEqual(await page.locator('#prediction-window').textContent(), '開始日を記録すると表示');
   assert.ok(writes.length); assert.ok(writes.every(v => !/頭痛|自由メモ|symptoms|date/.test(v)));
+  assert.ok(writes.every(value=>Object.keys(JSON.parse(value)).sort().join(',')==='ciphertext,expectedRevision,iv'));
   // Model a different credential in the test harness; the login UI stays identical.
   await other.route('**/review/auth',route=>route.fulfill({json:{prf:Array.from(review.fixture.users.subject.prf),handoffToken:review.fixture.issue('subject')}}));
   await other.goto(review.url); await other.getByRole('button',{name:'パスキーでログイン',exact:true}).click(); await other.locator('#app').waitFor({state:'visible'});
@@ -125,6 +148,9 @@ try {
   await openDaily();page.once('dialog',dialog=>dialog.accept());await page.locator('#delete').click();await page.locator('#editor').waitFor({state:'hidden'});
   assert.deepEqual({...dailyRow()},{iv:'',ciphertext:'',revision:3});
   await page.locator('#refresh').click();await page.waitForFunction(()=>!document.getElementById('refresh').disabled);
+  await page.locator('#logout').click();await page.locator('#login').waitFor({state:'visible'});
+  await page.reload();await page.locator('#sign-in').click();await page.locator('#app').waitFor({state:'visible'});
+  if(previousDate.slice(0,7)!==today().slice(0,7))await page.locator('#previous').click();
   await openDaily();assert.equal(await page.locator('#delete').isVisible(),false);
   await page.locator('#note').fill('削除した日の再登録');await page.locator('#save').click();await page.locator('#editor').waitFor({state:'hidden'});
   assert.equal(dailyRow().revision,4);assert.equal((await decryptRecord(review.fixture.master,dailyId,dailyRow(),'nobumi')).note,'削除した日の再登録');

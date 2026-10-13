@@ -2189,7 +2189,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "health"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {

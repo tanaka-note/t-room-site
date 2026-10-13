@@ -55,8 +55,13 @@ test('atomic OCC rejects stale updates/deletes, creation races and deletion/recr
     await remove(b, 2); await conflict(put(a, 2)); await conflict(remove(a, 2));
     assert.equal((await (await handleRequest(req('/records', a), f.env)).json()).records.length, 0);
     assert.deepEqual({...f.db.prepare('SELECT iv,ciphertext,revision FROM health_records').get()}, {iv:'',ciphertext:'',revision:3});
-    assert.equal((await (await put(b, 0)).json()).revision, 4);
+    const resurrection = await Promise.allSettled([put(a,0),put(b,0)]);
+    assert.equal(resurrection.filter(item=>item.status==='fulfilled').length,1);
+    assert.equal(resurrection.find(item=>item.status==='rejected').reason.code,'revision_conflict');
+    assert.equal((await resurrection.find(item=>item.status==='fulfilled').value.json()).revision,4);
     await conflict(put(a, 1)); await conflict(remove(a, 2));
+    await conflict(put(a,2));await conflict(remove(a,1));await conflict(put(a,3));await conflict(remove(a,3));
+    assert.equal((await (await put(b,4)).json()).revision,5);
     await assert.rejects(handleRequest(req('/records/' + id, a, 'PUT', encrypted), f.env), e => e.status === 400);
     await assert.rejects(remove(a, 0), e => e.status === 400);
     await assert.rejects(handleRequest(req('/records', {Cookie:a.Cookie}), f.env), e => e.code === 'session_changed');

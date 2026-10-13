@@ -59,6 +59,12 @@ test('handoff requires a usable session, expiry, account context and encrypted k
   const malformed=[{}, {...valid,sessionId:''},{...valid,expiresAt:0},{...valid,expiresAt:valid.expiresAt+0.5},{...valid,keyBundle:null},
     {...valid,keyBundle:{...bundle,accountId:null}},{...valid,keyBundle:{...bundle,wrappedKey:''}},
     {...valid,keyBundle:{...bundle,vault:{...bundle.vault,iv:'bad'}}},{...valid,keyBundle:{...bundle,vault:{...bundle.vault,publicKey:{kty:'EC'}}}}];
+  for(const sessionId of [null,{},123,'invalid session','x'.repeat(129)])malformed.push({...valid,sessionId});
+  for(const expiresAt of [null,'4102444800',-1,Number.MAX_SAFE_INTEGER+1])malformed.push({...valid,expiresAt});
+  for(const keyBundle of [{},[],{...bundle,vault:undefined},{...bundle,vault:null},{...bundle,wrappedKey:undefined}])malformed.push({...valid,keyBundle});
+  for(const field of ['iv','ciphertext','publicKey'])malformed.push({...valid,keyBundle:{...bundle,vault:{...bundle.vault,[field]:undefined}}});
+  for(const wrappedKey of ['a'.repeat(129),'='.repeat(512),'a+'.repeat(256)])malformed.push({...valid,keyBundle:{...bundle,wrappedKey}});
+  for(const publicKey of [{kty:'RSA',n:bundle.vault.publicKey.n},{kty:'RSA',e:'AQAB'}, {...bundle.vault.publicKey,n:'a'.repeat(129)}, {...bundle.vault.publicKey,e:'A==='}])malformed.push({...valid,keyBundle:{...bundle,vault:{...bundle.vault,publicKey}}});
   for(const value of malformed){const f=setup(t,Response.json(value));await assert.rejects(f.api('/passkey/handoff',{method:'POST'}),/応答/);t.mock.restoreAll();}
   const f=setup(t,Response.json(valid));assert.deepEqual(await f.api('/passkey/handoff',{method:'POST'}),valid);
 });

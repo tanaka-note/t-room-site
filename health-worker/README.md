@@ -1,6 +1,6 @@
 # 体調管理
 
-田中暢美名義の1アカウントを、本人と第一管理者がそれぞれのパスキーで共同管理するWebアプリ。新しいID・パスワードは発行しない。現在はレビュー版で、本番のWorker・D1作成、migration適用、公開は未実施。
+本人名義の1アカウントを、本人と第一管理者がそれぞれのパスキーで共同管理するWebアプリ。新しいID・パスワードは発行しない。現在はレビュー版で、本番のWorker・D1作成、migration適用、公開は未実施。
 
 ## 記録と予測
 
@@ -88,8 +88,38 @@ node health-worker/tools/review-server.mjs
 
 1. 専用D1を作成し、wrangler.jsoncのゼロ値database_idを置き換える。独立したSESSION_SECRETをSecretとして登録する。
 2. Security側0022_health_service.sqlとhealth側0001_init.sqlを対象DBへ適用する。既存Securityテーブルを作り直すmigrationなのでバックアップ・対象確認を行う。
-3. 相互service bindingを満たす順番でhealth／securityを公開し、registryのbuild一致を確認する。PASSKEY_ENABLEDは準備完了後に有効化する。
+3. 相互service binding・監査Queueとパスキー設定の準備を完了し、HealthのPASSKEY_ENABLED=trueを公開する設定として確定する。Healthは通常の対象限定release（`npm run release -- health`）で公開し、registryのbuild一致を確認する。この手順には別途公開承認が必要。
 4. Security Centerでオーナー連携、本人の招待・連携、各パスキーの鍵準備、既存T-Cloud管理者鍵による初期化・委譲承認を行う。
 5. 本物の2人のパスキーで共同記録・PRF対応・失効、テストデータで復旧を確認する。既存日記・請求書・T-Cloudのログインも確認する。
 
 本番bindingを持つWorkerをPreviewへ公開しない。本番公開と初期設定は今回のレビュー作業に含めない。
+
+Health限定の公開前ガードは、ゼロ値／不正UUID／未設定のD1 DB、PASSKEY_ENABLEDがtrue以外、ASSETS・SECURITY・SECURITY_AUDIT binding不足、SESSION_SECRET不足をdeploy前に拒否する。SecretはWranglerの読み取り操作で**名前のみ**を確認し、値の取得・表示は行わない。取得失敗時も停止する。設定ファイルにSESSION_SECRETを置くことも拒否する。値の強度、実リソースの準備、相互binding先の公開状態、DB移行済み状態まではこのガードだけで証明しない。
+
+## 移行・認可・失敗時の自動確認
+
+Securityの0001〜0021を実際のSQL順に適用した後、3 Identity（active／disabled）、9 credential（active／pending／revoked）、6既存サービスの54連携とhandoff、162鍵envelope、54監査・54セッション（終了済み・NULL・Cloud folder scopeを含む）を用意して0022を適用する。既存全テーブルの全行、主キー・外部キー、indexの列順・unique・partial条件を前後比較し、foreign_key_checkが空であることを確認する。再作成で変わる列の物理位置は比較対象にしない。
+
+`security-worker/test/health-migration-local.test.js`は本番bindingを引き継がない一時設定で`wrangler d1 migrations apply --local`も実行する。子テーブルと旧親テーブルをDROPした直後に失敗を注入し、全行・全schema・migration履歴が元に戻り、正しい0022で再試行できることを確認する。本番D1へのmigration試験・バックアップ復元試験は未実施。実migrationに修正は加えていない。
+
+Securityの実RPCとHealthの実handlerを接続した合成fixtureで、credential→Identity→active連携→Health member→承認済みgrantを確認する。失効・Identity無効・連携無効・member／grant不足・他Identityのcredential／link・旧epoch・handoff再使用／サービス違いを拒否する。Healthの監査とactive sessionはHealthとして記録し、登録名やクライアントが送る利用者名では認可しない。これも実WebAuthnの代替ではない。
+
+削除→再作成はrevision 1→2→3→4→5、並行再作成は1件だけ成功、古いPUT／DELETEは409を確認する。ブラウザでは更新・削除後のrefresh／reload／logout→loginを含め、409や200の壊れたJSON・不足フィールド・不正revision・非JSON、通信障害でも入力を保持する。PRF非対応はhandoff前に停止する。API保存本文はiv・ciphertext・expectedRevisionの3項目だけで、平文の健康項目やPRF・記録鍵・秘密鍵を監査／失敗ログへ含めないことを検証する。
+
+## 実端末の受け入れ確認（すべて未実施）
+
+ローカルfixture、模擬PRF、RSA復旧の単体試験が成功しても、以下は完了扱いにしない。公開・初期設定の別途承認後、管理された確認環境と削除可能な合成テスト記録で行い、実健康記録を使わない。実行時は端末／OS／ブラウザと結果だけを残し、credential・PRF・鍵・記録内容を記載しない。
+
+| 確認 | オーナー | 本人 |
+| --- | --- | --- |
+| 各自の実パスキーでログインし、Security CenterのIdentityと連携を自動解決 | 未実施 | 未実施 |
+| PRF取得・利用者秘密鍵解除・承認済み記録鍵解除（平文fallbackなし） | 未実施 | 未実施 |
+| 同じ合成記録の読み込み・復号、作成・編集・削除 | 未実施 | 未実施 |
+| 同日削除→再作成→更新。refresh／reload／logout→login後も正しく復号 | 未実施 | 未実施 |
+| 2端末の共同更新・同時再作成で409になった側の入力が残る | 未実施 | 未実施 |
+| パスキー／Identity／連携の失効で再読み込みを拒否、画面と鍵を消去 | 未実施 | 未実施 |
+| Security Center経由で新しいHealthパスキーを招待・承認・鍵準備 | 未実施 | 未実施 |
+| T-Cloud管理者秘密鍵を端末で解除して復旧鍵を開き、新パスキーに再委譲 | 未実施 | 未実施 |
+| 復旧後に各自の新パスキーで既存の合成記録を読み込み・復号・編集 | 未実施 | 未実施 |
+
+PRF非対応端末で停止すること、旧パスキーから新規アクセスできないこと、既存T-Cloud・日記・請求書ログインへの影響がないことも未実施。Cloudflare外部Buildの失敗解消、必要リソース・Secret・binding・migrationの準備、上記実端末確認が残る間はDraftを維持し、本番利用を開始しない。

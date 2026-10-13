@@ -5,10 +5,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from 'node:net';
 
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 const wranglerPath = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url));
-const port = 8796;
+// Avoid colliding with an open review server or another permission fixture.
+const portProbe=createServer();
+await new Promise(resolve=>portProbe.listen(0,'127.0.0.1',resolve));
+const port=portProbe.address().port;
+await new Promise(resolve=>portProbe.close(resolve));
 const origin = `http://127.0.0.1:${port}`;
 
 function testHash(password) {
