@@ -16,6 +16,23 @@ assert.ok(Object.isFrozen(load.TCloudUploadView));
 const viewScript = html.indexOf('/cloud/upload-view.js?'), clientScript = html.indexOf('/cloud/cloud.js?');
 assert.ok(viewScript >= 0 && clientScript > viewScript, 'Load the view before its caller');
 
+// Keep the real HTML contract complete, including elements used only by failure/confirmation paths.
+const required = [...new Set([...view.matchAll(/\b(?:node|text)\("([^"]+)"/g)].map(match => `#upload-${match[1]}`))];
+const checked = [], elements = new Map(required.map(selector => [selector, {}]));
+const contractView = load.TCloudUploadView.create({
+  panel: { querySelector(selector) { checked.push(selector); return elements.get(selector) || null; } },
+  formatBytes: String, escapeHtml: String
+});
+assert.deepEqual([...new Set(checked)].sort(), [...required].sort(), 'Initialization checks every referenced upload element');
+for (const selector of required) {
+  assert.equal(html.split(`id="${selector.slice(1)}"`).length - 1, 1, selector + ' exists exactly once in the real HTML');
+  elements.delete(selector);
+  assert.throws(() => contractView.assertReady(), /アップロード画面を準備できませんでした/, 'A cached view detects missing ' + selector);
+  assert.throws(() => load.TCloudUploadView.create({ panel: { querySelector: name => elements.get(name) || null } }), /アップロード画面を準備できませんでした/);
+  elements.set(selector, {});
+}
+assert.throws(() => load.TCloudUploadView.create({ panel: null }), /アップロード画面を準備できませんでした/);
+
 const root = {}, received = [];
 const formatBytes = value => String(value), escapeHtml = value => String(value);
 const adapter = vm.createContext({
@@ -38,4 +55,4 @@ assert.deepEqual(JSON.parse(JSON.stringify(received)), [
   [{ name: 'display name', reason: 'conflict reason', details: ['保存済み：folder/file'] }],
   [{ name: 'display name', message: 'failure reason' }]
 ], 'Only display fields cross the upload presentation boundary');
-console.log('upload view loads independently and receives no file, key, transfer or session state: ok');
+console.log('upload view checks its real HTML contract and receives no file, key, transfer or session state: ok');

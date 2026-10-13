@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-9fb857a23591";
+const APP_BUILD_ID = "cloud-5ae69dd4d2fa";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -5132,6 +5132,17 @@ function getUploadView() {
   return uploadView ||= TCloudUploadView.create({ panel: $("#upload-panel"), formatBytes, escapeHtml });
 }
 
+function prepareUploadView() {
+  try {
+    const view = getUploadView();
+    view.assertReady();
+    return view;
+  } catch {
+    setNotice("アップロード画面を準備できませんでした。ページを再読み込みしてください。", true);
+    return null;
+  }
+}
+
 function uploadConflictDisplayRecords(conflicts) {
   return conflicts.map(item => ({
     name: item.displayName || item.file?.name || "名称なし",
@@ -5322,22 +5333,24 @@ async function uploadSelectedFolder(event) {
     setNotice(message, true);
     return;
   }
+  const view = prepareUploadView();
+  if (!view) return;
   const operationId = ++state.folderUploadOperationSequence;
   const topLevelPassword = state.folderId ? "" : $("#folder-upload-password").value;
   state.activeFolderUploadOperationId = operationId;
   state.uploading = true;
-  submitButton.disabled = true;
-  submitButton.textContent = "準備中…";
-  state.folderUploadSelection = null;
-  $("#folder-upload-dialog").close();
-  $("#folder-upload-password").value = "";
-  $("#folder-upload-error").textContent = "";
-  syncAvailableActions();
-  const view = getUploadView();
-  view.beginFolder(selection.directories.length, selection.roots.join("、"));
-  await syncTransferWakeLock();
-  await waitForInterfacePaint();
   try {
+    submitButton.disabled = true;
+    submitButton.textContent = "準備中…";
+    state.folderUploadSelection = null;
+    $("#folder-upload-dialog").close();
+    $("#folder-upload-password").value = "";
+    $("#folder-upload-error").textContent = "";
+    state.pendingSafetyUpload = null;
+    syncAvailableActions();
+    view.beginFolder(selection.directories.length, selection.roots.join("、"));
+    await syncTransferWakeLock();
+    await waitForInterfacePaint();
     if (state.activeFolderUploadOperationId !== operationId) return;
     if (!state.crypto.publicKey || !state.crypto.fileEncryptionReady) throw new Error("暗号化の初期設定を完了してください。");
     const baseParentId = state.folderId ? Number(state.folderId) : null;
@@ -6191,6 +6204,8 @@ async function uploadFiles(files, destinations = null, options = {}) {
     setNotice("暗号化の初期設定を完了してください。", true);
     return;
   }
+  const view = prepareUploadView();
+  if (!view) return;
   const requestedTotal = files.length;
   const safetyConfirmed = options.safetyConfirmed === true;
   const skippedFiles = files
@@ -6204,18 +6219,17 @@ async function uploadFiles(files, destinations = null, options = {}) {
   $("#file-input").value = "";
   state.uploading = true;
   state.uploadAbort = new AbortController();
-  syncAvailableActions();
-  const view = getUploadView();
   const fixedFolderId = state.folderId ? Number(state.folderId) : null;
   const fixedFolderKey = fixedFolderId ? state.crypto.folderKeys.get(fixedFolderId) : null;
   let duplicateSkipped = [...precheckedSkipped];
   let tracker = { stop() {} };
   let completed = 0;
   let cancelled = false;
-  view.beginFiles(files.length, files.reduce((sum, file) => sum + file.size, 0), options.skipExisting !== false, uploadConflictDisplayRecords(precheckedSkipped));
-  state.pendingSafetyUpload = null;
-  await syncTransferWakeLock();
   try {
+    state.pendingSafetyUpload = null;
+    syncAvailableActions();
+    view.beginFiles(files.length, files.reduce((sum, file) => sum + file.size, 0), options.skipExisting !== false, uploadConflictDisplayRecords(precheckedSkipped));
+    await syncTransferWakeLock();
     if (options.skipExisting !== false && files.length) {
       view.checkingConflicts();
       const differential = await excludeExistingUploadFiles(files, destinations);

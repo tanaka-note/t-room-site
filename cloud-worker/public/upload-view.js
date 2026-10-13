@@ -2,6 +2,15 @@
 (() => {
   function create({ panel, formatBytes, escapeHtml }) {
     const node = name => panel?.querySelector(`#upload-${name}`);
+    function assertReady() {
+      const required = ["heading", "status", "progress", "plan-summary", "file-name", "file-progress", "speed",
+        "bytes", "eta", "activity", "failure-summary", "failed-list", "safety-actions", "cancel", "dismiss",
+        "conflict-summary", "conflict-list"];
+      if (!panel || required.some(name => !node(name))) {
+        throw new Error("アップロード画面を準備できませんでした。ページを再読み込みしてください。");
+      }
+    }
+    assertReady();
     const text = (name, value) => { node(name).textContent = value; };
     const completed = (count, total) => text("status", `${count} / ${total}件完了`);
     const savedStatus = (count, total, conflicts) => text("status", conflicts
@@ -28,6 +37,8 @@
       panel.classList.remove("upload-complete", "upload-error");
       node("plan-summary").hidden = true;
       renderConflicts(conflicts);
+      renderFailures([]);
+      node("safety-actions").hidden = true;
       node("dismiss").hidden = true;
     }
 
@@ -40,7 +51,7 @@
     }
 
     return Object.freeze({
-      renderConflicts, renderFailures, planSummary, completed,
+      assertReady, renderConflicts, renderFailures, planSummary, completed,
       beginFolder(count, names) {
         begin([]);
         text("heading", "アップロード内容を確認中");
@@ -81,8 +92,6 @@
         text("eta", "残り時間：計算中");
         text("activity", "送信準備中");
         node("activity").classList.remove("waiting");
-        renderFailures([]);
-        node("safety-actions").hidden = true;
         node("cancel").hidden = false;
         node("cancel").disabled = false;
       },

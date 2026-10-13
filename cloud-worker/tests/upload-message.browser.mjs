@@ -17,14 +17,33 @@ try { for (const [name, engine, launch] of engines) {
       const response = await route.fetch();
       await route.fulfill({ response, body: await response.text() + `
         globalThis.__uploadTest = { uploadFiles, uploadSelectedFolder, dismissUploadMessage,
-          makeTracker: createUploadTracker, formatBytes, escapeHtml,
+          makeTracker: createUploadTracker, formatBytes, escapeHtml, openFolderUploadDialog, continuePendingSafetyUpload,
+          pauseFolderPlan() {
+            const original = planFolderUpload;
+            planFolderUpload = async (...args) => {
+              this.folderPlanEntered = true;
+              await new Promise(resolve => { this.releaseFolderPlan = resolve; });
+              return original(...args);
+            };
+          },
+          failStartup(boundary) {
+            if (boundary === 'paint') waitForInterfacePaint = async () => { throw new Error('fixture paint failure'); };
+            else {
+              const original = syncTransferWakeLock;
+              let first = true;
+              syncTransferWakeLock = async () => {
+                if (first) { first = false; throw new Error('fixture wake lock failure'); }
+                return original();
+              };
+            }
+          },
           setup(mode) {
             state.session.canUpload = true; state.crypto.fileEncryptionReady = true;
             syncAvailableActions = () => {}; syncTransferWakeLock = async () => {};
             loadItems = async () => {}; loadUsage = async () => {}; invalidateStoredConflicts = () => {};
             getUploadFileLimit = () => 1; getUploadConnectionLimit = () => 1; createUploadLimiter = () => ({});
             createUploadTracker = () => ({ stop() {}, finish() {}, defer() {} });
-            this.saved = 0; this.attempts = 0;
+            this.saved = 0; this.attempts = 0; this.folderPlanEntered = false; this.folderPreparationFails = false;
             uploadOne = async (...args) => {
               this.attempts++;
               if (mode === 'failure' || mode === 'escaped-failure') throw new Error('fixture upload failure');
@@ -37,7 +56,7 @@ try { for (const [name, engine, launch] of engines) {
             state.folderUploadSelection = { directories: ['empty'], roots: ['empty'], files: [], looseFiles: [] };
             waitForInterfacePaint = async () => {};
             planFolderUpload = async (selection) => {
-              if (mode === 'folder-failure') throw new Error('fixture folder preparation failure');
+              if (mode === 'folder-failure' || this.folderPreparationFails) throw new Error('fixture folder preparation failure');
               return { pendingFiles: selection.files.map(item => item.file), duplicateSkipped: [], newFolderCount: 1, reusedFolderCount: 0,
                 foldersByPath: new Map([['empty', { existing: false, name: 'empty', parentPath: '' }]]) };
             };
@@ -105,6 +124,85 @@ try { for (const [name, engine, launch] of engines) {
         ? 'アップロード完了' : '確認対象のアップロードをキャンセルしました');
       await page.evaluate(() => __uploadTest.dismissUploadMessage());
     }
+    // Do not dismiss the previous notification: starting a folder must consume the previous intent.
+    for (const previous of ['failure', 'safety']) for (const outcome of ['empty', 'files', 'failure']) {
+      const before = await page.evaluate(async ({ previous, outcome }) => {
+        __uploadTest.dismissUploadMessage(); __uploadTest.setup(previous);
+        await __uploadTest.uploadFiles([new File(['fixture'], 'previous.txt')], null, { skipExisting: false });
+        const selection = __test.state.folderUploadSelection;
+        if (outcome === 'files') selection.files = [{ file: new File(['fixture'], 'current.txt'), relativePath: 'empty/current.txt' }];
+        __uploadTest.folderPreparationFails = outcome === 'failure';
+        __uploadTest.pauseFolderPlan();
+        return { attempts: __uploadTest.attempts, saved: __uploadTest.saved, pending: Boolean(__test.state.pendingSafetyUpload) };
+      }, { previous, outcome });
+      assert.equal(before.pending, previous === 'safety');
+      assert.equal(await page.locator('#upload-failure-summary').isVisible(), true);
+      await page.evaluate(() => {
+        __uploadTest.openFolderUploadDialog(__test.state.folderUploadSelection);
+        globalThis.__pendingFolderTest = __uploadTest.uploadSelectedFolder({ preventDefault() {}, currentTarget: document.querySelector('#folder-upload-form') });
+      });
+      await page.waitForFunction(() => __uploadTest.folderPlanEntered);
+      assert.equal(await page.evaluate(() => __test.state.uploading), true);
+      assert.equal(await page.evaluate(() => __test.state.pendingSafetyUpload), null, 'folder start clears the previous confirmation intent');
+      assert.equal(await page.locator('#upload-failure-summary').isVisible(), false);
+      assert.equal(await page.locator('#upload-failed-list li').count(), 0);
+      assert.equal(await page.locator('#upload-safety-actions').isVisible(), false);
+      await page.evaluate(() => __uploadTest.continuePendingSafetyUpload());
+      assert.equal(await page.evaluate(() => __uploadTest.attempts), before.attempts, 'no old transfer runs during folder preparation');
+      await page.evaluate(async () => { __uploadTest.releaseFolderPlan(); await __pendingFolderTest; });
+      assert.equal(await page.evaluate(() => __test.state.uploading), false);
+      assert.equal(await page.evaluate(() => __test.state.activeFolderUploadOperationId), null);
+      assert.equal(await page.locator('#upload-dismiss').isVisible(), true);
+      assert.equal(await page.locator('#folder-upload-form button[type="submit"]').isDisabled(), false);
+      if (outcome === 'files') {
+        assert.deepEqual(await page.locator('#upload-failed-list strong').allTextContents(), ['empty/current.txt'], 'the list belongs to the current folder only');
+        assert.deepEqual(await page.evaluate(() => (__test.state.pendingSafetyUpload?.files || []).map(file => file.name)), previous === 'safety' ? ['current.txt'] : []);
+      } else {
+        assert.equal(await page.locator('#upload-heading').textContent(), outcome === 'empty' ? 'フォルダ作成完了' : 'フォルダの準備に失敗しました');
+        assert.equal(await page.locator('#upload-failure-summary').isVisible(), false);
+        assert.equal(await page.locator('#upload-safety-actions').isVisible(), false);
+        assert.equal(await page.evaluate(() => __test.state.pendingSafetyUpload), null);
+        await page.evaluate(() => __uploadTest.continuePendingSafetyUpload());
+        assert.equal(await page.evaluate(() => __uploadTest.attempts), before.attempts, 'the previous file cannot be continued after folder completion/failure');
+      }
+      assert.equal(await page.evaluate(() => __uploadTest.saved), before.saved + (outcome === 'failure' ? 0 : 1), 'only the current folder is stored');
+      await click('#upload-dismiss');
+    }
+    // Missing markup must reject a new operation before changing busy flags or discarding the selection.
+    for (const flow of ['folder', 'files']) {
+      const rejected = await page.evaluate(async flow => {
+        __uploadTest.setup('success');
+        const heading = document.querySelector('#upload-heading'), parent = heading.parentNode, next = heading.nextSibling;
+        const selection = __test.state.folderUploadSelection;
+        heading.remove();
+        try {
+          if (flow === 'folder') await __uploadTest.uploadSelectedFolder({ preventDefault() {}, currentTarget: document.querySelector('#folder-upload-form') });
+          else await __uploadTest.uploadFiles([new File(['fixture'], 'fixture.txt')], null, { skipExisting: false });
+          return { uploading: __test.state.uploading, folderActive: __test.state.activeFolderUploadOperationId,
+            abort: __test.state.uploadAbort, attempts: __uploadTest.attempts, saved: __uploadTest.saved,
+            selectionPreserved: selection === __test.state.folderUploadSelection, notice: document.querySelector('#notice').textContent };
+        } finally { parent.insertBefore(heading, next); }
+      }, flow);
+      assert.deepEqual(rejected, { uploading: false, folderActive: null, abort: null, attempts: 0, saved: 0,
+        selectionPreserved: true, notice: 'アップロード画面を準備できませんでした。ページを再読み込みしてください。' });
+      assert.equal(await page.locator('#folder-upload-form button[type="submit"]').isDisabled(), false);
+      await page.evaluate(() => __uploadTest.dismissUploadMessage());
+    }
+    // Exceptions in the previously unprotected startup awaits still release transfer/UI state.
+    for (const [flow, boundary] of [['folder', 'wake-lock'], ['folder', 'paint'], ['files', 'wake-lock']]) {
+      await page.evaluate(async ({ flow, boundary }) => {
+        __uploadTest.setup('success'); __uploadTest.failStartup(boundary);
+        if (flow === 'folder') await __uploadTest.uploadSelectedFolder({ preventDefault() {}, currentTarget: document.querySelector('#folder-upload-form') });
+        else await __uploadTest.uploadFiles([new File(['fixture'], 'fixture.txt')], null, { skipExisting: false });
+      }, { flow, boundary });
+      assert.deepEqual(await page.evaluate(() => ({ uploading: __test.state.uploading, folderActive: __test.state.activeFolderUploadOperationId,
+        abort: __test.state.uploadAbort, attempts: __uploadTest.attempts, saved: __uploadTest.saved })),
+        { uploading: false, folderActive: null, abort: null, attempts: 0, saved: 0 });
+      assert.equal(await page.locator('#upload-dismiss').isVisible(), true);
+      assert.equal(await page.locator('#upload-cancel').isVisible(), false);
+      assert.equal(await page.locator('#folder-upload-form button[type="submit"]').isDisabled(), false);
+      await click('#upload-dismiss');
+    }
     // Use the actual accounting-to-view adapter, including retry reset and completed count.
     await page.evaluate(() => {
       const file = { name: 'progress fixture.txt', size: 1000 };
@@ -154,7 +252,7 @@ try { for (const [name, engine, launch] of engines) {
     assert.equal(await page.locator('#upload-panel').isVisible(), false);
     assert.equal(requests.some(method => method !== 'GET'), false, 'fixture never writes to an API');
     assert.deepEqual(errors, []);
-    console.log('PASS upload presentation, saved counts, safety cancel/continue, actual progress/retry, escaped names, scoped DOM and active transfer protection', name, mobile ? 'touch' : 'desktop');
+    console.log('PASS upload presentation, chained folder reset, missing DOM/startup cleanup, safety cancel/continue, progress/retry, escaped names, scoped DOM and active transfer protection', name, mobile ? 'touch' : 'desktop');
     await page.close();
   } } finally { await browser.close(); }
 } } finally { await fixture.close(); }
