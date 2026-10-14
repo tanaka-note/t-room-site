@@ -43,8 +43,7 @@ CREATE TABLE inventory_requests (
 );
 CREATE TRIGGER inventory_movement_guard BEFORE INSERT ON inventory_movements BEGIN
   SELECT RAISE(ABORT, 'inventory_item_unavailable') WHERE NOT EXISTS (SELECT 1 FROM inventory_items
-    WHERE id = NEW.item_id AND account_id = NEW.account_id AND archived_at IS NULL)
-    ;
+    WHERE id = NEW.item_id AND account_id = NEW.account_id AND archived_at IS NULL);
   SELECT RAISE(ABORT, 'inventory_version_conflict') WHERE NEW.kind = 'adjust' AND NEW.expected_version !=
     (SELECT version FROM inventory_items WHERE id = NEW.item_id);
 END;
