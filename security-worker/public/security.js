@@ -810,7 +810,8 @@
 
   function addLinkRow(service = null, containerSelector = "#link-rows", removable = true, excludedKeys = new Set()) {
     const availableServices = state.services
-      .filter((item) => containerSelector !== "#link-rows" || !["downloader", "downloader2"].includes(item.id))
+      .filter((item) => containerSelector !== "#link-rows" || !["downloader", "downloader2", "inventory"].includes(item.id))
+      .filter((item) => item.id !== "inventory" || state.selectedIdentity?.identity.id === "primary-admin")
       .map((item) => ({
         ...item,
         targets: (item.targets || []).filter((target) => !excludedKeys.has(serviceLinkKey(target.service, target.accountId, target.rootFolderId)))

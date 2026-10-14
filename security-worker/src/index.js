@@ -51,7 +51,8 @@ const SERVICE_REGISTRY = Object.freeze({
   billing: Object.freeze({ displayName: "請求書", binding: "BILLING_AUTH" }),
   ai: Object.freeze({ displayName: "AI Chat", binding: "AI_AUTH" }),
   downloader: Object.freeze({ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" }),
-  downloader2: Object.freeze({ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" })
+  downloader2: Object.freeze({ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" }),
+  inventory: Object.freeze({ displayName: "在庫照会", binding: "INVENTORY_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
@@ -70,7 +71,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -1679,6 +1680,12 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
     const accountId = normalizeText(item.accountId, 100);
     const rootFolderId = item.rootFolderId == null || item.rootFolderId === "" ? null : Number(item.rootFolderId);
     if (!service || !accountId) throw new HttpError(400, "サービス連携を確認してください。");
+    if (service === "inventory") {
+      if (invitation || identityId !== PRIMARY_ADMIN_ID || admin?.identityId !== PRIMARY_ADMIN_ID || accountId !== "owner") {
+        throw new HttpError(403, "在庫照会は第一管理者本人のアカウントだけに連携できます。");
+      }
+      requireFreshSecurityAdmin(admin);
+    }
     if (service !== "cloud" && rootFolderId !== null) throw new HttpError(400, "日記・請求書の連携にT-Cloudフォルダは指定できません。");
     if (["downloader", "downloader2"].includes(service)) {
       if (invitation) throw new HttpError(400, "Downloaderはユーザー作成後、利用者詳細のサービス連携から追加してください。");
@@ -2167,7 +2174,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {
