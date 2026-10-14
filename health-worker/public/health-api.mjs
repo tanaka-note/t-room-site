@@ -31,7 +31,7 @@ function fallbackMessage(status) {
 }
 
 export function createApi(state, onInvalidSession) {
-  return async (path, options = {}, generation = state.auth.generation) => {
+  return async (path, options = {}, generation = state.auth.generation, onHandoffSession) => {
     state.check(generation);
     const response = await fetch(`/health/api${path}`, {
       credentials: 'same-origin', ...options,
@@ -46,6 +46,10 @@ export function createApi(state, onInvalidSession) {
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) value = parsed;
       } catch { /* Infrastructure failures may have empty/truncated JSON bodies. */ }
     }
+    // A Cookie can already exist even if the bundle is invalid or the page
+    // generation changed. Let signIn clean up that specific issued session.
+    if (path === '/passkey/handoff' && response.ok && typeof onHandoffSession === 'function'
+      && typeof value?.sessionId === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value.sessionId)) onHandoffSession(value.sessionId);
     state.check(generation);
     if (!response.ok) {
       const message = typeof value?.error === 'string' && value.error ? value.error : fallbackMessage(response.status);

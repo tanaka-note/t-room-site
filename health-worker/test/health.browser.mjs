@@ -36,7 +36,53 @@ try {
   await page.locator('#sign-in').click();await page.waitForFunction(()=>document.getElementById('message').textContent.includes('暗号鍵'));
   assert.equal(handoffRequests,0);assert.equal(await page.locator('#app').isVisible(),false);
   await page.evaluate(()=>{TRoomPasskeys.authenticate=globalThis.fixtureAuthenticate;delete globalThis.fixtureAuthenticate;});
+  // Exercise the real issued Cookie and logout handler during incomplete login.
+  let logoutRequests=0;
+  page.on('request',request=>{
+    if(new URL(request.url()).pathname==='/health/api/logout') {
+      logoutRequests++;
+      assert.ok(/^[A-Za-z0-9_-]{16,128}$/.test(request.headers()['x-health-session']||''));
+    }
+  });
+  const failedLoginMessage='暗号鍵を解除できませんでした';
+  for(const phase of ['unlock','unwrap','bundle','load','cleanup-500','cleanup-network','cleanup-timeout']) {
+    const beforeLogout=logoutRequests,beforeHandoff=handoffRequests;
+    if(phase==='bundle')await page.route('**/health/api/passkey/handoff',async route=>{
+      const response=await route.fetch(),value=await response.json();
+      await route.fulfill({response,json:{...value,keyBundle:{...value.keyBundle,vault:null}}});
+    });
+    if(phase==='load')await page.route('**/health/api/records',route=>route.fulfill({status:500,json:{error:'初回記録を読み込めませんでした'}}));
+    let blockedLogout;
+    if(phase.startsWith('cleanup-'))await page.route('**/health/api/logout',route=>{
+      if(phase==='cleanup-timeout'){blockedLogout=route;return;}
+      return phase==='cleanup-500'?route.fulfill({status:500,json:{error:'cleanup failed'}}):route.abort('failed');
+    });
+    if(phase!=='bundle'&&phase!=='load')await page.evaluate(({phase,message})=>{
+      const original=crypto.subtle.decrypt.bind(crypto.subtle);
+      globalThis.fixtureDecrypt=original;
+      crypto.subtle.decrypt=async(...args)=>{
+        if(args[0].name===(phase==='unwrap'?'RSA-OAEP':'AES-GCM'))throw new Error(message);
+        return original(...args);
+      };
+    },{phase,message:failedLoginMessage});
+    await page.locator('#sign-in').click();
+    await page.waitForFunction(()=>!document.getElementById('sign-in').disabled&&document.getElementById('message').textContent.length>0);
+    assert.equal(handoffRequests-beforeHandoff,1,phase);assert.equal(logoutRequests-beforeLogout,1,phase);
+    const expected=phase==='bundle'?'サーバーの応答を確認できませんでした。再度お試しください。':phase==='load'?'初回記録を読み込めませんでした':failedLoginMessage;
+    assert.equal(await page.locator('#message').textContent(),expected,phase);
+    assert.equal(await page.locator('#app').isVisible(),false,phase);assert.equal(await page.locator('#records').textContent(),'',phase);
+    if(!phase.startsWith('cleanup-')) {
+      assert.equal((await a.cookies()).some(cookie=>cookie.name==='troom_health_session'),false,phase);
+      assert.equal(review.fixture.auditEvents.at(-1).eventType,'logout',phase);
+    }
+    if(blockedLogout)await blockedLogout.abort().catch(()=>{});
+    await page.unroute('**/health/api/passkey/handoff');await page.unroute('**/health/api/records');await page.unroute('**/health/api/logout');
+    await page.evaluate(()=>{if(globalThis.fixtureDecrypt){crypto.subtle.decrypt=globalThis.fixtureDecrypt;delete globalThis.fixtureDecrypt;}});
+    await a.clearCookies();
+  }
+  const beforeSuccessfulLogin=logoutRequests;
   await page.getByRole('button', { name: 'パスキーでログイン', exact: true }).click(); await page.locator('#app').waitFor({ state: 'visible' });
+  assert.equal(logoutRequests,beforeSuccessfulLogin,'successful login must not discard the new session');
   assert.equal(await page.locator('#insight-cycles').isVisible(),false);
   assert.equal(review.fixture.db.prepare('SELECT ciphertext FROM health_records WHERE record_id=?').get(legacyId).ciphertext,legacyCipher.ciphertext);
   await page.locator('#record-today').click();
