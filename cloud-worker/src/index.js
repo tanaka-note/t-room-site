@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-12458db74630";
+const APP_BUILD_ID = "cloud-e45e4ba3f6c4";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -108,7 +108,10 @@ export class SecurityIntegration extends WorkerEntrypoint {
 }
 
 async function listSecurityFolderTargets(env, { topLevelOnly = false } = {}) {
-  const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(id, parent_id, name, path) AS (
+  const result = await env.DB.prepare(topLevelOnly
+    ? `SELECT id, parent_id AS parentId, name AS path FROM cloud_folders
+       WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY name COLLATE NOCASE, id`
+    : `WITH RECURSIVE folder_tree(id, parent_id, name, path) AS (
       SELECT id, parent_id, name, name FROM cloud_folders
       WHERE parent_id IS NULL AND deleted_at IS NULL
       UNION ALL
@@ -117,7 +120,7 @@ async function listSecurityFolderTargets(env, { topLevelOnly = false } = {}) {
       WHERE child.deleted_at IS NULL
     )
     SELECT id, parent_id AS parentId, path FROM folder_tree ORDER BY path COLLATE NOCASE, id`).all();
-  return (result.results || []).filter((folder) => !topLevelOnly || folder.parentId == null).map((folder) => ({
+  return (result.results || []).map((folder) => ({
     accountId: "folder-member",
     rootFolderId: Number(folder.id),
     displayLabel: String(folder.path || "T-Cloudフォルダ"),
