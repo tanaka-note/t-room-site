@@ -436,11 +436,12 @@
     $("#admin-login-view").hidden = true;
     $("#admin-view").hidden = false;
     if (setup) renderPrimarySetupNotice(setup);
-    // Overview, users and link targets must not block one another's first paint.
+    // Overview, users, link targets and audit must not block one another's first paint.
     const results = await Promise.allSettled([
       loadDashboard(),
       prepareServiceLinks({ refresh: true }),
-      loadIdentities().then(() => loadAudit({ append: false })),
+      loadIdentities(),
+      loadAudit({ append: false }),
       setup ? Promise.resolve() : get("/setup/status").then(renderPrimarySetupNotice)
     ]);
     for (const result of results.slice(1)) if (result.status === "rejected") showMessage(result.reason.message, true);

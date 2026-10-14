@@ -74,6 +74,28 @@ try {
   await failedServices.waitForFunction(() => document.querySelector("#message").textContent.includes("連携候補"));
   await failedServices.close();
 
+  // Audit must also start before a slow or failed identity list finishes.
+  const slowIdentities = await newPage();
+  let releaseIdentities;
+  const identityGate = new Promise(resolve => { releaseIdentities = resolve; });
+  await slowIdentities.route("**/security/api/identities", async route => {
+    await identityGate;
+    await fulfill(route, { identities: [{ id: "fixture-user", displayName: "確認ユーザー", status: "active" }], pendingIdentities: [], auditIdentities: [] });
+  });
+  try {
+    await slowIdentities.goto(url); await ready(slowIdentities);
+    await slowIdentities.waitForFunction(() => document.querySelector("#audit-status").textContent.includes("0件を表示"));
+    assert.equal(await slowIdentities.locator("#audit-list").getAttribute("aria-busy"), "false");
+    assert.equal(await slowIdentities.locator("#identity-list").textContent().then(text => text.includes("確認ユーザー")), false);
+    releaseIdentities(); await usersReady(slowIdentities);
+  } finally { releaseIdentities(); await slowIdentities.close(); }
+  const failedIdentities = await newPage();
+  await failedIdentities.route("**/security/api/identities", route => fulfill(route, { error: "ユーザー一覧を取得できません。" }, 503));
+  await failedIdentities.goto(url); await ready(failedIdentities);
+  await failedIdentities.waitForFunction(() => document.querySelector("#audit-status").textContent.includes("0件を表示"));
+  assert.equal(await failedIdentities.locator("#audit-list").getAttribute("aria-busy"), "false");
+  await failedIdentities.close();
+
   const slowDashboard = await newPage();
   let releaseDashboard;
   const dashboardGate = new Promise((resolve) => { releaseDashboard = resolve; });

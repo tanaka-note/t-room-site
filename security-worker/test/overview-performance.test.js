@@ -199,6 +199,22 @@ test("an older overview response cannot replace a newer result or clear its load
   assert.equal(state.dashboardLoaded, true);
 });
 
+test("initial overview, users, candidates and audit start independently even when identities fail", async () => {
+  const started = [], errors = [], identities = gate();
+  const show = handler(client, "showAdmin", {
+    $: () => ({ hidden: true }), renderPrimarySetupNotice: () => {},
+    loadDashboard: async () => { started.push("dashboard"); },
+    prepareServiceLinks: async () => { started.push("services"); },
+    loadIdentities: async () => { started.push("identities"); await identities.promise; throw new Error("identity failure"); },
+    loadAudit: async () => { started.push("audit"); },
+    showMessage: message => errors.push(message)
+  });
+  const pending = show({ active: false }); await turn();
+  assert.deepEqual(started, ["dashboard", "services", "identities", "audit"]);
+  identities.release(); await pending;
+  assert.deepEqual(errors, ["identity failure"]);
+});
+
 test("candidate readers share a pending request, can retry failure, and refresh on administrator reentry", async () => {
   const reads = [], state = { services: [], servicesPromise: null };
   const load = handler(client, "loadServices", { state, get: () => new Promise((resolve, reject) => reads.push({ resolve, reject })) });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { lineBrowserResponse } from '../../assets/line-browser-worker.mjs';
 
 const [view, client, html] = await Promise.all([
   readFile(new URL('../public/upload-view.js', import.meta.url), 'utf8'),
@@ -15,6 +16,38 @@ assert.equal(typeof load.TCloudUploadView.create, 'function', 'The view loads wi
 assert.ok(Object.isFrozen(load.TCloudUploadView));
 const viewScript = html.indexOf('/cloud/upload-view.js?'), clientScript = html.indexOf('/cloud/cloud.js?');
 assert.ok(viewScript >= 0 && clientScript > viewScript, 'Load the view before its caller');
+
+// Exercise the production Worker entry point, not the static browser fixture's routing.
+const workerSource = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
+const workerContext = { WorkerEntrypoint: class {}, Request, Response, Headers, URL, TextEncoder, console, lineBrowserResponse };
+vm.runInNewContext(workerSource.replace(/^import .*;\r?\n/gm, '')
+  .replace('export class SecurityIntegration', 'class SecurityIntegration')
+  .replace('export default {', 'globalThis.worker = {'), workerContext);
+const assetRequests = [];
+const env = { ASSETS: { async fetch(request) {
+  const path = new URL(request.url).pathname;
+  assetRequests.push(path);
+  const file = path === '/' ? 'index.html' : path === '/share' ? 'share.html' : path.slice(1);
+  const body = await readFile(new URL('../public/' + file, import.meta.url));
+  return new Response(body, { headers: { 'Content-Type': file.endsWith('.js') ? 'text/javascript' : 'text/html' } });
+} } };
+const requestAsset = path => workerContext.worker.fetch(new Request('https://fixture.test' + path), env, {});
+const shell = await requestAsset('/cloud/');
+assert.equal(shell.status, 200);
+assert.equal(await shell.text(), html, 'The Worker serves the actual application HTML');
+const scriptRefs = [...new Set([...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)]
+  .map(match => match[1]).filter(path => path.startsWith('/cloud/')))];
+for (const path of scriptRefs) {
+  const response = await requestAsset(path);
+  assert.equal(response.status, 200, 'The production Worker serves required script ' + path);
+  assert.match(response.headers.get('Content-Type'), /javascript/);
+  if (path.startsWith('/cloud/upload-view.js?')) assert.equal(await response.text(), view);
+}
+const allowedRequestCount = assetRequests.length;
+for (const path of ['/cloud/src/index.js', '/cloud/unlisted.js', '/cloud/upload-view.js/private']) {
+  assert.equal((await requestAsset(path)).status, 404, 'Unlisted paths remain private');
+}
+assert.equal(assetRequests.length, allowedRequestCount, 'Unlisted paths never reach the asset binding');
 
 // Keep the real HTML contract complete, including elements used only by failure/confirmation paths.
 const required = [...new Set([...view.matchAll(/\b(?:node|text)\("([^"]+)"/g)].map(match => `#upload-${match[1]}`))];
