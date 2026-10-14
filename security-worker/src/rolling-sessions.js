@@ -2,7 +2,7 @@ import { PASSKEY_SESSION_TTL_SECONDS } from "../../assets/session-policy.mjs";
 
 // Internal service binding only. Authority remains the service's signed cookie
 // plus its live Identity/link/account checks; this stores expiry and revocation.
-export async function trackedPasskeySession(env, input, validate) {
+export async function trackedPasskeySession(env, input, validate, loadSession = null) {
   const now = Math.floor(Date.now() / 1000);
   if (!["security", "diary", "billing", "ai", "downloader", "downloader2"].includes(input?.service)
     || !/^[A-Za-z0-9_-]{43}$/.test(input.sessionIdHash || "")
@@ -20,7 +20,10 @@ export async function trackedPasskeySession(env, input, validate) {
       .bind(input.sessionIdHash, input.identityId, input.service, input.serviceLinkId || null, input.serviceAccountId,
         input.credentialId, input.role, input.sessionVersion, input.sessionEpoch, input.startedAt, new Date().toISOString(), input.expiresAt).run();
   }
-  const row = await env.DB.prepare("SELECT * FROM security_active_sessions WHERE session_id_hash = ?").bind(input.sessionIdHash).first();
+  // A local validator may already have read the ledger alongside live authority.
+  // Register still reads after inserting; callers without a loader keep this path.
+  const row = loadSession && ["read", "touch"].includes(input.action) ? await loadSession(input)
+    : await env.DB.prepare("SELECT * FROM security_active_sessions WHERE session_id_hash = ?").bind(input.sessionIdHash).first();
   if (!row) return { valid: input.action === "end" };
   if (row.service !== input.service || row.identity_id !== input.identityId || row.credential_id !== input.credentialId
     || (row.service_link_id || null) !== (input.serviceLinkId || null) || row.service_account_id !== input.serviceAccountId

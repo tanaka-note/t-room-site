@@ -1512,17 +1512,46 @@ async function cloudPasskeySession(env, input) {
 }
 
 async function passkeyRollingSession(env, input) {
+  let sessionRow;
   return trackedPasskeySession(env, input, async (claims) => {
     if (claims.service !== "security") return (await validatePasskeySession(env, claims)).valid === true;
-    const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
-    if (!runtime.enabled || runtime.epoch !== claims.sessionEpoch || !["identity", "security-admin"].includes(claims.role)
+    if (!["identity", "security-admin"].includes(claims.role)
       || claims.serviceAccountId !== claims.role || claims.serviceLinkId != null) return false;
-    const row = await env.DB.prepare(`SELECT i.status, i.is_security_admin, c.status AS credential_status
-      FROM security_identities i JOIN security_credentials c ON c.identity_id = i.id
-      WHERE i.id = ? AND c.credential_id = ?`).bind(claims.identityId, claims.credentialId).first();
+    let runtime, row;
+    if (["read", "touch"].includes(claims.action)) {
+      if (!passkeysEnabled(env)) {
+        await observePasskeyRuntime(env, false);
+        return false;
+      }
+      // One live snapshot per check, never cached across requests or renewal.
+      const readState = () => env.DB.prepare(`SELECT s.*, i.status, i.is_security_admin,
+        c.status AS credential_status, r.passkey_session_epoch AS runtime_epoch,
+        r.switch_observed_enabled AS runtime_enabled
+        FROM security_active_sessions s
+        JOIN security_identities i ON i.id = s.identity_id
+        JOIN security_credentials c ON c.credential_id = s.credential_id AND c.identity_id = i.id
+        LEFT JOIN security_runtime_state r ON r.id = 1
+        WHERE s.session_id_hash = ? AND i.id = ? AND c.credential_id = ?`)
+        .bind(claims.sessionIdHash, claims.identityId, claims.credentialId).first();
+      row = await readState();
+      if (row && row.runtime_epoch == null) {
+        await observePasskeyRuntime(env, true);
+        row = await readState();
+      }
+      runtime = { enabled: Number(row?.runtime_enabled) === 1, epoch: Number(row?.runtime_epoch) };
+      sessionRow = row;
+    } else {
+      runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+      row = await env.DB.prepare(`SELECT i.status, i.is_security_admin, c.status AS credential_status
+        FROM security_identities i JOIN security_credentials c ON c.identity_id = i.id
+        WHERE i.id = ? AND c.credential_id = ?`).bind(claims.identityId, claims.credentialId).first();
+    }
+    if (!runtime.enabled || runtime.epoch !== claims.sessionEpoch) return false;
     return Boolean(row && row.status !== "disabled" && row.credential_status !== "revoked"
       && (claims.role === "identity" || (row.status === "active" && row.credential_status === "active" && row.is_security_admin)));
-  });
+  }, async (claims) => sessionRow === undefined
+    ? env.DB.prepare("SELECT * FROM security_active_sessions WHERE session_id_hash = ?").bind(claims.sessionIdHash).first()
+    : sessionRow);
 }
 
 async function refreshSecuritySessions(request, response, env, url, path) {
@@ -1944,8 +1973,10 @@ async function signedCookie(env, name, payload, ttl, secureValue) {
 async function readSecuritySession(request, env, name, expectedKind) {
   if (!isValidSessionSecret(env.SESSION_SECRET)) return null;
   try {
-    const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
-    if (!runtime.enabled) return null;
+    if (!passkeysEnabled(env)) {
+      await observePasskeyRuntime(env, false);
+      return null;
+    }
     const token = parseCookies(request.headers.get("Cookie") || "")[name];
     if (!token) return null;
     const parts = token.split(".");
@@ -1954,10 +1985,15 @@ async function readSecuritySession(request, env, name, expectedKind) {
     if (!payload || !signature || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
     const value = JSON.parse(decoder.decode(base64UrlToBytes(payload)));
     if (!(value.kind === expectedKind && value.authMethod === "passkey" && value.exp > nowSeconds()
-      && Number.isInteger(Number(value.passkeySessionEpoch))
-      && Number(value.passkeySessionEpoch) === runtime.epoch)) return null;
-    if (value.rollingSessionVersion != null && (value.rollingSessionVersion !== ROLLING_SESSION_VERSION
-      || !(await passkeyRollingSession(env, await rollingSessionInput(env, "security", value, "read"))).valid)) return null;
+      && Number.isInteger(Number(value.passkeySessionEpoch)))) return null;
+    if (value.rollingSessionVersion != null) {
+      // Rolling validation includes the live epoch, credential and ledger check.
+      if (value.rollingSessionVersion !== ROLLING_SESSION_VERSION
+        || !(await passkeyRollingSession(env, await rollingSessionInput(env, "security", value, "read"))).valid) return null;
+    } else {
+      const runtime = await observePasskeyRuntime(env, true);
+      if (!(runtime.enabled && Number(value.passkeySessionEpoch) === runtime.epoch)) return null;
+    }
     return value;
   } catch { return null; }
 }
