@@ -3,7 +3,7 @@
 日用品・消耗品の現在庫と使用履歴を管理する、単一利用者向けのサービス。
 初期版では「何を、いつ、何個使用したか」を記録し、品目ごとの月別・年間使用数を確認できる。
 
-状態: **設計案。認証・暗号化方針の承認待ちで、アプリ実装・アカウント作成・本番公開は未実施。**
+状態: **初期版。HTTPS＋D1標準暗号化、共通パスキー連携、単一ownerの方針を承認済み。**
 この文書に実際の利用者氏名、認証情報、在庫、使用履歴を記載しない。
 
 ## 初期版の操作
@@ -91,8 +91,9 @@
 誤入力は取消後に正しい記録を追加する。取消不能な補充は事情を表示して在庫調整へ案内する。
 在庫調整は入力時のversionを確認し、途中の使用を上書きする場合は再読み込みを要求する。
 初期版は履歴や品目の完全削除を提供せず、在庫0の品目をアーカイブして過去の集計を保持する。
+取消によって在庫が戻ったアーカイブ品目は自動的に通常一覧へ戻し、再び使用できるようにする。
 
-## 認証・暗号化の提案（実装前の承認対象）
+## 認証・暗号化（承認済み）
 
 ### アカウントとパスキー
 
@@ -135,7 +136,7 @@ Cloudflare運用者にも内容を見せない端末内暗号化／E2EEは初期
 2. Security CenterへInventoryの明示的な連携・監査・session検証を追加し、既存の認証方式を回帰確認する。
 3. `web-apps.json`へInventoryを登録し、安全な自動更新、未保存入力／送信中の更新延期、対象限定verify・releaseを組み込む。
 4. 架空fixtureでローカル検証・必要なbuildを通し、Git commit／pushとPRのCI確認を行う。
-5. 個人データのないschemaを専用D1へ適用し、Secret・単一ownerを安全に設定する。既存の本番DBは更新しない。
+5. 個人データのないschemaを専用D1へ適用し、Secret・単一ownerを安全に設定する。Securityの`0022_inventory_service.sql`は既存全行・cloud scope・暗号化済みenvelopeを保持してサービス制約を拡張する。在庫データは既存DBへ保存しない。
 6. 相互Service Bindingの初回作成順をdry-runで確認する。必要な場合はデータAPIを閉じたInventoryを先に作成し、Security、Inventoryの順で連携対応を公開する。
 7. 公開先のbuild一致と未認証アクセス拒否を確認する。本人がローンチ後にパスキーを紐づける。
 
@@ -152,3 +153,19 @@ Cloudflare運用者にも内容を見せない端末内暗号化／E2EEは初期
 
 対象限定の検証・公開は[開発フロー](../docs/development-flow.md)に従う。
 パスキーの本人端末操作はローカルfixtureと区別して報告する。
+
+## 開発・初回設定
+
+```sh
+node tools/verify.mjs --target inventory --browser --build
+node tools/sync-web-app-builds.mjs --target inventory
+npm run release -- inventory
+```
+
+`inventory-worker`で`wrangler d1 migrations apply inventory-db --remote`を実行する。
+初回Worker作成後、`node tools/bootstrap.mjs --remote`の標準入力へ
+`{"displayName":"<本番だけで設定する表示名>"}`を渡す。
+helperは未設定の場合だけ独立したランダムSESSION_SECRETを設定し、ownerを1件作成する。
+Secret・氏名は出力せず、SQL用のOS一時ファイルを処理後に削除する。
+個人データを入力した設定ファイル・実行履歴をGitへ追加しない。
+通常のコード公開でbootstrapを再実行・Secretをローテーションする必要はない。

@@ -1,3 +1,2 @@
-# Keep Cloud's byte-hashed license files identical on Windows and CI.
-cloud-worker/public/vendor/libav/NOTICE.md text eol=lf
-cloud-worker/public/vendor/mpegts-1.8.0.LICENSE.txt text eol=lf
+# D1's remote statement parser requires LF for trigger migration files.
+inventory-worker/migrations/*.sql text eol=lf
