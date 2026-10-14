@@ -57,6 +57,12 @@ export async function handleRequest(request, env, context) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'この操作は利用できません。');
     const response = await env.ASSETS.fetch(new Request(new URL(path, url.origin), request));
     const headers = new Headers(response.headers); headers.set('Cache-Control', 'no-store');
+    if (headers.has('Location')) {
+      const destination = new URL(headers.get('Location'), url.origin);
+      if (destination.origin !== url.origin) throw new HttpError(503, '画面を読み込めませんでした。');
+      if (!destination.pathname.startsWith(`${BASE}/`)) destination.pathname = BASE + destination.pathname;
+      headers.set('Location', destination.pathname + destination.search + destination.hash);
+    }
     return new Response(response.body, { status: response.status, headers });
   }
   requireSessionSecret(env.SESSION_SECRET, HttpError);

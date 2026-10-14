@@ -7,6 +7,14 @@ async function result(f, path, body, status = 200) { const r = await f.request(p
 const create = (f, stock = 10) => result(f, '/api/items', { name: 'サンプル消耗品', unit: '個', stock, requestId: requestId() });
 const record = (f, id, kind, amount, time = '2026-01-01T00:00:00+09:00', extra = {}) => result(f, `/api/items/${id}/movements`, { kind, quantity: amount, occurredAt: time, requestId: requestId(), ...extra });
 
+test('asset canonical redirects retain the Inventory prefix and version query', async () => {
+  const f = fixture(); try {
+    f.env.ASSETS.fetch = async () => new Response(null, { status: 308, headers: { Location: '/?v=fixture' } });
+    const response = await f.request('/index.html'); assert.equal(response.status, 308); assert.equal(response.headers.get('Location'), '/inventory/?v=fixture');
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  } finally { f.close(); }
+});
+
 test('stock, annual use, zero months, adjustment and cancellation have independent meanings', async () => {
   const f = fixture(); try { await f.login(); const { itemId } = await create(f); await record(f, itemId, 'restock', 3); const use = await record(f, itemId, 'use', 2);
     let value = await result(f, `/api/items/${itemId}?year=2026`); assert.equal(value.item.stock, 11); assert.equal(value.annualUsage, 2); assert.equal(value.months.length, 12); assert.equal(value.months[0].used, 2); assert.equal(value.months[11].used, 0);
