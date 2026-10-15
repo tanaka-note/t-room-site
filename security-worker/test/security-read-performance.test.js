@@ -104,6 +104,29 @@ test("background lists validate current authority without extending either sessi
   } finally { f.close(); }
 });
 
+test("audit details and summary pages require live administrator authority", async () => {
+  const f = await fixture();
+  try {
+    f.db.exec(`INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,auth_method,details_json)
+      VALUES('fixture:event','2026-10-14T15:00:00.000Z','cloud','password_login_success','success','password','{"detail":"only-on-expand"}')`);
+    for (const path of ["audit?summary=true", "audit/fixture%3Aevent"]) {
+      f.calls.length = 0;
+      assert.equal((await f.request(path, { cookie: "", active: false })).status, 401);
+      assert.equal(f.calls.some(sql => sql.includes("FROM security_audit_events")), false, "no event read before authorization");
+    }
+    const summary = await (await f.request("audit?summary=true", { active: false })).json();
+    assert.equal(Object.hasOwn(summary.events[0], "details_json"), false);
+    const response = await f.request("audit/fixture%3Aevent", { active: false });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).event.details_json, '{"detail":"only-on-expand"}');
+    assert.equal((await f.request("audit/missing", { active: false })).status, 404);
+    for (const path of ["audit/%FF", "audit/%20", `audit/${"x".repeat(129)}`])
+      assert.equal((await f.request(path, { active: false })).status, 400, path);
+    f.db.exec("UPDATE security_identities SET is_security_admin=0");
+    assert.equal((await f.request("audit/fixture%3Aevent", { active: false })).status, 401);
+  } finally { f.close(); }
+});
+
 test("next request immediately rejects changed authority and ledger state", async () => {
   for (const sql of [
     "UPDATE security_credentials SET status='revoked'",

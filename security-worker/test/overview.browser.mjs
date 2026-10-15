@@ -50,31 +50,40 @@ async function newPage() {
   return page;
 }
 try {
-  // A slow candidate provider must not delay overview or identity rendering.
+  // Initial overview starts no unrelated lists. A slow provider only affects its tab.
   const slowServices = await newPage();
-  let releaseServices, serviceRequests = 0;
+  let releaseServices, serviceRequests = 0, identityRequests = 0, auditRequests = 0;
   const serviceGate = new Promise((resolve) => { releaseServices = resolve; });
+  slowServices.on("request", request => {
+    if (new URL(request.url()).pathname === "/security/api/identities") identityRequests++;
+    if (new URL(request.url()).pathname === "/security/api/audit") auditRequests++;
+  });
   await slowServices.route("**/security/api/services", async (route) => {
     serviceRequests++; await serviceGate; await fulfill(route, services);
   });
   try {
-    await slowServices.goto(url); await ready(slowServices); await usersReady(slowServices);
-    assert.equal(serviceRequests, 1);
+    await slowServices.goto(url); await ready(slowServices);
+    assert.deepEqual([serviceRequests, identityRequests, auditRequests], [0, 0, 0]);
     assert.equal(await slowServices.locator("#link-rows .link-row").count(), 0);
     await slowServices.getByRole("button", { name: "ユーザー", exact: true }).click();
-    assert.equal(serviceRequests, 1, "parallel readers share the same candidate request");
+    await usersReady(slowServices);
+    assert.equal(serviceRequests, 1);
+    await slowServices.getByRole("button", { name: "概要", exact: true }).click();
+    await slowServices.getByRole("button", { name: "ユーザー", exact: true }).click();
+    assert.deepEqual([serviceRequests, identityRequests], [1, 1], "tab reentry shares cached or pending reads");
     releaseServices();
     await slowServices.waitForFunction(() => document.querySelectorAll("#link-rows .link-row").length === 1);
   } finally { releaseServices(); await slowServices.close(); }
 
   const failedServices = await newPage();
   await failedServices.route("**/security/api/services", (route) => fulfill(route, { error: "日記の連携候補を取得できません。" }, 503));
-  await failedServices.goto(url); await ready(failedServices); await usersReady(failedServices);
+  await failedServices.goto(url); await ready(failedServices);
   assert.match(await failedServices.locator("#dashboard-panel").innerText(), /現在ログイン中のユーザー[\s\S]*確認ユーザー/);
+  await failedServices.getByRole("button", { name: "ユーザー", exact: true }).click(); await usersReady(failedServices);
   await failedServices.waitForFunction(() => document.querySelector("#message").textContent.includes("連携候補"));
   await failedServices.close();
 
-  // Audit must also start before a slow or failed identity list finishes.
+  // Audit summaries do not need identities; only opening advanced filters needs choices.
   const slowIdentities = await newPage();
   let releaseIdentities;
   const identityGate = new Promise(resolve => { releaseIdentities = resolve; });
@@ -84,15 +93,23 @@ try {
   });
   try {
     await slowIdentities.goto(url); await ready(slowIdentities);
+    await slowIdentities.getByRole("button", { name: "履歴", exact: true }).click();
     await slowIdentities.waitForFunction(() => document.querySelector("#audit-status").textContent.includes("0件を表示"));
     assert.equal(await slowIdentities.locator("#audit-list").getAttribute("aria-busy"), "false");
     assert.equal(await slowIdentities.locator("#identity-list").textContent().then(text => text.includes("確認ユーザー")), false);
+    await slowIdentities.locator("#audit-search > summary").click();
     releaseIdentities(); await usersReady(slowIdentities);
+    await slowIdentities.getByRole("button", { name: "概要", exact: true }).click();
+    await slowIdentities.getByRole("button", { name: "履歴", exact: true }).click();
+    assert.equal(await slowIdentities.locator("#audit-search").getAttribute("open"), "");
   } finally { releaseIdentities(); await slowIdentities.close(); }
   const failedIdentities = await newPage();
   await failedIdentities.route("**/security/api/identities", route => fulfill(route, { error: "ユーザー一覧を取得できません。" }, 503));
   await failedIdentities.goto(url); await ready(failedIdentities);
+  await failedIdentities.getByRole("button", { name: "履歴", exact: true }).click();
   await failedIdentities.waitForFunction(() => document.querySelector("#audit-status").textContent.includes("0件を表示"));
+  await failedIdentities.locator("#audit-search > summary").click();
+  await failedIdentities.waitForFunction(() => document.querySelector("#message").textContent.includes("ユーザー一覧"));
   assert.equal(await failedIdentities.locator("#audit-list").getAttribute("aria-busy"), "false");
   await failedIdentities.close();
 
@@ -101,9 +118,10 @@ try {
   const dashboardGate = new Promise((resolve) => { releaseDashboard = resolve; });
   await slowDashboard.route("**/security/api/dashboard", async (route) => { await dashboardGate; await fulfill(route, dashboard); });
   try {
-    await slowDashboard.goto(url); await usersReady(slowDashboard);
+    await slowDashboard.goto(url);
     assert.equal(await slowDashboard.locator("#dashboard-panel").getAttribute("aria-busy"), "true");
     assert.match(await slowDashboard.locator("#dashboard-panel [role=status]").innerText(), /読み込んでいます/);
+    await slowDashboard.getByRole("button", { name: "ユーザー", exact: true }).click(); await usersReady(slowDashboard);
     releaseDashboard(); await ready(slowDashboard);
   } finally { releaseDashboard(); await slowDashboard.close(); }
 
@@ -113,7 +131,7 @@ try {
     await page.route("**/security/api/dashboard", (route) => ++requests === 1
       ? fulfill(route, { error: "概要を一時的に確認できません。<img id=xss-marker src=x>" }, 503)
       : fulfill(route, dashboard));
-    await page.goto(url); await page.locator("#dashboard-retry").waitFor(); await usersReady(page);
+    await page.goto(url); await page.locator("#dashboard-retry").waitFor();
     assert.match(await page.locator("#dashboard-panel [role=alert]").innerText(), /読み込めませんでした/);
     assert.equal(await page.locator("#xss-marker").count(), 0);
     if (retry === "button") await page.locator("#dashboard-retry").click();
@@ -147,7 +165,7 @@ try {
   assert.equal(await timedOut.locator("#dashboard-panel").getAttribute("aria-busy"), "false");
   await timedOut.locator("#dashboard-retry").click(); await ready(timedOut); await timedOut.close();
   assert.deepEqual(errors, []);
-  console.log("Security overview browser regressions passed (independent reads, loading, failures, retries, invalid JSON, deadline).");
+  console.log("Security overview browser regressions passed (lazy tabs/filters, cached reads, independent failures, retries, invalid JSON, deadline).");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));

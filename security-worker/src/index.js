@@ -16,7 +16,7 @@ import {
 import { secure } from "./security-headers.js";
 import {
   AUDIT_PAGE_SIZE,
-  LOGIN_FAILURE_EVENTS,
+  AUDIT_SUMMARY_PAGE_SIZE,
   LOGIN_SUCCESS_EVENTS,
   auditRetentionCutoff,
   auditViewFilter,
@@ -245,6 +245,13 @@ async function handleApi(request, env, url, path, context = null) {
     return createIdentityAndInvite(request, env, admin);
   }
   if (path === "/api/audit" && request.method === "GET") return listAuditEvents(url, env);
+  const auditDetailMatch = path.match(/^\/api\/audit\/([^/]+)$/);
+  if (auditDetailMatch && request.method === "GET") {
+    let id;
+    try { id = decodeURIComponent(auditDetailMatch[1]); } catch { throw new HttpError(400, "履歴IDを確認してください。"); }
+    if (!id || normalizeText(id, 128) !== id) throw new HttpError(400, "履歴IDを確認してください。");
+    return auditEventDetail(env, id);
+  }
   if (path === "/api/ai/budgets" && request.method === "GET") return listAiBudgets(env);
   const aiBudgetMatch = path.match(/^\/api\/ai\/budgets\/([A-Za-z0-9_-]{1,64})$/);
   if (aiBudgetMatch && request.method === "POST") {
@@ -773,17 +780,12 @@ async function saveOwnTCloudEnvelope(request, env) {
 
 async function dashboard(env) {
   const today = currentJstDayBounds();
-  const successPlaceholders = LOGIN_SUCCESS_EVENTS.map(() => "?").join(", ");
-  const failurePlaceholders = LOGIN_FAILURE_EVENTS.map(() => "?").join(", ");
   const [counts, identityCounts, sessionState, clamavDefinitions] = await Promise.all([
     env.DB.prepare(`SELECT
-    SUM(CASE WHEN outcome = 'success' AND event_type IN (${successPlaceholders}) THEN 1 ELSE 0 END) AS loginSuccess,
-    SUM(CASE WHEN outcome = 'failure' AND event_type IN (${failurePlaceholders}) THEN 1 ELSE 0 END) AS loginFailure,
-    SUM(CASE WHEN outcome = 'blocked' THEN 1 ELSE 0 END) AS lockouts,
-    SUM(CASE WHEN event_type = 'session_resume' THEN 1 ELSE 0 END) AS sessionResume,
-    SUM(CASE WHEN event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END) AS critical
-    FROM security_audit_events WHERE occurred_at >= ? AND occurred_at < ?`)
-      .bind(...LOGIN_SUCCESS_EVENTS, ...LOGIN_FAILURE_EVENTS, today.start, today.end).first(),
+    login_success AS loginSuccess, login_failure AS loginFailure, lockouts,
+    session_resume AS sessionResume, critical
+    FROM security_audit_daily WHERE day = date(?, '+9 hours')`)
+      .bind(today.start).first(),
     env.DB.prepare(`SELECT
     SUM(CASE WHEN EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'pending') THEN 1 ELSE 0 END) AS pendingApproval,
     SUM(CASE WHEN status = 'invited' THEN 1 ELSE 0 END) AS invited,
@@ -1335,6 +1337,8 @@ function retireUnregisteredInvitedIdentityIfOrphaned(env, identityId, invitation
 }
 
 async function listAuditEvents(url, env) {
+  const summary = url.searchParams.get("summary") === "true";
+  const pageSize = summary ? AUDIT_SUMMARY_PAGE_SIZE : AUDIT_PAGE_SIZE;
   const clauses = ["1 = 1"];
   const values = [];
   let view;
@@ -1360,22 +1364,33 @@ async function listAuditEvents(url, env) {
     let cursor;
     try { cursor = decodeAuditCursor(rawCursor); }
     catch { throw new HttpError(400, "監査履歴のcursorが不正です。"); }
-    clauses.push("(occurred_at < ? OR (occurred_at = ? AND event_id > ?))");
-    values.push(cursor.occurredAt, cursor.occurredAt, cursor.eventId);
+    clauses.push("occurred_at <= ? AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?))");
+    values.push(cursor.occurredAt, cursor.occurredAt, cursor.occurredAt, cursor.eventId);
   }
-  const result = await env.DB.prepare(`SELECT *,
+  const columns = summary
+    ? "event_id, occurred_at, event_type, service, outcome, auth_method, identity_id, service_account_id, service_account_label, role, user_agent"
+    : "*";
+  const result = await env.DB.prepare(`SELECT ${columns},
       (SELECT display_name FROM security_identities WHERE id = security_audit_events.identity_id) AS identity_display_name
     FROM security_audit_events
     WHERE ${clauses.join(" AND ")}
     ORDER BY occurred_at DESC, event_id ASC LIMIT ?`)
-    .bind(...values, AUDIT_PAGE_SIZE + 1).all();
+    .bind(...values, pageSize + 1).all();
   const rows = result.results || [];
-  const hasMore = rows.length > AUDIT_PAGE_SIZE;
-  const page = rows.slice(0, AUDIT_PAGE_SIZE);
+  const hasMore = rows.length > pageSize;
+  const page = rows.slice(0, pageSize);
   return json({
     events: page.map((row) => ({ ...withUtcTimes(row), ...auditDisplayNames(row) })),
     nextCursor: hasMore && page.length ? encodeAuditCursor(page.at(-1)) : null
   });
+}
+
+async function auditEventDetail(env, id) {
+  const row = await env.DB.prepare(`SELECT *,
+    (SELECT display_name FROM security_identities WHERE id = security_audit_events.identity_id) AS identity_display_name
+    FROM security_audit_events WHERE event_id = ?`).bind(id).first();
+  if (!row) throw new HttpError(404, "この履歴は見つかりません。保持期限を過ぎた可能性があります。");
+  return json({ event: { ...withUtcTimes(row), ...auditDisplayNames(row) } });
 }
 
 async function redeemHandoff(env, token, service) {

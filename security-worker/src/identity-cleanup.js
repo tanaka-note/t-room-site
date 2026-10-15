@@ -5,8 +5,11 @@ const KNOWN_TABLES = new Set([
   "security_invitations", "security_setup_sessions", "security_challenges",
   "security_handoffs", "security_tcloud_client_vaults", "security_tcloud_key_envelopes",
   "security_active_sessions", "security_audit_events", "security_ai_budget_policies",
-  "security_runtime_state", "security_definition_events", "security_definition_updates"
+  "security_runtime_state", "security_definition_events", "security_definition_updates", "security_audit_daily"
 ]);
+// Reviewed derived counts contain no Identity/link/credential/key references.
+// These triggers only maintain those counts; unknown triggers still stop cleanup.
+const KNOWN_TRIGGERS = new Set(["security_audit_daily_insert", "security_audit_daily_delete", "security_audit_daily_update"]);
 
 export const DISABLED_IDENTITY_CLEANUP_LIMIT = 20;
 
@@ -57,7 +60,7 @@ export async function cleanupDisabledIdentities(db, retentionCutoff) {
   if (!Number.isFinite(Date.parse(retentionCutoff))) throw new Error("Invalid Identity retention cutoff");
   // New tables/triggers require a new dependency review before enabling deletion.
   const schema = await db.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'trigger') AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*' AND name != 'd1_migrations'").all();
-  if ((schema.results || []).some((row) => row.type !== "table" || !KNOWN_TABLES.has(row.name))
+  if ((schema.results || []).some((row) => row.type === "trigger" ? !KNOWN_TRIGGERS.has(row.name) : !KNOWN_TABLES.has(row.name))
     || [...KNOWN_TABLES].some((name) => !(schema.results || []).some((row) => row.name === name))) {
     console.warn("Identity cleanup skipped: schema requires dependency review");
     return { deleted: 0, skipped: "schema" };

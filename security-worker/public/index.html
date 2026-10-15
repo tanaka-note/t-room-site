@@ -60,10 +60,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta name="troom-app-build" content="security-73cc42ee81f7">
+  <meta name="troom-app-build" content="security-878349d1fbe6">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain セキュリティセンター</title>
-  <link rel="stylesheet" href="/security/security.css?v=security-73cc42ee81f7">
+  <link rel="stylesheet" href="/security/security.css?v=security-878349d1fbe6">
 </head>
 <body>
   <main class="shell">
@@ -174,15 +174,18 @@
         </details>
         <p id="audit-status" role="status" aria-live="polite"></p>
         <div id="audit-list" class="card compact"></div>
-        <button id="audit-load-more" class="secondary" type="button" hidden>もっと見る</button>
+        <div class="actions">
+          <button id="audit-previous" class="secondary" type="button" disabled>前の30件</button>
+          <button id="audit-load-more" class="secondary" type="button" hidden>次の30件</button>
+        </div>
       </section>
     </section>
   </main>
-  <script src="/cloud/vendor/argon2.umd.min.js?v=security-73cc42ee81f7"></script>
-  <script src="/cloud/crypto-vault.js?v=security-73cc42ee81f7"></script>
-  <script src="/security/passkey-client.js?v=security-73cc42ee81f7"></script>
-  <script src="/security/security-display.js?v=security-73cc42ee81f7"></script>
-  <script src="/assets/pwa-auto-update.js?v=security-73cc42ee81f7" defer></script>
-  <script src="/security/security.js?v=security-73cc42ee81f7"></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-878349d1fbe6"></script>
+  <script src="/cloud/crypto-vault.js?v=security-878349d1fbe6"></script>
+  <script src="/security/passkey-client.js?v=security-878349d1fbe6"></script>
+  <script src="/security/security-display.js?v=security-878349d1fbe6"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-878349d1fbe6" defer></script>
+  <script src="/security/security.js?v=security-878349d1fbe6"></script>
 </body>
 </html>

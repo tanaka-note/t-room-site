@@ -20,16 +20,17 @@ function gate() {
 }
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 
-test("overview counts only the current JST day and uses the existing audit range index", async () => {
+test("overview reads one JST aggregate row while other overview reads remain parallel", async () => {
   const db = new DatabaseSync(":memory:");
   try {
-    db.exec(`CREATE TABLE security_audit_events (occurred_at TEXT, event_type TEXT, outcome TEXT);
-      CREATE INDEX idx_security_audit_occurred ON security_audit_events(occurred_at DESC);
+    db.exec(`CREATE TABLE security_audit_events (event_id TEXT, occurred_at TEXT, event_type TEXT, outcome TEXT, identity_id TEXT, service TEXT, auth_method TEXT);
+      CREATE TABLE security_active_sessions (expires_at INTEGER, ended_at TEXT);
       CREATE TABLE security_identities (id TEXT, status TEXT);
       CREATE TABLE security_credentials (identity_id TEXT, status TEXT);
       INSERT INTO security_identities VALUES ('active','active'),('pending','invited'),('disabled','disabled');
       INSERT INTO security_credentials VALUES ('active','active'),('pending','pending');`);
-    const insert = db.prepare("INSERT INTO security_audit_events VALUES (?,?,?)");
+    db.exec(readFileSync(new URL("../migrations/0023_audit_read_model.sql", import.meta.url), "utf8"));
+    const insert = db.prepare("INSERT INTO security_audit_events(occurred_at,event_type,outcome) VALUES (?,?,?)");
     const start = "2026-10-12T15:00:00.000Z", end = "2026-10-13T15:00:00.000Z";
     for (const event of LOGIN_SUCCESS_EVENTS) insert.run(start, event, "success");
     for (const event of LOGIN_FAILURE_EVENTS) insert.run("2026-10-13T14:59:59.999Z", event, "failure");
@@ -45,8 +46,8 @@ test("overview counts only the current JST day and uses the existing audit range
     const env = { DB: { prepare(sql) {
       let values = [];
       const query = { bind(...args) { values = args; return query; }, async first() {
-        started.push(sql.includes("FROM security_audit_events") ? "audit" : "identities");
-        if (sql.includes("FROM security_audit_events")) auditPlan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values);
+        started.push(sql.includes("FROM security_audit_daily") ? "audit" : "identities");
+        if (sql.includes("FROM security_audit_daily")) auditPlan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values);
         await waiting.promise;
         return db.prepare(sql).get(...values);
       } };
@@ -67,7 +68,7 @@ test("overview counts only the current JST day and uses the existing audit range
     assert.deepEqual([result.pendingApproval, result.invited, result.noPasskey], [1, 1, 1]);
     assert.equal(result.activeUsers[0].identityId, "active");
     assert.equal(result.clamavDefinitions.result, "success");
-    assert.ok(auditPlan.some((row) => /SEARCH.*idx_security_audit_occurred.*occurred_at[<>]/.test(row.detail)), JSON.stringify(auditPlan));
+    assert.ok(auditPlan.some((row) => /SEARCH security_audit_daily.*day=/.test(row.detail)), JSON.stringify(auditPlan));
     db.exec("DELETE FROM security_audit_events");
     assert.equal((await dashboard(env)).loginSuccess, 0, "empty sums remain zero");
   } finally { db.close(); }
@@ -199,20 +200,20 @@ test("an older overview response cannot replace a newer result or clear its load
   assert.equal(state.dashboardLoaded, true);
 });
 
-test("initial overview, users, candidates and audit start independently even when identities fail", async () => {
-  const started = [], errors = [], identities = gate();
+test("initial overview does not start users, candidates or audit reads", async () => {
+  const started = [];
   const show = handler(client, "showAdmin", {
     $: () => ({ hidden: true }), renderPrimarySetupNotice: () => {},
+    state: { readGeneration: 1 }, resetAdminReads: () => {}, showPanel: () => {}, document: { querySelector: () => ({}) },
     loadDashboard: async () => { started.push("dashboard"); },
-    prepareServiceLinks: async () => { started.push("services"); },
-    loadIdentities: async () => { started.push("identities"); await identities.promise; throw new Error("identity failure"); },
-    loadAudit: async () => { started.push("audit"); },
-    showMessage: message => errors.push(message)
+    get: async (path) => { started.push(path); return { active: false }; },
+    showMessage: () => assert.fail("unexpected initial failure")
   });
-  const pending = show({ active: false }); await turn();
-  assert.deepEqual(started, ["dashboard", "services", "identities", "audit"]);
-  identities.release(); await pending;
-  assert.deepEqual(errors, ["identity failure"]);
+  await show({ active: false });
+  assert.deepEqual(started, ["dashboard"]);
+  started.length = 0;
+  await show();
+  assert.deepEqual(started, ["dashboard", "/setup/status"]);
 });
 
 test("candidate readers share a pending request, can retry failure, and refresh on administrator reentry", async () => {
