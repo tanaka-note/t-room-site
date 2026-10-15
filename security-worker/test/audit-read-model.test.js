@@ -104,6 +104,11 @@ test("presets use their partial indexes and cursor pages seek from the boundary"
       const schema=f.db.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(`idx_security_audit_${view}_page`).sql;
       assert.ok(schema.includes(auditViewFilter(view).clause),'preset/index predicates stay aligned');
     }
+    for (const [filter, index] of [['identityId=test-user', 'identity'], ['service=cloud', 'service']]) {
+      await f.query(`summary=true&${filter}`);
+      const q = f.queries.at(-1), plan = f.db.prepare('EXPLAIN QUERY PLAN ' + q.sql).all(...q.values);
+      assert.ok(plan.some(row => row.detail.includes(`idx_security_audit_${index}_page`)), JSON.stringify(plan));
+    }
     const first=await f.query('summary=true');await f.query('summary=true&cursor='+first.nextCursor);
     const q=f.queries.at(-1);
     assert.ok(f.db.prepare('EXPLAIN QUERY PLAN '+q.sql).all(...q.values).some(r=>/SEARCH.*idx_security_audit_occurred.*occurred_at</.test(r.detail)));

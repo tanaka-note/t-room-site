@@ -119,6 +119,7 @@ try {
   await slowDashboard.route("**/security/api/dashboard", async (route) => { await dashboardGate; await fulfill(route, dashboard); });
   try {
     await slowDashboard.goto(url);
+    await slowDashboard.waitForFunction(() => document.querySelector("#dashboard-panel").getAttribute("aria-busy") === "true");
     assert.equal(await slowDashboard.locator("#dashboard-panel").getAttribute("aria-busy"), "true");
     assert.match(await slowDashboard.locator("#dashboard-panel [role=status]").innerText(), /読み込んでいます/);
     await slowDashboard.getByRole("button", { name: "ユーザー", exact: true }).click(); await usersReady(slowDashboard);
