@@ -6,6 +6,9 @@
   let items = [], detail = null, cursor = null, listScroll = 0, listYear = yearNow, mode = '', editedItem = null;
   let dirty = false, busy = false, approvedClose = false, openToken = '', opener = null, retry = null, backgroundPointer = null;
   let activity = Date.now(), renderSequence = 0;
+  let listAnchors = [];
+  const detailPositions = new Map();
+  const positionKey = value => `${value.item.id}:${value.year}`;
   const el = (tag, content, className) => { const node = document.createElement(tag); if (content != null) node.textContent = content; if (className) node.className = className; return node; };
   const button = (label, action, className) => { const b = el('button', label, className); b.type = 'button'; b.addEventListener('click', action); return b; };
   const message = value => { $('message').textContent = value; $('message').hidden = !value; };
@@ -19,7 +22,7 @@
       if (response.status === 401) loginView(); throw error; }
     return value;
   }
-  function loginView() { if ($('editor').open) finishClose(); $('login-view').hidden = false; $('app-view').hidden = true; $('logout').hidden = true; $('account-name').textContent = ''; items = []; detail = null; $('items').replaceChildren(); $('movements').replaceChildren(); $('chart').replaceChildren(); }
+  function loginView() { if ($('editor').open) finishClose(); $('login-view').hidden = false; $('app-view').hidden = true; $('logout').hidden = true; $('account-name').textContent = ''; items = []; detail = null; for (const id of ['items','movements','chart','item-name','item-stock','annual-total','detail-actions','month-values']) $(id).replaceChildren(); }
   async function enter(account) { $('account-name').textContent = account.displayName; $('login-view').hidden = true; $('app-view').hidden = false; $('logout').hidden = false; message(''); await loadItems(); await renderLocation(); }
   async function loadItems() { const value = await api(`/items?year=${listYear}`); items = value.items; renderItems(); }
   function renderItems() {
@@ -33,10 +36,11 @@
     }
     if (!shown.length) $('items').append(el('p', items.length ? '該当する品目はありません。' : '品目を追加して、在庫の記録を始めましょう。', 'empty'));
   }
-  function openDetail(id) { listScroll = window.scrollY; const url = new URL(location.href); url.searchParams.set('item', id); url.searchParams.set('year', String(listYear)); history.pushState({ ...history.state, inventory: { itemId: id, year: listYear } }, '', url); void renderLocation().catch(e => message(e.message)); }
-  async function renderLocation() {
+  function openDetail(id) { listScroll = window.scrollY; listAnchors = [...$('items').children].filter(n => n.dataset.itemId && n.getBoundingClientRect().bottom > 0).slice(0, 2).map(n => ({ id: n.dataset.itemId, top: n.getBoundingClientRect().top })); const url = new URL(location.href); url.searchParams.set('item', id); url.searchParams.set('year', String(listYear)); history.pushState({ ...history.state, inventory: { itemId: id, year: listYear } }, '', url); void renderLocation(true).catch(e => message(e.message)); }
+  async function renderLocation(fresh = false) {
     const sequence = ++renderSequence, params = new URL(location.href).searchParams, id = params.get('item');
-    if (!id) { $('detail-view').hidden = true; $('list-view').hidden = false; detail = null; requestAnimationFrame(() => window.scrollTo(0, listScroll)); return; }
+    if (!id) { $('detail-view').hidden = true; $('list-view').hidden = false; detail = null; requestAnimationFrame(() => { if (sequence !== renderSequence) return; const anchor = listAnchors.find(a => [...$('items').children].some(n => n.dataset.itemId === a.id)); const row = anchor && [...$('items').children].find(n => n.dataset.itemId === anchor.id); window.scrollTo(0, row ? window.scrollY + row.getBoundingClientRect().top - anchor.top : listScroll); }); return; }
+    const priorScroll = detail && detail.item.id === id ? window.scrollY : null;
     const year = Number(params.get('year') || listYear), value = await api(`/items/${encodeURIComponent(id)}?year=${year}`);
     if (sequence !== renderSequence) return;
     detail = value; cursor = value.nextCursor; $('list-view').hidden = true; $('detail-view').hidden = false; $('item-name').textContent = value.item.name;
@@ -44,6 +48,7 @@
     $('detail-year').value = String(value.year); $('annual-total').textContent = `年間使用数 ${value.annualUsage.toLocaleString()} ${value.item.unit}`;
     $('detail-actions').replaceChildren(); if (!value.item.archived_at) { $('detail-actions').append(button('使用', e => edit('use', value.item, e.currentTarget)), button('補充', e => edit('restock', value.item, e.currentTarget)), button('在庫を合わせる', e => edit('adjust', value.item, e.currentTarget))); if (value.item.stock === 0) $('detail-actions').append(button('アーカイブ', () => archive(value.item))); }
     renderChart(value); $('movements').replaceChildren(); appendHistory(value.movements); $('more').hidden = !cursor;
+    requestAnimationFrame(() => { if (sequence === renderSequence) window.scrollTo(0, fresh ? 0 : priorScroll ?? detailPositions.get(positionKey(value)) ?? 0); });
   }
   function renderChart(value) {
     $('chart').replaceChildren(); $('month-labels').replaceChildren(); $('month-values').replaceChildren();
@@ -112,6 +117,7 @@
     try { await enter(await api('/session')); } catch (e) { loginView(); message(e.status === 401 ? '' : e.message); }
   });
   window.addEventListener('popstate', () => {
+    if (detail && !$('detail-view').hidden) detailPositions.set(positionKey(detail), window.scrollY);
     if ($('editor').open && history.state?.inventoryDialog !== openToken) { if (!approvedClose && !allowClose()) { history.go(1); return; } finishClose(); approvedClose = false; }
     if (busy) return; if (!$('app-view').hidden) void renderLocation().catch(e => message(e.message));
   });
