@@ -20,6 +20,10 @@ let delayPassword = false;
 let failNext = false;
 let expiredSession = false;
 const queries = [];
+const details = [];
+let failDetail = false;
+let identityRequests = 0;
+let serviceRequests = 0;
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
   const send = (body, status = 200) => { response.writeHead(status, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); };
@@ -30,6 +34,14 @@ const server = createServer(async (request, response) => {
     if (failNext) { failNext = false; return send({ error: "一時的に確認できません" }, 503); }
     return send(await fixture.query(url.search.slice(1)));
   }
+  if (url.pathname.startsWith("/security/api/audit/")) {
+    details.push(url.pathname);
+    if (failDetail) { failDetail = false; return send({ error: "詳細を一時的に確認できません" }, 503); }
+    try { return send(await fixture.detail(decodeURIComponent(url.pathname.split("/").at(-1)))); }
+    catch (error) { return send({ error: error.message }, error.status || 500); }
+  }
+  if (url.pathname === "/security/api/identities") identityRequests++;
+  if (url.pathname === "/security/api/services") serviceRequests++;
   if (url.pathname === "/security/api/identities" && url.searchParams.get("includeDisabled") === "true") {
     return send({ auditIdentities: [{ id: "retired-user", displayName: "田中宏知", status: "disabled" }] });
   }
@@ -63,24 +75,67 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, timezoneId: "America/Los_Angeles" });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/security/`);
+  await page.waitForFunction(() => document.querySelector("#dashboard-panel").getAttribute("aria-busy") === "false");
+  assert.deepEqual([queries.length, details.length, identityRequests, serviceRequests], [0, 0, 0, 0]);
   await page.getByRole("button", { name: "履歴", exact: true }).click();
   assert.equal(await page.locator("#users-panel").isVisible(), false);
   assert.equal(await page.locator("#dashboard-panel").isVisible(), false);
   const settle = () => page.waitForFunction(() => document.querySelector("#audit-list").getAttribute("aria-busy") === "false");
   const choose = async (view) => { await page.locator(`[data-audit-view="${view}"]`).click(); await settle(); };
   await settle();
+  assert.equal(await page.evaluate(() => !document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), false, "disabled previous-page navigation cannot block automatic updates forever");
+  assert.equal(await page.evaluate(() => {
+    const action = document.querySelector("#add-link");
+    action.disabled = true;
+    const deferred = !document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }));
+    action.disabled = false;
+    return deferred;
+  }), true, "pending management actions still defer automatic updates");
   assert.equal(await page.locator("#audit-search").getAttribute("open"), null);
+  assert.equal(identityRequests, 0, "summary names are independent of the user list");
+  assert.equal(await page.locator("#audit-from").inputValue(), "");
+  assert.equal(await page.locator("#audit-to").inputValue(), "");
   await choose("password");
-  assert.equal(await page.locator(".audit-row").count(), 100);
+  assert.equal(await page.locator(".audit-row").count(), 30);
+  assert.ok(queries.every(query => new URLSearchParams(query).get("summary") === "true"));
   assert.doesNotMatch(await page.locator("#audit-list").innerText(), /保存済みセッション|パスキー認証を開始/);
   const summary = await page.locator(".audit-summary").first().innerText();
   for (const value of ["2026/9/8 22:14", "副管理者", "T-Cloud", "ID・パスワード", "成功", "Windows / Chrome"]) assert.ok(summary.includes(value), value);
   assert.equal(await page.locator(".audit-detail").first().isVisible(), false);
+  assert.equal(await page.locator(".audit-detail").first().textContent(), "");
+  assert.equal(details.length, 0, "collapsed detail does not fetch or render its payload");
+  failDetail = true;
   await page.locator(".audit-summary").first().click();
+  await page.locator("[data-audit-detail-retry]").click();
+  await page.locator('.audit-row[data-loaded="true"]').first().waitFor();
   assert.match(await page.locator(".audit-detail").first().innerText(), /2026\/9\/8 22:14:00（日本時間）/);
   assert.match(await page.locator(".audit-detail").first().innerText(), /Identity ID[\s\S]*test-user[\s\S]*サービス内ID[\s\S]*subadmin[\s\S]*role[\s\S]*User-Agent/);
+  const firstId = await page.locator(".audit-row").first().getAttribute("data-audit-id");
+  await page.locator("#audit-load-more").scrollIntoViewIfNeeded();
+  const position = await page.evaluate(() => {
+    const anchor = [...document.querySelectorAll(".audit-row")].find(row => row.getBoundingClientRect().bottom > 0);
+    return { id: anchor.dataset.auditId, offset: anchor.getBoundingClientRect().top };
+  });
   await page.locator("#audit-load-more").click(); await settle();
-  assert.equal(await page.locator(".audit-row").count(), 105);
+  assert.equal(await page.locator(".audit-row").count(), 30, "next page replaces the previous DOM");
+  assert.notEqual(await page.locator(".audit-row").first().getAttribute("data-audit-id"), firstId);
+  await page.locator("#audit-previous").click(); await settle();
+  assert.equal(await page.locator(".audit-row").first().getAttribute("open"), "");
+  assert.equal(await page.locator(".audit-row").first().getAttribute("data-loaded"), "true");
+  assert.ok(Math.abs(await page.locator(`[data-audit-id="${position.id}"]`).evaluate(row => row.getBoundingClientRect().top) - position.offset) <= 3, "previous page restores the stable row anchor");
+  const readCounts = [queries.length, details.length];
+  await page.getByRole("button", { name: "概要", exact: true }).click();
+  await page.getByRole("button", { name: "履歴", exact: true }).click();
+  assert.deepEqual([queries.length, details.length], readCounts, "tabs retain history without refetching");
+  const ids = [];
+  for (let index = 0; index < 4; index++) {
+    ids.push(...await page.locator(".audit-row").evaluateAll(rows => rows.map(row => row.dataset.auditId)));
+    if (!await page.locator("#audit-load-more").isVisible()) break;
+    await page.locator("#audit-load-more").click(); await settle();
+  }
+  assert.equal(ids.length, 105);
+  assert.equal(new Set(ids).size, 105);
+  assert.equal(await page.locator(".audit-row").count(), 15);
   assert.equal(await page.locator("#audit-load-more").isVisible(), false);
   await choose("passkey");
   assert.equal(await page.locator(".audit-row").count(), 2);
@@ -96,6 +151,7 @@ try {
   await choose("all");
   assert.equal(await page.locator(".audit-row").count(), 1, "preset intersects advanced filter");
   await page.locator(".audit-summary").click();
+  await page.locator('.audit-row[data-loaded="true"]').waitFor();
   assert.equal(await page.locator("#xss-marker").count(), 0);
   assert.match(await page.locator(".audit-detail").innerText(), /<img id=xss-marker/);
   await page.locator("#audit-search > summary").click();
@@ -122,7 +178,9 @@ try {
   assert.doesNotMatch(await page.locator("#identity-list").innerText(), /田中宏知/);
   assert.equal(await page.locator("#audit-include-disabled").isChecked(), false);
   assert.equal(await page.locator('#audit-identity option[value="retired-user"]').count(), 0);
-  await page.locator("#audit-load-more").click(); await settle();
+  while (await page.locator("#audit-load-more").isVisible()) {
+    await page.locator("#audit-load-more").click(); await settle();
+  }
   assert.match(await page.locator("#audit-list").innerText(), /田中宏知/);
   await page.locator("#audit-include-disabled").check();
   await page.waitForFunction(() => !!document.querySelector('#audit-identity option[value="retired-user"]'));
@@ -157,13 +215,21 @@ try {
   await page.screenshot({ path: process.env.AUDIT_SCREENSHOT || "../tmp/security-audit-desktop.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: process.env.AUDIT_MOBILE_SCREENSHOT || "../tmp/security-audit-mobile.png" });
+  await page.locator(".audit-summary").first().click();
+  await page.locator('.audit-row[data-loaded="true"]').first().waitFor();
+  await page.locator("#audit-load-more").click(); await settle();
+  await page.locator("#audit-previous").click(); await settle();
+  assert.equal(await page.locator(".audit-row").count(), 30);
+  assert.equal(await page.locator(".audit-row").first().getAttribute("open"), "", "mobile previous page restores expanded details");
   expiredSession = true;
   await page.locator("#audit-refresh").click();
   await page.locator("#admin-login-view").waitFor({ state: "visible" });
   assert.equal(await page.locator("#admin-view").isVisible(), false);
+  assert.equal(await page.locator(".audit-row").count(), 0, "session expiry clears cached audit data");
+  assert.equal(await page.locator("#audit-identity option").count(), 1);
   assert.match(await page.locator("#message").innerText(), /有効期限|ログイン/);
   assert.deepEqual(errors, []);
-  console.log("Audit UI passed: all presets, details/XSS, filters, paging, races, retry, JST, desktop/mobile and CSP.");
+  console.log("Audit UI passed: lazy thirty-row pages/details, previous/tab restoration, presets, filters, races, retry, JST, desktop/mobile and session expiry.");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));

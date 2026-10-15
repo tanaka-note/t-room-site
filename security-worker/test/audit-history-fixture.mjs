@@ -1,5 +1,5 @@
 import { auditDisplayNames } from "../../assets/account-display.mjs";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import * as domain from "../src/security-domain.js";
 
@@ -13,20 +13,21 @@ const dependencies = {
   json: (body) => Response.json(body),
   withUtcTimes: (row) => ({ ...row, occurred_at: domain.normalizeUtcTimestamp(row.occurred_at) })
 };
-const handler = new Function(...Object.keys(dependencies), `${source}; return listAuditEvents;`)(...Object.values(dependencies));
+const handlers = new Function(...Object.keys(dependencies), `${source}; return { listAuditEvents, auditEventDetail };`)(...Object.values(dependencies));
 
-export function auditFixture() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(`CREATE TABLE security_identities (id TEXT PRIMARY KEY, display_name TEXT);
-    INSERT INTO security_identities VALUES ('test-user', '副管理者'), ('retired-user', '田中宏知')`);
-  db.exec(`CREATE TABLE security_audit_events (
-    event_id TEXT PRIMARY KEY, occurred_at TEXT, event_type TEXT, service TEXT,
-    outcome TEXT, auth_method TEXT, identity_id TEXT, service_account_id TEXT,
-    service_account_label TEXT, role TEXT, user_agent TEXT, details_json TEXT
-  )`);
+export function auditFixture({ databasePath = ":memory:" } = {}) {
+  const db = new DatabaseSync(databasePath);
+  const migrations = new URL("../migrations/", import.meta.url);
+  for (const file of readdirSync(migrations).filter((file) => file.endsWith(".sql")).sort()) db.exec(readFileSync(new URL(file, migrations), "utf8"));
+  db.exec(`INSERT INTO security_identities(id, display_name) VALUES ('test-user', '副管理者'), ('retired-user', '田中宏知')`);
   let sequence = 0;
-  const env = { DB: { prepare: (sql) => ({ bind: (...values) => ({ all: async () => ({ results: db.prepare(sql).all(...values) }) }) }) } };
+  const queries = [];
+  const env = { DB: { prepare: (sql) => ({ bind: (...values) => ({
+    all: async () => { queries.push({ sql, values }); return { results: db.prepare(sql).all(...values) }; },
+    first: async () => { queries.push({ sql, values }); return db.prepare(sql).get(...values) || null; }
+  }) }) } };
   return {
+    db, queries,
     close: () => db.close(),
     add(event = {}) {
       const row = {
@@ -38,6 +39,7 @@ export function auditFixture() {
       db.prepare(`INSERT INTO security_audit_events (${Object.keys(row).join(",")}) VALUES (${Object.keys(row).map(() => "?").join(",")})`).run(...Object.values(row));
       return row.event_id;
     },
-    async query(search = "") { return (await handler(new URL(`https://example.test/security/api/audit?${search}`), env)).json(); }
+    async query(search = "") { return (await handlers.listAuditEvents(new URL(`https://example.test/security/api/audit?${search}`), env)).json(); },
+    async detail(id) { return (await handlers.auditEventDetail(env, id)).json(); }
   };
 }

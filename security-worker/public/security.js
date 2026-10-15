@@ -17,6 +17,7 @@
     $("#admin-view").hidden = true;
     $("#admin-login-view").hidden = false;
     for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+    resetAdminReads();
     showMessage("ログインの有効期限が切れました。パスキーでログインしてください。", true);
   }
   window.addEventListener("troom-session-renewed", event => observeSessionExpiry(event.detail.expiresAt));
@@ -28,7 +29,10 @@
     pendingInviteCloud: null, pendingPrimarySetup: null, inviteFlow: false, inviteRegistrationPending: false, identityNames: new Map(),
     currentIdentities: [], auditIdentities: [], auditIdentitiesRequest: 0,
     auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: [],
-    servicesPromise: null, dashboardLoading: false, dashboardLoaded: false, dashboardRequest: 0
+    servicesPromise: null, dashboardLoading: false, dashboardLoaded: false, dashboardRequest: 0,
+    readGeneration: 0, usersLoaded: false, identitiesPromise: null, identitiesRequest: 0,
+    auditLoaded: false, auditPage: 0, auditCursors: [null], auditPositions: [], auditDetails: new WeakMap(),
+    activePanel: "dashboard-panel", panelScroll: new Map()
   };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -55,7 +59,8 @@
       if (event.persisted && state.inviteFlow && !state.inviteRegistrationPending) routeStatus();
     });
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (document.querySelector("button:disabled")) event.preventDefault();
+      // An unavailable read-only page is not an in-progress management action.
+      if (document.querySelector("button:disabled:not(#audit-previous):not(#audit-load-more)")) event.preventDefault();
     });
     $("#bootstrap-form").addEventListener("submit", bootstrap);
     $("#admin-passkey-login").addEventListener("click", adminLogin);
@@ -102,10 +107,21 @@
       event.preventDefault();
       const button = event.submitter;
       if (button) button.disabled = true;
-      try { await loadAudit({ append: false }); } catch (error) { showMessage(error.message, true); }
+      try { await loadAudit(); } catch (error) { showMessage(error.message, true); }
       finally { if (button) button.disabled = false; }
     });
-    $("#audit-load-more").addEventListener("click", () => loadAudit({ append: true }).catch((error) => showMessage(error.message, true)));
+    $("#audit-load-more").addEventListener("click", () => loadAudit({ page: state.auditPage + 1 }));
+    $("#audit-previous").addEventListener("click", () => loadAudit({ page: state.auditPage - 1 }));
+    $("#audit-search").addEventListener("toggle", () => {
+      if ($("#audit-search").open) ensureIdentities().catch((error) => showMessage(error.message, true));
+    });
+    $("#audit-list").addEventListener("toggle", (event) => {
+      if (event.target.matches(".audit-row") && event.target.open) loadAuditDetail(event.target);
+    }, true);
+    $("#audit-list").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-audit-detail-retry]");
+      if (button) loadAuditDetail(button.closest(".audit-row"));
+    });
     document.querySelectorAll("[data-audit-view]").forEach((button) => button.addEventListener("click", () => {
       state.auditView = button.dataset.auditView;
       document.querySelectorAll("[data-audit-view]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
@@ -150,14 +166,17 @@
     $("#audit-refresh").addEventListener("click", async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
-      try { await loadAudit({ append: false }); } catch (error) { showMessage(error.message, true); }
+      try { await loadAudit(); } catch (error) { showMessage(error.message, true); }
       finally { button.disabled = false; }
     });
     document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => {
-      showPanel(button.dataset.panel, button);
+      showPanel(button.dataset.panel, button, { restore: true });
       if (button.dataset.panel === "dashboard-panel" && !state.dashboardLoaded && !state.dashboardLoading) loadDashboard().catch(() => {});
-      if (button.dataset.panel === "users-panel") prepareServiceLinks().catch((error) => showMessage(error.message, true));
-      if (button.dataset.panel === "audit-panel") loadAudit({ append: false }).catch((error) => showMessage(error.message, true));
+      if (button.dataset.panel === "users-panel") {
+        ensureIdentities().catch((error) => showMessage(error.message, true));
+        prepareServiceLinks().catch((error) => showMessage(error.message, true));
+      }
+      if (button.dataset.panel === "audit-panel" && !state.auditLoaded && !state.auditLoading) loadAudit();
       if (button.dataset.panel === "ai-panel") loadAiBudgets().catch((error) => showMessage(error.message, true));
     }));
     populateAuditEventFilter();
@@ -432,34 +451,43 @@
   }
 
   async function showAdmin(setup = null) {
+    resetAdminReads();
     $("#bootstrap-view").hidden = true;
     $("#admin-login-view").hidden = true;
     $("#admin-view").hidden = false;
     if (setup) renderPrimarySetupNotice(setup);
-    // Overview, users, link targets and audit must not block one another's first paint.
+    showPanel("dashboard-panel", document.querySelector('[data-panel="dashboard-panel"]'));
+    // Other tabs do no work until selected. Setup/credential readiness remains required.
+    const generation = state.readGeneration;
     const results = await Promise.allSettled([
       loadDashboard(),
-      prepareServiceLinks({ refresh: true }),
-      loadIdentities(),
-      loadAudit({ append: false }),
-      setup ? Promise.resolve() : get("/setup/status").then(renderPrimarySetupNotice)
+      setup ? Promise.resolve() : get("/setup/status").then((data) => {
+        if (generation === state.readGeneration) renderPrimarySetupNotice(data);
+      })
     ]);
     for (const result of results.slice(1)) if (result.status === "rejected") showMessage(result.reason.message, true);
   }
 
   async function loadServices({ refresh = false } = {}) {
     if (!refresh && state.services.length) return state.services;
-    if (!state.servicesPromise) state.servicesPromise = get("/services").then((data) => {
-      const services = Array.isArray(data.services) ? data.services : [];
-      if (!services.length) throw new Error("サービス連携候補を取得できません。");
-      state.services = services;
-      return services;
-    }).finally(() => { state.servicesPromise = null; });
+    const generation = state.readGeneration;
+    if (!state.servicesPromise) {
+      const promise = get("/services").then((data) => {
+        if (generation !== state.readGeneration) return [];
+        const services = Array.isArray(data.services) ? data.services : [];
+        if (!services.length) throw new Error("サービス連携候補を取得できません。");
+        state.services = services;
+        return services;
+      }).finally(() => { if (state.servicesPromise === promise) state.servicesPromise = null; });
+      state.servicesPromise = promise;
+    }
     return state.servicesPromise;
   }
 
   async function prepareServiceLinks(options) {
+    const generation = state.readGeneration;
     await loadServices(options);
+    if (generation !== state.readGeneration) return;
     if (!$("#link-rows .link-row")) addLinkRow();
   }
 
@@ -549,7 +577,11 @@
   }
 
   async function loadIdentities() {
+    const requestId = ++state.identitiesRequest;
+    if (!state.usersLoaded) $("#identity-list").innerHTML = '<p role="status">ユーザーを読み込んでいます…</p>';
     const data = await get("/identities");
+    if (requestId !== state.identitiesRequest) return;
+    state.usersLoaded = true;
     const currentIdentities = (Array.isArray(data.identities) ? data.identities : []).filter((identity) => identity.status !== "disabled");
     const pendingIdentities = (Array.isArray(data.pendingIdentities) ? data.pendingIdentities : []).filter((identity) => identity.status !== "disabled");
     state.currentIdentities = [...currentIdentities, ...pendingIdentities];
@@ -564,6 +596,15 @@
       try { await viewIdentity(button.dataset.viewIdentity); } catch (error) { showMessage(error.message, true); }
       finally { button.disabled = false; }
     }));
+  }
+
+  function ensureIdentities() {
+    if (state.usersLoaded) return Promise.resolve();
+    if (!state.identitiesPromise) {
+      const promise = loadIdentities().finally(() => { if (state.identitiesPromise === promise) state.identitiesPromise = null; });
+      state.identitiesPromise = promise;
+    }
+    return state.identitiesPromise;
   }
 
   async function viewIdentity(id) {
@@ -873,36 +914,55 @@
     await TRoomPasskeys.authenticate("security");
   }
 
-  async function loadAudit({ append = false } = {}) {
-    if (append && (state.auditLoading || !state.auditCursor)) return;
+  async function loadAudit({ page = null } = {}) {
+    const paging = Number.isInteger(page);
+    if (paging && (state.auditLoading || page < 0 || page >= state.auditCursors.length)) return;
+    if (paging) saveAuditPosition();
+    const pageIndex = paging ? page : 0;
+    const position = paging ? state.auditPositions[pageIndex] : null;
+    const params = paging ? new URLSearchParams(state.auditQuery) : currentAuditQuery();
+    if (paging && state.auditCursors[pageIndex]) params.set("cursor", state.auditCursors[pageIndex]);
+    if (!paging) {
+      state.auditCursors = [null];
+      state.auditPositions = [];
+      state.auditPage = 0;
+      state.auditCursor = null;
+      state.auditLoaded = false;
+      $("#audit-list").replaceChildren();
+      const filterCount = [...params.keys()].filter((key) => !["view", "summary"].includes(key)).length;
+      $("#audit-filter-status").textContent = filterCount ? `（${filterCount}件の条件で絞り込み中）` : "";
+    }
     const requestId = ++state.auditRequest;
     state.auditLoading = true;
     $("#audit-list").setAttribute("aria-busy", "true");
     $("#audit-status").textContent = "履歴を読み込んでいます…";
     const more = $("#audit-load-more");
     more.disabled = true;
-    const params = append ? new URLSearchParams(state.auditQuery) : currentAuditQuery();
-    if (append) params.set("cursor", state.auditCursor);
-    else {
-      state.auditCursor = null;
-      more.hidden = true;
-      $("#audit-list").replaceChildren();
-      const filterCount = [...params.keys()].filter((key) => key !== "view").length;
-      $("#audit-filter-status").textContent = filterCount ? `（${filterCount}件の条件で絞り込み中）` : "";
-    }
+    $("#audit-previous").disabled = true;
     try {
       const data = await get(`/audit?${params}`);
       if (requestId !== state.auditRequest) return;
-      const html = data.events.map(renderAuditEvent).join("");
-      if (append) {
-        if (html) $("#audit-list").insertAdjacentHTML("beforeend", html);
-      } else {
-        $("#audit-list").innerHTML = html || "<p>該当する履歴はありません。</p>";
-      }
-      if (!append) state.auditQuery = params.toString();
+      $("#audit-list").innerHTML = data.events.map(renderAuditEvent).join("") || "<p>該当する履歴はありません。</p>";
+      params.delete("cursor");
+      state.auditQuery = params.toString();
+      state.auditLoaded = true;
+      state.auditPage = pageIndex;
       state.auditCursor = data.nextCursor || null;
+      state.auditCursors.length = pageIndex + 1;
+      if (state.auditCursor) state.auditCursors.push(state.auditCursor);
       more.hidden = !state.auditCursor;
-      $("#audit-status").textContent = `${$("#audit-list").querySelectorAll(".audit-row").length}件を表示${state.auditCursor ? "・続きがあります" : ""}`;
+      $("#audit-status").textContent = `第${pageIndex + 1}ページ・${data.events.length}件を表示${state.auditCursor ? "・続きがあります" : ""}`;
+      if (position) {
+        const rows = [...$("#audit-list").querySelectorAll(".audit-row")];
+        await Promise.all(rows.filter((row) => position.open.includes(row.dataset.auditId)).map((row) => {
+          row.open = true;
+          return loadAuditDetail(row);
+        }));
+        if (requestId === state.auditRequest && state.activePanel === "audit-panel") {
+          const anchor = rows.find((row) => row.dataset.auditId === position.id);
+          window.scrollTo(0, anchor ? window.scrollY + anchor.getBoundingClientRect().top - position.offset : position.y);
+        }
+      } else if (paging && state.activePanel === "audit-panel") $("#audit-list").scrollIntoView({ block: "start" });
     } catch (error) {
       if (requestId !== state.auditRequest) return;
       $("#audit-status").textContent = "履歴を読み込めませんでした。「最新に更新」で再試行してください。";
@@ -910,14 +970,42 @@
       if (requestId === state.auditRequest) {
         state.auditLoading = false;
         more.disabled = false;
+        $("#audit-previous").disabled = state.auditPage === 0;
         $("#audit-list").setAttribute("aria-busy", "false");
       }
     }
   }
 
+  function saveAuditPosition() {
+    const rows = [...$("#audit-list").querySelectorAll(".audit-row")];
+    const anchor = rows.find((row) => row.getBoundingClientRect().bottom > 0);
+    state.auditPositions[state.auditPage] = { id: anchor?.dataset.auditId, offset: anchor?.getBoundingClientRect().top || 0,
+      y: window.scrollY, open: rows.filter((row) => row.open).map((row) => row.dataset.auditId) };
+  }
+
+  function loadAuditDetail(row) {
+    if (row.dataset.loaded === "true") return Promise.resolve();
+    if (state.auditDetails.has(row)) return state.auditDetails.get(row);
+    const body = row.querySelector(".audit-detail");
+    body.innerHTML = '<p role="status">詳細を読み込んでいます…</p>';
+    const promise = (async () => {
+      try {
+        const data = await get(`/audit/${encodeURIComponent(row.dataset.auditId)}`);
+        if (!row.isConnected) return;
+        body.innerHTML = renderAuditDetail(data.event);
+        row.dataset.loaded = "true";
+      } catch (error) {
+        if (row.isConnected) body.innerHTML = `<p role="alert">${escapeHtml(error.message)}</p><button class="secondary" type="button" data-audit-detail-retry>再試行</button>`;
+      } finally { state.auditDetails.delete(row); }
+    })();
+    state.auditDetails.set(row, promise);
+    return promise;
+  }
+
   function currentAuditQuery() {
     const params = new URLSearchParams();
     params.set("view", state.auditView);
+    params.set("summary", "true");
     [["identityId", "#audit-identity"], ["service", "#audit-service"], ["authMethod", "#audit-auth"], ["outcome", "#audit-outcome"], ["eventType", "#audit-event"], ["from", "#audit-from"], ["to", "#audit-to"]].forEach(([key, selector]) => {
       const value = $(selector).value;
       if (value) params.set(key, value);
@@ -969,19 +1057,11 @@
     // Password audit attribution describes a service account, not necessarily a
     // verified person. Prefer its saved label when Identity linkage is absent.
     const user = event.actor_display_name || (identityId === "primary-admin" ? "田中宏知" : identityName ? actor : event.service_account_label || actor);
-    const fields = [
-      ["Identity ID", identityId], ["サービス内ID", serviceAccountId],
-      ["サービス内の表示名", event.account_display_name || event.service_account_label], ["role", event.role],
-      ["イベントID", event.event_id], ["操作内容", event.event_type],
-      ["サービス連携ID", event.service_link_id], ["セッションハッシュ", event.session_id_hash],
-      ["接続元ハッシュ", event.source_hash], ["対象種別", event.target_type],
-      ["対象ID", event.target_id], ["その他の監査情報", event.details_json]
-    ].filter(([, value]) => value != null && value !== "");
     const method = event.auth_method === "password" ? "ID・パスワード" : display.authMethodLabel(event.auth_method);
     const date = event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", {
       timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"
     }) : "日時不明";
-    return `<details class="audit-row audit-${outcomeClass}">
+    return `<details class="audit-row audit-${outcomeClass}" data-audit-id="${escapeHtml(event.event_id)}">
       <summary class="audit-summary">
         <time datetime="${escapeHtml(event.occurred_at || "")}">${escapeHtml(date)}</time>
         <strong>${escapeHtml(user)}</strong>
@@ -991,13 +1071,21 @@
         <span class="audit-device">${escapeHtml(display.formatUserAgent(userAgent))}</span>
         <span class="audit-operation">${escapeHtml(display.eventLabel(event.event_type))}</span>
       </summary>
-      <div class="audit-detail">
-        <p>${escapeHtml(event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "日時不明")}（日本時間）</p>
-        <dl>${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</dd></div>`).join("")}
-          <div><dt>User-Agent</dt><dd>${escapeHtml(userAgent) || "記録なし"}</dd></div>
-        </dl>
-      </div>
+      <div class="audit-detail"></div>
     </details>`;
+  }
+
+  function renderAuditDetail(event) {
+    const fields = [
+      ["Identity ID", event.identity_id], ["サービス内ID", event.service_account_id],
+      ["サービス内の表示名", event.account_display_name || event.service_account_label], ["role", event.role],
+      ["イベントID", event.event_id], ["操作内容", event.event_type],
+      ["サービス連携ID", event.service_link_id], ["セッションハッシュ", event.session_id_hash],
+      ["接続元ハッシュ", event.source_hash], ["対象種別", event.target_type],
+      ["対象ID", event.target_id], ["その他の監査情報", event.details_json], ["User-Agent", event.user_agent || "記録なし"]
+    ].filter(([, value]) => value != null && value !== "");
+    return `<p>${escapeHtml(event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "日時不明")}（日本時間）</p>
+      <dl>${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</dd></div>`).join("")}</dl>`;
   }
 
   function renderInvitationResult(container, result) {
@@ -1025,7 +1113,34 @@
     try { await post("/logout", {}); location.reload(); }
     catch (error) { showMessage(error.message, true); button.disabled = false; }
   }
-  function showPanel(id, button) { document.querySelectorAll(".panel").forEach((panel) => { panel.hidden = panel.id !== id; }); document.querySelectorAll("[data-panel]").forEach((item) => item.classList.toggle("active", item === button)); }
+  function showPanel(id, button, { restore = false } = {}) {
+    state.panelScroll.set(state.activePanel, window.scrollY);
+    state.activePanel = id;
+    document.querySelectorAll(".panel").forEach((panel) => { panel.hidden = panel.id !== id; });
+    document.querySelectorAll("[data-panel]").forEach((item) => item.classList.toggle("active", item === button));
+    if (restore) requestAnimationFrame(() => { if (state.activePanel === id) window.scrollTo(0, state.panelScroll.get(id) || 0); });
+  }
+
+  function resetAdminReads() {
+    state.readGeneration++;
+    state.identitiesRequest++;
+    state.auditIdentitiesRequest++;
+    state.auditRequest++;
+    state.dashboardRequest++;
+    Object.assign(state, { usersLoaded: false, identitiesPromise: null, services: [], servicesPromise: null,
+      currentIdentities: [], auditIdentities: [], identityNames: new Map(), selectedIdentity: null,
+      auditLoaded: false, auditLoading: false, auditCursor: null, auditQuery: "", auditPage: 0,
+      auditCursors: [null], auditPositions: [], auditDetails: new WeakMap(),
+      dashboardLoaded: false, dashboardLoading: false, panelScroll: new Map() });
+    for (const selector of ["#identity-list", "#identity-detail", "#audit-list", "#link-rows", "#ai-budget-list", "#dashboard-panel"])
+      $(selector).replaceChildren();
+    $("#identity-detail").hidden = true;
+    $("#audit-filter").reset();
+    populateAuditIdentityFilter([]);
+    $("#audit-status").textContent = "";
+    $("#audit-load-more").hidden = true;
+    $("#audit-previous").disabled = true;
+  }
   function showMessage(text, error = false) {
     const box = $("#message");
     box.hidden = false;

@@ -16,7 +16,7 @@ import {
 import { secure } from "./security-headers.js";
 import {
   AUDIT_PAGE_SIZE,
-  LOGIN_FAILURE_EVENTS,
+  AUDIT_SUMMARY_PAGE_SIZE,
   LOGIN_SUCCESS_EVENTS,
   auditRetentionCutoff,
   auditViewFilter,
@@ -245,6 +245,13 @@ async function handleApi(request, env, url, path, context = null) {
     return createIdentityAndInvite(request, env, admin);
   }
   if (path === "/api/audit" && request.method === "GET") return listAuditEvents(url, env);
+  const auditDetailMatch = path.match(/^\/api\/audit\/([^/]+)$/);
+  if (auditDetailMatch && request.method === "GET") {
+    let id;
+    try { id = decodeURIComponent(auditDetailMatch[1]); } catch { throw new HttpError(400, "履歴IDを確認してください。"); }
+    if (!id || normalizeText(id, 128) !== id) throw new HttpError(400, "履歴IDを確認してください。");
+    return auditEventDetail(env, id);
+  }
   if (path === "/api/ai/budgets" && request.method === "GET") return listAiBudgets(env);
   const aiBudgetMatch = path.match(/^\/api\/ai\/budgets\/([A-Za-z0-9_-]{1,64})$/);
   if (aiBudgetMatch && request.method === "POST") {
@@ -773,17 +780,12 @@ async function saveOwnTCloudEnvelope(request, env) {
 
 async function dashboard(env) {
   const today = currentJstDayBounds();
-  const successPlaceholders = LOGIN_SUCCESS_EVENTS.map(() => "?").join(", ");
-  const failurePlaceholders = LOGIN_FAILURE_EVENTS.map(() => "?").join(", ");
   const [counts, identityCounts, sessionState, clamavDefinitions] = await Promise.all([
     env.DB.prepare(`SELECT
-    SUM(CASE WHEN outcome = 'success' AND event_type IN (${successPlaceholders}) THEN 1 ELSE 0 END) AS loginSuccess,
-    SUM(CASE WHEN outcome = 'failure' AND event_type IN (${failurePlaceholders}) THEN 1 ELSE 0 END) AS loginFailure,
-    SUM(CASE WHEN outcome = 'blocked' THEN 1 ELSE 0 END) AS lockouts,
-    SUM(CASE WHEN event_type = 'session_resume' THEN 1 ELSE 0 END) AS sessionResume,
-    SUM(CASE WHEN event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END) AS critical
-    FROM security_audit_events WHERE occurred_at >= ? AND occurred_at < ?`)
-      .bind(...LOGIN_SUCCESS_EVENTS, ...LOGIN_FAILURE_EVENTS, today.start, today.end).first(),
+    login_success AS loginSuccess, login_failure AS loginFailure, lockouts,
+    session_resume AS sessionResume, critical
+    FROM security_audit_daily WHERE day = date(?, '+9 hours')`)
+      .bind(today.start).first(),
     env.DB.prepare(`SELECT
     SUM(CASE WHEN EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'pending') THEN 1 ELSE 0 END) AS pendingApproval,
     SUM(CASE WHEN status = 'invited' THEN 1 ELSE 0 END) AS invited,
@@ -1335,6 +1337,8 @@ function retireUnregisteredInvitedIdentityIfOrphaned(env, identityId, invitation
 }
 
 async function listAuditEvents(url, env) {
+  const summary = url.searchParams.get("summary") === "true";
+  const pageSize = summary ? AUDIT_SUMMARY_PAGE_SIZE : AUDIT_PAGE_SIZE;
   const clauses = ["1 = 1"];
   const values = [];
   let view;
@@ -1360,22 +1364,33 @@ async function listAuditEvents(url, env) {
     let cursor;
     try { cursor = decodeAuditCursor(rawCursor); }
     catch { throw new HttpError(400, "監査履歴のcursorが不正です。"); }
-    clauses.push("(occurred_at < ? OR (occurred_at = ? AND event_id > ?))");
-    values.push(cursor.occurredAt, cursor.occurredAt, cursor.eventId);
+    clauses.push("occurred_at <= ? AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?))");
+    values.push(cursor.occurredAt, cursor.occurredAt, cursor.occurredAt, cursor.eventId);
   }
-  const result = await env.DB.prepare(`SELECT *,
+  const columns = summary
+    ? "event_id, occurred_at, event_type, service, outcome, auth_method, identity_id, service_account_id, service_account_label, role, user_agent"
+    : "*";
+  const result = await env.DB.prepare(`SELECT ${columns},
       (SELECT display_name FROM security_identities WHERE id = security_audit_events.identity_id) AS identity_display_name
     FROM security_audit_events
     WHERE ${clauses.join(" AND ")}
     ORDER BY occurred_at DESC, event_id ASC LIMIT ?`)
-    .bind(...values, AUDIT_PAGE_SIZE + 1).all();
+    .bind(...values, pageSize + 1).all();
   const rows = result.results || [];
-  const hasMore = rows.length > AUDIT_PAGE_SIZE;
-  const page = rows.slice(0, AUDIT_PAGE_SIZE);
+  const hasMore = rows.length > pageSize;
+  const page = rows.slice(0, pageSize);
   return json({
     events: page.map((row) => ({ ...withUtcTimes(row), ...auditDisplayNames(row) })),
     nextCursor: hasMore && page.length ? encodeAuditCursor(page.at(-1)) : null
   });
+}
+
+async function auditEventDetail(env, id) {
+  const row = await env.DB.prepare(`SELECT *,
+    (SELECT display_name FROM security_identities WHERE id = security_audit_events.identity_id) AS identity_display_name
+    FROM security_audit_events WHERE event_id = ?`).bind(id).first();
+  if (!row) throw new HttpError(404, "この履歴は見つかりません。保持期限を過ぎた可能性があります。");
+  return json({ event: { ...withUtcTimes(row), ...auditDisplayNames(row) } });
 }
 
 async function redeemHandoff(env, token, service) {
@@ -1513,17 +1528,46 @@ async function cloudPasskeySession(env, input) {
 }
 
 async function passkeyRollingSession(env, input) {
+  let sessionRow;
   return trackedPasskeySession(env, input, async (claims) => {
     if (claims.service !== "security") return (await validatePasskeySession(env, claims)).valid === true;
-    const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
-    if (!runtime.enabled || runtime.epoch !== claims.sessionEpoch || !["identity", "security-admin"].includes(claims.role)
+    if (!["identity", "security-admin"].includes(claims.role)
       || claims.serviceAccountId !== claims.role || claims.serviceLinkId != null) return false;
-    const row = await env.DB.prepare(`SELECT i.status, i.is_security_admin, c.status AS credential_status
-      FROM security_identities i JOIN security_credentials c ON c.identity_id = i.id
-      WHERE i.id = ? AND c.credential_id = ?`).bind(claims.identityId, claims.credentialId).first();
+    let runtime, row;
+    if (["read", "touch"].includes(claims.action)) {
+      if (!passkeysEnabled(env)) {
+        await observePasskeyRuntime(env, false);
+        return false;
+      }
+      // One live snapshot per check, never cached across requests or renewal.
+      const readState = () => env.DB.prepare(`SELECT s.*, i.status, i.is_security_admin,
+        c.status AS credential_status, r.passkey_session_epoch AS runtime_epoch,
+        r.switch_observed_enabled AS runtime_enabled
+        FROM security_active_sessions s
+        JOIN security_identities i ON i.id = s.identity_id
+        JOIN security_credentials c ON c.credential_id = s.credential_id AND c.identity_id = i.id
+        LEFT JOIN security_runtime_state r ON r.id = 1
+        WHERE s.session_id_hash = ? AND i.id = ? AND c.credential_id = ?`)
+        .bind(claims.sessionIdHash, claims.identityId, claims.credentialId).first();
+      row = await readState();
+      if (row && row.runtime_epoch == null) {
+        await observePasskeyRuntime(env, true);
+        row = await readState();
+      }
+      runtime = { enabled: Number(row?.runtime_enabled) === 1, epoch: Number(row?.runtime_epoch) };
+      sessionRow = row;
+    } else {
+      runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
+      row = await env.DB.prepare(`SELECT i.status, i.is_security_admin, c.status AS credential_status
+        FROM security_identities i JOIN security_credentials c ON c.identity_id = i.id
+        WHERE i.id = ? AND c.credential_id = ?`).bind(claims.identityId, claims.credentialId).first();
+    }
+    if (!runtime.enabled || runtime.epoch !== claims.sessionEpoch) return false;
     return Boolean(row && row.status !== "disabled" && row.credential_status !== "revoked"
       && (claims.role === "identity" || (row.status === "active" && row.credential_status === "active" && row.is_security_admin)));
-  });
+  }, async (claims) => sessionRow === undefined
+    ? env.DB.prepare("SELECT * FROM security_active_sessions WHERE session_id_hash = ?").bind(claims.sessionIdHash).first()
+    : sessionRow);
 }
 
 async function refreshSecuritySessions(request, response, env, url, path) {
@@ -1951,8 +1995,10 @@ async function signedCookie(env, name, payload, ttl, secureValue) {
 async function readSecuritySession(request, env, name, expectedKind) {
   if (!isValidSessionSecret(env.SESSION_SECRET)) return null;
   try {
-    const runtime = await observePasskeyRuntime(env, passkeysEnabled(env));
-    if (!runtime.enabled) return null;
+    if (!passkeysEnabled(env)) {
+      await observePasskeyRuntime(env, false);
+      return null;
+    }
     const token = parseCookies(request.headers.get("Cookie") || "")[name];
     if (!token) return null;
     const parts = token.split(".");
@@ -1961,10 +2007,15 @@ async function readSecuritySession(request, env, name, expectedKind) {
     if (!payload || !signature || !(await safeEqual(signature, await hmac(payload, env.SESSION_SECRET)))) return null;
     const value = JSON.parse(decoder.decode(base64UrlToBytes(payload)));
     if (!(value.kind === expectedKind && value.authMethod === "passkey" && value.exp > nowSeconds()
-      && Number.isInteger(Number(value.passkeySessionEpoch))
-      && Number(value.passkeySessionEpoch) === runtime.epoch)) return null;
-    if (value.rollingSessionVersion != null && (value.rollingSessionVersion !== ROLLING_SESSION_VERSION
-      || !(await passkeyRollingSession(env, await rollingSessionInput(env, "security", value, "read"))).valid)) return null;
+      && Number.isInteger(Number(value.passkeySessionEpoch)))) return null;
+    if (value.rollingSessionVersion != null) {
+      // Rolling validation includes the live epoch, credential and ledger check.
+      if (value.rollingSessionVersion !== ROLLING_SESSION_VERSION
+        || !(await passkeyRollingSession(env, await rollingSessionInput(env, "security", value, "read"))).valid) return null;
+    } else {
+      const runtime = await observePasskeyRuntime(env, true);
+      if (!(runtime.enabled && Number(value.passkeySessionEpoch) === runtime.epoch)) return null;
+    }
     return value;
   } catch { return null; }
 }
