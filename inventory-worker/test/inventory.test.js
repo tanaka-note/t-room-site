@@ -27,6 +27,7 @@ test('Japan month and year boundaries use occurrence time, including backdated r
   const f = fixture(); try { await f.login(); const { itemId } = await create(f, 30); await record(f, itemId, 'use', 1, '2025-12-31T14:59:59Z'); await record(f, itemId, 'use', 2, '2025-12-31T15:00:00Z'); await record(f, itemId, 'use', 3, '2026-01-31T15:00:00Z');
     assert.equal((await result(f, `/api/items/${itemId}?year=2025`)).annualUsage, 1);
     const value = await result(f, `/api/items/${itemId}?year=2026`); assert.equal(value.annualUsage, 5); assert.equal(value.months[0].used, 2); assert.equal(value.months[1].used, 3);
+    assert.equal(value.months.reduce((sum,month)=>sum+month.used,0),value.annualUsage);
   } finally { f.close(); }
 });
 test('double sends replay one result; changed payloads conflict; failed mutations roll back request and stock', async () => {

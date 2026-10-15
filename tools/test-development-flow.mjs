@@ -45,6 +45,12 @@ test('Inventory changes have an isolated verify and deployment profile', () => {
   assert.ok(commands('inventory').some(c => c.script === 'test'));
   assert.deepEqual(installDirectories(['inventory']), ['.', 'inventory-worker', 'diary-worker']);
 });
+
+test('Inventory WebKit installation and execution are isolated to the Inventory target', () => {
+  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
+  assert.match(workflow, /Install Inventory WebKit only when used\r?\n\s+if: matrix\.target == 'inventory'\r?\n\s+run: pnpm --dir diary-worker exec playwright install --with-deps webkit/);
+  assert.match(workflow, /Inventory WebKit regression\r?\n\s+if: matrix\.target == 'inventory'[\s\S]*?TROOM_BROWSER: webkit[\s\S]*?inventory-worker\/test\/inventory\.browser\.mjs/);
+});
 test('affected mapping is order independent and unknown runtime files are not silently skipped', () => {
   const paths = ['assets/session-policy.mjs', 'assets/pwa-auto-update.js'];
   assert.deepEqual(affected(paths), affected([...paths].reverse()));

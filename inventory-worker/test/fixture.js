@@ -35,5 +35,5 @@ export function fixture() {
   let cookie = '';
   async function request(path, body, headers = {}) { return worker.fetch(new Request(`https://example.test/inventory${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { Origin: 'https://example.test', 'Content-Type': 'application/json', Cookie: cookie, ...headers }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })); }
   async function login() { const response = await request('/api/passkey/handoff', { handoffToken: 'fixture-handoff' }); if (response.status !== 200) throw new Error(`fixture login ${response.status}`); cookie = response.headers.get('Set-Cookie').split(';')[0]; return response; }
-  return { sqlite, env, worker, request, login, get cookie() { return cookie; }, set cookie(v) { cookie = v; }, setActive(v) { active = v; }, close() { sqlite.close(); } };
+  return { sqlite, env, worker, request, login, renewHandoff() { consumed = false; }, get cookie() { return cookie; }, set cookie(v) { cookie = v; }, setActive(v) { active = v; }, close() { sqlite.close(); } };
 }

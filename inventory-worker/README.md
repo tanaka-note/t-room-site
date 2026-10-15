@@ -169,3 +169,94 @@ helperは未設定の場合だけ独立したランダムSESSION_SECRETを設定
 Secret・氏名は出力せず、SQL用のOS一時ファイルを処理後に削除する。
 個人データを入力した設定ファイル・実行履歴をGitへ追加しない。
 通常のコード公開でbootstrapを再実行・Secretをローテーションする必要はない。
+
+## セキュリティ改善レビュー（2026-10-16、Draft・本番未反映）
+
+### P1: 認証handoffのRate Limiting（手動反映待ち）
+
+対象は `POST /inventory/api/passkey/handoff`。Cloudflareのルール本体はこのリポジトリで管理していない。
+監査依頼で示された既存ルール名は **T-lain authentication burst protection**、条件は **20 requests / 10 seconds、10 seconds block**。
+今回の読み取り専用MCPによる `/zones?name=tanaka-note.com` 取得はポリシーで拒否され、現行の式・計数式・除外条件は独立確認できていない。
+書き込み可能な経路へ切り替えず、Cloudflareの設定変更・ルール新規作成・上書きは行わない。
+
+本番担当者は既存ルールをエクスポートし、共通のhost／method／IP除外条件を残して、**現在の認証パスのOR列挙に次の実式を1件追加**する。
+
+```text
+http.request.uri.path eq "/inventory/api/passkey/handoff"
+```
+
+変更後の式の構成は次の通り。`C` は現行の共通条件、`P` は現行の認証パス条件を一文字も変えず保持したもの。
+これは差分の定義であり、`C`・`P`を置換していない文字列をCloudflareへ貼り付けてはいけない。
+
+```text
+変更前: C and (P)
+変更後: C and ((P) or (http.request.uri.path eq "/inventory/api/passkey/handoff"))
+```
+
+現行式が別の形なら、上記へ勝手に正規化せず、同じ共通条件内のパス列挙だけへ追加する。
+計数式がパスを別途列挙している場合も、同じ条件下へ同じ1件を加える。
+しきい値20、期間10秒、block 10秒、計数単位、他のパス、除外、ルール順序は維持する。
+現行式を取得できていないため、**そのまま適用できる完成した全体式は未確定**。現行式と変更後の全体式の差分レビューを本番反映の前提とする。
+反映後はこのパスの通常の一度限りのログインだけを確認し、本番でのburst試験は行わない。
+
+### P2・P3: クライアントの失効・エラー境界
+
+ログアウトと、Content-Typeに関係しない401で、フォーム・一覧・詳細・メモリ上の品目・操作再送情報・スクロール位置・opener参照を解除する。
+フォーム値とdirty／busy状態をリセットし、URLと現在のHistory stateから品目・年・dialog状態を取り除く。
+失効前の通信をabortし、世代番号でも古い応答・描画・finally処理を排除して再ログイン後の画面へ戻さない。
+通常のdialog終了時にも入力と編集対象・opener参照を解除する。認証・Cookie・rolling sessionの仕様は変更しない。
+
+APIはContent-Typeを確認し、JSONでも空・不正な応答は安全な固定メッセージへ変換する。
+429は再試行を案内し、HTML・text/plain・ネットワーク例外・未知のJSONエラー本文を表示しない。
+既存Workerの固定された公開用HttpErrorメッセージだけを許可する。将来そのメッセージを追加する場合は、クライアントの許可リストと境界の契約試験も更新する。
+在庫ロジック、D1スキーマ、requestIdの意味、フォームの数量・日時制約は変更しない。
+
+### P4: Chromium／WebKitの共通fixture
+
+`test/inventory.browser.mjs` は `TROOM_BROWSER=chromium`（既定）と `webkit` の同じ操作をPC・タッチで実行する。
+登録・補充・使用・調整・取消・集計、戻る／進む・位置復元、dialog・Esc・背景タップ・未保存保護、ログアウト／401／再ログイン、XSS、Cookie属性、横スクロールとpage errorを確認する。
+beforeunloadは全ケースでハンドラを確認し、PCでは実際の再読み込みを取り消して入力の保持も確認する。
+タッチ端末のブラウザ終了時にbeforeunloadが必ず発生するとは扱わない。
+パスキーの端末操作だけは合成authenticatorへ差し替え、引換え・署名Cookie・Security台帳はfixtureの実装を通す。
+実機Safari／iOSのWebAuthn・OS終了操作とは区別する。本番データ・本番パスキーをTraceへ渡さない。
+CIでのWebKit導入・追加実行はInventoryターゲットだけに限定する。
+WindowsのPlaywright 1.56.1 WebKitでは、独立した最小Set-CookieサーバーでもStrict CookieがAPI上Noneとなり、cross-siteで送られる挙動を再現した。
+この環境だけSameSiteの実送信試験を明示的にskipし、WorkerのStrictヘッダーとHttpOnly／Pathは確認する。
+Ubuntu CIではskipせず、CookieのStrict属性とcross-site navigationが401となる実挙動を必須にする。Windowsの操作試験だけでSafariのSameSite確認済みとはしない。
+
+```powershell
+node tools/verify.mjs --target inventory --browser --build
+$env:TROOM_BROWSER = 'webkit'
+node inventory-worker/test/inventory.browser.mjs
+Remove-Item Env:TROOM_BROWSER
+```
+
+### P5: Observability（調査済み・無効を維持）
+
+`observability.enabled=false` を維持する。Cloudflareの[Workers Logs仕様](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs)では、
+Invocation LogsにRequest／Responseと関連metadataが入り、FetchのmessageはmethodとURLを含む。
+`logs.invocation_logs=false` でInvocation Logsを停止できるが、console等のログに付く関連metadata・例外の収集まで、必要な固定フィールドだけへ制限できることは確認できていない。
+サンプリングは情報の削除にならない。今回、リクエスト情報・handoff・Cookie・品目・数量等の混入を避ける要件を優先し、有効化しない。
+「Never log exception messages」を維持し、DB例外・レスポンス本文・新しいconsoleログも追加しない。
+
+当面はHTTPステータス／失敗率の集計、既存の固定schemaのSecurity監査、ローカル再現fixtureを調査手段とする。
+将来必要なら、rawなrequest／exception／console本文を保存せず、service・version・固定operation・固定result・timestampだけを投影する経路を別途設計し、metadataを含めて保存前の境界試験を行う。
+本PRはログ用binding・Tail Worker・外部転送先・課金を伴う収集設定を追加しない。
+
+### P6: request recordの長期蓄積（設計と回帰試験のみ）
+
+現時点では**削除しない**。Cron、利用時cleanup、maintenance API、migrationを追加しない。
+requestIdは発行時刻を検証できないUUIDなので、90日を経過した行の削除だけでは、古い同一リクエストが新規操作として再実行される。
+`inventory_movements`にもrequestIdとの永続的な対応はない。movementを残すだけでは重複を検出できない。
+不明な復元条件で削除するより、単一利用者の冪等性を全期間維持する。
+
+`response_json`は現在、品目／movementのID等の小さな操作結果であり、在庫名・履歴一式ではない。
+まずレコード数とDBの保存容量だけを監視し、容量上の必要性が生じた時に次の設計を審査する。
+
+1. `(account_id, request_id)`とfingerprint、同じ結果を返せる最小情報を**無期限のtombstone**として保持する。古いキーを忘れるTTL削除は認めない。
+2. 将来、大きい応答を保存する場合だけpayloadを段階的に圧縮・分離し、tombstoneと対応情報の移行を同一トランザクションで確定する。現行の応答は既に小さいため当面は不要。
+3. maintenanceは通常操作から独立し、失敗しても通常の操作を停止・部分更新しない。直近90日は対象外とし、未来日時／境界／同時再送／変更内容の再送／失敗ロールバックをfixtureで先に試験する。
+4. movementと在庫値は削除・再計算しない。schemaを変える必要がある場合は、別PRで移行・ロールバックを提示する。
+
+今回の回帰試験は古いrequest recordをfixture内で2000年へ遡らせ、同じ内容は同じ結果・在庫不変、異なる内容は409、movement増加なしを確認する。
+未実装のcleanupの成功・失敗を確認済みとは扱わない。

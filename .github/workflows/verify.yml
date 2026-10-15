@@ -67,6 +67,9 @@ jobs:
       - name: Install Chromium only when used
         if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","inventory"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
+      - name: Install Inventory WebKit only when used
+        if: matrix.target == 'inventory'
+        run: pnpm --dir diary-worker exec playwright install --with-deps webkit
       - name: Install Cloud seek fixture and WebKit dependencies
         if: matrix.target == 'cloud'
         run: |
@@ -82,6 +85,13 @@ jobs:
           WRANGLER_SEND_METRICS: 'false'
           TROOM_CHROMIUM_CHANNEL: ${{ matrix.target == 'cloud' && 'chrome' || '' }}
         run: node tools/verify.mjs --target "$VERIFY_TARGET" --browser --build
+      - name: Inventory WebKit regression
+        if: matrix.target == 'inventory'
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_TRACE_DIR: tmp/verify-artifacts/inventory-webkit
+          CI: 'true'
+        run: timeout -k 10s 5m node --require ./tools/browser-trace.cjs inventory-worker/test/inventory.browser.mjs
       - name: Start Cloud WebKit audio device
         if: matrix.target == 'cloud'
         run: |
