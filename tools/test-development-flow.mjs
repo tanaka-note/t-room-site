@@ -16,7 +16,7 @@ test('Cloud edits do not select Android, Downloader or unrelated services', () =
   assert.deepEqual(affected(['cloud-worker/tests/manual-thumbnail-api.mjs']), ['cloud']);
 });
 test('shared authentication, PRF and SW changes include consumers', () => {
-  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'auth']);
+  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'auth']);
   const auth = affected(['assets/session-policy.mjs']);
   for (const t of ['cloud', 'diary', 'billing', 'auth']) assert.ok(auth.includes(t), t);
   assert.ok(affected(['security-worker/src/index.js']).includes('auth'));
@@ -37,6 +37,13 @@ test('Downloader 2 components select only Downloader 2 while unknown files remai
   assert.equal(downloader2NativeAffected(['downloader2-native/src/Program.cs']), true);
   assert.equal(downloader2NativeAffected(['downloader2-extension/service-worker.js']), false);
   assert.equal(downloader2NativeAffected(['docs/downloader2.md']), false);
+});
+
+test('Inventory changes have an isolated verify and deployment profile', () => {
+  assert.deepEqual(affected(['inventory-worker/src/index.js']), ['inventory']);
+  assert.deepEqual(affected(['inventory-worker/README.md']), []);
+  assert.ok(commands('inventory').some(c => c.script === 'test'));
+  assert.deepEqual(installDirectories(['inventory']), ['.', 'inventory-worker', 'diary-worker']);
 });
 test('affected mapping is order independent and unknown runtime files are not silently skipped', () => {
   const paths = ['assets/session-policy.mjs', 'assets/pwa-auto-update.js'];

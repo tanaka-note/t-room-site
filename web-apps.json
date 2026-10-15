@@ -312,6 +312,22 @@
       "deployTarget": "t-room-downloader2",
       "deployCwd": "downloader2-worker",
       "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "inventory",
+      "name": "在庫照会（非公開）",
+      "publicUrls": ["https://tanaka-note.com/inventory/"],
+      "entrypoints": ["inventory-worker/public/index.html"],
+      "buildRoots": ["inventory-worker/public"],
+      "buildFiles": ["inventory-worker/src/index.js", "inventory-worker/src/domain.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "assets/passkey-rolling.mjs", "assets/security-audit-worker.js", "security-worker/public/passkey-client.js"],
+      "assetCopies": [{ "source": "security-worker/public/passkey-client.js", "copy": "inventory-worker/public/passkey-client.js" }],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "manifest": null,
+      "twa": null,
+      "deployTarget": "t-room-inventory",
+      "deployCwd": "inventory-worker",
+      "deployCommand": "pnpm run deploy"
     }
   ],
   "excludedHtml": [
