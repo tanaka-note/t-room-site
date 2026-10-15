@@ -37,6 +37,13 @@ try {
       assert.match(await page.locator('#annual-total').innerText(), /2 個/); assert.equal(await page.locator('#chart rect').count(), 12); assert.equal(await page.locator('#month-values td').count(), 12);
       await page.locator('#movements .movement').filter({ hasText: '使用' }).getByRole('button', { name: '取消' }).click(); await page.waitForFunction(() => document.getElementById('annual-total').textContent.includes('0 個'));
       await page.getByRole('button', { name: '一覧へ戻る', exact: false }).click(); await page.locator('#list-view').waitFor({ state: 'visible' }); assert.equal(await page.locator('#search').inputValue(), 'サンプル');
+      for (let i=0;i<18;i++) await f.request('/api/items',{name:`Sample ${String(i).padStart(2,'0')}`,unit:'個',stock:0,requestId:crypto.randomUUID()});
+      await page.reload(); await page.locator('#app-view').waitFor({state:'visible'}); await page.locator('.item').filter({hasText:'サンプル消耗品'}).waitFor();
+      const source = page.locator('.item').filter({hasText:'サンプル消耗品'}); await source.scrollIntoViewIfNeeded(); const sourceTop = await source.evaluate(n=>n.getBoundingClientRect().top);
+      await source.locator('.item-link').click(); await page.locator('#detail-view').waitFor({state:'visible'}); await page.waitForFunction(()=>window.scrollY===0);
+      await page.evaluate(()=>window.scrollTo(0,200)); const detailScroll = await page.evaluate(()=>window.scrollY); await page.goBack(); await page.locator('#list-view').waitFor({state:'visible'});
+      await page.waitForFunction(({top})=>Math.abs([...document.querySelectorAll('.item')].find(n=>n.textContent.includes('サンプル消耗品')).getBoundingClientRect().top-top)<4,{top:sourceTop});
+      await page.goForward(); await page.locator('#detail-view').waitFor({state:'visible'}); await page.waitForFunction(y=>Math.abs(window.scrollY-y)<4,detailScroll); await page.goBack(); await page.locator('#list-view').waitFor({state:'visible'});
       await page.getByRole('button', { name: '品目を追加', exact: true }).click(); await page.locator('#name').fill('未保存');
       assert.equal(await page.locator('#record-form').getAttribute('data-troom-dirty'), 'true'); acceptDialog = false;
       publishedBuild = 'inventory-ffffffffffff';
