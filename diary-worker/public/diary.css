@@ -772,6 +772,11 @@ button {
   right: 10px;
   width: 34px;
   height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
   border: 1px solid rgba(31, 41, 51, 0.12);
   border-radius: 999px;
   background: #f5f3ed;
@@ -780,6 +785,17 @@ button {
   line-height: 1;
   transform: translateY(-50%);
 }
+
+.diary-search-clear:hover,
+.diary-search-clear:focus-visible {
+  background: #ece7db;
+  color: var(--ink);
+}
+
+.auxiliary-search-field { position: relative; display: block; }
+.auxiliary-search-field input[type="search"] { padding-right: 54px; }
+.auxiliary-search-field input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+.auxiliary-search-field input:placeholder-shown + .diary-search-clear { display: none; }
 
 .diary-search-status {
   margin: 12px 0 0;

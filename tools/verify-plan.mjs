@@ -54,11 +54,12 @@ export function commands(target) {
 export function browserTests(target) {
   const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
     security: ['security-worker/test/overview.browser.mjs', 'security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
-    diary: ['diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs'],
+    diary: ['diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
+  const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
-    ? [...existing, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : existing;
+    ? [...existing, ...searchClear, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : [...existing, ...searchClear];
 }
 
 export function affected(paths) {

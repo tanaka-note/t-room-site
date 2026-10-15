@@ -665,8 +665,9 @@ dialog::backdrop { background: rgba(13, 24, 29, .68); backdrop-filter: blur(4px)
   .download-screen { min-height: 100vh; min-height: 100dvh; max-height: 100vh; max-height: 100dvh; }
 }
 :is(.search-box,.floating-search-box) { position:relative; }
-.search-box input { padding-right:42px; }
-.search-clear { position:absolute; right:4px; top:50%; transform:translateY(-50%); border:0; background:transparent; color:var(--muted); font-size:24px; padding:4px 10px; }
+:is(.search-box,.floating-search-box) input { padding-right:54px; }
+.search-clear { position:absolute; right:10px; top:50%; transform:translateY(-50%); display:grid; place-items:center; width:34px; height:34px; min-width:34px; min-height:34px; padding:0; border:1px solid rgba(31,41,51,.12); border-radius:999px; background:#f5f3ed; color:#5d6673; font-size:1.3rem; line-height:1; }
+.search-clear:hover, .search-clear:focus-visible { background:#ece7db; color:var(--ink); }
 input[type="search"]::-webkit-search-cancel-button { -webkit-appearance:none; }
 mark { background:#fff0a8; color:inherit; border-radius:2px; }
 #search-result-count { margin:8px 0; color:var(--muted); font-size:13px; }

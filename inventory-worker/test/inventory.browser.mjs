@@ -31,6 +31,13 @@ try {
       const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message)); let acceptDialog = true; page.on('dialog', d => acceptDialog ? d.accept() : d.dismiss());
       await page.goto(`${origin}/inventory/`); await page.locator('#app-view').waitFor({ state: 'visible' });
       await page.getByRole('button', { name: '品目を追加', exact: true }).click(); await page.locator('#name').fill('サンプル消耗品'); await page.locator('#quantity').fill('10'); await page.getByRole('button', { name: '記録する' }).click(); await page.locator('#editor').waitFor({ state: 'hidden' }); await page.locator('.item').waitFor();
+      await page.locator('#search').fill('存在しない検索語');
+      assert.match(await page.locator('#items').textContent(), /該当する品目はありません/);
+      await page.locator('#search-clear').click();
+      assert.equal(await page.locator('#search').inputValue(), '');
+      assert.equal(await page.locator('#search-clear').isVisible(), false);
+      assert.equal(await page.locator('#search').evaluate(n => n === document.activeElement), true);
+      await page.locator('.item').waitFor();
       await page.locator('.item').getByRole('button', { name: '補充', exact: true }).click(); await page.locator('#quantity').fill('3'); await page.getByRole('button', { name: '記録する' }).click(); await page.locator('#editor').waitFor({ state: 'hidden' }); await page.locator('.item .number').filter({ hasText: '13 個' }).waitFor();
       await page.locator('.item').getByRole('button', { name: '使用', exact: true }).click(); await page.locator('#quantity').fill('2'); await page.getByRole('button', { name: '記録する' }).click(); await page.locator('#editor').waitFor({ state: 'hidden' }); await page.locator('.item .number').filter({ hasText: '11 個' }).waitFor();
       await page.locator('#search').fill('サンプル'); await page.locator('.item-link').click(); await page.locator('#detail-view').waitFor({ state: 'visible' });

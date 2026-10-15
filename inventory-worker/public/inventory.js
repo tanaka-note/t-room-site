@@ -102,6 +102,7 @@
   document.addEventListener('DOMContentLoaded', async () => {
     for (const id of ['list-year', 'detail-year']) for (let year = yearNow; year >= 2000; year--) { const option = el('option', `${year}年`); option.value = String(year); $(id).append(option); } $('list-year').value = String(yearNow);
     $('search').addEventListener('input', renderItems); $('show-archived').addEventListener('change', renderItems); $('add-item').addEventListener('click', e => edit('add', null, e.currentTarget));
+    $('search-clear').addEventListener('click', () => { $('search').value = ''; renderItems(); $('search').focus({ preventScroll: true }); });
     $('list-year').addEventListener('change', async () => { listYear = Number($('list-year').value); try { await loadItems(); } catch (e) { message(e.message); } });
     $('detail-year').addEventListener('change', () => { const url = new URL(location.href); url.searchParams.set('year', $('detail-year').value); history.replaceState(history.state, '', url); void renderLocation().catch(e => message(e.message)); });
     $('back').addEventListener('click', () => { if (history.state?.inventory?.itemId) history.back(); else { const url = new URL(location.href); url.searchParams.delete('item'); url.searchParams.delete('year'); history.replaceState(history.state, '', url); void renderLocation(); } });
