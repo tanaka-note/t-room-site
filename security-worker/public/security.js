@@ -17,6 +17,7 @@
     $("#admin-view").hidden = true;
     $("#admin-login-view").hidden = false;
     for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+    resetAdminReads();
     showMessage("ログインの有効期限が切れました。パスキーでログインしてください。", true);
   }
   window.addEventListener("troom-session-renewed", event => observeSessionExpiry(event.detail.expiresAt));
@@ -27,7 +28,11 @@
     adminPrf: null, adminCredentialId: null, selectedIdentity: null,
     pendingInviteCloud: null, pendingPrimarySetup: null, inviteFlow: false, inviteRegistrationPending: false, identityNames: new Map(),
     currentIdentities: [], auditIdentities: [], auditIdentitiesRequest: 0,
-    auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: []
+    auditCursor: null, auditQuery: "", auditLoading: false, auditRequest: 0, auditView: "all", services: [],
+    servicesPromise: null, dashboardLoading: false, dashboardLoaded: false, dashboardRequest: 0,
+    readGeneration: 0, usersLoaded: false, identitiesPromise: null, identitiesRequest: 0,
+    auditLoaded: false, auditPage: 0, auditCursors: [null], auditPositions: [], auditDetails: new WeakMap(),
+    activePanel: "dashboard-panel", panelScroll: new Map()
   };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -54,7 +59,8 @@
       if (event.persisted && state.inviteFlow && !state.inviteRegistrationPending) routeStatus();
     });
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (document.querySelector("button:disabled")) event.preventDefault();
+      // An unavailable read-only page is not an in-progress management action.
+      if (document.querySelector("button:disabled:not(#audit-previous):not(#audit-load-more)")) event.preventDefault();
     });
     $("#bootstrap-form").addEventListener("submit", bootstrap);
     $("#admin-passkey-login").addEventListener("click", adminLogin);
@@ -93,16 +99,29 @@
     });
     $("#tcloud-setup-form").addEventListener("submit", resumePrimaryAdminSetup);
     $("#invite-form").addEventListener("submit", createInvite);
-    $("#add-link").addEventListener("click", () => addLinkRow());
+    $("#add-link").addEventListener("click", async () => {
+      try { await loadServices(); addLinkRow(); } catch (error) { showMessage(error.message, true); }
+    });
     $("#invite-expiry").addEventListener("change", () => { $("#custom-expiry-row").hidden = $("#invite-expiry").value !== "custom"; });
     $("#audit-filter").addEventListener("submit", async (event) => {
       event.preventDefault();
       const button = event.submitter;
       if (button) button.disabled = true;
-      try { await loadAudit({ append: false }); } catch (error) { showMessage(error.message, true); }
+      try { await loadAudit(); } catch (error) { showMessage(error.message, true); }
       finally { if (button) button.disabled = false; }
     });
-    $("#audit-load-more").addEventListener("click", () => loadAudit({ append: true }).catch((error) => showMessage(error.message, true)));
+    $("#audit-load-more").addEventListener("click", () => loadAudit({ page: state.auditPage + 1 }));
+    $("#audit-previous").addEventListener("click", () => loadAudit({ page: state.auditPage - 1 }));
+    $("#audit-search").addEventListener("toggle", () => {
+      if ($("#audit-search").open) ensureIdentities().catch((error) => showMessage(error.message, true));
+    });
+    $("#audit-list").addEventListener("toggle", (event) => {
+      if (event.target.matches(".audit-row") && event.target.open) loadAuditDetail(event.target);
+    }, true);
+    $("#audit-list").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-audit-detail-retry]");
+      if (button) loadAuditDetail(button.closest(".audit-row"));
+    });
     document.querySelectorAll("[data-audit-view]").forEach((button) => button.addEventListener("click", () => {
       state.auditView = button.dataset.auditView;
       document.querySelectorAll("[data-audit-view]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
@@ -147,12 +166,17 @@
     $("#audit-refresh").addEventListener("click", async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
-      try { await loadAudit({ append: false }); } catch (error) { showMessage(error.message, true); }
+      try { await loadAudit(); } catch (error) { showMessage(error.message, true); }
       finally { button.disabled = false; }
     });
     document.querySelectorAll("[data-panel]").forEach((button) => button.addEventListener("click", () => {
-      showPanel(button.dataset.panel, button);
-      if (button.dataset.panel === "audit-panel") loadAudit({ append: false }).catch((error) => showMessage(error.message, true));
+      showPanel(button.dataset.panel, button, { restore: true });
+      if (button.dataset.panel === "dashboard-panel" && !state.dashboardLoaded && !state.dashboardLoading) loadDashboard().catch(() => {});
+      if (button.dataset.panel === "users-panel") {
+        ensureIdentities().catch((error) => showMessage(error.message, true));
+        prepareServiceLinks().catch((error) => showMessage(error.message, true));
+      }
+      if (button.dataset.panel === "audit-panel" && !state.auditLoaded && !state.auditLoading) loadAudit();
       if (button.dataset.panel === "ai-panel") loadAiBudgets().catch((error) => showMessage(error.message, true));
     }));
     populateAuditEventFilter();
@@ -162,7 +186,7 @@
     $("#invite-complete").hidden = true;
     $("#invite-view").hidden = true;
     try {
-      const setup = await TRoomPasskeys.setupStatus();
+      const setup = await get("/setup/status");
       if (renderInviteSetup(setup)) return;
       if (setup.isPrimaryAdmin && setup.credentialStatus === "pending") {
         $("#invite-view").hidden = false;
@@ -427,21 +451,44 @@
   }
 
   async function showAdmin(setup = null) {
+    resetAdminReads();
     $("#bootstrap-view").hidden = true;
     $("#admin-login-view").hidden = true;
     $("#admin-view").hidden = false;
-    const setupResult = setup || await TRoomPasskeys.setupStatus().catch(() => ({ active: false }));
-    renderPrimarySetupNotice(setupResult);
-    await loadServices();
-    if (!$("#link-rows .link-row")) addLinkRow();
-    await Promise.all([loadDashboard(), loadIdentities()]);
-    await loadAudit({ append: false });
+    if (setup) renderPrimarySetupNotice(setup);
+    showPanel("dashboard-panel", document.querySelector('[data-panel="dashboard-panel"]'));
+    // Other tabs do no work until selected. Setup/credential readiness remains required.
+    const generation = state.readGeneration;
+    const results = await Promise.allSettled([
+      loadDashboard(),
+      setup ? Promise.resolve() : get("/setup/status").then((data) => {
+        if (generation === state.readGeneration) renderPrimarySetupNotice(data);
+      })
+    ]);
+    for (const result of results.slice(1)) if (result.status === "rejected") showMessage(result.reason.message, true);
   }
 
-  async function loadServices() {
-    const data = await get("/services");
-    state.services = Array.isArray(data.services) ? data.services : [];
-    if (!state.services.length) throw new Error("サービス連携候補を取得できません。");
+  async function loadServices({ refresh = false } = {}) {
+    if (!refresh && state.services.length) return state.services;
+    const generation = state.readGeneration;
+    if (!state.servicesPromise) {
+      const promise = get("/services").then((data) => {
+        if (generation !== state.readGeneration) return [];
+        const services = Array.isArray(data.services) ? data.services : [];
+        if (!services.length) throw new Error("サービス連携候補を取得できません。");
+        state.services = services;
+        return services;
+      }).finally(() => { if (state.servicesPromise === promise) state.servicesPromise = null; });
+      state.servicesPromise = promise;
+    }
+    return state.servicesPromise;
+  }
+
+  async function prepareServiceLinks(options) {
+    const generation = state.readGeneration;
+    await loadServices(options);
+    if (generation !== state.readGeneration) return;
+    if (!$("#link-rows .link-row")) addLinkRow();
   }
 
   function renderPrimarySetupNotice(setup) {
@@ -461,15 +508,36 @@
   }
 
   async function loadDashboard() {
-    const data = await get("/dashboard");
-    const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
-    const activeUsers = (data.activeUsers || []).map((user) => `<div class="active-user-row"><strong>${escapeHtml(display.identityLabel(user.identityId, user.displayName))}</strong><span>${user.services.map((service) => escapeHtml(display.serviceLabel(service))).join(" / ")}</span></div>`).join("");
-    const definitions = data.clamavDefinitions || { issues: ["unknown"], result: "unknown" };
-    const definitionLabels = { rollout_pending: "定義の本番反映を確認中です（次回も確認を継続します）", rollout_ambiguous: "更新要求の成否を確認中です。重複更新を防ぐため再送を保留しています", stale_rollout: "Cloudflareの更新IDと更新履歴が不整合です。管理者の確認が必要です", reconciliation_stuck: "更新の成否を確定できません。管理者の確認が必要です", rollout_conflict: "別の本番更新を検出しました。自動上書きを停止しています", rollout_unknown_status: "Cloudflareが未対応の更新状態を返しました", rollout_reverted: "Cloudflare側で更新が切り戻されました", rollout_replaced: "別の更新に置き換えられました", candidate_expired: "保留中の候補定義が有効な期間を過ぎました", rollout_deferred: "処理中のジョブがあるため定義の反映を延期しています", deployment_unknown: "本番imageとの一致を確認できません", unknown: "状態を取得できません", expired: "定義が期限切れです（取得停止）", expiring: "定義が生成から5日以上経過しています", not_configured: "自動更新の設定・初回実行が未完了です", updater_stopped: "更新処理の実行を36時間以上確認できません", update_failed: "更新失敗が継続しています", update_interrupted: "更新処理が中断しています", monitor_stopped: "毎時定義監視が未確認、または完了を3時間以上確認できません" };
-    const definitionTime = value => value ? new Date(value * 1000).toLocaleString("ja-JP") : "未確認";
-    const definitionResults = { success: "更新・本番反映確認済み", failed: "更新失敗（本番反映状態を要確認）", running: "更新中", unknown: "未確認", deferred: "処理中ジョブのため延期" };
-    const definitionPanel = `<section class="card compact" id="clamav-definitions"><h3>DownloaderのClamAV定義</h3><p>${escapeHtml((definitions.issues || ["unknown"]).map(key => definitionLabels[key] || "未確認").join(" / ") || "確認済み定義は有効です")}</p><dl>${[["定義の生成日時", definitions.generatedAt],["有効期限（7日）", definitions.expiresAt],["最終更新確認", definitions.verifiedAt],["更新処理の最終実行", definitions.lastAttemptAt],["毎時監視の最終起動", definitions.hourlyMonitorStartedAt],["毎時監視の最終完了", definitions.hourlyMonitorCheckedAt],["定義状態の最終確認（日次含む）", definitions.monitorCheckedAt],["状態の最終変化", definitions.incidentChangedAt]].map(([label,value])=>`<dt>${label}</dt><dd>${escapeHtml(definitionTime(value))}</dd>`).join("")}</dl><p>更新結果: ${escapeHtml(definitionResults[definitions.result] || "未確認")} / 連続失敗 ${Number(definitions.failures || 0)}回</p><p>署名を検証した本番imageの記録です。実際の取得時にも定義を検証します。通知はGitHubの定義監視Issueを確認してください。</p></section>`;
-    $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div><section class="card compact active-users"><h3>現在ログイン中のユーザー</h3>${activeUsers || "<p>現在ログイン中のユーザーはいません。</p>"}</section>${definitionPanel}`;
+    const requestId = ++state.dashboardRequest;
+    const panel = $("#dashboard-panel");
+    state.dashboardLoading = true;
+    state.dashboardLoaded = false;
+    panel.setAttribute("aria-busy", "true");
+    panel.innerHTML = '<section class="card compact" role="status"><p>セキュリティ概要を読み込んでいます。</p></section>';
+    try {
+      const data = await get("/dashboard");
+      if (requestId !== state.dashboardRequest) return;
+      const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
+      const activeUsers = (data.activeUsers || []).map((user) => `<div class="active-user-row"><strong>${escapeHtml(display.identityLabel(user.identityId, user.displayName))}</strong><span>${user.services.map((service) => escapeHtml(display.serviceLabel(service))).join(" / ")}</span></div>`).join("");
+      const definitions = data.clamavDefinitions || { issues: ["unknown"], result: "unknown" };
+      const definitionLabels = { rollout_pending: "定義の本番反映を確認中です（次回も確認を継続します）", rollout_ambiguous: "更新要求の成否を確認中です。重複更新を防ぐため再送を保留しています", stale_rollout: "Cloudflareの更新IDと更新履歴が不整合です。管理者の確認が必要です", reconciliation_stuck: "更新の成否を確定できません。管理者の確認が必要です", rollout_conflict: "別の本番更新を検出しました。自動上書きを停止しています", rollout_unknown_status: "Cloudflareが未対応の更新状態を返しました", rollout_reverted: "Cloudflare側で更新が切り戻されました", rollout_replaced: "別の更新に置き換えられました", candidate_expired: "保留中の候補定義が有効な期間を過ぎました", rollout_deferred: "処理中のジョブがあるため定義の反映を延期しています", deployment_unknown: "本番imageとの一致を確認できません", unknown: "状態を取得できません", expired: "定義が期限切れです（取得停止）", expiring: "定義が生成から5日以上経過しています", not_configured: "自動更新の設定・初回実行が未完了です", updater_stopped: "更新処理の実行を36時間以上確認できません", update_failed: "更新失敗が継続しています", update_interrupted: "更新処理が中断しています", monitor_stopped: "毎時定義監視が未確認、または完了を3時間以上確認できません" };
+      const definitionTime = value => value ? new Date(value * 1000).toLocaleString("ja-JP") : "未確認";
+      const definitionResults = { success: "更新・本番反映確認済み", failed: "更新失敗（本番反映状態を要確認）", running: "更新中", unknown: "未確認", deferred: "処理中ジョブのため延期" };
+      const definitionPanel = `<section class="card compact" id="clamav-definitions"><h3>DownloaderのClamAV定義</h3><p>${escapeHtml((definitions.issues || ["unknown"]).map(key => definitionLabels[key] || "未確認").join(" / ") || "確認済み定義は有効です")}</p><dl>${[["定義の生成日時", definitions.generatedAt],["有効期限（7日）", definitions.expiresAt],["最終更新確認", definitions.verifiedAt],["更新処理の最終実行", definitions.lastAttemptAt],["毎時監視の最終起動", definitions.hourlyMonitorStartedAt],["毎時監視の最終完了", definitions.hourlyMonitorCheckedAt],["定義状態の最終確認（日次含む）", definitions.monitorCheckedAt],["状態の最終変化", definitions.incidentChangedAt]].map(([label,value])=>`<dt>${label}</dt><dd>${escapeHtml(definitionTime(value))}</dd>`).join("")}</dl><p>更新結果: ${escapeHtml(definitionResults[definitions.result] || "未確認")} / 連続失敗 ${Number(definitions.failures || 0)}回</p><p>署名を検証した本番imageの記録です。実際の取得時にも定義を検証します。通知はGitHubの定義監視Issueを確認してください。</p></section>`;
+      $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div><section class="card compact active-users"><h3>現在ログイン中のユーザー</h3>${activeUsers || "<p>現在ログイン中のユーザーはいません。</p>"}</section>${definitionPanel}`;
+      state.dashboardLoaded = true;
+    } catch (error) {
+      if (requestId === state.dashboardRequest) {
+        panel.innerHTML = `<section class="card compact" role="alert"><p>セキュリティ概要を読み込めませんでした。</p><p>${escapeHtml(error.message)}</p><button id="dashboard-retry" class="secondary" type="button">再試行</button></section>`;
+        $("#dashboard-retry").addEventListener("click", () => loadDashboard().catch(() => {}));
+      }
+      throw error;
+    } finally {
+      if (requestId === state.dashboardRequest) {
+        state.dashboardLoading = false;
+        panel.setAttribute("aria-busy", "false");
+      }
+    }
   }
 
   async function loadAiBudgets() {
@@ -509,7 +577,11 @@
   }
 
   async function loadIdentities() {
+    const requestId = ++state.identitiesRequest;
+    if (!state.usersLoaded) $("#identity-list").innerHTML = '<p role="status">ユーザーを読み込んでいます…</p>';
     const data = await get("/identities");
+    if (requestId !== state.identitiesRequest) return;
+    state.usersLoaded = true;
     const currentIdentities = (Array.isArray(data.identities) ? data.identities : []).filter((identity) => identity.status !== "disabled");
     const pendingIdentities = (Array.isArray(data.pendingIdentities) ? data.pendingIdentities : []).filter((identity) => identity.status !== "disabled");
     state.currentIdentities = [...currentIdentities, ...pendingIdentities];
@@ -524,6 +596,15 @@
       try { await viewIdentity(button.dataset.viewIdentity); } catch (error) { showMessage(error.message, true); }
       finally { button.disabled = false; }
     }));
+  }
+
+  function ensureIdentities() {
+    if (state.usersLoaded) return Promise.resolve();
+    if (!state.identitiesPromise) {
+      const promise = loadIdentities().finally(() => { if (state.identitiesPromise === promise) state.identitiesPromise = null; });
+      state.identitiesPromise = promise;
+    }
+    return state.identitiesPromise;
   }
 
   async function viewIdentity(id) {
@@ -582,7 +663,7 @@
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));
     if ($("#disable-identity-button")) $("#disable-identity-button").onclick = (event) => disableIdentity(id, event.currentTarget);
-    $("#detail-open-link").onclick = () => openDetailLinkEditor();
+    $("#detail-open-link").onclick = () => openDetailLinkEditor().catch((error) => showMessage(error.message, true));
     $("#detail-cancel-link").onclick = () => closeDetailLinkEditor();
     $("#detail-add-link").onclick = (event) => addDetailLink(id, event.currentTarget);
   }
@@ -603,7 +684,8 @@
     return `${service}\u0000${accountId}\u0000${rootFolderId ?? ""}`;
   }
 
-  function openDetailLinkEditor() {
+  async function openDetailLinkEditor() {
+    await loadServices();
     const editor = $("#detail-link-editor");
     const rowContainer = $("#detail-link-row");
     const excluded = currentServiceLinkKeys();
@@ -769,7 +851,8 @@
 
   function addLinkRow(service = null, containerSelector = "#link-rows", removable = true, excludedKeys = new Set()) {
     const availableServices = state.services
-      .filter((item) => containerSelector !== "#link-rows" || !["downloader", "downloader2"].includes(item.id))
+      .filter((item) => containerSelector !== "#link-rows" || !["downloader", "downloader2", "inventory"].includes(item.id))
+      .filter((item) => item.id !== "inventory" || state.selectedIdentity?.identity.id === "primary-admin")
       .map((item) => ({
         ...item,
         targets: (item.targets || []).filter((target) => !excludedKeys.has(serviceLinkKey(target.service, target.accountId, target.rootFolderId)))
@@ -831,36 +914,55 @@
     await TRoomPasskeys.authenticate("security");
   }
 
-  async function loadAudit({ append = false } = {}) {
-    if (append && (state.auditLoading || !state.auditCursor)) return;
+  async function loadAudit({ page = null } = {}) {
+    const paging = Number.isInteger(page);
+    if (paging && (state.auditLoading || page < 0 || page >= state.auditCursors.length)) return;
+    if (paging) saveAuditPosition();
+    const pageIndex = paging ? page : 0;
+    const position = paging ? state.auditPositions[pageIndex] : null;
+    const params = paging ? new URLSearchParams(state.auditQuery) : currentAuditQuery();
+    if (paging && state.auditCursors[pageIndex]) params.set("cursor", state.auditCursors[pageIndex]);
+    if (!paging) {
+      state.auditCursors = [null];
+      state.auditPositions = [];
+      state.auditPage = 0;
+      state.auditCursor = null;
+      state.auditLoaded = false;
+      $("#audit-list").replaceChildren();
+      const filterCount = [...params.keys()].filter((key) => !["view", "summary"].includes(key)).length;
+      $("#audit-filter-status").textContent = filterCount ? `（${filterCount}件の条件で絞り込み中）` : "";
+    }
     const requestId = ++state.auditRequest;
     state.auditLoading = true;
     $("#audit-list").setAttribute("aria-busy", "true");
     $("#audit-status").textContent = "履歴を読み込んでいます…";
     const more = $("#audit-load-more");
     more.disabled = true;
-    const params = append ? new URLSearchParams(state.auditQuery) : currentAuditQuery();
-    if (append) params.set("cursor", state.auditCursor);
-    else {
-      state.auditCursor = null;
-      more.hidden = true;
-      $("#audit-list").replaceChildren();
-      const filterCount = [...params.keys()].filter((key) => key !== "view").length;
-      $("#audit-filter-status").textContent = filterCount ? `（${filterCount}件の条件で絞り込み中）` : "";
-    }
+    $("#audit-previous").disabled = true;
     try {
       const data = await get(`/audit?${params}`);
       if (requestId !== state.auditRequest) return;
-      const html = data.events.map(renderAuditEvent).join("");
-      if (append) {
-        if (html) $("#audit-list").insertAdjacentHTML("beforeend", html);
-      } else {
-        $("#audit-list").innerHTML = html || "<p>該当する履歴はありません。</p>";
-      }
-      if (!append) state.auditQuery = params.toString();
+      $("#audit-list").innerHTML = data.events.map(renderAuditEvent).join("") || "<p>該当する履歴はありません。</p>";
+      params.delete("cursor");
+      state.auditQuery = params.toString();
+      state.auditLoaded = true;
+      state.auditPage = pageIndex;
       state.auditCursor = data.nextCursor || null;
+      state.auditCursors.length = pageIndex + 1;
+      if (state.auditCursor) state.auditCursors.push(state.auditCursor);
       more.hidden = !state.auditCursor;
-      $("#audit-status").textContent = `${$("#audit-list").querySelectorAll(".audit-row").length}件を表示${state.auditCursor ? "・続きがあります" : ""}`;
+      $("#audit-status").textContent = `第${pageIndex + 1}ページ・${data.events.length}件を表示${state.auditCursor ? "・続きがあります" : ""}`;
+      if (position) {
+        const rows = [...$("#audit-list").querySelectorAll(".audit-row")];
+        await Promise.all(rows.filter((row) => position.open.includes(row.dataset.auditId)).map((row) => {
+          row.open = true;
+          return loadAuditDetail(row);
+        }));
+        if (requestId === state.auditRequest && state.activePanel === "audit-panel") {
+          const anchor = rows.find((row) => row.dataset.auditId === position.id);
+          window.scrollTo(0, anchor ? window.scrollY + anchor.getBoundingClientRect().top - position.offset : position.y);
+        }
+      } else if (paging && state.activePanel === "audit-panel") $("#audit-list").scrollIntoView({ block: "start" });
     } catch (error) {
       if (requestId !== state.auditRequest) return;
       $("#audit-status").textContent = "履歴を読み込めませんでした。「最新に更新」で再試行してください。";
@@ -868,14 +970,42 @@
       if (requestId === state.auditRequest) {
         state.auditLoading = false;
         more.disabled = false;
+        $("#audit-previous").disabled = state.auditPage === 0;
         $("#audit-list").setAttribute("aria-busy", "false");
       }
     }
   }
 
+  function saveAuditPosition() {
+    const rows = [...$("#audit-list").querySelectorAll(".audit-row")];
+    const anchor = rows.find((row) => row.getBoundingClientRect().bottom > 0);
+    state.auditPositions[state.auditPage] = { id: anchor?.dataset.auditId, offset: anchor?.getBoundingClientRect().top || 0,
+      y: window.scrollY, open: rows.filter((row) => row.open).map((row) => row.dataset.auditId) };
+  }
+
+  function loadAuditDetail(row) {
+    if (row.dataset.loaded === "true") return Promise.resolve();
+    if (state.auditDetails.has(row)) return state.auditDetails.get(row);
+    const body = row.querySelector(".audit-detail");
+    body.innerHTML = '<p role="status">詳細を読み込んでいます…</p>';
+    const promise = (async () => {
+      try {
+        const data = await get(`/audit/${encodeURIComponent(row.dataset.auditId)}`);
+        if (!row.isConnected) return;
+        body.innerHTML = renderAuditDetail(data.event);
+        row.dataset.loaded = "true";
+      } catch (error) {
+        if (row.isConnected) body.innerHTML = `<p role="alert">${escapeHtml(error.message)}</p><button class="secondary" type="button" data-audit-detail-retry>再試行</button>`;
+      } finally { state.auditDetails.delete(row); }
+    })();
+    state.auditDetails.set(row, promise);
+    return promise;
+  }
+
   function currentAuditQuery() {
     const params = new URLSearchParams();
     params.set("view", state.auditView);
+    params.set("summary", "true");
     [["identityId", "#audit-identity"], ["service", "#audit-service"], ["authMethod", "#audit-auth"], ["outcome", "#audit-outcome"], ["eventType", "#audit-event"], ["from", "#audit-from"], ["to", "#audit-to"]].forEach(([key, selector]) => {
       const value = $(selector).value;
       if (value) params.set(key, value);
@@ -927,19 +1057,11 @@
     // Password audit attribution describes a service account, not necessarily a
     // verified person. Prefer its saved label when Identity linkage is absent.
     const user = event.actor_display_name || (identityId === "primary-admin" ? "田中宏知" : identityName ? actor : event.service_account_label || actor);
-    const fields = [
-      ["Identity ID", identityId], ["サービス内ID", serviceAccountId],
-      ["サービス内の表示名", event.account_display_name || event.service_account_label], ["role", event.role],
-      ["イベントID", event.event_id], ["操作内容", event.event_type],
-      ["サービス連携ID", event.service_link_id], ["セッションハッシュ", event.session_id_hash],
-      ["接続元ハッシュ", event.source_hash], ["対象種別", event.target_type],
-      ["対象ID", event.target_id], ["その他の監査情報", event.details_json]
-    ].filter(([, value]) => value != null && value !== "");
     const method = event.auth_method === "password" ? "ID・パスワード" : display.authMethodLabel(event.auth_method);
     const date = event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", {
       timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"
     }) : "日時不明";
-    return `<details class="audit-row audit-${outcomeClass}">
+    return `<details class="audit-row audit-${outcomeClass}" data-audit-id="${escapeHtml(event.event_id)}">
       <summary class="audit-summary">
         <time datetime="${escapeHtml(event.occurred_at || "")}">${escapeHtml(date)}</time>
         <strong>${escapeHtml(user)}</strong>
@@ -949,13 +1071,21 @@
         <span class="audit-device">${escapeHtml(display.formatUserAgent(userAgent))}</span>
         <span class="audit-operation">${escapeHtml(display.eventLabel(event.event_type))}</span>
       </summary>
-      <div class="audit-detail">
-        <p>${escapeHtml(event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "日時不明")}（日本時間）</p>
-        <dl>${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</dd></div>`).join("")}
-          <div><dt>User-Agent</dt><dd>${escapeHtml(userAgent) || "記録なし"}</dd></div>
-        </dl>
-      </div>
+      <div class="audit-detail"></div>
     </details>`;
+  }
+
+  function renderAuditDetail(event) {
+    const fields = [
+      ["Identity ID", event.identity_id], ["サービス内ID", event.service_account_id],
+      ["サービス内の表示名", event.account_display_name || event.service_account_label], ["role", event.role],
+      ["イベントID", event.event_id], ["操作内容", event.event_type],
+      ["サービス連携ID", event.service_link_id], ["セッションハッシュ", event.session_id_hash],
+      ["接続元ハッシュ", event.source_hash], ["対象種別", event.target_type],
+      ["対象ID", event.target_id], ["その他の監査情報", event.details_json], ["User-Agent", event.user_agent || "記録なし"]
+    ].filter(([, value]) => value != null && value !== "");
+    return `<p>${escapeHtml(event.occurred_at ? new Date(event.occurred_at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "日時不明")}（日本時間）</p>
+      <dl>${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</dd></div>`).join("")}</dl>`;
   }
 
   function renderInvitationResult(container, result) {
@@ -983,7 +1113,34 @@
     try { await post("/logout", {}); location.reload(); }
     catch (error) { showMessage(error.message, true); button.disabled = false; }
   }
-  function showPanel(id, button) { document.querySelectorAll(".panel").forEach((panel) => { panel.hidden = panel.id !== id; }); document.querySelectorAll("[data-panel]").forEach((item) => item.classList.toggle("active", item === button)); }
+  function showPanel(id, button, { restore = false } = {}) {
+    state.panelScroll.set(state.activePanel, window.scrollY);
+    state.activePanel = id;
+    document.querySelectorAll(".panel").forEach((panel) => { panel.hidden = panel.id !== id; });
+    document.querySelectorAll("[data-panel]").forEach((item) => item.classList.toggle("active", item === button));
+    if (restore) requestAnimationFrame(() => { if (state.activePanel === id) window.scrollTo(0, state.panelScroll.get(id) || 0); });
+  }
+
+  function resetAdminReads() {
+    state.readGeneration++;
+    state.identitiesRequest++;
+    state.auditIdentitiesRequest++;
+    state.auditRequest++;
+    state.dashboardRequest++;
+    Object.assign(state, { usersLoaded: false, identitiesPromise: null, services: [], servicesPromise: null,
+      currentIdentities: [], auditIdentities: [], identityNames: new Map(), selectedIdentity: null,
+      auditLoaded: false, auditLoading: false, auditCursor: null, auditQuery: "", auditPage: 0,
+      auditCursors: [null], auditPositions: [], auditDetails: new WeakMap(),
+      dashboardLoaded: false, dashboardLoading: false, panelScroll: new Map() });
+    for (const selector of ["#identity-list", "#identity-detail", "#audit-list", "#link-rows", "#ai-budget-list", "#dashboard-panel"])
+      $(selector).replaceChildren();
+    $("#identity-detail").hidden = true;
+    $("#audit-filter").reset();
+    populateAuditIdentityFilter([]);
+    $("#audit-status").textContent = "";
+    $("#audit-load-more").hidden = true;
+    $("#audit-previous").disabled = true;
+  }
   function showMessage(text, error = false) {
     const box = $("#message");
     box.hidden = false;
@@ -1003,9 +1160,18 @@
   async function get(path) { return request(path); }
   async function post(path, body) { return request(path, body); }
   async function request(path, body) {
-    const response = await fetch(`/security/api${path}`, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers: body === undefined ? {} : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(TRoomPasskeys.safeJapaneseMessage(payload.error, "Security Centerの処理に失敗しました。"));
-    return payload;
+    // Bound reads only. A mutation is never aborted or automatically resent.
+    const controller = body === undefined ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 15000) : null;
+    try {
+      const response = await fetch(`/security/api${path}`, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers: body === undefined ? {} : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), ...(controller ? { signal: controller.signal } : {}) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(TRoomPasskeys.safeJapaneseMessage(payload.error, "Security Centerの処理に失敗しました。"));
+      return payload;
+    } catch (error) {
+      if (controller?.signal.aborted) throw new Error("読み込みに時間がかかっています。時間を置いて再度お試しください。");
+      if (error instanceof SyntaxError) throw new Error("取得した情報を確認できませんでした。再度お試しください。");
+      throw error;
+    } finally { clearTimeout(timer); }
   }
 })();

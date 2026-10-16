@@ -18,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "health-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "620aa524-b2f8-400a-ad53-cb505618a9af",
       "migrations_dir": "migrations"
     }
   ],
@@ -29,7 +29,7 @@
     }
   ],
   "vars": {
-    "PASSKEY_ENABLED": "false",
+    "PASSKEY_ENABLED": "true",
     "SESSION_VERSION": "1"
   },
   "queues": {

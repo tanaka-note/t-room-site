@@ -137,6 +137,16 @@ test("unreviewed schema fails closed", async () => {
   finally { f.db.close(); }
 });
 
+test("unreviewed triggers still block cleanup beside the reviewed aggregate triggers", async () => {
+  const f = fixture();
+  try {
+    f.identity("retired");
+    f.db.exec("CREATE TRIGGER future_identity_trigger AFTER DELETE ON security_identities BEGIN SELECT 1; END");
+    assert.deepEqual(await f.cleanup(), { deleted: 0, skipped: "schema" });
+    assert.ok(f.exists());
+  } finally { f.db.close(); }
+});
+
 test("normal Identity API excludes disabled choices; explicit audit opt-in includes them", async () => {
   const f = fixture();
   try {

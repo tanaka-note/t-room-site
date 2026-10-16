@@ -68,7 +68,7 @@
   ].map(([value, label, group]) => Object.freeze({ value, label, group })));
 
   const EVENT_LABELS = new Map(EVENT_DEFINITIONS.map((item) => [item.value, item.label]));
-  const SERVICE_LABELS = Object.freeze({ security: "Security Center", cloud: "T-Cloud", diary: "日記", billing: "請求書", ai: "AI Chat", downloader: "T-lain Downloader", downloader2: "T-lain Downloader 2", health: "体調管理" });
+  const SERVICE_LABELS = Object.freeze({ security: "Security Center", cloud: "T-Cloud", diary: "日記", billing: "請求書", ai: "AI Chat", downloader: "T-lain Downloader", downloader2: "T-lain Downloader 2", inventory: "在庫照会", health: "体調管理" });
   const OUTCOME_LABELS = Object.freeze({ success: "成功", failure: "失敗", blocked: "停止", cancelled: "キャンセル", info: "情報" });
   const AUTH_METHOD_LABELS = Object.freeze({ password: "パスワード", passkey: "パスキー", system: "システム" });
   const ROLE_LABELS = Object.freeze({ admin: "管理者", "security-admin": "管理者", identity: "ユーザー", subadmin: "副管理者", owner: "管理者", member: "一般ユーザー", user: "一般ユーザー", global_owner: "全体管理者" });

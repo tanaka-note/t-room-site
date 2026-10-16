@@ -42,7 +42,7 @@ test('Cloud edits do not select Android, Downloader or unrelated services', () =
   assert.deepEqual(affected(['cloud-worker/tests/manual-thumbnail-api.mjs']), ['cloud']);
 });
 test('shared authentication, PRF and SW changes include consumers', () => {
-  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'health', 'auth']);
+  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'auth']);
   const auth = affected(['assets/session-policy.mjs']);
   for (const t of ['cloud', 'diary', 'billing', 'auth']) assert.ok(auth.includes(t), t);
   assert.ok(affected(['security-worker/src/index.js']).includes('auth'));
@@ -63,6 +63,27 @@ test('Downloader 2 components select only Downloader 2 while unknown files remai
   assert.equal(downloader2NativeAffected(['downloader2-native/src/Program.cs']), true);
   assert.equal(downloader2NativeAffected(['downloader2-extension/service-worker.js']), false);
   assert.equal(downloader2NativeAffected(['docs/downloader2.md']), false);
+});
+
+test('Inventory changes have an isolated verify and deployment profile', () => {
+  assert.deepEqual(affected(['inventory-worker/src/index.js']), ['inventory']);
+  assert.deepEqual(affected(['inventory-worker/README.md']), []);
+  assert.ok(commands('inventory').some(c => c.script === 'test'));
+  assert.deepEqual(installDirectories(['inventory']), ['.', 'inventory-worker']);
+});
+
+test('Inventory WebKit installation and execution are isolated to the Inventory target', () => {
+  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
+  const job = workflow.slice(workflow.indexOf('  inventory-webkit-macos:'),workflow.indexOf('  cloud-webkit-macos:'));
+  assert.match(job, /if: contains\(fromJSON\(needs\.plan\.outputs\.node\), 'inventory'\)/);
+  assert.match(job, /runs-on: macos-15/);
+  assert.match(job, /pnpm --dir inventory-worker exec playwright install webkit/);
+  assert.match(job, /TROOM_BROWSER: webkit[\s\S]*inventory-worker\/test\/inventory\.browser\.mjs/);
+  assert.doesNotMatch(job, /continue-on-error/);
+  const gate = workflow.slice(workflow.indexOf('\n  verify:'));
+  assert.match(gate, /needs: \[plan, node, inventory-webkit-macos,/);
+  assert.match(gate, /\[\[ "\$INVENTORY_MACOS" =~ \^\(success\|skipped\)\$ \]\]/);
+  assert.match(workflow, /Install Inventory Chromium\r?\n\s+if: matrix\.target == 'inventory'\r?\n\s+run: pnpm --dir inventory-worker exec playwright install --with-deps chromium/);
 });
 test('affected mapping is order independent and unknown runtime files are not silently skipped', () => {
   const paths = ['assets/session-policy.mjs', 'assets/pwa-auto-update.js'];

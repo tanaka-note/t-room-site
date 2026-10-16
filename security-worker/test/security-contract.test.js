@@ -12,6 +12,7 @@ const lifecycleMigration = await readFile(new URL("../migrations/0002_passkey_li
 const foreignKeyMigration = await readFile(new URL("../migrations/0003_repair_service_link_foreign_keys.sql", import.meta.url), "utf8");
 const handoffEpochMigration = await readFile(new URL("../migrations/0004_handoff_session_epoch.sql", import.meta.url), "utf8");
 const serviceAuditMigration = await readFile(new URL("../migrations/0005_service_links_and_session_audit.sql", import.meta.url), "utf8");
+const auditReadMigration = await readFile(new URL("../migrations/0023_audit_read_model.sql", import.meta.url), "utf8");
 const primaryCloudAccountsMigration = await readFile(new URL("../migrations/0006_primary_admin_cloud_subadmin.sql", import.meta.url), "utf8");
 const primaryDiaryAccountsMigration = await readFile(new URL("../migrations/0007_primary_admin_diary_main_user.sql", import.meta.url), "utf8");
 const cancelledInviteCleanupMigration = await readFile(new URL("../migrations/0008_cleanup_cancelled_unregistered_identities.sql", import.meta.url), "utf8");
@@ -242,7 +243,7 @@ test("service links come from an explicit provider registry and never from free-
   assert.match(cloud, /targets: await listSecurityFolderTargets/);
   assert.match(cloud, /listSecurityFolderTargets\(this\.env, \{ topLevelOnly: true \}\)/,
     "T-Cloud selection candidates are limited to top-level folders");
-  assert.match(cloud, /!topLevelOnly \|\| folder\.parentId == null/,
+  assert.match(cloud, /WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY name COLLATE NOCASE, id/,
     "the provider filters candidates using the existing parent relationship");
   assert.match(worker, /describeAccount\(\{ accountId, rootFolderId, selectableOnly: true \}\)/,
     "new service links are revalidated against selectable top-level targets on the server");
@@ -319,7 +320,7 @@ test("session resume audit is distinct, deduplicated, human-labelled, and tracks
     assert.match(source, /sessionId: session\.sessionId/);
   }
   assert.match(worker, /recordSecuritySessionResume/);
-  assert.match(worker, /event_type = 'session_resume'/);
+  assert.match(auditReadMigration, /event_type = 'session_resume'/);
   assert.match(worker, /service_account_label/);
   assert.match(worker, /last_seen_at/);
   assert.match(serviceAuditMigration, /uq_security_audit_session_resume_minute/);
@@ -393,7 +394,7 @@ test("Security Center keeps audit localization in a reusable escaped display lay
   assert.match(securityDisplay, /formatUserAgent/);
   assert.match(securityUi, /data\.events\.map\(renderAuditEvent\)/);
   assert.match(securityUi, /escapeHtml\(display\.eventLabel\(event\.event_type\)\)/);
-  assert.match(securityUi, /escapeHtml\(userAgent\)/);
+  assert.match(securityUi, /escapeHtml\(typeof value === "object" \? JSON\.stringify\(value\) : value\)/);
 });
 
 test("Identity routes, audit service and invitation lifecycle share the hardened contracts", () => {
@@ -401,7 +402,8 @@ test("Identity routes, audit service and invitation lifecycle share the hardened
   assert.match(worker, /normalizeIdentityId\(body\.identityId\)/);
   assert.match(worker, /normalizeAuditService/);
   assert.match(worker, /currentJstDayBounds/);
-  assert.match(worker, /LOGIN_FAILURE_EVENTS/);
+  assert.match(worker, /FROM security_audit_daily WHERE day = date/);
+  assert.match(auditReadMigration, /'password_login_failure', 'passkey_authentication_failure', 'bootstrap_auth_failure'/);
   assert.match(worker, /resolveInviteExpiry/);
   assert.match(worker, /UPDATE security_invitations SET status = 'revoked'.*identity_id = \?.*status = 'active'/s);
   assert.match(worker, /assertUniqueServiceLinks/);
@@ -541,13 +543,13 @@ test("audit history uses stable composite cursor pagination", () => {
   assert.match(worker, /ORDER BY occurred_at DESC, event_id ASC LIMIT \?/);
   assert.match(worker, /occurred_at < \? OR \(occurred_at = \? AND event_id > \?\)/);
   assert.match(worker, /nextCursor/);
-  assert.match(securityHtml, /id="audit-load-more"[\s\S]*もっと見る/);
+  assert.match(securityHtml, /id="audit-load-more"[^>]*>次の30件/);
+  assert.match(securityHtml, /id="audit-previous"[^>]*>前の30件/);
   assert.match(securityHtml, /id="audit-identity"[\s\S]*すべて/);
   assert.match(securityUi, /\["identityId", "#audit-identity"\]/);
-  assert.match(securityUi, /append \? new URLSearchParams\(state\.auditQuery\) : currentAuditQuery\(\)/);
-  assert.match(securityUi, /if \(!append\) state\.auditQuery = params\.toString\(\)/);
-  assert.match(securityUi, /params\.set\("cursor", state\.auditCursor\)/);
-  assert.match(securityUi, /insertAdjacentHTML\("beforeend"/);
+  assert.match(securityUi, /paging \? new URLSearchParams\(state\.auditQuery\) : currentAuditQuery\(\)/);
+  assert.match(securityUi, /params\.set\("cursor", state\.auditCursors\[pageIndex\]\)/);
+  assert.doesNotMatch(securityUi, /insertAdjacentHTML\("beforeend"/);
 });
 
 test("user choices include disabled history only through explicit advanced-search opt-in", () => {

@@ -4,7 +4,7 @@
 CREATE TABLE security_service_links_next (
   id TEXT PRIMARY KEY,
   identity_id TEXT NOT NULL,
-  service TEXT NOT NULL CHECK (service IN ('cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2', 'health')),
+  service TEXT NOT NULL CHECK (service IN ('cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2', 'inventory', 'health')),
   service_account_id TEXT NOT NULL,
   cloud_root_folder_id INTEGER,
   display_label TEXT NOT NULL,
@@ -82,7 +82,7 @@ ON security_service_links(identity_id, service, service_account_id, COALESCE(clo
 WHERE status IN ('pending', 'active');
 CREATE UNIQUE INDEX uq_security_service_links_exclusive_current
 ON security_service_links(service, service_account_id)
-WHERE service IN ('diary', 'billing')
+WHERE service IN ('diary', 'billing', 'inventory')
   AND status IN ('pending', 'active')
   AND NOT (
     identity_id = 'primary-admin'
@@ -94,7 +94,7 @@ CREATE TABLE security_audit_events_next (
   event_id TEXT PRIMARY KEY,
   occurred_at TEXT NOT NULL,
   received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  service TEXT NOT NULL CHECK (service IN ('security', 'cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2', 'health')),
+  service TEXT NOT NULL CHECK (service IN ('security', 'cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2', 'inventory', 'health')),
   event_type TEXT NOT NULL,
   outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure', 'blocked', 'cancelled', 'info')),
   identity_id TEXT,
@@ -133,7 +133,7 @@ WHERE event_type = 'session_resume' AND session_id_hash IS NOT NULL;
 CREATE TABLE security_active_sessions_next (
   session_id_hash TEXT PRIMARY KEY,
   identity_id TEXT,
-  service TEXT NOT NULL CHECK (service IN ('security', 'cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2', 'health')),
+  service TEXT NOT NULL CHECK (service IN ('security', 'cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2', 'inventory', 'health')),
   service_link_id TEXT,
   service_account_id TEXT,
   credential_id TEXT,
@@ -173,3 +173,65 @@ CREATE TABLE security_health_vaults (credential_id TEXT PRIMARY KEY REFERENCES s
 CREATE TABLE security_health_grants (identity_id TEXT NOT NULL REFERENCES security_identities(id), credential_id TEXT NOT NULL REFERENCES security_credentials(credential_id), service_link_id TEXT NOT NULL REFERENCES security_service_links(id), wrapped_key TEXT NOT NULL, PRIMARY KEY(credential_id,service_link_id));
 CREATE TRIGGER health_members_only BEFORE INSERT ON security_service_links WHEN NEW.service='health' BEGIN SELECT CASE WHEN NEW.service_account_id!='nobumi' OR NEW.cloud_root_folder_id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM security_health_members WHERE identity_id=NEW.identity_id) THEN RAISE(ABORT,'health membership required') END; END;
 CREATE TRIGGER health_members_only_update BEFORE UPDATE OF identity_id,service,service_account_id,cloud_root_folder_id ON security_service_links WHEN NEW.service='health' BEGIN SELECT CASE WHEN NEW.service_account_id!='nobumi' OR NEW.cloud_root_folder_id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM security_health_members WHERE identity_id=NEW.identity_id) THEN RAISE(ABORT,'health membership required') END; END;
+
+-- Preserve the existing derived totals; only recreate their triggers and indexes
+-- after rebuilding source tables. Do not backfill the totals a second time.
+CREATE TRIGGER security_audit_daily_insert AFTER INSERT ON security_audit_events BEGIN
+  INSERT INTO security_audit_daily(day, event_count, login_success, login_failure, lockouts, session_resume, critical)
+  SELECT date(NEW.occurred_at, '+9 hours'), 1, CASE WHEN NEW.event_type IN ('password_login_success', 'passkey_login_success') AND NEW.outcome = 'success' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.event_type IN ('password_login_failure', 'passkey_authentication_failure', 'bootstrap_auth_failure') AND NEW.outcome = 'failure' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.outcome = 'blocked' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.event_type = 'session_resume' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END
+  WHERE date(NEW.occurred_at, '+9 hours') IS NOT NULL
+  ON CONFLICT(day) DO UPDATE SET event_count = event_count + 1,
+    login_success = login_success + excluded.login_success,
+    login_failure = login_failure + excluded.login_failure,
+    lockouts = lockouts + excluded.lockouts,
+    session_resume = session_resume + excluded.session_resume,
+    critical = critical + excluded.critical;
+END;
+
+CREATE TRIGGER security_audit_daily_delete AFTER DELETE ON security_audit_events BEGIN
+  UPDATE security_audit_daily SET event_count = event_count - 1,
+    login_success = login_success - (CASE WHEN OLD.event_type IN ('password_login_success', 'passkey_login_success') AND OLD.outcome = 'success' THEN 1 ELSE 0 END),
+    login_failure = login_failure - (CASE WHEN OLD.event_type IN ('password_login_failure', 'passkey_authentication_failure', 'bootstrap_auth_failure') AND OLD.outcome = 'failure' THEN 1 ELSE 0 END),
+    lockouts = lockouts - (CASE WHEN OLD.outcome = 'blocked' THEN 1 ELSE 0 END),
+    session_resume = session_resume - (CASE WHEN OLD.event_type = 'session_resume' THEN 1 ELSE 0 END),
+    critical = critical - (CASE WHEN OLD.event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END)
+  WHERE day = date(OLD.occurred_at, '+9 hours');
+  DELETE FROM security_audit_daily WHERE day = date(OLD.occurred_at, '+9 hours') AND event_count = 0;
+END;
+
+CREATE TRIGGER security_audit_daily_update AFTER UPDATE OF occurred_at, event_type, outcome ON security_audit_events BEGIN
+  UPDATE security_audit_daily SET event_count = event_count - 1,
+    login_success = login_success - (CASE WHEN OLD.event_type IN ('password_login_success', 'passkey_login_success') AND OLD.outcome = 'success' THEN 1 ELSE 0 END),
+    login_failure = login_failure - (CASE WHEN OLD.event_type IN ('password_login_failure', 'passkey_authentication_failure', 'bootstrap_auth_failure') AND OLD.outcome = 'failure' THEN 1 ELSE 0 END),
+    lockouts = lockouts - (CASE WHEN OLD.outcome = 'blocked' THEN 1 ELSE 0 END),
+    session_resume = session_resume - (CASE WHEN OLD.event_type = 'session_resume' THEN 1 ELSE 0 END),
+    critical = critical - (CASE WHEN OLD.event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END)
+  WHERE day = date(OLD.occurred_at, '+9 hours');
+  DELETE FROM security_audit_daily WHERE day = date(OLD.occurred_at, '+9 hours') AND event_count = 0;
+  INSERT INTO security_audit_daily(day, event_count, login_success, login_failure, lockouts, session_resume, critical)
+  SELECT date(NEW.occurred_at, '+9 hours'), 1, CASE WHEN NEW.event_type IN ('password_login_success', 'passkey_login_success') AND NEW.outcome = 'success' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.event_type IN ('password_login_failure', 'passkey_authentication_failure', 'bootstrap_auth_failure') AND NEW.outcome = 'failure' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.outcome = 'blocked' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.event_type = 'session_resume' THEN 1 ELSE 0 END,
+    CASE WHEN NEW.event_type IN ('credential_compromise', 'admin_access') THEN 1 ELSE 0 END
+  WHERE date(NEW.occurred_at, '+9 hours') IS NOT NULL
+  ON CONFLICT(day) DO UPDATE SET event_count = event_count + 1,
+    login_success = login_success + excluded.login_success,
+    login_failure = login_failure + excluded.login_failure,
+    lockouts = lockouts + excluded.lockouts,
+    session_resume = session_resume + excluded.session_resume,
+    critical = critical + excluded.critical;
+END;
+
+-- Cursor order and common filters must seek without scanning earlier history.
+CREATE INDEX idx_security_audit_identity_page ON security_audit_events(identity_id, occurred_at DESC, event_id);
+CREATE INDEX idx_security_audit_service_page ON security_audit_events(service, occurred_at DESC, event_id);
+CREATE INDEX idx_security_audit_password_page ON security_audit_events(occurred_at DESC,event_id) WHERE event_type IN ('password_login_success', 'password_login_failure', 'password_login_submit', 'password_login_client_failure', 'bootstrap_auth_success', 'bootstrap_auth_failure', 'bootstrap_login_blocked', 'login_success', 'login_failure', 'login_blocked', 'login_locked') AND auth_method = 'password' AND outcome IN ('success', 'failure', 'blocked');
+CREATE INDEX idx_security_audit_passkey_page ON security_audit_events(occurred_at DESC,event_id) WHERE event_type IN ('passkey_login_success', 'passkey_authentication_success', 'passkey_authentication_failure', 'login_success', 'login_failure', 'login_blocked', 'login_locked') AND auth_method = 'passkey' AND outcome IN ('success', 'failure', 'blocked');
+CREATE INDEX idx_security_audit_attention_page ON security_audit_events(occurred_at DESC,event_id) WHERE event_type IN ('password_login_success', 'password_login_failure', 'password_login_submit', 'password_login_client_failure', 'bootstrap_auth_success', 'bootstrap_auth_failure', 'bootstrap_login_blocked', 'login_success', 'login_failure', 'login_blocked', 'login_locked', 'passkey_login_success', 'passkey_authentication_success', 'passkey_authentication_failure') AND outcome IN ('failure', 'blocked');
+-- The overview queries all current sessions, not an individual service/Identity.
+CREATE INDEX idx_security_sessions_current ON security_active_sessions(expires_at) WHERE ended_at IS NULL;

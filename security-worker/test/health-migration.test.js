@@ -7,11 +7,11 @@ import { DatabaseSync } from "node:sqlite";
 
 const directory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../migrations");
 
-test("0022 preserves existing links, handoffs, encrypted envelopes, audit and sessions", () => {
+test("0024 preserves existing links, handoffs, encrypted envelopes, audit and sessions", () => {
   const db = new DatabaseSync(":memory:");
   try {
     const files = fs.readdirSync(directory).filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
-    for (const file of files.filter((name) => name < "0022_")) db.exec(fs.readFileSync(path.join(directory, file), "utf8"));
+    for (const file of files.filter((name) => name < "0024_")) db.exec(fs.readFileSync(path.join(directory, file), "utf8"));
     db.exec(`INSERT INTO security_identities (id, display_name, status, is_security_admin) VALUES ('primary-admin','Owner','active',1);
       INSERT INTO security_credentials (credential_id, identity_id, public_key, counter, status, label, prf_salt) VALUES ('credential','primary-admin','key',0,'active','Windows Hello','c2FsdA');
       INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status) VALUES ('d1','primary-admin','downloader','owner','Downloader','active');
@@ -29,7 +29,7 @@ test("0022 preserves existing links, handoffs, encrypted envelopes, audit and se
       const primary = table === "security_active_sessions" ? "session_id_hash" : table === "security_audit_events" ? "event_id" : "id";
       return [table, db.prepare(`SELECT * FROM ${table} WHERE ${primary}=?`).get(id)];
     }));
-    db.exec(fs.readFileSync(path.join(directory, "0022_health_service.sql"), "utf8"));
+    db.exec(fs.readFileSync(path.join(directory, "0024_health_service.sql"), "utf8"));
     const links = db.prepare("SELECT service, service_account_id, status FROM security_service_links WHERE identity_id='primary-admin' ORDER BY service").all();
     assert.ok(links.some((item) => item.service === "downloader"), "Downloader 1 link remains");
     for (const [table, before] of Object.entries(preserved)) {

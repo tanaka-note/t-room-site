@@ -1,10 +1,11 @@
 export const IDENTITY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-export const LINKED_SERVICES = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "health"]);
+export const LINKED_SERVICES = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health"]);
 export const AUDIT_SERVICES = Object.freeze(["security", ...LINKED_SERVICES]);
 export const INVITE_EXPIRY_PRESETS = Object.freeze([3600, 21600, 86400, 259200, 604800]);
 export const LOGIN_SUCCESS_EVENTS = Object.freeze(["password_login_success", "passkey_login_success"]);
 export const LOGIN_FAILURE_EVENTS = Object.freeze(["password_login_failure", "passkey_authentication_failure", "bootstrap_auth_failure"]);
 export const AUDIT_PAGE_SIZE = 100;
+export const AUDIT_SUMMARY_PAGE_SIZE = 30;
 // Read-only history presets. Keep these separate from dashboard/session counters:
 // bootstrap is password verification (including recovery), and a service passkey
 // verification and its completed login remain distinct audit records.
@@ -25,12 +26,14 @@ export function auditViewFilter(view = "all") {
   }
   const events = view === "password" ? PASSWORD_AUDIT_EVENTS : view === "passkey"
     ? PASSKEY_AUDIT_EVENTS : [...new Set([...PASSWORD_AUDIT_EVENTS, ...PASSKEY_AUDIT_EVENTS])];
-  const clause = `event_type IN (${events.map(() => "?").join(", ")})`;
+  // These are server-owned constants, never request values. Literal predicates
+  // let SQLite match the corresponding partial indexes in migration 0023.
+  const clause = `event_type IN (${events.map((event) => `'${event}'`).join(", ")})`;
   // An auth method alone also matches session resumes, registration and admin
   // actions. Neither those nor unrelated download failures belong in a preset.
   return view === "attention"
-    ? { clause: `${clause} AND outcome IN ('failure', 'blocked')`, values: events }
-    : { clause: `${clause} AND auth_method = ? AND outcome IN ('success', 'failure', 'blocked')`, values: [...events, view] };
+    ? { clause: `${clause} AND outcome IN ('failure', 'blocked')`, values: [] }
+    : { clause: `${clause} AND auth_method = '${view}' AND outcome IN ('success', 'failure', 'blocked')`, values: [] };
 }
 // WebAuthn Level 3 limits credential IDs to 1023 bytes.
 export const MAX_CREDENTIAL_ID_BYTES = 1023;

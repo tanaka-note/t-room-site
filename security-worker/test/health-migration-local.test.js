@@ -8,15 +8,15 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { migrationNames, migrationSql, legacySeedSql, snapshot, existingTables, oldServices } from './health-migration-fixture.mjs';
 
-test('0022 preserves every legacy row, primary/foreign key, index and uniqueness constraint across all six services', () => {
+test('0024 preserves every legacy row, primary/foreign key, index and uniqueness constraint across all seven services', () => {
   const db = new DatabaseSync(':memory:');
   try {
     db.exec('PRAGMA foreign_keys=ON');
-    for (const name of migrationNames.filter(name=>name<'0022_')) db.exec(migrationSql(name));
+    for (const name of migrationNames.filter(name=>name<'0024_')) db.exec(migrationSql(name));
     db.exec(legacySeedSql());
     const tables=existingTables(db), before=snapshot(db,tables);
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
-    db.exec(migrationSql('0022_health_service.sql'));
+    db.exec(migrationSql('0024_health_service.sql'));
     assert.deepEqual(snapshot(db,tables),before);
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
     assert.deepEqual(db.prepare('SELECT DISTINCT service FROM security_service_links ORDER BY service').all().map(row=>row.service),[...oldServices].sort());
@@ -27,11 +27,20 @@ test('0022 preserves every legacy row, primary/foreign key, index and uniqueness
     assert.throws(()=>db.exec("UPDATE security_handoffs SET token_hash='hash-cloud-0-0' WHERE id='handoff-cloud-0-1'"));
     assert.throws(()=>db.exec("INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type) VALUES ('duplicate','fixture-0','credential-0-0','cloud-0-0','folder_key_rsa')"));
     assert.throws(()=>db.exec("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,session_id_hash) VALUES ('duplicate','2026-01-01T00:00:30Z','cloud','session_resume','success','session-cloud-0-0')"));
-    assert.doesNotThrow(()=>db.exec("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome) VALUES ('health',CURRENT_TIMESTAMP,'health','session_resume','success')"));
+    const count=()=>db.prepare('SELECT SUM(event_count) AS n FROM security_audit_daily').get().n;
+    const initialCount=count();
+    db.exec("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome) VALUES ('health','2026-01-01T00:00:00Z','health','session_resume','success')");
+    assert.equal(count(),initialCount+1,'preserved aggregate triggers count Health inserts once');
+    db.exec("UPDATE security_audit_events SET occurred_at='2026-01-02T00:00:00Z',event_type='passkey_login_success' WHERE event_id='health'");
+    assert.equal(count(),initialCount+1);
+    assert.equal(db.prepare("SELECT login_success FROM security_audit_daily WHERE day='2026-01-02'").get().login_success,1);
+    db.exec("DELETE FROM security_audit_events WHERE event_id='health'");
+    assert.equal(count(),initialCount);
+    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'health_members_only%' ORDER BY name").all().map(r=>r.name),['health_members_only','health_members_only_update']);
   } finally { db.close(); }
 });
 
-test('actual Wrangler local D1 migrations roll back a mid-0022 failure and preserve populated legacy data on retry', {timeout:120000}, () => {
+test('actual Wrangler local D1 migrations roll back a mid-0024 failure and preserve populated legacy data on retry', {timeout:120000}, () => {
   const directory=mkdtempSync(resolve(tmpdir(),'health-migration-'));
   const migrations=resolve(directory,'migrations'), persistence=resolve(directory,'state');
   const wrangler=fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js',import.meta.url));
@@ -54,21 +63,21 @@ test('actual Wrangler local D1 migrations roll back a mid-0022 failure and prese
   const read=()=>{const db=database();try{return {tables:existingTables(db),data:snapshot(db,existingTables(db)),schema:db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE '__cf%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all(),
     applied:db.prepare('SELECT name FROM d1_migrations ORDER BY id').all(),foreignKeys:db.prepare('PRAGMA foreign_key_check').all()};}finally{db.close();}};
   try {
-    for(const name of migrationNames.filter(name=>name<'0022_'))writeFileSync(resolve(migrations,name),migrationSql(name));
+    for(const name of migrationNames.filter(name=>name<'0024_'))writeFileSync(resolve(migrations,name),migrationSql(name));
     let result=apply();assert.equal(result.status,0,result.stderr);
     writeFileSync(resolve(directory,'seed.sql'),legacySeedSql());
     result=run('execute','DB','--file',resolve(directory,'seed.sql'));assert.equal(result.status,0,result.stderr);
-    const before=read();assert.equal(before.applied.length,21);assert.deepEqual(before.foreignKeys,[]);
-    const sql=migrationSql('0022_health_service.sql');
+    const before=read();assert.equal(before.applied.length,23);assert.deepEqual(before.foreignKeys,[]);
+    const sql=migrationSql('0024_health_service.sql');
     const failing=sql.replace('DROP TABLE security_service_links;', 'DROP TABLE security_service_links;\nSELECT * FROM migration_injected_failure;');
     assert.notEqual(failing,sql);
-    writeFileSync(resolve(migrations,'0022_health_service.sql'),failing);
+    writeFileSync(resolve(migrations,'0024_health_service.sql'),failing);
     result=apply();assert.notEqual(result.status,0);assert.match(result.stderr+result.stdout,/migration_injected_failure/);
     assert.deepEqual(read(),before,'Wrangler batch restores old tables, child rows, indexes and migration history');
-    writeFileSync(resolve(migrations,'0022_health_service.sql'),sql);
+    writeFileSync(resolve(migrations,'0024_health_service.sql'),sql);
     result=apply();assert.equal(result.status,0,result.stderr);
     const after=read();assert.deepEqual(Object.fromEntries(before.tables.map(table=>[table,after.data[table]])),before.data);
-    assert.equal(after.applied.length,22);assert.equal(after.applied.at(-1).name,'0022_health_service.sql');assert.deepEqual(after.foreignKeys,[]);
+    assert.equal(after.applied.length,24);assert.equal(after.applied.at(-1).name,'0024_health_service.sql');assert.deepEqual(after.foreignKeys,[]);
   } finally {
     assert.equal(dirname(resolve(directory)),resolve(tmpdir()));assert.match(basename(directory),/^health-migration-/);
     rmSync(directory,{recursive:true,force:true});
