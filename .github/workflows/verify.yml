@@ -93,6 +93,29 @@ jobs:
           CI: 'true'
           DEBUG: pw:browser
         run: timeout -k 10s 5m node --require ./tools/browser-trace.cjs inventory-worker/test/inventory.browser.mjs
+      - name: Diagnose Inventory WebKit reload with current client without tracing
+        if: failure() && matrix.target == 'inventory'
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_INVENTORY_RELOAD_PROBE: '1'
+          DEBUG: pw:browser
+        run: node inventory-worker/test/inventory.browser.mjs
+      - name: Diagnose Inventory WebKit reload with main client without tracing
+        if: failure() && matrix.target == 'inventory'
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_INVENTORY_RELOAD_PROBE: '1'
+          TROOM_INVENTORY_CLIENT_PATH: tmp/inventory-main-client.js
+          DEBUG: pw:browser
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          mkdir -p tmp
+          git show FETCH_HEAD:inventory-worker/public/inventory.js > tmp/inventory-main-client.js
+          node inventory-worker/test/inventory.browser.mjs
       - name: Start Cloud WebKit audio device
         if: matrix.target == 'cloud'
         run: |
