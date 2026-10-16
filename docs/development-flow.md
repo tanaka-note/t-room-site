@@ -26,7 +26,7 @@ Node.js 24（`node:sqlite`使用）、pnpm 11.19.0。各Workerは独立したpac
 pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false
 ```
 
-依存パッケージの任意のinstall scriptを動かさず、lockfileのプラットフォーム別esbuild/workerdを利用する。CIは対象に必要なディレクトリだけinstallする。ブラウザ依存は既存の `diary-worker` のPlaywrightを共用する。AI Workerにも既存Wrangler 4.121.0を固定するlockfileを追加した。
+依存パッケージの任意のinstall scriptを動かさず、lockfileのプラットフォーム別esbuild/workerdを利用する。CIは対象に必要なディレクトリだけinstallする。ブラウザ依存は既存の `diary-worker` のPlaywrightを共用するが、InventoryはSafari検証用に専用のPlaywright 1.64.1を固定し、他サービスの依存を更新しない。AI Workerにも既存Wrangler 4.121.0を固定するlockfileを追加した。
 
 ```sh
 npm run verify:plan                     # 未commit差分の対象・コマンドを表示（実行しない）

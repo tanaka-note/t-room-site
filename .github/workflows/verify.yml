@@ -65,8 +65,11 @@ jobs:
           VERIFY_TARGET: ${{ matrix.target }}
         run: node tools/install-verify-dependencies.mjs "$VERIFY_TARGET"
       - name: Install Chromium only when used
-        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","inventory"]'), matrix.target)
+        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
+      - name: Install Inventory Chromium
+        if: matrix.target == 'inventory'
+        run: pnpm --dir inventory-worker exec playwright install --with-deps chromium
       - name: Install Cloud seek fixture and WebKit dependencies
         if: matrix.target == 'cloud'
         run: |
@@ -103,6 +106,39 @@ jobs:
         with:
           name: verify-failure-${{ matrix.target }}
           path: tmp/verify-artifacts/
+          if-no-files-found: ignore
+          retention-days: 5
+  inventory-webkit-macos:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.node), 'inventory')
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install only Inventory dependencies
+        run: node tools/install-verify-dependencies.mjs inventory
+      - name: Install Inventory WebKit
+        run: pnpm --dir inventory-worker exec playwright install webkit
+      - name: Inventory macOS WebKit regression
+        timeout-minutes: 5
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_TRACE_DIR: tmp/verify-artifacts/inventory-webkit-macos
+          CI: 'true'
+        run: node --require ./tools/browser-trace.cjs inventory-worker/test/inventory.browser.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: verify-failure-inventory-webkit-macos
+          path: tmp/verify-artifacts/inventory-webkit-macos/
           if-no-files-found: ignore
           retention-days: 5
   cloud-webkit-macos:
@@ -235,7 +271,7 @@ jobs:
         run: dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
   verify:
     if: always()
-    needs: [plan, node, cloud-webkit-macos, android, downloader2-native]
+    needs: [plan, node, inventory-webkit-macos, cloud-webkit-macos, android, downloader2-native]
     runs-on: ubuntu-latest
     steps:
       - name: Require selected jobs to succeed
@@ -243,6 +279,7 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           NODE: ${{ needs.node.result }}
           MACOS: ${{ needs.cloud-webkit-macos.result }}
+          INVENTORY_MACOS: ${{ needs.inventory-webkit-macos.result }}
           ANDROID: ${{ needs.android.result }}
           DOWNLOADER2_NATIVE: ${{ needs.downloader2-native.result }}
-        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
+        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$INVENTORY_MACOS" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]

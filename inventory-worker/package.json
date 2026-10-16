@@ -7,5 +7,5 @@
     "test": "node --test test/*.test.js",
     "deploy": "wrangler deploy"
   },
-  "devDependencies": { "wrangler": "4.121.0" }
+  "devDependencies": { "playwright": "1.64.1", "wrangler": "4.121.0" }
 }
