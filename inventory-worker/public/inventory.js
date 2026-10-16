@@ -5,7 +5,7 @@
   const labels = { opening: '初期在庫', restock: '補充', use: '使用', adjust: '在庫調整' };
   let items = [], detail = null, cursor = null, listScroll = 0, listYear = yearNow, mode = '', editedItem = null;
   let dirty = false, busy = false, approvedClose = false, openToken = '', opener = null, retry = null, backgroundPointer = null;
-  let activity = Date.now(), renderSequence = 0;
+  let activity = Date.now(), renderSequence = 0, listSequence = 0;
   let listAnchors = [];
   let sessionGeneration = 0;
   const pendingRequests = new Set();
@@ -78,7 +78,7 @@
     $('login').disabled = false; markBusy(false); message('');
   }
   async function enter(account, generation = sessionGeneration) { currentSession(generation); $('account-name').textContent = account.displayName; $('login-view').hidden = true; $('app-view').hidden = false; $('logout').hidden = false; message(''); await loadItems(); currentSession(generation); await renderLocation(); }
-  async function loadItems() { const generation = sessionGeneration, value = await api(`/items?year=${listYear}`); currentSession(generation); items = value.items; renderItems(); }
+  async function loadItems() { const generation = sessionGeneration, sequence = ++listSequence, value = await api(`/items?year=${listYear}`); currentSession(generation); if (sequence !== listSequence) return; items = value.items; renderItems(); }
   function renderItems() {
     const search = $('search').value.trim().toLocaleLowerCase(); $('items').replaceChildren();
     const shown = items.filter(item => (!item.archived_at || $('show-archived').checked) && item.name.toLocaleLowerCase().includes(search));

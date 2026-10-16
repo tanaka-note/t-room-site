@@ -9,15 +9,16 @@ function frontend(fetch) {
   const nodes = new Map();
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { value: '', textContent: '', dataset: {}, hidden: false, open: false, disabled: false,
-      replaceChildren() { this.textContent = ''; }, close() { this.open = false; }, reset() { this.resets = (this.resets || 0) + 1; }, focus() {} });
+      replaceChildren() { this.textContent = ''; }, append() {}, close() { this.open = false; }, reset() { this.resets = (this.resets || 0) + 1; }, focus() {} });
     return nodes.get(id);
   };
   const location = { href: 'https://example.test/inventory/?item=old-item&year=2025' };
   const history = { state: { inventory: { itemId: 'old-item' }, inventoryDialog: 'old-token' }, replaceState(state, _, url) { this.state = state; location.href = String(url); } };
   const window = { addEventListener() {} };
-  const document = { getElementById: node, hidden: false, body: { dataset: {} }, addEventListener() {}, dispatchEvent() {} };
+  const document = { getElementById: node, createElement: tag => ({ tagName: tag, textContent: '' }), hidden: false, body: { dataset: {} }, addEventListener() {}, dispatchEvent() {} };
   // Inspect lexical state only in this synthetic VM; production has no debug hooks.
   const hooks = `window.fixture = { api, loginView, loadItems, localTimestamp,
+    itemNames() { return items.map(item => item.name); },
     seed() { items = [{name:'private item'}]; detail = editedItem = {name:'private item'}; cursor = 'private cursor'; retry = {fingerprint:'private input'};
       listAnchors = [{id:'private id'}]; detailPositions.set('private id',123); listScroll=123; listYear=2025;
       openToken='private token'; mode='adjust'; dirty=busy=approvedClose=true; opener=$('items'); backgroundPointer=7;
@@ -83,6 +84,15 @@ test('responses started before session invalidation cannot repopulate memory or 
   const request=f.loadItems(); f.loginView();
   resolve(Response.json({items:[{name:'private item'}]}));
   await assert.rejects(request,e=>e.discarded===true); assertCleared(f);
+});
+
+test('a delayed pre-deletion list cannot overwrite the newer list without the deleted item', async () => {
+  const resolves=[];
+  const f=frontend(()=>new Promise(resolve=>resolves.push(resolve)));
+  const beforeDeletion=f.loadItems(), afterDeletion=f.loadItems();
+  resolves[1](Response.json({items:[]})); await afterDeletion;
+  resolves[0](Response.json({items:[{id:'deleted-item',name:'Deleted fixture'}]})); await beforeDeletion;
+  assert.equal(f.itemNames().length,0);
 });
 
 test('JSON success and structured JSON media types remain supported', async () => {
