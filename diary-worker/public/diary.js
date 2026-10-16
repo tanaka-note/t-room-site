@@ -319,6 +319,14 @@
       loadEntries(true);
       elements.searchInput.focus();
     });
+    document.querySelectorAll("[data-clear-search]").forEach((button) => {
+      const input = document.getElementById(button.dataset.clearSearch);
+      button.addEventListener("click", () => {
+        input.value = "";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.focus({ preventScroll: true });
+      });
+    });
     elements.searchInput.addEventListener("compositionstart", () => {
       state.searchComposing = true;
       cancelPendingEntrySearch();

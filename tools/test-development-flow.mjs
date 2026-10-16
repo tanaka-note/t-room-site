@@ -222,3 +222,21 @@ test('log projection never forwards personal information or secret-bearing text'
   assert.doesNotMatch(JSON.stringify(event), /secret|Cookie|password|requestId/);
   assert.equal(event.result, 'exception'); assert.equal(event.operation, 'request');
 });
+
+test('shared browser fixtures use only Inventory dependencies when tracing its profile', () => {
+  const scratch = mkdtempSync(resolve(tmpdir(), 'troom-browser-dependencies-'));
+  try {
+    const tools = resolve(scratch, 'tools'), inventory = resolve(scratch, 'inventory-worker');
+    mkdirSync(tools); mkdirSync(resolve(inventory, 'node_modules/playwright'), { recursive: true });
+    writeFileSync(resolve(inventory, 'package.json'), '{}');
+    writeFileSync(resolve(inventory, 'node_modules/playwright/index.js'),
+      'module.exports = Object.fromEntries(["chromium","firefox","webkit"].map(name => [name, { launch: async () => {} }]));');
+    writeFileSync(resolve(tools, 'browser-trace.cjs'), readFileSync(resolve(root, 'tools/browser-trace.cjs')));
+    writeFileSync(resolve(tools, 'shared-fixture.cjs'),
+      'require("node:assert/strict").ok(require.cache[require.resolve("../inventory-worker/node_modules/playwright")]);');
+    assert.equal(existsSync(resolve(scratch, 'diary-worker')), false, 'Diary dependencies are deliberately absent');
+    execFileSync(process.execPath, ['--require', resolve(tools, 'browser-trace.cjs'), resolve(tools, 'shared-fixture.cjs')], {
+      env: { ...process.env, VERIFY_TARGET: 'inventory', TROOM_TRACE_DIR: resolve(scratch, 'trace') }, stdio: 'pipe'
+    });
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});

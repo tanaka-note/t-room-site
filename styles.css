@@ -1533,6 +1533,11 @@ h1 {
   right: 10px;
   width: 34px;
   height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
   border: 1px solid rgba(31, 41, 51, 0.12);
   border-radius: 999px;
   background: #f5f3ed;
@@ -2173,9 +2178,14 @@ h1 {
   right: 10px;
   width: 34px;
   height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
   border: 1px solid rgba(31, 41, 51, 0.12);
   border-radius: 999px;
-  background: #f3f8f6;
+  background: #f5f3ed;
   color: #5d6673;
   font-size: 1.3rem;
   line-height: 1;
@@ -2185,7 +2195,7 @@ h1 {
 
 .learning-search-clear:hover,
 .learning-search-clear:focus-visible {
-  background: #e7f1ed;
+  background: #ece7db;
   color: var(--ink);
 }
 

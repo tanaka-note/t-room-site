@@ -35,6 +35,7 @@ const entries = Array.from({ length: 43 }, (_, index) => ({
   photos: [{ id: photoId, displayUrl: "/diary/icons/favicon-64-v4.png", fileName: "写真.png" }]
 }));
 const requests = [];
+const photoRequests = [];
 entries.push({ ...entries[0], id: 44, title: "タイトル限定", content: "本文の先頭。".repeat(60), contentFormat: null, photos: [] });
 entries.push({ ...entries[0], id: 45, title: "タグ一致日記", content: "海辺で過ごした。", contentFormat: null, photos: [],
   tags: ["家族旅行", "旅の記録", "境界前", "境界後", "A+B%_<b>😀", "abc"] });
@@ -57,6 +58,10 @@ const server = createServer(async (request, response) => {
       const offset = Number(url.searchParams.get("offset") || 0);
       const limit = Number(url.searchParams.get("limit") || 20);
       return sendJson(response, { entries: source.slice(offset, offset + limit), hasMore: offset + limit < source.length });
+    }
+    if (path === "/photos") {
+      photoRequests.push(Object.fromEntries(url.searchParams));
+      return sendJson(response, { photos: [], hasMore: false });
     }
     const detail = path.match(/^\/entries\/(\d+)$/);
     if (detail) return sendJson(response, { entry: entries[Number(detail[1]) - 1] });
@@ -106,8 +111,8 @@ function browserExecutable(name) {
 }
 
 async function run(browserType, name, options = {}) {
-  const executablePath = browserExecutable(name === "Touch Chromium" ? "chromium" : name.toLowerCase());
-  assert.ok(executablePath, `${name} executable required`);
+  const executablePath = browserExecutable(name === "Touch Chromium" ? "chromium" : name.toLowerCase()) || browserType.executablePath();
+  assert.ok(existsSync(executablePath), `${name} executable required`);
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
     const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1280, height: 800 }, ...options });
@@ -122,6 +127,29 @@ async function run(browserType, name, options = {}) {
     assert.equal(normalSummary, "朝".repeat(130) + "…");
 
     const input = page.locator("#diary-search-input");
+    await page.locator("#tag-search-input").fill("見つからないタグ");
+    await page.locator('[data-clear-search="tag-search-input"]').click();
+    assert.equal(await page.locator("#tag-search-input").inputValue(), "");
+    assert.equal(await page.locator('[data-clear-search="tag-search-input"]').isVisible(), false);
+    assert.equal(await page.locator("#tag-search-input").evaluate(node => node === document.activeElement), true);
+    await page.locator("#camera-roll-button").click();
+    for (const [id, parameter] of [["photo-entry-search", "entryQuery"], ["photo-file-name-search", "fileName"]]) {
+      const responseFor = value => page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === '/diary/api/photos' && url.searchParams.get(parameter) === value;
+      });
+      const filtered = responseFor("検索テスト");
+      await page.locator(`#${id}`).fill("検索テスト");
+      await filtered;
+      const cleared = responseFor(null);
+      await page.locator(`[data-clear-search="${id}"]`).click();
+      assert.equal(await page.locator(`#${id}`).inputValue(), "");
+      assert.equal(await page.locator(`#${id}`).evaluate(node => node === document.activeElement), true);
+      await cleared;
+      assert.equal(photoRequests.at(-1)[parameter], undefined, 'Clearing refreshes photos without the old filter');
+    }
+    await page.keyboard.press("Escape");
+    await page.locator("#camera-roll-dialog").waitFor({ state: "hidden" });
     const beforeComposition = requests.length;
     await input.evaluate((element) => {
       element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));

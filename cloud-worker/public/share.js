@@ -72,7 +72,7 @@ function bindEvents() {
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) requestPreviewClose();
   });
   $("#share-search").addEventListener("input", event => { state.query = event.target.value.trim(); filterSharedItems(); });
-  $("#share-search-clear").addEventListener("click", () => { state.query = ""; $("#share-search").value = ""; filterSharedItems(); });
+  $("#share-search-clear").addEventListener("click", () => { state.query = ""; $("#share-search").value = ""; filterSharedItems(); $("#share-search").focus({ preventScroll: true }); });
   $("#share-kind").addEventListener("change", event => { state.kind = event.target.value; filterSharedItems(); });
   window.addEventListener("scroll", queueShareThumbnails, {passive:true});
   window.addEventListener("resize", queueShareThumbnails, {passive:true});
