@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { root } from './verify-plan.mjs';
 import { installVerifyDependencies } from './install-verify-dependencies.mjs';
 import { loadWebAppRegistry, expectedBuild } from './web-app-registry.mjs';
+import { healthProductionPreflight } from './health-production-preflight.mjs';
 
 export function assertPreviewSafe(config) {
   const allowed = new Set(['name', 'compatibility_date', 'assets', 'main', '$schema']);
@@ -19,8 +20,9 @@ export function prepareReleaseDependencies(app, install = installVerifyDependenc
   install([profile]);
   return profile;
 }
-export function runProductionDelivery(app, { runCommand, rootDirectory = root, deployDirectory = resolve(root, app.deployCwd) }) {
+export function runProductionDelivery(app, { runCommand, rootDirectory = root, deployDirectory = resolve(root, app.deployCwd), healthPreflight = healthProductionPreflight }) {
   runCommand(rootDirectory, ['tools/check-web-app-builds.mjs', '--target', app.deployTarget]);
+  if (app.deployTarget === 't-room-health') healthPreflight(deployDirectory);
   runCommand(deployDirectory, [resolve(deployDirectory, 'node_modules/wrangler/bin/wrangler.js'), 'deploy']);
   runCommand(rootDirectory, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]);
 }
