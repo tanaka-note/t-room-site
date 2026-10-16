@@ -204,7 +204,7 @@ http.request.uri.path eq "/inventory/api/passkey/handoff"
 ログアウトと、Content-Typeに関係しない401で、フォーム・一覧・詳細・メモリ上の品目・操作再送情報・スクロール位置・opener参照を解除する。
 フォーム値とdirty／busy状態をリセットし、URLと現在のHistory stateから品目・年・dialog状態を取り除く。
 失効前の通信をabortし、世代番号でも古い応答・描画・finally処理を排除して再ログイン後の画面へ戻さない。
-通常のdialog終了時にも入力と編集対象・opener参照を解除する。認証・Cookie・rolling sessionの仕様は変更しない。
+通常のdialog終了時には編集対象・opener参照を解除し、フォーム初期化は次回の編集開始とセッション終了時に行う。認証・Cookie・rolling sessionの仕様は変更しない。
 
 APIはContent-Typeを確認し、JSONでも空・不正な応答は安全な固定メッセージへ変換する。
 429は再試行を案内し、HTML・text/plain・ネットワーク例外・未知のJSONエラー本文を表示しない。

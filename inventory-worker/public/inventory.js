@@ -131,7 +131,7 @@
   }
   function allowClose() { return !busy && (!dirty || confirm('未保存の入力を破棄して閉じますか？')); }
   function closeEditor() { if (!allowClose()) return; approvedClose = true; if (history.state?.inventoryDialog === openToken) history.back(); else finishClose(); }
-  function finishClose() { $('editor').close(); dirty = false; retry = editedItem = null; mode = openToken = ''; $('record-form').reset(); $('record-form').dataset.troomDirty = 'false'; $('form-message').textContent = ''; $('editor-title').textContent = ''; const origin = opener; opener = backgroundPointer = null; origin?.focus({ preventScroll: true }); ready(); }
+  function finishClose() { $('editor').close(); dirty = false; retry = editedItem = null; mode = openToken = ''; $('record-form').dataset.troomDirty = 'false'; const origin = opener; opener = backgroundPointer = null; origin?.focus({ preventScroll: true }); ready(); }
   async function save(event) {
     event.preventDefault(); if (busy) return; const generation = sessionGeneration, editingMode = mode;
     const data = { quantity: Number($('quantity').value), occurredAt: `${$('occurred-at').value}+09:00` };

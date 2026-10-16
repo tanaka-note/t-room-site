@@ -91,6 +91,7 @@ jobs:
           TROOM_BROWSER: webkit
           TROOM_TRACE_DIR: tmp/verify-artifacts/inventory-webkit
           CI: 'true'
+          DEBUG: pw:browser
         run: timeout -k 10s 5m node --require ./tools/browser-trace.cjs inventory-worker/test/inventory.browser.mjs
       - name: Start Cloud WebKit audio device
         if: matrix.target == 'cloud'
