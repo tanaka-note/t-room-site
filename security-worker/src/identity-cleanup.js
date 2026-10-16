@@ -5,11 +5,12 @@ const KNOWN_TABLES = new Set([
   "security_invitations", "security_setup_sessions", "security_challenges",
   "security_handoffs", "security_tcloud_client_vaults", "security_tcloud_key_envelopes",
   "security_active_sessions", "security_audit_events", "security_ai_budget_policies",
+  "security_health_members", "security_health_config", "security_health_vaults", "security_health_grants",
   "security_runtime_state", "security_definition_events", "security_definition_updates", "security_audit_daily"
 ]);
 // Reviewed derived counts contain no Identity/link/credential/key references.
 // These triggers only maintain those counts; unknown triggers still stop cleanup.
-const KNOWN_TRIGGERS = new Set(["security_audit_daily_insert", "security_audit_daily_delete", "security_audit_daily_update"]);
+const KNOWN_TRIGGERS = new Set(["security_audit_daily_insert", "security_audit_daily_delete", "security_audit_daily_update", "health_members_only", "health_members_only_update"]);
 
 export const DISABLED_IDENTITY_CLEANUP_LIMIT = 20;
 
@@ -23,9 +24,12 @@ export const DISABLED_IDENTITY_CLEANUP_GUARD = `
   AND (identity.last_seen_at IS NULL OR datetime(identity.last_seen_at) < datetime(?1))
   AND NOT EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = identity.id AND c.status != 'revoked')
   AND NOT EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = identity.id
-    AND (l.status != 'disabled' OR l.service IN ('ai', 'downloader', 'downloader2', 'inventory')))
+    AND (l.status != 'disabled' OR l.service IN ('ai', 'downloader', 'downloader2', 'inventory', 'health')))
   AND NOT EXISTS (SELECT 1 FROM security_invitations v WHERE v.identity_id = identity.id AND v.status NOT IN ('used', 'revoked', 'expired'))
   AND NOT EXISTS (SELECT 1 FROM security_invitations v WHERE v.created_by_identity_id = identity.id)
+  AND NOT EXISTS (SELECT 1 FROM security_health_members WHERE identity_id=identity.id)
+  AND NOT EXISTS (SELECT 1 FROM security_health_vaults WHERE identity_id=identity.id)
+  AND NOT EXISTS (SELECT 1 FROM security_health_grants WHERE identity_id=identity.id)
   AND NOT EXISTS (SELECT 1 FROM security_ai_budget_policies p WHERE p.identity_id = identity.id)
   AND NOT EXISTS (SELECT 1 FROM security_setup_sessions s WHERE s.identity_id = identity.id
     OR s.credential_id IN (SELECT credential_id FROM security_credentials WHERE identity_id = identity.id))

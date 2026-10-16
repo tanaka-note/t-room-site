@@ -4,6 +4,9 @@ import { passwordLifetimeClaims } from "../../assets/session-policy.mjs";
 import { createHash, createHmac, pbkdf2Sync, randomUUID, randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 globalThis.window = globalThis;
 await import("../../cloud-worker/public/vendor/argon2.umd.min.js");
@@ -75,8 +78,10 @@ function fetch(input, options = {}) {
   const headers = new Headers(options.headers);
   const cookie = headers.get("Cookie")?.match(/(?:^|;\s*)troom_cloud_session=([^;]+)/)?.[1];
   if (cookie && new URL(input).pathname.startsWith("/cloud/api/")) {
-    const session = JSON.parse(Buffer.from(cookie.split(".")[0], "base64url"));
-    if (session.sessionId) headers.set("X-TCloud-Session", session.sessionId);
+    try {
+      const session = JSON.parse(Buffer.from(cookie.split(".")[0], "base64url"));
+      if (session.sessionId) headers.set("X-TCloud-Session", session.sessionId);
+    } catch { /* Malformed-cookie cases must reach the actual Worker validator. */ }
   }
   return globalThis.fetch(input, {...options, headers});
 }
@@ -309,82 +314,26 @@ try {
     assert.equal((await response.json()).adminAuthenticated, false);
   }
   const identityCountBeforeUnlinkedLogin = queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_identities");
-  const adminPasswordAuditBefore = serviceAuditCount(identityId, "diary", "password_login_success");
-  const adminPasswordLogin = await loginDiary("main-admin@example.test", diaryAdminPassword);
-  assert.equal(adminPasswordLogin.response.status, 200, JSON.stringify(adminPasswordLogin.body));
-  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), adminPasswordAuditBefore + 1,
-    "Diary main-admin password login is present in Security D1 before the response is observed");
-  assert.ok(adminPasswordLogin.cookie);
-
-  const userPasswordAuditBefore = serviceAuditCount(identityId, "diary", "password_login_success");
-  const userPasswordLogin = await loginDiary("sub@a-tanaka.jp", diaryUserPassword);
-  assert.equal(userPasswordLogin.response.status, 200, JSON.stringify(userPasswordLogin.body));
-  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), userPasswordAuditBefore + 1,
-    "a second Diary account linked to the same Identity updates that same Identity synchronously");
-  assert.ok(userPasswordLogin.cookie);
-  const loginAtBeforeResume = queryText("security-worker", "security-db",
-    `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`);
-  const seenAtBeforeResume = queryText("security-worker", "security-db",
-    `SELECT last_seen_at AS value FROM security_identities WHERE id = '${identityId}'`);
-  const resumeAuditBefore = serviceAuditCount(identityId, "diary", "session_resume");
-  await delay(5);
-  const resumed = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/session`, {
-    headers: { Cookie: `${services.diary.cookie}=${userPasswordLogin.cookie}` }
-  });
-  assert.equal(resumed.status, 200);
-  assert.equal((await resumed.json()).authenticated, true);
-  assert.equal(serviceAuditCount(identityId, "diary", "session_resume"), resumeAuditBefore + 1,
-    "saved Diary session resume is stored synchronously");
-  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_active_sessions
-    WHERE identity_id = '${identityId}' AND service = 'diary' AND service_account_id = 'main-user'
-      AND auth_method = 'password' AND ended_at IS NULL`), 1,
-  "a uniquely linked password session is tracked by its one-way identifier");
-  assert.equal(queryText("security-worker", "security-db",
-    `SELECT last_login_at AS value FROM security_identities WHERE id = '${identityId}'`), loginAtBeforeResume,
-  "session resume never changes last_login_at");
-  assert.ok(queryText("security-worker", "security-db",
-    `SELECT last_seen_at AS value FROM security_identities WHERE id = '${identityId}'`) >= seenAtBeforeResume,
-  "session resume advances only last_seen_at");
-  const diaryLogout = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/logout`, {
-    method: "POST",
-    headers: { Origin: `http://127.0.0.1:${services.diary.port}`, "Content-Type": "application/json", Cookie: `${services.diary.cookie}=${userPasswordLogin.cookie}` },
-    body: "{}"
-  });
-  assert.equal(diaryLogout.status, 200);
-  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_active_sessions
-    WHERE identity_id = '${identityId}' AND service = 'diary' AND service_account_id = 'main-user'
-      AND auth_method = 'password' AND ended_at IS NULL`), 0,
-  "explicit logout ends only the matching service session");
-  assert.equal(queryText("security-worker", "security-db", `SELECT end_reason AS value FROM security_active_sessions
-    WHERE identity_id = '${identityId}' AND service = 'diary' AND service_account_id = 'main-user'
-      AND auth_method = 'password' ORDER BY updated_at DESC LIMIT 1`), "logout");
-
-  const unlinkedAuditBefore = queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
-    WHERE service = 'diary' AND service_account_id = 'wife-admin' AND event_type = 'password_login_success'`);
-  const unlinkedLogin = await loginDiary("wife@example.test", diaryWifePassword);
-  assert.equal(unlinkedLogin.response.status, 200, JSON.stringify(unlinkedLogin.body));
-  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
-    WHERE service = 'diary' AND service_account_id = 'wife-admin' AND event_type = 'password_login_success'`), unlinkedAuditBefore + 1,
-  "an unlinked account audit is retained without inventing an Identity");
-  assert.equal(queryNumber("security-worker", "security-db", `SELECT COUNT(*) AS value FROM security_audit_events
-    WHERE service = 'diary' AND service_account_id = 'wife-admin' AND event_type = 'password_login_success' AND identity_id IS NOT NULL`), 0,
-  "an unlinked password account is not attached to the wrong Identity");
-  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_identities"), identityCountBeforeUnlinkedLogin,
-    "password audit resolution never auto-creates an Identity");
-
-  const fallbackAuditBefore = serviceAuditCount(identityId, "diary", "password_login_success");
-  runSecuritySql(`CREATE TRIGGER fail_synchronous_login_audit
-    BEFORE INSERT ON security_audit_events
-    WHEN NEW.event_type = 'password_login_success'
-    BEGIN SELECT RAISE(ABORT, 'injected synchronous audit failure'); END`);
+  const failedPasswordAudits = () => queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_audit_events WHERE service='diary' AND event_type='password_login_failure'");
+  const passwordSuccessBefore = queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_audit_events WHERE service='diary' AND event_type='password_login_success'");
+  for (const [loginId, password] of [["main-admin@example.test", diaryAdminPassword], ["sub@a-tanaka.jp", diaryUserPassword], ["wife@example.test", diaryWifePassword]]) {
+    const before = failedPasswordAudits();
+    const denied = await loginDiary(loginId, password);
+    assert.equal(denied.response.status, 401, "every Diary account uses passkey-only authentication");
+    assert.match(denied.body.error, /パスキー/);
+    assert.equal(denied.cookie, null, "a rejected password never issues a session");
+    assert.equal(failedPasswordAudits(), before + 1, "password denial is audited before the response is observed");
+  }
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_audit_events WHERE service='diary' AND event_type='password_login_success'"), passwordSuccessBefore);
+  assert.equal(queryNumber("security-worker", "security-db", "SELECT COUNT(*) AS value FROM security_identities"), identityCountBeforeUnlinkedLogin, "rejected password requests never create an Identity");
+  const fallbackAuditBefore = failedPasswordAudits();
+  runSecuritySql("CREATE TRIGGER fail_synchronous_login_audit BEFORE INSERT ON security_audit_events WHEN NEW.event_type = 'password_login_failure' BEGIN SELECT RAISE(ABORT, 'injected synchronous audit failure'); END");
   const fallbackLogin = await loginDiary("main-admin@example.test", diaryAdminPassword);
-  assert.equal(fallbackLogin.response.status, 200, "Security RPC failure must not reject a valid service login");
-  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), fallbackAuditBefore,
-    "the injected Security D1 failure prevents the synchronous insert before Queue recovery");
+  assert.equal(fallbackLogin.response.status, 401, "audit fallback cannot re-enable retired password login");
+  assert.equal(failedPasswordAudits(), fallbackAuditBefore);
   runSecuritySql("DROP TRIGGER fail_synchronous_login_audit");
-  await waitForServiceAudit(identityId, "diary", "password_login_success", fallbackAuditBefore + 1);
-  assert.equal(serviceAuditCount(identityId, "diary", "password_login_success"), fallbackAuditBefore + 1,
-    "the same login event is recovered later through SECURITY_AUDIT Queue");
+  for (let attempt=0; attempt<60 && failedPasswordAudits() === fallbackAuditBefore; attempt++) await delay(200);
+  assert.equal(failedPasswordAudits(), fallbackAuditBefore + 1, "Queue recovers the same rejected-login audit");
 
   const handoffCases = [
     { service: "diary", cookie: oldIdentityCookie, linkId: services.diary.linkId, accountId: services.diary.accountId, role: "user" },
@@ -474,6 +423,18 @@ try {
   });
   assert.equal(ordinaryUserHouseholdSwitch.status, 403,
     "selecting main-user keeps the existing personal household boundary instead of inheriting global-owner scope");
+
+  const resumeBefore = serviceAuditCount(identityId, 'diary', 'session_resume');
+  const loginBeforeResume = queryText('security-worker', 'security-db', `SELECT last_login_at AS value FROM security_identities WHERE id='${identityId}'`);
+  const userCookieHeader = `${services.diary.cookie}=${redeemedDiaryUserChoice.cookie}`;
+  const userResume = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/session`, { headers: { Cookie: userCookieHeader } });
+  assert.equal(userResume.status, 200);assert.equal((await userResume.json()).authenticated, true);
+  assert.equal(serviceAuditCount(identityId, 'diary', 'session_resume'), resumeBefore + 1, 'passkey resume is audited synchronously');
+  assert.equal(queryText('security-worker', 'security-db', `SELECT last_login_at AS value FROM security_identities WHERE id='${identityId}'`), loginBeforeResume, 'resume does not alter the login timestamp');
+  const liveDiarySessions = () => queryNumber('security-worker', 'security-db', `SELECT COUNT(*) AS value FROM security_active_sessions WHERE identity_id='${identityId}' AND service='diary' AND auth_method='passkey' AND ended_at IS NULL`);
+  const liveBeforeLogout = liveDiarySessions();
+  const userLogout = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/logout`, { method: 'POST', headers: { Origin: `http://127.0.0.1:${services.diary.port}`, 'Content-Type': 'application/json', Cookie: userCookieHeader }, body: '{}' });
+  assert.equal(userLogout.status, 200);assert.equal(liveDiarySessions(), liveBeforeLogout - 1, 'logout ends only the chosen passkey session');
 
   const adminHandoff = await createSecurityHandoff(readinessCookieA, "cloud", "readiness-cloud-admin-link");
   assert.equal(adminHandoff.response.status, 200, JSON.stringify(adminHandoff.body));
@@ -614,10 +575,10 @@ try {
     "the old Security Identity cookie is rejected on its next access");
   await assertSingleAccess("cloud", disabledLifecycleCloudLogin.cookie, false, "disabled Identity service session");
   const passwordSessionAfterDisable = await fetch(`http://127.0.0.1:${services.diary.port}/diary/api/session`, {
-    headers: { Cookie: `${services.diary.cookie}=${userPasswordLogin.cookie}` }
+    headers: { Cookie: `${services.diary.cookie}=${createServiceCookies('password', diaryVersion, billingVersion).diary}` }
   });
-  assert.equal(passwordSessionAfterDisable.status, 200, "Identity disable does not affect an existing password session");
-  assert.equal((await passwordSessionAfterDisable.json()).authenticated, true);
+  assert.equal(passwordSessionAfterDisable.status, 200, "public session endpoint reports authentication state");
+  assert.equal((await passwordSessionAfterDisable.json()).authenticated, false);
   const disablePrimary = await securityAdminRequest("/security/api/identities/primary-admin/disable", freshAdminCookie, {});
   assert.equal(disablePrimary.response.status, 409, "the primary administrator cannot be disabled");
   runSecuritySql(`
@@ -1117,13 +1078,13 @@ try {
   const switchedDiaryCookie = switchedDiary.headers.get("set-cookie")?.match(/troom_diary_session=([^;]+)/)?.[1];
   assert.ok(switchedDiaryCookie, "Diary household switch reissues its session cookie");
   const switchedPayload = decodeSignedPayload(switchedDiaryCookie);
-  for (const key of ["identityId", "credentialId", "serviceLinkId", "serviceAccountId", "passkeySessionEpoch", "authMethod"]) {
+  for (const key of ["identityId", "credentialId", "serviceLinkId", "serviceAccountId", "passkeySessionEpoch", "authMethod", "sessionId", "startedAt", "rollingSessionVersion"]) {
     assert.equal(switchedPayload[key], handoffPayload[key], `Diary household switch preserves ${key}`);
   }
   assert.equal(switchedPayload.activeHouseholdId, "chiharu-household");
-  assert.equal(switchedPayload.exp, handoffPayload.exp, "Diary household switch preserves the passkey absolute expiry");
-  assert.doesNotMatch(switchedDiary.headers.get("set-cookie") || "", /Max-Age|Expires=/i,
-    "Diary household switch keeps a non-persistent passkey cookie");
+  assert.equal(switchedPayload.exp, handoffPayload.exp, "Diary household switch without foreground renewal preserves the current expiry");
+  assert.match((switchedDiary.headers.get("set-cookie") || "").split(';').slice(1).join(';'), /; Max-Age=43200(?:;|$)/,
+    "Diary household switch keeps the twelve-hour persistent passkey cookie");
   const switchedAccess = await fetch(`http://127.0.0.1:${services.diary.port}${services.diary.path}`, {
     headers: { Cookie: `${services.diary.cookie}=${switchedDiaryCookie}` }
   });
@@ -1132,7 +1093,7 @@ try {
   runSecuritySql(`UPDATE security_credentials SET status = 'revoked' WHERE credential_id = '${credentialId}'`);
   await assertAccess(passkeyCookies, false, "credential revoke");
   await assertSingleAccess("diary", switchedDiaryCookie, false, "credential revoke rejects the household-switched Diary cookie");
-  await assertAccess(passwordCookies, true, "password sessions after credential revoke");
+  await assertAccess(passwordCookies, false, "retired password sessions after credential revoke");
 
   runSecuritySql(`UPDATE security_credentials SET status = 'active', revoked_at = NULL WHERE credential_id = '${credentialId}'`);
   await assertSingleAccess("diary", switchedDiaryCookie, true, "the fixture can continue to the epoch and local-switch checks after credential restoration");
@@ -1168,7 +1129,7 @@ try {
     for (const activeService of Object.keys(services).filter((name) => name !== disabledService)) {
       await assertSingleAccess(activeService, replacementCookies[activeService], true, `${disabledService} local kill switch must not affect ${activeService}`);
     }
-    await assertAccess(passwordCookies, true, `password sessions while only ${disabledService} passkeys are disabled`);
+    await assertAccess(passwordCookies, false, `retired password sessions while only ${disabledService} passkeys are disabled`);
     assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 1,
       "service-local kill switches must not change the global epoch");
   }
@@ -1195,7 +1156,7 @@ try {
   assert.equal(await securityIdentityHandoff(oldIdentityCookie), 503, "disable transition cannot issue a handoff while the Secret is still true");
   await assertAccess(replacementCookies, false, "disable transition rejects every service passkey cookie before the false Secret is deployed");
   await assertSingleAccess("diary", switchedDiaryCookie, false, "global epoch transition rejects the household-switched Diary cookie");
-  await assertAccess(passwordCookies, true, "password sessions remain valid while the global runtime gate is closed");
+  await assertAccess(passwordCookies, false, "retired password sessions remain rejected while the global runtime gate is closed");
 
   stopSecurityWorker();
   await delay(300);
@@ -1226,7 +1187,7 @@ try {
   await waitForUrl("http://127.0.0.1:8810/security/api/status");
   assert.equal(await securityAdminAuthenticated(newAdminCookie), false, "Security global kill switch rejects its admin cookie");
   await assertAccess(newEpochCookies, false, "Security global kill switch rejects every service passkey session");
-  await assertAccess(passwordCookies, true, "password sessions remain valid during the Security global kill switch");
+  await assertAccess(passwordCookies, false, "retired password sessions remain rejected during the Security global kill switch");
   assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 3);
   await assertAccess(newEpochCookies, false, "repeated OFF access does not restore or repeatedly advance sessions");
   assert.equal(queryNumber("security-worker", "security-db", "SELECT passkey_session_epoch AS value FROM security_runtime_state WHERE id = 1"), 3);
@@ -1242,7 +1203,7 @@ try {
   await assertAccess(newEpochCookies, false, "old service passkey cookies stay revoked after global re-enable");
   const latestEpochCookies = createServiceCookies("passkey", diaryVersion, billingVersion, 3, replacementLinks);
   await assertAccess(latestEpochCookies, true, "new passkey login after repeated-access kill switch uses the new epoch");
-  await assertAccess(passwordCookies, true, "password sessions remain valid across the kill-switch cycle");
+  await assertAccess(passwordCookies, false, "retired password sessions remain rejected across the kill-switch cycle");
 
   const latestFreshAdminCookie = signSecurityCookie({
     kind: "admin", identityId: "audit_admin", credentialId: "audit-credential",
@@ -1306,10 +1267,16 @@ async function startServiceWorkers(passkeysEnabled) {
   processes.push(startWorker("security-worker", 8815, [], [
     "--config", "test/downloader-service-fixture.wrangler.jsonc"
   ], "downloader-fixture"));
+  // Registry now includes these services even though this test's revocation
+  // scenarios remain scoped to Cloud/Diary/Billing.
+  processes.push(startWorker("downloader2-worker", 8816, [`SESSION_SECRET:${sessionSecret}`, "ALLOW_LOCAL_HTTP:true"]));
+  processes.push(startWorker("health-worker", 8817, [`SESSION_SECRET:${sessionSecret}`, "PASSKEY_ENABLED:true"]));
   await Promise.all(Object.entries(services).map(([name, service]) =>
     waitForUrl(`http://127.0.0.1:${service.port}${sessionPath(name)}`)));
   await waitForUrl("http://127.0.0.1:8814/ai/api/session");
   await waitForUrl("http://127.0.0.1:8815/");
+  await waitForUrl("http://127.0.0.1:8816/downloader2/api/session");
+  await waitForUrl("http://127.0.0.1:8817/health/");
 }
 
 function startSecurityWorker(passkeysEnabled) {
@@ -1400,7 +1367,10 @@ async function redeemServiceHandoff(name, handoffToken) {
     },
     body: JSON.stringify({ handoffToken })
   });
-  const body = await response.json().catch(() => ({}));
+  const rawBody = await response.text();
+  let body;
+  try { body = JSON.parse(rawBody); }
+  catch { body = { unexpectedResponse: rawBody.replaceAll(sessionSecret, '[redacted]').replaceAll(securitySessionSecret, '[redacted]').slice(0, 500) }; }
   const cookie = response.headers.get("set-cookie")?.match(new RegExp(`${service.cookie}=([^;]+)`))?.[1] || null;
   return { response, body, cookie };
 }
@@ -1741,9 +1711,10 @@ async function redeemDiaryAdminHandoff() {
   const body = await response.text();
   assert.equal(response.status, 200, `valid Diary handoff redeem: ${body}`);
   const setCookie = response.headers.get("set-cookie") || "";
-  assert.doesNotMatch(setCookie, /Max-Age|Expires=/i, "Diary passkey handoff does not issue a persistent cookie");
+  assert.match(setCookie.split(';').slice(1).join(';'), /; Max-Age=43200(?:;|$)/, "Diary passkey handoff issues the current twelve-hour persistent cookie");
   const cookie = setCookie.match(/troom_diary_session=([^;]+)/)?.[1];
   assert.ok(cookie, "Diary handoff issues a session cookie");
+  assert.equal(decodeSignedPayload(cookie).rollingSessionVersion, 1, "new Diary handoffs use the current rolling-session generation");
   const lifetime = decodeSignedPayload(cookie).exp - Math.floor(Date.now() / 1000);
   assert.ok(lifetime > 43190 && lifetime <= 43200, `Diary passkey session lifetime is twelve hours: ${lifetime}`);
   return cookie;
@@ -1767,8 +1738,8 @@ async function assertSessionRefreshPolicies(passkeyCookies, passwordCookies) {
     const passwordResponse = await fetch(`http://127.0.0.1:${service.port}${service.path}`, {
       headers: { Cookie: `${service.cookie}=${passwordCookies[name]}` }
     });
-    assert.equal(passwordResponse.status, 200, `${name} password session remains usable`);
-    assert.equal(passwordResponse.headers.get("set-cookie"), null, `${name} does not roll or reissue a password session`);
+    assert.equal(passwordResponse.status, 401, `${name} retired password session remains rejected`);
+    assert.doesNotMatch(passwordResponse.headers.get("set-cookie") || "", new RegExp(`${service.cookie}=[^;]+`), `${name} does not renew a rejected password session`);
     assert.equal(decodeSignedPayload(passwordCookies[name]).exp, passwordPayload.exp);
   }
 }
@@ -1840,8 +1811,9 @@ function startWorker(directory, port, vars, extraArgs = [], marker = directory) 
   });
   child.__directory = marker;
   child.__output = "";
-  child.stdout.on("data", (chunk) => { child.__output += chunk; });
-  child.stderr.on("data", (chunk) => { child.__output += chunk; });
+  const diagnostic = chunk => { child.__output += String(chunk).replaceAll(sessionSecret, '[redacted]').replaceAll(securitySessionSecret, '[redacted]'); };
+  child.stdout.on("data", diagnostic);
+  child.stderr.on("data", diagnostic);
   return child;
 }
 
@@ -2001,17 +1973,24 @@ async function waitForServiceAudit(identity, service, eventType, minimum) {
 }
 
 function queryNumber(directory, database, sql) {
-  const result = runWrangler(directory, ["d1", "execute", database, "--local", "--command", sql]);
-  const match = result.stdout.match(/"value"\s*:\s*(\d+)/);
-  if (!match) throw new Error(`Could not read test account version from ${directory}.`);
-  return Number(match[1]);
+  const value = queryLocalValue(directory, database, sql);
+  assert.equal(Number.isSafeInteger(value), true, 'Invalid numeric fixture value');
+  return value;
 }
-
 function queryText(directory, database, sql) {
-  const result = runWrangler(directory, ["d1", "execute", database, "--local", "--command", sql]);
-  const match = result.stdout.match(/"value"\s*:\s*"([^"]*)"/);
-  if (!match) throw new Error(`Could not read text fixture from ${directory}.`);
-  return match[1];
+  const value = queryLocalValue(directory, database, sql);
+  assert.equal(typeof value, 'string', 'Invalid text fixture value');
+  return value;
+}
+function queryLocalValue(directory, database, sql) {
+  assert.equal(databaseName(directory), database);
+  const persistence = join(repository, directory, '.wrangler/state/v3/d1');
+  const files = readdirSync(persistence, { recursive: true }).filter(file => file.endsWith('.sqlite') && !file.endsWith('metadata.sqlite'));
+  assert.equal(files.length, 1, 'Expected one local D1 fixture');
+  // Read committed SQLite state without launching Wrangler per assertion.
+  // Mutations and every HTTP/RPC path still use the local Workers.
+  const db = new DatabaseSync(join(persistence, files[0]), { readOnly: true });
+  try { return db.prepare(sql).get()?.value; } finally { db.close(); }
 }
 
 function runWrangler(directory, args) {
@@ -2023,7 +2002,7 @@ function runWrangler(directory, args) {
 }
 
 function wranglerPath(directory) {
-  if (directory === "ai-worker") return `${repository}node_modules/wrangler/bin/wrangler.js`;
+  if (["ai-worker", "downloader2-worker"].includes(directory)) return `${repository}node_modules/wrangler/bin/wrangler.js`;
   return `${repository}${directory}/node_modules/wrangler/bin/wrangler.js`;
 }
 
