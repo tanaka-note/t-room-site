@@ -129,6 +129,40 @@ try {
       f.setActive(true); await loginAgain(); await activate(page.getByRole('button',{name:'品目を追加',exact:true}));
       assert.equal(await page.locator('#name').inputValue(),''); assert.equal(await page.locator('#quantity').inputValue(),'0');
       await page.keyboard.press('Escape'); await page.locator('#editor').waitFor({state:'hidden'});
+      // Deletion covers nonzero stock, confirmation, stale versions, history and stale tabs.
+      const liveCookie=(await context.cookies(`${origin}/inventory/`)).find(c=>c.name==='troom_inventory_session');
+      f.cookie=`${liveCookie.name}=${liveCookie.value}`;
+      const createResponse=await f.request('/api/items',{name:'Delete fixture',unit:'個',stock:5,requestId:crypto.randomUUID()}); assert.equal(createResponse.status,200);
+      const created=await createResponse.json();
+      await f.request(`/api/items/${created.itemId}/movements`,{kind:'use',quantity:2,occurredAt:'2026-01-01T09:00:00+09:00',requestId:crypto.randomUUID()});
+      await page.reload(); await page.locator('#app-view').waitFor({state:'visible'}); await page.locator('#search').fill('Delete fixture');
+      await activate(page.getByRole('button',{name:'Delete fixture',exact:true})); await page.locator('#detail-view').waitFor({state:'visible'});
+      assert.match(await page.locator('#annual-total').innerText(),/2 個/);
+      const staleUrl=page.url(), staleTab=await context.newPage(); await staleTab.goto(staleUrl); await staleTab.locator('#detail-view').waitFor({state:'visible'});
+      try {
+        acceptDialog=false; await activate(page.getByRole('button',{name:'品目を削除',exact:true}));
+        assert.equal(await page.locator('#detail-view').isVisible(),true); assert.equal((await f.request(`/api/items/${created.itemId}`)).status,200);
+        acceptDialog=true;
+        await f.request(`/api/items/${created.itemId}/movements`,{kind:'restock',quantity:1,occurredAt:'2026-01-01T09:00:00+09:00',requestId:crypto.randomUUID()});
+        await activate(page.getByRole('button',{name:'品目を削除',exact:true}));
+        await page.waitForFunction(()=>document.getElementById('item-stock').textContent.includes('4 個') && document.getElementById('message').textContent.includes('別の操作'));
+        assert.equal((await f.request(`/api/items/${created.itemId}`)).status,200);
+        const deletionResponse=page.waitForResponse(r=>r.url().endsWith(`/items/${created.itemId}/delete`) && r.status()===200);
+        await activate(page.getByRole('button',{name:'品目を削除',exact:true})); await deletionResponse;
+        await page.locator('#list-view').waitFor({state:'visible'}); await page.getByText('品目を削除しました。',{exact:true}).waitFor();
+        assert.equal(await page.locator('#search').inputValue(),'Delete fixture'); assert.equal(await page.locator('.item').count(),0);
+        assert.equal(new URL(page.url()).searchParams.has('item'),false);
+        await page.locator('#show-archived').check(); assert.equal(await page.locator('.item').count(),0);
+        await page.goBack(); await page.locator('#list-view').waitFor({state:'visible'}); await page.goForward(); await page.locator('#list-view').waitFor({state:'visible'});
+        await staleTab.reload(); await staleTab.locator('#list-view').waitFor({state:'visible'});
+        await staleTab.getByText('品目が見つかりません。',{exact:true}).waitFor(); assert.equal(new URL(staleTab.url()).searchParams.has('item'),false);
+        await page.goto(staleUrl); await page.getByText('品目が見つかりません。',{exact:true}).waitFor(); assert.equal(await page.locator('#detail-view').isHidden(),true);
+      } finally { await staleTab.close(); }
+      const archived=await (await f.request('/api/items',{name:'Archived delete fixture',unit:'個',stock:0,requestId:crypto.randomUUID()})).json();
+      await f.request(`/api/items/${archived.itemId}/archive`,{requestId:crypto.randomUUID()});
+      await page.goto(`${origin}/inventory/?item=${archived.itemId}`); await page.locator('#detail-view').waitFor({state:'visible'});
+      await activate(page.getByRole('button',{name:'品目を削除',exact:true})); await page.getByText('品目を削除しました。',{exact:true}).waitFor();
+      assert.equal((await f.request(`/api/items/${archived.itemId}`)).status,404);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false); assert.deepEqual(errors, []);
       assert.deepEqual(unexpectedDialogs,[]);
       assert.equal(await page.evaluate(() => Boolean(window.TRoomPwaUpdater)), true);

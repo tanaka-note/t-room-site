@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -20,7 +20,8 @@ export function d1(sqlite) {
 }
 export const inventory = await bundle(new URL('../src/index.js', import.meta.url), '\nexport {signSession};');
 export function fixture() {
-  const sqlite = new DatabaseSync(':memory:'); sqlite.exec('PRAGMA foreign_keys=ON'); sqlite.exec(readFileSync(new URL('../migrations/0001_inventory.sql', import.meta.url), 'utf8'));
+  const sqlite = new DatabaseSync(':memory:'); sqlite.exec('PRAGMA foreign_keys=ON');
+  for (const name of readdirSync(new URL('../migrations/', import.meta.url)).filter(n => n.endsWith('.sql')).sort()) sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'));
   sqlite.prepare('INSERT INTO inventory_accounts(id,display_name) VALUES(?,?)').run('owner', 'Sample Owner');
   const sessions = new Map(); let active = true, consumed = false;
   const env = { DB: d1(sqlite), SESSION_SECRET: randomBytes(32).toString('hex'), PASSKEY_ENABLED: 'true', SESSION_VERSION: '1',

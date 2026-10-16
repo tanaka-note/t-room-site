@@ -68,7 +68,7 @@
 | テーブル | 主な項目 | 役割 |
 |---|---|---|
 | `inventory_accounts` | id、display_name、is_active、session_version | 初期版はownerの1件のみ。氏名は本番作成時に入力 |
-| `inventory_items` | id、account_id、name、unit、stock、version、archived_at | 品目と現在庫。更新versionで競合を検知 |
+| `inventory_items` | id、account_id、name、unit、stock、version、archived_at、deleted_at | 品目と現在庫。更新versionで競合を検知 |
 | `inventory_movements` | id、account_id、item_id、kind、quantity_delta、occurred_at、created_at、voided_at、request_id | 初期在庫・補充・使用・調整の履歴と再送防止 |
 
 `quantity_delta`は初期在庫・補充が正、使用が負、調整は正または負。
@@ -90,8 +90,15 @@
 別タブから同時に使用しても在庫が負にならないよう、DBの条件付き更新・制約で保証する。
 誤入力は取消後に正しい記録を追加する。取消不能な補充は事情を表示して在庫調整へ案内する。
 在庫調整は入力時のversionを確認し、途中の使用を上書きする場合は再読み込みを要求する。
-初期版は履歴や品目の完全削除を提供せず、在庫0の品目をアーカイブして過去の集計を保持する。
+在庫0の品目をアーカイブして過去の集計を保持する。
 取消によって在庫が戻ったアーカイブ品目は自動的に通常一覧へ戻し、再び使用できるようにする。
+
+テスト登録等の不要な品目は詳細の「品目を削除」から確認後に削除できる。在庫あり・アーカイブ済みも対象。
+削除は`deleted_at`による論理削除で、一覧（アーカイブ表示を含む）・詳細・月別/年間集計から除外する。復元操作は提供しない。
+品目・履歴・`inventory_requests`はDB内に保持し、物理的なデータ消去は行わない。元の登録や削除の再送で復活・二重計上させない。
+削除時のversionが変わっていれば409で拒否し、最新状態を表示して再確認を求める。DB triggerでも削除後の記録追加・取消・アーカイブ・復活を拒否する。
+削除マーカーとrequest recordは同一batchで確定する。戻る/進む・別タブ・保存URLから削除済み詳細を開いた場合は一覧へ戻す。
+公開時はコードの切替前に`0002_item_deletion.sql`を適用する（既存行は変更せず列とguardを追加）。旧コードは削除フラグを扱わないため、削除利用後は旧版へ単純rollbackしない。
 
 ## 認証・暗号化（承認済み）
 

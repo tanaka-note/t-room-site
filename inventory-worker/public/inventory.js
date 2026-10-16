@@ -16,7 +16,7 @@
     'ページが見つかりません。', 'この操作は利用できません。', '画面を読み込めませんでした。', 'ログアウトを完了できませんでした。',
     '品目が見つかりません。', '履歴のページを確認してください。', '記録の種類を確認してください。', 'アーカイブ済みの品目には追加できません。',
     '記録が見つかりません。', '同じ操作IDで異なる内容を送信できません。', '別の操作で在庫が変わりました。再読み込みして入力し直してください。',
-    '初期在庫は取り消せません。在庫調整を利用してください。', 'この記録は既に取り消されています。', '在庫0の有効な品目だけをアーカイブできます。',
+    '初期在庫は取り消せません。在庫調整を利用してください。', 'この記録は既に取り消されています。', '在庫0の有効な品目だけをアーカイブできます。', '削除済みの品目は変更できません。',
     '在庫が不足しているか、数量の上限を超えています。取消できない場合は在庫調整を利用してください。',
     '認証の準備ができていません。', 'アカウントの準備ができていません。', '利用できるパスキーを確認できませんでした。',
     'セッションを開始できませんでした。', 'パスキーでログインしてください。', '認証設定を確認してください。', 'セッションの認証設定が完了していません。',
@@ -95,12 +95,20 @@
     const sequence = ++renderSequence, params = new URL(location.href).searchParams, id = params.get('item');
     if (!id) { $('detail-view').hidden = true; $('list-view').hidden = false; detail = null; requestAnimationFrame(() => { if (sequence !== renderSequence) return; const anchor = listAnchors.find(a => [...$('items').children].some(n => n.dataset.itemId === a.id)); const row = anchor && [...$('items').children].find(n => n.dataset.itemId === anchor.id); window.scrollTo(0, row ? window.scrollY + row.getBoundingClientRect().top - anchor.top : listScroll); }); return; }
     const priorScroll = detail && detail.item.id === id ? window.scrollY : null;
-    const year = Number(params.get('year') || listYear), value = await api(`/items/${encodeURIComponent(id)}?year=${year}`);
+    const year = Number(params.get('year') || listYear);
+    let value;
+    try { value = await api(`/items/${encodeURIComponent(id)}?year=${year}`); }
+    catch (error) {
+      if (sequence !== renderSequence) return;
+      if (error.status === 404) { await returnToList('品目が見つかりません。', id); return; }
+      throw error;
+    }
     if (sequence !== renderSequence) return;
     detail = value; cursor = value.nextCursor; $('list-view').hidden = true; $('detail-view').hidden = false; $('item-name').textContent = value.item.name;
     $('item-stock').textContent = `現在庫 ${value.item.stock.toLocaleString()} ${value.item.unit}${value.item.archived_at ? '（アーカイブ）' : ''}`;
     $('detail-year').value = String(value.year); $('annual-total').textContent = `年間使用数 ${value.annualUsage.toLocaleString()} ${value.item.unit}`;
     $('detail-actions').replaceChildren(); if (!value.item.archived_at) { $('detail-actions').append(button('使用', e => edit('use', value.item, e.currentTarget)), button('補充', e => edit('restock', value.item, e.currentTarget)), button('在庫を合わせる', e => edit('adjust', value.item, e.currentTarget))); if (value.item.stock === 0) $('detail-actions').append(button('アーカイブ', () => archive(value.item))); }
+    $('detail-actions').append(button('品目を削除', () => deleteItem(value.item)));
     renderChart(value); $('movements').replaceChildren(); appendHistory(value.movements); $('more').hidden = !cursor;
     requestAnimationFrame(() => { if (sequence === renderSequence) window.scrollTo(0, fresh ? 0 : priorScroll ?? detailPositions.get(positionKey(value)) ?? 0); });
   }
@@ -152,6 +160,32 @@
   async function archive(item) {
     if (busy || !confirm('この品目をアーカイブしますか？ 過去の記録は残ります。')) return;
     const generation = sessionGeneration; markBusy(true); try { await api(`/items/${item.id}/archive`, { requestId: crypto.randomUUID() }); currentSession(generation); await loadItems(); await renderLocation(); currentSession(generation); message('アーカイブしました。'); } catch (e) { report(e); } finally { if (generation === sessionGeneration) markBusy(false); }
+  }
+  async function returnToList(notice, itemId) {
+    const generation = sessionGeneration;
+    renderSequence++; detail = cursor = null;
+    for (const key of detailPositions.keys()) if (key.startsWith(`${itemId}:`)) detailPositions.delete(key);
+    for (const id of ['item-name','item-stock','annual-total','detail-actions','movements','chart','month-labels','month-values']) $(id).replaceChildren();
+    $('more').hidden = true; $('detail-view').hidden = true; $('list-view').hidden = false;
+    const url = new URL(location.href); url.searchParams.delete('item'); url.searchParams.delete('year');
+    const state = { ...history.state }; delete state.inventory; delete state.inventoryDialog; history.replaceState(state, '', url);
+    await loadItems(); currentSession(generation); await renderLocation(); message(notice);
+  }
+  async function deleteItem(item) {
+    if (busy || !confirm('この品目を削除しますか？ 在庫数にかかわらず、一覧・使用数の集計・履歴画面から除外されます。元に戻せません。')) return;
+    const generation = sessionGeneration; markBusy(true);
+    try {
+      await api(`/items/${item.id}/delete`, { requestId: crypto.randomUUID(), expectedVersion: item.version });
+      currentSession(generation); await returnToList('品目を削除しました。', item.id);
+    } catch (error) {
+      if (generation !== sessionGeneration) { report(error); return; }
+      if (error.status === 404) await returnToList('品目は既に削除されています。', item.id).catch(report);
+      else if (error.status === 409) {
+        try { await loadItems(); currentSession(generation); await renderLocation(); currentSession(generation); report(error); }
+        catch (refreshError) { report(refreshError); }
+      }
+      else report(error);
+    } finally { if (generation === sessionGeneration) markBusy(false); }
   }
   document.addEventListener('DOMContentLoaded', async () => {
     for (const id of ['list-year', 'detail-year']) for (let year = yearNow; year >= 2000; year--) { const option = el('option', `${year}年`); option.value = String(year); $(id).append(option); } $('list-year').value = String(yearNow);

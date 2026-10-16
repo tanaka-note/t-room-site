@@ -85,7 +85,7 @@ export async function handleRequest(request, env, context) {
     const items = await env.DB.prepare(`SELECT i.*, COALESCE((SELECT SUM(-m.quantity_delta) FROM inventory_movements m
       WHERE m.item_id = i.id AND m.account_id = i.account_id AND m.kind = 'use' AND m.voided_at IS NULL
       AND m.occurred_at >= ? AND m.occurred_at < ?), 0) AS annual_usage
-      FROM inventory_items i WHERE account_id = ? ORDER BY archived_at IS NOT NULL, name, id`).bind(start, end, 'owner').all();
+      FROM inventory_items i WHERE account_id = ? AND deleted_at IS NULL ORDER BY archived_at IS NOT NULL, name, id`).bind(start, end, 'owner').all();
     return json({ year, items: items.results });
   }
   if (path === '/api/items' && request.method === 'POST') {
@@ -99,10 +99,20 @@ export async function handleRequest(request, env, context) {
       ] };
     });
   }
-  const itemRoute = /^\/api\/items\/([^/]+)(?:\/(movements|archive))?$/.exec(path);
+  const itemRoute = /^\/api\/items\/([^/]+)(?:\/(movements|archive|delete))?$/.exec(path);
   if (itemRoute) {
     const itemId = uuid(itemRoute[1]);
-    const item = await env.DB.prepare('SELECT * FROM inventory_items WHERE id = ? AND account_id = ?').bind(itemId, 'owner').first();
+    // Replay must precede the deleted-item lookup so a lost delete response is retryable.
+    if (itemRoute[2] === 'delete' && request.method === 'POST') {
+      const body = await readJson(request), expectedVersion = quantity(body.expectedVersion, true);
+      return idempotent(env, uuid(body.requestId), { path, expectedVersion }, async () => {
+        const existing = await env.DB.prepare('SELECT id FROM inventory_items WHERE id = ? AND account_id = ? AND deleted_at IS NULL').bind(itemId, 'owner').first();
+        if (!existing) throw new HttpError(404, '品目が見つかりません。');
+        return { value: { itemId }, statements: [env.DB.prepare('UPDATE inventory_items SET deleted_at = ?, version = ? WHERE id = ? AND account_id = ?')
+          .bind(new Date().toISOString(), expectedVersion + 1, itemId, 'owner')] };
+      });
+    }
+    const item = await env.DB.prepare('SELECT * FROM inventory_items WHERE id = ? AND account_id = ? AND deleted_at IS NULL').bind(itemId, 'owner').first();
     if (!item) throw new HttpError(404, '品目が見つかりません。');
     if (!itemRoute[2] && request.method === 'GET') {
       const { year, start, end } = yearBounds(url.searchParams.get('year') || jstYear());
@@ -178,6 +188,7 @@ async function idempotent(env, requestId, input, prepare) {
     if (/inventory_version_conflict/.test(message)) throw new HttpError(409, '別の操作で在庫が変わりました。再読み込みして入力し直してください。', 'version_conflict');
     if (/inventory_opening_required/.test(message)) throw new HttpError(409, '初期在庫は取り消せません。在庫調整を利用してください。');
     if (/inventory_movement_immutable/.test(message)) throw new HttpError(409, 'この記録は既に取り消されています。');
+    if (/inventory_item_deleted/.test(message)) throw new HttpError(409, '削除済みの品目は変更できません。');
     if (/inventory_item_unavailable|inventory_archive_conflict/.test(message)) throw new HttpError(409, '在庫0の有効な品目だけをアーカイブできます。');
     if (/CHECK constraint failed/.test(message)) throw new HttpError(409, '在庫が不足しているか、数量の上限を超えています。取消できない場合は在庫調整を利用してください。', 'stock_conflict');
     throw error;
