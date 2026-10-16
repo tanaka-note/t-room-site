@@ -17,7 +17,7 @@ function frontend(fetch) {
   const window = { addEventListener() {} };
   const document = { getElementById: node, hidden: false, body: { dataset: {} }, addEventListener() {}, dispatchEvent() {} };
   // Inspect lexical state only in this synthetic VM; production has no debug hooks.
-  const hooks = `window.fixture = { api, loginView, loadItems,
+  const hooks = `window.fixture = { api, loginView, loadItems, localTimestamp,
     seed() { items = [{name:'private item'}]; detail = editedItem = {name:'private item'}; cursor = 'private cursor'; retry = {fingerprint:'private input'};
       listAnchors = [{id:'private id'}]; detailPositions.set('private id',123); listScroll=123; listYear=2025;
       openToken='private token'; mode='adjust'; dirty=busy=approvedClose=true; opener=$('items'); backgroundPointer=7;
@@ -88,6 +88,12 @@ test('responses started before session invalidation cannot repopulate memory or 
 test('JSON success and structured JSON media types remain supported', async () => {
   const f=frontend(async()=>new Response('{"ok":true}',{headers:{'Content-Type':'application/problem+json; charset=UTF-8'}}));
   assert.equal((await f.api('/session')).ok,true);
+});
+
+test('minute-only datetime-local values preserve zero seconds and JST without relaxing API validation', () => {
+  const f=frontend();
+  assert.equal(f.localTimestamp('2026-02-01T09:15'),'2026-02-01T09:15:00+09:00');
+  assert.equal(f.localTimestamp('2026-02-01T09:15:30'),'2026-02-01T09:15:30+09:00');
 });
 
 test('all current fixed Worker HttpError messages survive the client error boundary', async () => {

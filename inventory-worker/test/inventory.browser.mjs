@@ -45,7 +45,7 @@ try {
       assert.match(await page.locator('#annual-total').innerText(), /2 個/); assert.equal(await page.locator('#chart rect').count(), 12); assert.equal(await page.locator('#month-values td').count(), 12);
       await page.locator('#movements .movement').filter({ hasText: '使用' }).getByRole('button', { name: '取消' }).click(); await page.waitForFunction(() => document.getElementById('annual-total').textContent.includes('0 個'));
       assert.match(await page.locator('#item-stock').innerText(), /13 個/);
-      await activate(page.getByRole('button', {name:'在庫を合わせる',exact:true})); await page.locator('#quantity').fill('9'); await page.locator('#occurred-at').fill('2026-02-01T09:15:30');
+      await activate(page.getByRole('button', {name:'在庫を合わせる',exact:true})); await page.locator('#quantity').fill('9'); await page.locator('#occurred-at').fill('2026-02-01T09:15:00');
       await page.getByRole('button',{name:'記録する',exact:true}).click(); await page.locator('#editor').waitFor({state:'hidden'}); await page.waitForFunction(()=>document.getElementById('item-stock').textContent.includes('9 個'));
       assert.match(await page.locator('#annual-total').innerText(),/0 個/);
       await page.getByRole('button', { name: '一覧へ戻る', exact: false }).click(); await page.locator('#list-view').waitFor({ state: 'visible' }); assert.equal(await page.locator('#search').inputValue(), 'サンプル');

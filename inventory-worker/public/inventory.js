@@ -31,6 +31,8 @@
   const button = (label, action, className) => { const b = el('button', label, className); b.type = 'button'; b.addEventListener('click', action); return b; };
   const message = value => { $('message').textContent = value; $('message').hidden = !value; };
   const ready = () => document.dispatchEvent(new Event('troom:auto-update-ready'));
+  // datetime-local normalizes zero seconds away, but the API requires seconds.
+  const localTimestamp = value => `${/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(value) ? `${value}:00` : value}+09:00`;
   async function api(path, body) {
     const generation = sessionGeneration, controller = new AbortController(); pendingRequests.add(controller);
     const headers = { 'Content-Type': 'application/json' };
@@ -134,7 +136,7 @@
   function finishClose() { $('editor').close(); dirty = false; retry = editedItem = null; mode = openToken = ''; $('record-form').dataset.troomDirty = 'false'; const origin = opener; opener = backgroundPointer = null; origin?.focus({ preventScroll: true }); ready(); }
   async function save(event) {
     event.preventDefault(); if (busy) return; const generation = sessionGeneration, editingMode = mode;
-    const data = { quantity: Number($('quantity').value), occurredAt: `${$('occurred-at').value}+09:00` };
+    const data = { quantity: Number($('quantity').value), occurredAt: localTimestamp($('occurred-at').value) };
     const input = mode === 'add' ? { name: $('name').value, unit: $('unit').value, stock: data.quantity } : { ...data, kind: mode, ...(mode === 'adjust' ? { expectedVersion: editedItem.version } : {}) };
     const path = mode === 'add' ? '/items' : `/items/${editedItem.id}/movements`;
     const fingerprint = JSON.stringify(input); if (!retry || retry.fingerprint !== fingerprint) retry = { fingerprint, requestId: crypto.randomUUID() };

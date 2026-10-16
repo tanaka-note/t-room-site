@@ -214,6 +214,7 @@ APIはContent-Typeを確認し、JSONでも空・不正な応答は安全な固�
 ### P4: Chromium／WebKitの共通fixture
 
 `test/inventory.browser.mjs` は `TROOM_BROWSER=chromium`（既定）と `webkit` の同じ操作をPC・タッチで実行する。
+datetime-localが秒00を省略する既存挙動には送信時だけ`:00`を補い、APIの日時検証・JSTの意味は変えない。明示的な秒00の入力も共通試験へ含める。
 登録・補充・使用・調整・取消・集計、戻る／進む・位置復元、dialog・Esc・背景タップ・未保存保護、ログアウト／401／再ログイン、XSS、Cookie属性、横スクロールとpage errorを確認する。
 beforeunloadは全ケースでハンドラを確認し、PCでは実際の再読み込みを取り消して入力の保持も確認する。
 タッチ端末のブラウザ終了時にbeforeunloadが必ず発生するとは扱わない。
