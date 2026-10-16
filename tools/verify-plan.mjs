@@ -33,7 +33,7 @@ export function commands(target) {
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
-    diary: tests('diary-worker', ...['entry-domain', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
+    diary: tests('diary-worker', ...['entry-domain', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     downloader2: [
@@ -57,7 +57,7 @@ export function browserTests(target) {
   if (target === 'health') return ['health-worker/test/health.browser.mjs'];
   const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs'], cloud: ['cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
     security: ['security-worker/test/overview.browser.mjs', 'security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
-    diary: ['diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
+    diary: ['diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
@@ -139,7 +139,7 @@ export function ciPlan({ event, ref, base, head, defaultBranch = 'origin/main' }
 export function installDirectories(selected) {
   const dirs = new Set(['.']);
   for (const target of selected) {
-    if (target === 'site') dirs.add('security-worker');
+    if (['site', 'diary'].includes(target)) dirs.add('security-worker');
     if (services.includes(target)) dirs.add(`${target}-worker`);
     if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
