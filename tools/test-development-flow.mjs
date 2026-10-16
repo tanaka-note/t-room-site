@@ -48,8 +48,15 @@ test('Inventory changes have an isolated verify and deployment profile', () => {
 
 test('Inventory WebKit installation and execution are isolated to the Inventory target', () => {
   const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
-  assert.match(workflow, /Install Inventory WebKit only when used\r?\n\s+if: matrix\.target == 'inventory'\r?\n\s+run: pnpm --dir diary-worker exec playwright install --with-deps webkit/);
-  assert.match(workflow, /Inventory WebKit regression\r?\n\s+if: matrix\.target == 'inventory'[\s\S]*?TROOM_BROWSER: webkit[\s\S]*?inventory-worker\/test\/inventory\.browser\.mjs/);
+  const job = workflow.slice(workflow.indexOf('  inventory-webkit-macos:'),workflow.indexOf('  cloud-webkit-macos:'));
+  assert.match(job, /if: contains\(fromJSON\(needs\.plan\.outputs\.node\), 'inventory'\)/);
+  assert.match(job, /runs-on: macos-15/);
+  assert.match(job, /pnpm --dir diary-worker exec playwright install webkit/);
+  assert.match(job, /TROOM_BROWSER: webkit[\s\S]*inventory-worker\/test\/inventory\.browser\.mjs/);
+  assert.doesNotMatch(job, /continue-on-error/);
+  const gate = workflow.slice(workflow.indexOf('\n  verify:'));
+  assert.match(gate, /needs: \[plan, node, inventory-webkit-macos,/);
+  assert.match(gate, /\[\[ "\$INVENTORY_MACOS" =~ \^\(success\|skipped\)\$ \]\]/);
 });
 test('affected mapping is order independent and unknown runtime files are not silently skipped', () => {
   const paths = ['assets/session-policy.mjs', 'assets/pwa-auto-update.js'];

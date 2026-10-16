@@ -6,7 +6,6 @@ import { fixture } from './fixture.js';
 const require = createRequire(new URL('../../diary-worker/package.json', import.meta.url));
 const playwright = require('playwright');
 const engine = process.env.TROOM_BROWSER || 'chromium';
-const reloadProbe = process.env.TROOM_INVENTORY_RELOAD_PROBE === '1';
 if (!['chromium', 'webkit'].includes(engine)) throw new Error('Inventory browser must be chromium or webkit');
 const root = new URL('../public/', import.meta.url);
 const browser = await playwright[engine].launch({ headless: true });
@@ -25,8 +24,7 @@ try {
           res.writeHead(response.status, Object.fromEntries(response.headers)); res.end(Buffer.from(await response.arrayBuffer())); return;
         }
         let path = url.pathname === '/inventory/' ? 'index.html' : url.pathname.replace('/inventory/', '');
-        let bytes = path === 'inventory.js' && process.env.TROOM_INVENTORY_CLIENT_PATH ? readFileSync(process.env.TROOM_INVENTORY_CLIENT_PATH)
-          : path === '/assets/pwa-auto-update.js' ? readFileSync(new URL('../../assets/pwa-auto-update.js', import.meta.url)) : readFileSync(new URL(path, root));
+        let bytes = path === '/assets/pwa-auto-update.js' ? readFileSync(new URL('../../assets/pwa-auto-update.js', import.meta.url)) : readFileSync(new URL(path, root));
         if (path === 'index.html' && publishedBuild) bytes = Buffer.from(bytes.toString().replace(/(<meta name="troom-app-build" content=")[^"]+/, `$1${publishedBuild}`));
         res.setHeader('Content-Type', path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'); res.end(bytes);
       } catch { res.writeHead(404); res.end('not found'); }
@@ -47,14 +45,13 @@ try {
       assert.match(await page.locator('#annual-total').innerText(), /2 個/); assert.equal(await page.locator('#chart rect').count(), 12); assert.equal(await page.locator('#month-values td').count(), 12);
       await page.locator('#movements .movement').filter({ hasText: '使用' }).getByRole('button', { name: '取消' }).click(); await page.waitForFunction(() => document.getElementById('annual-total').textContent.includes('0 個'));
       assert.match(await page.locator('#item-stock').innerText(), /13 個/);
-      await activate(page.getByRole('button', {name:'在庫を合わせる',exact:true})); await page.locator('#quantity').fill('9'); await page.locator('#occurred-at').fill(reloadProbe ? '2026-02-01T09:15:30' : '2026-02-01T09:15');
+      await activate(page.getByRole('button', {name:'在庫を合わせる',exact:true})); await page.locator('#quantity').fill('9'); await page.locator('#occurred-at').fill('2026-02-01T09:15');
       await page.getByRole('button',{name:'記録する',exact:true}).click(); await page.locator('#editor').waitFor({state:'hidden'}); await page.waitForFunction(()=>document.getElementById('item-stock').textContent.includes('9 個'));
       assert.match(await page.locator('#annual-total').innerText(),/0 個/);
       await page.getByRole('button', { name: '一覧へ戻る', exact: false }).click(); await page.locator('#list-view').waitFor({ state: 'visible' }); assert.equal(await page.locator('#search').inputValue(), 'サンプル');
       for (let i=0;i<18;i++) await f.request('/api/items',{name:`Sample ${String(i).padStart(2,'0')}`,unit:'個',stock:0,requestId:crypto.randomUUID()});
       assert.equal(await page.locator('body').getAttribute('data-troom-update-block'),'false');
       await page.reload(); await page.locator('#app-view').waitFor({state:'visible'}); await page.locator('.item').filter({hasText:'サンプル消耗品'}).waitFor();
-      if (reloadProbe) { console.log(`Inventory reload probe passed: ${engine} ${mobile ? 'touch' : 'desktop'}`); continue; }
       const source = page.locator('.item').filter({hasText:'サンプル消耗品'}); await source.scrollIntoViewIfNeeded(); const sourceTop = await source.evaluate(n=>n.getBoundingClientRect().top);
       await source.locator('.item-link').click(); await page.locator('#detail-view').waitFor({state:'visible'}); await page.waitForFunction(()=>window.scrollY===0);
       await page.evaluate(()=>window.scrollTo(0,200)); const detailScroll = await page.evaluate(()=>window.scrollY); await page.goBack(); await page.locator('#list-view').waitFor({state:'visible'});
@@ -102,9 +99,9 @@ try {
           crossSiteChecked=true;
           if (engine==='webkit' && process.platform==='win32') {
             // Reproduced with an isolated Set-Cookie server: this Windows port
-            // reports None and sends Strict cookies cross-site. Linux CI must
+            // reports None and sends Strict cookies cross-site. macOS CI must
             // enforce the behavioral assertion below; never relax Worker cookies.
-            console.log('SameSite enforcement SKIP: Windows WebKit port; raw Strict header verified, Linux CI required');
+            console.log('SameSite enforcement SKIP: Windows WebKit port; raw Strict header verified, macOS CI required');
           } else {
             assert(cookies.some(c=>c.name==='troom_inventory_session' && c.sameSite==='Strict'));
             const crossSite=await context.newPage();

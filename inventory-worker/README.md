@@ -220,10 +220,13 @@ beforeunloadは全ケースでハンドラを確認し、PCでは実際の再読
 タッチ端末のブラウザ終了時にbeforeunloadが必ず発生するとは扱わない。
 パスキーの端末操作だけは合成authenticatorへ差し替え、引換え・署名Cookie・Security台帳はfixtureの実装を通す。
 実機Safari／iOSのWebAuthn・OS終了操作とは区別する。本番データ・本番パスキーをTraceへ渡さない。
-CIでのWebKit導入・追加実行はInventoryターゲットだけに限定する。
+CIでのWebKit導入・追加実行はInventoryターゲットだけのmacOS 15ジョブに限定し、最終verifyの必須結果に含める。
 WindowsのPlaywright 1.56.1 WebKitでは、独立した最小Set-CookieサーバーでもStrict CookieがAPI上Noneとなり、cross-siteで送られる挙動を再現した。
 この環境だけSameSiteの実送信試験を明示的にskipし、WorkerのStrictヘッダーとHttpOnly／Pathは確認する。
-Ubuntu CIではskipせず、CookieのStrict属性とcross-site navigationが401となる実挙動を必須にする。Windowsの操作試験だけでSafariのSameSite確認済みとはしない。
+macOS CIではskipせず、CookieのStrict属性とcross-site navigationが401となる実挙動を必須にする。Windowsの操作試験だけでSafariのSameSite確認済みとはしない。
+Ubuntu 24.04のWebKit build 2215では、修正版・main版ともTraceなしの同じ操作後のreloadでC++の`std::optional`内部assertionが発生した。
+この既存の組合せでの失敗を成功扱いにせず、Safari向けの必須検証をmacOS上へ分離する。Linuxの単体・Chromium検証は継続する。
+比較結果は[CI診断run](https://github.com/tanaka-note/t-room-site/actions/runs/38855682935)に保持する。ブラウザ内部のassertionの根本修正や実機Safari検証は本PRの確認範囲外。
 
 ```powershell
 node tools/verify.mjs --target inventory --browser --build
