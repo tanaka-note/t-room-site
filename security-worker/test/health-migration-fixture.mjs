@@ -45,7 +45,7 @@ export function snapshot(db, tables) {
     rows: db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
     columns: db.prepare(`PRAGMA table_info(${table})`).all().map(({cid,...column})=>column).sort((a,b)=>a.name.localeCompare(b.name)),
     foreignKeys: db.prepare(`PRAGMA foreign_key_list(${table})`).all(),
-    triggers: db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND name NOT IN ('health_members_only','health_members_only_update') ORDER BY name").all(table),
+    triggers: db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND name NOT IN ('health_members_only','health_members_only_update') ORDER BY name").all(table).map(({name,sql})=>({name,sql:sql.replaceAll('\r\n','\n')})),
     indexes: db.prepare(`PRAGMA index_list(${table})`).all().map(({seq,...index})=>({...index,
       columns:db.prepare(`PRAGMA index_info('${index.name}')`).all().map(({cid,...column})=>column),
       sql:(db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(index.name)?.sql || '').replaceAll('"','').replace(/\s+/g,' ').trim()
