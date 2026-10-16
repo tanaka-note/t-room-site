@@ -6,7 +6,8 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
-const { chromium, webkit } = createRequire(new URL('../diary-worker/package.json', import.meta.url))('playwright');
+const browserPackage = process.env.VERIFY_TARGET === 'inventory' ? '../inventory-worker/package.json' : '../diary-worker/package.json';
+const { chromium, webkit } = createRequire(new URL(browserPackage, import.meta.url))('playwright');
 const cases = [
   ['diary', 'diary-worker/public/index.html', '#diary-search-input', '#diary-search-clear'],
   ['diary', 'diary-worker/public/index.html', '#tag-search-input', '[data-clear-search="tag-search-input"]'],

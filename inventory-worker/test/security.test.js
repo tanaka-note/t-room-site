@@ -49,3 +49,25 @@ test('real Security rolling ledger validates Inventory runtime and link revocati
     db.exec("UPDATE security_service_links SET status='disabled' WHERE id='inventory-link'"); assert.equal((await f.request('/api/items')).status, 401);
   } finally { db.close(); f.close(); }
 });
+
+test('real Security handoffs reject foreign services, expired/consumed tokens and replay', async () => {
+  const db=baseDb(), f=fixture(); try {seed(db); apply(db);
+    db.exec("INSERT INTO security_service_links (id,identity_id,service,service_account_id,display_label,status) VALUES ('inventory-link','primary-admin','inventory','owner','Sample Owner','active')");
+    const env={DB:d1(db),SESSION_SECRET:randomBytes(32).toString('hex'),PASSKEY_ENABLED:'true',INVENTORY_AUTH:new inventory.SecurityIntegration({},f.env)};
+    f.env.SECURITY.redeemHandoff=(token,service)=>security.redeemHandoff(env,token,service);
+    f.env.SECURITY.passkeyRollingSession=input=>security.passkeyRollingSession(env,input);
+    async function token(id, link='inventory-link', expires=Math.floor(Date.now()/1000)+60, consumed=null) {
+      const value=`synthetic-handoff-${id}`;
+      const hash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))).toString('base64url');
+      db.prepare('INSERT INTO security_handoffs(id,token_hash,identity_id,service_link_id,credential_id,expires_at,consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id,hash,'primary-admin',link,'credential-a',expires,consumed); return value;
+    }
+    for (const value of [await token('foreign','link-a'),await token('expired','inventory-link',1),await token('consumed','inventory-link',Math.floor(Date.now()/1000)+60,1),'unknown-handoff']) {
+      assert.equal((await f.request('/api/passkey/handoff',{handoffToken:value})).status,401);
+    }
+    const valid=await token('valid'); const response=await f.request('/api/passkey/handoff',{handoffToken:valid}); assert.equal(response.status,200);
+    f.cookie=response.headers.get('Set-Cookie').split(';')[0]; assert.equal((await f.request('/api/items')).status,200);
+    assert.equal((await f.request('/api/passkey/handoff',{handoffToken:valid})).status,401);
+    db.exec("UPDATE security_credentials SET status='revoked' WHERE credential_id='credential-a'"); assert.equal((await f.request('/api/items')).status,401);
+  } finally {db.close(); f.close();}
+});
