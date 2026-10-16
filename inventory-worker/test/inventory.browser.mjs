@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fixture } from './fixture.js';
-const require = createRequire(new URL('../../diary-worker/package.json', import.meta.url));
+const require = createRequire(new URL('../package.json', import.meta.url));
 const playwright = require('playwright');
 const engine = process.env.TROOM_BROWSER || 'chromium';
 if (!['chromium', 'webkit'].includes(engine)) throw new Error('Inventory browser must be chromium or webkit');
@@ -97,7 +97,7 @@ try {
         const cookies=await context.cookies(`${origin}/inventory/`); assert(cookies.some(c=>c.name==='troom_inventory_session' && c.httpOnly && c.path==='/inventory'));
         if (!crossSiteChecked) {
           crossSiteChecked=true;
-          if (engine==='webkit' && process.platform==='win32') {
+          if (engine==='webkit' && process.platform==='win32' && !cookies.some(c=>c.name==='troom_inventory_session' && c.sameSite==='Strict')) {
             // Reproduced with an isolated Set-Cookie server: this Windows port
             // reports None and sends Strict cookies cross-site. macOS CI must
             // enforce the behavioral assertion below; never relax Worker cookies.
@@ -136,3 +136,7 @@ try {
     } finally { await context.close(); await new Promise(resolve => server.close(resolve)); f.close(); }
   }
 } finally { await browser.close(); }
+if (process.env.TROOM_TRACE_DIR) {
+  const files=readdirSync(process.env.TROOM_TRACE_DIR);
+  assert(files.some(name=>name.endsWith('.zip')) && files.some(name=>name.endsWith('.png')),'Inventory browser tracing must use the same Playwright installation as the fixture');
+}

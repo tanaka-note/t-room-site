@@ -43,7 +43,7 @@ test('Inventory changes have an isolated verify and deployment profile', () => {
   assert.deepEqual(affected(['inventory-worker/src/index.js']), ['inventory']);
   assert.deepEqual(affected(['inventory-worker/README.md']), []);
   assert.ok(commands('inventory').some(c => c.script === 'test'));
-  assert.deepEqual(installDirectories(['inventory']), ['.', 'inventory-worker', 'diary-worker']);
+  assert.deepEqual(installDirectories(['inventory']), ['.', 'inventory-worker']);
 });
 
 test('Inventory WebKit installation and execution are isolated to the Inventory target', () => {
@@ -51,12 +51,13 @@ test('Inventory WebKit installation and execution are isolated to the Inventory 
   const job = workflow.slice(workflow.indexOf('  inventory-webkit-macos:'),workflow.indexOf('  cloud-webkit-macos:'));
   assert.match(job, /if: contains\(fromJSON\(needs\.plan\.outputs\.node\), 'inventory'\)/);
   assert.match(job, /runs-on: macos-15/);
-  assert.match(job, /pnpm --dir diary-worker exec playwright install webkit/);
+  assert.match(job, /pnpm --dir inventory-worker exec playwright install webkit/);
   assert.match(job, /TROOM_BROWSER: webkit[\s\S]*inventory-worker\/test\/inventory\.browser\.mjs/);
   assert.doesNotMatch(job, /continue-on-error/);
   const gate = workflow.slice(workflow.indexOf('\n  verify:'));
   assert.match(gate, /needs: \[plan, node, inventory-webkit-macos,/);
   assert.match(gate, /\[\[ "\$INVENTORY_MACOS" =~ \^\(success\|skipped\)\$ \]\]/);
+  assert.match(workflow, /Install Inventory Chromium\r?\n\s+if: matrix\.target == 'inventory'\r?\n\s+run: pnpm --dir inventory-worker exec playwright install --with-deps chromium/);
 });
 test('affected mapping is order independent and unknown runtime files are not silently skipped', () => {
   const paths = ['assets/session-policy.mjs', 'assets/pwa-auto-update.js'];

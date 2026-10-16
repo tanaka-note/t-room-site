@@ -137,7 +137,7 @@ export function installDirectories(selected) {
   for (const target of selected) {
     if (target === 'site') dirs.add('security-worker');
     if (services.includes(target)) dirs.add(`${target}-worker`);
-    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'inventory', 'auth'].includes(target)) dirs.add('diary-worker');
+    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }
   return [...dirs];

@@ -65,8 +65,11 @@ jobs:
           VERIFY_TARGET: ${{ matrix.target }}
         run: node tools/install-verify-dependencies.mjs "$VERIFY_TARGET"
       - name: Install Chromium only when used
-        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","inventory"]'), matrix.target)
+        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
+      - name: Install Inventory Chromium
+        if: matrix.target == 'inventory'
+        run: pnpm --dir inventory-worker exec playwright install --with-deps chromium
       - name: Install Cloud seek fixture and WebKit dependencies
         if: matrix.target == 'cloud'
         run: |
@@ -123,7 +126,7 @@ jobs:
       - name: Install only Inventory dependencies
         run: node tools/install-verify-dependencies.mjs inventory
       - name: Install Inventory WebKit
-        run: pnpm --dir diary-worker exec playwright install webkit
+        run: pnpm --dir inventory-worker exec playwright install webkit
       - name: Inventory macOS WebKit regression
         timeout-minutes: 5
         env:

@@ -5,7 +5,8 @@ const { mkdirSync } = require('node:fs');
 const dir = process.env.TROOM_TRACE_DIR;
 if (dir) {
   mkdirSync(dir, { recursive: true });
-  const playwright = createRequire(join(__dirname, '../diary-worker/package.json'))('playwright');
+  const inventory = /(?:^|[\\/])inventory-worker[\\/]/.test(process.argv[1] || '');
+  const playwright = createRequire(join(__dirname, inventory ? '../inventory-worker/package.json' : '../diary-worker/package.json'))('playwright');
   let sequence = 0;
   for (const name of ['chromium', 'firefox', 'webkit']) {
     const engine = playwright[name];
