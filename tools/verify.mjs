@@ -36,7 +36,7 @@ for (const t of selected) {
     try {
       const path = resolve(root, script);
       const r = run(process.execPath, ['--require', resolve(root, 'tools/browser-trace.cjs'), path], script.startsWith('tools/') ? root : resolve(root, script.split('/')[0]),
-        { ...process.env, TROOM_BROWSER: process.env.TROOM_BROWSER || 'chromium', TROOM_TRACE_DIR: scratch }, true);
+        { ...process.env, VERIFY_TARGET: t, TROOM_BROWSER: process.env.TROOM_BROWSER || 'chromium', TROOM_TRACE_DIR: scratch }, true);
       if (r.status !== 0) {
         const dest = resolve(root, 'tmp/verify-artifacts', basename(script)); mkdirSync(dest, { recursive: true });
         cpSync(scratch, dest, { recursive: true });
