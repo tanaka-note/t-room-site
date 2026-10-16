@@ -54,7 +54,12 @@
     }
     const [, , runtime] = await runtimePromise;
     if (installDialog.open) installDialog.close();
-    await runtime.startDiary(session, deferredInstallPrompt, () => events.abort());
+    await runtime.startDiary(session, deferredInstallPrompt, () => {
+      button.disabled = false;
+      button.textContent = "パスキーでログイン";
+      events.abort();
+      return deferredInstallPrompt;
+    });
   }
 
   button.addEventListener("click", async () => {
@@ -66,12 +71,15 @@
       const session = await api("/passkey/handoff", { handoffToken: authentication.handoff.handoffToken });
       await enterDiary(session);
     } catch (error) {
+      if (events.signal.aborted) return;
       showLogin(/ID・パスワード/.test(error.message)
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message);
     } finally {
-      button.disabled = false;
-      button.textContent = "パスキーでログイン";
+      if (!events.signal.aborted) {
+        button.disabled = false;
+        button.textContent = "パスキーでログイン";
+      }
     }
   }, { signal: events.signal });
 

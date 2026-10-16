@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 // Synthetic local latency only; no production credentials, telemetry or WebAuthn timing.
-const root = fileURLToPath(new URL("../../../", import.meta.url));
+const root = process.env.TROOM_STARTUP_ROOT || fileURLToPath(new URL("../../../", import.meta.url));
 const session = { authenticated: true, role: "user", accountName: "fixture", householdId: "fixture-household",
   activeHouseholdId: "fixture-household", canManageEntries: false, canViewTrash: false,
   canPermanentlyDelete: false, canViewInvestment: false, isGlobalOwner: false };
@@ -44,6 +44,7 @@ const server = createServer(async (req, res) => {
     let body = await readFile(path);
     if (url.pathname === "/security/passkey-client.js") body = Buffer.concat([body, Buffer.from(`
       window.TRoomPasskeys = { ...TRoomPasskeys, authenticate: async () => {
+        if (window.fixtureAuthGate) await new Promise(done => { window.releaseFixtureAuth = done; });
         for (const path of ["options", "verify", "handoff"]) await fetch("/security/api/auth/" + path, {method:"POST"});
         return {handoff:{handoffToken:"synthetic-fixture"}};
       }};`)]);
@@ -161,6 +162,23 @@ try {
     await page.waitForTimeout(100);
     assert.equal(await page.locator("#app-view").isVisible(), false);
     assert.equal(await page.locator("#entry-list").textContent(), "");
+    holdBootstrap = true; releaseBootstrap = null;
+    await page.locator("#passkey-login").click();
+    await page.locator("#app-view:not([hidden])").waitFor();
+    while (!releaseBootstrap) await delay(20);
+    await page.locator("#logout-button").click();
+    await page.locator("#login-view:not([hidden])").waitFor();
+    assert.equal(await page.locator("#passkey-login").isEnabled(), true);
+    await page.evaluate(() => { window.fixtureAuthGate = true; });
+    await page.locator("#passkey-login").click();
+    await page.waitForFunction(() => Boolean(window.releaseFixtureAuth));
+    releaseBootstrap(); holdBootstrap = false;
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator("#passkey-login").isDisabled(), true, "old login completion cannot unlock a newer authentication attempt");
+    await page.evaluate(() => { window.fixtureAuthGate = false; window.releaseFixtureAuth(); });
+    await page.waitForFunction(() => document.querySelector("#entry-list").textContent.includes("起動確認"));
+    await page.locator("#logout-button").click();
+    await page.locator("#login-view:not([hidden])").waitFor();
     wrongHousehold = true;
     await context.addCookies([{ name: "fixture", value: "1", url: origin }]);
     await page.reload();

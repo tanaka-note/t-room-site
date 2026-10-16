@@ -1,4 +1,4 @@
-export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => {}) {
+export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt) {
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
   const scriptUrl = new URL(import.meta.url);
   let splitSearchTerms, createSearchExcerpt, highlightSearchTerms;
@@ -19,6 +19,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   });
   const BASE_PATH = "/diary";
   let sessionGeneration = 0;
+  let loginAttempt = 0;
   let activeSessionContext = "";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
@@ -283,8 +284,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const startup = enterDiary(initialSession);
     await readingToolsReady;
     bindEvents();
-    onReady();
-    state.deferredInstallPrompt = deferredInstallPrompt;
+    state.deferredInstallPrompt = onReady();
     updateInstallButtonVisibility();
     elements.appView.inert = false;
     await startup;
@@ -552,19 +552,23 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function handlePasskeyLogin() {
+    const attempt = ++loginAttempt;
     const button = document.querySelector("#passkey-login");
     setBusy(button, true, "確認中...");
     elements.loginMessage.textContent = "";
     try {
       const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
+      if (attempt !== loginAttempt) return;
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
+      if (attempt !== loginAttempt) return;
       await enterDiary(session);
     } catch (error) {
+      if (attempt !== loginAttempt) return;
       elements.loginMessage.textContent = /ID・パスワード/.test(error.message)
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message;
     } finally {
-      setBusy(button, false, "パスキーでログイン");
+      if (attempt === loginAttempt) setBusy(button, false, "パスキーでログイン");
     }
   }
 
@@ -3795,6 +3799,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function resetState() {
+    loginAttempt += 1;
+    setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
     sessionGeneration += 1;
     activeSessionContext = "";
     elements.entryList.replaceChildren();

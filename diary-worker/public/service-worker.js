@@ -1,26 +1,26 @@
-const CACHE_NAME = "troom-diary-shell-diary-a4a7ab900c77";
+const CACHE_NAME = "troom-diary-shell-diary-f94606520c56";
 const STATIC_ASSETS = [
-  "/diary/diary-photo-processing.js?v=diary-a4a7ab900c77",
-  "/diary/diary-photo-upload.js?v=diary-a4a7ab900c77",
-  "/diary/diary-rich-text.js?v=diary-a4a7ab900c77",
-  "/diary/diary-weather.js?v=diary-a4a7ab900c77",
+  "/diary/diary-photo-processing.js?v=diary-f94606520c56",
+  "/diary/diary-photo-upload.js?v=diary-f94606520c56",
+  "/diary/diary-rich-text.js?v=diary-f94606520c56",
+  "/diary/diary-weather.js?v=diary-f94606520c56",
   "/diary/icons/icon-192-v4.png?v=5",
   "/diary/icons/icon-512-v4.png?v=5",
   "/diary/icons/icon-maskable-512-v4.png?v=5",
   "/diary/icons/apple-touch-icon-v3.png?v=4",
   "/diary/icons/favicon-64-v4.png?v=5",
-  "/diary/diary-search.js?v=diary-a4a7ab900c77",
-  "/diary/dialog-navigation.js?v=diary-a4a7ab900c77",
-  "/diary/diary.js?v=diary-a4a7ab900c77",
-  "/diary/troom-date-picker.js?v=diary-a4a7ab900c77",
-  "/assets/pwa-auto-update.js?v=diary-a4a7ab900c77",
-  "/diary/diary-bootstrap.js?v=diary-a4a7ab900c77",
-  "/diary/diary.css?v=diary-a4a7ab900c77",
-  "/diary/investment.css?v=diary-a4a7ab900c77",
-  "/diary/investment.js?v=diary-a4a7ab900c77",
-  "/diary/manifest.webmanifest?v=diary-a4a7ab900c77",
-  "/diary/troom-date-picker.css?v=diary-a4a7ab900c77",
-  "/security/passkey-client.js?v=diary-a4a7ab900c77"
+  "/diary/diary-search.js?v=diary-f94606520c56",
+  "/diary/dialog-navigation.js?v=diary-f94606520c56",
+  "/diary/diary.js?v=diary-f94606520c56",
+  "/diary/troom-date-picker.js?v=diary-f94606520c56",
+  "/assets/pwa-auto-update.js?v=diary-f94606520c56",
+  "/diary/diary-bootstrap.js?v=diary-f94606520c56",
+  "/diary/diary.css?v=diary-f94606520c56",
+  "/diary/investment.css?v=diary-f94606520c56",
+  "/diary/investment.js?v=diary-f94606520c56",
+  "/diary/manifest.webmanifest?v=diary-f94606520c56",
+  "/diary/troom-date-picker.css?v=diary-f94606520c56",
+  "/security/passkey-client.js?v=diary-f94606520c56"
 ];
 // Only exact build URLs for public code/styles/icons may bypass the network.
 // Investment assets remain behind their server-side authorization checks.
