@@ -136,6 +136,7 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
             : error.Contains("429") || error.Contains("rate limit") ? "X側のアクセス制限に達しました。時間をおいて再試行してください。"
             : error.Contains("login") || error.Contains("protected") || error.Contains("authentication") || error.Contains("sensitive") || error.Contains("nsfw")
                 ? "ログインが必要、または閲覧が制限された投稿です。この試作版は公開投稿のみ対応します。"
+            : error.Contains("no video could be found") ? "この投稿から動画情報を取得できません。動画のない投稿、削除済み、非公開・年齢制限などが考えられます。ログインが必要な投稿は現在未対応です。"
             : error.Contains("format") ? "選択した画質で保存できません。再解析し、別の画質を選んでください。"
             : error.Contains("404") || error.Contains("unavailable") || error.Contains("not found") || error.Contains("deleted")
                 ? "投稿が削除済み、または現在取得できません。ブラウザで投稿を確認してください。"

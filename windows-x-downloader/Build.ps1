@@ -1,6 +1,5 @@
-param([switch]$SkipTools)
+param([switch]$SkipTools, [string]$OutputDirectory = (Join-Path $PSScriptRoot 'dist/XDownloader'))
 $ErrorActionPreference = 'Stop'
-$outputDirectory = Join-Path $PSScriptRoot 'dist/XDownloader'
 if (!$SkipTools) { & (Join-Path $PSScriptRoot 'Prepare-Tools.ps1') }
 dotnet publish (Join-Path $PSScriptRoot 'src/XDownloader.App/XDownloader.App.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $outputDirectory
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }

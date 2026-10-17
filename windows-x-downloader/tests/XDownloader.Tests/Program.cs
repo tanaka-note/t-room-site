@@ -127,7 +127,7 @@ try
         Assert(!Directory.EnumerateDirectories(dest).Any());
         Assert(fake.DownloadArguments!.Contains("id ~= ^1231$"));
     });
-    foreach (var (error, message) in new[] { ("HTTP 429 / secret-url", "アクセス制限"), ("NSFW requires login", "ログイン"), ("HTTP 403", "拒否"), ("404 deleted", "削除"), ("Requested format unavailable", "選択した画質"), ("no such option", "バージョン") })
+    foreach (var (error, message) in new[] { ("HTTP 429 / secret-url", "アクセス制限"), ("NSFW requires login", "ログイン"), ("HTTP 403", "拒否"), ("404 deleted", "削除"), ("Requested format unavailable", "選択した画質"), ("no such option", "バージョン"), ("No video could be found in this tweet", "この投稿から動画情報を取得できません") })
         await Test($"safe error classification: {error.Split(' ')[0]}", async () =>
         {
             fake.Error = error;
