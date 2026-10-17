@@ -5,7 +5,7 @@ T-lainは、公開サイト、日記、T-Cloud Storage、請求書管理、Secur
 ## 主要サービス
 
 - 公開サイトと小規模Webアプリ
-- T-Cloud Storage（Web／TWA／Android）
+- T-Cloud Storage（Web／PWA／TWA。Androidネイティブの[T-Cloud Playerは廃止](android-tcloud/README.md)）
 - 日記（Web／PWA／TWA）
 - 請求書管理
 - T-lain Security Center（共通Identity／Passkey）
@@ -15,7 +15,7 @@ T-lainは、公開サイト、日記、T-Cloud Storage、請求書管理、Secur
 ## 主要ディレクトリ
 
 - `site-worker/`、ルートのHTML、`apps/`：公開サイトとWebアプリ
-- `cloud-worker/`、`android-tcloud/`、`android-tcloud-twa/`：T-Cloud
+- `cloud-worker/`、`android-tcloud-twa/`：T-Cloud。`android-tcloud/`は廃止済みPlayerの実装記録
 - `diary-worker/`、`android-diary-twa/`：日記
 - `billing-worker/`：請求書管理
 - `security-worker/`：Identity、Passkey、Security Center
