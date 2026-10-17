@@ -1,7 +1,41 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { portfolioFixture } from './fixtures/asset-report.mjs';
-import { ALLOCATION_GROUPS, allocationGroups, adjustmentForPeriod, assetProfit, assetReturnRate, calculateHistoryScale, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
+import { ALLOCATION_GROUPS, allocationGroups, adjustedAllocationGroups, adjustmentForPeriod, assetProfit, assetReturnRate, calculateHistoryScale, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
+
+test('adjusted allocation tracks prices and the latest cumulative deduction with exact yen totals', () => {
+  const data = portfolioFixture();
+  data.assets = ALLOCATION_GROUPS.map((group, index) => ({ id: group.id, name: group.name, category: group.name, color: group.color, costBasis: 1000000, marketValue: 1000000 + index * 100000 }));
+  data.history.at(-1).rawMarketValue = 4600000;
+  data.performanceAdjustmentSnapshots.push({ effectiveFrom: '2024-01-06', cumulativeValue: -320000 });
+  const unchanged = structuredClone(data);
+  const groups = adjustedAllocationGroups(data);
+  assert.deepEqual(groups.map(group => group.marketValue), [920000, 1020000, 1120000, 1220000]);
+  assert.deepEqual(groups.map(group => group.adjustment), [-80000, -80000, -80000, -80000]);
+  assert.deepEqual(groups.map(group => group.rawMarketValue), [1000000, 1100000, 1200000, 1300000]);
+  assert.deepEqual(data, unchanged, 'allocation must never change raw data/history');
+  data.performanceAdjustmentSnapshots.push({ effectiveFrom: '2024-01-07', cumulativeValue: -400003 });
+  assert.deepEqual(adjustedAllocationGroups(data), groups, 'future deduction does not affect today');
+  data.period = '2024-01-07';
+  assert.deepEqual(adjustedAllocationGroups(data).map(group => group.adjustment), [-100001, -100001, -100001, -100000]);
+  data.assets[1].marketValue += 12345;
+  const changed = adjustedAllocationGroups(data);
+  assert.equal(changed[1].marketValue, 1100000 + 12345 - 100001, 'daily prices automatically feed adjusted allocation');
+  data.assets.reverse(); data.assets[0].name = '名称変更'; data.realizedProfit.value *= 10;
+  assert.deepEqual(adjustedAllocationGroups(data), changed, 'name/order/realized profit do not change allocation');
+  data.period = '2024-01-08';
+  data.performanceAdjustmentSnapshots.push({ effectiveFrom: data.period, cumulativeValue: -200001 });
+  assert.deepEqual(adjustedAllocationGroups(data).map(group => group.adjustment), [-50001, -50000, -50000, -50000], 'lower cumulative deduction replaces the earlier amount');
+  for (const [deduction, expected] of [[0, [0, 0, 0, 0]], [1, [-1, 0, 0, 0]], [2, [-1, -1, 0, 0]], [3, [-1, -1, -1, 0]], [4, [-1, -1, -1, -1]], [31, [-8, -8, -8, -7]]]) {
+    data.performanceAdjustmentSnapshots.at(-1).cumulativeValue = -deduction;
+    const result = adjustedAllocationGroups(data);
+    assert.deepEqual(result.map(group => group.adjustment), expected);
+    assert.equal(result.reduce((sum, group) => sum + group.marketValue, 0), createPortfolioModel(data).summary().marketValue);
+    assert.ok(result.every(group => Number.isSafeInteger(group.marketValue)));
+  }
+  data.performanceAdjustmentSnapshots = [];
+  assert.deepEqual(adjustedAllocationGroups(data).map(group => group.marketValue), allocationGroups(data).map(group => group.marketValue));
+});
 
 test('allocation combines assets into four stable groups without changing performance', () => {
   const data = portfolioFixture();
