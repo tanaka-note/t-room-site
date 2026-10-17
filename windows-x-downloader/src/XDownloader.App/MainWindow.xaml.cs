@@ -7,23 +7,27 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
 using XDownloader.Core;
+using XDownloader.Auth;
 
 namespace XDownloader.App;
 
 public partial class MainWindow : Window
 {
     private readonly Downloader downloader;
+    private readonly IXLoginService? loginService;
     private CancellationTokenSource? operation;
     private string? analyzedUrl;
     private bool closingAfterCancel;
     private readonly string settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XVideoDownloader", "settings.json");
 
-    public MainWindow() : this(new Downloader(Path.Combine(AppContext.BaseDirectory, "tools"))) { }
+    public MainWindow() : this(new AppServices()) { }
+    private MainWindow(AppServices services) : this(services.Downloader,services.Login) { }
 
     // Injectable engine permits offline WPF smoke tests with the same event handlers as the app.
-    public MainWindow(Downloader service)
+    public MainWindow(Downloader service,IXLoginService? login=null)
     {
         downloader = service;
+        loginService = login;
         InitializeComponent();
         FolderInput.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
         try
@@ -36,6 +40,7 @@ public partial class MainWindow : Window
             }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { }
+        RefreshLogin();
         UrlInput.Focus();
     }
 
@@ -115,7 +120,7 @@ public partial class MainWindow : Window
             operation.Dispose();
             operation = null;
             Progress.IsIndeterminate = false;
-            SetBusy(false);
+            RefreshLogin();
             if (closingAfterCancel) Close();
         }
     }
@@ -125,6 +130,58 @@ public partial class MainWindow : Window
         UrlInput.IsEnabled = AnalyzeButton.IsEnabled = VideoChoice.IsEnabled = QualityChoice.IsEnabled = FolderButton.IsEnabled = !busy;
         CancelButton.IsEnabled = busy;
         DownloadButton.IsEnabled = !busy && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo && QualityChoice.SelectedItem is Quality;
+        LoginButton.IsEnabled = !busy && loginService is not null;
+        LogoutButton.IsEnabled = !busy && loginService is not null && loginService.State != LoginState.Anonymous;
+    }
+
+    private void RefreshLogin()
+    {
+        var state=loginService?.State ?? LoginState.Anonymous;
+        LoginStatus.Text=state switch
+        {
+            LoginState.Ready => "Xログイン保存済み",
+            LoginState.Expired => "Xへの再ログインが必要",
+            LoginState.Unreadable => "Xログイン情報を確認できません",
+            _ => "未ログイン"
+        };
+        LoginButton.Content=state == LoginState.Ready ? "Xログインを確認" : "Xにログイン";
+        SetBusy(operation is not null);
+    }
+
+    private void ClearAnalysis()
+    {
+        analyzedUrl=null;
+        VideoChoice.ItemsSource=null;
+        QualityChoice.ItemsSource=null;
+        DownloadButton.IsEnabled=false;
+        SavedFile.Visibility=Visibility.Collapsed;
+    }
+
+    private async void Login_Click(object sender,RoutedEventArgs e)
+    {
+        if (operation is not null || loginService is null) return;
+        await RunOperationAsync(async token =>
+        {
+            Status.Text="Xへのログインを待っています…";
+            var saved=await loginService.LoginAsync(this,token);
+            token.ThrowIfCancellationRequested();
+            if (saved) ClearAnalysis();
+            RefreshLogin();
+            Status.Text=saved ? "Xのログイン情報をこのPCに保護して保存しました。投稿をもう一度解析してください。" : "ログインを中止しました。";
+        });
+    }
+
+    private async void Logout_Click(object sender,RoutedEventArgs e)
+    {
+        if (operation is not null || loginService is null) return;
+        await RunOperationAsync(_ =>
+        {
+            loginService.Logout();
+            ClearAnalysis();
+            RefreshLogin();
+            Status.Text="アプリに保存したXのログイン情報を消去しました。";
+            return Task.CompletedTask;
+        });
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => Cancel();

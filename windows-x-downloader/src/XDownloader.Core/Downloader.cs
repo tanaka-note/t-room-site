@@ -5,7 +5,7 @@ namespace XDownloader.Core;
 
 public sealed record DownloadProgress(double? Percent, string Message);
 
-public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = null)
+public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = null, ICookieSource? cookies = null)
 {
     private readonly IEngineProcess process = runner ?? new EngineProcess();
     private string Engine => Path.Combine(toolsDirectory, "yt-dlp.exe");
@@ -17,23 +17,28 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
                 throw new FileNotFoundException("動画エンジンが未準備です。READMEに従って Prepare-Tools.ps1 を実行し、アプリを再起動してください。");
     }
 
-    private List<string> CommonArguments() =>
-    [
+    private List<string> CommonArguments(ICookieLease? login)
+    {
+        List<string> arguments = [
         "--ignore-config", "--no-plugin-dirs", "--no-cache-dir", "--no-cookies-from-browser",
         "--no-update", "--encoding", "utf-8", "--no-colors", "--socket-timeout", "20",
         "--retries", "2", "--fragment-retries", "2", "--extractor-retries", "1", "--no-warnings",
         "--proxy", "", "--use-extractors", "twitter,twitter:amplify,twitter:card", "--ffmpeg-location", toolsDirectory
-    ];
+        ];
+        if (login is not null) arguments.AddRange(["--cookies", login.FilePath]);
+        return arguments;
+    }
 
     public async Task<IReadOnlyList<VideoInfo>> AnalyzeAsync(string input, CancellationToken cancellationToken)
     {
         var url = PostUrl.Normalize(input);
         CheckTools();
-        var arguments = CommonArguments();
+        using var login = cookies?.Acquire();
+        var arguments = CommonArguments(login);
         arguments.AddRange(["--dump-single-json", "--skip-download", "--yes-playlist", "--no-progress", "--", url]);
         var result = await process.RunAsync(Engine, arguments, toolsDirectory, TimeSpan.FromSeconds(120), null, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        EnsureSuccess(result);
+        EnsureSuccess(result, login is not null);
         return MediaInfo.Parse(result.Output);
     }
 
@@ -43,13 +48,14 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
         var url = PostUrl.Normalize(input);
         if (!video.Qualities.Contains(quality)) throw new ArgumentException("解析結果から画質を選択してください。");
         CheckTools();
+        using var login = cookies?.Acquire();
         var root = Path.GetFullPath(destination);
         Directory.CreateDirectory(root);
         var staging = Path.Combine(root, $".xdownloader-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
         try
         {
-            var arguments = CommonArguments();
+            var arguments = CommonArguments(login);
             arguments.AddRange([
                 "--yes-playlist", "--match-filters", $"id ~= ^{video.Id}$", "--format", quality.Selector,
                 "--merge-output-format", "mp4", "--remux-video", "mp4", "--windows-filenames", "--no-overwrites",
@@ -67,7 +73,7 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
                     completed = JsonSerializer.Deserialize<string>(line[8..]);
             }, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            EnsureSuccess(result);
+            EnsureSuccess(result, login is not null);
             if (completed is null) throw new InvalidOperationException("対象の動画が見つかりません。投稿を再解析してください。");
             var source = Path.GetFullPath(completed);
             var relative = Path.GetRelativePath(staging, source);
@@ -126,7 +132,7 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
         return $"X_{id}_{(clean.Length > 0 ? clean : "video")}";
     }
 
-    private static void EnsureSuccess(EngineResult result)
+    private static void EnsureSuccess(EngineResult result, bool loggedIn)
     {
         if (result.ExitCode == 0) return;
         var error = result.Error.ToLowerInvariant();
@@ -135,8 +141,11 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
             : error.Contains("no suitable extractor") || error.Contains("unsupported url") ? "この投稿の動画形式には対応していません。Xに直接投稿された通常の動画で試してください。"
             : error.Contains("429") || error.Contains("rate limit") ? "X側のアクセス制限に達しました。時間をおいて再試行してください。"
             : error.Contains("login") || error.Contains("protected") || error.Contains("authentication") || error.Contains("sensitive") || error.Contains("nsfw")
-                ? "ログインが必要、または閲覧が制限された投稿です。この試作版は公開投稿のみ対応します。"
-            : error.Contains("no video could be found") ? "この投稿から動画情報を取得できません。動画のない投稿、削除済み、非公開・年齢制限などが考えられます。ログインが必要な投稿は現在未対応です。"
+                ? loggedIn ? "Xのログインが失効したか、このアカウントに閲覧権限がありません。Xへ再ログインし、ブラウザーでも閲覧できる投稿か確認してください。"
+                    : "ログインが必要、または閲覧が制限された投稿です。「Xにログイン」から、ご本人が閲覧できるアカウントでログインしてください。"
+            : error.Contains("no video could be found") ? loggedIn
+                ? "ログイン状態でも動画情報が見つかりません。動画のない投稿、削除済み、閲覧権限の不足などが考えられます。Xへの再ログインも確認してください。"
+                : "この投稿から動画情報を取得できません。動画のない投稿、削除済み、閲覧制限などが考えられます。ブラウザーで再生できる場合は「Xにログイン」を試してください。"
             : error.Contains("format") ? "選択した画質で保存できません。再解析し、別の画質を選んでください。"
             : error.Contains("404") || error.Contains("unavailable") || error.Contains("not found") || error.Contains("deleted")
                 ? "投稿が削除済み、または現在取得できません。ブラウザで投稿を確認してください。"

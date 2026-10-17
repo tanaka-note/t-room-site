@@ -20,6 +20,7 @@ internal static class RealMediaFixture
         using var server = new TcpListener(IPAddress.Loopback,0);
         server.Start();
         var port = ((IPEndPoint)server.LocalEndpoint).Port;
+        var leakedCookie=false;
         var serving = Task.Run(async () =>
         {
             try
@@ -30,7 +31,8 @@ internal static class RealMediaFixture
                     await using var stream = client.GetStream();
                     using var reader = new StreamReader(stream,Encoding.ASCII,leaveOpen:true);
                     var request = await reader.ReadLineAsync(stop.Token);
-                    while (!string.IsNullOrEmpty(await reader.ReadLineAsync(stop.Token))) { }
+                    while (await reader.ReadLineAsync(stop.Token) is { Length: > 0 } header)
+                        if (header.StartsWith("Cookie:",StringComparison.OrdinalIgnoreCase)) leakedCookie=true;
                     var ok = request?.StartsWith("GET /fixture.mp4 ",StringComparison.Ordinal) == true;
                     var body = ok ? bytes : [];
                     await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {(ok ? "200 OK" : "404 Not Found")}\r\nContent-Type: video/mp4\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"),stop.Token);
@@ -49,18 +51,35 @@ internal static class RealMediaFixture
             });
             var infoFile=Path.Combine(sandbox,"fixture-info.json"); File.WriteAllText(infoFile,info);
             var runner = new FixtureInfoRunner(infoFile);
-            var downloader=new Downloader(tools,runner);
+            var downloader=new Downloader(tools,runner,new ScopedCookieFixture(sandbox));
             var video=MediaInfo.Parse(info)[0];
             var output=Path.Combine(sandbox,"real-media");
             var file=await downloader.DownloadAsync("https://x.com/user/status/123",video,video.Qualities[0],output,null,CancellationToken.None);
             if (!File.Exists(file) || new FileInfo(file).Length == 0 || Directory.EnumerateDirectories(output).Any())
                 throw new Exception("Real media was not published cleanly");
             if (runner.ProgressEvents == 0) throw new Exception("Real yt-dlp progress was not received");
+            if (leakedCookie) throw new Exception("X credential cookie leaked to a different host");
             // A full decode of this tiny fixture checks both audio and video in addition to production's ffprobe gate.
             var decoded=await process.RunAsync(Path.Combine(tools,"ffmpeg.exe"),["-v","error","-i",file,"-f","null","-"],sandbox,TimeSpan.FromSeconds(20),null,CancellationToken.None);
             if (decoded.ExitCode != 0) throw new Exception("Downloaded synthetic media does not decode");
         }
         finally { stop.Cancel(); await serving; }
+    }
+
+    private sealed class ScopedCookieFixture(string directory) : ICookieSource
+    {
+        public ICookieLease Acquire()
+        {
+            var file=Path.Combine(directory,"fixture-cookies.txt");
+            // Use production's Secure/HttpOnly syntax as well as a deliberately non-Secure domain probe.
+            // The latter isolates domain matching on loopback HTTP; production never exports it.
+            File.WriteAllText(file,"# Netscape HTTP Cookie File\n#HttpOnly_.x.com\tTRUE\t/\tTRUE\t0\tauth_token\t"+Guid.NewGuid().ToString("N")
+                +"\n.x.com\tTRUE\t/\tTRUE\t0\tct0\t"+Guid.NewGuid().ToString("N")
+                +"\n.x.com\tTRUE\t/\tFALSE\t0\tdomain_probe\t"+Guid.NewGuid().ToString("N")+"\n");
+            return new FixtureLease(file);
+        }
+        private sealed class FixtureLease(string file) : ICookieLease
+        { public string FilePath=>file; public void Dispose()=>File.Delete(file); }
     }
 
     private sealed class FixtureInfoRunner(string infoFile) : IEngineProcess

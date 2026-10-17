@@ -10,5 +10,7 @@ The app invokes separate executables. They are downloaded locally by Prepare-Too
   - Build recipes and dependency sources: https://github.com/yt-dlp/FFmpeg-Builds . License files included by the archive are copied into tools/licenses.
   - This build enables GPL components. See https://ffmpeg.org/legal.html .
 - .NET / WPF: https://github.com/dotnet/runtime and https://github.com/dotnet/wpf (MIT and third-party notices).
+- Microsoft.Web.WebView2 SDK 1.0.4258.31: https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.4258.31 . The SDK/native loader and the separately installed Evergreen Runtime have Microsoft license terms; consult the package license and https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution before redistribution.
+- System.Security.Cryptography.ProtectedData 10.0.13: https://www.nuget.org/packages/System.Security.Cryptography.ProtectedData/10.0.13 (MIT; Windows CurrentUser DPAPI).
 
 This output is for local prototyping. Before distributing an executable package to others, prepare the complete corresponding source, dependency/build information, license texts and notices required by the exact shipped binaries. This notice alone does not fulfill all redistribution obligations. App code and helper executables are separate processes; that does not waive the helpers' redistribution requirements.

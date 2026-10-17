@@ -29,6 +29,8 @@ public sealed class EngineProcess : IEngineProcess
         using var process = new Process { StartInfo = start };
         cancellationToken.ThrowIfCancellationRequested();
         if (!process.Start()) throw new InvalidOperationException("動画エンジンを起動できませんでした。");
+        // The OS closes this job on an app crash too, terminating the engine and its descendants.
+        using var job = OperatingSystem.IsWindows() ? WindowsProcessJob.Attach(process) : null;
         using var registration = linked.Token.Register(() =>
         {
             try { process.Kill(entireProcessTree: true); }

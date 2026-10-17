@@ -7,10 +7,12 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>XDownloader</AssemblyName>
-    <Version>0.1.1</Version>
+    <Version>0.2.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../XDownloader.Core/XDownloader.Core.csproj" />
+    <ProjectReference Include="../XDownloader.Auth/XDownloader.Auth.csproj" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="[1.0.4258.31]" />
   </ItemGroup>
 </Project>

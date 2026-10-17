@@ -1,11 +1,19 @@
 <Window x:Class="XDownloader.App.MainWindow"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- Title="X動画ダウンローダー（試作版 0.1.1）" Width="760" Height="590"
+ Title="X動画ダウンローダー（試作版 0.2）" Width="760" Height="650"
  MinWidth="620" MinHeight="520" FontFamily="Yu Gothic UI" FontSize="14"
  Closing="Window_Closing" PreviewKeyDown="Window_KeyDown">
  <ScrollViewer VerticalScrollBarVisibility="Auto">
- <Grid Margin="22" Background="White">
+ <StackPanel Margin="22">
+ <DockPanel LastChildFill="True">
+  <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+   <Button x:Name="LoginButton" Content="Xにログイン" Padding="14,7" Margin="8,0,0,0" Click="Login_Click"/>
+   <Button x:Name="LogoutButton" Content="ログアウト" Padding="14,7" Margin="8,0,0,0" Click="Logout_Click"/>
+  </StackPanel>
+  <TextBlock x:Name="LoginStatus" Text="未ログイン" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+ </DockPanel>
+ <Grid Margin="0,16,0,0" Background="White">
   <Grid.RowDefinitions>
    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
@@ -41,8 +49,9 @@
    <TextBlock x:Name="Status" Text="投稿URLを入力して「解析」を押してください。" TextWrapping="Wrap" MinHeight="40" AutomationProperties.LiveSetting="Polite"/>
    <TextBox x:Name="SavedFile" IsReadOnly="True" BorderThickness="0" Background="Transparent" TextWrapping="Wrap" Visibility="Collapsed"/>
   </StackPanel>
-  <TextBlock Grid.Row="10" Text="公開投稿に対応。ログイン必須・DM・ライブは対象外です。保存する権利のある動画に使用してください。"
+  <TextBlock Grid.Row="10" Text="ログイン後は、そのアカウントが閲覧できる投稿を取得します。DM・ライブは対象外です。保存する権利のある動画に使用してください。"
    Foreground="#555555" FontSize="12" TextWrapping="Wrap" Margin="0,18,0,0"/>
  </Grid>
+ </StackPanel>
  </ScrollViewer>
 </Window>

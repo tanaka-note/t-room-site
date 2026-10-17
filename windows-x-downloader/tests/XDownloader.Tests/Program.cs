@@ -5,6 +5,12 @@ using XDownloader.Core;
 Console.OutputEncoding = new System.Text.UTF8Encoding(false);
 if (args.Contains("--emit")) { Console.WriteLine("日本語の動画"); Console.Error.WriteLine("fixture stderr"); return 0; }
 if (args.Contains("--sleep")) { await Task.Delay(TimeSpan.FromMinutes(1)); return 0; }
+if (args.Contains("--report-and-sleep")) { Console.WriteLine(Environment.ProcessId); await Task.Delay(TimeSpan.FromMinutes(1)); return 0; }
+if (args.Contains("--supervisor"))
+{
+    await new EngineProcess().RunAsync(Environment.ProcessPath!,["--report-and-sleep"],Directory.GetCurrentDirectory(),TimeSpan.FromMinutes(1),Console.WriteLine,CancellationToken.None);
+    return 0;
+}
 if (args.Contains("--child"))
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
@@ -180,6 +186,33 @@ try
         try { using var child = Process.GetProcessById(childId); Assert(child.HasExited, "grandchild survived cancellation"); } catch (ArgumentException) { }
     });
     await Test("real process timeout is distinct from cancellation", () => Throws<TimeoutException>(() => real.RunAsync(Environment.ProcessPath!, ["--sleep"], sandbox, TimeSpan.FromMilliseconds(400), null, CancellationToken.None)));
+    if (OperatingSystem.IsWindows())
+        await Test("Windows job terminates the engine when its app crashes",async()=>
+        {
+            var start=new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true };
+            start.ArgumentList.Add("--supervisor");
+            using var supervisor=Process.Start(start)!;
+            int childId=0;
+            try
+            {
+                var line=await supervisor.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+                childId=int.Parse(line!);
+                supervisor.Kill(entireProcessTree:false); await supervisor.WaitForExitAsync();
+                var deadline=DateTime.UtcNow.AddSeconds(5);
+                while (true)
+                {
+                    try { using var child=Process.GetProcessById(childId); if (child.HasExited) break; }
+                    catch (ArgumentException) { break; }
+                    if (DateTime.UtcNow>=deadline) throw new Exception("engine survived its supervisor");
+                    await Task.Delay(50);
+                }
+            }
+            finally
+            {
+                if (!supervisor.HasExited) supervisor.Kill(true);
+                if (childId>0) { try { using var child=Process.GetProcessById(childId); if (!child.HasExited) child.Kill(true); } catch (ArgumentException) { } }
+            }
+        });
 }
 finally { Directory.Delete(sandbox, true); }
 Console.WriteLine($"RESULT {passed} passed; {failures} failed");
