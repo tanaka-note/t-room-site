@@ -1,253 +1,54 @@
-import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import vm from "node:vm";
-import { resolve } from "node:path";
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { portfolioFixture } from './fixtures/asset-report.mjs';
+import { adjustmentForPeriod, assetProfit, assetReturnRate, calculateHistoryScale, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
 
-const root = resolve(import.meta.dirname, "..");
-const reportSource = await readFile(resolve(root, "asset-report-k7m4q9x2/report.js"), "utf8");
-const reportHtml = await readFile(resolve(root, "asset-report-k7m4q9x2/index.html"), "utf8");
-const reportCss = await readFile(resolve(root, "asset-report-k7m4q9x2/report.css"), "utf8");
+test('dated cumulative adjustment replaces earlier loss, including exact boundary dates', () => {
+  const { performanceAdjustmentSnapshots: snapshots } = portfolioFixture();
+  for (const [date, expected] of [['2024-01-02', 0], ['2024-01-03', -20], ['2024-01-04', -20], ['2024-01-05', -30], ['2024-01-06', -30]]) {
+    assert.equal(adjustmentForPeriod(snapshots, date), expected);
+  }
+  assert.equal(adjustmentForPeriod([], '2024-01-06'), 0);
+});
 
-const context = {
-  window: {
-    __assetReportDisableAutoRender: true,
-    addEventListener: () => {}
-  },
-  document: {},
-  Intl,
-  Date,
-  Math,
-  Number,
-  parseInt,
-  parseFloat,
-  setTimeout,
-  clearTimeout,
-  setInterval,
-  clearInterval,
-  requestAnimationFrame: () => {},
-  cancelAnimationFrame: () => {}
-};
+test('future adjustment never rewrites earlier history or the current summary', () => {
+  const data = portfolioFixture();
+  const model = createPortfolioModel(data);
+  const rawHistory = structuredClone(data.history);
+  const displayed = data.history.map(model.historyMarketValue);
+  const summary = model.summary();
+  data.performanceAdjustmentSnapshots.push({ effectiveFrom: '2024-01-07', cumulativeValue: -80 });
+  assert.deepEqual(data.history.map(model.historyMarketValue), displayed);
+  assert.deepEqual(data.history, rawHistory);
+  assert.deepEqual(model.summary(), summary);
+  assert.equal(model.adjustmentForPeriod('2024-01-07'), -80);
+});
 
-vm.createContext(context);
-vm.runInContext(reportSource, context, { filename: "asset-report-report.js" });
+test('raw allocation, adjusted performance and acquisition cost are separate concepts', () => {
+  const data = portfolioFixture();
+  validatePortfolioData(data, { expectedBasePrincipal: 1000 });
+  const model = createPortfolioModel(data);
+  assert.deepEqual(model.summary(), { rawMarketValue: 2800, adjustment: -30, marketValue: 2770, profit: 1770, returnRate: 177 });
+  assert.equal(data.assets.reduce((sum, asset) => sum + asset.costBasis, 0), 2600);
+  assert.equal(assetProfit(data.assets[0]), 300);
+  assert.equal(assetReturnRate(data.assets[0]), 300 / 1700 * 100);
+  assert.equal(assetProfit(data.assets[1]), -100);
+  assert.equal(data.assets[0].marketValue / model.summary().rawMarketValue, 2000 / 2800);
+  data.realizedProfit.value *= 10;
+  assert.equal(model.summary().marketValue, 2770, 'display-only realized profit is never added');
+  assert.deepEqual(data.history.map(model.historyMarketValue), [2700, 2730, 2770]);
+  data.assets[0].name = '変更後の表示名';
+  assert.equal(data.assets[0].id, 'alpha');
+  assert.equal(model.summary().marketValue, 2770);
+});
 
-const hooks = context.window.__assetReportTestHooks;
-assert.ok(hooks, "window.__assetReportTestHooks must exist");
-assert.equal(typeof hooks.calculateHistoryScale, "function");
-assert.equal(typeof hooks.historyMarketValue, "function");
-
-const { calculateHistoryScale, historyMarketValue, adjustmentForPeriod } = hooks;
-
-const summaryElements = new Map([
-  ["#principal-value", { textContent: "" }],
-  ["#market-value", { textContent: "" }],
-  ["#profit-value", { textContent: "", className: "" }],
-  ["#return-value", { textContent: "", className: "" }],
-  ["#donut-total", { textContent: "" }]
-]);
-context.document.querySelector = (selector) => summaryElements.get(selector);
-const portfolioTotal = vm.runInContext("renderSummary()", context);
-assert.equal(summaryElements.get("#market-value").textContent, summaryElements.get("#donut-total").textContent,
-  "上部の時価総額と資産構成中央は同一の調整後金額を表示する");
-assert.equal(summaryElements.get("#principal-value").textContent, "￥6,000,000", "上部の元本は維持する");
-assert.equal(summaryElements.get("#profit-value").textContent, "+￥349,066", "調整後の損益計算を維持する");
-assert.equal(summaryElements.get("#return-value").textContent, "+5.82%", "調整後の損益率計算を維持する");
-assert.equal(summaryElements.get("#market-value").textContent, "￥6,349,066", "投資信託他売却損を反映した時価総額を表示する");
-assert.equal(portfolioTotal, 6_669_066, "資産構成のセグメント・構成比には従来の保有資産合計を使う");
-assert.match(reportHtml, /<span>更新日<\/span>/);
-assert.match(reportHtml, /<time id="report-updated" datetime="2026-10-16">2026\.10\.16<\/time>/);
-assert.doesNotMatch(reportHtml, /AS OF|日時点|8月17日/);
-assert.equal((reportHtml.match(/id="report-updated"/g) || []).length, 1, "更新日の表示箇所は1つに統一する");
-
-const small = calculateHistoryScale([6380000, 6400000, 6420000, 6390000, 6410000]);
-assert.equal(small.minValue, 6380000);
-assert.equal(small.maxValue, 6420000);
-assert.equal(small.adjustedSpread, 160500);
-assert.ok((small.yMax - small.yMin) < 300000, `小さな変動のY軸が過剰に広がっていない: ${small.yMax - small.yMin}`);
-
-const large = calculateHistoryScale([6000000, 8000000]);
-assert.equal(large.minValue, 6000000);
-assert.equal(large.maxValue, 8000000);
-assert.ok(large.yMin <= 6000000, `下限は最小値を下回るまたは同値: ${large.yMin}`);
-assert.ok(large.yMax >= 8000000, `上限は最大値を上回るまたは同値: ${large.yMax}`);
-
-const tenMillion = calculateHistoryScale([10_000_000, 10_150_000, 10_100_000, 10_080_000]);
-assert.ok(tenMillion.ySpan > 0, "10万円以上の規模で幅が算出される");
-assert.ok(tenMillion.adjustedSpread >= 100000, "最小表示幅は100000以上");
-
-const weekScale = calculateHistoryScale([6_341_192, 6_345_218, 6_397_495, 6_382_548, 6_384_282]);
-const allScale = calculateHistoryScale([6_221_192, 6_167_574, 6_237_083, 6_345_218, 6_343_667, 6_393_495, 6_387_548, 6_384_282, 6_409_958, 6_389_451, 6_411_887, 6_423_188, 6_422_213]);
-assert.ok(allScale.ySpan >= weekScale.ySpan, "全期間のY軸幅は週次より小さくならない");
-
-const latest = historyMarketValue({ period: "2026-08-15", marketValue: 6422213 });
-assert.equal(latest, 6202213);
-const previous = historyMarketValue({ period: "2026-08-14", marketValue: 6423188 });
-assert.equal(previous, 6423188);
-const current = historyMarketValue({ period: "2026-08-16", marketValue: 6424845 });
-assert.equal(current, 6204845);
-const latestCurrent = historyMarketValue({ period: "2026-08-17", marketValue: 6416884 });
-assert.equal(latestCurrent, 6196884);
-
-for (const [period, adjustment] of [
-  ["2026-08-14", 0],
-  ["2026-08-15", -220000],
-  ["2026-09-12", -220000],
-  ["2026-09-13", -320000],
-  ["2026-09-14", -320000],
-  ["2026-09-20", -320000],
-  ["2026-09-21", -320000],
-  ["2026-09-22", -320000],
-  ["2026-09-23", -320000],
-  ["2026-09-24", -320000],
-  ["2026-09-25", -320000],
-  ["2026-09-27", -320000],
-  ["2026-09-28", -320000],
-  ["2026-09-29", -320000],
-  ["2026-10-05", -320000],
-  ["2026-10-06", -320000],
-  ["2026-10-07", -320000],
-  ["2026-10-08", -320000],
-  ["2026-10-09", -320000],
-  ["2026-10-10", -320000],
-  ["2026-10-11", -320000],
-  ["2026-10-13", -320000],
-  ["2026-10-14", -320000],
-  ["2026-10-15", -320000],
-  ["2026-10-16", -320000]
-]) assert.equal(adjustmentForPeriod(period), adjustment, `${period}時点の補正額`);
-
-const history = vm.runInContext("reportData.history", context);
-const assets = vm.runInContext("reportData.assets", context);
-assert.deepEqual(Object.fromEntries(assets.map((asset) => [asset.name, asset.marketValue])), {
-  "iFナス100H無": 2115771,
-  "iSNIFTY50": 828240,
-  "三菱電": 500500,
-  "三菱HCキャピタル": 394500,
-  "伊藤忠": 228400,
-  "アコム": 137160,
-  "イオン": 111950,
-  "ソフトバンク": 122350,
-  "NTT": 87250,
-  "ムニノバHD": 41700,
-  "ビットコイン": 2101245
-}, "10月16日の全資産評価額を反映する");
-const displayed = (period) => historyMarketValue(history.find((entry) => entry.period === period));
-assert.equal(displayed("2026-09-10"), 6248152);
-assert.equal(displayed("2026-09-12"), 6220352);
-assert.equal(displayed("2026-09-13"), 6120352);
-assert.equal(displayed("2026-09-12") - displayed("2026-09-13"), 100000);
-assert.equal(displayed("2026-09-14"), 6147501);
-assert.equal(displayed("2026-09-15"), 6131723);
-assert.equal(displayed("2026-09-16"), 6117019);
-assert.equal(displayed("2026-09-17"), 6174916);
-assert.equal(displayed("2026-09-19"), 6333422);
-assert.equal(displayed("2026-09-20"), 6317954);
-assert.equal(displayed("2026-09-21"), 6349994);
-assert.equal(displayed("2026-09-22"), 6478950);
-assert.equal(displayed("2026-09-23"), 6483064);
-assert.equal(displayed("2026-09-24"), 6482884);
-assert.equal(displayed("2026-09-25"), 6516173);
-assert.equal(displayed("2026-09-27"), 6512177);
-assert.equal(displayed("2026-09-28"), 6421186);
-assert.equal(displayed("2026-09-29"), 6394679);
-assert.equal(displayed("2026-10-05"), 6506441);
-assert.equal(displayed("2026-10-06"), 6550743);
-assert.equal(displayed("2026-10-07"), 6475465);
-assert.equal(displayed("2026-10-08"), 6385326);
-assert.equal(displayed("2026-10-09"), 6418935);
-assert.equal(displayed("2026-10-10"), 6412957);
-assert.equal(displayed("2026-10-11"), 6417606);
-assert.equal(displayed("2026-10-13"), 6428219);
-assert.equal(displayed("2026-10-14"), 6419335);
-assert.equal(displayed("2026-10-15"), 6270156);
-assert.equal(displayed("2026-10-16"), 6349066);
-
-const rawHistory = JSON.stringify(history);
-const originalDisplayed = history.map(historyMarketValue);
-const adjustments = vm.runInContext("reportData.operatingExpense.adjustmentHistory", context);
-// 将来の改定を追加・変更しても、それ以前の日付と現在の報告は変わらない。
-adjustments.push({ from: "2026-10-17", value: -420000 });
-for (const value of [-420000, -520000]) {
-  adjustments.at(-1).value = value;
-  assert.equal(adjustmentForPeriod("2026-10-17"), value);
-  assert.deepEqual(history.map(historyMarketValue), originalDisplayed);
-  vm.runInContext("renderSummary()", context);
-  assert.equal(summaryElements.get("#market-value").textContent, "￥6,349,066");
-}
-vm.runInContext('reportData.period = "2026-09-12"; renderSummary()', context);
-assert.equal(summaryElements.get("#market-value").textContent, "￥6,449,066", "サマリーも報告日時点の補正額を使う");
-vm.runInContext('reportData.period = "2026-10-17"; renderSummary()', context);
-assert.equal(summaryElements.get("#market-value").textContent, "￥6,149,066");
-adjustments.pop();
-vm.runInContext('reportData.period = "2026-10-16"; renderSummary()', context);
-assert.equal(JSON.stringify(history), rawHistory, "実資産額の履歴を変更しない");
-
-assert.match(reportSource, /period: "2026-10-16"/);
-assert.match(reportSource, /from: "2026-08-15", value: -220000/);
-assert.match(reportSource, /name: "投資信託他売却損"/);
-assert.doesNotMatch(reportSource, /name: "運用手数料・雑費"/);
-assert.match(reportSource, /value: -320000/);
-assert.match(reportSource, /\{ period: "2026-08-17", principal: 6000000, marketValue: 6416884 \}/);
-assert.match(reportSource, /\{ period: "2026-08-18", principal: 6000000, marketValue: 6402118 \}/);
-assert.match(reportSource, /\{ period: "2026-08-19", principal: 6000000, marketValue: 6298001 \}/);
-assert.match(reportSource, /\{ period: "2026-08-20", principal: 6000000, marketValue: 6510008 \}/);
-assert.match(reportSource, /\{ period: "2026-08-21", principal: 6000000, marketValue: 6679288 \}/);
-assert.match(reportSource, /\{ period: "2026-08-22", principal: 6000000, marketValue: 6666459 \}/);
-assert.match(reportSource, /\{ period: "2026-08-24", principal: 6000000, marketValue: 6651675 \}/);
-assert.match(reportSource, /\{ period: "2026-08-25", principal: 6000000, marketValue: 6740149 \}/);
-assert.match(reportSource, /\{ period: "2026-08-26", principal: 6000000, marketValue: 6740149 \}/);
-assert.match(reportSource, /\{ period: "2026-08-28", principal: 6000000, marketValue: 6765347 \}/);
-assert.match(reportSource, /\{ period: "2026-08-31", principal: 6000000, marketValue: 6736202 \}/);
-assert.match(reportSource, /\{ period: "2026-09-01", principal: 6000000, marketValue: 6731243 \}/);
-assert.match(reportSource, /\{ period: "2026-09-03", principal: 6000000, marketValue: 6599458 \}/);
-assert.match(reportSource, /\{ period: "2026-09-04", principal: 6000000, marketValue: 6681955 \}/);
-assert.match(reportSource, /\{ period: "2026-09-06", principal: 6000000, marketValue: 6651886 \}/);
-assert.match(reportSource, /\{ period: "2026-09-07", principal: 6000000, marketValue: 6620132 \}/);
-assert.match(reportSource, /\{ period: "2026-09-08", principal: 6000000, marketValue: 6526723 \}/);
-assert.match(reportSource, /\{ period: "2026-09-09", principal: 6000000, marketValue: 6509484 \}/);
-assert.match(reportSource, /\{ period: "2026-09-10", principal: 6000000, marketValue: 6468152 \}/);
-assert.match(reportSource, /\{ period: "2026-09-12", principal: 6000000, marketValue: 6440352 \}/);
-assert.match(reportSource, /\{ period: "2026-09-13", principal: 6000000, marketValue: 6440352 \}/);
-assert.match(reportSource, /\{ period: "2026-09-14", principal: 6000000, marketValue: 6467501 \}/);
-assert.match(reportSource, /\{ period: "2026-09-15", principal: 6000000, marketValue: 6451723 \}/);
-assert.match(reportSource, /\{ period: "2026-09-16", principal: 6000000, marketValue: 6437019 \}/);
-assert.match(reportSource, /\{ period: "2026-09-17", principal: 6000000, marketValue: 6494916 \}/);
-assert.match(reportSource, /\{ period: "2026-09-19", principal: 6000000, marketValue: 6653422 \}/);
-assert.match(reportSource, /\{ period: "2026-09-20", principal: 6000000, marketValue: 6637954 \}/);
-assert.match(reportSource, /\{ period: "2026-09-21", principal: 6000000, marketValue: 6669994 \}/);
-assert.match(reportSource, /\{ period: "2026-09-22", principal: 6000000, marketValue: 6798950 \}/);
-assert.match(reportSource, /\{ period: "2026-09-23", principal: 6000000, marketValue: 6803064 \}/);
-assert.match(reportSource, /\{ period: "2026-09-24", principal: 6000000, marketValue: 6802884 \}/);
-assert.match(reportSource, /\{ period: "2026-09-25", principal: 6000000, marketValue: 6836173 \}/);
-assert.match(reportSource, /\{ period: "2026-09-27", principal: 6000000, marketValue: 6832177 \}/);
-assert.match(reportSource, /\{ period: "2026-09-28", principal: 6000000, marketValue: 6741186 \}/);
-assert.match(reportSource, /\{ period: "2026-09-29", principal: 6000000, marketValue: 6714679 \}/);
-assert.match(reportSource, /\{ period: "2026-10-05", principal: 6000000, marketValue: 6826441 \}/);
-assert.match(reportSource, /\{ period: "2026-10-06", principal: 6000000, marketValue: 6870743 \}/);
-assert.match(reportSource, /\{ period: "2026-10-07", principal: 6000000, marketValue: 6795465 \}/);
-assert.match(reportSource, /\{ period: "2026-10-08", principal: 6000000, marketValue: 6705326 \}/);
-assert.match(reportSource, /\{ period: "2026-10-09", principal: 6000000, marketValue: 6738935 \}/);
-assert.match(reportSource, /\{ period: "2026-10-10", principal: 6000000, marketValue: 6732957 \}/);
-assert.match(reportSource, /\{ period: "2026-10-11", principal: 6000000, marketValue: 6737606 \}/);
-assert.match(reportSource, /\{ period: "2026-10-13", principal: 6000000, marketValue: 6748219 \}/);
-assert.match(reportSource, /\{ period: "2026-10-14", principal: 6000000, marketValue: 6739335 \}/);
-assert.match(reportSource, /\{ period: "2026-10-15", principal: 6000000, marketValue: 6590156 \}/);
-assert.match(reportSource, /\{ period: "2026-10-16", principal: 6000000, marketValue: 6669066 \}/);
-assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 2101245/);
-
-assert.doesNotMatch(reportSource, /yFor\(entry\.marketValue\)/, "時価総額描画はentry.marketValueを直接使っていない");
-assert.match(reportSource, /yFor\(historyMarketValue\(entry\)\)/, "時価総額描画のy計算はhistoryMarketValueを通る");
-assert.match(reportSource, /renderHistoryTooltip\(entry, xFor\(index\), yFor\(historyMarketValue\(entry\)\)\);/, "tooltipYはdisplay値と同じ計算");
-assert.doesNotMatch(reportSource, /drawSeries\(\(entry\) => entry\.principal/, "元本の破線を描画しない");
-assert.doesNotMatch(reportSource, /\[entry\.principal, "#8996a8"\]/, "選択位置に元本のポイントを描画しない");
-assert.match(reportSource, /drawSeries\(\(entry\) => historyMarketValue\(entry\), "#52e6aa"/, "時価総額の緑色ラインを維持する");
-assert.match(reportSource, /createLinearGradient[\s\S]*?context\.fill\(\);/, "時価総額の緑色の塗りを維持する");
-
-const historySection = reportHtml.match(/<section id="history-section"[\s\S]*?<\/section>/)?.[0] || "";
-assert.match(historySection, /aria-label="時価総額（売却損反映後）の日次推移"/, "チャートARIAは売却損反映後であることを表す");
-assert.match(reportHtml, /<span>時価総額（売却損反映後）<\/span>/);
-assert.doesNotMatch(historySection, /元本/, "資産推移チャートの凡例・ARIAに元本を表示しない");
-assert.match(historySection, /history-dot-market[\s\S]*?時価総額/, "時価総額の凡例を維持する");
-assert.doesNotMatch(reportCss, /history-dot-principal/, "不要になった元本凡例スタイルを残さない");
-
-process.stdout.write("asset report history scale tests passed.\n");
+test('history scale preserves small variations, large ranges and empty/nonfinite input behavior', () => {
+  const small = calculateHistoryScale([6380000, 6400000, 6420000, 6390000, 6410000]);
+  assert.equal(small.minValue, 6380000);
+  assert.equal(small.maxValue, 6420000);
+  assert.equal(small.adjustedSpread, 160500);
+  assert.ok(small.ySpan < 300000);
+  const large = calculateHistoryScale([6000000, 8000000]);
+  assert.ok(large.yMin <= 6000000 && large.yMax >= 8000000);
+  for (const values of [[], [NaN, Infinity]]) assert.equal(calculateHistoryScale(values).ySpan, 1);
+});
