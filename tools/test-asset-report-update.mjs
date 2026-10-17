@@ -80,7 +80,7 @@ test('updates are validated and staged before changing data, HTML and managed me
     assert.deepEqual(next.history.slice(0, -1), current.history);
     assert.deepEqual(next.monthlyReport, current.monthlyReport);
     assert.deepEqual(next.performanceAdjustmentSnapshots, current.performanceAdjustmentSnapshots);
-    const metadata = d => d.assets.map(({ id, costBasis, color, name }) => ({ id, costBasis, color, name }));
+    const metadata = d => d.assets.map(({ id, category, costBasis, color, name }) => ({ id, category, costBasis, color, name }));
     assert.deepEqual(metadata(next), metadata(current));
     assert.equal((await snapshot())[3], before[3], 'price updates never edit rendering logic');
     assert.equal((await inspectBuildFreshness(app, registry.contract, root)).fresh, true);

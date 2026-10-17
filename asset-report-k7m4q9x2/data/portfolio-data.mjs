@@ -347,7 +347,7 @@ export default {
     {
       "id": "nasdaq100-unhedged",
       "name": "iFナス100H無",
-      "category": "ETF",
+      "category": "米株",
       "costBasis": 2002329,
       "marketValue": 2115771,
       "color": "#ff8a61"
@@ -355,7 +355,7 @@ export default {
     {
       "id": "nifty50",
       "name": "iSNIFTY50",
-      "category": "ETF",
+      "category": "インド株",
       "costBasis": 866320,
       "marketValue": 828240,
       "color": "#f4ca64"
@@ -374,7 +374,7 @@ export default {
       "category": "日本株",
       "costBasis": 430200,
       "marketValue": 394500,
-      "color": "#68a7ff"
+      "color": "#52e6aa"
     },
     {
       "id": "itochu",
@@ -382,7 +382,7 @@ export default {
       "category": "日本株",
       "costBasis": 198100,
       "marketValue": 228400,
-      "color": "#ffb454"
+      "color": "#52e6aa"
     },
     {
       "id": "acom",
@@ -390,7 +390,7 @@ export default {
       "category": "日本株",
       "costBasis": 142500,
       "marketValue": 137160,
-      "color": "#50d3c2"
+      "color": "#52e6aa"
     },
     {
       "id": "aeon",
@@ -398,7 +398,7 @@ export default {
       "category": "日本株",
       "costBasis": 135100,
       "marketValue": 111950,
-      "color": "#f06fa9"
+      "color": "#52e6aa"
     },
     {
       "id": "softbank",
@@ -406,7 +406,7 @@ export default {
       "category": "日本株",
       "costBasis": 111500,
       "marketValue": 122350,
-      "color": "#96a7ff"
+      "color": "#52e6aa"
     },
     {
       "id": "ntt",
@@ -414,7 +414,7 @@ export default {
       "category": "日本株",
       "costBasis": 75500,
       "marketValue": 87250,
-      "color": "#c6dc70"
+      "color": "#52e6aa"
     },
     {
       "id": "muninova-hd",
@@ -422,12 +422,12 @@ export default {
       "category": "日本株",
       "costBasis": 43900,
       "marketValue": 41700,
-      "color": "#7e8da1"
+      "color": "#52e6aa"
     },
     {
       "id": "btc",
       "name": "ビットコイン",
-      "category": "暗号資産",
+      "category": "ビットコイン",
       "costBasis": 2500000,
       "marketValue": 2082342,
       "color": "#a98cff"

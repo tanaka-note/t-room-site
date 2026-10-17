@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { extname, resolve, sep } from 'node:path';
 import data from '../asset-report-k7m4q9x2/data/portfolio-data.mjs';
-import { createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
+import { allocationGroups, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
 import { syntheticPortfolio } from './fixtures/asset-report.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -36,9 +36,36 @@ async function inspect(page, portfolio) {
   for (const asset of portfolio.assets) {
     const row = page.locator(`#holdings-body tr[data-asset-id="${asset.id}"]`);
     assert.equal(await row.locator('td').nth(1).textContent(), yen(asset.marketValue));
-    const legend = page.locator(`#allocation-legend li[data-asset-id="${asset.id}"]`);
-    assert.equal(await legend.locator('.legend-share').textContent(), `${(asset.marketValue / model.summary().rawMarketValue * 100).toFixed(2)}%`);
   }
+  const groups = allocationGroups(portfolio);
+  assert.equal(await page.locator('#allocation-legend li').count(), 4);
+  assert.deepEqual(await page.locator('#allocation-legend li').evaluateAll(items => items.map(item => item.dataset.groupId)), groups.map(group => group.id));
+  for (const group of groups) {
+    const legend = page.locator(`#allocation-legend li[data-group-id="${group.id}"]`);
+    assert.equal(await legend.locator('.legend-name').textContent(), group.name + yen(group.marketValue));
+    const total = model.summary().rawMarketValue;
+    assert.equal(await legend.locator('.legend-share').textContent(), `${(total > 0 ? group.marketValue / total * 100 : 0).toFixed(2)}%`);
+    assert.equal(await legend.locator('.legend-color').evaluate(element => element.style.backgroundColor), `rgb(${group.color.slice(1).match(/../g).map(hex => parseInt(hex, 16)).join(', ')})`);
+  }
+  assert.equal(await page.locator('#allocation-note').isVisible(), true);
+  assert.match(await page.locator('#allocation-note').textContent(), /売却損控除前/);
+  const chartBox = await page.locator('#allocation-chart').boundingBox();
+  assert.ok((await page.locator('#allocation-note').boundingBox()).y >= chartBox.y + chartBox.height);
+  const pixelsMatch = await page.locator('#allocation-chart').evaluate((canvas, groups) => {
+    const { width, height } = canvas.getBoundingClientRect();
+    const radius = Math.min(width, height) * 0.45;
+    const centerRadius = radius - Math.max(28, radius * 0.28) / 2;
+    const total = groups.reduce((sum, group) => sum + group.marketValue, 0);
+    let start = -Math.PI / 2;
+    return groups.every(group => {
+      const angle = total > 0 ? group.marketValue / total * Math.PI * 2 : 0;
+      const midpoint = start + angle / 2; start += angle;
+      if (!angle) return true;
+      const pixel = canvas.getContext('2d').getImageData(Math.round((width / 2 + Math.cos(midpoint) * centerRadius) * canvas.width / width), Math.round((height / 2 + Math.sin(midpoint) * centerRadius) * canvas.height / height), 1, 1).data;
+      return group.color.slice(1).match(/../g).every((hex, i) => Math.abs(parseInt(hex, 16) - pixel[i]) <= 1);
+    });
+  }, groups);
+  assert.equal(pixelsMatch, true, 'donut segments must use the same four grouped values and colors as the legend');
   assert.equal(await page.locator('#history-section').isVisible(), true);
   const entries = portfolio.monthlyReport.entries.filter(entry => entry.text.trim()).sort((a, b) => b.date.localeCompare(a.date));
   assert.equal(await page.locator('#comment-section').isVisible(), entries.length > 0);

@@ -52,6 +52,9 @@ test('inconsistent data fails instead of being silently omitted from the report'
     ['historical principal', d => { d.history[0].basePrincipal++; }],
     ['zero cost basis', d => { d.assets[0].costBasis = 0; }],
     ['invalid color', d => { d.assets[0].color = 'not-a-color'; }],
+    ['unknown allocation group', d => { d.assets[0].category = '不明'; }],
+    ['missing allocation group', d => { delete d.assets[0].category; }],
+    ['inconsistent group color', d => { d.assets[0].color = '#123456'; }],
     ['empty assets', d => { d.assets = []; }],
     ['empty history', d => { d.history = []; }],
     ['ambiguous legacy field', d => { d.principal = 1000; }]

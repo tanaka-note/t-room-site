@@ -1,6 +1,23 @@
 // The reference principal is a reporting policy, independent of asset acquisition costs.
 export const BASE_PRINCIPAL = 6000000;
 
+export const ALLOCATION_GROUPS = Object.freeze([
+  { id: "us-stocks", name: "米株", color: "#ff8a61" },
+  { id: "india-stocks", name: "インド株", color: "#f4ca64" },
+  { id: "bitcoin", name: "ビットコイン", color: "#a98cff" },
+  { id: "japan-stocks", name: "日本株", color: "#52e6aa" }
+].map(Object.freeze));
+
+export function allocationGroups(data) {
+  const groups = ALLOCATION_GROUPS.map(group => ({ ...group, marketValue: 0 }));
+  for (const asset of data.assets) {
+    const group = groups.find(group => group.name === asset.category);
+    requireValue(group, "asset.category: unknown allocation group");
+    group.marketValue += asset.marketValue;
+  }
+  return groups;
+}
+
 export function isReportDate(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(value + "T00:00:00Z");
@@ -89,9 +106,12 @@ export function validatePortfolioData(data, { expectedBasePrincipal = BASE_PRINC
     ids.add(asset.id);
     text(asset.name, "asset.name");
     text(asset.category, "asset.category");
+    const group = ALLOCATION_GROUPS.find(group => group.name === asset.category);
+    requireValue(group, "asset.category: unknown allocation group");
     amount(asset.costBasis, "asset.costBasis", 1);
     amount(asset.marketValue, "asset.marketValue");
     requireValue(typeof asset.color === "string" && /^#[a-f0-9]{6}$/i.test(asset.color), "asset.color: hex color required");
+    requireValue(asset.color === group.color, "asset.color: must match allocation group");
   }
   amount(rawMarketValue(data), "assets total");
   record(data.monthlyReport, ["entries"], "monthlyReport");
