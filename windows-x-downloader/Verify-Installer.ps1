@@ -6,6 +6,16 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Runtime.InteropServices.ComTypes;
+[ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IXDownloaderShellLinkW {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity, IntPtr data, uint flags);
+    void GetIDList(out IntPtr list);
+    void SetIDList(IntPtr list);
+    void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int capacity);
+    void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+    void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity);
+}
 public static class XDownloaderInstallerPaths {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetLongPathName(string path, StringBuilder buffer, uint capacity);
@@ -14,7 +24,7 @@ public static class XDownloaderInstallerPaths {
     public static string Long(string path) {
         var buffer = new StringBuilder(32768);
         uint length = GetLongPathName(path, buffer, (uint)buffer.Capacity);
-        if (length == 0 || length >= buffer.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if (length == 0 || length >= buffer.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot normalize path: " + path);
         return buffer.ToString().TrimEnd('\\');
     }
     public static string Short(string path) {
@@ -22,6 +32,19 @@ public static class XDownloaderInstallerPaths {
         uint length = GetShortPathName(path, buffer, (uint)buffer.Capacity);
         if (length == 0 || length >= buffer.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
         return buffer.ToString();
+    }
+    public static string[] ReadShortcut(string path) {
+        var instance = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+        try {
+            ((IPersistFile)instance).Load(path, 0);
+            var link = (IXDownloaderShellLinkW)instance;
+            var target = new StringBuilder(32768);
+            var directory = new StringBuilder(32768);
+            link.GetPath(target, target.Capacity, IntPtr.Zero, 4);
+            link.GetWorkingDirectory(directory, directory.Capacity);
+            return new[] { target.ToString(), directory.ToString() };
+        }
+        finally { Marshal.FinalReleaseComObject(instance); }
     }
 }
 '@
@@ -45,7 +68,6 @@ $preservedData = Join-Path $settingsRoot ('installer-verify-' + [guid]::NewGuid(
 $preservedFile = Join-Path $installDirectory 'user-created-video.mp4'
 $uninstaller = Join-Path $installDirectory 'unins000.exe'
 $mutex = $null
-$shell = $null
 
 function Invoke-CheckedProcess([string]$Executable, [string[]]$Arguments, [switch]$ExpectBlocked) {
     $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru
@@ -60,12 +82,13 @@ function Assert-File([string]$Path) {
 }
 function Assert-Shortcut([string]$Path) {
     Assert-File $Path
-    $link = $shell.CreateShortcut($Path)
+    # IShellLinkW preserves Japanese on English Windows, unlike WScript's ANSI path accessor.
+    $link = [XDownloaderInstallerPaths]::ReadShortcut($Path)
     $expected = Join-Path $installDirectory 'XDownloader.exe'
     # WScript expands DOS 8.3 aliases (e.g. RUNNER~1), unlike the TEMP environment variable.
-    if ([XDownloaderInstallerPaths]::Long($link.TargetPath) -ine [XDownloaderInstallerPaths]::Long($expected) -or
-        [XDownloaderInstallerPaths]::Long($link.WorkingDirectory) -ine [XDownloaderInstallerPaths]::Long($installDirectory)) {
-        throw "Incorrect shortcut: $Path; target=$($link.TargetPath); workingDirectory=$($link.WorkingDirectory); expected=$expected"
+    if ([XDownloaderInstallerPaths]::Long($link[0]) -ine [XDownloaderInstallerPaths]::Long($expected) -or
+        [XDownloaderInstallerPaths]::Long($link[1]) -ine [XDownloaderInstallerPaths]::Long($installDirectory)) {
+        throw "Incorrect shortcut: $Path; target=$($link[0]); workingDirectory=$($link[1]); expected=$expected"
     }
 }
 function Remove-TestRoot {
@@ -87,7 +110,6 @@ try {
     $setupArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="{0}"' -f $installDirectory), '/TASKS=desktopicon')
     $uninstallArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
     Invoke-CheckedProcess $SetupPath $setupArgs
-    $shell = New-Object -ComObject WScript.Shell
     Assert-File (Join-Path $installDirectory 'XDownloader.exe')
     Assert-File (Join-Path $installDirectory 'README.md')
     Assert-File (Join-Path $installDirectory 'THIRD-PARTY.md')
@@ -141,6 +163,5 @@ finally {
     }
     if (Test-Path -LiteralPath $preservedData) { Remove-Item -LiteralPath $preservedData -Force }
     if (!$settingsExisted -and (Test-Path -LiteralPath $settingsRoot) -and !(Get-ChildItem -LiteralPath $settingsRoot -Force)) { Remove-Item -LiteralPath $settingsRoot }
-    if ($null -ne $shell) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
     Remove-TestRoot
 }
