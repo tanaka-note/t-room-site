@@ -44,9 +44,10 @@ function withVersion(url, build) {
   return `${path}?${params.toString()}${hash ? `#${hash}` : ""}`;
 }
 
-function isLocalVersionedAsset(url) {
+function isLocalVersionedAsset(url, modulePreload = false) {
   if (!url || /^(?:[a-z]+:)?\/\//i.test(url) || /^(?:data|blob):/i.test(url)) return false;
-  return /\.(?:css|js|webmanifest)(?:[?#]|$)/i.test(url);
+  return /\.(?:css|js|webmanifest)(?:[?#]|$)/i.test(url)
+    || (modulePreload && /\.mjs(?:[?#]|$)/i.test(url));
 }
 
 function versionLocalAssets(html, build) {
@@ -55,7 +56,7 @@ function versionLocalAssets(html, build) {
       isLocalVersionedAsset(url) ? `${start}${withVersion(url, build)}${end}` : match
     ))
     .replace(/(<link\b[^>]*\bhref=["'])([^"']+)(["'][^>]*>)/gi, (match, start, url, end) => (
-      isLocalVersionedAsset(url) ? `${start}${withVersion(url, build)}${end}` : match
+      isLocalVersionedAsset(url, /\brel=["']modulepreload["']/i.test(start + end)) ? `${start}${withVersion(url, build)}${end}` : match
     ));
 }
 
@@ -90,14 +91,14 @@ function localShellReferences(html, publicUrl) {
   for (const match of html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi)) references.push(match[1]);
   for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
     const tag = match[0];
-    if (!/\brel=["'][^"']*(?:stylesheet|manifest)[^"']*["']/i.test(tag)) continue;
+    if (!/\brel=["'][^"']*(?:stylesheet|manifest|modulepreload)[^"']*["']/i.test(tag)) continue;
     const href = tag.match(/\bhref=["']([^"']+)["']/i)?.[1];
     if (href) references.push(href);
   }
   const base = new URL(publicUrl);
   return references.flatMap((reference) => {
     const resolved = new URL(reference, base);
-    if (resolved.origin !== base.origin || !/\.(?:css|js|webmanifest)$/i.test(resolved.pathname)) return [];
+    if (resolved.origin !== base.origin || !/\.(?:css|m?js|webmanifest)$/i.test(resolved.pathname)) return [];
     return [`${resolved.pathname}${resolved.search}`];
   });
 }
@@ -150,7 +151,7 @@ function syncHtmlPrecacheArray(source, app, shellAssets) {
 }
 
 export function syncServiceWorkerText(source, app, build, shellAssets = []) {
-  let output = source.replace(/(\.(?:html|css|js|webmanifest)\?v=)[^"'`\s)]+/g, `$1${build}`);
+  let output = source.replace(/(\.(?:html|css|m?js|webmanifest)\?v=)[^"'`\s)]+/g, `$1${build}`);
   output = replaceStringConstant(output, app.cacheNameConstant || "CACHE_NAME", `${app.cachePrefix}${build}`);
   if (app.serviceWorkerBuildConstant) output = replaceStringConstant(output, app.serviceWorkerBuildConstant, build);
   if (app.precacheMode === "html") output = syncHtmlPrecacheArray(output, app, shellAssets);

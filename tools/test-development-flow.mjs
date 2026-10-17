@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { root, affected, changedFiles, ciPlan, commands, targets, installDirectories, downloader2NativeAffected } from './verify-plan.mjs';
+import { root, affected, changedFiles, ciPlan, commands, targets, installDirectories, downloader2NativeAffected, browserTests } from './verify-plan.mjs';
 import { dependencyInstallPlan, installArgs } from './install-verify-dependencies.mjs';
 import { localConfig } from './local-dev.mjs';
 import { assertPreviewSafe, prepareReleaseDependencies, releaseProfile } from './release.mjs';
@@ -35,6 +35,16 @@ test('Health production guard stops incomplete configuration before deploy witho
   runProductionDelivery({deployTarget:'t-room-health'},{rootDirectory:'root',deployDirectory:'health',runCommand:(_cwd,args)=>calls.push(args),
     healthPreflight:()=>assertHealthProductionReady(valid,()=>['SESSION_SECRET'])});
   assert.equal(calls.length,3);assert.equal(calls[1].at(-1),'deploy');assert.match(calls[2][0],/verify-web-app-builds/);
+});
+
+test('asset report data, rendering, update tools and tests always select the standard site regression', () => {
+  for (const path of ['asset-report-k7m4q9x2/report.js', 'asset-report-k7m4q9x2/data/portfolio-data.mjs',
+    'asset-report-k7m4q9x2/portfolio-model.mjs', 'tools/update-asset-report.mjs', 'tools/test-asset-report-data.mjs',
+    'tools/test-asset-report-history.mjs', 'tools/test-asset-report-update.mjs', 'tools/test-asset-report.browser.mjs', 'tools/fixtures/asset-report.mjs']) {
+    assert.deepEqual(affected([path]), ['site'], path);
+  }
+  assert.ok(commands('site').some(command => command.script === 'asset-report:test'));
+  assert.ok(browserTests('site').includes('tools/test-asset-report.browser.mjs'));
 });
 
 test('Cloud edits do not select Android, Downloader or unrelated services', () => {

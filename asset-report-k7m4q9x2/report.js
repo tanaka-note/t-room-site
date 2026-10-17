@@ -1,177 +1,13 @@
 "use strict";
 
-const reportData = {
-  period: "2026-10-16",
-  principal: 6000000,
-  realizedProfit: {
-    name: "投資信託売却益",
-    value: 1058649
-  },
-  operatingExpense: {
-    name: "投資信託他売却損",
-    adjustmentHistory: [
-      { from: "2026-08-15", value: -220000 },
-      { from: "2026-09-13", value: -320000 }
-    ]
-  },
-  monthlyReport: {
-    entries: [
-      {
-        date: "2026-08-03",
-        dateLabel: "2026年8月3日",
-        text: "追加で日本株式と米国株式の上場投信を購入。個別銘柄については、長期で成長が期待できる銘柄を選定。"
-      },
-      {
-        date: "2026-07",
-        dateLabel: "2026年7月",
-        text: "インド株式の低迷とBTC価格下落に伴い、損益が悪化。バランス改善のため国内株式および全世界株式への分散投資の比率を引き上げました。インド株式への投資については追加の売却を行う予定はありません。"
-      }
-    ],
-    updated: "2026-10-16",
-    updatedLabel: "2026年10月16日"
-  },
-  history: [
-    { period: "2026-07-31", principal: 6000000, marketValue: 6221192 },
-    { period: "2026-08-03", principal: 6000000, marketValue: 6167574 },
-    { period: "2026-08-04", principal: 6000000, marketValue: 6237083 },
-    { period: "2026-08-05", principal: 6000000, marketValue: 6345218 },
-    { period: "2026-08-06", principal: 6000000, marketValue: 6343667 },
-    { period: "2026-08-07", principal: 6000000, marketValue: 6393495 },
-    { period: "2026-08-08", principal: 6000000, marketValue: 6387548 },
-    { period: "2026-08-09", principal: 6000000, marketValue: 6384282 },
-    { period: "2026-08-10", principal: 6000000, marketValue: 6409958 },
-    { period: "2026-08-11", principal: 6000000, marketValue: 6389451 },
-    { period: "2026-08-13", principal: 6000000, marketValue: 6411887 },
-    { period: "2026-08-14", principal: 6000000, marketValue: 6423188 },
-    { period: "2026-08-15", principal: 6000000, marketValue: 6422213 },
-    { period: "2026-08-16", principal: 6000000, marketValue: 6424845 },
-    { period: "2026-08-17", principal: 6000000, marketValue: 6416884 },
-    { period: "2026-08-18", principal: 6000000, marketValue: 6402118 },
-    { period: "2026-08-19", principal: 6000000, marketValue: 6298001 },
-    { period: "2026-08-20", principal: 6000000, marketValue: 6510008 },
-    { period: "2026-08-21", principal: 6000000, marketValue: 6679288 },
-    { period: "2026-08-22", principal: 6000000, marketValue: 6666459 },
-    { period: "2026-08-24", principal: 6000000, marketValue: 6651675 },
-    { period: "2026-08-25", principal: 6000000, marketValue: 6740149 },
-    { period: "2026-08-26", principal: 6000000, marketValue: 6740149 },
-    { period: "2026-08-28", principal: 6000000, marketValue: 6765347 },
-    { period: "2026-08-31", principal: 6000000, marketValue: 6736202 },
-    { period: "2026-09-01", principal: 6000000, marketValue: 6731243 },
-    { period: "2026-09-03", principal: 6000000, marketValue: 6599458 },
-    { period: "2026-09-04", principal: 6000000, marketValue: 6681955 },
-    { period: "2026-09-06", principal: 6000000, marketValue: 6651886 },
-    { period: "2026-09-07", principal: 6000000, marketValue: 6620132 },
-    { period: "2026-09-08", principal: 6000000, marketValue: 6526723 },
-    { period: "2026-09-09", principal: 6000000, marketValue: 6509484 },
-    { period: "2026-09-10", principal: 6000000, marketValue: 6468152 },
-    { period: "2026-09-12", principal: 6000000, marketValue: 6440352 },
-    { period: "2026-09-13", principal: 6000000, marketValue: 6440352 },
-    { period: "2026-09-14", principal: 6000000, marketValue: 6467501 },
-    { period: "2026-09-15", principal: 6000000, marketValue: 6451723 },
-    { period: "2026-09-16", principal: 6000000, marketValue: 6437019 },
-    { period: "2026-09-17", principal: 6000000, marketValue: 6494916 },
-    { period: "2026-09-19", principal: 6000000, marketValue: 6653422 },
-    { period: "2026-09-20", principal: 6000000, marketValue: 6637954 },
-    { period: "2026-09-21", principal: 6000000, marketValue: 6669994 },
-    { period: "2026-09-22", principal: 6000000, marketValue: 6798950 },
-    { period: "2026-09-23", principal: 6000000, marketValue: 6803064 },
-    { period: "2026-09-24", principal: 6000000, marketValue: 6802884 },
-    { period: "2026-09-25", principal: 6000000, marketValue: 6836173 },
-    { period: "2026-09-27", principal: 6000000, marketValue: 6832177 },
-    { period: "2026-09-28", principal: 6000000, marketValue: 6741186 },
-    { period: "2026-09-29", principal: 6000000, marketValue: 6714679 },
-    { period: "2026-10-05", principal: 6000000, marketValue: 6826441 },
-    { period: "2026-10-06", principal: 6000000, marketValue: 6870743 },
-    { period: "2026-10-07", principal: 6000000, marketValue: 6795465 },
-    { period: "2026-10-08", principal: 6000000, marketValue: 6705326 },
-    { period: "2026-10-09", principal: 6000000, marketValue: 6738935 },
-    { period: "2026-10-10", principal: 6000000, marketValue: 6732957 },
-    { period: "2026-10-11", principal: 6000000, marketValue: 6737606 },
-    { period: "2026-10-13", principal: 6000000, marketValue: 6748219 },
-    { period: "2026-10-14", principal: 6000000, marketValue: 6739335 },
-    { period: "2026-10-15", principal: 6000000, marketValue: 6590156 },
-    { period: "2026-10-16", principal: 6000000, marketValue: 6669066 }
-  ],
-  assets: [
-    {
-      name: "iFナス100H無",
-      category: "ETF",
-      principal: 2002329,
-      marketValue: 2115771,
-      color: "#ff8a61"
-    },
-    {
-      name: "iSNIFTY50",
-      category: "ETF",
-      principal: 866320,
-      marketValue: 828240,
-      color: "#f4ca64"
-    },
-    {
-      name: "三菱電",
-      category: "日本株",
-      principal: 553200,
-      marketValue: 500500,
-      color: "#52e6aa"
-    },
-    {
-      name: "三菱HCキャピタル",
-      category: "日本株",
-      principal: 430200,
-      marketValue: 394500,
-      color: "#68a7ff"
-    },
-    {
-      name: "伊藤忠",
-      category: "日本株",
-      principal: 198100,
-      marketValue: 228400,
-      color: "#ffb454"
-    },
-    {
-      name: "アコム",
-      category: "日本株",
-      principal: 142500,
-      marketValue: 137160,
-      color: "#50d3c2"
-    },
-    {
-      name: "イオン",
-      category: "日本株",
-      principal: 135100,
-      marketValue: 111950,
-      color: "#f06fa9"
-    },
-    {
-      name: "ソフトバンク",
-      category: "日本株",
-      principal: 111500,
-      marketValue: 122350,
-      color: "#96a7ff"
-    },
-    {
-      name: "NTT",
-      category: "日本株",
-      principal: 75500,
-      marketValue: 87250,
-      color: "#c6dc70"
-    },
-    {
-      name: "ムニノバHD",
-      category: "日本株",
-      principal: 43900,
-      marketValue: 41700,
-      color: "#7e8da1"
-    },
-    {
-      name: "ビットコイン",
-      category: "暗号資産",
-      principal: 2500000,
-      marketValue: 2101245,
-      color: "#a98cff"
-    }
-  ]
-};
+const version = new URL(import.meta.url).search;
+const [{ default: reportData }, { createPortfolioModel, validatePortfolioData, assetProfit, assetReturnRate, calculateHistoryScale }] = await Promise.all([
+  import(`./data/portfolio-data.mjs${version}`),
+  import(`./portfolio-model.mjs${version}`)
+]);
+validatePortfolioData(reportData);
+const portfolio = createPortfolioModel(reportData);
+const { adjustmentForPeriod, historyMarketValue } = portfolio;
 
 const yenFormatter = new Intl.NumberFormat("ja-JP", {
   style: "currency",
@@ -220,88 +56,10 @@ function assetsByMarketValue() {
   return [...reportData.assets].sort((assetA, assetB) => assetB.marketValue - assetA.marketValue);
 }
 
-function assetProfit(asset) {
-  return asset.marketValue - asset.principal;
-}
-
-function assetReturnRate(asset) {
-  return (assetProfit(asset) / asset.principal) * 100;
-}
-
-function totalMarketValue(includeAdjustment = false) {
-  const baseTotal = reportData.assets.reduce((sum, asset) => sum + asset.marketValue, 0);
-  return includeAdjustment ? baseTotal + adjustmentForPeriod(reportData.period) : baseTotal;
-}
-
-function adjustmentForPeriod(period) {
-  let active = null;
-  for (const adjustment of reportData.operatingExpense.adjustmentHistory) {
-    if (adjustment.from <= period && (!active || adjustment.from > active.from)) active = adjustment;
-  }
-  return active?.value ?? 0;
-}
-
-function historyMarketValue(entry) {
-  return entry.marketValue + adjustmentForPeriod(entry.period);
-}
-
-function calculateHistoryScale(values) {
-  if (!Array.isArray(values) || values.length === 0) {
-    return {
-      yMin: 0,
-      yMax: 1,
-      ySpan: 1,
-      tickInterval: 1,
-      minValue: 0,
-      maxValue: 1,
-      adjustedSpread: 1
-    };
-  }
-
-  const finiteValues = values.filter((value) => Number.isFinite(value));
-  if (!finiteValues.length) {
-    return {
-      yMin: 0,
-      yMax: 1,
-      ySpan: 1,
-      tickInterval: 1,
-      minValue: 0,
-      maxValue: 1,
-      adjustedSpread: 1
-    };
-  }
-
-  const minValue = Math.min(...finiteValues);
-  const maxValue = Math.max(...finiteValues);
-  const actualSpread = Math.max(maxValue - minValue, 0);
-  const minimumSpread = Math.max(maxValue * 0.025, 100000);
-  const adjustedSpread = Math.max(actualSpread, minimumSpread);
-  const padding = adjustedSpread * 0.08;
-  const lowerBound = minValue - padding;
-  const upperBound = maxValue + padding;
-  const tickInterval = niceHistoryStep(adjustedSpread / 4);
-  const yMin = Math.floor(lowerBound / tickInterval) * tickInterval;
-  const yMax = Math.ceil(upperBound / tickInterval) * tickInterval;
-  const ySpan = Math.max(yMax - yMin, tickInterval);
-
-  return {
-    yMin,
-    yMax,
-    ySpan,
-    tickInterval,
-    minValue,
-    maxValue,
-    adjustedSpread
-  };
-}
-
 function renderSummary() {
-  const total = totalMarketValue(false);
-  const adjustedTotal = totalMarketValue(true);
-  const profit = adjustedTotal - reportData.principal;
-  const returnRate = (profit / reportData.principal) * 100;
+  const { rawMarketValue: total, marketValue: adjustedTotal, profit, returnRate } = portfolio.summary();
 
-  document.querySelector("#principal-value").textContent = formatYen(reportData.principal);
+  document.querySelector("#principal-value").textContent = formatYen(reportData.basePrincipal);
   document.querySelector("#market-value").textContent = formatYen(adjustedTotal);
 
   const profitElement = document.querySelector("#profit-value");
@@ -323,6 +81,7 @@ function renderLegend(total) {
   assetsByMarketValue().forEach((asset) => {
     const share = (asset.marketValue / total) * 100;
     const item = document.createElement("li");
+    item.dataset.assetId = asset.id;
     item.innerHTML = `
       <span class="legend-color" style="background:${asset.color};color:${asset.color}" aria-hidden="true"></span>
       <span class="legend-name">${asset.name}<small>${formatYen(asset.marketValue)}</small></span>
@@ -340,6 +99,7 @@ function renderHoldings() {
 
   assetsByMarketValue().forEach((asset) => {
     const row = document.createElement("tr");
+    row.dataset.assetId = asset.id;
     const profit = assetProfit(asset);
     const returnRate = assetReturnRate(asset);
     const profitClass = valueClass(profit);
@@ -369,7 +129,7 @@ function renderHoldings() {
   const operatingExpenseClass = valueClass(operatingExpenseValue);
   operatingExpenseRow.className = "realized-profit-row";
   operatingExpenseRow.innerHTML = `
-    <td><span class="asset-name"><strong>${reportData.operatingExpense.name}</strong><small>運用成績調整</small></span></td>
+    <td><span class="asset-name"><strong>${reportData.performanceAdjustmentName}</strong><small>運用成績調整</small></span></td>
     <td data-label="時価総額" class="unknown-value">—</td>
     <td data-label="投資信託他売却損" class="${operatingExpenseClass}">${formatYen(operatingExpenseValue, true)}</td>
     <td data-label="損益率" class="unknown-value">—</td>
@@ -414,11 +174,7 @@ function drawAllocationChart(total) {
 
 function initializeHistoryChart() {
   const section = document.querySelector("#history-section");
-  historyView.records = [...reportData.history]
-    .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry.period)
-      && Number.isFinite(entry.principal)
-      && Number.isFinite(entry.marketValue))
-    .sort((entryA, entryB) => entryA.period.localeCompare(entryB.period));
+  historyView.records = [...reportData.history];
 
   if (historyView.records.length < 2) {
     section.hidden = true;
@@ -615,7 +371,7 @@ function renderHistoryTooltip(entry, x, y) {
   const frame = document.querySelector(".chart-frame-history");
   const canvas = document.querySelector("#history-chart");
   const marketValue = historyMarketValue(entry);
-  const profit = marketValue - entry.principal;
+  const profit = marketValue - entry.basePrincipal;
   const date = document.createElement("time");
   date.dateTime = entry.period;
   date.textContent = formatHistoryDateLong(entry.period);
@@ -630,15 +386,6 @@ function renderHistoryTooltip(entry, x, y) {
   tooltip.style.left = `${Math.min(frame.clientWidth - tooltipHalf, Math.max(tooltipHalf, relativeX))}px`;
   tooltip.style.top = `${Math.max(92, canvas.offsetTop + y)}px`;
   tooltip.hidden = false;
-}
-
-function exposeTestHooks() {
-  if (typeof window === "undefined") return;
-  window.__assetReportTestHooks = {
-    calculateHistoryScale,
-    adjustmentForPeriod,
-    historyMarketValue
-  };
 }
 
 function hideHistoryTooltip(redraw = true) {
@@ -670,14 +417,6 @@ function formatHistoryAxisValue(value) {
   return `${Math.round(value / 10000).toLocaleString("ja-JP")}万円`;
 }
 
-function niceHistoryStep(value) {
-  const safeValue = Math.max(Number(value) || 1, 1);
-  const magnitude = 10 ** Math.floor(Math.log10(safeValue));
-  const normalized = safeValue / magnitude;
-  const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
-  return factor * magnitude;
-}
-
 function renderComment() {
   const section = document.querySelector("#comment-section");
   const report = reportData.monthlyReport;
@@ -707,20 +446,19 @@ function renderComment() {
   });
   container.replaceChildren(fragment);
 
-  const updated = document.querySelector("#report-updated");
-  updated.dateTime = report.updated;
-  updated.textContent = report.updatedLabel;
 }
 
 function renderReport() {
   const total = renderSummary();
+  const updated = document.querySelector("#report-updated");
+  updated.dateTime = reportData.period;
+  updated.textContent = formatHistoryDateLong(reportData.period);
   currentPortfolioTotal = total;
   renderLegend(total);
   renderHoldings();
   renderComment();
   drawAllocationChart(total);
   initializeHistoryChart();
-  exposeTestHooks();
 }
 
 let resizeTimer;
@@ -732,7 +470,4 @@ window.addEventListener("resize", () => {
   }, 120);
 });
 
-exposeTestHooks();
-if (!window.__assetReportDisableAutoRender) {
-  renderReport();
-}
+renderReport();
