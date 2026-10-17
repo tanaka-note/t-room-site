@@ -8,7 +8,7 @@ public sealed record Quality(string Label, string Selector)
     public override string ToString() => Label;
 }
 
-public sealed record VideoInfo(string Id, string Title, double? Duration, IReadOnlyList<Quality> Qualities)
+public sealed record VideoInfo(string Id, string Title, double? Duration, IReadOnlyList<Quality> Qualities, string? Uploader = null)
 {
     public override string ToString() => Duration is > 0 ? $"{Title}（{TimeSpan.FromSeconds(Duration.Value):g}）" : Title;
 }
@@ -47,8 +47,10 @@ public static partial class MediaInfo
                 qualities.Add(new(label, selector));
             }
             var duration = Number(entry, "duration");
+            var uploader = new[] { Text(entry, "uploader"), Text(entry, "uploader_id"),
+                Text(root, "uploader"), Text(root, "uploader_id") }.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
             videos.Add(new(id, Text(entry, "title") is { Length: > 0 } title ? title : $"動画 {videos.Count + 1}",
-                duration > 0 ? duration : null, qualities));
+                duration > 0 ? duration : null, qualities, uploader));
         }
         if (videos.Count == 0) throw new InvalidOperationException("保存できるMP4動画がありません。動画なし・ライブ・閲覧制限・未対応形式の可能性があります。");
         return videos.DistinctBy(v => v.Id).ToArray();

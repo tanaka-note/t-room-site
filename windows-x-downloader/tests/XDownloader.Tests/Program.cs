@@ -64,7 +64,7 @@ Task Sync(Action action) { action(); return Task.CompletedTask; }
 const string url = "https://x.com/user/status/123";
 const string mediaJson = """
 {"entries":[
- {"id":"1231","title":"テスト動画","duration":12,"formats":[
+ {"id":"1231","title":"投稿者名 - テスト動画","uploader":"投稿者名","duration":12,"formats":[
   {"format_id":"http-800","ext":"mp4","vcodec":"h264","acodec":"aac","protocol":"https","height":720,"tbr":800},
   {"format_id":"hls-2000","ext":"mp4","vcodec":"h264","acodec":"none","protocol":"m3u8_native","height":1080,"tbr":2000},
   {"format_id":"audio","ext":"mp4","vcodec":"none","protocol":"https"},
@@ -84,8 +84,29 @@ await Test("multiple videos and nullable metadata", () => Sync(() => { Equal(2, 
 await Test("quality filters DRM, audio, invalid selector; sorts by height", () => Sync(() => { Equal(3, video.Qualities.Count); Assert(video.Qualities[1].Label.StartsWith("1080p")); Assert(video.Qualities[1].Selector.Contains("+ba")); Equal("http-800", video.Qualities[2].Selector); }));
 await Test("missing media rejected", () => Throws<InvalidOperationException>(() => Sync(() => MediaInfo.Parse("{\"id\":\"123\"}"))));
 await Test("live media rejected", () => Throws<InvalidOperationException>(() => Sync(() => MediaInfo.Parse(mediaJson.Replace("\"id\":\"1231\"", "\"live_status\":\"is_live\",\"id\":\"1231\"").Replace("\"id\":\"1232\"", "\"live_status\":\"is_upcoming\",\"id\":\"1232\"")))));
-await Test("filename cannot escape directory or use Windows reserved name", () => Sync(() => { var name = Downloader.SafeFileName("../CON:<bad>?/x", "123"); Assert(name.StartsWith("X_123_")); Assert(!name.Contains('/')); Assert(!name.Contains(':')); }));
-await Test("filename length and emoji boundary", () => Sync(() => { var name = Downloader.SafeFileName(new string('a',69) + "😀suffix", "123"); Assert(!char.IsHighSurrogate(name[^1])); Assert(name.Length < 110); }));
+var savedAt = new DateTimeOffset(2026,10,17,21,30,45,TimeSpan.FromHours(9));
+await Test("suggested title moves uploader to suffix without duplication", () => Sync(() => Equal("Xテスト動画（投稿者名）", SaveFileName.Suggest(video))));
+await Test("uploader is inherited for playlists and missing names stay absent", () => Sync(() =>
+{
+    Equal("共通投稿者", MediaInfo.Parse(mediaJson.Replace("{\"entries\":", "{\"uploader\":\"共通投稿者\",\"entries\":"))[1].Uploader);
+    Equal(null, media[1].Uploader);
+    Equal("X動画2", SaveFileName.Suggest(media[1]));
+    Equal("account_name", MediaInfo.Parse(mediaJson.Replace("\"uploader\":\"投稿者名\"", "\"uploader_id\":\"account_name\""))[0].Uploader);
+    Equal("account_name", MediaInfo.Parse(mediaJson.Replace("{\"entries\":", "{\"uploader\":\"別の投稿者\",\"entries\":").Replace("\"uploader\":\"投稿者名\"", "\"uploader_id\":\"account_name\""))[0].Uploader);
+}));
+await Test("filename uses local numeric save date through seconds and underscore", () => Sync(() => Equal("20261017213045_X好きな名前（投稿者名）", SaveFileName.Stem("X好きな名前（投稿者名）", savedAt))));
+await Test("filename cannot escape directory or use Windows reserved name", () => Sync(() => { var name = SaveFileName.Stem("../CON:<bad>?/x\\|*\"", savedAt); Assert(name.StartsWith("20261017213045_")); Assert(!name.Contains('/')); Assert(!name.Contains(':')); Assert(!name.Contains('\\')); Equal("20261017213045_CON",SaveFileName.Stem("CON",savedAt)); }));
+await Test("filename length and emoji boundary", () => Sync(() => { var name = SaveFileName.Stem(new string('a',159) + "😀suffix", savedAt); Assert(!char.IsHighSurrogate(name[^1])); Assert(name.Length <= 175); }));
+await Test("long default titles retain uploader and closing bracket", () => Sync(() =>
+{
+    var title=SaveFileName.Suggest(video with { Title=new string('あ',250), Uploader=new string('名',100) });
+    Assert(title.Length<=SaveFileName.MaxTitleLength && title.EndsWith('）') && title.Contains('（'));
+}));
+await Test("empty and Windows-invalid-only titles are rejected", () => Sync(() =>
+{
+    foreach (var title in new[]{"", " \r\n\t", "<>:\"/\\|?*", "..."}) Assert(!SaveFileName.IsUsable(title));
+    Equal("Xテスト 動画", SaveFileName.NormalizeTitle(" Xテスト\r\n動画. "));
+}));
 await Test("progress numbers and indeterminate", () => Sync(() => { Equal(52.3, Downloader.ParseProgress("XD_PROGRESS:52.3%|1MiB/s|00:02").Percent); Equal(null, Downloader.ParseProgress("XD_PROGRESS:NA|NA|NA").Percent); Equal(100.0, Downloader.ParseProgress("XD_PROGRESS:105%|NA|NA").Percent); }));
 
 var sandbox = Path.Combine(Path.GetTempPath(), "x-downloader-tests-" + Guid.NewGuid().ToString("N"));
@@ -95,7 +116,8 @@ try
     var tools = Path.Combine(sandbox, "tools"); Directory.CreateDirectory(tools);
     foreach (var name in new[] { "yt-dlp.exe", "ffmpeg.exe", "ffprobe.exe" }) File.WriteAllText(Path.Combine(tools, name), "fixture");
     var fake = new FakeEngine(mediaJson);
-    var downloader = new Downloader(tools, fake);
+    var clock = new SaveClock(savedAt);
+    var downloader = new Downloader(tools, fake, timeProvider: clock);
     await Test("analysis restricted to X and argument-list execution contract", async () =>
     {
         Equal(2, (await downloader.AnalyzeAsync(url, CancellationToken.None)).Count);
@@ -132,6 +154,23 @@ try
         Equal("fixture media", File.ReadAllText(first));
         Assert(!Directory.EnumerateDirectories(dest).Any());
         Assert(fake.DownloadArguments!.Contains("id ~= ^1231$"));
+    });
+    await Test("edited title and save-click time survive a long download; never enter engine arguments", async () =>
+    {
+        var dest=Path.Combine(sandbox,"edited");
+        clock.Utc=savedAt.UtcDateTime;
+        fake.AfterDownload=()=>clock.Utc=clock.Utc.AddHours(1);
+        var edited="X変更した名前（投稿者名）";
+        var file=await downloader.DownloadAsync(url,video,video.Qualities[0],dest,null,CancellationToken.None,edited);
+        Equal("20261017213045_"+edited+".mp4",Path.GetFileName(file));
+        Assert(!fake.DownloadArguments!.Any(a=>a.Contains(edited)));
+        fake.AfterDownload=null; clock.Utc=savedAt.UtcDateTime;
+    });
+    await Test("invalid edited title never starts engine or creates destination", async () =>
+    {
+        var dest=Path.Combine(sandbox,"empty-title");
+        await Throws<ArgumentException>(()=>downloader.DownloadAsync(url,video,video.Qualities[0],dest,null,CancellationToken.None," \t"));
+        Assert(!Directory.Exists(dest));
     });
     foreach (var (error, message) in new[] { ("HTTP 429 / secret-url", "アクセス制限"), ("NSFW requires login", "ログイン"), ("HTTP 403", "拒否"), ("404 deleted", "削除"), ("Requested format unavailable", "選択した画質"), ("no such option", "バージョン"), ("No video could be found in this tweet", "この投稿から動画情報を取得できません") })
         await Test($"safe error classification: {error.Split(' ')[0]}", async () =>
@@ -217,6 +256,13 @@ try
 finally { Directory.Delete(sandbox, true); }
 Console.WriteLine($"RESULT {passed} passed; {failures} failed");
 return failures == 0 ? 0 : 1;
+
+sealed class SaveClock(DateTimeOffset local) : TimeProvider
+{
+    public DateTimeOffset Utc { get; set; } = local.ToUniversalTime();
+    public override DateTimeOffset GetUtcNow() => Utc;
+    public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.CreateCustomTimeZone("Fixture JST",TimeSpan.FromHours(9),"Fixture JST","Fixture JST");
+}
 
 sealed class FakeEngine(string metadata) : IEngineProcess
 {

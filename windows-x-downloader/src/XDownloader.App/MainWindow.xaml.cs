@@ -15,6 +15,7 @@ public partial class MainWindow : Window
 {
     private readonly Downloader downloader;
     private readonly IXLoginService? loginService;
+    private readonly Dictionary<string, string> editedTitles = new();
     private CancellationTokenSource? operation;
     private string? analyzedUrl;
     private bool closingAfterCancel;
@@ -47,6 +48,7 @@ public partial class MainWindow : Window
     private void Url_Changed(object sender, TextChangedEventArgs e)
     {
         analyzedUrl = null;
+        editedTitles.Clear();
         if (VideoChoice is null) return;
         VideoChoice.ItemsSource = null;
         QualityChoice.ItemsSource = null;
@@ -56,9 +58,20 @@ public partial class MainWindow : Window
 
     private void Video_Changed(object sender, SelectionChangedEventArgs e)
     {
-        QualityChoice.ItemsSource = (VideoChoice.SelectedItem as VideoInfo)?.Qualities;
+        var video = VideoChoice.SelectedItem as VideoInfo;
+        QualityChoice.ItemsSource = video?.Qualities;
         QualityChoice.SelectedIndex = QualityChoice.Items.Count > 0 ? 0 : -1;
-        DownloadButton.IsEnabled = operation is null && analyzedUrl is not null && QualityChoice.SelectedItem is Quality;
+        TitleInput.Text = video is null ? "" : editedTitles.GetValueOrDefault(video.Id) ?? SaveFileName.Suggest(video);
+        SetBusy(operation is not null);
+    }
+
+    private void Title_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (DownloadButton is null) return;
+        if (VideoChoice.SelectedItem is VideoInfo video) editedTitles[video.Id] = TitleInput.Text;
+        DownloadButton.IsEnabled = operation is null && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo
+            && QualityChoice.SelectedItem is Quality && SaveFileName.IsUsable(TitleInput.Text);
+        SavedFile.Visibility = Visibility.Collapsed;
     }
 
     private async void Analyze_Click(object sender, RoutedEventArgs e)
@@ -68,13 +81,14 @@ public partial class MainWindow : Window
         {
             var url = PostUrl.Normalize(UrlInput.Text);
             analyzedUrl = null;
+            editedTitles.Clear();
             VideoChoice.ItemsSource = null;
             Status.Text = "動画情報を解析しています…";
             var videos = await downloader.AnalyzeAsync(url, token);
             analyzedUrl = url;
             VideoChoice.ItemsSource = videos;
             VideoChoice.SelectedIndex = 0;
-            Status.Text = $"{videos.Count}件の動画が見つかりました。動画と画質を選んで保存できます。";
+            Status.Text = $"{videos.Count}件の動画が見つかりました。動画・画質を選び、保存タイトルを確認してください。";
         });
     }
 
@@ -83,6 +97,7 @@ public partial class MainWindow : Window
         if (operation is not null || analyzedUrl is null || VideoChoice.SelectedItem is not VideoInfo video
             || QualityChoice.SelectedItem is not Quality quality) return;
         var url = analyzedUrl;
+        var title = TitleInput.Text;
         await RunOperationAsync(async token =>
         {
             Status.Text = "ダウンロードを準備しています…";
@@ -93,7 +108,7 @@ public partial class MainWindow : Window
                 Progress.Value = value.Percent ?? 0;
                 Status.Text = value.Message;
             });
-            var saved = await downloader.DownloadAsync(url, video, quality, FolderInput.Text, progress, token);
+            var saved = await downloader.DownloadAsync(url, video, quality, FolderInput.Text, progress, token, title);
             Progress.Value = 100;
             Status.Text = "保存しました。";
             SavedFile.Text = saved;
@@ -129,7 +144,8 @@ public partial class MainWindow : Window
     {
         UrlInput.IsEnabled = AnalyzeButton.IsEnabled = VideoChoice.IsEnabled = QualityChoice.IsEnabled = FolderButton.IsEnabled = !busy;
         CancelButton.IsEnabled = busy;
-        DownloadButton.IsEnabled = !busy && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo && QualityChoice.SelectedItem is Quality;
+        TitleInput.IsEnabled = !busy && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo;
+        DownloadButton.IsEnabled = !busy && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo && QualityChoice.SelectedItem is Quality && SaveFileName.IsUsable(TitleInput.Text);
         LoginButton.IsEnabled = !busy && loginService is not null;
         LogoutButton.IsEnabled = !busy && loginService is not null && loginService.State != LoginState.Anonymous;
     }
@@ -151,6 +167,7 @@ public partial class MainWindow : Window
     private void ClearAnalysis()
     {
         analyzedUrl=null;
+        editedTitles.Clear();
         VideoChoice.ItemsSource=null;
         QualityChoice.ItemsSource=null;
         DownloadButton.IsEnabled=false;

@@ -36,6 +36,7 @@ internal static class Program
                 var status = Control<TextBlock>("Status");
                 var videos = Control<ComboBox>("VideoChoice");
                 var qualities = Control<ComboBox>("QualityChoice");
+                var title = Control<TextBox>("TitleInput");
                 var loginButton = Control<Button>("LoginButton");
                 var logoutButton = Control<Button>("LogoutButton");
                 Control<TextBox>("FolderInput").Text = Path.Combine(root, "saved");
@@ -47,6 +48,7 @@ internal static class Program
                     Check(analyze.IsEnabled, "UI operation completed");
                 }
                 Check(!download.IsEnabled, "download disabled before analysis");
+                Check(!title.IsEnabled && title.Text.Length==0, "save title disabled before analysis");
                 Check(loginButton.IsEnabled && !logoutButton.IsEnabled, "anonymous login controls");
                 url.Text = "https://evil.test/user/status/123"; Click(analyze); await Idle();
                 Check(status.Text.Contains("投稿URL") && !download.IsEnabled, "invalid URL shown without starting engine");
@@ -57,21 +59,39 @@ internal static class Program
                 Click(analyze); await Idle();
                 Check(engine.Analyses == 1, "double analysis prevented");
                 Check(videos.Items.Count == 2 && qualities.Items.Count > 0 && download.IsEnabled, "multiple videos and qualities selectable");
+                Check(title.IsEnabled && title.Text=="X動作確認用の動画1（投稿者1）", "save title suggested with uploader");
+                title.Text="X動画1の編集名（投稿者1）";
                 videos.SelectedIndex = 1;
                 Check(qualities.SelectedIndex == 0, "changing video resets quality");
+                Check(title.Text=="X動作確認用の動画2（投稿者2）", "switching video selects its own title");
+                title.Text=" \t";
+                Check(!download.IsEnabled, "empty edited title disables save");
+                title.Text="<>:\"/\\|?*";
+                Check(!download.IsEnabled, "invalid-only edited title disables save");
+                title.Text="X保存前に編集（投稿者2）";
+                videos.SelectedIndex=0;
+                Check(title.Text=="X動画1の編集名（投稿者1）", "switching back restores edited title");
+                videos.SelectedIndex=1;
+                Check(title.Text=="X保存前に編集（投稿者2）" && download.IsEnabled, "per-video edited title is retained");
+                var beforeSave=DateTimeOffset.Now;
                 Click(download); await Idle();
                 Check(status.Text == "保存しました。", "save completion displayed");
                 var saved = Control<TextBox>("SavedFile");
-                Check(File.Exists(saved.Text) && saved.Text.Contains("1232"), "selected video saved");
+                var afterSave=DateTimeOffset.Now;
+                var fileName=Path.GetFileName(saved.Text);
+                Check(File.Exists(saved.Text) && fileName.EndsWith("_X保存前に編集（投稿者2）.mp4"), "selected video saved with edited title");
+                var timestamp=DateTime.ParseExact(fileName[..14],"yyyyMMddHHmmss",System.Globalization.CultureInfo.InvariantCulture);
+                Check(timestamp>=beforeSave.LocalDateTime.AddSeconds(-1) && timestamp<=afterSave.LocalDateTime, "saved filename begins with local save time through seconds");
                 var content = (FrameworkElement)window.Content;
-                content.Measure(new Size(760,650)); content.Arrange(new Rect(0,0,760,650)); content.UpdateLayout();
-                var image = new RenderTargetBitmap(760,650,96,96,PixelFormats.Pbgra32); image.Render(content);
+                content.Measure(new Size(760,740)); content.Arrange(new Rect(0,0,760,740)); content.UpdateLayout();
+                var image = new RenderTargetBitmap(760,740,96,96,PixelFormats.Pbgra32); image.Render(content);
                 var artifact = Path.Combine(Directory.GetCurrentDirectory(), "tmp", "windows-x-downloader-ui.png");
                 Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
                 using (var file = File.Create(artifact)) { var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(image)); png.Save(file); }
                 Console.WriteLine("WPF_RENDER " + artifact);
                 url.Text = "https://x.com/user/status/456";
                 Check(!download.IsEnabled && videos.Items.Count == 0 && saved.Visibility == Visibility.Collapsed, "URL change invalidates stale selection");
+                Check(title.Text.Length==0 && !title.IsEnabled, "URL change clears edited title");
                 engine.Delay = 1000; Click(analyze); Click(cancel); await Idle();
                 Check(status.Text.Contains("キャンセル") && !download.IsEnabled, "analysis cancellation restores controls");
                 engine.Delay = 50; Click(analyze); await Idle();
@@ -82,6 +102,7 @@ internal static class Program
                 login.NextResult=true; Click(loginButton); await Idle();
                 Check(Control<TextBlock>("LoginStatus").Text.Contains("保存済み") && logoutButton.IsEnabled, "login success refreshes status");
                 Check(!download.IsEnabled && videos.Items.Count==0 && url.Text.Contains("456"), "login change invalidates analysis while preserving input");
+                Check(title.Text.Length==0 && !title.IsEnabled, "login change clears edited title");
                 engine.Delay=50; Click(analyze); await Idle();
                 engine.Delay=1000; Click(download); Click(logoutButton);
                 Check(login.Logouts==0 && !loginButton.IsEnabled && !logoutButton.IsEnabled, "logout cannot race a download");
@@ -126,8 +147,8 @@ internal sealed class UiEngine : IEngineProcess
             await Task.Delay(Delay,token);
             return new(0, """
             {"entries":[
-             {"id":"1231","title":"動作確認用の動画1","formats":[{"format_id":"mp4","ext":"mp4","protocol":"https","height":720}]},
-             {"id":"1232","title":"動作確認用の動画2","formats":[{"format_id":"mp4","ext":"mp4","protocol":"https","height":1080}]}
+             {"id":"1231","title":"投稿者1 - 動作確認用の動画1","uploader":"投稿者1","formats":[{"format_id":"mp4","ext":"mp4","protocol":"https","height":720}]},
+             {"id":"1232","title":"投稿者2 - 動作確認用の動画2","uploader":"投稿者2","formats":[{"format_id":"mp4","ext":"mp4","protocol":"https","height":1080}]}
             ]}
             """, "");
         }

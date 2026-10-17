@@ -5,9 +5,10 @@ namespace XDownloader.Core;
 
 public sealed record DownloadProgress(double? Percent, string Message);
 
-public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = null, ICookieSource? cookies = null)
+public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = null, ICookieSource? cookies = null, TimeProvider? timeProvider = null)
 {
     private readonly IEngineProcess process = runner ?? new EngineProcess();
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
     private string Engine => Path.Combine(toolsDirectory, "yt-dlp.exe");
 
     public void CheckTools()
@@ -43,10 +44,12 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
     }
 
     public async Task<string> DownloadAsync(string input, VideoInfo video, Quality quality, string destination,
-        IProgress<DownloadProgress>? progress, CancellationToken cancellationToken)
+        IProgress<DownloadProgress>? progress, CancellationToken cancellationToken, string? saveTitle = null)
     {
         var url = PostUrl.Normalize(input);
         if (!video.Qualities.Contains(quality)) throw new ArgumentException("解析結果から画質を選択してください。");
+        // Capture the local save-button time before the first await, rather than extraction/post time.
+        var stem = SaveFileName.Stem(saveTitle ?? SaveFileName.Suggest(video), clock.GetLocalNow());
         CheckTools();
         using var login = cookies?.Acquire();
         var root = Path.GetFullPath(destination);
@@ -83,7 +86,6 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
                 throw new InvalidOperationException("保存結果を確認できませんでした。");
             await ValidateMediaAsync(source, staging, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            var stem = SafeFileName(video.Title, video.Id);
             // Move within the chosen volume; never overwrite another download, even across app instances.
             for (var number = 0; number < 10000; number++)
             {
@@ -120,16 +122,6 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
             && double.IsFinite(n) ? Math.Clamp(n, 0, 100) : null;
         return new(percent, percent >= 100 ? "動画を結合・検証しています…"
             : $"ダウンロード中 {parts[0].Trim()}  {(parts.Length > 1 ? parts[1].Trim() : "")}  残り {(parts.Length > 2 ? parts[2].Trim() : "不明")}");
-    }
-
-    public static string SafeFileName(string title, string id)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var clean = new string(title.Where(c => !char.IsControl(c) && !invalid.Contains(c)).ToArray()).Trim().TrimEnd('.');
-        if (clean.Length > 70) clean = clean[..70];
-        clean = clean.TrimEnd().TrimEnd('.');
-        if (clean.Length > 0 && char.IsHighSurrogate(clean[^1])) clean = clean[..^1];
-        return $"X_{id}_{(clean.Length > 0 ? clean : "video")}";
     }
 
     private static void EnsureSuccess(EngineResult result, bool loggedIn)
