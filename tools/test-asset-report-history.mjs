@@ -50,12 +50,12 @@ const portfolioTotal = vm.runInContext("renderSummary()", context);
 assert.equal(summaryElements.get("#market-value").textContent, summaryElements.get("#donut-total").textContent,
   "上部の時価総額と資産構成中央は同一の調整後金額を表示する");
 assert.equal(summaryElements.get("#principal-value").textContent, "￥6,000,000", "上部の元本は維持する");
-assert.equal(summaryElements.get("#profit-value").textContent, "+￥428,219", "調整後の損益計算を維持する");
-assert.equal(summaryElements.get("#return-value").textContent, "+7.14%", "調整後の損益率計算を維持する");
-assert.equal(summaryElements.get("#market-value").textContent, "￥6,428,219", "投資信託他売却損を反映した時価総額を表示する");
-assert.equal(portfolioTotal, 6_748_219, "資産構成のセグメント・構成比には従来の保有資産合計を使う");
+assert.equal(summaryElements.get("#profit-value").textContent, "+￥419,335", "調整後の損益計算を維持する");
+assert.equal(summaryElements.get("#return-value").textContent, "+6.99%", "調整後の損益率計算を維持する");
+assert.equal(summaryElements.get("#market-value").textContent, "￥6,419,335", "投資信託他売却損を反映した時価総額を表示する");
+assert.equal(portfolioTotal, 6_739_335, "資産構成のセグメント・構成比には従来の保有資産合計を使う");
 assert.match(reportHtml, /<span>更新日<\/span>/);
-assert.match(reportHtml, /<time id="report-updated" datetime="2026-10-13">2026\.10\.13<\/time>/);
+assert.match(reportHtml, /<time id="report-updated" datetime="2026-10-14">2026\.10\.14<\/time>/);
 assert.doesNotMatch(reportHtml, /AS OF|日時点|8月17日/);
 assert.equal((reportHtml.match(/id="report-updated"/g) || []).length, 1, "更新日の表示箇所は1つに統一する");
 
@@ -110,24 +110,25 @@ for (const [period, adjustment] of [
   ["2026-10-09", -320000],
   ["2026-10-10", -320000],
   ["2026-10-11", -320000],
-  ["2026-10-13", -320000]
+  ["2026-10-13", -320000],
+  ["2026-10-14", -320000]
 ]) assert.equal(adjustmentForPeriod(period), adjustment, `${period}時点の補正額`);
 
 const history = vm.runInContext("reportData.history", context);
 const assets = vm.runInContext("reportData.assets", context);
 assert.deepEqual(Object.fromEntries(assets.map((asset) => [asset.name, asset.marketValue])), {
-  "iFナス100H無": 2158506,
-  "iSNIFTY50": 813960,
-  "三菱電": 517700,
-  "三菱HCキャピタル": 396150,
-  "伊藤忠": 221900,
-  "アコム": 137580,
-  "イオン": 120000,
-  "ソフトバンク": 121500,
-  "NTT": 86650,
-  "ムニノバHD": 41700,
-  "ビットコイン": 2132573
-}, "10月13日の全資産評価額を反映する");
+  "iFナス100H無": 2166276,
+  "iSNIFTY50": 814912,
+  "三菱電": 518400,
+  "三菱HCキャピタル": 393750,
+  "伊藤忠": 223200,
+  "アコム": 136200,
+  "イオン": 112550,
+  "ソフトバンク": 120900,
+  "NTT": 86250,
+  "ムニノバHD": 40900,
+  "ビットコイン": 2125997
+}, "10月14日の全資産評価額を反映する");
 const displayed = (period) => historyMarketValue(history.find((entry) => entry.period === period));
 assert.equal(displayed("2026-09-10"), 6248152);
 assert.equal(displayed("2026-09-12"), 6220352);
@@ -155,28 +156,29 @@ assert.equal(displayed("2026-10-09"), 6418935);
 assert.equal(displayed("2026-10-10"), 6412957);
 assert.equal(displayed("2026-10-11"), 6417606);
 assert.equal(displayed("2026-10-13"), 6428219);
+assert.equal(displayed("2026-10-14"), 6419335);
 
 const rawHistory = JSON.stringify(history);
 const originalDisplayed = history.map(historyMarketValue);
 const adjustments = vm.runInContext("reportData.operatingExpense.adjustmentHistory", context);
 // 将来の改定を追加・変更しても、それ以前の日付と現在の報告は変わらない。
-adjustments.push({ from: "2026-10-14", value: -420000 });
+adjustments.push({ from: "2026-10-15", value: -420000 });
 for (const value of [-420000, -520000]) {
   adjustments.at(-1).value = value;
-  assert.equal(adjustmentForPeriod("2026-10-14"), value);
+  assert.equal(adjustmentForPeriod("2026-10-15"), value);
   assert.deepEqual(history.map(historyMarketValue), originalDisplayed);
   vm.runInContext("renderSummary()", context);
-  assert.equal(summaryElements.get("#market-value").textContent, "￥6,428,219");
+  assert.equal(summaryElements.get("#market-value").textContent, "￥6,419,335");
 }
 vm.runInContext('reportData.period = "2026-09-12"; renderSummary()', context);
-assert.equal(summaryElements.get("#market-value").textContent, "￥6,528,219", "サマリーも報告日時点の補正額を使う");
-vm.runInContext('reportData.period = "2026-10-14"; renderSummary()', context);
-assert.equal(summaryElements.get("#market-value").textContent, "￥6,228,219");
+assert.equal(summaryElements.get("#market-value").textContent, "￥6,519,335", "サマリーも報告日時点の補正額を使う");
+vm.runInContext('reportData.period = "2026-10-15"; renderSummary()', context);
+assert.equal(summaryElements.get("#market-value").textContent, "￥6,219,335");
 adjustments.pop();
-vm.runInContext('reportData.period = "2026-10-13"; renderSummary()', context);
+vm.runInContext('reportData.period = "2026-10-14"; renderSummary()', context);
 assert.equal(JSON.stringify(history), rawHistory, "実資産額の履歴を変更しない");
 
-assert.match(reportSource, /period: "2026-10-13"/);
+assert.match(reportSource, /period: "2026-10-14"/);
 assert.match(reportSource, /from: "2026-08-15", value: -220000/);
 assert.match(reportSource, /name: "投資信託他売却損"/);
 assert.doesNotMatch(reportSource, /name: "運用手数料・雑費"/);
@@ -224,7 +226,8 @@ assert.match(reportSource, /\{ period: "2026-10-09", principal: 6000000, marketV
 assert.match(reportSource, /\{ period: "2026-10-10", principal: 6000000, marketValue: 6732957 \}/);
 assert.match(reportSource, /\{ period: "2026-10-11", principal: 6000000, marketValue: 6737606 \}/);
 assert.match(reportSource, /\{ period: "2026-10-13", principal: 6000000, marketValue: 6748219 \}/);
-assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 2132573/);
+assert.match(reportSource, /\{ period: "2026-10-14", principal: 6000000, marketValue: 6739335 \}/);
+assert.match(reportSource, /name: "ビットコイン"[\s\S]*?marketValue: 2125997/);
 
 assert.doesNotMatch(reportSource, /yFor\(entry\.marketValue\)/, "時価総額描画はentry.marketValueを直接使っていない");
 assert.match(reportSource, /yFor\(historyMarketValue\(entry\)\)/, "時価総額描画のy計算はhistoryMarketValueを通る");
