@@ -62,8 +62,8 @@
   <meta name="referrer" content="no-referrer">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#07090d">
-  <meta name="troom-app-build" content="asset-report-8f1c7d46c2b4">
-  <meta name="troom-service-worker" content="./service-worker.js?v=asset-report-8f1c7d46c2b4">
+  <meta name="troom-app-build" content="asset-report-24fd316fbaee">
+  <meta name="troom-service-worker" content="./service-worker.js?v=asset-report-24fd316fbaee">
   <meta name="application-name" content="資産運用報告">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -71,12 +71,12 @@
   <meta name="apple-mobile-web-app-title" content="資産報告">
   <title>資産運用報告ページ</title>
   <meta name="description" content="資産運用状況と不定期のレポートを記録する報告ページです。">
-  <link rel="manifest" href="./manifest.webmanifest?v=asset-report-8f1c7d46c2b4">
+  <link rel="manifest" href="./manifest.webmanifest?v=asset-report-24fd316fbaee">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png?v=20260812-2">
   <link rel="icon" href="./icons/favicon-32.png?v=20260812-2" sizes="32x32" type="image/png">
-  <link rel="stylesheet" href="./report.css?v=asset-report-8f1c7d46c2b4">
-  <link rel="modulepreload" href="./data/portfolio-data.mjs?v=asset-report-8f1c7d46c2b4">
-  <link rel="modulepreload" href="./portfolio-model.mjs?v=asset-report-8f1c7d46c2b4">
+  <link rel="stylesheet" href="./report.css?v=asset-report-24fd316fbaee">
+  <link rel="modulepreload" href="./data/portfolio-data.mjs?v=asset-report-24fd316fbaee">
+  <link rel="modulepreload" href="./portfolio-model.mjs?v=asset-report-24fd316fbaee">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -144,12 +144,12 @@
           <p class="section-number" id="allocation-number">01</p>
           <h2 id="allocation-title">資産構成</h2>
         </div>
-        <p>時価総額に占める割合</p>
+        <p>保有資産の評価額に占める割合</p>
       </div>
 
       <div class="allocation-layout">
         <div class="donut-wrap">
-          <canvas id="allocation-chart" role="img" aria-label="銘柄ごとの資産構成比"></canvas>
+          <canvas id="allocation-chart" role="img" aria-label="米株・インド株・ビットコイン・日本株の資産構成比" aria-describedby="allocation-note"></canvas>
           <div class="donut-center" aria-hidden="true">
             <span>MARKET VALUE</span>
             <strong id="donut-total">—</strong>
@@ -157,6 +157,7 @@
         </div>
         <ol id="allocation-legend" class="allocation-legend" aria-label="資産構成比の内訳"></ol>
       </div>
+      <p id="allocation-note" class="allocation-note">米株は米国株ETF、インド株はインド株ETF、日本株は国内個別株をまとめています。構成比は売却損控除前の評価額を基準にしています。</p>
     </section>
 
     <section class="report-panel holdings-panel" aria-labelledby="holdings-title">
@@ -201,8 +202,8 @@
     </section>
   </main>
 
-  <script type="module" src="./report.js?v=asset-report-8f1c7d46c2b4"></script>
-  <script src="./pwa.js?v=asset-report-8f1c7d46c2b4"></script>
-  <script src="/assets/pwa-auto-update.js?v=asset-report-8f1c7d46c2b4" defer></script>
+  <script type="module" src="./report.js?v=asset-report-24fd316fbaee"></script>
+  <script src="./pwa.js?v=asset-report-24fd316fbaee"></script>
+  <script src="/assets/pwa-auto-update.js?v=asset-report-24fd316fbaee" defer></script>
 </body>
 </html>

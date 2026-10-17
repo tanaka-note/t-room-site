@@ -1,7 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { portfolioFixture } from './fixtures/asset-report.mjs';
-import { adjustmentForPeriod, assetProfit, assetReturnRate, calculateHistoryScale, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
+import { ALLOCATION_GROUPS, allocationGroups, adjustmentForPeriod, assetProfit, assetReturnRate, calculateHistoryScale, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
+
+test('allocation combines assets into four stable groups without changing performance', () => {
+  const data = portfolioFixture();
+  data.assets.push(
+    { ...data.assets[1], id: 'gamma', name: '別の日本株', marketValue: 200 },
+    { ...data.assets[0], id: 'delta', category: 'インド株', color: '#f4ca64', marketValue: 300 },
+    { ...data.assets[0], id: 'epsilon', category: 'ビットコイン', color: '#a98cff', marketValue: 400 }
+  );
+  const summary = createPortfolioModel(data).summary();
+  const groups = allocationGroups(data);
+  assert.deepEqual(groups.map(({ name, color, marketValue }) => ({ name, color, marketValue })), [
+    { name: '米株', color: '#ff8a61', marketValue: 2000 },
+    { name: 'インド株', color: '#f4ca64', marketValue: 300 },
+    { name: 'ビットコイン', color: '#a98cff', marketValue: 400 },
+    { name: '日本株', color: '#52e6aa', marketValue: 1000 }
+  ]);
+  assert.equal(groups.reduce((sum, group) => sum + group.marketValue, 0), summary.rawMarketValue);
+  data.assets.reverse(); data.assets[0].name = '名称変更';
+  assert.deepEqual(allocationGroups(data), groups, 'names and order do not affect classification');
+  assert.deepEqual(createPortfolioModel(data).summary(), summary);
+  for (const asset of data.assets) asset.marketValue = 0;
+  assert.deepEqual(allocationGroups(data).map(group => group.marketValue), [0, 0, 0, 0]);
+  assert.equal(new Set(ALLOCATION_GROUPS.map(group => group.color)).size, 4);
+  data.assets[0].category = '未分類';
+  assert.throws(() => allocationGroups(data), /unknown allocation group/);
+});
 
 test('dated cumulative adjustment replaces earlier loss, including exact boundary dates', () => {
   const { performanceAdjustmentSnapshots: snapshots } = portfolioFixture();

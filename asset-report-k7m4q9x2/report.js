@@ -1,12 +1,13 @@
 "use strict";
 
 const version = new URL(import.meta.url).search;
-const [{ default: reportData }, { createPortfolioModel, validatePortfolioData, assetProfit, assetReturnRate, calculateHistoryScale }] = await Promise.all([
+const [{ default: reportData }, { createPortfolioModel, validatePortfolioData, assetProfit, assetReturnRate, calculateHistoryScale, allocationGroups }] = await Promise.all([
   import(`./data/portfolio-data.mjs${version}`),
   import(`./portfolio-model.mjs${version}`)
 ]);
 validatePortfolioData(reportData);
 const portfolio = createPortfolioModel(reportData);
+const allocation = allocationGroups(reportData);
 const { adjustmentForPeriod, historyMarketValue } = portfolio;
 
 const yenFormatter = new Intl.NumberFormat("ja-JP", {
@@ -78,13 +79,13 @@ function renderLegend(total) {
   const legend = document.querySelector("#allocation-legend");
   const fragment = document.createDocumentFragment();
 
-  assetsByMarketValue().forEach((asset) => {
-    const share = (asset.marketValue / total) * 100;
+  allocation.forEach((group) => {
+    const share = total > 0 ? (group.marketValue / total) * 100 : 0;
     const item = document.createElement("li");
-    item.dataset.assetId = asset.id;
+    item.dataset.groupId = group.id;
     item.innerHTML = `
-      <span class="legend-color" style="background:${asset.color};color:${asset.color}" aria-hidden="true"></span>
-      <span class="legend-name">${asset.name}<small>${formatYen(asset.marketValue)}</small></span>
+      <span class="legend-color" style="background:${group.color};color:${group.color}" aria-hidden="true"></span>
+      <span class="legend-name">${group.name}<small>${formatYen(group.marketValue)}</small></span>
       <strong class="legend-share">${share.toFixed(2)}%</strong>
     `;
     fragment.appendChild(item);
@@ -161,11 +162,11 @@ function drawAllocationChart(total) {
   context.clearRect(0, 0, width, height);
   context.lineCap = "butt";
 
-  assetsByMarketValue().forEach((asset) => {
-    const angle = (asset.marketValue / total) * Math.PI * 2;
+  allocation.forEach((group) => {
+    const angle = total > 0 ? (group.marketValue / total) * Math.PI * 2 : 0;
     context.beginPath();
     context.arc(centerX, centerY, radius - lineWidth / 2, startAngle, startAngle + angle);
-    context.strokeStyle = asset.color;
+    context.strokeStyle = group.color;
     context.lineWidth = lineWidth;
     context.stroke();
     startAngle += angle;
