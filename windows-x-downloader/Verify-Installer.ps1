@@ -1,5 +1,31 @@
 param([Parameter(Mandatory = $true)][string]$SetupPath)
 $ErrorActionPreference = 'Stop'
+if ($null -eq ('XDownloaderInstallerPaths' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class XDownloaderInstallerPaths {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetLongPathName(string path, StringBuilder buffer, uint capacity);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(string path, StringBuilder buffer, uint capacity);
+    public static string Long(string path) {
+        var buffer = new StringBuilder(32768);
+        uint length = GetLongPathName(path, buffer, (uint)buffer.Capacity);
+        if (length == 0 || length >= buffer.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return buffer.ToString().TrimEnd('\\');
+    }
+    public static string Short(string path) {
+        var buffer = new StringBuilder(32768);
+        uint length = GetShortPathName(path, buffer, (uint)buffer.Capacity);
+        if (length == 0 || length >= buffer.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return buffer.ToString();
+    }
+}
+'@
+}
 $SetupPath = (Resolve-Path -LiteralPath $SetupPath).Path
 $expectedHash = (Get-Content -LiteralPath "$SetupPath.sha256" -Raw).Split(' ')[0]
 if ($expectedHash -notmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $SetupPath -Algorithm SHA256).Hash -ine $expectedHash) { throw 'Setup integrity check failed.' }
@@ -35,8 +61,11 @@ function Assert-File([string]$Path) {
 function Assert-Shortcut([string]$Path) {
     Assert-File $Path
     $link = $shell.CreateShortcut($Path)
-    if ($link.TargetPath -ine (Join-Path $installDirectory 'XDownloader.exe') -or $link.WorkingDirectory -ine $installDirectory) {
-        throw "Incorrect shortcut target: $Path"
+    $expected = Join-Path $installDirectory 'XDownloader.exe'
+    # WScript expands DOS 8.3 aliases (e.g. RUNNER~1), unlike the TEMP environment variable.
+    if ([XDownloaderInstallerPaths]::Long($link.TargetPath) -ine [XDownloaderInstallerPaths]::Long($expected) -or
+        [XDownloaderInstallerPaths]::Long($link.WorkingDirectory) -ine [XDownloaderInstallerPaths]::Long($installDirectory)) {
+        throw "Incorrect shortcut: $Path; target=$($link.TargetPath); workingDirectory=$($link.WorkingDirectory); expected=$expected"
     }
 }
 function Remove-TestRoot {
@@ -49,6 +78,10 @@ function Remove-TestRoot {
 
 try {
     New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
+    # Exercise the same short/long path boundary locally when the volume supports 8.3 names.
+    $installDirectory = Join-Path ([XDownloaderInstallerPaths]::Short($testRoot)) '日本語のインストール先 with spaces'
+    $preservedFile = Join-Path $installDirectory 'user-created-video.mp4'
+    $uninstaller = Join-Path $installDirectory 'unins000.exe'
     New-Item -ItemType Directory -Path $settingsRoot -Force | Out-Null
     [IO.File]::WriteAllText($preservedData, 'synthetic-preservation-marker')
     $setupArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="{0}"' -f $installDirectory), '/TASKS=desktopicon')
@@ -103,7 +136,7 @@ finally {
     if ($null -ne $mutex) { $mutex.Dispose() }
     if ((Test-Path -LiteralPath $registryPath) -and (Test-Path -LiteralPath $uninstaller)) {
         $entry = Get-ItemProperty -LiteralPath $registryPath
-        if ($entry.InstallLocation.TrimEnd('\') -ine $installDirectory) { throw 'Refusing to clean an unrelated installation.' }
+        if ([XDownloaderInstallerPaths]::Long($entry.InstallLocation) -ine [XDownloaderInstallerPaths]::Long($installDirectory)) { throw 'Refusing to clean an unrelated installation.' }
         Invoke-CheckedProcess $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
     }
     if (Test-Path -LiteralPath $preservedData) { Remove-Item -LiteralPath $preservedData -Force }
