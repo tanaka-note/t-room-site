@@ -13,7 +13,7 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -27,12 +27,12 @@ jobs:
       - name: Offline core, process, engine options and WPF regression tests
         shell: pwsh
         run: ./windows-x-downloader/Verify.ps1
-      - name: Publish self-contained Windows app
+      - name: Build personal-use Windows installer
         shell: pwsh
-        run: ./windows-x-downloader/Build.ps1 -SkipTools
-      - name: Verify packaged WebView2 and protected cookie lifecycle offline
+        run: ./windows-x-downloader/Build-Installer.ps1 -SkipTools
+      - name: Verify actual installation, packaged app, reinstall, running-app protection and uninstall
         shell: pwsh
         run: |
-          $app = Start-Process -FilePath ./windows-x-downloader/dist/XDownloader/XDownloader.exe -ArgumentList '--verify-package' -WindowStyle Hidden -PassThru
-          if (!$app.WaitForExit(60000)) { $app.Kill($true); throw 'Packaged smoke test timed out.' }
-          if ($app.ExitCode -ne 0) { throw 'Packaged smoke test failed.' }
+          $setup = @(Get-ChildItem ./windows-x-downloader/dist/installer/XDownloader-Setup-*-win-x64.exe)
+          if ($setup.Count -ne 1) { throw 'Expected exactly one setup executable.' }
+          ./windows-x-downloader/Verify-Installer.ps1 -SetupPath $setup[0].FullName

@@ -8,6 +8,7 @@ namespace XDownloader.App;
 public partial class App : Application
 {
     private Mutex? singleInstance;
+    private Mutex? installerLock;
     private bool ownsLock;
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -25,6 +26,8 @@ public partial class App : Application
             MessageBox.Show("X動画ダウンローダーは既に起動しています。開いている画面を使用してください。","X動画ダウンローダー");
             Shutdown(); return;
         }
+        // Inno Setup checks this object before installing/uninstalling. It never force-closes a download.
+        installerLock=new Mutex(false,"Local\\XVideoDownloader.Installer.v1");
         try { MainWindow=new MainWindow(); MainWindow.Show(); }
         catch (Exception)
         {
@@ -36,6 +39,7 @@ public partial class App : Application
     {
         if (ownsLock) singleInstance?.ReleaseMutex();
         singleInstance?.Dispose();
+        installerLock?.Dispose();
         base.OnExit(e);
     }
 
