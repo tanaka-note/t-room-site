@@ -15,7 +15,7 @@ test('public Health and Security HTML does not disclose participant names',()=>{
     assert.doesNotMatch(html,/田中暢美|田中宏知|暢美さん|宏知さん/,path);
   }
 });
-test('Health login is limited to the service title and passkey login; private service is not on the public index',()=>{
+test('Health login is limited to the service title and passkey login; index links use the service name',()=>{
   const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
   const login=html.match(/<section id="login"[^>]*>([\s\S]*?)<\/section>/)[1];
   assert.match(html,/<h1>体調管理<\/h1>/);assert.match(login,/パスキーでログイン/);
@@ -23,5 +23,7 @@ test('Health login is limited to the service title and passkey login; private se
   assert.match(header,/^\s*<h1>体調管理<\/h1>\s*$/);
   assert.doesNotMatch(login,/生理|周期|備考|復旧|<p|<a|<select|<input|利用者|ユーザー/);
   const index=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
-  assert.doesNotMatch(index,/href=["'](?:\.\/|\/)health\//);
+  const card=index.match(/<a\b[^>]*href=["'](?:\.\/|\/)health\/["'][^>]*>([\s\S]*?)<\/a>/)[1];
+  assert.match(card,/<h3>体調管理<\/h3>/);
+  assert.doesNotMatch(card,/nobumi|田中暢美|田中宏知/);
 });
