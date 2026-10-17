@@ -40,6 +40,16 @@ async function inspect(page, portfolio) {
     assert.equal(await legend.locator('.legend-share').textContent(), `${(asset.marketValue / model.summary().rawMarketValue * 100).toFixed(2)}%`);
   }
   assert.equal(await page.locator('#history-section').isVisible(), true);
+  const entries = portfolio.monthlyReport.entries.filter(entry => entry.text.trim()).sort((a, b) => b.date.localeCompare(a.date));
+  assert.equal(await page.locator('#comment-section').isVisible(), entries.length > 0);
+  assert.equal(await page.locator('#comment-title').textContent(), 'レポート（不定期）');
+  assert.equal(await page.locator('#monthly-report-entries section').count(), entries.length);
+  for (const [index, entry] of entries.entries()) {
+    const article = page.locator('#monthly-report-entries section').nth(index);
+    assert.equal(await article.locator('time').getAttribute('datetime'), entry.date);
+    assert.equal(await article.locator('time').textContent(), entry.dateLabel);
+    assert.equal(await article.locator('p').textContent(), entry.text);
+  }
   for (const [range, days] of [['7d', 7], ['1m', 31], ['all', null]]) {
     await page.locator(`button[data-history-range="${range}"]`).click();
     assert.equal(await page.locator(`button[data-history-range="${range}"]`).getAttribute('aria-pressed'), 'true');
