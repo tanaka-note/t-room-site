@@ -1,28 +1,26 @@
-(async () => {
+export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt) {
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
-  const scriptUrl = new URL(document.currentScript.src);
-  const { splitSearchTerms, createSearchExcerpt, highlightSearchTerms } = await import(
-    new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href
-  );
-  const { preparePhoto } = await import(new URL(`diary-photo-processing.js${scriptUrl.search}`, scriptUrl).href);
-  const { createPhotoUploadManager } = await import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href);
-  const {
-    applyFormatToSelection,
-    findPhotoMarkers,
-    getSelectionFormatState,
-    hasTextMarks,
-    insertTextIntoRichDocument,
-    mergeRichTextRuns,
-    photoMarker,
-    removeTextFromRichDocument,
-    replaceTextInRichDocument,
-    sameTextMarks,
-    tokenizeEditorDocument,
-    tokenizeEntryTextWithLinks,
-    withoutPhotoMarkers
-  } = await import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href);
+  const scriptUrl = new URL(import.meta.url);
+  let splitSearchTerms, createSearchExcerpt, highlightSearchTerms;
+  let applyFormatToSelection, findPhotoMarkers, getSelectionFormatState, hasTextMarks,
+    insertTextIntoRichDocument, mergeRichTextRuns, photoMarker, removeTextFromRichDocument,
+    replaceTextInRichDocument, sameTextMarks, tokenizeEditorDocument, tokenizeEntryTextWithLinks, withoutPhotoMarkers;
+  let WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon;
+  const readingToolsReady = Promise.all([
+    import(new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href),
+    import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href),
+    import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href)
+  ]).then(([search, richText, weather]) => {
+    ({ splitSearchTerms, createSearchExcerpt, highlightSearchTerms } = search);
+    ({ applyFormatToSelection, findPhotoMarkers, getSelectionFormatState, hasTextMarks,
+      insertTextIntoRichDocument, mergeRichTextRuns, photoMarker, removeTextFromRichDocument,
+      replaceTextInRichDocument, sameTextMarks, tokenizeEditorDocument, tokenizeEntryTextWithLinks, withoutPhotoMarkers } = richText);
+    ({ WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = weather);
+  });
   const BASE_PATH = "/diary";
-  const { WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = await import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href);
+  let sessionGeneration = 0;
+  let loginAttempt = 0;
+  let activeSessionContext = "";
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_NAVIGATION_KEY = "troomDiaryReturnNavigation";
@@ -254,36 +252,42 @@
     toast: document.querySelector("#toast")
   };
 
-  const {
-    cancelEditorPhotoUploadSession,
-    commitStagedPhotos,
-    deleteStagedPhotoUpload,
-    ensurePhotosUploaded,
-    queueBackgroundPhotoUpload,
-    releaseUploadedPhotoPayload
-  } = createPhotoUploadManager({
-    state,
-    api,
-    basePath: BASE_PATH,
-    getTargetEntryId: () => Number(elements.entryId.value || 0) || null
-  });
+  let photoToolsPromise;
+  let photoUploadManager;
+  async function loadPhotoTools() {
+    if (!photoToolsPromise) {
+      photoToolsPromise = Promise.all([
+        import(new URL(`diary-photo-processing.js${scriptUrl.search}`, scriptUrl).href),
+        import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href)
+      ]).then(([processing, upload]) => {
+        photoUploadManager = upload.createPhotoUploadManager({ state, api, basePath: BASE_PATH,
+          getTargetEntryId: () => Number(elements.entryId.value || 0) || null });
+        return processing;
+      }).catch(error => { photoToolsPromise = null; throw error; });
+    }
+    return photoToolsPromise;
+  }
+  async function preparePhoto(file) { return (await loadPhotoTools()).preparePhoto(file); }
+  function cancelEditorPhotoUploadSession() { return photoUploadManager?.cancelEditorPhotoUploadSession(); }
+  function commitStagedPhotos(...args) { return photoUploadManager.commitStagedPhotos(...args); }
+  function deleteStagedPhotoUpload(...args) { return photoUploadManager?.deleteStagedPhotoUpload(...args); }
+  function ensurePhotosUploaded(photos) { return photos.length ? photoUploadManager.ensurePhotosUploaded(photos) : Promise.resolve(); }
+  function queueBackgroundPhotoUpload(...args) { return photoUploadManager.queueBackgroundPhotoUpload(...args); }
+  function releaseUploadedPhotoPayload(...args) { return photoUploadManager.releaseUploadedPhotoPayload(...args); }
 
-  boot();
+  await boot();
 
   async function boot() {
     applyRouteState();
+    // Fetch data alongside rendering tools; display the authorized shell immediately.
+    elements.appView.inert = true;
+    const startup = enterDiary(initialSession);
+    await readingToolsReady;
     bindEvents();
+    state.deferredInstallPrompt = onReady();
     updateInstallButtonVisibility();
-    try {
-      const session = await api("/session");
-      if (session.authenticated) {
-        await enterDiary(session);
-      } else {
-        showLogin();
-      }
-    } catch (error) {
-      showLogin(error.message);
-    }
+    elements.appView.inert = false;
+    await startup;
   }
 
   function bindEvents() {
@@ -548,19 +552,23 @@
   }
 
   async function handlePasskeyLogin() {
+    const attempt = ++loginAttempt;
     const button = document.querySelector("#passkey-login");
     setBusy(button, true, "確認中...");
     elements.loginMessage.textContent = "";
     try {
       const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
+      if (attempt !== loginAttempt) return;
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
+      if (attempt !== loginAttempt) return;
       await enterDiary(session);
     } catch (error) {
+      if (attempt !== loginAttempt) return;
       elements.loginMessage.textContent = /ID・パスワード/.test(error.message)
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message;
     } finally {
-      setBusy(button, false, "パスキーでログイン");
+      if (attempt === loginAttempt) setBusy(button, false, "パスキーでログイン");
     }
   }
 
@@ -581,6 +589,8 @@
   }
 
   async function enterDiary(session) {
+    const generation = ++sessionGeneration;
+    activeSessionContext = sessionContext(session);
     state.role = session.role;
     state.accountName = session.accountName;
     state.householdId = session.householdId;
@@ -591,7 +601,11 @@
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
     const returnView = takeDiaryReturnView(state.activeHouseholdId);
-    if (returnView) applyDiaryReturnView(returnView);
+    if (returnView) {
+      await readingToolsReady;
+      if (generation !== sessionGeneration) return;
+      applyDiaryReturnView(returnView);
+    }
     state.lastSessionRefreshAt = Date.now();
     elements.roleLabel.textContent = session.accountDisplayName || `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`;
     elements.newEntryButton.hidden = !state.canManageEntries;
@@ -599,22 +613,37 @@
     elements.trashButton.hidden = !state.canViewTrash;
     elements.investmentSection.hidden = !state.canViewInvestment || state.tagDirectory;
     updateFilterControls();
-    await Promise.all([loadHouseholdSwitcher(), loadMeta(), loadEntries(true)]);
-    if (returnView) {
-      await loadEntriesForDiaryReturn(returnView.entryCount);
-    }
+    // Apply trusted authorization and clear prior data before exposing the shell.
+    elements.householdSwitcherWrap.hidden = true;
+    elements.householdSwitcher.replaceChildren();
+    elements.entryList.replaceChildren(createEmpty("読み込んでいます..."));
+    elements.archiveList.replaceChildren();
+    elements.tagList.replaceChildren();
     elements.bootView.hidden = true;
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
     resetHeaderVisibilityTracking();
+    const initialRequestId = state.requestId + 1;
+    await loadEntries(true, true);
+    if (generation !== sessionGeneration || initialRequestId !== state.requestId) return;
+    if (returnView) {
+      await loadEntriesForDiaryReturn(returnView.entryCount);
+      if (generation !== sessionGeneration) return;
+    }
     if (returnView) restoreDiaryReturnPosition(returnView);
     else if (isNewDiaryNavigation()) restoreEntryListPosition({ scrollY: 0 });
   }
 
   async function loadHouseholdSwitcher() {
+    if (!state.isGlobalOwner) return;
+    const generation = sessionGeneration;
+    const result = await api("/households");
+    if (generation === sessionGeneration) applyHouseholds(result);
+  }
+
+  function applyHouseholds(result) {
     elements.householdSwitcherWrap.hidden = !state.isGlobalOwner;
     if (!state.isGlobalOwner) return;
-    const result = await api("/households");
     elements.householdSwitcher.replaceChildren(...result.households.map((household) => {
       const option = document.createElement("option");
       option.value = household.id;
@@ -629,7 +658,12 @@
     elements.householdSwitcher.disabled = true;
     try {
       await api("/households/select", { method: "POST", body: { householdId } });
+      sessionGeneration += 1;
+      cancelPendingEntrySearch();
       state.activeHouseholdId = householdId;
+      state.availableTags = [];
+      elements.archiveList.replaceChildren();
+      elements.tagList.replaceChildren();
       state.trash = false;
       state.drafts = false;
       state.query = "";
@@ -680,7 +714,13 @@
     }
   }
 
-  async function loadEntries(reset) {
+  function sessionContext(session) {
+    return JSON.stringify([session.accountName || "", session.loginId || "", session.householdId, session.activeHouseholdId || session.householdId, session.role,
+      ...["isGlobalOwner", "canManageEntries", "canViewTrash", "canPermanentlyDelete", "canViewInvestment"].map(key => Boolean(session[key]))]);
+  }
+
+  async function loadEntries(reset, bootstrap = false) {
+    const generation = sessionGeneration;
     window.clearTimeout(state.searchTimer);
     state.searchTimer = null;
     state.entriesAbortController?.abort();
@@ -718,14 +758,32 @@
         if (state.drafts) parameters.set("draft", "1");
         if (state.favoritePage) parameters.set("favorite", "1");
 
-        const result = await api(`/entries?${parameters}`, { signal: abortController.signal });
-        if (requestId !== state.requestId) return;
+        let result;
+        if (bootstrap && pageGuard === 0) {
+          // Keep metadata alive when a user starts a search during initial loading.
+          const initial = await api(`/bootstrap?${parameters}`);
+          await readingToolsReady;
+          if (generation !== sessionGeneration) return;
+          if (!initial.session?.authenticated || sessionContext(initial.session) !== activeSessionContext) {
+            resetState();
+            showLogin("ログイン状態が変わりました。もう一度パスキーでログインしてください。");
+            return;
+          }
+          applyHouseholds(initial.households);
+          applyMeta(initial.meta);
+          result = initial.entries;
+        } else {
+          result = await api(`/entries?${parameters}`, { signal: abortController.signal });
+        }
+        if (requestId !== state.requestId || generation !== sessionGeneration) return;
         loadedEntries.push(...result.entries);
         nextOffset += result.entries.length;
         hasMore = result.hasMore;
         pageGuard += 1;
       } while (monthlyView && state.monthExpanded && hasMore && pageGuard < 100);
 
+      await readingToolsReady;
+      if (requestId !== state.requestId || generation !== sessionGeneration) return;
       state.entries = loadedEntries;
       state.entryMap.clear();
       for (const entry of state.entries) state.entryMap.set(entry.id, entry);
@@ -1018,19 +1076,25 @@
   }
 
   async function loadMeta() {
+    const generation = sessionGeneration;
     try {
       const result = await api("/meta");
-      state.draftCount = Number(result.draftCount || 0);
-      elements.draftCount.textContent = String(state.draftCount);
-      elements.draftCount.hidden = state.draftCount < 1;
-      elements.draftCount.setAttribute("aria-label", `下書き${state.draftCount}件`);
-      updateFilterControls();
-      renderArchive(result.months || []);
-      renderTags(result.tags || []);
+      if (generation === sessionGeneration) applyMeta(result);
     } catch (error) {
+      if (generation !== sessionGeneration) return;
       elements.archiveList.replaceChildren(createEmpty(error.message));
       elements.tagList.replaceChildren(createEmpty(error.message));
     }
+  }
+
+  function applyMeta(result) {
+    state.draftCount = Number(result.draftCount || 0);
+    elements.draftCount.textContent = String(state.draftCount);
+    elements.draftCount.hidden = state.draftCount < 1;
+    elements.draftCount.setAttribute("aria-label", `下書き${state.draftCount}件`);
+    updateFilterControls();
+    renderArchive(result.months || []);
+    renderTags(result.tags || []);
   }
 
   function renderEntries(appendFrom = 0) {
@@ -3472,6 +3536,7 @@
   }
 
   async function api(path, options = {}) {
+    const generation = sessionGeneration;
     const headers = new Headers(options.headers);
     const init = {
       method: options.method || "GET",
@@ -3509,7 +3574,7 @@
       }
     }
     if (!response.ok) {
-      if (response.status === 401 && path !== "/login" && path !== "/passkey/handoff") {
+      if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff") {
         resetState();
         showLogin("ログインの有効期限が切れました。");
       }
@@ -3734,6 +3799,16 @@
   }
 
   function resetState() {
+    loginAttempt += 1;
+    setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
+    sessionGeneration += 1;
+    activeSessionContext = "";
+    elements.entryList.replaceChildren();
+    elements.archiveList.replaceChildren();
+    elements.tagList.replaceChildren();
+    elements.householdSwitcher.replaceChildren();
+    elements.householdSwitcherWrap.hidden = true;
+    elements.investmentSection.hidden = true;
     finishPhotoViewerClose();
     dialogs.reset();
     cancelPendingEntrySearch();
@@ -3796,4 +3871,4 @@
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
   }
-})();
+}
