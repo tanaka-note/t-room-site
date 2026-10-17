@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-2132b8f8baf6";
+const APP_BUILD_ID = "cloud-ed2254ccbcfb";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -148,6 +148,14 @@ export default {
       if (!url.pathname.startsWith(BASE_PATH)) return new Response("Not found", { status: 404 });
       const path = url.pathname.slice(BASE_PATH.length) || "/";
       if (path.startsWith("/api/")) {
+        // Retire every distributed native Player version before session refresh,
+        // audit, D1 or R2 access. This client identifier is not an auth boundary.
+        if (/^T-Cloud-Android(?:\/|$)/i.test(request.headers.get("User-Agent") || "")) {
+          return secureResponse(json({
+            code: "tcloud_player_retired",
+            error: "T-Cloud Playerは廃止しました。Web版 https://tanaka-note.com/cloud/ をご利用ください。"
+          }, 410));
+        }
         const response = await withPasswordLoginAudit(env, request, "cloud", () => handleApi(request, env, url, path, context));
         return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
       }
