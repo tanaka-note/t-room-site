@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { extname, resolve, sep } from 'node:path';
 import data from '../asset-report-k7m4q9x2/data/portfolio-data.mjs';
-import { allocationGroups, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
+import { adjustedAllocationGroups, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
 import { syntheticPortfolio } from './fixtures/asset-report.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -37,18 +37,22 @@ async function inspect(page, portfolio) {
     const row = page.locator(`#holdings-body tr[data-asset-id="${asset.id}"]`);
     assert.equal(await row.locator('td').nth(1).textContent(), yen(asset.marketValue));
   }
-  const groups = allocationGroups(portfolio);
+  const groups = adjustedAllocationGroups(portfolio);
+  assert.equal(groups.reduce((sum, group) => sum + group.marketValue, 0), model.summary().marketValue);
   assert.equal(await page.locator('#allocation-legend li').count(), 4);
   assert.deepEqual(await page.locator('#allocation-legend li').evaluateAll(items => items.map(item => item.dataset.groupId)), groups.map(group => group.id));
   for (const group of groups) {
     const legend = page.locator(`#allocation-legend li[data-group-id="${group.id}"]`);
     assert.equal(await legend.locator('.legend-name').textContent(), group.name + yen(group.marketValue));
-    const total = model.summary().rawMarketValue;
+    const total = model.summary().marketValue;
     assert.equal(await legend.locator('.legend-share').textContent(), `${(total > 0 ? group.marketValue / total * 100 : 0).toFixed(2)}%`);
     assert.equal(await legend.locator('.legend-color').evaluate(element => element.style.backgroundColor), `rgb(${group.color.slice(1).match(/../g).map(hex => parseInt(hex, 16)).join(', ')})`);
   }
   assert.equal(await page.locator('#allocation-note').isVisible(), true);
-  assert.match(await page.locator('#allocation-note').textContent(), /売却損控除前/);
+  assert.match(await page.locator('#allocation-note').textContent(), /累計控除額を4等分/);
+  assert.equal(await page.locator('#allocation-rules').isVisible(), true);
+  const rules = await page.locator('#allocation-rules').textContent();
+  for (const rule of ['分類別評価額−累計控除額÷4', '控除後の全体合計', '最新の累計控除額だけ', '実現益は加算しません', '米株→インド株→ビットコイン→日本株', '個別銘柄一覧は控除前']) assert.ok(rules.includes(rule), rule);
   const chartBox = await page.locator('#allocation-chart').boundingBox();
   assert.ok((await page.locator('#allocation-note').boundingBox()).y >= chartBox.y + chartBox.height);
   const pixelsMatch = await page.locator('#allocation-chart').evaluate((canvas, groups) => {

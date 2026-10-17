@@ -1,13 +1,13 @@
 "use strict";
 
 const version = new URL(import.meta.url).search;
-const [{ default: reportData }, { createPortfolioModel, validatePortfolioData, assetProfit, assetReturnRate, calculateHistoryScale, allocationGroups }] = await Promise.all([
+const [{ default: reportData }, { createPortfolioModel, validatePortfolioData, assetProfit, assetReturnRate, calculateHistoryScale, adjustedAllocationGroups }] = await Promise.all([
   import(`./data/portfolio-data.mjs${version}`),
   import(`./portfolio-model.mjs${version}`)
 ]);
 validatePortfolioData(reportData);
 const portfolio = createPortfolioModel(reportData);
-const allocation = allocationGroups(reportData);
+const allocation = adjustedAllocationGroups(reportData);
 const { adjustmentForPeriod, historyMarketValue } = portfolio;
 
 const yenFormatter = new Intl.NumberFormat("ja-JP", {
@@ -58,7 +58,7 @@ function assetsByMarketValue() {
 }
 
 function renderSummary() {
-  const { rawMarketValue: total, marketValue: adjustedTotal, profit, returnRate } = portfolio.summary();
+  const { marketValue: adjustedTotal, profit, returnRate } = portfolio.summary();
 
   document.querySelector("#principal-value").textContent = formatYen(reportData.basePrincipal);
   document.querySelector("#market-value").textContent = formatYen(adjustedTotal);
@@ -72,7 +72,7 @@ function renderSummary() {
   returnElement.className = valueClass(returnRate);
 
   document.querySelector("#donut-total").textContent = formatYen(adjustedTotal);
-  return total;
+  return adjustedTotal;
 }
 
 function renderLegend(total) {

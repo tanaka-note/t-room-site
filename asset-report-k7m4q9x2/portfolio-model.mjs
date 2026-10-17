@@ -18,6 +18,23 @@ export function allocationGroups(data) {
   return groups;
 }
 
+// Presentation-only allocation: never write these adjusted amounts back into
+// assets/history. Use the same single dated snapshot as the portfolio summary.
+export function adjustedAllocationGroups(data) {
+  const groups = allocationGroups(data);
+  const deduction = -adjustmentForPeriod(data.performanceAdjustmentSnapshots, data.period);
+  const perGroup = Math.floor(deduction / groups.length);
+  const remainder = deduction % groups.length;
+  return groups.map((group, index) => {
+    // Integer yen, deterministic remainder order: US, India, BTC, Japan.
+    const allocatedDeduction = perGroup + (index < remainder ? 1 : 0);
+    const adjustment = allocatedDeduction === 0 ? 0 : -allocatedDeduction;
+    const marketValue = group.marketValue + adjustment;
+    requireValue(marketValue >= 0, "adjusted allocation must not be negative");
+    return { ...group, rawMarketValue: group.marketValue, adjustment, marketValue };
+  });
+}
+
 export function isReportDate(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(value + "T00:00:00Z");

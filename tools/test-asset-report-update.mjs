@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, relative, resolve, join } from 'node:path';
 import { dataPath, parsePortfolioModule, prepareReportUpdate, updateAssetReport } from './update-asset-report.mjs';
 import { filesForApp, inspectBuildFreshness, loadWebAppRegistry, workspace } from './web-app-registry.mjs';
-import { validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
+import { adjustedAllocationGroups, createPortfolioModel, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
 
 test('updates are validated and staged before changing data, HTML and managed metadata', async () => {
   const root = await mkdtemp(join(tmpdir(), 't-lain-asset-update-test-'));
@@ -75,6 +75,14 @@ test('updates are validated and staged before changing data, HTML and managed me
     assertCleanupWarning();
     const next = parsePortfolioModule(await readFile(resolve(root, dataPath), 'utf8'));
     validatePortfolioData(next);
+    const previousGroups = adjustedAllocationGroups(current);
+    const updatedGroups = adjustedAllocationGroups(next);
+    for (const group of updatedGroups) {
+      const previous = previousGroups.find(item => item.id === group.id);
+      const change = current.assets.reduce((sum, asset) => sum + (asset.category === group.name ? prices[asset.id] - asset.marketValue : 0), 0);
+      assert.equal(group.marketValue, previous.marketValue + change + group.adjustment - previous.adjustment, 'daily updater feeds current prices and dated deductions into adjusted values automatically');
+    }
+    assert.equal(updatedGroups.reduce((sum, group) => sum + group.marketValue, 0), createPortfolioModel(next).summary().marketValue);
     assert.equal(next.period, input.period);
     assert.equal(next.history.length, current.history.length + 1);
     assert.deepEqual(next.history.slice(0, -1), current.history);
