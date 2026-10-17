@@ -1,0 +1,32 @@
+name: X Downloader Windows prototype
+on:
+  push:
+    paths: ['windows-x-downloader/**', '.github/workflows/x-downloader-windows.yml']
+  pull_request:
+    paths: ['windows-x-downloader/**', '.github/workflows/x-downloader-windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: x-downloader-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Prepare checksum-pinned tools
+        shell: pwsh
+        run: ./windows-x-downloader/Prepare-Tools.ps1
+      - name: Offline core, process, engine options and WPF regression tests
+        shell: pwsh
+        run: ./windows-x-downloader/Verify.ps1
+      - name: Publish self-contained Windows app
+        shell: pwsh
+        run: ./windows-x-downloader/Build.ps1 -SkipTools
