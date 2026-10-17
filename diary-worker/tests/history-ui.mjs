@@ -5,7 +5,7 @@ const html = await readFile(new URL("../public/index.html", import.meta.url), "u
 for (const id of ["entry-dialog", "editor-dialog", "camera-roll-dialog", "photo-viewer-dialog", "date-wheel-dialog", "delete-confirm-dialog", "editor-leave-dialog"]) {
   assert.ok(script.includes('dialogs.register("' + id + '"'), id);
 }
-assert.ok(html.includes('/diary/dialog-navigation.js?v=diary-'));
+assert.ok(html.includes('/diary/diary-bootstrap.js?v=diary-'));
 assert.ok(script.includes('elements.photoInput.addEventListener("cancel", handlePhotoPickerCancel)'));
 assert.match(script, /function handlePhotoPickerCancel\(event\) \{\s*event\.stopPropagation\(\);\s*finishPhotoPickerInteraction\(\);\s*\}/);
 assert.ok(script.includes('state.editorSaving || state.photoPreparing || state.photoPickerActive'));

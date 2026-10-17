@@ -172,23 +172,7 @@ async function handleApi(request, env, url, path, context, getSession) {
       startedAt: session.startedAt,
       sessionVersion: diarySessionVersion(env, session.accountVersion), passkeySessionEpoch: session.passkeySessionEpoch
     });
-    return json({
-      authenticated: Boolean(session),
-      expiresAt: session?.exp || null,
-      role: session?.role || null,
-      accountName: session?.accountName || null,
-      accountDisplayName: session ? accountDisplayName({ service: "diary", accountId: session.accountId, role: securityAuditRole(session) }, `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`) : null,
-      loginId: session?.loginId || null,
-      householdId: session?.householdId || null,
-      activeHouseholdId: session?.activeHouseholdId || null,
-      isGlobalOwner: Boolean(session?.isGlobalOwner),
-      mustChangePassword: Boolean(session?.mustChangePassword),
-      canManageEntries: Boolean(session?.canManageEntries),
-      canViewTrash: Boolean(session?.canViewTrash),
-      canPermanentlyDelete: Boolean(session?.canPermanentlyDelete),
-      canViewInvestment: Boolean(session?.canViewInvestment),
-      authMethod: session?.authMethod || null
-    });
+    return json(sessionSummary(session));
   }
 
   if (path === "/api/login" && request.method === "POST") {
@@ -242,13 +226,7 @@ async function handleApi(request, env, url, path, context, getSession) {
   }
 
   if (path === "/api/households" && request.method === "GET") {
-    const households = session.isGlobalOwner
-      ? [
-          { id: "tanaka-household", name: "田中宏知・田中暢美" },
-          { id: "chiharu-household", name: "田中千晴" }
-        ]
-      : [{ id: session.householdId, name: session.accountName }];
-    return json({ households, activeHouseholdId: session.activeHouseholdId });
+    return json(await listHouseholds(env, session));
   }
 
   if (path === "/api/households/select" && request.method === "POST") {
@@ -286,6 +264,13 @@ async function handleApi(request, env, url, path, context, getSession) {
 
   if (request.method !== "GET" && !validMutationRequest(request, url)) {
     return json({ error: "不正なリクエストです。" }, 403);
+  }
+
+  if (path === "/api/bootstrap" && request.method === "GET") {
+    const [households, meta, entries] = await Promise.all([
+      listHouseholds(env, session), readMeta(env, session), readEntries(url, env, session)
+    ]);
+    return json({ session: sessionSummary(session), households, meta, entries });
   }
 
   if (path === "/api/entries" && request.method === "GET") {
@@ -422,12 +407,43 @@ async function handleApi(request, env, url, path, context, getSession) {
   return json({ error: "Not found" }, 404);
 }
 
+function sessionSummary(session) {
+  return {
+    authenticated: Boolean(session),
+    expiresAt: session?.exp || null,
+    role: session?.role || null,
+    accountName: session?.accountName || null,
+    accountDisplayName: session ? accountDisplayName({ service: "diary", accountId: session.accountId, role: securityAuditRole(session) }, `${session.accountName}（${session.role === "admin" ? "管理者" : "一般ユーザー"}）`) : null,
+    loginId: session?.loginId || null,
+    householdId: session?.householdId || null,
+    activeHouseholdId: session?.activeHouseholdId || null,
+    isGlobalOwner: Boolean(session?.isGlobalOwner),
+    mustChangePassword: Boolean(session?.mustChangePassword),
+    canManageEntries: Boolean(session?.canManageEntries),
+    canViewTrash: Boolean(session?.canViewTrash),
+    canPermanentlyDelete: Boolean(session?.canPermanentlyDelete),
+    canViewInvestment: Boolean(session?.canViewInvestment),
+    authMethod: session?.authMethod || null
+  };
+}
+
+async function listHouseholds(env, session) {
+  const households = session.isGlobalOwner
+    ? [
+        { id: "tanaka-household", name: "田中宏知・田中暢美" },
+        { id: "chiharu-household", name: "田中千晴" }
+      ]
+    : [{ id: session.householdId, name: session.accountName }];
+  return { households, activeHouseholdId: session.activeHouseholdId };
+}
+
 async function serveAsset(request, env, url, path) {
   if (!env.ASSETS) return new Response("Diary assets are not configured", { status: 503 });
 
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/diary-bootstrap.js", "/diary-bootstrap.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],
     ["/dialog-navigation.js", "/dialog-navigation.js"],
     ["/diary-photo-processing.js", "/diary-photo-processing.js"],
@@ -479,9 +495,12 @@ async function serveAsset(request, env, url, path) {
   }
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-  headers.set("Cache-Control", assetPath === "/"
+  const immutable = response.ok && /^diary-[a-f0-9]{12}$/.test(url.searchParams.get("v") || "")
+    && /\.(?:js|css|png)$/.test(assetPath) && !isInvestmentAssetPath(path);
+  headers.set("Cache-Control", assetPath === "/" || assetPath === "/investment.html"
     ? "no-store"
-    : (assetPath === "/service-worker.js" ? "no-cache" : "public, max-age=3600"));
+    : assetPath === "/service-worker.js" ? "no-cache"
+      : immutable ? "public, max-age=31536000, immutable" : "public, max-age=3600");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -544,6 +563,10 @@ function appendEntryKeywordConditions(conditions, bindings, terms) {
 }
 
 async function listEntries(url, env, session) {
+  return json(await readEntries(url, env, session));
+}
+
+async function readEntries(url, env, session) {
   const limit = clampNumber(url.searchParams.get("limit"), 1, 50, 20);
   const offset = clampNumber(url.searchParams.get("offset"), 0, 1000000, 0);
   const searchTerms = splitSearchTerms(url.searchParams.get("q"));
@@ -640,7 +663,7 @@ async function listEntries(url, env, session) {
   const result = await env.DB.prepare(statement).bind(...bindings).all();
   const rows = (result.results || []).map(serializeEntry);
   const hasMore = rows.length > limit;
-  return json({ entries: rows.slice(0, limit), hasMore, offset, limit });
+  return { entries: rows.slice(0, limit), hasMore, offset, limit };
 }
 
 async function getEntry(id, env, session) {
@@ -1493,6 +1516,10 @@ async function deleteEntryPhotoRecord(id, env, session, expectedEntryId = null) 
 }
 
 async function listMeta(env, session) {
+  return json(await readMeta(env, session));
+}
+
+async function readMeta(env, session) {
   const [months, tags, draftCount] = await Promise.all([
     env.DB.prepare(`
       SELECT substr(entry_date, 1, 7) AS value, COUNT(*) AS count
@@ -1515,7 +1542,7 @@ async function listMeta(env, session) {
       WHERE household_id = ? AND deleted_at IS NULL AND status = 'draft'
     `).bind(session.activeHouseholdId).first()
   ]);
-  return json({ months: months.results || [], tags: tags.results || [], draftCount: Number(draftCount?.count || 0) });
+  return { months: months.results || [], tags: tags.results || [], draftCount: Number(draftCount?.count || 0) };
 }
 
 async function createEntry(request, env, session) {
@@ -2077,7 +2104,9 @@ async function withRollingSession(request, response, env, url, path, getSession)
   // second check after the handler, without renewing background activity.
   const session = await getSession();
   if (!response.ok || request.headers.get("X-Troom-Activity") !== "foreground") return response;
-  return renewServiceSession(request, response, env, "diary", path, session, async expiresAt => {
+  // Bootstrap replaces the foreground entry read, so retain its renewal semantics.
+  const activityPath = path === "/api/bootstrap" ? "/api/entries" : path;
+  return renewServiceSession(request, response, env, "diary", activityPath, session, async expiresAt => {
     const account = await findAccountById(session.accountId, env);
     const policy = getSessionPolicy(env, "passkey");
     const token = await createSessionToken(account, policy, env, session.activeHouseholdId, { ...session, expiresAt });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createDiaryFixtureServer as createServer } from "./bootstrap-fixture.mjs";
 import { createRequire } from "node:module";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";

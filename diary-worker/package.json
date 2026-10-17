@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "node ../tools/sync-web-app-builds.mjs --target t-room-diary && wrangler deploy",
-    "check": "node --check src/entry-domain.js && node --check src/index.js && node --check src/backup.js && node --check public/diary.js && node --check public/diary-photo-processing.js && node --check public/diary-photo-upload.js && node --check public/diary-rich-text.js && node --check public/diary-search.js && node --check public/diary-weather.js && node --check public/investment.js",
+    "check": "node --check src/entry-domain.js && node --check src/index.js && node --check src/backup.js && node --check public/diary-bootstrap.js && node --check public/diary.js && node --check public/diary-photo-processing.js && node --check public/diary-photo-upload.js && node --check public/diary-rich-text.js && node --check public/diary-search.js && node --check public/diary-weather.js && node --check public/investment.js",
     "test:weather": "node tests/weather.mjs && node tests/weather.e2e.mjs && node tests/browser/weather.mjs",
     "test:permissions": "node tests/permissions.e2e.mjs",
     "test:households": "node tests/household-isolation.e2e.mjs",
@@ -28,7 +28,7 @@
     "test:investment": "node tests/investment-ui.mjs && node tests/browser/investment-ranges.mjs",
     "test:navigation-return": "node tests/navigation-return-ui.mjs && node tests/browser/navigation-return.mjs",
     "test:pwa": "node tests/pwa-ui.mjs",
-    "test:startup": "node tests/startup-view.mjs",
+    "test:startup": "node tests/startup-view.mjs && node tests/bootstrap.mjs && node tests/static-cache.mjs && node tests/browser/startup-performance.mjs",
     "test:scroll-header": "node tests/scroll-header-ui.mjs",
     "test:date-dismiss": "node tests/date-wheel-dismiss-ui.mjs",
     "test:date-input": "node tests/date-input-platform-ui.mjs",

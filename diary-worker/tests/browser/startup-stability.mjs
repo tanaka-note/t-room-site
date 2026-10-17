@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createDiaryFixtureServer as createServer } from "./bootstrap-fixture.mjs";
 import { createRequire } from "node:module";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,7 +47,7 @@ const server = createServer(async (request, response) => {
       : apiPath === "/households"
         ? { activeHouseholdId: "main-household", households: [{ id: "main-household", name: "日記" }] }
         : apiPath === "/meta"
-          ? { draftCount: 0, months: [{ month: "2026-08", count: 1 }], tags: [{ tag: "確認", count: 1 }] }
+          ? { draftCount: 0, months: [{ value: "2026-08", count: 1 }], tags: [{ value: "確認", count: 1 }] }
           : apiPath === "/entries"
             ? {
                 entries: [{
@@ -111,7 +111,7 @@ function browserExecutable(name) {
     : [];
   const candidates = name === "firefox"
     ? [...playwrightFirefox, "C:/Program Files/Mozilla Firefox/firefox.exe"]
-    : ["C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe"];
+    : [chromium.executablePath(), "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe"];
   return candidates.find(existsSync) || null;
 }
 
@@ -125,7 +125,8 @@ async function verifyStartup(browserType, name) {
     const registerCalls = [];
     const viewStates = [];
     let navigations = 0;
-    page.on("framenavigated", (frame) => { if (frame === page.mainFrame()) navigations += 1; });
+    // replaceState also emits framenavigated; count actual document requests.
+    page.on("request", request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations += 1; });
     page.on("console", (message) => {
       const text = message.text();
       if (text.startsWith("__TROOM_SW_REGISTER__")) registerCalls.push(text.slice("__TROOM_SW_REGISTER__".length));
@@ -154,7 +155,12 @@ async function verifyStartup(browserType, name) {
 
     await page.goto(`${origin}/diary/`, { waitUntil: "networkidle" });
     await page.waitForSelector("#app-view:not([hidden])");
-    await page.evaluate(() => navigator.serviceWorker.ready);
+    try {
+      await page.waitForFunction(() => navigator.serviceWorker.controller, null, { timeout: 15000 });
+    } catch (error) {
+      const registrations = await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map(r => ({scope:r.scope, active:r.active?.state, installing:r.installing?.state, waiting:r.waiting?.state})));
+      throw new Error(`${name}: Service Worker did not take control: ${JSON.stringify({ registerCalls, registrations })}`, { cause: error });
+    }
     await page.waitForTimeout(300);
 
     registerCalls.length = 0;
@@ -169,9 +175,9 @@ async function verifyStartup(browserType, name) {
     assert.match(registerCalls[0], /^\/diary\/service-worker\.js\?v=diary-[a-f0-9]{12}$/, `${name}: build付きURLだけを登録`);
     assert.equal(viewStates.filter((state) => state.login).length, 0, `${name}: 認証済み起動でログイン画面を表示しない`);
     const appStates = viewStates.filter((state) => state.app);
-    assert.equal(appStates.length, 1, `${name}: 日記本体を1回だけ表示`);
-    assert.equal(appStates[0].loading, false, `${name}: 読み込み途中の一覧を見せない`);
-    assert.equal(appStates[0].entry, true, `${name}: 初期日記を揃えてから表示`);
+    assert.ok(appStates.length >= 1, `${name}: 日記本体を表示`);
+    assert.equal(appStates[0].loading, true, `${name}: 画面枠とローディングを先に表示`);
+    assert.equal(appStates.at(-1).entry, true, `${name}: 後から初期日記を表示`);
     await context.close();
     return `${name}: ok`;
   } finally {
