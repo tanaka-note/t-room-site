@@ -24,6 +24,18 @@ test('updates are validated and staged before changing data, HTML and managed me
     const monitored = [dataPath, app.entrypoints[0], app.serviceWorker, 'asset-report-k7m4q9x2/report.js'];
     const snapshot = () => Promise.all(monitored.map(path => readFile(resolve(root, path), 'utf8')));
     const before = await snapshot();
+    const warnings = [];
+    const cleanupFailure = {
+      removeStaging: async (path, options) => {
+        await rm(path, options);
+        throw new Error('simulated cleanup failure');
+      },
+      warn: message => warnings.push(message)
+    };
+    const assertCleanupWarning = () => {
+      assert.equal(warnings.length, 1);
+      assert.match(warnings.pop(), /Warning: could not remove asset-report staging directory .*simulated cleanup failure/);
+    };
     const missing = { ...prices }; delete missing[current.assets[0].id];
     for (const bad of [
       { ...input, period: current.period }, { ...input, period: '2000-01-01' }, { ...input, period: '2024-02-30' },
@@ -34,7 +46,8 @@ test('updates are validated and staged before changing data, HTML and managed me
       await assert.rejects(updateAssetReport({ rootDirectory: root, input: bad }));
       assert.deepEqual(await snapshot(), before, 'invalid input must not modify any file');
     }
-    const dry = await updateAssetReport({ rootDirectory: root, input, dryRun: true });
+    const dry = await updateAssetReport({ rootDirectory: root, input, dryRun: true }, cleanupFailure);
+    assertCleanupWarning();
     assert.deepEqual(await snapshot(), before, 'dry-run must not modify any file');
     assert.ok(dry.changed.includes(dataPath));
     await writeFile(resolve(root, app.entrypoints[0]), before[1].replace('id="report-updated"', 'id="broken-update-time"'));
@@ -43,10 +56,23 @@ test('updates are validated and staged before changing data, HTML and managed me
     await writeFile(resolve(root, app.entrypoints[0]), before[1]);
     await writeFile(resolve(root, app.serviceWorker), before[2].replace('const CACHE_NAME', 'const BROKEN_CACHE_NAME'));
     const beforeFailure = await snapshot();
-    await assert.rejects(updateAssetReport({ rootDirectory: root, input }), /CACHE_NAME/);
+    await assert.rejects(updateAssetReport({ rootDirectory: root, input }, cleanupFailure), /CACHE_NAME/);
+    assertCleanupWarning();
     assert.deepEqual(await snapshot(), beforeFailure, 'build staging failure must not change the checkout');
     await writeFile(resolve(root, app.serviceWorker), before[2]);
-    const result = await updateAssetReport({ rootDirectory: root, input });
+    const writeError = new Error('simulated report write failure');
+    let writes = 0;
+    await assert.rejects(updateAssetReport({ rootDirectory: root, input }, {
+      ...cleanupFailure,
+      writeReportFile: async (path, contents) => {
+        if (++writes === 2) throw writeError;
+        await writeFile(path, contents);
+      }
+    }), error => error === writeError);
+    assertCleanupWarning();
+    assert.deepEqual(await snapshot(), before, 'write failure must roll back despite cleanup failure');
+    const result = await updateAssetReport({ rootDirectory: root, input }, cleanupFailure);
+    assertCleanupWarning();
     const next = parsePortfolioModule(await readFile(resolve(root, dataPath), 'utf8'));
     validatePortfolioData(next);
     assert.equal(next.period, input.period);

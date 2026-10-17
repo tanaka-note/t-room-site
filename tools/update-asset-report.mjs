@@ -50,7 +50,19 @@ export function updateHtmlPeriod(html, period) {
   return html.replace(pattern, `<time id="report-updated" datetime="${period}">${period.replaceAll('-', '.')}</time>`);
 }
 
-export async function updateAssetReport({ input, rootDirectory = repositoryRoot, dryRun = false }) {
+async function cleanupStagingDirectory(stagingRoot, removeStaging, warn) {
+  try {
+    await removeStaging(stagingRoot, { recursive: true, force: true });
+  } catch (error) {
+    // Cleanup is best-effort: never replace a committed result or the original
+    // staging/write/rollback error with a temporary-directory removal failure.
+    warn(`Warning: could not remove asset-report staging directory ${stagingRoot}: ${error.message}`);
+  }
+}
+
+export async function updateAssetReport({ input, rootDirectory = repositoryRoot, dryRun = false }, {
+  removeStaging = rm, writeReportFile = writeFile, warn = console.warn
+} = {}) {
   const current = parsePortfolioModule(await readFile(resolve(rootDirectory, dataPath), 'utf8'));
   const next = prepareReportUpdate(current, input);
   const registry = JSON.parse(await readFile(resolve(rootDirectory, 'web-apps.json'), 'utf8'));
@@ -85,10 +97,10 @@ export async function updateAssetReport({ input, rootDirectory = repositoryRoot,
       try {
         for (const change of prepared) {
           written.push(change);
-          await writeFile(resolve(rootDirectory, change.path), change.after);
+          await writeReportFile(resolve(rootDirectory, change.path), change.after);
         }
       } catch (error) {
-        const rollback = await Promise.allSettled(written.map(change => writeFile(resolve(rootDirectory, change.path), change.before)));
+        const rollback = await Promise.allSettled(written.map(change => writeReportFile(resolve(rootDirectory, change.path), change.before)));
         const failed = rollback.filter(result => result.status === 'rejected');
         if (failed.length) throw new AggregateError([error, ...failed.map(result => result.reason)], 'Update and rollback failed; restore the reported files from Git');
         throw error;
@@ -96,7 +108,7 @@ export async function updateAssetReport({ input, rootDirectory = repositoryRoot,
     }
     return { period: next.period, ...createPortfolioModel(next).summary(), build: synced.build, dryRun, changed: prepared.map(change => change.path) };
   } finally {
-    await rm(stagingRoot, { recursive: true, force: true });
+    await cleanupStagingDirectory(stagingRoot, removeStaging, warn);
   }
 }
 
