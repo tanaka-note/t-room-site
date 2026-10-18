@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-ed2254ccbcfb";
+const APP_BUILD_ID = "cloud-8220dc8390db";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -8,6 +8,7 @@ const INITIAL_ITEM_PAGE_SIZE = 32;
 const BACKGROUND_ITEM_PAGE_SIZE = 64;
 const SEARCH_ITEM_PAGE_SIZE = 250;
 let searchPageTimer = null;
+let searchInputController = null;
 const searchMetadataCache = new Map();
 let searchMetadataCacheScope = "";
 const SEARCH_METADATA_CACHE_LIMIT = 4096;
@@ -329,42 +330,8 @@ function bindEvents() {
   document.addEventListener("freeze", handlePreviewBackgroundVisibility);
   document.addEventListener("keydown", handlePreviewKeydown);
   window.addEventListener("popstate", handleHistoryNavigation);
-  let searchTimer;
-  const runSearch = () => {
-    clearTimeout(searchTimer);
-    state.itemLoadController?.abort();
-    state.itemLoadGeneration += 1;
-    listingView?.reset();
-    state.progressiveItemsLoading = false;
-    resetEncryptedThumbnailLoading();
-    resetBackgroundMediaWork();
-    clearTimeout(searchPageTimer);
-    const count = $("#search-result-count");
-    if (count && state.query) { count.hidden = false; count.textContent = "検索中…"; }
-    searchTimer = setTimeout(async () => { const result = await loadItems(); if (result?.ok) scrollToResultsStart(); }, 250);
-  };
-  $$("#search-input, #floating-search-input").forEach((input) => input.addEventListener("input", (event) => {
-    state.query = event.target.value.trim();
-    syncSearchInputs(event.target);
-    if (event.isComposing || event.target.dataset.composing === "1") return;
-    runSearch();
-  }));
-  $$("#search-input, #floating-search-input").forEach((input) => {
-    input.addEventListener("compositionstart", () => {
-      input.dataset.composing = "1";
-      clearTimeout(searchTimer); clearTimeout(searchPageTimer);
-      state.itemLoadController?.abort(); state.itemLoadGeneration++; listingView?.reset();
-    });
-    input.addEventListener("compositionend", () => {
-      delete input.dataset.composing;
-      state.query = input.value.trim(); syncSearchInputs(input); runSearch();
-    });
-  });
+  getSearchInputController();
   $$(".sort-controls [data-sort-key]").forEach((button) => button.addEventListener("click", () => changeSort(button.dataset.sortKey)));
-  $$("[data-search-clear]").forEach(button => button.addEventListener("click", event => {
-    event.preventDefault(); state.query = ""; syncSearchInputs(); runSearch();
-    document.getElementById(button.dataset.searchClear)?.focus({preventScroll:true});
-  }));
   $("#floating-search-input").addEventListener("focus", showFloatingToolbar);
   $("#floating-location-button").addEventListener("click", toggleFloatingLocation);
   document.addEventListener("click", closeFloatingLocationOnOutsideClick);
@@ -1956,8 +1923,32 @@ function syncNavigationActiveState() {
 }
 
 function clearSearch() {
-  state.query = "";
-  syncSearchInputs();
+  getSearchInputController().clear();
+}
+
+function getSearchInputController() {
+  return searchInputController ||= TCloudSearchInput.create({
+    inputs: $$("#search-input, #floating-search-input"),
+    clearButtons: $$("[data-search-clear]"),
+    resultCount: $("#search-result-count"),
+    getQuery: () => state.query,
+    setQuery: query => { state.query = query; },
+    invalidateSearch() {
+      state.itemLoadController?.abort();
+      state.itemLoadGeneration += 1;
+      listingView?.reset();
+      state.progressiveItemsLoading = false;
+      resetEncryptedThumbnailLoading();
+      resetBackgroundMediaWork();
+      clearTimeout(searchPageTimer);
+    },
+    pauseForComposition() {
+      clearTimeout(searchPageTimer);
+      state.itemLoadController?.abort(); state.itemLoadGeneration++; listingView?.reset();
+    },
+    loadItems: () => loadItems(),
+    onResults: () => scrollToResultsStart()
+  });
 }
 
 async function removeCachedFolderKeys(folderIds) {
@@ -1984,10 +1975,7 @@ async function removeCachedFolderKeys(folderIds) {
 }
 
 function syncSearchInputs(source = null) {
-  $$("[data-search-clear]").forEach(button => { button.hidden = !state.query; });
-  $$("#search-input, #floating-search-input").forEach((input) => {
-    if (input !== source && input.value !== state.query) input.value = state.query;
-  });
+  getSearchInputController().sync(source);
 }
 
 function syncAvailableActions() {
