@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-ed2254ccbcfb";
+const APP_BUILD_ID = "cloud-41922b268a28";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -23,6 +23,12 @@ const PLAYBACK_CACHE_LIMIT_OPTIONS = [536870912, 1073741824, 2147483648, 3221225
 const VAULT_CACHE_DB = "tcloud-device-vault";
 const VAULT_CACHE_STORE = "crypto-keys";
 const FOLDER_CACHE_PREFIX = "folder-session:";
+// History stores display metadata only. Keep positions reached before Back/Forward
+// in memory too, since popstate already points at the destination entry.
+const navigationPositions = new Map();
+let activeNavigationEntry = null;
+let folderNavigation = null;
+let navigationGeneration = 0;
 const state = {
   session: null,
   loginId: "",
@@ -1080,6 +1086,7 @@ async function logout() {
 }
 
 function initializeNavigationHistory() {
+  history.scrollRestoration = "manual";
   if (state.historyReady) return navigationEntry(state.folderId, $("#view-title").textContent);
   const saved = history.state?.tcloud ? history.state : null;
   const folderId = Number.isInteger(Number(saved?.folderId)) && Number(saved.folderId) > 0 ? Number(saved.folderId) : null;
@@ -1098,18 +1105,23 @@ function initializeNavigationHistory() {
     scrollY: Math.max(0, Number(saved?.scrollY) || 0),
     originType: ["folder", "file"].includes(saved?.originType) ? saved.originType : "",
     originId: Number.isInteger(Number(saved?.originId)) && Number(saved.originId) > 0 ? Number(saved.originId) : null,
+    originOffsetY: Number.isFinite(saved?.originOffsetY) ? saved.originOffsetY : null,
     kind: state.kind,
     view: state.view,
     query: state.query,
-    listMode: state.listMode
+    listMode: state.listMode,
+    loadedFolderCount: Math.max(0, Number(saved?.loadedFolderCount) || 0),
+    loadedFileCount: Math.max(0, Number(saved?.loadedFileCount) || 0),
+    renderLimit: Math.max(ITEM_RENDER_BATCH_SIZE, Number(saved?.renderLimit) || 0)
   };
   history.replaceState(entry, "", location.href);
+  activeNavigationEntry = entry;
   state.historyReady = true;
   return entry;
 }
 
 function navigationEntry(folderId, folderName) {
-  return { tcloud: true, folderId: folderId ? Number(folderId) : null, folderName: folderName || (folderId ? "ファイル" : "フォルダ"), previewId: null };
+  return { tcloud: true, navigationId: crypto.randomUUID(), folderId: folderId ? Number(folderId) : null, folderName: folderName || (folderId ? "ファイル" : "フォルダ"), previewId: null };
 }
 
 function setViewTitle(value) {
@@ -1119,11 +1131,20 @@ function setViewTitle(value) {
 }
 
 function rememberCurrentNavigationPosition(originType = "", originId = null) {
-  if (!state.historyReady) return;
+  if (!state.historyReady || folderNavigation) return;
   const current = history.state?.tcloud
     ? history.state
     : navigationEntry(state.folderId, $("#view-title").textContent);
-  history.replaceState({
+  const entry = captureNavigationPosition(current, originType, originId);
+  cacheNavigationPosition(entry);
+  history.replaceState(entry, "", location.href);
+  activeNavigationEntry = entry;
+}
+
+function captureNavigationPosition(current, originType = current?.originType || "", originId = current?.originId) {
+  const selector = navigationOriginSelector({ originType, originId });
+  const anchor = selector ? $(selector)?.getBoundingClientRect() : null;
+  return {
     ...current,
     folderId: state.folderId ? Number(state.folderId) : null,
     folderName: $("#view-title").textContent,
@@ -1131,11 +1152,39 @@ function rememberCurrentNavigationPosition(originType = "", originId = null) {
     scrollY: Math.max(0, appScrollPosition().y || 0),
     originType: ["folder", "file"].includes(originType) ? originType : "",
     originId: Number.isInteger(Number(originId)) && Number(originId) > 0 ? Number(originId) : null,
+    originOffsetY: anchor ? anchor.top - (appScrollRoot()?.getBoundingClientRect().top || 0) : null,
     kind: state.kind,
     view: state.view,
     query: state.query,
-    listMode: state.listMode
-  }, "", location.href);
+    listMode: state.listMode,
+    sort: state.sort,
+    sortDirection: state.sortDirection,
+    sortUsesTypeDefaults: state.sortUsesTypeDefaults,
+    loadedFolderCount: state.folders.length,
+    loadedFileCount: state.files.length,
+    renderLimit: state.itemRenderLimit
+  };
+}
+
+function cacheNavigationPosition(entry) {
+  if (!entry?.navigationId) return;
+  navigationPositions.delete(entry.navigationId);
+  navigationPositions.set(entry.navigationId, entry);
+  if (navigationPositions.size > 128) navigationPositions.delete(navigationPositions.keys().next().value);
+}
+
+function cancelFolderNavigation() {
+  navigationGeneration++;
+  folderNavigation = null;
+  $(".workspace").inert = false;
+  $(".workspace").removeAttribute("aria-busy");
+}
+
+function navigateToAncestor(folderId, folderName) {
+  if (Number(folderId || 0) === Number(state.folderId || 0) && state.view === "all") return Promise.resolve({ ok: true });
+  const previous = [...navigationPositions.values()].reverse().find(entry =>
+    Number(entry.folderId || 0) === Number(folderId || 0) && entry.view === "all");
+  return navigateToFolder(folderId, folderName, previous ? { restoreEntry: previous, resetScroll: false } : {});
 }
 
 async function navigateToFolder(folderId, folderName, options = {}) {
@@ -1147,24 +1196,60 @@ async function navigateToFolder(folderId, folderName, options = {}) {
     state.selectionHistoryActive = false;
   }
   if (pushHistory && state.historyReady) rememberCurrentNavigationPosition(originType, originId);
+  cancelFolderNavigation();
+  history.scrollRestoration = "manual";
+  const navigation = { generation: navigationGeneration, loadGeneration: null };
+  folderNavigation = navigation;
+  $(".workspace").inert = true;
+  $(".workspace").setAttribute("aria-busy", "true");
   state.folderId = folderId ? Number(folderId) : null;
   state.kind = restoreEntry ? String(restoreEntry.kind || "") : "";
   state.view = restoreEntry ? String(restoreEntry.view || "all") : "all";
   state.query = restoreEntry ? String(restoreEntry.query || "") : "";
   if (restoreEntry) state.listMode = Boolean(restoreEntry.listMode);
   restoreFolderSortPreference(state.folderId);
-  syncSearchInputs();
-  setViewTitle(folderName || (state.folderId ? "ファイル" : "フォルダ"));
+  if (restoreEntry && ["name", "updated", "size"].includes(restoreEntry.sort)) {
+    state.sort = restoreEntry.sort;
+    state.sortDirection = restoreEntry.sortDirection === "desc" ? "desc" : "asc";
+    state.sortUsesTypeDefaults = Boolean(restoreEntry.sortUsesTypeDefaults);
+  }
+  const title = folderName || (state.folderId ? "ファイル" : "フォルダ");
   if (pushHistory && state.historyReady) {
-    const entry = navigationEntry(state.folderId, $("#view-title").textContent);
+    const entry = { ...restoreEntry, ...navigationEntry(state.folderId, title) };
     if (replaceSelectionHistory) history.replaceState(entry, "", location.href);
     else history.pushState(entry, "", location.href);
   }
-  syncNavigationActiveState();
-  syncAvailableActions();
-  if (resetScroll) resetFolderScrollPosition();
-  if (load) await loadItems();
-  if (resetScroll) requestAnimationFrame(resetFolderScrollPosition);
+  activeNavigationEntry = history.state;
+  let result = { ok: true };
+  try {
+    if (load) result = await loadItems();
+    if (folderNavigation !== navigation || result.stale) return { ok: false, stale: true };
+    if (restoreEntry && result.ok) await ensureNavigationOriginRendered(restoreEntry);
+    if (folderNavigation !== navigation) return { ok: false, stale: true };
+    // Commit the complete list and its position in the same task, before paint.
+    folderNavigation = null;
+    if (!result.ok) {
+      state.folders = []; state.files = []; state.folderSummary = null;
+      navigation.breadcrumbs = [];
+    }
+    setViewTitle(title);
+    syncSearchInputs();
+    syncSortControls();
+    syncNavigationActiveState();
+    syncAvailableActions();
+    renderBreadcrumbs(navigation.breadcrumbs || state.breadcrumbs);
+    renderItems();
+    if (restoreEntry && result.ok) applyNavigationPosition(restoreEntry);
+    else if (resetScroll) resetFolderScrollPosition();
+    scheduleSearchPage(state.itemLoadGeneration);
+    return result;
+  } finally {
+    if (navigation.generation === navigationGeneration) {
+      folderNavigation = null;
+      $(".workspace").inert = false;
+      $(".workspace").removeAttribute("aria-busy");
+    }
+  }
 }
 
 function showLoginView() {
@@ -1207,8 +1292,12 @@ function restoreSelectionScrollPosition(position) {
 }
 
 async function handleHistoryNavigation(event) {
-  const target = event.state;
+  let target = event.state;
   if (!target?.tcloud) return;
+  if (activeNavigationEntry?.tcloud && !folderNavigation) {
+    cacheNavigationPosition(captureNavigationPosition(activeNavigationEntry));
+  }
+  target = { ...target, ...navigationPositions.get(target.navigationId), previewId: target.previewId };
   state.handlingPopState = true;
   try {
     const sameFolder = Number(target.folderId || 0) === Number(state.folderId || 0);
@@ -1242,8 +1331,8 @@ async function handleHistoryNavigation(event) {
       restorePreviewOrigin(previewOriginId, origin.x, origin.y);
       return;
     }
-    await navigateToFolder(target.folderId, target.folderName, { pushHistory: false, restoreEntry: target });
-    await restoreNavigationPosition(target);
+    const loaded = await navigateToFolder(target.folderId, target.folderName, { pushHistory: false, restoreEntry: target });
+    if (!loaded.ok) return;
     if (target.previewId) {
       const file = state.files.find((item) => Number(item.id) === Number(target.previewId));
       if (file) await openPreview(file, { pushHistory: false });
@@ -1254,11 +1343,11 @@ async function handleHistoryNavigation(event) {
 }
 
 function restorePreviewOrigin(fileId, scrollX = state.previewOriginScrollX, scrollY = state.previewOriginScrollY) {
-  const generation = state.itemLoadGeneration, scope = displayCacheScope();
+  const generation = state.itemLoadGeneration, scope = displayCacheScope(), navigation = navigationGeneration;
   const left = Number.isFinite(Number(scrollX)) ? Math.max(0, Number(scrollX)) : 0;
   const top = Number.isFinite(Number(scrollY)) ? Math.max(0, Number(scrollY)) : null;
   const restore = () => {
-    if (generation !== state.itemLoadGeneration || scope !== displayCacheScope()) return;
+    if (generation !== state.itemLoadGeneration || scope !== displayCacheScope() || navigation !== navigationGeneration) return;
     if (top !== null) {
       scrollAppTo({ top, left, behavior: "auto" });
       return;
@@ -1285,43 +1374,48 @@ function navigationOriginSelector(entry) {
 }
 
 async function ensureNavigationOriginRendered(entry) {
-  const selector = navigationOriginSelector(entry);
-  if (!selector || $(selector)) return;
-  for (let attempt = 0; attempt < 256 && !$(selector); attempt += 1) {
+  const generation = state.itemLoadGeneration;
+  const navigation = navigationGeneration;
+  for (let attempt = 0; attempt < 256; attempt += 1) {
+    if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
     const folderIndex = entry.originType === "folder"
       ? state.folders.findIndex((folder) => Number(folder.id) === Number(entry.originId))
       : -1;
     const fileIndex = entry.originType === "file"
       ? state.files.findIndex((file) => Number(file.id) === Number(entry.originId))
       : -1;
-    if (folderIndex >= 0 || fileIndex >= 0) {
-      const combinedIndex = folderIndex >= 0 ? folderIndex : state.folders.length + fileIndex;
-      state.itemRenderLimit = Math.max(state.itemRenderLimit, combinedIndex + 1);
-      renderItems();
-      await nextRenderOpportunity();
-      continue;
-    }
+    const found = folderIndex >= 0 || fileIndex >= 0;
+    const enough = state.folders.length >= (Number(entry.loadedFolderCount) || 0)
+      && state.files.length >= (Number(entry.loadedFileCount) || 0);
+    state.itemRenderLimit = Math.max(state.itemRenderLimit, Number(entry.renderLimit) || 0,
+      folderIndex >= 0 ? folderIndex + 1 : fileIndex >= 0 ? state.folders.length + fileIndex + 1 : 0);
+    if (enough && (found || !navigationOriginSelector(entry))) break;
     if (!state.progressiveItemsLoading) break;
-    await loadNextItemPage();
+    if (state.itemPageLoading) await nextRenderOpportunity();
+    else await loadNextItemPage();
   }
+  if (generation === state.itemLoadGeneration && navigation === navigationGeneration && !folderNavigation) renderItems();
 }
 
 async function restoreNavigationPosition(entry) {
   if (!entry?.tcloud) return;
+  const generation = state.itemLoadGeneration, navigation = navigationGeneration;
   await ensureNavigationOriginRendered(entry);
+  if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
+  applyNavigationPosition(entry);
+}
+
+function applyNavigationPosition(entry) {
   const left = Math.max(0, Number(entry.scrollX) || 0);
-  const top = Math.max(0, Number(entry.scrollY) || 0);
+  let top = Math.max(0, Number(entry.scrollY) || 0);
   const selector = navigationOriginSelector(entry);
-  const restore = () => {
-    scrollAppTo({ top, left, behavior: "auto" });
-    if (appScrollPosition().y + 2 < top && selector) $(selector)?.scrollIntoView({ block: "center", inline: "nearest" });
-  };
-  restore();
-  requestAnimationFrame(() => {
-    restore();
-    requestAnimationFrame(restore);
-  });
-  window.setTimeout(restore, 80);
+  const anchor = selector ? $(selector) : null;
+  if (anchor && Number.isFinite(entry.originOffsetY)) {
+    top = Math.max(0, anchor.getBoundingClientRect().top + appScrollPosition().y
+      - (appScrollRoot()?.getBoundingClientRect().top || 0) - entry.originOffsetY);
+  }
+  scrollAppTo({ top, left, behavior: "auto" });
+  if (appScrollPosition().y + 2 < top && selector) $(selector)?.scrollIntoView({ block: "center", inline: "nearest" });
 }
 
 async function prepareCryptoSession(password = "", accountKey = null, passkeyContext = null) {
@@ -1716,6 +1810,9 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  cancelFolderNavigation();
+  navigationPositions.clear();
+  activeNavigationEntry = null;
   listingView?.reset();
   if (state.session?.authMethod === "passkey") void clearCachedPasskeyKeys(state.session.sessionCacheId);
   clearTimeout(favoriteSelectionTimer);
@@ -1906,6 +2003,7 @@ function setCryptoStatus(text, ready) {
 }
 
 function selectSection(button) {
+  cancelFolderNavigation();
   if (button.closest("#account-content")) $("#account-dialog").close();
   const managedNavigation = ["favorites", "account"].includes(button.dataset.view) || ["favorites", "account"].includes(state.view);
   if (managedNavigation && button.dataset.view === "all") { navigateToFolder(null, "フォルダ"); return; }
@@ -1938,6 +2036,7 @@ function selectSection(button) {
   setViewTitle(labels[state.view] || labels[state.kind] || "ファイル");
   if (managedNavigation && state.historyReady) {
     history[replaceSelection ? "replaceState" : "pushState"]({ ...navigationEntry(state.folderId, $("#view-title").textContent), view: state.view, kind: state.kind, query: state.query, listMode: state.listMode }, "", location.href);
+    activeNavigationEntry = history.state;
     resetFolderScrollPosition();
   }
   syncNavigationActiveState();
@@ -2025,6 +2124,10 @@ async function loadItems() {
   clearTimeout(searchPageTimer);
   searchPathFolders.clear();
   const loadGeneration = ++state.itemLoadGeneration;
+  if (folderNavigation) {
+    if (folderNavigation.loadGeneration === null) folderNavigation.loadGeneration = loadGeneration;
+    else cancelFolderNavigation();
+  }
   state.itemLoadController?.abort();
   const itemLoadController = new AbortController();
   state.itemLoadController = itemLoadController;
@@ -2304,7 +2407,7 @@ async function loadNextItemPage() {
 
 function scheduleSearchPage(generation) {
   clearTimeout(searchPageTimer);
-  if (!state.query || !state.progressiveItemsLoading || generation !== state.itemLoadGeneration) return;
+  if (folderNavigation || !state.query || !state.progressiveItemsLoading || generation !== state.itemLoadGeneration) return;
   // Complete the search even if initial matches fill the viewport; keep DOM virtualization.
   searchPageTimer = setTimeout(() => {
     if (generation === state.itemLoadGeneration && state.query) void loadNextItemPage();
@@ -2460,6 +2563,7 @@ function listingCardFactory(folders, files) {
 }
 
 function appendProgressiveItems(folders, files) {
+  if (folderNavigation) return;
   getListingView().append(Object.freeze({
     folders: listingDisplayRecords(folders), files: listingDisplayRecords(files), limit: state.itemRenderLimit
   }), { createCard: listingCardFactory(folders, files) });
@@ -2474,6 +2578,7 @@ function normalizeNextItemOffset(value) {
 }
 
 function renderItems() {
+  if (folderNavigation) return;
   syncAccountView();
   renderFolderSummary();
   if (state.view === "account") { listingView?.reset(); $("#empty-state").hidden = true; $("#empty-trash-button").hidden = true; return; }
@@ -2528,6 +2633,7 @@ function renderItems() {
 }
 
 function installItemRenderSentinel() {
+  if (folderNavigation) return;
   const generation = state.itemLoadGeneration;
   getListingView().observe(Object.freeze({
     view: state.view, total: state.folders.length + state.files.length, progressive: state.progressiveItemsLoading
@@ -2656,7 +2762,7 @@ function renderFloatingLocation(items) {
     button.textContent = name;
     button.addEventListener("click", () => {
       closeFloatingLocation();
-      navigateToFolder(folderId, folderId ? name : "フォルダ");
+      navigateToAncestor(folderId, folderId ? name : "フォルダ");
     });
     nav.append(button);
   };
@@ -5290,6 +5396,11 @@ async function handleTransferVisibility() {
 }
 
 function renderBreadcrumbs(items) {
+  if (folderNavigation) {
+    folderNavigation.breadcrumbs = items;
+    state.breadcrumbs = items;
+    return;
+  }
   if (["favorites", "account"].includes(state.view)) {
     if (state.view === "favorites") state.breadcrumbs = [];
     $("#breadcrumbs").textContent = state.view === "favorites" ? "現在アクセスできるお気に入りのファイルとフォルダです。" : "アカウント情報・端末保存・管理機能";
@@ -5306,14 +5417,14 @@ function renderBreadcrumbs(items) {
   const home = document.createElement("button");
   home.type = "button";
   home.textContent = "Cloud Storage";
-  home.addEventListener("click", () => navigateToFolder(null, "フォルダ"));
+  home.addEventListener("click", () => navigateToAncestor(null, "フォルダ"));
   nav.append(home);
   for (const item of items) {
     const span = document.createElement("span");
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = item.name;
-    button.addEventListener("click", () => navigateToFolder(item.id, item.name));
+    button.addEventListener("click", () => navigateToAncestor(item.id, item.name));
     span.append(button);
     nav.append(span);
   }
@@ -8530,6 +8641,7 @@ async function openAccountDialog() {
 }
 
 function syncAccountView() {
+  if (folderNavigation) return;
   const active = state.view === "account";
   $("#account-view").hidden = !active;
   $("#content-grid").hidden = active;
