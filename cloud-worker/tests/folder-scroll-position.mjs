@@ -1,52 +1,39 @@
-import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import vm from "node:vm";
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 
-const client = await readFile(new URL("../public/cloud.js", import.meta.url), "utf8");
+const client = await readFile(new URL('../public/cloud.js', import.meta.url), 'utf8');
+const snapshotSource = client.slice(client.indexOf('function captureNavigationPosition'), client.indexOf('function cancelFolderNavigation'));
+const context = vm.createContext({
+  navigationPositions: new Map(), state: { folderId: 30, kind: 'video', view: 'all', query: 'sample', listMode: true,
+    sort: 'name', sortDirection: 'desc', sortUsesTypeDefaults: false, folders: Array(96), files: Array(32), itemRenderLimit: 192 },
+  appScrollPosition: () => ({ x: 12, y: 845 }), $: () => ({ textContent: 'C' }), navigationOriginSelector: () => ''
+});
+vm.runInContext(snapshotSource, context);
+const entry = vm.runInContext('captureNavigationPosition({tcloud:true,navigationId:"visit-1"},"folder",11)', context);
+assert.equal(entry.scrollY, 845); assert.equal(entry.scrollX, 12);
+assert.equal(entry.originType, 'folder'); assert.equal(entry.originId, 11);
+assert.equal(entry.query, 'sample'); assert.equal(entry.listMode, true);
+assert.equal(entry.loadedFolderCount, 96); assert.equal(entry.loadedFileCount, 32);
+assert.equal(entry.sortDirection, 'desc'); assert.equal(entry.renderLimit, 192);
+assert.equal(Object.hasOwn(entry, 'folders'), false, 'history contains counts rather than records or encryption keys');
+vm.runInContext('for(let i=0;i<200;i++)cacheNavigationPosition({navigationId:String(i)})', context);
+assert.equal(context.navigationPositions.size, 128);
 
-assert.match(client, /const \{ pushHistory = true, load = true, resetScroll = pushHistory, originType = "", originId = null, restoreEntry = null \} = options/);
-assert.match(client, /if \(resetScroll\) resetFolderScrollPosition\(\);[\s\S]*?if \(load\) await loadItems\(\);[\s\S]*?if \(resetScroll\) requestAnimationFrame\(resetFolderScrollPosition\)/);
-assert.match(client, /function resetFolderScrollPosition\(\) \{[\s\S]*?scrollAppTo\(\{ top: 0, left: 0, behavior: "auto" \}\);[\s\S]*?hideFloatingToolbar\(\)/);
-assert.match(client, /await navigateToFolder\(target\.folderId, target\.folderName, \{ pushHistory: false, restoreEntry: target \}\)/);
-assert.match(client, /restorePreviewOrigin\(previewOriginId, origin\.x, origin\.y\)/);
-assert.match(client, /function rememberCurrentNavigationPosition\(originType = "", originId = null\)/);
-assert.match(client, /scrollX: Math\.max\(0, appScrollPosition\(\)\.x \|\| 0\)/);
-assert.match(client, /scrollY: Math\.max\(0, appScrollPosition\(\)\.y \|\| 0\)/);
-assert.match(client, /navigateToFolder\(folder\.id, folder\.name, \{ originType: "folder", originId: folder\.id \}\)/);
-assert.match(client, /rememberCurrentNavigationPosition\("file", file\.id\)/);
-assert.match(client, /await navigateToFolder\(target\.folderId, target\.folderName, \{ pushHistory: false, restoreEntry: target \}\);[\s\S]*?await restoreNavigationPosition\(target\)/);
-assert.match(client, /query: state\.query,[\s\S]*?listMode: state\.listMode/);
-assert.match(client, /state\.query = restoreEntry \? String\(restoreEntry\.query \|\| ""\) : ""/);
-assert.match(client, /async function ensureNavigationOriginRendered\(entry\)/);
-assert.match(client, /await loadNextItemPage\(\)/);
-assert.match(client, /async function restoreNavigationPosition\(entry\)/);
-assert.match(client, /previewOriginScrollX: 0,[\s\S]*?previewOriginScrollY: 0/);
-assert.match(client, /state\.previewOriginScrollX = Math\.max\(0, appScrollPosition\(\)\.x \|\| 0\)/);
-assert.match(client, /state\.previewOriginScrollY = Math\.max\(0, appScrollPosition\(\)\.y \|\| 0\)/);
-assert.match(client, /function restorePreviewOrigin\(fileId, scrollX = state\.previewOriginScrollX, scrollY = state\.previewOriginScrollY\)/);
-assert.match(client, /scrollAppTo\(\{ top, left, behavior: "auto" \}\)/);
-assert.match(client, /requestAnimationFrame\(\(\) => \{[\s\S]*?requestAnimationFrame\(restore\)[\s\S]*?setTimeout\(restore, 80\)/);
-
-const rememberStart = client.indexOf("function rememberCurrentNavigationPosition");
-const rememberEnd = client.indexOf("async function navigateToFolder", rememberStart);
-assert.ok(rememberStart >= 0 && rememberEnd > rememberStart);
-let replacedState = null;
-const rememberContext = {
-  state: { historyReady: true, folderId: 30, kind: "video", view: "all", query: "sample", listMode: true },
-  history: {
-    state: { tcloud: true, folderId: 30, previewId: null },
-    replaceState: (value) => { replacedState = value; }
-  },
-  location: { href: "https://example.test/cloud/" },
-  appScrollPosition: () => ({ x: 12, y: 845 }),
-  $: () => ({ textContent: "C" }),
-  Number
-};
-vm.runInNewContext(`${client.slice(rememberStart, rememberEnd)}; rememberCurrentNavigationPosition("folder", 11);`, rememberContext);
-assert.equal(replacedState.scrollY, 845);
-assert.equal(replacedState.originType, "folder");
-assert.equal(replacedState.originId, 11);
-assert.equal(replacedState.query, "sample");
-assert.equal(replacedState.listMode, true);
-
-console.log("folder and file back navigation restores the exact previous list position: ok");
+const restoreSource = client.slice(client.indexOf('async function restoreNavigationPosition'), client.indexOf('async function prepareCryptoSession'));
+for (const changed of ['navigationGeneration', 'load']) {
+  let finish;
+  const scrolls = [];
+  const restoreContext = vm.createContext({
+    state: { itemLoadGeneration: 1 }, navigationGeneration: 1,
+    ensureNavigationOriginRendered: () => new Promise(resolve => { finish = resolve; }),
+    navigationOriginSelector: () => '', scrollAppTo: value => scrolls.push(value), appScrollPosition: () => ({y: 845})
+  });
+  vm.runInContext(restoreSource, restoreContext);
+  const restoring = vm.runInContext('restoreNavigationPosition({tcloud:true,scrollY:845})', restoreContext);
+  if (changed === 'load') restoreContext.state.itemLoadGeneration++;
+  else restoreContext.navigationGeneration++;
+  finish(); await restoring;
+  assert.deepEqual(scrolls, [], changed + ' invalidates an unfinished restoration');
+}
+console.log('folder navigation display snapshots, bounded history and stale restoration cancellation: ok');
