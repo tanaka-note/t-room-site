@@ -42,9 +42,13 @@ for (const path of scriptRefs) {
   assert.equal(response.status, 200, 'The production Worker serves required script ' + path);
   assert.match(response.headers.get('Content-Type'), /javascript/);
   if (path.startsWith('/cloud/upload-view.js?')) assert.equal(await response.text(), view);
+  if (path.startsWith('/cloud/search-input.js?')) {
+    assert.equal(await response.text(), await readFile(new URL('../public/search-input.js', import.meta.url), 'utf8'),
+      'The production Worker serves the actual search controller, including versioned requests');
+  }
 }
 const allowedRequestCount = assetRequests.length;
-for (const path of ['/cloud/src/index.js', '/cloud/unlisted.js', '/cloud/upload-view.js/private']) {
+for (const path of ['/cloud/src/index.js', '/cloud/unlisted.js', '/cloud/upload-view.js/private', '/cloud/search-input.js/private']) {
   assert.equal((await requestAsset(path)).status, 404, 'Unlisted paths remain private');
 }
 assert.equal(assetRequests.length, allowedRequestCount, 'Unlisted paths never reach the asset binding');

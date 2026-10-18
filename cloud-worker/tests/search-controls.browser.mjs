@@ -27,6 +27,7 @@ try{for(const [name,engine,launch] of engines){
   await page.locator('[data-search-clear="search-input"]').click();
   await page.waitForFunction(()=>document.querySelector('#content-grid strong')?.textContent==='all.txt');
   assert.equal(await page.locator('#floating-search-input').inputValue(),'');assert.equal(await page.locator('#search-input').inputValue(),'');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'search-input','Clearing returns focus to its search input');
   assert.ok(queries.filter(Boolean).length>=2&&queries.includes(false));
   const previous=queries.length;
   await page.locator('#search-input').dispatchEvent('compositionstart');

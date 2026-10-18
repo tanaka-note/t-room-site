@@ -4,6 +4,11 @@ import { engines, startUIFixture, preparePage } from './ui-fixture.mjs';
 const fixture = await startUIFixture();
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 const ready = page => page.waitForFunction(() => !document.querySelector('.workspace').inert);
+// History traversal is asynchronous; an idle workspace before popstate is not completion.
+const traverse = (page, direction) => page.evaluate(direction => new Promise(resolve => {
+  window.addEventListener('popstate', () => resolve(), { once: true });
+  history[direction]();
+}), direction);
 try { for (const [name, engine, launch] of engines) {
   const browser = await engine.launch({ headless: true, ...launch });
   try { for (const mobile of [false, true]) for (const cached of [false, true]) {
@@ -62,8 +67,9 @@ try { for (const [name, engine, launch] of engines) {
           title: document.querySelector('#view-title').textContent });
         requestAnimationFrame(sample);
       };
-      sample(); history.back();
+      sample();
     });
+    await traverse(page, 'back');
     await ready(page); await frames(page);
     const back = await page.evaluate(() => {
       __sampleNavigation = false;
@@ -77,12 +83,12 @@ try { for (const [name, engine, launch] of engines) {
     const parentFrames = back.samples.filter(sample => sample.title === 'フォルダ');
     assert.ok(parentFrames.length > 0);
     assert.ok(parentFrames.every(sample => Math.abs(sample.y - original) <= 2), 'never paint the destination at a partial-list position: ' + JSON.stringify(parentFrames));
-    await page.evaluate(() => history.forward()); await ready(page); await frames(page);
+    await traverse(page, 'forward'); await ready(page); await frames(page);
     assert.ok(Math.abs(await page.evaluate(() => __test.appScrollPosition().y) - 1100) <= 2, 'Forward restores the position reached before Back');
     delay = 120;
-    await page.evaluate(() => history.back());
+    await traverse(page, 'back');
     await page.waitForFunction(() => document.querySelector('.workspace').inert);
-    await page.evaluate(() => history.forward()); await ready(page); await frames(page);
+    await traverse(page, 'forward'); await ready(page); await frames(page);
     assert.equal(await page.evaluate(() => __test.state.folderId), 90);
     assert.ok(Math.abs(await page.evaluate(() => __test.appScrollPosition().y) - 1100) <= 2);
     delay = 0;
@@ -99,7 +105,7 @@ try { for (const [name, engine, launch] of engines) {
     await frames(page);
     const searchPosition = await page.evaluate(() => __test.appScrollPosition().y);
     await page.evaluate(() => openFolder(__test.state.folders.find(folder => folder.id === 90)));
-    await page.evaluate(() => history.back()); await ready(page); await frames(page);
+    await traverse(page, 'back'); await ready(page); await frames(page);
     assert.equal(await page.evaluate(() => __test.state.query), 'Folder 0');
     assert.ok(Math.abs(await page.evaluate(() => __test.appScrollPosition().y) - searchPosition) <= 2, 'search results retain their position');
     const denied = await page.evaluate(() => navigateToFolder(777, 'Denied'));
