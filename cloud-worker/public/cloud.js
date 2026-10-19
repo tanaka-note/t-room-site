@@ -1,11 +1,12 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-bc0894b800d6";
+const APP_BUILD_ID = "cloud-b723e587962e";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
 const LONG_PRESS_DRAG_THRESHOLD_PX = 28;
 const INITIAL_ITEM_PAGE_SIZE = 32;
 const BACKGROUND_ITEM_PAGE_SIZE = 64;
+const RESTORE_ITEM_PAGE_SIZE = 250;
 const SEARCH_ITEM_PAGE_SIZE = 250;
 let searchPageTimer = null;
 let searchInputController = null;
@@ -1191,7 +1192,10 @@ async function navigateToFolder(folderId, folderName, options = {}) {
   try {
     if (load) result = await loadItems();
     if (folderNavigation !== navigation || result.stale) return { ok: false, stale: true };
-    if (restoreEntry && result.ok) await ensureNavigationOriginRendered(restoreEntry);
+    if (restoreEntry && result.ok) {
+      const restored = await ensureNavigationOriginRendered(restoreEntry);
+      if (restored?.ok === false) result = restored;
+    }
     if (folderNavigation !== navigation) return { ok: false, stale: true };
     // Commit the complete list and its position in the same task, before paint.
     folderNavigation = null;
@@ -1343,7 +1347,7 @@ function navigationOriginSelector(entry) {
 async function ensureNavigationOriginRendered(entry) {
   const generation = state.itemLoadGeneration;
   const navigation = navigationGeneration;
-  for (let attempt = 0; attempt < 256; attempt += 1) {
+  for (let attempt = 0; attempt < 256;) {
     if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
     const folderIndex = entry.originType === "folder"
       ? state.folders.findIndex((folder) => Number(folder.id) === Number(entry.originId))
@@ -1358,8 +1362,13 @@ async function ensureNavigationOriginRendered(entry) {
       folderIndex >= 0 ? folderIndex + 1 : fileIndex >= 0 ? state.folders.length + fileIndex + 1 : 0);
     if (enough && (found || !navigationOriginSelector(entry))) break;
     if (!state.progressiveItemsLoading) break;
-    if (state.itemPageLoading) await nextRenderOpportunity();
-    else await loadNextItemPage();
+    if (state.itemPageLoading) await nextRenderOpportunity(true);
+    else {
+      attempt += 1;
+      const page = await loadNextItemPage({ restore: true, entry });
+      if (page?.ok === false) return page;
+      if (page?.exhausted) break;
+    }
   }
   if (generation === state.itemLoadGeneration && navigation === navigationGeneration && !folderNavigation) renderItems();
 }
@@ -2226,7 +2235,11 @@ async function loadItems() {
       params.set("offset", "0");
       const cacheKey = state.query ? "" : displayListingCacheKey(params);
       const dataPromise = api(`/items?${params}`, { signal: itemLoadSignal });
-      const cached = cacheKey ? await readDisplayListingCache(cacheKey) : null;
+      const cachePromise = cacheKey ? readDisplayListingCache(cacheKey) : Promise.resolve(null);
+      // Observe rejection immediately, and let a completed API response bypass slow IDB.
+      // Navigation keeps cached records behind its existing atomic commit barrier.
+      const cached = await Promise.race([cachePromise, dataPromise.then(() => null,
+        error => error.status || error.name === "AbortError" ? null : cachePromise)]);
       if (cached && loadGeneration === state.itemLoadGeneration && !itemLoadSignal.aborted) {
         renderCachedDisplayListing(cached);
         renderedInitialItems = true;
@@ -2279,7 +2292,7 @@ async function loadItems() {
     if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
     state.progressiveItemsLoading = false;
     if (clearDeniedSearchResults(error)) { handleError(error); return { ok: false, error }; }
-    if (renderedCachedItems && [401, 403, 404, 423].includes(Number(error?.status))) {
+    if (renderedCachedItems && [401, 403, 404, 419, 423].includes(Number(error?.status))) {
       state.folders = [];
       state.files = [];
       state.breadcrumbs = [];
@@ -2300,36 +2313,47 @@ async function loadItems() {
   }
 }
 
-function nextRenderOpportunity() {
+function nextRenderOpportunity(priority = false) {
   return new Promise((resolve) => {
+    // Restoration is user-blocking; yield a task for input/cancellation, not an idle frame.
+    if (priority) { window.setTimeout(resolve, 0); return; }
     const ready = () => requestAnimationFrame(() => resolve());
     if ("requestIdleCallback" in window) window.requestIdleCallback(ready, { timeout: 250 });
     else window.setTimeout(ready, 24);
   });
 }
 
-async function loadNextItemPage() {
+async function loadNextItemPage({ restore = false, entry = null } = {}) {
   if (state.itemPageLoading || !state.progressiveItemsLoading || !state.itemPageParams) return;
   const generation = state.itemLoadGeneration;
   const signal = state.itemLoadController?.signal;
   if (!signal || signal.aborted) return;
   state.itemPageLoading = true;
   try {
-    if (state.query) await new Promise(resolve => setTimeout(resolve, 0));
+    if (restore) await nextRenderOpportunity(true);
+    else if (state.query) await new Promise(resolve => setTimeout(resolve, 0));
     else await nextRenderOpportunity();
     if (generation !== state.itemLoadGeneration || signal.aborted) return;
     const baseParams = new URLSearchParams(state.itemPageParams);
     if (state.query) { baseParams.delete("q"); baseParams.delete("recursive"); baseParams.set("searchCandidates", "1"); }
-    const folderPageParams = state.itemNextFolderOffset == null ? null : new URLSearchParams(baseParams);
-    const filePageParams = state.itemNextFileOffset == null ? null : new URLSearchParams(baseParams);
+    const needsPage = (records, type, count) => !restore || !entry || records.length < (Number(count) || 0)
+      || (entry.originType === type && !records.some(record => Number(record.id) === Number(entry.originId)));
+    const folderPageParams = state.itemNextFolderOffset == null || !needsPage(state.folders, "folder", entry?.loadedFolderCount)
+      ? null : new URLSearchParams(baseParams);
+    const filePageParams = state.itemNextFileOffset == null || !needsPage(state.files, "file", entry?.loadedFileCount)
+      ? null : new URLSearchParams(baseParams);
+    if (!folderPageParams && !filePageParams) return { ok: true, exhausted: true };
+    const pageSize = (remaining) => restore
+      ? Math.min(RESTORE_ITEM_PAGE_SIZE, remaining > 0 ? remaining : RESTORE_ITEM_PAGE_SIZE)
+      : state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE;
     if (folderPageParams) {
-      folderPageParams.set("pageSize", String(state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE));
+      folderPageParams.set("pageSize", String(pageSize(Number(entry?.loadedFolderCount) - state.folders.length)));
       folderPageParams.set("offset", String(state.itemNextFolderOffset));
       folderPageParams.set("foldersOnly", "1");
       folderPageParams.set("continuation", "1");
     }
     if (filePageParams) {
-      filePageParams.set("pageSize", String(state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE));
+      filePageParams.set("pageSize", String(pageSize(Number(entry?.loadedFileCount) - state.files.length)));
       filePageParams.set("offset", String(state.itemNextFileOffset));
       filePageParams.set("filesOnly", "1");
       filePageParams.set("continuation", "1");
@@ -2362,8 +2386,8 @@ async function loadNextItemPage() {
     });
     state.folders = finalizeHydratedFolders([...state.folders, ...pageFolders]);
     state.files = finalizeHydratedFiles([...state.files, ...pageFiles]);
-    state.itemNextFolderOffset = normalizeNextItemOffset(folderPage?.nextFolderOffset);
-    state.itemNextFileOffset = normalizeNextItemOffset(filePage?.nextFileOffset);
+    if (folderPageParams) state.itemNextFolderOffset = normalizeNextItemOffset(folderPage?.nextFolderOffset);
+    if (filePageParams) state.itemNextFileOffset = normalizeNextItemOffset(filePage?.nextFileOffset);
     state.progressiveItemsLoading = state.itemNextFolderOffset != null || state.itemNextFileOffset != null;
     state.itemPageLoading = false;
     if (state.sortUsesTypeDefaults && !state.query) {
@@ -2378,10 +2402,15 @@ async function loadNextItemPage() {
     }
     syncUnlockedTopFolderNames();
     if (!state.query) scheduleDisplayListingCacheWrite(displayListingCacheKey(baseParams));
+    return { ok: true };
   } catch (error) {
     if (error?.name !== "AbortError" && generation === state.itemLoadGeneration) {
       state.progressiveItemsLoading = false;
       $("#content-grid .item-render-sentinel")?.remove();
+      if (folderNavigation) {
+        handleError(error);
+        return { ok: false, error };
+      }
       if (clearDeniedSearchResults(error)) handleError(error);
       else setNotice("残りのファイルを読み込めませんでした。通信状態を確認して、もう一度開いてください。", true);
     }
