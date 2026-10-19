@@ -12,6 +12,8 @@ HTMLは共通Updater、Passkeyクライアント、軽量な `diary-bootstrap.js
 
 bootstrapもrequestごとに現在のSecurity状態を検証し、同じGET requestの内部だけで検証結果を再利用する。foregroundのbootstrapは置き換え元の一覧GETと同じRolling Session更新条件を維持する。バックグラウンド・エラー・session確認だけでは延長しない。遅い応答は検索のrequest IDとsession／householdの世代で区別し、ログアウト後や切替後に前のデータを再表示しない。
 
+写真ビューアの読み込み・画像切り替え・スワイプ・矢印キーは `public/diary-photo-viewer.js` が担当する。選択中の写真と戻る履歴、閉じる要求、認可・アップロードは本体側で管理し、ビューアには表示要素と写真選択だけを渡す。
+
 ## キャッシュと更新
 
 Service Workerは登録された正確なbuild付きの公開JS／CSS／アイコンURLだけをcache-firstにする。install時の先読みはログイン入口に必要な資産だけとし、本体や写真モジュールは利用後に保存する。API・HTML・写真・投資資産・manifestはこのキャッシュを経由しない。エラー、redirect、private、no-store応答は保存しない。

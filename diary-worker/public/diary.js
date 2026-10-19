@@ -6,11 +6,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     insertTextIntoRichDocument, mergeRichTextRuns, photoMarker, removeTextFromRichDocument,
     replaceTextInRichDocument, sameTextMarks, tokenizeEditorDocument, tokenizeEntryTextWithLinks, withoutPhotoMarkers;
   let WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon;
+  let createPhotoViewer, photoViewer;
   const readingToolsReady = Promise.all([
     import(new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href),
     import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href),
-    import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href)
-  ]).then(([search, richText, weather]) => {
+    import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href),
+    import(new URL(`diary-photo-viewer.js${scriptUrl.search}`, scriptUrl).href)
+  ]).then(([search, richText, weather, viewer]) => {
+    ({ createPhotoViewer } = viewer);
     ({ splitSearchTerms, createSearchExcerpt, highlightSearchTerms } = search);
     ({ applyFormatToSelection, findPhotoMarkers, getSelectionFormatState, hasTextMarks,
       insertTextIntoRichDocument, mergeRichTextRuns, photoMarker, removeTextFromRichDocument,
@@ -111,8 +114,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoSearchTimer: null,
     viewerPhotos: [],
     viewerIndex: -1,
-    viewerImageRequestId: 0,
-    viewerImageLoad: null,
     photoPickerActive: false,
     favoriteRequestPending: false,
     entryCreateRequestId: null,
@@ -283,6 +284,22 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.appView.inert = true;
     const startup = enterDiary(initialSession);
     await readingToolsReady;
+    photoViewer = createPhotoViewer({
+      nodes: {
+        dialog: elements.photoViewerDialog, stage: elements.photoStage,
+        date: elements.photoViewerDate, title: elements.photoViewerTitle,
+        get image() { return elements.photoViewerImage; },
+        set image(value) { elements.photoViewerImage = value; },
+        status: elements.photoViewerStatus, file: elements.photoViewerFile,
+        downloadLow: elements.photoDownloadLow, downloadOriginal: elements.photoDownloadOriginal
+      },
+      selection: {
+        get photos() { return state.viewerPhotos; },
+        get index() { return state.viewerIndex; },
+        set index(value) { state.viewerIndex = value; }
+      },
+      formatDate, formatBytes
+    });
     bindEvents();
     state.deferredInstallPrompt = onReady();
     updateInstallButtonVisibility();
@@ -446,15 +463,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
-    bindPhotoViewerSwipe();
+    photoViewer.bind();
     elements.photoOpenEntry.addEventListener("click", openViewerEntry);
-    elements.photoViewerDialog.addEventListener("keydown", (event) => {
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      event.preventDefault();
-      movePhotoViewer(event.key === "ArrowLeft" ? -1 : 1);
-    });
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
@@ -1460,7 +1470,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         if (!canView() || !saved.photos[saved.index]) return false;
         state.viewerPhotos = saved.photos;
         state.viewerIndex = saved.index;
-        renderPhotoViewer();
+        photoViewer.render();
       },
       onClose: finishPhotoViewerClose
     });
@@ -2849,51 +2859,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     openPhotoViewer(state.photos, index);
   }
 
-  function bindPhotoViewerSwipe() {
-    const stage = elements.photoStage;
-    let gesture = null;
-    // A second finger anywhere in the viewer belongs to pinch/zoom, not navigation.
-    elements.photoViewerDialog.addEventListener("pointerdown", (event) => {
-      if (event.pointerType === "touch" && !event.isPrimary) gesture = null;
-    }, { capture: true });
-    stage.addEventListener("pointerdown", (event) => {
-      if (event.pointerType !== "touch" || !event.isPrimary || !elements.photoViewerDialog.open) return;
-      if ((window.visualViewport?.scale || 1) > 1) return;
-      // Leave edge gestures to the OS/browser Back navigation.
-      if (event.clientX < 24 || event.clientX > window.innerWidth - 24) return;
-      gesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-      stage.setPointerCapture(event.pointerId);
-    });
-    stage.addEventListener("pointermove", (event) => {
-      if (gesture?.pointerId !== event.pointerId) return;
-      const dx = event.clientX - gesture.x;
-      const dy = event.clientY - gesture.y;
-      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) gesture = null;
-    });
-    stage.addEventListener("pointerup", (event) => {
-      if (gesture?.pointerId !== event.pointerId) return;
-      const start = gesture;
-      gesture = null;
-      if (!elements.photoViewerDialog.open || (window.visualViewport?.scale || 1) > 1) return;
-      const dx = event.clientX - start.x;
-      const dy = event.clientY - start.y;
-      const threshold = Math.max(40, Math.min(80, stage.clientWidth * 0.12));
-      if (Math.abs(dx) < threshold || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      movePhotoViewer(dx < 0 ? 1 : -1);
-    });
-    const cancel = (event) => {
-      if (gesture?.pointerId === event.pointerId) gesture = null;
-    };
-    stage.addEventListener("pointercancel", cancel);
-    stage.addEventListener("lostpointercapture", cancel);
-    elements.photoViewerDialog.addEventListener("close", () => { gesture = null; });
-  }
-
   function openPhotoViewer(photos, index) {
     if (!photos?.length || index < 0 || index >= photos.length) return;
     state.viewerPhotos = photos;
     state.viewerIndex = index;
-    renderPhotoViewer();
+    photoViewer.render();
     dialogs.open("photo-viewer-dialog");
   }
 
@@ -2912,86 +2882,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function finishPhotoViewerClose() {
-    cancelPhotoViewerImageLoad();
+    photoViewer?.cancelLoad();
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
     elements.photoViewerImage.removeAttribute("src");
     elements.photoViewerImage.hidden = true;
     elements.photoViewerStatus.hidden = true;
-  }
-
-  function cancelPhotoViewerImageLoad() {
-    state.viewerImageRequestId++;
-    if (state.viewerImageLoad) {
-      state.viewerImageLoad.onload = null;
-      state.viewerImageLoad.onerror = null;
-      state.viewerImageLoad.removeAttribute("src");
-      state.viewerImageLoad = null;
-    }
-  }
-
-  function loadPhotoViewerImage(photo) {
-    cancelPhotoViewerImageLoad();
-    const requestId = state.viewerImageRequestId;
-    // A new element cannot paint the previous photo while this source loads.
-    const preview = new Image();
-    preview.id = "photo-viewer-image";
-    preview.draggable = false;
-    preview.alt = photo.fileName || "日記の写真";
-    preview.hidden = !photo.thumbnailUrl;
-    if (photo.thumbnailUrl) preview.src = photo.thumbnailUrl;
-    elements.photoViewerImage.replaceWith(preview);
-    elements.photoViewerImage = preview;
-    elements.photoViewerStatus.textContent = "写真を読み込んでいます...";
-    elements.photoViewerStatus.hidden = false;
-
-    const image = new Image();
-    image.id = preview.id;
-    image.draggable = false;
-    image.alt = preview.alt;
-    image.decoding = "async";
-    state.viewerImageLoad = image;
-    const isCurrent = () => requestId === state.viewerImageRequestId;
-    preview.onerror = () => { if (isCurrent()) preview.hidden = true; };
-    const failed = () => {
-      if (!isCurrent()) return;
-      state.viewerImageLoad = null;
-      elements.photoViewerStatus.textContent = "写真を読み込めませんでした。";
-    };
-    image.onerror = failed;
-    image.onload = async () => {
-      try {
-        await image.decode();
-        if (!isCurrent()) return;
-        image.onload = null;
-        image.onerror = null;
-        state.viewerImageLoad = null;
-        elements.photoViewerImage.replaceWith(image);
-        elements.photoViewerImage = image;
-        elements.photoViewerStatus.hidden = true;
-      } catch {
-        failed();
-      }
-    };
-    image.src = photo.displayUrl;
-  }
-
-  function renderPhotoViewer() {
-    const photo = state.viewerPhotos[state.viewerIndex];
-    if (!photo) return;
-    elements.photoViewerDate.textContent = formatDate(photo.entryDate);
-    elements.photoViewerTitle.textContent = photo.entryTitle || "日記の写真";
-    loadPhotoViewerImage(photo);
-    const dimensions = photo.width && photo.height ? ` / ${photo.width}×${photo.height}` : "";
-    elements.photoViewerFile.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
-    elements.photoDownloadLow.href = `${photo.displayUrl}?download=1`;
-    elements.photoDownloadOriginal.href = `${photo.originalUrl}?download=1`;
-  }
-
-  function movePhotoViewer(direction) {
-    const next = state.viewerIndex + direction;
-    if (next < 0 || next >= state.viewerPhotos.length) return;
-    state.viewerIndex = next;
-    renderPhotoViewer();
   }
 
   function openViewerEntry() {

@@ -15,6 +15,7 @@ const env = { ASSETS: { fetch: async () => new Response("public fixture", { head
 for (const [path, expected] of [
   [`diary.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary-bootstrap.js?v=${build}`, "public, max-age=31536000, immutable"],
+  [`diary-photo-viewer.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary.css?v=${build}`, "public, max-age=31536000, immutable"],
   ["diary.js", "public, max-age=3600"], ["diary.js?v=unversioned", "public, max-age=3600"],
   ["", "no-store"], ["favorites/", "no-store"], [`service-worker.js?v=${build}`, "no-cache"],
@@ -67,7 +68,7 @@ stores.set("troom-diary-shell-old", {});
 await lifecycle("install"); await lifecycle("activate");
 assert.equal(stores.has("troom-diary-shell-old"), false);
 assert.ok(fetched.some(url => url.includes("diary-bootstrap.js")));
-assert.equal(fetched.some(url => /\/(?:diary|diary-search|diary-photo-processing|diary-photo-upload|diary-rich-text|diary-weather|dialog-navigation|troom-date-picker)\.js\?/.test(url)), false, "install must not undo deferred loading");
+assert.equal(fetched.some(url => /\/(?:diary|diary-search|diary-photo-processing|diary-photo-upload|diary-photo-viewer|diary-rich-text|diary-weather|dialog-navigation|troom-date-picker)\.js\?/.test(url)), false, "install must not undo deferred loading");
 const path = `/diary/diary.js?v=${build}`;
 let count = fetched.length;
 assert.equal((await fetchAsset(path)).status, 200);
@@ -77,6 +78,14 @@ assert.equal(fetched.length, count + 1, "warm hit returns without waiting for ne
 offline = true;
 assert.equal((await fetchAsset(path)).status, 200);
 assert.equal((await fetchAsset(`/diary/diary-photo-upload.js?v=${build}`)).status, 503);
+offline = false;
+const viewerPath = `/diary/diary-photo-viewer.js?v=${build}`;
+count = fetched.length;
+assert.equal((await fetchAsset(viewerPath)).status, 200);
+assert.equal((await fetchAsset(viewerPath)).status, 200);
+assert.equal(fetched.length, count + 1, 'the photo viewer module uses an exact build cache after its first request');
+offline = true;
+assert.equal((await fetchAsset(viewerPath)).status, 200, 'a previously used viewer remains available offline');
 offline = false;
 for (const path of ["/diary/", "/diary/api/bootstrap", "/diary/api/session", "/diary/api/photos/id/display",
   `/diary/investment.js?v=${build}`, `/diary/manifest.webmanifest?v=${build}`, "/diary/service-worker.js",

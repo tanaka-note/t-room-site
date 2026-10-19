@@ -15,6 +15,7 @@ const staticFiles = new Map([
   ["/diary/dialog-navigation.js", ["dialog-navigation.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-search.js", ["diary-search.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-weather.js", ["diary-weather.js", "text/javascript; charset=utf-8"]],
+  ["/diary/diary-photo-viewer.js", ["diary-photo-viewer.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-photo-processing.js", ["diary-photo-processing.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-photo-upload.js", ["diary-photo-upload.js", "text/javascript; charset=utf-8"]],
   ["/diary/diary-rich-text.js", ["diary-rich-text.js", "text/javascript; charset=utf-8"]],
