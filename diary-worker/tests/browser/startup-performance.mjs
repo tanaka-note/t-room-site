@@ -127,6 +127,8 @@ try {
   assert.deepEqual(errors, []);
   if (!process.env.TROOM_STARTUP_BASELINE) {
     assert.equal(results[0].js.some(r => /diary(?:-(?:search|photo|rich|weather))?\.js/.test(r.path)), false, "signed-out startup must not load the runtime");
+    assert.equal(results[0].js.some(r => r.path.includes('diary-photo-viewer.js')), false, "the viewer must not add a signed-out request");
+    assert.equal(results[3].js.some(r => r.path.includes('diary-photo-viewer.js')), true, "authenticated reading loads the build-versioned viewer module");
     assert.equal(results[3].apiRequests.length, 2, "resume uses session then bootstrap");
     assert.equal(results[2].apiRequests.length, 5, "unchanged four auth round trips plus bootstrap");
     assert.ok(results[2].marks["app-shell"] < results[2].marks["entries-ready"], "show shell before data");

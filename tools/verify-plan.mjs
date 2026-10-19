@@ -35,7 +35,7 @@ export function commands(target) {
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
-    diary: tests('diary-worker', ...['entry-domain', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
+    diary: tests('diary-worker', ...['entry-domain', 'photo-viewer', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     downloader2: [
