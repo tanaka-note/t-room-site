@@ -78,7 +78,25 @@ npm run site:visual:test
 
 ## PreviewとProduction
 
-ルートの `pnpm run build` は検索インデックスを生成した後、`site:prepare` でWranglerの配信元 `.site-assets` を作る。生成物のないcheckoutからbuildとWrangler dry-runが成功することを `tools/test-site-build.mjs` で検証する。CloudflareのBuild commandがこのコマンドの場合にもアセット準備が完了するが、外部Buildの設定・失敗原因は実ログで別途確認する。
+ルートの `pnpm run build` は検索インデックスを生成した後、`site:prepare` でWranglerの配信元 `.site-assets` を作る。`tools/test-site-build.mjs` は、packages未指定の最小fixtureへのCIと同じ安全なinstall、および生成物のないcheckoutからのbuild・Wrangler dry-runを検証する。build試験は既存の依存関係を参照し、そのリンク経由で再installしない。
+
+### Cloudflare Workers Builds（公開サイトのみ）
+
+`t-room-site` のSettings → Buildsは次を正とする。ルートの `pnpm-workspace.yaml` はinstall許可設定用で、Workerを一括installするworkspaceではない。Cloudflare標準の `pnpm install --frozen-lockfile` は `packages field missing or empty` で停止するため、自動installを無効にし、CIと同じ指定でルートの依存関係だけを導入する。
+
+| 設定 | 値 |
+| --- | --- |
+| Root directory | `/` |
+| Production branch | `main` |
+| Build variable `PNPM_VERSION` | `11.19.0`（CIと同じ） |
+| Build variable `SKIP_DEPENDENCY_INSTALL` | `1` |
+| Build command | `pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false && pnpm run build` |
+| Deploy command | `node tools/check-web-app-builds.mjs --target t-room-site && npx wrangler deploy && node tools/verify-web-app-builds.mjs --target t-room-site` |
+| Version command（作業ブランチ） | `node tools/check-web-app-builds.mjs --target t-room-site && npx wrangler versions upload` |
+
+作業ブランチはversion uploadだけとし、本番trafficを切り替えない。mainへの反映はPRの対象CI成功後に行う。Build前の依存install失敗、Build失敗、公開失敗をログの工程別に区別する。Build tokenは既存のものを使い、調査・修正のために権限を拡大したり値を読み出したりしない。
+
+設定方法は[Cloudflare Build image](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)を参照。Cloudflare側の設定はGit管理外なので、復旧時は実画面・実ログとこの表を照合する。
 
 横断認証・失効のHTTP E2Eは `pnpm --dir security-worker run test:revocation` で明示実行する。ローカルのSecurity／Cloud／Diary／Billing等と合成データを使い、現行のPasskey専用サービスで旧Passwordログイン・cookieを拒否する。通常のSecurity unit verifyとは別の試験で、実端末WebAuthn／PRFの確認を代替しない。
 

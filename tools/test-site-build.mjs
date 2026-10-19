@@ -5,6 +5,26 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { installArgs } from './install-verify-dependencies.mjs';
+
+test('Cloudflare install accepts a settings-only pnpm-workspace without packages',async()=>{
+  const fixture=await mkdtemp(join(tmpdir(),'tlain-site-install-'));
+  try {
+    await writeFile(join(fixture,'package.json'),'{"private":true}\n');
+    await writeFile(join(fixture,'pnpm-lock.yaml'),"lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n");
+    const root=fileURLToPath(new URL('../',import.meta.url));
+    await cp(join(root,'pnpm-workspace.yaml'),join(fixture,'pnpm-workspace.yaml'));
+    assert.doesNotMatch(await readFile(join(fixture,'pnpm-workspace.yaml'),'utf8'),/^packages:/m);
+    const command=`pnpm ${installArgs.join(' ')}`;
+    const shell=process.platform==='win32'?'cmd.exe':'sh';
+    const result=spawnSync(shell,process.platform==='win32'?['/d','/c',command]:['-c',command],{cwd:fixture,encoding:'utf8',timeout:60000});
+    assert.ifError(result.error);assert.equal(result.status,0,result.stdout+result.stderr);
+  } finally {
+    assert.equal(dirname(resolve(fixture)),resolve(tmpdir()));
+    assert.match(fixture.split(/[\\/]/).at(-1),/^tlain-site-install-/);
+    await rm(fixture,{recursive:true,force:true});
+  }
+});
 
 test('root build creates deployable static assets from a checkout without generated assets',async()=>{
   const root=fileURLToPath(new URL('../',import.meta.url));
