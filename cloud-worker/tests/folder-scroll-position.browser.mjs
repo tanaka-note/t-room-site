@@ -124,6 +124,12 @@ async function verifyNavigationBoundaries(page) {
   } }));
   assert.deepEqual(await page.evaluate(() => [__test.state.folders.length, __test.state.files.length, __test.state.itemNextFolderOffset]),
     [160, 500, 160], 'stop each stream at its saved range while retaining the remaining continuation');
+  await page.evaluate(() => document.querySelector('[data-file-id="1100"]').scrollIntoView({ block: 'center' }));
+  await frames(page);
+  const fileAnchor = await page.locator('[data-file-id="1100"]').evaluate(card => card.getBoundingClientRect().top);
+  await page.evaluate(() => __test.loadNextItemPage()); await frames(page);
+  assert.ok(Math.abs(await page.locator('[data-file-id="1100"]').evaluate(card => card.getBoundingClientRect().top) - fileAnchor) <= 2,
+    'loading the remaining folder prefix retains the visible file position');
   mixed = false;
   // Interrupt restoration with a new navigation and with session/account replacement.
   delay = 60;
