@@ -1,14 +1,14 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-importScripts("/cloud/crypto-vault.js?v=cloud-b723e587962e");
-importScripts("/cloud/media-range.js?v=cloud-b723e587962e");
-importScripts("/cloud/offline-store.js?v=cloud-b723e587962e");
+importScripts("/cloud/crypto-vault.js?v=cloud-c1d015024a2a");
+importScripts("/cloud/media-range.js?v=cloud-c1d015024a2a");
+importScripts("/cloud/offline-store.js?v=cloud-c1d015024a2a");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-b723e587962e";
-const MEDIA_WORKER_BUILD_ID = "cloud-b723e587962e";
+const APP_SHELL_CACHE = "tcloud-shell-cloud-c1d015024a2a";
+const MEDIA_WORKER_BUILD_ID = "cloud-c1d015024a2a";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
 const DEMAND_PREFETCH_CHUNKS = 4;
 const PREFETCH_CONCURRENCY = 4;
@@ -18,8 +18,8 @@ const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-  "/cloud/offline-store.js?v=cloud-b723e587962e",
-  "/cloud/search-input.js?v=cloud-b723e587962e",
+  "/cloud/offline-store.js?v=cloud-c1d015024a2a",
+  "/cloud/search-input.js?v=cloud-c1d015024a2a",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"

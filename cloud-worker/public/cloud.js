@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-b723e587962e";
+const APP_BUILD_ID = "cloud-c1d015024a2a";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -1347,6 +1347,7 @@ function navigationOriginSelector(entry) {
 async function ensureNavigationOriginRendered(entry) {
   const generation = state.itemLoadGeneration;
   const navigation = navigationGeneration;
+  let searchedOrigin = false;
   for (let attempt = 0; attempt < 256;) {
     if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
     const folderIndex = entry.originType === "folder"
@@ -1356,19 +1357,31 @@ async function ensureNavigationOriginRendered(entry) {
       ? state.files.findIndex((file) => Number(file.id) === Number(entry.originId))
       : -1;
     const found = folderIndex >= 0 || fileIndex >= 0;
-    const enough = state.folders.length >= (Number(entry.loadedFolderCount) || 0)
-      && state.files.length >= (Number(entry.loadedFileCount) || 0);
+    const enough = (state.itemNextFolderOffset == null || state.folders.length >= (Number(entry.loadedFolderCount) || 0))
+      && (state.itemNextFileOffset == null || state.files.length >= (Number(entry.loadedFileCount) || 0));
+    const originIndex = folderIndex >= 0 ? folderIndex : fileIndex >= 0 ? state.folders.length + fileIndex : -1;
+    // Leave space below a displaced anchor so its saved viewport offset is reachable.
     state.itemRenderLimit = Math.max(state.itemRenderLimit, Number(entry.renderLimit) || 0,
-      folderIndex >= 0 ? folderIndex + 1 : fileIndex >= 0 ? state.folders.length + fileIndex + 1 : 0);
-    if (enough && (found || !navigationOriginSelector(entry))) break;
+      originIndex >= 0 ? originIndex + ITEM_RENDER_BATCH_SIZE : 0);
+    if (enough && (found || !navigationOriginSelector(entry) || searchedOrigin)) break;
     if (!state.progressiveItemsLoading) break;
     if (state.itemPageLoading) await nextRenderOpportunity(true);
     else {
       attempt += 1;
-      const page = await loadNextItemPage({ restore: true, entry });
+      // A moved anchor may be just beyond the saved range; search at most one extra page.
+      const searchOrigin = enough;
+      const page = await loadNextItemPage({ restore: true, entry, searchOrigin });
+      if (searchOrigin) searchedOrigin = true;
       if (page?.ok === false) return page;
       if (page?.exhausted) break;
     }
+  }
+  if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
+  if ((state.itemNextFolderOffset != null && state.folders.length < (Number(entry.loadedFolderCount) || 0))
+    || (state.itemNextFileOffset != null && state.files.length < (Number(entry.loadedFileCount) || 0))) {
+    const error = new Error("表示範囲を復元できませんでした。フォルダを開き直してください。");
+    handleError(error);
+    return { ok: false, error };
   }
   if (generation === state.itemLoadGeneration && navigation === navigationGeneration && !folderNavigation) renderItems();
 }
@@ -2115,6 +2128,11 @@ function syncAvailableActions() {
   $$('[data-kind]').forEach((button) => { button.disabled = !insideFolder || inTrash || inHistory || inConflicts || inRequests || inShares; });
 }
 
+function canFallbackToDisplayListing(error) {
+  const status = Number(error?.status) || 0;
+  return error?.name !== "AbortError" && (!status || (status >= 500 && status <= 599));
+}
+
 async function loadItems() {
   syncAccountView();
   renderDiaryBackupMount();
@@ -2235,11 +2253,11 @@ async function loadItems() {
       params.set("offset", "0");
       const cacheKey = state.query ? "" : displayListingCacheKey(params);
       const dataPromise = api(`/items?${params}`, { signal: itemLoadSignal });
-      const cachePromise = cacheKey ? readDisplayListingCache(cacheKey) : Promise.resolve(null);
+      const cachePromise = cacheKey ? readDisplayListingCache(cacheKey, itemLoadSignal) : Promise.resolve(null);
       // Observe rejection immediately, and let a completed API response bypass slow IDB.
       // Navigation keeps cached records behind its existing atomic commit barrier.
       const cached = await Promise.race([cachePromise, dataPromise.then(() => null,
-        error => error.status || error.name === "AbortError" ? null : cachePromise)]);
+        error => canFallbackToDisplayListing(error) ? cachePromise : null)]);
       if (cached && loadGeneration === state.itemLoadGeneration && !itemLoadSignal.aborted) {
         renderCachedDisplayListing(cached);
         renderedInitialItems = true;
@@ -2288,11 +2306,11 @@ async function loadItems() {
     scheduleStoredConflictScan();
     return { ok: true, error: null };
   } catch (error) {
-    if (error?.name === "AbortError") return { ok: false, stale: true, error: null };
+    if (error?.name === "AbortError" || itemLoadSignal.aborted) return { ok: false, stale: true, error: null };
     if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
     state.progressiveItemsLoading = false;
     if (clearDeniedSearchResults(error)) { handleError(error); return { ok: false, error }; }
-    if (renderedCachedItems && [401, 403, 404, 419, 423].includes(Number(error?.status))) {
+    if (renderedCachedItems && !canFallbackToDisplayListing(error)) {
       state.folders = [];
       state.files = [];
       state.breadcrumbs = [];
@@ -2323,7 +2341,7 @@ function nextRenderOpportunity(priority = false) {
   });
 }
 
-async function loadNextItemPage({ restore = false, entry = null } = {}) {
+async function loadNextItemPage({ restore = false, entry = null, searchOrigin = false } = {}) {
   if (state.itemPageLoading || !state.progressiveItemsLoading || !state.itemPageParams) return;
   const generation = state.itemLoadGeneration;
   const signal = state.itemLoadController?.signal;
@@ -2337,7 +2355,7 @@ async function loadNextItemPage({ restore = false, entry = null } = {}) {
     const baseParams = new URLSearchParams(state.itemPageParams);
     if (state.query) { baseParams.delete("q"); baseParams.delete("recursive"); baseParams.set("searchCandidates", "1"); }
     const needsPage = (records, type, count) => !restore || !entry || records.length < (Number(count) || 0)
-      || (entry.originType === type && !records.some(record => Number(record.id) === Number(entry.originId)));
+      || (searchOrigin && entry.originType === type && !records.some(record => Number(record.id) === Number(entry.originId)));
     const folderPageParams = state.itemNextFolderOffset == null || !needsPage(state.folders, "folder", entry?.loadedFolderCount)
       ? null : new URLSearchParams(baseParams);
     const filePageParams = state.itemNextFileOffset == null || !needsPage(state.files, "file", entry?.loadedFileCount)
@@ -2495,15 +2513,28 @@ function displayListingCacheKey(params) {
   return normalized.toString();
 }
 
-async function readDisplayListingCache(cacheKey) {
+async function readDisplayListingCache(cacheKey, signal) {
   const scope = displayCacheScope();
-  if (!scope || state.view !== "all") return null;
-  if (state.session?.role !== "admin" && state.folderId && !state.crypto.folderKeys.has(Number(state.folderId))) return null;
+  const session = state.session, sessionId = session?.sessionCacheId, folderId = state.folderId;
+  const canRead = () => state.view === "all"
+    && !(state.session?.role !== "admin" && state.folderId && !state.crypto.folderKeys.has(Number(state.folderId)));
+  if (!scope || signal?.aborted || !canRead()) return null;
+  let onAbort;
   try {
-    const cached = await TCloudDisplayCache.getListing(scope, cacheKey, legacyDisplayCacheScope());
-    return scope === displayCacheScope() ? cached : null;
+    const aborted = signal && new Promise(resolve => {
+      onAbort = () => resolve(null);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    const lookup = TCloudDisplayCache.getListing(scope, cacheKey, legacyDisplayCacheScope());
+    const cached = await (signal ? Promise.race([lookup, aborted]) : lookup);
+    if (signal?.aborted) return null;
+    globalThis.TCloudSession?.check();
+    return session === state.session && sessionId === state.session?.sessionCacheId && folderId === state.folderId
+      && scope === displayCacheScope() && canRead() ? cached : null;
   } catch {
     return null;
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
   }
 }
 

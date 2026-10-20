@@ -27,10 +27,24 @@ try { for (const [engineName, engine, launch] of engines) {
         globalThis.__timings = [];
         for (const name of ['api', 'readDisplayListingCache', 'hydrateFolderRecords', 'hydrateFileRecords', 'loadNextItemPage', 'ensureNavigationOriginRendered']) {
           const original = eval(name);
-          eval(name + ' = async function(...args) { const start = performance.now(), timings = __timings; try { return await original(...args); } finally { timings.push({name, ms: performance.now()-start}); } }');
+          eval(name + ' = async function(...args) { const start = performance.now(), timings = __timings; try { return await original(...args); } finally { timings.push({name, ms: performance.now()-start, ...(name === "api" ? {items: String(args[0]).startsWith("/items?"), path: String(args[0]).split("?")[0]} : {})}); } }');
         }
-        const originalApply = applyNavigationPosition;
-        applyNavigationPosition = function(...args) { const start = performance.now(); try { return originalApply(...args); } finally { __timings.push({name:'applyNavigationPosition', ms:performance.now()-start}); } };
+        for (const name of ['renderItems', 'applyNavigationPosition']) {
+          const original = eval(name);
+          eval(name + ' = function(...args) { const start = performance.now(); try { return original(...args); } finally { __timings.push({name, ms:performance.now()-start}); } }');
+        }
+        const measuredCrypto = { ...TRoomCrypto };
+        for (const name of ['unlockFileKey', 'decryptFileMetadata']) {
+          const original = TRoomCrypto[name];
+          measuredCrypto[name] = async (...args) => {
+            const timings = __timings;
+            let metric = timings.find(step => step.name === name);
+            if (!metric) { metric = { name, ms: 0, calls: 0 }; timings.push(metric); }
+            const start = performance.now(); metric.calls++;
+            try { return await original(...args); } finally { metric.ms += performance.now() - start; }
+          };
+        }
+        globalThis.TRoomCrypto = measuredCrypto;
       ` });
     });
     let records = [], maxResponseBytes = 0;
@@ -73,7 +87,7 @@ try { for (const [engineName, engine, launch] of engines) {
           await action();
           const commitMs = performance.now() - start;
           await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          return { ms: performance.now() - start, commitMs, steps: [...__timings] };
+          return { ms: performance.now() - start, commitMs, itemRequests: __timings.filter(step => step.items).length, steps: __timings.map(step => ({...step})) };
         };
         await navigateToFolder(8, 'Empty');
         const normal = await measure(() => navigateToFolder(7, 'Files'));
@@ -105,11 +119,11 @@ try { for (const [engineName, engine, launch] of engines) {
     for (const mode of ['normal', 'back']) {
       const values = samples[mode];
       const steps = {};
-      for (const name of ['api', 'readDisplayListingCache', 'hydrateFolderRecords', 'hydrateFileRecords', 'loadNextItemPage', 'ensureNavigationOriginRendered', 'applyNavigationPosition']) {
+      for (const name of ['api', 'readDisplayListingCache', 'hydrateFolderRecords', 'hydrateFileRecords', 'unlockFileKey', 'decryptFileMetadata', 'loadNextItemPage', 'ensureNavigationOriginRendered', 'renderItems', 'applyNavigationPosition']) {
         const sums = values.map(v => v.steps.filter(step => step.name === name).reduce((total, step) => total + step.ms, 0));
         steps[name] = { median: percentile(sums, .5), p95: percentile(sums, .95) };
       }
-      const result = { engine: engineName, device: mobile ? 'touch' : 'desktop', count, latency, cacheDelay, maxResponseBytes, mode, n: repeats,
+      const result = { engine: engineName, browserVersion: browser.version(), device: mobile ? 'touch' : 'desktop', count, latency, cacheDelay, maxResponseBytes, mode, n: repeats,
         median: percentile(values.map(v => v.ms), .5), p95: percentile(values.map(v => v.ms), .95), steps, samples: values };
       results.push(result);
       console.log('PERF', JSON.stringify({ ...result, samples: undefined }));

@@ -255,3 +255,5 @@ try { for (const [name, engine, launch] of engines) {
     await page.close();
   } } finally { await browser.close(); }
 } } finally { await fixture.close(); }
+
+await import('./folder-navigation-review.browser.mjs');
