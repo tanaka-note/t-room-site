@@ -65,7 +65,7 @@ jobs:
           VERIFY_TARGET: ${{ matrix.target }}
         run: node tools/install-verify-dependencies.mjs "$VERIFY_TARGET"
       - name: Install Chromium only when used
-        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health"]'), matrix.target)
+        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health","payments"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
       - name: Install Inventory Chromium
         if: matrix.target == 'inventory'

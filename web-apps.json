@@ -381,6 +381,37 @@
       "deployTarget": "t-room-health",
       "deployCwd": "health-worker",
       "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "payments",
+      "assetCopies": [{ "source": "diary-worker/public/dialog-navigation.js", "copy": "payments-worker/public/dialog-navigation.js" }],
+      "name": "支払明細",
+      "publicUrls": [
+        "https://tanaka-note.com/payments/"
+      ],
+      "entrypoints": [
+        "payments-worker/public/index.html"
+      ],
+      "buildRoots": [
+        "payments-worker/public"
+      ],
+      "buildFiles": [
+        "payments-worker/src/index.js",
+        "payments-worker/src/domain.js",
+        "assets/session-secret.mjs",
+        "assets/session-policy.mjs",
+        "assets/passkey-rolling.mjs",
+        "assets/security-audit-worker.js",
+        "security-worker/public/passkey-client.js",
+        "diary-worker/public/dialog-navigation.js"
+      ],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "manifest": null,
+      "twa": null,
+      "deployTarget": "t-room-payments",
+      "deployCwd": "payments-worker",
+      "deployCommand": "pnpm run deploy"
     }
   ],
   "excludedHtml": [

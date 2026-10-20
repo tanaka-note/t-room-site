@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-payments",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-14",
+  "routes": [
+    {
+      "pattern": "tanaka-note.com/payments*",
+      "zone_name": "tanaka-note.com"
+    }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "payments-db",
+      "database_id": "066196b0-25d4-4c92-acfd-066dae61530b",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SECURITY_AUDIT",
+        "queue": "t-room-security-audit"
+      }
+    ]
+  },
+  "vars": {
+    "SESSION_VERSION": "1",
+    "PASSKEY_ENABLED": "true"
+  },
+  "observability": {
+    "enabled": false
+  }
+}
