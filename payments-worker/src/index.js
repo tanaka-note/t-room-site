@@ -55,7 +55,7 @@ export async function handleRequest(request, env, context) {
   const path = url.pathname.slice(BASE.length);
   if (!path.startsWith('/api/')) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'この操作は利用できません。');
-    if (!['/', '/index.html', '/payments.css', '/payments.js', '/dialog-navigation.js'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
+    if (!['/', '/index.html', '/payments.css', '/payments.js', '/dialog-navigation.js', '/troom-date-picker.js', '/troom-date-picker.css', '/date-wheel.js', '/date-wheel.css'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
     const response = await env.ASSETS.fetch(new Request(new URL(path === '/index.html' ? '/' : path, url.origin), request));
     const headers = new Headers(response.headers); headers.set('Cache-Control', 'no-store');
     return new Response(response.body, { status: response.status, headers });

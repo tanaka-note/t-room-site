@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/domain.js && node --check public/payments.js",
+    "check": "node --check src/index.js && node --check src/domain.js && node --check public/payments.js && node --check public/troom-date-picker.js && node --check public/date-wheel.js",
     "test": "node --test test/*.test.js",
     "deploy": "wrangler deploy"
   },

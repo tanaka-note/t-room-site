@@ -11,3 +11,5 @@
 初回公開はD1を作成してwranglerのIDを設定し、paymentsのmigrationを適用する。初回のpayments公開後に `tools/bootstrap.mjs --remote`へ標準入力JSONの`displayName`を渡すと、未設定の場合だけ安全なSESSION_SECRETとownerを作成する。値は出力しない。SESSION_SECRET未設定の間はAPIが503で停止する。paymentsを先に公開し、検証済みのSecurity migration `0025_payments_service.sql`を適用後、Securityを公開する。このmigrationは既存連携・鍵envelope・health grant・handoff・session・監査・集計を保持してservice制約を拡張する。通常公開はリポジトリの `npm run release -- payments` を使う。
 
 HTMLと個人データはno-store。共通updaterを利用し、未保存入力・認証・保存・削除中は更新を延期する。編集と確認画面は既存の共通dialog-navigationを同梱し、戻る・Esc・背景・閉じるを統一する。
+
+明細の追加・編集では、支払日／対象開始月の欄を押すと日記と同じ下部ホイール、カレンダーアイコンを押すと独自カレンダーを開く。ホイールは完了・背景操作で確定し、キャンセル・戻る・Escでは未確定値を破棄する。`troom-date-picker.js` は日記の実装を基に、既存の支払明細の年範囲1900〜9999年だけを維持する。カレンダーCSSとホイールのレイアウトも日記に合わせ、同等性をテストする。支払明細に同梱し、日記Workerの同時公開を不要にする。

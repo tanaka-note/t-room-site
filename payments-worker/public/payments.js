@@ -2,6 +2,8 @@
   'use strict';
   const $ = id => document.getElementById(id), form = $('entry-form');
   const dialogs = TroomDialogNavigation.create({ key: 'troomPaymentsDialogs' });
+  TRoomDatePicker.setNavigation(dialogs);
+  TRoomDateWheel.initialize(dialogs, () => busy);
   const money = value => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 2 }).format(value);
   let entries = [], editing = null, initial = '', busy = false, requestId = null, confirmAction = null, confirmRequestId = null;
   let activity = Date.now();
@@ -12,7 +14,7 @@
   function setBusy(value) {
     busy = value; document.body.dataset.troomUpdateBlock = String(value);
     for (const el of document.querySelectorAll('button')) el.disabled = value;
-    for (const el of form.querySelectorAll('input,textarea')) el.readOnly = value;
+    for (const el of form.querySelectorAll('input,textarea')) el.readOnly = value || el.hasAttribute('data-date-wheel-mode');
   }
   async function api(path, body, method = 'POST') {
     const response = await fetch(`/payments/api${path}`, { method: body === undefined ? 'GET' : method, credentials: 'same-origin', headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(!document.hidden && Date.now() - activity < 60000 ? { 'X-Troom-Activity': 'foreground' } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).catch(() => { throw new Error('通信を完了できませんでした。入力内容は保持されています。もう一度お試しください。'); });
@@ -112,7 +114,7 @@
     catch (error) { $('message').textContent = error.message; } finally { setBusy(false); }
   };
   window.addEventListener('beforeunload', event => { if (busy || ($('entry-dialog').open && dirty())) { event.preventDefault(); event.returnValue = ''; } });
-  document.addEventListener('troom:before-auto-update', event => { if (busy || ($('entry-dialog').open && dirty()) || $('confirm-dialog').open) event.preventDefault(); });
+  document.addEventListener('troom:before-auto-update', event => { if (busy || ($('entry-dialog').open && dirty()) || $('confirm-dialog').open || $('date-wheel-dialog').open || $('troom-calendar-dialog').open) event.preventDefault(); });
   (async () => {
     try { const session = await api('/session'); showApp(session); await load(); }
     catch (error) { if ($('app-view').hidden) { $('boot-message').textContent = 'パスキーでログインしてください。'; $('login').hidden = false; if (!error.message.includes('ログインしてください')) $('login-error').textContent = error.message; } else $('message').textContent = error.message; }
