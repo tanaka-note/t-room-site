@@ -143,6 +143,34 @@ test("content hashes normalize JavaScript module line endings", async () => {
   }
 });
 
+test("JSONC configuration keeps build and freshness stable across LF, CRLF and mixed line endings", async () => {
+  const directory = await createFixture();
+  const app = fixtureApp("site-app", "t-room-site");
+  app.buildFiles = ["wrangler.jsonc"];
+  const configPath = resolve(directory, "wrangler.jsonc");
+  const lines = ["{", "  // deployment configuration", '  "name": "fixture",', '  "compatibility_date": "2026-08-20"', "}", ""];
+  const lf = lines.join("\n");
+  const crlf = lines.join("\r\n");
+  // Reproduce an inserted LF line in an otherwise CRLF file, as in Security.
+  const mixed = lines.map((line, index) => line + (index === lines.length - 1 ? "" : index === 2 ? "\n" : "\r\n")).join("");
+  try {
+    await writeFile(configPath, lf);
+    const synchronized = await syncContentHashApp(app, contract, directory);
+    for (const source of [crlf, mixed, lf]) {
+      await writeFile(configPath, source);
+      assert.equal(await expectedBuild(app, contract, directory), synchronized.build);
+      assert.equal((await inspectBuildFreshness(app, contract, directory)).fresh, true);
+      assert.deepEqual((await syncContentHashApp(app, contract, directory)).changed, []);
+      assert.equal(await readFile(configPath, "utf8"), source, "build checks must preserve the configuration bytes");
+    }
+    await writeFile(configPath, lf.replace('"fixture"', '"changed"'));
+    assert.notEqual(await expectedBuild(app, contract, directory), synchronized.build, "configuration changes must still invalidate the build");
+    assert.equal((await inspectBuildFreshness(app, contract, directory)).fresh, false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("service worker synchronization preserves CRLF and remains idempotent", () => {
   const app = fixtureApp("site-app", "t-room-site");
   const source = `const CACHE_NAME = "old";\r\nconst APP_ASSETS = [\r\n  "./"\r\n];\r\n`;

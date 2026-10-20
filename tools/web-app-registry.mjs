@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 export const workspace = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const registryPath = resolve(workspace, "web-apps.json");
-const textExtensions = new Set([".cjs", ".css", ".html", ".js", ".json", ".mjs", ".svg", ".webmanifest"]);
+const textExtensions = new Set([".cjs", ".css", ".html", ".js", ".json", ".jsonc", ".mjs", ".svg", ".webmanifest"]);
 
 export async function loadWebAppRegistry() {
   return JSON.parse(await readFile(registryPath, "utf8"));
