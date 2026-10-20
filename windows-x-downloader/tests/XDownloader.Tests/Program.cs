@@ -85,22 +85,32 @@ await Test("quality filters DRM, audio, invalid selector; sorts by height", () =
 await Test("missing media rejected", () => Throws<InvalidOperationException>(() => Sync(() => MediaInfo.Parse("{\"id\":\"123\"}"))));
 await Test("live media rejected", () => Throws<InvalidOperationException>(() => Sync(() => MediaInfo.Parse(mediaJson.Replace("\"id\":\"1231\"", "\"live_status\":\"is_live\",\"id\":\"1231\"").Replace("\"id\":\"1232\"", "\"live_status\":\"is_upcoming\",\"id\":\"1232\"")))));
 var savedAt = new DateTimeOffset(2026,10,17,21,30,45,TimeSpan.FromHours(9));
-await Test("suggested title moves uploader to suffix without duplication", () => Sync(() => Equal("Xテスト動画（投稿者名）", SaveFileName.Suggest(video))));
+await Test("suggested title includes editable local load date and moves uploader to suffix", () => Sync(() => Equal("20261017213045_Xテスト動画（投稿者名）", SaveFileName.Suggest(video, savedAt))));
 await Test("uploader is inherited for playlists and missing names stay absent", () => Sync(() =>
 {
     Equal("共通投稿者", MediaInfo.Parse(mediaJson.Replace("{\"entries\":", "{\"uploader\":\"共通投稿者\",\"entries\":"))[1].Uploader);
     Equal(null, media[1].Uploader);
-    Equal("X動画2", SaveFileName.Suggest(media[1]));
+    Equal("20261017213045_X動画2", SaveFileName.Suggest(media[1], savedAt));
     Equal("account_name", MediaInfo.Parse(mediaJson.Replace("\"uploader\":\"投稿者名\"", "\"uploader_id\":\"account_name\""))[0].Uploader);
     Equal("account_name", MediaInfo.Parse(mediaJson.Replace("{\"entries\":", "{\"uploader\":\"別の投稿者\",\"entries\":").Replace("\"uploader\":\"投稿者名\"", "\"uploader_id\":\"account_name\""))[0].Uploader);
 }));
-await Test("filename uses local numeric save date through seconds and underscore", () => Sync(() => Equal("20261017213045_X好きな名前（投稿者名）", SaveFileName.Stem("X好きな名前（投稿者名）", savedAt))));
-await Test("filename cannot escape directory or use Windows reserved name", () => Sync(() => { var name = SaveFileName.Stem("../CON:<bad>?/x\\|*\"", savedAt); Assert(name.StartsWith("20261017213045_")); Assert(!name.Contains('/')); Assert(!name.Contains(':')); Assert(!name.Contains('\\')); Equal("20261017213045_CON",SaveFileName.Stem("CON",savedAt)); }));
-await Test("filename length and emoji boundary", () => Sync(() => { var name = SaveFileName.Stem(new string('a',159) + "😀suffix", savedAt); Assert(!char.IsHighSurrogate(name[^1])); Assert(name.Length <= 175); }));
+await Test("filename preserves changed dates and never adds a deleted date", () => Sync(() =>
+{
+    foreach (var title in new[]{"20261017213045_X好きな名前（投稿者名）", "20200101_X好きな名前", "X日付なし"})
+        Equal(title, SaveFileName.Stem(title));
+}));
+await Test("filename cannot escape directory or use Windows reserved name after date removal", () => Sync(() =>
+{
+    var name = SaveFileName.Stem("../CON:<bad>?/x\\|*\"");
+    Assert(!name.Contains('/')); Assert(!name.Contains(':')); Assert(!name.Contains('\\'));
+    foreach (var title in new[]{"CON", "nul.txt", "COM1", "LPT²", "CONIN$"}) Equal("_"+title, SaveFileName.Stem(title));
+    Assert(SaveFileName.Stem("CON."+new string('a',200)).Length<=SaveFileName.MaxTitleLength);
+}));
+await Test("filename length and emoji boundary", () => Sync(() => { var name = SaveFileName.Stem(new string('a',159) + "😀suffix"); Assert(!char.IsHighSurrogate(name[^1])); Assert(name.Length <= SaveFileName.MaxTitleLength); }));
 await Test("long default titles retain uploader and closing bracket", () => Sync(() =>
 {
-    var title=SaveFileName.Suggest(video with { Title=new string('あ',250), Uploader=new string('名',100) });
-    Assert(title.Length<=SaveFileName.MaxTitleLength && title.EndsWith('）') && title.Contains('（'));
+    var title=SaveFileName.Suggest(video with { Title=new string('あ',250), Uploader=new string('名',100) }, savedAt);
+    Assert(title.StartsWith("20261017213045_X") && title.Length<=SaveFileName.MaxTitleLength && title.EndsWith('）') && title.Contains('（'));
 }));
 await Test("empty and Windows-invalid-only titles are rejected", () => Sync(() =>
 {
@@ -155,15 +165,17 @@ try
         Assert(!Directory.EnumerateDirectories(dest).Any());
         Assert(fake.DownloadArguments!.Contains("id ~= ^1231$"));
     });
-    await Test("edited title and save-click time survive a long download; never enter engine arguments", async () =>
+    await Test("edited titles preserve kept, changed and deleted load dates through a long download", async () =>
     {
         var dest=Path.Combine(sandbox,"edited");
         clock.Utc=savedAt.UtcDateTime;
         fake.AfterDownload=()=>clock.Utc=clock.Utc.AddHours(1);
-        var edited="X変更した名前（投稿者名）";
-        var file=await downloader.DownloadAsync(url,video,video.Qualities[0],dest,null,CancellationToken.None,edited);
-        Equal("20261017213045_"+edited+".mp4",Path.GetFileName(file));
-        Assert(!fake.DownloadArguments!.Any(a=>a.Contains(edited)));
+        foreach (var edited in new[]{"20261017213045_X変更した名前（投稿者名）", "20000101_X変更した日付", "X日付を削除"})
+        {
+            var file=await downloader.DownloadAsync(url,video,video.Qualities[0],dest,null,CancellationToken.None,edited);
+            Equal(edited+".mp4",Path.GetFileName(file));
+            Assert(!fake.DownloadArguments!.Any(a=>a.Contains(edited)));
+        }
         fake.AfterDownload=null; clock.Utc=savedAt.UtcDateTime;
     });
     await Test("invalid edited title never starts engine or creates destination", async () =>

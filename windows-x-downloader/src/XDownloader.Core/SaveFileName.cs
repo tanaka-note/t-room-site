@@ -8,8 +8,9 @@ public static partial class SaveFileName
     public const int MaxTitleLength = 160;
     private const string InvalidWindowsCharacters = "<>:\"/\\|?*";
 
-    public static string Suggest(VideoInfo video)
+    public static string Suggest(VideoInfo video, DateTimeOffset loadedAt)
     {
+        var prefix = loadedAt.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture) + "_X";
         var author = OneLine(video.Uploader ?? "");
         var title = OneLine(video.Title);
         // The Twitter extractor puts the display name before the post text.
@@ -18,7 +19,7 @@ public static partial class SaveFileName
             title = title[(author.Length + 3)..];
         if (title.Length == 0) title = "動画";
         var suffix = author.Length > 0 ? $"（{Truncate(author, 58)}）" : "";
-        return "X" + Truncate(title, MaxTitleLength - 1 - suffix.Length) + suffix;
+        return prefix + Truncate(title, MaxTitleLength - prefix.Length - suffix.Length) + suffix;
     }
 
     public static string NormalizeTitle(string title)
@@ -27,6 +28,8 @@ public static partial class SaveFileName
         clean = new string(clean.Where(c => !char.IsControl(c) && !InvalidWindowsCharacters.Contains(c)).ToArray());
         clean = Truncate(clean.Trim().TrimEnd('.'), MaxTitleLength).TrimEnd().TrimEnd('.');
         if (string.IsNullOrWhiteSpace(clean)) throw new ArgumentException("保存タイトルを入力してください。ファイル名に使えない文字だけのタイトルは保存できません。");
+        // The editable date can be removed, so a Windows device name may now be the entire title.
+        if (ReservedName().IsMatch(clean)) clean = "_" + Truncate(clean, MaxTitleLength - 1).TrimEnd().TrimEnd('.');
         return clean;
     }
 
@@ -36,8 +39,7 @@ public static partial class SaveFileName
         catch (ArgumentException) { return false; }
     }
 
-    public static string Stem(string title, DateTimeOffset savedAt) =>
-        savedAt.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture) + "_" + NormalizeTitle(title);
+    public static string Stem(string title) => NormalizeTitle(title);
 
     private static string OneLine(string value) => Whitespace().Replace(value, " ").Trim();
     private static string Truncate(string value, int length)
@@ -49,4 +51,6 @@ public static partial class SaveFileName
     }
     [GeneratedRegex(@"\s+")]
     private static partial Regex Whitespace();
+    [GeneratedRegex(@"^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(\.|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ReservedName();
 }

@@ -1,7 +1,7 @@
 <Window x:Class="XDownloader.App.MainWindow"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- Title="X動画ダウンローダー（試作版 0.3）" Width="760" Height="740"
+ Title="X動画ダウンローダー（試作版 0.3.1）" Width="760" Height="740"
  MinWidth="620" MinHeight="520" FontFamily="Yu Gothic UI" FontSize="14"
  Closing="Window_Closing" PreviewKeyDown="Window_KeyDown">
  <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -35,7 +35,7 @@
   <StackPanel Grid.Row="6" Margin="0,12,0,0">
    <TextBlock Text="保存タイトル" Margin="0,0,0,6"/>
    <TextBox x:Name="TitleInput" Padding="7" IsEnabled="False" MaxLength="160" TextChanged="Title_Changed" AutomationProperties.Name="保存タイトル"/>
-   <TextBlock Text="先頭に保存日時（秒まで）を付けます：20261017213045_タイトル.mp4"
+   <TextBlock Text="読み込み時の日時（秒まで）を含むタイトルです。日付も自由に変更・削除できます。"
     Foreground="#555555" FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"/>
   </StackPanel>
   <Grid Grid.Row="7" Margin="0,18,0,0">

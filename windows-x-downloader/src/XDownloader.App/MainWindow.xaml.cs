@@ -61,7 +61,7 @@ public partial class MainWindow : Window
         var video = VideoChoice.SelectedItem as VideoInfo;
         QualityChoice.ItemsSource = video?.Qualities;
         QualityChoice.SelectedIndex = QualityChoice.Items.Count > 0 ? 0 : -1;
-        TitleInput.Text = video is null ? "" : editedTitles.GetValueOrDefault(video.Id) ?? SaveFileName.Suggest(video);
+        TitleInput.Text = video is null ? "" : editedTitles.GetValueOrDefault(video.Id) ?? "";
         SetBusy(operation is not null);
     }
 
@@ -85,6 +85,8 @@ public partial class MainWindow : Window
             VideoChoice.ItemsSource = null;
             Status.Text = "動画情報を解析しています…";
             var videos = await downloader.AnalyzeAsync(url, token);
+            var loadedAt = DateTimeOffset.Now;
+            foreach (var video in videos) editedTitles[video.Id] = SaveFileName.Suggest(video, loadedAt);
             analyzedUrl = url;
             VideoChoice.ItemsSource = videos;
             VideoChoice.SelectedIndex = 0;

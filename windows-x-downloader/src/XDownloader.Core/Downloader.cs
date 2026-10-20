@@ -48,8 +48,8 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
     {
         var url = PostUrl.Normalize(input);
         if (!video.Qualities.Contains(quality)) throw new ArgumentException("解析結果から画質を選択してください。");
-        // Capture the local save-button time before the first await, rather than extraction/post time.
-        var stem = SaveFileName.Stem(saveTitle ?? SaveFileName.Suggest(video), clock.GetLocalNow());
+        // Preserve the complete edited title, including any edited or removed date, before the first await.
+        var stem = SaveFileName.Stem(saveTitle ?? SaveFileName.Suggest(video, clock.GetLocalNow()));
         CheckTools();
         using var login = cookies?.Acquire();
         var root = Path.GetFullPath(destination);
