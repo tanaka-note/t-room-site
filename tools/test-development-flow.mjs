@@ -101,6 +101,10 @@ test('affected mapping is order independent and unknown runtime files are not si
   assert.deepEqual(affected(['new-app/index.html']), ['site']);
   assert.deepEqual(affected(['.github/workflows/verify.yml']), ['tooling']);
   assert.deepEqual(affected(['tools/install-verify-dependencies.mjs']), ['tooling']);
+  for (const path of ['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs']) {
+    assert.deepEqual(affected([path]), ['tooling', 'site']);
+    assert.ok(commands('tooling').some(command => command.args?.includes('tools/test-web-app-build-freshness.mjs')));
+  }
 });
 test('Downloader 2 Native CI isolates every fallible command in a fail-fast step', () => {
   const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
