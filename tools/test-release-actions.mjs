@@ -27,6 +27,7 @@ test('promotion is pinned to a unique uploaded Worker/version and read back at 1
   const version='12345678-1234-1234-1234-123456789abc';
   const upload={type:'version-upload',worker_name:'t-room-site',version_id:version};
   assert.equal(uploadedVersion(JSON.stringify(upload),'t-room-site'),version);
+  assert.equal(uploadedVersion(JSON.stringify({...upload,type:'deploy',worker_name:'t-room-downloader'}),'t-room-downloader','deploy'),version);
   assert.throws(() => uploadedVersion(JSON.stringify(upload),'t-room-cloud'));
   assert.throws(() => uploadedVersion(JSON.stringify(upload)+'\n'+JSON.stringify(upload),'t-room-site'));
   assert.throws(() => uploadedVersion(JSON.stringify({...upload,version_id:'latest'}),'t-room-site'));
@@ -49,4 +50,7 @@ test('production gates explicitly handle skipped upstream service jobs', () => {
     assert.match(gate,/needs\.verify\.result == 'success'/);
     assert.match(gate,/github\.ref == 'refs\/heads\/main'/);
   }
+  assert.match(workflow,/manual \|\| selected\.includes\('container-unit'\)/);
+  assert.match(workflow,/clamav-definition-update/);
+  assert.match(readFileSync(new URL('./release-actions.mjs',import.meta.url),'utf8'),/--containers-rollout=none/);
 });

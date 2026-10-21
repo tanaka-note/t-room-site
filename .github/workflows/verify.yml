@@ -50,7 +50,8 @@ jobs:
           const manual=process.env.VERIFY_EVENT==='workflow_dispatch' && requested!=='none';
           const {selected,native}=manual ? {selected:manualVerification(requested),native:requested==='downloader2'} : ciPlan({event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,base:process.env.BASE_SHA,head:process.env.HEAD_SHA});
           const production=productionPlan(selected,{event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,requested,enabled:process.env.PRODUCTION_ENABLED==='true'});
-          appendFileSync(process.env.GITHUB_OUTPUT,`production=${JSON.stringify(production.filter(t=>t!=='downloader'))}\ndownloader_production=${production.includes('downloader')}\n`);
+          const containerRelease=production.includes('downloader') && (manual || selected.includes('container-unit'));
+          appendFileSync(process.env.GITHUB_OUTPUT,`production=${JSON.stringify(production.filter(t=>t!=='downloader' || !containerRelease))}\ndownloader_production=${containerRelease}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`node=${JSON.stringify(selected.filter(t=>!android.includes(t)))}\nandroid=${JSON.stringify(selected.filter(t=>android.includes(t)))}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`downloader2_native=${native}\n`);
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Verify plan\n${selected.join(', ') || 'Documentation only: no tests required'}\n`);
@@ -309,7 +310,7 @@ jobs:
       matrix:
         target: ${{ fromJSON(needs.plan.outputs.production) }}
     concurrency:
-      group: production-${{ matrix.target }}
+      group: ${{ matrix.target == 'downloader' && 'clamav-definition-update' || format('production-{0}', matrix.target) }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -343,7 +344,8 @@ jobs:
           RELEASE_TARGET: ${{ matrix.target }}
           TROOM_CI_RESULT: ${{ needs.verify.result }}
           TROOM_VERIFIED_SHA: ${{ github.sha }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TROOM_DOWNLOADER_WORKER_ONLY: ${{ matrix.target == 'downloader' && 'true' || 'false' }}
+          CLOUDFLARE_API_TOKEN: ${{ matrix.target == 'downloader' && secrets.CLAMAV_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: 'false'
         run: node tools/release-actions.mjs "$RELEASE_TARGET"

@@ -135,7 +135,7 @@ DownloaderのProductionはこのコマンドで拒否し、既存の署名・lea
 
 この経路は既存のroutes、Custom Domains、Cron、Queue設定、Containerを変更しない。これらの非version設定やDB migrationを変更する作業は、通常コード公開と別に既存の専用手順で扱う。勝手に権限を増やしたり、未適用の設定変更を適用済みとして報告しない。ローカルの`npm run release`は従来どおり利用できる。
 
-Downloaderは通常のversion公開から除外し、CI成功後に既存の`ClamAV daily definitions`をreusable workflowとして`release_code=true`で呼ぶ。専用の既存repository Secret `CLAMAV_CLOUDFLARE_API_TOKEN`、署名・鮮度・小容量fixture・lease・job/grace保護・digest照合・Worker build確認を維持する。日次更新・独立監視は変更しない。Containerコード公開を伴うため、初期構築の動作確認だけを目的にこの高コスト経路を実行しない。利用者の本番データは検証用に作成・変更・削除しない。
+Downloaderは通常のversion公開から除外する。Containerディレクトリの変更と手動のDownloader指定では、CI成功後に既存の`ClamAV daily definitions`をreusable workflowとして`release_code=true`で呼ぶ。Workerだけの差分では既存専用Secretを使い、`--containers-rollout=none`でWorkerだけを更新してversionとWeb buildを照合する。Container設定・非version設定の変更はこのWorker単独経路では拒否し、手動のDownloader指定で専用公開を実行する。両経路は日次更新と同じconcurrency groupを使う。専用の既存repository Secret `CLAMAV_CLOUDFLARE_API_TOKEN`、署名・鮮度・小容量fixture・lease・job/grace保護・digest照合・Worker build確認を維持する。日次更新・独立監視は変更しない。Containerコード公開を伴うため、初期構築の動作確認だけを目的にこの高コスト経路を実行しない。利用者の本番データは検証用に作成・変更・削除しない。
 
 ## ローカルD1/R2・ログ
 
