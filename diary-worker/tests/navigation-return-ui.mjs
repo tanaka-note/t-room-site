@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const script = await readFile(`${root}/public/diary.js`, "utf8");
@@ -21,5 +22,52 @@ assert.doesNotMatch(script, /setTimeout\(restore, (120|400)\)/);
 assert.doesNotMatch(script, /else if \(isNewDiaryNavigation\(\)\) restoreEntryListPosition/);
 assert.match(script, /if \(returnView\.householdId && householdId && returnView\.householdId !== householdId\) return false;/);
 assert.match(script, /link === elements\.tagPageBack \|\| \(link === elements\.favoritesLink && state\.favoritePage\)[\s\S]*?hasDiaryReturnNavigation\(destination\.pathname\)[\s\S]*?window\.history\.back\(\)/s);
+
+// Execute the production helpers with browser state; these cases must exercise
+// acceptance and consumption, rather than merely assert the source's shape.
+const helpers = ["isNewDiaryNavigation", "isDiaryReturnReferrer", "isDiaryListPath", "configureDiaryReturnNavigation"]
+  .map((name) => script.match(new RegExp(`  function ${name}\\([^]*?\\n  }`))[0]).join("\n");
+function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diary/", age = 10,
+  savedAt = 100_000, type = "navigate", snapshot = {}, raw, storageBlocked = false } = {}) {
+  const navigation = { savedAt, sourcePath, destinationPath: "/diary/favorites/" };
+  const view = { version: 2, routePath: sourcePath, destinationPath: navigation.destinationPath, savedAt, ...snapshot };
+  const storage = new Map([
+    ["handoff", raw === undefined ? JSON.stringify(navigation) : raw],
+    ["view", JSON.stringify(view)]
+  ]);
+  const history = { state: { unrelated: "preserved", handoff: "old-token" },
+    replaceState(value) { this.state = value; } };
+  runInNewContext(`${helpers}\nconfigureDiaryReturnNavigation();`, {
+    URL, Date, Number, JSON,
+    RETURN_NAVIGATION_KEY: "handoff", RETURN_VIEW_STORAGE_KEY: "view",
+    RETURN_NAVIGATION_MAX_AGE_MS: 30_000, RETURN_VIEW_MAX_AGE_MS: 6 * 60 * 60 * 1000,
+    elements: { tagPageBack: { hidden: true } },
+    document: { referrer },
+    window: {
+      history, location: new URL("https://diary.test/diary/favorites/"),
+      performance: { timeOrigin: 100_000 + age, getEntriesByType: () => [{ type }] },
+      sessionStorage: {
+        getItem(key) { if (storageBlocked) throw Error("blocked"); return storage.get(key); },
+        removeItem: (key) => storage.delete(key)
+      }
+    }
+  });
+  assert.equal(history.state.unrelated, "preserved");
+  if (!storageBlocked) assert.equal(storage.has("handoff"), false, "handoff is consumed even when rejected");
+  return history.state.handoff;
+}
+assert.equal(configure(), 100_000, "normal internal navigation accepts its handoff");
+for (const options of [
+  { referrer: "https://diary.test/diary/tags/" }, // interrupted handoff followed by another screen
+  { referrer: "" },
+  { referrer: "https://other.test/diary/" },
+  { sourcePath: undefined, raw: JSON.stringify({ savedAt: 100_000, destinationPath: "/diary/favorites/" }) },
+  { age: 30_001 }, { age: -1 }, { savedAt: "100000" }, { savedAt: null },
+  { snapshot: { savedAt: 99_999 } }, { snapshot: { routePath: "/diary/tags/" } },
+  { snapshot: { destinationPath: "/diary/tags/" } }, { snapshot: { version: 1 } },
+  { raw: "invalid JSON" }, { raw: "null" }, { storageBlocked: true }
+]) assert.equal(configure(options), undefined, `reject stale/unverifiable handoff: ${JSON.stringify(options)}`);
+assert.equal(configure({ type: "reload" }), "old-token", "reload preserves the owned history token without accepting a handoff");
+assert.equal(configure({ type: "back_forward" }), "old-token", "Back/Forward preserves the owned history token");
 
 process.stdout.write("Diary navigation return-state test passed.\n");

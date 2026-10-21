@@ -26,6 +26,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_NAVIGATION_KEY = "troomDiaryReturnNavigation";
+  const RETURN_NAVIGATION_MAX_AGE_MS = 30 * 1000;
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const MONTH_HEADING_SCROLL_GAP_PX = 12;
   const TAG_SUGGESTION_MAX_HEIGHT = 246;
@@ -923,6 +924,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       return;
     }
     if (destination.pathname === window.location.pathname) return;
+    // The page defaults to no-referrer. Only these same-origin diary links
+    // need their source path to validate the one-shot return handoff.
+    link.referrerPolicy = "same-origin";
     storeDiaryReturnView(destination.pathname);
   }
 
@@ -962,7 +966,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     try {
       window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
       window.sessionStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
-        savedAt: returnView.savedAt, destinationPath
+        savedAt: returnView.savedAt, sourcePath: returnView.routePath, destinationPath
       }));
     } catch {
       // 保存領域が利用できない場合はブラウザ標準の戻る位置復元へ委ねます。
@@ -3630,9 +3634,23 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       }
     }
     try {
-      const navigation = JSON.parse(window.sessionStorage.getItem(RETURN_NAVIGATION_KEY) || "null");
+      const newNavigation = isNewDiaryNavigation();
+      if (newNavigation && window.history.state?.[RETURN_NAVIGATION_KEY] !== undefined) {
+        const historyState = { ...window.history.state };
+        delete historyState[RETURN_NAVIGATION_KEY];
+        window.history.replaceState(historyState, "", window.location.href);
+      }
+      const storedNavigation = window.sessionStorage.getItem(RETURN_NAVIGATION_KEY);
       window.sessionStorage.removeItem(RETURN_NAVIGATION_KEY);
-      if (navigation?.destinationPath === window.location.pathname) {
+      const navigation = JSON.parse(storedNavigation || "null");
+      const returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      // Measure at navigation start so a slow bootstrap cannot expire a valid handoff.
+      const navigationAge = window.performance.timeOrigin - navigation?.savedAt;
+      if (newNavigation && navigation?.destinationPath === window.location.pathname
+        && isDiaryListPath(navigation.sourcePath) && isDiaryReturnReferrer(navigation.sourcePath)
+        && Number.isFinite(navigation.savedAt) && navigationAge >= 0 && navigationAge <= RETURN_NAVIGATION_MAX_AGE_MS
+        && returnView?.version === 2 && returnView.savedAt === navigation.savedAt
+        && returnView.routePath === navigation.sourcePath && returnView.destinationPath === navigation.destinationPath) {
         window.history.replaceState({
           ...(window.history.state || {}),
           [RETURN_NAVIGATION_KEY]: navigation.savedAt
