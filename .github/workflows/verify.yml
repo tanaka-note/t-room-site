@@ -301,7 +301,7 @@ jobs:
         run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$INVENTORY_MACOS" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
   production:
     needs: [plan, verify]
-    if: github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.production != '[]'
+    if: ${{ !cancelled() && github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.production != '[]' }}
     environment: production
     strategy:
       fail-fast: false
@@ -349,7 +349,7 @@ jobs:
         run: node tools/release-actions.mjs "$RELEASE_TARGET"
   downloader-production:
     needs: [plan, verify]
-    if: github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.downloader_production == 'true'
+    if: ${{ !cancelled() && github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.downloader_production == 'true' }}
     permissions:
       contents: read
       issues: write
