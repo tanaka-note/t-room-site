@@ -40,6 +40,10 @@ const tags = Array.from({ length: 90 }, (_, index) => ({
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
+  if (url.pathname === "/intermediate") {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return response.end('<a href="/diary/favorites/">日記のお気に入り</a>');
+  }
   if (url.pathname.startsWith("/diary/api/")) {
     const apiPath = url.pathname.slice("/diary/api".length);
     if (apiPath === "/session") return sendJson(response, {
@@ -193,6 +197,23 @@ async function run(browserType, name, executablePath) {
     await waitForDiary(page);
     await assertTagContext(page, appBackStoredContext, `${name} app Back`);
 
+    // Cancel the internal navigation after the capture listener saved a handoff.
+    await page.evaluate(() => {
+      document.querySelector("#favorites-link").addEventListener("click", event => event.preventDefault(), { once: true });
+      document.querySelector("#favorites-link").click();
+    });
+    assert.ok(await page.evaluate(() => sessionStorage.getItem("troomDiaryReturnNavigation")));
+    await page.goto(`${origin}/intermediate`);
+    await page.click("a");
+    await page.waitForURL(/\/diary\/favorites\/?$/);
+    await waitForDiary(page);
+    assert.equal(await page.evaluate(() => history.state?.troomDiaryReturnNavigation), undefined,
+      `${name}: an interrupted handoff cannot be accepted after another page`);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem("troomDiaryReturnNavigation")), null);
+    await page.click("#tag-page-back");
+    await page.waitForURL(/\/diary\/?$/);
+    await waitForDiary(page);
+
     await page.goto(`${origin}/diary/tags/`, { waitUntil: "networkidle" });
     await waitForDiary(page);
     await page.fill("#tag-search-input", "タグ0");
@@ -250,10 +271,9 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 try {
   const chromiumPath = browserExecutable("chromium");
   const firefoxPath = browserExecutable("firefox");
-  if (!chromiumPath || !firefoxPath) throw new Error("Chromium/Firefox executable is required.");
-  await run(chromium, "Chromium", chromiumPath);
-  await run(firefox, "Firefox", firefoxPath);
-  process.stdout.write("Diary return position and view-state restoration passed in Chromium and Firefox.\n");
+  await run(chromium, "Chromium", chromiumPath || undefined);
+  if (process.env.TROOM_BROWSER !== "chromium") await run(firefox, "Firefox", firefoxPath || undefined);
+  process.stdout.write("Diary return position, view-state restoration and stale handoff rejection passed.\n");
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));
 }
