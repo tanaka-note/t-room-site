@@ -619,8 +619,10 @@ async function readEntries(url, env, session) {
     appendEntryKeywordConditions(conditions, bindings, searchTerms);
   }
   if (month && !draft) {
-    conditions.push("substr(e.entry_date, 1, 7) = ?");
-    bindings.push(month);
+    // The ASCII month prefix interval preserves the old match (even legacy values),
+    // while allowing the household/date index to bound the scan.
+    conditions.push("e.entry_date >= ? AND e.entry_date < ?");
+    bindings.push(month, `${month.slice(0, 6)}${String.fromCharCode(month.charCodeAt(6) + 1)}`);
   }
   if (!draft && dateRange.from === dateRange.to && dateRange.from) {
     conditions.push("e.entry_date = ?");
@@ -752,8 +754,10 @@ async function listPhotos(url, env, session) {
     bindings.push(entryQuery, entryQuery, entryQuery);
   }
   if (month) {
-    conditions.push("substr(e.entry_date, 1, 7) = ?");
-    bindings.push(month);
+    // The ASCII month prefix interval preserves the old match (even legacy values),
+    // while allowing the household/date index to bound the scan.
+    conditions.push("e.entry_date >= ? AND e.entry_date < ?");
+    bindings.push(month, `${month.slice(0, 6)}${String.fromCharCode(month.charCodeAt(6) + 1)}`);
   }
   if (fileNameQuery) {
     conditions.push("instr(p.file_name, ?) > 0");

@@ -1,4 +1,4 @@
-export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt) {
+export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}) {
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
   const scriptUrl = new URL(import.meta.url);
   let splitSearchTerms, createSearchExcerpt, highlightSearchTerms;
@@ -6,14 +6,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     insertTextIntoRichDocument, mergeRichTextRuns, photoMarker, removeTextFromRichDocument,
     replaceTextInRichDocument, sameTextMarks, tokenizeEditorDocument, tokenizeEntryTextWithLinks, withoutPhotoMarkers;
   let WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon;
-  let createPhotoViewer, photoViewer;
+  let photoViewer, photoViewerPromise;
+  let viewerOpenRequest = 0;
   const readingToolsReady = Promise.all([
     import(new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href),
     import(new URL(`diary-rich-text.js${scriptUrl.search}`, scriptUrl).href),
-    import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href),
-    import(new URL(`diary-photo-viewer.js${scriptUrl.search}`, scriptUrl).href)
-  ]).then(([search, richText, weather, viewer]) => {
-    ({ createPhotoViewer } = viewer);
+    import(new URL(`diary-weather.js${scriptUrl.search}`, scriptUrl).href)
+  ]).then(([search, richText, weather]) => {
     ({ splitSearchTerms, createSearchExcerpt, highlightSearchTerms } = search);
     ({ applyFormatToSelection, findPhotoMarkers, getSelectionFormatState, hasTextMarks,
       insertTextIntoRichDocument, mergeRichTextRuns, photoMarker, removeTextFromRichDocument,
@@ -27,6 +26,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_NAVIGATION_KEY = "troomDiaryReturnNavigation";
+  const RETURN_NAVIGATION_MAX_AGE_MS = 30 * 1000;
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const MONTH_HEADING_SCROLL_GAP_PX = 12;
   const TAG_SUGGESTION_MAX_HEIGHT = 246;
@@ -276,6 +276,39 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function queueBackgroundPhotoUpload(...args) { return photoUploadManager.queueBackgroundPhotoUpload(...args); }
   function releaseUploadedPhotoPayload(...args) { return photoUploadManager.releaseUploadedPhotoPayload(...args); }
 
+  // Only input expresses user intent. Scroll events also come from restoration,
+  // browser anchoring and dialogs, so they must never cancel a restoration.
+  let positionVersion = 0;
+  const positionFrames = new Map();
+  function cancelPositionRestoration() {
+    positionVersion += 1;
+    for (const [frame, resolve] of positionFrames) {
+      window.cancelAnimationFrame(frame);
+      resolve(false);
+    }
+    positionFrames.clear();
+  }
+  function schedulePositionRestoration(restore, version = positionVersion) {
+    if (version !== positionVersion) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const frame = window.requestAnimationFrame(() => {
+        positionFrames.delete(frame);
+        if (version !== positionVersion || elements.appView.hidden) { resolve(false); return; }
+        restore();
+        resolve(true);
+      });
+      positionFrames.set(frame, resolve);
+    });
+  }
+  for (const type of ["wheel", "touchmove", "pointerdown"]) {
+    window.addEventListener(type, cancelPositionRestoration, { passive: true, capture: true });
+  }
+  window.addEventListener("keydown", event => {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.closest?.("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
+    if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) cancelPositionRestoration();
+  });
+
   await boot();
 
   async function boot() {
@@ -283,28 +316,39 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // Fetch data alongside rendering tools; display the authorized shell immediately.
     elements.appView.inert = true;
     const startup = enterDiary(initialSession);
+    loadPhotoViewer().catch(() => {});
     await readingToolsReady;
-    photoViewer = createPhotoViewer({
-      nodes: {
-        dialog: elements.photoViewerDialog, stage: elements.photoStage,
-        date: elements.photoViewerDate, title: elements.photoViewerTitle,
-        get image() { return elements.photoViewerImage; },
-        set image(value) { elements.photoViewerImage = value; },
-        status: elements.photoViewerStatus, file: elements.photoViewerFile,
-        downloadLow: elements.photoDownloadLow, downloadOriginal: elements.photoDownloadOriginal
-      },
-      selection: {
-        get photos() { return state.viewerPhotos; },
-        get index() { return state.viewerIndex; },
-        set index(value) { state.viewerIndex = value; }
-      },
-      formatDate, formatBytes
-    });
     bindEvents();
     state.deferredInstallPrompt = onReady();
     updateInstallButtonVisibility();
     elements.appView.inert = false;
     await startup;
+  }
+
+  function loadPhotoViewer() {
+    if (!photoViewerPromise) {
+      photoViewerPromise = import(new URL(`diary-photo-viewer.js${scriptUrl.search}`, scriptUrl).href).then(viewer => {
+        photoViewer = viewer.createPhotoViewer({
+          nodes: {
+            dialog: elements.photoViewerDialog, stage: elements.photoStage,
+            date: elements.photoViewerDate, title: elements.photoViewerTitle,
+            get image() { return elements.photoViewerImage; },
+            set image(value) { elements.photoViewerImage = value; },
+            status: elements.photoViewerStatus, file: elements.photoViewerFile,
+            downloadLow: elements.photoDownloadLow, downloadOriginal: elements.photoDownloadOriginal
+          },
+          selection: {
+            get photos() { return state.viewerPhotos; },
+            get index() { return state.viewerIndex; },
+            set index(value) { state.viewerIndex = value; }
+          },
+          formatDate, formatBytes
+        });
+        photoViewer.bind();
+        return photoViewer;
+      }).catch(error => { photoViewerPromise = null; throw error; });
+    }
+    return photoViewerPromise;
   }
 
   function bindEvents() {
@@ -316,6 +360,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     window.addEventListener("scroll", scheduleHeaderVisibilityUpdate, { passive: true });
     document.addEventListener("click", rememberDiaryReturnViewFromNavigation, true);
     window.addEventListener("pageshow", restoreDiaryReturnViewFromPageCache);
+    window.addEventListener("pagehide", () => {
+      if (isDiaryListRoute() && !elements.appView.hidden && !state.entriesAbortController) {
+        storeDiaryReturnView("", { historyOnly: true });
+      }
+      cancelPositionRestoration();
+      if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    });
     document.querySelector("#passkey-login")?.addEventListener("click", handlePasskeyLogin);
     elements.householdSwitcher.addEventListener("change", changeActiveHousehold);
     elements.logoutButton.addEventListener("click", handleLogout);
@@ -463,7 +514,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
-    photoViewer.bind();
     elements.photoOpenEntry.addEventListener("click", openViewerEntry);
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
@@ -599,6 +649,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function enterDiary(session) {
+    cancelPositionRestoration();
+    const restoreVersion = initialScrollIntent.interrupted ? -1 : positionVersion;
     const generation = ++sessionGeneration;
     activeSessionContext = sessionContext(session);
     state.role = session.role;
@@ -611,7 +663,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
     const returnView = takeDiaryReturnView(state.activeHouseholdId);
+    if (!returnView && "scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
     if (returnView) {
+      if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
       await readingToolsReady;
       if (generation !== sessionGeneration) return;
       applyDiaryReturnView(returnView);
@@ -634,14 +688,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.appView.hidden = false;
     resetHeaderVisibilityTracking();
     const initialRequestId = state.requestId + 1;
-    await loadEntries(true, true);
+    const loaded = await loadEntries(true, true, returnView?.entryCount || 0);
     if (generation !== sessionGeneration || initialRequestId !== state.requestId) return;
-    if (returnView) {
-      await loadEntriesForDiaryReturn(returnView.entryCount);
-      if (generation !== sessionGeneration) return;
-    }
-    if (returnView) restoreDiaryReturnPosition(returnView);
-    else if (isNewDiaryNavigation()) restoreEntryListPosition({ scrollY: 0 });
+    if (loaded && returnView) restoreDiaryReturnPosition(returnView, restoreVersion);
   }
 
   async function loadHouseholdSwitcher() {
@@ -705,6 +754,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function cancelPendingEntrySearch() {
+    cancelPositionRestoration();
     window.clearTimeout(state.searchTimer);
     state.searchTimer = null;
     state.entriesAbortController?.abort();
@@ -729,7 +779,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       ...["isGlobalOwner", "canManageEntries", "canViewTrash", "canPermanentlyDelete", "canViewInvestment"].map(key => Boolean(session[key]))]);
   }
 
-  async function loadEntries(reset, bootstrap = false) {
+  async function loadEntries(reset, bootstrap = false, returnEntryCount = 0) {
+    if (!bootstrap) cancelPositionRestoration();
     const generation = sessionGeneration;
     window.clearTimeout(state.searchTimer);
     state.searchTimer = null;
@@ -738,7 +789,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.entriesAbortController = abortController;
     const requestId = ++state.requestId;
     const monthlyView = isMonthlyView();
-    const pageSize = monthlyView ? (state.monthExpanded ? 50 : 5) : 20;
+    const targetCount = Math.max(0, Math.min(Number(returnEntryCount) || 0, 2000));
+    const pageSize = targetCount ? Math.min(50, Math.max(monthlyView ? 5 : 20, targetCount))
+      : monthlyView ? (state.monthExpanded ? 50 : 5) : 20;
     const loadedEntries = reset ? [] : [...state.entries];
     const previousEntryCount = loadedEntries.length;
     let nextOffset = reset ? 0 : state.offset;
@@ -756,7 +809,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     try {
       do {
         const parameters = new URLSearchParams({
-          limit: String(pageSize),
+          limit: String(targetCount > loadedEntries.length ? Math.min(pageSize, targetCount - loadedEntries.length) : pageSize),
           offset: String(nextOffset)
         });
         if (state.query) parameters.set("q", state.query);
@@ -780,7 +833,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
             return;
           }
           applyHouseholds(initial.households);
-          applyMeta(initial.meta);
+          preserveViewport(() => applyMeta(initial.meta));
           result = initial.entries;
         } else {
           result = await api(`/entries?${parameters}`, { signal: abortController.signal });
@@ -790,7 +843,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         nextOffset += result.entries.length;
         hasMore = result.hasMore;
         pageGuard += 1;
-      } while (monthlyView && state.monthExpanded && hasMore && pageGuard < 100);
+      } while (hasMore && pageGuard < 100 && ((monthlyView && state.monthExpanded) || loadedEntries.length < targetCount));
 
       await readingToolsReady;
       if (requestId !== state.requestId || generation !== sessionGeneration) return;
@@ -799,8 +852,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       for (const entry of state.entries) state.entryMap.set(entry.id, entry);
       state.offset = state.entries.length;
       state.hasMore = hasMore;
-      renderEntries(reset ? 0 : previousEntryCount);
+      if (bootstrap) preserveViewport(() => renderEntries(reset ? 0 : previousEntryCount));
+      else renderEntries(reset ? 0 : previousEntryCount);
       updateSearchStatus();
+      return true;
     } catch (error) {
       if (requestId !== state.requestId) return;
       elements.entryList.replaceChildren(createEmpty(error.message));
@@ -812,6 +867,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         setBusy(elements.loadMore, false, monthlyView ? "もっと見る" : "さらに表示");
       }
     }
+  }
+
+  function preserveViewport(render) {
+    // Compensate synchronous layout/anchoring changes using the position at
+    // commit time, including any scrolling performed while the request waited.
+    const top = window.scrollY;
+    render();
+    if (window.scrollY !== top) window.scrollTo({ top, left: 0, behavior: "instant" });
   }
 
   function captureEntryListPosition() {
@@ -830,22 +893,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function restoreEntryListPosition(position) {
     if (!position) return;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const anchor = position.entryId
-          ? elements.entryList.querySelector(`[data-entry-id="${position.entryId}"]`)
-          : null;
-        if (anchor) {
-          window.scrollBy({
-            top: anchor.getBoundingClientRect().top - position.top,
-            left: 0,
-            behavior: "auto"
-          });
-          return;
-        }
-        window.scrollTo({ top: position.scrollY, left: 0, behavior: "auto" });
-      });
-    });
+    const anchor = position.entryId
+      ? elements.entryList.querySelector(`[data-entry-id="${position.entryId}"]`)
+      : null;
+    if (anchor) {
+      window.scrollBy({ top: anchor.getBoundingClientRect().top - position.top, left: 0, behavior: "instant" });
+    } else {
+      window.scrollTo({ top: position.scrollY, left: 0, behavior: "instant" });
+    }
+    resetHeaderVisibilityTracking();
   }
 
   function rememberDiaryReturnViewFromNavigation(event) {
@@ -868,10 +924,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       return;
     }
     if (destination.pathname === window.location.pathname) return;
+    // The page defaults to no-referrer. Only these same-origin diary links
+    // need their source path to validate the one-shot return handoff.
+    link.referrerPolicy = "same-origin";
     storeDiaryReturnView(destination.pathname);
   }
 
-  function storeDiaryReturnView(destinationPath = "") {
+  function storeDiaryReturnView(destinationPath = "", { historyOnly = false } = {}) {
     const position = captureEntryListPosition();
     const returnView = {
       version: 2,
@@ -879,6 +938,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       routePath: window.location.pathname,
       destinationPath,
       householdId: state.activeHouseholdId || "",
+      accountName: state.accountName || "",
       query: state.query,
       month: state.month,
       monthExpanded: state.monthExpanded,
@@ -900,10 +960,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } catch {
       // History APIを利用できない場合もsessionStorageのfallbackを維持します。
     }
+    // Lifecycle snapshots belong to this history entry. Only explicit in-app
+    // navigation may replace the shared source snapshot and navigation token.
+    if (historyOnly) return;
     try {
       window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
       window.sessionStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
-        savedAt: returnView.savedAt, destinationPath
+        savedAt: returnView.savedAt, sourcePath: returnView.routePath, destinationPath
       }));
     } catch {
       // 保存領域が利用できない場合はブラウザ標準の戻る位置復元へ委ねます。
@@ -957,6 +1020,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function isUsableDiaryReturnView(returnView, householdId, expectedRoute) {
     if (!returnView || ![1, 2].includes(returnView.version)) return false;
     if (!Number.isFinite(returnView.savedAt) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return false;
+    if (returnView.accountName && returnView.accountName !== state.accountName) return false;
     if (returnView.householdId && householdId && returnView.householdId !== householdId) return false;
     const routePath = returnView.version === 1 ? `${BASE_PATH}/` : returnView.routePath;
     return routePath === expectedRoute && expectedRoute === window.location.pathname;
@@ -987,15 +1051,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.tagSearchInput.value = String(returnView.tagQueryInput || returnView.tagQuery || "").slice(0, 100);
   }
 
-  async function loadEntriesForDiaryReturn(entryCount) {
-    const targetCount = Math.max(0, Math.min(Number(entryCount) || 0, 2000));
-    let pageGuard = 0;
-    while (state.entries.length < targetCount && state.hasMore && pageGuard < 100) {
-      await loadEntries(false);
-      pageGuard += 1;
-    }
-  }
-
   function captureTagListPosition() {
     const containerRect = elements.tagList.getBoundingClientRect();
     const visibleTag = [...elements.tagList.querySelectorAll("[data-tag]")]
@@ -1013,41 +1068,40 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function restoreTagListPosition(position) {
     if (!position) return;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        elements.tagList.scrollTo({
-          top: Math.max(0, Number(position.scrollTop) || 0),
-          left: Math.max(0, Number(position.scrollLeft) || 0),
-          behavior: "auto"
-        });
-        const anchor = position.tag
-          ? [...elements.tagList.querySelectorAll("[data-tag]")].find((tag) => tag.dataset.tag === position.tag)
-          : null;
-        if (!anchor) return;
-        elements.tagList.scrollBy({
-          top: anchor.getBoundingClientRect().top - elements.tagList.getBoundingClientRect().top - (Number(position.top) || 0),
-          left: 0,
-          behavior: "auto"
-        });
-      });
+    elements.tagList.scrollTo({
+      top: Math.max(0, Number(position.scrollTop) || 0),
+      left: Math.max(0, Number(position.scrollLeft) || 0), behavior: "instant"
+    });
+    const anchor = position.tag
+      ? [...elements.tagList.querySelectorAll("[data-tag]")].find(tag => tag.dataset.tag === position.tag)
+      : null;
+    if (anchor) elements.tagList.scrollBy({
+      top: anchor.getBoundingClientRect().top - elements.tagList.getBoundingClientRect().top - (Number(position.top) || 0),
+      left: 0, behavior: "instant"
     });
   }
 
-  function restoreDiaryReturnPosition(returnView) {
+  function restoreDiaryReturnPosition(returnView, version = positionVersion) {
     if (!returnView) return;
     const restore = () => {
       restoreEntryListPosition(returnView.position);
       restoreTagListPosition(returnView.tagListPosition);
     };
-    restore();
-    window.setTimeout(restore, 120);
-    window.setTimeout(restore, 400);
+    schedulePositionRestoration(restore, version);
+    // A late webfont can change card heights. Correct only while the original
+    // restoration still owns the position; never overwrite subsequent input.
+    if (document.fonts?.status === "loading") {
+      document.fonts.ready.then(() => schedulePositionRestoration(restore, version));
+    }
   }
 
   function restoreDiaryReturnViewFromPageCache(event) {
-    if (!event.persisted || !isDiaryListRoute()) return;
-    const returnView = takeDiaryReturnView(state.activeHouseholdId, true);
-    if (returnView) restoreDiaryReturnPosition(returnView);
+    if (!event.persisted) return;
+    cancelPositionRestoration();
+    // BFCache retains the complete DOM, filters and scroll position. Let the
+    // browser restore that live page instead of replaying an older snapshot.
+    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    resetHeaderVisibilityTracking();
   }
 
   function isDiaryHomeRoute() {
@@ -1068,6 +1122,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     return returnView?.version === 2
       && returnView.destinationPath === window.location.pathname
       && returnView.routePath === destinationPath
+      && (!returnView.accountName || returnView.accountName === state.accountName)
+      && (!returnView.householdId || !state.activeHouseholdId || returnView.householdId === state.activeHouseholdId)
       && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
   }
@@ -1078,8 +1134,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       const position = captureEntryListPosition();
       elements.loadMore.blur();
       state.monthExpanded = true;
-      await loadEntries(false);
-      restoreEntryListPosition(position);
+      const loading = loadEntries(false);
+      const version = positionVersion;
+      const requestId = state.requestId;
+      const generation = sessionGeneration;
+      await loading;
+      if (generation === sessionGeneration && requestId === state.requestId) {
+        schedulePositionRestoration(() => restoreEntryListPosition(position), version);
+      }
       return;
     }
     await loadEntries(false);
@@ -1414,28 +1476,25 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       applyRouteState();
     }
     updateFilterControls();
-    await loadEntries(true);
-    await scrollToMonthlyHeadingAfterRender(targetMonth);
+    const loading = loadEntries(true);
+    const version = positionVersion;
+    const requestId = state.requestId;
+    const loaded = await loading;
+    if (loaded && requestId === state.requestId) await scrollToMonthlyHeadingAfterRender(targetMonth, version);
   }
 
-  function scrollToMonthlyHeadingAfterRender(targetMonth) {
-    return new Promise((resolve) => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          if (isDiaryHomeRoute() && isMonthlyView() && state.month === targetMonth && !elements.loadMore.disabled) {
-            const headerHeight = elements.siteHeader?.offsetHeight || 0;
-            const headingTop = window.scrollY + elements.listTitle.getBoundingClientRect().top;
-            window.scrollTo({
-              top: Math.max(0, headingTop - headerHeight - MONTH_HEADING_SCROLL_GAP_PX),
-              left: 0,
-              behavior: "auto"
-            });
-            resetHeaderVisibilityTracking();
-          }
-          resolve();
+  function scrollToMonthlyHeadingAfterRender(targetMonth, version = positionVersion) {
+    return schedulePositionRestoration(() => {
+      if (isDiaryHomeRoute() && isMonthlyView() && state.month === targetMonth && !elements.loadMore.disabled) {
+        const headerHeight = elements.siteHeader?.offsetHeight || 0;
+        const headingTop = window.scrollY + elements.listTitle.getBoundingClientRect().top;
+        window.scrollTo({
+          top: Math.max(0, headingTop - headerHeight - MONTH_HEADING_SCROLL_GAP_PX),
+          left: 0, behavior: "instant"
         });
-      });
-    });
+        resetHeaderVisibilityTracking();
+      }
+    }, version);
   }
 
   async function openEntry(id) {
@@ -1467,7 +1526,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       scrollRoots: () => [],
       capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex }),
       restore: saved => {
-        if (!canView() || !saved.photos[saved.index]) return false;
+        if (!canView() || !photoViewer || !saved.photos[saved.index]) return false;
         state.viewerPhotos = saved.photos;
         state.viewerIndex = saved.index;
         photoViewer.render();
@@ -1529,6 +1588,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function finishEntryClose() {
+    viewerOpenRequest += 1;
     if (elements.entryDialog.open) elements.entryDialog.close();
     state.activeEntry = null;
   }
@@ -2859,8 +2919,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     openPhotoViewer(state.photos, index);
   }
 
-  function openPhotoViewer(photos, index) {
+  async function openPhotoViewer(photos, index) {
     if (!photos?.length || index < 0 || index >= photos.length) return;
+    const generation = sessionGeneration;
+    const request = ++viewerOpenRequest;
+    try { await loadPhotoViewer(); } catch (error) { showToast(error.message); return; }
+    if (generation !== sessionGeneration || request !== viewerOpenRequest || elements.appView.hidden) return;
     state.viewerPhotos = photos;
     state.viewerIndex = index;
     photoViewer.render();
@@ -2872,6 +2936,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function finishCameraRollClose() {
+    viewerOpenRequest += 1;
     cancelCameraRollLoad();
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
 
@@ -2882,6 +2947,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function finishPhotoViewerClose() {
+    viewerOpenRequest += 1;
     photoViewer?.cancelLoad();
     if (elements.photoViewerDialog.open) elements.photoViewerDialog.close();
     elements.photoViewerImage.removeAttribute("src");
@@ -3533,7 +3599,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.favoritePage = onFavoritePage;
     const onTagPage = Boolean(tag);
     elements.tagPageBack.hidden = !onTagPage && !onTagDirectory && !onFavoritePage;
-    elements.tagPageBack.textContent = "← 日記へ戻る";
     elements.searchPanel.hidden = onTagPage;
     elements.diaryMain.hidden = onTagDirectory;
     elements.archivePanel.hidden = onTagDirectory;
@@ -3554,10 +3619,28 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function configureDiaryReturnNavigation() {
+    elements.tagPageBack.href = `${BASE_PATH}/`;
+    elements.tagPageBack.textContent = "← 日記へ戻る";
+    // Fresh accesses discard retained tokens before accepting a validated handoff.
+    // Reload and history navigation keep the token owned by their current entry.
     try {
-      const navigation = JSON.parse(window.sessionStorage.getItem(RETURN_NAVIGATION_KEY) || "null");
+      const newNavigation = isNewDiaryNavigation();
+      if (newNavigation && window.history.state?.[RETURN_NAVIGATION_KEY] !== undefined) {
+        const historyState = { ...window.history.state };
+        delete historyState[RETURN_NAVIGATION_KEY];
+        window.history.replaceState(historyState, "", window.location.href);
+      }
+      const storedNavigation = window.sessionStorage.getItem(RETURN_NAVIGATION_KEY);
       window.sessionStorage.removeItem(RETURN_NAVIGATION_KEY);
-      if (navigation?.destinationPath === window.location.pathname) {
+      const navigation = JSON.parse(storedNavigation || "null");
+      const returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      // Measure at navigation start so a slow bootstrap cannot expire a valid handoff.
+      const navigationAge = window.performance.timeOrigin - navigation?.savedAt;
+      if (newNavigation && navigation?.destinationPath === window.location.pathname
+        && isDiaryListPath(navigation.sourcePath) && isDiaryReturnReferrer(navigation.sourcePath)
+        && Number.isFinite(navigation.savedAt) && navigationAge >= 0 && navigationAge <= RETURN_NAVIGATION_MAX_AGE_MS
+        && returnView?.version === 2 && returnView.savedAt === navigation.savedAt
+        && returnView.routePath === navigation.sourcePath && returnView.destinationPath === navigation.destinationPath) {
         window.history.replaceState({
           ...(window.history.state || {}),
           [RETURN_NAVIGATION_KEY]: navigation.savedAt
@@ -3574,6 +3657,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       return;
     }
     if (returnView?.version !== 2 || returnView.destinationPath !== window.location.pathname) return;
+    // Display a source only when this history entry owns the accepted navigation.
+    if (!Number.isFinite(returnView.savedAt)
+      || window.history.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
     if (!isDiaryListPath(returnView.routePath) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
     elements.tagPageBack.href = returnView.routePath;
     elements.tagPageBack.textContent = "← 前の画面へ戻る";
@@ -3694,6 +3780,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function resetState() {
+    cancelPositionRestoration();
+    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
     loginAttempt += 1;
     setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
     sessionGeneration += 1;

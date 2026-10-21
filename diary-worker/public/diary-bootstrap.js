@@ -1,5 +1,15 @@
 (() => {
   const scriptUrl = new URL(document.currentScript.src);
+  const navigationType = window.performance.getEntriesByType("navigation")[0]?.type;
+  // Establish a fresh page's origin before any authentication/data wait or input.
+  // Reload and history navigation keep their existing restoration semantics.
+  if (navigationType !== "back_forward" && navigationType !== "reload") {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  } else if (window.history.state?.troomDiaryReturnView?.routePath === window.location.pathname
+    && "scrollRestoration" in window.history) {
+    // The runtime verifies account/household before using this snapshot.
+    window.history.scrollRestoration = "manual";
+  }
   const button = document.querySelector("#passkey-login");
   const bootView = document.querySelector("#boot-view");
   const loginView = document.querySelector("#login-view");
@@ -8,11 +18,24 @@
   const installButtons = [...document.querySelectorAll(".install-app-button")];
   const closeButtons = [...installDialog.querySelectorAll("[data-close-dialog]")];
   const events = new AbortController();
+  const initialScrollIntent = { interrupted: false };
+  for (const type of ["wheel", "touchmove", "pointerdown"]) {
+    window.addEventListener(type, () => { initialScrollIntent.interrupted = true; },
+      { passive: true, capture: true, signal: events.signal });
+  }
+  window.addEventListener("keydown", event => {
+    if (!event.ctrlKey && !event.metaKey && !event.altKey
+      && !event.target.closest?.("input, textarea, select, [contenteditable]:not([contenteditable='false'])")
+      && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+      initialScrollIntent.interrupted = true;
+    }
+  }, { signal: events.signal });
   let deferredInstallPrompt = null;
   let runtimePromise;
   const scripts = new Map();
 
   function showLogin(text = "") {
+    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
     document.querySelector("#app-view").hidden = true;
     bootView.hidden = true;
     loginView.hidden = false;
@@ -59,7 +82,7 @@
       button.textContent = "パスキーでログイン";
       events.abort();
       return deferredInstallPrompt;
-    });
+    }, initialScrollIntent);
   }
 
   button.addEventListener("click", async () => {

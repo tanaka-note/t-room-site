@@ -17,7 +17,8 @@
 }
 
 html {
-  scroll-behavior: smooth;
+  /* History/dialog restoration must not animate through a stale position. */
+  scroll-behavior: auto;
   background: #eef2f5;
 }
 

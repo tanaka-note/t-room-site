@@ -44,7 +44,7 @@ Downloaderの通常verifyはNodeテスト・Python構文・Worker bundleまで�
 
 Android/TWAは該当ディレクトリの変更時だけJava 21でdebug buildとunit test。SDK 36が必要。署名鍵、release build、実機/emulatorをCIへ持ち込まない。Webだけの変更でAndroid buildは走らない。
 
-Web契約テストはOS一時ディレクトリへ現在のソースをコピーし、既存 `web-apps:sync` と `web-apps:test` を実行して生成物を検証する。元のworktreeや公開中のbuildは変更しない。この生成テストとは別に、site verifyは実checkoutを変更しないfreshness checkを実行し、`t-room-site`に属するcontent-hash appのcommit済みmarker・updater・Service Worker・app shellが現在のhashと一致しなければCIを失敗させる。
+Web契約テストはOS一時ディレクトリへ現在のソースをコピーし、既存 `web-apps:sync` と `web-apps:test` を実行して生成物を検証する。元のworktreeや公開中のbuildは変更しない。この生成テストとは別に、site／diary verifyは実checkoutを変更しないfreshness checkを実行し、それぞれ`t-room-site`／`t-room-diary`に属するcontent-hash appのcommit済みmarker・updater・Service Worker・app shellが現在のhashと一致しなければCIを失敗させる。
 
 markerを同期する場合はdeploy targetまたはapp idを必ず指定し、対象外Workerのmarkerを巻き込まない。
 
