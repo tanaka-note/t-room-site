@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings } from './release-actions.mjs';
+import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings, assertDenied } from './release-actions.mjs';
 
 test('production selects changed services only, never PR/branch/docs/tooling or disabled runs', () => {
   const context = { event: 'push', ref: 'refs/heads/main', enabled: true };
@@ -53,4 +53,10 @@ test('production gates explicitly handle skipped upstream service jobs', () => {
   assert.match(workflow,/manual \|\| selected\.includes\('container-unit'\)/);
   assert.match(workflow,/clamav-definition-update/);
   assert.match(readFileSync(new URL('./release-actions.mjs',import.meta.url),'utf8'),/--containers-rollout=none/);
+});
+test('scope checks accept product-specific authorization denials, never success or a missing endpoint', () => {
+  for (const status of [401,403]) assertDenied(status,{success:false,errors:[{code:10000}]});
+  for (const status of [200,404,429,500]) assert.throws(()=>assertDenied(status,{success:false}));
+  assert.throws(()=>assertDenied(403,{success:true}));
+  assert.throws(()=>assertDenied(403,null));
 });
