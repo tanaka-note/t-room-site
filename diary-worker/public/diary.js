@@ -3620,19 +3620,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function configureDiaryReturnNavigation() {
-    // Clear a retained token before accepting this navigation's handoff. Internal
-    // links are also "navigate"; takeDiaryReturnView runs later and must keep it.
-    if (isNewDiaryNavigation()) {
-      try {
-        if (window.history.state && RETURN_NAVIGATION_KEY in window.history.state) {
-          const historyState = { ...window.history.state };
-          delete historyState[RETURN_NAVIGATION_KEY];
-          window.history.replaceState(historyState, "", window.location.href);
-        }
-      } catch {
-        // History APIを利用できない場合は既存の履歴を変更しません。
-      }
-    }
+    // Fresh accesses discard retained tokens before accepting a validated handoff.
+    // Reload and history navigation keep the token owned by their current entry.
     try {
       const newNavigation = isNewDiaryNavigation();
       if (newNavigation && window.history.state?.[RETURN_NAVIGATION_KEY] !== undefined) {

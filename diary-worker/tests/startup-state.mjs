@@ -168,7 +168,7 @@ function returnViewFixture() {
     history: { state: { unrelated: 42 }, replaceState(value) { this.state = value; }, scrollRestoration: 'manual' },
     sessionStorage: { getItem: key => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
-    performance: { getEntriesByType: () => [{ type: navigationType }] }
+    performance: { timeOrigin: Date.now(), getEntriesByType: () => [{ type: navigationType }] }
   };
   const document = { referrer: 'https://fixture.test/diary/favorites/' };
   let navigationType = 'navigate', cancellations = 0;
@@ -177,7 +177,7 @@ function returnViewFixture() {
   const api = new Function('window', 'document', 'state', 'elements', 'cancelPositionRestoration', `
     const BASE_PATH = '/diary', RETURN_VIEW_STORAGE_KEY = 'troom-diary-return-view-v1';
     const RETURN_VIEW_HISTORY_KEY = 'troomDiaryReturnView', RETURN_NAVIGATION_KEY = 'troomDiaryReturnNavigation';
-    const RETURN_VIEW_MAX_AGE_MS = 1800000;
+    const RETURN_VIEW_MAX_AGE_MS = 1800000, RETURN_NAVIGATION_MAX_AGE_MS = 30000;
     const captureEntryListPosition = () => ({ scrollY: 640 });
     const captureTagListPosition = () => ({ scrollTop: 80 });
     const isDiaryListRoute = () => true;
@@ -247,6 +247,7 @@ function openFavorites(f) {
   f.window.location.pathname = '/diary/favorites/';
   f.window.location.href = 'https://fixture.test/diary/favorites/';
   f.document.referrer = 'https://fixture.test/diary/';
+  f.window.performance.timeOrigin = JSON.parse(f.storage.get('troomDiaryReturnNavigation')).savedAt + 10;
   // boot applies route state (including configure) before enterDiary takes a view.
   assert.match(body('boot'), /applyRouteState\(\);[\s\S]*enterDiary\(initialSession\)/);
   assert.match(body('applyRouteState'), /configureDiaryReturnNavigation\(\)/);
@@ -305,4 +306,24 @@ test('reload and back/forward preserve the consumed internal token and current p
     assert.equal(f.has('/diary/'), true);
     assert.equal(f.window.history.state.unrelated, 42);
   }
+});
+
+test('interrupted handoff survives pagehide but is rejected after visiting another source', () => {
+  const f = returnViewFixture();
+  f.store('/diary/favorites/');
+  const snapshot = f.storage.get('troom-diary-return-view-v1');
+  const token = JSON.parse(f.storage.get('troomDiaryReturnNavigation')).savedAt;
+  f.hide();
+  f.window.location.pathname = '/diary/favorites/';
+  f.window.location.href = 'https://fixture.test/diary/favorites/';
+  f.document.referrer = 'https://fixture.test/diary/tags/';
+  f.window.performance.timeOrigin = token + 10;
+  f.window.history.state.troomDiaryReturnNavigation = token;
+  f.configure();
+  assert.equal(f.storage.has('troomDiaryReturnNavigation'), false);
+  assert.equal(f.window.history.state.troomDiaryReturnNavigation, undefined);
+  assert.equal(f.window.history.state.unrelated, 42);
+  assert.equal(f.take('household-a'), null);
+  assert.equal(f.has('/diary/'), false);
+  assert.equal(f.storage.get('troom-diary-return-view-v1'), snapshot);
 });
