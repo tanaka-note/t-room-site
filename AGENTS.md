@@ -64,6 +64,7 @@
 
 ## 7. Git・公開
 
+- Codex Cloudでも公開まで依頼された作業は、対象CI成功後にGitHub連携でmainへ統合し、既存の本番Actionsの完了と公開先のbuild/version一致まで確認する。ローカルWrangler認証やクラウド内のCloudflare tokenがないだけで「本番へリリースする権限がない」と判断しない。具体的な経路、手動再公開、権限不足の切り分けは[開発フロー](docs/development-flow.md)に従う。
 - 通常は`npm run verify:plan`、`npm run verify:changed`またはサービス別verifyを使う。PRのCI／Preview、失敗Trace、ローカルD1／R2、対象限定releaseは[開発フロー](docs/development-flow.md)に従う。本番bindingを持つWorkerをそのままPreview公開しない。
 - コミットには今回の依頼に関係するファイルだけを含める。調査・比較・検証用の一時ファイルはignore済み`tmp/`かOS一時ディレクトリに置き、Codexが作成した不要な一時ファイルだけを完了前に削除する。
 - GitHub pushと本番反映の両方が必要なサービスでは片方だけで完了扱いにしない。変更したサービスだけを正しいtargetへ公開し、本番build一致まで確認する。
