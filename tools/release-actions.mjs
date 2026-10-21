@@ -52,6 +52,12 @@ export function assertVersionSettings(before, after) {
   }
   if (JSON.stringify(before.queues?.consumers) !== JSON.stringify(after.queues?.consumers)) throw new Error('Queue consumer changes require the dedicated release procedure.');
 }
+export function assertDenied(status, body) {
+  if (![401, 403].includes(status) || body?.success !== false) {
+    const codes = (body?.errors || []).map(error => error.code).filter(Number.isFinite);
+    throw new Error(`Token scope denial not established (HTTP ${status}; codes ${codes.join(',') || 'none'}).`);
+  }
+}
 async function api(path) {
   const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
     headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(30000)
@@ -74,8 +80,9 @@ export async function checkTokenScope() {
     const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
       headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(30000)
     });
-    if (response.status !== 403) throw new Error('Token scope check did not establish denial of unrelated resources.');
-    console.log('[permissions] unrelated resource: denied (403)');
+    const body = await response.json().catch(() => null);
+    assertDenied(response.status, body);
+    console.log(`[permissions] unrelated resource: denied (${response.status})`);
   }
 }
 export async function releaseActions(target) {
