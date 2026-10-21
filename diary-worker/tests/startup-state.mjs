@@ -162,7 +162,7 @@ function returnViewFixture() {
   const storage = new Map();
   const state = { activeHouseholdId: 'household-a', accountName: 'account-a', entries: [1],
     query: 'saved search', month: '2026-09', monthExpanded: true };
-  const elements = { appView: { hidden: false }, tagSearchInput: { value: 'tag' } };
+  const elements = { appView: { hidden: false }, tagSearchInput: { value: 'tag' }, tagPageBack: { hidden: false } };
   const window = {
     location: { pathname: '/diary/', href: 'https://fixture.test/diary/', origin: 'https://fixture.test' },
     history: { state: { unrelated: 42 }, replaceState(value) { this.state = value; }, scrollRestoration: 'manual' },
@@ -187,10 +187,12 @@ function returnViewFixture() {
     ${body('isUsableDiaryReturnView')}
     ${body('isDiaryReturnReferrer')}
     ${body('hasDiaryReturnNavigation')}
+    ${body('configureDiaryReturnNavigation')}
+    ${body('isDiaryListPath')}
     let hide;
     window.addEventListener = (type, callback) => { if (type === 'pagehide') hide = callback; };
     ${pagehide}
-    return { store: storeDiaryReturnView, take: takeDiaryReturnView, hide, has: hasDiaryReturnNavigation };
+    return { store: storeDiaryReturnView, take: takeDiaryReturnView, hide, has: hasDiaryReturnNavigation, configure: configureDiaryReturnNavigation };
   `)(window, document, state, elements, () => { cancellations++; });
   return { ...api, window, state, elements, storage, document,
     setNavigation: type => { navigationType = type; }, cancellations: () => cancellations };
@@ -239,4 +241,68 @@ test('fresh navigation ignores and clears only its own lifecycle snapshot', () =
   assert.equal(f.take('household-a'), null);
   assert.equal(f.window.history.state.troomDiaryReturnView, undefined);
   assert.equal(f.window.history.state.unrelated, 42);
+});
+
+function openFavorites(f) {
+  f.window.location.pathname = '/diary/favorites/';
+  f.window.location.href = 'https://fixture.test/diary/favorites/';
+  f.document.referrer = 'https://fixture.test/diary/';
+  // boot applies route state (including configure) before enterDiary takes a view.
+  assert.match(body('boot'), /applyRouteState\(\);[\s\S]*enterDiary\(initialSession\)/);
+  assert.match(body('applyRouteState'), /configureDiaryReturnNavigation\(\)/);
+  f.configure();
+  return f.take('household-a');
+}
+test('fresh same-URL access rejects retained history tokens before and after taking a view', () => {
+  for (const pending of ['absent', 'other destination', 'malformed']) {
+    const f = returnViewFixture();
+    f.store('/diary/favorites/');
+    const snapshot = f.storage.get('troom-diary-return-view-v1');
+    f.window.history.state.troomDiaryReturnNavigation = JSON.parse(snapshot).savedAt;
+    if (pending === 'absent') f.storage.delete('troomDiaryReturnNavigation');
+    else f.storage.set('troomDiaryReturnNavigation', pending === 'malformed' ? '{' :
+      JSON.stringify({ destinationPath: '/diary/tags/', savedAt: Date.now() }));
+    f.window.location.pathname = '/diary/favorites/';
+    f.configure();
+    assert.equal(f.has('/diary/'), false, pending);
+    assert.equal(f.take('household-a'), null);
+    assert.equal(f.has('/diary/'), false);
+    assert.equal(f.window.history.state.troomDiaryReturnNavigation, undefined);
+    assert.equal(f.window.history.state.unrelated, 42);
+    assert.equal(f.storage.get('troom-diary-return-view-v1'), snapshot);
+  }
+});
+test('navigate from an internal link installs the new token and preserves valid back navigation', () => {
+  const f = returnViewFixture();
+  f.store('/diary/favorites/');
+  const token = JSON.parse(f.storage.get('troomDiaryReturnNavigation')).savedAt;
+  f.window.history.state.troomDiaryReturnNavigation = token - 1;
+  assert.equal(openFavorites(f), null);
+  assert.equal(f.window.history.state.troomDiaryReturnNavigation, token);
+  assert.equal(f.window.history.state.unrelated, 42);
+  assert.equal(f.storage.has('troomDiaryReturnNavigation'), false);
+  assert.equal(f.has('/diary/'), true);
+  assert.equal(f.has('/diary/tags/'), false);
+  f.state.activeHouseholdId = 'household-b';
+  assert.equal(f.has('/diary/'), false);
+  f.state.activeHouseholdId = 'household-a';
+  f.state.accountName = 'account-b';
+  assert.equal(f.has('/diary/'), false);
+});
+test('reload and back/forward preserve the consumed internal token and current page snapshot', () => {
+  for (const type of ['reload', 'back_forward']) {
+    const f = returnViewFixture();
+    f.store('/diary/favorites/');
+    openFavorites(f);
+    f.state.query = 'favorites search';
+    f.hide();
+    f.setNavigation(type);
+    f.configure();
+    const view = f.take('household-a');
+    assert.equal(view.routePath, '/diary/favorites/');
+    assert.equal(view.query, 'favorites search');
+    assert.equal(view.position.scrollY, 640);
+    assert.equal(f.has('/diary/'), true);
+    assert.equal(f.window.history.state.unrelated, 42);
+  }
 });
