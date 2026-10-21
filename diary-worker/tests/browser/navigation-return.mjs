@@ -197,6 +197,9 @@ async function run(browserType, name, executablePath) {
     await waitForDiary(page);
     await assertTagContext(page, appBackStoredContext, `${name} app Back`);
 
+    // A stale tag-directory source must not change the favorites return link.
+    await page.goto(`${origin}/diary/tags/`, { waitUntil: "networkidle" });
+    await waitForDiary(page);
     // Cancel the internal navigation after the capture listener saved a handoff.
     await page.evaluate(() => {
       document.querySelector("#favorites-link").addEventListener("click", event => event.preventDefault(), { once: true });
@@ -210,6 +213,10 @@ async function run(browserType, name, executablePath) {
     assert.equal(await page.evaluate(() => history.state?.troomDiaryReturnNavigation), undefined,
       `${name}: an interrupted handoff cannot be accepted after another page`);
     assert.equal(await page.evaluate(() => sessionStorage.getItem("troomDiaryReturnNavigation")), null);
+    assert.equal(await page.locator("#tag-page-back").getAttribute("href"), "/diary/",
+      `${name}: rejected handoff keeps the default diary link`);
+    assert.equal(await page.locator("#tag-page-back").textContent(), "← 日記へ戻る",
+      `${name}: rejected handoff does not claim a previous screen`);
     await page.click("#tag-page-back");
     await page.waitForURL(/\/diary\/?$/);
     await waitForDiary(page);
