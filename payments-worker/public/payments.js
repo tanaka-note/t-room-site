@@ -37,7 +37,7 @@
     for (const entry of entries) {
       const row = document.createElement('tr'); row.dataset.id = entry.id;
       cell(row, entry.paid_on); cell(row, entry.payee); cell(row, entry.description);
-      cell(row, money(entry.amount), 'numeric'); cell(row, `${entry.start_month} 〜\n${entry.end_month}`);
+      cell(row, money(entry.amount), 'numeric'); cell(row, `${entry.start_month} 〜\n${entry.end_month}\n期間終了まで：残り${entry.remaining_months}ヶ月`);
       cell(row, `${entry.months}ヶ月`, 'numeric'); cell(row, money(entry.monthly_amount), 'numeric');
       const status = cell(row, ''), badge = document.createElement('span'); badge.className = `badge ${entry.status}`;
       badge.textContent = entry.status === 'completed' ? '計上完了' : `残り${entry.remaining_count}回・計上済み${entry.completed_count}回`;

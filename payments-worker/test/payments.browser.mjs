@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fixture } from './fixture.js';
+import { currentJstMonth, month, monthText } from '../src/domain.js';
 const { chromium } = createRequire(new URL('../../diary-worker/package.json', import.meta.url))('playwright');
 const browser = await chromium.launch({ headless: true, ...(process.env.TROOM_CHROMIUM_PATH ? { executablePath:process.env.TROOM_CHROMIUM_PATH } : {}) });
 try {
@@ -116,6 +117,23 @@ try {
       await page.locator('#confirm-ok').click(); await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
       await page.locator('#empty').waitFor({ state: 'visible' });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      // Elapsed calendar months and unrecorded household entries remain distinct.
+      const periodCurrent = month(currentJstMonth()), periodCases = [];
+      for (const [label, offset, remaining] of [['開始前',1,3],['対象期間中',-1,2],['対象期間終了',-3,0]]) {
+        const id = crypto.randomUUID(); periodCases.push({id, remaining});
+        const response = await page.request.post(new URL('/payments/api/entries',page.url()).href, {
+          headers: {Origin:new URL(page.url()).origin},
+          data: {requestId:id,paidOn:'2020-01-01',payee:`期間表示確認・${label}`,amount:300,startMonth:monthText(periodCurrent+offset),months:3}
+        });
+        assert.equal(response.status(),200);
+      }
+      await page.locator('#refresh').click();
+      await page.waitForFunction(()=>document.querySelectorAll('#entries tr').length===3);
+      for (const {id,remaining} of periodCases) {
+        const row = page.locator(`#entries tr[data-id="${id}"]`);
+        assert.match(await row.innerText(),new RegExp(`期間終了まで：残り${remaining}ヶ月`));
+        assert.match(await row.innerText(),/残り3回・計上済み0回/);
+      }
       await page.locator('#logout').click(); await page.locator('#login-view').waitFor({ state: 'visible' });
       assert.deepEqual(errors, []);
     } finally { await context.close(); await new Promise(resolve => server.close(resolve)); f.close(); }
