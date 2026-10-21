@@ -56,12 +56,14 @@ export async function startUIFixture(sourceRoot = root, {handleRequest} = {}) {
   return {origin:`http://127.0.0.1:${server.address().port}`, close:()=>new Promise(r=>server.close(r))};
 }
 
-export async function preparePage(page, origin, count = 128) {
-  await page.goto(origin + '/cloud/');
+export async function preparePage(page, origin, count = 128, { reload = false } = {}) {
+  if (reload) await page.reload(); else await page.goto(origin + '/cloud/');
   await page.waitForFunction(() => globalThis.__test);
   await page.evaluate(async count => {
     __test.prepare(count);
-    globalThis.TCloudSession = {check:()=>({sessionCacheId:__test.state.session?.sessionCacheId}), fetch:globalThis.fetch.bind(globalThis), scopedUrl:url=>url};
+    globalThis.__realSessionGuard = TCloudSession;
+    globalThis.TCloudSession = {check:()=>({sessionCacheId:__test.state.session?.sessionCacheId}),
+      fetch:globalThis.fetch.bind(globalThis), scopedUrl:url=>url, isNetworkError:__realSessionGuard.isNetworkError};
     __test.bindEvents();
     const key = await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
     const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;canvas.getContext('2d').fillStyle='#248080';canvas.getContext('2d').fillRect(0,0,64,64);canvas.getContext('2d').fillStyle='#fff';canvas.getContext('2d').fillRect(32,0,32,64);

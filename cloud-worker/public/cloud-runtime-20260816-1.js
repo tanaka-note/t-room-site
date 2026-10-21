@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-c1d015024a2a";
+const APP_BUILD_ID = "cloud-531654d4b16f";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -189,16 +189,16 @@ async function initialize() {
         const cached = await loadCachedPasskeyKeys(session, config);
         globalThis.TCloudSession?.check();
         if (cached) {
-          await enterApp(session, "", null, { cached, config });
-          reportCompletedAppUpdate();
+          const loaded = await enterApp(session, "", null, { cached, config });
+          if (loaded?.ok !== false) reportCompletedAppUpdate();
           return;
         }
         const authentication = await TRoomPasskeys.authenticate("cloud", (links) => resumePasskeyLink(links, session));
         resumePasskeyLink([authentication.link], session);
         requirePasskeyPrf(authentication);
         const refreshed = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
-        await enterApp(refreshed, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
-        reportCompletedAppUpdate();
+        const loaded = await enterApp(refreshed, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
+        if (loaded?.ok !== false) reportCompletedAppUpdate();
         return;
       }
     } else {
@@ -998,6 +998,8 @@ function resumePasskeyLink(links, session) {
 }
 
 async function enterApp(session, password = "", accountKey = null, passkeyContext = null) {
+  if (state.session && (state.session.sessionCacheId !== session.sessionCacheId
+    || state.session.serviceAccountId !== session.serviceAccountId || state.session.role !== session.role)) releaseSessionState();
   globalThis.TCloudSession?.bind(session, false);
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
   state.session = session;
@@ -1019,23 +1021,31 @@ async function enterApp(session, password = "", accountKey = null, passkeyContex
   $("#mobile-storage-summary").hidden = session.role !== "admin";
   $("#mobile-usage-details-action").hidden = session.role !== "admin";
   const restoredNavigation = initializeNavigationHistory();
+  setViewTitle(state.folderId ? "ファイル" : "フォルダ");
   await prepareCryptoSession(password, accountKey, passkeyContext);
-  // Authentication and key preparation precede display, but /items must not
-  // hide an already available account cache behind the startup screen.
+  if (state.session !== session) return { ok: false, stale: true };
+  globalThis.TCloudSession?.check();
+  // Startup uses the same atomic list/position commit as history navigation.
   $("#boot-view").hidden = true;
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
   document.body.classList.add("cloud-app-open");
-  const loaded = await loadItems();
-  if (!loaded.ok && restoredNavigation.folderId && [403, 404, 423].includes(Number(loaded.error?.status))) {
-    await navigateToFolder(null, "フォルダ", { pushHistory: false, load: false });
-    history.replaceState(navigationEntry(null, "フォルダ"), "", location.href);
-    await loadItems();
-    setNotice("前回開いていたフォルダの再確認が必要なため、フォルダ一覧を表示しました。", true);
+  let loaded = await navigateToFolder(restoredNavigation.folderId, restoredNavigation.folderName,
+    { pushHistory: false, resetScroll: false, restoreEntry: restoredNavigation });
+  if (loaded.stale || state.session !== session) return loaded;
+  if (!loaded.ok && !loaded.restoreFailed && restoredNavigation.folderId && [403, 404, 423].includes(Number(loaded.error?.status))) {
+    loaded = await navigateToFolder(null, "フォルダ", { pushHistory: false, resetScroll: true });
+    if (loaded.stale || state.session !== session) return loaded;
+    if (loaded.ok) {
+      history.replaceState(navigationEntry(null, "フォルダ"), "", location.href);
+      activeNavigationEntry = history.state;
+      setNotice("前回開いていたフォルダの再確認が必要なため、フォルダ一覧を表示しました。", true);
+    }
   }
-  await restoreNavigationPosition(restoredNavigation);
+  if (!loaded.ok) return loaded;
   if (session.role === "admin") scheduleUsageLoad();
   scheduleLegacyFolderMigration();
+  return loaded;
 }
 
 async function logout() {
@@ -1066,7 +1076,7 @@ function initializeNavigationHistory() {
   state.listMode = Boolean(saved?.listMode);
   restoreFolderSortPreference(folderId);
   syncSearchInputs();
-  setViewTitle(folderName);
+  setViewTitle(folderId ? "ファイル" : "フォルダ");
   const entry = {
     ...navigationEntry(folderId, folderName),
     scrollX: Math.max(0, Number(saved?.scrollX) || 0),
@@ -1193,8 +1203,9 @@ async function navigateToFolder(folderId, folderName, options = {}) {
     if (load) result = await loadItems();
     if (folderNavigation !== navigation || result.stale) return { ok: false, stale: true };
     if (restoreEntry && result.ok) {
-      const restored = await ensureNavigationOriginRendered(restoreEntry);
-      if (restored?.ok === false) result = restored;
+      const restored = await restoreNavigationPosition(restoreEntry, { prepareOnly: true });
+      if (restored?.stale) return restored;
+      if (restored?.ok === false) result = { ...restored, restoreFailed: true };
     }
     if (folderNavigation !== navigation) return { ok: false, stale: true };
     // Commit the complete list and its position in the same task, before paint.
@@ -1203,7 +1214,7 @@ async function navigateToFolder(folderId, folderName, options = {}) {
       state.folders = []; state.files = []; state.folderSummary = null;
       navigation.breadcrumbs = [];
     }
-    setViewTitle(title);
+    setViewTitle(result.ok ? title : state.folderId ? "ファイル" : "フォルダ");
     syncSearchInputs();
     syncSortControls();
     syncNavigationActiveState();
@@ -1347,9 +1358,10 @@ function navigationOriginSelector(entry) {
 async function ensureNavigationOriginRendered(entry) {
   const generation = state.itemLoadGeneration;
   const navigation = navigationGeneration;
+  const signal = state.itemLoadController?.signal;
   let searchedOrigin = false;
   for (let attempt = 0; attempt < 256;) {
-    if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
+    if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration || signal?.aborted) return { ok: false, stale: true };
     const folderIndex = entry.originType === "folder"
       ? state.folders.findIndex((folder) => Number(folder.id) === Number(entry.originId))
       : -1;
@@ -1376,7 +1388,7 @@ async function ensureNavigationOriginRendered(entry) {
       if (page?.exhausted) break;
     }
   }
-  if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
+  if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration || signal?.aborted) return { ok: false, stale: true };
   if ((state.itemNextFolderOffset != null && state.folders.length < (Number(entry.loadedFolderCount) || 0))
     || (state.itemNextFileOffset != null && state.files.length < (Number(entry.loadedFileCount) || 0))) {
     const error = new Error("表示範囲を復元できませんでした。フォルダを開き直してください。");
@@ -1386,12 +1398,14 @@ async function ensureNavigationOriginRendered(entry) {
   if (generation === state.itemLoadGeneration && navigation === navigationGeneration && !folderNavigation) renderItems();
 }
 
-async function restoreNavigationPosition(entry) {
-  if (!entry?.tcloud) return;
+async function restoreNavigationPosition(entry, { prepareOnly = false } = {}) {
+  if (!entry || (!entry.tcloud && !prepareOnly)) return { ok: true };
   const generation = state.itemLoadGeneration, navigation = navigationGeneration;
-  await ensureNavigationOriginRendered(entry);
-  if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration) return;
-  applyNavigationPosition(entry);
+  const result = await ensureNavigationOriginRendered(entry);
+  if (generation !== state.itemLoadGeneration || navigation !== navigationGeneration || state.itemLoadController?.signal.aborted) return { ok: false, stale: true };
+  if (result?.ok === false) return result;
+  if (!prepareOnly) applyNavigationPosition(entry);
+  return { ok: true };
 }
 
 function applyNavigationPosition(entry) {
@@ -2130,7 +2144,8 @@ function syncAvailableActions() {
 
 function canFallbackToDisplayListing(error) {
   const status = Number(error?.status) || 0;
-  return error?.name !== "AbortError" && (!status || (status >= 500 && status <= 599));
+  return error?.name !== "AbortError" && (status ? status >= 500 && status <= 599
+    : globalThis.TCloudSession?.isNetworkError?.(error) === true);
 }
 
 async function loadItems() {
@@ -2253,18 +2268,25 @@ async function loadItems() {
       params.set("offset", "0");
       const cacheKey = state.query ? "" : displayListingCacheKey(params);
       const dataPromise = api(`/items?${params}`, { signal: itemLoadSignal });
-      const cachePromise = cacheKey ? readDisplayListingCache(cacheKey, itemLoadSignal) : Promise.resolve(null);
-      // Observe rejection immediately, and let a completed API response bypass slow IDB.
-      // Navigation keeps cached records behind its existing atomic commit barrier.
-      const cached = await Promise.race([cachePromise, dataPromise.then(() => null,
-        error => canFallbackToDisplayListing(error) ? cachePromise : null)]);
-      if (cached && loadGeneration === state.itemLoadGeneration && !itemLoadSignal.aborted) {
-        renderCachedDisplayListing(cached);
-        renderedInitialItems = true;
-        renderedCachedItems = true;
-      }
-      const data = await dataPromise;
+      const cacheAccess = displayListingCacheAccess();
+      const cachePromise = cacheKey ? readDisplayListingCache(cacheKey, itemLoadSignal, cacheAccess) : Promise.resolve(null);
+      // Never publish a cache before /items settles. Only a proven transport/5xx
+      // failure may use it; success does not wait for IDB or hide hydration errors.
+      const data = await dataPromise.catch(async error => {
+        if (canFallbackToDisplayListing(error) && cacheAccess.check()) {
+          const cached = await cachePromise;
+          if (cached && loadGeneration === state.itemLoadGeneration && !itemLoadSignal.aborted && cacheAccess.check(cached)) {
+            renderCachedDisplayListing(cached);
+            renderedInitialItems = true;
+            renderedCachedItems = true;
+          }
+        }
+        throw error;
+      });
       if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
+      if (!data || !Array.isArray(data.folders) || !Array.isArray(data.files)) {
+        throw new Error("一覧の応答を確認できませんでした。フォルダを開き直してください。");
+      }
       state.canTrashCurrentFolderContents = Boolean(data.canTrashContents);
       state.folderSummary = state.folderId ? {
         fileCount: Number(data.folder?.fileCount || 0),
@@ -2310,10 +2332,13 @@ async function loadItems() {
     if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
     state.progressiveItemsLoading = false;
     if (clearDeniedSearchResults(error)) { handleError(error); return { ok: false, error }; }
-    if (renderedCachedItems && !canFallbackToDisplayListing(error)) {
+    if (!renderedCachedItems || !canFallbackToDisplayListing(error)) {
       state.folders = [];
       state.files = [];
+      state.history = []; state.requests = []; state.shares = [];
+      state.folderSummary = null;
       state.breadcrumbs = [];
+      if (state.view === "all") setViewTitle(state.folderId ? "ファイル" : "フォルダ");
       renderBreadcrumbs([]);
       renderItems();
       handleError(error);
@@ -2381,6 +2406,16 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
       filePageParams ? api(`/items?${filePageParams}`, { signal }) : null
     ]);
     if (generation !== state.itemLoadGeneration || signal.aborted) return;
+    const nextOffset = (page, records, key, params) => {
+      if (!params) return null;
+      const next = normalizeNextItemOffset(page?.[key], Number(params.get("offset")));
+      if (!page || !Array.isArray(page[records])) {
+        throw new Error("一覧の続きの応答を確認できませんでした。フォルダを開き直してください。");
+      }
+      return next;
+    };
+    const nextFolderOffset = nextOffset(folderPage, "folders", "nextFolderOffset", folderPageParams);
+    const nextFileOffset = nextOffset(filePage, "files", "nextFileOffset", filePageParams);
     await hydrateSearchFolderKeyRecords([
       ...(folderPage?.searchFolders || []),
       ...(filePage?.searchFolders || [])
@@ -2404,8 +2439,8 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
     });
     state.folders = finalizeHydratedFolders([...state.folders, ...pageFolders]);
     state.files = finalizeHydratedFiles([...state.files, ...pageFiles]);
-    if (folderPageParams) state.itemNextFolderOffset = normalizeNextItemOffset(folderPage?.nextFolderOffset);
-    if (filePageParams) state.itemNextFileOffset = normalizeNextItemOffset(filePage?.nextFileOffset);
+    if (folderPageParams) state.itemNextFolderOffset = nextFolderOffset;
+    if (filePageParams) state.itemNextFileOffset = nextFileOffset;
     state.progressiveItemsLoading = state.itemNextFolderOffset != null || state.itemNextFileOffset != null;
     state.itemPageLoading = false;
     if (state.sortUsesTypeDefaults && !state.query) {
@@ -2513,24 +2548,34 @@ function displayListingCacheKey(params) {
   return normalized.toString();
 }
 
-async function readDisplayListingCache(cacheKey, signal) {
+function displayListingCacheAccess() {
   const scope = displayCacheScope();
   const session = state.session, sessionId = session?.sessionCacheId, folderId = state.folderId;
-  const canRead = () => state.view === "all"
-    && !(state.session?.role !== "admin" && state.folderId && !state.crypto.folderKeys.has(Number(state.folderId)));
-  if (!scope || signal?.aborted || !canRead()) return null;
+  return { scope, check(cached) {
+    if (!scope || session !== state.session || sessionId !== state.session?.sessionCacheId || folderId !== state.folderId
+      || scope !== displayCacheScope() || state.view !== "all") return false;
+    globalThis.TCloudSession?.check();
+    if (state.folderId) return state.crypto.folderKeys.has(Number(state.folderId));
+    if (state.session.role === "admin") return Boolean(state.crypto.adminPrivateKey);
+    if (state.session.role === "subadmin") return cached
+      ? (cached.folders || []).every(folder => state.crypto.folderKeys.has(Number(folder.id))) && !(cached.files || []).length
+      : state.crypto.folderKeys.size > 0;
+    return state.session.role === "member" && memberFolderScopes().every(item => state.crypto.folderKeys.has(Number(item.rootFolderId)));
+  } };
+}
+
+async function readDisplayListingCache(cacheKey, signal, access = displayListingCacheAccess()) {
   let onAbort;
   try {
+    if (signal?.aborted || !access.check()) return null;
     const aborted = signal && new Promise(resolve => {
       onAbort = () => resolve(null);
       signal.addEventListener("abort", onAbort, { once: true });
     });
-    const lookup = TCloudDisplayCache.getListing(scope, cacheKey, legacyDisplayCacheScope());
+    const lookup = TCloudDisplayCache.getListing(access.scope, cacheKey, legacyDisplayCacheScope());
     const cached = await (signal ? Promise.race([lookup, aborted]) : lookup);
     if (signal?.aborted) return null;
-    globalThis.TCloudSession?.check();
-    return session === state.session && sessionId === state.session?.sessionCacheId && folderId === state.folderId
-      && scope === displayCacheScope() && canRead() ? cached : null;
+    return access.check(cached) ? cached : null;
   } catch {
     return null;
   } finally {
@@ -2619,10 +2664,13 @@ function appendProgressiveItems(folders, files) {
   queueFloatingToolbarUpdate();
 }
 
-function normalizeNextItemOffset(value) {
-  if (value == null || value === "") return null;
-  const offset = Number(value);
-  return Number.isInteger(offset) && offset >= 0 ? offset : null;
+function normalizeNextItemOffset(value, previous = 0) {
+  if (value == null) return null;
+  const offset = typeof value === "number" || (typeof value === "string" && value.trim()) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(offset) || offset <= previous) {
+    throw new Error("一覧の続きの応答を確認できませんでした。フォルダを開き直してください。");
+  }
+  return offset;
 }
 
 function renderItems() {
@@ -9326,7 +9374,10 @@ async function api(path, options = {}) {
   if (!options.rawBody) headers.set("Content-Type", "application/json");
   const response = await TCloudSession.fetch(`${API}${path}`, { ...options, headers, credentials: "same-origin" });
   const type = response.headers.get("Content-Type") || "";
-  const data = type.includes("application/json") ? await response.json() : null;
+  const data = type.includes("application/json") ? await response.json().catch(error => {
+    TCloudSession.isNetworkError?.(error, response);
+    throw error;
+  }) : null;
   if (!response.ok) {
 
     const error = new Error(data?.error || `通信に失敗しました（${response.status}）`);

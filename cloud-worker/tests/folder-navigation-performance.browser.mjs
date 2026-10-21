@@ -91,6 +91,8 @@ try { for (const [engineName, engine, launch] of engines) {
         };
         await navigateToFolder(8, 'Empty');
         const normal = await measure(() => navigateToFolder(7, 'Files'));
+        normal.loadedCount = __test.state.files.length;
+        normal.scrollError = Math.abs(__test.appScrollPosition().y);
         // Seed the saved, fully loaded listing outside both timed intervals.
         // Every measured restoration still downloads and decrypts all records anew.
         const deadline = performance.now() + 30000;
@@ -110,10 +112,14 @@ try { for (const [engineName, engine, launch] of engines) {
             await new Promise(resolve => setTimeout(resolve, 1));
           }
         });
+        back.loadedCount = __test.state.files.length;
+        back.scrollError = Math.abs(position - __test.appScrollPosition().y);
         return { normal, back, position, restored: __test.appScrollPosition().y, loaded: __test.state.files.length };
       });
       assert.ok(Math.abs(measured.position - measured.restored) <= 2, JSON.stringify(measured));
       assert.equal(measured.loaded, count);
+      assert.equal(measured.normal.loadedCount, 32);
+      assert.ok(measured.normal.scrollError <= 2);
       if (iteration >= 0) for (const mode of ['normal', 'back']) samples[mode].push(measured[mode]);
     }
     for (const mode of ['normal', 'back']) {

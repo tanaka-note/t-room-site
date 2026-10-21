@@ -61,8 +61,10 @@ async function cacheFailures(page, origin) {
     assert.equal(await page.locator('[data-folder-id="99001"]').count(), 1);
   }
   networkFailure = true;
+  await page.evaluate(() => { globalThis.__fixtureFetch = TCloudSession.fetch; TCloudSession.fetch = __realSessionGuard.fetch; });
   assert.equal((await page.evaluate(() => navigateToFolder(7, 'Offline'))).partial, true);
   networkFailure = false;
+  await page.evaluate(() => { TCloudSession.fetch = __fixtureFetch; });
 
   // Success wins without waiting for a 600ms read, whose later result cannot overwrite it.
   status = 200;

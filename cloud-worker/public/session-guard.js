@@ -7,6 +7,8 @@
   const HEADER = "X-TCloud-Session";
   const nativeFetch = global.fetch.bind(global);
   const pending = new Set();
+  const networkFailures = new WeakSet();
+  const bodyFailures = new WeakMap();
   let epoch = 0;
   let current = null;
   let blocked = false;
@@ -99,6 +101,15 @@
     return url.pathname + url.search;
   }
   function privateApi(url) { return url.origin === global.location.origin && url.pathname.startsWith("/cloud/api/") && !url.pathname.startsWith("/cloud/api/public/"); }
+  function networkFailure(failure, signal) {
+    if (!signal.aborted && failure?.name === "TypeError") networkFailures.add(failure);
+    return failure;
+  }
+  function isNetworkError(failure, response) {
+    // Response.json() can replace a stream rejection with a new TypeError.
+    if (response && bodyFailures.get(response)?.network && failure?.name === "TypeError") networkFailures.add(failure);
+    return networkFailures.has(failure);
+  }
   async function scopedFetch(input, options = {}) {
     const url = new URL(typeof input === "string" ? input : input.url, global.location.href);
     if (!privateApi(url) || url.pathname === "/cloud/api/app-version" || url.pathname === "/cloud/api/auth-mode") return nativeFetch(input, options);
@@ -112,7 +123,12 @@
     pending.add(controller);
     const finish = () => { pending.delete(controller); external?.removeEventListener("abort", abort); };
     try {
-      const response = await nativeFetch(input, {...options, headers:selecting ? options.headers : headers(options.headers), credentials:"same-origin", cache:"no-store", signal:controller.signal});
+      // Validate request construction before classifying native transport failures.
+      const request = new Request(typeof input === "string" ? url : input, {...options,
+        headers:selecting ? options.headers : headers(options.headers), credentials:"same-origin", cache:"no-store", signal:controller.signal});
+      let response;
+      try { response = await nativeFetch(request); }
+      catch (failure) { check(snapshot); throw networkFailure(failure, controller.signal); }
       check(snapshot);
       if (response.status === 419 || (response.status === 401 && current && !selecting)) { invalidate(); throw error(); }
       if (selecting && response.ok) bind(await response.clone().json());
@@ -120,18 +136,34 @@
       const bodyEpoch = epoch;
       const reader = response.body?.getReader();
       if (!reader) { finish(); return response; }
+      const bodyFailure = { network: false };
       const body = new ReadableStream({
         async pull(target) {
-          try { check(bodyEpoch); const result = await reader.read(); check(bodyEpoch); if (result.done) { finish(); target.close(); } else target.enqueue(result.value); }
+          try {
+            check(bodyEpoch);
+            let result;
+            try { result = await reader.read(); }
+            catch (failure) {
+              check(bodyEpoch);
+              networkFailure(failure, controller.signal);
+              bodyFailure.network = networkFailures.has(failure);
+              throw failure;
+            }
+            check(bodyEpoch);
+            if (result.done) { finish(); target.close(); } else target.enqueue(result.value);
+          }
           catch (failure) { finish(); controller.abort(); void reader.cancel().catch(()=>{}); target.error(failure); }
         },
         cancel(reason) { finish(); controller.abort(); return reader.cancel(reason); }
       });
-      return new Response(body, {status:response.status, statusText:response.statusText, headers:response.headers});
+      const guarded = new Response(body, {status:response.status, statusText:response.statusText, headers:response.headers});
+      bodyFailures.set(guarded, bodyFailure);
+      return guarded;
     } catch (failure) { finish(); throw failure; }
   }
   function track(controller) { check(); pending.add(controller); return () => pending.delete(controller); }
   scheduleExpiry();
   global.TCloudSession = Object.freeze({fetch:scopedFetch, headers, scopedUrl, bind, renew, beginSelection, end, check, invalidate, track,
+    isNetworkError,
     context:()=>current, isBlocked:()=>blocked});
 })(globalThis);

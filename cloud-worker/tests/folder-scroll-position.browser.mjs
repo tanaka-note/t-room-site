@@ -34,6 +34,8 @@ async function verifyNavigationBoundaries(page) {
   });
   // A successful response must commit while IDB is still blocked, with no late overwrite.
   await page.evaluate(() => {
+    __test.state.crypto.folderKeys.set(7, __thumb.key);
+    __test.state.crypto.folderKeys.set(8, __thumb.key);
     globalThis.__originalCache = TCloudDisplayCache;
     globalThis.TCloudDisplayCache = { ...TCloudDisplayCache, supported: () => true,
       getListing: () => new Promise(resolve => { globalThis.__finishCache = () => resolve({ folders: [{ id: 9999, name: 'Stale cache', cryptoVersion: 0 }], files: [] }); }) };
@@ -78,6 +80,7 @@ async function verifyNavigationBoundaries(page) {
   continuationStatus = 200;
   // Existing offline fallback remains available, but a locked member cannot read it.
   offline = true;
+  await page.evaluate(() => { globalThis.__fixtureFetch = TCloudSession.fetch; TCloudSession.fetch = __realSessionGuard.fetch; });
   assert.equal((await page.evaluate(() => navigateToFolder(7, 'Offline'))).ok, true);
   assert.equal(await page.locator('[data-folder-id="9999"]').count(), 1);
   await page.evaluate(() => {
@@ -87,6 +90,7 @@ async function verifyNavigationBoundaries(page) {
   assert.equal((await page.evaluate(() => navigateToFolder(7, 'Locked'))).ok, false);
   assert.equal(await page.locator('.folder-card, .file-card').count(), 0);
   offline = false;
+  await page.evaluate(() => { TCloudSession.fetch = __fixtureFetch; });
   await page.evaluate(() => { __test.releaseSessionState(); __test.prepare(0); globalThis.TCloudDisplayCache = { ...__originalCache, supported: () => false }; });
   // Restore a partial loaded range exactly, then append a normal 64-item page.
   requests.length = 0;
@@ -257,3 +261,4 @@ try { for (const [name, engine, launch] of engines) {
 } } finally { await fixture.close(); }
 
 await import('./folder-navigation-review.browser.mjs');
+await import('./startup-security.browser.mjs');

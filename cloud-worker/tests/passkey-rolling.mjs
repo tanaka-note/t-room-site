@@ -146,7 +146,7 @@ const shared=new Map();
 function guard() {
   const local=new Map(),events=new Map();
   const storage=map=>({getItem:key=>map.get(key)||null,setItem:(key,value)=>map.set(key,value)});
-  const scope={fetch:async()=>new Response('{}'),Headers,URL,AbortController,ReadableStream,Response,Event,CustomEvent,crypto,
+  const scope={fetch:async()=>new Response('{}'),Headers,Request,URL,AbortController,ReadableStream,Response,Event,CustomEvent,crypto,
     Date:{now:()=>clock},setTimeout(){return 1},clearTimeout(){},localStorage:storage(shared),sessionStorage:storage(local),
     document:{visibilityState:'visible'},location:{origin:'https://example.test',href:'https://example.test/cloud/',replace(){}},
     addEventListener(name,callback){events.set(name,callback)},dispatchEvent(){},BroadcastChannel:class{postMessage(){}}};
