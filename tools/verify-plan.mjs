@@ -19,7 +19,7 @@ export function commands(target) {
   const checks = services.includes(target) ? [{ cwd: `${target}-worker`, script: 'check' }] : [];
   // Downloader's existing check also compiles Python; no Docker or definition refresh.
   const suites = {
-    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
+    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-release-actions.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
     site: [
       { cwd: '.', script: 'asset-report:test' },
       { cwd: '.', script: 'brand:test' },
@@ -76,7 +76,7 @@ export function affected(paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
-    if (/^(tools\/(verify|install-verify|test-development|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
+    if (/^(tools\/(verify|install-verify|test-development|test-release|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }
     if (['tools/test-session-secret.mjs', 'tools/test-passkey-rolling.mjs', 'tools/fixtures/passkey-rolling-binding.mjs'].includes(path)) { add('auth'); continue; }
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');

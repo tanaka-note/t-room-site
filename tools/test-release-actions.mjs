@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings } from './release-actions.mjs';
+
+test('production selects changed services only, never PR/branch/docs/tooling or disabled runs', () => {
+  const context = { event: 'push', ref: 'refs/heads/main', enabled: true };
+  assert.deepEqual(productionPlan(['tooling', 'cloud', 'auth'], context), ['cloud']);
+  assert.deepEqual(productionPlan(['downloader', 'container-unit'], context), ['downloader']);
+  assert.deepEqual(productionPlan(['tooling'], context), []);
+  for (const override of [{event:'pull_request'}, {ref:'refs/heads/codex/test'}, {enabled:false}]) {
+    assert.deepEqual(productionPlan(['site'], {...context,...override}), []);
+  }
+  assert.deepEqual(productionPlan(['site','cloud'], {...context,event:'workflow_dispatch',requested:'diary'}), ['diary']);
+  assert.deepEqual(productionPlan(['site'], {...context,event:'workflow_dispatch'}), []);
+  assert.throws(() => productionPlan([], {...context,event:'workflow_dispatch',requested:'../../evil'}));
+  assert.ok(manualVerification('security').includes('auth'));
+  assert.deepEqual(manualVerification('site'), ['site']);
+});
+test('CI bypass is rejected unless successful CI and checkout are the same main SHA', () => {
+  const head='a'.repeat(40);
+  const env={GITHUB_ACTIONS:'true',GITHUB_REPOSITORY:'tanaka-note/t-room-site',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'push',TROOM_CI_RESULT:'success',GITHUB_SHA:head,TROOM_VERIFIED_SHA:head};
+  assert.doesNotThrow(() => assertActionsRelease(env,head));
+  for (const key of Object.keys(env)) assert.throws(() => assertActionsRelease({...env,[key]:'invalid'},head),key);
+});
+test('promotion is pinned to a unique uploaded Worker/version and read back at 100%', () => {
+  const version='12345678-1234-1234-1234-123456789abc';
+  const upload={type:'version-upload',worker_name:'t-room-site',version_id:version};
+  assert.equal(uploadedVersion(JSON.stringify(upload),'t-room-site'),version);
+  assert.throws(() => uploadedVersion(JSON.stringify(upload),'t-room-cloud'));
+  assert.throws(() => uploadedVersion(JSON.stringify(upload)+'\n'+JSON.stringify(upload),'t-room-site'));
+  assert.throws(() => uploadedVersion(JSON.stringify({...upload,version_id:'latest'}),'t-room-site'));
+  assertDeployedVersion({deployments:[{versions:[{version_id:version,percentage:100}]}]},version);
+  for (const deployments of [[],[{versions:[{version_id:'different',percentage:100}]}],[{versions:[{version_id:version,percentage:50}]}]]) {
+    assert.throws(() => assertDeployedVersion({deployments},version));
+  }
+});
+test('code release refuses infrastructure changes instead of silently ignoring them', () => {
+  const before={routes:[{pattern:'example.test/*'}],triggers:{crons:['0 * * * *']},queues:{consumers:[{queue:'existing'}]}};
+  assertVersionSettings(before,{...before,compatibility_date:'2026-10-21',vars:{FEATURE:'true'}});
+  for (const key of ['routes','workers_dev','triggers','migrations']) assert.throws(()=>assertVersionSettings(before,{...before,[key]:['changed']}));
+  assert.throws(()=>assertVersionSettings(before,{...before,queues:{consumers:[]}}));
+});
