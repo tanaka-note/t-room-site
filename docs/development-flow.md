@@ -123,15 +123,45 @@ DownloaderのProductionはこのコマンドで拒否し、既存の署名・lea
 
 ## GitHub Actionsからの本番自動公開
 
+### Codex Cloudから実装・公開する
+
+公開まで承認された依頼では、クラウド内で実装・対象verify・commit・push・PR作成を行い、対象CI成功後に接続済みGitHub連携のmerge操作でmainへ統合する。main pushの`Verify changed services`で`production (<target>)`（Containerは専用job）の成功と`Production verified`のcommit/version、および対象の公開buildを確認して完了する。PRのCI成功、mainへのpush、公開jobのskipだけでは本番反映の証拠にならない。PR作成だけの依頼ではmergeしない。
+
+この経路のCloudflare認証はGitHubの`production` EnvironmentからActionsへ渡される。クラウドにローカルPCのWrangler OAuthや本番Secretをコピーする必要はない。Cloudflare読み取り専用MCPの権限と、GitHub Actionsの公開権限は別であり、MCPから変更できないことを本番公開全体の権限不足と混同しない。`tools/release-actions.mjs`はActions内の専用コマンドであり、クラウドのshellで`GITHUB_ACTIONS`等を偽装して実行しない。
+
+最新mainの対象を再公開する場合、GitHub CLIが認証済みなら次を使う。接続済みGitHubツールがworkflow dispatchを提供する場合はそれでもよい。CLI・RESTの認証とGitHub連携ツールの認証は別で、連携が使えても`gh auth status`が成功するとは限らない。
+
+```sh
+gh workflow run verify.yml --repo tanaka-note/t-room-site --ref main -f production_target=site
+gh run list --repo tanaka-note/t-room-site --workflow verify.yml --branch main --event workflow_dispatch --limit 5
+gh run watch <run-id> --repo tanaka-note/t-room-site --exit-status
+gh run view <run-id> --repo tanaka-note/t-room-site --json jobs,url,headSha,conclusion
+```
+
+`site`は依頼対象へ置き換える。dispatchのない連携でCLI認証もない場合でも、検証済み変更のmain統合による通常の自動公開は利用できる。変更のない再公開のために空commitを作らず、未提供の操作と必要な認証だけを具体的に報告する。
+
+権限エラーは次の順で切り分ける。
+
+| 層 | 確認・対応 |
+| --- | --- |
+| クラウド環境の通信 | Settings → Codex Cloud → T-ROOM → 編集。インターネットを許可し、GitHub API、必要なCloudflare APIと公開先を許可する。パッケージマネージャーのプリセットだけではすべてのAPI・公開先を含まない。設定の公開後、新規タスクで確認する。 |
+| GitHub連携 | 対象repositoryの取得・push・PR作成・mergeを確認する。GitHub Appの対象repositoryと許可が正本。shellの`gh`未認証だけで連携ツールまで使用不能と判断しない。 |
+| Actions設定 | `CLOUDFLARE_PRODUCTION_ENABLED=true`、production EnvironmentのSecret/変数、main限定policy、対象jobの実行結果を確認する。Secret値を読み出さない。 |
+| Cloudflare公開 | production jobの失敗stepとHTTP statusを調べる。Cloudflare APIの拒否、build不一致、CI失敗、古いmain、非version設定変更を区別する。D1/R2の認可拒否は限定tokenの正常な検査結果になり得る。 |
+
+通常のコード公開は既存の11 Worker向け権限を使う。D1 migration、R2操作、DNS/route/Queue/Container変更、新規Worker作成はこの公開経路と別の作業であり、対象の操作に必要な権限と専用手順を確認する。クラウドへ永続認証を追加する場合は環境のNetwork secrets（HTTPS宛先限定）を使い、GitHub用とCloudflare用を分ける。ユーザーの認証・署名・復号鍵は渡さない。環境を更新しても既存タスクの保存状態は自動更新されないため、更新後は新規タスクを使う。[公式クラウド環境設定](https://learn.chatgpt.com/docs/environments/cloud-environments)を参照。
+
+### 公開jobと認証
+
 `Verify changed services` はmain pushの差分対象だけを検証し、集約`verify`成功後に対象Workerだけを公開する。PR・開発branch・通常の手動verifyからは本番公開しない。手動公開は同Workflowの`production_target`で1サービスを選び、branchをmainにする。手動対象にも既存の対象別CI（Securityのauth回帰、Downloader 2のNative試験等）を適用する。
 
 初期設定はGitHubの`production` Environmentをbranch `main`だけに限定し、Environment Secret `CLOUDFLARE_API_TOKEN`とEnvironment変数`CLOUDFLARE_ACCOUNT_ID`を登録する。repository変数`CLOUDFLARE_PRODUCTION_ENABLED=true`で有効化する。無効時はCIだけ実行し、Production planに公開対象なしを明記する。失敗時は同じmainコミットのrunを再実行するか、最新mainから`production_target`を指定する。mainが進んだ古いrunは新規公開を拒否するため、失敗した対象を最新mainで明示再実行して公開漏れを解消する。
 
-専用のaccount-owned tokenは既存の本番11 Worker（`t-room-site/cloud/security/diary/billing/downloader/downloader2/ai/inventory/health/payments`）を個別指定した`Individual Workers Editor`だけを付与する。アカウント管理、token管理、DNS/ルート編集、D1/R2の直接読み書き権限を追加しない。Editorには対象Workerのコード・binding・設定の変更権限があり、コード変更を通した本番データへの間接的なアクセスまで遮断する権限ではない。mainへの変更内容とCIがその境界になる。[Cloudflareの権限仕様](https://developers.cloudflare.com/workers/authorization/workers/)を参照。初期構築の専用トークンはユーザー指定により期限なしとする。漏えいの疑い・権限変更等で交換する場合は、同じ限定権限の新トークンを発行し、Environment Secretだけを差し替える。値をチャット・Git・ログ・スクリーンショットへ出さない。
+専用のaccount-owned tokenは既存の本番11 Worker（`t-room-site/cloud/security/diary/billing/downloader/downloader2/ai/inventory/health/payments`）を個別指定した`Individual Workers Editor`と、同アカウント全体の`Workers Scripts Read`を付与する。後者はWranglerがversion upload後に取得する共通`workers.dev`サブドメインの読取に必要で、個別Worker権限だけではHTTP 403/code 10000で失敗する。アップロード前にもこのAPIを検査して早期停止する。`Workers Scripts Read`は対象外Workerのmetadata/sourceの読取も許可するため、その範囲も含む権限である。アカウント管理、token管理、DNS/ルート編集、D1/R2の直接読み書き権限を追加しない。Editorには対象Workerのコード・binding・設定の変更権限があり、コード変更を通した本番データへの間接的なアクセスまで遮断する権限ではない。mainへの変更内容とCIがその境界になる。[Cloudflareの権限仕様](https://developers.cloudflare.com/workers/authorization/workers/)を参照。初期構築の専用トークンはユーザー指定により期限なしとする。漏えいの疑い・権限変更等で交換する場合は、同じ限定権限の新トークンを発行し、Environment Secretだけを差し替える。値をチャット・Git・ログ・スクリーンショットへ出さない。
 
 既存のCloudflare Buildsによるsiteの独立した自動公開は停止し、CIを迂回する二重公開を避ける。他の10 WorkerにBuilds連携がないことも初期構築時に確認した。`Disable builds`を解除する場合はCIとの公開順序を再設計する。
 
-通常の10 Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。AIはWeb registryを持たないためversionの一致を確認する。手動公開時は対象11 Workerのmetadata読取成功と、既知の対象外Worker・D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
+通常の10 Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。AIはWeb registryを持たないためversionの一致を確認する。手動公開時はアカウント共通サブドメインおよび対象11 Workerのmetadata読取成功と、D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
 
 この経路は既存のroutes、Custom Domains、Cron、Queue設定、Containerを変更しない。これらの非version設定やDB migrationを変更する作業は、通常コード公開と別に既存の専用手順で扱う。勝手に権限を増やしたり、未適用の設定変更を適用済みとして報告しない。ローカルの`npm run release`は従来どおり利用できる。
 

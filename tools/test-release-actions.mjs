@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings, assertDenied } from './release-actions.mjs';
+import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings, assertDenied, checkTokenScope } from './release-actions.mjs';
 
 test('production selects changed services only, never PR/branch/docs/tooling or disabled runs', () => {
   const context = { event: 'push', ref: 'refs/heads/main', enabled: true };
@@ -59,4 +59,29 @@ test('scope checks accept product-specific authorization denials, never success 
   for (const status of [200,404,429,500]) assert.throws(()=>assertDenied(status,{success:false}));
   assert.throws(()=>assertDenied(403,{success:true}));
   assert.throws(()=>assertDenied(403,null));
+});
+
+test('token preflight requires account subdomain access and checks only read operations', async () => {
+  const calls = [], logs = [];
+  const options = {
+    env: { CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_API_TOKEN: 'fixture-token' },
+    read: async path => { calls.push(path); return {}; },
+    request: async (url, init) => {
+      assert.equal(init.method, undefined, 'scope probes must use GET');
+      calls.push(url);
+      return { status: url.endsWith('/d1/database') ? 401 : 403, json: async () => ({success:false}) };
+    },
+    log: message => logs.push(message)
+  };
+  await checkTokenScope(options);
+  assert.match(calls[0], /\/workers\/subdomain$/);
+  assert.equal(calls.length, 14, 'account subdomain, 11 selected Workers, D1 and R2');
+  assert.equal(calls.filter(path => path.endsWith('/settings')).length, 11);
+  assert.equal(logs.some(message => message.includes('fixture-token')), false);
+  const deniedCalls = [];
+  await assert.rejects(checkTokenScope({...options, read: async path => {
+    deniedCalls.push(path); throw new Error('Cloudflare verification failed (HTTP 403).');
+  }}), /HTTP 403/);
+  assert.equal(deniedCalls.length, 1, 'fail before any other work when account read permission is absent');
+  await assert.rejects(checkTokenScope({...options, request: async () => ({status:200,json:async()=>({success:true})})}), /denial not established/);
 });
