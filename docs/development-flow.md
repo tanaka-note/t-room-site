@@ -144,7 +144,7 @@ gh run view <run-id> --repo tanaka-note/t-room-site --json jobs,url,headSha,conc
 
 | 層 | 確認・対応 |
 | --- | --- |
-| クラウド環境の通信 | Settings → Codex Cloud → T-ROOM → 編集。インターネットを許可し、GitHub API、必要なCloudflare APIと公開先を許可する。パッケージマネージャーのプリセットだけではすべてのAPI・公開先を含まない。設定の公開後、新規タスクで確認する。 |
+| クラウド環境の通信 | Settings → Codex Cloud → 登録済みの対象環境 → 編集。インターネットを許可し、GitHub API、必要なCloudflare APIと公開先を許可する。パッケージマネージャーのプリセットだけではすべてのAPI・公開先を含まない。設定の公開後、新規タスクで確認する。 |
 | GitHub連携 | 対象repositoryの取得・push・PR作成・mergeを確認する。GitHub Appの対象repositoryと許可が正本。shellの`gh`未認証だけで連携ツールまで使用不能と判断しない。 |
 | Actions設定 | `CLOUDFLARE_PRODUCTION_ENABLED=true`、production EnvironmentのSecret/変数、main限定policy、対象jobの実行結果を確認する。Secret値を読み出さない。 |
 | Cloudflare公開 | production jobの失敗stepとHTTP statusを調べる。Cloudflare APIの拒否、build不一致、CI失敗、古いmain、非version設定変更を区別する。D1/R2の認可拒否は限定tokenの正常な検査結果になり得る。 |
