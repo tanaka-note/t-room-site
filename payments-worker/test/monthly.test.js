@@ -69,6 +69,17 @@ test('current dashboard uses actual amounts, zero-yen months can be completed, f
     assert.throws(()=>f.sqlite.prepare('INSERT INTO payments_monthly_marks VALUES (?,?,?,?)').run(id,monthText(month(current)+1),0,new Date().toISOString()),/invalid_month/);
   } finally { f.close(); }
 });
+test('only completing every target month finishes an ended contract; undo reopens it and stored sum stays exact',async()=>{
+  const f=fixture(); try {
+    await f.login(); const id=await create(f);
+    for(let i=0;i<12;i++) assert.equal((await mark(f,id,i+1,monthText(month('2020-01')+i))).status,200);
+    let entry=(await (await f.request('/api/entries')).json()).entries[0];
+    assert.equal(entry.remaining_count,0); assert.equal(entry.status,'completed'); assert.equal(entry.period_status,'ended');
+    assert.equal(f.sqlite.prepare('SELECT SUM(amount) total FROM payments_monthly_marks WHERE completed_at IS NOT NULL').get().total,10000);
+    assert.equal((await mark(f,id,13,'2020-01',false)).status,200);
+    entry=(await (await f.request('/api/entries')).json()).entries[0]; assert.equal(entry.remaining_count,1); assert.equal(entry.status,'pending'); assert.equal(entry.past_pending_amount,834);
+  } finally {f.close();}
+});
 test('concurrent tabs: one transaction wins; opposing mark, edit and delete cannot overwrite it', async () => {
   for (const rival of ['mark','edit','delete']) {
     const f=fixture(); try {

@@ -90,7 +90,21 @@
     ask('入力内容を破棄しますか？', '保存していない入力内容があります。', '破棄する', async () => { await dialogs.close('confirm-dialog', { force: true }); await dialogs.close('entry-dialog', { force: true }); });
     return false;
   }, onClose: () => { form.reset(); initial = JSON.stringify(values()); protect(); editing = null; requestId = null; } });
-  dialogs.register('months-dialog', { blocked: () => busy, guard: () => !busy, onClose: () => { detail = null; detailEntry = null; } });
+  dialogs.register('months-dialog', {
+    blocked: () => busy, guard: () => !busy,
+    capture: () => ({ detail, entry: detailEntry, monthPage }),
+    restore: saved => {
+      const entry = entries.find(e => e.id === saved?.entry?.id);
+      if (!entry || entry.version !== saved.detail?.version || $('app-view').hidden || saved.detail.currentMonth !== new Date(Date.now()+9*3600000).toISOString().slice(0,7)) return false;
+      detail = saved.detail; detailEntry = entry; monthPage = saved.monthPage;
+      $('months-title').textContent = `${entry.payee}の月別計上履歴`; renderMonths(); return true;
+    },
+    onClose: () => {
+      const id = detailEntry?.id; detail = null; detailEntry = null;
+      // A completion refresh replaces the original row; retain a safe focus target.
+      [...$('entries').rows].find(row => row.dataset.id === id)?.querySelector('button')?.focus({ preventScroll:true });
+    }
+  });
   dialogs.register('confirm-dialog', { guard: () => !busy, blocked: () => busy, onClose: () => { confirmAction = null; } });
   form.addEventListener('input', () => { requestId = null; protect(); calculation(); });
   form.addEventListener('submit', async event => {
@@ -192,7 +206,10 @@
   async function refreshIfSafe() {
     if (document.hidden || busy || $('app-view').hidden || document.querySelector('dialog[open]')) return;
     const nowMonth = new Date(Date.now()+9*3600000).toISOString().slice(0,7);
-    if (needsRefresh || (currentMonth && currentMonth !== nowMonth)) { needsRefresh=false; try { await load(); } catch {} }
+    if (needsRefresh || (currentMonth && currentMonth !== nowMonth)) {
+      needsRefresh=false; setBusy(true);
+      try { await load(); } catch {} finally { setBusy(false); }
+    }
   }
   if (channel) channel.onmessage = () => { needsRefresh=true; refreshIfSafe(); };
   document.addEventListener('visibilitychange', refreshIfSafe); window.addEventListener('focus', refreshIfSafe);

@@ -85,6 +85,9 @@ try {
       }
       assert.equal(await page.locator('#month-items button').first().evaluate(el=>el.getBoundingClientRect().height>=44), true);
       await page.goBack(); await page.locator('#months-dialog').waitFor({state:'hidden'});
+      assert.equal(await page.evaluate(()=>document.activeElement?.textContent),'月別履歴');
+      await page.goForward(); await page.locator('#months-dialog').waitFor({state:'visible'});
+      await page.locator('#close-months').click(); await page.locator('#months-dialog').waitFor({state:'hidden'});
       await page.getByRole('button',{name:monthlyLabel,exact:true}).click(); await page.locator('#months-dialog').waitFor({state:'visible'});
       if (mobile) await page.touchscreen.tap(2,2); else await page.mouse.click(2,2);
       await page.locator('#months-dialog').waitFor({state:'hidden'});
