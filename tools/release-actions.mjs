@@ -68,21 +68,26 @@ async function api(path) {
   if (!body.success) throw new Error('Cloudflare verification failed.');
   return body.result;
 }
-export async function checkTokenScope() {
-  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-  if (!/^[a-f0-9]{32}$/.test(account || '') || !process.env.CLOUDFLARE_API_TOKEN) throw new Error('Production credentials are missing.');
+export async function checkTokenScope({ env = process.env, read = api, request = fetch, log = console.log } = {}) {
+  const account = env.CLOUDFLARE_ACCOUNT_ID;
+  if (!/^[a-f0-9]{32}$/.test(account || '') || !env.CLOUDFLARE_API_TOKEN) throw new Error('Production credentials are missing.');
+  // Wrangler reads the account subdomain after uploading a preview-capable version.
+  // Establish this permission before any upload, not after creating an orphan version.
+  await read(`/accounts/${account}/workers/subdomain`);
+  log('[permissions] Workers account subdomain: readable');
   for (const target of [...productionTargets, 'downloader']) {
-    await api(`/accounts/${account}/workers/scripts/${workerName(target)}/settings`);
-    console.log(`[permissions] ${workerName(target)}: readable`);
+    await read(`/accounts/${account}/workers/scripts/${workerName(target)}/settings`);
+    log(`[permissions] ${workerName(target)}: readable`);
   }
-  // These known resources exist; only read-only requests are used to prove denial.
-  for (const path of [`/accounts/${account}/workers/scripts/sakura-mail-cloud/settings`, `/accounts/${account}/d1/database`, `/accounts/${account}/r2/buckets`]) {
-    const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(30000)
+  // Account Workers Scripts Read also permits other Worker metadata/source reads.
+  // D1/R2 remain outside this token. Never probe write denial with a mutation.
+  for (const path of [`/accounts/${account}/d1/database`, `/accounts/${account}/r2/buckets`]) {
+    const response = await request(`https://api.cloudflare.com/client/v4${path}`, {
+      headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(30000)
     });
     const body = await response.json().catch(() => null);
     assertDenied(response.status, body);
-    console.log(`[permissions] unrelated resource: denied (${response.status})`);
+    log(`[permissions] unrelated resource: denied (${response.status})`);
   }
 }
 export async function releaseActions(target) {
@@ -112,6 +117,7 @@ export async function releaseActions(target) {
   if (app) run(root, ['tools/check-web-app-builds.mjs', '--target', app.deployTarget]);
   if (target === 'health') healthProductionPreflight(directory);
   await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/settings`);
+  await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/subdomain`);
   const outDir = resolve(root, 'tmp/production', target); mkdirSync(outDir, { recursive: true });
   const output = resolve(outDir, `upload-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.ndjson`);
   if (existsSync(output)) throw new Error('Refusing to reuse a previous upload result.');
