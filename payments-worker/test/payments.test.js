@@ -7,7 +7,7 @@ test('year boundaries, inclusive months, rounding and Japan month boundary', () 
   const view = paymentView({ amount: 10000, start_month: '2026-10', months: 12 }, '2026-10');
   assert.equal(view.end_month, '2027-09'); assert.equal(view.remaining_months, 12);
   assert.equal(paymentView({ amount: 10000, start_month: '2026-10', months: 12 }, '2027-09').remaining_months, 1);
-  assert.equal(paymentView({ amount: 10000, start_month: '2026-10', months: 12 }, '2027-10').status, 'completed');
+  assert.equal(paymentView({ amount: 10000, start_month: '2026-10', months: 12 }, '2027-10').period_status, 'ended');
   assert.equal(paymentView({ amount: 10000, start_month: '2026-10', months: 3 }, '2026-09').remaining_months, 3);
   assert.equal(paymentView({ amount: 10000, start_month: '2026-12', months: 3 }, '2026-12').end_month, '2027-02');
   assert.equal(currentJstMonth(new Date('2026-10-31T15:00:00Z')), '2026-11');
