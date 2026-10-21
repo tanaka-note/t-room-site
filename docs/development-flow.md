@@ -151,7 +151,15 @@ gh run view <run-id> --repo tanaka-note/t-room-site --json jobs,url,headSha,conc
 
 通常のコード公開は既存の11 Worker向け権限を使う。D1 migration、R2操作、DNS/route/Queue/Container変更、新規Worker作成はこの公開経路と別の作業であり、対象の操作に必要な権限と専用手順を確認する。クラウドへ永続認証を追加する場合は環境のNetwork secrets（HTTPS宛先限定）を使い、GitHub用とCloudflare用を分ける。ユーザーの認証・署名・復号鍵は渡さない。環境を更新しても既存タスクの保存状態は自動更新されないため、更新後は新規タスクを使う。[公式クラウド環境設定](https://learn.chatgpt.com/docs/environments/cloud-environments)を参照。
 
-### 公開jobと認証
+### クラウドのインフラ操作用認証
+
+通常公開の`production` Environmentとは別に、クラウド環境の`CLOUDFLARE_API_TOKEN` Network secret（許可先は`api.cloudflare.com`のみ）をインフラ操作に使う。account IDを`CLOUDFLARE_ACCOUNT_ID`、対象zone IDを`CLOUDFLARE_ZONE_ID`の環境変数に設定する。Network secretは代理値を渡し、HTTPS proxyが宛先へのリクエストで実値へ置換する。raw tokenをソース・ファイル・ログへ書き出さない。Node.js 24の通信確認には`node --use-env-proxy tools/check-cloud-infrastructure.mjs`を使う。
+
+インフラ用tokenはユーザーから全権限の付与を指示されている。Cloudflareの`Full account and zone access`を使う場合、当該accountとその全zoneの利用可能な権限（Workers新規作成・D1・R2・KV・Queue・Container・DNS/Routesに加え、アカウント設定・課金設定・API token管理等）を含む。これは通常公開用tokenの個別Worker権限より広い。通常公開のSecretへ置き換えたり、既存のD1/R2拒否検査を無効にしたりしない。読み取り専用MCPは調査用のまま維持し、変更はインフラ用の認証と専用手順で行う。
+
+権限確認はGETによる一覧metadata取得だけで行い、レスポンス本文・リソース名・tokenを表示しない。この確認は通信・読取権限の検査であり、書込・削除権限の実行試験ではない。新規リソースの作成・migration・DNS/Routesの変更は依頼対象に限り、変更内容とrollbackを準備して実行する。既存の認証・暗号・鍵管理、本番データの破壊を伴う変更は引き続きAGENTS.mdの確認条件に従う。権限の付与自体を、あらゆる実データ操作の一括実行許可とは扱わない。
+
+### 通常公開の制限付き認証
 
 `Verify changed services` はmain pushの差分対象だけを検証し、集約`verify`成功後に対象Workerだけを公開する。PR・開発branch・通常の手動verifyからは本番公開しない。手動公開は同Workflowの`production_target`で1サービスを選び、branchをmainにする。手動対象にも既存の対象別CI（Securityのauth回帰、Downloader 2のNative試験等）を適用する。
 
