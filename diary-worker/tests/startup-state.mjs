@@ -157,3 +157,86 @@ test('viewer is prefetched independently, never a reading dependency', () => {
   assert.match(body('boot'), /loadPhotoViewer\(\)\.catch/);
   assert.match(body('openPhotoViewer'), /await loadPhotoViewer\(\)[\s\S]*generation !== sessionGeneration/);
 });
+
+function returnViewFixture() {
+  const storage = new Map();
+  const state = { activeHouseholdId: 'household-a', accountName: 'account-a', entries: [1],
+    query: 'saved search', month: '2026-09', monthExpanded: true };
+  const elements = { appView: { hidden: false }, tagSearchInput: { value: 'tag' } };
+  const window = {
+    location: { pathname: '/diary/', href: 'https://fixture.test/diary/', origin: 'https://fixture.test' },
+    history: { state: { unrelated: 42 }, replaceState(value) { this.state = value; }, scrollRestoration: 'manual' },
+    sessionStorage: { getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+    performance: { getEntriesByType: () => [{ type: navigationType }] }
+  };
+  const document = { referrer: 'https://fixture.test/diary/favorites/' };
+  let navigationType = 'navigate', cancellations = 0;
+  const pagehide = source.slice(source.indexOf('    window.addEventListener("pagehide",'),
+    source.indexOf('    document.querySelector("#passkey-login")'));
+  const api = new Function('window', 'document', 'state', 'elements', 'cancelPositionRestoration', `
+    const BASE_PATH = '/diary', RETURN_VIEW_STORAGE_KEY = 'troom-diary-return-view-v1';
+    const RETURN_VIEW_HISTORY_KEY = 'troomDiaryReturnView', RETURN_NAVIGATION_KEY = 'troomDiaryReturnNavigation';
+    const RETURN_VIEW_MAX_AGE_MS = 1800000;
+    const captureEntryListPosition = () => ({ scrollY: 640 });
+    const captureTagListPosition = () => ({ scrollTop: 80 });
+    const isDiaryListRoute = () => true;
+    ${body('storeDiaryReturnView')}
+    ${body('isNewDiaryNavigation')}
+    ${body('takeDiaryReturnView')}
+    ${body('isUsableDiaryReturnView')}
+    ${body('isDiaryReturnReferrer')}
+    ${body('hasDiaryReturnNavigation')}
+    let hide;
+    window.addEventListener = (type, callback) => { if (type === 'pagehide') hide = callback; };
+    ${pagehide}
+    return { store: storeDiaryReturnView, take: takeDiaryReturnView, hide, has: hasDiaryReturnNavigation };
+  `)(window, document, state, elements, () => { cancellations++; });
+  return { ...api, window, state, elements, storage, document,
+    setNavigation: type => { navigationType = type; }, cancellations: () => cancellations };
+}
+test('pagehide preserves the source return view and navigation token across favorites and fresh access', () => {
+  const f = returnViewFixture();
+  f.store('/diary/favorites/');
+  const saved = f.storage.get('troom-diary-return-view-v1');
+  const token = f.storage.get('troomDiaryReturnNavigation');
+  f.hide();
+  assert.equal(f.storage.get('troom-diary-return-view-v1'), saved);
+  assert.equal(f.storage.get('troomDiaryReturnNavigation'), token);
+  f.window.location.pathname = '/diary/favorites/';
+  f.window.history.state = { unrelated: 42, troomDiaryReturnNavigation: JSON.parse(saved).savedAt };
+  f.storage.delete('troomDiaryReturnNavigation'); // consumed by the destination
+  f.state.query = 'favorites search';
+  f.hide(); // favorites -> other page
+  assert.equal(f.storage.get('troom-diary-return-view-v1'), saved);
+  assert.equal(f.storage.has('troomDiaryReturnNavigation'), false);
+  assert.equal(f.window.history.state.troomDiaryReturnView.routePath, '/diary/favorites/');
+  assert.equal(f.window.history.state.unrelated, 42);
+  f.window.history.state = {}; // direct navigation back to favorites
+  assert.equal(f.take('household-a'), null);
+  assert.equal(f.storage.get('troom-diary-return-view-v1'), saved);
+  assert.equal(f.has('/diary/'), false, 'stale source cannot trigger history.back');
+  assert.equal(f.cancellations(), 2);
+  assert.equal(f.window.history.scrollRestoration, 'auto');
+});
+test('pagehide keeps the current page restorable on reload/back/forward, with scope checks', () => {
+  for (const type of ['reload', 'back_forward']) {
+    const f = returnViewFixture();
+    f.hide();
+    assert.equal(f.storage.size, 0, 'lifecycle snapshots belong only to history');
+    f.setNavigation(type);
+    const saved = f.take('household-a');
+    assert.equal(saved.query, 'saved search');
+    assert.equal(saved.position.scrollY, 640);
+    assert.equal(f.take('household-b'), null);
+    f.state.accountName = 'account-b';
+    assert.equal(f.take('household-a'), null);
+  }
+});
+test('fresh navigation ignores and clears only its own lifecycle snapshot', () => {
+  const f = returnViewFixture();
+  f.hide();
+  assert.equal(f.take('household-a'), null);
+  assert.equal(f.window.history.state.troomDiaryReturnView, undefined);
+  assert.equal(f.window.history.state.unrelated, 42);
+});

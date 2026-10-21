@@ -9,7 +9,7 @@ assert.match(script, /const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v
 assert.match(script, /const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView"/);
 assert.match(script, /document\.addEventListener\("click", rememberDiaryReturnViewFromNavigation, true\)/);
 assert.match(script, /window\.addEventListener\("pageshow", restoreDiaryReturnViewFromPageCache\)/);
-assert.match(script, /function storeDiaryReturnView\(destinationPath = ""\)[\s\S]*?routePath: window\.location\.pathname,[\s\S]*?query: state\.query,[\s\S]*?monthExpanded: state\.monthExpanded,[\s\S]*?tagQuery: state\.tagQuery,[\s\S]*?tagQueryInput: elements\.tagSearchInput\.value,[\s\S]*?entryCount: state\.entries\.length,[\s\S]*?tagListPosition: captureTagListPosition\(\)/s);
+assert.match(script, /function storeDiaryReturnView\(destinationPath = "", \{ historyOnly = false \} = \{\}\)[\s\S]*?routePath: window\.location\.pathname,[\s\S]*?query: state\.query,[\s\S]*?monthExpanded: state\.monthExpanded,[\s\S]*?tagQuery: state\.tagQuery,[\s\S]*?tagQueryInput: elements\.tagSearchInput\.value,[\s\S]*?entryCount: state\.entries\.length,[\s\S]*?tagListPosition: captureTagListPosition\(\)/s);
 assert.match(script, /window\.history\.replaceState\([\s\S]*?\[RETURN_VIEW_HISTORY_KEY\]: returnView/s);
 assert.match(script, /function applyDiaryReturnView\(returnView\)[\s\S]*?elements\.searchInput\.value = state\.query;[\s\S]*?elements\.tagSearchInput\.value = String\(returnView\.tagQueryInput \|\| returnView\.tagQuery/s);
 assert.match(script, /elements\.appView\.hidden = false;[\s\S]*?await loadEntries\(true, true, returnView\?\.entryCount \|\| 0\);[\s\S]*?if \(loaded && returnView\) restoreDiaryReturnPosition\(returnView, restoreVersion\);/s);

@@ -361,7 +361,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     window.addEventListener("pageshow", restoreDiaryReturnViewFromPageCache);
     window.addEventListener("pagehide", () => {
       if (isDiaryListRoute() && !elements.appView.hidden && !state.entriesAbortController) {
-        storeDiaryReturnView(window.history.state?.[RETURN_VIEW_HISTORY_KEY]?.destinationPath || "");
+        storeDiaryReturnView("", { historyOnly: true });
       }
       cancelPositionRestoration();
       if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
@@ -926,7 +926,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     storeDiaryReturnView(destination.pathname);
   }
 
-  function storeDiaryReturnView(destinationPath = "") {
+  function storeDiaryReturnView(destinationPath = "", { historyOnly = false } = {}) {
     const position = captureEntryListPosition();
     const returnView = {
       version: 2,
@@ -956,6 +956,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } catch {
       // History APIを利用できない場合もsessionStorageのfallbackを維持します。
     }
+    // Lifecycle snapshots belong to this history entry. Only explicit in-app
+    // navigation may replace the shared source snapshot and navigation token.
+    if (historyOnly) return;
     try {
       window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
       window.sessionStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
