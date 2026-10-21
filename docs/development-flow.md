@@ -127,13 +127,15 @@ DownloaderのProductionはこのコマンドで拒否し、既存の署名・lea
 
 初期設定はGitHubの`production` Environmentをbranch `main`だけに限定し、Environment Secret `CLOUDFLARE_API_TOKEN`とEnvironment変数`CLOUDFLARE_ACCOUNT_ID`を登録する。repository変数`CLOUDFLARE_PRODUCTION_ENABLED=true`で有効化する。無効時はCIだけ実行し、Production planに公開対象なしを明記する。失敗時は同じmainコミットのrunを再実行するか、最新mainから`production_target`を指定する。mainが進んだ古いrunは新規公開を拒否するため、失敗した対象を最新mainで明示再実行して公開漏れを解消する。
 
-専用のaccount-owned tokenは既存の本番11 Worker（`t-room-site/cloud/security/diary/billing/downloader/downloader2/ai/inventory/health/payments`）を個別指定した`Individual Workers Editor`だけを付与する。アカウント管理、token管理、DNS/ルート編集、D1/R2の直接読み書き権限を追加しない。Editorには対象Workerのコード・binding・設定の変更権限があり、コード変更を通した本番データへの間接的なアクセスまで遮断する権限ではない。mainへの変更内容とCIがその境界になる。[Cloudflareの権限仕様](https://developers.cloudflare.com/workers/authorization/workers/)を参照。トークンの期限前に同じ限定権限の新トークンを発行し、Environment Secretだけを差し替える。値をチャット・Git・ログ・スクリーンショットへ出さない。
+専用のaccount-owned tokenは既存の本番11 Worker（`t-room-site/cloud/security/diary/billing/downloader/downloader2/ai/inventory/health/payments`）を個別指定した`Individual Workers Editor`だけを付与する。アカウント管理、token管理、DNS/ルート編集、D1/R2の直接読み書き権限を追加しない。Editorには対象Workerのコード・binding・設定の変更権限があり、コード変更を通した本番データへの間接的なアクセスまで遮断する権限ではない。mainへの変更内容とCIがその境界になる。[Cloudflareの権限仕様](https://developers.cloudflare.com/workers/authorization/workers/)を参照。初期構築の専用トークンはユーザー指定により期限なしとする。漏えいの疑い・権限変更等で交換する場合は、同じ限定権限の新トークンを発行し、Environment Secretだけを差し替える。値をチャット・Git・ログ・スクリーンショットへ出さない。
+
+既存のCloudflare Buildsによるsiteの独立した自動公開は停止し、CIを迂回する二重公開を避ける。他の10 WorkerにBuilds連携がないことも初期構築時に確認した。`Disable builds`を解除する場合はCIとの公開順序を再設計する。
 
 通常の10 Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。AIはWeb registryを持たないためversionの一致を確認する。手動公開時は対象11 Workerのmetadata読取成功と、既知の対象外Worker・D1一覧・R2一覧への403も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
 
 この経路は既存のroutes、Custom Domains、Cron、Queue設定、Containerを変更しない。これらの非version設定やDB migrationを変更する作業は、通常コード公開と別に既存の専用手順で扱う。勝手に権限を増やしたり、未適用の設定変更を適用済みとして報告しない。ローカルの`npm run release`は従来どおり利用できる。
 
-Downloaderは通常のversion公開から除外し、CI成功後に既存の`ClamAV daily definitions`をreusable workflowとして`release_code=true`で呼ぶ。専用の既存repository Secret `CLAMAV_CLOUDFLARE_API_TOKEN`、署名・鮮度・小容量fixture・lease・job/grace保護・digest照合・Worker build確認を維持する。日次更新・独立監視は変更しない。Containerコード公開を伴うため、初期構築の動作確認だけを目的にこの高コスト経路を実行しない。利用者の本番データは検証用に作成・変更・削除しない。
+Downloaderは通常のversion公開から除外する。Containerディレクトリの変更と手動のDownloader指定では、CI成功後に既存の`ClamAV daily definitions`をreusable workflowとして`release_code=true`で呼ぶ。Workerだけの差分では既存専用Secretを使い、`--containers-rollout=none`でWorkerだけを更新してversionとWeb buildを照合する。Container設定・非version設定の変更はこのWorker単独経路では拒否し、手動のDownloader指定で専用公開を実行する。両経路は日次更新と同じconcurrency groupを使う。専用の既存repository Secret `CLAMAV_CLOUDFLARE_API_TOKEN`、署名・鮮度・小容量fixture・lease・job/grace保護・digest照合・Worker build確認を維持する。日次更新・独立監視は変更しない。Containerコード公開を伴うため、初期構築の動作確認だけを目的にこの高コスト経路を実行しない。利用者の本番データは検証用に作成・変更・削除しない。
 
 ## ローカルD1/R2・ログ
 

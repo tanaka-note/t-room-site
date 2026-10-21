@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings } from './release-actions.mjs';
 
 test('production selects changed services only, never PR/branch/docs/tooling or disabled runs', () => {
@@ -26,6 +27,7 @@ test('promotion is pinned to a unique uploaded Worker/version and read back at 1
   const version='12345678-1234-1234-1234-123456789abc';
   const upload={type:'version-upload',worker_name:'t-room-site',version_id:version};
   assert.equal(uploadedVersion(JSON.stringify(upload),'t-room-site'),version);
+  assert.equal(uploadedVersion(JSON.stringify({...upload,type:'deploy',worker_name:'t-room-downloader'}),'t-room-downloader','deploy'),version);
   assert.throws(() => uploadedVersion(JSON.stringify(upload),'t-room-cloud'));
   assert.throws(() => uploadedVersion(JSON.stringify(upload)+'\n'+JSON.stringify(upload),'t-room-site'));
   assert.throws(() => uploadedVersion(JSON.stringify({...upload,version_id:'latest'}),'t-room-site'));
@@ -39,4 +41,16 @@ test('code release refuses infrastructure changes instead of silently ignoring t
   assertVersionSettings(before,{...before,compatibility_date:'2026-10-21',vars:{FEATURE:'true'}});
   for (const key of ['routes','workers_dev','triggers','migrations']) assert.throws(()=>assertVersionSettings(before,{...before,[key]:['changed']}));
   assert.throws(()=>assertVersionSettings(before,{...before,queues:{consumers:[]}}));
+});
+test('production gates explicitly handle skipped upstream service jobs', () => {
+  const workflow=readFileSync(new URL('../.github/workflows/verify.yml',import.meta.url),'utf8');
+  for (const job of ['production','downloader-production']) {
+    const gate=workflow.split(`\n  ${job}:`)[1].split('\n    environment:')[0].split('\n    permissions:')[0];
+    assert.match(gate,/!cancelled\(\)/);
+    assert.match(gate,/needs\.verify\.result == 'success'/);
+    assert.match(gate,/github\.ref == 'refs\/heads\/main'/);
+  }
+  assert.match(workflow,/manual \|\| selected\.includes\('container-unit'\)/);
+  assert.match(workflow,/clamav-definition-update/);
+  assert.match(readFileSync(new URL('./release-actions.mjs',import.meta.url),'utf8'),/--containers-rollout=none/);
 });

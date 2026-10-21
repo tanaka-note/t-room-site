@@ -33,8 +33,8 @@ export function assertActionsRelease(env, head) {
     throw new Error('Production requires successful CI for this exact main commit in this repository.');
   }
 }
-export function uploadedVersion(output, name) {
-  const uploads = output.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)).filter(x => x.type === 'version-upload');
+export function uploadedVersion(output, name, type = 'version-upload') {
+  const uploads = output.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)).filter(x => x.type === type);
   if (uploads.length !== 1 || uploads[0].worker_name !== name || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(uploads[0].version_id || '')) {
     throw new Error('Wrangler did not report exactly one version for the selected Worker.');
   }
@@ -47,7 +47,7 @@ export function assertDeployedVersion(deployments, version) {
   }
 }
 export function assertVersionSettings(before, after) {
-  for (const key of ['routes', 'route', 'workers_dev', 'preview_urls', 'triggers', 'tail_consumers', 'migrations']) {
+  for (const key of ['routes', 'route', 'workers_dev', 'preview_urls', 'triggers', 'tail_consumers', 'migrations', 'containers']) {
     if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) throw new Error(`Non-versioned infrastructure change (${key}) requires the dedicated release procedure.`);
   }
   if (JSON.stringify(before.queues?.consumers) !== JSON.stringify(after.queues?.consumers)) throw new Error('Queue consumer changes require the dedicated release procedure.');
@@ -79,7 +79,8 @@ export async function checkTokenScope() {
   }
 }
 export async function releaseActions(target) {
-  if (!productionTargets.includes(target)) throw new Error('Downloader Container releases must use ClamAV daily definitions with release_code=true.');
+  const downloaderWorkerOnly = target === 'downloader' && process.env.TROOM_DOWNLOADER_WORKER_ONLY === 'true';
+  if (!productionTargets.includes(target) && !downloaderWorkerOnly) throw new Error('Downloader Container releases must use ClamAV daily definitions with release_code=true.');
   const git = args => execFileSync('git', ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0', ...args], { cwd: root, encoding: 'utf8' }).trim();
   const head = git(['rev-parse', 'HEAD']);
   assertActionsRelease(process.env, head);
@@ -90,7 +91,7 @@ export async function releaseActions(target) {
   const directory = resolve(root, target === 'site' ? '.' : `${target}-worker`);
   const name = workerName(target);
   const config = JSON.parse(readFileSync(resolve(directory, 'wrangler.jsonc'), 'utf8'));
-  if (config.name !== name || config.containers?.length) throw new Error('Worker configuration does not match the allowed production target.');
+  if (config.name !== name || (config.containers?.length && !downloaderWorkerOnly)) throw new Error('Worker configuration does not match the allowed production target.');
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
   const baseline = process.env.GITHUB_EVENT_NAME === 'push' ? event.before : `${head}^`;
   if (!baseline || /^0+$/.test(baseline)) throw new Error('Initial infrastructure must be provisioned before automatic code releases.');
@@ -109,10 +110,13 @@ export async function releaseActions(target) {
   if (existsSync(output)) throw new Error('Refusing to reuse a previous upload result.');
   const cli = resolve(directory, 'node_modules/wrangler/bin/wrangler.js');
   // Version commands leave routes, domains, schedules and Container rollouts untouched.
-  run(directory, [cli, 'versions', 'upload', '--message', `GitHub ${head}`, '--tag', head.slice(0, 12)], { ...process.env, WRANGLER_OUTPUT_FILE_PATH: output });
-  const version = uploadedVersion(readFileSync(output, 'utf8'), name);
-  if (git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0] !== head) throw new Error('main advanced during upload; version was not promoted.');
-  run(directory, [cli, 'versions', 'deploy', `${version}@100%`, '--yes']);
+  const uploadArgs = downloaderWorkerOnly ? ['deploy', '--containers-rollout=none'] : ['versions', 'upload', '--message', `GitHub ${head}`, '--tag', head.slice(0, 12)];
+  run(directory, [cli, ...uploadArgs], { ...process.env, WRANGLER_OUTPUT_FILE_PATH: output });
+  const version = uploadedVersion(readFileSync(output, 'utf8'), name, downloaderWorkerOnly ? 'deploy' : 'version-upload');
+  if (!downloaderWorkerOnly) {
+    if (git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0] !== head) throw new Error('main advanced during upload; version was not promoted.');
+    run(directory, [cli, 'versions', 'deploy', `${version}@100%`, '--yes']);
+  }
   const deployments = await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/deployments`);
   assertDeployedVersion(deployments, version);
   if (app) run(root, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]);
