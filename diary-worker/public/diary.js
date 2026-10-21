@@ -3599,7 +3599,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.favoritePage = onFavoritePage;
     const onTagPage = Boolean(tag);
     elements.tagPageBack.hidden = !onTagPage && !onTagDirectory && !onFavoritePage;
-    elements.tagPageBack.textContent = "← 日記へ戻る";
     elements.searchPanel.hidden = onTagPage;
     elements.diaryMain.hidden = onTagDirectory;
     elements.archivePanel.hidden = onTagDirectory;
@@ -3620,6 +3619,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function configureDiaryReturnNavigation() {
+    elements.tagPageBack.href = `${BASE_PATH}/`;
+    elements.tagPageBack.textContent = "← 日記へ戻る";
     // Fresh accesses discard retained tokens before accepting a validated handoff.
     // Reload and history navigation keep the token owned by their current entry.
     try {
@@ -3656,6 +3657,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       return;
     }
     if (returnView?.version !== 2 || returnView.destinationPath !== window.location.pathname) return;
+    // Display a source only when this history entry owns the accepted navigation.
+    if (!Number.isFinite(returnView.savedAt)
+      || window.history.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
     if (!isDiaryListPath(returnView.routePath) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
     elements.tagPageBack.href = returnView.routePath;
     elements.tagPageBack.textContent = "← 前の画面へ戻る";

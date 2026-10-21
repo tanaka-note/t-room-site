@@ -28,20 +28,21 @@ assert.match(script, /link === elements\.tagPageBack \|\| \(link === elements\.f
 const helpers = ["isNewDiaryNavigation", "isDiaryReturnReferrer", "isDiaryListPath", "configureDiaryReturnNavigation"]
   .map((name) => script.match(new RegExp(`  function ${name}\\([^]*?\\n  }`))[0]).join("\n");
 function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diary/", age = 10,
-  savedAt = 100_000, type = "navigate", snapshot = {}, raw, storageBlocked = false } = {}) {
+  savedAt = 100_000, type = "navigate", snapshot = {}, raw, storageBlocked = false, historyToken = "old-token", repeat = false } = {}) {
   const navigation = { savedAt, sourcePath, destinationPath: "/diary/favorites/" };
   const view = { version: 2, routePath: sourcePath, destinationPath: navigation.destinationPath, savedAt, ...snapshot };
   const storage = new Map([
     ["handoff", raw === undefined ? JSON.stringify(navigation) : raw],
     ["view", JSON.stringify(view)]
   ]);
-  const history = { state: { unrelated: "preserved", handoff: "old-token" },
+  const history = { state: { unrelated: "preserved", handoff: historyToken },
     replaceState(value) { this.state = value; } };
-  runInNewContext(`${helpers}\nconfigureDiaryReturnNavigation();`, {
-    URL, Date, Number, JSON,
+  const backLink = { hidden: false, href: "/diary/", textContent: "← 日記へ戻る" };
+  runInNewContext(`${helpers}\nconfigureDiaryReturnNavigation();${repeat ? "configureDiaryReturnNavigation();" : ""}`, {
+    URL, Date: { now: () => 100_010 }, Number, JSON, BASE_PATH: "/diary",
     RETURN_NAVIGATION_KEY: "handoff", RETURN_VIEW_STORAGE_KEY: "view",
     RETURN_NAVIGATION_MAX_AGE_MS: 30_000, RETURN_VIEW_MAX_AGE_MS: 6 * 60 * 60 * 1000,
-    elements: { tagPageBack: { hidden: true } },
+    elements: { tagPageBack: backLink },
     document: { referrer },
     window: {
       history, location: new URL("https://diary.test/diary/favorites/"),
@@ -54,9 +55,9 @@ function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diar
   });
   assert.equal(history.state.unrelated, "preserved");
   if (!storageBlocked) assert.equal(storage.has("handoff"), false, "handoff is consumed even when rejected");
-  return history.state.handoff;
+  return { token: history.state.handoff, backLink };
 }
-assert.equal(configure(), 100_000, "normal internal navigation accepts its handoff");
+assert.equal(configure().token, 100_000, "normal internal navigation accepts its handoff");
 for (const options of [
   { referrer: "https://diary.test/diary/tags/" }, // interrupted handoff followed by another screen
   { referrer: "" },
@@ -66,8 +67,31 @@ for (const options of [
   { snapshot: { savedAt: 99_999 } }, { snapshot: { routePath: "/diary/tags/" } },
   { snapshot: { destinationPath: "/diary/tags/" } }, { snapshot: { version: 1 } },
   { raw: "invalid JSON" }, { raw: "null" }, { storageBlocked: true }
-]) assert.equal(configure(options), undefined, `reject stale/unverifiable handoff: ${JSON.stringify(options)}`);
-assert.equal(configure({ type: "reload" }), "old-token", "reload preserves the owned history token without accepting a handoff");
-assert.equal(configure({ type: "back_forward" }), "old-token", "Back/Forward preserves the owned history token");
+]) {
+  const result = configure(options);
+  assert.equal(result.token, undefined, `reject stale/unverifiable handoff: ${JSON.stringify(options)}`);
+  assert.equal(result.backLink.href, "/diary/", "rejected handoff keeps the default return destination");
+  assert.equal(result.backLink.textContent, "← 日記へ戻る");
+}
+assert.equal(configure({ type: "reload" }).token, "old-token", "reload preserves the owned history token without accepting a handoff");
+assert.equal(configure({ type: "back_forward" }).token, "old-token", "Back/Forward preserves the owned history token");
+
+for (const type of ["navigate", "reload", "back_forward"]) {
+  const result = configure({ type, sourcePath: "/diary/tags/", referrer: "https://diary.test/diary/tags/", historyToken: 100_000 });
+  assert.equal(result.backLink.href, "/diary/tags/", `${type}: owned navigation displays its source`);
+  assert.equal(result.backLink.textContent, "← 前の画面へ戻る");
+}
+for (const type of ["reload", "back_forward"]) {
+  const result = configure({ type, sourcePath: "/diary/tags/" });
+  assert.equal(result.backLink.href, "/diary/", `${type}: unrelated history token cannot display a stale source`);
+  assert.equal(result.backLink.textContent, "← 日記へ戻る");
+}
+const interrupted = configure({ sourcePath: "/diary/tags/", referrer: "https://diary.test/intermediate" });
+assert.equal(interrupted.backLink.href, "/diary/");
+assert.equal(interrupted.backLink.textContent, "← 日記へ戻る");
+const repeated = configure({ sourcePath: "/diary/tags/", referrer: "https://diary.test/diary/tags/", repeat: true });
+assert.equal(repeated.token, undefined);
+assert.equal(repeated.backLink.href, "/diary/", "reconfiguration clears a previously displayed source");
+assert.equal(repeated.backLink.textContent, "← 日記へ戻る");
 
 process.stdout.write("Diary navigation return-state test passed.\n");
