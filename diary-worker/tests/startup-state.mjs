@@ -237,6 +237,42 @@ test('pagehide keeps the current page restorable on reload/back/forward, with sc
     assert.equal(f.take('household-a'), null);
   }
 });
+test('history and storage restoration require account and household ownership, including version 1', () => {
+  const cases = [
+    { label: 'matching ownership', patch: {}, accepted: true },
+    { label: 'different account in same household', patch: { accountName: 'account-b' } },
+    { label: 'missing account in same household', patch: { accountName: undefined } },
+    { label: 'empty account', patch: { accountName: '' } },
+    { label: 'different household', patch: { householdId: 'household-b' } },
+    { label: 'missing household', patch: { householdId: undefined } },
+    { label: 'empty household', patch: { householdId: '' } },
+    { label: 'missing both identifiers', patch: { accountName: undefined, householdId: undefined } }
+  ];
+  for (const version of [1, 2]) {
+    for (const type of ['reload', 'back_forward']) {
+      for (const source of ['history', 'storage']) {
+        for (const { label, patch, accepted = false } of cases) {
+          const f = returnViewFixture();
+          f.store('/diary/favorites/');
+          const view = { ...JSON.parse(f.storage.get('troom-diary-return-view-v1')), version, ...patch };
+          if (version === 1) delete view.routePath;
+          // Isolate each source so fallback cannot hide a rejected snapshot.
+          delete f.window.history.state.troomDiaryReturnView;
+          f.storage.clear();
+          if (source === 'history') f.window.history.state.troomDiaryReturnView = view;
+          else f.storage.set('troom-diary-return-view-v1', JSON.stringify(view));
+          f.setNavigation(type);
+          const result = f.take('household-a');
+          const context = `v${version} ${type} ${source}: ${label}`;
+          if (accepted) {
+            assert.equal(result?.query, 'saved search', context);
+            assert.equal(result?.position.scrollY, 640, context);
+          } else assert.equal(result, null, context);
+        }
+      }
+    }
+  }
+});
 test('fresh navigation ignores and clears only its own lifecycle snapshot', () => {
   const f = returnViewFixture();
   f.hide();

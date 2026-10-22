@@ -1022,8 +1022,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function isUsableDiaryReturnView(returnView, householdId, expectedRoute) {
     if (!returnView || ![1, 2].includes(returnView.version)) return false;
     if (!Number.isFinite(returnView.savedAt) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return false;
-    if (returnView.accountName && returnView.accountName !== state.accountName) return false;
-    if (returnView.householdId && householdId && returnView.householdId !== householdId) return false;
+    if (!isOwnedDiaryReturnView(returnView) || returnView.householdId !== householdId) return false;
     const routePath = returnView.version === 1 ? `${BASE_PATH}/` : returnView.routePath;
     return routePath === expectedRoute && expectedRoute === window.location.pathname;
   }
