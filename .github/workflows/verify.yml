@@ -4,6 +4,12 @@ on:
   push:
     branches: [main, 'codex/**']
   workflow_dispatch:
+    inputs:
+      production_target:
+        description: 'Verify and release one main service (none = verification only)'
+        type: choice
+        default: none
+        options: [none, site, cloud, security, diary, billing, downloader, downloader2, ai, inventory, health, payments]
 permissions:
   contents: read
 concurrency:
@@ -17,6 +23,8 @@ jobs:
       node: ${{ steps.plan.outputs.node }}
       android: ${{ steps.plan.outputs.android }}
       downloader2_native: ${{ steps.plan.outputs.downloader2_native }}
+      production: ${{ steps.plan.outputs.production }}
+      downloader_production: ${{ steps.plan.outputs.downloader_production }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -31,14 +39,23 @@ jobs:
           VERIFY_REF: ${{ github.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PRODUCTION_TARGET: ${{ inputs.production_target || 'none' }}
+          PRODUCTION_ENABLED: ${{ vars.CLOUDFLARE_PRODUCTION_ENABLED }}
         run: |
           node --input-type=module <<'JS'
           import {ciPlan,android} from './tools/verify-plan.mjs';
+          import {productionPlan,manualVerification} from './tools/release-actions.mjs';
           import {appendFileSync} from 'node:fs';
-          const {selected,native}=ciPlan({event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,base:process.env.BASE_SHA,head:process.env.HEAD_SHA});
+          const requested=process.env.PRODUCTION_TARGET;
+          const manual=process.env.VERIFY_EVENT==='workflow_dispatch' && requested!=='none';
+          const {selected,native}=manual ? {selected:manualVerification(requested),native:requested==='downloader2'} : ciPlan({event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,base:process.env.BASE_SHA,head:process.env.HEAD_SHA});
+          const production=productionPlan(selected,{event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,requested,enabled:process.env.PRODUCTION_ENABLED==='true'});
+          const containerRelease=production.includes('downloader') && (manual || selected.includes('container-unit'));
+          appendFileSync(process.env.GITHUB_OUTPUT,`production=${JSON.stringify(production.filter(t=>t!=='downloader' || !containerRelease))}\ndownloader_production=${containerRelease}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`node=${JSON.stringify(selected.filter(t=>!android.includes(t)))}\nandroid=${JSON.stringify(selected.filter(t=>android.includes(t)))}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`downloader2_native=${native}\n`);
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Verify plan\n${selected.join(', ') || 'Documentation only: no tests required'}\n`);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Production plan\n${production.join(', ') || 'No production deployment selected (or production disabled)'}\n`);
           JS
   node:
     needs: plan
@@ -283,3 +300,64 @@ jobs:
           ANDROID: ${{ needs.android.result }}
           DOWNLOADER2_NATIVE: ${{ needs.downloader2-native.result }}
         run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$INVENTORY_MACOS" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
+  production:
+    needs: [plan, verify]
+    if: ${{ !cancelled() && github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.production != '[]' }}
+    environment: production
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.production) }}
+    concurrency:
+      group: ${{ matrix.target == 'downloader' && 'clamav-definition-update' || format('production-{0}', matrix.target) }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install only verified target dependencies
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: node tools/install-verify-dependencies.mjs "$RELEASE_TARGET"
+      - name: Prepare site from the verified commit
+        if: matrix.target == 'site'
+        run: node tools/prepare-static-assets.mjs
+      - name: Check least-privilege token (manual initial verification)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: node tools/release-actions.mjs --check-token
+      - name: Publish selected Worker and verify production
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+          TROOM_CI_RESULT: ${{ needs.verify.result }}
+          TROOM_VERIFIED_SHA: ${{ github.sha }}
+          TROOM_DOWNLOADER_WORKER_ONLY: ${{ matrix.target == 'downloader' && 'true' || 'false' }}
+          CLOUDFLARE_API_TOKEN: ${{ matrix.target == 'downloader' && secrets.CLAMAV_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: node tools/release-actions.mjs "$RELEASE_TARGET"
+  downloader-production:
+    needs: [plan, verify]
+    if: ${{ !cancelled() && github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.downloader_production == 'true' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/clamav-definitions.yml
+    with:
+      release_code: true
+      verified_sha: ${{ github.sha }}
+    secrets:
+      CLAMAV_CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}

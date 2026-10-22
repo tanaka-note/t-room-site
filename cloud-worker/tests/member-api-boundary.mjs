@@ -53,7 +53,7 @@ async function api(cookie, path, method = "GET", body) {
     headers: { Origin: "https://example.test", ...(cookie ? { Cookie: cookie, "X-TCloud-Session": sessionId } : {}), "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body) });
   const response = await context.worker.fetch(request, env, { waitUntil() {} });
-  return { status: response.status, body: await response.json(), cookie: response.headers.get("set-cookie")?.split(";")[0] };
+  return { status: response.status, body: await response.json(), cookie: response.headers.get("set-cookie")?.split(";")[0], cacheControl: response.headers.get("cache-control") };
 }
 async function handoff(account, identity = "primary-admin", folderScopes = null) {
   selected = { identityId: identity, credentialId: "credential", serviceLinkId: `${identity}-${account}`, serviceAccountId: account, cloudRootFolderId: account === "folder-member" ? 7 : null, displayLabel: account === "folder-member" ? "Atsushi" : "管理者", sessionEpoch: 1, ...(folderScopes ? { folderScopes, cloudScopeId: "fixture-cloud-scope" } : {}) };
@@ -84,6 +84,16 @@ try {
       ["/upload-conflict-candidates", "POST", { sizes: [1], folderId: 9 }]
     ]) assert.equal((await api(member.cookie, path, method, body)).status, 403, `${method} ${path}`);
     assert.equal((await api(member.cookie, "/items?folderId=10")).status, 423);
+    for (const pageSize of [64, 128, 250]) {
+      for (const suffix of ["", "&continuation=1&filesOnly=1", "&continuation=1&foldersOnly=1"]) {
+        const query = `pageSize=${pageSize}&offset=0${suffix}`;
+        for (const [cookie, folderId, expected] of [[null, 7, 401], [member.cookie, 9, 403], [member.cookie, 10, 423], [member.cookie, 99999, 404], [member.cookie, 7, 200]]) {
+          const response = await api(cookie, `/items?folderId=${folderId}&${query}`);
+          assert.equal(response.status, expected, 'pagination retains session/PW/root checks: ' + query);
+          assert.equal(response.cacheControl, 'no-store');
+        }
+      }
+    }
     assert.equal((await api(member.cookie, "/files/4")).status, 423);
     const search = await api(member.cookie, "/items?q=other&recursive=1");
     assert.equal(search.status, 200); assert.equal(search.body.files.some((file) => [2, 3, 4].includes(file.id)), false);

@@ -21,8 +21,42 @@ export function paymentInput(body) {
 }
 export function paymentView(row, currentMonth) {
   const start = month(row.start_month), end = start + row.months - 1, current = month(currentMonth);
-  return { ...row, end_month: monthText(end), monthly_amount: row.amount / row.months,
-    remaining_months: Math.max(0, end - Math.max(start, current) + 1), status: current < start ? 'upcoming' : current > end ? 'completed' : 'active' };
+  const completed = Number(row.completed_count || 0), past = Math.max(0, Math.min(row.months, current - start));
+  const currentAmount = current >= start && current <= end ? allocation(row.amount, row.months, current - start) : null;
+  return { ...row, end_month: monthText(end), monthly_amount: allocation(row.amount, row.months, 0),
+    remaining_months: Math.max(0, end - Math.max(start, current) + 1),
+    remaining_count: row.months - completed, completed_count: completed,
+    past_pending_count: past - Number(row.past_completed_count || 0),
+    past_pending_amount: allocationPrefix(row.amount, row.months, past) - Number(row.past_completed_amount || 0),
+    current_amount: currentAmount, current_completed: Boolean(row.current_completed),
+    period_status: current < start ? 'upcoming' : current > end ? 'ended' : 'active',
+    status: completed === row.months ? 'completed' : 'pending' };
+}
+// BigInt division/remainder keep every allocation exact, including amounts < months.
+export function allocation(amount, months, offset) {
+  const total = BigInt(amount), count = BigInt(months);
+  return Number(total / count + (BigInt(offset) < total % count ? 1n : 0n));
+}
+export function allocationPrefix(amount, months, count) {
+  const total = BigInt(amount), n = BigInt(months), k = BigInt(count), remainder = total % n;
+  return Number(total / n * k + (k < remainder ? k : remainder));
+}
+export function monthlyView(row, marks, currentMonth) {
+  const byMonth = new Map(marks.map(m => [m.target_month, m]));
+  const start = month(row.start_month);
+  return Array.from({ length: row.months }, (_, offset) => {
+    const targetMonth = monthText(start + offset), mark = byMonth.get(targetMonth);
+    return { target_month: targetMonth, amount: allocation(row.amount, row.months, offset), completed_at: mark?.completed_at || null,
+      can_complete: targetMonth <= currentMonth };
+  });
+}
+export function dashboard(entries) {
+  const current = entries.filter(e => e.current_amount !== null), pending = current.filter(e => !e.current_completed);
+  return { current_pending_count: pending.length, current_pending_amount: pending.reduce((n,e) => n + BigInt(e.current_amount), 0n).toString(),
+    current_completed_count: current.length - pending.length, current_count: current.length,
+    past_pending_count: entries.reduce((n,e) => n + e.past_pending_count, 0),
+    past_pending_amount: entries.reduce((n,e) => n + BigInt(e.past_pending_amount), 0n).toString(),
+    completed_count: entries.reduce((n,e) => n + e.completed_count, 0), total_count: entries.reduce((n,e) => n + e.months, 0) };
 }
 export function currentJstMonth(now = new Date()) { return new Date(now.getTime() + 9 * 3600000).toISOString().slice(0, 7); }
 export function uuid(value) {

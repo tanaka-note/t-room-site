@@ -81,7 +81,7 @@ console.log('PASS Cloud PW login/cookie retirement, no counters/schema changes, 
 // The real browser guard expires without a per-thumbnail session request.
 let clock=100000,invalidations=0,fetches=0,callback;const local=new Map(),tab=new Map();
 const store=map=>({getItem:key=>map.get(key)||null,setItem:(key,value)=>map.set(key,value)});
-const guard={fetch:async()=>{fetches++;return new Response('{}');},localStorage:store(local),sessionStorage:store(tab),Headers,URL,AbortController,ReadableStream,Response,Event,crypto,
+const guard={fetch:async()=>{fetches++;return new Response('{}');},localStorage:store(local),sessionStorage:store(tab),Headers,Request,URL,AbortController,ReadableStream,Response,Event,crypto,
  Date:{now:()=>clock},setTimeout:fn=>(callback=fn,1),clearTimeout(){callback=null;},addEventListener(){},dispatchEvent(){invalidations++;},location:{origin:'https://example.test',href:'https://example.test/cloud/',replace(){}},BroadcastChannel:class {postMessage(){}}};
 guard.globalThis=guard;vm.runInNewContext(readFileSync(new URL('../public/session-guard.js',import.meta.url),'utf8'),guard);
 guard.TCloudSession.bind({sessionCacheId:'authenticated',expiresAt:101,role:'admin'});

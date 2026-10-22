@@ -7,6 +7,31 @@
   const daysInMonth = (year, month) => new Date(Date.UTC(year, month, 0)).getUTCDate();
   let navigation, blocked, target = null, draft = null, mode = 'date';
   const timers = {};
+  const firstYear = 1900, lastYear = 9999, optionHeight = 44, yearRadius = 25;
+
+  function renderYears(index, force = false) {
+    const column = $('date-wheel-year');
+    const center = firstYear + index;
+    if (!force && Math.abs(center - Number(column.dataset.center)) < 12) return;
+    column.dataset.center = String(center);
+    const start = Math.max(firstYear, center - yearRadius), end = Math.min(lastYear, center + yearRadius);
+    const spacer = count => {
+      const el = document.createElement('div');
+      el.style.height = `${count * optionHeight}px`; el.setAttribute('aria-hidden', 'true');
+      return el;
+    };
+    const top = column.scrollTop;
+    column.replaceChildren(spacer(start - firstYear), ...range(start, end).map(value => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'date-wheel-option'; el.textContent = `${value}年`;
+      el.dataset.value = String(value); el.dataset.index = String(value - firstYear);
+      el.setAttribute('role', 'option'); el.setAttribute('aria-selected', String(value === draft.year));
+      el.setAttribute('aria-posinset', String(value - firstYear + 1));
+      el.setAttribute('aria-setsize', String(lastYear - firstYear + 1));
+      return el;
+    }), spacer(lastYear - end));
+    column.scrollTo({ top, behavior: 'instant' });
+  }
 
   function updateValue() {
     $('date-wheel-value').textContent = `${draft.year}年${draft.month}月${mode === 'date' ? `${draft.day}日` : ''}`;
@@ -51,6 +76,15 @@
   }
 
   function syncScroll(column, key) {
+    if (key === 'year') {
+      const index = clamp(Math.round(column.scrollTop / optionHeight), 0, lastYear - firstYear);
+      renderYears(index);
+      select(column, key, column.querySelector(`[data-index="${index}"]`));
+      // Snap after touch inertia settles; native mandatory snapping would stop
+      // a large gesture at the edge of the currently rendered year window.
+      if (Math.abs(column.scrollTop - index * optionHeight) > 1) column.scrollTo({ top: index * optionHeight, behavior: 'smooth' });
+      return;
+    }
     const options = column.querySelectorAll('.date-wheel-option');
     select(column, key, options[clamp(Math.round(column.scrollTop / 44), 0, options.length - 1)]);
   }
@@ -69,13 +103,23 @@
       if (!event.deltaY) return;
       event.preventDefault();
       delete column.dataset.clickScrollTarget;
-      const count = column.children.length;
+      const count = key === 'year' ? lastYear - firstYear + 1 : column.children.length;
       const index = clamp(Math.round(column.scrollTop / 44) + Math.sign(event.deltaY), 0, count - 1);
       column.scrollTo({ top: index * 44, behavior: 'instant' });
       syncScroll(column, key);
     }, { passive: false });
+    column.addEventListener('keydown', event => {
+      if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault(); delete column.dataset.clickScrollTarget;
+      const last = key === 'year' ? lastYear - firstYear : column.children.length - 1;
+      const index = event.key === 'Home' ? 0 : event.key === 'End' ? last
+        : clamp(Math.round(column.scrollTop / 44) + (event.key === 'ArrowUp' ? -1 : 1), 0, last);
+      column.scrollTo({ top: index * 44, behavior: 'instant' }); syncScroll(column, key);
+      column.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+    });
     column.addEventListener('scroll', () => {
       if (column.dataset.settingScroll === 'true') return;
+      if (key === 'year' && draft) renderYears(clamp(Math.round(column.scrollTop / 44), 0, lastYear - firstYear));
       if (column.dataset.clickScrollTarget !== undefined) {
         if (Math.abs(column.scrollTop - Number(column.dataset.clickScrollTarget)) > 1) return;
         delete column.dataset.clickScrollTarget;
@@ -94,9 +138,17 @@
     $('date-wheel-dialog').querySelector('.date-wheel-window').dataset.mode = mode;
     $('date-wheel-day').parentElement.hidden = mode === 'month';
     // Retain the ledger's existing accepted year range, including saved future entries.
-    fill($('date-wheel-year'), range(1900, 9999), draft.year, '年');
+    const yearColumn = $('date-wheel-year');
+    clearTimeout(timers[yearColumn.id]); delete yearColumn.dataset.clickScrollTarget;
+    yearColumn.dataset.settingScroll = 'true';
+    renderYears(draft.year - firstYear, true);
     fill($('date-wheel-month'), range(1, 12), draft.month, '月');
     renderDays(); updateValue(); navigation.open('date-wheel-dialog');
+    requestAnimationFrame(() => {
+      if (!draft) return;
+      yearColumn.scrollTo({ top: (draft.year - firstYear) * 44, behavior: 'instant' });
+      timers[yearColumn.id] = setTimeout(() => { delete yearColumn.dataset.settingScroll; }, 160);
+    });
   }
 
   function apply() {

@@ -125,6 +125,7 @@
 }
 
 .date-wheel-head .text-button { border: 0; padding: 0; background: transparent; color: var(--green); font-weight: 700; }
+#date-wheel-year { overflow-anchor: none; scroll-snap-type: none; }
 .date-wheel-window[data-mode="month"] { grid-template-columns: 1.35fr 1fr; }
 .date-wheel-dialog { --ink: #1f2933; --muted: #667085; --line: #d8dee6; }
 .troom-calendar-head { padding: 0; border: 0; }
