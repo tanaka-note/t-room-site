@@ -4,11 +4,14 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { fixture } from './fixture.js';
 
-const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+const read = path => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('calendar keeps Diary design and behavior while preserving payment year boundaries', () => {
   const source = read('../public/troom-date-picker.js');
-  assert.equal(source.slice(source.indexOf('(() =>')), read('../../diary-worker/public/troom-date-picker.js').replace('const MAX_YEAR = 2100;', 'const MAX_YEAR = 9999;'));
+  const diary = read('../../diary-worker/public/troom-date-picker.js').replace('const MAX_YEAR = 2100;', 'const MAX_YEAR = 9999;')
+    .replace('dialog.addEventListener("close", resetCalendar);', 'dialog.addEventListener("close", () => {\n      if (!state.navigation) resetCalendar();\n    });')
+    .replace('navigation.register("troom-calendar-dialog", { dialog: ensureDialog() });', 'navigation.register("troom-calendar-dialog", { dialog: ensureDialog(), onClose: resetCalendar });');
+  assert.equal(source.slice(source.indexOf('(() =>')), diary);
   assert.equal(read('../public/troom-date-picker.css'), read('../../diary-worker/public/troom-date-picker.css'));
   const wheelLayout = read('../../diary-worker/public/diary.css').split('.date-wheel-dialog {')[1].split('\n.toast {')[0];
   assert.ok(read('../public/date-wheel.css').includes('.date-wheel-dialog {' + wheelLayout));

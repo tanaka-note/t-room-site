@@ -89,7 +89,9 @@
       event.preventDefault();
       closeCalendar();
     });
-    dialog.addEventListener("close", resetCalendar);
+    dialog.addEventListener("close", () => {
+      if (!state.navigation) resetCalendar();
+    });
     document.body.append(dialog);
     return dialog;
   }
@@ -301,7 +303,7 @@
 
   function setNavigation(navigation) {
     state.navigation = navigation;
-    navigation.register("troom-calendar-dialog", { dialog: ensureDialog() });
+    navigation.register("troom-calendar-dialog", { dialog: ensureDialog(), onClose: resetCalendar });
   }
 
   window.TRoomDatePicker = Object.freeze({ setNavigation, initialize, parseValue, formatValue, calendarCells });
