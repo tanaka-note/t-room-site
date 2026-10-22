@@ -42,8 +42,22 @@
   "queues": {
     "producers": [
       {
+        "binding": "TRASH_DELETION",
+        "queue": "t-room-cloud-trash-deletion"
+      },
+      {
         "binding": "SECURITY_AUDIT",
         "queue": "t-room-security-audit"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "t-room-cloud-trash-deletion",
+        "max_batch_size": 1,
+        "max_batch_timeout": 0,
+        "max_concurrency": 1,
+        "max_retries": 5,
+        "retry_delay": 60
       }
     ]
   },
@@ -57,6 +71,6 @@
     "PASSKEY_ENABLED": "true"
   },
   "triggers": {
-    "crons": ["17 18 * * *"]
+    "crons": ["17 18 * * *", "*/5 * * * *"]
   }
 }

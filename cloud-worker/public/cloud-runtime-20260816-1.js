@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-531654d4b16f";
+const APP_BUILD_ID = "cloud-4545b626db45";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -9,6 +9,7 @@ const BACKGROUND_ITEM_PAGE_SIZE = 64;
 const RESTORE_ITEM_PAGE_SIZE = 250;
 const SEARCH_ITEM_PAGE_SIZE = 250;
 let searchPageTimer = null;
+let trashDeletionTimer = null;
 let searchInputController = null;
 const searchMetadataCache = new Map();
 let searchMetadataCacheScope = "";
@@ -33,6 +34,7 @@ let folderNavigation = null;
 let navigationGeneration = 0;
 const state = {
   session: null,
+  trashDeletionJob: null,
   loginId: "",
   credentialSalt: "",
   folderId: null,
@@ -1813,6 +1815,9 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  clearTimeout(trashDeletionTimer);
+  state.trashDeletionJob = null;
+  $("#trash-deletion-status").hidden = true;
   cancelFolderNavigation();
   navigationPositions.clear();
   activeNavigationEntry = null;
@@ -2149,6 +2154,8 @@ function canFallbackToDisplayListing(error) {
 }
 
 async function loadItems() {
+  clearTimeout(trashDeletionTimer);
+  $("#trash-deletion-status").hidden = state.view !== "trash";
   syncAccountView();
   renderDiaryBackupMount();
   clearTimeout(searchPageTimer);
@@ -2215,6 +2222,8 @@ async function loadItems() {
       renderBreadcrumbs([]);
     } else if (state.view === "trash") {
       const data = await api("/trash", { signal: itemLoadSignal });
+      if (loadGeneration !== state.itemLoadGeneration || itemLoadSignal.aborted) return { ok: false, stale: true };
+      state.trashDeletionJob = data.job || null;
       state.folders = (await hydrateFolderRecords(data.folders || [])).map((folder) => ({ ...folder, trashed: true }));
       state.files = (await hydrateFileRecords(data.files || [])).map((file) => ({ ...file, trashed: true }));
       state.history = [];
@@ -2720,7 +2729,7 @@ function renderItems() {
   $("#display-toggle").innerHTML = TCloudUI.icon(state.listMode ? "grid" : "list");
   $("#display-toggle").setAttribute("aria-label", state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え");
   $("#display-toggle").title = state.listMode ? "1:1表示へ切り替え" : "横長表示へ切り替え";
-  $("#empty-trash-button").hidden = state.view !== "trash" || !state.session?.canDelete || state.files.length + state.folders.length === 0;
+  renderTrashDeletionStatus();
   scheduleEncryptedThumbnailLoading();
   scheduleMissingMediaDurations();
   scheduleMissingVideoThumbnails();
@@ -8476,6 +8485,7 @@ async function approveDeletionRequest(item) {
 }
 
 async function showTrashActions(file) {
+  if (file.purging) { setNotice("完全削除を受け付けたデータです。ブラウザを閉じても処理は続きます。"); return; }
   state.selected = { ...file, trashTargetType: "file" };
   $("#trash-file-name").textContent = file.name;
   $("#trash-action-note").textContent = "元に戻すか、完全に削除する操作を選んでください。";
@@ -8484,6 +8494,7 @@ async function showTrashActions(file) {
 }
 
 async function showTrashFolderActions(folder) {
+  if (folder.purging) { setNotice("完全削除を受け付けたデータです。ブラウザを閉じても処理は続きます。"); return; }
   state.selected = { ...folder, trashTargetType: "folder" };
   $("#trash-file-name").textContent = folder.name;
   $("#trash-action-note").textContent = "フォルダと、その中にあったデータをまとめて元に戻せます。";
@@ -8509,46 +8520,70 @@ async function permanentlyDeleteSelectedFile() {
   const file = state.selected;
   if (!file || file.trashTargetType === "folder" || !state.session.canDelete || !confirm("完全に削除すると元に戻せません。削除しますか？")) return;
   try {
-    await api(`/files/${file.id}/permanent`, { method: "DELETE", body: "{}" });
+    const result = await api(`/files/${file.id}/permanent`, { method: "DELETE", body: "{}" });
+    state.trashDeletionJob = result.job || null;
     await removeDeviceCopiesForFiles([file]);
     $("#trash-dialog").close();
-    setNotice("完全に削除しました。");
     await Promise.all([loadItems(), loadUsage()]);
+    setNotice("完全削除を受け付けました。ブラウザを閉じても処理は続きます。");
   } catch (error) { setNotice(error.message, true); }
 }
 
 async function emptyTrash() {
+  const retry = state.trashDeletionJob?.status === "failed";
   const count = state.files.length + state.folders.length;
-  if (!count || !state.session?.canDelete) return;
-  if (!confirm(`ゴミ箱内の${count}件をすべて完全に削除します。元に戻せません。続けますか？`)) return;
+  if ((!count && !retry) || !state.session?.canDelete) return;
+  if (!confirm(retry
+    ? "受け付け済みの完全削除を再試行します。元に戻せません。続けますか？"
+    : "現在ゴミ箱にあるデータをすべて完全に削除します。ブラウザを閉じても続行し、受け付け後は復元できません。続けますか？")) return;
   const button = $("#empty-trash-button");
   button.disabled = true;
-  button.textContent = "削除中 0件";
+  button.textContent = "受付中…";
   try {
-    let totalDeleted = 0;
-    let expected = 0;
-    let failed = 0;
-    let remaining = 1;
-    while (remaining > 0 && failed === 0) {
-      const result = await api("/trash", { method: "DELETE", body: "{}" });
-      if (!expected) expected = Number(result.totalFiles || 0) + Number(result.totalFolders || 0);
-      totalDeleted += Number(result.deleted || 0) + Number(result.deletedFolders || 0);
-      failed += Number(result.failed || 0);
-      remaining = Number(result.remaining || 0);
-      button.textContent = expected
-        ? `削除中 ${Math.min(totalDeleted, expected).toLocaleString("ja-JP")} / ${expected.toLocaleString("ja-JP")}件`
-        : `削除中 ${totalDeleted.toLocaleString("ja-JP")}件`;
-      if (Number(result.deleted || 0) === 0 && Number(result.deletedFolders || 0) === 0 && remaining > 0) break;
-    }
-    setNotice(failed || remaining
-      ? `${totalDeleted}件を完全に削除しました。削除できなかったデータがあるため、ゴミ箱に残しています。`
-      : `${totalDeleted}件を完全に削除しました。` , Boolean(failed || remaining));
+    const result = await api(retry ? "/trash/job/retry" : "/trash", { method: retry ? "POST" : "DELETE", body: "{}" });
+    state.trashDeletionJob = result.job || null;
     await Promise.all([loadItems(), loadUsage()]);
+    setNotice("完全削除を受け付けました。ブラウザを閉じても処理は続きます。後からゴミ箱に入れたデータは対象に含みません。");
   } catch (error) {
     setNotice(error.message, true);
   } finally {
-    button.disabled = false;
-    button.textContent = "一括削除";
+    renderTrashDeletionStatus();
+  }
+}
+
+function renderTrashDeletionStatus() {
+  clearTimeout(trashDeletionTimer);
+  const visible = state.view === "trash" && state.session?.canDelete;
+  const job = visible ? state.trashDeletionJob : null;
+  const active = job && ["queued", "running"].includes(job.status);
+  const button = $("#empty-trash-button");
+  button.hidden = !visible || (!job && !state.files.length && !state.folders.length)
+    || (job?.status === "completed" && !state.files.length && !state.folders.length);
+  button.disabled = Boolean(active);
+  button.textContent = active ? "クラウドで削除中" : job?.status === "failed" ? "削除を再試行" : "一括削除";
+  const status = $("#trash-deletion-status");
+  status.hidden = !job;
+  if (!job) return;
+  const deleted = Number(job.deletedFiles || 0) + Number(job.deletedFolders || 0);
+  const total = Number(job.totalFiles || 0) + Number(job.totalFolders || 0);
+  status.textContent = job.status === "completed" ? `完全削除が完了しました（${deleted.toLocaleString("ja-JP")}件）。`
+    : job.status === "failed" ? `${deleted.toLocaleString("ja-JP")} / ${total.toLocaleString("ja-JP")}件を完全削除しました。一部の削除に失敗しました。「削除を再試行」で残りを再開できます。`
+    : `クラウドで完全削除中：${deleted.toLocaleString("ja-JP")} / ${total.toLocaleString("ja-JP")}件。ブラウザを閉じても続行します。`;
+  if (active) {
+    const session = state.session;
+    trashDeletionTimer = setTimeout(async () => {
+      try {
+        const result = await api("/trash/job");
+        if (state.session !== session || state.view !== "trash") return;
+        const changed = JSON.stringify(state.trashDeletionJob) !== JSON.stringify(result.job);
+        state.trashDeletionJob = result.job || null;
+        if (changed) await Promise.all([loadItems(), loadUsage()]);
+      } catch {
+        if (state.session === session && state.view === "trash") status.textContent = "削除の進捗を再確認しています。クラウド側の処理はブラウザと独立して続行します。";
+      } finally {
+        if (state.session === session && state.view === "trash") renderTrashDeletionStatus();
+      }
+    }, 5000);
   }
 }
 
