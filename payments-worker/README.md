@@ -66,52 +66,36 @@ node --test test/*.test.js
 
 ## バックアップ・復元
 
-### 調査結果と権限
+### 標準機能による保管と権限
 
-2026-10-21の読み取り確認では `payments-db` はproduction世代、APAC、read replication disabled、53,248 bytes。Time Travel bookmark取得APIの利用可を確認した（現時点のbookmarkは公開前バックアップの代用にはしない）。契約プランの実保持期間は未確認。支払明細Workerにはcron/R2バックアップbindingがなく、リポジトリ内にもpaymentsの定期export運用はない。
+`payments-db` はproduction世代、APAC、read replication disabled。本番アカウントのWorkers Paid契約とbookmark取得を確認済み。Time Travelは常時有効で保持上限30日（DB作成前の履歴は存在しない）。[公式Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)を参照。期限内でも本番DBの復元は上書きと実行中クエリの中止を伴うため、**本番での復元試験は禁止**。
 
-日記の自動バックアップは日記専用テーブル許可リストと写真を扱う形式v6で、paymentsには非互換。既存の日記バケット/復元コードを流用すると支払履歴を取りこぼすため、今回は変更しない。
+日記の自動バックアップは `diary-db` の許可されたテーブルと写真を扱う形式v6で、paymentsには非互換。支払明細Workerにはcron/R2バックアップbindingがなく、paymentsの定期export運用はまだない。
 
-[Cloudflare公式Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)によるとproduction世代で常時有効、Wrangler 3.4.0以上が必要。Workers Freeは過去7日、Paidは30日まで。復元は元DBをその場で上書きし、実行中クエリが中止される。別DBへのclone/forkとして使わない。**本番での復元試験は禁止**。
+今回の公開前SQL exportは、既存の非公開R2バケット `t-room-diary-backups` の `payments/pre-migration/<UTC日時と一意ID>/` へ保管する。日記の `daily/`・`monthly/` と復元形式を分け、その世代削除対象にも入れない。公開r2.devは無効、カスタムドメインなし、対象prefixを消すLifecycleなしを毎回確認する。バケットロックは未設定で、認可された管理者や日記Workerのバケットbindingはこのprefixにもアクセスできる。prefixはIAMの分離ではない。
 
-実施済みは合成データでのlocal D1 export/import復元。remote D1作成・export・Time Travel restoreは未実施（読み取り専用接続のため）。本番データは取得していない。remoteでの確認が必要なら、権限のある運用者が次の同じ手順を専用の検証DBと合成データで行う。MCPの読み取り権限を回避しない。
+[R2標準の保存時暗号化](https://developers.cloudflare.com/r2/reference/data-security/)（Cloudflare管理鍵によるAES-256）とTLS、認証付きAPIを使う。SQL/gzip自体に追加の公開鍵暗号化は行わず、利用者に新しい秘密鍵の管理を要求しない。今回の支払明細バックアップは既存のCloudflare管理データと同じ信頼境界で保管する。T-Cloudの端末暗号化ファイル・動画・ユーザー鍵には適用せず、それらの方式や鍵を変更しない。
 
-### 本番migration前（公開担当者が実施）
+インフラ操作はクラウド環境のHTTPS宛先限定 `CLOUDFLARE_API_TOKEN` を使う。調査用Cloudflare MCPは読み取り専用のまま。SQL本文、支払先、備考、署名URL、credentialはログ・Git・CI Artifactへ出さない。SQLはメモリ内で受け渡し、通常のクラウド作業ディスクへ平文保存しない。
 
-1. 最新main・PRのVerify/CodeQL・対象テスト・build marker一致を確認する。本番反映は別途実施する。
-2. 本番のWorker Version ID、DB UUID、適用済みmigration、UTC/JST時刻、Time Travel保持期間を記録する。新旧Workerをまたぐ変更を避けるため、保守時間中は `/payments/api/entries` 配下へのPOST/PUT/DELETEをゲートウェイ等で停止する。アプリには保守モード切替を実装していないため、公開担当者が書込停止を確認する。
-3. 安全な管理端末でアクセス権を制限した暗号化ディスク上のディレクトリを用意する。以下は**本番データをファイルへ保存する運用コマンド**。CI・共有端末・画面共有・公開Artifactでは実行しない。SQL本文、支払先、備考を出力しない。
+### 公開前のバックアップと復元検証
 
-```sh
-# payments-worker/。BACKUP_DIRは運用者が用意した保護領域
-umask 077
-pnpm exec wrangler d1 time-travel info payments-db
-pnpm exec wrangler d1 export payments-db --remote --output "$BACKUP_DIR/payments-before-0002.sql"
-# 出力ファイルのハッシュ/サイズ・取得時刻・commit・DB UUIDを非公開で記録する
-# exportを安全な検証DBへimportして検証するまで本番migrationしない
-pnpm exec wrangler d1 migrations list payments-db --remote
-pnpm exec wrangler d1 migrations apply payments-db --remote
-```
+1. 最新main・PRのVerify/CodeQL・対象テスト・build markerを確認し、本番Worker Version、DB UUID、適用済みmigration、UTC/JST時刻、保持期間を記録する。
+2. `/payments/api/entries` とその子pathのPOST/PUT/DELETEを保守中だけゲートウェイで止める。直接workers.dev経路も有効なら止める。アプリに保守モードはないため、停止が有効なことを実HTTPで確認する。
+3. 新しいTime Travel bookmarkを取得し、D1標準SQL export APIで全schema/dataを出力する。一時署名URLは表示せずTLSでメモリへ読み込み、gzip化したSQLを上記R2へ保存する。取得した時刻、元DB UUID、Worker Version、SQL/gzipのSHA-256・byte数、各テーブルの行数・内容hash、schema hashをmanifestに記録する。
+4. **保存したR2オブジェクトを読み戻して**圧縮前後のSHA-256を照合する。空の隔離検証D1を作り、UUIDが本番 `066196b0-25d4-4c92-acfd-066dae61530b` と異なることをコードで強制する。Worker binding・公開route・cron・SESSION_SECRETを付けず、D1標準import APIで読み戻したSQLを復元する。
+5. 既存 `payments_accounts` / `payments_entries` / `payments_requests` / `d1_migrations` の全行hash、schema/index/trigger、明細version・論理削除、`PRAGMA quick_check` と `PRAGMA foreign_key_check` を照合する。隔離DBだけで0002を適用し、既存行保持、新テーブルが空、実配分のDB検証・完了済み編集保護・操作監査の不変性を確認する。検証DBのbookmarkへのTime Travel復元も同DBだけで試験し、元の全行・schemaへ戻ることを確認する。
+6. 検証成功・取得時刻をmanifestへ追記し、R2へ保存・再読込する。検証DBはUUIDガード付きで削除する。書込停止前の予備検証が済んでいても、公開前には停止中の最新snapshotでこの検証を行う。**復元検証に成功するまで本番migration・merge・公開をしない**。
+7. 未適用が0002だけであることと、書込停止後の本番全行hashがバックアップと一致することを確認してから `wrangler d1 migrations apply payments-db --remote` 相当の原子的なmigrationを適用する。既存全行が不変、新テーブルが空、foreign key/quick_checkとmigration記録を再確認する。Security DB・bootstrap・既存Secretは変更しない。
+8. payments Workerを正規の公開手順で反映し、公開versionと `node tools/verify-web-app-builds.mjs --target t-room-payments` の一致を確認する。実機パスキーでの個人データ操作は利用者認証が必要なため、未実施の場合はそう報告する。可能な読み取り確認後に書込停止を解除する。
 
-4. 未適用が `0002_monthly_ledger.sql` であることを確認し、既存行数・外部キー・新テーブルが空であることを検証する。Security DBのIdentity/連携/パスキー/session/監査/Health/Cloudへ操作しない。既存bootstrapやSecurity `0025` を再実行する必要はない。
-5. migration後にpayments Workerだけを公開する。`node tools/check-web-app-builds.mjs --target t-room-payments` →正規release手順→公開build一致を確認する。パスキー認証・一覧・月別配分・既存行保持を読み取りで確認してから書込停止を解除する。今回の作業では本番反映を実施しない。
+2026-10-22の事前検証では、本番SQL export→非公開R2への保存・再読込→隔離remote D1への復元→全既存行/schema/制約一致→0002の保持/監査/配分guard→隔離DBのTime Travel復元を確認し、検証DBを削除した。公開直前のsnapshotでも同じ検証を行う。
 
-### 検証用remote DBへの復元（運用者向け・未実施）
+### 復旧と今後の自動バックアップ
 
-運用者が空の専用検証DBを準備し、本番route/Service Binding/cron/SESSION_SECRETを含まない別configへそのUUIDだけを設定する。復元先UUIDが本番 `066196b0-25d4-4c92-acfd-066dae61530b` と異なることを人とコマンドの両方で確認する。先に合成データによるexport/import、次に必要な場合のみ保護領域の本番exportで試験する。
+復旧時はmanifestの元DB UUID・取得時刻・SHA-256・検証結果を確認し、認証付きR2 APIでSQL gzipを読み出す。隔離DBへのimportで再検証してから、別途承認した災害復旧手順で切り替える。SQLにはmigration/schema/index/triggerも含む。0002適用後のSQLは月別実績・取消状態・全操作監査・再送記録も含めて復元する。
 
-```sh
-# RESTORE_CONFIGには検証DBのみ。中身は事前レビューする
-pnpm exec wrangler d1 execute payments-restore-check --remote --config "$RESTORE_CONFIG" --file "$BACKUP_DIR/payments-before-0002.sql"
-```
-
-復元先で全テーブルの行数、明細version/論理削除、月別実額/完了UTC日時/取消状態、操作IDと監査行の対応、配分の合計、DB制約・index/trigger、`PRAGMA integrity_check` と `PRAGMA foreign_key_check` を照合する。前migrationのexportには新テーブルがないため、復元後に0002を適用し全て未計上になることも確認する。月別履歴を含むpost-migration exportの復元も別途行う。検証用DBだけで書込み・取消の試験をする。結果は件数・整合性のみ記録し個人データをログへ出さない。
-
-Time Travel自体の試験は、専用検証DBで合成データを登録→bookmark記録→合成データ変更→**その検証DBだけ**restore→照合する。export/import試験はTime Travel復元試験の代わりと報告しない。
-
-### 長期保存と切り戻し
-
-Time Travelの期限を越える保管には、一貫したD1全体のexport（明細・marks・requests・audit・migration情報とschema/trigger/index）を推奨する。管理端末で暗号化し、秘密鍵をCloudflare/Git/CIへ置かず、非公開の別保管先へ保存する。日次・月次世代、保存期間、アクセス権、削除規則、復号と復元の定期試験を運用者が定める。Cloudflare Workflows→R2の公式export方式もあるが、平文バックアップ・権限・暗号鍵の管理を設計してから導入する。今回は定期ジョブや課金リソースを追加していない。
+公開後はpayments専用の定期export、保持日数、失敗通知、復元の定期検証、専用バケットによるIAM分離を別作業で検討する。Cloudflare Workflows→R2の公式方式を候補とし、今回の公開に定期ジョブや恒久的な新Workerは追加しない。
 
 通常の切り戻しでは**追加テーブル・監査・完了実績を残し、migrationを逆適用しない**。不具合時はまず業務書込を停止し、現時点のexport/bookmarkを保護して修正版へ進める。旧Worker Versionへの切替は可能だが、旧版は月別管理・業務監査を生成しないため、書込停止を保って一時的な閲覧用途だけにする。DB全体のTime Travel巻戻しは新しい支払/計上/監査を失うため通常のrollbackに使わない。災害復旧時のみ、別の承認と停止時間を確保し、失われる変更を照合して運用者が実施する。
 
