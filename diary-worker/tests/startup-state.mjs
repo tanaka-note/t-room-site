@@ -160,7 +160,7 @@ test('viewer is prefetched independently, never a reading dependency', () => {
 
 function returnViewFixture() {
   const storage = new Map();
-  const state = { activeHouseholdId: 'household-a', accountName: 'account-a', entries: [1],
+  const state = { role: 'user', activeHouseholdId: 'household-a', accountName: 'account-a', entries: [1],
     query: 'saved search', month: '2026-09', monthExpanded: true };
   const elements = { appView: { hidden: false }, tagSearchInput: { value: 'tag' }, tagPageBack: { hidden: false } };
   const window = {
@@ -187,6 +187,8 @@ function returnViewFixture() {
     ${body('isUsableDiaryReturnView')}
     ${body('isDiaryReturnReferrer')}
     ${body('hasDiaryReturnNavigation')}
+    ${body('isOwnedDiaryReturnView')}
+    ${body('updateDiaryReturnNavigation')}
     ${body('configureDiaryReturnNavigation')}
     ${body('isDiaryListPath')}
     let hide;
