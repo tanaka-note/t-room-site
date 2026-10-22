@@ -67,6 +67,8 @@ try {
       await page.getByRole('button', { name:monthlyLabel, exact:true }).click();
       await page.locator('#months-dialog').waitFor({state:'visible'});
       assert.match(await page.locator('#month-items').innerText(), /2026-10[\s\S]*3,334/);
+      let markRequests = 0;
+      page.on('request', request => { if (request.method() === 'PUT' && /\/months\/\d{4}-\d{2}$/.test(request.url())) markRequests++; });
       const current = new Date(Date.now()+9*3600000).toISOString().slice(0,7);
       if (current >= '2026-10') {
         let loseMark = true;
@@ -74,12 +76,51 @@ try {
           if (loseMark && route.request().method() === 'PUT') { loseMark=false; await route.fetch(); await route.abort(); } else await route.continue();
         });
         const complete = page.locator('#months-dialog').getByRole('button',{name:'サンプル年会費 2026-10 計上済みにする',exact:true});
-        await complete.click(); await page.locator('#months-error').waitFor({state:'visible'});
-        await complete.click();
+        // Every dismissal is a cancellation, with no mutation API or audit.
+        for (const close of ['cancel', 'escape', 'back', 'backdrop']) {
+          await complete.click(); await page.locator('#confirm-dialog').waitFor({state:'visible'});
+          assert.match(await page.locator('#confirm-copy').innerText(), /サンプル年会費[\s\S]*2026-10[\s\S]*3,334[\s\S]*家計簿には自動反映されません/);
+          assert.equal(await page.evaluate(() => document.dispatchEvent(new CustomEvent('troom:before-auto-update', {cancelable:true}))), false);
+          if (close === 'cancel') await page.locator('#confirm-cancel').click();
+          if (close === 'escape') await page.keyboard.press('Escape');
+          if (close === 'back') await page.goBack();
+          if (close === 'backdrop') { if (mobile) await page.touchscreen.tap(2,2); else await page.mouse.click(2,2); }
+          await page.locator('#confirm-dialog').waitFor({state:'hidden'});
+          assert.equal(await page.locator('#months-dialog').evaluate(el => el.open), true);
+          assert.equal(markRequests,0);
+          assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM payments_monthly_marks').get().n,0);
+        }
+        await complete.click(); await page.locator('#confirm-ok').click();
+        await page.locator('#confirm-error').waitFor({state:'visible'});
+        assert.match(await page.locator('#confirm-copy').innerText(), /2026-10[\s\S]*3,334/);
+        // A lost-response retry keeps its ID; two synchronous clicks submit once.
+        await page.locator('#confirm-ok').evaluate(el => { el.click(); el.click(); });
+        await page.locator('#confirm-dialog').waitFor({state:'hidden'});
+        assert.equal(markRequests,2);
         await page.locator('#months-dialog').getByRole('button',{name:'サンプル年会費 2026-10 計上を取り消す',exact:true}).waitFor();
         assert.match(await page.locator('#month-items').innerText(), /日本時間/);
+        assert.match(await page.locator('#month-items').innerText(), /計上済み（月単位）/);
+        assert.doesNotMatch(await page.locator('#entries .entry-status').innerText(), /計上完了/);
         assert.equal(f.sqlite.prepare("SELECT COUNT(*) n FROM payments_operation_audit WHERE action='month_complete'").get().n,1);
-        await page.locator('#months-dialog').getByRole('button',{name:'サンプル年会費 2026-10 計上を取り消す',exact:true}).click();
+        const undo = page.locator('#months-dialog').getByRole('button',{name:'サンプル年会費 2026-10 計上を取り消す',exact:true});
+        await undo.click();
+        assert.match(await page.locator('#confirm-copy').innerText(), /未計上に戻します/);
+        await page.locator('#confirm-cancel').click(); await page.locator('#confirm-dialog').waitFor({state:'hidden'});
+        assert.equal(markRequests,2);
+        // Approval from an old version must not overwrite another tab's edit.
+        await undo.click();
+        const stored = f.sqlite.prepare('SELECT id,version FROM payments_entries').get();
+        const concurrent = await page.request.put(new URL('/payments/api/entries/'+stored.id,page.url()).href, {
+          headers:{Origin:new URL(page.url()).origin},
+          data:{requestId:crypto.randomUUID(),expectedVersion:stored.version,paidOn:'2026-10-20',payee:'サンプル年会費',description:'<img src=x onerror=alert(1)>',amount:10000,startMonth:'2026-10',months:3,notes:'競合確認'}
+        });
+        assert.equal(concurrent.status(),200);
+        await page.locator('#confirm-ok').click(); await page.locator('#confirm-error').waitFor({state:'visible'});
+        assert.equal(await page.locator('#confirm-ok').isDisabled(),true);
+        assert.ok(f.sqlite.prepare('SELECT completed_at FROM payments_monthly_marks').get().completed_at);
+        await page.locator('#confirm-cancel').click(); await page.locator('#confirm-dialog').waitFor({state:'hidden'});
+        await undo.click(); assert.equal(await page.locator('#confirm-ok').isEnabled(),true);
+        await page.locator('#confirm-ok').click(); await page.locator('#confirm-dialog').waitFor({state:'hidden'});
         await complete.waitFor();
         await page.locator('#months-dialog details summary').click();
         assert.match(await page.locator('#operation-history').innerText(), /計上取消[\s\S]*primary-admin/);
@@ -94,6 +135,15 @@ try {
       await page.locator('#months-dialog').waitFor({state:'hidden'});
       await page.getByRole('button',{name:monthlyLabel,exact:true}).click(); await page.locator('#months-dialog').waitFor({state:'visible'});
       await page.keyboard.press('Escape'); await page.locator('#months-dialog').waitFor({state:'hidden'});
+      const entryRow = page.locator('#entries tr').first();
+      assert.equal(await entryRow.evaluate(el => getComputedStyle(el).display), mobile ? 'grid' : 'table-row');
+      if (mobile) {
+        assert.equal(await page.locator('.table-scroll').evaluate(el => el.scrollWidth <= el.clientWidth),true);
+        await entryRow.locator('summary').click();
+        assert.match(await entryRow.locator('.mobile-details').innerText(), /支払日：2026-10-20[\s\S]*競合確認/);
+        await entryRow.locator('summary').click();
+        for (const action of await entryRow.locator('button').all()) assert.ok(await action.evaluate(el=>el.getBoundingClientRect().height>=44));
+      }
       if (process.env.TROOM_SCREENSHOT_DIR) {
         await mkdir(process.env.TROOM_SCREENSHOT_DIR,{recursive:true});
         await page.screenshot({path:`${process.env.TROOM_SCREENSHOT_DIR}/payments-${mobile?'mobile':'desktop'}.png`,fullPage:true});
@@ -101,9 +151,9 @@ try {
       // A second tab must observe completion changes without overwriting a stale view.
       if (new Date(Date.now()+9*3600000).toISOString().slice(0,7) === '2026-10') {
         const other=await context.newPage(); await other.goto(page.url()); await other.locator('#current-items button').waitFor();
-        await page.locator('#current-items button').click();
+        await page.locator('#current-items button').click(); await page.locator('#confirm-ok').click(); await page.locator('#confirm-dialog').waitFor({state:'hidden'});
         await other.waitForFunction(()=>document.getElementById('current-items').textContent.includes('計上を取り消す'));
-        await other.locator('#current-items button').click();
+        await other.locator('#current-items button').click(); await other.locator('#confirm-ok').click(); await other.locator('#confirm-dialog').waitFor({state:'hidden'});
         await page.waitForFunction(()=>document.getElementById('current-items').textContent.includes('計上済みにする'));
         await other.close();
       }
@@ -123,7 +173,7 @@ try {
         const id = crypto.randomUUID(); periodCases.push({id, remaining});
         const response = await page.request.post(new URL('/payments/api/entries',page.url()).href, {
           headers: {Origin:new URL(page.url()).origin},
-          data: {requestId:id,paidOn:'2020-01-01',payee:`期間表示確認・${label}`,amount:300,startMonth:monthText(periodCurrent+offset),months:3}
+          data: {requestId:id,paidOn:'2020-01-01',payee:`期間表示確認・${label}`,description:'長い摘要・'.repeat(30),notes:'長い備考・'.repeat(50),amount:999999999999,startMonth:monthText(periodCurrent+offset),months:3}
         });
         assert.equal(response.status(),200);
       }
@@ -134,9 +184,13 @@ try {
         assert.match(await row.innerText(),new RegExp(`期間終了まで：残り${remaining}ヶ月`));
         assert.match(await row.innerText(),/残り3回・計上済み0回/);
       }
+      if (mobile) {
+        assert.equal(await page.locator('.table-scroll').evaluate(el => el.scrollWidth <= el.clientWidth),true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),true);
+      }
       await page.locator('#logout').click(); await page.locator('#login-view').waitFor({ state: 'visible' });
       assert.deepEqual(errors, []);
     } finally { await context.close(); await new Promise(resolve => server.close(resolve)); f.close(); }
   }
-  console.log('Payments Chromium desktop/touch: login, CRUD, year boundary, integer allocation, monthly complete/undo, JST timestamps, cross-tab refresh, XSS text, lost-response retry, unsaved input, Back, Escape, delete cancel, layout and logout passed.');
+  console.log('Confirm cancellations, exact amount, idempotent retry, double submit, stale approval, responsive cards and Payments Chromium desktop/touch: login, CRUD, year boundary, integer allocation, monthly complete/undo, JST timestamps, cross-tab refresh, XSS text, lost-response retry, unsaved input, Back, Escape, delete cancel, layout and logout passed.');
 } finally { await browser.close(); }
