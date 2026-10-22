@@ -181,4 +181,3 @@ await drain(blocked.body.job.id);
 assert.equal(getJob().status, "completed");
 assert.equal(getJob().deleted_folders, 1);
 console.log("PASS durable trash deletion: acceptance, permissions/CSRF, snapshots, batches, leases/recovery, retry, audit, usage, Stream and browser-independent completion");
-
