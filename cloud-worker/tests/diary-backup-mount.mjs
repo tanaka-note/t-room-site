@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
+import { randomBytes } from "node:crypto";
+import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { scanBackupMetadata, getBackupSnapshot } from "../../diary-worker/src/backup-browser.js";
 
 const at = new Date("2026-09-12T18:25:00Z");
@@ -72,8 +74,8 @@ function fixture() {
     const prepared = db.prepare(sql);
     return { bind(...values) { return statement(sql, values); }, async first() { return prepared.get(...args) || null; }, async all() { return { results: prepared.all(...args) }; } };
   }
-  const env = { DB: { prepare: statement }, DIARY_BACKUP_MOUNT_FOLDER_ID: "2850", DIARY_BACKUPS: { async getSnapshot() { return snapshot; } } };
-  const context = { WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console, setTimeout, clearTimeout, enqueueSecurityAudit() {} };
+  const env = { DB: { prepare: statement }, SESSION_SECRET: randomBytes(32).toString("hex"), DIARY_BACKUP_MOUNT_FOLDER_ID: "2850", DIARY_BACKUPS: { async getSnapshot() { return snapshot; } } };
+  const context = { isValidSessionSecret, requireSessionSecret, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console, setTimeout, clearTimeout, enqueueSecurityAudit() {} };
   const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
   vm.runInNewContext(source, context);
   // Isolate the authenticated API boundary; existing member-api-boundary tests
@@ -95,6 +97,16 @@ test("admin reads the fixed mount ID despite rename, with actual metadata", asyn
     assert.equal(r.body.folderId, 2850);
     assert.equal(r.body.readOnly, true);
     assert.equal(r.body.backupBytes, 1300);
+  } finally { f.db.close(); }
+});
+
+test("backup metadata retains the real session-secret preflight", async () => {
+  const f = fixture();
+  try {
+    for (const value of [undefined, "invalid"]) {
+      f.env.SESSION_SECRET = value;
+      await assert.rejects(f.api("/diary-backups"), error => error.status === 503);
+    }
   } finally { f.db.close(); }
 });
 
