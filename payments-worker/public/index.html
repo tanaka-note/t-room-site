@@ -59,13 +59,17 @@
 })(window).enforce();</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow,noarchive">
-  <meta name="troom-app-build" content="payments-2912886976ad">
+  <meta name="troom-app-build" content="payments-5800e2ee7d85">
   <meta name="troom-auto-update" content="enabled">
   <title>支払明細</title>
-  <link rel="stylesheet" href="./payments.css?v=payments-2912886976ad">
-  <script src="/security/passkey-client.js?v=payments-2912886976ad" defer></script>
-  <script src="./dialog-navigation.js?v=payments-2912886976ad" defer></script>
-  <script src="./payments.js?v=payments-2912886976ad" defer></script>
+  <link rel="stylesheet" href="./payments.css?v=payments-5800e2ee7d85">
+  <script src="/security/passkey-client.js?v=payments-5800e2ee7d85" defer></script>
+  <script src="./dialog-navigation.js?v=payments-5800e2ee7d85" defer></script>
+  <link rel="stylesheet" href="./troom-date-picker.css?v=payments-5800e2ee7d85">
+  <link rel="stylesheet" href="./date-wheel.css?v=payments-5800e2ee7d85">
+  <script src="./troom-date-picker.js?v=payments-5800e2ee7d85" defer></script>
+  <script src="./date-wheel.js?v=payments-5800e2ee7d85" defer></script>
+  <script src="./payments.js?v=payments-5800e2ee7d85" defer></script>
 </head>
 <body>
   <main>
@@ -103,11 +107,11 @@
     <form id="entry-form">
       <div class="dialog-heading"><h2 id="editor-title">明細を登録</h2><button id="close-editor" type="button" class="quiet" aria-label="閉じる">×</button></div>
       <div class="fields">
-        <label>支払日<input name="paidOn" type="date" required></label>
+        <label for="paidOn">支払日<span class="date-input-shell"><input id="paidOn" name="paidOn" type="text" inputmode="none" readonly required pattern="\d{4}-\d{2}-\d{2}" data-date-wheel-mode="date" aria-haspopup="dialog" aria-controls="date-wheel-dialog"><button class="date-picker-button" type="button" data-date-picker-target="paidOn" data-date-picker-mode="date" aria-label="支払日をカレンダーから選ぶ" title="カレンダーから選ぶ"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 11h18"></path></svg></button></span></label>
         <label>支払先<input name="payee" maxlength="120" required autocomplete="off"></label>
         <label class="wide">摘要<input name="description" maxlength="240" autocomplete="off"></label>
         <label>支払総額（円）<input name="amount" type="number" inputmode="numeric" min="1" max="999999999999" step="1" required></label>
-        <label>対象開始月<input name="startMonth" type="month" min="1900-01" max="9999-12" required></label>
+        <label for="startMonth">対象開始月<span class="date-input-shell"><input id="startMonth" name="startMonth" type="text" inputmode="none" readonly required pattern="\d{4}-\d{2}" data-date-wheel-mode="month" aria-haspopup="dialog" aria-controls="date-wheel-dialog"><button class="date-picker-button" type="button" data-date-picker-target="startMonth" data-date-picker-mode="month" aria-label="対象開始月をカレンダーから選ぶ" title="カレンダーから選ぶ"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 11h18"></path></svg></button></span></label>
         <label>対象月数（ヶ月）<input name="months" type="number" inputmode="numeric" min="1" max="1200" step="1" required value="12"></label>
         <p id="calculation" class="calculation" role="status"></p>
         <label class="wide">備考<textarea name="notes" rows="3" maxlength="2000"></textarea></label>
@@ -116,8 +120,35 @@
       <div class="dialog-actions"><button id="cancel-editor" type="button">キャンセル</button><button class="primary" id="save" type="submit">登録する</button></div>
     </form>
   </dialog>
+  <dialog id="date-wheel-dialog" class="date-wheel-dialog" aria-labelledby="date-wheel-title">
+    <section class="date-wheel-sheet">
+      <header class="date-wheel-head">
+        <button id="date-wheel-cancel" class="text-button" type="button">キャンセル</button>
+        <div>
+          <p id="date-wheel-title">日付を選択</p>
+          <strong id="date-wheel-value"></strong>
+        </div>
+        <button id="date-wheel-done" class="text-button" type="button">完了</button>
+      </header>
+      <div class="date-wheel-window">
+        <div class="date-wheel-highlight" aria-hidden="true"></div>
+        <div class="date-wheel-group">
+          <span>年</span>
+          <div id="date-wheel-year" class="date-wheel-column" role="listbox" aria-label="年"></div>
+        </div>
+        <div class="date-wheel-group">
+          <span>月</span>
+          <div id="date-wheel-month" class="date-wheel-column" role="listbox" aria-label="月"></div>
+        </div>
+        <div class="date-wheel-group">
+          <span>日</span>
+          <div id="date-wheel-day" class="date-wheel-column" role="listbox" aria-label="日"></div>
+        </div>
+      </div>
+    </section>
+  </dialog>
   <dialog id="months-dialog" aria-labelledby="months-title"><div class="dialog-heading"><h2 id="months-title">月別計上履歴</h2><button id="close-months" type="button" aria-label="履歴を閉じる">閉じる</button></div><p class="muted">実際の月別計上額です。計上済みの金額・対象期間を変更する場合は、先に全ての計上を取り消してください。</p><p id="months-error" class="error" role="alert"></p><div id="month-items"></div><div id="month-pagination"></div><details><summary>操作履歴（最新100件・日本時間）</summary><ol id="operation-history"></ol></details></dialog>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-copy"></p><div class="dialog-actions"><button id="confirm-cancel" type="button">キャンセル</button><button id="confirm-ok" type="button" class="danger">削除する</button></div></dialog>
-  <script src="/assets/pwa-auto-update.js?v=payments-2912886976ad" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=payments-5800e2ee7d85" defer></script>
 </body>
 </html>
