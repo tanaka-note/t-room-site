@@ -34,23 +34,30 @@
   }
   function showApp(session) { $('account-name').textContent = session.displayName; $('login-view').hidden = true; $('app-view').hidden = false; }
   function cell(row, value, className = '') { const el = document.createElement('td'); el.textContent = value; el.className = className; row.append(el); return el; }
+  function badge(text, tone) { const el = document.createElement('span'); el.className = `badge status-${tone}`; el.textContent = text; return el; }
   function render() {
     const root = $('entries'); root.replaceChildren();
     for (const entry of entries) {
-      const row = document.createElement('tr'); row.dataset.id = entry.id;
-      cell(row, entry.paid_on); cell(row, entry.payee); cell(row, entry.description);
-      cell(row, money(entry.amount), 'numeric'); cell(row, `${entry.start_month} 〜 ${entry.end_month}\n期間終了まで：残り${entry.remaining_months}ヶ月`);
-      cell(row, `${entry.months}ヶ月`, 'numeric'); cell(row, money(entry.monthly_amount), 'numeric');
-      const status = cell(row, ''), badge = document.createElement('span'); badge.className = `badge ${entry.status}`;
-      badge.textContent = entry.status === 'completed' ? '計上完了' : `残り${entry.remaining_count}回・計上済み${entry.completed_count}回`;
-      status.append(badge, document.createElement('br'), entry.period_status === 'ended' ? '対象期間終了' : entry.period_status === 'upcoming' ? '開始前' : '対象期間中');
-      if (entry.past_pending_count) status.append(document.createElement('br'), `過去未計上 ${entry.past_pending_count}件`);
-      cell(row, entry.notes);
-      const actions = cell(row, '');
+      const row = document.createElement('tr'); row.dataset.id = entry.id; row.setAttribute('role', 'row');
+      cell(row, entry.paid_on, 'paid-on'); cell(row, entry.payee, 'payee'); cell(row, entry.description, 'description');
+      cell(row, money(entry.amount), 'numeric amount'); cell(row, `${entry.start_month} 〜 ${entry.end_month}\n期間終了まで：残り${entry.remaining_months}ヶ月`, 'period');
+      cell(row, `${entry.months}ヶ月`, 'numeric duration'); cell(row, money(entry.monthly_amount), 'numeric monthly-amount');
+      const status = cell(row, '', 'entry-status');
+      status.append(badge(entry.status === 'completed' ? '計上完了（全期間）' : `未計上：残り${entry.remaining_count}回・計上済み${entry.completed_count}回`, entry.status === 'completed' ? 'done' : entry.period_status === 'upcoming' ? 'upcoming' : 'pending'), document.createElement('br'),
+        badge(entry.period_status === 'ended' ? '対象期間終了' : entry.period_status === 'upcoming' ? '開始前' : '対象期間中', 'upcoming'));
+      if (entry.past_pending_count) status.append(document.createElement('br'), badge(`過去未計上 ${entry.past_pending_count}件`, 'overdue'));
+      const notes = cell(row, '', 'notes'), desktopNotes = document.createElement('span'), more = document.createElement('details');
+      desktopNotes.className = 'desktop-notes'; desktopNotes.textContent = entry.notes;
+      more.className = 'mobile-details'; const moreTitle = document.createElement('summary'); moreTitle.textContent = '支払日・備考など';
+      const moreCopy = document.createElement('p'); moreCopy.textContent = `支払日：${entry.paid_on}\n対象月数：${entry.months}ヶ月\n摘要：${entry.description || 'なし'}\n備考：${entry.notes || 'なし'}`;
+      more.append(moreTitle, moreCopy); notes.append(desktopNotes, more);
+      const actions = cell(row, '', 'entry-actions');
       for (const [label, action] of [['月別履歴', () => openMonths(entry)], ['編集', () => openEditor(entry)], ['削除', () => confirmDelete(entry)]]) {
         const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.setAttribute('aria-label', `${entry.payee}の明細を${label}`);
-        if (label === '削除') button.className = 'delete'; button.onclick = action; actions.append(button);
+        if (label === '削除') button.className = 'danger'; button.onclick = action; actions.append(button);
       }
+      const labels = ['支払日', '支払先', '摘要', '支払総額', '対象期間', '対象月数', '月別計上額（目安）', '計上状況', '備考', '操作'];
+      [...row.cells].forEach((el, index) => { el.dataset.label = labels[index]; el.setAttribute('role', 'cell'); });
       root.append(row);
     }
     renderDashboard(); $('count').textContent = `${entries.length}件`; $('empty').hidden = entries.length !== 0;
@@ -76,12 +83,15 @@
     $('editor-title').textContent = entry ? '明細を編集' : '明細を登録'; $('save').textContent = entry ? '変更を保存' : '登録する';
     calculation(); dialogs.open('entry-dialog'); protect();
   }
-  function ask(title, copy, ok, action) {
-    $('confirm-title').textContent = title; $('confirm-copy').textContent = copy; $('confirm-ok').textContent = ok; confirmAction = action; dialogs.open('confirm-dialog');
+  function ask(title, copy, ok, action, tone = 'danger') {
+    $('confirm-title').textContent = title; $('confirm-copy').textContent = copy; $('confirm-error').textContent = '';
+    $('confirm-ok').textContent = ok; $('confirm-ok').className = tone; $('confirm-ok').dataset.unavailable = 'false';
+    $('confirm-ok').disabled = busy;
+    confirmAction = action; dialogs.open('confirm-dialog');
   }
   function confirmDelete(entry) {
     confirmRequestId = crypto.randomUUID();
-    ask('この明細を削除しますか？', `${entry.payee}\n${entry.paid_on}　${money(entry.amount)}\n一覧から削除します。計上済み月がある場合は、先に月別履歴で全て取り消してください。`, '削除する', async () => {
+    ask('この明細を削除しますか？', `支払先：${entry.payee}\n支払日：${entry.paid_on}\n支払総額：${money(entry.amount)}\n対象期間：${entry.start_month} 〜 ${entry.end_month}\n一覧から削除します。計上済み月がある場合は、先に月別履歴で全て取り消してください。\n家計簿には自動反映されません。`, '削除する', async () => {
       await api(`/entries/${entry.id}`, { requestId: confirmRequestId, expectedVersion: entry.version }, 'DELETE');
       await dialogs.close('confirm-dialog', { force: true }); await load(); channel?.postMessage('changed');
     });
@@ -121,7 +131,11 @@
   });
   $('confirm-ok').onclick = async () => {
     if (busy || !confirmAction) return; const action = confirmAction; setBusy(true);
-    try { await action(); } catch (error) { $('confirm-copy').textContent = error.message; } finally { setBusy(false); }
+    try { await action(); } catch (error) {
+      ($('confirm-dialog').open ? $('confirm-error') : detail ? $('months-error') : $('message')).textContent = error.message;
+      // A stale version must be reviewed again instead of retrying old approval.
+      if (error.status === 409) { confirmAction = null; $('confirm-ok').dataset.unavailable = 'true'; }
+    } finally { setBusy(false); }
   };
   $('confirm-cancel').onclick = () => dialogs.close('confirm-dialog');
   $('close-editor').onclick = $('cancel-editor').onclick = () => dialogs.close('entry-dialog');
@@ -141,9 +155,16 @@
     const el = document.createElement('button'); el.type = 'button'; el.textContent = label;
     el.dataset.unavailable = String(unavailable); el.disabled = busy || unavailable; el.onclick = action; return el;
   }
-  function markButton(entry, target, completed, canComplete = true) {
-    const el = button(completed ? '計上を取り消す' : canComplete ? '計上済みにする' : '未来月', () => changeMark(entry, target, !completed), !completed && !canComplete);
+  function markButton(entry, target, completed, canComplete, amount) {
+    const el = button(completed ? '計上を取り消す' : canComplete ? '計上済みにする' : '未来月', () => confirmMark(entry, target, !completed, amount), !completed && !canComplete);
+    el.className = completed ? 'danger-outline' : canComplete ? 'primary' : '';
     el.setAttribute('aria-label', `${entry.payee} ${target} ${el.textContent}`); return el;
+  }
+  function confirmMark(entry, target, completed, amount) {
+    if (busy) return;
+    ask(completed ? 'この月を計上済みにしますか？' : 'この月の計上を取り消しますか？',
+      `支払先：${entry.payee}\n対象年月：${target}\n対象金額：${money(amount)}\n${completed ? '家計簿への入力を確認し、この月を計上済みにします。全期間の計上完了とは異なります。' : 'この月を未計上に戻します。家計簿側の記録も確認してください。'}\n家計簿には自動反映されません。`,
+      completed ? '計上済みにする' : '計上を取り消す', () => changeMark(entry, target, completed), completed ? 'primary' : 'danger-outline');
   }
   function renderDashboard() {
     $('dashboard-month').textContent = `${currentMonth} の計上管理`;
@@ -151,13 +172,16 @@
     $('current-done').textContent = `今月計上済み：${summary.current_completed_count || 0}件`;
     $('past-pending').textContent = `過去月未計上：${summary.past_pending_count || 0}件／${preciseMoney(summary.past_pending_amount || '0')}`;
     $('past-pending').classList.toggle('error', !!summary.past_pending_count);
+    $('past-pending').classList.toggle('status-overdue', !!summary.past_pending_count);
+    $('past-pending').classList.toggle('status-upcoming', !summary.past_pending_count);
     $('progress').textContent = `今月の進捗 ${summary.current_completed_count || 0}／${summary.current_count || 0}件　全期間の計上済み ${summary.completed_count || 0}／${summary.total_count || 0}件`;
     const root = $('current-items'); root.replaceChildren();
     for (const entry of entries.filter(e => e.current_amount !== null)) {
       const item = document.createElement('div'); item.className = 'monthly-item';
-      const text = document.createElement('p'); text.textContent = `${entry.payee}　${money(entry.current_amount)}　${entry.current_completed ? '計上済み' : '未計上'}`;
+      const text = document.createElement('p'); text.textContent = `${entry.payee}　${money(entry.current_amount)}　`;
+      text.append(badge(entry.current_completed ? '計上済み（月単位）' : '未計上', entry.current_completed ? 'done' : 'pending'));
       if (entry.current_completed_at) { const time = document.createElement('small'); time.textContent = jstTime(entry.current_completed_at); text.append(document.createElement('br'), time); }
-      item.append(text, markButton(entry, currentMonth, entry.current_completed)); root.append(item);
+      item.append(text, markButton(entry, currentMonth, entry.current_completed, true, entry.current_amount)); root.append(item);
     }
     if (!root.childElementCount) root.textContent = '今月の対象明細はありません。';
     const past = $('past-items'); past.replaceChildren();
@@ -178,30 +202,30 @@
     const root = $('month-items'); root.replaceChildren();
     for (const item of detail.months.slice(monthPage * pageSize, (monthPage + 1) * pageSize)) {
       const row = document.createElement('div'); row.className = 'monthly-item';
-      const copy = document.createElement('p'); copy.textContent = `${item.target_month}　${money(item.amount)}　${item.completed_at ? '計上済み' : '未計上'}`;
+      const copy = document.createElement('p'); copy.textContent = `${item.target_month}　${money(item.amount)}　`;
+      copy.append(badge(item.completed_at ? '計上済み（月単位）' : item.target_month > detail.currentMonth ? '開始前（未計上）' : item.target_month < detail.currentMonth ? '過去未計上' : '未計上', item.completed_at ? 'done' : item.target_month > detail.currentMonth ? 'upcoming' : item.target_month < detail.currentMonth ? 'overdue' : 'pending'));
       if (item.completed_at) { const time = document.createElement('small'); time.textContent = jstTime(item.completed_at); copy.append(document.createElement('br'),time); }
-      row.append(copy,markButton(detailEntry,item.target_month,!!item.completed_at,item.can_complete)); root.append(row);
+      row.append(copy,markButton(detailEntry,item.target_month,!!item.completed_at,item.can_complete,item.amount)); root.append(row);
     }
     $('month-pagination').replaceChildren(button('前の月へ', () => { monthPage--; renderMonths(); }, monthPage === 0),
       document.createTextNode(` ${monthPage+1}／${Math.ceil(detail.months.length/pageSize)} `),
       button('次の月へ', () => { monthPage++; renderMonths(); }, (monthPage+1)*pageSize >= detail.months.length));
-    const labels = { entry_create:'明細登録', entry_edit:'明細編集', allocation_change:'配分変更', entry_delete:'明細削除', month_complete:'計上完了', month_undo:'計上取消' };
+    const labels = { entry_create:'明細登録', entry_edit:'明細編集', allocation_change:'配分変更', entry_delete:'明細削除', month_complete:'月別計上済み', month_undo:'計上取消' };
     const history = $('operation-history'); history.replaceChildren();
     for (const event of detail.history) { const item = document.createElement('li'); item.textContent = `${jstTime(event.occurred_at)}　${event.target_month || ''} ${labels[event.action]}　操作者：${event.identity_id}`; history.append(item); }
   }
   async function changeMark(entry, target, completed) {
-    if (busy) return;
     const key = `${entry.id}:${target}:${entry.version}:${completed}`;
     if (!pendingMarks.has(key)) pendingMarks.set(key, crypto.randomUUID());
-    setBusy(true); $('message').textContent = ''; $('months-error').textContent = '';
+    $('message').textContent = ''; $('months-error').textContent = '';
     try {
       await api(`/entries/${entry.id}/months/${target}`, { requestId:pendingMarks.get(key), expectedVersion:entry.version, completed }, 'PUT');
-      pendingMarks.delete(key); channel?.postMessage('changed'); await load();
+      pendingMarks.delete(key); await dialogs.close('confirm-dialog', { force: true }); channel?.postMessage('changed'); await load();
       if (detailEntry?.id === entry.id) { detail = await api(`/entries/${entry.id}/months`); detailEntry = { ...entry, version:detail.version }; renderMonths(); }
     } catch (error) {
       if (error.status === 409) { pendingMarks.delete(key); await load().catch(() => {}); if (detailEntry?.id === entry.id) { try { detail=await api(`/entries/${entry.id}/months`); detailEntry={...entry,version:detail.version}; renderMonths(); } catch {} } }
-      (detail ? $('months-error') : $('message')).textContent = error.message;
-    } finally { setBusy(false); }
+      throw error;
+    }
   }
   $('close-months').onclick = () => dialogs.close('months-dialog');
   $('refresh').onclick = async () => { if (busy) return; setBusy(true); try { await load(); } catch {} finally { setBusy(false); } };
