@@ -15,8 +15,9 @@ assert.match(script, /function showLoginView\(\) \{[\s\S]*?\$\("#boot-view"\)\.h
 const enterApp = script.match(/async function enterApp\(session, password = "", accountKey = null, passkeyContext = null\) \{[\s\S]*?\n\}/)?.[0] || "";
 assert.ok(enterApp.indexOf("await prepareCryptoSession(password, accountKey, passkeyContext)") < enterApp.indexOf('$("#app-view").hidden = false'), "暗号鍵準備後に本体を表示します");
 const visible = enterApp.indexOf('$("#app-view").hidden = false');
-const load = enterApp.indexOf('await loadItems()');
-assert.ok(visible >= 0 && load > visible, "鍵準備後は本体を表示し、既存キャッシュを一覧通信の完了まで隠しません");
-assert.ok(enterApp.indexOf('await restoreNavigationPosition(restoredNavigation)') > load, "一覧取得後に戻り位置を復元します");
+const load = enterApp.indexOf('await navigateToFolder(restoredNavigation.folderId');
+assert.ok(visible >= 0 && load > visible, "鍵準備後は本体を表示し、初回も検証済み一覧と位置を一括確定します");
+assert.match(enterApp, /restoreEntry: restoredNavigation/);
+assert.doesNotMatch(enterApp, /await loadItems\(\)/, "初回起動が一括確定バリアを迂回しません");
 
 process.stdout.write("T-Cloud authenticated startup view contract test passed.\n");

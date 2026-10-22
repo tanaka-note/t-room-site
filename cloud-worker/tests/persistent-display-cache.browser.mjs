@@ -12,13 +12,14 @@ try{for(const [name,engine,launch] of engines){
    return {file:{id:1,folderId:7,...pack.payload,name:'[encrypted]',mediaKind:'other',mimeType:'application/octet-stream',hasThumbnail:true,createdAt:'2026-09-14 00:00:00'},
     thumbnail:[...new Uint8Array(await(await TRoomCrypto.encryptThumbnail(__thumb.blob,pack.fileKey)).arrayBuffer())]};
   });
-  let hold=false,release,answered=0,thumbnailRequests=0;
+  let hold=false,release,answered=0,thumbnailRequests=0,status=200;
   const network=[];
   await page.route('**/cloud/api/**',async route=>{
    const req=route.request(),url=new URL(req.url());network.push({method:req.method(),body:req.postData(),path:url.pathname});
    if(url.pathname.endsWith('/items')){
     if(hold)await new Promise(r=>{release=r;});
     answered++;
+    if(status!==200){await route.fulfill({status,json:{error:'Synthetic temporary outage'}});return;}
     await route.fulfill({json:{folders:[],files:[payload.file],breadcrumbs:[],folder:{fileCount:1},nextFolderOffset:null,nextFileOffset:null}});
    }else if(url.pathname.endsWith('/thumbnail')){thumbnailRequests++;await route.fulfill({body:Buffer.from(payload.thumbnail)});}
    else await route.fulfill({json:{ok:true}});
@@ -31,7 +32,7 @@ try{for(const [name,engine,launch] of engines){
   });
   assert.equal(thumbnailRequests,1,JSON.stringify({network,state:await page.evaluate(()=>({images:document.querySelectorAll('.thumb img').length,files:__test.state.files.map(f=>({id:f.id,kind:f.mediaKind,has:f.hasThumbnail,key:!!f.fileKey})),active:__test.state.thumbnailLoadActive}))}));
   const scope=await page.evaluate(()=>__test.displayCacheScope());
-  // An authenticated new session can show the same disk cache before /items replies.
+  // Reuse the same disk cache only after a classified outage, never before /items settles.
   await page.evaluate(()=>{
    window.initialSession={...__test.state.session};window.folderKey=__thumb.key;
    __test.releaseSessionState();
@@ -39,21 +40,25 @@ try{for(const [name,engine,launch] of engines){
   assert.equal(await page.locator('#content-grid .file-card').count(),0);
   assert.equal(await page.evaluate(()=>__test.displayCacheScope()),'');
   assert.equal(await page.evaluate(async s=>(await TCloudDisplayCache.summary(s)).thumbnailCount,scope),1);
-  hold=true;const before=answered;
+  hold=true;status=503;const before=answered;
   await page.evaluate(()=>{
    __test.prepare(0);__test.state.folderId=7;
    __test.state.session={...initialSession,sessionCacheId:'new-authenticated-session'};
    __test.state.crypto.folderKeys.set(7,folderKey);
    window.cacheStarted=performance.now();window.pendingItems=__test.loadItems();
   });
+  await page.waitForTimeout(80);
+  assert.equal(await page.locator('.file-card').count(),0,'cached names stay hidden while authorization is unresolved');
+  assert.equal(answered,before,'server response is still held');
+  hold=false;release();
+  assert.equal((await page.evaluate(()=>pendingItems)).partial,true);
   await page.waitForFunction(()=>document.querySelector('.file-card .thumb img')?.naturalWidth>0);
-  assert.equal(answered,before,'cached listing and thumbnail appeared while server response was held');
   assert.equal(thumbnailRequests,1,'warm login did not fetch thumbnail');
   assert.equal(await page.evaluate(()=>__test.displayCacheScope()),scope);
   assert.equal(await page.evaluate(()=>__test.state.files[0].fileKey==null),true,'display records contain no file keys');
   const milliseconds=await page.evaluate(()=>Math.round(performance.now()-cacheStarted));
-  payload.file={...payload.file,sizeBytes:987654};hold=false;release();
-  await page.evaluate(()=>pendingItems);
+  payload.file={...payload.file,sizeBytes:987654};status=200;
+  await page.evaluate(()=>__test.loadItems());
   assert.equal(await page.evaluate(()=>__test.state.files[0].sizeBytes),987654,'fresh server data reconciled');
   assert.equal(await page.evaluate(()=>__test.state.files[0].fileKey instanceof CryptoKey),true,'current authorized key hydration restored actions');
   assert.ok(network.every(r=>r.method==='GET'&&r.body===null&&!r.path.includes('display-thumbnail')),'no plaintext or key upload');
@@ -78,6 +83,6 @@ try{for(const [name,engine,launch] of engines){
    return {listing:listing.files[0].name,thumbnail:!!thumbnail,oldCount,preferred:preferred.files[0].name,reused,isolated,locked};
   });
   assert.deepEqual(migration,{listing:'cached',thumbnail:true,oldCount:1,preferred:'newer',reused:true,isolated:[true,true,true,true,true],locked:null});
-  console.log('PASS persistent display cache',name,JSON.stringify({cacheBeforeServerMs:milliseconds,logoutPreserved:true,reloginHit:true,lazyMigration:true,accountAndFolderIsolation:true}));
+  console.log('PASS persistent display cache',name,JSON.stringify({classifiedFallbackMs:milliseconds,noUnverifiedPaint:true,logoutPreserved:true,reloginHit:true,lazyMigration:true,accountAndFolderIsolation:true}));
  }finally{await browser.close();}
 }}finally{await fixture.close();}
