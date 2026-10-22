@@ -266,6 +266,7 @@ try
         });
 }
 finally { Directory.Delete(sandbox, true); }
+await Test("bounded queue, duplicate protection, cancellation, pause and shutdown", QueueTests.VerifyAsync);
 Console.WriteLine($"RESULT {passed} passed; {failures} failed");
 return failures == 0 ? 0 : 1;
 

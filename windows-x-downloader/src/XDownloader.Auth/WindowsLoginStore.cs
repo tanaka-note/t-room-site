@@ -15,6 +15,7 @@ public sealed class WindowsLoginStore : ICookieSource
     private readonly string temporaryRoot;
     private readonly Func<DateTimeOffset> clock;
     private int activeLeases;
+    private readonly object gate = new();
 
     public WindowsLoginStore(string directory, Func<DateTimeOffset>? utcNow = null)
     {
@@ -26,25 +27,33 @@ public sealed class WindowsLoginStore : ICookieSource
     }
 
     // Call only after the app's per-Windows-user single-instance lock has been acquired.
-    public void CleanInterruptedOperations() => PrivateFiles.CleanOwnedDirectories(temporaryRoot);
+    public void CleanInterruptedOperations() { lock (gate) PrivateFiles.CleanOwnedDirectories(temporaryRoot); }
 
     public LoginState State
     {
         get
         {
-            try { return Read() is { } snapshot ? IsExpired(snapshot) ? LoginState.Expired : LoginState.Ready : LoginState.Anonymous; }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException or JsonException or InvalidOperationException)
-            { return LoginState.Unreadable; }
+            lock (gate)
+            {
+                try { return Read() is { } snapshot ? IsExpired(snapshot) ? LoginState.Expired : LoginState.Ready : LoginState.Anonymous; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException or JsonException or InvalidOperationException)
+                { return LoginState.Unreadable; }
+            }
         }
     }
 
     public IReadOnlyList<XCookie> GetForLoginWindow()
     {
-        if (State != LoginState.Ready) return [];
-        return Read()!.Cookies;
+        lock (gate)
+        {
+            if (State != LoginState.Ready) return [];
+            return Read()!.Cookies;
+        }
     }
 
     public void Save(IEnumerable<XCookie> cookies)
+    { lock (gate) SaveLocked(cookies); }
+    private void SaveLocked(IEnumerable<XCookie> cookies)
     {
         if (activeLeases != 0) throw new InvalidOperationException("処理中はXのログインを変更できません。");
         var now = clock();
@@ -71,6 +80,8 @@ public sealed class WindowsLoginStore : ICookieSource
     }
 
     public ICookieLease? Acquire()
+    { lock (gate) return AcquireLocked(); }
+    private ICookieLease? AcquireLocked()
     {
         Snapshot? snapshot;
         try { snapshot = Read(); }
@@ -87,10 +98,13 @@ public sealed class WindowsLoginStore : ICookieSource
             activeLeases++;
             return new Lease(file,() =>
             {
-                try { PrivateFiles.DeleteOwnedDirectory(temporaryRoot,path); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                { throw new InvalidOperationException("ログイン情報の一時ファイルを削除できませんでした。アプリを終了してから再起動してください。"); }
-                finally { activeLeases--; }
+                lock (gate)
+                {
+                    try { PrivateFiles.DeleteOwnedDirectory(temporaryRoot,path); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    { throw new InvalidOperationException("ログイン情報の一時ファイルを削除できませんでした。アプリを終了してから再起動してください。"); }
+                    finally { activeLeases--; }
+                }
             });
         }
         catch { PrivateFiles.DeleteOwnedDirectory(temporaryRoot,path); throw; }
@@ -98,9 +112,12 @@ public sealed class WindowsLoginStore : ICookieSource
 
     public void Logout()
     {
-        if (activeLeases != 0) throw new InvalidOperationException("取得処理を完了またはキャンセルしてからログアウトしてください。");
-        File.Delete(sessionFile);
-        CleanInterruptedOperations();
+        lock (gate)
+        {
+            if (activeLeases != 0) throw new InvalidOperationException("取得処理を完了またはキャンセルしてからログアウトしてください。");
+            File.Delete(sessionFile);
+            CleanInterruptedOperations();
+        }
     }
 
     private Snapshot? Read()
@@ -132,8 +149,8 @@ public sealed class WindowsLoginStore : ICookieSource
     private sealed record Snapshot(int Version,DateTimeOffset NotAfter,XCookie[] Cookies);
     private sealed class Lease(string path,Action cleanup) : ICookieLease
     {
-        private bool disposed;
+        private int disposed;
         public string FilePath => path;
-        public void Dispose() { if (disposed) return; disposed=true; cleanup(); }
+        public void Dispose() { if (Interlocked.Exchange(ref disposed,1) == 0) cleanup(); }
     }
 }

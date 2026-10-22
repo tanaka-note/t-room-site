@@ -9,12 +9,22 @@ public interface IXLoginService
 {
     LoginState State { get; }
     Task<bool> LoginAsync(Window owner,CancellationToken token);
+    Task BrowseAsync(Window owner,Func<string,Task> savePost,Func<bool> canChangeSession,Action sessionSaved,CancellationToken token);
     void Logout();
 }
 
 public sealed class XLoginService(WindowsLoginStore store,string browserRoot) : IXLoginService
 {
     public LoginState State => store.State;
+    public async Task BrowseAsync(Window owner,Func<string,Task> savePost,Func<bool> canChangeSession,Action sessionSaved,CancellationToken token)
+    {
+        var window=new XLoginWindow(store,browserRoot,onSavePost:savePost,canUpdateSession:canChangeSession,onSessionSaved:sessionSaved) { Owner=owner };
+        var closed=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        window.Closed+=(_,_) => closed.TrySetResult();
+        using var cancel=token.Register(()=>owner.Dispatcher.BeginInvoke(()=> { if (window.IsVisible) window.Close(); }));
+        try { window.Show(); await closed.Task; }
+        finally { await window.CleanupAsync(); }
+    }
     public async Task<bool> LoginAsync(Window owner,CancellationToken token)
     {
         var window = new XLoginWindow(store,browserRoot) { Owner=owner };

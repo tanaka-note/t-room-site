@@ -143,6 +143,8 @@ public sealed class Downloader(string toolsDirectory, IEngineProcess? runner = n
                 ? "投稿が削除済み、または現在取得できません。ブラウザで投稿を確認してください。"
             : error.Contains("403") || error.Contains("forbidden") ? "X側から取得を拒否されました。時間をおくか、エンジン更新を確認してください。"
             : "取得に失敗しました。通信状況・投稿の公開状態を確認してください。Xの仕様変更でエンジン更新が必要な場合もあります。";
+        if (error.Contains("429") || error.Contains("rate limit") || error.Contains("login") || error.Contains("authentication")
+            || error.Contains("403") || error.Contains("forbidden")) throw new DownloadAccessException(message);
         throw new InvalidOperationException(message);
     }
 }

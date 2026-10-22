@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Collections.ObjectModel;
 using Microsoft.Win32;
 using XDownloader.Core;
 using XDownloader.Auth;
@@ -15,6 +16,13 @@ public partial class MainWindow : Window
 {
     private readonly Downloader downloader;
     private readonly IXLoginService? loginService;
+    private readonly DownloadQueue queue;
+    private readonly CancellationTokenSource browserLifetime = new();
+    private Task? browserTask;
+    private bool browserOpen;
+    private bool allowClose;
+    private readonly ObservableCollection<QueueRow> queueRows = [];
+    private bool queueWasUnfinished;
     private readonly Dictionary<string, string> editedTitles = new();
     private CancellationTokenSource? operation;
     private string? analyzedUrl;
@@ -29,7 +37,11 @@ public partial class MainWindow : Window
     {
         downloader = service;
         loginService = login;
+        queue = new DownloadQueue(service);
         InitializeComponent();
+        MaxHeight=Math.Max(MinHeight,SystemParameters.WorkArea.Height);
+        QueueList.ItemsSource=queueRows;
+        queue.Changed += QueueChanged;
         FolderInput.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
         try
         {
@@ -76,7 +88,7 @@ public partial class MainWindow : Window
 
     private async void Analyze_Click(object sender, RoutedEventArgs e)
     {
-        if (operation is not null) return;
+        if (operation is not null || closingAfterCancel) return;
         await RunOperationAsync(async token =>
         {
             var url = PostUrl.Normalize(UrlInput.Text);
@@ -94,31 +106,23 @@ public partial class MainWindow : Window
         });
     }
 
-    private async void Download_Click(object sender, RoutedEventArgs e)
+    private void Download_Click(object sender, RoutedEventArgs e)
     {
-        if (operation is not null || analyzedUrl is null || VideoChoice.SelectedItem is not VideoInfo video
+        if (operation is not null || closingAfterCancel || analyzedUrl is null || VideoChoice.SelectedItem is not VideoInfo video
             || QualityChoice.SelectedItem is not Quality quality) return;
-        var url = analyzedUrl;
-        var title = TitleInput.Text;
-        await RunOperationAsync(async token =>
+        try
         {
-            Status.Text = "ダウンロードを準備しています…";
-            var progress = new Progress<DownloadProgress>(value =>
-            {
-                if (operation is null || operation.IsCancellationRequested) return;
-                Progress.IsIndeterminate = value.Percent is null;
-                Progress.Value = value.Percent ?? 0;
-                Status.Text = value.Message;
-            });
-            var saved = await downloader.DownloadAsync(url, video, quality, FolderInput.Text, progress, token, title);
-            Progress.Value = 100;
-            Status.Text = "保存しました。";
-            SavedFile.Text = saved;
-            SavedFile.Visibility = Visibility.Visible;
-        });
+            queue.Enqueue(new(analyzedUrl, video, quality, FolderInput.Text, TitleInput.Text));
+            ClearAnalysis();
+            UrlInput.Text="";
+            UrlInput.Focus();
+            Status.Text="保存待ちに追加しました。次のURLを読み込めます。";
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        { Status.Text=SafeMessage(error); }
     }
 
-    private async Task RunOperationAsync(Func<CancellationToken, Task> action)
+    private async Task RunOperationAsync(Func<CancellationToken, Task> action,bool propagate=false)
     {
         operation = new CancellationTokenSource();
         SetBusy(true);
@@ -126,30 +130,29 @@ public partial class MainWindow : Window
         Progress.Value = 0;
         Progress.IsIndeterminate = true;
         try { await action(operation.Token); }
-        catch (OperationCanceledException) { Status.Text = "キャンセルしました。"; }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException or FileNotFoundException or TimeoutException)
-        { Status.Text = e.Message; }
-        catch (UnauthorizedAccessException) { Status.Text = "保存先への書き込みが許可されていません。保存先を変更してください。"; }
-        catch (IOException) { Status.Text = "ファイルの保存に失敗しました。空き容量・保存先・ファイルの使用状況を確認してください。"; }
-        catch (Exception) { Status.Text = "処理を完了できませんでした。アプリの再起動、またはエンジンの再準備を試してください。"; }
+        catch (Exception e)
+        {
+            if (e is DownloadAccessException) queue.Pause();
+            Status.Text=SafeMessage(e);
+            if (propagate) throw new InvalidOperationException(Status.Text);
+        }
         finally
         {
             operation.Dispose();
             operation = null;
             Progress.IsIndeterminate = false;
             RefreshLogin();
-            if (closingAfterCancel) Close();
         }
     }
 
     private void SetBusy(bool busy)
     {
-        UrlInput.IsEnabled = AnalyzeButton.IsEnabled = VideoChoice.IsEnabled = QualityChoice.IsEnabled = FolderButton.IsEnabled = !busy;
+        UrlInput.IsEnabled = AnalyzeButton.IsEnabled = VideoChoice.IsEnabled = QualityChoice.IsEnabled = FolderButton.IsEnabled = !busy && !closingAfterCancel;
         CancelButton.IsEnabled = busy;
-        TitleInput.IsEnabled = !busy && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo;
-        DownloadButton.IsEnabled = !busy && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo && QualityChoice.SelectedItem is Quality && SaveFileName.IsUsable(TitleInput.Text);
-        LoginButton.IsEnabled = !busy && loginService is not null;
-        LogoutButton.IsEnabled = !busy && loginService is not null && loginService.State != LoginState.Anonymous;
+        TitleInput.IsEnabled = !busy && !closingAfterCancel && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo;
+        DownloadButton.IsEnabled = !busy && !closingAfterCancel && analyzedUrl is not null && VideoChoice.SelectedItem is VideoInfo && QualityChoice.SelectedItem is Quality && SaveFileName.IsUsable(TitleInput.Text);
+        LoginButton.IsEnabled = !busy && !browserOpen && !closingAfterCancel && loginService is not null;
+        LogoutButton.IsEnabled = !busy && !browserOpen && !queue.HasUnfinished && loginService is not null && loginService.State != LoginState.Anonymous;
     }
 
     private void RefreshLogin()
@@ -162,7 +165,7 @@ public partial class MainWindow : Window
             LoginState.Unreadable => "Xログイン情報を確認できません",
             _ => "未ログイン"
         };
-        LoginButton.Content=state == LoginState.Ready ? "Xログインを確認" : "Xにログイン";
+        LoginButton.Content="Xを開く";
         SetBusy(operation is not null);
     }
 
@@ -178,21 +181,49 @@ public partial class MainWindow : Window
 
     private async void Login_Click(object sender,RoutedEventArgs e)
     {
-        if (operation is not null || loginService is null) return;
-        await RunOperationAsync(async token =>
+        if (operation is not null || loginService is null || browserOpen || closingAfterCancel) return;
+        browserOpen=true; RefreshLogin();
+        try
         {
-            Status.Text="Xへのログインを待っています…";
-            var saved=await loginService.LoginAsync(this,token);
-            token.ThrowIfCancellationRequested();
-            if (saved) ClearAnalysis();
-            RefreshLogin();
-            Status.Text=saved ? "Xのログイン情報をこのPCに保護して保存しました。投稿をもう一度解析してください。" : "ログインを中止しました。";
-        });
+            browserTask=loginService.BrowseAsync(this,SaveBrowserPostAsync,()=>operation is null && !queue.HasUnfinished,
+                ()=> { ClearAnalysis(); RefreshLogin(); },browserLifetime.Token);
+            await browserTask;
+        }
+        catch (Exception error) { Status.Text=SafeMessage(error); }
+        finally { browserOpen=false; RefreshLogin(); }
+    }
+
+    private async Task SaveBrowserPostAsync(string url)
+    {
+        if (operation is not null || closingAfterCancel) throw new InvalidOperationException("解析中です。完了してから保存を押してください。");
+        url=PostUrl.Normalize(url);
+        await RunOperationAsync(async token=>
+        {
+            using var linked=CancellationTokenSource.CreateLinkedTokenSource(token,browserLifetime.Token);
+            var browserOwner=OwnedWindows.OfType<XLoginWindow>().FirstOrDefault();
+            void BrowserClosed(object? sender,EventArgs args) => linked.Cancel();
+            if (browserOwner is not null) browserOwner.Closed+=BrowserClosed;
+            try
+            {
+                Status.Text="投稿の動画情報を読み込んでいます…";
+                var media=await downloader.AnalyzeAsync(url,linked.Token);
+                linked.Token.ThrowIfCancellationRequested();
+                var editor=new SavePostWindow(url,media,FolderInput.Text) { Owner=browserOwner as Window ?? this,Opacity=Opacity,ShowActivated=Opacity!=0 };
+                using var cancelled=linked.Token.Register(()=>Dispatcher.BeginInvoke(()=> { if (editor.IsVisible) editor.Close(); }));
+                if (editor.ShowDialog()==true && editor.Request is { } request)
+                {
+                    linked.Token.ThrowIfCancellationRequested();
+                    queue.Enqueue(request);
+                    Status.Text="保存待ちに追加しました。Xの閲覧を続けられます。";
+                }
+            }
+            finally { if (browserOwner is not null) browserOwner.Closed-=BrowserClosed; }
+        },propagate:true);
     }
 
     private async void Logout_Click(object sender,RoutedEventArgs e)
     {
-        if (operation is not null || loginService is null) return;
+        if (operation is not null || loginService is null || browserOpen || queue.HasUnfinished) return;
         await RunOperationAsync(_ =>
         {
             loginService.Logout();
@@ -212,12 +243,22 @@ public partial class MainWindow : Window
         operation.Cancel();
     }
 
-    private void Window_Closing(object? sender, CancelEventArgs e)
+    private async void Window_Closing(object? sender, CancelEventArgs e)
     {
-        if (operation is null) return;
+        if (allowClose) return;
         e.Cancel = true;
+        if (closingAfterCancel) return;
+        if (Application.Current.Windows.OfType<SavePostWindow>().Any(editor=>!editor.ApproveClose())) return;
         closingAfterCancel = true;
+        SetBusy(operation is not null);
         Cancel();
+        browserLifetime.Cancel();
+        await queue.StopAsync();
+        while (operation is not null) await Task.Delay(20);
+        if (browserTask is not null) { try { await browserTask; } catch (Exception) { } }
+        queue.Changed-=QueueChanged;
+        await System.Windows.Threading.Dispatcher.Yield();
+        allowClose=true; Close();
     }
 
     private void Window_KeyDown(object sender, KeyEventArgs e)
@@ -252,6 +293,48 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         { Status.Text = "保存先を開けませんでした。フォルダーの場所を確認してください。"; }
+    }
+
+    private void QueueChanged()
+    {
+        if (!Dispatcher.CheckAccess()) { _=Dispatcher.InvokeAsync(QueueChanged); return; }
+        var items=queue.Snapshot();
+        foreach (var item in items)
+        {
+            var row=queueRows.FirstOrDefault(existing=>existing.Id==item.Id);
+            if (row is null) queueRows.Add(new QueueRow(item)); else row.Update(item);
+        }
+        var running=items.Count(j=>j.State=="running"); var waiting=items.Count(j=>j.State=="waiting");
+        QueueSummary.Text=$"取得中 {running}件 ／ 待ち {waiting}件"+(queue.IsPaused ? "（新しい取得を停止中）" : "（最大2件同時）");
+        CancelAllButton.IsEnabled=queue.HasUnfinished;
+        ResumeQueueButton.Visibility=queue.IsPaused ? Visibility.Visible : Visibility.Collapsed;
+        if (queueWasUnfinished!=queue.HasUnfinished) { queueWasUnfinished=queue.HasUnfinished; RefreshLogin(); }
+    }
+    private void CancelJob_Click(object sender,RoutedEventArgs e) { if (sender is Button { Tag: Guid id }) queue.Cancel(id); }
+    private void CancelAll_Click(object sender,RoutedEventArgs e) { foreach (var job in queue.Snapshot()) if (job.CanCancel) queue.Cancel(job.Id); }
+    private void ResumeQueue_Click(object sender,RoutedEventArgs e) => queue.Resume();
+    private static string SafeMessage(Exception e) => e is OperationCanceledException ? "キャンセルしました。"
+        : e is ArgumentException or InvalidOperationException or FileNotFoundException or TimeoutException ? e.Message
+        : e is IOException or UnauthorizedAccessException ? "ファイルの保存に失敗しました。空き容量・保存先の権限を確認してください。"
+        : "処理を完了できませんでした。アプリを再起動して試してください。";
+    internal DownloadQueue QueueForTest => queue;
+    internal Task SaveBrowserPostForTest(string url) => SaveBrowserPostAsync(url);
+
+    private sealed class QueueRow(QueuedDownload value) : INotifyPropertyChanged
+    {
+        private QueuedDownload current=value;
+        public Guid Id => current.Id;
+        public string Title => current.Title;
+        public string Message => current.Message;
+        public double? Percent => current.Percent;
+        public string? SavedPath => current.SavedPath;
+        public bool CanCancel => current.CanCancel;
+        public event PropertyChangedEventHandler? PropertyChanged;
+        public void Update(QueuedDownload next)
+        {
+            if (current==next) return;
+            current=next; PropertyChanged?.Invoke(this,new PropertyChangedEventArgs(null));
+        }
     }
 
     private sealed record Settings(string SaveDirectory);

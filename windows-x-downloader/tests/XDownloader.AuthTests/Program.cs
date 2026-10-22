@@ -65,6 +65,17 @@ try
         using var lease=store.Acquire();
         Throws<InvalidOperationException>(store.Logout); Throws<InvalidOperationException>(()=>store.Save(cookies));
     }));
+    await Test("parallel cookie leases remain isolated and protect session until the last release",async ()=>
+    {
+        var leases=await Task.WhenAll(Enumerable.Range(0,2).Select(_=>Task.Run(()=>store.Acquire()!)));
+        Assert(leases[0].FilePath!=leases[1].FilePath);
+        await Task.Run(leases[0].Dispose);
+        Throws<InvalidOperationException>(store.Logout); Throws<InvalidOperationException>(()=>store.Save(cookies));
+        Assert(File.Exists(leases[1].FilePath));
+        await Task.Run(leases[1].Dispose);
+        Assert(!File.Exists(leases[0].FilePath) && !File.Exists(leases[1].FilePath));
+        store.Save(cookies);
+    });
     foreach (var bad in new[]{cookies[0] with {Secure=false},cookies[0] with {HttpOnly=false},cookies[0] with {Value=Fresh()+"\n"},cookies[0] with {Expires=now.AddMinutes(-1).ToUnixTimeSeconds()},cookies[0] with {Domain="x.com"}})
         await Test("invalid/insecure/expired cookie cannot replace valid session",()=>Sync(()=>
         { Throws<InvalidOperationException>(()=>store.Save([bad,cookies[1]])); Assert(store.State==LoginState.Ready); }));
