@@ -657,6 +657,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.accountName = session.accountName;
     state.householdId = session.householdId;
     state.activeHouseholdId = session.activeHouseholdId || session.householdId;
+    updateDiaryReturnNavigation();
     state.isGlobalOwner = Boolean(session.isGlobalOwner);
     state.canManageEntries = Boolean(session.canManageEntries);
     state.canViewTrash = Boolean(session.canViewTrash);
@@ -720,6 +721,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       sessionGeneration += 1;
       cancelPendingEntrySearch();
       state.activeHouseholdId = householdId;
+      updateDiaryReturnNavigation();
       state.availableTags = [];
       elements.archiveList.replaceChildren();
       elements.tagList.replaceChildren();
@@ -1020,8 +1022,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function isUsableDiaryReturnView(returnView, householdId, expectedRoute) {
     if (!returnView || ![1, 2].includes(returnView.version)) return false;
     if (!Number.isFinite(returnView.savedAt) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return false;
-    if (returnView.accountName && returnView.accountName !== state.accountName) return false;
-    if (returnView.householdId && householdId && returnView.householdId !== householdId) return false;
+    if (!isOwnedDiaryReturnView(returnView) || returnView.householdId !== householdId) return false;
     const routePath = returnView.version === 1 ? `${BASE_PATH}/` : returnView.routePath;
     return routePath === expectedRoute && expectedRoute === window.location.pathname;
   }
@@ -1122,8 +1123,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     return returnView?.version === 2
       && returnView.destinationPath === window.location.pathname
       && returnView.routePath === destinationPath
-      && (!returnView.accountName || returnView.accountName === state.accountName)
-      && (!returnView.householdId || !state.activeHouseholdId || returnView.householdId === state.activeHouseholdId)
+      && isOwnedDiaryReturnView(returnView)
       && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
   }
@@ -3619,8 +3619,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function configureDiaryReturnNavigation() {
-    elements.tagPageBack.href = `${BASE_PATH}/`;
-    elements.tagPageBack.textContent = "← 日記へ戻る";
     // Fresh accesses discard retained tokens before accepting a validated handoff.
     // Reload and history navigation keep the token owned by their current entry.
     try {
@@ -3649,6 +3647,18 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } catch {
       // 遷移を確認できない場合は通常のリンクで戻ります。
     }
+    updateDiaryReturnNavigation();
+  }
+
+  function isOwnedDiaryReturnView(returnView) {
+    return Boolean(state.role && state.accountName && state.activeHouseholdId)
+      && returnView.accountName === state.accountName
+      && returnView.householdId === state.activeHouseholdId;
+  }
+
+  function updateDiaryReturnNavigation() {
+    elements.tagPageBack.href = `${BASE_PATH}/`;
+    elements.tagPageBack.textContent = "← 日記へ戻る";
     if (elements.tagPageBack.hidden) return;
     let returnView = null;
     try {
@@ -3656,7 +3666,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } catch {
       return;
     }
-    if (returnView?.version !== 2 || returnView.destinationPath !== window.location.pathname) return;
+    if (returnView?.version !== 2 || returnView.destinationPath !== window.location.pathname
+      || !isOwnedDiaryReturnView(returnView)) return;
     // Display a source only when this history entry owns the accepted navigation.
     if (!Number.isFinite(returnView.savedAt)
       || window.history.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
@@ -3781,6 +3792,23 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function resetState() {
     cancelPositionRestoration();
+    elements.tagPageBack.href = `${BASE_PATH}/`;
+    elements.tagPageBack.textContent = "← 日記へ戻る";
+    for (const key of [RETURN_VIEW_STORAGE_KEY, RETURN_NAVIGATION_KEY]) {
+      try {
+        window.sessionStorage.removeItem(key);
+      } catch {
+        // Storage may be unavailable; ownership checks still reject the old source.
+      }
+    }
+    try {
+      const historyState = { ...(window.history.state || {}) };
+      delete historyState[RETURN_VIEW_HISTORY_KEY];
+      delete historyState[RETURN_NAVIGATION_KEY];
+      window.history.replaceState(historyState, "", window.location.href);
+    } catch {
+      // A retained history snapshot is still checked against the next session.
+    }
     if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
     loginAttempt += 1;
     setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");

@@ -20,17 +20,20 @@ assert.match(script, /function restoreTagListPosition\(position\)[\s\S]*?element
 assert.match(script, /function restoreDiaryReturnPosition[\s\S]*?restoreEntryListPosition\(returnView\.position\);[\s\S]*?restoreTagListPosition\(returnView\.tagListPosition\);[\s\S]*?schedulePositionRestoration\(restore, version\);/s);
 assert.doesNotMatch(script, /setTimeout\(restore, (120|400)\)/);
 assert.doesNotMatch(script, /else if \(isNewDiaryNavigation\(\)\) restoreEntryListPosition/);
-assert.match(script, /if \(returnView\.householdId && householdId && returnView\.householdId !== householdId\) return false;/);
 assert.match(script, /link === elements\.tagPageBack \|\| \(link === elements\.favoritesLink && state\.favoritePage\)[\s\S]*?hasDiaryReturnNavigation\(destination\.pathname\)[\s\S]*?window\.history\.back\(\)/s);
 
 // Execute the production helpers with browser state; these cases must exercise
 // acceptance and consumption, rather than merely assert the source's shape.
-const helpers = ["isNewDiaryNavigation", "isDiaryReturnReferrer", "isDiaryListPath", "configureDiaryReturnNavigation"]
+const helpers = ["isNewDiaryNavigation", "isDiaryReturnReferrer", "isDiaryListPath", "configureDiaryReturnNavigation",
+  "updateDiaryReturnNavigation", "isOwnedDiaryReturnView", "hasDiaryReturnNavigation"]
   .map((name) => script.match(new RegExp(`  function ${name}\\([^]*?\\n  }`))[0]).join("\n");
 function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diary/", age = 10,
-  savedAt = 100_000, type = "navigate", snapshot = {}, raw, storageBlocked = false, historyToken = "old-token", repeat = false } = {}) {
+  savedAt = 100_000, type = "navigate", snapshot = {}, raw, storageBlocked = false, historyToken = "old-token", repeat = false,
+  session = {}, nextSession } = {}) {
   const navigation = { savedAt, sourcePath, destinationPath: "/diary/favorites/" };
-  const view = { version: 2, routePath: sourcePath, destinationPath: navigation.destinationPath, savedAt, ...snapshot };
+  const view = { version: 2, routePath: sourcePath, destinationPath: navigation.destinationPath, savedAt,
+    accountName: "account-a", householdId: "household-a", ...snapshot };
+  const state = { role: "user", accountName: "account-a", activeHouseholdId: "household-a", ...session };
   const storage = new Map([
     ["handoff", raw === undefined ? JSON.stringify(navigation) : raw],
     ["view", JSON.stringify(view)]
@@ -38,11 +41,11 @@ function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diar
   const history = { state: { unrelated: "preserved", handoff: historyToken },
     replaceState(value) { this.state = value; } };
   const backLink = { hidden: false, href: "/diary/", textContent: "← 日記へ戻る" };
-  runInNewContext(`${helpers}\nconfigureDiaryReturnNavigation();${repeat ? "configureDiaryReturnNavigation();" : ""}`, {
+  const context = {
     URL, Date: { now: () => 100_010 }, Number, JSON, BASE_PATH: "/diary",
     RETURN_NAVIGATION_KEY: "handoff", RETURN_VIEW_STORAGE_KEY: "view",
     RETURN_NAVIGATION_MAX_AGE_MS: 30_000, RETURN_VIEW_MAX_AGE_MS: 6 * 60 * 60 * 1000,
-    elements: { tagPageBack: backLink },
+    elements: { tagPageBack: backLink }, state,
     document: { referrer },
     window: {
       history, location: new URL("https://diary.test/diary/favorites/"),
@@ -52,10 +55,16 @@ function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diar
         removeItem: (key) => storage.delete(key)
       }
     }
-  });
+  };
+  runInNewContext(`${helpers}\nconfigureDiaryReturnNavigation();${repeat ? "configureDiaryReturnNavigation();" : ""}`, context);
+  if (nextSession) {
+    Object.assign(state, nextSession);
+    runInNewContext(`${helpers}\nupdateDiaryReturnNavigation();`, context);
+  }
+  const canGoBack = runInNewContext(`${helpers}\nhasDiaryReturnNavigation(${JSON.stringify(sourcePath)});`, context);
   assert.equal(history.state.unrelated, "preserved");
   if (!storageBlocked) assert.equal(storage.has("handoff"), false, "handoff is consumed even when rejected");
-  return { token: history.state.handoff, backLink };
+  return { token: history.state.handoff, backLink, canGoBack };
 }
 assert.equal(configure().token, 100_000, "normal internal navigation accepts its handoff");
 for (const options of [
@@ -93,5 +102,24 @@ const repeated = configure({ sourcePath: "/diary/tags/", referrer: "https://diar
 assert.equal(repeated.token, undefined);
 assert.equal(repeated.backLink.href, "/diary/", "reconfiguration clears a previously displayed source");
 assert.equal(repeated.backLink.textContent, "← 日記へ戻る");
+
+for (const ownership of [
+  { session: { role: null, accountName: null, activeHouseholdId: null } },
+  { session: { accountName: "account-b" } }, // another account in the same household
+  { session: { activeHouseholdId: "household-b" } },
+  { snapshot: { accountName: "" } }, { snapshot: { householdId: "" } },
+  { nextSession: { accountName: "account-b" } },
+  { nextSession: { activeHouseholdId: "household-b" } }
+]) {
+  const result = configure({ sourcePath: "/diary/tags/", referrer: "https://diary.test/diary/tags/", ...ownership });
+  assert.equal(result.backLink.href, "/diary/", "unowned source keeps the default destination");
+  assert.equal(result.backLink.textContent, "← 日記へ戻る");
+  assert.equal(result.canGoBack, false, "unowned source cannot consume browser history");
+}
+const afterLogin = configure({ sourcePath: "/diary/tags/", referrer: "https://diary.test/diary/tags/",
+  session: { role: null, accountName: null, activeHouseholdId: null },
+  nextSession: { role: "user", accountName: "account-a", activeHouseholdId: "household-a" } });
+assert.equal(afterLogin.backLink.href, "/diary/tags/", "matching login rechecks the accepted handoff");
+assert.equal(afterLogin.canGoBack, true);
 
 process.stdout.write("Diary navigation return-state test passed.\n");

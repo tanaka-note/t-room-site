@@ -46,10 +46,10 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname.startsWith("/diary/api/")) {
     const apiPath = url.pathname.slice("/diary/api".length);
-    if (apiPath === "/session") return sendJson(response, {
+    const session = {
       authenticated: true,
       role: "admin",
-      accountName: "復元テスト",
+      accountName: request.headers.cookie?.includes("fixture-account-b=1") ? "別アカウント" : "復元テスト",
       householdId: "main-household",
       activeHouseholdId: "main-household",
       isGlobalOwner: false,
@@ -57,7 +57,12 @@ const server = createServer(async (request, response) => {
       canViewTrash: true,
       canPermanentlyDelete: true,
       canViewInvestment: false
-    });
+    };
+    if (apiPath === "/session") return sendJson(response, session);
+    if (apiPath === "/passkey/handoff") {
+      response.setHeader("Set-Cookie", "fixture-account-b=1; Path=/diary; HttpOnly; SameSite=Strict");
+      return sendJson(response, { ...session, accountName: "別アカウント" });
+    }
     if (apiPath === "/meta") return sendJson(response, {
       draftCount: 0,
       months: [{ value: "2026-08", count: entries.length }],
@@ -265,6 +270,56 @@ async function run(browserType, name, executablePath) {
       maxScroll: document.documentElement.scrollHeight - window.innerHeight
     }));
     assert.ok(Math.abs(restored.top - entryPosition.top) <= 3, `${name}: entry IDと相対位置を復元 expected=${JSON.stringify(entryPosition)} actual=${JSON.stringify(restored)}`);
+
+    // Exercise the shipped logout/reset/login handlers in the same tab.
+    for (const reset of ["logout", "expired"]) {
+      await context.clearCookies();
+      await page.goto(`${origin}/diary/tags/`, { waitUntil: "networkidle" });
+      await waitForDiary(page);
+      await page.locator('#tag-list [data-tag="タグ001"]').click();
+      await page.waitForURL(new RegExp(`/diary/tag/${encodeURIComponent("タグ001")}/?$`));
+      await waitForDiary(page);
+      assert.equal(await page.locator("#tag-page-back").getAttribute("href"), "/diary/tags/");
+      const oldView = await page.evaluate(() => {
+        const view = sessionStorage.getItem("troom-diary-return-view-v1");
+        sessionStorage.setItem("troomDiaryReturnNavigation", "stale handoff");
+        sessionStorage.setItem("unrelated", "preserved");
+        history.replaceState({ ...history.state, troomDiaryReturnView: JSON.parse(view), unrelated: "preserved" }, "");
+        return view;
+      });
+      if (reset === "logout") {
+        await page.click("#logout-button");
+      } else {
+        await page.route("**/diary/api/entries?**", route => route.fulfill({
+          status: 401, contentType: "application/json", body: JSON.stringify({ error: "expired fixture" })
+        }), { times: 1 });
+        await page.evaluate(() => document.querySelector("#load-more-button").click());
+      }
+      await page.waitForSelector("#login-view:not([hidden])");
+      assert.deepEqual(await page.evaluate(() => ({
+        view: sessionStorage.getItem("troom-diary-return-view-v1"),
+        handoff: sessionStorage.getItem("troomDiaryReturnNavigation"),
+        historyView: history.state?.troomDiaryReturnView,
+        historyHandoff: history.state?.troomDiaryReturnNavigation,
+        unrelatedStorage: sessionStorage.getItem("unrelated"), unrelatedHistory: history.state?.unrelated,
+        href: document.querySelector("#tag-page-back").getAttribute("href"),
+        text: document.querySelector("#tag-page-back").textContent
+      })), { view: null, handoff: null, historyView: undefined, historyHandoff: undefined,
+        unrelatedStorage: "preserved", unrelatedHistory: "preserved", href: "/diary/", text: "← 日記へ戻る" },
+      `${name} ${reset}: reset clears only diary return state and resets the link`);
+      // Even if an older page repopulates storage, another account must reject it.
+      await page.evaluate(view => {
+        sessionStorage.setItem("troom-diary-return-view-v1", view);
+        history.replaceState({ ...history.state, troomDiaryReturnNavigation: JSON.parse(view).savedAt }, "");
+        window.TRoomPasskeys = { ...window.TRoomPasskeys,
+          authenticate: async () => ({ handoff: { handoffToken: "fixture-account-b" } }) };
+      }, oldView);
+      await page.click("#passkey-login");
+      await waitForDiary(page);
+      assert.equal(await page.locator("#tag-page-back").getAttribute("href"), "/diary/",
+        `${name} ${reset}: another account in the same household rejects the old source`);
+      assert.equal(await page.locator("#tag-page-back").textContent(), "← 日記へ戻る");
+    }
     assert.deepEqual(pageErrors, [], `${name}: page errorなし`);
     await context.close();
   } finally {
