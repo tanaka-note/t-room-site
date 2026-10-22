@@ -40,12 +40,16 @@ const tags = Array.from({ length: 90 }, (_, index) => ({
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
+  if (url.pathname === "/intermediate") {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return response.end('<a href="/diary/favorites/">日記のお気に入り</a>');
+  }
   if (url.pathname.startsWith("/diary/api/")) {
     const apiPath = url.pathname.slice("/diary/api".length);
-    if (apiPath === "/session") return sendJson(response, {
+    const session = {
       authenticated: true,
       role: "admin",
-      accountName: "復元テスト",
+      accountName: request.headers.cookie?.includes("fixture-account-b=1") ? "別アカウント" : "復元テスト",
       householdId: "main-household",
       activeHouseholdId: "main-household",
       isGlobalOwner: false,
@@ -53,7 +57,12 @@ const server = createServer(async (request, response) => {
       canViewTrash: true,
       canPermanentlyDelete: true,
       canViewInvestment: false
-    });
+    };
+    if (apiPath === "/session") return sendJson(response, session);
+    if (apiPath === "/passkey/handoff") {
+      response.setHeader("Set-Cookie", "fixture-account-b=1; Path=/diary; HttpOnly; SameSite=Strict");
+      return sendJson(response, { ...session, accountName: "別アカウント" });
+    }
     if (apiPath === "/meta") return sendJson(response, {
       draftCount: 0,
       months: [{ value: "2026-08", count: entries.length }],
@@ -193,6 +202,30 @@ async function run(browserType, name, executablePath) {
     await waitForDiary(page);
     await assertTagContext(page, appBackStoredContext, `${name} app Back`);
 
+    // A stale tag-directory source must not change the favorites return link.
+    await page.goto(`${origin}/diary/tags/`, { waitUntil: "networkidle" });
+    await waitForDiary(page);
+    // Cancel the internal navigation after the capture listener saved a handoff.
+    await page.evaluate(() => {
+      document.querySelector("#favorites-link").addEventListener("click", event => event.preventDefault(), { once: true });
+      document.querySelector("#favorites-link").click();
+    });
+    assert.ok(await page.evaluate(() => sessionStorage.getItem("troomDiaryReturnNavigation")));
+    await page.goto(`${origin}/intermediate`);
+    await page.click("a");
+    await page.waitForURL(/\/diary\/favorites\/?$/);
+    await waitForDiary(page);
+    assert.equal(await page.evaluate(() => history.state?.troomDiaryReturnNavigation), undefined,
+      `${name}: an interrupted handoff cannot be accepted after another page`);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem("troomDiaryReturnNavigation")), null);
+    assert.equal(await page.locator("#tag-page-back").getAttribute("href"), "/diary/",
+      `${name}: rejected handoff keeps the default diary link`);
+    assert.equal(await page.locator("#tag-page-back").textContent(), "← 日記へ戻る",
+      `${name}: rejected handoff does not claim a previous screen`);
+    await page.click("#tag-page-back");
+    await page.waitForURL(/\/diary\/?$/);
+    await waitForDiary(page);
+
     await page.goto(`${origin}/diary/tags/`, { waitUntil: "networkidle" });
     await waitForDiary(page);
     await page.fill("#tag-search-input", "タグ0");
@@ -237,6 +270,56 @@ async function run(browserType, name, executablePath) {
       maxScroll: document.documentElement.scrollHeight - window.innerHeight
     }));
     assert.ok(Math.abs(restored.top - entryPosition.top) <= 3, `${name}: entry IDと相対位置を復元 expected=${JSON.stringify(entryPosition)} actual=${JSON.stringify(restored)}`);
+
+    // Exercise the shipped logout/reset/login handlers in the same tab.
+    for (const reset of ["logout", "expired"]) {
+      await context.clearCookies();
+      await page.goto(`${origin}/diary/tags/`, { waitUntil: "networkidle" });
+      await waitForDiary(page);
+      await page.locator('#tag-list [data-tag="タグ001"]').click();
+      await page.waitForURL(new RegExp(`/diary/tag/${encodeURIComponent("タグ001")}/?$`));
+      await waitForDiary(page);
+      assert.equal(await page.locator("#tag-page-back").getAttribute("href"), "/diary/tags/");
+      const oldView = await page.evaluate(() => {
+        const view = sessionStorage.getItem("troom-diary-return-view-v1");
+        sessionStorage.setItem("troomDiaryReturnNavigation", "stale handoff");
+        sessionStorage.setItem("unrelated", "preserved");
+        history.replaceState({ ...history.state, troomDiaryReturnView: JSON.parse(view), unrelated: "preserved" }, "");
+        return view;
+      });
+      if (reset === "logout") {
+        await page.click("#logout-button");
+      } else {
+        await page.route("**/diary/api/entries?**", route => route.fulfill({
+          status: 401, contentType: "application/json", body: JSON.stringify({ error: "expired fixture" })
+        }), { times: 1 });
+        await page.evaluate(() => document.querySelector("#load-more-button").click());
+      }
+      await page.waitForSelector("#login-view:not([hidden])");
+      assert.deepEqual(await page.evaluate(() => ({
+        view: sessionStorage.getItem("troom-diary-return-view-v1"),
+        handoff: sessionStorage.getItem("troomDiaryReturnNavigation"),
+        historyView: history.state?.troomDiaryReturnView,
+        historyHandoff: history.state?.troomDiaryReturnNavigation,
+        unrelatedStorage: sessionStorage.getItem("unrelated"), unrelatedHistory: history.state?.unrelated,
+        href: document.querySelector("#tag-page-back").getAttribute("href"),
+        text: document.querySelector("#tag-page-back").textContent
+      })), { view: null, handoff: null, historyView: undefined, historyHandoff: undefined,
+        unrelatedStorage: "preserved", unrelatedHistory: "preserved", href: "/diary/", text: "← 日記へ戻る" },
+      `${name} ${reset}: reset clears only diary return state and resets the link`);
+      // Even if an older page repopulates storage, another account must reject it.
+      await page.evaluate(view => {
+        sessionStorage.setItem("troom-diary-return-view-v1", view);
+        history.replaceState({ ...history.state, troomDiaryReturnNavigation: JSON.parse(view).savedAt }, "");
+        window.TRoomPasskeys = { ...window.TRoomPasskeys,
+          authenticate: async () => ({ handoff: { handoffToken: "fixture-account-b" } }) };
+      }, oldView);
+      await page.click("#passkey-login");
+      await waitForDiary(page);
+      assert.equal(await page.locator("#tag-page-back").getAttribute("href"), "/diary/",
+        `${name} ${reset}: another account in the same household rejects the old source`);
+      assert.equal(await page.locator("#tag-page-back").textContent(), "← 日記へ戻る");
+    }
     assert.deepEqual(pageErrors, [], `${name}: page errorなし`);
     await context.close();
   } finally {
@@ -250,10 +333,9 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 try {
   const chromiumPath = browserExecutable("chromium");
   const firefoxPath = browserExecutable("firefox");
-  if (!chromiumPath || !firefoxPath) throw new Error("Chromium/Firefox executable is required.");
-  await run(chromium, "Chromium", chromiumPath);
-  await run(firefox, "Firefox", firefoxPath);
-  process.stdout.write("Diary return position and view-state restoration passed in Chromium and Firefox.\n");
+  await run(chromium, "Chromium", chromiumPath || undefined);
+  if (process.env.TROOM_BROWSER !== "chromium") await run(firefox, "Firefox", firefoxPath || undefined);
+  process.stdout.write("Diary return position, view-state restoration and stale handoff rejection passed.\n");
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));
 }

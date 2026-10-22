@@ -47,12 +47,21 @@ test('asset report data, rendering, update tools and tests always select the sta
   assert.ok(browserTests('site').includes('tools/test-asset-report.browser.mjs'));
 });
 
+test('diary JavaScript changes select read-only build freshness verification before regressions', () => {
+  assert.deepEqual(affected(['diary-worker/public/diary.js']), ['diary']);
+  const profile = commands('diary');
+  const freshness = profile.findIndex(command => command.args?.join(' ') === 'tools/check-web-app-builds.mjs --target t-room-diary');
+  assert.ok(freshness >= 0);
+  assert.equal(profile[freshness].cwd, '.');
+  assert.ok(freshness < profile.findIndex(command => command.args?.includes('tests/entry-time.e2e.mjs')));
+});
+
 test('Cloud edits do not select Android, Downloader or unrelated services', () => {
   assert.deepEqual(affected(['cloud-worker/public/cloud.js']), ['cloud']);
   assert.deepEqual(affected(['cloud-worker/tests/manual-thumbnail-api.mjs']), ['cloud']);
 });
 test('shared authentication, PRF and SW changes include consumers', () => {
-  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'auth']);
+  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'auth']);
   const auth = affected(['assets/session-policy.mjs']);
   for (const t of ['cloud', 'diary', 'billing', 'auth']) assert.ok(auth.includes(t), t);
   assert.ok(affected(['security-worker/src/index.js']).includes('auth'));
@@ -101,6 +110,10 @@ test('affected mapping is order independent and unknown runtime files are not si
   assert.deepEqual(affected(['new-app/index.html']), ['site']);
   assert.deepEqual(affected(['.github/workflows/verify.yml']), ['tooling']);
   assert.deepEqual(affected(['tools/install-verify-dependencies.mjs']), ['tooling']);
+  for (const path of ['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs']) {
+    assert.deepEqual(affected([path]), ['tooling', 'site']);
+    assert.ok(commands('tooling').some(command => command.args?.includes('tools/test-web-app-build-freshness.mjs')));
+  }
 });
 test('Downloader 2 Native CI isolates every fallible command in a fail-fast step', () => {
   const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');

@@ -14,7 +14,7 @@ assert.match(bootstrap, /const session = await api\("\/session"\);[\s\S]*?if \(s
 assert.match(script, /async function enterDiary[\s\S]*?elements\.bootView\.hidden = true;[\s\S]*?elements\.loginView\.hidden = true;[\s\S]*?elements\.appView\.hidden = false/);
 assert.match(bootstrap, /function showLogin[\s\S]*?bootView\.hidden = true;[\s\S]*?loginView\.hidden = false/);
 const enterDiary = script.match(/async function enterDiary\(session\) \{[\s\S]*?\n  \}/)?.[0] || "";
-assert.ok(enterDiary.indexOf("elements.appView.hidden = false") < enterDiary.indexOf("await loadEntries(true, true)"), "認可適用後の画面枠を先に表示します");
+assert.ok(enterDiary.indexOf("elements.appView.hidden = false") < enterDiary.indexOf("await loadEntries(true, true,"), "認可適用後の画面枠を先に表示します");
 assert.doesNotMatch(script, /navigator\.serviceWorker\.register/, "Service Worker登録は共通Updaterへ集約します");
 assert.match(script, /function restoreDiaryReturnPosition[\s\S]*?restoreEntryListPosition\(returnView\.position\)[\s\S]*?restoreTagListPosition\(returnView\.tagListPosition\)/, "描画後に一覧と内部スクロール領域の戻り位置を反映します");
 

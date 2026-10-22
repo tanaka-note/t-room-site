@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <script data-tlain-browser-guard>(function lineBrowserPolicy(scope) {
+  function isLine(userAgent) {
+    return /(?:^|[\s;(])Line\/\d+(?:\.|\b)/i.test(String(userAgent || ""));
+  }
+  function isApp() {
+    return Boolean(scope?.navigator?.standalone === true || ["standalone", "fullscreen", "minimal-ui"]
+      .some((mode) => scope?.matchMedia?.(`(display-mode: ${mode})`).matches));
+  }
+  function safeUrl(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.hostname !== "tanaka-note.com" || url.port || url.username || url.password) return null;
+      return url;
+    } catch { return null; }
+  }
+  function externalUrl(value) {
+    const url = safeUrl(value);
+    if (!url) return null;
+    url.searchParams.delete("openInAppBrowser");
+    url.searchParams.set("openExternalBrowser", "1");
+    return url.href;
+  }
+  function appUrl(value, userAgent) {
+    const url = safeUrl(value);
+    if (!url || !/Android/i.test(userAgent || "")) return null;
+    const packageName = url.pathname.startsWith("/diary/") ? "jp.tanaka.troom.diary.twa"
+      : url.pathname.startsWith("/cloud/") ? "jp.tanaka.tcloud.twa" : null;
+    if (!packageName) return null;
+    url.searchParams.delete("openExternalBrowser");
+    url.searchParams.delete("openInAppBrowser");
+    // HTTPS data + a fixed existing package, not a new application URL scheme.
+    // Android parses the last #Intent block; URL fragments stay in the data URI.
+    return `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=https;package=${packageName};S.browser_fallback_url=${encodeURIComponent(externalUrl(value))};end`;
+  }
+  const css = `:root{color-scheme:light dark;font-family:system-ui,-apple-system,sans-serif;background:#f5f6f4;color:#293831}*{box-sizing:border-box}body{margin:0;padding:24px 20px;min-height:100svh;display:grid;place-items:center}main{width:min(100%,460px);padding:32px 24px;border:1px solid #dce3dd;border-radius:18px;background:#fff}p{line-height:1.8}h1{font-size:1.25rem;line-height:1.6;margin:24px 0 16px}.brand{font-size:1.4rem;font-weight:700;letter-spacing:.06em}.actions{display:grid;gap:12px;margin:28px 0}a{display:block;padding:15px 18px;min-height:52px;border-radius:10px;text-align:center;font-weight:600;text-decoration:none;border:1px solid #587061;color:inherit;overflow-wrap:anywhere}a.primary{background:#506b59;color:#fff}a:focus-visible{outline:3px solid #8ca895;outline-offset:3px}.help{font-size:.9rem;color:#536158}.help strong{display:block}#app-note{font-size:.85rem}[hidden]{display:none!important}@media(prefers-color-scheme:dark){:root{background:#161c19;color:#e4eae5}main{background:#202923;border-color:#3b4b40}.help{color:#becbbf}a.primary{background:#536f5c}}@media(max-width:360px){main{padding:24px 18px}body{padding:16px}}`;
+  function escape(value) {
+    return String(value).replace(/[&\u003c>"']/g, (char) => ({ "&": "&amp;", "\u003c": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  }
+  function contents(value, userAgent) {
+    const external = externalUrl(value), app = appUrl(value, userAgent);
+    return `\u003chead>\u003cmeta charset="utf-8">\u003cmeta name="viewport" content="width=device-width,initial-scale=1">\u003cmeta name="robots" content="noindex,nofollow">\u003ctitle>T-lain | ブラウザのご案内\u003c/title>\u003cstyle>${css}\u003c/style>\u003c/head>\u003cbody>\u003cmain aria-labelledby="browser-title">\u003cdiv class="brand">T-lain\u003c/div>\u003ch1 id="browser-title">このブラウザでは\u003cbr>T-lainを利用できません。\u003c/h1>\u003cp>安全なログイン・パスキー認証のため、T-lainアプリまたは通常のブラウザで開いてください。\u003c/p>\u003cdiv class="actions">${app ? `\u003ca id="open-app" class="primary" href="${escape(app)}" rel="noreferrer">T-lainアプリで開く\u003c/a>` : ""}${external ? `\u003ca id="open-browser" class="${app ? "" : "primary"}" href="${escape(external)}" rel="noreferrer">既定のブラウザで開く\u003c/a>` : ""}\u003c/div>${app ? '\u003cp id="app-note">このページに対応する日記／T-Cloudアプリを開きます。開かない場合は、既定のブラウザをご利用ください。\u003c/p>' : ""}\u003cp class="help">\u003cstrong>うまく開かない場合\u003c/strong>LINEのメニュー「…」から「デフォルトのブラウザで開く」を選択してください。\u003cbr>ホーム画面に追加したアプリは、ホーム画面からも開けます。\u003c/p>\u003c/main>\u003c/body>`;
+  }
+  function enforce() {
+    if (!scope || isApp() || !isLine(scope.navigator.userAgent)) return false;
+    scope.stop();
+    scope.document.documentElement.lang = "ja";
+    scope.document.documentElement.innerHTML = contents(scope.location.href, scope.navigator.userAgent);
+    // Restoring this document must keep the gate, never resume the old UI.
+    scope.addEventListener("pageshow", () => {
+      if (!scope.document.getElementById("browser-title")) enforce();
+    }, { once: true });
+    return true;
+  }
+  return { isLine, isApp, externalUrl, appUrl, contents, css, enforce };
+})(window).enforce();</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="troom-app-build" content="payments-fb2be7cee618">
+  <meta name="troom-auto-update" content="enabled">
+  <title>支払明細</title>
+  <link rel="stylesheet" href="./payments.css?v=payments-fb2be7cee618">
+  <script src="/security/passkey-client.js?v=payments-fb2be7cee618" defer></script>
+  <script src="./dialog-navigation.js?v=payments-fb2be7cee618" defer></script>
+  <script src="./payments.js?v=payments-fb2be7cee618" defer></script>
+</head>
+<body>
+  <main>
+    <section id="login-view" class="login-view">
+      <div class="login-card">
+        <p class="eyebrow">T-lain PRIVATE</p><h1>支払明細</h1>
+        <p class="muted">まとめて支払った費用を、月ごとにわかりやすく。</p>
+        <p id="boot-message" role="status">ログイン状態を確認しています…</p>
+        <button id="login" class="primary full" type="button" hidden>端末のロック解除でログイン</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </div>
+    </section>
+    <section id="app-view" hidden>
+      <header><div><p class="eyebrow">PAYMENT LEDGER</p><h1>支払明細</h1></div><div class="account"><span id="account-name"></span><button id="logout" class="quiet" type="button">ログアウト</button></div></header>
+      <div class="intro"><p class="muted">支払った金額と対象期間を登録すると、月単価と何月分まで支払済みかを確認できます。</p><button id="add" class="primary" type="button">＋ 明細を登録</button></div>
+      <p id="message" class="error" role="alert"></p>
+      <section class="ledger" aria-label="支払明細一覧">
+        <div class="ledger-heading"><h2>登録した支払い</h2><span id="count" class="muted"></span></div>
+        <p id="loading" role="status">読み込み中…</p>
+        <p class="scroll-hint">表は横にスクロールできます。</p>
+        <div class="table-scroll" tabindex="0" aria-label="明細表。横方向にスクロールできます。">
+          <table><thead><tr><th>支払日</th><th>支払先</th><th>摘要</th><th class="numeric">支払総額</th><th>対象期間</th><th class="numeric">対象月数</th><th class="numeric">月単価</th><th>残り・状態</th><th>備考</th><th>操作</th></tr></thead><tbody id="entries"></tbody></table>
+        </div>
+        <p id="empty" class="empty" hidden>支払いはまだ登録されていません。「明細を登録」から追加できます。</p>
+        <p class="footnote">月単価＝支払総額÷対象月数。割り切れない場合は小数第2位まで表示します。残り月数は今月を含み、対象期間前は全月数を表示します。</p>
+      </section>
+    </section>
+  </main>
+  <dialog id="entry-dialog" aria-labelledby="editor-title">
+    <form id="entry-form">
+      <div class="dialog-heading"><h2 id="editor-title">明細を登録</h2><button id="close-editor" type="button" class="quiet" aria-label="閉じる">×</button></div>
+      <div class="fields">
+        <label>支払日<input name="paidOn" type="date" required></label>
+        <label>支払先<input name="payee" maxlength="120" required autocomplete="off"></label>
+        <label class="wide">摘要<input name="description" maxlength="240" autocomplete="off"></label>
+        <label>支払総額（円）<input name="amount" type="number" inputmode="numeric" min="1" max="999999999999" step="1" required></label>
+        <label>対象開始月<input name="startMonth" type="month" min="1900-01" max="9999-12" required></label>
+        <label>対象月数（ヶ月）<input name="months" type="number" inputmode="numeric" min="1" max="1200" step="1" required value="12"></label>
+        <p id="calculation" class="calculation" role="status"></p>
+        <label class="wide">備考<textarea name="notes" rows="3" maxlength="2000"></textarea></label>
+      </div>
+      <p id="form-error" class="error" role="alert"></p>
+      <div class="dialog-actions"><button id="cancel-editor" type="button">キャンセル</button><button class="primary" id="save" type="submit">登録する</button></div>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-copy"></p><div class="dialog-actions"><button id="confirm-cancel" type="button">キャンセル</button><button id="confirm-ok" type="button" class="danger">削除する</button></div></dialog>
+  <script src="/assets/pwa-auto-update.js?v=payments-fb2be7cee618" defer></script>
+</body>
+</html>
