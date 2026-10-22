@@ -19,7 +19,7 @@ export function commands(target) {
   const checks = services.includes(target) ? [{ cwd: `${target}-worker`, script: 'check' }] : [];
   // Downloader's existing check also compiles Python; no Docker or definition refresh.
   const suites = {
-    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
+    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-release-actions.mjs', 'tools/test-cloud-infrastructure.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
     site: [
       { cwd: '.', script: 'asset-report:test' },
       { cwd: '.', script: 'brand:test' },
@@ -35,7 +35,8 @@ export function commands(target) {
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
-    diary: tests('diary-worker', ...['entry-domain', 'photo-viewer', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs'),
+    diary: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-diary'),
+      ...tests('diary-worker', ...['entry-domain', 'photo-viewer', 'startup-state', 'month-range', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs')],
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     downloader2: [
@@ -61,7 +62,7 @@ export function browserTests(target) {
   if (target === 'health') return ['health-worker/test/health.browser.mjs'];
   const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs', 'tools/test-asset-report.browser.mjs'], cloud: ['cloud-worker/tests/folder-scroll-position.browser.mjs', 'cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
     security: ['security-worker/test/overview.browser.mjs', 'security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
-    diary: ['diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
+    diary: ['diary-worker/tests/browser/navigation-return.mjs', 'diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
@@ -76,7 +77,7 @@ export function affected(paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
-    if (/^(tools\/(verify|install-verify|test-development|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
+    if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }
     if (['tools/test-session-secret.mjs', 'tools/test-passkey-rolling.mjs', 'tools/fixtures/passkey-rolling-binding.mjs'].includes(path)) { add('auth'); continue; }
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');

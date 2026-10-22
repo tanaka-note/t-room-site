@@ -200,6 +200,8 @@ async function run(browserType, name, executablePath, contextOptions = {}) {
     const offColor = await favoriteLink.evaluate((link) => getComputedStyle(link).backgroundColor);
     assert.equal(await favoriteLink.getAttribute("aria-current"), null, `${name}: 日記ではオフ`);
     await page.click("#previous-month-button");
+    // Capture the rendered list, not the transient loading placeholder's height.
+    await page.waitForSelector('#entry-list [data-entry-id="1"]');
     const originalHeading = await page.locator("#diary-recent-title").textContent();
     await page.evaluate(() => {
       window.scrollTo(0, document.documentElement.scrollHeight);

@@ -1,5 +1,16 @@
 name: ClamAV daily definitions
 on:
+  workflow_call:
+    inputs:
+      release_code:
+        type: boolean
+        required: true
+      verified_sha:
+        type: string
+        required: true
+    secrets:
+      CLAMAV_CLOUDFLARE_API_TOKEN:
+        required: true
   schedule:
     - cron: '37 19 * * *' # 04:37 JST, once per day
   workflow_dispatch:
@@ -32,10 +43,18 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
+      - name: Require the latest verified main for automatic code release
+        if: inputs.verified_sha != ''
+        env:
+          VERIFIED_SHA: ${{ inputs.verified_sha }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$VERIFIED_SHA"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$VERIFIED_SHA"
       - run: node downloader-worker/tools/refresh-definitions.mjs
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}
-          RELEASE_CONTAINER_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_code && 'true' || 'false' }}
+          RELEASE_CONTAINER_CODE: ${{ (github.event_name == 'workflow_dispatch' || inputs.verified_sha != '') && inputs.release_code && 'true' || 'false' }}
           RELEASE_ANALYSIS_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.analysis_only && 'true' || 'false' }}
           RECONCILE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.reconcile_only && 'true' || 'false' }}
   notify:

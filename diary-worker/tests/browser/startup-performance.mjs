@@ -133,8 +133,17 @@ try {
     assert.equal(results[2].apiRequests.length, 5, "unchanged four auth round trips plus bootstrap");
     assert.ok(results[2].marks["app-shell"] < results[2].marks["entries-ready"], "show shell before data");
     assert.equal(results[3].js.some(r => /diary-photo-(processing|upload)\.js/.test(r.path)), false, "reading does not load photo posting tools");
+    for (const version of [1, 2]) {
+      await page.evaluate(version => history.replaceState({ ...history.state, troomDiaryReturnView: {
+        version, savedAt: Date.now(), householdId: "fixture-household", routePath: "/diary/",
+        query: "検索", entryCount: 1, month: "2026-10"
+      } }, "", location.href), version);
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector("#entry-list").textContent.includes("起動確認"));
+      assert.equal(await page.locator("#diary-search-input").inputValue(), "", `v${version}: missing account must not restore filters`);
+    }
     await page.evaluate(() => history.replaceState({ ...history.state, troomDiaryReturnView: {
-      version: 2, savedAt: Date.now(), householdId: "fixture-household", routePath: "/diary/",
+      version: 2, savedAt: Date.now(), accountName: "fixture", householdId: "fixture-household", routePath: "/diary/",
       query: "検索", entryCount: 1, month: "2026-10", tag: "", favoritePage: false
     } }, "", location.href));
     await page.reload();

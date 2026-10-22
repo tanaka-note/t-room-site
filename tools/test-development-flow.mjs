@@ -47,6 +47,15 @@ test('asset report data, rendering, update tools and tests always select the sta
   assert.ok(browserTests('site').includes('tools/test-asset-report.browser.mjs'));
 });
 
+test('diary JavaScript changes select read-only build freshness verification before regressions', () => {
+  assert.deepEqual(affected(['diary-worker/public/diary.js']), ['diary']);
+  const profile = commands('diary');
+  const freshness = profile.findIndex(command => command.args?.join(' ') === 'tools/check-web-app-builds.mjs --target t-room-diary');
+  assert.ok(freshness >= 0);
+  assert.equal(profile[freshness].cwd, '.');
+  assert.ok(freshness < profile.findIndex(command => command.args?.includes('tests/entry-time.e2e.mjs')));
+});
+
 test('Cloud edits do not select Android, Downloader or unrelated services', () => {
   assert.deepEqual(affected(['cloud-worker/public/cloud.js']), ['cloud']);
   assert.deepEqual(affected(['cloud-worker/tests/manual-thumbnail-api.mjs']), ['cloud']);
