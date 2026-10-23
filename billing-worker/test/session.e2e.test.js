@@ -1,114 +1,24 @@
 import assert from "node:assert/strict";
-import { pbkdf2Sync, randomBytes } from "node:crypto";
-import { once } from "node:events";
-import { fileURLToPath } from "node:url";
-import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { registerHooks } from "node:module";
 import test from "node:test";
+registerHooks({ resolve(specifier, context, next) {
+  if (specifier === "cloudflare:workers") return {url: "data:text/javascript,export class WorkerEntrypoint {}", shortCircuit:true};
+  return next(specifier, context);
+} });
+const worker = (await import("../src/index.js")).default;
 
-const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
-const wranglerPath = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url));
-const origin = "http://127.0.0.1:8797";
-const testPassword = "billing-session-test";
-
-function runWrangler(args) {
-  const result = spawnSync(process.execPath, [wranglerPath, ...args], {
-    cwd: projectDirectory,
-    encoding: "utf8"
-  });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-}
-
-function sessionExpiry(cookie) {
-  const token = cookie.split(";", 1)[0].split("=", 2)[1];
-  const payload = JSON.parse(Buffer.from(token.split(".", 1)[0], "base64url").toString("utf8"));
-  return payload.exp;
-}
-
-test("owner passwords are retired; other password sessions stay fixed for 12 hours", async () => {
-  runWrangler(["d1", "migrations", "apply", "billing-db", "--local"]);
-  const salt = randomBytes(16);
-  const hash = pbkdf2Sync(testPassword, salt, 100000, 32, "sha256");
-  runWrangler([
-    "d1", "execute", "billing-db", "--local", "--command",
-    `UPDATE billing_accounts SET password_salt = '${salt.toString("base64url")}', password_hash = '${hash.toString("base64url")}', password_iterations = 100000, password_pepper_version = 0, failed_login_attempts = 0, locked_until = NULL WHERE is_active = 1`
-  ]);
-
-  const server = spawn(process.execPath, [
-    wranglerPath,
-    "dev",
-    "--local",
-    "--port",
-    "8797",
-    "--var",
-    "ALLOW_LOCAL_HTTP:true",
-    "--var",
-    `SESSION_SECRET:${randomBytes(32).toString("hex")}`,
-    "--var",
-    "BILLING_PASSWORD_PEPPER:billing-password-e2e-pepper",
-    "--var",
-    "LOGIN_FINGERPRINT_SECRET:billing-login-e2e-secret"
-  ], {
-    cwd: projectDirectory,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  let output = "";
-  server.stdout.on("data", (chunk) => { output += chunk; });
-  server.stderr.on("data", (chunk) => { output += chunk; });
-
-  async function waitForServer() {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      try {
-        const response = await fetch(`${origin}/billing/api/session`);
-        if (response.ok) return;
-      } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    throw new Error(`Local billing server did not start.\n${output}`);
+test("real billing handler rejects cached password requests without credential DB access, even when passkeys are disabled", async () => {
+  const events = [];
+  const env = { SESSION_SECRET: randomBytes(32).toString("hex"), PASSKEY_ENABLED: "false",
+    DB: { prepare() { assert.fail("retired password requests must not access billing DB"); } },
+    SECURITY: { recordAuditEvent: async event => events.push(event) } };
+  for (const body of [JSON.stringify({loginId:"future-user",password:"fixture"}), "{malformed", "{}"]) {
+    const response = await worker.fetch(new Request("https://example.test/billing/api/login", {method:"POST",
+      headers:{Origin:"https://example.test","Content-Type":"application/json"},body}),env,{});
+    assert.equal(response.status,401); assert.equal(response.headers.get("set-cookie"),null);
+    assert.equal(events.at(-1).details.reason,"password_auth_disabled");
+    assert.equal(events.at(-1).details.counterUpdated,false);
   }
-
-  async function login(loginId) {
-    const response = await fetch(`${origin}/billing/api/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
-      body: JSON.stringify({ loginId, password: testPassword })
-    });
-    assert.equal(response.status, 200, await response.text());
-    const cookie = response.headers.get("set-cookie");
-    assert.doesNotMatch(cookie, /Max-Age|Expires=/i);
-    return cookie.split(";", 1)[0];
-  }
-
-  try {
-    await waitForServer();
-    for (const loginId of ["contact@a-tanaka.jp", "sub@a-tanaka.jp"]) {
-      const owner = await fetch(`${origin}/billing/api/login`, {
-        method: "POST", headers: { "Content-Type": "application/json", Origin: origin },
-        body: JSON.stringify({ loginId, password: testPassword })
-      });
-      assert.equal(owner.status,401);
-      assert.equal(owner.headers.get("set-cookie"),null);
-    }
-    for (const loginId of ["chiharu", "hideaki", "machiko", "masami", "yuuka"]) {
-      const cookie = await login(loginId);
-      const firstExpiry = sessionExpiry(cookie);
-      await new Promise((resolve) => setTimeout(resolve, 1100));
-      const response = await fetch(`${origin}/billing/api/session`, { headers: { Cookie: cookie } });
-      assert.equal(response.status, 200);
-      const refreshedCookie = response.headers.get("set-cookie");
-      assert.equal(refreshedCookie, null);
-      assert.equal((await response.json()).expiresAt, firstExpiry);
-    }
-    const database = spawnSync(process.execPath, [
-      wranglerPath, "d1", "execute", "billing-db", "--local", "--command",
-      "SELECT id, password_iterations, password_pepper_version FROM billing_accounts WHERE is_active = 1 ORDER BY id"
-    ], { cwd: projectDirectory, encoding: "utf8" });
-    assert.equal(database.status, 0, database.stderr || database.stdout);
-    assert.match(database.stdout, /"password_iterations": 100000/);
-    assert.match(database.stdout, /"password_pepper_version": 1/);
-  } finally {
-    if (server.exitCode === null) {
-      server.kill();
-      await Promise.race([once(server, "exit"), new Promise((resolve) => setTimeout(resolve, 2000))]);
-    }
-  }
+  assert.equal(events.length,3);
 });

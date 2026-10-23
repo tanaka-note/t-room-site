@@ -1,6 +1,6 @@
 # Passwordログインの失敗監査
 
-BillingのPassword認証結果、HTTP status、既存の試行制限・停止ポリシーは維持する。Cloud・Diaryは[Password認証の廃止方針](password-auth-policy.md)に従って全アカウントのPasswordログインを拒否し、拒否試行の監査を残す。Passkeyの認証処理・権限、暗号方式・鍵管理は変更しない。
+Cloud・Diary・Billingは[Password認証の廃止方針](password-auth-policy.md)に従って全アカウントのPasswordログインを拒否し、拒否試行の監査を残す。Passkeyの認証処理・権限、暗号方式・鍵管理は変更しない。
 
 ## 配送と追跡
 
@@ -33,11 +33,11 @@ Password拒否は`await recordSecurityAudit`でSecurity Service Bindingへ同期
 | `login_response` | `request_failed`, `unexpected_client_error` |
 | `request_validation` / `authentication` (Worker) | `invalid_request`, `invalid_credentials`, `password_auth_disabled`, `account_disabled`, `login_locked`, `rate_limited`, `authentication_error` |
 
-Cloudの公開Passwordログインはadmin/subadminとも廃止し、入力・credential derive・照合をせず`password_auth_disabled`を記録する。入力IDから本人を推測せず、試行カウンタは更新しない。Security Centerの管理者PW本人確認は維持する。停止ポリシーの`password_auth_disabled`はCloud／Diaryと対象Billing accountで記録する。
+Cloudの公開Passwordログインはadmin/subadminとも廃止し、入力・credential derive・照合をせず`password_auth_disabled`を記録する。入力IDから本人を推測せず、試行カウンタは更新しない。Security Centerの管理者PW本人確認は維持する。`password_auth_disabled`はCloud／Diary／Billingの全アカウント・将来アカウントについて記録する。Billingも資格情報を照合せず、入力IDからIdentityを推測せず、認証カウンタ・accountを変更しない。
 
 ## カウンタと秘密情報
 
-資格情報を実際に照合して失敗したときは、従来のカウンタ更新後に監査を待つ。`counterUpdated`はその拒否による更新有無を示す。既存の入力拒否・未知account・Password停止・ロック中の扱いを変更しない（未知accountの更新有無はサービスの既存仕様による）。未処理の500エラーでは更新状態を推測せずnullとする。端末監査はカウンタを増やさない。Billing accountカウンタとsourceカウンタも既存更新を維持する。
+資格情報を実際に照合して失敗したときは、従来のカウンタ更新後に監査を待つ。`counterUpdated`はその拒否による更新有無を示す。既存の入力拒否・未知account・Password停止・ロック中の扱いを変更しない（未知accountの更新有無はサービスの既存仕様による）。未処理の500エラーでは更新状態を推測せずnullとする。端末監査はカウンタを増やさない。Billingの廃止済みPassword要求も認証カウンタを更新しない。既存のカウンタ・ロック行・過去ログは保持する。
 
 監査にはaccount IDとsalt付き接続元hashを使用し、入力loginIdを保存しない。Billingの新規Password監査からも`attempted_login_id`入力を除く。過去の監査行を削除・変更しない。Password、hash、credential master、authProof、鍵、PRF、cookie、token、recovery codeはdetailsで拒否し、ネストしたobjectは保持しない。
 
@@ -57,4 +57,4 @@ Cloudの公開Passwordログインはadmin/subadminとも廃止し、入力・cr
 
 ## テスト
 
-Securityの`password-login-audit.test.js`は3サービスの本物のWorker handler、SQLite、Security同期保存／Queue replayを使用する。日記は全Passwordログインを拒否し、入力IDでのIdentity特定・認証カウンタ更新は行わない。履歴と拒否試行の同期保存／Queue fallbackは維持する。`password-login-client.test.js`はT-Cloud・請求書の本物のsubmit handlerとCloud deriveを使用する。`password-login-client.browser.mjs`はT-Cloud・請求書のChromium、実HTMLのrequired検証・本物のhandler・ローカルWorker／Security SQLiteをつなぐ。実在アカウントのPasswordや本番認証は使用しない。
+Securityの`password-login-audit.test.js`は3サービスの本物のWorker handler、SQLite、Security同期保存／Queue replayを使用する。日記は全Passwordログインを拒否し、入力IDでのIdentity特定・認証カウンタ更新は行わない。履歴と拒否試行の同期保存／Queue fallbackは維持する。`password-login-client.test.js`は各サービスのPasswordフォーム廃止とSecurity Centerの復旧UI維持を確認する。`password-login-client.browser.mjs`は請求書の実HTML・JavaScriptを使い、PC・スマートフォンのログイン表示、エラー、handoff、session復帰、ログアウト・再ログインをローカルAPI fixtureで確認する。WebAuthnはstubであり、実端末試験を代替しない。旧画面からのPassword API直接要求は本物のWorker／Security SQLiteへ接続して拒否と監査保存を確認する。実在アカウントのPasswordや本番認証は使用しない。

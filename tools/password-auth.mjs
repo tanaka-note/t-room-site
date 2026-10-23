@@ -1,11 +1,12 @@
+import { isPasswordAuthRetired } from "../assets/password-auth-policy.mjs";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-// Intentional exact allowlist. Adding a person/service requires a reviewed change.
-// Cloud, the primary administrator, other/current/future accounts are protected.
+// Historical inspection targets only. Retired services reject every mutation.
+// Do not use this list to decide which accounts can authenticate.
 export const MANAGED_PASSWORD_ACCOUNTS = Object.freeze([
   Object.freeze({ service: "billing", accountId: "chiharu", displayName: "田中千晴" }),
   Object.freeze({ service: "billing", accountId: "masami", displayName: "田中暢美" }),
@@ -21,6 +22,7 @@ const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 
 export function changePasswordPolicySql(target, enabled, epoch, reason) {
   target = managedPasswordAccount(target.service, target.accountId);
+  if (isPasswordAuthRetired(target.service, target.accountId)) throw new Error("このサービスのPassword認証は恒久廃止済みです。Security Centerでパスキーを復旧してください。");
   if (typeof enabled !== "boolean" || !Number.isSafeInteger(epoch) || epoch < 0 || epoch >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid policy transition");
   if (!reason || reason.length > 200) throw new Error("理由は1〜200文字で指定してください。秘密情報を含めないでください。");
   const service = quote(target.service), id = quote(target.accountId), name = quote(target.displayName);
@@ -75,12 +77,14 @@ export async function inspectPasswordAccount(target, query) {
     FROM security_service_links l JOIN security_identities i ON i.id = l.identity_id
     WHERE l.service = ${quote(target.service)} AND l.service_account_id = ${quote(target.accountId)} AND l.status = 'active'`);
   return { service: target.service, ...accounts[0], policyExists: policies.length === 1,
-    passwordAuthEnabled: policies.length ? policies[0].password_auth_enabled === 1 : true,
+    passwordAuthEnabled: !isPasswordAuthRetired(target.service, target.accountId) && (policies.length ? policies[0].password_auth_enabled === 1 : true),
+    storedPasswordAuthEnabled: policies.length ? policies[0].password_auth_enabled === 1 : true,
     passwordSessionEpoch: policies[0]?.password_session_epoch ?? 0, passkeyLinks: links };
 }
 
 export async function setPasswordAccount(target, action, options, query) {
   target = managedPasswordAccount(target.service, target.accountId);
+  if (isPasswordAuthRetired(target.service, target.accountId)) throw new Error("このサービスのPassword認証は恒久廃止済みです。Security Centerでパスキーを復旧してください。");
   if (!["enable", "disable"].includes(action)) throw new Error("enableまたはdisableを指定してください。");
   const before = await inspectPasswordAccount(target, query);
   console.log(JSON.stringify({ before }));
