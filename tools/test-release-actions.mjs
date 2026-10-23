@@ -2,12 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings, assertDenied, checkTokenScope } from './release-actions.mjs';
+import { affected } from './verify-plan.mjs';
 
 test('production selects changed services only, never PR/branch/docs/tooling or disabled runs', () => {
   const context = { event: 'push', ref: 'refs/heads/main', enabled: true };
   assert.deepEqual(productionPlan(['tooling', 'cloud', 'auth'], context), ['cloud']);
   assert.deepEqual(productionPlan(['downloader', 'container-unit'], context), ['downloader']);
   assert.deepEqual(productionPlan(['tooling'], context), []);
+  assert.deepEqual(productionPlan(affected(['diary-worker/public/service-worker.js', 'tools/verify-plan.mjs']), context), ['diary'],
+    'Diary shell updates must not publish the unrelated public site');
   for (const override of [{event:'pull_request'}, {ref:'refs/heads/codex/test'}, {enabled:false}]) {
     assert.deepEqual(productionPlan(['site'], {...context,...override}), []);
   }

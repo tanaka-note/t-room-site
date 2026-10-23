@@ -66,7 +66,9 @@ test('shared authentication, PRF and SW changes include consumers', () => {
   for (const t of ['cloud', 'diary', 'billing', 'auth']) assert.ok(auth.includes(t), t);
   assert.ok(affected(['security-worker/src/index.js']).includes('auth'));
   assert.ok(affected(['cloud-worker/public/crypto-vault.js']).includes('security'));
-  assert.ok(affected(['diary-worker/public/service-worker.js']).includes('site'));
+  assert.deepEqual(affected(['diary-worker/public/service-worker.js']), ['diary']);
+  assert.deepEqual(affected(['diary-worker/public/manifest.webmanifest']), ['diary']);
+  assert.ok(commands('diary').some(command => command.args?.includes('tools/verify-web-contracts.mjs')));
   assert.deepEqual(affected(['android-ai-chat/app/build.gradle.kts']), ['android-ai-chat']);
   assert.deepEqual(affected(['AGENTS.md', 'docs/development.md']), []);
 });

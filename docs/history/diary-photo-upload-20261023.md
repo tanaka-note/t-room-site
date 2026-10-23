@@ -33,7 +33,8 @@ Cloudflare読み取り専用MCPで以下を照合した。調査操作によるC
 - `tests/photos.e2e.mjs`：既存のローカルD1/R2・Security RPC fixtureによる一時保存/commit/cleanup競合、既存写真表示、アルバム、写真削除、下書き昇格、ゴミ箱/復元。新しい保存確認APIのno-store、所有account制限、未保存404も検証する。
 - `tests/write-integrity.e2e.mjs`：既存の投稿冪等性、原子的なDB更新、streamの容量制限。
 - EXIF Orientation 1〜8、PNG縦横：Chromium・Firefox・WebKit・タッチ相当で既存の画像処理回帰を確認する。
-- 日記限定の標準verify（構文、unit/API、ブラウザ、Wrangler dry-run）。対象判定はdiaryのみ。
+- 日記限定の標準verify（構文、unit/API、ブラウザ、Wrangler dry-run）。Web契約テストも日記profileで実行する。
+- 公開前に、既存のService Worker差分判定が日記に加えてsiteを選び、mainで無関係な公開サイトまでdeployする経路を確認した。日記SW/manifestは日記だけを選ぶよう修正し、Web契約テストを日記profileへ移した。開発フロー・productionPlanの回帰で公開対象がdiaryだけになることを確認する。最終CI対象はtoolingとdiary、公開対象はdiaryのみ。
 
 実行結果・公開commit/buildはPRと完了報告を正とする。初回のphotos E2Eは他処理による開発サーバーreload中にfixtureのメモリ内認証が失効し401で中断したため、配信ソース確定後に再実行し成功した。ユーザーデータを使う本番uploadは実行しない。
 
