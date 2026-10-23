@@ -64,9 +64,9 @@ function fixture(service) {
         return [{ service, account_id: target.accountId, display_name: target.displayName, identity_status: "active", link_status: "active", active_credentials: 1 }]; }
       assert.equal(s, service); return db.prepare(sql).all();
     },
-    async request(path, cookie, body) {
+    async request(path, cookie, body, headers = {}) {
       const response = await workers[service].fetch(new Request(`https://example.test/${service}/api/${path}`, {
-        method: body ? "POST" : "GET", headers: { Origin: "https://example.test", "Content-Type": "application/json", "X-Diary-Request": "1", "X-Billing-Request": "1", ...(cookie ? { Cookie: cookie } : {}) },
+        method: body ? "POST" : "GET", headers: { Origin: "https://example.test", "Content-Type": "application/json", "X-Diary-Request": "1", "X-Billing-Request": "1", ...(cookie ? { Cookie: cookie } : {}), ...headers },
         ...(body ? { body: JSON.stringify(body) } : {})
       }), env, { waitUntil: (p) => pending.push(p) });
       await Promise.all(pending.splice(0));
@@ -93,106 +93,7 @@ function cookieWithPayload(cookie, payload, secret) {
   return cookie.split("=",1)[0]+"="+encoded+"."+createHmac("sha256",secret).update(encoded).digest("base64url");
 }
 
-for (const service of ["billing"]) test(`${service}: fixed twelve-hour password lifetime and password-only migration`, async () => {
-  const f = fixture(service), OriginalDate = Date;
-  let now = OriginalDate.now();
-  globalThis.Date = class extends OriginalDate {
-    constructor(...args) { super(...(args.length ? args : [now])); }
-    static now() { return now; }
-  };
-  try {
-    const id = service === "diary" ? "wife-admin" : "chiharu";
-    const login = await f.login(id), payload = cookiePayload(login.cookie);
-    assert.equal(login.status, 200);
-    assert.equal(payload.exp, Math.floor(Date.parse(payload.startedAt) / 1000) + 43200);
-    assert.equal(payload.passwordSessionVersion, 1);
-    assert.doesNotMatch(login.setCookie, /Max-Age|Expires=/i);
-    const passkey = await f.passkey(id), pkPayload = cookiePayload(passkey.cookie);
-    assert.equal(pkPayload.passwordSessionVersion, undefined);
-    for (const extra of [{passwordSessionVersion:undefined}, {passwordSessionVersion:undefined,authMethod:undefined}, {exp:payload.exp+2592000}]) {
-      const old = cookieWithPayload(login.cookie, {...payload,...extra}, f.env.SESSION_SECRET);
-      assert.equal((await f.request("session",old)).body.authenticated, false);
-    }
-    for (const elapsed of [0,1,11*3600,43199]) {
-      now = (payload.exp - 43200 + elapsed) * 1000 + 999;
-      const resumed = await f.request("session", login.cookie);
-      assert.equal(resumed.body.authenticated,true);
-      assert.equal(resumed.cookie,null);
-      assert.equal(resumed.body.expiresAt,payload.exp);
-      assert.equal(f.audit.at(-1).expiresAt,payload.exp);
-      assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
-    }
-    now = payload.exp * 1000;
-    assert.equal((await f.request("session", login.cookie)).body.authenticated,false);
-    assert.equal((await f.request("protected-fixture",login.cookie)).status,401);
-    now = pkPayload.exp * 1000;
-    assert.equal((await f.request("session", passkey.cookie)).body.authenticated,false);
-    const fresh=await f.login(id);assert.equal(fresh.status,200);
-    assert.equal((await f.request("logout",fresh.cookie,{})).status,200);
-  } finally { globalThis.Date = OriginalDate; f.close(); }
-});
-
-for (const target of MANAGED_PASSWORD_ACCOUNTS) test(`${target.service}/${target.accountId}: stop → recover → stop preserves Passkey and rejects every old password cookie`, async () => {
-  const f = fixture(target.service);
-  try {
-    const wrongPassword = await f.login(target.accountId, "wrong-local-password");
-    const initial = await f.login(target.accountId); assert.equal(initial.status,200);
-    const oldPayload = cookiePayload(initial.cookie); delete oldPayload.passwordSessionEpoch; delete oldPayload.authMethod;
-    const legacy = cookieWithPayload(initial.cookie,oldPayload,f.env.SESSION_SECRET);
-    assert.equal((await f.request("session",legacy)).body.authenticated,true);
-    const passkey = await f.passkey(target.accountId); assert.equal(passkey.status,200);
-    assert.equal(cookiePayload(passkey.cookie).passwordSessionEpoch,undefined);
-    const baseline = f.accounts();
-    await f.change(target.accountId,"disable",0);
-    const deriveBits = crypto.subtle.deriveBits;
-    let hashCalls = 0;
-    crypto.subtle.deriveBits = function (...args) { hashCalls++; return deriveBits.apply(this,args); };
-    let blocked;
-    try { blocked = await f.login(target.accountId); } finally { crypto.subtle.deriveBits = deriveBits; }
-    assert.equal(hashCalls,0,"disabled login skips expensive password hashing");
-    assert.equal(blocked.status,401); assert.equal(blocked.cookie,null);
-    assert.deepEqual(blocked.body,wrongPassword.body,"same generic response as wrong password");
-    assert.equal((await f.request("protected-fixture",initial.cookie)).status,401);
-    assert.equal((await f.request("session",initial.cookie)).body.authenticated,false);
-    assert.equal((await f.request("session",legacy)).body.authenticated,false);
-    assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
-    assert.equal((await f.passkey(target.accountId)).status,200);
-    assert.equal(f.accounts(),baseline,"credentials/active/roles/households/account versions unchanged");
-    assert.ok(f.audit.some((event)=>event.details?.reason==="password_auth_disabled"));
-    await f.change(target.accountId,"enable",1);
-    for(const cookie of [initial.cookie,legacy]) assert.equal((await f.request("session",cookie)).body.authenticated,false);
-    const fresh = await f.login(target.accountId); assert.equal(fresh.status,200); assert.equal(cookiePayload(fresh.cookie).passwordSessionEpoch,2);
-    const rolled = await f.request("session",fresh.cookie); assert.equal(rolled.body.authenticated,true); assert.equal(rolled.cookie,null); assert.equal(cookiePayload(fresh.cookie).passwordSessionEpoch,2);
-    assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
-    await f.change(target.accountId,"disable",2);
-    assert.equal((await f.request("session",fresh.cookie)).body.authenticated,false);
-    assert.equal((await f.request("session",passkey.cookie)).body.authenticated,true);
-    assert.equal(f.accounts(),baseline);
-    assert.deepEqual(f.db.prepare("SELECT event_type,password_session_epoch FROM password_auth_policy_audit ORDER BY id").all().map(r=>[r.event_type,r.password_session_epoch]),[["password_auth_disabled",1],["password_auth_enabled",2],["password_auth_disabled",3]]);
-    f.invalidatePasskey(); assert.equal((await f.request("session",passkey.cookie)).body.authenticated,false,"existing Passkey revocation still applies");
-  } finally { f.close(); }
-});
-
-for(const service of ["billing"]) test(`${service}: only the explicitly managed accounts change; all other accounts retain password login/fixed sessions`,async()=>{
-  const f=fixture(service);
-  try {
-    const baseline=f.accounts();
-    for(const t of MANAGED_PASSWORD_ACCOUNTS.filter(t=>t.service===service)) await f.change(t.accountId,"disable",0);
-    assert.equal(f.accounts(),baseline);
-    const ids=service==="diary"?["future-user"]:["yuuka","machiko","future-user"];
-    for(const id of ids){
-      assert.deepEqual(await readPasswordAuthPolicy(f.env,service,id),{enabled:true,epoch:0});
-      const login=await f.login(id);assert.equal(login.status,200,id);
-      const p=cookiePayload(login.cookie);delete p.authMethod;delete p.passwordSessionEpoch;
-      const legacy=cookieWithPayload(login.cookie,p,f.env.SESSION_SECRET);
-      const resumed=await f.request("session",legacy);assert.equal(resumed.body.authenticated,true,id);const rolled=await f.request("session",login.cookie);assert.equal(rolled.cookie,null); assert.equal(cookiePayload(login.cookie).passwordSessionEpoch,0);
-    }
-    assert.equal(f.accounts(),baseline);
-    assert.deepEqual(f.db.prepare("SELECT service,account_id FROM password_auth_policy ORDER BY account_id").all().map(r=>`${r.service}/${r.account_id}`),MANAGED_PASSWORD_ACCOUNTS.filter(t=>t.service===service).map(t=>`${t.service}/${t.accountId}`).sort());
-  } finally{f.close();}
-});
-
-for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["diary", "wife-admin"], ["diary", "chiharu-admin"], ["diary", "future-user"], ["billing", "owner"]]) {
+for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["diary", "wife-admin"], ["diary", "chiharu-admin"], ["diary", "future-user"], ...["owner", "chiharu", "hideaki", "masami", "yuuka", "machiko", "future-user"].map(id => ["billing", id])]) {
   test(`${service}/${id}: permanently rejects passwords and existing cookies, preserving Passkey access and account data`, async () => {
     const f = fixture(service);
     try {
@@ -204,7 +105,7 @@ for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["
         const beforeQueries=f.queries.length;
         const blocked = await f.login(id);
         assert.equal(blocked.status,401); assert.equal(blocked.cookie,null);
-        if(service==="diary") assert.equal(f.queries.length,beforeQueries,"retired login does not read credentials or mutate counters");
+        assert.equal(f.queries.length,beforeQueries,"retired login does not read credentials or mutate counters");
         assert.deepEqual(blocked.body,(await f.login(id,"wrong-local-password")).body);
       }
       assert.ok(f.audit.some(e=>e.details?.reason === "password_auth_disabled"));
@@ -213,18 +114,31 @@ for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["
         assert.equal(legacyId.status,401); assert.equal(legacyId.cookie,null);
       }
       const pk = await f.passkey(id); assert.equal(pk.status,200);
-      assert.equal(pk.body.role,service === "billing" ? "owner" : ["main-admin", "wife-admin", "chiharu-admin"].includes(id) ? "admin" : "user");
+      assert.equal(pk.body.role,service === "billing" ? (id === "owner" ? "owner" : "member") : ["main-admin", "wife-admin", "chiharu-admin"].includes(id) ? "admin" : "user");
       for (const authMethod of ["password", undefined]) {
         const payload = { ...cookiePayload(pk.cookie), authMethod, passwordSessionVersion: 1, passwordSessionEpoch: 0 };
         for (const key of ["identityId","credentialId","serviceLinkId","serviceAccountId","passkeySessionEpoch"]) delete payload[key];
         if (!authMethod) delete payload.passwordSessionEpoch;
         const old = cookieWithPayload(pk.cookie,payload,f.env.SESSION_SECRET);
-        assert.equal((await f.request("session",old)).body.authenticated,false);
+        const resumed = await f.request("session",old,undefined,{"X-Troom-Activity":"foreground"});
+        assert.equal(resumed.body.authenticated,false);
+        assert.equal(resumed.cookie,null,"rejected cookies are never renewed");
         assert.equal((await f.request(service === "diary" ? "households" : "accounts",old)).status,401);
       }
       const session = await f.request("session",pk.cookie);
       assert.equal(session.body.authenticated,true);
       assert.equal((await f.request(service === "diary" ? "households" : "accounts",pk.cookie)).status,200);
+      if (service === "billing") {
+        const accounts = await f.request("accounts", pk.cookie);
+        if (id !== "owner") assert.deepEqual(accounts.body.accounts.map(a => a.id), [id]);
+        const summary = await f.request("summary?month=2026-10&accountId=masami", pk.cookie);
+        assert.equal(summary.status, 200);
+        assert.equal(summary.body.account.id, id === "owner" ? "masami" : id);
+        assert.equal((await f.request("audit-logs", pk.cookie)).status, id === "owner" ? 200 : 403);
+        if (id !== "owner") {
+          for (const path of ["entries", "settlements"]) assert.equal((await f.request(path, pk.cookie, {})).status, 403);
+        }
+      }
       if (id === "main-admin") {
         assert.equal(session.body.isGlobalOwner,true);
         const selected = await f.request("households/select",pk.cookie,{householdId:"chiharu-household"});
@@ -242,27 +156,27 @@ for (const [service, id] of [["diary", "main-admin"], ["diary", "main-user"], ["
   });
 }
 
-test("Diary: Passkey lifetime, rolling and revocation remain independent of retired password records",async()=>{
-  const f=fixture("diary"),OriginalDate=Date;
+for (const service of ["diary", "billing"]) test(`${service}: Passkey lifetime and revocation remain independent of retired password records`,async()=>{
+  const f=fixture(service),OriginalDate=Date;
   let now=OriginalDate.now();
   globalThis.Date=class extends OriginalDate {constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}};
   try {
-    const pk=await f.passkey("wife-admin"),payload=cookiePayload(pk.cookie);
+    const pk=await f.passkey(service === "diary" ? "wife-admin" : "chiharu"),payload=cookiePayload(pk.cookie);
     assert.equal(pk.status,200);
     assert.equal(payload.passwordSessionEpoch,undefined);
     assert.equal(payload.passwordSessionVersion,undefined);
     assert.equal((await f.request("session",pk.cookie)).body.authenticated,true);
     now=payload.exp*1000;
     assert.equal((await f.request("session",pk.cookie)).body.authenticated,false);
-    assert.equal((await f.request("households",pk.cookie)).status,401);
-    const fresh=await f.passkey("wife-admin");assert.equal(fresh.status,200);
+    assert.equal((await f.request(service === "diary" ? "households" : "accounts",pk.cookie)).status,401);
+    const fresh=await f.passkey(service === "diary" ? "wife-admin" : "chiharu");assert.equal(fresh.status,200);
     f.invalidatePasskey();assert.equal((await f.request("session",fresh.cookie)).body.authenticated,false);
   } finally {globalThis.Date=OriginalDate;f.close();}
 });
 
 test("policy lookups fail closed; Passkey bypasses only password policy; rolling never adopts a new epoch",async()=>{
   const broken={DB:{prepare(){throw Error("D1 unavailable");}}};
-  await assert.rejects(validatePasswordSession({accountId:"chiharu"},broken,"billing"));
+  assert.equal(await validatePasswordSession({accountId:"chiharu"},broken,"billing"),false,"retirement is independent of D1 availability");
   assert.equal(await validatePasswordSession({authMethod:"passkey"},broken,"billing"),true);
   assert.equal(await validatePasswordSession({authMethod:"other"},broken,"billing"),false);
   assert.deepEqual(passwordSessionClaims({authMethod:"passkey",passwordSessionEpoch:3}),{});
@@ -282,32 +196,44 @@ for (const service of ["diary", "billing"]) test(`${service}: missing policy sch
   } finally { f.close(); }
 });
 
-test("operator rejects protected accounts, mismatched names, missing Passkey and stale generations; schema cannot reset cookies",async()=>{
-  assert.deepEqual(MANAGED_PASSWORD_ACCOUNTS.map(t=>[t.service,t.accountId,t.displayName]),[
-    ["billing","chiharu","田中千晴"],["billing","masami","田中暢美"],["billing","hideaki","田中秀晃"]
-  ]);
-  for(const [s,ids] of [["cloud",["admin","subadmin","folder-member","hideaki"]],["diary",["main-admin","main-user","wife-admin","chiharu-admin","future-user","*","hideaki"]],["billing",["owner","yuuka","machiko","future-user","chi%","Hideaki","hideaki "]],["ai",["owner","hideaki"]],["downloader",["owner","hideaki"]]]) for(const id of ids) assert.throws(()=>managedPasswordAccount(s,id));
-  for (const accountId of ["chiharu", "hideaki"]) {
-    const f=fixture("billing"),t=managedPasswordAccount("billing",accountId);
-    try{
-      const options={expectName:t.displayName,expectEpoch:0,reason:"test"};
-      await assert.rejects(setPasswordAccount(t,"disable",{...options,expectName:"別人"},f.query));
-      await assert.rejects(setPasswordAccount(t,"disable",{...options,expectEpoch:3},f.query));
-      const noPasskey=async(s,sql)=>s==="security"?[]:f.query(s,sql);
-      await assert.rejects(setPasswordAccount(t,"disable",options,noPasskey));
-      assert.equal(f.db.prepare("SELECT COUNT(*) n FROM password_auth_policy").get().n,0);
-      await f.change(t.accountId,"disable",0);
-      assert.equal((await f.change(t.accountId,"disable",1)).changed,false,"idempotent stop does not advance epoch");
-      assert.throws(()=>f.db.exec("DELETE FROM password_auth_policy"));
-      assert.throws(()=>f.db.exec("UPDATE password_auth_policy SET password_session_epoch=0"));
-      assert.equal(f.db.prepare(updatePasswordPolicySql(t,true,0,"stale")).all().length,0);
-      assert.equal(f.db.prepare(changePasswordPolicySql(t,false,0,"stale")).all().length,0);
-      const recovered=await setPasswordAccount(t,"enable",{...options,expectEpoch:1},noPasskey);
-      assert.equal(recovered.after.passwordAuthEnabled,true,"emergency recovery works without a Passkey");
-      f.db.prepare("UPDATE billing_accounts SET display_name='different' WHERE id=?").run(accountId);
-      await assert.rejects(inspectPasswordAccount(t,f.query));
-    }finally{f.close();}
+test("operator cannot re-enable retired billing authentication or write policy SQL", async () => {
+  for (const target of MANAGED_PASSWORD_ACCOUNTS) {
+    const f = fixture(target.service);
+    try {
+      const before = f.accounts();
+      const inspect = await inspectPasswordAccount(target, f.query);
+      assert.equal(inspect.passwordAuthEnabled, false);
+      assert.equal(inspect.storedPasswordAuthEnabled, true);
+      const noQuery = () => assert.fail("retired operations must reject before any DB access");
+      for (const action of ["enable", "disable"]) {
+        await assert.rejects(setPasswordAccount(target, action, {}, noQuery), /恒久廃止/);
+        assert.throws(() => changePasswordPolicySql(target, action === "enable", 0, "test"), /恒久廃止/);
+        assert.throws(() => updatePasswordPolicySql(target, action === "enable", 0, "test"), /恒久廃止/);
+      }
+      assert.equal(f.accounts(), before);
+      assert.equal(f.db.prepare("SELECT COUNT(*) n FROM password_auth_policy").get().n, 0);
+    } finally { f.close(); }
   }
+  for (const [service, id] of [["cloud","admin"],["diary","main-admin"],["billing","owner"],["ai","owner"]]) {
+    assert.throws(() => managedPasswordAccount(service, id));
+  }
+});
+
+test("billing: passkey stop never enables passwords or renews rejected cookies", async () => {
+  const f = fixture("billing");
+  try {
+    const pk = await f.passkey("chiharu");
+    f.env.PASSKEY_ENABLED = "false";
+    assert.equal((await f.login("chiharu")).status, 401);
+    assert.equal((await f.passkey("chiharu")).status, 503);
+    const resumed = await f.request("session", pk.cookie, undefined, {"X-Troom-Activity":"foreground"});
+    assert.equal(resumed.body.authenticated, false);
+    assert.equal(resumed.cookie, null);
+    assert.equal((await f.request("accounts", pk.cookie)).status, 401);
+    f.env.PASSKEY_ENABLED = "true";
+    assert.equal((await f.login("chiharu")).status, 401);
+    assert.equal((await f.passkey("chiharu")).status, 200);
+  } finally { f.close(); }
 });
 
 test("migrations contain no initial stops or account/credential writes and only the named services import the policy",()=>{
