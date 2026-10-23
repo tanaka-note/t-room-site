@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-52526af3be3a";
+const APP_BUILD_ID = "cloud-3b98225ac679";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2102,6 +2102,12 @@ async function startTrashDeletion(env, session, fileId = null) {
     if (active && file.purge_job_id !== active.id) throw new HttpError(409, "別の完全削除が進行中です。完了後に再試行してください。");
   }
   let job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE status IN ('queued', 'running')").first();
+  if (job && fileId === null) {
+    const unclaimed = await env.DB.prepare(`SELECT
+      EXISTS (SELECT 1 FROM cloud_files WHERE deleted_at IS NOT NULL AND purge_job_id IS NULL)
+      OR EXISTS (SELECT 1 FROM cloud_folders WHERE deleted_at IS NOT NULL AND purge_job_id IS NULL) AS present`).first();
+    if (unclaimed.present) throw new HttpError(409, "別の完全削除が進行中です。新しい対象は完了後に受け付けます。");
+  }
   if (!job) {
     const id = crypto.randomUUID();
     const now = Date.now();
@@ -2122,6 +2128,7 @@ async function startTrashDeletion(env, session, fileId = null) {
       // A concurrent request may already have claimed the singleton job.
       job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE status IN ('queued', 'running')").first();
       if (!job) throw error;
+      throw new HttpError(409, "別の完全削除を受け付けました。画面の進捗を確認してください。");
     }
     job ||= await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ?").bind(id).first();
   }

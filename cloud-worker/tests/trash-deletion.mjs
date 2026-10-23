@@ -90,8 +90,9 @@ assert.equal(started.body.job.phase, "waiting", "failed Queue dispatch is visibl
 assert.equal(batches.length, 0, "HTTP only persists acceptance, never deletes R2 objects");
 const jobId = started.body.job.id;
 sendFails = false;
-addFile(1300); // This is deliberately newer than the snapshot.
 assert.equal((await request("/trash", "DELETE")).body.job.id, jobId, "duplicate request is idempotent");
+addFile(1300); // This is deliberately newer than the snapshot.
+assert.equal((await request("/trash", "DELETE")).status, 409, "new targets cannot be mistaken for acceptance into the active scope");
 assert.equal(remaining(1300).purge_job_id, null);
 assert.equal((await request("/files/1000/restore", "POST")).status, 409);
 assert.equal((await request("/folders/100/restore", "POST")).status, 409);
@@ -141,7 +142,10 @@ assert.notEqual(unrelated.body.job.id, second.body.job.id);
 assert.equal(unrelated.body.job.totalFiles, 1);
 assert.equal((await retry(second.body.job.id)).status, 409, "retry cannot compete with an active job");
 assert.equal(remaining(1300).purge_attempts, 5, "rejected retry does not reset counters");
+env.TRASH_DELETION_PAUSED = "true";
 await drain(unrelated.body.job.id);
+assert.equal((await retry(second.body.job.id)).status, 503, "acceptance pause keeps durable scopes and allows existing work to finish");
+delete env.TRASH_DELETION_PAUSED;
 assert.equal(remaining(1400), undefined);
 assert.equal(getJob(second.body.job.id).status, "failed");
 assert.equal((await retry(second.body.job.id)).status, 202);
