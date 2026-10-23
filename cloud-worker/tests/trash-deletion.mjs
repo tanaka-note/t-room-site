@@ -20,18 +20,19 @@ env.TRASH_DELETION = { async send(body, options) {
 const deletedKeys = new Set();
 const batches = [];
 let r2Fails = false;
+const blockedKeys = new Set();
 env.FILES.delete = async keys => {
   assert.ok(Array.isArray(keys));
   assert.ok(keys.length <= 1000);
   batches.push([...keys]);
-  if (r2Fails) throw new Error("synthetic R2 outage");
+  if (r2Fails || keys.some(key => blockedKeys.has(key))) throw new Error("synthetic R2 outage");
   keys.forEach(key => deletedKeys.add(key));
 };
 const admin = await handoff("admin");
 const headers = { "X-TCloud-Session": admin.body.sessionCacheId };
 const request = (path, method = "GET", cookie = admin.cookie) => api(cookie, path, method, method === "GET" ? undefined : {}, headers);
 const member = await handoff("folder-member", "general-user");
-for (const [path, method] of [["/trash", "DELETE"], ["/trash/job", "GET"], ["/trash/job/retry", "POST"]]) {
+for (const [path, method] of [["/trash", "DELETE"], ["/trash/jobs", "GET"], ["/trash/jobs/00000000-0000-0000-0000-000000000000/retry", "POST"]]) {
   assert.equal((await api(member.cookie, path, method, method === "GET" ? undefined : {}, { "X-TCloud-Session": member.body.sessionCacheId })).status, 403);
   assert.equal((await api(null, path, method, method === "GET" ? undefined : {})).status, 401);
 }
@@ -46,7 +47,9 @@ function addFile(id, folder = 7, trashed = true, stream = null) {
     VALUES (?, ?, ?, ?, ?, 'fixture', 'text/plain', 'document', 100, 'ready', 'admin', ?, ?)`)
     .run(id, folder, `object-${id}`, `thumbnail-${id}`, `display-${id}`, trashed ? "2026-10-23T00:00:00Z" : null, stream);
 }
-const getJob = () => db.prepare("SELECT * FROM cloud_trash_jobs ORDER BY rowid DESC LIMIT 1").get();
+const getJob = id => id ? db.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ?").get(id)
+  : db.prepare("SELECT * FROM cloud_trash_jobs ORDER BY rowid DESC LIMIT 1").get();
+const retry = id => request(`/trash/jobs/${id}/retry`, "POST");
 const remaining = id => db.prepare("SELECT * FROM cloud_files WHERE id = ?").get(id);
 async function consume(jobId) {
   let acked = false;
@@ -58,7 +61,7 @@ async function drain(jobId) {
   for (let n = 0; n < 30; n++) {
     db.prepare("UPDATE cloud_trash_jobs SET next_attempt_at = 0 WHERE id = ?").run(jobId);
     await consume(jobId);
-    if (["completed", "failed"].includes(getJob().status)) return;
+    if (["completed", "failed"].includes(getJob(jobId).status)) return;
   }
   throw new Error("fixture job did not settle");
 }
@@ -72,6 +75,10 @@ addFile(1200, 7, false);
 delete env.TRASH_DELETION;
 assert.equal((await request("/trash", "DELETE")).status, 503);
 assert.equal(getJob(), undefined);
+env.TRASH_DELETION_PAUSED = "true";
+assert.equal((await request("/trash", "DELETE")).status, 503);
+assert.equal(getJob(), undefined);
+delete env.TRASH_DELETION_PAUSED;
 env.TRASH_DELETION = { async send(body, options) { if (sendFails) throw new Error("queue outage"); queue.push({ body, options }); } };
 
 sendFails = true;
@@ -79,6 +86,7 @@ const started = await request("/trash", "DELETE");
 assert.equal(started.status, 202);
 assert.equal(started.body.job.totalFiles, 175);
 assert.equal(started.body.job.totalFolders, 2);
+assert.equal(started.body.job.phase, "waiting", "failed Queue dispatch is visible and durable");
 assert.equal(batches.length, 0, "HTTP only persists acceptance, never deletes R2 objects");
 const jobId = started.body.job.id;
 sendFails = false;
@@ -128,14 +136,22 @@ assert.equal(remaining(1300).purge_attempts, 5);
 assert.equal(getJob().deleted_files, 0);
 addFile(1400);
 r2Fails = false;
-assert.equal((await request("/trash/job/retry", "POST")).status, 202);
+const unrelated = await request("/trash", "DELETE");
+assert.notEqual(unrelated.body.job.id, second.body.job.id);
+assert.equal(unrelated.body.job.totalFiles, 1);
+assert.equal((await retry(second.body.job.id)).status, 409, "retry cannot compete with an active job");
+assert.equal(remaining(1300).purge_attempts, 5, "rejected retry does not reset counters");
+await drain(unrelated.body.job.id);
+assert.equal(remaining(1400), undefined);
+assert.equal(getJob(second.body.job.id).status, "failed");
+assert.equal((await retry(second.body.job.id)).status, 202);
 await drain(second.body.job.id);
-assert.equal(getJob().status, "completed");
+assert.equal(getJob(second.body.job.id).status, "completed");
 assert.equal(remaining(1300), undefined);
-assert.equal(remaining(1400).purge_job_id, null);
 
 // An interrupted R2 success before DB commit safely repeats object deletion.
-const third = await request("/files/1400/permanent", "DELETE");
+addFile(1450);
+const third = await request("/files/1450/permanent", "DELETE");
 const originalBatch = env.DB.batch;
 let failCommit = true;
 env.DB.batch = async statements => {
@@ -143,12 +159,12 @@ env.DB.batch = async statements => {
   return originalBatch(statements);
 };
 await consume(third.body.job.id);
-assert.ok(deletedKeys.has("object-1400"));
-assert.ok(remaining(1400));
+assert.ok(deletedKeys.has("object-1450"));
+assert.ok(remaining(1450));
 db.prepare("UPDATE cloud_trash_jobs SET lease_until = 1 WHERE id = ?").run(third.body.job.id);
 await drain(third.body.job.id);
 assert.equal(getJob().deleted_files, 1);
-assert.equal(db.prepare("SELECT COUNT(*) AS n FROM cloud_audit_logs WHERE event_type = 'file_deleted' AND target_id = 1400").get().n, 1);
+assert.equal(db.prepare("SELECT COUNT(*) AS n FROM cloud_audit_logs WHERE event_type = 'file_deleted' AND target_id = 1450").get().n, 1);
 
 // Legacy Stream deletion is retried; an already removed asset (404) is success.
 addFile(1500, 7, true, "opaque-stream-asset");
@@ -176,8 +192,49 @@ assert.equal(getJob().status, "failed");
 assert.ok(db.prepare("SELECT id FROM cloud_folders WHERE id = 201").get());
 assert.equal(getJob().deleted_folders, 0);
 db.exec("DELETE FROM cloud_folders WHERE id = 201");
-await request("/trash/job/retry", "POST");
+await retry(blocked.body.job.id);
 await drain(blocked.body.job.id);
 assert.equal(getJob().status, "completed");
 assert.equal(getJob().deleted_folders, 1);
+
+// A single poison object must not exhaust healthy neighbours' retries.
+for (let id = 1700; id < 1780; id++) addFile(id);
+blockedKeys.add("object-1700");
+const poison = await request("/trash", "DELETE");
+await drain(poison.body.job.id);
+assert.equal(getJob(poison.body.job.id).status, "failed");
+assert.equal(getJob(poison.body.job.id).deleted_files, 79);
+assert.equal(remaining(1700).purge_attempts, 5);
+assert.equal(remaining(1700).purge_error, "r2_delete_failed");
+assert.throws(() => db.prepare("UPDATE cloud_files SET object_key = 'outside' WHERE id = 1700").run(), /permanent deletion/);
+addFile(1800);
+blockedKeys.add("object-1800");
+const another = await request("/trash", "DELETE");
+await drain(another.body.job.id);
+assert.equal(getJob(another.body.job.id).status, "failed");
+addFile(1900);
+const fresh = await request("/trash", "DELETE");
+assert.equal(fresh.body.job.totalFiles, 1);
+assert.equal((await retry(poison.body.job.id)).status, 409);
+await drain(fresh.body.job.id);
+const failedJobs = (await request("/trash/jobs")).body.jobs.filter(job => job.status === "failed");
+assert.deepEqual(new Set(failedJobs.map(job => job.id)), new Set([poison.body.job.id, another.body.job.id]));
+blockedKeys.delete("object-1700");
+assert.equal((await retry(poison.body.job.id)).status, 202);
+assert.equal((await retry(poison.body.job.id)).status, 409, "duplicate retry does not reset a live job");
+await drain(poison.body.job.id);
+assert.equal(remaining(1700), undefined);
+assert.equal(remaining(1800).purge_job_id, another.body.job.id);
+assert.equal((await request("/files/1800/restore", "POST")).status, 409);
+
+// Before touching R2, reject any object key still used outside this scope.
+addFile(2000);
+db.prepare("UPDATE cloud_files SET thumbnail_key = ? WHERE id = 2000").run("object-1200");
+const shared = await request("/trash", "DELETE");
+await drain(shared.body.job.id);
+assert.equal(getJob(shared.body.job.id).status, "failed");
+assert.equal(remaining(2000).purge_error, "referenced_object");
+assert.equal(deletedKeys.has("object-1200"), false);
+assert.equal(deletedKeys.has("object-2000"), false);
+assert.equal((await request("/trash/jobs")).body.jobs.find(job => job.id === shared.body.job.id).referencedFiles, 1);
 console.log("PASS durable trash deletion: acceptance, permissions/CSRF, snapshots, batches, leases/recovery, retry, audit, usage, Stream and browser-independent completion");

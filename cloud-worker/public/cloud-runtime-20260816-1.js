@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-4545b626db45";
+const APP_BUILD_ID = "cloud-52526af3be3a";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -35,6 +35,7 @@ let navigationGeneration = 0;
 const state = {
   session: null,
   trashDeletionJob: null,
+  trashDeletionJobs: [],
   loginId: "",
   credentialSalt: "",
   folderId: null,
@@ -1817,7 +1818,9 @@ async function clearLegacyPasskeyAdminKeys() {
 function releaseSessionState() {
   clearTimeout(trashDeletionTimer);
   state.trashDeletionJob = null;
+  state.trashDeletionJobs = [];
   $("#trash-deletion-status").hidden = true;
+  $("#trash-deletion-jobs").hidden = true;
   cancelFolderNavigation();
   navigationPositions.clear();
   activeNavigationEntry = null;
@@ -2156,6 +2159,7 @@ function canFallbackToDisplayListing(error) {
 async function loadItems() {
   clearTimeout(trashDeletionTimer);
   $("#trash-deletion-status").hidden = state.view !== "trash";
+  $("#trash-deletion-jobs").hidden = state.view !== "trash";
   syncAccountView();
   renderDiaryBackupMount();
   clearTimeout(searchPageTimer);
@@ -2224,6 +2228,7 @@ async function loadItems() {
       const data = await api("/trash", { signal: itemLoadSignal });
       if (loadGeneration !== state.itemLoadGeneration || itemLoadSignal.aborted) return { ok: false, stale: true };
       state.trashDeletionJob = data.job || null;
+      state.trashDeletionJobs = data.jobs || (data.job ? [data.job] : []);
       state.folders = (await hydrateFolderRecords(data.folders || [])).map((folder) => ({ ...folder, trashed: true }));
       state.files = (await hydrateFileRecords(data.files || [])).map((file) => ({ ...file, trashed: true }));
       state.history = [];
@@ -8530,17 +8535,14 @@ async function permanentlyDeleteSelectedFile() {
 }
 
 async function emptyTrash() {
-  const retry = state.trashDeletionJob?.status === "failed";
   const count = state.files.length + state.folders.length;
-  if ((!count && !retry) || !state.session?.canDelete) return;
-  if (!confirm(retry
-    ? "受け付け済みの完全削除を再試行します。元に戻せません。続けますか？"
-    : "現在ゴミ箱にあるデータをすべて完全に削除します。ブラウザを閉じても続行し、受け付け後は復元できません。続けますか？")) return;
+  if (!count || !state.session?.canDelete) return;
+  if (!confirm("まだ削除を受け付けていないゴミ箱のデータを完全に削除します。ブラウザを閉じても続行し、受け付け後は復元できません。続けますか？")) return;
   const button = $("#empty-trash-button");
   button.disabled = true;
   button.textContent = "受付中…";
   try {
-    const result = await api(retry ? "/trash/job/retry" : "/trash", { method: retry ? "POST" : "DELETE", body: "{}" });
+    const result = await api("/trash", { method: "DELETE", body: "{}" });
     state.trashDeletionJob = result.job || null;
     await Promise.all([loadItems(), loadUsage()]);
     setNotice("完全削除を受け付けました。ブラウザを閉じても処理は続きます。後からゴミ箱に入れたデータは対象に含みません。");
@@ -8551,32 +8553,64 @@ async function emptyTrash() {
   }
 }
 
+async function retryTrashJob(jobId) {
+  if (!state.session?.canDelete || !confirm(`削除依頼 ${jobId.slice(0, 8)} の残りだけを再試行します。元に戻せません。続けますか？`)) return;
+  try {
+    await api(`/trash/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST", body: "{}" });
+    await Promise.all([loadItems(), loadUsage()]);
+  } catch (error) { setNotice(error.message, true); }
+}
+
 function renderTrashDeletionStatus() {
   clearTimeout(trashDeletionTimer);
   const visible = state.view === "trash" && state.session?.canDelete;
-  const job = visible ? state.trashDeletionJob : null;
-  const active = job && ["queued", "running"].includes(job.status);
+  const jobs = visible ? state.trashDeletionJobs : [];
+  const job = jobs.find(job => ["queued", "running"].includes(job.status)) || jobs[0] || null;
+  const active = jobs.some(job => ["queued", "running"].includes(job.status));
   const button = $("#empty-trash-button");
-  button.hidden = !visible || (!job && !state.files.length && !state.folders.length)
-    || (job?.status === "completed" && !state.files.length && !state.folders.length);
+  const unclaimed = [...state.files, ...state.folders].some(item => !item.purging);
+  button.hidden = !visible || !unclaimed;
   button.disabled = Boolean(active);
-  button.textContent = active ? "クラウドで削除中" : job?.status === "failed" ? "削除を再試行" : "一括削除";
+  button.textContent = "新しい対象を一括削除";
   const status = $("#trash-deletion-status");
   status.hidden = !job;
+  const list = $("#trash-deletion-jobs");
+  list.hidden = !visible || !jobs.length;
+  list.replaceChildren();
   if (!job) return;
-  const deleted = Number(job.deletedFiles || 0) + Number(job.deletedFolders || 0);
-  const total = Number(job.totalFiles || 0) + Number(job.totalFolders || 0);
-  status.textContent = job.status === "completed" ? `完全削除が完了しました（${deleted.toLocaleString("ja-JP")}件）。`
-    : job.status === "failed" ? `${deleted.toLocaleString("ja-JP")} / ${total.toLocaleString("ja-JP")}件を完全削除しました。一部の削除に失敗しました。「削除を再試行」で残りを再開できます。`
-    : `クラウドで完全削除中：${deleted.toLocaleString("ja-JP")} / ${total.toLocaleString("ja-JP")}件。ブラウザを閉じても続行します。`;
-  if (active) {
+  status.textContent = "完全削除はブラウザを閉じても続行します。失敗した依頼の再試行と、新しい対象の削除は別の操作です。";
+  for (const entry of jobs) {
+    const deleted = Number(entry.deletedFiles || 0) + Number(entry.deletedFolders || 0);
+    const total = Number(entry.totalFiles || 0) + Number(entry.totalFolders || 0);
+    const labels = { queued: "受付済み", running: "削除処理中", waiting: "中断・再開待ち", failed: "一部失敗", completed: "完了" };
+    const row = document.createElement("div");
+    row.dataset.trashJobId = entry.id;
+    const text = document.createElement("p");
+    const date = entry.createdAt ? new Date(entry.createdAt).toLocaleString("ja-JP") : "";
+    text.textContent = `${labels[entry.phase || entry.status]}：${deleted.toLocaleString("ja-JP")} / ${total.toLocaleString("ja-JP")}件（ファイル${entry.totalFiles}・フォルダ${entry.totalFolders}）。受付 ${date} / 依頼 ${entry.id.slice(0, 8)}`;
+    if (entry.status === "failed") text.textContent += entry.referencedFiles
+      ? " 対象外のファイルと保存オブジェクトを共有しているため、その対象は保持しています。"
+      : " 削除できなかったデータや参照の残るフォルダを保持しています。";
+    row.append(text);
+    if (entry.status === "failed") {
+      const retry = document.createElement("button");
+      retry.type = "button"; retry.className = "secondary-button";
+      retry.textContent = `依頼 ${entry.id.slice(0, 8)} の残りを再試行`;
+      retry.disabled = active;
+      retry.addEventListener("click", () => retryTrashJob(entry.id));
+      row.append(retry);
+    }
+    list.append(row);
+  }
+  // Failed-only views also poll so a second browser's explicit retry is seen.
+  if (active || jobs.some(job => job.status === "failed")) {
     const session = state.session;
     trashDeletionTimer = setTimeout(async () => {
       try {
-        const result = await api("/trash/job");
+        const result = await api("/trash/jobs");
         if (state.session !== session || state.view !== "trash") return;
-        const changed = JSON.stringify(state.trashDeletionJob) !== JSON.stringify(result.job);
-        state.trashDeletionJob = result.job || null;
+        const changed = JSON.stringify(state.trashDeletionJobs) !== JSON.stringify(result.jobs);
+        state.trashDeletionJobs = result.jobs || [];
         if (changed) await Promise.all([loadItems(), loadUsage()]);
       } catch {
         if (state.session === session && state.view === "trash") status.textContent = "削除の進捗を再確認しています。クラウド側の処理はブラウザと独立して続行します。";
