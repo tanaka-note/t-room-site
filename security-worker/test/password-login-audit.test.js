@@ -26,8 +26,8 @@ for (const service of ['billing']) {
       const r = await f.request('login', { loginId: f.loginId, password: service === 'cloud' ? 'incorrect-fixture' : fixturePassword });
       assert.equal(r.status, 401);
       const row = s.db.prepare("SELECT * FROM security_audit_events WHERE event_type='password_login_failure'").get();
-      assert.equal(row.identity_id, 'audit-fixture');
-      assert.equal(JSON.parse(row.details_json).reason, service === 'cloud' ? 'invalid_credentials' : 'password_auth_disabled');
+      assert.equal(row.identity_id, null, 'retired login never infers Identity from supplied ID');
+      assert.equal(JSON.parse(row.details_json).reason, 'password_auth_disabled');
       let ack = false;
       await s.worker.queue({ messages: [{body:f.stored[0],ack:()=>{ack=true;},retry:()=>assert.fail('Queue replay should persist')} ] });
       assert.equal(ack, true);
@@ -51,7 +51,7 @@ for (const service of ['billing']) {
       assert.equal(r.cookie, null);
       assert.equal(f.stored.length, 1, 'authentication failure must reach Security before response');
       assert.equal(f.stored[0].eventType, 'password_login_failure');
-      assert.equal(f.stored[0].details.reason, 'invalid_credentials');
+      assert.equal(f.stored[0].details.reason, 'password_auth_disabled');
       assert.equal(f.queued.length, 0);
     } finally { f.close(); }
   });
@@ -74,9 +74,9 @@ for (const service of ['billing']) {
       assert.equal(r.status, 401); assert.equal(r.cookie, null);
       assert.deepEqual(f.queued, f.attempted);
       assert.equal(f.queued[0].details.requestCorrelationId, id);
-      assert.equal(f.queued[0].details.counterUpdated, true);
-      assert.equal(f.db.prepare(`SELECT failed_count FROM ${service}_login_attempts`).get().failed_count, 1);
-      if (service === 'billing') assert.equal(f.db.prepare('SELECT failed_login_attempts FROM billing_accounts WHERE id=?').get(f.accountId).failed_login_attempts, 1);
+      assert.equal(f.queued[0].details.counterUpdated, false);
+      assert.equal(f.db.prepare(`SELECT COUNT(*) n FROM ${service}_login_attempts`).get().n, 0);
+      if (service === 'billing') assert.equal(f.db.prepare('SELECT failed_login_attempts FROM billing_accounts WHERE id=?').get(f.accountId).failed_login_attempts, 0);
     } finally { f.close(); }
   });
   test(`${service}: total audit outage remains fail-closed and logs only safe delivery metadata`, async () => {
@@ -90,7 +90,7 @@ for (const service of ['billing']) {
       assert.equal(r.status, 401); assert.equal(r.cookie, null);
       assert.ok(messages.some(args => args[1]?.reason === 'delivery_failed'));
       assert.doesNotMatch(JSON.stringify(messages), new RegExp(secret));
-      assert.equal(f.db.prepare(`SELECT failed_count FROM ${service}_login_attempts`).get().failed_count, 1);
+      assert.equal(f.db.prepare(`SELECT COUNT(*) n FROM ${service}_login_attempts`).get().n, 0);
     } finally { console.error = original; f.close(); }
   });
   test(`${service}: malformed, missing and unknown IDs are audited without ID disclosure`, async () => {
@@ -99,17 +99,17 @@ for (const service of ['billing']) {
       for (const body of [{ loginId: '', password: 'local' }, { loginId: 'x'.repeat(255), password: 'local' }, '{malformed']) {
         const r = await f.request('login', body);
         assert.ok([400, 401].includes(r.status)); assert.equal(r.cookie, null);
-        assert.equal(f.stored.at(-1).details.reason, 'invalid_request');
+        assert.equal(f.stored.at(-1).details.reason, 'password_auth_disabled');
       }
       const unknown = await f.request('login', { loginId: 'unknown@example.test', password: fixturePassword });
       const wrong = await f.request('login', { loginId: f.loginId, password: 'incorrect-fixture' });
       assert.equal(unknown.status, 401); assert.deepEqual(unknown.body, wrong.body);
-      assert.equal(f.stored.at(-2).details.reason, 'invalid_credentials');
+      assert.equal(f.stored.at(-2).details.reason, 'password_auth_disabled');
       assert.doesNotMatch(JSON.stringify(f.stored), /unknown@example\.test|incorrect-fixture|x{255}/);
       if (service === 'billing') assert.ok(f.db.prepare('SELECT attempted_login_id FROM billing_audit_logs').all().every(r => r.attempted_login_id === null));
     } finally { f.close(); }
   });
-  test(`${service}: lockout decisions and audit records match unchanged counters`, async () => {
+  test(`${service}: retirement takes precedence over existing account locks without changing counters`, async () => {
     const f = fixture(service);
     try {
       for (let n = 0; n < 5; n++) assert.equal((await f.request('login', { loginId: f.loginId, password: 'incorrect-fixture' })).status, 401);
@@ -117,7 +117,7 @@ for (const service of ['billing']) {
       const before = JSON.stringify(f.db.prepare(`SELECT * FROM ${service}_login_attempts`).all());
       const r = await f.request('login', { loginId: f.loginId, password: fixturePassword });
       assert.equal(r.status, service === 'billing' ? 401 : 429); assert.equal(r.cookie, null);
-      assert.equal(f.stored.at(-1).details.reason, 'login_locked');
+      assert.equal(f.stored.at(-1).details.reason, 'password_auth_disabled');
       assert.equal(f.stored.at(-1).details.counterUpdated, false);
       assert.equal(JSON.stringify(f.db.prepare(`SELECT * FROM ${service}_login_attempts`).all()), before);
     } finally { f.close(); }
@@ -163,7 +163,7 @@ for (const service of ['billing']) test(`${service}: disabled password with an a
     const r = await f.request('login', { loginId: f.loginId, password: fixturePassword });
     assert.equal(r.status, 401); assert.equal(r.cookie, null);
     assert.equal(f.stored[0].details.reason, 'password_auth_disabled');
-    assert.equal(f.stored[0].serviceAccountId, f.accountId);
+    assert.equal(f.stored[0].serviceAccountId, null);
     assert.equal(f.stored[0].details.counterUpdated, false);
     assert.equal(f.db.prepare(`SELECT COUNT(*) AS n FROM ${service}_login_attempts`).get().n, 0);
     const unknown = await f.request('login', { loginId: 'unknown@example.test', password: fixturePassword });
@@ -202,19 +202,19 @@ test('Diary: retired password requests preserve Security history, synchronous au
   } finally {s.close();f.close();}
 });
 
-test('Billing source rate limit has a separate audit reason and a generic response', async () => {
+test('Billing retirement takes precedence over a pre-existing source lock', async () => {
   const f = fixture('billing');
   try {
     await f.request('login', { loginId: f.loginId, password: 'incorrect-fixture' });
-    f.db.exec(`UPDATE billing_login_attempts SET locked_until=${Math.floor(Date.now()/1000)+900}`);
+    f.db.exec(`INSERT INTO billing_login_attempts (fingerprint,failed_count,first_failed_at,locked_until) VALUES ('fixture',5,0,${Math.floor(Date.now()/1000)+900})`);
     const r = await f.request('login', { loginId: f.loginId, password: fixturePassword });
     assert.equal(r.status, 401); assert.equal(r.cookie, null);
-    assert.equal(f.stored.at(-1).details.reason, 'rate_limited');
+    assert.equal(f.stored.at(-1).details.reason, 'password_auth_disabled');
     assert.equal(f.stored.at(-1).details.counterUpdated, false);
   } finally { f.close(); }
 });
 
-for(const service of ['billing']) test(`${service}: inactive accounts are classified internally with a generic rejection`,async()=>{
+for(const service of ['billing']) test(`${service}: inactive and unknown accounts receive the same retired-password rejection`,async()=>{
   const f=fixture(service);
   try {
     if(service==='diary') f.db.exec("INSERT INTO diary_accounts(id,household_id,display_name,login_id,role,active) VALUES ('inactive-fixture','tanaka-household','Fixture','inactive@example.test','user',0)");
@@ -222,7 +222,7 @@ for(const service of ['billing']) test(`${service}: inactive accounts are classi
     const r=await f.request('login',{loginId:service==='diary'?'inactive@example.test':f.loginId,password:fixturePassword});
     const unknown=await f.request('login',{loginId:'unknown@example.test',password:fixturePassword});
     assert.equal(r.status,401);assert.deepEqual(r.body,unknown.body);
-    assert.equal(f.stored[0].details.reason,'account_disabled');
+    assert.equal(f.stored[0].details.reason,'password_auth_disabled');
   } finally {f.close();}
 });
 

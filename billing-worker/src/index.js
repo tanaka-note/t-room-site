@@ -1,28 +1,17 @@
 import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
-import { readPasswordAuthPolicy, validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
+import { validatePasswordSession } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
-import { LOGIN_LOCK_MINUTES, isLoginLocked } from "./login-limit.js";
-import {
-  ACCOUNT_LOGIN_LIMIT,
-  createCurrentPasswordRecord,
-  isSourceLocked,
-  needsPasswordUpgrade,
-  nextSourceAttempt,
-  verifyPasswordRecord
-} from "./auth-security.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
-import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
+import { PASSWORD_SESSION_TTL_SECONDS, sessionCookieValue, sessionPolicyForAuthMethod, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 
 const BASE_PATH = "/billing";
 const SESSION_COOKIE = "troom_billing_session";
 const MAX_SESSION_SECONDS = PASSWORD_SESSION_TTL_SECONDS;
-const CURRENT_OWNER_LOGIN_ID = "contact@a-tanaka.jp";
-const LEGACY_OWNER_LOGIN_ID = "sub@a-tanaka.jp";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -126,120 +115,18 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/login" && request.method === "POST") {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
-    if (!isValidSessionSecret(env.SESSION_SECRET)) throw new HttpError(503, "認証設定が完了していません。");
-    const body = await readJson(request, 4096);
-    const loginId = canonicalLoginId(body.loginId);
-    const password = typeof body.password === "string" ? body.password : "";
-    if (!loginId || !password || password.length > 256) {
-      await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", authMethod: "password", details: { stage: "authentication", reason: "invalid_request", counterUpdated: false } });
-      throw new HttpError(400, "IDとパスワードを確認してください。");
-    }
-
-    const account = await env.DB.prepare(`
-      SELECT id, login_id, display_name, role, password_salt, password_hash,
-             password_iterations, password_pepper_version, session_version, is_active,
-             failed_login_attempts, locked_until
-      FROM billing_accounts WHERE login_id = ? COLLATE NOCASE LIMIT 1
-    `).bind(loginId).first();
-    const passwordPolicy = account ? await readPasswordAuthPolicy(env, "billing", account.id) : null;
-    if (passwordPolicy && !passwordPolicy.enabled) {
-      await writeAudit(env, { eventType: "login_failure", targetAccountId: account.id, details: { reason: "password_auth_disabled" } });
-      await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false } });
-      throw loginRejected();
-    }
-    const fingerprint = await loginFingerprint(request, loginId, env);
-    const sourceAttempt = await env.DB.prepare(`
-      SELECT failed_count, first_failed_at, locked_until
-      FROM billing_login_attempts WHERE fingerprint = ?
-    `).bind(fingerprint).first();
-    if (isSourceLocked(sourceAttempt?.locked_until)) {
-      await writeAudit(env, {
-        eventType: "login_blocked",
-        targetAccountId: account?.id || null,
-        details: { scope: "source" }
-      });
-      await recordSecurityAudit(env, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account?.id, role: account?.role, authMethod: "password", details: { stage: "authentication", reason: "rate_limited", counterUpdated: false } });
-      throw loginRejected();
-    }
-    if (!account?.is_active) {
-      await recordSourceLoginFailure(env, fingerprint, sourceAttempt);
-      await writeAudit(env, { eventType: "login_failure" });
-      await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_failure", outcome: "failure", serviceAccountId: account?.id, role: account?.role, authMethod: "password", details: { stage: "authentication", reason: account?.is_active === 0 ? "account_disabled" : typeof body.loginId === "string" && body.loginId.trim().length > 120 ? "invalid_request" : "invalid_credentials", counterUpdated: true } });
-      throw loginRejected();
-    }
-    if (isLoginLocked(account.locked_until)) {
-      await writeAudit(env, {
-        eventType: "login_blocked",
-        targetAccountId: account.id,
-        details: { lockedUntil: account.locked_until }
-      });
-      await recordSecurityAudit(env, request, { service: "billing", eventType: "login_blocked", outcome: "blocked", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { stage: "authentication", reason: "login_locked", counterUpdated: false } });
-      throw loginRejected();
-    }
-
-    const verified = Boolean(account.password_hash && account.password_salt)
-      && await verifyPasswordRecord(password, account, env.BILLING_PASSWORD_PEPPER || "");
-    if (!verified) {
-      const nextSource = await recordSourceLoginFailure(env, fingerprint, sourceAttempt);
-      await env.DB.prepare(`
-        UPDATE billing_accounts SET
-          failed_login_attempts = failed_login_attempts + 1,
-          locked_until = CASE
-            WHEN failed_login_attempts + 1 >= ? THEN datetime('now', ?)
-            ELSE NULL
-          END,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(ACCOUNT_LOGIN_LIMIT, `+${LOGIN_LOCK_MINUTES} minutes`, account.id).run();
-      const failedState = await env.DB.prepare(`
-        SELECT failed_login_attempts, locked_until FROM billing_accounts WHERE id = ?
-      `).bind(account.id).first();
-      const accountLocked = isLoginLocked(failedState?.locked_until);
-      const sourceLocked = isSourceLocked(nextSource.lockedUntil);
-      await writeAudit(env, {
-        eventType: accountLocked || sourceLocked ? "login_locked" : "login_failure",
-        targetAccountId: account.id,
-        details: {
-          accountFailedAttempts: Number(failedState?.failed_login_attempts || 0),
-          sourceFailedAttempts: nextSource.failedCount,
-          scope: accountLocked ? "account" : (sourceLocked ? "source" : null)
-        }
-      });
-      await recordSecurityAudit(env, request, { service: "billing", eventType: accountLocked || sourceLocked ? "login_locked" : "password_login_failure", outcome: accountLocked || sourceLocked ? "blocked" : "failure", serviceAccountId: account.id, role: account.role, authMethod: "password", details: { stage: "authentication", reason: accountLocked || sourceLocked ? "login_locked" : "invalid_credentials", counterUpdated: true } });
-      throw loginRejected();
-    }
-
-    await env.DB.prepare("DELETE FROM billing_login_attempts WHERE fingerprint = ?").bind(fingerprint).run();
-    await env.DB.prepare(`
-      UPDATE billing_accounts SET failed_login_attempts = 0, locked_until = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND (failed_login_attempts != 0 OR locked_until IS NOT NULL)
-    `).bind(account.id).run();
-    try {
-      await upgradePasswordAfterLogin(env, account, password);
-    } catch (error) {
-      // 認証済みの利用者を、補助的なハッシュ更新の失敗だけで締め出さないようにします。
-      console.error("Billing password upgrade failed", "password_hash_upgrade_failed");
-    }
-    await writeAudit(env, {
-      eventType: "login_success",
-      actorAccountId: account.id,
-      targetAccountId: account.id,
+    // Retired for the entire service, including future accounts. Never read
+    // credentials or change account/lockout state for cached password clients.
+    await recordSecurityAudit(env, request, {
+      service: "billing", eventType: "password_login_failure", outcome: "failure", authMethod: "password",
+      details: { stage: "authentication", reason: "password_auth_disabled", counterUpdated: false }
     });
-
-    const policy = sessionPolicy(env, "password");
-    const sessionId = crypto.randomUUID();
-    const startedAt = new Date().toISOString();
-    const expiresAt = sessionExpiresAt(Math.floor(Date.parse(startedAt) / 1000), policy);
-    const token = await createSessionToken(account, policy.ttlSeconds, env, { authMethod: "password", passwordSessionEpoch: passwordPolicy.epoch, sessionId, startedAt, expiresAt });
-    const headers = new Headers();
-    headers.set("Set-Cookie", sessionCookie(token, policy, url.protocol === "https:"));
-    await recordSecurityAudit(env, request, { service: "billing", eventType: "password_login_success", outcome: "success", serviceAccountId: account.id, role: account.role, authMethod: "password", sessionId, expiresAt, startedAt, sessionVersion: billingSessionVersion(env, account.session_version) });
-    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`), authMethod: "password" }, 200, headers);
+    throw new HttpError(401, "パスワードログインは廃止されました。登録済みのパスキーでログインしてください。準備・復旧はSecurity Centerで行ってください。");
   }
 
   if (path === "/api/passkey/handoff" && request.method === "POST") {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
-    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。ID・パスワードが有効なアカウントをご利用いただくか、管理者へ復旧を依頼してください。");
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !env.SECURITY) throw new HttpError(503, "パスキー機能は一時停止中です。管理者へお問い合わせください。準備・復旧はSecurity Centerで行ってください。");
     const body = await readJson(request, 4096);
     const handoff = await env.SECURITY.redeemHandoff(String(body.handoffToken || ""), "billing");
     if (!handoff) throw new HttpError(401, "パスキー認証の有効期限が切れています。もう一度お試しください。");
@@ -639,6 +526,7 @@ async function readSession(request, env) {
   if (!constantTimeEqual(base64UrlToBytes(signature), base64UrlToBytes(expected))) return null;
   try {
     const payload = JSON.parse(decoder.decode(base64UrlToBytes(encodedPayload)));
+    if (!(await validatePasswordSession(payload, env, "billing"))) return null;
     if (!validSessionLifetime(payload)) return null;
     if (!payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
     if (String(payload.globalVersion) !== String(env.SESSION_VERSION || "1")) return null;
@@ -646,7 +534,6 @@ async function readSession(request, env) {
       SELECT id, display_name, role, session_version, is_active FROM billing_accounts WHERE id = ?
     `).bind(payload.accountId).first();
     if (!account?.is_active || account.role !== payload.role || Number(account.session_version) !== Number(payload.accountVersion)) return null;
-    if (!(await validatePasswordSession(payload, env, "billing"))) return null;
     if (!(await validateServicePasskeySession(payload, env, "billing"))) return null;
     return {
       accountId: account.id,
@@ -657,8 +544,7 @@ async function readSession(request, env) {
       serviceLinkId: payload.serviceLinkId || null,
       serviceAccountId: payload.serviceAccountId || null,
       passkeySessionEpoch: payload.passkeySessionEpoch || null,
-      passwordSessionEpoch: payload.passwordSessionEpoch ?? 0,
-      authMethod: payload.authMethod || "password",
+      authMethod: payload.authMethod,
       sessionId: payload.sessionId || null,
       startedAt: payload.startedAt || null,
       exp: Number(payload.exp),
@@ -672,6 +558,7 @@ async function readSession(request, env) {
 
 async function createSessionToken(account, maxAge, env, auth = {}) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
+  if (auth.authMethod !== "passkey") throw new HttpError(401, "パスキー認証が必要です。");
   const payload = {
     accountId: account.id,
     role: account.role,
@@ -682,9 +569,7 @@ async function createSessionToken(account, maxAge, env, auth = {}) {
     serviceLinkId: auth.serviceLinkId || null,
     serviceAccountId: auth.serviceAccountId || null,
     passkeySessionEpoch: auth.passkeySessionEpoch || null,
-    ...passwordSessionClaims(auth),
-    ...passwordLifetimeClaims(auth),
-    authMethod: auth.authMethod || "password",
+    authMethod: auth.authMethod,
     ...(auth.rollingSessionVersion != null ? { rollingSessionVersion: auth.rollingSessionVersion } : {}),
     sessionId: auth.sessionId || crypto.randomUUID(),
     startedAt: Object.hasOwn(auth, "startedAt") ? (auth.startedAt || null) : new Date().toISOString(),
@@ -715,48 +600,6 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
     const token = await createSessionToken(account, policy.ttlSeconds, env, { ...session, expiresAt });
     return sessionCookie(token, policy, url.protocol === "https:");
   });
-}
-
-async function upgradePasswordAfterLogin(env, account, password) {
-  if (!needsPasswordUpgrade(account) || !env.BILLING_PASSWORD_PEPPER) return false;
-  const upgraded = await createCurrentPasswordRecord(password, env.BILLING_PASSWORD_PEPPER);
-  const result = await env.DB.prepare(`
-    UPDATE billing_accounts SET
-      password_salt = ?, password_hash = ?, password_iterations = ?, password_pepper_version = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND password_pepper_version = ? AND password_iterations = ?
-  `).bind(
-    upgraded.passwordSalt,
-    upgraded.passwordHash,
-    upgraded.passwordIterations,
-    upgraded.passwordPepperVersion,
-    account.id,
-    Number(account.password_pepper_version || 0),
-    Number(account.password_iterations || 0)
-  ).run();
-  return Boolean(result.meta?.changes);
-}
-
-async function loginFingerprint(request, loginId, env) {
-  const secret = env.LOGIN_FINGERPRINT_SECRET || env.SESSION_SECRET;
-  if (!secret) throw new HttpError(503, "認証設定が完了していません。");
-  const ip = request.headers.get("CF-Connecting-IP") || "local";
-  return sign(`${ip}:${loginId}`, secret);
-}
-
-async function recordSourceLoginFailure(env, fingerprint, previous) {
-  const next = nextSourceAttempt(previous);
-  await env.DB.prepare(`
-    INSERT INTO billing_login_attempts
-      (fingerprint, failed_count, first_failed_at, locked_until, updated_at)
-    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(fingerprint) DO UPDATE SET
-      failed_count = excluded.failed_count,
-      first_failed_at = excluded.first_failed_at,
-      locked_until = excluded.locked_until,
-      updated_at = CURRENT_TIMESTAMP
-  `).bind(fingerprint, next.failedCount, next.firstFailedAt, next.lockedUntil).run();
-  return next;
 }
 
 async function sign(value, secret) {
@@ -848,10 +691,6 @@ function json(value, status = 200, inputHeaders = undefined) {
   return new Response(JSON.stringify(value), { status, headers });
 }
 
-function loginRejected() {
-  return new HttpError(401, "IDまたはパスワードが違うか、一時的にログインが停止されています。");
-}
-
 async function readJson(request, maxBytes) {
   const contentLength = Number(request.headers.get("Content-Length") || 0);
   if (contentLength > maxBytes) throw new HttpError(413, "入力内容が大きすぎます。");
@@ -907,15 +746,6 @@ function constantTimeEqual(left, right) {
   let difference = 0;
   for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
   return difference === 0;
-}
-
-function normalizeLoginId(value) {
-  return typeof value === "string" ? value.trim().toLowerCase().slice(0, 120) : "";
-}
-
-function canonicalLoginId(value) {
-  const normalized = normalizeLoginId(value);
-  return normalized === LEGACY_OWNER_LOGIN_ID ? CURRENT_OWNER_LOGIN_ID : normalized;
 }
 
 function normalizeAccountId(value) {

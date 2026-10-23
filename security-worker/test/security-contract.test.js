@@ -128,7 +128,9 @@ test("Security Center is first-admin-only and audits success and failure", () =>
   assert.doesNotMatch(diary, /password_login_success/);
   assert.match(diary, /password_login_failure/);
   assert.match(diary, /passkey_login_success/);
-  assert.match(billing, /password_login_success/);
+  assert.doesNotMatch(billing, /password_login_success/);
+  assert.match(billing, /password_login_failure/);
+  assert.match(billing, /passkey_login_success/);
 });
 
 test("first administrator password recovery remains available after initialization", () => {

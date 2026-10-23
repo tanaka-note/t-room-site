@@ -1,109 +1,101 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { resolve, extname, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fixture, fixturePassword, securityDatabase } from './password-login-audit-fixture.mjs';
-const {chromium}=createRequire(new URL('../../diary-worker/package.json',import.meta.url))('playwright');
-const read=path=>readFileSync(new URL(`../../${path}`,import.meta.url),'utf8');
-const fixtures={};
-for(const service of ['billing']) {
-  const f=fixture(service); f.security=await securityDatabase(f,service);
-  if(service!=='cloud') f.disablePassword();fixtures[service]=f;
-}
-function script(service) {
-  const source=read(`${service}-worker/public/${service}.js`);
-  const name=service==='diary'?'handleLogin':'login';
-  const start=source.indexOf(`async function ${name}(event) {`);
-  const end=source.indexOf(`async function ${service==='diary'?'handlePasskeyLogin':'loginWithPasskey'}()`,start);
-  const apiStart=source.indexOf('async function api(path, options = {}) {');
-  const apiEnd=source.indexOf(service==='cloud'?'function handleError':service==='diary'?'function createTagGroup':'function basePath',apiStart);
-  return `const API='/${service}/api',BASE_PATH='/${service}',state={};
-    const $=s=>document.querySelector(s),form=$('#login-form');
-    const el=Object.fromEntries([...document.querySelectorAll('[id]')].map(n=>[n.id,n]));
-    const elements={loginForm:form,loginId:$('#login-id'),password:$('#login-password')||$('#password'),loginMessage:$('#login-message')||$('#login-error')};
-    const TCloudSession={fetch:fetch.bind(globalThis),beginSelection(){}};
-    function showLoginError(message){$('#login-error').textContent=message;}
-    function setBusy(button,busy){button.disabled=busy;}
-    const updateRememberedLogin=async()=>{},enterApp=async()=>{},enterDiary=async()=>{},saveLoginPreference=async()=>{},showInitialPasswordSetup=async()=>{};
-    function canonicalLoginId(value){return value.trim().toLowerCase();}
-    function basePath(){return '/${service}';}
-    ${source.slice(apiStart,apiEnd)}
-    ${source.slice(start,end)}
-    state.passwordLoginAudit=TRoomPasswordLoginAudit.create({service:'${service}',apiBase:API,form,loginIdInput:elements.loginId});
-    form.addEventListener('submit',${name});
-    document.querySelector('#boot-view')?.setAttribute('hidden','');
-    document.querySelector('#login-view').hidden=false;
-    globalThis.fixtureReady=true;`;
-}
-const server=createServer(async(req,res)=>{
-  try {
-    const url=new URL(req.url,'http://localhost'),service=url.pathname.split('/')[1];
-    if (url.pathname === '/cloud/vendor/argon2.umd.min.js' || url.pathname === '/cloud/crypto-vault.js') {
-      res.setHeader('Content-Type','text/javascript');res.end(read(url.pathname.slice(1)));return;
-    }
-    if(!fixtures[service]) {res.writeHead(404).end();return;}
-    const file=url.pathname.split('/').slice(2).join('/');
-    if(file.startsWith('api/')) {
-      if(file==='api/auth-mode') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({mode:'legacy',credentialSalt:''}));return;}
-      const chunks=[];for await(const chunk of req)chunks.push(chunk);
-      const result=await fixtures[service].request(file.slice(4),Buffer.concat(chunks).toString(),req.headers['x-login-correlation-id']?{'X-Login-Correlation-ID':req.headers['x-login-correlation-id']}:{});
-      res.writeHead(result.status,{'Content-Type':'application/json'});res.end(result.body?JSON.stringify(result.body):'');return;
-    }
-    if(file==='fixture.js') {res.setHeader('Content-Type','text/javascript');res.end(script(service));return;}
-    if(!file) {
-      let html=read(`${service}-worker/public/index.html`).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'');
-      html=html.replace('</body>',`<script src="/${service}/password-login-audit.js"></script><script src="/cloud/vendor/argon2.umd.min.js"></script><script src="/cloud/crypto-vault.js"></script><script src="/${service}/fixture.js"></script></body>`);
-      res.setHeader('Content-Type','text/html');res.end(html);return;
-    }
-    if(file.includes('..')) {res.writeHead(404).end();return;}
-    const data=read(`${service}-worker/public/${file}`);
-    if(file==='password-login-audit.js') {
-      const response=await fixtures[service].asset(file,data);
-      res.writeHead(response.status,{'Content-Type':response.headers.get('Content-Type')});res.end(await response.text());return;
-    }
-    res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'application/octet-stream');res.end(data);
-  } catch {res.writeHead(404).end();}
+const { chromium } = createRequire(new URL('../../diary-worker/package.json', import.meta.url))('playwright');
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const f = fixture('billing');
+f.security = await securityDatabase(f, 'billing');
+const server = createServer((req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  const prefix = ['/billing/', '/security/', '/diary/', '/assets/'].find(p => url.pathname.startsWith(p));
+  if (!prefix) return res.writeHead(404).end();
+  const base = resolve(root, prefix === '/assets/' ? 'assets' : `${prefix.slice(1, -1)}-worker/public`);
+  const path = resolve(base, url.pathname.slice(prefix.length) || 'index.html');
+  if (!path.startsWith(base + sep)) return res.writeHead(404).end();
+  if (!existsSync(path)) return res.writeHead(404).end();
+  const types = {'.html':'text/html', '.js':'text/javascript', '.css':'text/css', '.json':'application/json'};
+  res.writeHead(200, {'Content-Type':types[extname(path)] || 'application/octet-stream'});
+  res.end(readFileSync(path));
 });
-await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-const origin=`http://127.0.0.1:${server.address().port}`,browser=await chromium.launch({headless:true});
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const origin = `http://127.0.0.1:${server.address().port}`;
+const executablePath = process.env.TROOM_CHROMIUM_EXECUTABLE || ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
+const browser = await chromium.launch({headless:true, ...(executablePath ? {executablePath} : {})});
 try {
-  for(const service of ['billing']) {
-    const page=await browser.newPage(),f=fixtures[service];
-    const errors=[];page.on('pageerror',error=>errors.push(error.message));
-    await page.goto(`${origin}/${service}/`);await page.waitForFunction(()=>globalThis.fixtureReady);
-    const pw=page.locator(service==='diary'?'#password':'#login-password');
-    // Real native required validation prevents the production submit handler.
-    await page.locator('#login-form button[type=submit]').click();
-    await page.waitForFunction(()=>document.querySelector('#login-id').validity.valueMissing);
-    await assertEventually(()=>f.stored.some(e=>e.details.stage==='form_validation'));
-    assert.equal(f.db.prepare(`SELECT COUNT(*) AS n FROM ${service}_login_attempts`).get().n,0);
-    f.stored.length=0;
-    await page.locator('#login-id').fill(f.loginId);await pw.fill(service==='cloud'?'short':fixturePassword);
-    await page.locator('#login-form button[type=submit]').click();
-    await assertEventually(()=>f.stored.some(e=>e.eventType===(service==='cloud'?'password_login_client_failure':'password_login_failure')));
-    const event=f.stored.at(-1);
-    assert.equal(event.details.reason,service==='cloud'?'password_length_invalid':'password_auth_disabled');
-    if(service==='cloud') {
-      assert.equal(event.details.stage,'credential_derivation');
-      assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM cloud_login_attempts').get().n,0);
-      f.stored.length=0;
-      await pw.fill('incorrect-long-fixture');await page.locator('#login-form button[type=submit]').click();
-      await assertEventually(()=>f.stored.some(e=>e.eventType==='password_login_failure'));
-    }
-    const submit=f.stored.find(e=>e.eventType==='password_login_submit'),failure=f.stored.at(-1);
-    assert.equal(submit.details.requestCorrelationId,failure.details.requestCorrelationId);
-    assert.ok(f.security.db.prepare('SELECT COUNT(*) AS n FROM security_audit_events').get().n>0);
-    assert.deepEqual(errors,[]);
-    assert.doesNotMatch(JSON.stringify(f.stored),/short|incorrect-long-fixture|local-audit-fixture-password|authProof|accountKey/);
-    await page.close();
-    console.log(`${service}: Chromium native validation and correlated password failure reached Security SQLite`);
+  for (const mobile of [false, true]) {
+    const context = await browser.newContext({viewport:{width:mobile ? 390 : 1280,height:mobile ? 844 : 900},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block'});
+    const page = await context.newPage(), errors = [], paths = [];
+    page.on('pageerror', e => errors.push(e.message));
+    let authenticated = false, failHandoff = true;
+    const account = {id:'chiharu',displayName:'Fixture',role:'member'};
+    const session = {authenticated:true,accountId:account.id,accountName:account.displayName,role:account.role,authMethod:'passkey'};
+    await page.route('**/billing/api/**', async route => {
+      const request = route.request(), url = new URL(request.url());
+      const path = url.pathname.slice('/billing/api/'.length); paths.push(path);
+      if (['login','password-login-audit'].includes(path)) {
+        const result = await f.request(path, request.postData());
+        return route.fulfill({status:result.status,contentType:'application/json',body:result.body ? JSON.stringify(result.body) : ''});
+      }
+      if (path === 'passkey/handoff' && failHandoff) return route.fulfill({status:401,json:{error:'fixture handoff expired'}});
+      if (path === 'passkey/handoff') authenticated = true;
+      if (path === 'logout') authenticated = false;
+      const data = path === 'session' ? (authenticated ? session : {authenticated:false})
+        : path === 'passkey/handoff' ? session
+        : path === 'accounts' ? {accounts:[account]}
+        : path === 'summary' ? {account,month:url.searchParams.get('month'),entries:[],settlements:[],settlementTotals:{incomingYen:0,outgoingYen:0},openingBalanceYen:0,closingBalanceYen:0}
+        : {};
+      return route.fulfill({json:data});
+    });
+    await page.goto(`${origin}/billing/`);
+    await page.locator('#login-view').waitFor({state:'visible'});
+    assert.equal(await page.locator('#login-view input').count(), 0);
+    assert.equal(await page.locator('#passkey-login').innerText(), 'パスキーでログイン');
+    assert.equal(await page.locator('#login-view a').getAttribute('href'), '/security/');
+    const layout = await page.evaluate(() => {
+      const r = document.querySelector('#login-view .login-card').getBoundingClientRect();
+      return {x:r.x+r.width/2,y:r.y+r.height/2,w:innerWidth,h:innerHeight,overflow:document.documentElement.scrollWidth > innerWidth};
+    });
+    assert.ok(Math.abs(layout.x-layout.w/2)<2 && Math.abs(layout.y-layout.h/2)<2);
+    assert.equal(layout.overflow, false);
+    const stubPasskey = () => page.evaluate(() => { window.TRoomPasskeys = { ...window.TRoomPasskeys, authenticate: async service => {
+      if (service !== 'billing') throw Error('wrong service');
+      return {handoff:{handoffToken:'fixture-token'}};
+    } }; });
+    await stubPasskey();
+    await page.locator('#passkey-login').click();
+    await page.locator('#login-error').filter({hasText:'fixture handoff expired'}).waitFor();
+    assert.equal(await page.locator('#passkey-login').isEnabled(), true);
+    failHandoff = false;
+    await page.locator('#passkey-login').focus(); await page.keyboard.press('Enter');
+    await page.locator('#app-view').waitFor({state:'visible'});
+    assert.equal(await page.locator('#new-entry-button').isVisible(), false);
+    await page.reload();
+    await page.locator('#app-view').waitFor({state:'visible'});
+    await stubPasskey();
+    await page.locator('#logout-button').click();
+    await page.locator('#login-view').waitFor({state:'visible'});
+    assert.equal(await page.locator('#passkey-login').isEnabled(), true);
+    assert.equal(paths.includes('login'), false, 'current UI never sends password login');
+    await page.locator('#passkey-login').click();
+    await page.locator('#app-view').waitFor({state:'visible'});
+    // Old cached clients can still submit safe metadata; their password request
+    // reaches the real Worker and Security SQLite but can never authenticate.
+    const result = await page.evaluate(async password => {
+      const response = await fetch('/billing/api/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({loginId:'masami@example.test',password})});
+      return {status:response.status,cookie:response.headers.get('set-cookie')};
+    }, fixturePassword);
+    assert.equal(result.status, 401); assert.equal(result.cookie, null);
+    assert.equal(f.stored.at(-1).details.reason, 'password_auth_disabled');
+    assert.ok(f.security.db.prepare("SELECT COUNT(*) n FROM security_audit_events WHERE event_type='password_login_failure'").get().n > 0);
+    assert.deepEqual(errors, []);
+    assert.doesNotMatch(JSON.stringify(f.stored), /masami@example.test|local-audit-fixture-password/);
+    await context.close();
+    console.log(`Billing ${mobile ? 'mobile' : 'desktop'}: centered passkey UI, errors, handoff, resume, logout/relogin and cached password rejection passed`);
   }
 } finally {
-  await browser.close();await new Promise(resolve=>server.close(resolve));
-  for(const f of Object.values(fixtures)) {f.security.close();f.close();}
-}
-async function assertEventually(check) {
-  const until=Date.now()+10000;
-  while(!check()&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,25));
-  assert.ok(check(),'Expected audit did not arrive');
+  await browser.close(); await new Promise(resolve => server.close(resolve)); f.security.close(); f.close();
 }

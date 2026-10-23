@@ -22,16 +22,10 @@
   const settlementMethodLabels = {
     bank_transfer: "振込", cash: "現金", offset: "相殺", other: "その他", unspecified: "未設定"
   };
-  const REMEMBER_LOGIN_KEY = "troom-billing-remember-login";
-  const SAVED_LOGIN_ID_KEY = "troom-billing-login-id";
-  const CURRENT_OWNER_LOGIN_ID = "contact@a-tanaka.jp";
-  const LEGACY_OWNER_LOGIN_ID = "sub@a-tanaka.jp";
-
   document.addEventListener("DOMContentLoaded", initialize);
 
   async function initialize() {
     bindEvents();
-    restoreLoginPreference();
     el["month-input"].value = japanToday().slice(0, 7);
     el["print-date"].textContent = formatDateJp(japanToday());
     try {
@@ -55,11 +49,8 @@
     document.addEventListener("troom:before-auto-update", (event) => {
       if (document.querySelector("dialog[open]")) event.preventDefault();
     });
-    state.passwordLoginAudit = TRoomPasswordLoginAudit.create({ service: "billing", apiBase: `${basePath()}/api`, form: el["login-form"], loginIdInput: el["login-id"] });
-    el["login-form"].addEventListener("submit", login);
     el["passkey-login"].addEventListener("click", loginWithPasskey);
     el["logout-button"].addEventListener("click", logout);
-    el["password-toggle"].addEventListener("click", togglePassword);
     bindMonthInput(el["month-input"]);
     el["month-input"].addEventListener("change", loadSummary);
     el["account-select"].addEventListener("change", changeAccount);
@@ -96,60 +87,22 @@
     el["settlements-body"].addEventListener("click", handleSettlementAction);
   }
 
-  async function login(event) {
-    event.preventDefault();
-    el["login-error"].textContent = "";
-    // Enter送信や一部ブラウザでは event.submitter が null になるため、
-    // 固定の送信ボタンへフォールバックして認証処理を止めないようにします。
-    const submit = event.submitter || el["login-submit"];
-    const submitLabel = submit.textContent;
-    const loginId = canonicalLoginId(el["login-id"].value);
-    const password = el["login-password"].value;
-    el["login-id"].value = loginId;
-    submit.disabled = true;
-    submit.textContent = "確認中…";
-    submit.setAttribute("aria-busy", "true");
-    const trace = state.passwordLoginAudit.begin();
-    let stage = "form_validation";
-    try {
-      await trace.report("form_submit", "submitted");
-      stage = "login_request";
-      const session = await api("/login", {
-        headers: trace.headers,
-        method: "POST",
-        body: { loginId, password }
-      });
-      stage = "login_response";
-      el["login-password"].value = "";
-      await enterApp(session);
-      // ブラウザのパスワード保存確認が長引いても、ログイン後の画面表示を止めません。
-      saveLoginPreference(loginId, password).catch(() => {});
-    } catch (error) {
-      if (!(stage === "login_request" && error.status && error.status < 500)) {
-        await trace.report(stage === "login_request" && error.status ? "login_response" : stage,
-          stage === "login_request" ? (error.status ? "request_failed" : "network_error") : "unexpected_client_error");
-      }
-      el["login-error"].textContent = error.message;
-    } finally {
-      submit.disabled = false;
-      submit.textContent = submitLabel;
-      submit.removeAttribute("aria-busy");
-    }
-  }
-
   async function loginWithPasskey() {
     const button = el["passkey-login"];
     el["login-error"].textContent = "";
     button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    el["passkey-login-label"].textContent = "確認中…";
     try {
       const authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
-      el["login-password"].value = "";
       await enterApp(session);
     } catch (error) {
       el["login-error"].textContent = error.message;
     } finally {
       button.disabled = false;
+      button.removeAttribute("aria-busy");
+      el["passkey-login-label"].textContent = "パスキーでログイン";
     }
   }
 
@@ -183,49 +136,7 @@
     el["boot-view"].hidden = true;
     el["app-view"].hidden = true;
     el["login-view"].hidden = false;
-    (el["login-id"].value ? el["login-password"] : el["login-id"]).focus();
-  }
-
-  function restoreLoginPreference() {
-    try {
-      const remember = localStorage.getItem(REMEMBER_LOGIN_KEY) !== "false";
-      el["remember-login"].checked = remember;
-      if (remember) {
-        const savedLoginId = canonicalLoginId(localStorage.getItem(SAVED_LOGIN_ID_KEY) || "");
-        el["login-id"].value = savedLoginId;
-        if (savedLoginId) localStorage.setItem(SAVED_LOGIN_ID_KEY, savedLoginId);
-      }
-    } catch {
-      el["remember-login"].checked = true;
-    }
-  }
-
-  async function saveLoginPreference(loginId, password) {
-    loginId = canonicalLoginId(loginId);
-    const remember = el["remember-login"].checked;
-    try {
-      localStorage.setItem(REMEMBER_LOGIN_KEY, String(remember));
-      if (remember) localStorage.setItem(SAVED_LOGIN_ID_KEY, loginId);
-      else localStorage.removeItem(SAVED_LOGIN_ID_KEY);
-    } catch {
-      // 端末側で保存が禁止されていても、通常のログインは続行します。
-    }
-    if (!remember) {
-      if (navigator.credentials?.preventSilentAccess) await navigator.credentials.preventSilentAccess().catch(() => {});
-      return;
-    }
-
-    if (!navigator.credentials?.store || typeof window.PasswordCredential !== "function") return;
-    try {
-      await navigator.credentials.store(new PasswordCredential({ id: loginId, password }));
-    } catch {
-      // 保存の可否と確認画面はブラウザのパスワード管理機能に任せます。
-    }
-  }
-
-  function canonicalLoginId(value) {
-    const normalized = String(value || "").trim().toLowerCase();
-    return normalized === LEGACY_OWNER_LOGIN_ID ? CURRENT_OWNER_LOGIN_ID : normalized;
+    el["passkey-login"].focus();
   }
 
   function fillAccountSelects() {
@@ -476,15 +387,6 @@
       return log.actorName || log.attemptedLoginId || "不明";
     }
     return "—";
-  }
-
-  function togglePassword() {
-    const showing = el["login-password"].type === "text";
-    el["login-password"].type = showing ? "password" : "text";
-    const label = showing ? "パスワードを表示" : "パスワードを隠す";
-    el["password-toggle"].setAttribute("aria-label", label);
-    el["password-toggle"].setAttribute("aria-pressed", String(!showing));
-    el["password-toggle"].title = label;
   }
 
   function updateCategoryOptions(selected = "") {
@@ -794,7 +696,7 @@
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 401 && path !== "/login" && path !== "/passkey/handoff") showLogin();
+      if (response.status === 401 && path !== "/passkey/handoff") showLogin();
       const error = new Error(data.error || "処理に失敗しました。");
       error.status = response.status;
       throw error;

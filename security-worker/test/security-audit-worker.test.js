@@ -91,13 +91,10 @@ test("all service login and resume success paths await synchronous Security deli
   const { readFile } = await import("node:fs/promises");
   for (const relative of ["../../cloud-worker/src/index.js", "../../diary-worker/src/index.js", "../../billing-worker/src/index.js"]) {
     const source = await readFile(new URL(relative, import.meta.url), "utf8");
-    assert.match(source, /await recordSecurityAudit\(env, request, \{[\s\S]{0,240}eventType: "session_resume"/);
-    if (relative.includes("diary-worker") || relative.includes("cloud-worker")) {
-      assert.doesNotMatch(source, /eventType: "password_login_success"/);
-      assert.match(source, /await recordSecurityAudit\(env, request, \{[^\n]*eventType: "password_login_failure"/);
-    } else {
-      assert.match(source, /await recordSecurityAudit\(env, request, \{[^\n]*eventType: "password_login_success"/);
+    assert.doesNotMatch(source, /eventType\s*:\s*["']password_login_success["']/);
+    for (const event of ["password_login_failure", "passkey_login_success", "session_resume"]) {
+      const synchronousAudit = new RegExp(`await\\s+recordSecurityAudit\\s*\\(\\s*env\\s*,\\s*request\\s*,\\s*\\{[^{}]*\\beventType\\s*:\\s*["']${event}["']`);
+      assert.match(source, synchronousAudit, `${relative}: ${event} must await Security delivery`);
     }
-    assert.match(source, /await recordSecurityAudit\(env, request, \{[^\n]*eventType: "passkey_login_success"/);
   }
 });
