@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-3b98225ac679";
+const APP_BUILD_ID = "cloud-382a66f8b206";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1864,10 +1864,11 @@ async function completeUpload(id, request, env, session) {
   const storedBytes = Number(stored?.size || 0);
   if (!stored || storedBytes !== expectedBytes) {
     await env.FILES.delete(file.object_key).catch(() => {});
-    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).run();
+    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(id).run();
     throw new HttpError(502, "Cloudflare上の保存容量を確認できませんでした。最初から再試行します。");
   }
-  await env.DB.prepare("UPDATE cloud_files SET status = 'ready', multipart_upload_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
+  const completed = await env.DB.prepare("UPDATE cloud_files SET status = 'ready', multipart_upload_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND purge_job_id IS NULL").bind(id).run();
+  if (!completed.meta?.changes) throw new HttpError(409, "完全削除を受け付けたアップロードです。");
   await audit(env, "upload_completed", session, "file", id, { encrypted: Number(file.crypto_version) === 1, sizeBytes: file.size_bytes });
   return json({ ok: true, id, verified: true, storedBytes });
 }
@@ -1878,7 +1879,7 @@ async function cancelUpload(id, env, session) {
   requireUploadOwnership(session, file);
   await requireFolderAccess(env, file.folder_id, session);
   await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort();
-  await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).run();
+  await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(id).run();
   return json({ ok: true });
 }
 
@@ -2182,7 +2183,7 @@ async function processTrashDeletion(env, jobId) {
   if (!lock.meta?.changes) return;
   const job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ?").bind(jobId).first();
   const lease = "EXISTS (SELECT 1 FROM cloud_trash_jobs WHERE id = ? AND lease_token = ?)";
-  const rows = (await env.DB.prepare(`SELECT id, object_key, thumbnail_key, display_thumbnail_key, stream_uid, purge_attempts
+  const rows = (await env.DB.prepare(`SELECT id, object_key, thumbnail_key, display_thumbnail_key, stream_uid, multipart_upload_id, purge_attempts
     FROM cloud_files WHERE purge_job_id = ? AND purge_attempts < 5 ORDER BY purge_attempts, id LIMIT 80`).bind(jobId).all()).results || [];
   const succeeded = [];
   const failures = new Map();
@@ -2216,7 +2217,20 @@ async function processTrashDeletion(env, jobId) {
         } catch { failures.set(file.id, "stream_delete_failed"); }
     }
   }
-  const eligible = rows.filter(file => !blocked.has(file.id));
+  const eligible = [];
+  for (const file of rows) {
+    if (blocked.has(file.id)) continue;
+    if (file.multipart_upload_id) {
+      try { await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort(); }
+      catch (error) {
+        if (error.code !== "NoSuchUpload" && error.name !== "NoSuchUpload") {
+          failures.set(file.id, "multipart_abort_failed");
+          continue;
+        }
+      }
+    }
+    eligible.push(file);
+  }
   // Keep the fast 80-file path. After a failed attempt, isolate ten files;
   // repeatedly failing groups are checked file by file within this invocation.
   const groupSize = eligible.some(file => file.purge_attempts > 0) ? 10 : 80;
@@ -2630,10 +2644,10 @@ async function approveDeletionRequest(id, env, session) {
 }
 
 async function abortStaleUploads(env) {
-  const stale = await env.DB.prepare("SELECT id, object_key, multipart_upload_id FROM cloud_files WHERE status = 'uploading' AND created_at < datetime('now', '-1 day') LIMIT 100").all();
+  const stale = await env.DB.prepare("SELECT id, object_key, multipart_upload_id FROM cloud_files WHERE status = 'uploading' AND purge_job_id IS NULL AND created_at < datetime('now', '-1 day') LIMIT 100").all();
   for (const file of stale.results || []) {
     try { await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort(); } catch {}
-    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(file.id).run();
+    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(file.id).run();
   }
   await env.DB.prepare("DELETE FROM cloud_folder_unlocks WHERE expires_at <= ?").bind(Math.floor(Date.now() / 1000)).run();
 }
@@ -2876,7 +2890,7 @@ async function requireReadyFile(env, id, allowDeleted) {
 }
 
 async function requireUploadingFile(env, id) {
-  const file = await env.DB.prepare("SELECT * FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).first();
+  const file = await env.DB.prepare("SELECT * FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(id).first();
   if (!file) throw new HttpError(404, "アップロード情報が見つかりません。");
   return file;
 }

@@ -241,4 +241,36 @@ assert.equal(remaining(2000).purge_error, "referenced_object");
 assert.equal(deletedKeys.has("object-1200"), false);
 assert.equal(deletedKeys.has("object-2000"), false);
 assert.equal((await request("/trash/jobs")).body.jobs.find(job => job.id === shared.body.job.id).referencedFiles, 1);
+
+// Reproduce acceptance racing the old upload cleanup, then retry a failed
+// multipart abort. Cleanup cannot remove the accepted row or count it done.
+addFile(3000);
+db.prepare("UPDATE cloud_files SET status = 'uploading', multipart_upload_id = 'synthetic-upload', created_at = '2020-01-01' WHERE id = 3000").run();
+let abortCalls = 0, multipartJob;
+env.FILES.resumeMultipartUpload = () => ({ async abort() {
+  if (++abortCalls === 1) {
+    multipartJob = await request("/trash", "DELETE");
+    assert.equal(multipartJob.status, 202);
+  } else if (abortCalls === 2) throw new Error("transient multipart outage");
+  else throw Object.assign(new Error("already completed or aborted"), { code: "NoSuchUpload" });
+} });
+await context.abortStaleUploads(env);
+assert.ok(remaining(3000), "a stale cleanup selected before acceptance cannot delete the claimed row");
+assert.equal(getJob(multipartJob.body.job.id).deleted_files, 0);
+await context.worker.scheduled({ cron: "17 18 * * *" }, env);
+assert.equal(abortCalls, 1, "later cleanup skips the accepted upload entirely");
+assert.equal((await request("/uploads/3000", "DELETE")).status, 404);
+assert.equal((await api(admin.cookie, "/uploads/3000/complete", "POST", { parts: [{ partNumber: 1, etag: "synthetic" }] }, headers)).status, 404);
+assert.throws(() => db.prepare("UPDATE cloud_files SET status = 'ready', multipart_upload_id = NULL WHERE id = 3000").run(), /permanent deletion/);
+const beforeAbortRetry = batches.length;
+await consume(multipartJob.body.job.id);
+assert.equal(batches.length, beforeAbortRetry, "no R2 object deletion before multipart abort succeeds");
+assert.equal(remaining(3000).purge_error, "multipart_abort_failed");
+await drain(multipartJob.body.job.id);
+assert.equal(remaining(3000), undefined);
+assert.equal(abortCalls, 3);
+assert.equal(getJob(multipartJob.body.job.id).deleted_files, 1);
+assert.equal(db.prepare("SELECT COUNT(*) n FROM cloud_audit_logs WHERE event_type='file_deleted' AND target_id=3000").get().n, 1);
+assert.equal(db.prepare("SELECT trash_file_count FROM cloud_usage_summary WHERE id=1").get().trash_file_count,
+  db.prepare("SELECT COUNT(*) n FROM cloud_files WHERE deleted_at IS NOT NULL AND status='ready'").get().n);
 console.log("PASS durable trash deletion: acceptance, permissions/CSRF, snapshots, batches, leases/recovery, retry, audit, usage, Stream and browser-independent completion");

@@ -7,8 +7,9 @@ CREATE INDEX cloud_files_thumbnail_key ON cloud_files(thumbnail_key);
 CREATE INDEX cloud_files_display_thumbnail_key ON cloud_files(display_thumbnail_key);
 -- Once accepted, a row cannot point a consumer at a different external object.
 CREATE TRIGGER cloud_files_purge_identity_guard
-BEFORE UPDATE OF object_key, thumbnail_key, display_thumbnail_key, stream_uid ON cloud_files
+BEFORE UPDATE OF object_key, thumbnail_key, display_thumbnail_key, stream_uid, status, multipart_upload_id ON cloud_files
 WHEN OLD.purge_job_id IS NOT NULL AND (
   NEW.object_key IS NOT OLD.object_key OR NEW.thumbnail_key IS NOT OLD.thumbnail_key
-  OR NEW.display_thumbnail_key IS NOT OLD.display_thumbnail_key OR NEW.stream_uid IS NOT OLD.stream_uid)
+  OR NEW.display_thumbnail_key IS NOT OLD.display_thumbnail_key OR NEW.stream_uid IS NOT OLD.stream_uid
+  OR NEW.status IS NOT OLD.status OR NEW.multipart_upload_id IS NOT OLD.multipart_upload_id)
 BEGIN SELECT RAISE(ABORT, 'permanent deletion already accepted'); END;
