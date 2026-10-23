@@ -44,7 +44,7 @@ function fixture(service) {
     };
   }
   const env = {
-    DB: { prepare: (sql) => statement(sql), batch: async (statements) => Promise.all(statements.map((s) => s.run())) },
+    DB: { prepare: (sql) => statement(sql), batch: async (statements) => Promise.all(statements.map((s) => s.all())) },
     SESSION_SECRET: randomBytes(32).toString("hex"), SESSION_VERSION: "3", PASSKEY_ENABLED: "true", BILLING_PASSWORD_PEPPER: "fixture-pepper",
     DIARY_MAIN_ADMIN_LOGIN_ID: "main@example.test", DIARY_WIFE_ADMIN_LOGIN_ID: "wife@example.test",
     DIARY_MAIN_ADMIN_PASSWORD_HASH: `sha256$${createHash("sha256").update(password).digest("base64url")}`,

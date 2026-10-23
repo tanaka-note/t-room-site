@@ -1,4 +1,4 @@
-import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
+import { foregroundSessionActivity, serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession } from "../../assets/password-auth-policy.mjs";
@@ -73,8 +73,13 @@ export default {
         : url.pathname;
 
       if (path.startsWith("/api/")) {
-        const response = await withPasswordLoginAudit(env, request, "billing", () => handleApi(request, env, url, path, context));
-        return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
+        // This promise lives only for this request. Mutations still re-read;
+        // rolling GETs are checked again by Security's live touch before release.
+        let sessionPromise;
+        const getSession = () => request.method === "GET"
+          ? (sessionPromise ??= readSession(request, env)) : readSession(request, env);
+        const response = await withPasswordLoginAudit(env, request, "billing", () => handleApi(request, env, url, path, context, getSession));
+        return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path, getSession));
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return secureResponse(json({ error: "Method not allowed" }, 405));
@@ -88,11 +93,11 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path, context) {
+async function handleApi(request, env, url, path, context, getSession) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "billing");
   if (path === "/api/session" && request.method === "GET") {
-    const session = await readSession(request, env);
+    const session = await getSession();
     if (session) await recordSecurityAudit(env, request, {
       service: "billing", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
@@ -153,7 +158,7 @@ async function handleApi(request, env, url, path, context) {
 
   if (path === "/api/logout" && request.method === "POST") {
     if (!validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
-    const session = await readSession(request, env);
+    const session = await getSession();
     if (session?.rollingSessionVersion != null && !(await serviceRollingSession(env, "billing", session, "end")).valid) throw new HttpError(503, "ログアウトを完了できませんでした。");
     if (session) {
       await writeAudit(env, { eventType: "logout", actorAccountId: session.accountId });
@@ -164,20 +169,25 @@ async function handleApi(request, env, url, path, context) {
     return json({ ok: true }, 200, headers);
   }
 
-  const session = await readSession(request, env);
+  const session = await getSession();
   if (!session) throw new HttpError(401, "ログインが必要です。");
   if (request.method !== "GET" && !validMutationRequest(request, url)) {
     throw new HttpError(403, "不正なリクエストです。");
   }
 
-  if (path === "/api/accounts" && request.method === "GET") return listAccounts(env, session);
+  if (path === "/api/accounts" && request.method === "GET") {
+    const accounts = await listAccounts(env, session);
+    if (url.searchParams.get("includeSummary") !== "1") return json({ accounts });
+    const account = session.role === "owner" ? accounts[0] : accounts.find(a => a.id === session.accountId);
+    if (!account) throw new HttpError(404, "利用者が見つかりません。");
+    const summary = await getSummary(url, env, session, account);
+    auditSummaryAccess(env, context, request, session, summary.account.id);
+    return json({ accounts, summary });
+  }
   if (path === "/api/summary" && request.method === "GET") {
-    const response = await getSummary(url, env, session);
-    const targetAccountId = url.searchParams.get("accountId");
-    if (session.role === "owner" && targetAccountId && targetAccountId !== session.accountId) {
-      enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceAccountId: session.accountId, role: session.role, authMethod: session.authMethod, targetType: "billing_account", targetId: targetAccountId });
-    }
-    return response;
+    const summary = await getSummary(url, env, session);
+    auditSummaryAccess(env, context, request, session, summary.account.id);
+    return json(summary);
   }
   if (path === "/api/entries" && request.method === "POST") {
     requireOwner(session);
@@ -217,7 +227,7 @@ async function handleApi(request, env, url, path, context) {
 
 async function listAccounts(env, session) {
   if (session.role !== "owner") {
-    return json({ accounts: [{ id: session.accountId, displayName: session.accountName, role: session.role }] });
+    return [{ id: session.accountId, displayName: session.accountName, role: session.role }];
   }
   const result = await env.DB.prepare(`
     SELECT id, display_name, role FROM billing_accounts
@@ -226,69 +236,75 @@ async function listAccounts(env, session) {
       WHEN 'chiharu' THEN 1 WHEN 'hideaki' THEN 2 WHEN 'masami' THEN 3 WHEN 'yuuka' THEN 4
       WHEN 'machiko' THEN 5 ELSE 99 END
   `).all();
-  return json({ accounts: (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, role: row.role })) });
+  return (result.results || []).map((row) => ({ id: row.id, displayName: row.display_name, role: row.role }));
 }
 
-async function getSummary(url, env, session) {
-  const accountId = await resolveTargetAccount(url.searchParams.get("accountId"), env, session);
+function auditSummaryAccess(env, context, request, session, targetAccountId) {
+  if (session.role === "owner" && targetAccountId !== session.accountId) {
+    enqueueSecurityAudit(env, context, request, { service: "billing", eventType: "admin_access", outcome: "success", identityId: session.identityId, serviceAccountId: session.accountId, role: session.role, authMethod: session.authMethod, targetType: "billing_account", targetId: targetAccountId });
+  }
+}
+
+async function getSummary(url, env, session, selectedAccount = null) {
+  const account = selectedAccount || await resolveSummaryAccount(url.searchParams.get("accountId"), env, session);
+  const accountId = account.id;
   const month = validMonth(url.searchParams.get("month")) || currentJapanMonth();
   const bounds = monthBounds(month);
-  const account = await env.DB.prepare(`SELECT id, display_name FROM billing_accounts WHERE id = ? AND is_active = 1`).bind(accountId).first();
-  if (!account) throw new HttpError(404, "利用者が見つかりません。");
-  const entriesResult = await env.DB.prepare(`
+  // One D1 round trip and snapshot for lists and balances. Each historical
+  // table is aggregated once; the existing signed-yen formulas stay in SQL.
+  const [entriesResult, settlementsResult, documentsResult, balancesResult] = await env.DB.batch([
+    env.DB.prepare(`
     SELECT id, document_type, entry_date, category, amount_yen, description, note, created_at, updated_at
     FROM billing_entries
     WHERE account_id = ? AND deleted_at IS NULL AND category != 'income'
       AND entry_date >= ? AND entry_date < ?
     ORDER BY entry_date, id
-  `).bind(accountId, bounds.start, bounds.next).all();
-  const entries = (entriesResult.results || []).map(serializeEntry);
-
-  const settlementsResult = await env.DB.prepare(`
+  `).bind(accountId, bounds.start, bounds.next),
+    env.DB.prepare(`
     SELECT id, settlement_date, direction, method, amount_yen, note, created_at, updated_at
     FROM billing_settlements
     WHERE account_id = ? AND deleted_at IS NULL AND settlement_date >= ? AND settlement_date < ?
     ORDER BY settlement_date, id
-  `).bind(accountId, bounds.start, bounds.next).all();
+  `).bind(accountId, bounds.start, bounds.next),
+    env.DB.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN entry_date < ? THEN
+      CASE document_type WHEN 'invoice' THEN amount_yen ELSE -amount_yen END ELSE 0 END), 0) AS opening,
+      COALESCE(SUM(CASE document_type WHEN 'invoice' THEN amount_yen ELSE -amount_yen END), 0) AS closing
+    FROM billing_entries
+    WHERE account_id = ? AND deleted_at IS NULL AND category != 'income' AND entry_date < ?
+  `).bind(bounds.start, accountId, bounds.next),
+    env.DB.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN settlement_date < ? THEN
+      CASE WHEN method = 'offset' THEN 0 WHEN direction = 'incoming' THEN -amount_yen ELSE amount_yen END ELSE 0 END), 0) AS opening,
+      COALESCE(SUM(CASE WHEN method = 'offset' THEN 0 WHEN direction = 'incoming' THEN -amount_yen ELSE amount_yen END), 0) AS closing
+    FROM billing_settlements
+    WHERE account_id = ? AND deleted_at IS NULL AND settlement_date < ?
+  `).bind(bounds.start, accountId, bounds.next)
+  ]);
+  const entries = (entriesResult.results || []).map(serializeEntry);
   const settlements = (settlementsResult.results || []).map(serializeSettlement);
-
-  const beforeDocuments = await env.DB.prepare(`
-    SELECT COALESCE(SUM(CASE document_type WHEN 'invoice' THEN amount_yen ELSE -amount_yen END), 0) AS total
-    FROM billing_entries
-    WHERE account_id = ? AND deleted_at IS NULL AND category != 'income' AND entry_date < ?
-  `).bind(accountId, bounds.start).first();
-  const throughMonthDocuments = await env.DB.prepare(`
-    SELECT COALESCE(SUM(CASE document_type WHEN 'invoice' THEN amount_yen ELSE -amount_yen END), 0) AS total
-    FROM billing_entries
-    WHERE account_id = ? AND deleted_at IS NULL AND category != 'income' AND entry_date < ?
-  `).bind(accountId, bounds.next).first();
-  const beforeSettlements = await settlementBalanceBefore(env, accountId, bounds.start);
-  const throughMonthSettlements = await settlementBalanceBefore(env, accountId, bounds.next);
+  const documents = documentsResult.results[0], balances = balancesResult.results[0];
   const settlementTotals = summarizeSettlements(settlements);
-  return json({
-    account: { id: account.id, displayName: account.display_name },
+  return {
+    account: { id: account.id, displayName: account.displayName },
     month,
-    openingBalanceYen: Number(beforeDocuments?.total || 0) + beforeSettlements,
-    closingBalanceYen: Number(throughMonthDocuments?.total || 0) + throughMonthSettlements,
+    openingBalanceYen: Number(documents.opening) + Number(balances.opening),
+    closingBalanceYen: Number(documents.closing) + Number(balances.closing),
     entries,
     settlements,
     settlementTotals
-  });
+  };
 }
 
-async function settlementBalanceBefore(env, accountId, beforeDate) {
-  const result = await env.DB.prepare(`
-    SELECT COALESCE(SUM(
-      CASE
-        WHEN method = 'offset' THEN 0
-        WHEN direction = 'incoming' THEN -amount_yen
-        ELSE amount_yen
-      END
-    ), 0) AS total
-    FROM billing_settlements
-    WHERE account_id = ? AND deleted_at IS NULL AND settlement_date < ?
-  `).bind(accountId, beforeDate).first();
-  return Number(result?.total || 0);
+async function resolveSummaryAccount(requested, env, session) {
+  const member = session.role !== "owner";
+  const target = member ? session.accountId : normalizeAccountId(requested);
+  const account = target
+    ? await env.DB.prepare(`SELECT id, display_name FROM billing_accounts WHERE id = ? AND is_active = 1${member ? "" : " AND role = 'member'"}`).bind(target).first()
+    : await env.DB.prepare(`SELECT id, display_name FROM billing_accounts WHERE role = 'member' AND is_active = 1
+        ORDER BY CASE id WHEN 'chiharu' THEN 1 WHEN 'hideaki' THEN 2 WHEN 'masami' THEN 3 WHEN 'yuuka' THEN 4 WHEN 'machiko' THEN 5 ELSE 99 END LIMIT 1`).first();
+  if (!account) throw new HttpError(404, "利用者が見つかりません。");
+  return { id: account.id, displayName: account.display_name };
 }
 
 async function createEntry(request, env, session) {
@@ -549,7 +565,8 @@ async function readSession(request, env) {
       startedAt: payload.startedAt || null,
       exp: Number(payload.exp),
       rollingSessionVersion: payload.rollingSessionVersion,
-      accountVersion: Number(payload.accountVersion || 1)
+      accountVersion: Number(payload.accountVersion || 1),
+      globalVersion: String(payload.globalVersion)
     };
   } catch {
     return null;
@@ -591,11 +608,19 @@ function sessionPolicy(env, authMethod) {
 
 function billingSessionVersion(env, accountVersion) { return `${String(env.SESSION_VERSION || "1")}:${Number(accountVersion || 1)}`; }
 
-async function refreshAuthenticatedSession(request, response, env, url, path) {
-  if (!response.ok || request.headers.get("X-Troom-Activity") !== "foreground") return response;
-  const session = await readSession(request, env);
+async function refreshAuthenticatedSession(request, response, env, url, path, getSession) {
+  if (!foregroundSessionActivity(request, response, path)) return response;
+  let session = await getSession();
+  // Legacy GETs cannot touch. Keep their final live read rather than reusing
+  // the first check without an equivalent Security revocation check.
+  if (request.method === "GET" && session?.rollingSessionVersion !== ROLLING_SESSION_VERSION) session = await readSession(request, env);
+  if (!session || session.exp <= Math.floor(Date.now() / 1000)) throw new HttpError(401, "パスキーでログインし直してください。");
   return renewServiceSession(request, response, env, "billing", path, session, async expiresAt => {
     const account = await env.DB.prepare("SELECT id, role, session_version FROM billing_accounts WHERE id = ? AND is_active = 1").bind(session.accountId).first();
+    // A role/version change during data retrieval must never mint a cookie
+    // for the changed authority or release the previously prepared response.
+    if (!account || account.role !== session.role || Number(account.session_version) !== session.accountVersion
+      || session.globalVersion !== String(env.SESSION_VERSION || "1")) throw new HttpError(401, "パスキーでログインし直してください。");
     const policy = sessionPolicy(env, "passkey");
     const token = await createSessionToken(account, policy.ttlSeconds, env, { ...session, expiresAt });
     return sessionCookie(token, policy, url.protocol === "https:");
@@ -605,23 +630,6 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
 async function sign(value, secret) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
-}
-
-async function resolveTargetAccount(requested, env, session) {
-  if (session.role !== "owner") return session.accountId;
-  let target = normalizeAccountId(requested);
-  if (!target) {
-    const first = await env.DB.prepare(`
-      SELECT id FROM billing_accounts WHERE role = 'member' AND is_active = 1
-      ORDER BY CASE id
-        WHEN 'chiharu' THEN 1 WHEN 'hideaki' THEN 2 WHEN 'masami' THEN 3 WHEN 'yuuka' THEN 4
-        WHEN 'machiko' THEN 5 ELSE 99 END
-      LIMIT 1
-    `).first();
-    target = first?.id || "";
-  }
-  await assertTargetAccountExists(target, env);
-  return target;
 }
 
 async function assertTargetAccountExists(accountId, env) {

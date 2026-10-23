@@ -3,6 +3,8 @@
     session: null,
     accounts: [],
     summary: null,
+    summaryGeneration: 0,
+    summaryController: null,
     entryInitialSnapshot: null,
     dateDraft: null,
     dateWheelTarget: null,
@@ -122,11 +124,19 @@
     el["account-label"].textContent = session.accountDisplayName || `${session.accountName}${session.role === "owner" ? "（管理者）" : ""}`;
     document.body.classList.toggle("is-owner", session.role === "owner");
     document.querySelectorAll(".owner-only").forEach((node) => { node.hidden = session.role !== "owner"; });
-    const result = await api("/accounts");
+    const month = el["month-input"].value || japanToday().slice(0, 7);
+    const result = await api(`/accounts?includeSummary=1&month=${encodeURIComponent(month)}`);
+    if (state.session !== session) return;
     state.accounts = result.accounts;
     fillAccountSelects();
     applyPreferredDocumentType();
-    await loadSummary();
+    // Accept the original accounts-only response during a rolling asset update.
+    if (result.summary) {
+      state.summary = result.summary;
+      el["account-select"].value = result.summary.account.id;
+      renderSummary();
+      setSummaryStatus("");
+    } else if (!await loadSummary()) return;
     el["boot-view"].hidden = true;
     el["login-view"].hidden = true;
     el["app-view"].hidden = false;
@@ -134,6 +144,13 @@
 
   function showLogin() {
     el["boot-view"].hidden = true;
+    state.session = null;
+    state.summaryGeneration++;
+    state.summaryController?.abort();
+    state.summary = null;
+    state.accounts = [];
+    clearSummary();
+    dialogs.reset();
     el["app-view"].hidden = true;
     el["login-view"].hidden = false;
     el["passkey-login"].focus();
@@ -165,26 +182,56 @@
   }
 
   async function loadSummary() {
+    if (!state.session) return false;
+    const session = state.session;
     const accountId = state.session.role === "owner" ? el["account-select"].value : state.session.accountId;
     const month = el["month-input"].value || japanToday().slice(0, 7);
+    const generation = ++state.summaryGeneration;
+    state.summaryController?.abort();
+    const controller = state.summaryController = new AbortController();
+    state.summary = null;
+    clearSummary();
+    setSummaryStatus("読み込み中…", true);
     try {
-      state.summary = await api(`/summary?accountId=${encodeURIComponent(accountId)}&month=${encodeURIComponent(month)}`);
+      const summary = await api(`/summary?accountId=${encodeURIComponent(accountId)}&month=${encodeURIComponent(month)}`, { signal: controller.signal });
+      if (generation !== state.summaryGeneration || state.session !== session) return false;
+      if (summary.account.id !== accountId || summary.month !== month) throw new Error("表示対象を確認できませんでした。もう一度選択してください。");
+      state.summary = summary;
       renderSummary();
+      setSummaryStatus("");
+      return true;
     } catch (error) {
-      alert(error.message);
+      if (generation !== state.summaryGeneration || controller.signal.aborted || state.session !== session) return false;
+      setSummaryStatus(error.message);
+      return false;
     }
+  }
+
+  function clearSummary() {
+    renderSummary();
+    for (const id of ["report-month", "report-account", "entries-body", "settlements-body", "settlements-dialog-context"]) el[id].replaceChildren();
+    for (const id of ["document-total", "opening-balance", "closing-balance", "incoming-total", "outgoing-total"]) el[id].textContent = "—";
+    el["empty-message"].hidden = true;
+    for (const id of ["new-entry-button", "print-button", "settlements-card"]) el[id].disabled = true;
+  }
+
+  function setSummaryStatus(message, busy = false) {
+    el["summary-status"].textContent = message;
+    el["summary-status"].hidden = !message;
+    el["report"].setAttribute("aria-busy", String(busy));
+    for (const id of ["new-entry-button", "print-button", "settlements-card"]) el[id].disabled = !state.summary;
   }
 
   function renderSummary() {
     const summary = state.summary;
-    if (!summary) return;
     const documentType = el["document-filter"].value;
-    const visibleEntries = summary.entries.filter((entry) => entry.documentType === documentType);
-    el["report-month"].textContent = formatMonthJp(summary.month);
     el["document-title"].textContent = documentLabels[documentType];
-    el["report-account"].textContent = `${summary.account.displayName} 様`;
     el["print-button"].textContent = `${documentLabels[documentType]}をPDF保存`;
     el["document-total-label"].textContent = documentType === "invoice" ? "請求合計" : "支払合計";
+    if (!summary) return;
+    const visibleEntries = summary.entries.filter((entry) => entry.documentType === documentType);
+    el["report-month"].textContent = formatMonthJp(summary.month);
+    el["report-account"].textContent = `${summary.account.displayName} 様`;
     const documentTotal = visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
     renderYen(el["document-total"], documentTotal);
     renderYen(el["opening-balance"], summary.openingBalanceYen);
@@ -213,6 +260,7 @@
   }
 
   function openEntryDialog(entry = null, settlement = null) {
+    if (!state.summary) return;
     el["entry-form"].reset();
     el["entry-error"].textContent = "";
     el["entry-id"].value = entry?.id || settlement?.id || "";
@@ -297,6 +345,7 @@
   }
 
   function handleEntryAction(event) {
+    if (!state.summary) return;
     const button = event.target.closest("button[data-action]");
     if (!button) return;
     const entry = state.summary.entries.find((item) => item.id === Number(button.dataset.id));
@@ -316,6 +365,7 @@
   }
 
   function openSettlements() {
+    if (!state.summary) return;
     renderSettlements();
     dialogs.open("settlements-dialog");
   }
@@ -338,6 +388,7 @@
   }
 
   function handleSettlementAction(event) {
+    if (!state.summary) return;
     const button = event.target.closest("button[data-settlement-action]");
     if (!button) return;
     const settlement = state.summary.settlements.find((item) => item.id === Number(button.dataset.id));
@@ -692,9 +743,11 @@
       method: options.method || "GET",
       headers: { ...options.headers, ...(options.body ? { "Content-Type": "application/json" } : {}) },
       body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: options.signal,
       credentials: "same-origin"
     });
     const data = await response.json().catch(() => ({}));
+    if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (!response.ok) {
       if (response.status === 401 && path !== "/passkey/handoff") showLogin();
       const error = new Error(data.error || "処理に失敗しました。");
