@@ -42,6 +42,7 @@ try {
       const stylePage = await context.newPage();
       try {
         await stylePage.route(`${origin}/inventory/hover-fixture`, route => route.fulfill({ contentType: 'text/html', body: `<!doctype html>
+          <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
           <link rel="stylesheet" href="/inventory/inventory.css">
           <button class="item-link">サンプル品目</button>
           <button>使用</button><button class="primary">補充</button>
@@ -65,14 +66,17 @@ try {
           await control.evaluate(n => n.blur());
           assert.equal(await background(), normal, `${selector}: resting background`);
         }
-        // Tab to every button, including the clear button, and retain its outline.
+        // Switch to keyboard input, then focus each control explicitly: macOS
+        // keyboard navigation preferences can exclude buttons from Tab order.
         await stylePage.goto(`${origin}/inventory/hover-fixture`);
-        for (let i = 0; i < 5; i++) {
-          await stylePage.keyboard.press('Tab');
-          assert.deepEqual(await stylePage.evaluate(() => {
-            const n = document.activeElement, s = getComputedStyle(n);
+        await stylePage.keyboard.press('Tab');
+        for (const selector of [...controls.map(([selector]) => selector), 'input']) {
+          const control = stylePage.locator(selector);
+          await control.focus();
+          assert.deepEqual(await control.evaluate(n => {
+            const s = getComputedStyle(n);
             return [n.matches(':focus-visible'), s.outlineStyle, s.outlineWidth];
-          }), [true, 'solid', '3px']);
+          }), [true, 'solid', '3px'], `${selector}: keyboard focus outline`);
         }
       } finally { await stylePage.close(); }
       await page.goto(`${origin}/inventory/`); await page.locator('#app-view').waitFor({ state: 'visible' });
