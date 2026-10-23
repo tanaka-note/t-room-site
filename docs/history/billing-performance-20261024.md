@@ -23,7 +23,7 @@ Summaryの管理者経路は、対象存在確認、対象名称取得、当月�
 
 Windows、Node 24.19.0、既存PlaywrightのChromium（このPCではEdge実行ファイル）、ローカルHTTPとin-memory SQLite。全migrationを適用した合成DBに5利用者、書類120件、入出金60件を投入した。本番データは使っていない。
 
-Worker計測は実handlerと実Security RPCメソッドを使い、D1 bindingをSQLite adapterへ置換した。同期audit helperは実コードだが、Security監査保存とQueue送信はmockなのでその実DB負荷・通信は含めない。WebAuthnとhandoff token消費の外部通信はmock。実Securityのregister/read/touch、Billingのsession署名・Cookie生成は実行する。
+Worker計測は実handlerと実Security RPCメソッドを使い、D1 bindingをSQLite adapterへ置換した。同期audit helperは実コードだが、Security監査保存とQueue送信はmockなのでその実DB負荷・通信は含めない。WebAuthnとhandoff token消費の外部通信はmock。未使用のWebAuthnサーバー関数は呼ばれたら失敗するstubへ明示置換し、Security用の外部パッケージがないBilling単独CIでも実行できる。実Securityのregister/read/touch、Billingのsession署名・Cookie生成は実行する。
 
 `performance-fixture.mjs` は読み込んだWorkerソースをメモリー内だけでラップし、readSession、session発行、最終更新、同期audit helper、SQL、Security呼び出しを `performance.now()` で測る。runtimeや共通コードには計測変更を加えていない。計測出力は固定endpoint名、処理名、回数、時間、SQL実行計画だけで、Cookie/token/credential/Identity/金額/明細/鍵を出力しない。
 
@@ -142,6 +142,7 @@ Billingの前面GETは依然readとtouchの2 RPCを待ち、Security D1は計9�
 - 最後の書類種別ラベル修正後の `npm run verify:billing`: 成功。構文、Billing 56テスト（追加29、skip 0）、性能/競合/失効のPC・タッチブラウザ、既存dialogの戻る/進む/背景/未保存保護、共通パスキー選択dialog、Worker dry-runを含む。
 - `node --test tools/test-password-auth.mjs`: 20成功、skip 0。旧ID/PWと旧Cookieの拒否、本人scope、既存データ維持を含む。
 - 前後benchmark、SQL実行計画、逐次/parallel/batch比較: 成功。baseline/currentのブラウザfixtureも成功。
+- 初回GitHub CIはBilling単独jobで未使用のWebAuthn依存がなくfixture importに失敗した。runtimeとCI設定は変えず、上記の呼出禁止stubで依存を分離して修正した。
 - `node tools/check-web-app-builds.mjs --target t-room-billing`、`git diff --check`: 成功。Billingのみbuildを同期し、最終markerは `billing-c2fa58fb86f2`。
 
 PR URL、commit IDとCI結果はPRと完了報告を参照する。変更ファイル:

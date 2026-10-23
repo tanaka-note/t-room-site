@@ -6,6 +6,14 @@ import { execFileSync } from 'node:child_process';
 
 registerHooks({ resolve(specifier, context, next) {
   if (specifier === 'cloudflare:workers') return { url: 'data:text/javascript,export class WorkerEntrypoint {}', shortCircuit: true };
+  if (specifier === '@simplewebauthn/server') return {
+    // Billing's CI intentionally installs no Security WebAuthn dependency.
+    // These fixtures exercise live session RPCs, not WebAuthn ceremonies;
+    // fail loudly if a test accidentally enters one of those unrelated paths.
+    url: 'data:text/javascript,' + encodeURIComponent(`const unavailable=()=>{throw new Error('WebAuthn ceremony is outside the Billing session fixture');};
+      export {unavailable as generateAuthenticationOptions,unavailable as generateRegistrationOptions,
+        unavailable as verifyAuthenticationResponse,unavailable as verifyRegistrationResponse};`), shortCircuit:true
+  };
   return next(specifier, context);
 } });
 export const baseline = process.argv.find(arg => arg.startsWith('--baseline='))?.slice('--baseline='.length);
