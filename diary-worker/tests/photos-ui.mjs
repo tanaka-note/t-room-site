@@ -54,9 +54,8 @@ assert.match(script, /commitStagedPhotos\(saved\.entry\.id, pendingPhotos\)/,
   "posting must promote staged photos without uploading them again");
 assert.match(script, /await waitForPhotoPreparation\(\);\s*const id = Number\(elements\.entryId\.value/s,
   "entry serialization must wait for the active photo preparation task");
-assert.match(photoUpload, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[250, 750\]\)/);
-assert.match(photoUpload, /response\.status < 500 \|\| response\.status > 599/,
-  "only network failures, invalid success responses, and 5xx responses may be retried");
+assert.match(photoUpload, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[1000, 3000, 7000\]\)/);
+assert.match(photoUpload, /status === 408 \|\| status === 429 \|\| status >= 500/);
 assert.match(photoProcessing, /String\(file\.type\)\.startsWith\("image\/"\)/);
 assert.match(script, /state\.editorPhotos = \(entry\?\.photos \|\| \[\]\)\.map/);
 assert.match(photoProcessing, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);

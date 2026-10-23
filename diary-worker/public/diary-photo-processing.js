@@ -3,7 +3,17 @@ export async function preparePhoto(file) {
     throw new Error("画像ファイルではありません。");
   }
   if (!file.size || file.size > 60 * 1024 * 1024) throw new Error("60MB以内の画像を選択してください。");
-  const imageSource = await preparePhotoSource(file);
+  // Own the bytes while the picker grant is still valid. A disk/provider-backed
+  // File can later fail at fetch time (including ERR_UPLOAD_FILE_CHANGED).
+  let fileBytes;
+  try {
+    fileBytes = new Uint8Array(await file.arrayBuffer());
+    file = new File([fileBytes], file.name, { type: file.type, lastModified: file.lastModified });
+  } catch {
+    throw new Error("写真を読み取れませんでした。端末に保存した写真を選び直してください。");
+  }
+  const imageSource = await preparePhotoSource(file, fileBytes);
+  fileBytes = null;
   let bitmap;
   try {
     bitmap = await createImageBitmap(imageSource.source);
@@ -37,15 +47,13 @@ export async function preparePhoto(file) {
   }
 }
 
-async function preparePhotoSource(file) {
+async function preparePhotoSource(file, bytes) {
   const isJpeg = /^image\/(?:jpeg|jpg)$/i.test(String(file.type || "")) || /\.jpe?g$/i.test(String(file.name || ""));
   if (!isJpeg) return { source: file, orientation: 1 };
-  const bytes = new Uint8Array(await file.arrayBuffer());
   const exif = readJpegOrientation(bytes);
   if (!exif) return { source: file, orientation: 1 };
-  // arrayBuffer() returns an independent copy. Mutating it preserves the
-  // original File while avoiding a second full-size copy on memory-limited
-  // mobile browsers.
+  // File construction snapshots the bytes before EXIF normalization, preserving
+  // the original without reading the source file for a second time.
   writeExifOrientation(bytes, exif.valueOffset, exif.littleEndian, 1);
   return {
     source: new Blob([bytes], { type: file.type || "image/jpeg" }),
