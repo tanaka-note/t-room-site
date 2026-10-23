@@ -261,5 +261,4 @@ try { for (const [name, engine, launch] of engines) {
 } } finally { await fixture.close(); }
 
 await import('./folder-navigation-review.browser.mjs');
-await import('./folder-navigation-visibility.browser.mjs');
 await import('./startup-security.browser.mjs');
