@@ -37,6 +37,44 @@ try {
       const page = await context.newPage(); const errors = [], unexpectedDialogs = []; page.on('pageerror', e => errors.push(e.message)); let acceptDialog = true, beforeUnloadSeen = false;
       page.on('dialog', d => { if (d.type() === 'beforeunload') beforeUnloadSeen = true; else if (d.type() !== 'confirm') unexpectedDialogs.push(d.type()); return acceptDialog ? d.accept() : d.dismiss(); });
       const activate = locator => mobile ? locator.tap() : locator.click();
+      // Use the real stylesheet to cover sticky touch hover and keyboard focus
+      // without opening dialogs or changing inventory while checking colors.
+      const stylePage = await context.newPage();
+      try {
+        await stylePage.route(`${origin}/inventory/hover-fixture`, route => route.fulfill({ contentType: 'text/html', body: `<!doctype html>
+          <link rel="stylesheet" href="/inventory/inventory.css">
+          <button class="item-link">サンプル品目</button>
+          <button>使用</button><button class="primary">補充</button>
+          <span class="search-field"><input value="検索"><button id="search-clear">×</button></span>` }));
+        await stylePage.goto(`${origin}/inventory/hover-fixture`);
+        await stylePage.mouse.move(1, 800);
+        assert.equal(await stylePage.evaluate(() => matchMedia('(hover: hover) and (pointer: fine)').matches), !mobile);
+        const controls = [
+          ['.item-link', 'rgba(0, 0, 0, 0)', 'rgb(238, 242, 237)'],
+          ['button:not([class]):not([id])', 'rgb(255, 255, 255)', 'rgb(238, 242, 237)'],
+          ['.primary', 'rgb(80, 107, 89)', 'rgb(64, 90, 73)'],
+          ['#search-clear', 'rgb(245, 243, 237)', 'rgb(236, 231, 219)']
+        ];
+        for (const [selector, normal, hovered] of controls) {
+          const control = stylePage.locator(selector);
+          const background = () => control.evaluate(n => getComputedStyle(n).backgroundColor);
+          assert.equal(await background(), normal, `${selector}: initial background`);
+          if (mobile) await control.tap(); else await control.hover();
+          assert.equal(await background(), mobile ? normal : hovered, `${selector}: ${mobile ? 'tap must not leave hover color' : 'mouse hover color'}`);
+          await stylePage.mouse.move(1, 800);
+          await control.evaluate(n => n.blur());
+          assert.equal(await background(), normal, `${selector}: resting background`);
+        }
+        // Tab to every button, including the clear button, and retain its outline.
+        await stylePage.goto(`${origin}/inventory/hover-fixture`);
+        for (let i = 0; i < 5; i++) {
+          await stylePage.keyboard.press('Tab');
+          assert.deepEqual(await stylePage.evaluate(() => {
+            const n = document.activeElement, s = getComputedStyle(n);
+            return [n.matches(':focus-visible'), s.outlineStyle, s.outlineWidth];
+          }), [true, 'solid', '3px']);
+        }
+      } finally { await stylePage.close(); }
       await page.goto(`${origin}/inventory/`); await page.locator('#app-view').waitFor({ state: 'visible' });
       await page.getByRole('button', { name: '品目を追加', exact: true }).click(); await page.locator('#name').fill('サンプル消耗品'); await page.locator('#quantity').fill('10'); await page.getByRole('button', { name: '記録する' }).click(); await page.locator('#editor').waitFor({ state: 'hidden' }); await page.locator('.item').waitFor();
       await page.locator('#search').fill('存在しない検索語');
