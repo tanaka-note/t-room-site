@@ -36,6 +36,7 @@ export function commands(target) {
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     diary: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-diary'),
+      node('.', 'tools/verify-web-contracts.mjs'),
       ...tests('diary-worker', ...['entry-domain', 'photo-viewer', 'startup-state', 'month-range', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs')],
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
@@ -102,7 +103,9 @@ export function affected(paths) {
     }
     if (/^assets\//.test(path) && !/^assets\/(passkey|password-auth|session-policy|session-secret|security-audit|account-display)/.test(path)) add('site', 'cloud', 'security', 'diary', 'billing');
     if (!service && !/^assets\//.test(path)) add('site');
-    if (/service-worker|webmanifest|web-apps\.json|pwa-auto-update/.test(path)) add('site');
+    // Diary owns its shell/SW and runs the web contracts in its own profile.
+    // Selecting site here would also redeploy the unrelated public Worker.
+    if (/service-worker|webmanifest|web-apps\.json|pwa-auto-update/.test(path) && service !== 'diary') add('site');
   }
   return targets.filter(t => selected.has(t));
 }

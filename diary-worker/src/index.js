@@ -327,6 +327,19 @@ async function handleApi(request, env, url, path, context, getSession) {
   }
 
   const stagedPhotoMatch = path.match(/^\/api\/photo-upload-sessions\/([0-9a-f-]{36})\/photos\/([0-9a-f-]{36})$/i);
+  if (stagedPhotoMatch && request.method === "GET") {
+    requireEntryManagementAccess(session);
+    const uploadSession = await readOwnedPhotoUploadSession(stagedPhotoMatch[1], env, session);
+    if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
+      throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
+    }
+    const row = await findStagedPhoto(stagedPhotoMatch[2].toLowerCase(), env);
+    if (!row || row.upload_session_id !== uploadSession.id
+        || row.household_id !== session.activeHouseholdId || row.account_id !== session.accountId) {
+      throw new HttpError(404, "画像の保存をまだ確認できません。");
+    }
+    return json({ photo: { id: row.id } });
+  }
   if (stagedPhotoMatch && request.method === "DELETE") {
     requireEntryManagementAccess(session);
     return deleteStagedPhoto(stagedPhotoMatch[1], stagedPhotoMatch[2], env, session);
@@ -838,6 +851,23 @@ async function readOwnedPhotoUploadSession(id, env, session) {
 }
 
 async function uploadStagedPhoto(uploadSessionId, request, env, session) {
+  const started = Date.now();
+  const suppliedId = request.headers.get("X-Diary-Upload-Request") || "";
+  const requestId = isUuid(suppliedId) ? suppliedId : crypto.randomUUID();
+  const diagnostic = { stage: "session" };
+  try {
+    return await receiveStagedPhoto(uploadSessionId, request, env, session, diagnostic);
+  } catch (error) {
+    console.warn("Diary photo request failed", {
+      requestId, stage: diagnostic.stage, status: error instanceof HttpError ? error.status : 500,
+      errorType: error instanceof Error ? error.name : "unknown", elapsedMs: Date.now() - started,
+      ray: (request.headers.get("cf-ray") || "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64)
+    });
+    throw error;
+  }
+}
+
+async function receiveStagedPhoto(uploadSessionId, request, env, session, diagnostic) {
   if (!env.MEDIA) throw new HttpError(503, "画像の保存先が設定されていません。");
   const uploadSession = await readOwnedPhotoUploadSession(uploadSessionId, env, session);
   if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
@@ -846,6 +876,7 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
 
   let form;
   try {
+    diagnostic.stage = "multipart";
     form = await readMultipartForm(request, PHOTO_REQUEST_MAX_BYTES);
   } catch (error) {
     if (error instanceof HttpError) throw error;
@@ -912,6 +943,7 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
   });
 
   try {
+    diagnostic.stage = "r2";
     const testPauseMs = clampNumber(env.STAGED_PHOTO_UPLOAD_TEST_PAUSE_MS, 0, 10000, 0);
     if (testPauseMs > 0 && testHook === "before-r2") {
       console.log("Diary staged photo upload test pause", { uploadSessionId: uploadSession.id, photoId: id });
@@ -931,6 +963,7 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
     const now = new Date();
     const nowIso = now.toISOString();
     const expiresAt = new Date(now.getTime() + PHOTO_UPLOAD_SESSION_TTL_MS).toISOString();
+    diagnostic.stage = "d1";
     const [insertResult, updateResult] = await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO diary_staged_photos (
@@ -986,12 +1019,6 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
       return response;
     }
     await cleanupCurrentAttempt();
-    console.error("Diary staged photo upload failed", {
-      stage: "staged-photo-upload",
-      uploadSessionId: uploadSession.id,
-      photoId: id,
-      errorType: error instanceof Error ? error.name : "unknown"
-    });
     if (error instanceof HttpError) throw error;
     throw new HttpError(500, "画像を保存できませんでした。");
   }
