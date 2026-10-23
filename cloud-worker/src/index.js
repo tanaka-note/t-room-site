@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-fb1fc876b8a2";
+const APP_BUILD_ID = "cloud-382a66f8b206";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -167,8 +167,20 @@ export default {
     }
   },
 
-  async scheduled(_controller, env) {
-    await abortStaleUploads(env);
+  async scheduled(controller, env) {
+    if (controller.cron === "17 18 * * *") await abortStaleUploads(env);
+    await recoverTrashDeletion(env);
+  },
+
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      try {
+        if (typeof message.body?.jobId === "string") await processTrashDeletion(env, message.body.jobId);
+        message.ack();
+      } catch {
+        message.retry({ delaySeconds: 60 });
+      }
+    }
   }
 };
 
@@ -285,6 +297,16 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/uploads" && request.method === "POST") return createUpload(request, env, session);
   if (path === "/api/trash" && request.method === "GET") return listTrash(env, session);
   if (path === "/api/trash" && request.method === "DELETE") return emptyTrash(env, session);
+  if (path === "/api/trash/job" && request.method === "GET") {
+    requireDelete(session);
+    return json({ job: trashJobView(await latestTrashJob(env)) });
+  }
+  if (path === "/api/trash/jobs" && request.method === "GET") {
+    requireDelete(session);
+    return json({ jobs: (await visibleTrashJobs(env)).map(trashJobView) });
+  }
+  const trashRetry = path.match(/^\/api\/trash\/jobs\/([a-f0-9-]{36})\/retry$/);
+  if (trashRetry && request.method === "POST") return retryTrashDeletion(env, session, trashRetry[1]);
   if (path === "/api/usage" && request.method === "GET") return getUsage(env, session);
   if (path === "/api/diary-backups" || path.startsWith("/api/diary-backups/")) {
     requireAdmin(session);
@@ -1694,8 +1716,9 @@ async function deleteFolder(id, env, session) {
 
 async function restoreFolder(id, env, session) {
   requireDelete(session);
-  const folder = await env.DB.prepare("SELECT id, deleted_at AS deletedAt FROM cloud_folders WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
+  const folder = await env.DB.prepare("SELECT id, deleted_at AS deletedAt, purge_job_id FROM cloud_folders WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!folder) throw new HttpError(404, "ゴミ箱にフォルダが見つかりません。");
+  if (folder.purge_job_id) throw new HttpError(409, "完全削除を受け付けたデータは復元できません。");
   const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
       SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
       UNION ALL
@@ -1730,7 +1753,10 @@ async function restoreFolder(id, env, session) {
       UPDATE cloud_folders SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE id IN (SELECT id FROM folder_tree)`)
       .bind(id, folder.deletedAt, folder.deletedAt)
-  ]);
+  ]).catch(error => {
+    if (String(error.message).includes("permanent deletion already accepted")) throw new HttpError(409, "完全削除を受け付けたデータは復元できません。");
+    throw error;
+  });
   await audit(env, "folder_restored", session, "folder", id, { folderCount, fileCount });
   return json({ ok: true, folderCount, fileCount, restored: folderCount + fileCount });
 }
@@ -1838,10 +1864,11 @@ async function completeUpload(id, request, env, session) {
   const storedBytes = Number(stored?.size || 0);
   if (!stored || storedBytes !== expectedBytes) {
     await env.FILES.delete(file.object_key).catch(() => {});
-    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).run();
+    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(id).run();
     throw new HttpError(502, "Cloudflare上の保存容量を確認できませんでした。最初から再試行します。");
   }
-  await env.DB.prepare("UPDATE cloud_files SET status = 'ready', multipart_upload_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
+  const completed = await env.DB.prepare("UPDATE cloud_files SET status = 'ready', multipart_upload_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND purge_job_id IS NULL").bind(id).run();
+  if (!completed.meta?.changes) throw new HttpError(409, "完全削除を受け付けたアップロードです。");
   await audit(env, "upload_completed", session, "file", id, { encrypted: Number(file.crypto_version) === 1, sizeBytes: file.size_bytes });
   return json({ ok: true, id, verified: true, storedBytes });
 }
@@ -1852,7 +1879,7 @@ async function cancelUpload(id, env, session) {
   requireUploadOwnership(session, file);
   await requireFolderAccess(env, file.folder_id, session);
   await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort();
-  await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).run();
+  await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(id).run();
   return json({ ok: true });
 }
 
@@ -2008,68 +2035,241 @@ async function moveFileToTrash(id, env, session) {
 
 async function restoreFile(id, env, session) {
   requireDelete(session);
-  const file = await env.DB.prepare("SELECT id, folder_id FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
+  const file = await env.DB.prepare("SELECT id, folder_id, purge_job_id FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
+  if (file.purge_job_id) throw new HttpError(409, "完全削除を受け付けたデータは復元できません。");
   await requireFolderAccess(env, file.folder_id, session);
-  await env.DB.prepare("UPDATE cloud_files SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
+  const restored = await env.DB.prepare("UPDATE cloud_files SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND purge_job_id IS NULL").bind(id).run();
+  if (!restored.meta?.changes) throw new HttpError(409, "完全削除を受け付けたデータは復元できません。");
   await audit(env, "file_restored", session, "file", id);
   return json({ ok: true });
 }
 
 async function permanentlyDeleteFile(id, env, session) {
   requireDelete(session);
-  const file = await env.DB.prepare("SELECT object_key, thumbnail_key, display_thumbnail_key, stream_uid FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
-  if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
-  await env.FILES.delete(file.object_key);
-  if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
-  if (file.display_thumbnail_key) await env.FILES.delete(file.display_thumbnail_key);
-  if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
-  await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(id).run();
-  await audit(env, "file_deleted", session, "file", id);
-  return json({ ok: true });
+  return startTrashDeletion(env, session, id);
 }
 
 async function emptyTrash(env, session) {
   requireDelete(session);
-  const totals = await env.DB.prepare(`SELECT
-    (SELECT COUNT(*) FROM cloud_files WHERE deleted_at IS NOT NULL) AS fileCount,
-    (SELECT COUNT(*) FROM cloud_folders WHERE deleted_at IS NOT NULL) AS folderCount`).first();
-  const rows = await env.DB.prepare("SELECT id, object_key, thumbnail_key, display_thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL ORDER BY id LIMIT 20").all();
-  let deleted = 0;
-  let deletedFolders = 0;
-  let failed = 0;
-  for (const file of rows.results || []) {
+  return startTrashDeletion(env, session);
+}
+
+async function latestTrashJob(env) {
+  return env.DB.prepare("SELECT * FROM cloud_trash_jobs ORDER BY created_at DESC, rowid DESC LIMIT 1").first();
+}
+
+async function visibleTrashJobs(env) {
+  return (await env.DB.prepare(`SELECT j.*,
+    (SELECT COUNT(*) FROM cloud_files WHERE purge_job_id = j.id AND purge_error = 'referenced_object') AS referenced_files
+    FROM cloud_trash_jobs j WHERE status <> 'completed'
+      OR id = (SELECT id FROM cloud_trash_jobs ORDER BY created_at DESC, rowid DESC LIMIT 1)
+    ORDER BY created_at DESC, rowid DESC`).all()).results;
+}
+
+function trashJobView(job) {
+  if (!job) return null;
+  const waiting = job.dispatch_failed || (job.status === "queued" && job.next_attempt_at > Date.now())
+    || (job.status === "running" && job.lease_until <= Date.now());
+  return { id: job.id, status: job.status, totalFiles: job.total_files, totalFolders: job.total_folders,
+    deletedFiles: job.deleted_files, deletedFolders: job.deleted_folders, createdAt: job.created_at,
+    phase: ["queued", "running"].includes(job.status) && waiting ? "waiting" : job.status,
+    referencedFiles: Number(job.referenced_files || 0) };
+}
+
+function requireTrashQueue(env) {
+  if (env.TRASH_DELETION_PAUSED === "true") throw new HttpError(503, "完全削除の新規受付と再試行を一時停止しています。");
+  if (!env.TRASH_DELETION) throw new HttpError(503, "バックグラウンド削除を準備中です。しばらくしてから再試行してください。");
+}
+
+async function dispatchTrashDeletion(env, jobId, delaySeconds = 0) {
+  try {
+    await env.TRASH_DELETION.send({ jobId }, { delaySeconds });
+    await env.DB.prepare("UPDATE cloud_trash_jobs SET dispatch_failed = 0 WHERE id = ?").bind(jobId).run();
+  } catch (error) {
+    await env.DB.prepare("UPDATE cloud_trash_jobs SET dispatch_failed = 1 WHERE id = ?").bind(jobId).run();
+    throw error;
+  }
+}
+
+async function startTrashDeletion(env, session, fileId = null) {
+  requireDelete(session);
+  requireTrashQueue(env);
+  if (fileId !== null) {
+    const file = await env.DB.prepare("SELECT id, purge_job_id FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(fileId).first();
+    if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
+    const active = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE status IN ('queued', 'running')").first();
+    if (file.purge_job_id && file.purge_job_id !== active?.id) throw new HttpError(409, "このファイルは受け付け済みです。該当ジョブから再試行してください。");
+    if (active && file.purge_job_id !== active.id) throw new HttpError(409, "別の完全削除が進行中です。完了後に再試行してください。");
+  }
+  let job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE status IN ('queued', 'running')").first();
+  if (job && fileId === null) {
+    const unclaimed = await env.DB.prepare(`SELECT
+      EXISTS (SELECT 1 FROM cloud_files WHERE deleted_at IS NOT NULL AND purge_job_id IS NULL)
+      OR EXISTS (SELECT 1 FROM cloud_folders WHERE deleted_at IS NOT NULL AND purge_job_id IS NULL) AS present`).first();
+    if (unclaimed.present) throw new HttpError(409, "別の完全削除が進行中です。新しい対象は完了後に受け付けます。");
+  }
+  if (!job) {
+    const id = crypto.randomUUID();
+    const now = Date.now();
     try {
-      await env.FILES.delete(file.object_key);
-      if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
-      if (file.display_thumbnail_key) await env.FILES.delete(file.display_thumbnail_key);
-      if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
-      await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(file.id).run();
-      await audit(env, "file_deleted", session, "file", file.id, { bulk: true });
-      deleted += 1;
+      // D1 batch is a transaction: the tags are the exact accepted snapshot.
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO cloud_trash_jobs(id, status, actor_role, created_at, updated_at) VALUES (?, 'queued', ?, ?, ?)").bind(id, session.role, now, now),
+        env.DB.prepare(`UPDATE cloud_files SET purge_job_id = ? WHERE deleted_at IS NOT NULL AND purge_job_id IS NULL${fileId === null ? "" : " AND id = ?"}`)
+          .bind(id, ...(fileId === null ? [] : [fileId])),
+        ...(fileId === null ? [env.DB.prepare("UPDATE cloud_folders SET purge_job_id = ? WHERE deleted_at IS NOT NULL AND purge_job_id IS NULL").bind(id)] : []),
+        env.DB.prepare(`UPDATE cloud_trash_jobs SET
+          total_files = (SELECT COUNT(*) FROM cloud_files WHERE purge_job_id = ?),
+          total_folders = (SELECT COUNT(*) FROM cloud_folders WHERE purge_job_id = ?) WHERE id = ?`).bind(id, id, id),
+        env.DB.prepare("INSERT INTO cloud_audit_logs(event_type, actor_role, target_type, details_json) VALUES ('trash_deletion_requested', ?, 'trash_job', ?)")
+          .bind(session.role, JSON.stringify({ jobId: id }))
+      ]);
+    } catch (error) {
+      // A concurrent request may already have claimed the singleton job.
+      job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE status IN ('queued', 'running')").first();
+      if (!job) throw error;
+      throw new HttpError(409, "別の完全削除を受け付けました。画面の進捗を確認してください。");
+    }
+    job ||= await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ?").bind(id).first();
+  }
+  if (fileId !== null) {
+    const target = await env.DB.prepare("SELECT purge_job_id FROM cloud_files WHERE id = ?").bind(fileId).first();
+    if (target && target.purge_job_id !== job.id) throw new HttpError(409, "別の完全削除が進行中です。完了後に再試行してください。");
+  }
+  // A failed send cannot lose the accepted job: Cron reconciles it independently.
+  if (job.status !== "failed") await dispatchTrashDeletion(env, job.id).catch(() => {});
+  job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ?").bind(job.id).first();
+  return json({ ok: true, job: trashJobView(job) }, 202);
+}
+
+async function retryTrashDeletion(env, session, jobId) {
+  requireDelete(session);
+  requireTrashQueue(env);
+  const job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ? AND status = 'failed'").bind(jobId).first();
+  if (!job) throw new HttpError(409, "再試行が必要な削除はありません。");
+  const admission = crypto.randomUUID();
+  const results = await env.DB.batch([
+    env.DB.prepare(`UPDATE cloud_trash_jobs SET status = 'queued', lease_token = ?, lease_until = 0,
+      dispatch_failed = 0, next_attempt_at = 0, updated_at = ? WHERE id = ? AND status = 'failed'
+      AND NOT EXISTS (SELECT 1 FROM cloud_trash_jobs WHERE status IN ('queued', 'running'))`).bind(admission, Date.now(), job.id),
+    env.DB.prepare(`UPDATE cloud_files SET purge_attempts = 0, purge_error = NULL WHERE purge_job_id = ?
+      AND EXISTS (SELECT 1 FROM cloud_trash_jobs WHERE id = ? AND lease_token = ?)`).bind(job.id, job.id, admission),
+    env.DB.prepare(`INSERT INTO cloud_audit_logs(event_type, actor_role, target_type, details_json)
+      SELECT 'trash_deletion_retried', ?, 'trash_job', ? WHERE EXISTS (SELECT 1 FROM cloud_trash_jobs WHERE id = ? AND lease_token = ?)`)
+      .bind(session.role, JSON.stringify({ jobId: job.id }), job.id, admission),
+    env.DB.prepare("UPDATE cloud_trash_jobs SET lease_token = NULL WHERE id = ? AND lease_token = ?").bind(job.id, admission)
+  ]);
+  if (!results[0].meta?.changes) throw new HttpError(409, "別の完全削除が進行中です。完了後に該当ジョブを再試行してください。");
+  await dispatchTrashDeletion(env, job.id).catch(() => {});
+  return json({ ok: true, job: trashJobView(await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ?").bind(job.id).first()) }, 202);
+}
+
+async function recoverTrashDeletion(env) {
+  if (!env.TRASH_DELETION) return;
+  const job = await env.DB.prepare(`SELECT id FROM cloud_trash_jobs
+    WHERE status IN ('queued', 'running') AND lease_until <= ? AND next_attempt_at <= ?`).bind(Date.now(), Date.now()).first();
+  if (job) await dispatchTrashDeletion(env, job.id);
+}
+
+async function processTrashDeletion(env, jobId) {
+  const token = crypto.randomUUID();
+  const now = Date.now();
+  // Longer than the Queue consumer's 15-minute wall-time limit. Cron can reclaim
+  // a killed invocation after expiry, without overlapping external deletions.
+  const lock = await env.DB.prepare(`UPDATE cloud_trash_jobs SET status = 'running', dispatch_failed = 0, lease_token = ?, lease_until = ?, updated_at = ?
+    WHERE id = ? AND status IN ('queued', 'running') AND lease_until <= ? AND next_attempt_at <= ?`)
+    .bind(token, now + 20 * 60 * 1000, now, jobId, now, now).run();
+  if (!lock.meta?.changes) return;
+  const job = await env.DB.prepare("SELECT * FROM cloud_trash_jobs WHERE id = ?").bind(jobId).first();
+  const lease = "EXISTS (SELECT 1 FROM cloud_trash_jobs WHERE id = ? AND lease_token = ?)";
+  const rows = (await env.DB.prepare(`SELECT id, object_key, thumbnail_key, display_thumbnail_key, stream_uid, multipart_upload_id, purge_attempts
+    FROM cloud_files WHERE purge_job_id = ? AND purge_attempts < 5 ORDER BY purge_attempts, id LIMIT 80`).bind(jobId).all()).results || [];
+  const succeeded = [];
+  const failures = new Map();
+  const keysFor = files => [...new Set(files.flatMap(file => [file.object_key, file.thumbnail_key, file.display_thumbnail_key]).filter(Boolean))];
+  const blocked = rows.length ? new Set((await env.DB.prepare(`SELECT DISTINCT candidate.id FROM cloud_files candidate
+    JOIN cloud_files other ON other.object_key IN (candidate.object_key, candidate.thumbnail_key, candidate.display_thumbnail_key)
+      OR other.thumbnail_key IN (candidate.object_key, candidate.thumbnail_key, candidate.display_thumbnail_key)
+      OR other.display_thumbnail_key IN (candidate.object_key, candidate.thumbnail_key, candidate.display_thumbnail_key)
+    WHERE candidate.purge_job_id = ? AND candidate.id IN (${rows.map(() => "?").join(",")}) AND other.purge_job_id IS NOT ?`)
+    .bind(jobId, ...rows.map(file => file.id), jobId).all()).results.map(row => row.id)) : new Set();
+  for (const id of blocked) failures.set(id, "referenced_object");
+  async function deleteGroup(files) {
+    try {
+      await env.FILES.delete(keysFor(files));
     } catch {
-      failed += 1;
+      if (files.length > 1 && files.every(file => file.purge_attempts >= 2)) {
+        for (const file of files) await deleteGroup([file]);
+      } else {
+        for (const file of files) failures.set(file.id, "r2_delete_failed");
+      }
+      return;
+    }
+    for (const file of files) {
+        try {
+          if (file.stream_uid) {
+            if (!env.STREAM) throw new Error("Stream binding unavailable");
+            try { await env.STREAM.video(file.stream_uid).delete(); }
+            catch (error) { if (Number(error.status ?? error.statusCode ?? error.response?.status) !== 404) throw error; }
+          }
+          succeeded.push(file.id);
+        } catch { failures.set(file.id, "stream_delete_failed"); }
     }
   }
-  const remainingRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM cloud_files WHERE deleted_at IS NOT NULL").first();
-  const remaining = Number(remainingRow?.count || 0);
-  if (failed === 0 && remaining === 0) {
-    try {
-      const result = await env.DB.prepare("DELETE FROM cloud_folders WHERE deleted_at IS NOT NULL").run();
-      deletedFolders = Number(result.meta?.changes || 0);
-    } catch {
-      failed += 1;
+  const eligible = [];
+  for (const file of rows) {
+    if (blocked.has(file.id)) continue;
+    if (file.multipart_upload_id) {
+      try { await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort(); }
+      catch (error) {
+        if (error.code !== "NoSuchUpload" && error.name !== "NoSuchUpload") {
+          failures.set(file.id, "multipart_abort_failed");
+          continue;
+        }
+      }
     }
+    eligible.push(file);
   }
-  return json({
-    ok: failed === 0 && remaining === 0,
-    deleted,
-    deletedFolders,
-    failed,
-    remaining,
-    totalFiles: Number(totals?.fileCount || 0),
-    totalFolders: Number(totals?.folderCount || 0)
-  });
+  // Keep the fast 80-file path. After a failed attempt, isolate ten files;
+  // repeatedly failing groups are checked file by file within this invocation.
+  const groupSize = eligible.some(file => file.purge_attempts > 0) ? 10 : 80;
+  for (let offset = 0; offset < eligible.length; offset += groupSize) await deleteGroup(eligible.slice(offset, offset + groupSize));
+  if (succeeded.length) {
+    const placeholders = succeeded.map(() => "?").join(",");
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO cloud_audit_logs(event_type, actor_role, target_type, target_id, details_json)
+        SELECT 'file_deleted', ?, 'file', id, ? FROM cloud_files WHERE id IN (${placeholders}) AND purge_job_id = ? AND ${lease}`)
+        .bind(job.actor_role, JSON.stringify({ bulk: true, jobId }), ...succeeded, jobId, jobId, token),
+      env.DB.prepare(`DELETE FROM cloud_files WHERE id IN (${placeholders}) AND purge_job_id = ? AND ${lease}`)
+        .bind(...succeeded, jobId, jobId, token)
+    ]);
+  }
+  if (failures.size) await env.DB.batch([...failures].map(([id, reason]) => env.DB.prepare(`UPDATE cloud_files
+    SET purge_attempts = purge_attempts + 1, purge_error = ? WHERE id = ? AND purge_job_id = ? AND ${lease}`)
+    .bind(reason, id, jobId, jobId, token)));
+
+  // Delete only snapshot folders with no remaining references, from leaves up.
+  const leaves = `SELECT f.id FROM cloud_folders f WHERE f.purge_job_id = ?
+    AND NOT EXISTS (SELECT 1 FROM cloud_files WHERE folder_id = f.id)
+    AND NOT EXISTS (SELECT 1 FROM cloud_folders WHERE parent_id = f.id)`;
+  const folderIds = (await env.DB.prepare(`${leaves} LIMIT 80`).bind(jobId).all()).results.map(row => row.id);
+  if (folderIds.length) await env.DB.prepare(`DELETE FROM cloud_folders WHERE id IN (${folderIds.map(() => "?").join(",")})
+    AND purge_job_id = ? AND ${lease}`).bind(...folderIds, jobId, jobId, token).run();
+  const pending = await env.DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM cloud_files WHERE purge_job_id = ?) AS files,
+    (SELECT COUNT(*) FROM cloud_files WHERE purge_job_id = ? AND purge_attempts < 5) AS retryable,
+    (SELECT COUNT(*) FROM cloud_folders WHERE purge_job_id = ?) AS folders,
+    EXISTS (${leaves}) AS leaves`).bind(jobId, jobId, jobId, jobId).first();
+  const status = !pending.files && !pending.folders ? "completed" : pending.retryable || pending.leaves ? "queued" : "failed";
+  const delay = failures.size ? 60 : 0;
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE cloud_trash_jobs SET status = ?, lease_token = NULL, lease_until = 0, next_attempt_at = ?, updated_at = ?
+      WHERE id = ? AND lease_token = ?`).bind(status, Date.now() + delay * 1000, Date.now(), jobId, token),
+    ...(status === "completed" || status === "failed" ? [env.DB.prepare(`INSERT INTO cloud_audit_logs(event_type, actor_role, target_type, details_json)
+      VALUES (?, ?, 'trash_job', ?)`).bind(`trash_deletion_${status}`, job.actor_role, JSON.stringify({ jobId }))] : [])
+  ]);
+  if (status === "queued") await dispatchTrashDeletion(env, jobId, delay);
 }
 
 async function putThumbnail(id, request, env, session) {
@@ -2172,7 +2372,7 @@ async function listTrash(env, session) {
   requireDelete(session);
   const result = await env.DB.prepare(`
     SELECT f.id, f.folder_id AS folderId, f.original_name AS name, f.mime_type AS mimeType, f.media_kind AS mediaKind,
-      f.size_bytes AS sizeBytes, f.thumbnail_key IS NOT NULL AS hasThumbnail, f.deleted_at AS deletedAt,
+      f.size_bytes AS sizeBytes, f.thumbnail_key IS NOT NULL AS hasThumbnail, f.deleted_at AS deletedAt, f.purge_job_id IS NOT NULL AS purging,
       f.crypto_version AS cryptoVersion, f.encrypted_metadata AS encryptedMetadata, f.metadata_iv AS metadataIv,
       f.wrapped_file_key AS wrappedFileKey, f.file_key_iv AS fileKeyIv,
       f.encrypted_size_bytes AS encryptedSizeBytes, f.chunk_size_bytes AS chunkSizeBytes, f.chunk_count AS chunkCount,
@@ -2193,7 +2393,7 @@ async function listTrash(env, session) {
     }
   }
   const folderResult = await env.DB.prepare(`SELECT f.id, f.parent_id AS parentId, f.name,
-      f.created_at AS createdAt, f.updated_at AS updatedAt, f.deleted_at AS deletedAt,
+      f.created_at AS createdAt, f.updated_at AS updatedAt, f.deleted_at AS deletedAt, f.purge_job_id IS NOT NULL AS purging,
       f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
       f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
       f.password_wrap_iv AS passwordWrapIv, f.admin_wrapped_key AS adminWrappedKey,
@@ -2227,7 +2427,7 @@ async function listTrash(env, session) {
       adminAccess: true
     });
   }
-  return json({ files, folders });
+  return json({ files, folders, job: trashJobView(await latestTrashJob(env)), jobs: (await visibleTrashJobs(env)).map(trashJobView) });
 }
 
 async function getUsage(env, session) {
@@ -2444,10 +2644,10 @@ async function approveDeletionRequest(id, env, session) {
 }
 
 async function abortStaleUploads(env) {
-  const stale = await env.DB.prepare("SELECT id, object_key, multipart_upload_id FROM cloud_files WHERE status = 'uploading' AND created_at < datetime('now', '-1 day') LIMIT 100").all();
+  const stale = await env.DB.prepare("SELECT id, object_key, multipart_upload_id FROM cloud_files WHERE status = 'uploading' AND purge_job_id IS NULL AND created_at < datetime('now', '-1 day') LIMIT 100").all();
   for (const file of stale.results || []) {
     try { await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort(); } catch {}
-    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(file.id).run();
+    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(file.id).run();
   }
   await env.DB.prepare("DELETE FROM cloud_folder_unlocks WHERE expires_at <= ?").bind(Math.floor(Date.now() / 1000)).run();
 }
@@ -2690,7 +2890,7 @@ async function requireReadyFile(env, id, allowDeleted) {
 }
 
 async function requireUploadingFile(env, id) {
-  const file = await env.DB.prepare("SELECT * FROM cloud_files WHERE id = ? AND status = 'uploading'").bind(id).first();
+  const file = await env.DB.prepare("SELECT * FROM cloud_files WHERE id = ? AND status = 'uploading' AND purge_job_id IS NULL").bind(id).first();
   if (!file) throw new HttpError(404, "アップロード情報が見つかりません。");
   return file;
 }
