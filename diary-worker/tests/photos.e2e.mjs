@@ -142,6 +142,14 @@ try {
   const stagedUpload = await stagedUploadResponse.json();
   assert.equal(stagedUploadResponse.status, 200, JSON.stringify(stagedUpload));
   assert.equal(stagedUpload.photo.id, stagedPhotoId);
+  const statusPath = `/photo-upload-sessions/${uploadSessionId}/photos/${stagedPhotoId}`;
+  const confirmedUpload = await jsonRequest(statusPath, { cookie: wifeCookie });
+  assert.equal(confirmedUpload.response.status, 200);
+  assert.deepEqual(confirmedUpload.result, { photo: { id: stagedPhotoId } });
+  assert.match(confirmedUpload.response.headers.get("cache-control"), /no-store/);
+  assert.equal((await jsonRequest(statusPath, { cookie: mainCookie })).response.status, 404,
+    "another account cannot inspect an upload even within the same household");
+  assert.equal((await jsonRequest(`/photo-upload-sessions/${uploadSessionId}/photos/${randomUUID()}`, { cookie: wifeCookie })).response.status, 404);
   assert.deepEqual(queryLocalDatabase(`
     SELECT
       (SELECT COUNT(*) FROM diary_staged_photos WHERE id = '${stagedPhotoId}') AS staged_count,

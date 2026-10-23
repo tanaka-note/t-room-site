@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, unlink, rmdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createDiaryFixtureServer as createServer } from "./bootstrap-fixture.mjs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -106,6 +107,7 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (apiPath === "/entries" && request.method === "POST") {
+      if (scenario.mode === "entry-401") return sendJson(response, 401, { error: "ログインが必要です。" });
       const body = JSON.parse((await readRequestBody(request)).toString("utf8"));
       const knownId = scenario.entryRequestIds.get(body.requestId);
       if (knownId) {
@@ -127,6 +129,7 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (apiPath === "/photo-upload-sessions" && request.method === "POST") {
+      if (scenario.mode === "session-401") return sendJson(response, 401, { error: "ログインが必要です。" });
       const id = crypto.randomUUID();
       scenario.uploadSessions.add(id);
       sendJson(response, 200, { uploadSession: { id, expiresAt: "2026-08-20T00:00:00.000Z" } });
@@ -159,6 +162,10 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, { entry });
       return;
     }
+    const statusMatch = apiPath.match(/^\/photo-upload-sessions\/([0-9a-f-]{36})\/photos\/([0-9a-f-]{36})$/);
+    if (statusMatch && request.method === "GET") {
+      return sendJson(response, scenario.storedPhotoIds.has(statusMatch[2]) ? 200 : 404, { photo: { id: statusMatch[2] } });
+    }
     const photoUploadMatch = apiPath.match(/^\/photo-upload-sessions\/([0-9a-f-]{36})\/photos$/);
     if (photoUploadMatch && request.method === "POST") {
       const multipart = (await readRequestBody(request)).toString("latin1");
@@ -174,6 +181,8 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: "画像形式を確認してください。" });
         return;
       }
+      if (scenario.mode === "photo-401") return sendJson(response, 401, { error: "ログインが必要です。" });
+      if (scenario.mode === "network-down") { request.socket.destroy(); return; }
       if (scenario.mode === "lost-response" && scenario.photoRequests === 1) {
         scenario.storedPhotoIds.add(photoId);
         request.socket.destroy();
@@ -384,6 +393,21 @@ async function verifyAutomaticRecovery(browser, name, mode, contextOptions) {
   resetScenario(mode);
   const page = await newDiaryPage(browser, contextOptions);
   try {
+    if (mode === "lost-response") {
+      scenario.mode = "success";
+      await page.evaluate(() => {
+        const nativeFetch = window.fetch.bind(window);
+        let lost = false;
+        window.fetch = async (url, init) => {
+          const response = await nativeFetch(url, init);
+          if (!lost && init?.method === "POST" && /\/photos$/.test(url)) {
+            lost = true;
+            throw new TypeError("simulated response loss after storage");
+          }
+          return response;
+        };
+      });
+    }
     await choosePhoto(page, `${mode}.png`);
     await page.waitForSelector("#editor-photo-list .editor-photo-card");
     await page.waitForFunction(() => document.querySelector("#photo-preparation-status")?.textContent.includes("本文へ追加"));
@@ -392,7 +416,8 @@ async function verifyAutomaticRecovery(browser, name, mode, contextOptions) {
     assert.deepEqual(scenario.entryRequests.map((item) => item.method), ["POST", "PUT"],
       `${name} ${mode}: entry must be created once and finalized in place`);
     assert.equal(scenario.createdEntryIds.size, 1, `${name} ${mode}: exactly one entry ID must be created`);
-    assert.equal(scenario.photoRequests, 2, `${name} ${mode}: upload must retry exactly once before success`);
+    assert.equal(scenario.photoRequests, mode === "lost-response" ? 1 : 2,
+      `${name} ${mode}: a saved upload must be reconciled without resending bytes`);
     assert.equal(scenario.storedPhotoIds.size, 1, `${name} ${mode}: retry must retain one logical photo`);
     assert.equal(scenario.photoUploadStartedBeforeEntry, true, `${name} ${mode}: retries must run while editing`);
     assert.equal(scenario.commitRequests.length, 1, `${name} ${mode}: posting must promote without another upload`);
@@ -527,7 +552,8 @@ async function verifyPermanentFailure(browser, name, contextOptions) {
     await page.waitForSelector("#editor-photo-list .editor-photo-card");
     await page.click("#save-entry-button");
     await page.waitForFunction(() => document.querySelector("#editor-message")?.textContent.includes("画像形式を確認してください。"));
-    assert.equal(scenario.photoRequests, 2, `${name}: background failure must be retried once when posting`);
+    assert.ok(scenario.photoRequests >= 1 && scenario.photoRequests <= 2,
+      `${name}: permanent errors must have no automatic retry; a new save may retry a settled failure`);
     assert.equal(scenario.createdEntryIds.size, 0, `${name}: entry must not be created before required photos are ready`);
     assert.equal(await page.locator("#editor-dialog").evaluate((node) => node.open), true, `${name}: editor must remain open after photo failure`);
     assert.equal(await page.inputValue("#entry-id"), "", `${name}: failed preupload must not create a partial entry`);
@@ -587,6 +613,12 @@ async function verifyNewDraft(browser, name, contextOptions) {
 async function runBrowser(browserType, name, executablePath, contextOptions = {}) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
+    await verifyChangedSourceFile(browser, name, contextOptions);
+    await verifyJpegMultiple(browser, name, contextOptions, 1);
+    await verifyJpegMultiple(browser, name, contextOptions, 3);
+    for (const mode of ["photo-401", "session-401", "entry-401", "network-down"]) {
+      await verifyEditorRetention(browser, name, mode, contextOptions);
+    }
     await verifyEntryPostResponseLoss(browser, name, contextOptions);
     await verifyPreparationRace(browser, name, contextOptions);
     await verifyAutomaticRecovery(browser, name, "http-500-once", contextOptions);
@@ -602,6 +634,99 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
   } finally {
     await browser.close();
   }
+}
+
+async function chooseJpegs(page, count = 3) {
+  const jpeg = await page.evaluate(() => {
+    const canvas = document.createElement("canvas"); canvas.width = 32; canvas.height = 24;
+    canvas.getContext("2d").fillRect(0, 0, 32, 24);
+    return canvas.toDataURL("image/jpeg").split(",")[1];
+  });
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.click("#add-photo-button");
+  await (await chooserPromise).setFiles(Array.from({ length: count }, (_, n) => ({ name: `${n}.jpg`, mimeType: "image/jpeg", buffer: Buffer.from(jpeg, "base64") })));
+}
+
+async function verifyChangedSourceFile(browser, name, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  const dir = await mkdtemp(join(tmpdir(), "diary-photo-source-"));
+  const path = join(dir, "source.png");
+  try {
+    await writeFile(path, validPng);
+    await page.evaluate(() => {
+      const nativeFetch = window.fetch.bind(window);
+      let release;
+      const gate = new Promise(resolve => { release = resolve; });
+      window.__releaseUpload = release;
+      window.fetch = async (url, init) => {
+        if (init?.method === "POST" && /\/photos$/.test(url)) {
+          window.__uploadHeld = true;
+          await gate;
+        }
+        return nativeFetch(url, init);
+      };
+    });
+    const chooser = page.waitForEvent("filechooser");
+    await page.click("#add-photo-button");
+    await (await chooser).setFiles(path);
+    await page.waitForFunction(() => window.__uploadHeld);
+    await writeFile(path, Buffer.from("source changed after image preparation"));
+    await page.evaluate(() => window.__releaseUpload());
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.storedPhotoIds.size, 1, `${name}: upload must survive a changed picker source`);
+    assert.equal(scenario.photoRequests, 1);
+  } finally {
+    await page.close();
+    await unlink(path).catch(() => {});
+    await rmdir(dir);
+  }
+}
+
+async function verifyJpegMultiple(browser, name, contextOptions, count) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await chooseJpegs(page, count);
+    await page.waitForFunction(expected => document.querySelectorAll("#editor-photo-list .editor-photo-card").length === expected, count);
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.photoRequests, count, name);
+    assert.equal(scenario.storedPhotoIds.size, count, name);
+    assert.equal(scenario.createdEntryIds.size, 1, name);
+    assert.equal(scenario.commitRequests[0].photoIds.length, count, name);
+  } finally { await page.close(); }
+}
+
+async function verifyEditorRetention(browser, name, mode, contextOptions) {
+  resetScenario(mode);
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await page.fill("#entry-tags", "保護, 再試行");
+    const date = await page.inputValue("#entry-date");
+    await chooseJpegs(page);
+    await page.waitForFunction(() => document.querySelectorAll("#editor-photo-list .editor-photo-card").length === 3);
+    // Exhaustion is bounded, but avoid waiting real backoff time in the fixture.
+    if (mode === "network-down") await page.evaluate(() => {
+      const timer = window.setTimeout.bind(window);
+      window.setTimeout = (fn, ms, ...args) => timer(fn, ms < 30000 ? 0 : ms, ...args);
+    });
+    await page.click("#save-draft-button");
+    await page.waitForFunction(() => !document.querySelector("#save-entry-button").disabled);
+    assert.equal(await page.locator("#editor-dialog").evaluate(el => el.open), true, `${name} ${mode}`);
+    assert.equal(await page.inputValue("#entry-title"), "写真付き投稿テスト");
+    assert.equal(await page.inputValue("#entry-date"), date);
+    assert.equal(await page.inputValue("#entry-tags"), "保護, 再試行");
+    assert.match(await page.locator("#entry-content").innerText(), /本文/);
+    assert.equal(scenario.createdEntryIds.size, 0);
+    scenario.mode = "success";
+    await page.click("#save-draft-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.createdEntryIds.size, 1);
+    assert.equal(scenario.storedPhotoIds.size, 3);
+    assert.ok(scenario.entryRequests.every(item => item.body.status === "draft"));
+  } finally { await page.close(); }
 }
 
 try {

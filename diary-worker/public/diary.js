@@ -3535,11 +3535,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       }
     }
     if (!response.ok) {
-      if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff") {
+      if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff"
+          && !options.preserveEditor && !elements.editorDialog.open) {
         resetState();
         showLogin("ログインの有効期限が切れました。");
       }
-      const error = new Error(result.error || "処理を完了できませんでした。");
+      const error = new Error(response.status === 401 && elements.editorDialog.open
+        ? "ログインの有効期限が切れました。編集内容を保持しています。別のタブで再ログインしてから再試行してください。"
+        : result.error || "処理を完了できませんでした。");
       error.status = response.status;
       throw error;
     }
