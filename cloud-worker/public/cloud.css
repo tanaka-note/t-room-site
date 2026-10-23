@@ -103,6 +103,10 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .account-block button { justify-self: start; margin: 12px 0 0; padding: 0; border: 0; color: var(--muted); background: none; font-size: .78rem; }
 
 .workspace { min-width: 0; padding: clamp(24px, 4vw, 52px); padding-bottom: 100px; background: var(--surface); }
+/* Inert blocks input, but the source folder must also stop painting while the
+   destination is prepared. Keep its layout for atomic scroll restoration. */
+.workspace[aria-busy="true"] { visibility: hidden; }
+.workspace[aria-busy="true"]::before { content: "読み込み中…"; visibility: visible; position: fixed; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
 .drop-overlay { position: fixed; z-index: 80; inset: 18px; display: grid; place-items: center; border: 2px dashed #5a9f98; border-radius: 22px; background: rgba(236, 248, 246, .96); box-shadow: 0 24px 70px rgba(16, 55, 58, .2); pointer-events: none; }
 .drop-overlay-copy { display: grid; justify-items: center; gap: 9px; padding: 32px; color: var(--teal-dark); text-align: center; }
 .drop-overlay-copy > span { display: grid; width: 58px; height: 58px; place-items: center; border-radius: 50%; color: white; background: var(--teal); font-size: 1.7rem; font-weight: 800; }
