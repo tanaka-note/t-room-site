@@ -1,6 +1,6 @@
 # 請求書高速化と共通認証性能調査（2026-10-24）
 
-対象は `tanaka-note/t-room-site`、比較元は作業開始時の最新main `b71a02d`。Billingの実装・関連テストだけを変更した。Security Worker・共通認証ライブラリ・schema・migration・本番設定は変更していない。mainへのマージ、本番公開、本番DB操作は行っていない。
+対象は `tanaka-note/t-room-site`、初回比較元は作業開始時の最新main `b71a02d`。以下は初回PR作成時の調査記録であり、その時点ではmainへのマージ、本番公開、本番DB操作を行っていない。後続の最終修正・Billing単独公開については末尾に記録する。Security Worker・共通認証ライブラリ・schema・migration・Secretは変更しない。
 
 ## 原因と今回の変更
 
@@ -164,3 +164,56 @@ PR URL、commit IDとCI結果はPRと完了報告を参照する。変更ファ�
 Securityと他サービスのruntimeは変更していない。作業中にmainへ入ったT-Cloudの変更は、このPRの変更範囲に含めない。
 
 将来の公開対象は `t-room-billing`、URLは `https://tanaka-note.com/billing/`。今回はPR作成まで。本番公開の承認後に対象CI成功、最新mainとの差分、Billing build一致、既存のPassword専用化に関する全利用者の本番パスキー準備条件を確認する。migration/Secret変更/Security同時deployは不要。旧新UI/Worker混在はaccounts-only fallbackで対応する。
+
+## PR #108の最終修正とBilling単独公開
+
+追加指示により、`68222c4` を基準として既存PR #108を最終修正し、CI/CodeQL成功後のmain統合・Billing単独公開までを対象とした。
+
+### DOM・ARIAの初期化
+
+入出金ボタンの金額入りaria-labelを、読み込み開始時・失敗時・認証失効・logout時に金額を含まない固定ラベルへ戻す。金額の負数class、閉じた明細フォーム、入出金履歴の本文/対象表示、日付ホイールの残留表示も消去する。logout/失効ではdialog、account表示/選択肢、監査本文も破棄し、遅い監査応答が再描画しないようsession一致を照合する。
+
+アカウント/月が変わったときは旧入出金履歴dialogを閉じる。同じ対象の保存・削除後の更新では親dialogを維持し、未保存の開いたeditorは認証失効時以外に勝手に破棄しない。空のフォームや日付ホイールへの不要なresetは避ける。読み込み中・失敗時は印刷操作を無効にし、印刷DOMにも旧氏名・明細・残高を残さない。
+
+### 書き込み後401
+
+書き込み→監査→最終read/touchの順序では、DBへの反映後に失効が判明し得る。401のみを返す現行の認証保証を維持し、成功body、record ID、財務内容、更新Cookieは返さない。今回、Workerの認証処理・財務計算・SQLには追加変更をしていない。
+
+フロントはentries/settlementsのPOST/PUT/DELETE中の401を「操作結果が未確認」と扱い、ログイン画面の既存デザイン内に保存済みの可能性と再送を控える案内を表示する。保存済み/未保存は断定しない。案内は再ログインの本人確認中も残す。メモリー内に対象account/月/書類種別だけを保ち、新sessionの認可された一覧に対象がある場合だけ最新Summaryを再取得する。データ取得成功後に案内を解除し、編集内容や元の変更要求を再送しない。通常のlogin/切替には追加APIは発生しない。
+
+18の実handler試験で、明細・入出金×POST/PUT/DELETE×書き込み前/書き込み後のread前/touch前の失効を確認した。書き込み前は0件、後は1件の変更をDBで確認し、すべて401のerrorだけを返す。9のUI API試験で全変更種別の案内、単一送信、非財務APIへの誤案内防止を確認した。PC/タッチでも保存済み401を実際に発生させ、二重submitが1要求に抑止され、再ログイン後に保存された1件が表示されることを確認する。
+
+これは大規模な冪等性保証ではない。手動の再実行、別タブ、接続切断後の結果不明を完全に防ぐものではなく、exactly-onceの保証はない。後続で冪等性キーを導入する場合は、認証済みactor、操作種別、要求内容の一致、有効期間、再送結果の権限/失効を設計した独立PRとする。
+
+### 最終検証と性能
+
+- Billing標準回帰83成功・skip 0（初回56＋今回27）。構文、financial ledger突合、権限、12時間rolling、logout、途中失効を含む。
+- Password20＋rolling18＋UI案内9のまとめ実行47成功・skip 0。UI案内9は上のBilling83にも含まれるため重複加算しない。
+- tooling標準検証44成功・skip 0。公開対象をBillingだけにする判定回帰を含む。
+- PC/タッチの本文・ARIA・フォーム消去、A→B失敗、reload復帰、競合、保存済み401、再ログイン、logout、既存dialogの戻る/背景/未保存保護が成功。実際のA4 PDF生成と印刷ボタンの呼出しもfixtureで確認。
+- Billingだけbuild同期。最終markerは `billing-81d1d7aee6f9`。Worker dry-run、build freshness、diff checkを実施した。
+
+性能は同じPC、同じ合成DB（書類120・入出金60）、同じwarmup/標本数で `68222c4` と比較。ブラウザの新しい書き込み回帰はDBを変更するため、比較用の `--measure-only` はその回帰を分離し、変更前後で同じデータを使う。
+
+| 指標 | `68222c4` | 最終追加修正 |
+| --- | ---: | ---: |
+| Summary handler中央値・30標本 | 4.380 ms | 3.288 ms |
+| GET認証RPC | read＋touch=2 | 同じ2 |
+| Summary Billing SQL / batch | 7 / 1 | 同じ7 / 1 |
+| Summary Security SQL | 9 | 同じ9 |
+| login描画PC・10標本 | 40.8 ms | 41.5 ms |
+| login描画タッチ・10標本 | 43.9 ms | 40.7 ms |
+| 切替描画PC・15標本 | 27.5 ms | 27.2 ms |
+| 切替描画タッチ・15標本 | 27.7 ms | 28.1 ms |
+
+Workerコードは追加変更しておらず、Summary時間差は追加高速化の証拠にしない。ブラウザも2 animation frame待ちを含み、別の回帰実行ではPC切替40～43msも観測している。比率で非劣化や本番性能を断定せず、通常経路のAPI/SQL/RPC不変と、局所的なDOM初期化だけであることを併せて評価する。通常操作に大きな待ち時間増加は観測していない。本番パスキー操作と本番1秒以内は未確認。
+
+### 公開経路・本番観測の範囲
+
+初回PRの `tools/test-password-auth.mjs` 差分は、汎用fallbackでsiteへ分類されていた。認証テストとしてauthへ分類し、tooling/Billing/authの検証を維持したまま、本番対象が `billing` だけになる回帰を追加した。公開サイトなどを同時公開しないための変更で、他サービスのruntime/設定は変更しない。
+
+公開前のCloudflare読み取りでは、BillingのObservability.enabled=false・traces.enabled=false・logpush=false、既存SECURITY bindingを確認した。公開サイトは保存されたbuild triggerがあるが、Worker build configurationのauto_build_enabled=false・previews_enabled=falseを確認した。本番設定の変更は行っていない。
+
+この既存設定では、指定4endpointの実際の応答中央値/p95、Worker wall time、endpoint別エラー率の前後比較を取得していない。ブラウザ通信時間で代用しない。詳細計測のためにlogging/tracingや外部送信を有効化しない。公開後のbuild/version・配信asset・未認証APIの状態は読み取りだけで確認し、実パスキー・本人の財務表示/切替は未検証として区別する。
+
+最新CI/CodeQL、merge/publication commit、Cloudflare versionと公開buildの結果は[PR #108](https://github.com/tanaka-note/t-room-site/pull/108)と完了報告に記録する。次回Security改善の優先度とread/touchのlive検証条件は上記調査のとおりで、今回はSecurity Workerを変更・公開しない。
