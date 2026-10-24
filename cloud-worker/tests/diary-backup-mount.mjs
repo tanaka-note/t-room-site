@@ -74,7 +74,7 @@ function fixture() {
     const prepared = db.prepare(sql);
     return { bind(...values) { return statement(sql, values); }, async first() { return prepared.get(...args) || null; }, async all() { return { results: prepared.all(...args) }; } };
   }
-  const env = { DB: { prepare: statement }, SESSION_SECRET: randomBytes(32).toString("hex"), DIARY_BACKUP_MOUNT_FOLDER_ID: "2850", DIARY_BACKUPS: { async getSnapshot() { return snapshot; } } };
+  const env = { DB: { prepare: statement, async batch(statements) { return Promise.all(statements.map(s => s.all())); } }, SESSION_SECRET: randomBytes(32).toString("hex"), DIARY_BACKUP_MOUNT_FOLDER_ID: "2850", DIARY_BACKUPS: { async getSnapshot() { return snapshot; } } };
   const context = { isValidSessionSecret, requireSessionSecret, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console, setTimeout, clearTimeout, enqueueSecurityAudit() {} };
   const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
   vm.runInNewContext(source, context);
