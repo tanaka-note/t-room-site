@@ -114,7 +114,12 @@ try {
     await manager.ensurePhotosUploaded([p]);
     assert.equal(p.uploadState, 'uploaded');
   }
-  for (const bytes of [16, 9 * 1024 * 1024]) {
+  for (const [sizes, expected] of [
+    [[16, 16, 16], 3],
+    [[4206412, 3339996, 2836380], 3],
+    [[6, 6, 6].map(size => size * 1024 * 1024), 2],
+    [[9, 9, 9].map(size => size * 1024 * 1024), 1]
+  ]) {
     let active = 0, max = 0;
     const { manager, photo } = fixture(async (url, init) => {
       active++; max = Math.max(active, max);
@@ -122,9 +127,45 @@ try {
       active--;
       return response(200, { photo: { id: init.body.get('id') } });
     });
-    const photos = [photo(bytes), photo(bytes), photo(bytes)];
+    const photos = sizes.map(size => photo(size));
     await Promise.all(photos.map(p => manager.queueBackgroundPhotoUpload(p)));
-    assert.equal(max, bytes === 16 ? 2 : 1, 'parallel byte budget');
+    assert.equal(max, expected, 'parallelism must fit the unchanged 16MiB byte budget');
+    assert.ok(photos.every(p => p.uploadState === 'uploaded'));
+  }
+  const connectionDescriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, 'connection');
+  try {
+    for (const connection of [{ saveData: true }, { effectiveType: '2g' }, { effectiveType: 'slow-2g' }]) {
+      Object.defineProperty(globalThis.navigator, 'connection', { configurable: true, value: connection });
+      let active = 0, max = 0;
+      const { manager, photo } = fixture(async (url, init) => {
+        active++; max = Math.max(max, active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+        return response(200, { photo: { id: init.body.get('id') } });
+      });
+      await Promise.all([photo(), photo(), photo()].map(p => manager.queueBackgroundPhotoUpload(p)));
+      assert.equal(max, 1, 'Save-Data and 2G must remain sequential');
+    }
+  } finally {
+    if (connectionDescriptor) Object.defineProperty(globalThis.navigator, 'connection', connectionDescriptor);
+    else delete globalThis.navigator.connection;
+  }
+  {
+    let active = 0, firstFailure = true;
+    const laterIds = new Set();
+    const { manager, photo } = fixture(async (url, init) => {
+      if (init.method !== 'POST') return response(404, {});
+      active++;
+      const id = init.body.get('id');
+      if (laterIds.has(id)) assert.equal(active, 1, 'new photos after a transport failure must remain sequential');
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active--;
+      if (firstFailure) { firstFailure = false; return response(503, {}); }
+      return response(200, { photo: { id } });
+    });
+    const photos = Array.from({ length: 6 }, () => photo());
+    for (const p of photos.slice(3)) laterIds.add(p.id);
+    await Promise.all(photos.map(p => manager.queueBackgroundPhotoUpload(p)));
     assert.ok(photos.every(p => p.uploadState === 'uploaded'));
   }
   console.log('Photo upload retries, timeout, response reconciliation, non-retryable errors, payload retention and byte budget passed.');
