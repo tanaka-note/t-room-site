@@ -100,6 +100,7 @@ export default {
   async fetch(request, env, context) {
     const browserResponse = lineBrowserResponse(request);
     if (browserResponse) return browserResponse;
+    let timing;
     try {
       const url = new URL(request.url);
       if (url.pathname === `${BASE_PATH}.html`) {
@@ -114,14 +115,16 @@ export default {
       }
 
       if (path.startsWith("/api/")) {
+        timing = createRequestTiming();
         // Share validation only within this read request. Mutations still revalidate
         // after their handler, and a subsequent request always checks current policy.
         let sessionPromise;
+        const readTimedSession = () => timing.measure("diary_auth", () => readSession(request, env));
         const getSession = () => request.method === "GET"
-          ? (sessionPromise ??= readSession(request, env))
-          : readSession(request, env);
-        const response = await withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context, getSession));
-        return secureResponse(await withRollingSession(request, response, env, url, path, getSession));
+          ? (sessionPromise ??= readTimedSession())
+          : readTimedSession();
+        const response = await timing.measure("diary_handler", () => withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context, getSession, timing)));
+        return secureResponse(timing.append(await withRollingSession(request, response, env, url, path, getSession)));
       }
 
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -141,10 +144,12 @@ export default {
       return secureResponse(await serveAsset(request, env, url, path));
     } catch (error) {
       if (error instanceof HttpError) {
-        return secureResponse(json({ error: error.message }, error.status));
+        const response = json({ error: error.message }, error.status);
+        return secureResponse(timing ? timing.append(response) : response);
       }
       console.error("Diary request failed", new URL(request.url).pathname.endsWith("/api/login") ? "password_login_error" : (error instanceof Error ? error.message : "unknown error"));
-      return secureResponse(json({ error: "日記を読み込めませんでした。時間を置いてもう一度お試しください。" }, 500));
+      const response = json({ error: "日記を読み込めませんでした。時間を置いてもう一度お試しください。" }, 500);
+      return secureResponse(timing ? timing.append(response) : response);
     }
   },
 
@@ -158,7 +163,26 @@ export default {
   }
 };
 
-async function handleApi(request, env, url, path, context, getSession) {
+// Durations only: never include URLs, IDs, cookies or entry/photo contents.
+// Handler includes its initial auth check; auth also includes the post-write check.
+function createRequestTiming() {
+  const started = performance.now();
+  const durations = new Map();
+  return {
+    async measure(name, operation) {
+      const start = performance.now();
+      try { return await operation(); }
+      finally { durations.set(name, (durations.get(name) || 0) + performance.now() - start); }
+    },
+    append(response) {
+      durations.set("diary_total", performance.now() - started);
+      response.headers.set("Server-Timing", [...durations].map(([name, duration]) => `${name};dur=${duration.toFixed(1)}`).join(", "));
+      return response;
+    }
+  };
+}
+
+async function handleApi(request, env, url, path, context, getSession, timing) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "diary");
   if (path === "/api/session" && request.method === "GET") {
@@ -348,7 +372,7 @@ async function handleApi(request, env, url, path, context, getSession) {
   const stagedPhotoUploadMatch = path.match(/^\/api\/photo-upload-sessions\/([0-9a-f-]{36})\/photos$/i);
   if (stagedPhotoUploadMatch && request.method === "POST") {
     requireEntryManagementAccess(session);
-    return uploadStagedPhoto(stagedPhotoUploadMatch[1], request, env, session);
+    return uploadStagedPhoto(stagedPhotoUploadMatch[1], request, env, session, timing);
   }
 
   const stagedPhotoCommitMatch = path.match(/^\/api\/photo-upload-sessions\/([0-9a-f-]{36})\/commit$/i);
@@ -850,13 +874,13 @@ async function readOwnedPhotoUploadSession(id, env, session) {
   return row;
 }
 
-async function uploadStagedPhoto(uploadSessionId, request, env, session) {
+async function uploadStagedPhoto(uploadSessionId, request, env, session, timing) {
   const started = Date.now();
   const suppliedId = request.headers.get("X-Diary-Upload-Request") || "";
   const requestId = isUuid(suppliedId) ? suppliedId : crypto.randomUUID();
   const diagnostic = { stage: "session" };
   try {
-    return await receiveStagedPhoto(uploadSessionId, request, env, session, diagnostic);
+    return await receiveStagedPhoto(uploadSessionId, request, env, session, diagnostic, timing);
   } catch (error) {
     console.warn("Diary photo request failed", {
       requestId, stage: diagnostic.stage, status: error instanceof HttpError ? error.status : 500,
@@ -867,7 +891,7 @@ async function uploadStagedPhoto(uploadSessionId, request, env, session) {
   }
 }
 
-async function receiveStagedPhoto(uploadSessionId, request, env, session, diagnostic) {
+async function receiveStagedPhoto(uploadSessionId, request, env, session, diagnostic, timing) {
   if (!env.MEDIA) throw new HttpError(503, "画像の保存先が設定されていません。");
   const uploadSession = await readOwnedPhotoUploadSession(uploadSessionId, env, session);
   if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
@@ -877,7 +901,7 @@ async function receiveStagedPhoto(uploadSessionId, request, env, session, diagno
   let form;
   try {
     diagnostic.stage = "multipart";
-    form = await readMultipartForm(request, PHOTO_REQUEST_MAX_BYTES);
+    form = await timing.measure("diary_receive", () => readMultipartForm(request, PHOTO_REQUEST_MAX_BYTES));
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(400, "画像を読み取れませんでした。");
@@ -949,11 +973,11 @@ async function receiveStagedPhoto(uploadSessionId, request, env, session, diagno
       console.log("Diary staged photo upload test pause", { uploadSessionId: uploadSession.id, photoId: id });
       await new Promise((resolve) => setTimeout(resolve, testPauseMs));
     }
-    const writes = await Promise.allSettled([
+    const writes = await timing.measure("diary_store", () => Promise.allSettled([
       env.MEDIA.put(originalKey, original.stream(), { httpMetadata: { contentType: original.type || "application/octet-stream" } }),
       env.MEDIA.put(displayKey, display.stream(), { httpMetadata: { contentType: display.type || "image/webp" } }),
       env.MEDIA.put(thumbnailKey, thumbnail.stream(), { httpMetadata: { contentType: thumbnail.type || "image/webp" } })
-    ]);
+    ]));
     const failedWrite = writes.find((result) => result.status === "rejected");
     if (failedWrite) throw failedWrite.reason;
     if (testPauseMs > 0 && ["after-r2", "after-r2-delete-failure"].includes(testHook)) {
@@ -1212,8 +1236,7 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
     if (Number(uploadSession.committed_entry_id) !== entryId || JSON.stringify(committedIds) !== JSON.stringify(photoIds)) {
       throw new HttpError(409, "画像の一時保存情報は別の日記へ確定済みです。");
     }
-    await cleanupStagedPhotoSession(env, uploadSession.id);
-    return committedPhotoUploadResponse(entryId, photoIds, env, true);
+    return finishPhotoUploadCommit(entryId, photoIds, env, uploadSession.id, true);
   }
   if (uploadSession.status !== "active" || Date.parse(uploadSession.expires_at) <= Date.now()) {
     throw new HttpError(409, "画像の一時保存期限が切れました。写真を追加し直してください。");
@@ -1319,8 +1342,17 @@ async function commitPhotoUploadSession(uploadSessionId, request, env, session) 
       }
     }
   }
-  await cleanupStagedPhotoSession(env, uploadSession.id);
-  return committedPhotoUploadResponse(entryId, photoIds, env, false);
+  return finishPhotoUploadCommit(entryId, photoIds, env, uploadSession.id, false);
+}
+
+async function finishPhotoUploadCommit(entryId, photoIds, env, uploadSessionId, idempotent) {
+  // Final photo rows are already committed. Reading them does not depend on
+  // deleting the staging ledger; still await cleanup before acknowledging.
+  const [, response] = await Promise.all([
+    cleanupStagedPhotoSession(env, uploadSessionId),
+    committedPhotoUploadResponse(entryId, photoIds, env, idempotent)
+  ]);
+  return response;
 }
 
 async function photoUploadSessionCanCommitToEntry(uploadSession, entry, env, session) {

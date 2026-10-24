@@ -65,7 +65,8 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
     state.photoUploadSessionPromise = api("/photo-upload-sessions", {
       method: "POST",
       body: { targetEntryId },
-      preserveEditor: true
+      preserveEditor: true,
+      onTiming: (timing) => { state.photoUploadSessionTiming = timing; }
     }).then((result) => {
       state.photoUploadSessionId = result.uploadSession.id;
       return state.photoUploadSessionId;
@@ -78,6 +79,8 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
   function queueBackgroundPhotoUpload(photo) {
     if (photo.existing || photo.removed || photo.uploadState === "uploaded") return Promise.resolve(photo);
     if (photo.uploadPromise) return photo.uploadPromise;
+    const queuedAt = Date.now();
+    const metrics = photo.uploadMetrics = { bytes: photoBytes(photo), queueMs: 0, attempts: [] };
     photo.uploadState = "uploading";
     photo.uploadError = null;
     state.photoUploadPendingCount += 1;
@@ -87,6 +90,7 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
         await Promise.race(state.photoUploadActiveTasks);
       }
       if (photo.removed) return null;
+      metrics.queueMs = Date.now() - queuedAt;
       activeBytes.set(photo.id, photoBytes(photo));
       const activeTask = uploadPhotoToStaging(photo);
       const settledTask = activeTask.catch(() => null);
@@ -108,6 +112,8 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
       }
     })();
     photo.uploadPromise = queued.finally(() => {
+      metrics.elapsedMs = Date.now() - queuedAt;
+      metrics.outcome = photo.uploadState;
       photo.uploadPromise = null;
       state.photoUploadPendingCount = Math.max(0, state.photoUploadPendingCount - 1);
       state.photoUploading = state.photoUploadPendingCount > 0;
@@ -154,6 +160,11 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
         else if (cause?.name === "NotReadableError") errorType = "file-read";
       } finally {
         window.clearTimeout(timer);
+        photo.uploadMetrics.attempts.push({
+          elapsedMs: Date.now() - started,
+          status: response?.status || 0,
+          serverTiming: response?.headers.get("Server-Timing") || ""
+        });
       }
 
       if (response?.ok && result?.photo?.id === photo.id) {

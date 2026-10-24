@@ -34,7 +34,13 @@ bootstrapもrequestごとに現在のSecurity状態を検証し、同じGET requ
 
 失敗時は編集画面と未送信の写真をメモリに残し、完了済み写真は再送しない。編集画面で401を受けても入力を初期化せず、別タブで同じアカウントへ再ログインして再試行する案内を出す。サーバーの認証・認可は全リクエストで従来どおり実施する。ブラウザ・タブを閉じた場合の復旧を保証する機能は追加していない。
 
-失敗時だけ、匿名の送信試行UUID、段階、HTTP status、例外分類、経過時間、Cloudflare Ray IDをconsoleへ出す。ファイル名・本文・画像・Cookie・tokenは含めない。新たなログ収集先や保存設定は作らない。詳細調査と制約は[2026-10-23の調査記録](../docs/history/diary-photo-upload-20261023.md)を参照。
+写真commit確定後の写真一覧取得と一時保存台帳のcleanupは並行する。両方の完了を待って応答し、写真の確定順序・冪等性と正式写真を消さない保護を維持する。
+
+API応答の`Server-Timing`は`diary_total`（Workerでの総時間）、`diary_auth`（同request内の認証確認の合計）、`diary_handler`（初回認証を含むhandler）、写真送信時の`diary_receive`（multipartの受信・解析）、`diary_store`（3種類のR2保存を待った時間）をミリ秒で返す。authはhandlerと重複するため全指標を単純加算しない。受信待ちには上り転送が含まれ、R2保存時間だけを回線の時間と解釈しない。
+
+投稿・下書き保存ごとに、ブラウザのconsoleへ`Diary save timing`を1件出す。ボタン操作からの総時間、準備待ち・送信待ち・本文保存・写真確定・最終反映・一覧更新、APIの所要時間とServer-Timing、写真ごとの準備時間・送信容量・順番待ち・試行時間を含む。写真の準備・送信は保存ボタンより先に始まるため、写真ごとの時間をボタン操作後の時間へ加算しない。編集開始からのユーザー操作時間を通信時間として扱わない。
+
+失敗時の匿名の送信試行UUID、段階、HTTP status、例外分類、経過時間、Cloudflare Ray IDのconsole出力も維持する。これらの診断にはファイル名・本文・画像・Cookie・token・account/entry/photo IDを含めず、新たなログ収集先や永続保存設定は作らない。詳細調査と制約は[2026-10-23の調査記録](../docs/history/diary-photo-upload-20261023.md)を参照。
 
 ## キャッシュと更新
 

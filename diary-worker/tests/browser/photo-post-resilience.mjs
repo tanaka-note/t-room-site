@@ -61,7 +61,7 @@ function readRequestBody(request) {
 }
 
 function sendJson(response, status, value) {
-  response.writeHead(status, { "content-type": "application/json" });
+  response.writeHead(status, { "content-type": "application/json", "server-timing": "diary_auth;dur=10.0, diary_total;dur=25.0" });
   response.end(JSON.stringify(value));
 }
 
@@ -339,6 +339,7 @@ async function verifyPreparationRace(browser, name, contextOptions) {
   resetScenario("success");
   const page = await newDiaryPage(browser, contextOptions);
   try {
+    const timingMessage = page.waitForEvent("console", { predicate: message => message.text().startsWith("Diary save timing ") });
     await page.evaluate(() => window.__startPhotoPreparationHold());
     await choosePhoto(page, "race.png");
     await page.waitForFunction(() => window.__photoPreparationWaiting === true);
@@ -364,6 +365,16 @@ async function verifyPreparationRace(browser, name, contextOptions) {
     const runs = scenario.entryRequests[1].body.contentFormat?.runs || [];
     assert.ok(runs.every((run) => run.start >= 0 && run.end <= scenario.entryRequests[1].body.content.length),
       `${name}: contentFormat must remain within serialized content`);
+    const diagnostic = JSON.parse((await timingMessage).text().slice("Diary save timing ".length));
+    assert.equal(diagnostic.outcome, "saved");
+    assert.ok(diagnostic.stages.prepare >= 90, "preparation delay must be separated from upload wait");
+    assert.ok(["uploadWait", "entrySave", "photoCommit", "finalize", "refresh"].every(stage => Number.isFinite(diagnostic.stages[stage])));
+    assert.equal(diagnostic.photos.length, 1);
+    assert.equal(diagnostic.photos[0].attempts.length, 1);
+    assert.match(diagnostic.photos[0].attempts[0].serverTiming, /diary_auth;dur=10.0/);
+    assert.ok(diagnostic.requests.some(request => request.method === "PUT" && request.serverTiming.includes("diary_total")));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /race\.png|写真付き投稿テスト|本文|[0-9a-f]{8}-[0-9a-f-]{27}/,
+      "diagnostics must omit content, names and identifiers");
   } finally {
     await page.close();
   }
