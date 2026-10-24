@@ -8,7 +8,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-7960067ed15c";
+const APP_BUILD_ID = "cloud-0930878384ed";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -983,7 +983,7 @@ async function listItems(url, env, session) {
   const folderClauses = [folderId ? "f.parent_id = ?" : "f.parent_id IS NULL", "f.deleted_at IS NULL"];
   const folderValues = [session.sessionId, Math.floor(Date.now() / 1000), ...(folderId ? [folderId] : [])];
   if (query) { folderClauses.push("LOWER(f.name) LIKE ?"); folderValues.push(`%${query}%`); }
-  const folders = filesOnly ? { results: [] } : await env.DB.prepare(`
+  const folderStatement = filesOnly ? null : env.DB.prepare(`
     SELECT f.id, f.parent_id AS parentId, f.name, f.created_at AS createdAt, f.updated_at AS updatedAt,
       f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
       f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
@@ -997,7 +997,7 @@ async function listItems(url, env, session) {
     WHERE ${folderClauses.join(" AND ")}
     ORDER BY f.name COLLATE NOCASE ASC
     LIMIT ? OFFSET ?
-  `).bind(...folderValues, folderPageSize + 1, folderOffset).all();
+  `).bind(...folderValues, folderPageSize + 1, folderOffset);
 
   const orderBySort = {
     "updated-desc": "created_at DESC", "updated-asc": "created_at ASC",
@@ -1006,13 +1006,13 @@ async function listItems(url, env, session) {
     newest: "created_at DESC", oldest: "created_at ASC", name: "original_name COLLATE NOCASE ASC", size: "size_bytes DESC"
   };
   const order = orderBySort[sort];
-  let files = { results: [] };
+  let fileStatement = null;
   if (folderId && !foldersOnly) {
     const clauses = ["folder_id = ?", "deleted_at IS NULL", "status = 'ready'"];
     const values = [folderId];
     if (query) { clauses.push("(display_metadata_version = 0 OR LOWER(COALESCE(display_name, original_name)) LIKE ?)"); values.push(`%${query}%`); }
     if (kind) { clauses.push("(display_metadata_version = 0 OR COALESCE(display_media_kind, media_kind) = ?)"); values.push(kind); }
-    files = await env.DB.prepare(`
+    fileStatement = env.DB.prepare(`
       SELECT id, folder_id AS folderId, COALESCE(display_name, original_name) AS name,
         COALESCE(display_mime_type, mime_type) AS mimeType,
         COALESCE(display_media_kind, media_kind) AS mediaKind, size_bytes AS sizeBytes,
@@ -1029,8 +1029,15 @@ async function listItems(url, env, session) {
         created_at AS createdAt, updated_at AS updatedAt
       FROM cloud_files WHERE ${clauses.join(" AND ")} ORDER BY ${order}${uploadIndex ? ", id ASC" : ""}
       LIMIT ? OFFSET ?
-    `).bind(...values, filePageSize + 1, fileOffset).all();
+    `).bind(...values, filePageSize + 1, fileOffset);
   }
+  // Access checks above still finish before either listing is read. Batch the
+  // independent SELECTs into one D1 round trip without changing page boundaries.
+  const statements = [folderStatement, fileStatement].filter(Boolean);
+  const pages = statements.length > 1 ? await env.DB.batch(statements)
+    : statements.length ? [await statements[0].all()] : [];
+  const folders = folderStatement ? pages.shift() : { results: [] };
+  const files = fileStatement ? pages.shift() : { results: [] };
   const fileResults = files.results || [];
   const visibleFiles = fileResults.slice(0, filePageSize);
   const nextFileOffset = fileResults.length > filePageSize ? fileOffset + filePageSize : null;
@@ -2841,42 +2848,44 @@ async function rememberFolderUnlock(env, session, folderId) {
 
 async function breadcrumbs(env, folderId, session) {
   const memberRootId = session.role === "member" ? (await requireMemberFolderScope(env, folderId, session)).rootFolderId : null;
-  const result = [];
-  let current = folderId;
-  let guard = 0;
-  while (current && guard++ < 20) {
-    const folder = await env.DB.prepare(`SELECT id, parent_id, name, crypto_version AS cryptoVersion,
-      encrypted_name AS encryptedName, name_iv AS nameIv, password_salt AS passwordSalt,
-      password_wrapped_key AS passwordWrappedKey, password_wrap_iv AS passwordWrapIv,
-      admin_wrapped_key AS adminWrappedKey, parent_wrapped_key AS parentWrappedKey,
-      parent_wrap_iv AS parentWrapIv, password_hash IS NOT NULL AS isProtected,
-      EXISTS(SELECT 1 FROM cloud_folder_unlocks unlock WHERE unlock.folder_id = cloud_folders.id AND unlock.session_id = ? AND unlock.expires_at > ?) AS isUnlocked
-      FROM cloud_folders WHERE id = ? AND deleted_at IS NULL`)
-      .bind(session.sessionId, Math.floor(Date.now() / 1000), current).first();
-    if (!folder) break;
-    result.unshift({
-      id: folder.id,
-      name: folder.name,
-      cryptoVersion: folder.cryptoVersion,
-      encryptedName: folder.encryptedName,
-      nameIv: folder.nameIv,
-      passwordSalt: folder.passwordSalt,
-      passwordWrappedKey: folder.passwordWrappedKey,
-      passwordWrapIv: folder.passwordWrapIv,
-      adminWrappedKey: folder.adminWrappedKey,
-      parentWrappedKey: folder.parentWrappedKey,
-      parentWrapIv: folder.parentWrapIv,
-      isProtected: Boolean(folder.isProtected),
-      isUnlocked: session.role === "admin"
-        || (session.role === "member" && Number(folder.id) === memberRootId)
-        ? true
-        : Boolean(folder.isUnlocked),
-      adminAccess: session.role === "admin"
-    });
-    if (session.role === "member" && Number(folder.id) === memberRootId) break;
-    current = folder.parent_id;
-  }
-  return result;
+  if (!folderId) return [];
+  // Preserve the existing 20-level bound and stop at the assigned member root.
+  // One recursive read replaces one DB round trip for each ancestor.
+  const { results } = await env.DB.prepare(`WITH RECURSIVE ancestors(id, parent_id, depth) AS (
+      SELECT id, parent_id, 0 FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+      UNION ALL
+      SELECT parent.id, parent.parent_id, child.depth + 1
+      FROM cloud_folders parent JOIN ancestors child ON parent.id = child.parent_id
+      WHERE parent.deleted_at IS NULL AND child.depth < 19
+        AND (? IS NULL OR child.id != ?)
+    )
+    SELECT f.id, f.name, f.crypto_version AS cryptoVersion,
+      f.encrypted_name AS encryptedName, f.name_iv AS nameIv, f.password_salt AS passwordSalt,
+      f.password_wrapped_key AS passwordWrappedKey, f.password_wrap_iv AS passwordWrapIv,
+      f.admin_wrapped_key AS adminWrappedKey, f.parent_wrapped_key AS parentWrappedKey,
+      f.parent_wrap_iv AS parentWrapIv, f.password_hash IS NOT NULL AS isProtected,
+      EXISTS(SELECT 1 FROM cloud_folder_unlocks unlock WHERE unlock.folder_id = f.id AND unlock.session_id = ? AND unlock.expires_at > ?) AS isUnlocked
+    FROM ancestors a JOIN cloud_folders f ON f.id = a.id ORDER BY a.depth DESC`)
+    .bind(folderId, memberRootId, memberRootId, session.sessionId, Math.floor(Date.now() / 1000)).all();
+  return (results || []).map((folder) => ({
+    id: folder.id,
+    name: folder.name,
+    cryptoVersion: folder.cryptoVersion,
+    encryptedName: folder.encryptedName,
+    nameIv: folder.nameIv,
+    passwordSalt: folder.passwordSalt,
+    passwordWrappedKey: folder.passwordWrappedKey,
+    passwordWrapIv: folder.passwordWrapIv,
+    adminWrappedKey: folder.adminWrappedKey,
+    parentWrappedKey: folder.parentWrappedKey,
+    parentWrapIv: folder.parentWrapIv,
+    isProtected: Boolean(folder.isProtected),
+    isUnlocked: session.role === "admin"
+      || (session.role === "member" && Number(folder.id) === memberRootId)
+      ? true
+      : Boolean(folder.isUnlocked),
+    adminAccess: session.role === "admin"
+  }));
 }
 
 function mapFile(file) {
