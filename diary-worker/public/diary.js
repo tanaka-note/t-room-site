@@ -23,6 +23,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   let sessionGeneration = 0;
   let loginAttempt = 0;
   let activeSessionContext = "";
+  let editorSaveTiming = null;
   const RETURN_VIEW_STORAGE_KEY = "troom-diary-return-view-v1";
   const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView";
   const RETURN_NAVIGATION_KEY = "troomDiaryReturnNavigation";
@@ -1832,7 +1833,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         const file = files[index];
         elements.photoPreparationStatus.textContent = `写真を準備中 ${index + 1}/${files.length}`;
         try {
+          const preparationStarted = Date.now();
           const photo = await preparePhoto(file);
+          photo.preparationMs = Date.now() - preparationStarted;
           state.editorPhotos.push(photo);
           preparedPhotos.push(photo);
           preparedCount += 1;
@@ -2456,6 +2459,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.editorPhotos = [];
     state.editorDeletedPhotoIds.clear();
     state.photoUploadSessionId = null;
+    state.photoUploadSessionTiming = null;
     state.photoUploadSessionPromise = null;
     state.photoUploadTargetEntryId = null;
     state.photoUploadCommitted = false;
@@ -2599,10 +2603,17 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function persistEditor(targetStatus, { closeAfter = false } = {}) {
+    const timing = { started: Date.now(), stages: {}, requests: [], photos: [], outcome: "failed" };
+    editorSaveTiming = timing;
+    const measure = async (stage, operation) => {
+      const started = Date.now();
+      try { return await operation(); }
+      finally { timing.stages[stage] = Date.now() - started; }
+    };
     elements.editorMessage.textContent = "";
     setEditorSaveBusy(true, targetStatus === "draft" ? "下書き保存中..." : "投稿中...");
     try {
-      await waitForPhotoPreparation();
+      await measure("prepare", () => waitForPhotoPreparation());
       const id = Number(elements.entryId.value || 0);
       const editorDocument = serializeRichEditor(true);
       const body = {
@@ -2619,10 +2630,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       else body.requestId = state.entryCreateRequestId || (state.entryCreateRequestId = crypto.randomUUID().toLowerCase());
 
       const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
+      timing.photos = pendingPhotos;
       if (pendingPhotos.length) {
         setEditorSaveBusy(true, "写真の保存完了を待っています...");
-        await ensurePhotosUploaded(pendingPhotos);
+        await measure("uploadWait", () => ensurePhotosUploaded(pendingPhotos));
       }
+      timing.uploadSession = state.photoUploadSessionTiming;
 
       const sourceEntry = state.editorSourceEntry;
       const provisionalDocument = pendingPhotos.length
@@ -2635,9 +2648,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         pendingPhotoIds: pendingPhotos.map((photo) => photo.id),
         photoUploadSessionId: state.photoUploadSessionId
       } : body;
-      let saved = id
-        ? await api(`/entries/${id}`, { method: "PUT", body: provisionalBody })
-        : await createEntryIdempotently(provisionalBody);
+      let saved = await measure("entrySave", () => id
+        ? api(`/entries/${id}`, { method: "PUT", body: provisionalBody })
+        : createEntryIdempotently(provisionalBody));
       const failures = [];
       const deletedPhotoIds = [...state.editorDeletedPhotoIds];
       const promotedEditDraft = targetStatus === "published"
@@ -2664,7 +2677,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       if (state.photoUploadSessionId && !state.photoUploadCommitted) {
         setEditorSaveBusy(true, "写真を日記へ反映しています...");
         try {
-          const committedPhotos = await commitStagedPhotos(saved.entry.id, pendingPhotos);
+          const committedPhotos = await measure("photoCommit", () => commitStagedPhotos(saved.entry.id, pendingPhotos));
           const committedById = new Map(committedPhotos.map((photo) => [photo.id, photo]));
           for (const photo of pendingPhotos) {
             photo.existing = true;
@@ -2673,7 +2686,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
           }
           if (pendingPhotos.length) {
             setEditorSaveBusy(true, "写真を本文へ反映しています...");
-            saved = await finalizeCommittedPhotoEntry(saved.entry.id, body, saved.entry);
+            saved = await measure("finalize", () => finalizeCommittedPhotoEntry(saved.entry.id, body, saved.entry));
             elements.entryRevision.value = String(saved.entry.revision);
             elements.entryStatus.value = saved.entry.status;
             state.editorSourceEntry = saved.entry;
@@ -2683,6 +2696,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         }
       }
       if (failures.length) {
+        timing.outcome = "partial";
         elements.editorMessage.textContent = `${targetStatus === "draft" ? "下書き" : "日記本文"}は保存しました。写真を保存できませんでした。${failures.join(" / ")}`;
         renderEditorPhotos();
         return false;
@@ -2696,13 +2710,24 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       else if (!closeAfter) state.drafts = true;
       updateFilterControls();
       await closeEditorDialog();
-      await Promise.all([loadMeta(), loadEntries(true)]);
+      await measure("refresh", () => Promise.all([loadMeta(), loadEntries(true)]));
+      timing.outcome = "saved";
       return true;
     } catch (error) {
       elements.editorMessage.textContent = error.message;
       return false;
     } finally {
       setEditorSaveBusy(false);
+      editorSaveTiming = null;
+      // One local summary per save, without entry contents, file names or IDs.
+      console.info("Diary save timing", JSON.stringify({
+        elapsedMs: Date.now() - timing.started,
+        outcome: timing.outcome,
+        stages: timing.stages,
+        requests: timing.requests,
+        uploadSession: timing.uploadSession || state.photoUploadSessionTiming,
+        photos: timing.photos.map((photo) => ({ preparationMs: photo.preparationMs, ...photo.uploadMetrics }))
+      }));
     }
   }
 
@@ -3498,6 +3523,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   async function api(path, options = {}) {
     const generation = sessionGeneration;
+    const timing = editorSaveTiming;
+    const started = Date.now();
     const headers = new Headers(options.headers);
     const init = {
       method: options.method || "GET",
@@ -3513,40 +3540,51 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
     let response;
     try {
-      response = await fetch(`${BASE_PATH}/api${path}`, init);
-    } catch (cause) {
-      if (options.signal?.aborted) throw cause;
-      const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
-      error.transportOutcomeUnknown = true;
-      error.cause = cause;
-      throw error;
-    }
-    let result;
-    try {
-      result = await response.json();
-    } catch (cause) {
-      if (options.signal?.aborted) throw cause;
-      if (!response.ok) result = {};
-      else {
+      try {
+        response = await fetch(`${BASE_PATH}/api${path}`, init);
+      } catch (cause) {
+        if (options.signal?.aborted) throw cause;
         const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
         error.transportOutcomeUnknown = true;
         error.cause = cause;
         throw error;
       }
-    }
-    if (!response.ok) {
-      if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff"
-          && !options.preserveEditor && !elements.editorDialog.open) {
-        resetState();
-        showLogin("ログインの有効期限が切れました。");
+      let result;
+      try {
+        result = await response.json();
+      } catch (cause) {
+        if (options.signal?.aborted) throw cause;
+        if (!response.ok) result = {};
+        else {
+          const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
+          error.transportOutcomeUnknown = true;
+          error.cause = cause;
+          throw error;
+        }
       }
-      const error = new Error(response.status === 401 && elements.editorDialog.open
-        ? "ログインの有効期限が切れました。編集内容を保持しています。別のタブで再ログインしてから再試行してください。"
-        : result.error || "処理を完了できませんでした。");
-      error.status = response.status;
-      throw error;
+      if (!response.ok) {
+        if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff"
+            && !options.preserveEditor && !elements.editorDialog.open) {
+          resetState();
+          showLogin("ログインの有効期限が切れました。");
+        }
+        const error = new Error(response.status === 401 && elements.editorDialog.open
+          ? "ログインの有効期限が切れました。編集内容を保持しています。別のタブで再ログインしてから再試行してください。"
+          : result.error || "処理を完了できませんでした。");
+        error.status = response.status;
+        throw error;
+      }
+      return result;
+    } finally {
+      if (timing || options.onTiming) {
+        const stage = path.startsWith("/photo-upload-sessions") ? "photo-session"
+          : path.startsWith("/entries") ? "entry" : path === "/meta" ? "meta" : "other";
+        const sample = { stage, method: init.method, status: response?.status || 0,
+          elapsedMs: Date.now() - started, serverTiming: response?.headers.get("Server-Timing") || "" };
+        if (timing && timing.requests.length < 40) timing.requests.push(sample);
+        options.onTiming?.(sample);
+      }
     }
-    return result;
   }
 
   function createTagGroup(tags, searchTerms = []) {
