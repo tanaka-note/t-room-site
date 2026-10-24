@@ -3,6 +3,9 @@
     session: null,
     accounts: [],
     summary: null,
+    summaryGeneration: 0,
+    summaryController: null,
+    uncertainOperationView: null,
     entryInitialSnapshot: null,
     dateDraft: null,
     dateWheelTarget: null,
@@ -22,6 +25,7 @@
   const settlementMethodLabels = {
     bank_transfer: "振込", cash: "現金", offset: "相殺", other: "その他", unspecified: "未設定"
   };
+  const uncertainOperationMessage = "ログイン状態が終了しました。操作が保存されている可能性があります。再ログイン後に明細をご確認ください。確認前に同じ操作を繰り返さないでください。";
   document.addEventListener("DOMContentLoaded", initialize);
 
   async function initialize() {
@@ -41,7 +45,7 @@
     TRoomDatePicker.setNavigation(dialogs);
     dialogs.register("entry-dialog", { guard: canCloseEntry });
     dialogs.register("settlements-dialog", {
-      capture: () => ({ account: state.summary.account.id, month: state.summary.month }),
+      capture: () => ({ account: state.summary?.account.id, month: state.summary?.month }),
       restore: saved => !!state.session && saved.account === state.summary?.account.id && saved.month === state.summary?.month
     });
     dialogs.register("logs-dialog", { restore: () => !!state.session });
@@ -114,6 +118,8 @@
     dialogs.reset();
     try { await api("/logout", { method: "POST", body: {} }); } catch { /* local view still closes */ }
     state.session = null;
+    state.uncertainOperationView = null;
+    el["login-operation-note"].hidden = true;
     showLogin();
   }
 
@@ -122,11 +128,28 @@
     el["account-label"].textContent = session.accountDisplayName || `${session.accountName}${session.role === "owner" ? "（管理者）" : ""}`;
     document.body.classList.toggle("is-owner", session.role === "owner");
     document.querySelectorAll(".owner-only").forEach((node) => { node.hidden = session.role !== "owner"; });
-    const result = await api("/accounts");
+    const month = el["month-input"].value || japanToday().slice(0, 7);
+    const result = await api(`/accounts?includeSummary=1&month=${encodeURIComponent(month)}`);
+    if (state.session !== session) return;
     state.accounts = result.accounts;
     fillAccountSelects();
     applyPreferredDocumentType();
-    await loadSummary();
+    const previousView = state.uncertainOperationView;
+    const restoreView = previousView && state.accounts.some(account => account.id === previousView.accountId);
+    if (restoreView) {
+      el["account-select"].value = previousView.accountId;
+      el["month-input"].value = previousView.month;
+      el["document-filter"].value = previousView.documentType;
+    }
+    // Accept the original accounts-only response during a rolling asset update.
+    if (result.summary && (!restoreView || (result.summary.account.id === previousView.accountId && result.summary.month === previousView.month))) {
+      state.summary = result.summary;
+      el["account-select"].value = result.summary.account.id;
+      renderSummary();
+      setSummaryStatus("");
+    } else if (!await loadSummary()) return;
+    state.uncertainOperationView = null;
+    el["login-operation-note"].hidden = true;
     el["boot-view"].hidden = true;
     el["login-view"].hidden = true;
     el["app-view"].hidden = false;
@@ -134,6 +157,20 @@
 
   function showLogin() {
     el["boot-view"].hidden = true;
+    state.session = null;
+    state.summaryGeneration++;
+    state.summaryController?.abort();
+    state.summary = null;
+    state.accounts = [];
+    clearSummary();
+    dialogs.reset();
+    el["entry-form"].reset();
+    state.entryInitialSnapshot = null;
+    state.dateDraft = null;
+    state.dateWheelTarget = null;
+    for (const id of ["date-wheel-value", "date-wheel-year", "date-wheel-month", "date-wheel-day"]) el[id].replaceChildren();
+    for (const id of ["account-label", "account-select", "entry-account", "logs-account-filter", "logs-body", "entry-error"]) el[id].replaceChildren();
+    setSummaryStatus("");
     el["app-view"].hidden = true;
     el["login-view"].hidden = false;
     el["passkey-login"].focus();
@@ -165,26 +202,72 @@
   }
 
   async function loadSummary() {
+    if (!state.session) return false;
+    const session = state.session;
     const accountId = state.session.role === "owner" ? el["account-select"].value : state.session.accountId;
     const month = el["month-input"].value || japanToday().slice(0, 7);
+    const generation = ++state.summaryGeneration;
+    state.summaryController?.abort();
+    const controller = state.summaryController = new AbortController();
+    const changingView = state.summary && (state.summary.account.id !== accountId || state.summary.month !== month);
+    state.summary = null;
+    clearSummary({ closeSettlements: Boolean(changingView) });
+    setSummaryStatus("読み込み中…", true);
     try {
-      state.summary = await api(`/summary?accountId=${encodeURIComponent(accountId)}&month=${encodeURIComponent(month)}`);
+      const summary = await api(`/summary?accountId=${encodeURIComponent(accountId)}&month=${encodeURIComponent(month)}`, { signal: controller.signal });
+      if (generation !== state.summaryGeneration || state.session !== session) return false;
+      if (summary.account.id !== accountId || summary.month !== month) throw new Error("表示対象を確認できませんでした。もう一度選択してください。");
+      state.summary = summary;
       renderSummary();
+      setSummaryStatus("");
+      return true;
     } catch (error) {
-      alert(error.message);
+      if (generation !== state.summaryGeneration || controller.signal.aborted || state.session !== session) return false;
+      setSummaryStatus(error.message);
+      return false;
     }
+  }
+
+  function clearSummary({ closeSettlements = true } = {}) {
+    renderSummary();
+    for (const id of ["report-month", "report-account", "entries-body", "settlements-body", "settlements-dialog-context"]) el[id].replaceChildren();
+    for (const id of ["document-total", "opening-balance", "closing-balance", "incoming-total", "outgoing-total"]) {
+      el[id].textContent = "—";
+      el[id].classList.remove("negative");
+    }
+    el["settlements-card"].setAttribute("aria-label", "当月入出金。履歴を見る");
+    if (closeSettlements && el["settlements-dialog"].open) void dialogs.close("settlements-dialog", { force: true });
+    if (!el["entry-dialog"].open) {
+      if (state.entryInitialSnapshot !== null) {
+        el["entry-form"].reset();
+        state.entryInitialSnapshot = null;
+      }
+      if (!el["date-wheel-dialog"].open && state.dateDraft) {
+        state.dateDraft = null;
+        for (const id of ["date-wheel-value", "date-wheel-year", "date-wheel-month", "date-wheel-day"]) el[id].replaceChildren();
+      }
+    }
+    el["empty-message"].hidden = true;
+    for (const id of ["new-entry-button", "print-button", "settlements-card"]) el[id].disabled = true;
+  }
+
+  function setSummaryStatus(message, busy = false) {
+    el["summary-status"].textContent = message;
+    el["summary-status"].hidden = !message;
+    el["report"].setAttribute("aria-busy", String(busy));
+    for (const id of ["new-entry-button", "print-button", "settlements-card"]) el[id].disabled = !state.summary;
   }
 
   function renderSummary() {
     const summary = state.summary;
-    if (!summary) return;
     const documentType = el["document-filter"].value;
-    const visibleEntries = summary.entries.filter((entry) => entry.documentType === documentType);
-    el["report-month"].textContent = formatMonthJp(summary.month);
     el["document-title"].textContent = documentLabels[documentType];
-    el["report-account"].textContent = `${summary.account.displayName} 様`;
     el["print-button"].textContent = `${documentLabels[documentType]}をPDF保存`;
     el["document-total-label"].textContent = documentType === "invoice" ? "請求合計" : "支払合計";
+    if (!summary) return;
+    const visibleEntries = summary.entries.filter((entry) => entry.documentType === documentType);
+    el["report-month"].textContent = formatMonthJp(summary.month);
+    el["report-account"].textContent = `${summary.account.displayName} 様`;
     const documentTotal = visibleEntries.reduce((total, entry) => total + entry.amountYen, 0);
     renderYen(el["document-total"], documentTotal);
     renderYen(el["opening-balance"], summary.openingBalanceYen);
@@ -213,6 +296,7 @@
   }
 
   function openEntryDialog(entry = null, settlement = null) {
+    if (!state.summary) return;
     el["entry-form"].reset();
     el["entry-error"].textContent = "";
     el["entry-id"].value = entry?.id || settlement?.id || "";
@@ -297,6 +381,7 @@
   }
 
   function handleEntryAction(event) {
+    if (!state.summary) return;
     const button = event.target.closest("button[data-action]");
     if (!button) return;
     const entry = state.summary.entries.find((item) => item.id === Number(button.dataset.id));
@@ -316,6 +401,7 @@
   }
 
   function openSettlements() {
+    if (!state.summary) return;
     renderSettlements();
     dialogs.open("settlements-dialog");
   }
@@ -338,6 +424,7 @@
   }
 
   function handleSettlementAction(event) {
+    if (!state.summary) return;
     const button = event.target.closest("button[data-settlement-action]");
     if (!button) return;
     const settlement = state.summary.settlements.find((item) => item.id === Number(button.dataset.id));
@@ -364,12 +451,14 @@
   }
 
   async function loadLogs() {
+    const session = state.session;
     el["logs-body"].innerHTML = `<tr><td colspan="4">読み込み中…</td></tr>`;
     const accountId = el["logs-account-filter"].value;
     try {
       const query = new URLSearchParams({ limit: "100" });
       if (accountId) query.set("accountId", accountId);
       const result = await api(`/audit-logs?${query}`);
+      if (state.session !== session) return;
       el["logs-body"].innerHTML = result.logs.map((log) => `<tr>
         <td>${escapeHtml(formatTimestampJp(log.occurredAt))}</td>
         <td>${escapeHtml(eventLabel(log.eventType))}</td>
@@ -377,6 +466,7 @@
         <td>${escapeHtml(auditTargetLabel(log))}</td>
       </tr>`).join("") || `<tr><td colspan="4">履歴はありません。</td></tr>`;
     } catch (error) {
+      if (state.session !== session) return;
       el["logs-body"].innerHTML = `<tr><td colspan="4">${escapeHtml(error.message)}</td></tr>`;
     }
   }
@@ -688,16 +778,31 @@
   }
 
   async function api(path, options = {}) {
+    const financialMutation = /^(POST|PUT|DELETE)$/.test(options.method || "GET") && /^\/(entries|settlements)(\/|$)/.test(path);
+    const operationView = financialMutation ? {
+      accountId: options.body?.accountId || state.summary?.account.id,
+      month: (options.body?.entryDate || options.body?.settlementDate || state.summary?.month || el["month-input"].value).slice(0, 7),
+      documentType: options.body?.documentType || el["document-filter"].value
+    } : null;
     const response = await fetch(`${basePath()}/api${path}`, {
       method: options.method || "GET",
       headers: { ...options.headers, ...(options.body ? { "Content-Type": "application/json" } : {}) },
       body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: options.signal,
       credentials: "same-origin"
     });
     const data = await response.json().catch(() => ({}));
+    if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (!response.ok) {
-      if (response.status === 401 && path !== "/passkey/handoff") showLogin();
-      const error = new Error(data.error || "処理に失敗しました。");
+      if (response.status === 401 && path !== "/passkey/handoff") {
+        if (financialMutation) {
+          state.uncertainOperationView = operationView;
+          el["login-operation-note"].textContent = uncertainOperationMessage;
+          el["login-operation-note"].hidden = false;
+        }
+        showLogin();
+      }
+      const error = new Error(response.status === 401 && financialMutation ? uncertainOperationMessage : data.error || "処理に失敗しました。");
       error.status = response.status;
       throw error;
     }

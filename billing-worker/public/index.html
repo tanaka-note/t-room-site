@@ -62,13 +62,13 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-a67f84d498b2">
-  <link rel="stylesheet" href="./billing.css?v=billing-a67f84d498b2">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-a67f84d498b2">
-  <script src="./troom-date-picker.js?v=billing-a67f84d498b2" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-a67f84d498b2" defer></script>
-  <script src="./billing.js?v=billing-a67f84d498b2" defer></script>
-  <meta name="troom-app-build" content="billing-a67f84d498b2">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-81d1d7aee6f9">
+  <link rel="stylesheet" href="./billing.css?v=billing-81d1d7aee6f9">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-81d1d7aee6f9">
+  <script src="./troom-date-picker.js?v=billing-81d1d7aee6f9" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-81d1d7aee6f9" defer></script>
+  <script src="./billing.js?v=billing-81d1d7aee6f9" defer></script>
+  <meta name="troom-app-build" content="billing-81d1d7aee6f9">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -87,7 +87,8 @@
         <h1 id="login-title">請求書管理システム</h1>
         <p class="login-copy">登録済みのパスキーでログインしてください。</p>
         <div class="login-actions">
-          <p id="login-error" class="error-message" role="alert"></p>
+        <p id="login-operation-note" class="form-note" role="alert" hidden></p>
+        <p id="login-error" class="error-message" role="alert"></p>
           <button id="passkey-login" class="button primary full" type="button">
             <svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg>
             <span id="passkey-login-label">パスキーでログイン</span>
@@ -132,7 +133,8 @@
         <button id="logs-button" class="button ghost owner-only" type="button" hidden>アカウント管理</button>
       </div>
 
-      <section class="report" aria-live="polite">
+      <section id="report" class="report" aria-live="polite" aria-busy="false">
+        <p id="summary-status" class="empty-message" role="status" hidden></p>
         <div class="report-heading">
           <div>
             <p id="report-month" class="report-month"></p>
@@ -259,7 +261,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-a67f84d498b2" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-a67f84d498b2" defer></script>
+  <script src="/security/passkey-client.js?v=billing-81d1d7aee6f9" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-81d1d7aee6f9" defer></script>
 </body>
 </html>

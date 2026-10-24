@@ -10,7 +10,7 @@ test("billing rejects password sessions and rolls only tracked passkeys", async 
   ]);
 
   assert.match(worker, /const MAX_SESSION_SECONDS = PASSWORD_SESSION_TTL_SECONDS/);
-  assert.match(worker, /refreshAuthenticatedSession\(request, response, env, url, path\)/);
+  assert.match(worker, /refreshAuthenticatedSession\(request, response, env, url, path, getSession\)/);
   assert.match(worker, /renewServiceSession\(request, response, env, "billing", path, session/);
   assert.doesNotMatch(worker, /sessionPolicy\(env, "password"\)/);
   assert.match(worker, /sessionPolicy\(env, "passkey"\)/);
