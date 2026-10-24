@@ -83,6 +83,15 @@ try { for (const [name, engine, launch] of engines) {
       const beforeGeneration = gridA.firstChild;
       a.render({ ...snapshot, generation: 3, files: [{ ...records[0], revision: 3 }] }, { createCard });
       check(gridA.firstChild !== beforeGeneration, 'new load generations must discard previous card bindings');
+      const gridC = document.createElement('div'); document.body.append(gridC);
+      const batched = make(gridC), mutations = new MutationObserver(() => {});
+      mutations.observe(gridC, { childList: true });
+      const many = Array.from({ length: 1056 }, (_, i) => ({ id: i + 1, name: 'File ' + i, revision: i + 1 }));
+      batched.render({ ...snapshot, generation: 4, limit: 1056, files: many }, { createCard });
+      const additions = mutations.takeRecords().filter(record => record.addedNodes.length);
+      check(additions.length === 1 && additions[0].addedNodes.length === 1056, 'a restored generation connects its cards in one batch');
+      check(gridC.firstChild.dataset.renderKey === 'file:1' && gridC.lastChild.dataset.renderKey === 'file:1056', 'batched insertion retains record order');
+      mutations.disconnect();
       return { snapshots, reveals, loads };
     });
     assert.deepEqual(result, { snapshots: 2, reveals: 2, loads: 1 });

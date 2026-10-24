@@ -262,3 +262,4 @@ try { for (const [name, engine, launch] of engines) {
 
 await import('./folder-navigation-review.browser.mjs');
 await import('./startup-security.browser.mjs');
+await import('./startup-config-reuse.browser.mjs');
