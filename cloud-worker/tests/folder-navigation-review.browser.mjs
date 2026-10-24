@@ -154,14 +154,14 @@ async function originRange(page, origin) {
   await preparePage(page, origin, 0);
   await page.evaluate(() => { globalThis.TCloudDisplayCache = { ...TCloudDisplayCache, supported: () => false }; });
   const restore = async ({ total, saved, remove = [], add = [], folders = 0, savedFolders = folders ? 160 : 0,
-    removeFolders = [], addFolders = [], originType = 'file' }) => {
+    removeFolders = [], addFolders = [], originType = 'file', query = '' }) => {
     count = total; ids = [...add, ...Array.from({ length: count }, (_, i) => i + 1).filter(id => !remove.includes(id))];
     folderCount = folders; calls.length = 0;
     folderIds = [...addFolders, ...Array.from({ length: folderCount }, (_, i) => i + 10000).filter(id => !removeFolders.includes(id))];
-    const result = await page.evaluate(async ({ saved, savedFolders, originType }) => {
+    const result = await page.evaluate(async ({ saved, savedFolders, originType, query }) => {
       await navigateToFolder(8, 'Empty');
       const entry = { tcloud: true, view: 'all', sort: 'updated', sortDirection: 'desc', sortUsesTypeDefaults: true,
-        listMode: true, loadedFolderCount: savedFolders, loadedFileCount: saved, renderLimit: Math.max(192, savedFolders + 192),
+        listMode: true, query, loadedFolderCount: savedFolders, loadedFileCount: saved, renderLimit: Math.max(192, savedFolders + 192),
         originType, originId: originType === 'folder' ? 10089 : 90, originOffsetY: 300, scrollX: 0, scrollY: 2400 };
       globalThis.__restoreSamples = []; globalThis.__sampling = true;
       const sample = () => { if (!__sampling) return; __restoreSamples.push({ title: document.querySelector('#view-title').textContent, y: __test.appScrollPosition().y }); requestAnimationFrame(sample); }; sample();
@@ -171,7 +171,7 @@ async function originRange(page, origin) {
         next: __test.state.itemNextFileOffset, folderNext: __test.state.itemNextFolderOffset, y: __test.appScrollPosition().y,
         anchor: document.querySelector(originType === 'folder' ? '[data-folder-id="10089"]' : '[data-file-id="90"]')?.getBoundingClientRect().top,
         rootTop: appScrollRoot()?.getBoundingClientRect().top || 0, samples: __restoreSamples };
-    }, { saved, savedFolders, originType });
+    }, { saved, savedFolders, originType, query });
     assert.equal(result.result.ok, true);
     assert.ok(result.samples.filter(sample => sample.title === 'Restored').every(sample => Math.abs(sample.y - result.y) <= 2), 'only the completed range and its position paint');
     return result;
@@ -179,17 +179,23 @@ async function originRange(page, origin) {
   // Reproduce an absent anchor scanning all 5,500 records beyond a saved 1,056-item range.
   let result = await restore({ total: 5500, saved: 1056, remove: [90] });
   assert.equal(result.files, 1306, 'missing anchor permits only 250 extra records after the saved range');
-  assert.equal(calls.length, 7, 'initial + five range pages + one bounded origin search');
+  assert.equal(calls.length, 5, 'initial + three range pages + one bounded origin search');
+  assert.equal(calls.at(-1).size, 250, 'a missing anchor retains its original look-ahead bound');
   assert.equal(result.next, 1306); assert.ok(Math.abs(result.y - 2400) <= 2, 'missing anchor uses saved coordinates');
   for (const total of [160, 500, 1056]) {
     result = await restore({ total, saved: total });
     assert.equal(result.files, total); assert.ok(Math.abs(result.anchor - result.rootTop - 300) <= 2, 'existing file anchor: ' + total);
-    assert.equal(calls.length, 1 + Math.ceil((total - 32) / 250));
+    assert.equal(calls.length, 1 + Math.ceil((total - 32) / 500));
+    assert.ok(calls.every(call => call.size <= 500));
   }
+  result = await restore({ total: 1056, saved: 1056, query: 'File' });
+  assert.equal(result.files, 1056);
+  assert.equal(calls.length, 6, 'search retains its 250-record API limit');
+  assert.ok(calls.every(call => call.size <= 250));
   for (const [total, saved] of [[1056, 1056], [1056, 160], [5500, 160]]) {
     result = await restore({ total, saved, remove: [90] });
     assert.ok(result.files <= saved + 250); assert.ok(Math.abs(result.y - 2400) <= 2);
-    assert.ok(calls.length <= 2 + Math.ceil((saved - 32) / 250));
+    assert.ok(calls.length <= 2 + Math.ceil((saved - 32) / 500));
   }
   // A moved-away file has the same absence semantics; nearby reordering still finds the anchor.
   result = await restore({ total: 5500, saved: 160, remove: [90], folders: 500 });
@@ -207,7 +213,7 @@ async function originRange(page, origin) {
   result = await restore({ total: 0, saved: 0, folders: 5500, savedFolders: 1056, originType: 'folder' });
   assert.equal(result.folders, 1056); assert.ok(Math.abs(result.anchor - result.rootTop - 300) <= 2, 'folder anchor is retained');
   result = await restore({ total: 0, saved: 0, folders: 5500, savedFolders: 1056, removeFolders: [10089], originType: 'folder' });
-  assert.equal(result.folders, 1306); assert.equal(calls.length, 7); assert.ok(Math.abs(result.y - 2400) <= 2);
+  assert.equal(result.folders, 1306); assert.equal(calls.length, 5); assert.ok(Math.abs(result.y - 2400) <= 2);
   result = await restore({ total: 0, saved: 0, folders: 5500, addFolders: Array.from({ length: 100 }, (_, i) => 20000 + i), originType: 'folder' });
   assert.ok(Math.abs(result.anchor - result.rootTop - 300) <= 2, 'nearby folder reordering is retained');
   result = await restore({ total: 5500, saved: 160, folders: 100, savedFolders: 160,

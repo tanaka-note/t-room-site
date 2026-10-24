@@ -118,6 +118,8 @@ for (const account of ["admin", "folder-member"]) {
  assert.equal(resumed.calls.handoff, 0);
  assert.equal(resumed.calls.enterApp.length, 1);
  assert.equal(resumed.calls.enterApp[0].session.sessionCacheId, "same-session");
+ assert.equal(resumed.calls.enterApp[0].passkeyContext.configSession, resumed.calls.enterApp[0].session,
+   "startup config reuse must be bound to the validated session object");
  const expired = await resumePasskeySession(account, null, account, false, {}, false);
  assert.equal(expired.calls.enterApp.length, 0, "a cache cannot bypass an invalid server session");
 }
@@ -125,3 +127,4 @@ const unavailable = await resumePasskeySession("admin", new Uint8Array(32), "adm
 assert.equal(unavailable.calls.authenticate, 1);
 assert.equal(unavailable.calls.enterApp.length, 1, "IndexedDB failure must not prevent PRF login");
 process.stdout.write("Cloud passkey resume: cache skips WebAuthn/handoff and preserves session; PRF miss/role fallback passed.\n");
+await import('./startup-config-reuse.mjs');

@@ -43,6 +43,14 @@
       };
       for (const folder of folders.slice(0, remaining)) { add(folder, "folder"); remaining -= 1; }
       for (const file of files.slice(0, remaining)) add(file, "file");
+      if (limited && !reuse) {
+        // New generations discard old bindings, but need only one insertion
+        // into the live grid. Same-generation renders retain their card nodes.
+        const fragment = grid.ownerDocument.createDocumentFragment();
+        for (const card of desired) fragment.append(card);
+        grid.replaceChildren(fragment);
+        return;
+      }
       if (limited) {
         const keep = new Set(desired);
         for (const node of [...grid.children]) if (!keep.has(node)) node.remove();
