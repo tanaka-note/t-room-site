@@ -1,12 +1,12 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-531654d4b16f";
+const APP_BUILD_ID = "cloud-7960067ed15c";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
 const LONG_PRESS_DRAG_THRESHOLD_PX = 28;
 const INITIAL_ITEM_PAGE_SIZE = 32;
 const BACKGROUND_ITEM_PAGE_SIZE = 64;
-const RESTORE_ITEM_PAGE_SIZE = 250;
+const RESTORE_ITEM_PAGE_SIZE = 500;
 const SEARCH_ITEM_PAGE_SIZE = 250;
 let searchPageTimer = null;
 let searchInputController = null;
@@ -189,7 +189,7 @@ async function initialize() {
         const cached = await loadCachedPasskeyKeys(session, config);
         globalThis.TCloudSession?.check();
         if (cached) {
-          const loaded = await enterApp(session, "", null, { cached, config });
+          const loaded = await enterApp(session, "", null, { cached, config, configSession: session });
           if (loaded?.ok !== false) reportCompletedAppUpdate();
           return;
         }
@@ -1428,7 +1428,11 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
     if (state.session !== selectedSession) throw Object.assign(new Error("ログイン状態が変わりました。"), {status:419});
   };
   try {
-    const config = await api("/crypto-config");
+    // initialize already fetched and checked this config to validate the cached
+    // key. Reuse it only within that same startup/session, never across logins.
+    const reuseStartupConfig = passkeyContext?.cached && passkeyContext.config
+      && passkeyContext.configSession === selectedSession;
+    const config = reuseStartupConfig ? passkeyContext.config : await api("/crypto-config");
     assertSelected();
     state.crypto.config = config;
     if (!config.initialized) {
@@ -2386,8 +2390,11 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
     const filePageParams = state.itemNextFileOffset == null || !needsPage(state.files, "file", entry?.loadedFileCount)
       ? null : new URLSearchParams(baseParams);
     if (!folderPageParams && !filePageParams) return { ok: true, exhausted: true };
+    // Keep search and the single displaced-anchor look-ahead at their existing
+    // bound; only the saved ordinary-folder range uses larger requests.
+    const restorePageSize = state.query || searchOrigin ? SEARCH_ITEM_PAGE_SIZE : RESTORE_ITEM_PAGE_SIZE;
     const pageSize = (remaining) => restore
-      ? Math.min(RESTORE_ITEM_PAGE_SIZE, remaining > 0 ? remaining : RESTORE_ITEM_PAGE_SIZE)
+      ? Math.min(restorePageSize, remaining > 0 ? remaining : restorePageSize)
       : state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE;
     if (folderPageParams) {
       folderPageParams.set("pageSize", String(pageSize(Number(entry?.loadedFolderCount) - state.folders.length)));
