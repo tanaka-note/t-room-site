@@ -65,7 +65,8 @@ jobs:
       max-parallel: 3
       matrix:
         target: ${{ fromJSON(needs.plan.outputs.node) }}
-    runs-on: ubuntu-latest
+    # Shared Playwright 1.56.1 does not support the ubuntu-latest 26.04 image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
