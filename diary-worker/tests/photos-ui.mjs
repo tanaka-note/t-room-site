@@ -44,15 +44,15 @@ assert.match(script, /\["dragenter", "dragover", "dragleave", "drop"\]/);
 assert.match(script, /prepareSelectedPhotos\(\[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\], getEditorSelectionOffset\("end"\)\)/);
 assert.match(script, /photoPreparationPromise: null/);
 assert.match(script, /photoUploading: false/);
-assert.match(photoUpload, /PHOTO_UPLOAD_CONCURRENCY = 2/);
+assert.match(photoUpload, /PHOTO_UPLOAD_CONCURRENCY = 3/);
 assert.match(script, /queueBackgroundPhotoUpload\(photo\)/,
   "each prepared photo must be queued before posting");
 assert.match(photoUpload, /\/api\/photo-upload-sessions/);
-assert.match(script, /await ensurePhotosUploaded\(pendingPhotos\)/,
+assert.match(script, /await measure\("uploadWait", \(\) => ensurePhotosUploaded\(pendingPhotos\)\)/,
   "posting must wait for any remaining staged uploads");
 assert.match(script, /commitStagedPhotos\(saved\.entry\.id, pendingPhotos\)/,
   "posting must promote staged photos without uploading them again");
-assert.match(script, /await waitForPhotoPreparation\(\);\s*const id = Number\(elements\.entryId\.value/s,
+assert.match(script, /await measure\("prepare", \(\) => waitForPhotoPreparation\(\)\);\s*const id = Number\(elements\.entryId\.value/s,
   "entry serialization must wait for the active photo preparation task");
 assert.match(photoUpload, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[1000, 3000, 7000\]\)/);
 assert.match(photoUpload, /status === 408 \|\| status === 429 \|\| status >= 500/);
