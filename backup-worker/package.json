@@ -1,0 +1,12 @@
+{
+  "name": "t-room-backup-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/backup.js && node --check src/monitor.js && node --check src/registry.js && node --check src/browser.js",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "4.121.0"
+  }
+}

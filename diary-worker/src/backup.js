@@ -1,3 +1,5 @@
+import { verifiedPut, digest, objectBytes } from '../../backup-worker/src/backup.js';
+import { reportRun } from '../../backup-worker/src/monitor.js';
 const BACKUP_FORMAT_VERSION = 6;
 const LEGACY_BACKUP_FORMAT_VERSION = 2;
 const DAILY_RETENTION = 30;
@@ -149,6 +151,7 @@ async function runDiaryBackup(env, { nowMs = Date.now() } = {}) {
     failedObjectCount: mediaBackup.failed,
     complete: mediaBackup.complete
   };
+  if (!mediaBackup.complete) return { complete: false, mediaBackup, dailyKey: keys.daily, monthlyKey: keys.monthly };
   const compressed = await gzipJson(payload);
   const putOptions = {
     httpMetadata: {
@@ -163,22 +166,42 @@ async function runDiaryBackup(env, { nowMs = Date.now() } = {}) {
     }
   };
 
-  await env.BACKUP.put(keys.daily, compressed, putOptions);
+  // Validate a candidate before publishing it; preserve an existing same-day good generation.
+  const candidate = 'attempts/' + crypto.randomUUID() + '.json.gz';
+  try {
+    await verifiedPut(env.BACKUP, candidate, compressed, putOptions.customMetadata);
+    const existing = await env.BACKUP.head(keys.daily);
+    if (existing?.customMetadata?.sha256) {
+      const prior = await env.BACKUP.get(keys.daily);
+      if (!prior || await digest(await objectBytes(prior)) !== existing.customMetadata.sha256) throw new Error('ExistingGenerationInvalid');
+    }
+    if (!existing || existing.customMetadata?.mediaComplete !== 'true') {
+      await verifiedPut(env.BACKUP, keys.daily, compressed, putOptions.customMetadata);
+    }
+  } finally { await env.BACKUP.delete(candidate); }
   const monthlyHead = await env.BACKUP.head(keys.monthly);
+  if (monthlyHead?.customMetadata?.sha256) {
+    const prior = await env.BACKUP.get(keys.monthly);
+    if (!prior || await digest(await objectBytes(prior)) !== monthlyHead.customMetadata.sha256) throw new Error('ExistingGenerationInvalid');
+  }
   let monthlyCreated = false;
   let monthlyUpgraded = false;
   if (!monthlyHead || monthlyHead.customMetadata?.format !== `troom-diary-d1-v${BACKUP_FORMAT_VERSION}`) {
-    await env.BACKUP.put(keys.monthly, compressed, putOptions);
+    await verifiedPut(env.BACKUP, keys.monthly, compressed, putOptions.customMetadata);
     monthlyCreated = !monthlyHead;
     monthlyUpgraded = Boolean(monthlyHead);
   }
 
-  const [dailyRetention, monthlyRetention] = await Promise.all([
-    pruneBackupGenerations(env.BACKUP, DAILY_PREFIX, DAILY_RETENTION),
-    pruneBackupGenerations(env.BACKUP, MONTHLY_PREFIX, MONTHLY_RETENTION)
-  ]);
+  let dailyRetention = { deleted: 0 }, monthlyRetention = { deleted: 0 }, retentionFailed = false;
+  try {
+    [dailyRetention, monthlyRetention] = await Promise.all([
+      pruneBackupGenerations(env.BACKUP, DAILY_PREFIX, DAILY_RETENTION),
+      pruneBackupGenerations(env.BACKUP, MONTHLY_PREFIX, MONTHLY_RETENTION)
+    ]);
+  } catch { retentionFailed = true; }
   return {
     complete: mediaBackup.complete,
+    retentionFailed,
     dailyKey: keys.daily,
     monthlyKey: keys.monthly,
     monthlyCreated,
@@ -191,23 +214,25 @@ async function runDiaryBackup(env, { nowMs = Date.now() } = {}) {
   };
 }
 
-async function runScheduledDiaryBackup(env, nowMs = Date.now()) {
-  try {
-    const result = await runDiaryBackup(env, { nowMs });
-    if (!result.complete) {
-      console.error(JSON.stringify({
-        event: "diary_photo_backup_incomplete",
-        missingObjectCount: result.mediaBackup.missing,
-        failedObjectCount: result.mediaBackup.failed
-      }));
+async function runScheduledDiaryBackup(env, nowMs = Date.now(), { sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  const runId = crypto.randomUUID();
+  await reportRun(env, 'diary', runId, 'started', {}, nowMs);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await runDiaryBackup(env, { nowMs });
+      if ((!result.complete || result.retentionFailed) && attempt < 3) { await sleep(attempt * 1000); continue; }
+      await reportRun(env, 'diary', runId, result.complete ? 'succeeded' : 'partial', {
+        attempt, ...(result.complete ? { bytes: result.compressedBytes } : { stage: 'photos', reason: 'media_incomplete' })
+      });
+      if (result.retentionFailed) await reportRun(env, 'diary', runId, 'prune_failed', { attempt, stage: 'retention', reason: 'retention_failed' });
+      if (!result.complete) console.error(JSON.stringify({ event: 'diary_photo_backup_incomplete', missingObjectCount: result.mediaBackup.missing, failedObjectCount: result.mediaBackup.failed }));
+      return result;
+    } catch (error) {
+      if (attempt < 3) { await sleep(attempt * 1000); continue; }
+      await reportRun(env, 'diary', runId, 'failed', { attempt, stage: 'save_or_retention', reason: 'operation_failed' });
+      console.error(JSON.stringify({ event: 'diary_backup_failed', errorType: backupErrorType(error) }));
+      return { complete: false, error: true };
     }
-    return result;
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "diary_backup_failed",
-      errorType: backupErrorType(error)
-    }));
-    return { complete: false, error: true };
   }
 }
 

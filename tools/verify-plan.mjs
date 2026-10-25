@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 export const root = fileURLToPath(new URL('../', import.meta.url));
 export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat'];
-export const targets = ['tooling', 'site', ...services, 'auth', 'container-unit', ...android];
+export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
 const node = (cwd, ...args) => ({ cwd, args });
 const files = (dir, pattern) => readdirSync(new URL(`../${dir}/`, import.meta.url)).filter(f => pattern.test(f)).sort();
@@ -16,7 +16,7 @@ const tests = (cwd, ...paths) => paths.map(path => node(cwd, path));
 export function commands(target) {
   if (!targets.includes(target)) throw new Error(`Unknown verify target: ${target}`);
   if (android.includes(target)) return [{ cwd: target, gradle: true, args: [':app:assembleDebug', ':app:testDebugUnitTest', '--no-daemon'] }];
-  const checks = services.includes(target) ? [{ cwd: `${target}-worker`, script: 'check' }] : [];
+  const checks = (services.includes(target) || target === 'backup') ? [{ cwd: `${target}-worker`, script: 'check' }] : [];
   // Downloader's existing check also compiles Python; no Docker or definition refresh.
   const suites = {
     tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-release-actions.mjs', 'tools/test-cloud-infrastructure.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
@@ -34,6 +34,7 @@ export function commands(target) {
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup', 'passkey-performance'
     ].map(n => `tests/${n}.mjs`)),
+    backup: [{ cwd: 'backup-worker', script: 'test' }],
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     diary: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-diary'),
       node('.', 'tools/verify-web-contracts.mjs'),
@@ -61,7 +62,7 @@ export function commands(target) {
 export function browserTests(target) {
   if (target === 'payments') return ['payments-worker/test/payments.browser.mjs'];
   if (target === 'health') return ['health-worker/test/health.browser.mjs'];
-  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs', 'tools/test-asset-report.browser.mjs'], cloud: ['cloud-worker/tests/folder-scroll-position.browser.mjs', 'cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
+  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs', 'tools/test-asset-report.browser.mjs'], cloud: ['cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/folder-scroll-position.browser.mjs', 'cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
     security: ['security-worker/test/overview.browser.mjs', 'security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
     diary: ['diary-worker/tests/browser/navigation-return.mjs', 'diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
@@ -85,8 +86,9 @@ export function affected(paths) {
     if (/^(package\.json$|pnpm-)/.test(path)) { add('tooling', 'site'); continue; }
     const mobile = android.find(d => path.startsWith(`${d}/`));
     if (mobile) { add(mobile); continue; }
-    const service = services.find(s => path.startsWith(`${s}-worker/`));
+    const service = [...services, 'backup'].find(s => path.startsWith(`${s}-worker/`));
     if (service) add(service);
+    if (/^backup-worker\/src\/(backup|monitor)\.js$/.test(path)) add('diary', 'security', 'backup');
     if (/^downloader2-(?:extension|native|fixtures)\//.test(path)) { add('downloader2'); continue; }
     if (/^downloader-worker\/container\//.test(path)) add('container-unit');
     // The server is monolithic: any Security runtime edit can affect handoff.
@@ -102,7 +104,7 @@ export function affected(paths) {
       }
     }
     if (/^assets\//.test(path) && !/^assets\/(passkey|password-auth|session-policy|session-secret|security-audit|account-display)/.test(path)) add('site', 'cloud', 'security', 'diary', 'billing');
-    if (!service && !/^assets\//.test(path)) add('site');
+    if (!service && !/^assets\//.test(path) && path !== 'tools/verify-plan.mjs') add('site');
     // Diary owns its shell/SW and runs the web contracts in its own profile.
     // Selecting site here would also redeploy the unrelated public Worker.
     if (/service-worker|webmanifest|web-apps\.json|pwa-auto-update/.test(path) && service !== 'diary') add('site');
@@ -149,7 +151,7 @@ export function installDirectories(selected) {
   const dirs = new Set(['.']);
   for (const target of selected) {
     if (['site', 'diary'].includes(target)) dirs.add('security-worker');
-    if (services.includes(target)) dirs.add(`${target}-worker`);
+    if (services.includes(target) || target === 'backup') dirs.add(`${target}-worker`);
     if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }

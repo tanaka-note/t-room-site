@@ -1,3 +1,5 @@
+import { runState } from '../../backup-worker/src/monitor.js';
+import { archiveAuditEvents } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
@@ -110,7 +112,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
 
   async scheduled(event) {
     return runDefinitionSchedule(event, this.env, async () => {
-      const retentionDays = clampNumber(this.env.AUDIT_RETENTION_DAYS, 30, 730, 180);
+      const retentionDays = 180;
       const retentionCutoff = auditRetentionCutoff(retentionDays);
       await this.env.DB.batch([
         this.env.DB.prepare("DELETE FROM security_challenges WHERE expires_at < ?").bind(nowSeconds() - 86400),
@@ -118,9 +120,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
         this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
         this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
         this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
-        this.env.DB.prepare("DELETE FROM security_audit_events WHERE occurred_at < ?").bind(retentionCutoff)
+        // Audit expiration is handled only by verified archival below.
       ]);
-      await cleanupDisabledIdentities(this.env.DB, retentionCutoff);
+      const archived = await archiveAuditEvents({ ...this.env, recordArchiveAudit: async event => { await storeAuditEvent(this.env, event); return { stored: true }; } }, retentionCutoff);
+      if (archived) await cleanupDisabledIdentities(this.env.DB, retentionCutoff);
     });
   }
 
@@ -145,6 +148,12 @@ export default class SecurityWorker extends WorkerEntrypoint {
   async recordAuditEvent(input) {
     await storeAuditEvent(this.env, input);
     return { stored: true };
+  }
+
+  async getBackupStatus(service) {
+    if (!['diary', 'security-audit'].includes(service)) throw new Error('UnknownBackup');
+    const result = await this.env.DB.prepare("SELECT event_id, occurred_at, event_type, details_json FROM security_audit_events WHERE target_type = 'backup' AND target_id = ? AND event_type LIKE 'backup_%' ORDER BY occurred_at DESC, event_id DESC LIMIT 40").bind(service).all();
+    return runState(result.results || [], { minute: service === 'diary' ? 25 : 41 });
   }
 
   async getHealthKeyBundle(input) {
@@ -1018,7 +1027,7 @@ async function identityDetail(id, env) {
     env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? ORDER BY service, created_at").bind(id).all(),
     env.DB.prepare("SELECT credential_id, transports_json, device_type, backed_up, prf_enabled, status, label, registered_at, approved_at, last_used_at, revoked_at FROM security_credentials WHERE identity_id = ? ORDER BY registered_at DESC").bind(id).all(),
     env.DB.prepare("SELECT id, expires_at, status, created_at, used_at, revoked_at FROM security_invitations WHERE identity_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
-    env.DB.prepare("SELECT * FROM security_audit_events WHERE identity_id = ? ORDER BY occurred_at DESC LIMIT 50").bind(id).all()
+    env.DB.prepare("SELECT * FROM security_audit_events WHERE identity_id = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT 50").bind(id, auditRetentionCutoff(180)).all()
   ]);
   const linkRows = links.results || [];
   const adminKeyRows = identity.is_security_admin ? await env.DB.prepare("SELECT credential_id, encrypted_payload, payload_iv FROM security_tcloud_key_envelopes WHERE identity_id = ? AND envelope_type = 'admin_private_prf'").bind(id).all() : { results: [] };
@@ -1358,8 +1367,8 @@ function retireUnregisteredInvitedIdentityIfOrphaned(env, identityId, invitation
 async function listAuditEvents(url, env) {
   const summary = url.searchParams.get("summary") === "true";
   const pageSize = summary ? AUDIT_SUMMARY_PAGE_SIZE : AUDIT_PAGE_SIZE;
-  const clauses = ["1 = 1"];
-  const values = [];
+  const clauses = ["occurred_at >= ?", "target_type IS NOT 'backup'"];
+  const values = [auditRetentionCutoff(180)];
   let view;
   try { view = auditViewFilter(url.searchParams.get("view") || "all"); }
   catch { throw new HttpError(400, "履歴の表示方法を確認してください。"); }
@@ -1407,8 +1416,8 @@ async function listAuditEvents(url, env) {
 async function auditEventDetail(env, id) {
   const row = await env.DB.prepare(`SELECT *,
     (SELECT display_name FROM security_identities WHERE id = security_audit_events.identity_id) AS identity_display_name
-    FROM security_audit_events WHERE event_id = ?`).bind(id).first();
-  if (!row) throw new HttpError(404, "この履歴は見つかりません。保持期限を過ぎた可能性があります。");
+    FROM security_audit_events WHERE event_id = ? AND occurred_at >= ? AND target_type IS NOT 'backup'`).bind(id, auditRetentionCutoff(180)).first();
+  if (!row) throw new HttpError(404, "この画面の表示対象外か、履歴が見つかりません。");
   return json({ event: { ...withUtcTimes(row), ...auditDisplayNames(row) } });
 }
 

@@ -46,7 +46,7 @@ for (const t of selected) {
     } finally { rmSync(scratch, { recursive: true, force: true }); }
     if (process.exitCode) process.exit(process.exitCode);
   }
-  if (argv.includes('--build') && (services.includes(t) || t === 'site')) {
+  if (argv.includes('--build') && (services.includes(t) || t === 'backup' || t === 'site')) {
     if (t === 'site' && run(process.execPath, ['tools/prepare-static-assets.mjs']).status !== 0) process.exit(1);
     const cwd = t === 'site' ? root : resolve(root, `${t}-worker`);
     const cli = resolve(cwd, 'node_modules/wrangler/bin/wrangler.js');

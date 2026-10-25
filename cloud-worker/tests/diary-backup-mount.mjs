@@ -89,6 +89,23 @@ function fixture() {
   } };
 }
 
+test('service failures are visible and do not hide diary or ordinary files', async () => {
+  const f = fixture();
+  try {
+    f.env.SERVICE_BACKUPS = { async getSnapshot() { return { backupBytes: 200, services: [{ id: 'health', label: '体調管理', state: 'failed', available: true }] }; } };
+    const result = (await f.api('/diary-backups')).body;
+    assert.equal(result.backupBytes, 1500);
+    assert.equal(result.diaryBytes, 1300);
+    assert.equal(result.services[0].state, 'failed');
+    f.env.DIARY_BACKUPS.getSnapshot = async () => { throw new Error('Unavailable'); };
+    const partial = (await f.api('/diary-backups')).body;
+    assert.equal(partial.available, true);
+    assert.equal(partial.diaryAvailable, false);
+    assert.equal(partial.backupBytes, 200);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM cloud_files').get().n, 2);
+  } finally { f.db.close(); }
+});
+
 test("admin reads the fixed mount ID despite rename, with actual metadata", async () => {
   const f = fixture();
   try {
