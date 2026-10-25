@@ -73,7 +73,15 @@ try {
             if(action==='x')await page.locator('#preview-dialog .dialog-close').click();
             if(action==='back')await page.goBack();
             if(action==='escape')await page.keyboard.press('Escape');
-            if(action==='backdrop')await page.mouse.click(2,2);
+            if(action==='backdrop') {
+              await page.mouse.click(2,2);
+              if(mobile) {
+                // A full-screen photo has no backdrop; tapping the header
+                // must keep it open. Use its close button to leave instead.
+                assert.equal(await page.locator('#preview-dialog').isVisible(),true);
+                await page.locator('#preview-dialog .dialog-close').click();
+              }
+            }
             await page.waitForFunction(()=>!document.querySelector('#preview-dialog').open&&!history.state?.previewId);
             await page.waitForTimeout(150);
             assert.ok(Math.abs(await page.evaluate(()=>__test.appScrollPosition().y)-5000)<=2,action+' photo');

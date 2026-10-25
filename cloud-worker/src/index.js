@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-88b28f01d2b8";
+const APP_BUILD_ID = "cloud-ef9d6e367e92";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2643,6 +2643,8 @@ async function serveAsset(request, env, url, path) {
     ["/transfer-progress.js", "/transfer-progress.js"],
     ["/upload-view.js", "/upload-view.js"],
     ["/preview-controls.js", "/preview-controls.js"],
+    ["/photo-viewer.js", "/photo-viewer.js"],
+    ["/photo-viewer.css", "/photo-viewer.css"],
     ["/thumbnail-codec.js", "/thumbnail-codec.js"],
     ["/cloud.css", "/cloud-runtime-20260815-1.css"],
     ["/cloud.js", "/cloud-runtime-20260816-1.js"],
