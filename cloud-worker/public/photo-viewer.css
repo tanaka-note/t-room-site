@@ -19,9 +19,11 @@
 #selection-mode-button { min-height: 44px; padding-inline: 10px; }
 .toolbar { grid-template-columns: minmax(160px, 1fr) auto auto 42px; }
 .selection-more { position: relative; }
+.selection-bar, .selection-bar .selection-actions { overflow: visible; }
+.selection-bar .selection-actions { max-height: none; }
 .selection-more summary { display: grid; place-items: center; min-height: 44px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--teal-dark); cursor: pointer; font-weight: 700; list-style: none; }
 .selection-more summary::-webkit-details-marker { display: none; }
-.selection-more-menu { display: grid; gap: 7px; position: fixed; z-index: 31; right: 24px; top: 94px; width: min(260px, calc(100vw - 48px)); max-height: 50dvh; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 10px 32px #17212a33; }
+.selection-more-menu { display: grid; gap: 7px; position: absolute; z-index: 31; right: 0; top: calc(100% + 12px); width: min(260px, calc(100vw - 48px)); max-height: 50dvh; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 10px 32px #17212a33; }
 #app-view .file-select-button, #app-view .folder-select-button { width: 44px; min-width: 44px; max-width: 44px; height: 44px; min-height: 44px; max-height: 44px; top: 3px; right: 3px; }
 @media (max-width: 900px) {
   .toolbar { grid-template-columns: minmax(0, 1fr) auto auto 42px; }

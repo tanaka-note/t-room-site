@@ -35,6 +35,15 @@ try { for (const [name, engine, launch] of engines) {
     assert.equal(await page.locator('#selection-move').isVisible(), true);
     assert.equal(await page.locator('#selection-delete').isVisible(), true);
     assert.equal(await page.locator('#selection-share').isVisible(), true);
+    const menu = await page.locator('.selection-more-menu').evaluate(menu => {
+      const bounds = menu.getBoundingClientRect();
+      return { inside: bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight,
+        buttons: [...menu.querySelectorAll('button')].filter(button => !button.hidden).map(button => {
+          const r = button.getBoundingClientRect();
+          return { id: button.id, hit: button.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)) };
+        }) };
+    });
+    assert.ok(menu.inside && menu.buttons.every(button => button.hit), JSON.stringify(menu));
     assert.equal(await page.evaluate(() => history.length - __selectionBefore.historyLength), 1);
     const retained = await page.evaluate(() => {
       globalThis.__capturedSelection = __test.selectedItems(); __test.selectAllVisibleItems();
