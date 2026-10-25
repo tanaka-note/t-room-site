@@ -39,13 +39,15 @@ test('successful backups verify bytes, preserve a daily generation, and retain 3
   const env = { HEALTH_DB: d1(db), BACKUP: bucket, ...monitor };
   try {
     const now = Date.now();
+    const seed = await compress(await capture(d1(db), 'health'));
+    const options = { customMetadata: { sha256: await digest(seed) } };
     for (let i = 50; i > 0; i--) {
       const day = new Date(now - i * 86400000).toISOString().slice(0, 10);
-      await bucket.put(`d1/health/daily/${day}.json.gz`, new Uint8Array([i]));
+      await bucket.put(`d1/health/v2/daily/${day}.json.gz`, seed, options);
     }
     for (let i = 0; i < 14; i++) {
       const month = new Date(Date.UTC(2024, i, 1)).toISOString().slice(0, 7);
-      await bucket.put(`d1/health/monthly/${month}.json.gz`, new Uint8Array([i]));
+      await bucket.put(`d1/health/v2/monthly/${month}.json.gz`, seed, options);
     }
     const result = await backupService(env, 'health', now, async () => {});
     assert.equal(result.state, 'ok');

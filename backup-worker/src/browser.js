@@ -2,7 +2,7 @@ import { SERVICES } from './registry.js';
 import { listObjects } from './backup.js';
 import { runState } from './monitor.js';
 
-const CACHE_KEY = 'https://backups.internal/storage-v1';
+const CACHE_KEY = 'https://backups.internal/storage-v2';
 export async function serviceStatus(env, service) {
   const result = await env.SECURITY_DB.prepare(`SELECT event_id, occurred_at, event_type, details_json
     FROM security_audit_events WHERE target_type = 'backup' AND target_id = ?
@@ -22,9 +22,10 @@ export async function storageSnapshot(env, refresh = false, cache = globalThis.c
   const services = [];
   for (const [id, spec] of Object.entries(SERVICES)) {
     try {
-      const [daily, monthly] = await Promise.all([listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`)]);
+      const [daily, monthly, legacyDaily, legacyMonthly] = await Promise.all([listObjects(env.BACKUP, `d1/${id}/v2/daily/`), listObjects(env.BACKUP, `d1/${id}/v2/monthly/`), listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`)]);
       services.push({ id, label: spec.label, storageAvailable: true,
-        bytes: [...daily, ...monthly].reduce((n, o) => n + o.size, 0),
+        legacy: [...legacyDaily,...legacyMonthly].map(metadata),
+        bytes: [...daily, ...monthly, ...legacyDaily, ...legacyMonthly].reduce((n, o) => n + o.size, 0),
         daily: daily.map(metadata).sort((a, b) => b.name.localeCompare(a.name)),
         monthly: monthly.map(metadata).sort((a, b) => b.name.localeCompare(a.name)) });
     } catch { services.push({ id, label: spec.label, storageAvailable: false }); }

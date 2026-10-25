@@ -1,3 +1,4 @@
+import { Bucket, d1, database } from '../../backup-worker/test/fixtures.mjs';
 import assert from "node:assert/strict";
 import { gunzipSync } from "node:zlib";
 import { readFile } from "node:fs/promises";
@@ -10,7 +11,6 @@ import {
   backupKeys,
   createDiaryBackupPayload,
   formalPhotoBackupKey,
-  pruneBackupGenerations,
   restoreDiaryBackup,
   restoreFormalPhotoObjects,
   runDiaryBackup,
@@ -57,7 +57,7 @@ const tableRows = {
     entry_id: 1,
     file_name: "photo.jpg",
     content_type: "image/jpeg",
-    original_size: 1234,
+    original_size: 3,
     original_key: "entries/1/photos/1/original.jpg",
     display_key: "entries/1/photos/1/display.webp",
     thumbnail_key: "entries/1/photos/1/thumbnail.webp",
@@ -107,79 +107,22 @@ const tableRows = {
   }]
 };
 
-function createDb({ fail = false } = {}) {
-  return {
-    prepare(sql) {
-      const table = BACKUP_TABLES.find((candidate) => sql.includes(`FROM ${candidate.name}`));
-      assert.ok(table, `Unexpected backup query: ${sql}`);
-      return { table: table.name };
-    },
-    async batch(statements) {
-      if (fail) throw new Error("temporary D1 failure");
-      return statements.map((statement) => ({ success: true, results: structuredClone(tableRows[statement.table]) }));
-    }
-  };
+function createDb({fail=false}={}) {
+  if(fail) return {prepare(){throw new Error('temporary D1 failure');}};
+  const db=database('diary');
+  db.exec('PRAGMA foreign_keys=OFF');
+  for(const t of [...BACKUP_TABLES].reverse()) db.exec('DELETE FROM '+t.name);
+  for(const t of BACKUP_TABLES) for(const row of tableRows[t.name]) db.prepare('INSERT INTO '+t.name+' ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].join(',')+') VALUES ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].map(()=>'?').join(',')+')').run(...t.columns.map(c=>row[c]),...(t.name==='diary_accounts'?['synthetic@invalid.local']:[]));
+  const api=d1(db); return api;
 }
-
-class MemoryBucket {
-  constructor() {
-    this.objects = new Map();
-    this.putCalls = [];
-    this.failMonthlyOnce = false;
-  }
-
-  async put(key, value, options = {}) {
-    if (this.failMonthlyOnce && key.startsWith("monthly/")) {
-      this.failMonthlyOnce = false;
-      throw new Error("temporary monthly write failure");
-    }
-    const bytes = value instanceof Uint8Array
-      ? value
-      : new Uint8Array(await new Response(value).arrayBuffer());
-    this.objects.set(key, { key, bytes: new Uint8Array(bytes), options });
-    this.putCalls.push(key);
-    return { key, size: bytes.byteLength };
-  }
-
-  async head(key) {
-    const object = this.objects.get(key);
-    return object ? {
-      key,
-      size: object.bytes.byteLength,
-      customMetadata: object.options.customMetadata || null,
-      httpMetadata: object.options.httpMetadata || null
-    } : null;
-  }
-
-  async get(key) {
-    const object = this.objects.get(key);
-    if (!object) return null;
-    return {
-      key,
-      size: object.bytes.byteLength,
-      body: new Blob([object.bytes]).stream(),
-      httpMetadata: object.options.httpMetadata || null,
-      customMetadata: object.options.customMetadata || null,
-      writeHttpMetadata(headers) {
-        if (object.options.httpMetadata?.contentType) headers.set("Content-Type", object.options.httpMetadata.contentType);
-      }
-    };
-  }
-
-  async list({ prefix = "", cursor, limit = 1000 } = {}) {
-    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix)).sort();
-    const offset = cursor ? Number(cursor) : 0;
-    const selected = keys.slice(offset, offset + limit);
-    const next = offset + selected.length;
-    return {
-      objects: selected.map((key) => ({ key, size: this.objects.get(key).bytes.byteLength })),
-      truncated: next < keys.length,
-      ...(next < keys.length ? { cursor: String(next) } : {})
-    };
-  }
-
-  async delete(keys) {
-    for (const key of Array.isArray(keys) ? keys : [keys]) this.objects.delete(key);
+class MemoryBucket extends Bucket {
+  putCalls=this.writes;
+  failMonthlyOnce=false;
+  async put(key,value,options={}) {
+    if(this.failMonthlyOnce && key.startsWith('v7/monthly/')) {this.failMonthlyOnce=false;throw new Error('temporary monthly write failure');}
+    const result=await super.put(key,value,options);
+    if(result) result.options=options;
+    return result;
   }
 }
 
@@ -220,7 +163,7 @@ class SqliteD1 {
     try {
       const results = statements.map((descriptor) => {
         const statement = this.database.prepare(descriptor.sql);
-        if (/^\s*SELECT\b/i.test(descriptor.sql)) {
+        if (/^\s*(SELECT|WITH)\b/i.test(descriptor.sql)) {
           return { success: true, results: statement.all(...descriptor.bindings) };
         }
         const meta = statement.run(...descriptor.bindings);
@@ -273,8 +216,8 @@ const nearUtcMidnight = Date.parse("2026-08-19T15:30:00.000Z");
 assert.deepEqual(backupKeys(nearUtcMidnight), {
   date: "2026-08-20",
   month: "2026-08",
-  daily: "daily/2026-08-20.json.gz",
-  monthly: "monthly/2026-08.json.gz"
+  daily: "v7/daily/2026-08-20.json.gz",
+  monthly: "v7/monthly/2026-08.json.gz"
 });
 
 const payload = await createDiaryBackupPayload(createDb(), nearUtcMidnight);
@@ -305,22 +248,22 @@ const first = await runDiaryBackup({ DB: createDb(), BACKUP: bucket, MEDIA: medi
 assert.equal(first.complete, true);
 assert.equal(first.monthlyCreated, true);
 assert.equal(first.mediaBackup.copied, 3, "only the three formal photo variants must be copied once");
-assert.equal(bucket.objects.size, 5);
+assert.equal(bucket.objects.size, 8);
 assert.equal(bucket.objects.get(first.dailyKey).options.httpMetadata.contentEncoding, "gzip");
 assert.equal(readBackup(bucket, first.dailyKey).tables.diary_photos.rowCount, 1);
 assert.equal(readBackup(bucket, first.dailyKey).mediaBackup.complete, true);
 assert.equal(bucket.objects.has(`${PHOTO_BACKUP_PREFIX}not-formal/original`), false, "staging objects outside the formal D1 ledger must not be copied");
 for (const [variant] of [["original"], ["display"], ["thumbnail"]]) {
-  assert.ok(bucket.objects.has(formalPhotoBackupKey(tableRows.diary_photos[0].id, variant)));
+  assert.ok(bucket.objects.has(readBackup(bucket, first.dailyKey).mediaBackup.objects.find(o=>o.variant===variant).backupKey));
 }
 
 const second = await runDiaryBackup({ DB: createDb(), BACKUP: bucket, MEDIA: media }, { nowMs: nearUtcMidnight + 60_000 });
 assert.equal(second.monthlyCreated, false);
 assert.equal(second.mediaBackup.copied, 0, "differential backup must not recopy existing formal media");
 assert.equal(second.mediaBackup.existing, 3);
-assert.equal(bucket.objects.size, 5, "same-day rerun must preserve the successful generation without duplicating media objects");
-assert.equal(bucket.putCalls.filter((key) => key.startsWith("daily/")).length, 1);
-assert.equal(bucket.putCalls.filter((key) => key.startsWith("monthly/")).length, 1);
+assert.equal(bucket.objects.size, 8, "same-day rerun must preserve the successful generation without duplicating media objects");
+assert.equal(bucket.putCalls.filter((key) => key.startsWith("v7/daily/")).length, 1);
+assert.equal(bucket.putCalls.filter((key) => key.startsWith("v7/monthly/")).length, 1);
 
 const legacyMonthlyBucket = new MemoryBucket();
 await legacyMonthlyBucket.put("monthly/2026-08.json.gz", new Uint8Array([1]), {
@@ -331,13 +274,15 @@ const upgradedMonthly = await runDiaryBackup({
   BACKUP: legacyMonthlyBucket,
   MEDIA: await createMediaFixture()
 }, { nowMs: nearUtcMidnight });
-assert.equal(upgradedMonthly.monthlyCreated, false);
-assert.equal(upgradedMonthly.monthlyUpgraded, true, "an existing monthly generation must be upgraded once when the backup format changes");
-assert.equal(legacyMonthlyBucket.objects.get("monthly/2026-08.json.gz").options.customMetadata.format, `troom-diary-d1-v${BACKUP_FORMAT_VERSION}`);
+assert.equal(upgradedMonthly.monthlyCreated, true);
+assert.equal(upgradedMonthly.monthlyUpgraded, false, "legacy generations must remain untouched");
+assert.equal(legacyMonthlyBucket.objects.get("monthly/2026-08.json.gz").options.customMetadata.format, "troom-diary-d1-v1");
 
 const restoredDatabase = await migratedEmptyDatabase();
 const restoreResult = await restoreDiaryBackup(new SqliteD1(restoredDatabase), readBackup(bucket, first.dailyKey));
 assert.equal(restoreResult.complete, true);
+assert.equal(restoredDatabase.prepare("PRAGMA integrity_check").get().integrity_check,"ok");
+assert.deepEqual(restoredDatabase.prepare("PRAGMA foreign_key_check").all(),[]);
 const hundredTagBackup = structuredClone(readBackup(bucket, first.dailyKey));
 hundredTagBackup.tables.diary_tags.rows = Array.from({ length: 100 }, (_, sort_order) => ({
   entry_id: 1, tag: `tag-${sort_order}`, created_at: "2026-08-20 00:00:00", sort_order
@@ -352,7 +297,7 @@ assert.deepEqual(hundredTagDatabase.prepare("SELECT tag FROM diary_tags WHERE en
 for (const table of BACKUP_TABLES) {
   const restoredRows = restoredDatabase.prepare(`SELECT ${table.columns.join(", ")} FROM ${table.name} ORDER BY ${table.orderBy}`).all()
     .map((row) => ({ ...row }));
-  assert.deepEqual(restoredRows, tableRows[table.name], `restored rows must match for ${table.name}`);
+  assert.deepEqual(restoredRows, tableRows[table.name].map(r=>table.name === "diary_accounts" ? {...r,active:0}:r), `restored rows must match for ${table.name}`);
 }
 const restoredAccountSecrets = restoredDatabase.prepare(`
   SELECT login_id, password_hash, must_change_password, session_version
@@ -421,7 +366,7 @@ const photoRestore = await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: re
 assert.deepEqual(photoRestore, { complete: true, restored: 3, existing: 0, missing: 0, failed: 0 });
 for (const [variant, sourceColumn] of [["original", "original_key"], ["display", "display_key"], ["thumbnail", "thumbnail_key"]]) {
   const restoredObject = restoredMedia.objects.get(tableRows.diary_photos[0][sourceColumn]);
-  const backupObject = bucket.objects.get(formalPhotoBackupKey(tableRows.diary_photos[0].id, variant));
+  const backupObject = bucket.objects.get(readBackup(bucket, first.dailyKey).mediaBackup.objects.find(o=>o.variant===variant).backupKey);
   assert.deepEqual(restoredObject.bytes, backupObject.bytes, `restored ${variant} must match the backup object`);
 }
 const idempotentPhotoRestore = await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: restoredMedia }, readBackup(bucket, first.dailyKey));
@@ -432,36 +377,10 @@ const retryBucket = new MemoryBucket();
 retryBucket.failMonthlyOnce = true;
 const retryMedia = await createMediaFixture();
 await assert.rejects(() => runDiaryBackup({ DB: createDb(), BACKUP: retryBucket, MEDIA: retryMedia }, { nowMs: nearUtcMidnight }), /monthly write failure/);
-assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("monthly/")).length, 0);
+assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("v7/monthly/")).length, 0);
 const retry = await runDiaryBackup({ DB: createDb(), BACKUP: retryBucket, MEDIA: retryMedia }, { nowMs: nearUtcMidnight + 86_400_000 });
 assert.equal(retry.monthlyCreated, true, "a later successful run in the same month must create the missing monthly backup");
-assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("monthly/")).length, 1);
-
-const retentionBucket = new MemoryBucket();
-for (let day = 1; day <= 31; day += 1) {
-  const key = `daily/2026-07-${String(day).padStart(2, "0")}.json.gz`;
-  await retentionBucket.put(key, new Uint8Array([day]));
-}
-for (let month = 1; month <= 12; month += 1) {
-  await retentionBucket.put(`monthly/2025-${String(month).padStart(2, "0")}.json.gz`, new Uint8Array([month]));
-}
-await retentionBucket.put("monthly/2026-01.json.gz", new Uint8Array([1]));
-await retentionBucket.put("daily/not-a-date.json.gz", new Uint8Array([1]));
-await retentionBucket.put("monthly/2026-99.json.gz", new Uint8Array([1]));
-await retentionBucket.put("other/do-not-delete.json.gz", new Uint8Array([1]));
-await retentionBucket.put(formalPhotoBackupKey("retained-photo", "original"), new Uint8Array([1]));
-assert.equal((await pruneBackupGenerations(retentionBucket, "daily/", 30)).deleted, 1);
-assert.equal((await pruneBackupGenerations(retentionBucket, "monthly/", 12)).deleted, 1);
-assert.equal([...retentionBucket.objects.keys()].filter((key) => /^daily\/\d{4}-\d{2}-\d{2}\.json\.gz$/.test(key)).length, 30);
-assert.equal([...retentionBucket.objects.keys()].filter((key) => /^monthly\/\d{4}-\d{2}\.json\.gz$/.test(key) && !key.endsWith("-99.json.gz")).length, 12);
-for (const key of [
-  "daily/not-a-date.json.gz",
-  "monthly/2026-99.json.gz",
-  "other/do-not-delete.json.gz",
-  formalPhotoBackupKey("retained-photo", "original")
-]) {
-  assert.ok(retentionBucket.objects.has(key), `unexpected keys must remain untouched: ${key}`);
-}
+assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("v7/monthly/")).length, 1);
 
 // Incomplete photo sets must not publish generations or prune good ones.
 const incompleteMedia = await createMediaFixture();

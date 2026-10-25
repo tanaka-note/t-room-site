@@ -1,5 +1,5 @@
 import { runState } from '../../backup-worker/src/monitor.js';
-import { archiveAuditEvents } from './audit-archive.js';
+import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
@@ -111,6 +111,14 @@ export default class SecurityWorker extends WorkerEntrypoint {
   }
 
   async scheduled(event) {
+    if (event?.cron === '17 * * * *') {
+      const [definitions] = await Promise.allSettled([
+        runDefinitionSchedule(event, this.env, async () => {}),
+        archiveIfPending({ ...this.env, recordArchiveAudit: async event => { await storeAuditEvent(this.env, event); return { stored: true }; } }, auditRetentionCutoff(180))
+      ]);
+      if (definitions.status === 'rejected') throw definitions.reason;
+      return;
+    }
     return runDefinitionSchedule(event, this.env, async () => {
       const retentionDays = 180;
       const retentionCutoff = auditRetentionCutoff(retentionDays);

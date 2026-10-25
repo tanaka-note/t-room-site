@@ -9,18 +9,18 @@ import { scanBackupMetadata, getBackupSnapshot } from "../../diary-worker/src/ba
 
 const at = new Date("2026-09-12T18:25:00Z");
 const objects = [
-  { key: "daily/2026-09-13.json.gz", size: 101, uploaded: at, customMetadata: { format: "troom-diary-d1-v4", mediaComplete: "true" } },
-  { key: "daily/2026-09-12.json.gz", size: 99, uploaded: new Date(at - 86400000), customMetadata: {} },
-  { key: "monthly/2026-09.json.gz", size: 80, uploaded: at, customMetadata: { mediaComplete: "false" } },
-  { key: "media/formal-photos/one/original", size: 1000, uploaded: at },
-  { key: "media/formal-photos/one/thumbnail", size: 20, uploaded: at },
+  { key: "v7/daily/2026-09-13.json.gz", size: 101, uploaded: at, customMetadata: { format: "troom-diary-d1-v4", mediaComplete: "true" } },
+  { key: "v7/daily/2026-09-12.json.gz", size: 99, uploaded: new Date(at - 86400000), customMetadata: {} },
+  { key: "v7/monthly/2026-09.json.gz", size: 80, uploaded: at, customMetadata: { mediaComplete: "false" } },
+  { key: "media/verified-photos/one/original", size: 1000, uploaded: at },
+  { key: "media/verified-photos/one/thumbnail", size: 20, uploaded: at },
   { key: "unrelated/ignored", size: 999999, uploaded: at }
 ];
 let listCalls = 0;
 // A read-only fixture intentionally has no get, put, delete, copy or body APIs.
 const bucket = { async list({ prefix, cursor, include }) {
   listCalls++;
-  if (prefix !== "media/formal-photos/") assert.deepEqual(include, ["customMetadata", "httpMetadata"]);
+  if (!["media/verified-photos/","media/photo-receipts/","media/formal-photos/"].includes(prefix)) assert.deepEqual(include, ["customMetadata", "httpMetadata"]);
   const selected = objects.filter(o => o.key.startsWith(prefix));
   const offset = Number(cursor || 0);
   return { objects: selected.slice(offset, offset + 1), truncated: offset + 1 < selected.length, cursor: String(offset + 1) };

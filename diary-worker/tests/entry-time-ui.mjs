@@ -36,9 +36,9 @@ assert.match(worker, /const accepted = new Set\(\[primary\]\);[\s\S]*?accepted\.
   "retries created by the previous entryTime-aware hash remain compatible across deployment");
 assert.doesNotMatch(worker, /normalizeEntryTime|payload\.entryTime|input\.entryTime|row\.entry_time/);
 
-assert.match(backup, /const BACKUP_FORMAT_VERSION = 6/);
+assert.match(backup, /const BACKUP_FORMAT_VERSION = 7/);
 assert.match(backup, /"id", "entry_date", "last_published_at", "entry_time"/);
-assert.match(backup, /\[LEGACY_BACKUP_FORMAT_VERSION, 3, 4, 5, BACKUP_FORMAT_VERSION\]/);
+assert.match(backup, /\[LEGACY_BACKUP_FORMAT_VERSION, 3, 4, 5, 6, BACKUP_FORMAT_VERSION\]/);
 assert.match(migration, /ADD COLUMN last_published_at TEXT DEFAULT NULL/);
 assert.match(migration, /WHEN revision <= 1 OR updated_at = created_at THEN strftime/);
 assert.match(migration, /WHEN deleted_at IS NOT NULL AND updated_at = deleted_at THEN strftime\('%Y-%m-%dT%H:%M:%fZ', created_at\)/);

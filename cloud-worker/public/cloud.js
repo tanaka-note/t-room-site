@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-9a3c7d24f95a";
+const APP_BUILD_ID = "cloud-fa7c24fdf881";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -9411,10 +9411,13 @@ function renderBackupHealth(output, data) {
     section.open = !['ok', 'running'].includes(state);
     section.innerHTML = '<summary>' + escapeHtml(service.label) + '：' + escapeHtml(labels[state] || labels.unknown) + '</summary>';
     const stages = { capture: 'データ取得', daily_save: '日次保存', monthly_save: '月次保存', retention: '世代整理', photos: '写真保存', save_or_retention: '保存・世代整理', archive: '監査の長期保管', catchup: '過去分の保管' };
-    const reasons = { schema_review_required: 'データ構造の変更に対応が必要です', source_unavailable: '対象のデータに接続できません', verification_failed: '保存内容の照合に失敗しました', concurrent_write: '同時実行のため次回確認が必要です', operation_failed: '処理に失敗しました', retention_failed: '古い世代の整理に失敗しました', media_incomplete: '写真の保存が未完了です', archive_failed: '長期保管に失敗しました', backlog: '未保管の過去分が残っています' };
+    const reasons = { snapshot_too_large: '安全な取得上限を超えました。取得方式の見直しが必要です', unsafe_integer: '数値を損失なく保存できないため停止しました', legacy_unverified: '旧形式のため検証できません', schema_review_required: 'データ構造の変更に対応が必要です', source_unavailable: '対象のデータに接続できません', verification_failed: '保存内容の照合に失敗しました', concurrent_write: '同時実行のため次回確認が必要です', operation_failed: '処理に失敗しました', retention_failed: '古い世代の整理に失敗しました', media_incomplete: '写真の保存が未完了です', archive_failed: '長期保管に失敗しました', backlog: '未保管の過去分が残っています' };
     const info = document.createElement('p');
     info.textContent = '最終成功 ' + backupJapanTime(service.lastSuccessAt) + ' ／ 最新実行 ' + backupJapanTime(service.lastAttemptAt)
       + (service.stage ? ' ／ ' + (stages[service.stage] || '処理確認') : '') + (service.reason ? ' ／ ' + (reasons[service.reason] || '詳細を確認してください') : '')
+      + (service.pendingCount != null ? ' ／ 未保管 ' + service.pendingCount + (service.pendingCapped ? '件以上' : '件') : '')
+      + (service.oldestPendingAt ? ' ／ 最古の未保管 ' + backupJapanTime(service.oldestPendingAt) : '')
+      + (service.pending ? ' ／ 写真の検証待ち ' + service.pending + '件' : '')
       + (service.attempt ? ' ／ 試行 ' + service.attempt + '回' : '')
       + (service.retention === 'indefinite' ? ' ／ 180日超の履歴を期限なしで保管' : '');
     section.append(info);
@@ -9431,6 +9434,9 @@ function renderBackupHealth(output, data) {
     }
     if (service.retention === 'indefinite' && service.available && !service.periods?.length) {
       const empty = document.createElement('p'); empty.textContent = '長期保管分はまだありません。'; section.append(empty);
+    }
+    if (service.legacy?.length) {
+      const row=document.createElement('p'); row.textContent='旧形式 '+service.legacy.length+'世代（未検証・保持中）'; section.append(row);
     }
     for (const period of service.periods || []) {
       const row = document.createElement('p');
@@ -9465,7 +9471,7 @@ function renderDiaryBackupMount() {
       const data = await api(`/diary-backups${refresh ? "?refresh=1" : ""}`);
       if (!output.isConnected || state.session?.role !== "admin") return;
       const expanded = new Set([...output.querySelectorAll("details[open]")].map(node => node.dataset.backupGroup));
-      output.innerHTML = `<dl class="backup-summary"><div><dt>日記の最終保存（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>保管容量（取得済み分）</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日記の日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>最新世代のメディアバックアップ</dt><dd>${backupMediaLabel(data.mediaComplete)}</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
+      output.innerHTML = `<dl class="backup-summary"><div><dt>日記の最終保存（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>保管容量（取得済み分）</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日記の日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>日記の旧形式（未検証・保持中）</dt><dd>${(data.legacyDaily?.objectCount || 0) + (data.legacyMonthly?.objectCount || 0)}世代</dd></div><div><dt>最新世代のメディアバックアップ</dt><dd>${backupMediaLabel(data.mediaComplete)}</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
       renderBackupHealth(output, data);
       for (const [kind, label] of [["daily", "日記の日次バックアップ"], ["monthly", "日記の月次バックアップ"], ["photo", "日記の写真バックアップ"]]) {
         if (data.diaryAvailable === false) break;
