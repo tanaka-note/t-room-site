@@ -27,6 +27,7 @@ try { for(const [name,engine,launch] of engines){
   await page.locator('.folder-select-button').click();
   await page.waitForFunction(()=>!document.querySelector('#selection-favorite').disabled);
   assert.ok((await page.locator('#selection-favorite').textContent()).includes('追加'));
+  await page.locator('#selection-more summary').click();
   await page.locator('#selection-favorite').click();
   await page.waitForFunction(()=>document.querySelector('#selection-favorite').textContent.includes('削除'));
   assert.equal(writes.length,1);assert.deepEqual(writes[0],{method:'POST',fileIds:[1],folderIds:[8]});
@@ -43,6 +44,7 @@ try { for(const [name,engine,launch] of engines){
   await page.locator('.file-select-button').click();
   await page.waitForFunction(()=>!document.querySelector('#selection-favorite').disabled);
   assert.ok((await page.locator('#selection-favorite').textContent()).includes('削除'));
+  await page.locator('#selection-more summary').click();
   await page.locator('#selection-favorite').click();
   await page.waitForFunction(()=>__test.state.files.length===0);
   assert.equal(writes.at(-1).method,'DELETE');

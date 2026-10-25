@@ -46,7 +46,9 @@ try { for (const [name, engine, launch] of engines) {
     // Denied permissions and cancelled confirmation must leave the list untouched.
     await page.evaluate(async () => { const state = __test.state; state.session.canDelete = false; await __test.deleteSelectedItems(); state.session.canDelete = true; });
     assert.equal(writes.length, 0);
+    await click('#selection-more summary');
     page.once('dialog', dialog => dialog.dismiss()); await click('#selection-delete'); assert.equal(writes.length, 0);
+    await click('#selection-more summary');
     await click('.file-card[data-file-id="2"] .file-select-button'); await click('.folder-card[data-folder-id="9"] .folder-select-button');
     // Hold this real toolbar response until the deletion has started.
     let favoriteTimer;

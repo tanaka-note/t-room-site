@@ -60,18 +60,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="cloud-9ce90eabaa38">
-  <meta name="troom-app-build" content="cloud-9ce90eabaa38">
-  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-9ce90eabaa38">
+  <meta name="tcloud-build" content="cloud-03e0dbfaf28c">
+  <meta name="troom-app-build" content="cloud-03e0dbfaf28c">
+  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-03e0dbfaf28c">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>T-Cloud Storage</title>
-  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-9ce90eabaa38">
+  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-03e0dbfaf28c">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-9ce90eabaa38">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-03e0dbfaf28c">
+  <link rel="stylesheet" href="/cloud/photo-viewer.css?v=cloud-03e0dbfaf28c">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -169,6 +170,7 @@
           <span><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg></span>
           <input id="search-input" type="search" placeholder="すべてのフォルダを検索"><button type="button" class="search-clear" data-search-clear="search-input" aria-label="検索をクリア" hidden>×</button>
         </label>
+        <button id="selection-mode-button" class="secondary-button" type="button" aria-pressed="false">選択</button>
         <div id="sort-controls" class="sort-controls" role="group" aria-label="並び順">
           <button class="sort-button" type="button" data-sort-key="updated" aria-pressed="false">更新日 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg></span></button>
           <button class="sort-button active" type="button" data-sort-key="name" aria-pressed="true">名前 <span aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 15 7-7 7 7"/></svg></span></button>
@@ -201,19 +203,21 @@
       </aside>
 
       <div id="selection-bar" class="selection-bar" hidden>
-        <div><strong id="selection-count">0件を選択中</strong><small>保存・移動・削除する項目を選択</small></div>
+        <div><strong id="selection-count" role="status">0件を選択中</strong><small>ダウンロードする項目を選択</small></div>
         <div class="selection-actions">
           <button id="selection-clear" class="secondary-button" type="button">選択解除</button>
           <button id="selection-all" class="secondary-button" type="button">すべて選択</button>
+          <button id="selection-download" class="primary-button" type="button">ダウンロード</button>
+          <details id="selection-more" class="selection-more"><summary>その他</summary><div class="selection-more-menu">
           <button id="selection-share" class="secondary-button" type="button" hidden>共有</button>
           <button id="selection-favorite" class="secondary-button" type="button" hidden>☆ お気に入りに追加</button>
           <button id="selection-rename" class="secondary-button" type="button" hidden>名前変更</button>
           <button id="selection-password" class="secondary-button" type="button" hidden>PW変更</button>
           <button id="selection-lock" class="secondary-button" type="button" hidden>ロック</button>
-          <button id="selection-download" class="primary-button" type="button">保存</button>
           <button id="selection-move" class="secondary-button" type="button">移動</button>
           <button id="selection-delete" class="danger-button" type="button">削除</button>
           <button id="selection-offline" class="offline-button" type="button" hidden>オフライン</button>
+          </div></details>
         </div>
       </div>
 
@@ -303,8 +307,14 @@
       <div id="preview-stage" class="preview-stage"></div>
       <button id="preview-next" class="preview-nav preview-next" type="button" aria-label="次の写真" hidden><svg class="ui-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9 4 8 8-8 8"/></svg></button>
       <span id="preview-counter" class="preview-counter" hidden></span>
+      <button id="photo-zoom-toggle" class="photo-zoom-toggle" type="button" aria-label="写真を拡大" aria-pressed="false" hidden>
+        <svg class="ui-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5M7 10h6"/><path class="zoom-plus" d="M10 7v6"/></svg>
+      </button>
     </div>
-    <dl class="file-details">
+    <details id="photo-details" class="photo-details" hidden>
+      <summary>写真の詳細</summary>
+    </details>
+    <dl id="preview-file-details" class="file-details">
       <div><dt>容量</dt><dd id="preview-size"></dd></div>
       <div><dt id="preview-date-label">保存日</dt><dd id="preview-date"></dd></div>
     </dl>
@@ -321,6 +331,10 @@
           <button id="manual-thumbnail-button" class="secondary-button" type="button" hidden>サムネイル位置を変更</button>
         </div>
       </details>
+      <div id="photo-selection-actions" class="photo-selection-actions" hidden>
+        <button id="preview-select" class="secondary-button" type="button" aria-pressed="false">この写真を選択</button>
+        <button id="preview-download-selected" class="primary-button" type="button" hidden>選択分をダウンロード</button>
+      </div>
     </div>
   </dialog>
 
@@ -632,29 +646,30 @@
     </div>
   </dialog>
 
-  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/ui.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/thumbnail-codec.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/crypto-vault.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/file-safety.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/media-range.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/media-format.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/media-remux.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/offline-store.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/display-cache.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/session-guard.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/media-client.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/security/passkey-client.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/listing-model.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/listing-view.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/search-input.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/selection-state.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/bulk-delete.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/transfer-progress.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/upload-view.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/preview-controls.js?v=cloud-9ce90eabaa38" defer></script>
-  <script src="/cloud/cloud.js?v=cloud-9ce90eabaa38" defer></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/ui.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/thumbnail-codec.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/crypto-vault.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/file-safety.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/media-range.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/media-format.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/media-remux.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/offline-store.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/display-cache.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/session-guard.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/media-client.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/security/passkey-client.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/listing-model.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/listing-view.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/search-input.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/selection-state.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/bulk-delete.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/transfer-progress.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/upload-view.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/preview-controls.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/photo-viewer.js?v=cloud-03e0dbfaf28c" defer></script>
+  <script src="/cloud/cloud.js?v=cloud-03e0dbfaf28c" defer></script>
 </body>
 </html>
