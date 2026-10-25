@@ -12,6 +12,10 @@
 .photo-zoom-toggle { position: absolute; z-index: 4; bottom: 12px; right: 12px; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; color: white; background: rgba(9,17,20,.6); border: 1px solid rgba(255,255,255,.3); border-radius: 50%; }
 .photo-zoom-toggle:focus-visible { outline: 2px solid white; outline-offset: 2px; }
 .photo-zoom-toggle[aria-pressed="true"] .zoom-plus { display: none; }
+.photo-fullscreen-toggle { right: 64px; }
+.photo-fullscreen-toggle .fullscreen-exit, .photo-fullscreen-toggle[aria-pressed="true"] .fullscreen-enter { display: none; }
+.photo-fullscreen-toggle[aria-pressed="true"] .fullscreen-exit { display: block; }
+.photo-dialog .preview-stage-wrap:is(:fullscreen, :-webkit-full-screen) { display: block; width: 100vw; width: 100dvw; height: 100vh; height: 100dvh; max-width: none; max-height: none; background: #000; }
 .photo-dialog .preview-counter { right: auto; left: 50%; transform: translateX(-50%); }
 .photo-details { flex-shrink: 0; max-height: 25dvh; overflow: auto; padding: 0 20px 12px; }
 .photo-details summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--teal-dark); font-weight: 700; }
