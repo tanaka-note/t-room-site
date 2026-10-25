@@ -106,6 +106,11 @@
     render();
     return Object.freeze({
       toggle: () => zoom(scale > 1 ? 1 : 2.5),
+      replaceImage(nextImage) {
+        image.style.removeProperty("transform");
+        image = nextImage;
+        render();
+      },
       destroy() {
         destroyed = true; controller.abort(); observer.disconnect();
         for (const id of pointers.keys()) { try { stage.releasePointerCapture(id); } catch {} }

@@ -41,12 +41,13 @@ env.DB.prepare = (sql) => {
       return statement[method](...args);
     }])),
     // Only the fixture batch adapter reads this original statement.
-    original: statement
+    original: statement, sql
   });
   return wrap(originalPrepare(sql));
 };
 env.DB.batch = async (statements) => {
   calls.trips++; calls.batches++;
+  calls.ancestorReads += statements.filter(statement => statement.sql.includes('WITH RECURSIVE ancestors')).length;
   return originalBatch(statements.map(statement => statement.original));
 };
 env.SECURITY.validatePasskeySession = input => { calls.validations++; return originalValidation(input); };
@@ -73,7 +74,7 @@ try {
     isProtected: false, isUnlocked: true, adminAccess: true
   }, 'preserve every breadcrumb field used for folder names and client-side key unwrapping');
   assert.deepEqual({ trips: calls.trips, batches: calls.batches, ancestorReads: calls.ancestorReads },
-    { trips: 3, batches: 1, ancestorReads: 1 }, 'six levels need only three Cloud D1 round trips');
+    { trips: 2, batches: 1, ancestorReads: 1 }, 'admin listing and breadcrumbs share one D1 batch after the folder lookup');
   assert.equal(calls.validations, 2, 'initial ledger read and final touch both validate live authority');
   assert.deepEqual(calls.ledger, ['read', 'touch'], 'renewal reuses only the request-local initial read');
 
@@ -109,11 +110,70 @@ try {
   assert.deepEqual(deletedParent.body.breadcrumbs.map(folder => folder.id), [125]);
   db.prepare('UPDATE cloud_folders SET deleted_at=NULL WHERE id=124').run();
 
+  reset();
   const own = await get(member, '/items?folderId=8');
   assert.equal(own.status, 200);
   assert.deepEqual(own.body.breadcrumbs.map(folder => folder.id), [7, 8], 'never include ancestors outside the member root');
   assert.equal(own.body.breadcrumbs[0].isUnlocked, true);
   assert.ok(own.body.breadcrumbs.every(folder => !folder.adminAccess));
+  assert.equal(calls.trips, 5, 'three listing trips plus both live session root checks');
+  assert.deepEqual(calls.ledger, ['read', 'touch']);
+  for (let id = 300; id <= 304; id++) {
+    db.prepare('INSERT INTO cloud_folders(id,parent_id,name,created_by) VALUES(?,?,?,?)')
+      .run(id, id === 300 ? 7 : id - 1, `deep-${id}`, 'admin');
+  }
+  reset();
+  const deep = await get(member, '/items?folderId=304');
+  assert.equal(deep.status, 200);
+  assert.deepEqual(deep.body.breadcrumbs.map(folder => folder.id), [7, 300, 301, 302, 303, 304]);
+  assert.equal(calls.trips, 5, 'six levels must not add any D1 round trips, including both session root checks');
+  assert.equal(calls.validations, 2);
+  db.prepare("UPDATE cloud_folders SET password_hash='fixture-locked' WHERE id=302").run();
+  reset();
+  assert.equal((await get(member, '/items?folderId=304')).status, 423);
+  assert.equal(calls.batches, 0, 'locked folders never read either listing or breadcrumbs');
+  db.prepare('INSERT INTO cloud_folder_unlocks(session_id,folder_id,expires_at) VALUES(?,?,?)')
+    .run(member.body.sessionCacheId, 302, Math.floor(Date.now() / 1000) + 60);
+  assert.equal((await get(member, '/items?folderId=304')).status, 200);
+  db.prepare('UPDATE cloud_folder_unlocks SET expires_at=0 WHERE folder_id=302').run();
+  assert.equal((await get(member, '/items?folderId=304')).status, 423, 'an earlier success cannot retain expired authority');
+  db.prepare('UPDATE cloud_folders SET password_hash=NULL WHERE id=302').run();
+  db.prepare('UPDATE cloud_folders SET deleted_at=CURRENT_TIMESTAMP WHERE id=302').run();
+  assert.equal((await get(member, '/items?folderId=304')).status, 403, 'a deleted ancestor breaks member scope');
+  db.prepare('UPDATE cloud_folders SET deleted_at=NULL WHERE id=302').run();
+  // Compare against the unchanged access walk used by other endpoints, including
+  // its exact depth bound, nearest assigned root and lock/error precedence.
+  const directSession = { role: 'member', rootFolderId: 7, serviceLinkId: 'fixture', sessionId: 'direct-fixture' };
+  const outcome = async (check, folderId, session = directSession) => {
+    try { await check(env, folderId, session); return 200; } catch (error) { return error.status; }
+  };
+  const equivalent = async (folderId, expected, session = directSession) => {
+    assert.equal(await outcome(context.requireFolderAccess, folderId, session), expected);
+    reset();
+    assert.equal(await outcome(context.requireMemberListingScope, folderId, session), expected);
+    assert.equal(calls.trips, 1, 'a member listing access check always uses one query');
+  };
+  for (const [folderId, expected] of [[7, 200], [8, 200], [11, 423], [9, 403], [999999, 403]]) {
+    await equivalent(folderId, expected);
+  }
+  for (let id = 10000; id < 10100; id++) {
+    db.prepare('INSERT INTO cloud_folders(id,parent_id,name,created_by) VALUES(?,?,?,?)')
+      .run(id, id === 10000 ? 7 : id - 1, `bounded-${id}`, 'admin');
+  }
+  await equivalent(10098, 200); // 99 descendants plus the assigned root.
+  await equivalent(10099, 403);
+  db.prepare("UPDATE cloud_folders SET password_hash='fixture-lock' WHERE id=10040").run();
+  await equivalent(10098, 423);
+  await equivalent(10098, 200, { ...directSession, folderScopes: [
+    { serviceLinkId: 'outer', rootFolderId: 7 }, { serviceLinkId: 'inner', rootFolderId: 10050 }
+  ] });
+  db.prepare('INSERT INTO cloud_folder_unlocks(session_id,folder_id,expires_at) VALUES(?,?,?)')
+    .run(directSession.sessionId, 10040, Math.floor(Date.now() / 1000) + 60);
+  await equivalent(10098, 200);
+  db.prepare('UPDATE cloud_folder_unlocks SET expires_at=0 WHERE session_id=?').run(directSession.sessionId);
+  await equivalent(10098, 423);
+  db.prepare('UPDATE cloud_folders SET parent_id=10001 WHERE id=10000').run();
+  await equivalent(10098, 403, directSession);
   const search = await get(member, '/items?folderId=8&searchCandidates=1');
   assert.equal(search.status, 200); assert.deepEqual(search.body.breadcrumbs.map(folder => folder.id), [7, 8]);
   for (const [path, expected] of [['/items?folderId=9', 403], ['/items?folderId=11', 423], ['/items?folderId=999999', 404]]) {
