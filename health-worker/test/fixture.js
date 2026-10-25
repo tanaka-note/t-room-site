@@ -16,7 +16,7 @@ export async function fixture({ master: importedMaster } = {}) {
   const auditEvents=[]; const tokens = new Map(); let revoked = false;
   const env = { DB: d1(db), SESSION_SECRET: randomBytes(32).toString('hex'), SESSION_VERSION: '1', PASSKEY_ENABLED: 'true', SECURITY: {
     redeemHandoff: async (token, service) => { const user = tokens.get(token); tokens.delete(token); return service === 'health' && user ? user.handoff : null; },
-    validatePasskeySession: async input => ({ valid: !revoked && Object.values(users).some(u => u.handoff.identityId === input.identityId && u.handoff.credentialId === input.credentialId && u.handoff.serviceLinkId === input.serviceLinkId && input.serviceAccountId === 'nobumi' && input.sessionEpoch === 1) }),
+    validatePasskeySession: async input => { const valid = !revoked && Object.values(users).some(u => u.handoff.identityId === input.identityId && u.handoff.credentialId === input.credentialId && u.handoff.serviceLinkId === input.serviceLinkId && input.serviceAccountId === 'nobumi' && input.sessionEpoch === 1); return { valid, ...(input.requireHealthKeyReady ? { keyReady: valid } : {}) }; },
     getHealthKeyBundle: async input => !revoked ? Object.values(users).find(u => u.handoff.identityId === input.identityId && u.handoff.credentialId === input.credentialId && u.handoff.serviceLinkId === input.serviceLinkId)?.bundle || null : null,
     recordAuditEvent: async event => { auditEvents.push(event); return {stored:true}; }
   } };

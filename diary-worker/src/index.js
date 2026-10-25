@@ -1,4 +1,4 @@
-import { serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
+import { foregroundSessionActivity, serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { createDiaryEntryDomain } from "./entry-domain.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
@@ -116,13 +116,11 @@ export default {
 
       if (path.startsWith("/api/")) {
         timing = createRequestTiming();
-        // Share validation only within this read request. Mutations still revalidate
-        // after their handler, and a subsequent request always checks current policy.
+        // Share the initial check only within this request. A rolling response
+        // still performs Security's live touch and checks the local account.
         let sessionPromise;
         const readTimedSession = () => timing.measure("diary_auth", () => readSession(request, env));
-        const getSession = () => request.method === "GET"
-          ? (sessionPromise ??= readTimedSession())
-          : readTimedSession();
+        const getSession = (fresh = false) => fresh ? readTimedSession() : (sessionPromise ??= readTimedSession());
         const response = await timing.measure("diary_handler", () => withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context, getSession, timing)));
         return secureResponse(timing.append(await withRollingSession(request, response, env, url, path, getSession)));
       }
@@ -2164,14 +2162,20 @@ function getSessionPolicy(env, authMethod) {
 
 async function withRollingSession(request, response, env, url, path, getSession) {
   if (["/api/login", "/api/password-login-audit", "/api/passkey/handoff", "/api/logout", "/api/password/initial", "/api/households/select"].includes(path) || response.status === 401) return response;
-  // Reads reuse their request-local validation; mutations retain the existing
-  // second check after the handler, without renewing background activity.
-  const session = await getSession();
-  if (!response.ok || request.headers.get("X-Troom-Activity") !== "foreground") return response;
   // Bootstrap replaces the foreground entry read, so retain its renewal semantics.
   const activityPath = path === "/api/bootstrap" ? "/api/entries" : path;
+  let session = await getSession();
+  const willTouch = session?.rollingSessionVersion === ROLLING_SESSION_VERSION
+    && foregroundSessionActivity(request, response, activityPath);
+  // Keep the legacy/background mutation path's final read. Foreground rolling
+  // mutations use touch for the same final live revocation check.
+  if (request.method !== "GET" && !willTouch) session = await getSession(true);
+  if (!willTouch) return response;
+  if (session.exp <= Math.floor(Date.now() / 1000) || String(env.PASSKEY_ENABLED || "true") !== "true") throw new HttpError(401, "パスキーでログインし直してください。");
   return renewServiceSession(request, response, env, "diary", activityPath, session, async expiresAt => {
     const account = await findAccountById(session.accountId, env);
+    if (!account || account.role !== session.role || Number(account.sessionVersion || 1) !== Number(session.accountVersion || 1)
+      || String(session.version || "1") !== String(env.SESSION_VERSION || "1")) throw new HttpError(401, "パスキーでログインし直してください。");
     const policy = getSessionPolicy(env, "passkey");
     const token = await createSessionToken(account, policy, env, session.activeHouseholdId, { ...session, expiresAt });
     return sessionCookie(token, policy, url.protocol === "https:");

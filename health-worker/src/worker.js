@@ -51,10 +51,13 @@ async function authorized(request, env) {
   const cookie = (request.headers.get('Cookie') || '').split(';').map(v => v.trim()).find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
   const session = await verifySession(cookie, env);
   if (!session) throw new HttpError(401, 'パスキーでログインしてください。');
-  const result = await env.SECURITY.validatePasskeySession({ service: 'health', identityId: session.identityId, credentialId: session.credentialId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId, sessionEpoch: session.passkeySessionEpoch });
+  const result = await env.SECURITY.validatePasskeySession({ service: 'health', requireHealthKeyReady: true, identityId: session.identityId, credentialId: session.credentialId, serviceLinkId: session.serviceLinkId, serviceAccountId: session.serviceAccountId, sessionEpoch: session.passkeySessionEpoch });
   if (result?.valid !== true) throw new HttpError(401, 'もう一度パスキーでログインしてください。');
-  const key = await env.SECURITY.getHealthKeyBundle({ identityId: session.identityId, credentialId: session.credentialId, serviceLinkId: session.serviceLinkId });
-  if (!key) throw new HttpError(403, 'Security Centerで利用準備と承認を完了してください。');
+  // Older Security versions do not return keyReady. Retain their live bundle
+  // check during a mixed-version rollout; never fall back on an RPC error.
+  const keyReady = Object.hasOwn(result, 'keyReady') ? result.keyReady === true
+    : Boolean(await env.SECURITY.getHealthKeyBundle({ identityId: session.identityId, credentialId: session.credentialId, serviceLinkId: session.serviceLinkId }));
+  if (!keyReady) throw new HttpError(403, 'Security Centerで利用準備と承認を完了してください。');
   if (request.headers.get('X-Health-Session') !== session.sessionId) throw new HttpError(409, '別のログインに切り替わりました。もう一度ログインしてください。', 'session_changed');
   return session;
 }

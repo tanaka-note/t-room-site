@@ -3,18 +3,18 @@ import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
-import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
 import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-0930878384ed";
+const APP_BUILD_ID = "cloud-9ce90eabaa38";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
 const LOGIN_LIMIT = 5;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const encoder = new TextEncoder();
+const authorizedSessions = new WeakMap();
 const MIN_MULTIPART_CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_MULTIPART_CHUNK_BYTES = 64 * 1024 * 1024;
 const MAX_MULTIPART_PARTS = 10000;
@@ -2954,9 +2954,16 @@ async function refreshAuthenticatedSession(request, response, env, url, path) {
   // maintenance, static assets and hidden-tab polling never renew a passkey.
   if (!response.ok || request.headers.get("X-TCloud-Activity") !== "foreground"
     || !(/^\/api\/(items|favorites|folders|files|uploads|shares)(\/|$)/.test(path))) return response;
-  const session = await readSession(request, env);
-  if (!session || session.authMethod !== "passkey") return response;
+  const session = authorizedSessions.get(request);
+  if (!session || session.authMethod !== "passkey" || session.exp <= Math.floor(Date.now() / 1000)
+    || String(session.version) !== String(env.SESSION_VERSION || "1") || String(env.PASSKEY_ENABLED || "true") !== "true") {
+    throw new HttpError(401, "ログインし直してください。");
+  }
   assertSessionContext(request, session);
+  // Preserve the final local root check; Security's touch rechecks all live links.
+  for (const root of new Set(session.folderScopes?.map(scope => scope.rootFolderId) || (session.rootFolderId ? [session.rootFolderId] : []))) {
+    await requireFolder(env, root);
+  }
   const policy = cloudSessionPolicy(env, session.authMethod, session.role);
   const renewed = await cloudPasskeySession(env, session, "touch", policy.ttlSeconds);
   if (!renewed.valid) throw new HttpError(401, "ログインし直してください。");
@@ -2982,6 +2989,7 @@ async function readSession(request, env) {
   try {
     const payload = await readSignedSession(request, env);
     if (payload?.authMethod !== "passkey" || !validSessionLifetime(payload)) return null;
+    if (String(env.PASSKEY_ENABLED || "true") !== "true" || !payload.sessionId) return null;
     if (payload.exp <= Math.floor(Date.now() / 1000) || String(payload.version) !== String(env.SESSION_VERSION || "1")) return null;
     const account = payload.role === "member" ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find((item) => item.role === payload.role);
     if (!account) return null;
@@ -2994,16 +3002,16 @@ async function readSession(request, env) {
       if (payload.rootFolderId != null) await requireFolder(env, Number(payload.rootFolderId));
     } else if (payload.role === "member") return null;
     let folderScopes = null;
-    let trackedSession = null;
+    const trackedSession = await cloudPasskeySession(env, payload, "read");
+    if (trackedSession?.valid !== true) return null;
     if (payload.cloudScopeId != null) {
       if (payload.authMethod !== "passkey" || payload.role !== "member" || String(env.PASSKEY_ENABLED || "true") !== "true") return null;
-      const result = trackedSession = await cloudPasskeySession(env, payload, "read");
+      const result = trackedSession;
       folderScopes = normalizeMemberFolderScopes(result?.folderScopes);
       if (result?.valid !== true || !folderScopes || folderScopes[0].serviceLinkId !== payload.serviceLinkId || folderScopes[0].rootFolderId !== Number(payload.rootFolderId)) return null;
-    } else if (payload.folderScopes != null || !(await validateServicePasskeySession(payload, env, "cloud", payload.rootFolderId == null ? null : Number(payload.rootFolderId)))) return null;
+    } else if (payload.folderScopes != null) return null;
     if (folderScopes) for (const scope of folderScopes) await requireFolder(env, scope.rootFolderId);
-    if (payload.authMethod === "passkey" && (!payload.sessionId || !(trackedSession || await cloudPasskeySession(env, payload, "read")).valid)) return null;
-    return {
+    const session = {
       role: account.role,
       label: payload.authMethod === "passkey" ? payload.label || account.label : account.label,
       canUpload: account.canUpload,
@@ -3030,6 +3038,8 @@ async function readSession(request, env) {
       rootFolderId: payload.rootFolderId == null ? null : Number(payload.rootFolderId),
       ...(folderScopes ? { folderScopes, cloudScopeId: payload.cloudScopeId } : {})
     };
+    authorizedSessions.set(request, session);
+    return session;
   } catch { return null; }
 }
 
