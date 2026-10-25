@@ -25,9 +25,9 @@ export async function backupPhotos(env, rows, { now = Date.now(), maxObjects = 4
     if (!source) { result.missing++; continue; }
     if (variant === 'original' && Number(photo.original_size) !== source.size) { result.failed++; continue; }
     const copy = copyMap.get(proof.backupKey);
-    const valid = proof.format === 'troom-photo-proof-v1' && proof.photoId === String(photo.id) && proof.variant === variant
-      && proof.sourceKey === sourceKey && proof.sourceEtag === source.etag && copy?.etag === proof.backupEtag
-      && Number(proof.bytes) === source.size && copy?.size === source.size && SHA.test(proof.contentSha256 || '')
+    const sourceProven = proof.format === 'troom-photo-proof-v1' && proof.photoId === String(photo.id) && proof.variant === variant
+      && proof.sourceKey === sourceKey && proof.sourceEtag === source.etag && Number(proof.bytes) === source.size && SHA.test(proof.contentSha256 || '');
+    const valid = sourceProven && copy?.etag === proof.backupEtag && copy?.size === source.size
       && proof.backupKey.startsWith(PHOTO_VERIFIED_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '/' + proof.contentSha256);
     const record = (key, sha, date) => ({ photoId: String(photo.id), variant, sourceKey, backupKey: key, sha256: sha, bytes: source.size, verifiedAt: date });
     if (valid && now >= Date.parse(proof.verifiedAt) && now - Date.parse(proof.verifiedAt) < WEEK) {
@@ -39,6 +39,7 @@ export async function backupPhotos(env, rows, { now = Date.now(), maxObjects = 4
       const original = await env.MEDIA.get(sourceKey, { onlyIf: { etagMatches: source.etag } });
       if (!original?.body || original.etag !== source.etag) throw new Error('SourceChanged');
       const sha = await hashObject(original);
+      if (sourceProven && sha !== proof.contentSha256) throw new Error('VerificationFailed');
       const canonical = PHOTO_VERIFIED_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '/' + sha;
       let key = canonical, existing = await env.BACKUP.get(key);
       // Keep the damaged recovery object for investigation. Do not conceal it

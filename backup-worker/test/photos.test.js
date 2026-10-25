@@ -26,6 +26,12 @@ test('missing source, changed source during copying, and invalid original size d
     assert.equal((await backupPhotos(env,[{...photo,original_size:mode==='size'?999:3}])).complete,false,mode);
   }
 });
+test('unchanged source version with changed bytes fails against its earlier SHA oracle',async()=>{
+ const env=await fixture(),now=Date.now();
+ assert.equal((await backupPhotos(env,[photo],{now})).complete,true);
+ env.MEDIA.objects.get(photo.original_key).bytes=new Uint8Array([9,9,9]);
+ assert.equal((await backupPhotos(env,[photo],{now:now+8*86400000})).complete,false);
+});
 test('bounded verification resumes using receipts; missing SHA and mismatched destinations fail closed',async()=>{
   const env=await fixture(), now=Date.now();
   const first=await backupPhotos(env,[photo],{now,maxObjects:1});assert.equal(first.complete,false);assert.equal(first.pending,2);
