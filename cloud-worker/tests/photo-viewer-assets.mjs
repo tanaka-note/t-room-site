@@ -4,7 +4,7 @@ import { context, env } from "./session-fixture.mjs";
 import "../public/photo-viewer.js";
 
 // Exercise the production allowlist rather than the permissive UI fixture.
-for (const asset of ["photo-viewer.js", "photo-viewer.css"]) {
+for (const asset of ["photo-viewer.js", "photo-viewer.css", "photo-fullscreen.js"]) {
   let served;
   env.ASSETS = { fetch: async request => {
     served = new URL(request.url).pathname;

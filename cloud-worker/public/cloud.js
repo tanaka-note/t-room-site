@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-03e0dbfaf28c";
+const APP_BUILD_ID = "cloud-90df2fc572bc";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -110,6 +110,7 @@ const state = {
   previewMediaToken: "",
   previewPlayer: null,
   photoViewer: null,
+  photoFullscreen: null,
   previewFileId: null,
   previewGeneration: 0,
   manualThumbnail: null,
@@ -327,11 +328,20 @@ function bindEvents() {
   $("#preview-select").addEventListener("click", togglePreviewSelection);
   $("#preview-download-selected").addEventListener("click", startSelectedDownloads);
   $("#photo-zoom-toggle").addEventListener("click", () => state.photoViewer?.toggle());
+  state.photoFullscreen ||= TCloudPhotoFullscreen.create({
+    dialog: $("#preview-dialog"), container: $("#preview-stage-wrap"), button: $("#photo-fullscreen-toggle"),
+    isPhoto: () => $("#preview-dialog").open && state.selected?.mediaKind === "image",
+    onError: () => {
+      $("#preview-notice").textContent = "全画面表示を切り替えられませんでした。通常の写真表示でご覧ください。";
+      $("#preview-notice").hidden = false;
+    }
+  });
   $("#preview-dialog").addEventListener("close", handlePreviewClosed);
   $("#preview-dialog").addEventListener("close", queueEncryptedThumbnailPump);
   document.addEventListener("visibilitychange", queueEncryptedThumbnailPump);
   $("#preview-dialog").addEventListener("cancel", (event) => {
     event.preventDefault();
+    if (state.photoFullscreen?.consumeCancel()) return;
     requestPreviewClose();
   });
   $("#preview-prev").addEventListener("click", () => navigatePreview(-1));
@@ -1836,6 +1846,7 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  void state.photoFullscreen?.exit();
   photoHistoryFiles.clear();
   cancelFolderNavigation();
   navigationPositions.clear();
@@ -7606,6 +7617,8 @@ async function openPreview(file, options = {}) {
   state.selected = file;
   const isPhoto = file.mediaKind === "image";
   dialog.classList.toggle("photo-dialog", isPhoto);
+  if (!isPhoto) void state.photoFullscreen?.exit();
+  state.photoFullscreen?.sync();
   $("#photo-zoom-toggle").hidden = !isPhoto;
   $("#photo-zoom-toggle").disabled = true;
   $("#photo-selection-actions").hidden = !isPhoto;
@@ -7710,6 +7723,7 @@ function renderPreviewImage(stage, file, url, generation) {
           button.setAttribute("aria-label", scale > 1 ? "写真を通常表示に戻す" : "写真を拡大");
         }
       });
+      state.photoFullscreen?.sync();
     }
   }, { once: true });
   image.addEventListener("error", () => {
@@ -7973,6 +7987,7 @@ function enforceFolderPortraitOrientation() {
 }
 
 function handlePreviewFullscreenOrientationChange() {
+  if (state.selected?.mediaKind === "image") return;
   const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
   syncPreviewSeekbarFullscreenControl(fullscreenElement);
   const fullscreenVideo = fullscreenElement?.matches?.("video")
@@ -8145,6 +8160,7 @@ function requestPreviewClose() {
 function handlePreviewClosed() {
   // A queued close event must never destroy a newly opened preview.
   if ($("#preview-dialog").open) return;
+  void state.photoFullscreen?.exit();
   if (state.previewKeepMediaOnClose && state.previewPictureInPictureActive) {
     state.previewKeepMediaOnClose = false;
     state.previewTouchStart = null;
