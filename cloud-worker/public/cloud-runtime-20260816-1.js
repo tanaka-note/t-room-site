@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-dff192112120";
+const APP_BUILD_ID = "cloud-03e0dbfaf28c";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -31,6 +31,8 @@ const navigationPositions = new Map();
 let activeNavigationEntry = null;
 let folderNavigation = null;
 let navigationGeneration = 0;
+const photoHistoryFiles = new Map();
+let photoHistorySequence = 0;
 const state = {
   session: null,
   loginId: "",
@@ -324,9 +326,7 @@ function bindEvents() {
   });
   $("#preview-select").addEventListener("click", togglePreviewSelection);
   $("#preview-download-selected").addEventListener("click", startSelectedDownloads);
-  $("#photo-zoom-in").addEventListener("click", () => state.photoViewer?.zoomBy(1.5));
-  $("#photo-zoom-out").addEventListener("click", () => state.photoViewer?.zoomBy(1 / 1.5));
-  $("#photo-zoom-reset").addEventListener("click", () => state.photoViewer?.reset());
+  $("#photo-zoom-toggle").addEventListener("click", () => state.photoViewer?.toggle());
   $("#preview-dialog").addEventListener("close", handlePreviewClosed);
   $("#preview-dialog").addEventListener("close", queueEncryptedThumbnailPump);
   document.addEventListener("visibilitychange", queueEncryptedThumbnailPump);
@@ -1291,6 +1291,9 @@ function restoreSelectionScrollPosition(position) {
 async function handleHistoryNavigation(event) {
   let target = event.state;
   if (!target?.tcloud) return;
+  if (target.previewId && photoHistoryFiles.has(target.photoHistoryId)) {
+    target = { ...target, previewId: photoHistoryFiles.get(target.photoHistoryId) };
+  }
   if (activeNavigationEntry?.tcloud && !folderNavigation) {
     cacheNavigationPosition(captureNavigationPosition(activeNavigationEntry));
   }
@@ -1833,6 +1836,7 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  photoHistoryFiles.clear();
   cancelFolderNavigation();
   navigationPositions.clear();
   activeNavigationEntry = null;
@@ -7578,16 +7582,23 @@ async function openPreview(file, options = {}) {
       tcloud: true,
       folderId: state.folderId,
       folderName: $("#view-title").textContent,
-      previewId: file.id
+      previewId: file.id,
+      ...(file.mediaKind === "image" ? { photoHistoryId: ++photoHistorySequence } : {})
     }, "", location.href);
     state.previewHistoryActive = true;
   } else if (!pushHistory && state.previewHistoryActive && state.historyReady) {
-    history.replaceState({
+    // A photo entry retains its current file in memory. Replacing browser
+    // history for every swipe can exceed WebKit's history mutation limit.
+    if (!(file.mediaKind === "image" && history.state?.photoHistoryId)) history.replaceState({
       tcloud: true,
       folderId: state.folderId,
       folderName: $("#view-title").textContent,
       previewId: file.id
     }, "", location.href);
+  }
+  if (file.mediaKind === "image" && history.state?.photoHistoryId) {
+    photoHistoryFiles.set(history.state.photoHistoryId, Number(file.id));
+    while (photoHistoryFiles.size > 64) photoHistoryFiles.delete(photoHistoryFiles.keys().next().value);
   }
   if (!pushHistory && state.historyReady && history.state?.previewId) state.previewHistoryActive = true;
   clearPreviewUrl();
@@ -7595,7 +7606,8 @@ async function openPreview(file, options = {}) {
   state.selected = file;
   const isPhoto = file.mediaKind === "image";
   dialog.classList.toggle("photo-dialog", isPhoto);
-  $("#photo-tools").hidden = !isPhoto;
+  $("#photo-zoom-toggle").hidden = !isPhoto;
+  $("#photo-zoom-toggle").disabled = true;
   $("#photo-selection-actions").hidden = !isPhoto;
   const details = $("#photo-details"), fileDetails = $("#preview-file-details");
   details.open = false;
@@ -7692,9 +7704,10 @@ function renderPreviewImage(stage, file, url, generation) {
         onNavigate: direction => { void navigatePreview(direction); },
         onChange: scale => {
           $("#preview-dialog").classList.toggle("is-photo-zoomed", scale > 1);
-          $("#photo-zoom-reset").textContent = `${Math.round(scale * 100)}%`;
-          $("#photo-zoom-out").disabled = scale <= 1;
-          $("#photo-zoom-in").disabled = scale >= 6;
+          const button = $("#photo-zoom-toggle");
+          button.disabled = false;
+          button.setAttribute("aria-pressed", String(scale > 1));
+          button.setAttribute("aria-label", scale > 1 ? "写真を通常表示に戻す" : "写真を拡大");
         }
       });
     }
@@ -7727,7 +7740,7 @@ function togglePreviewSelection() {
   // Insert a selection screen below this preview, so Back closes one layer
   // and keeps the chosen photos ready for downloading.
   if (!state.selectionHistoryActive && state.previewHistoryActive && history.state?.previewId) {
-    const previewEntry = { ...history.state };
+    const previewEntry = { ...history.state, previewId: state.previewFileId };
     history.replaceState({ ...previewEntry, previewId: null, selection: true }, "", location.href);
     history.pushState(previewEntry, "", location.href);
     state.selectionHistoryActive = true;
@@ -7853,6 +7866,13 @@ function renderAudioPlayer(stage, file, url) {
 
 function handlePreviewKeydown(event) {
   if (!$("#preview-dialog").open) return;
+  if ($("#preview-dialog").classList.contains("photo-dialog")
+    && (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    && !event.target.closest?.("input, textarea, select, [contenteditable='true']")) {
+    event.preventDefault();
+    void navigatePreview(event.key === "ArrowLeft" ? -1 : 1);
+    return;
+  }
   if (event.target.closest?.("input, textarea, select, button, a")) return;
   const video = $("#preview-stage video");
   if (video && event.code === "Space") {

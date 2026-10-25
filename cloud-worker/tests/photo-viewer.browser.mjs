@@ -19,6 +19,7 @@ async function swipe(page) {
   await pointer(page, "pointermove", 1, box.x + box.width * .2, box.y + box.height / 2);
   await pointer(page, "pointerup", 1, box.x + box.width * .2, box.y + box.height / 2);
 }
+const zoomed = page => page.locator("#photo-zoom-toggle").getAttribute("aria-pressed");
 try {
   for (const [name, engine, launch] of engines) {
     for (const mobile of [false, true]) {
@@ -38,10 +39,12 @@ try {
         const layout = await page.evaluate(() => {
           const r = document.querySelector("#preview-dialog").getBoundingClientRect();
           const stage = document.querySelector("#preview-stage").getBoundingClientRect();
-          return { width: r.width, height: r.height, imageHeight: stage.height, viewport: innerHeight, horizontalOverflow: document.querySelector("#preview-dialog").scrollWidth > r.width + 1 };
+          const image = document.querySelector("#preview-stage img").getBoundingClientRect();
+          return { width: r.width, height: r.height, imageHeight: stage.height, imageFitsStage: image.width <= stage.width + 1 && image.height <= stage.height + 1, viewport: innerHeight, horizontalOverflow: document.querySelector("#preview-dialog").scrollWidth > r.width + 1 };
         });
         if (mobile) { assert.ok(Math.abs(layout.width - 390) < 1); assert.ok(Math.abs(layout.height - 844) < 1); assert.ok(layout.imageHeight > 844 * .6, JSON.stringify(layout)); }
         assert.equal(layout.horizontalOverflow, false);
+        assert.equal(layout.imageFitsStage,true,"normal-size photos must fit rather than crop in a wide desktop stage");
         const box = await page.locator("#preview-stage").boundingBox();
         const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
 
@@ -60,21 +63,38 @@ try {
           await pointer(page,"pointerup",1,cx-90,cy); await pointer(page,"pointerup",2,cx+90,cy);
         }
         assert.equal(await page.evaluate(() => __test.state.previewFileId), 1, "pinch must keep the same photo");
-        assert.ok(parseInt(await page.locator("#photo-zoom-reset").textContent()) > 100);
+        assert.equal(await zoomed(page), "true");
         await swipe(page);
         assert.equal(await page.evaluate(() => __test.state.previewFileId), 1, "dragging a zoomed photo must pan");
-        await page.locator("#photo-zoom-reset").click();
-        assert.equal(await page.locator("#photo-zoom-reset").textContent(), "100%");
+        await page.locator("#photo-zoom-toggle").click();
+        assert.equal(await zoomed(page), "false");
         await pointer(page,"pointerdown",1,cx,cy);
         await pointer(page,"pointercancel",1,cx-100,cy);
         await pointer(page,"pointerup",1,cx-100,cy);
         assert.equal(await page.evaluate(() => __test.state.previewFileId), 1, "cancelled drag must not navigate");
         await page.locator("#preview-stage img").dblclick();
-        assert.equal(await page.locator("#photo-zoom-reset").textContent(), "250%");
-        await page.locator("#photo-zoom-reset").click();
+        assert.equal(await zoomed(page), "true");
+        await page.locator("#preview-stage img").dblclick();
+        assert.equal(await zoomed(page), "false");
+        await pointer(page,"pointerdown",1,cx,cy); await pointer(page,"pointerup",1,cx,cy);
+        await pointer(page,"pointerdown",1,cx,cy); await pointer(page,"pointerup",1,cx,cy);
+        assert.equal(await zoomed(page), "true", "double tap must zoom");
+        await page.locator("#photo-zoom-toggle").focus();
+        await page.keyboard.press("Enter");
+        assert.equal(await zoomed(page), "false", "icon supports keyboard reset");
+        await page.keyboard.press("Space");
+        assert.equal(await zoomed(page), "true", "icon supports keyboard zoom");
+        await page.keyboard.press("ArrowRight"); await ready(page,3);
+        assert.equal(await zoomed(page), "false", "arrow navigation resets zoom even with a control focused");
+        await page.keyboard.press("ArrowLeft"); await ready(page,1);
+        const scaleBeforeWheel = await page.locator("#preview-stage img").evaluate(img => getComputedStyle(img).transform);
+        await page.mouse.move(cx,cy); await page.mouse.wheel(0,-240);
+        await page.waitForTimeout(80);
+        assert.equal(await page.locator("#preview-stage img").evaluate(img => getComputedStyle(img).transform),scaleBeforeWheel,"wheel must not zoom");
+        assert.equal(await page.locator("#photo-zoom-reset").count(),0,"numeric zoom UI is removed");
         await page.locator("#preview-select").click();
         await swipe(page); await ready(page,3);
-        assert.equal(await page.locator("#photo-zoom-reset").textContent(), "100%");
+        assert.equal(await zoomed(page), "false");
         await page.locator("#preview-select").click();
         assert.equal(await page.locator("#preview-download-selected").textContent(), "2件をダウンロード");
         if (process.env.TROOM_PHOTO_SCREENSHOTS) {

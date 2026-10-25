@@ -7,6 +7,25 @@ import { encryptRecord, recordId } from '../public/health-crypto.mjs';
 const origin='https://tanaka-note.com';
 async function login(f,person='owner') {const r=await handleRequest(new Request(`${origin}/health/api/passkey/handoff`,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({handoffToken:f.issue(person)})}),f.env);const v=await r.json();return {Cookie:r.headers.get('Set-Cookie').split(';')[0],'X-Health-Session':v.sessionId};}
 function req(path,headers,method='GET',body){return new Request(`${origin}/health/api${path}`,{method,headers:{Origin:origin,'Content-Type':'application/json',...headers},...(body?{body:JSON.stringify(body)}:{})});}
+
+test('mixed Security versions retain the old live key check; explicit denial and RPC errors never fall back', async () => {
+  const f = await fixture();
+  try {
+    const headers = await login(f), bundle = f.env.SECURITY.getHealthKeyBundle;
+    let bundles = 0;
+    f.env.SECURITY.getHealthKeyBundle = async input => { bundles++; return bundle(input); };
+    f.env.SECURITY.validatePasskeySession = async () => ({ valid: true });
+    assert.equal((await handleRequest(req('/records', headers), f.env)).status, 200);
+    assert.equal(bundles, 1);
+    bundles = 0;
+    f.env.SECURITY.validatePasskeySession = async () => ({ valid: true, keyReady: false });
+    await assert.rejects(handleRequest(req('/records', headers), f.env), error => error.status === 403);
+    assert.equal(bundles, 0);
+    f.env.SECURITY.validatePasskeySession = async () => { throw new Error('fixture RPC unavailable'); };
+    await assert.rejects(handleRequest(req('/records', headers), f.env), /fixture RPC unavailable/);
+    assert.equal(bundles, 0);
+  } finally { f.db.close(); }
+});
 test('actual handler shares encrypted records with revision checks and no history',async()=>{
   const f=await fixture();try{const a=await login(f);const b=await login(f,'subject');const id=await recordId(f.master,'2026-01-01', 'nobumi');
   assert.equal(f.auditEvents.length,2); for(const event of f.auditEvents){assert.match(event.eventId,/^[a-f0-9-]{36}$/);assert.ok(Number.isFinite(Date.parse(event.occurredAt)));assert.equal(event.service,'health');assert.equal(event.eventType,'passkey_login_success');assert.equal(event.sessionId,undefined);assert.ok(event.sessionIdHash);}

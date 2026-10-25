@@ -27,7 +27,7 @@
     "test:mobile-browser": "node tests/mobile-ui.browser.mjs && node tests/preview-player-parity.browser.mjs && node tests/media-format-fallback.browser.mjs",
     "test:display-browser": "node tests/thumbnail-preview.browser.mjs && node tests/display-cache.browser.mjs && node tests/preview-close.browser.mjs && node tests/manual-video-thumbnail.browser.mjs && node tests/persistent-display-cache.browser.mjs",
     "test:media-seek": "node tests/media-seek.browser.mjs",
-    "test:photos": "node tests/photo-navigation.mjs && node tests/photo-viewer-assets.mjs && node tests/photo-viewer.browser.mjs"
+    "test:photos": "node tests/photo-navigation.mjs && node tests/photo-viewer-assets.mjs && node tests/photo-viewer.browser.mjs && node tests/photo-download.browser.mjs && node tests/photo-lifecycle.browser.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.34.0"

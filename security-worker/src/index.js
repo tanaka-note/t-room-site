@@ -1447,7 +1447,15 @@ async function validatePasskeySession(env, input) {
   if (!runtime.enabled || !service || !identityId || !credentialId || !serviceLinkId || !serviceAccountId || !Number.isInteger(sessionEpoch)) return { valid: false };
   if (service === "cloud" && serviceAccountId === "subadmin") return { valid: false };
   const row = await env.DB.prepare(`SELECT c.credential_id, c.identity_id, l.id AS link_id, l.service,
-      l.service_account_id, l.cloud_root_folder_id, ? AS session_epoch
+      l.service_account_id, l.cloud_root_folder_id, ? AS session_epoch,
+      ${service === "health" && input.requireHealthKeyReady ? `EXISTS (
+        SELECT 1 FROM security_health_vaults v
+        JOIN security_health_grants g ON g.credential_id = v.credential_id AND g.identity_id = v.identity_id
+        JOIN security_health_members m ON m.identity_id = v.identity_id
+        JOIN security_health_config cfg ON cfg.account_id = 'nobumi'
+        WHERE v.credential_id = c.credential_id AND v.identity_id = i.id AND g.service_link_id = l.id
+          AND l.service_account_id = 'nobumi' AND json_valid(v.public_key_json)
+      )` : "0"} AS health_key_ready
     FROM security_credentials c
     JOIN security_identities i ON i.id = c.identity_id
     JOIN security_service_links l ON l.identity_id = i.id
@@ -1465,7 +1473,8 @@ async function validatePasskeySession(env, input) {
     valid = valid && service === "cloud" && serviceAccountId === "folder-member" && Boolean(folderScopes)
       && await validCloudFolderScopes(env, identityId, credentialId, folderScopes, serviceLinkId, input.cloudRootFolderId);
   }
-  return { valid, ...(valid && folderScopes ? { folderScopes } : {}) };
+  return { valid, ...(valid && folderScopes ? { folderScopes } : {}),
+    ...(service === "health" && input.requireHealthKeyReady ? { keyReady: valid && Number(row?.health_key_ready) === 1 } : {}) };
 }
 
 function normalizeCloudFolderScopes(value) {
@@ -1549,7 +1558,39 @@ async function cloudPasskeySession(env, input) {
 async function passkeyRollingSession(env, input) {
   let sessionRow;
   return trackedPasskeySession(env, input, async (claims) => {
-    if (claims.service !== "security") return (await validatePasskeySession(env, claims)).valid === true;
+    if (claims.service !== "security") {
+      if (!["read", "touch"].includes(claims.action)) return (await validatePasskeySession(env, claims)).valid === true;
+      if (!passkeysEnabled(env)) {
+        await observePasskeyRuntime(env, false);
+        return false;
+      }
+      const service = normalizeLinkedService(claims.service), identityId = normalizeIdentityId(claims.identityId);
+      const credentialId = validCredentialId(claims.credentialId), linkId = normalizeId(claims.serviceLinkId);
+      const accountId = normalizeText(claims.serviceAccountId, 100);
+      if (!service || !identityId || !credentialId || !linkId || !accountId
+        || claims.cloudRootFolderId != null || claims.cloudScopeId != null || claims.folderScopes != null) return false;
+      // One live snapshot, including the ledger. Never reuse it for a later touch.
+      const readState = () => env.DB.prepare(`SELECT s.*, i.status AS identity_status,
+        c.status AS credential_status, l.status AS link_status, l.service_account_id AS linked_account,
+        l.cloud_root_folder_id AS linked_root, r.passkey_session_epoch AS runtime_epoch,
+        r.switch_observed_enabled AS runtime_enabled
+        FROM security_active_sessions s
+        JOIN security_identities i ON i.id = s.identity_id
+        JOIN security_credentials c ON c.credential_id = s.credential_id AND c.identity_id = i.id
+        JOIN security_service_links l ON l.id = s.service_link_id AND l.identity_id = i.id
+        LEFT JOIN security_runtime_state r ON r.id = 1
+        WHERE s.session_id_hash = ? AND i.id = ? AND c.credential_id = ? AND l.id = ? AND l.service = ?`)
+        .bind(claims.sessionIdHash, identityId, credentialId, linkId, service).first();
+      let row = await readState();
+      if (row && row.runtime_epoch == null) {
+        await observePasskeyRuntime(env, true);
+        row = await readState();
+      }
+      sessionRow = row;
+      return Boolean(row && Number(row.runtime_enabled) === 1 && Number(row.runtime_epoch) === claims.sessionEpoch
+        && row.identity_status === "active" && row.credential_status === "active" && row.link_status === "active"
+        && row.linked_account === accountId && row.linked_root == null);
+    }
     if (!["identity", "security-admin"].includes(claims.role)
       || claims.serviceAccountId !== claims.role || claims.serviceLinkId != null) return false;
     let runtime, row;
@@ -2318,14 +2359,20 @@ async function publicLink(env, row) {
 
 function passkeysEnabled(env) { return String(env.PASSKEY_ENABLED || "false") === "true"; }
 async function observePasskeyRuntime(env, requestedEnabled) {
-  await env.DB.prepare(`INSERT INTO security_runtime_state (id, passkey_session_epoch, switch_observed_enabled)
+  const initialize = () => env.DB.prepare(`INSERT INTO security_runtime_state (id, passkey_session_epoch, switch_observed_enabled)
     VALUES (1, 1, 1) ON CONFLICT(id) DO NOTHING`).run();
   if (!requestedEnabled) {
+    await initialize();
     await env.DB.prepare(`UPDATE security_runtime_state
       SET passkey_session_epoch = passkey_session_epoch + 1, switch_observed_enabled = 0, updated_at = CURRENT_TIMESTAMP
       WHERE id = 1 AND switch_observed_enabled = 1`).run();
   }
-  const state = await env.DB.prepare("SELECT passkey_session_epoch, switch_observed_enabled FROM security_runtime_state WHERE id = 1").first();
+  const readState = () => env.DB.prepare("SELECT passkey_session_epoch, switch_observed_enabled FROM security_runtime_state WHERE id = 1").first();
+  let state = await readState();
+  if (!state) {
+    await initialize();
+    state = await readState();
+  }
   return {
     enabled: Boolean(requestedEnabled) && Number(state?.switch_observed_enabled) === 1,
     epoch: Number(state?.passkey_session_epoch || 1)

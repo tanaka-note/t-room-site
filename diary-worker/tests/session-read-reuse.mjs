@@ -32,10 +32,11 @@ const env = {
       body: new Blob([new Uint8Array([1, 2, 3])]).stream() };
   } }
 };
-function cookie(authMethod = "passkey") {
+function cookie(authMethod = "passkey", claims = {}) {
   const payload = { accountId: authMethod === "passkey" ? "main-admin" : "wife-admin", role: "admin", version: "3", accountVersion: 1,
     authMethod, exp: Math.floor(Date.now() / 1000) + 3600, startedAt: new Date().toISOString(), passwordSessionVersion: 1 };
   if (authMethod === "passkey") Object.assign(payload, { identityId: "fixture", credentialId: "fixture", serviceLinkId: "fixture", serviceAccountId: "main-admin", passkeySessionEpoch: 1 });
+  Object.assign(payload, claims);
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = createHmac("sha256", env.SESSION_SECRET).update(encoded).digest("base64url");
   return `troom_diary_session=${encoded}.${signature}`;
@@ -64,3 +65,28 @@ assert.equal(response.status, 401, "main's passkey-only policy must reject retir
 assert.equal((await worker.fetch(passwordRequest, env, {})).status, 401, "request reuse must never restore password access");
 assert.equal(passwordChecks, 0, "retired password access cannot be enabled by a DB policy row");
 console.log("Diary request-scoped session validation tests passed.");
+
+const actions = [];
+let beforeTouch = null;
+env.SECURITY.passkeyRollingSession = async input => {
+  actions.push(input.action);
+  if (input.action === "touch") beforeTouch?.();
+  return { valid: validPasskey, expiresAt: Math.floor(Date.now() / 1000) + 43200 };
+};
+const rollingCookie = () => cookie("passkey", { rollingSessionVersion: 1, sessionId: "rolling-fixture" });
+const mutation = token => new Request("https://fixture.test/diary/api/entries/1/favorite", {
+  method: "POST", headers: { Cookie: token, Origin: "https://fixture.test", "X-Diary-Request": "1", "X-Troom-Activity": "foreground" }
+});
+actions.length = 0;
+response = await worker.fetch(mutation(rollingCookie()), env, {});
+assert.equal(response.status, 200);
+assert.deepEqual(actions, ["read", "touch"], "rolling mutations use one initial read and one final live touch");
+assert.match(response.headers.get("Set-Cookie"), /Max-Age=43200/);
+for (const revoke of [() => { validPasskey = false; }, () => { env.SESSION_VERSION = "4"; }]) {
+  validPasskey = true; env.SESSION_VERSION = "3"; actions.length = 0; beforeTouch = revoke;
+  response = await worker.fetch(mutation(rollingCookie()), env, {});
+  assert.equal(response.status, 401, "final Security/local version changes deny protected response and renewed cookie");
+  assert.equal(response.headers.get("Set-Cookie"), null);
+}
+validPasskey = true; env.SESSION_VERSION = "3"; beforeTouch = null;
+console.log("Diary rolling mutations retain final live revocation and account/version checks.");

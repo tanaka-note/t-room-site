@@ -6,7 +6,7 @@
     const controller = new AbortController();
     const pointers = new Map();
     let scale = 1, x = 0, y = 0, gesture = null, lastTap = null;
-    let destroyed = false;
+    let destroyed = false, lastPointerType = "mouse";
     const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
     const point = event => ({ x: event.clientX, y: event.clientY });
     const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -34,6 +34,7 @@
     }
     function start(event) {
       if (event.pointerType === "mouse" && event.button !== 0) return;
+      lastPointerType = event.pointerType;
       event.preventDefault();
       pointers.set(event.pointerId, point(event));
       try { stage.setPointerCapture(event.pointerId); } catch {}
@@ -78,10 +79,11 @@
       const finished = gesture; gesture = null;
       if (finished.multi || event.type === "pointercancel") return;
       const dx = event.clientX - finished.start.x, dy = event.clientY - finished.start.y;
-      if (finished.scale === 1 && scale === 1 && Math.abs(dx) >= 45 && Math.abs(dx) > Math.abs(dy) * 1.25) {
+      if (event.pointerType !== "mouse" && finished.scale === 1 && scale === 1 && Math.abs(dx) >= 45 && Math.abs(dx) > Math.abs(dy) * 1.25) {
         lastTap = null; onNavigate(dx < 0 ? 1 : -1); return;
       }
       if (finished.moved || Math.hypot(dx, dy) > 8 || performance.now() - finished.time > 350) { lastTap = null; return; }
+      if (event.pointerType === "mouse") return;
       const now = performance.now(), at = point(event);
       if (lastTap && now - lastTap.time < 320 && distance(lastTap, at) < 30) {
         lastTap = null; zoom(scale > 1 ? 1 : 2.5, at);
@@ -90,7 +92,10 @@
     for (const [type, handler] of [["pointerdown", start], ["pointermove", move], ["pointerup", end], ["pointercancel", end]]) {
       stage.addEventListener(type, handler, { signal: controller.signal });
     }
-    stage.addEventListener("dblclick", event => event.preventDefault(), { signal: controller.signal });
+    stage.addEventListener("dblclick", event => {
+      event.preventDefault();
+      if (lastPointerType === "mouse") zoom(scale > 1 ? 1 : 2.5, point(event));
+    }, { signal: controller.signal });
     stage.addEventListener("dragstart", event => event.preventDefault(), { signal: controller.signal });
     stage.addEventListener("lostpointercapture", event => {
       if (!pointers.has(event.pointerId)) return;
@@ -100,8 +105,7 @@
     observer.observe(stage);
     render();
     return Object.freeze({
-      zoomBy: amount => zoom(scale * amount),
-      reset: () => zoom(1),
+      toggle: () => zoom(scale > 1 ? 1 : 2.5),
       destroy() {
         destroyed = true; controller.abort(); observer.disconnect();
         for (const id of pointers.keys()) { try { stage.releasePointerCapture(id); } catch {} }

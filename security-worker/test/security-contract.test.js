@@ -437,10 +437,16 @@ test("all service passkey sessions carry revocable Security identifiers and vali
       `${name} stores the passkey credential in its local session`);
     assert.match(source, /serviceLinkId: handoff\.serviceLinkId/,
       `${name} stores the Security link in its local session`);
-    assert.match(source, /validateServicePasskeySession\(payload, env, /,
-      `${name} revalidates service sessions through the shared fail-closed helper`);
-    assert.match(source, /passkey-session-validation\.mjs/,
-      `${name} validates credential, Identity, link and kill switch through Security`);
+    if (name === "cloud") {
+      assert.match(source, /const trackedSession = await cloudPasskeySession\(env, payload, "read"\)/);
+      assert.match(source, /trackedSession\?\.valid !== true/);
+      assert.match(source, /String\(env\.PASSKEY_ENABLED \|\| "true"\) !== "true"/);
+    } else {
+      assert.match(source, /validateServicePasskeySession\(payload, env, /,
+        `${name} revalidates service sessions through the shared fail-closed helper`);
+      assert.match(source, /passkey-session-validation\.mjs/,
+        `${name} validates credential, Identity, link and kill switch through Security`);
+    }
   }
   assert.match(worker, /async validatePasskeySession\(input\)/);
   assert.match(worker, /c\.status = 'active'[\s\S]*i\.status = 'active'[\s\S]*l\.status = 'active'/);

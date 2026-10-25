@@ -74,8 +74,8 @@ try {
   }, 'preserve every breadcrumb field used for folder names and client-side key unwrapping');
   assert.deepEqual({ trips: calls.trips, batches: calls.batches, ancestorReads: calls.ancestorReads },
     { trips: 3, batches: 1, ancestorReads: 1 }, 'six levels need only three Cloud D1 round trips');
-  assert.equal(calls.validations, 5, 'existing passkey validations are unchanged');
-  assert.deepEqual(calls.ledger, ['read', 'read', 'touch'], 'existing session checks and renewal are unchanged');
+  assert.equal(calls.validations, 2, 'initial ledger read and final touch both validate live authority');
+  assert.deepEqual(calls.ledger, ['read', 'touch'], 'renewal reuses only the request-local initial read');
 
   for (const [flag, key, expected] of [
     ['filesOnly', 'files', [1002]], ['foldersOnly', 'folders', [201, 202]]

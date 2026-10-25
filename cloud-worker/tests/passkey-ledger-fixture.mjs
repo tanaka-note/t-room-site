@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { createHash } from "node:crypto";
 import * as domain from "../../security-worker/src/security-domain.js";
 
-export function attachPasskeyLedger(env, { realValidation = false } = {}) {
+export function attachPasskeyLedger(env, { realValidation = false, onQuery = () => {} } = {}) {
   const db = new DatabaseSync(":memory:");
   for (const name of readdirSync(new URL("../../security-worker/migrations/", import.meta.url)).filter(f => f.endsWith(".sql")).sort())
     db.exec(readFileSync(new URL("../../security-worker/migrations/" + name, import.meta.url), "utf8"));
@@ -23,9 +23,9 @@ export function attachPasskeyLedger(env, { realValidation = false } = {}) {
   const fixtureEnv = { DB: { prepare(sql) {
     let args = [];
     return { bind(...values) { args = values; return this; },
-      async first() { return db.prepare(sql).get(...args) || null; },
-      async all() { return { results: db.prepare(sql).all(...args) }; },
-      async run() { const result = db.prepare(sql).run(...args); return { meta: { changes: Number(result.changes) } }; } };
+      async first() { onQuery(sql); return db.prepare(sql).get(...args) || null; },
+      async all() { onQuery(sql); return { results: db.prepare(sql).all(...args) }; },
+      async run() { onQuery(sql); const result = db.prepare(sql).run(...args); return { meta: { changes: Number(result.changes) } }; } };
   } } };
   Object.defineProperty(fixtureEnv, "PASSKEY_ENABLED", { get: () => env.PASSKEY_ENABLED });
   const helpers = ["normalizeCloudFolderScopes", "parseJson", "normalizeId", "normalizeText"];

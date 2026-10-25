@@ -3,7 +3,7 @@ import test from 'node:test';
 import { fixture } from './performance-fixture.mjs';
 
 for (const kind of ['entries','settlements']) for (const method of ['POST','PUT','DELETE']) {
-  for (const stage of ['before write','after write before read','after write before touch']) {
+  for (const stage of ['before write','after write','before touch']) {
     test(`${kind} ${method}: ${stage} returns only 401, with no protected result or replay`, async () => {
       const f=fixture();
       try {
@@ -15,14 +15,15 @@ for (const kind of ['entries','settlements']) for (const method of ['POST','PUT'
         if(method!=='POST') {const created=await f.request(kind,cookie,{method:'POST',body});assert.equal(created.status,201);path+=`/${created.body.id}`;}
         f.reset();
         const revoke=()=>f.securityDb.exec("UPDATE security_credentials SET status='revoked'");
-        const rpc=f.env.SECURITY.passkeyRollingSession;
-        let reads=0;
         if(stage==='before write')revoke();
-        if(stage==='after write before read')f.env.SECURITY.passkeyRollingSession=async input=>{
-          if(input.action==='read'&&++reads===2)revoke();
-          return rpc(input);
-        };
-        if(stage==='after write before touch')f.beforeTouch=revoke;
+        if(stage==='after write') {
+          const prepare=f.env.DB.prepare;
+          const wrap=statement=>({ ...statement, bind:(...args)=>wrap(statement.bind(...args)), async run(){
+            const result=await statement.run(); revoke(); return result;
+          } });
+          f.env.DB.prepare=(sql)=>/^(?:\s*INSERT INTO|\s*UPDATE) billing_(entries|settlements)\b/.test(sql) ? wrap(prepare(sql)) : prepare(sql);
+        }
+        if(stage==='before touch')f.beforeTouch=revoke;
         const result=await f.request(path,cookie,{method,body:{...body,amountYen:456}});
         assert.equal(result.status,401);
         assert.deepEqual(Object.keys(result.body),['error']);
