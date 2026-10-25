@@ -73,11 +73,10 @@ export default {
         : url.pathname;
 
       if (path.startsWith("/api/")) {
-        // This promise lives only for this request. Mutations still re-read;
-        // rolling GETs are checked again by Security's live touch before release.
+        // Only this request shares the initial read. Rolling responses still
+        // require a live touch and a final local account check before release.
         let sessionPromise;
-        const getSession = () => request.method === "GET"
-          ? (sessionPromise ??= readSession(request, env)) : readSession(request, env);
+        const getSession = () => (sessionPromise ??= readSession(request, env));
         const response = await withPasswordLoginAudit(env, request, "billing", () => handleApi(request, env, url, path, context, getSession));
         return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path, getSession));
       }
@@ -611,10 +610,10 @@ function billingSessionVersion(env, accountVersion) { return `${String(env.SESSI
 async function refreshAuthenticatedSession(request, response, env, url, path, getSession) {
   if (!foregroundSessionActivity(request, response, path)) return response;
   let session = await getSession();
-  // Legacy GETs cannot touch. Keep their final live read rather than reusing
+  // Legacy sessions cannot touch. Keep their final live read rather than reusing
   // the first check without an equivalent Security revocation check.
-  if (request.method === "GET" && session?.rollingSessionVersion !== ROLLING_SESSION_VERSION) session = await readSession(request, env);
-  if (!session || session.exp <= Math.floor(Date.now() / 1000)) throw new HttpError(401, "パスキーでログインし直してください。");
+  if (session?.rollingSessionVersion !== ROLLING_SESSION_VERSION) session = await readSession(request, env);
+  if (!session || session.exp <= Math.floor(Date.now() / 1000) || String(env.PASSKEY_ENABLED || "true") !== "true") throw new HttpError(401, "パスキーでログインし直してください。");
   return renewServiceSession(request, response, env, "billing", path, session, async expiresAt => {
     const account = await env.DB.prepare("SELECT id, role, session_version FROM billing_accounts WHERE id = ? AND is_active = 1").bind(session.accountId).first();
     // A role/version change during data retrieval must never mint a cookie

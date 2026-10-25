@@ -68,15 +68,15 @@ async function fixture({ legacy = false } = {}) {
   return { db, env, calls, sessions, sign, request, close: () => db.close(), intercept: fn => { beforeCall = fn; } };
 }
 
-test("foreground list requests retain both renewals with at most twelve DB round trips", async () => {
-  for (const [path, maximum] of [["audit?view=all", 11], ["identities", 12]]) {
+test("foreground list requests retain both renewals with at most eleven DB round trips", async () => {
+  for (const [path, maximum] of [["audit?view=all", 10], ["identities", 11]]) {
     const f = await fixture();
     try {
       const response = await f.request(path);
       assert.equal(response.status, 200);
       assert.ok(f.calls.length <= maximum, `${path}: ${f.calls.length} DB calls`);
       assert.equal(f.calls.filter(sql => sql.includes("SELECT s.*, i.status")).length, 5, "each read and touch uses its own live snapshot");
-      assert.equal(f.calls.filter(sql => sql.includes("INSERT INTO security_runtime_state")).length, 1, "only the API guard initializes runtime");
+      assert.equal(f.calls.filter(sql => sql.includes("INSERT INTO security_runtime_state")).length, 0, "normal guards only read existing runtime");
       const cookies = response.headers.getSetCookie();
       assert.equal(cookies.length, 2);
       for (const cookie of cookies) {
@@ -98,7 +98,7 @@ test("background lists validate current authority without extending either sessi
     const response = await f.request(undefined, { active: false });
     assert.equal(response.status, 200);
     assert.equal(response.headers.getSetCookie().length, 0);
-    assert.equal(f.calls.length, 5);
+    assert.equal(f.calls.length, 4);
     for (const session of Object.values(f.sessions))
       assert.equal(f.db.prepare("SELECT expires_at FROM security_active_sessions WHERE session_id_hash=?").get(session.hash).expires_at, session.exp);
   } finally { f.close(); }

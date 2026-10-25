@@ -37,6 +37,7 @@ test('GET validation is request-local; session/excluded, inactive and error requ
       const r = await f.request(path, login.cookie, { active });
       assert.equal(r.status, status);
       assert.deepEqual(f.metrics.rpc.map(r => r.action), actions);
+      assert.equal(f.metrics.security.sql.length, actions.includes('touch') ? 3 : 1, 'live Security validation has a bounded SQL budget');
       if (!actions.includes('touch')) assert.equal(r.cookie, undefined);
       if (path === summaryPath) { assert.equal(f.metrics.billing.sql.length, 7); assert.equal(f.metrics.billing.batches, 1); }
       if (path === 'session') assert.deepEqual(f.metrics.audits, ['session_resume']);
@@ -76,7 +77,7 @@ for (const [name, change] of Object.entries(revoke)) {
   });
 }
 
-test('legacy GET retains its final read, and mutations retain read/read/touch', async () => {
+test('legacy GET retains its final read, and rolling mutations use read/touch', async () => {
   const f = fixture();
   try {
     const { cookie } = await f.login();
@@ -96,8 +97,9 @@ test('legacy GET retains its final read, and mutations retain read/read/touch', 
       accountId: 'chiharu', documentType: 'invoice', entryDate: '2026-10-01', category: 'purchase', amountYen: 100, description: 'Fixture'
     } });
     assert.equal(r.status, 201);
-    assert.deepEqual(f.metrics.rpc.map(r => r.action), ['read', 'read', 'touch']);
-    // Revoke during a mutation: its final read must fail closed. This cannot
+    assert.deepEqual(f.metrics.rpc.map(r => r.action), ['read', 'touch']);
+    assert.equal(f.metrics.security.sql.length, 3);
+    // Revoke during a mutation: its final touch must fail closed. This cannot
     // undo a completed write; the original two-phase API has the same limit.
     f.afterRead = () => { revoke.credential(f); f.afterRead = null; };
     assert.equal((await f.request('entries', cookie, { method: 'POST', body: {

@@ -32,7 +32,7 @@ export function commands(target) {
       'retired-player', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
       'listing-model', 'listing-boundary', 'selection-state', 'selection-boundary', 'bulk-delete', 'bulk-delete-boundary', 'selection-move', 'selection-history', 'selection-toolbar-stability', 'search-delete-stability', 'transfer-progress', 'upload-view-boundary', 'folder-transfer', 'search-result-ranking', 'upload-live-progress', 'upload-differential', 'transfer-cancel', 'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
-      'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup'
+      'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup', 'passkey-performance'
     ].map(n => `tests/${n}.mjs`)),
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     diary: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-diary'),

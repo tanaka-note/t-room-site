@@ -48,6 +48,8 @@ test('real Identity/link/member/grant authorization fails closed for revocation,
       {label:'disabled link',sql:"UPDATE security_service_links SET status='disabled' WHERE id='link-owner'"},
       {label:'unapproved grant',sql:"DELETE FROM security_health_grants WHERE credential_id='fixture-owner-AA'",sessionValid:true},
       {label:'missing member',sql:"DELETE FROM security_health_members WHERE identity_id='primary-admin'",sessionValid:true},
+      {label:'missing key config',sql:"DELETE FROM security_health_config",sessionValid:true},
+      {label:'missing vault',sql:"DELETE FROM security_health_vaults WHERE credential_id='fixture-owner-AA'",sessionValid:true},
       {label:'wrong credential',claims:{credentialId:'fixture-subject-AA'}},
       {label:'wrong link',claims:{serviceLinkId:'link-subject'}},
       {label:'wrong identity',claims:{identityId:'fixture-subject'}},
@@ -61,6 +63,12 @@ test('real Identity/link/member/grant authorization fails closed for revocation,
         if(item.sql)f.db.exec(item.sql);
         const claims={...owner,...item.claims}, validation={...input(claims),sessionEpoch:claims.passkeySessionEpoch??1};
         assert.equal((await f.security.validatePasskeySession(validation)).valid,Boolean(item.sessionValid),item.label);
+        if (!item.rpcOnly) {
+          const combined = await f.security.validatePasskeySession({ ...validation, requireHealthKeyReady: true });
+          assert.equal(combined.valid, Boolean(item.sessionValid), item.label);
+          assert.equal(combined.keyReady, false, item.label);
+          assert.deepEqual(Object.keys(combined).sort(), ['keyReady', 'valid']);
+        }
         if(!item.keyAvailable)assert.equal(await f.security.getHealthKeyBundle(validation),null,item.label);
         if(!item.rpcOnly)assert.equal((await f.worker.fetch(request('/records',await signed(claims)))).status,item.sessionValid?403:401,item.label);
         if(item.sql)assert.equal((await login(f)).response.status,item.sessionValid?403:401,item.label+' handoff');
@@ -70,6 +78,26 @@ test('real Identity/link/member/grant authorization fails closed for revocation,
     const result=await login(f);assert.equal((await f.worker.fetch(request('/records',{...result.headers,'X-Health-Session':'different-session'}))).status,409);
     f.security.env.PASSKEY_ENABLED='false';assert.equal((await f.worker.fetch(request('/records',result.headers))).status,401);
   }finally{f.close();}
+});
+
+test('ordinary Health reads use one RPC and two Security SELECTs without transferring key envelopes', async () => {
+  const f = await healthSecurityFixture();
+  try {
+    const { headers } = await login(f);
+    let calls = 0;
+    const validate = f.security.validatePasskeySession.bind(f.security);
+    f.security.validatePasskeySession = async input => { calls++; assert.equal(input.requireHealthKeyReady, true); return validate(input); };
+    f.security.getHealthKeyBundle = async () => { throw new Error('ordinary reads must not fetch key envelopes'); };
+    const queries = [], prepare = f.security.env.DB.prepare;
+    f.security.env.DB.prepare = sql => { queries.push(sql); return prepare(sql); };
+    assert.equal((await f.worker.fetch(request('/records', headers))).status, 200);
+    assert.equal(calls, 1);
+    assert.equal(queries.length, 2);
+    assert.ok(queries.every(sql => /^SELECT/.test(sql)));
+    assert.ok(queries.some(sql => /EXISTS[\s\S]*security_health_grants/.test(sql)));
+    f.db.exec("UPDATE security_health_vaults SET public_key_json='{' WHERE credential_id='fixture-owner-AA'");
+    assert.equal((await f.worker.fetch(request('/records', headers))).status, 403, 'corrupt vault JSON remains fail-closed without fetching the envelope');
+  } finally { f.close(); }
 });
 
 test('Health HTTP, actual Security audits and failure logs contain encrypted envelopes without health plaintext or key material',async t=>{
