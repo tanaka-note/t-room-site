@@ -73,7 +73,7 @@ WebAuthn credential登録とT-Cloud鍵準備は別状態として扱う。PRF非
 
 履歴UIは`GET /api/audit?summary=true`で一覧に必要な項目を30件ずつ取得し、前／次ページの置換表示でDOM件数を抑える。詳細情報・ハッシュ・対象ID・details JSONは行を展開したときだけ`GET /api/audit/:eventId`で取得する。詳細APIにも既存のSecurity管理者認可を要求する。旧クライアントの`summary`なしのAPIは従来の100件・詳細込みを維持する。カーソルは適用済み検索条件とUTC時刻・event IDの順序に固定し、OFFSETは使わない。前ページへ戻る際は展開状態と安定したevent IDを基準に表示位置を復元し、タブ移動でも検索・ページ・表示位置を保つ。これらの状態はメモリ内だけに保持する。
 
-概要の当日件数は日本時間の日別集計`security_audit_daily`から1行を読む。監査ログ保存・削除・再分類と同じトランザクションのDB triggerで更新し、同一event IDの再送やsession resumeの分単位重複は加算しない。保持期限による削除も集計へ反映し、認証の成功・失敗や重要操作の記録を省略しない。Identity・サービスと時刻、認証プリセット、未終了sessionの検索用indexで履歴・期限切れsessionの全件走査を避ける。任意の複合検索やDB容量・書き込み上限まで無制限にするものではない。
+概要の当日件数は日本時間の日別集計`security_audit_daily`から1行を読む。監査ログ保存・削除・再分類と同じトランザクションのDB triggerで更新し、同一event IDの再送やsession resumeの分単位重複は加算しない。検証済み保管後のD1整理も集計へ反映し、認証の成功・失敗や重要操作の記録を省略しない。Identity・サービスと時刻、認証プリセット、未終了sessionの検索用indexで履歴・期限切れsessionの全件走査を避ける。任意の複合検索やDB容量・書き込み上限まで無制限にするものではない。
 
 この読み取り方式の公開前には`0023_audit_read_model.sql`をSecurity D1へ適用する。既存ログからの初回集計とindex作成を伴うため、先にmigrationの成功を確認し、その後Security Workerを公開する。migrationは元の監査ログを削除・変更しない。
 
@@ -83,11 +83,13 @@ WebAuthn credential登録とT-Cloud鍵準備は別状態として扱う。PRF非
 
 通常のユーザー一覧・監査ユーザー候補はactive／invited／pending_approvalのみとする。詳細検索の「停止済みユーザーも表示」は初期OFFで、ON時だけ`includeDisabled=true`を指定してdisabled候補を取得する。監査イベント自身は切替に関係なく保持し、取得時にIdentityのdisplay_nameを解決する。停止・再招待禁止・失効・鍵管理の仕様は変更しない。
 
-日次scheduledは既存の監査保持期限（既定180日）の削除を成功させた後、`src/identity-cleanup.js`の条件で最大20件を1件ずつ整理する。disabledで第一管理者IDでもsecurity adminでもなく、停止・最終利用から保持期間が経過し、監査イベントからの直接参照・対象ID・details内Identity ID・service link参照が一切ない場合だけ対象となる。active/pending credential、pending/active link、有効招待、招待作成者参照、setup／challenge／handoff、Client Vault／Key Envelope（credential・link経由も含む）、AI予算が1件でもあれば保持する。未終了・保持期間内・期限内・不正日時のsessionも削除を禁止する。外部DBにIdentity別履歴を持つAI／Downloaderは、disabled linkでも保持する。
+Security Centerの一覧・詳細・ユーザー詳細は直近180日を表示する。日次scheduledは180日超の監査原本を非公開R2へ保存・読み戻し照合し、保存時と同一の行だけをD1から整理する。R2の監査原本は期限なしで保持し、日次30世代・月次12世代の通常バックアップとは削除規則を分ける。未保管・保存失敗・読み戻し不一致の行はD1に残し、画面では180日以内だけを表示する。詳細と初回公開条件は[バックアップ運用](../../backup-worker/README.md)を参照。
+
+日次scheduledはこの保管処理が成功した後、`src/identity-cleanup.js`の条件で最大20件を1件ずつ整理する。disabledで第一管理者IDでもsecurity adminでもなく、停止・最終利用から保持期間が経過し、監査イベントからの直接参照・対象ID・details内Identity ID・service link参照が一切ない場合だけ対象となる。active/pending credential、pending/active link、有効招待、招待作成者参照、setup／challenge／handoff、Client Vault／Key Envelope（credential・link経由も含む）、AI予算が1件でもあれば保持する。未終了・保持期間内・期限内・不正日時のsessionも削除を禁止する。外部DBにIdentity別履歴を持つAI／Downloaderは、disabled linkでも保持する。
 
 各候補の条件は削除時に再評価する。保持期限を過ぎた終了済みsession、Identity、削除件数だけの監査イベントをD1の同一batchで確定し、失敗時は全体をrollbackする。Identity削除のcascade対象は審査済みのrevoked credential・disabled link・終了済みinvitationだけであり、鍵データは存在そのものが削除禁止条件となる。他Identityからの参照も禁止し、未知のテーブル／triggerが増えた場合は自動整理を停止して依存関係の再審査を要求する。日別件数だけを持つ`security_audit_daily`とその3つの更新triggerは審査済みとして許可し、Identity・鍵・linkを保持する対象には含めない。新しいカラムやFKの追加時もこのguardとテストを見直す。
 
-`disabled_identity_cleanup`監査は実行時刻、削除件数、保持期限、policyVersionのみを保存し、削除したIdentity ID・氏名・対応表を再保存しない。この記録にも通常の監査保持期限が適用される。外部サービスのアカウント・履歴・T-Cloudの実ファイルは一切削除しない。鍵や外部参照が残るIdentityは自動削除せず保持し、必要性を判断せず鍵を破棄しない。
+`disabled_identity_cleanup`監査は実行時刻、削除件数、保持期限、policyVersionのみを保存し、削除したIdentity ID・氏名・対応表を再保存しない。この記録も他の監査と同じく180日後はR2へ期限なしで保管する。外部サービスのアカウント・履歴・T-Cloudの実ファイルは一切削除しない。鍵や外部参照が残るIdentityは自動削除せず保持し、必要性を判断せず鍵を破棄しない。
 
 各サービスの既存監査ログを維持したまま、ログイン成功と有効sessionの復帰はSecurity Service BindingでSecurity D1へ同期反映する。同期処理が失敗した場合だけ、同一event IDのイベントをQueueへ送り後から補完するため、監査障害だけで通常ログインを停止しない。Passwordログインの拒否は同期保存と同一event IDのQueue fallbackを使用する（[Passwordログインの失敗監査](password-login-audit.md)）。その他の失敗・停止・キャンセルや通常の管理操作は従来どおりQueueで非同期送信する。成功・失敗・停止・キャンセル、PW/パスキー、Identity、サービスaccount、role、時刻、salt/hash化したアクセス元、User-Agent、安全なsession識別子、重要な管理操作を記録する。
 

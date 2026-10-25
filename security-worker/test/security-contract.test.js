@@ -597,7 +597,8 @@ test("active service sessions use hashed identifiers and runtime validity instea
 });
 
 test("WebAuthn credential IDs and audit retention use standards-aligned boundaries", () => {
-  assert.match(worker, /DELETE FROM security_audit_events WHERE occurred_at < \?/);
+  assert.match(worker, /await archiveAuditEvents/);
+  assert.doesNotMatch(worker, /DELETE FROM security_audit_events WHERE occurred_at </);
   assert.doesNotMatch(worker, /security_audit_events WHERE occurred_at < datetime/);
   assert.match(worker, /auditRetentionCutoff/);
 });

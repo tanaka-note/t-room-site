@@ -76,7 +76,7 @@ node --test test/*.test.js
 
 `payments-db` はproduction世代、APAC、read replication disabled。本番アカウントのWorkers Paid契約とbookmark取得を確認済み。Time Travelは常時有効で保持上限30日（DB作成前の履歴は存在しない）。[公式Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)を参照。期限内でも本番DBの復元は上書きと実行中クエリの中止を伴うため、**本番での復元試験は禁止**。
 
-日記の自動バックアップは `diary-db` の許可されたテーブルと写真を扱う形式v6で、paymentsには非互換。支払明細Workerにはcron/R2バックアップbindingがなく、paymentsの定期export運用はまだない。
+日記の自動バックアップは `diary-db` の許可されたテーブルと写真を扱う形式v6で、paymentsには非互換。支払明細Worker自体にはcron/R2バックアップbindingを追加せず、専用バックアップWorkerがpayments D1の許可された業務テーブルを定期保存する。[バックアップ運用](../backup-worker/README.md)の初回インフラ準備・公開後に有効になる。
 
 今回の公開前SQL exportは、既存の非公開R2バケット `t-room-diary-backups` の `payments/pre-migration/<UTC日時と一意ID>/` へ保管する。日記の `daily/`・`monthly/` と復元形式を分け、その世代削除対象にも入れない。公開r2.devは無効、カスタムドメインなし、対象prefixを消すLifecycleなしを毎回確認する。バケットロックは未設定で、認可された管理者や日記Workerのバケットbindingはこのprefixにもアクセスできる。prefixはIAMの分離ではない。
 
@@ -101,7 +101,7 @@ node --test test/*.test.js
 
 復旧時はmanifestの元DB UUID・取得時刻・SHA-256・検証結果を確認し、認証付きR2 APIでSQL gzipを読み出す。隔離DBへのimportで再検証してから、別途承認した災害復旧手順で切り替える。SQLにはmigration/schema/index/triggerも含む。0002適用後のSQLは月別実績・取消状態・全操作監査・再送記録も含めて復元する。
 
-公開後はpayments専用の定期export、保持日数、失敗通知、復元の定期検証、専用バケットによるIAM分離を別作業で検討する。Cloudflare Workflows→R2の公式方式を候補とし、今回の公開に定期ジョブや恒久的な新Workerは追加しない。
+通常の定期保管は専用WorkerによるJSON gzip、日次30世代・月次12世代、T-Cloud Backup-dataでの成否確認を使う。移行前の標準SQL exportと復元検証は別の手順として維持し、今回のJSON形式をSQL importへ渡さない。
 
 通常の切り戻しでは**追加テーブル・監査・完了実績を残し、migrationを逆適用しない**。不具合時はまず業務書込を停止し、現時点のexport/bookmarkを保護して修正版へ進める。旧Worker Versionへの切替は可能だが、旧版は月別管理・業務監査を生成しないため、書込停止を保って一時的な閲覧用途だけにする。DB全体のTime Travel巻戻しは新しい支払/計上/監査を失うため通常のrollbackに使わない。災害復旧時のみ、別の承認と停止時間を確保し、失われる変更を照合して運用者が実施する。
 

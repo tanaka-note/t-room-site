@@ -1,14 +1,14 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-importScripts("/cloud/crypto-vault.js?v=cloud-90df2fc572bc");
-importScripts("/cloud/media-range.js?v=cloud-90df2fc572bc");
-importScripts("/cloud/offline-store.js?v=cloud-90df2fc572bc");
+importScripts("/cloud/crypto-vault.js?v=cloud-9a3c7d24f95a");
+importScripts("/cloud/media-range.js?v=cloud-9a3c7d24f95a");
+importScripts("/cloud/offline-store.js?v=cloud-9a3c7d24f95a");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-90df2fc572bc";
-const MEDIA_WORKER_BUILD_ID = "cloud-90df2fc572bc";
+const APP_SHELL_CACHE = "tcloud-shell-cloud-9a3c7d24f95a";
+const MEDIA_WORKER_BUILD_ID = "cloud-9a3c7d24f95a";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
 const DEMAND_PREFETCH_CHUNKS = 4;
 const PREFETCH_CONCURRENCY = 4;
@@ -18,11 +18,11 @@ const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-  "/cloud/offline-store.js?v=cloud-90df2fc572bc",
-  "/cloud/search-input.js?v=cloud-90df2fc572bc",
-  "/cloud/photo-viewer.js?v=cloud-90df2fc572bc",
-  "/cloud/photo-fullscreen.js?v=cloud-90df2fc572bc",
-  "/cloud/photo-viewer.css?v=cloud-90df2fc572bc",
+  "/cloud/offline-store.js?v=cloud-9a3c7d24f95a",
+  "/cloud/search-input.js?v=cloud-9a3c7d24f95a",
+  "/cloud/photo-viewer.js?v=cloud-9a3c7d24f95a",
+  "/cloud/photo-fullscreen.js?v=cloud-9a3c7d24f95a",
+  "/cloud/photo-viewer.css?v=cloud-9a3c7d24f95a",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"
