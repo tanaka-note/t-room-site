@@ -1,17 +1,17 @@
 // Generated from checked-in migrations using Node SQLite; review alongside schema changes.
 import { digest } from './integrity.js';
 const EXPECTED = {
-  "cloud": "4161f3c49308c352bf4e6fcfb753d026ad56dea797bc5b03d8fc72d163082ce8",
-  "security": "280383d59ff66b5a65d413e50628be2738107d69c56baff8a2a489f7be588a0c",
-  "billing": "3761a6ba771fe46bf365ecc12cab129f0ec9dce898d7c1e3f6392f98c27a93c2",
-  "payments": "c009c7c4d52d7efb93062e05aec314478f59787a9c3a2c53051cda3220f5608d",
-  "health": "5309173146ab9ce33e7e65c074c9fdf30cfc8474d8668f30432641aaaf763a58",
+  "cloud": "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c",
+  "security": "a6baaaa5981cb3840795c648b61c31a85039ccf04423233cdf3ad64bb847aeec",
+  "billing": "e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f",
+  "payments": "a74f9ffcabf4a59f3ae58f552de94adc14738883ea1f07baf670c9c6fc3c740f",
+  "health": "5d74bfd7ac54779545e86f1e0bd948b29ce3f578c68c309e445f1542d47f98ac",
   "inventory": "ed4811be91f73a7a58cdf29e0c6aade079b4f74529e9042b82399fa8aa13e6f3",
-  "ai": "6ab904f64896f5bdc27c1319059ce96f2d1dcab4115c0ea8dbf7a6e0e1ff5f71",
-  "downloader": "8391bafe4d2f422c0964488622b8ae93f205df4b030dd78b78c5ebbfe31d0d72",
-  "diary": "1396152a54085ef22e7e1e5b5e8c3d590056cd14dc2c14822fbc6411702a1852"
+  "ai": "d7e265eac65afddd4301e02adb081123c3ab7d1d0444f427cf8cec3d57b9ca0c",
+  "downloader": "b367e88bee856222f72cfdf97a35794d381a13a3a7126c07ab50a3c43e6fe6a9",
+  "diary": "d79a6daee8a70c7df4ba2148f01d45b00884f800afd8b78e801fbde548ef1a4c"
 };
 export async function assertSchema(service, rows) {
-  const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql]);
+  const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
   if(await digest(new TextEncoder().encode(JSON.stringify(schema)))!==EXPECTED[service]) throw new Error('SchemaReviewRequired');
 }

@@ -4,6 +4,7 @@ import { database,d1,Bucket,recorder } from './fixtures.mjs';
 import { capture,backupService,prune,validateSnapshot } from '../src/backup.js';
 import { compress,decode,digest,publishGeneration,verifiedPut,verifiedGeneration,readBounded } from '../src/integrity.js';
 import { snapshotStatement,snapshotTables } from '../src/snapshot.js';
+import { assertSchema } from '../src/schema-guard.js';
 
 test('CAS concurrent writers preserve one independently verified generation',async()=>{
   const b=new Bucket(), validate=p=>assert.ok(p.version);
@@ -69,4 +70,11 @@ test('snapshot format validation rejects omitted tables despite valid compressio
 
 test('DDL drift with unchanged columns also stops publication',async()=>{
  const db=database('health');try{db.exec('CREATE INDEX unexpected_revision_index ON health_records(revision)');await assert.rejects(capture(d1(db),'health'),/SchemaReviewRequired/);}finally{db.close();}
+});
+test('migration fingerprints are independent of Windows/Linux line endings',async()=>{
+ const db=database('health');try {
+  const rows=db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name").all();
+  await assertSchema('health',rows.map(r=>({...r,sql:r.sql.replace(/\r\n?/g,'\n')})));
+  await assertSchema('health',rows.map(r=>({...r,sql:r.sql.replace(/\r\n?/g,'\n').replace(/\n/g,'\r\n')})));
+ }finally{db.close();}
 });
