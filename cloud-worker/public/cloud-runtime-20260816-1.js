@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-0930878384ed";
+const APP_BUILD_ID = "cloud-6915b7da2c69";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -82,6 +82,7 @@ const state = {
   selectedFolder: null,
   shareTarget: null,
   listMode: false,
+  selectionMode: false,
   selectionHistoryActive: false,
   selectionClearBackPending: false,
   selectionClearScrollPosition: null,
@@ -106,6 +107,7 @@ const state = {
   previewUrl: "",
   previewMediaToken: "",
   previewPlayer: null,
+  photoViewer: null,
   previewFileId: null,
   previewGeneration: 0,
   manualThumbnail: null,
@@ -309,9 +311,22 @@ function bindEvents() {
   $("#download-link").addEventListener("click", (event) => {
     if (Number(state.selected?.cryptoVersion) !== 1) return;
     event.preventDefault();
-    replaceSelectedFiles([state.selected]);
-    startSelectedDownloads();
+    void downloadPreviewFile(state.selected);
   });
+  $("#selection-mode-button").addEventListener("click", () => {
+    if (state.selectionMode || getSelection().count("file") || getSelection().count("folder")) {
+      clearSelectionWithoutRefresh();
+    } else {
+      beginSelectionHistory();
+      state.selectionMode = true;
+      syncSelectionBar();
+    }
+  });
+  $("#preview-select").addEventListener("click", togglePreviewSelection);
+  $("#preview-download-selected").addEventListener("click", startSelectedDownloads);
+  $("#photo-zoom-in").addEventListener("click", () => state.photoViewer?.zoomBy(1.5));
+  $("#photo-zoom-out").addEventListener("click", () => state.photoViewer?.zoomBy(1 / 1.5));
+  $("#photo-zoom-reset").addEventListener("click", () => state.photoViewer?.reset());
   $("#preview-dialog").addEventListener("close", handlePreviewClosed);
   $("#preview-dialog").addEventListener("close", queueEncryptedThumbnailPump);
   document.addEventListener("visibilitychange", queueEncryptedThumbnailPump);
@@ -1296,7 +1311,8 @@ async function handleHistoryNavigation(event) {
       ? Number(state.previewFileId || state.previewCloseOrigin?.id)
       : null;
     const origin = state.previewCloseOrigin || {x: state.previewOriginScrollX, y: state.previewOriginScrollY};
-    if (getSelection().count("file") || getSelection().count("folder")) {
+    if ((state.selectionMode || getSelection().count("file") || getSelection().count("folder"))
+      && !(sameFolder && (target.selection || target.previewId))) {
       const position = selectionScrollPosition();
       state.selectionHistoryActive = false;
       clearFileSelection(true, false);
@@ -2124,6 +2140,7 @@ function syncAvailableActions() {
   const inRequests = state.view === "requests";
   const inShares = ["shares", "favorites", "account"].includes(state.view);
   const insideFolder = Boolean(state.folderId);
+  $("#selection-mode-button").hidden = inTrash;
   const showLogoutLabel = state.view === "all" && !insideFolder && !state.kind;
   $("#logout-button-label").hidden = !showLogoutLabel;
   $("#logout-button").classList.toggle("icon-only", !showLogoutLabel);
@@ -3062,7 +3079,7 @@ function folderCard(folder) {
       card.dataset.longPressed = "false";
       return;
     }
-    if (getSelection().count("file") || getSelection().count("folder")) {
+    if (state.selectionMode || getSelection().count("file") || getSelection().count("folder")) {
       toggleFolderSelection(folder, card);
       return;
     }
@@ -3590,7 +3607,7 @@ function fileCard(file) {
       card.dataset.longPressed = "false";
       return;
     }
-    if (getSelection().count("file") || getSelection().count("folder") || event.ctrlKey || event.metaKey || event.shiftKey) {
+    if (state.selectionMode || getSelection().count("file") || getSelection().count("folder") || event.ctrlKey || event.metaKey || event.shiftKey) {
       toggleFileSelection(file, card);
       return;
     }
@@ -4162,7 +4179,7 @@ function toggleFileSelection(file, card) {
     selectFile(file, card);
   }
   syncSelectionBar();
-  if (!getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
+  if (!state.selectionMode && !getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
     state.selectionHistoryActive = false;
     history.back();
   }
@@ -4186,7 +4203,7 @@ function toggleFolderSelection(folder, card) {
     selectFolder(folder, card);
   }
   syncSelectionBar();
-  if (!getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
+  if (!state.selectionMode && !getSelection().count("file") && !getSelection().count("folder") && state.selectionHistoryActive) {
     state.selectionHistoryActive = false;
     history.back();
   }
@@ -4226,7 +4243,8 @@ function selectAllVisibleItems() {
 }
 
 function clearFileSelection(update = true, rewindHistory = update) {
-  const hadSelection = Boolean(getSelection().count("file") || getSelection().count("folder"));
+  const hadSelection = Boolean(state.selectionMode || getSelection().count("file") || getSelection().count("folder"));
+  state.selectionMode = false;
   clearSelectedRecords();
   state.selecting = false;
   $$(".file-card.selected, .file-card.selection-pass, .folder-card.selected, .folder-card.selection-pass").forEach((card) => {
@@ -4309,7 +4327,11 @@ function syncSelectionBar() {
   const count = fileCount + folderCount;
   syncFavoriteSelection(files, folders);
   $("#selection-count").textContent = `${count.toLocaleString("ja-JP")}件を選択中`;
-  $("#selection-bar").hidden = count === 0;
+  $("#selection-bar").hidden = count === 0 && !state.selectionMode;
+  $("#selection-mode-button").setAttribute("aria-pressed", String(state.selectionMode || count > 0));
+  $("#selection-mode-button").textContent = state.selectionMode || count ? "選択を終了" : "選択";
+  if (!count) $("#selection-more").open = false;
+  syncPreviewSelection();
   const canRenameSelection = (fileCount === 1 && folderCount === 0 && canRenameFile(files[0]))
     || (folderCount === 1 && fileCount === 0 && canRenameFolder(folders[0]));
   $("#selection-rename").hidden = !canRenameSelection;
@@ -4400,7 +4422,7 @@ async function lockSelectedFolder() {
 }
 
 function clearSelectionWithoutRefresh() {
-  const shouldRewind = Boolean((getSelection().count("file") || getSelection().count("folder"))
+  const shouldRewind = Boolean((state.selectionMode || getSelection().count("file") || getSelection().count("folder"))
     && state.selectionHistoryActive
     && !state.handlingPopState);
   const position = selectionScrollPosition();
@@ -4467,6 +4489,16 @@ async function startSelectedDownloads() {
     return;
   }
   await executeDownloads(files, targets);
+}
+
+async function downloadPreviewFile(file) {
+  if (!file || state.downloadActive) return;
+  try {
+    const targets = await chooseDownloadTargets([file]);
+    await executeDownloads([file], targets, { keepSelection: true });
+  } catch (error) {
+    if (error.name !== "AbortError") setNotice(error.message, true);
+  }
 }
 
 function currentOfflineContext() {
@@ -5142,7 +5174,7 @@ async function createUniqueDirectoryHandle(parentHandle, requestedName) {
   throw new Error("保存先フォルダを作成できませんでした。");
 }
 
-async function executeDownloads(files, targets) {
+async function executeDownloads(files, targets, { keepSelection = false } = {}) {
   state.downloadActive = true;
   state.downloadAbort = new AbortController();
   syncAvailableActions();
@@ -5152,6 +5184,7 @@ async function executeDownloads(files, targets) {
   $("#download-close").disabled = true;
   await syncTransferWakeLock();
   let completed = 0;
+  const completedIds = new Set();
   let deferred = [];
   let activeFile = null;
   let closeOnSuccess = false;
@@ -5166,6 +5199,7 @@ async function executeDownloads(files, targets) {
         await downloadFile(file, state.downloadAbort.signal, targets.get(file.id) || null);
         await recordDownloadEvent(file.id, "download_completed");
         completed++;
+        completedIds.add(file.id);
         activeFile = null;
         updateDownloadQueueItem(file.id, "完了", "done");
         updateDownloadProgress(completed, files.length);
@@ -5189,6 +5223,7 @@ async function executeDownloads(files, targets) {
           await downloadFile(file, state.downloadAbort.signal, targets.get(file.id) || null);
           await recordDownloadEvent(file.id, "download_completed");
           completed++;
+          completedIds.add(file.id);
           activeFile = null;
           updateDownloadQueueItem(file.id, "完了", "done");
           updateDownloadProgress(completed, files.length);
@@ -5207,9 +5242,12 @@ async function executeDownloads(files, targets) {
       $("#download-current").textContent = "保存できなかったデータを下にまとめました。";
       renderTransferFailures("#download-failure-summary", "#download-failed-list", deferred);
     } else {
-      $("#download-summary").textContent = `${completed}件の保存が完了しました`;
-      $("#download-current").textContent = "選択した保存先をご確認ください。";
-      closeOnSuccess = true;
+      const savedDirectly = files.every(file => targets.has(file.id));
+      $("#download-summary").textContent = savedDirectly
+        ? `${completed}件の保存が完了しました` : `${completed}件をブラウザへ渡しました`;
+      $("#download-current").textContent = savedDirectly
+        ? "選択した保存先をご確認ください。" : "端末のダウンロード一覧で保存結果をご確認ください。";
+      closeOnSuccess = savedDirectly;
     }
   } catch (error) {
     if (error.name === "AbortError") {
@@ -5224,7 +5262,17 @@ async function executeDownloads(files, targets) {
     await syncTransferWakeLock();
     $("#download-cancel").hidden = true;
     $("#download-close").disabled = false;
-    clearFileSelection();
+    if (!keepSelection) {
+      for (const file of files) {
+        if (!completedIds.has(file.id)) continue;
+        removeSelectedRecord("file", file.id);
+        const card = document.querySelector(`.file-card[data-file-id="${Number(file.id)}"]`);
+        card?.classList.remove("selected", "selection-pass");
+        card?.querySelector(".file-select-button")?.setAttribute("aria-pressed", "false");
+      }
+      if (!getSelection().count("file") && !getSelection().count("folder") && !$("#preview-dialog").open) clearSelectionWithoutRefresh();
+      else syncSelectionBar();
+    }
     if (closeOnSuccess && $("#download-dialog").open) $("#download-dialog").close();
   }
 }
@@ -7545,6 +7593,18 @@ async function openPreview(file, options = {}) {
   clearPreviewUrl();
   state.previewFileId = Number(file.id);
   state.selected = file;
+  const isPhoto = file.mediaKind === "image";
+  dialog.classList.toggle("photo-dialog", isPhoto);
+  $("#photo-tools").hidden = !isPhoto;
+  $("#photo-selection-actions").hidden = !isPhoto;
+  const details = $("#photo-details"), fileDetails = $("#preview-file-details");
+  details.open = false;
+  details.hidden = !isPhoto;
+  if (isPhoto) details.append(fileDetails);
+  else dialog.insertBefore(fileDetails, dialog.querySelector(".preview-actions"));
+  if (isPhoto) $("#preview-more .preview-more-menu").prepend($("#delete-file-button"));
+  else dialog.querySelector(".preview-actions").insertBefore($("#delete-file-button"), $("#preview-pip"));
+  syncPreviewSelection();
   $("#preview-more").open = false;
   $("#preview-title").textContent = file.name;
   $("#preview-kind").textContent = kindLabel(file.mediaKind);
@@ -7626,7 +7686,18 @@ function renderPreviewImage(stage, file, url, generation) {
   const image = new Image();
   image.alt = file.name;
   image.addEventListener("load", () => {
-    if (previewRequestActive(generation, file.id) && $("#preview-dialog").open) stage.replaceChildren(image);
+    if (previewRequestActive(generation, file.id) && $("#preview-dialog").open) {
+      stage.replaceChildren(image);
+      state.photoViewer = TCloudPhotoViewer.attach(stage, image, {
+        onNavigate: direction => { void navigatePreview(direction); },
+        onChange: scale => {
+          $("#preview-dialog").classList.toggle("is-photo-zoomed", scale > 1);
+          $("#photo-zoom-reset").textContent = `${Math.round(scale * 100)}%`;
+          $("#photo-zoom-out").disabled = scale <= 1;
+          $("#photo-zoom-in").disabled = scale >= 6;
+        }
+      });
+    }
   }, { once: true });
   image.addEventListener("error", () => {
     if (previewRequestActive(generation, file.id) && $("#preview-dialog").open) {
@@ -7638,6 +7709,38 @@ function renderPreviewImage(stage, file, url, generation) {
 
 function previewImages() {
   return state.files.filter((file) => !file.trashed && file.mediaKind === "image");
+}
+
+function syncPreviewSelection() {
+  const file = state.selected;
+  const selected = Boolean(file && getSelection().has("file", file.id));
+  $("#preview-select").setAttribute("aria-pressed", String(selected));
+  $("#preview-select").textContent = selected ? "選択済み ✓" : "この写真を選択";
+  const count = getSelection().count("file");
+  $("#preview-download-selected").hidden = count === 0 || getSelection().count("folder") > 0;
+  $("#preview-download-selected").textContent = `${count}件をダウンロード`;
+}
+
+function togglePreviewSelection() {
+  const file = state.selected;
+  if (!file || file.mediaKind !== "image" || file.trashed) return;
+  // Insert a selection screen below this preview, so Back closes one layer
+  // and keeps the chosen photos ready for downloading.
+  if (!state.selectionHistoryActive && state.previewHistoryActive && history.state?.previewId) {
+    const previewEntry = { ...history.state };
+    history.replaceState({ ...previewEntry, previewId: null, selection: true }, "", location.href);
+    history.pushState(previewEntry, "", location.href);
+    state.selectionHistoryActive = true;
+  }
+  state.selectionMode = true;
+  const selected = getSelection().has("file", file.id);
+  if (selected) removeSelectedRecord("file", file.id);
+  else rememberSelectedRecord("file", file);
+  const card = $$(`.file-card[data-file-id="${Number(file.id)}"]`)[0];
+  card?.classList.toggle("selected", !selected);
+  card?.classList.toggle("selection-pass", !selected);
+  card?.querySelector(".file-select-button")?.setAttribute("aria-pressed", String(!selected));
+  syncSelectionBar();
 }
 
 function syncPreviewNavigation(file) {
@@ -7987,11 +8090,16 @@ function clearPreviewTapGesture() {
 }
 
 function handlePreviewTouchStart(event) {
+  if ($("#preview-dialog").classList.contains("photo-dialog") || event.touches?.length > 1) {
+    state.previewTouchStart = null;
+    return;
+  }
   const touch = event.changedTouches?.[0];
   state.previewTouchStart = touch ? { x: touch.clientX, y: touch.clientY } : null;
 }
 
 function handlePreviewTouchEnd(event) {
+  if ($("#preview-dialog").classList.contains("photo-dialog")) return;
   const start = state.previewTouchStart;
   const touch = event.changedTouches?.[0];
   state.previewTouchStart = null;
@@ -8043,6 +8151,9 @@ function handlePreviewClosed() {
 }
 
 function clearPreviewUrl() {
+  state.photoViewer?.destroy();
+  state.photoViewer = null;
+  $("#preview-dialog").classList.remove("is-photo-zoomed");
   stopManualThumbnail();
   $("#preview-notice").hidden = true;
   $("#preview-notice").textContent = "";

@@ -31,6 +31,7 @@ try { for (const [name, engine, launch] of engines) {
     assert.equal(await page.locator('#selection-download').isVisible(), true);
     await click('.folder-card[data-folder-id="8"] .folder-select-button');
     assert.equal(await page.locator('#selection-download').isVisible(), false);
+    await click('#selection-more summary');
     assert.equal(await page.locator('#selection-move').isVisible(), true);
     assert.equal(await page.locator('#selection-delete').isVisible(), true);
     assert.equal(await page.locator('#selection-share').isVisible(), true);
