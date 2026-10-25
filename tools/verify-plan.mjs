@@ -29,7 +29,7 @@ export function commands(target) {
       { cwd: '.', script: 'browser-policy:test' }
     ],
     cloud: tests('cloud-worker', ...[
-      'retired-player', 'photo-navigation', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
+      'retired-player', 'photo-navigation', 'photo-loading', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
       'listing-model', 'listing-boundary', 'selection-state', 'selection-boundary', 'bulk-delete', 'bulk-delete-boundary', 'selection-move', 'selection-history', 'selection-toolbar-stability', 'search-delete-stability', 'transfer-progress', 'upload-view-boundary', 'folder-transfer', 'search-result-ranking', 'upload-live-progress', 'upload-differential', 'transfer-cancel', 'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup', 'passkey-performance'
@@ -66,6 +66,7 @@ export function browserTests(target) {
     diary: ['diary-worker/tests/browser/navigation-return.mjs', 'diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
+  if (target === 'cloud') existing.unshift('cloud-worker/tests/photo-preview-loading.browser.mjs');
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, ...searchClear, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : [...existing, ...searchClear];
