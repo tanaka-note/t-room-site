@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-fa7c24fdf881";
+const APP_BUILD_ID = "cloud-b32171717dda";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -951,7 +951,10 @@ async function listItems(url, env, session) {
     (SELECT COUNT(*) FROM cloud_folders sf WHERE sf.parent_id = f.id AND sf.deleted_at IS NULL) AS folderCount
     FROM cloud_folders f WHERE f.id = ? AND f.deleted_at IS NULL`).bind(folderId).first()) : null;
   if (folderId && !folder) throw new HttpError(404, "フォルダが見つかりません。");
-  const folderAccessGranted = folderId ? await requireFolderAccess(env, folderId, session) : false;
+  const memberScope = folderId && session.role === "member"
+    ? await requireMemberListingScope(env, folderId, session) : null;
+  const folderAccessGranted = folderId
+    ? memberScope ? true : await requireFolderAccess(env, folderId, session) : false;
   if (!folderId && session.role === "member") {
     const roots = await Promise.all(memberFolderScopes(session).map((scope) => requireFolder(env, scope.rootFolderId)));
     return json({
@@ -1031,13 +1034,17 @@ async function listItems(url, env, session) {
       LIMIT ? OFFSET ?
     `).bind(...values, filePageSize + 1, fileOffset);
   }
-  // Access checks above still finish before either listing is read. Batch the
-  // independent SELECTs into one D1 round trip without changing page boundaries.
-  const statements = [folderStatement, fileStatement].filter(Boolean);
+  // All access checks finish before the listing and path are read. Keep the
+  // current request's member root; never cache authority across requests.
+  const memberRootId = memberScope?.rootFolderId ?? null;
+  const pathStatement = folderId && !filesOnly && !foldersOnly
+    ? breadcrumbStatement(env, folderId, session, memberRootId) : null;
+  const statements = [folderStatement, fileStatement, pathStatement].filter(Boolean);
   const pages = statements.length > 1 ? await env.DB.batch(statements)
     : statements.length ? [await statements[0].all()] : [];
   const folders = folderStatement ? pages.shift() : { results: [] };
   const files = fileStatement ? pages.shift() : { results: [] };
+  const path = pathStatement ? pages.shift() : { results: [] };
   const fileResults = files.results || [];
   const visibleFiles = fileResults.slice(0, filePageSize);
   const nextFileOffset = fileResults.length > filePageSize ? fileOffset + filePageSize : null;
@@ -1055,7 +1062,7 @@ async function listItems(url, env, session) {
     backupMount: session.role === "admin" && folderId === Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID)
       ? { type: "diary-backup", folderId } : null,
     canTrashContents,
-    breadcrumbs: filesOnly || foldersOnly ? [] : await breadcrumbs(env, folderId, session),
+    breadcrumbs: mapBreadcrumbs(path.results || [], session, memberRootId),
     folders: visibleFolders,
     files: visibleFiles,
     nextFolderOffset,
@@ -2817,6 +2824,35 @@ async function requireMemberFolderScope(env, folderId, session) {
   throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
 }
 
+async function requireMemberListingScope(env, folderId, session) {
+  if (!session.rootFolderId) throw new HttpError(403, "利用できるT-Cloudフォルダが設定されていません。");
+  const scopes = memberFolderScopes(session);
+  // Match the two existing walks: the nearest assigned root must be reached
+  // within 100 folders, and every protected descendant must be unlocked.
+  const { results } = await env.DB.prepare(`WITH RECURSIVE
+    allowed_roots(id) AS (VALUES ${scopes.map(() => "(?)").join(",")}),
+    listing_access(id, parent_id, depth) AS (
+      SELECT id, parent_id, 0 FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+      UNION ALL
+      SELECT parent.id, parent.parent_id, child.depth + 1
+      FROM cloud_folders parent JOIN listing_access child ON parent.id = child.parent_id
+      WHERE parent.deleted_at IS NULL AND child.depth < 99
+        AND NOT EXISTS(SELECT 1 FROM allowed_roots WHERE id = child.id)
+    )
+    SELECT f.id, f.password_hash IS NOT NULL AS isProtected,
+      EXISTS(SELECT 1 FROM cloud_folder_unlocks unlock WHERE unlock.folder_id = f.id
+        AND unlock.session_id = ? AND unlock.expires_at > ?) AS isUnlocked
+    FROM listing_access access JOIN cloud_folders f ON f.id = access.id ORDER BY access.depth ASC`)
+    .bind(...scopes.map(scope => scope.rootFolderId), folderId, session.sessionId, Math.floor(Date.now() / 1000)).all();
+  const chain = results || [];
+  const scope = scopes.find(item => Number(item.rootFolderId) === Number(chain.at(-1)?.id));
+  if (!scope) throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
+  if (chain.slice(0, -1).some(folder => folder.isProtected && !folder.isUnlocked)) {
+    throw new HttpError(423, "フォルダのロックを解除してください。");
+  }
+  return scope;
+}
+
 // Move policy is separate from read scope: ordinary members stay within one
 // assigned parent, and the assigned parent itself is never a move target.
 async function requireMemberMoveScope(env, sourceId, destinationId, session, movingFolder = false) {
@@ -2874,9 +2910,14 @@ async function rememberFolderUnlock(env, session, folderId) {
 async function breadcrumbs(env, folderId, session) {
   const memberRootId = session.role === "member" ? (await requireMemberFolderScope(env, folderId, session)).rootFolderId : null;
   if (!folderId) return [];
+  const { results } = await breadcrumbStatement(env, folderId, session, memberRootId).all();
+  return mapBreadcrumbs(results || [], session, memberRootId);
+}
+
+function breadcrumbStatement(env, folderId, session, memberRootId) {
   // Preserve the existing 20-level bound and stop at the assigned member root.
   // One recursive read replaces one DB round trip for each ancestor.
-  const { results } = await env.DB.prepare(`WITH RECURSIVE ancestors(id, parent_id, depth) AS (
+  return env.DB.prepare(`WITH RECURSIVE ancestors(id, parent_id, depth) AS (
       SELECT id, parent_id, 0 FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
       UNION ALL
       SELECT parent.id, parent.parent_id, child.depth + 1
@@ -2891,8 +2932,11 @@ async function breadcrumbs(env, folderId, session) {
       f.parent_wrap_iv AS parentWrapIv, f.password_hash IS NOT NULL AS isProtected,
       EXISTS(SELECT 1 FROM cloud_folder_unlocks unlock WHERE unlock.folder_id = f.id AND unlock.session_id = ? AND unlock.expires_at > ?) AS isUnlocked
     FROM ancestors a JOIN cloud_folders f ON f.id = a.id ORDER BY a.depth DESC`)
-    .bind(folderId, memberRootId, memberRootId, session.sessionId, Math.floor(Date.now() / 1000)).all();
-  return (results || []).map((folder) => ({
+    .bind(folderId, memberRootId, memberRootId, session.sessionId, Math.floor(Date.now() / 1000));
+}
+
+function mapBreadcrumbs(results, session, memberRootId) {
+  return results.map((folder) => ({
     id: folder.id,
     name: folder.name,
     cryptoVersion: folder.cryptoVersion,

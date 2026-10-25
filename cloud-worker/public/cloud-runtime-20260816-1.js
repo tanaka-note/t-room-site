@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-fa7c24fdf881";
+const APP_BUILD_ID = "cloud-b32171717dda";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -113,6 +113,7 @@ const state = {
   photoFullscreen: null,
   previewFileId: null,
   previewGeneration: 0,
+  previewLoadController: null,
   manualThumbnail: null,
   previewOrientationGeneration: 0,
   previewVideoFullscreenActive: false,
@@ -7616,6 +7617,8 @@ async function openPreview(file, options = {}) {
   state.previewFileId = Number(file.id);
   state.selected = file;
   const isPhoto = file.mediaKind === "image";
+  state.previewLoadController = isPhoto ? new AbortController() : null;
+  const previewSignal = state.previewLoadController?.signal;
   dialog.classList.toggle("photo-dialog", isPhoto);
   if (!isPhoto) void state.photoFullscreen?.exit();
   state.photoFullscreen?.sync();
@@ -7648,6 +7651,7 @@ async function openPreview(file, options = {}) {
   const stage = $("#preview-stage");
   stage.classList.remove("has-custom-video-controls", "is-media-ready");
   stage.innerHTML = "";
+  if (isPhoto) stage.dataset.photoOriginalState = "loading";
   syncPreviewNavigation(file);
   let url = TCloudSession.scopedUrl(`${API}/files/${file.id}/view`);
   let preparedVideo = null;
@@ -7661,24 +7665,34 @@ async function openPreview(file, options = {}) {
       preparedVideo = prepareVideoPlayer(stage, file);
       preparedVideo.buffering.textContent = "暗号を復号して再生準備をしています…";
     } else {
-      stage.innerHTML = `<div class="preview-loading"><p>暗号を復号して再生準備をしています…</p></div>`;
+      stage.innerHTML = `<div class="preview-loading"><p>${isPhoto ? "写真を読み込んでいます…" : "暗号を復号して再生準備をしています…"}</p></div>`;
     }
     if (!dialog.open) dialog.showModal();
+    const thumbnailUrl = isPhoto ? state.thumbnailObjectUrls.get(Number(file.id)) : null;
+    if (thumbnailUrl) {
+      renderPreviewImage(stage, file, thumbnailUrl, generation, { thumbnail: true });
+      $("#preview-notice").textContent = "高画質で読み込み中…";
+      $("#preview-notice").hidden = false;
+    }
     try {
       const streaming = file.mediaKind === "video" || file.mediaKind === "audio" || Number(file.sizeBytes) > 128 * 1024 * 1024;
       if (streaming) {
         const media = await registerMediaWithDeviceCache(file, `${API}/files/${file.id}/view`);
-        if (!previewRequestActive(generation, file.id)) {
+        if (!previewRequestActive(generation, file.id) || previewSignal?.aborted) {
           TCloudMedia.releaseMedia(media.token);
           return;
         }
         state.previewMediaToken = media.token;
         url = media.url;
       } else {
-        await prepareDeviceCacheEntry(file);
-        const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/view`);
+        const cacheReady = isPhoto ? prepareDeviceCacheEntry(file).catch(() => {}) : prepareDeviceCacheEntry(file);
+        if (!isPhoto) await cacheReady;
+        if (!previewRequestActive(generation, file.id) || previewSignal?.aborted) return;
+        const blob = await TCloudMedia.decryptToBlob(file, file.fileKey, `${API}/files/${file.id}/view`, {
+          signal: previewSignal, cacheReady: isPhoto ? cacheReady : undefined
+        });
         const objectUrl = URL.createObjectURL(blob);
-        if (!previewRequestActive(generation, file.id)) {
+        if (!previewRequestActive(generation, file.id) || previewSignal?.aborted) {
           URL.revokeObjectURL(objectUrl);
           return;
         }
@@ -7686,13 +7700,18 @@ async function openPreview(file, options = {}) {
         url = state.previewUrl;
       }
     } catch (error) {
-      if (!previewRequestActive(generation, file.id)) return;
+      if (!previewRequestActive(generation, file.id) || previewSignal?.aborted) return;
+      if (isPhoto) stage.dataset.photoOriginalState = "error";
       if (preparedVideo) showVideoPlayerError(stage, preparedVideo.buffering, error.message);
+      else if (isPhoto && stage.querySelector('img[data-photo-quality="thumbnail"]')) {
+        $("#preview-notice").textContent = "元の写真を読み込めませんでした。写真を開き直すか、ダウンロードしてご確認ください。";
+        $("#preview-notice").hidden = false;
+      }
       else stage.innerHTML = `<div class="preview-fallback"><p>${escapeHtml(error.message)}</p></div>`;
       return;
     }
   }
-  if (!previewRequestActive(generation, file.id)) return;
+  if (!previewRequestActive(generation, file.id) || previewSignal?.aborted) return;
   if (file.mediaKind === "image") {
     renderPreviewImage(stage, file, url, generation);
   } else if (file.mediaKind === "video") {
@@ -7707,13 +7726,17 @@ async function openPreview(file, options = {}) {
   if (!dialog.open) dialog.showModal();
 }
 
-function renderPreviewImage(stage, file, url, generation) {
+function renderPreviewImage(stage, file, url, generation, { thumbnail = false } = {}) {
   const image = new Image();
+  const signal = state.previewLoadController?.signal;
   image.alt = file.name;
+  image.dataset.photoQuality = thumbnail ? "thumbnail" : "original";
   image.addEventListener("load", () => {
-    if (previewRequestActive(generation, file.id) && $("#preview-dialog").open) {
+    if (previewRequestActive(generation, file.id) && !signal?.aborted && $("#preview-dialog").open) {
+      if (thumbnail && stage.dataset.photoOriginalState === "ready") return;
       stage.replaceChildren(image);
-      state.photoViewer = TCloudPhotoViewer.attach(stage, image, {
+      if (state.photoViewer) state.photoViewer.replaceImage(image);
+      else state.photoViewer = TCloudPhotoViewer.attach(stage, image, {
         onNavigate: direction => { void navigatePreview(direction); },
         onChange: scale => {
           $("#preview-dialog").classList.toggle("is-photo-zoomed", scale > 1);
@@ -7723,14 +7746,29 @@ function renderPreviewImage(stage, file, url, generation) {
           button.setAttribute("aria-label", scale > 1 ? "写真を通常表示に戻す" : "写真を拡大");
         }
       });
+      if (!thumbnail) {
+        stage.dataset.photoOriginalState = "ready";
+        $("#preview-notice").hidden = true;
+      } else if (stage.dataset.photoOriginalState === "error") {
+        $("#preview-notice").textContent = "元の写真を表示できませんでした。ダウンロードしてご確認ください。";
+        $("#preview-notice").hidden = false;
+      }
       state.photoFullscreen?.sync();
     }
-  }, { once: true });
+  }, { once: true, signal });
   image.addEventListener("error", () => {
+    if (thumbnail || signal?.aborted) return;
     if (previewRequestActive(generation, file.id) && $("#preview-dialog").open) {
-      stage.innerHTML = '<div class="preview-fallback"><p>写真を表示できませんでした。</p><p>ダウンロードしてご確認ください。</p></div>';
+      stage.dataset.photoOriginalState = "error";
+      if (stage.querySelector('img[data-photo-quality="thumbnail"]')) {
+        $("#preview-notice").textContent = "元の写真を表示できませんでした。ダウンロードしてご確認ください。";
+        $("#preview-notice").hidden = false;
+      } else {
+        stage.innerHTML = '<div class="preview-fallback"><p>写真を表示できませんでした。</p><p>ダウンロードしてご確認ください。</p></div>';
+      }
     }
-  }, { once: true });
+  }, { once: true, signal });
+  signal?.addEventListener("abort", () => { image.src = ""; }, { once: true });
   image.src = url;
 }
 
@@ -8148,6 +8186,7 @@ function handlePreviewTouchEnd(event) {
 
 function requestPreviewClose() {
   if (!$("#preview-dialog").open || state.previewClosePending) return;
+  state.previewLoadController?.abort();
   if (state.previewHistoryActive && history.state?.previewId && !state.handlingPopState) {
     state.previewClosePending = true;
     history.back();
@@ -8187,6 +8226,8 @@ function handlePreviewClosed() {
 }
 
 function clearPreviewUrl() {
+  state.previewLoadController?.abort();
+  state.previewLoadController = null;
   state.photoViewer?.destroy();
   state.photoViewer = null;
   $("#preview-dialog").classList.remove("is-photo-zoomed");
@@ -8196,6 +8237,7 @@ function clearPreviewUrl() {
   $("#manual-thumbnail-button").hidden = true;
   const stage = $("#preview-stage");
   clearPreviewTapGesture();
+  if (stage) delete stage.dataset.photoOriginalState;
   state.previewPictureInPictureActive = false;
   state.previewPictureInPictureVideo = null;
   state.previewKeepMediaOnClose = false;

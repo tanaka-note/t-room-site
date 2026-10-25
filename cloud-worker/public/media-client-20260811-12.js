@@ -246,7 +246,7 @@
         const index = nextIndex++;
         if (index >= chunkCount) return;
         if (options.signal?.aborted) throw new DOMException("中止しました", "AbortError");
-        const plain = await fetchAndDecryptChunk(file, fileKey, endpoint, index, options.signal);
+        const plain = await fetchAndDecryptChunk(file, fileKey, endpoint, index, options.signal, options.cacheReady);
         chunks[index] = plain;
         completedBytes += plain.byteLength;
         options.onProgress?.(Math.min(Number(file.sizeBytes), completedBytes), Number(file.sizeBytes));
@@ -256,18 +256,26 @@
     return new Blob(chunks, { type: file.mimeType || "application/octet-stream" });
   }
 
-  async function fetchAndDecryptChunk(file, fileKey, endpoint, index, signal) {
-    const envelope = await fetchEncryptedChunk(file, endpoint, index, signal);
+  function checkTransferSignal(signal) {
+    if (signal?.aborted) throw new DOMException("中止しました", "AbortError");
+  }
+
+  async function fetchAndDecryptChunk(file, fileKey, endpoint, index, signal, cacheReady) {
+    const envelope = await fetchEncryptedChunk(file, endpoint, index, signal, cacheReady);
+    checkTransferSignal(signal);
     const plain = new Uint8Array(await TRoomCrypto.decryptFileChunk(fileKey, envelope, index));
+    checkTransferSignal(signal);
     global.TCloudSession?.check();
     return plain;
   }
 
-  async function fetchEncryptedChunk(file, endpoint, index, signal) {
+  async function fetchEncryptedChunk(file, endpoint, index, signal, cacheReady) {
+    checkTransferSignal(signal);
     global.TCloudSession?.check();
     const { start, end } = TCloudRange.encryptedChunkRange(file, index);
     if (file.offlineStorageId && global.TCloudOffline?.supported()) {
       const cached = await global.TCloudOffline.getChunk(file.offlineStorageId, index).catch(() => null);
+      checkTransferSignal(signal);
       global.TCloudSession?.check();
       if (cached) return cached;
     }
@@ -285,8 +293,11 @@
         });
         if (response.status !== 206) throw new Error(`分割データを取得できませんでした（${response.status}）。`);
         const envelope = new Uint8Array(await response.arrayBuffer());
+        checkTransferSignal(signal);
         if (file.offlineStorageId && global.TCloudOffline?.supported()) {
-          global.TCloudOffline.putChunk(file.offlineStorageId, index, envelope, { expectedBytes: end - start + 1 }).catch(() => {});
+          // Optional cache creation must not delay the displayed original. Only
+          // the encrypted envelope is retained, after its entry is ready.
+          queueEncryptedCacheWrite(file.offlineStorageId, index, envelope, end - start + 1, cacheReady, signal);
         }
         return envelope;
       } catch (error) {
@@ -295,6 +306,26 @@
       }
     }
     throw lastError || new Error("分割データを取得できませんでした。");
+  }
+
+  function queueEncryptedCacheWrite(storageId, index, bytes, expectedBytes, cacheReady, signal) {
+    const pending = { bytes };
+    // A slow storage gate must not retain an old photo's bytes after close or
+    // navigation. This closure keeps only encrypted bytes and public IDs.
+    const discard = () => { pending.bytes = null; };
+    signal?.addEventListener("abort", discard, { once: true });
+    if (signal?.aborted) discard();
+    Promise.resolve(cacheReady).then(() => {
+      checkTransferSignal(signal);
+      global.TCloudSession?.check();
+      if (!pending.bytes) return;
+      const payload = pending.bytes;
+      discard();
+      return global.TCloudOffline.putChunk(storageId, index, payload, { expectedBytes });
+    }).catch(() => {}).finally(() => {
+      discard();
+      signal?.removeEventListener("abort", discard);
+    });
   }
 
   async function saveOfflineFile(file, record, endpoint, options = {}) {
