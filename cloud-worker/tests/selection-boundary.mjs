@@ -10,7 +10,7 @@ const adapter = client.slice(client.indexOf('let selectionState = null;'), clien
 const action = (name, next) => client.slice(client.indexOf(`async function ${name}(`), client.indexOf(next, client.indexOf(`async function ${name}(`)));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function makeContext(extra = {}) {
-  const context = vm.createContext({ TCloudSelection, TCloudBulkDelete, ...extra });
+  const context = vm.createContext({ TCloudSelection, TCloudBulkDelete, AbortController, setTimeout, clearTimeout, ...extra });
   vm.runInContext(adapter, context); return context;
 }
 function choose(context, files, folders = []) {

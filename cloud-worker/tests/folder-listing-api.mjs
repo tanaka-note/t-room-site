@@ -68,7 +68,7 @@ try {
   assert.equal(first.body.files[0].hasThumbnail, 1);
   assert.ok(first.body.breadcrumbs.every(folder => folder.adminAccess && folder.isUnlocked));
   assert.deepEqual(first.body.breadcrumbs.at(-1), {
-    id: 105, name: 'ancestor-105', cryptoVersion: 1, encryptedName: 'folder-cipher', nameIv: 'folder-iv',
+    id: 105, parentId: 104, name: 'ancestor-105', cryptoVersion: 1, encryptedName: 'folder-cipher', nameIv: 'folder-iv',
     passwordSalt: 'folder-salt', passwordWrappedKey: 'password-envelope', passwordWrapIv: 'password-iv',
     adminWrappedKey: 'admin-envelope', parentWrappedKey: 'parent-envelope', parentWrapIv: 'parent-iv',
     isProtected: false, isUnlocked: true, adminAccess: true

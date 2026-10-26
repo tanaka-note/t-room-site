@@ -19,7 +19,8 @@ try { for (const [name, engine, launch] of engines) {
         await route.fulfill({status: deny ? 401 : 200, json: deny ? {error: 'Synthetic revoked session'} : {ok: true}});
       } else if (url.pathname.endsWith('/items')) {
         const index = breadcrumbs.findIndex(folder => folder.id === Number(url.searchParams.get('folderId')));
-        await route.fulfill({json: {folders: [], files: [], breadcrumbs: breadcrumbs.slice(0, index + 1), nextFileOffset: null, nextFolderOffset: null}});
+        const path = Number(url.searchParams.get('folderId')) === 201 ? [{id:201,parentId:9}] : breadcrumbs.slice(0, index + 1);
+        await route.fulfill({json: {folders: [], files: [], breadcrumbs: path, nextFileOffset: null, nextFolderOffset: null}});
       } else await route.fulfill({json: {}});
     });
     try {
@@ -62,7 +63,7 @@ try { for (const [name, engine, launch] of engines) {
       await page.waitForFunction(() => !document.querySelector('#move-dialog').open);
       assert.equal(patches.length, 1);
       assert.equal(patches[0].body.folderId, 103);
-      assert.deepEqual(Object.keys(patches[0].body).sort(), ['fileKeyIv', 'folderId', 'wrappedFileKey']);
+      assert.deepEqual(Object.keys(patches[0].body).sort(), ['expectedFolderId', 'fileKeyIv', 'folderId', 'wrappedFileKey']);
       assert.equal(await page.evaluate(async wrapped => {
         const key = await TRoomCrypto.unlockFileKey(wrapped, __moveWitness.deepKey);
         const bytes = await crypto.subtle.exportKey('raw', key);
