@@ -75,7 +75,9 @@
     const url = new URL(location.href); url.searchParams.delete('item'); url.searchParams.delete('year');
     const state = { ...history.state }; delete state.inventory; delete state.inventoryDialog; history.replaceState(state, '', url);
     $('login-view').hidden = false; $('app-view').hidden = true; $('logout').hidden = true; $('account-name').textContent = '';
-    $('login').disabled = false; markBusy(false); message('');
+    $('login').disabled = false; $('login').removeAttribute('aria-busy');
+    $('passkey-login-label').textContent = 'パスキーでログイン';
+    markBusy(false); message('');
   }
   async function enter(account, generation = sessionGeneration) { currentSession(generation); $('account-name').textContent = account.displayName; $('login-view').hidden = true; $('app-view').hidden = false; $('logout').hidden = false; message(''); await loadItems(); currentSession(generation); await renderLocation(); }
   async function loadItems() { const generation = sessionGeneration, sequence = ++listSequence, value = await api(`/items?year=${listYear}`); currentSession(generation); if (sequence !== listSequence) return; items = value.items; renderItems(); }
@@ -201,7 +203,7 @@
     $('editor').addEventListener('pointerup', e => { if (backgroundPointer === e.pointerId && outside(e)) { e.preventDefault(); e.stopPropagation(); closeEditor(); } backgroundPointer = null; });
     $('editor').addEventListener('pointercancel', () => { backgroundPointer = null; });
     $('record-form').addEventListener('input', () => { dirty = true; retry = null; $('record-form').dataset.troomDirty = 'true'; }); $('record-form').addEventListener('submit', save);
-    $('login').addEventListener('click', async () => { if (busy) return; const generation = sessionGeneration; markBusy(true); $('login').disabled = true; $('login').setAttribute('aria-busy', 'true'); $('passkey-login-label').textContent = '確認中…'; try { const auth = await window.TRoomPasskeys.authenticate('inventory'); currentSession(generation); await enter(await api('/passkey/handoff', { handoffToken: auth.handoff.handoffToken }), generation); } catch (e) { if (generation !== sessionGeneration && e.status !== 401) return; if (e.name === 'NotAllowedError') message('本人確認をキャンセルしました。'); else report(e); } finally { $('login').removeAttribute('aria-busy'); $('passkey-login-label').textContent = 'パスキーでログイン'; if (generation === sessionGeneration) { markBusy(false); $('login').disabled = false; } } });
+    $('login').addEventListener('click', async () => { if (busy) return; const generation = sessionGeneration; markBusy(true); $('login').disabled = true; $('login').setAttribute('aria-busy', 'true'); $('passkey-login-label').textContent = '確認中…'; try { const auth = await window.TRoomPasskeys.authenticate('inventory'); currentSession(generation); await enter(await api('/passkey/handoff', { handoffToken: auth.handoff.handoffToken }), generation); } catch (e) { if (generation !== sessionGeneration && e.status !== 401) return; if (e.name === 'NotAllowedError') message('本人確認をキャンセルしました。'); else report(e); } finally { if (generation === sessionGeneration) { $('login').removeAttribute('aria-busy'); $('passkey-login-label').textContent = 'パスキーでログイン'; markBusy(false); $('login').disabled = false; } } });
     $('logout').addEventListener('click', async () => { if (busy || !allowClose()) return; const generation = sessionGeneration; markBusy(true); try { await api('/logout', {}); currentSession(generation); loginView(); message('ログアウトしました。'); } catch (e) { report(e); } finally { if (generation === sessionGeneration) markBusy(false); } });
     const generation = sessionGeneration;
     try { await enter(await api('/session'), generation); } catch (e) { if (!e.discarded) { loginView(); message(e.status === 401 ? '' : e.message); } }
