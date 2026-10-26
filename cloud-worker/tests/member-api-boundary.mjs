@@ -323,7 +323,9 @@ try {
         assert.match(notices.at(-1),/結果未確認2件/);
       }
       fail = false;blockStatus = false;
+      if (mode === "before") db.prepare("UPDATE cloud_folders SET name='renamed before retry' WHERE id=?").run(folderId);
       await submit();await verify(0);
+      if (mode === "before") assert.equal(db.prepare("SELECT name FROM cloud_folders WHERE id=?").get(folderId).name,"renamed before retry","retry preserves another user's rename");
       assert.equal(elements.get("#move-dialog").open,false);
       assert.equal(writes.length,initialWrites+(mode==="before"?2:0),"retry never repeats successful writes");
       if(mode==="before"){
@@ -360,13 +362,13 @@ try {
     env.DB.prepare = sql => {
       if (interleave && sql.startsWith("UPDATE cloud_folders SET name = ?, parent_id")) {
         interleave = false;
-        db.prepare("UPDATE cloud_folders SET name='concurrent name',parent_id=7,parent_wrapped_key=?,parent_wrap_iv=? WHERE id=350")
-          .run(concurrentFolderWrap.parentWrappedKey,concurrentFolderWrap.parentWrapIv);
+        db.prepare("UPDATE cloud_folders SET name='concurrent name' WHERE id=350").run();
       }
       return prepareBeforeRace(sql);
     };
     assert.equal((await api(group.cookie,"/folders/350","PATCH",{name:"stale name",parentId:7,expectedParentId:101,...concurrentFolderWrap})).status,409);
     assert.equal(db.prepare("SELECT name FROM cloud_folders WHERE id=350").get().name,"concurrent name");
+    assert.equal(db.prepare("SELECT parent_id FROM cloud_folders WHERE id=350").get().parent_id,101);
   } finally { env.DB.prepare = prepareBeforeRace; }
   revokedScope="general-user-nas";
   assert.equal((await api(group.cookie,"/items")).status,401,"non-anchor link revoke rejects the next request");

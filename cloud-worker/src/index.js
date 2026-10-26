@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-49b6d2e12804";
+const APP_BUILD_ID = "cloud-6daeddbb2997";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1670,9 +1670,9 @@ async function updateFolder(id, request, env, session) {
   }
   if (moving) {
     const result = await env.DB.prepare(`UPDATE cloud_folders SET name = ?, parent_id = ?, parent_wrapped_key = ?, parent_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      ${conditionalMove ? "AND parent_id IS ? AND parent_wrapped_key IS ? AND parent_wrap_iv IS ?" : ""}`)
-      .bind(name, parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id,
-        ...(conditionalMove ? [folder.parent_id, folder.parentWrappedKey, folder.parentWrapIv] : [])).run();
+      ${conditionalMove ? "AND parent_id IS ? AND parent_wrapped_key IS ? AND parent_wrap_iv IS ? AND name IS ?" : ""}`)
+      .bind(conditionalMove ? folder.name : name, parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id,
+        ...(conditionalMove ? [folder.parent_id, folder.parentWrappedKey, folder.parentWrapIv, folder.name] : [])).run();
     if (conditionalMove && result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
   }
   await audit(env, "folder_updated", session, "folder", id, { folderNameEncrypted: false, passwordChanged: passwordAction === "replace", moved: moving, parentId });
