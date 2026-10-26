@@ -67,7 +67,7 @@ export function browserTests(target) {
     diary: ['diary-worker/tests/browser/navigation-return.mjs', 'diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
-  if (target === 'cloud') existing.unshift('cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/diary-backup-mount.browser.mjs', 'cloud-worker/tests/photo-preview-loading.browser.mjs');
+  if (target === 'cloud') existing.unshift('cloud-worker/tests/folder-history-loading.browser.mjs', 'cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/diary-backup-mount.browser.mjs', 'cloud-worker/tests/photo-preview-loading.browser.mjs');
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, ...searchClear, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : [...existing, ...searchClear];
