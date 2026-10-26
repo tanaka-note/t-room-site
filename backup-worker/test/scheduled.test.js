@@ -3,7 +3,7 @@ import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {SERVICES} from '../src/registry.js';
-import {backupService} from '../src/backup.js';
+import {backupService,capture,compress,digest} from '../src/backup.js';
 import {getBackupSnapshot} from '../src/browser.js';
 import {database,d1,Bucket} from './fixtures.mjs';
 
@@ -102,7 +102,11 @@ for(const mode of ['ok','all_save_failures','audit_start_unavailable_prior_succe
    }
    if(['all_save_failures','failure_audit_unavailable'].includes(mode))bucket.failPut=true;
    if(mode==='prune_failure_audit_unavailable'){
-    for(const id of ids)for(let day=1;day<=31;day++)await bucket.put(`d1/${id}/daily/${new Date(scheduledTime-day*86400000).toISOString().slice(0,10)}.json.gz`,new Uint8Array([1]));
+    for(const id of ids){
+     const bytes=await compress(await capture(env[SERVICES[id].binding],id,scheduledTime));
+     const sha256=await digest(bytes);
+     for(let day=1;day<=31;day++)await bucket.put(`d1/${id}/v2/daily/${new Date(scheduledTime-day*86400000).toISOString().slice(0,10)}.json.gz`,bytes,{customMetadata:{sha256}});
+    }
     const remove=bucket.delete.bind(bucket);
     bucket.delete=async keys=>{if(Array.isArray(keys)&&keys.some(key=>key.includes('/daily/')))throw new Error('secret-fixture-retention');return remove(keys);};
    }

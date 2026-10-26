@@ -1,27 +1,28 @@
 // Metadata only. This integration never reads backup bodies or writes to R2/D1.
-const CACHE_KEY = "https://diary-backup.internal/browser-summary-v1";
+const CACHE_KEY = "https://diary-backup.internal/browser-summary-v2";
 const CACHE_SECONDS = 6 * 60 * 60;
-const PREFIXES = { daily: "daily/", monthly: "monthly/", photo: "media/formal-photos/" };
+const PREFIXES = { daily: "v7/daily/", monthly: "v7/monthly/", photo: "media/verified-photos/", receipts: "media/photo-receipts/", legacyDaily: "daily/", legacyMonthly: "monthly/", legacyPhoto: "media/formal-photos/" };
 
 export async function scanBackupMetadata(bucket, now = Date.now()) {
   if (!bucket) throw new Error("Backup storage unavailable");
   const groups = {};
   for (const [kind, prefix] of Object.entries(PREFIXES)) {
-    const group = { bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(kind === "photo" ? {} : { objects: [] }) };
+    const group = { bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(["photo","receipts","legacyPhoto"].includes(kind) ? {} : { objects: [] }) };
     let cursor;
     do {
       const page = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}),
-        ...(kind === "photo" ? {} : { include: ["customMetadata", "httpMetadata"] }) });
+        ...(["photo","receipts","legacyPhoto"].includes(kind) ? {} : { include: ["customMetadata", "httpMetadata"] }) });
       for (const object of page.objects) {
         group.bytes += object.size;
         group.objectCount += 1;
+        if(group.objectCount>20000) throw new Error("SnapshotTooLarge");
         const updatedAt = object.uploaded.toISOString();
         if (!group.lastUpdatedAt || updatedAt > group.lastUpdatedAt) group.lastUpdatedAt = updatedAt;
         if (group.objects) {
           const metadata = object.customMetadata || {};
           group.objects.push({ name: object.key.slice(prefix.length), sizeBytes: object.size, updatedAt,
             format: metadata.format || null, japanDate: metadata.japanDate || null,
-            mediaComplete: metadata.mediaComplete === "true" ? true : metadata.mediaComplete === "false" ? false : null,
+            mediaComplete: kind.startsWith("legacy") ? null : metadata.mediaComplete === "true" ? true : metadata.mediaComplete === "false" ? false : null,
             contentType: object.httpMetadata?.contentType || null, contentEncoding: object.httpMetadata?.contentEncoding || null });
         }
       }

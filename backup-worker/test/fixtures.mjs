@@ -18,7 +18,7 @@ export function d1(db) {
     db.exec('BEGIN');
     try {
       const result = [];
-      for (const item of items) result.push(/^\s*SELECT/.test(item.sql) ? await item.all() : await item.run());
+      for (const item of items) result.push(/^\s*(SELECT|WITH)\b|\bRETURNING\b/.test(item.sql) ? await item.all() : await item.run());
       db.exec('COMMIT'); return result;
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   } };
@@ -34,8 +34,9 @@ export class Bucket {
     this.objects.set(key, { bytes, ...options, etag: crypto.randomUUID(), uploaded: new Date() }); this.writes.push(key);
     return this.objects.get(key);
   }
-  async get(key) {
+  async get(key, options = {}) {
     const value = this.objects.get(key); if (!value) return null;
+    if (options.onlyIf?.etagMatches && options.onlyIf.etagMatches !== value.etag) return { etag: value.etag };
     const bytes = this.corrupt ? new Uint8Array([0]) : value.bytes;
     return { ...value, body: new Blob([bytes]).stream(), arrayBuffer: async () => bytes.buffer, size: bytes.length };
   }

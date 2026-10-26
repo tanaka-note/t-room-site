@@ -8,7 +8,7 @@ const snapshot = { daily: empty, monthly: empty, photo: empty, backupBytes: 1200
   observedAt: new Date().toISOString(), status: { state: 'ok', lastSuccessAt: new Date().toISOString() },
   services: [{ id: 'billing', label: '請求書管理', available: true, state: 'failed', stage: 'daily_save', reason: 'operation_failed', attempt: 3,
     lastSuccessAt: '2026-10-24T18:40:00Z', lastAttemptAt: '2026-10-25T18:40:00Z', history: [{ state: 'failed', at: '2026-10-25T18:40:00Z' }] },
-  { id: 'security-audit', label: 'セキュリティ監査の長期保管', available: true, state: 'ok', retention: 'indefinite', periods: [
+  { id: 'security-audit', label: 'セキュリティ監査の長期保管', available: true, state: 'partial', pendingCount:1001, pendingCapped:true, oldestPendingAt:'2026-01-01T00:00:00Z', retention: 'indefinite', periods: [
     { month: '2026-10', bytes: 200, rowCount: 10, firstAt: '2026-01-01T00:00:00Z', lastAt: '2026-01-02T00:00:00Z' }] },
   { id: 'escaped', label: '<img id="injected" src=x>', available: false, state: 'unavailable' }] };
 const writes = [];
@@ -30,8 +30,9 @@ try {
         const panel = page.locator('#diary-backup-mount');
         await panel.getByText('請求書管理：失敗', { exact: true }).waitFor();
         assert.match(await panel.innerText(), /日次保存.*処理に失敗しました.*試行 3回/);
-        await panel.getByText('セキュリティ監査の長期保管：正常', { exact: true }).click();
+        await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         assert.match(await panel.innerText(), /180日超の履歴を期限なしで保管/);
+        assert.match(await panel.innerText(),/未保管 1001件以上.*最古の未保管/);
         assert.equal(await page.locator('#injected').count(), 0);
         assert.equal(await panel.locator('input[type=checkbox], [draggable=true], a').count(), 0);
         const adminDetails = await panel.textContent();
@@ -43,7 +44,7 @@ try {
           renderDiaryBackupMount();
         });
         await panel.getByText('請求書管理：失敗', { exact: true }).waitFor();
-        await panel.getByText('セキュリティ監査の長期保管：正常', { exact: true }).click();
+        await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         assert.equal(await panel.isVisible(), true, 'authorized members see aggregated status, errors, history and archive periods');
         assert.equal(await page.evaluate(() => document.querySelector('#diary-backup-mount').textContent), adminDetails);
         await page.evaluate(() => { __test.state.backupMount = null; renderDiaryBackupMount(); });
@@ -52,7 +53,7 @@ try {
         assert.deepEqual(writes, []);
         await page.evaluate(() => { __test.state.session = { role: 'admin' }; __test.state.backupMount = { type: 'diary-backup', folderId: 2850 }; renderDiaryBackupMount(); });
         await panel.getByText('請求書管理：失敗', { exact: true }).waitFor();
-        await panel.getByText('セキュリティ監査の長期保管：正常', { exact: true }).click();
+        await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         mkdirSync(root + '/tmp/backup-ui', { recursive: true });
         await panel.screenshot({ path: root + `/tmp/backup-ui/${name}-${mobile ? 'mobile' : 'desktop'}.png` });
         await page.close();
