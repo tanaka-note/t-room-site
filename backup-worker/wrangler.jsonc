@@ -1,0 +1,75 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-backup",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-26",
+  "workers_dev": false,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "CLOUD_DB",
+      "database_name": "cloud-db",
+      "database_id": "d536bdb7-c3b4-46df-bdc5-f9ea4f00c4cd"
+    },
+    {
+      "binding": "SECURITY_DB",
+      "database_name": "security-db",
+      "database_id": "45c2e1ff-8ee1-4cc8-b8e5-cacc0846e475"
+    },
+    {
+      "binding": "BILLING_DB",
+      "database_name": "billing-db",
+      "database_id": "8ed4cb80-44ca-4449-bfb4-bb38f3191bde"
+    },
+    {
+      "binding": "PAYMENTS_DB",
+      "database_name": "payments-db",
+      "database_id": "066196b0-25d4-4c92-acfd-066dae61530b"
+    },
+    {
+      "binding": "HEALTH_DB",
+      "database_name": "health-db",
+      "database_id": "620aa524-b2f8-400a-ad53-cb505618a9af"
+    },
+    {
+      "binding": "INVENTORY_DB",
+      "database_name": "inventory-db",
+      "database_id": "e47d0a7f-7c1b-44b4-98ea-e5db030acd86"
+    },
+    {
+      "binding": "AI_DB",
+      "database_name": "ai-db",
+      "database_id": "94d336e3-66c9-4e45-ae23-6ee34a602b05"
+    },
+    {
+      "binding": "DOWNLOADER_DB",
+      "database_name": "downloader-db",
+      "database_id": "1e047091-e838-4ec3-899d-62014b283660"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BACKUP",
+      "bucket_name": "t-room-service-backups"
+    }
+  ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "40 18 * * *"
+    ]
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "SECURITY_AUDIT",
+        "queue": "t-room-security-audit"
+      }
+    ]
+  }
+}

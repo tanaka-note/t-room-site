@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-8bcd9c82b36b";
+const APP_BUILD_ID = "cloud-2a6c8440014a";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -287,7 +287,6 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/trash" && request.method === "DELETE") return emptyTrash(env, session);
   if (path === "/api/usage" && request.method === "GET") return getUsage(env, session);
   if (path === "/api/diary-backups" || path.startsWith("/api/diary-backups/")) {
-    requireAdmin(session);
     if (path !== "/api/diary-backups" || request.method !== "GET") throw new HttpError(405, "バックアップは読み取り専用です。");
     const backup = await readDiaryBackupMount(env, session, url.searchParams.get("refresh") === "1");
     return json(backup, backup.available ? 200 : 503);
@@ -1059,7 +1058,7 @@ async function listItems(url, env, session) {
     || (session.canTrashUnlockedFiles && folderAccessGranted)));
   return json({
     folder,
-    backupMount: session.role === "admin" && folderId === Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID)
+    backupMount: ["admin", "member"].includes(session.role) && folderId === Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID)
       ? { type: "diary-backup", folderId } : null,
     canTrashContents,
     breadcrumbs: mapBreadcrumbs(path.results || [], session, memberRootId),
@@ -2292,16 +2291,50 @@ async function getUsageDetails(env, session) {
   })) });
 }
 
-async function readDiaryBackupMount(env, session, refresh = false) {
-  requireAdmin(session);
+async function requireBackupMountAccess(env, session) {
   const folderId = Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID);
+  if (session.role === "admin") return folderId;
+  if (session.role !== "member" || !Number.isSafeInteger(folderId) || folderId <= 0) {
+    throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
+  }
+  // Match listItems: the nearest delegated root and every protected descendant.
+  // Always use the configured mount, never a client-supplied folder ID. Keep
+  // authorization outside the snapshot error handler so 403/423 stay intact.
+  await requireMemberListingScope(env, folderId, session);
+  return folderId;
+}
+
+async function readDiaryBackupMount(env, session, refresh = false) {
+  const folderId = await requireBackupMountAccess(env, session);
   let timer;
   try {
-    if (!Number.isSafeInteger(folderId) || folderId <= 0 || !env.DIARY_BACKUPS) throw new Error("Mount unavailable");
+    if (!Number.isSafeInteger(folderId) || folderId <= 0) throw new Error("Mount unavailable");
     const folder = await env.DB.prepare("SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL").bind(folderId).first();
     if (!folder) throw new Error("Mount unavailable");
     const snapshot = await Promise.race([
-      env.DIARY_BACKUPS.getSnapshot({ refresh }),
+      (async () => {
+        const bounded = async read => {
+          let sourceTimer;
+          try {
+            return await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
+              sourceTimer = setTimeout(() => reject(new Error('Source timeout')), 10000);
+            })]);
+          } finally { clearTimeout(sourceTimer); }
+        };
+        const results = await Promise.allSettled([
+          bounded(() => env.DIARY_BACKUPS ? env.DIARY_BACKUPS.getSnapshot({ refresh }) : Promise.reject(new Error('Unavailable'))),
+          bounded(() => env.SERVICE_BACKUPS ? env.SERVICE_BACKUPS.getSnapshot({ refresh }) : Promise.reject(new Error('Unavailable')))
+        ]);
+        const diary = results[0].status === 'fulfilled' ? results[0].value : null;
+        const other = results[1].status === 'fulfilled' ? results[1].value : null;
+        if (!diary && !other) throw new Error('Unavailable');
+        const empty = { bytes: 0, objectCount: 0, objects: [] };
+        return { ...(diary || { daily: empty, monthly: empty, photo: empty }),
+          diaryAvailable: Boolean(diary), diaryBytes: diary?.backupBytes ?? null,
+          serviceBackupsAvailable: Boolean(other), services: other?.services || [],
+          storageObservedAt: other?.observedAt || diary?.observedAt || null,
+          backupBytes: (diary?.backupBytes || 0) + (other?.backupBytes || 0), observedAt: diary?.observedAt || other?.observedAt };
+      })(),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Backup timeout")), 15000); })
     ]);
     return { ...snapshot, available: true, folderId, type: "diary-backup", readOnly: true };

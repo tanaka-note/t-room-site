@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-8bcd9c82b36b";
+const APP_BUILD_ID = "cloud-2a6c8440014a";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -2203,6 +2203,7 @@ function canFallbackToDisplayListing(error) {
 
 async function loadItems() {
   syncAccountView();
+  state.backupMount = null;
   renderDiaryBackupMount();
   clearTimeout(searchPageTimer);
   searchPathFolders.clear();
@@ -9458,26 +9459,81 @@ function backupMediaLabel(value) {
   return value === true ? "完了" : value === false ? "未完了" : "記録なし";
 }
 
+function renderBackupHealth(output, data) {
+  const labels = { ok: '正常', started: '実行開始', running: '実行中', failed: '失敗', partial: '一部未完了', overdue: '未実行・遅延', prune_failed: '保存済み・世代整理に失敗', unavailable: '状態取得不可', unknown: '状態不明' };
+  const services = [{ id: 'diary', label: '日記', ...data.status, available: data.diaryAvailable !== false }, ...(data.services || [])];
+  if (!data.serviceBackupsAvailable) services.push({ id: 'services', label: '他サービスのバックアップ', state: 'unavailable', available: false });
+  for (const service of services) {
+    const section = document.createElement('details');
+    section.dataset.backupGroup = service.id;
+    const state = service.available === false && !['failed', 'partial', 'prune_failed'].includes(service.state) ? 'unavailable' : service.state || 'unknown';
+    section.open = !['ok', 'running'].includes(state);
+    section.innerHTML = '<summary>' + escapeHtml(service.label) + '：' + escapeHtml(labels[state] || labels.unknown) + '</summary>';
+    const stages = { capture: 'データ取得', daily_save: '日次保存', monthly_save: '月次保存', retention: '世代整理', photos: '写真保存', save_or_retention: '保存・世代整理', archive: '監査の長期保管', catchup: '過去分の保管' };
+    const reasons = { schema_review_required: 'データ構造の変更に対応が必要です', source_unavailable: '対象のデータに接続できません', verification_failed: '保存内容の照合に失敗しました', concurrent_write: '同時実行のため次回確認が必要です', operation_failed: '処理に失敗しました', retention_failed: '古い世代の整理に失敗しました', media_incomplete: '写真の保存が未完了です', archive_failed: '長期保管に失敗しました', backlog: '未保管の過去分が残っています' };
+    const info = document.createElement('p');
+    info.textContent = '最終成功 ' + backupJapanTime(service.lastSuccessAt) + ' ／ 最新実行 ' + backupJapanTime(service.lastAttemptAt)
+      + (service.stage ? ' ／ ' + (stages[service.stage] || '処理確認') : '') + (service.reason ? ' ／ ' + (reasons[service.reason] || '詳細を確認してください') : '')
+      + (service.attempt ? ' ／ 試行 ' + service.attempt + '回' : '')
+      + (service.retention === 'indefinite' ? ' ／ 180日超の履歴を期限なしで保管' : '');
+    section.append(info);
+    for (const [kind, label] of [['daily', '日次'], ['monthly', '月次']]) {
+      if (!Array.isArray(service[kind])) continue;
+      const group = document.createElement('details');
+      group.innerHTML = '<summary>' + label + ' ' + service[kind].length + '世代</summary>';
+      for (const object of service[kind]) {
+        const row = document.createElement('p');
+        row.textContent = object.name + ' ／ ' + formatBytes(object.sizeBytes) + ' ／ ' + backupJapanTime(object.updatedAt);
+        group.append(row);
+      }
+      section.append(group);
+    }
+    if (service.retention === 'indefinite' && service.available && !service.periods?.length) {
+      const empty = document.createElement('p'); empty.textContent = '長期保管分はまだありません。'; section.append(empty);
+    }
+    for (const period of service.periods || []) {
+      const row = document.createElement('p');
+      row.textContent = period.month + '保管分 ／ ' + formatBytes(period.bytes) + ' ／ 延べ' + period.rowCount + '件 ／ 対象 ' + backupJapanTime(period.firstAt) + ' 〜 ' + backupJapanTime(period.lastAt);
+      section.append(row);
+    }
+    for (const entry of service.history || []) {
+      const row = document.createElement('p');
+      row.textContent = backupJapanTime(entry.at) + ' ／ ' + (labels[entry.state === 'succeeded' ? 'ok' : entry.state] || entry.state)
+        + (entry.stage ? ' ／ ' + (stages[entry.stage] || '処理確認') : '') + (entry.reason ? ' ／ ' + (reasons[entry.reason] || '詳細を確認してください') : '');
+      section.append(row);
+    }
+    output.append(section);
+  }
+}
+
 function renderDiaryBackupMount() {
   const panel = $("#diary-backup-mount");
-  const visible = state.session?.role === "admin" && state.view === "all" && !state.query
+  const visible = Boolean(state.session) && state.view === "all" && !state.query
     && state.backupMount?.type === "diary-backup" && Number(state.folderId) === state.backupMount.folderId;
   panel.hidden = !visible;
   if (!visible) { panel.replaceChildren(); return; }
   if (panel.childElementCount) return;
   // Separate from folder/file cards: never selectable, draggable, shared or
   // submitted to any ordinary cloud mutation API.
-  panel.innerHTML = '<details open><summary>日記バックアップ <small>読み取り専用</small></summary><div class="backup-browser-body"><button type="button" class="secondary-button backup-refresh">最新情報に更新</button><div class="backup-snapshot" aria-live="polite">バックアップ情報を取得しています…</div></div></details>';
+  panel.innerHTML = '<details open><summary>バックアップ管理 <small>読み取り専用</small></summary><div class="backup-browser-body"><button type="button" class="secondary-button backup-refresh">最新情報に更新</button><div class="backup-snapshot" aria-live="polite">バックアップ情報を取得しています…</div></div></details>';
   const button = panel.querySelector(".backup-refresh");
   const output = panel.querySelector(".backup-snapshot");
+  const session = state.session, mount = state.backupMount;
+  const isCurrent = () => output.isConnected && state.session === session && state.backupMount === mount
+    && state.view === "all" && !state.query && Number(state.folderId) === mount.folderId;
   const load = async (refresh = false) => {
+    if (!isCurrent()) return;
     button.disabled = true;
+    const expanded = new Set([...output.querySelectorAll("details[open]")].map(node => node.dataset.backupGroup));
+    // Discard previously displayed details before checking current authorization.
+    output.textContent = "バックアップ情報を取得しています…";
     try {
       const data = await api(`/diary-backups${refresh ? "?refresh=1" : ""}`);
-      if (!output.isConnected || state.session?.role !== "admin") return;
-      const expanded = new Set([...output.querySelectorAll("details[open]")].map(node => node.dataset.backupGroup));
-      output.innerHTML = `<dl class="backup-summary"><div><dt>最終バックアップ（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>バックアップ容量</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>最新世代のメディアバックアップ</dt><dd>${backupMediaLabel(data.mediaComplete)}</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
-      for (const [kind, label] of [["daily", "日次バックアップ"], ["monthly", "月次バックアップ"], ["photo", "写真バックアップ"]]) {
+      if (!isCurrent()) return;
+      output.innerHTML = `<dl class="backup-summary"><div><dt>日記の最終保存（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>保管容量（取得済み分）</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日記の日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>最新世代のメディアバックアップ</dt><dd>${backupMediaLabel(data.mediaComplete)}</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
+      renderBackupHealth(output, data);
+      for (const [kind, label] of [["daily", "日記の日次バックアップ"], ["monthly", "日記の月次バックアップ"], ["photo", "日記の写真バックアップ"]]) {
+        if (data.diaryAvailable === false) break;
         const group = data[kind];
         const section = document.createElement("details");
         section.dataset.backupGroup = kind;
@@ -9501,8 +9557,14 @@ function renderDiaryBackupMount() {
         output.append(section);
       }
       if (refresh) void loadUsage();
-    } catch {
-      if (output.isConnected) output.textContent = "バックアップ情報を取得できませんでした。通常ファイルは引き続き利用できます。";
+    } catch (error) {
+      if (!isCurrent()) return;
+      if ([401, 403, 419, 423].includes(error.status)) {
+        state.backupMount = null;
+        renderDiaryBackupMount();
+        return;
+      }
+      output.textContent = "バックアップ情報を取得できませんでした。通常ファイルは引き続き利用できます。";
     } finally { button.disabled = false; }
   };
   button.addEventListener("click", () => { void load(true); });
@@ -9557,7 +9619,7 @@ async function openUsageDetails() {
       if (Number(folder.id) === data.backup?.folderId) {
         const detail = document.createElement("small");
         detail.textContent = data.backup.available
-          ? `日記バックアップ ${formatBytes(data.backup.backupBytes)}（日次 ${formatBytes(data.backup.daily.bytes)} / 月次 ${formatBytes(data.backup.monthly.bytes)} / 写真 ${formatBytes(data.backup.photo.bytes)}）・集計 ${backupJapanTime(data.backup.observedAt)}`
+          ? `バックアップ保管 ${formatBytes(data.backup.backupBytes)}（日記の日次 ${formatBytes(data.backup.daily.bytes)} / 月次 ${formatBytes(data.backup.monthly.bytes)} / 写真 ${formatBytes(data.backup.photo.bytes)}）・集計 ${backupJapanTime(data.backup.observedAt)}`
           : "バックアップ情報を取得できませんでした（通常ファイル容量のみ表示）";
         row.append(detail);
       }
