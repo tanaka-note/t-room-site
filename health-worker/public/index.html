@@ -56,8 +56,8 @@
 })(window).enforce();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>体調管理 | T-lain</title>
-  <link rel="stylesheet" href="/health/health.css?v=health-9c2c0d328ad2">
-  <meta name="troom-app-build" content="health-9c2c0d328ad2">
+  <link rel="stylesheet" href="/health/health.css?v=health-b2a54c1ba20f">
+  <meta name="troom-app-build" content="health-b2a54c1ba20f">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -67,7 +67,7 @@
     </header>
 
     <section id="login" class="card login-card" aria-label="体調管理へのログイン">
-      <button id="sign-in" type="button">パスキーでログイン</button>
+      <button id="sign-in" type="button" class="passkey-login-button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
     </section>
     <p id="message" class="error" role="status" aria-live="polite"></p>
 
@@ -201,9 +201,9 @@
       <p id="export-error" class="error" role="alert"></p><button type="submit">ダウンロード</button>
     </form>
   </dialog>
-  <script src="/security/passkey-client.js?v=health-9c2c0d328ad2"></script>
-  <script src="/diary/dialog-navigation.js?v=health-9c2c0d328ad2"></script>
-  <script src="/assets/pwa-auto-update.js?v=health-9c2c0d328ad2" defer></script>
-  <script type="module" src="/health/health.js?v=health-9c2c0d328ad2"></script>
+  <script src="/security/passkey-client.js?v=health-b2a54c1ba20f"></script>
+  <script src="/diary/dialog-navigation.js?v=health-b2a54c1ba20f"></script>
+  <script src="/assets/pwa-auto-update.js?v=health-b2a54c1ba20f" defer></script>
+  <script type="module" src="/health/health.js?v=health-b2a54c1ba20f"></script>
 </body>
 </html>

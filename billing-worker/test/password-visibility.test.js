@@ -9,7 +9,7 @@ test("billing login offers only a primary passkey action and Security Center pre
     readFile(new URL("../public/billing.css", import.meta.url), "utf8")
   ]);
   assert.match(html, /登録済みのパスキーでログインしてください。/);
-  assert.match(html, /id="passkey-login" class="button primary full"/);
+  assert.match(html, /id="passkey-login" class="button primary full(?: [^"]*)?"/);
   assert.match(html, /class="passkey-icon"[\s\S]*aria-hidden="true"/);
   assert.match(html, /href="\/security\/"/);
   assert.doesNotMatch(html, /id="login-(?:form|id|password|submit)"|password-toggle|remember-login|auth-divider|password-login-audit\.js/);

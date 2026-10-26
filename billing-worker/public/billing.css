@@ -24,8 +24,6 @@ button { cursor: pointer; }
 h1 { margin: 0; font-size: clamp(25px, 5vw, 38px); letter-spacing: -.03em; }
 .login-note { margin: 0; color: var(--muted); font-size: 13px; }
 .login-note a { color: var(--accent-dark); }
-#passkey-login { display: flex; align-items: center; justify-content: center; gap: 10px; }
-.passkey-icon { width: 24px; height: 24px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .login-copy { margin: 14px 0 28px; color: var(--muted); }
 .login-actions, .dialog-form { display: grid; gap: 18px; }
 label { display: grid; gap: 8px; color: #4e5048; font-size: 13px; font-weight: 700; }
@@ -225,3 +223,10 @@ dialog::backdrop { background: rgba(24,31,26,.48); backdrop-filter: blur(3px); }
   background: var(--surface);
   font-weight: 600;
 }
+
+/* Keep the login action identical to the billing passkey button. */
+button.passkey-login-button { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 44px; padding: 10px 18px; border: 1px solid transparent; border-radius: 10px; color: #fff; background: #577263; font: 800 16px/normal "Noto Sans JP", "Yu Gothic", system-ui, sans-serif; letter-spacing: normal; cursor: pointer; }
+button.passkey-login-button:hover { background: #3d584a; }
+button.passkey-login-button:focus-visible { outline: 3px solid #8ca895; outline-offset: 3px; }
+button.passkey-login-button:disabled { opacity: .6; cursor: wait; }
+button.passkey-login-button .passkey-icon { width: 24px; height: 24px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

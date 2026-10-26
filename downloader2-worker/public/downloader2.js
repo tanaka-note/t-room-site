@@ -45,14 +45,14 @@
   }
 
   async function login() {
-    setBusy(elements.passkeyLogin, true, "本人確認中…");
+    setBusy(elements.passkeyLogin, true, "確認中…");
     try {
       const authentication = await window.TRoomPasskeys.authenticate("downloader2");
       await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
       showApp();
       await connectLocalServices();
     } catch (error) { showMessage(userMessage(error)); }
-    finally { setBusy(elements.passkeyLogin, false, "端末のロック解除でログイン"); }
+    finally { setBusy(elements.passkeyLogin, false, "パスキーでログイン"); }
   }
 
   async function logout() {
@@ -241,7 +241,16 @@
   function showLogin() { elements.loginView.hidden = false; elements.appView.hidden = true; elements.logout.hidden = true; }
   function showApp() { elements.loginView.hidden = true; elements.appView.hidden = false; elements.logout.hidden = false; hideMessage(); }
   function updateStatus(element, text, online) { element.textContent = text; element.dataset.state = online ? "online" : "offline"; }
-  function setBusy(button, busy, text) { button.disabled = busy; button.textContent = text; }
+  function setBusy(button, busy, text) {
+    button.disabled = busy;
+    const labelElement = button.querySelector?.(".passkey-login-label");
+    if (labelElement) {
+      if (busy) button.setAttribute("aria-busy", "true");
+      else button.removeAttribute("aria-busy");
+    }
+    (labelElement || button).textContent = text;
+  }
+
   function showMessage(text, error = true) { elements.message.textContent = text; elements.message.dataset.kind = error ? "error" : "success"; elements.message.hidden = false; }
   function hideMessage() { elements.message.hidden = true; elements.message.textContent = ""; }
   function requestId() { return crypto.randomUUID(); }
