@@ -103,6 +103,9 @@ input:focus, select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgb
 .account-block button { justify-self: start; margin: 12px 0 0; padding: 0; border: 0; color: var(--muted); background: none; font-size: .78rem; }
 
 .workspace { min-width: 0; padding: clamp(24px, 4vw, 52px); padding-bottom: 100px; background: var(--surface); }
+.workspace.is-history-loading > * { visibility: hidden; }
+.folder-navigation-loading { position: fixed; z-index: 19; top: 50%; left: calc(50% + 124px); max-width: calc(100vw - 48px); margin: 0; transform: translate(-50%, -50%); color: var(--muted); text-align: center; }
+@media (max-width: 900px) { .folder-navigation-loading { left: 50%; } }
 .drop-overlay { position: fixed; z-index: 80; inset: 18px; display: grid; place-items: center; border: 2px dashed #5a9f98; border-radius: 22px; background: rgba(236, 248, 246, .96); box-shadow: 0 24px 70px rgba(16, 55, 58, .2); pointer-events: none; }
 .drop-overlay-copy { display: grid; justify-items: center; gap: 9px; padding: 32px; color: var(--teal-dark); text-align: center; }
 .drop-overlay-copy > span { display: grid; width: 58px; height: 58px; place-items: center; border-radius: 50%; color: white; background: var(--teal); font-size: 1.7rem; font-weight: 800; }
