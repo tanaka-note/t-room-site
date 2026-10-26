@@ -1,9 +1,5 @@
 const API = "/cloud/api";
-<<<<<<< HEAD
-const APP_BUILD_ID = "cloud-5ebb973f0fdf";
-=======
-const APP_BUILD_ID = "cloud-2a6c8440014a";
->>>>>>> origin/main
+const APP_BUILD_ID = "cloud-5325db2e8a02";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;

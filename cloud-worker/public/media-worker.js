@@ -1,25 +1,14 @@
 /* T-Cloud Storage local decrypting media gateway.
  * Decryption keys live only in this Service Worker process and are never
  * persisted or sent to Cloudflare. */
-<<<<<<< HEAD
-importScripts("/cloud/crypto-vault.js?v=cloud-5ebb973f0fdf");
-importScripts("/cloud/media-range.js?v=cloud-5ebb973f0fdf");
-importScripts("/cloud/offline-store.js?v=cloud-5ebb973f0fdf");
+importScripts("/cloud/crypto-vault.js?v=cloud-5325db2e8a02");
+importScripts("/cloud/media-range.js?v=cloud-5325db2e8a02");
+importScripts("/cloud/offline-store.js?v=cloud-5325db2e8a02");
 
 const registrations = new Map();
 const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-5ebb973f0fdf";
-const MEDIA_WORKER_BUILD_ID = "cloud-5ebb973f0fdf";
-=======
-importScripts("/cloud/crypto-vault.js?v=cloud-5ebb973f0fdf");
-importScripts("/cloud/media-range.js?v=cloud-5ebb973f0fdf");
-importScripts("/cloud/offline-store.js?v=cloud-5ebb973f0fdf");
-
-const registrations = new Map();
-const RETRY_DELAYS = [0, 400, 1200, 3000];
-const APP_SHELL_CACHE = "tcloud-shell-cloud-2a6c8440014a";
-const MEDIA_WORKER_BUILD_ID = "cloud-2a6c8440014a";
->>>>>>> origin/main
+const APP_SHELL_CACHE = "tcloud-shell-cloud-5325db2e8a02";
+const MEDIA_WORKER_BUILD_ID = "cloud-5325db2e8a02";
 const DECRYPTED_CACHE_LIMIT_BYTES = 96 * 1024 * 1024;
 const DEMAND_PREFETCH_CHUNKS = 4;
 const PREFETCH_CONCURRENCY = 4;
@@ -29,19 +18,11 @@ const OFFLINE_URL = "/cloud/offline";
 const APP_SHELL_ASSETS = [
   OFFLINE_URL,
   "/cloud/manifest.webmanifest",
-<<<<<<< HEAD
-  "/cloud/offline-store.js?v=cloud-5ebb973f0fdf",
-  "/cloud/search-input.js?v=cloud-5ebb973f0fdf",
-  "/cloud/photo-viewer.js?v=cloud-5ebb973f0fdf",
-  "/cloud/photo-fullscreen.js?v=cloud-5ebb973f0fdf",
-  "/cloud/photo-viewer.css?v=cloud-5ebb973f0fdf",
-=======
-  "/cloud/offline-store.js?v=cloud-5ebb973f0fdf",
-  "/cloud/search-input.js?v=cloud-5ebb973f0fdf",
-  "/cloud/photo-viewer.js?v=cloud-5ebb973f0fdf",
-  "/cloud/photo-fullscreen.js?v=cloud-5ebb973f0fdf",
-  "/cloud/photo-viewer.css?v=cloud-5ebb973f0fdf",
->>>>>>> origin/main
+  "/cloud/offline-store.js?v=cloud-5325db2e8a02",
+  "/cloud/search-input.js?v=cloud-5325db2e8a02",
+  "/cloud/photo-viewer.js?v=cloud-5325db2e8a02",
+  "/cloud/photo-fullscreen.js?v=cloud-5325db2e8a02",
+  "/cloud/photo-viewer.css?v=cloud-5325db2e8a02",
   "/cloud/icons/icon-192-v3.png?rev=20260811-3",
   "/cloud/icons/icon-512-v3.png?rev=20260811-3",
   "/cloud/icons/icon-maskable-512-v3.png?rev=20260811-3"
