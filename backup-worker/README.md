@@ -25,6 +25,10 @@ D1→Workerの取得は合計10,000行・行JSON合計8 MiB・1行JSON 1 MiBま�
 
 これは無制限に増えるAI会話や監査を全量取得し続ける方式ではない。上限超過時はBackup-dataに失敗理由を表示し、既存世代を維持する。分割SELECTでは更新中の一貫性を保証できないため採用しない。将来は書込停止時間を調整したD1 export、または書込世代を固定できる別設計とWorkflows等への分離を推奨する。DB間・鍵情報と本文の世代一致は復旧時に照合し、自動で本番へ戻さない。実際の本番規模でCPU時間・最大メモリを計測したわけではない。
 
+公開前の2026-10-26の読取専用集計では、T-Cloudは少なくとも29,395行・行JSON 9,813,926 byteで、既にこの上限を超えていた（各tableの先頭最大25,001行だけの下限値）。**今回の方式で本番T-Cloudの新規全量バックアップは成功しない**。既存世代を削除せず`SnapshotTooLarge`で停止し、Backup-dataとCron全体で失敗を示す。他サービスは処理を継続する。T-Cloudの継続的な全量保存には上記の別方式が必要で、上限を緩和したり原本を除外して成功扱いにはしない。日記とSecurityについては集計時点で行数・行JSON合計・最大行・整数精度が上限内だった。本番原本の取得や復元実証とは区別する。
+
+取得SQLはD1のcompound SELECT分岐数制限に合わせて5分岐以下の入れ子へ分け、単一SQL・全体上限の判定を維持する。全8サービスと日記について、実際のローカルworkerd/D1でもSQLの実行・schema照合・上限による本文抑止を検証する。本番bindingは使わない。
+
 公式制約: [D1 limits](https://developers.cloudflare.com/d1/platform/limits/)、[D1 batch transaction](https://developers.cloudflare.com/d1/worker-api/d1-database/)、[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)、[D1 export中の書込制限](https://developers.cloudflare.com/d1/best-practices/import-export-data/)。上限は安全停止のための保守的な実装値で、プロバイダの契約上限を増やすものではない。
 
 日記写真は`media/verified-photos/{photoId}/{variant}/{sha256}`へcreate-only保存し、sourceと保存先のSHA-256・サイズ・ETagを検証する。検証レシートにはその時点の両方のobject版を記録し、版・サイズが同じ場合のみ再利用する。最大7日で内容を再照合し、存在だけでは完了としない。1試行40 object・推定256 MiB読書込・開始から90秒の枠を設け、未処理数を表示して次回へ継続する（進行中のI/Oを90秒で中断する保証ではない）。写真数が継続処理量を上回る場合は枠の再設計が必要。破損を見つけたimmutable copyは自動修復・上書きせず失敗を継続し、調査対象として残す。写真・レシート・旧写真は世代整理から除外する。旧形式写真はハッシュの根拠がないため復元検証済み扱いにしない。R2写真は世代とは独立した保存物なので、実際の復旧前には対象世代の全写真のハッシュを再照合する。
