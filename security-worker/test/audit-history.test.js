@@ -2,6 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { auditFixture } from "./audit-history-fixture.mjs";
 
+test('records older than 180 days stay stored but are excluded from history and direct details', async () => {
+  const f = auditFixture();
+  try {
+    const old = f.add({ occurred_at: '2025-01-01T00:00:00.000Z' });
+    const recent = f.add();
+    f.add({ target_type: 'backup', target_id: 'health', event_type: 'backup_failed', outcome: 'failure' });
+    assert.deepEqual((await f.query()).events.map(e => e.event_id), [recent]);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM security_audit_events WHERE event_id=?').get(old).n, 1);
+    await assert.rejects(f.detail(old), { status: 404 });
+  } finally { f.close(); }
+});
+
 test("password preset includes real cross-service results and excludes resumes and administrative activity", async () => {
   const f = auditFixture();
   try {

@@ -13,7 +13,11 @@ import { getBackupSnapshot } from "./backup-browser.js";
 // object bodies, storage mutations or restore operations are exposed.
 export class BackupBrowserIntegration extends WorkerEntrypoint {
   async getSnapshot(options) {
-    return getBackupSnapshot(this.env, { refresh: options?.refresh === true });
+    const snapshot = await getBackupSnapshot(this.env, { refresh: options?.refresh === true });
+    let status;
+    try { status = await this.env.SECURITY.getBackupStatus('diary'); }
+    catch { status = { state: 'unavailable' }; }
+    return { ...snapshot, status };
   }
 }
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";

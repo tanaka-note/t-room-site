@@ -318,8 +318,8 @@ const second = await runDiaryBackup({ DB: createDb(), BACKUP: bucket, MEDIA: med
 assert.equal(second.monthlyCreated, false);
 assert.equal(second.mediaBackup.copied, 0, "differential backup must not recopy existing formal media");
 assert.equal(second.mediaBackup.existing, 3);
-assert.equal(bucket.objects.size, 5, "same-day rerun must replace D1 data without duplicating media objects");
-assert.equal(bucket.putCalls.filter((key) => key.startsWith("daily/")).length, 2);
+assert.equal(bucket.objects.size, 5, "same-day rerun must preserve the successful generation without duplicating media objects");
+assert.equal(bucket.putCalls.filter((key) => key.startsWith("daily/")).length, 1);
 assert.equal(bucket.putCalls.filter((key) => key.startsWith("monthly/")).length, 1);
 
 const legacyMonthlyBucket = new MemoryBucket();
@@ -462,6 +462,17 @@ for (const key of [
 ]) {
   assert.ok(retentionBucket.objects.has(key), `unexpected keys must remain untouched: ${key}`);
 }
+
+// Incomplete photo sets must not publish generations or prune good ones.
+const incompleteMedia = await createMediaFixture();
+await incompleteMedia.delete(tableRows.diary_photos[0].original_key);
+const incompleteBucket = new MemoryBucket();
+await incompleteBucket.put('daily/2026-07-31.json.gz', new Uint8Array([7]));
+const incompleteRun = await runDiaryBackup({ DB: createDb(), BACKUP: incompleteBucket, MEDIA: incompleteMedia }, { nowMs: nearUtcMidnight });
+assert.equal(incompleteRun.complete, false);
+assert.equal(incompleteBucket.objects.has('daily/2026-07-31.json.gz'), true);
+assert.equal(incompleteBucket.objects.has(incompleteRun.dailyKey), false);
+assert.equal(incompleteBucket.objects.has(incompleteRun.monthlyKey), false);
 
 const originalConsoleError = console.error;
 const backupFailureLogs = [];

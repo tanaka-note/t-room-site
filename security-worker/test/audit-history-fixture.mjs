@@ -9,7 +9,7 @@ const worker = readFileSync(new URL("../src/index.js", import.meta.url), "utf8")
 const source = worker.slice(worker.indexOf("async function listAuditEvents("), worker.indexOf("async function redeemHandoff("));
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const dependencies = {
-  ...domain, auditDisplayNames, HttpError, normalizeText: (value, limit) => String(value || "").trim().slice(0, limit),
+  ...domain, auditDisplayNames, HttpError, auditRetentionCutoff: days => domain.auditRetentionCutoff(days, Date.parse("2026-09-10T00:00:00Z")), normalizeText: (value, limit) => String(value || "").trim().slice(0, limit),
   json: (body) => Response.json(body),
   withUtcTimes: (row) => ({ ...row, occurred_at: domain.normalizeUtcTimestamp(row.occurred_at) })
 };
