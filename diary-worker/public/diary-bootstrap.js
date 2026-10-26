@@ -79,7 +79,8 @@
     if (installDialog.open) installDialog.close();
     await runtime.startDiary(session, deferredInstallPrompt, () => {
       button.disabled = false;
-      button.textContent = "パスキーでログイン";
+      button.removeAttribute("aria-busy");
+      button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
       events.abort();
       return deferredInstallPrompt;
     }, initialScrollIntent);
@@ -87,7 +88,8 @@
 
   button.addEventListener("click", async () => {
     button.disabled = true;
-    button.textContent = "確認中...";
+    button.setAttribute("aria-busy", "true");
+    button.querySelector(".passkey-login-label").textContent = "確認中…";
     message.textContent = "";
     try {
       const authentication = await TRoomPasskeys.authenticate("diary", links => TRoomPasskeys.chooseLinkDialog(links, "diary"));
@@ -101,7 +103,8 @@
     } finally {
       if (!events.signal.aborted) {
         button.disabled = false;
-        button.textContent = "パスキーでログイン";
+        button.removeAttribute("aria-busy");
+        button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
       }
     }
   }, { signal: events.signal });

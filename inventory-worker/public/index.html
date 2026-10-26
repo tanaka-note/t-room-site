@@ -60,10 +60,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <title>在庫照会 | T-lain</title>
-  <link rel="stylesheet" href="/inventory/inventory.css?v=inventory-7e93a3b65f3f">
-  <script src="/inventory/passkey-client.js?v=inventory-7e93a3b65f3f" defer></script>
-  <script src="/inventory/inventory.js?v=inventory-7e93a3b65f3f" defer></script>
-  <meta name="troom-app-build" content="inventory-7e93a3b65f3f">
+  <link rel="stylesheet" href="/inventory/inventory.css?v=inventory-64758404e96c">
+  <script src="/inventory/passkey-client.js?v=inventory-64758404e96c" defer></script>
+  <script src="/inventory/inventory.js?v=inventory-64758404e96c" defer></script>
+  <meta name="troom-app-build" content="inventory-64758404e96c">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -72,7 +72,7 @@
   <p id="message" role="status" aria-live="polite">読み込み中…</p>
   <section id="login-view" class="panel" hidden>
     <h2>パスキーでログイン</h2><p>ご自身の在庫と使用履歴を確認できます。</p>
-    <button id="login" class="primary">パスキーでログイン</button>
+    <button id="login" class="primary passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
   </section>
   <section id="app-view" hidden>
     <div id="list-view">
@@ -99,6 +99,6 @@
   <p id="form-message" role="alert"></p><button type="submit" class="primary" id="save">記録する</button>
   </fieldset>
 </form></dialog>
-  <script src="/assets/pwa-auto-update.js?v=inventory-7e93a3b65f3f" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=inventory-64758404e96c" defer></script>
 </body>
 </html>

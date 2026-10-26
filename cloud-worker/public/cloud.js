@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-55ee2d74db2d";
+const APP_BUILD_ID = "cloud-2eb5835cfc06";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -929,6 +929,8 @@ async function loginWithPasskey() {
   const button = $("#passkey-login");
   showLoginError("");
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.querySelector(".passkey-login-label").textContent = "確認中…";
   try {
     await clearLegacyPasskeyAdminKeys();
     const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
@@ -941,6 +943,8 @@ async function loginWithPasskey() {
     showLoginError(passkeyLoginErrorMessage(error));
   } finally {
     button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
   }
 }
 

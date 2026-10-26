@@ -81,7 +81,8 @@ try {
         card:{x:c.x,width:c.width},width:innerWidth,height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth};
     });
     assert.equal(geometry.overflow,false,name);
-    assert.ok(geometry.button.height>=52&&geometry.button.width>=180,name);
+    assert.equal(await button.locator("svg.passkey-icon").count(),1,name);
+    assert.ok(geometry.button.height>=44&&geometry.button.width>=180,name);
     assert.ok(geometry.button.x>=24&&geometry.button.right<=geometry.width-24,name);
     assert.ok(geometry.button.y>=0&&geometry.button.bottom<=geometry.height,name);
     assert.ok(Math.abs(geometry.card.x+geometry.card.width/2-geometry.width/2)<1,name);

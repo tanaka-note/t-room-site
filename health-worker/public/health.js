@@ -42,8 +42,15 @@ function lock(message = '') {
   $('app').hidden = true; $('login').hidden = false; $('message').textContent = message;
 }
 async function signIn(generation) {
-  await session.signIn(generation); state.check(generation);
-  $('login').hidden = true; $('app').hidden = false;
+  $('sign-in').setAttribute('aria-busy', 'true');
+  $('passkey-login-label').textContent = '確認中…';
+  try {
+    await session.signIn(generation); state.check(generation);
+    $('login').hidden = true; $('app').hidden = false;
+  } finally {
+    $('sign-in').removeAttribute('aria-busy');
+    $('passkey-login-label').textContent = 'パスキーでログイン';
+  }
 }
 function moveMonth(delta) {
   const date = new Date(`${state.ui.month}-01T00:00:00Z`);

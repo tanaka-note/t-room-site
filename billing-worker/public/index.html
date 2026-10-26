@@ -62,13 +62,13 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-dc1f97e0c2cc">
-  <link rel="stylesheet" href="./billing.css?v=billing-dc1f97e0c2cc">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-dc1f97e0c2cc">
-  <script src="./troom-date-picker.js?v=billing-dc1f97e0c2cc" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-dc1f97e0c2cc" defer></script>
-  <script src="./billing.js?v=billing-dc1f97e0c2cc" defer></script>
-  <meta name="troom-app-build" content="billing-dc1f97e0c2cc">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-b581e8e1c144">
+  <link rel="stylesheet" href="./billing.css?v=billing-b581e8e1c144">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-b581e8e1c144">
+  <script src="./troom-date-picker.js?v=billing-b581e8e1c144" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-b581e8e1c144" defer></script>
+  <script src="./billing.js?v=billing-b581e8e1c144" defer></script>
+  <meta name="troom-app-build" content="billing-b581e8e1c144">
   <meta name="troom-auto-update" content="enabled">
 </head>
 <body>
@@ -89,10 +89,7 @@
         <div class="login-actions">
         <p id="login-operation-note" class="form-note" role="alert" hidden></p>
         <p id="login-error" class="error-message" role="alert"></p>
-          <button id="passkey-login" class="button primary full" type="button">
-            <svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg>
-            <span id="passkey-login-label">パスキーでログイン</span>
-          </button>
+          <button id="passkey-login" class="button primary full passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
           <p class="login-note">パスキーの登録・利用準備は<a href="/security/">Security Center</a>で行ってください。</p>
         </div>
       </div>
@@ -261,7 +258,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-dc1f97e0c2cc" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-dc1f97e0c2cc" defer></script>
+  <script src="/security/passkey-client.js?v=billing-b581e8e1c144" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-b581e8e1c144" defer></script>
 </body>
 </html>
