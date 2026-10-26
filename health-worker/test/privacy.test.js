@@ -21,7 +21,7 @@ test('Health login is limited to the service title and passkey login; index link
   assert.match(html,/<h1>体調管理<\/h1>/);assert.match(login,/パスキーでログイン/);
   const header=html.match(/<header class="app-header">([\s\S]*?)<\/header>/)[1];
   assert.match(header,/^\s*<h1>体調管理<\/h1>\s*$/);
-  assert.doesNotMatch(login,/生理|周期|備考|復旧|<p|<a|<select|<input|利用者|ユーザー/);
+  assert.doesNotMatch(login,/生理|周期|備考|復旧|<(?:p|a|select|input)\b|利用者|ユーザー/);
   const index=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
   const card=index.match(/<a\b[^>]*href=["'](?:\.\/|\/)health\/["'][^>]*>([\s\S]*?)<\/a>/)[1];
   assert.match(card,/<h3>体調管理<\/h3>/);
