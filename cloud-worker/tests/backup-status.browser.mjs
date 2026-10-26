@@ -44,7 +44,7 @@ try {
           renderDiaryBackupMount();
         });
         await panel.getByText('請求書管理：失敗', { exact: true }).waitFor();
-        await panel.getByText('セキュリティ監査の長期保管：正常', { exact: true }).click();
+        await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         assert.equal(await panel.isVisible(), true, 'authorized members see aggregated status, errors, history and archive periods');
         assert.equal(await page.evaluate(() => document.querySelector('#diary-backup-mount').textContent), adminDetails);
         await page.evaluate(() => { __test.state.backupMount = null; renderDiaryBackupMount(); });
