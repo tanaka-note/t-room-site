@@ -131,7 +131,7 @@
         passkey: "パスキーの本人確認とログイン結果を表示します。認証開始・登録・キャンセルは含みません。本人確認とサービスへのログインは別の履歴です。",
         attention: "ログイン・本人確認の失敗や一時停止を表示します。"
       };
-      $("#audit-view-note").textContent = `${notes[state.auditView]} 日時は日本時間です。各履歴を開くと詳細を確認できます。`;
+      $("#audit-view-note").textContent = `${notes[state.auditView]} 表示対象は直近180日です。日時は日本時間です。各履歴を開くと詳細を確認できます。`;
       loadAudit().catch((error) => showMessage(error.message, true));
     }));
     $("#audit-filter-clear").addEventListener("click", () => {

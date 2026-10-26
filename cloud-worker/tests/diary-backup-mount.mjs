@@ -90,6 +90,25 @@ function fixture() {
   } };
 }
 
+test('authorized members and admins share service failures, history and partial diary outages', async () => {
+  const f = fixture();
+  try {
+    f.env.SERVICE_BACKUPS = { async getSnapshot() { return { backupBytes: 200, services: [{ id: 'health', label: '体調管理', state: 'failed', available: true, history: [{ state: 'failed', reason: 'operation_failed' }] }] }; } };
+    const result = (await f.api('/diary-backups')).body;
+    assert.equal(result.backupBytes, 1500);
+    assert.equal(result.diaryBytes, 1300);
+    assert.equal(result.services[0].state, 'failed');
+    assert.deepEqual((await f.api('/diary-backups', 'member', 'GET', member())).body, result);
+    f.env.DIARY_BACKUPS.getSnapshot = async () => { throw new Error('Unavailable'); };
+    const partial = (await f.api('/diary-backups')).body;
+    assert.equal(partial.available, true);
+    assert.equal(partial.diaryAvailable, false);
+    assert.equal(partial.backupBytes, 200);
+    assert.deepEqual((await f.api('/diary-backups', 'member', 'GET', member())).body, partial);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM cloud_files').get().n, 2);
+  } finally { f.db.close(); }
+});
+
 test("admin reads the fixed mount ID despite rename, with actual metadata", async () => {
   const f = fixture();
   try {
@@ -244,11 +263,13 @@ test("actual Cloud/Security handlers validate signed member sessions and reject 
   env.DIARY_BACKUP_MOUNT_FOLDER_ID = "9";
   let reads = 0;
   env.DIARY_BACKUPS = { async getSnapshot() { reads++; return snapshot; } };
+  env.SERVICE_BACKUPS = { async getSnapshot() { reads++; return { backupBytes: 200, services: [{ id: "billing", state: "failed", history: [{ state: "failed", reason: "operation_failed" }] }] }; } };
   try {
     const admin = await handoff("admin");
     const adminBackup = await api(admin.cookie, "/diary-backups", "GET", undefined, { "X-TCloud-Session": admin.body.sessionCacheId });
     assert.equal(adminBackup.status, 200);
-    assert.equal(adminBackup.body.backupBytes, 1300);
+    assert.equal(adminBackup.body.backupBytes, 1500);
+    assert.equal(adminBackup.body.services[0].history[0].reason, "operation_failed");
     assert.equal((await api(null, "/diary-backups")).status, 401);
     assert.equal((await api(legacyPasswordSession("admin").cookie, "/diary-backups")).status, 401);
     for (const identity of ["primary-admin", "another-member"]) {

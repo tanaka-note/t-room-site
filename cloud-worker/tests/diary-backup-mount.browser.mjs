@@ -43,7 +43,7 @@ try {
     const memberStart = calls.length;
     await open('member'); await loaded();
     assert.equal(await panel.textContent(), adminText, 'one renderer supplies identical admin/member details');
-    assert.match(adminText, /最終バックアップ|バックアップ容量/);
+    assert.match(adminText, /日記の最終保存|保管容量/);
     assert.equal(await panel.locator('a, input, [draggable=true], .file-card, .folder-card').count(), 0);
     await panel.locator('[data-backup-group=daily] summary').click();
     assert.match(await panel.textContent(), /<fixture>\.json\.gz/);

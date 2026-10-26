@@ -29,6 +29,7 @@
     }
   ],
   "services": [
+    { "binding": "SERVICE_BACKUPS", "service": "t-room-backup", "entrypoint": "BackupBrowserIntegration" },
     {
       "binding": "DIARY_BACKUPS",
       "service": "t-room-diary",

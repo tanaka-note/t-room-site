@@ -22,6 +22,7 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [{ "binding": "AUDIT_ARCHIVE", "bucket_name": "t-room-service-backups" }],
   "services": [
     { "binding": "CLOUD_AUTH", "service": "t-room-cloud", "entrypoint": "SecurityIntegration" },
     { "binding": "DIARY_AUTH", "service": "t-room-diary", "entrypoint": "SecurityIntegration" },

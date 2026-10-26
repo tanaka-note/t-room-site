@@ -11,7 +11,7 @@ const old = "2025-01-01T00:00:00.000Z";
 test("scheduled cleanup follows successful audit retention cleanup and is included in the published build", () => {
   const worker = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
   const scheduled = worker.slice(worker.indexOf("async scheduled("), worker.indexOf("async redeemHandoff("));
-  assert.match(scheduled, /await this\.env\.DB\.batch\([\s\S]*DELETE FROM security_audit_events[\s\S]*\]\);\s*await cleanupDisabledIdentities/);
+  assert.match(scheduled, /await archiveAuditEvents[\s\S]*if \(archived\) await cleanupDisabledIdentities/);
   const registry = JSON.parse(readFileSync(new URL("../../web-apps.json", import.meta.url), "utf8"));
   assert.ok(registry.apps.find((app) => app.id === "security").buildFiles.includes("security-worker/src/identity-cleanup.js"));
 });

@@ -51,3 +51,7 @@ Diary Workerの公開静的資産で `v=diary-` と12桁hexのbuild IDがあるJ
 ## 起動の検証
 
 `pnpm run test:startup` は起動契約、実SQL／Security連携のbootstrap、静的キャッシュ、cold／warm／Passkey模擬／再開／standaloneのローカルブラウザfixtureを実行する。恒久的な性能計測や個人追跡は追加しない。模擬試験は実端末のWebAuthn・PWAの性能を代替しない。[初回比較と制約](../docs/history/diary-startup-performance-20261016.md)を参照。
+
+## バックアップの管理
+
+従来の毎日03:25 JST・日次30世代・月次12世代・正式写真の差分コピーを維持する。写真が一部未完了なら新しい日次・月次世代を公開・整理しない。D1候補はR2への保存・読み戻しのSHA-256照合後に公開し、同日正常世代を保持する。最大3試行と開始・成功・失敗・一部未完了の安全な監査記録を追加し、通常の日記画面に通知を出さず、T-Cloudの`Backup-data`で状態を確認する。写真コピーは従来どおり世代削除対象外。方式・運用条件は[バックアップ運用](../backup-worker/README.md)を参照。
