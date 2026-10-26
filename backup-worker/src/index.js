@@ -18,8 +18,8 @@ export default {
     for (const id of Object.keys(SERVICES)) {
       let state;
       try {
-        const result = await backupService(env, id, now);
-        state = knownStates.has(result?.state) ? result.state : 'invalid_result';
+        const value = (await backupService(env, id, now))?.state;
+        state = knownStates.has(value) ? value : 'invalid_result';
       } catch {
         state = 'unexpected_failure';
         console.error(JSON.stringify({ event: 'backup_unexpected_failure', runId, service: id }));
