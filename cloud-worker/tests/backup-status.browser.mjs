@@ -35,12 +35,23 @@ try {
         assert.match(await panel.innerText(),/未保管 1001件以上.*最古の未保管/);
         assert.equal(await page.locator('#injected').count(), 0);
         assert.equal(await panel.locator('input[type=checkbox], [draggable=true], a').count(), 0);
+        const adminDetails = await panel.textContent();
         await page.evaluate(() => { __test.state.folderId = 7; renderDiaryBackupMount(); });
         assert.equal(await panel.isVisible(), false);
-        await page.evaluate(() => { __test.state.folderId = 2850; __test.state.session.role = 'member'; renderDiaryBackupMount(); });
-        assert.equal(await panel.isVisible(), false);
+        await page.evaluate(() => {
+          __test.state.session = { role: 'member', sessionCacheId: 'delegated-member' };
+          __test.state.folderId = 2850;
+          renderDiaryBackupMount();
+        });
+        await panel.getByText('請求書管理：失敗', { exact: true }).waitFor();
+        await panel.getByText('セキュリティ監査の長期保管：正常', { exact: true }).click();
+        assert.equal(await panel.isVisible(), true, 'authorized members see aggregated status, errors, history and archive periods');
+        assert.equal(await page.evaluate(() => document.querySelector('#diary-backup-mount').textContent), adminDetails);
+        await page.evaluate(() => { __test.state.backupMount = null; renderDiaryBackupMount(); });
+        assert.equal(await panel.isVisible(), false, 'a member without an authorized mount sees no details');
+        assert.equal(await panel.textContent(), '');
         assert.deepEqual(writes, []);
-        await page.evaluate(() => { __test.state.session.role = 'admin'; renderDiaryBackupMount(); });
+        await page.evaluate(() => { __test.state.session = { role: 'admin' }; __test.state.backupMount = { type: 'diary-backup', folderId: 2850 }; renderDiaryBackupMount(); });
         await panel.getByText('請求書管理：失敗', { exact: true }).waitFor();
         await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         mkdirSync(root + '/tmp/backup-ui', { recursive: true });

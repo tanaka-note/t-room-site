@@ -1,0 +1,69 @@
+[
+  {
+    "service": "billing",
+    "ddl": [
+      {
+        "name": "billing_accounts",
+        "sql": "CREATE TABLE billing_accounts (  id TEXT PRIMARY KEY,  login_id TEXT NOT NULL COLLATE NOCASE UNIQUE,  display_name TEXT NOT NULL,  role TEXT NOT NULL CHECK (role IN ('owner', 'member')),  password_salt TEXT,  password_hash TEXT,  password_iterations INTEGER NOT NULL DEFAULT 210000,  session_version INTEGER NOT NULL DEFAULT 1,  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, failed_login_attempts INTEGER NOT NULL DEFAULT 0, locked_until TEXT, password_pepper_version INTEGER NOT NULL DEFAULT 0)"
+      },
+      {
+        "name": "billing_audit_logs",
+        "sql": "CREATE TABLE billing_audit_logs (  id INTEGER PRIMARY KEY AUTOINCREMENT,  event_type TEXT NOT NULL,  actor_account_id TEXT,  target_account_id TEXT,  entry_id INTEGER,  attempted_login_id TEXT,  details_json TEXT NOT NULL DEFAULT '{}',  occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,  FOREIGN KEY (actor_account_id) REFERENCES billing_accounts(id),  FOREIGN KEY (target_account_id) REFERENCES billing_accounts(id))"
+      },
+      {
+        "name": "billing_entries",
+        "sql": "CREATE TABLE billing_entries (  id INTEGER PRIMARY KEY AUTOINCREMENT,  account_id TEXT NOT NULL,  document_type TEXT NOT NULL CHECK (document_type IN ('invoice', 'payment_notice')),  entry_date TEXT NOT NULL CHECK (entry_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),  category TEXT NOT NULL CHECK (category IN ('purchase', 'discount', 'income', 'offset', 'other')),  amount_yen INTEGER NOT NULL CHECK ((category = 'purchase' AND amount_yen > 0) OR (category IN ('discount', 'income', 'offset') AND amount_yen < 0) OR (category = 'other' AND amount_yen != 0)),  description TEXT NOT NULL,  note TEXT NOT NULL DEFAULT '',  created_by TEXT NOT NULL,  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,  deleted_at TEXT,  CHECK (document_type = 'invoice' OR category != 'discount'),  FOREIGN KEY (account_id) REFERENCES billing_accounts(id),  FOREIGN KEY (created_by) REFERENCES billing_accounts(id))"
+      },
+      {
+        "name": "billing_opening_balances",
+        "sql": "CREATE TABLE billing_opening_balances (  account_id TEXT PRIMARY KEY,  effective_date TEXT NOT NULL CHECK (effective_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),  balance_yen INTEGER NOT NULL,  updated_by TEXT NOT NULL,  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,  FOREIGN KEY (account_id) REFERENCES billing_accounts(id),  FOREIGN KEY (updated_by) REFERENCES billing_accounts(id))"
+      },
+      {
+        "name": "idx_billing_audit_logs_occurred",
+        "sql": "CREATE INDEX idx_billing_audit_logs_occurred  ON billing_audit_logs(occurred_at DESC, id DESC)"
+      },
+      {
+        "name": "idx_billing_entries_account_date",
+        "sql": "CREATE INDEX idx_billing_entries_account_date ON billing_entries(account_id, entry_date, id)"
+      },
+      {
+        "name": "idx_billing_entries_active",
+        "sql": "CREATE INDEX idx_billing_entries_active ON billing_entries(account_id, deleted_at, entry_date)"
+      },
+      {
+        "name": "idx_billing_entries_document",
+        "sql": "CREATE INDEX idx_billing_entries_document ON billing_entries(account_id, document_type, entry_date, deleted_at)"
+      }
+    ]
+  },
+  {
+    "service": "inventory",
+    "ddl": [
+      {
+        "name": "inventory_movement_guard",
+        "sql": "CREATE TRIGGER inventory_movement_guard BEFORE INSERT ON inventory_movements BEGIN\n  SELECT RAISE(ABORT, 'inventory_item_unavailable') WHERE NOT EXISTS (SELECT 1 FROM inventory_items\n    WHERE id = NEW.item_id AND account_id = NEW.account_id AND archived_at IS NULL)\n    ;\n  SELECT RAISE(ABORT, 'inventory_version_conflict') WHERE NEW.kind = 'adjust' AND NEW.expected_version !=\n    (SELECT version FROM inventory_items WHERE id = NEW.item_id);\nEND"
+      }
+    ]
+  },
+  {
+    "service": "diary",
+    "ddl": [
+      {
+        "name": "diary_entries",
+        "sql": "CREATE TABLE diary_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_date TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT, revision INTEGER NOT NULL DEFAULT 1, author_id TEXT NOT NULL DEFAULT 'unknown', author_name TEXT NOT NULL DEFAULT '不明', deleted_by_id TEXT, deleted_by_name TEXT, household_id TEXT NOT NULL DEFAULT 'tanaka-household', content_format TEXT, status TEXT NOT NULL DEFAULT 'published'\nCHECK (status IN ('published', 'draft')), draft_of_entry_id INTEGER, draft_of_revision INTEGER, draft_excluded_photo_ids TEXT, client_request_id TEXT, client_request_hash TEXT, last_mutation_id TEXT, weather TEXT DEFAULT NULL\n  CHECK (weather IS NULL OR weather IN (\n    'sunny', 'cloudy', 'partly_cloudy', 'cloudy_rain',\n    'rain', 'heavy_rain', 'thunder', 'snow'\n  )), entry_time TEXT DEFAULT NULL\r\n  CHECK (\r\n    entry_time IS NULL OR (\r\n      entry_time GLOB '[0-2][0-9]:[0-5][0-9]'\r\n      AND substr(entry_time, 1, 2) BETWEEN '00' AND '23'\r\n    )\r\n  ), last_published_at TEXT DEFAULT NULL)"
+      },
+      {
+        "name": "diary_tags",
+        "sql": "CREATE TABLE diary_tags (entry_id INTEGER NOT NULL, tag TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, sort_order INTEGER NOT NULL DEFAULT 0 CHECK(sort_order >= 0), PRIMARY KEY (entry_id, tag), FOREIGN KEY (entry_id) REFERENCES diary_entries(id) ON DELETE CASCADE)"
+      },
+      {
+        "name": "idx_diary_entries_active_date",
+        "sql": "CREATE INDEX idx_diary_entries_active_date ON diary_entries(deleted_at, entry_date DESC, id DESC)"
+      },
+      {
+        "name": "idx_diary_tags_tag",
+        "sql": "CREATE INDEX idx_diary_tags_tag ON diary_tags(tag)"
+      }
+    ]
+  }
+]
