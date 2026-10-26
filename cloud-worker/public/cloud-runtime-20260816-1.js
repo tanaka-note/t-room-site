@@ -1,5 +1,9 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-7459cb9c701c";
+<<<<<<< HEAD
+const APP_BUILD_ID = "cloud-5ebb973f0fdf";
+=======
+const APP_BUILD_ID = "cloud-2a6c8440014a";
+>>>>>>> origin/main
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -1186,6 +1190,12 @@ function cancelFolderNavigation() {
   folderNavigation = null;
   $(".workspace").inert = false;
   $(".workspace").removeAttribute("aria-busy");
+  setHistoryNavigationLoading(false);
+}
+
+function setHistoryNavigationLoading(loading) {
+  $(".workspace").classList.toggle("is-history-loading", loading);
+  $("#folder-navigation-loading").hidden = !loading;
 }
 
 function navigateToAncestor(folderId, folderName) {
@@ -1198,6 +1208,10 @@ function navigateToAncestor(folderId, folderName) {
 async function navigateToFolder(folderId, folderName, options = {}) {
   enforceFolderPortraitOrientation();
   const { pushHistory = true, load = true, resetScroll = pushHistory, originType = "", originId = null, restoreEntry = null } = options;
+  // Preserve layout for scroll restoration, but do not expose the outgoing
+  // folder after the browser's history preview. A newer navigation owns this state.
+  const hideSource = load && ((!pushHistory && Boolean(restoreEntry))
+    || $(".workspace").classList.contains("is-history-loading"));
   const replaceSelectionHistory = pushHistory && state.selectionHistoryActive;
   if (replaceSelectionHistory) {
     clearFileSelection(true, false);
@@ -1210,6 +1224,7 @@ async function navigateToFolder(folderId, folderName, options = {}) {
   folderNavigation = navigation;
   $(".workspace").inert = true;
   $(".workspace").setAttribute("aria-busy", "true");
+  setHistoryNavigationLoading(hideSource);
   state.folderId = folderId ? Number(folderId) : null;
   state.kind = restoreEntry ? String(restoreEntry.kind || "") : "";
   state.view = restoreEntry ? String(restoreEntry.view || "all") : "all";
@@ -1260,6 +1275,7 @@ async function navigateToFolder(folderId, folderName, options = {}) {
       folderNavigation = null;
       $(".workspace").inert = false;
       $(".workspace").removeAttribute("aria-busy");
+      setHistoryNavigationLoading(false);
     }
   }
 }
