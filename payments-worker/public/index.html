@@ -59,17 +59,17 @@
 })(window).enforce();</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow,noarchive">
-  <meta name="troom-app-build" content="payments-de2c00d525c8">
+  <meta name="troom-app-build" content="payments-1cf56b0eaabd">
   <meta name="troom-auto-update" content="enabled">
   <title>支払明細</title>
-  <link rel="stylesheet" href="./payments.css?v=payments-de2c00d525c8">
-  <script src="/security/passkey-client.js?v=payments-de2c00d525c8" defer></script>
-  <script src="./dialog-navigation.js?v=payments-de2c00d525c8" defer></script>
-  <link rel="stylesheet" href="./troom-date-picker.css?v=payments-de2c00d525c8">
-  <link rel="stylesheet" href="./date-wheel.css?v=payments-de2c00d525c8">
-  <script src="./troom-date-picker.js?v=payments-de2c00d525c8" defer></script>
-  <script src="./date-wheel.js?v=payments-de2c00d525c8" defer></script>
-  <script src="./payments.js?v=payments-de2c00d525c8" defer></script>
+  <link rel="stylesheet" href="./payments.css?v=payments-1cf56b0eaabd">
+  <script src="/security/passkey-client.js?v=payments-1cf56b0eaabd" defer></script>
+  <script src="./dialog-navigation.js?v=payments-1cf56b0eaabd" defer></script>
+  <link rel="stylesheet" href="./troom-date-picker.css?v=payments-1cf56b0eaabd">
+  <link rel="stylesheet" href="./date-wheel.css?v=payments-1cf56b0eaabd">
+  <script src="./troom-date-picker.js?v=payments-1cf56b0eaabd" defer></script>
+  <script src="./date-wheel.js?v=payments-1cf56b0eaabd" defer></script>
+  <script src="./payments.js?v=payments-1cf56b0eaabd" defer></script>
 </head>
 <body>
   <main>
@@ -78,7 +78,7 @@
         <p class="eyebrow">T-lain PRIVATE</p><h1>支払明細</h1>
         <p class="muted">まとめて支払った費用を、月ごとにわかりやすく。</p>
         <p id="boot-message" role="status">ログイン状態を確認しています…</p>
-        <button id="login" class="primary full" type="button" hidden>端末のロック解除でログイン</button>
+        <button id="login" class="primary full passkey-login-button" type="button" hidden><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
         <p id="login-error" class="error" role="alert"></p>
       </div>
     </section>
@@ -148,6 +148,6 @@
   </dialog>
   <dialog id="months-dialog" aria-labelledby="months-title"><div class="dialog-heading"><h2 id="months-title">月別計上履歴</h2><button id="close-months" type="button" aria-label="履歴を閉じる">閉じる</button></div><p class="muted">実際の月別計上額です。計上済みの金額・対象期間を変更する場合は、先に全ての計上を取り消してください。</p><p id="months-error" class="error" role="alert"></p><div id="month-items"></div><div id="month-pagination"></div><details><summary>操作履歴（最新100件・日本時間）</summary><ol id="operation-history"></ol></details></dialog>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-copy"><h2 id="confirm-title"></h2><p id="confirm-copy"></p><p id="confirm-error" class="error" role="alert"></p><div class="dialog-actions"><button id="confirm-cancel" type="button">キャンセル</button><button id="confirm-ok" type="button" class="danger">削除する</button></div></dialog>
-  <script src="/assets/pwa-auto-update.js?v=payments-de2c00d525c8" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=payments-1cf56b0eaabd" defer></script>
 </body>
 </html>

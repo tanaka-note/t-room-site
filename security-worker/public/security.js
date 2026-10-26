@@ -288,6 +288,8 @@
   async function adminLogin(event) {
     const button = event.currentTarget;
     button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.querySelector(".passkey-login-label").textContent = "確認中…";
     try {
       const result = await TRoomPasskeys.authenticate("security");
       state.adminPrf = result.prfOutput;
@@ -295,7 +297,11 @@
       $("#admin-login-view").hidden = true;
       await showAdmin();
     } catch (error) { showMessage(error.message, error.name !== "PasskeyCancelledError"); }
-    finally { button.disabled = false; }
+    finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
+    }
   }
 
   async function registerInvite(token) {

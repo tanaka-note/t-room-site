@@ -142,8 +142,10 @@
   $('add').onclick = () => openEditor();
   $('login').onclick = async () => {
     $('login-error').textContent = ''; setBusy(true);
+    $('login').setAttribute('aria-busy', 'true');
+    $('passkey-login-label').textContent = '確認中…';
     try { const auth = await TRoomPasskeys.authenticate('payments'); const session = await api('/passkey/handoff', { handoffToken: auth.handoff.handoffToken }); showApp(session); await load(); }
-    catch (error) { $('login-error').textContent = error.message; } finally { setBusy(false); }
+    catch (error) { $('login-error').textContent = error.message; } finally { setBusy(false); $('login').removeAttribute('aria-busy'); $('passkey-login-label').textContent = 'パスキーでログイン'; }
   };
   $('logout').onclick = async () => {
     setBusy(true); $('message').textContent = '';

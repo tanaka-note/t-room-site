@@ -615,7 +615,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   async function handlePasskeyLogin() {
     const attempt = ++loginAttempt;
     const button = document.querySelector("#passkey-login");
-    setBusy(button, true, "確認中...");
+    setBusy(button, true, "確認中…");
     elements.loginMessage.textContent = "";
     try {
       const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
@@ -3804,7 +3804,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function setBusy(button, busy, label) {
     button.disabled = busy;
-    button.textContent = label;
+    const labelElement = button.querySelector?.(".passkey-login-label");
+    if (labelElement) {
+      if (busy) button.setAttribute("aria-busy", "true");
+      else button.removeAttribute("aria-busy");
+    }
+    (labelElement || button).textContent = label;
   }
 
   function setBusyIconButton(button, busy, processingLabel, idleLabel) {

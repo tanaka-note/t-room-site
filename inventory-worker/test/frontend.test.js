@@ -8,7 +8,9 @@ const unavailable = '一時的に接続できません。時間を置いて再�
 function frontend(fetch) {
   const nodes = new Map();
   const node = id => {
-    if (!nodes.has(id)) nodes.set(id, { value: '', textContent: '', dataset: {}, hidden: false, open: false, disabled: false,
+    if (!nodes.has(id)) nodes.set(id, { value: '', textContent: '', dataset: {}, hidden: false, open: false, disabled: false, attributes: {},
+      setAttribute(name, value) { this.attributes[name] = value; },
+      removeAttribute(name) { delete this.attributes[name]; },
       replaceChildren() { this.textContent = ''; }, append() {}, close() { this.open = false; }, reset() { this.resets = (this.resets || 0) + 1; }, focus() {} });
     return nodes.get(id);
   };
@@ -23,6 +25,7 @@ function frontend(fetch) {
       listAnchors = [{id:'private id'}]; detailPositions.set('private id',123); listScroll=123; listYear=2025;
       openToken='private token'; mode='adjust'; dirty=busy=approvedClose=true; opener=$('items'); backgroundPointer=7;
       for (const id of ['name','unit','quantity','occurred-at','search','quantity-label','form-message','item-name','items']) { $(id).value='private input'; $(id).textContent='private data'; }
+      $('login').setAttribute('aria-busy', 'true'); $('passkey-login-label').textContent='確認中…';
       $('editor').open=true; $('record-form').dataset.troomDirty='true'; },
     state() { return {items:items.length,detail,cursor,editedItem,retry,listAnchors:listAnchors.length,positions:detailPositions.size,listScroll,listYear,
       mode,openToken,dirty,busy,approvedClose,opener,backgroundPointer,pending:pendingRequests.size,sessionGeneration}; }
@@ -38,6 +41,8 @@ function assertCleared(f) {
   for (const key of ['dirty','busy','approvedClose']) assert.equal(s[key],false,key);
   for (const id of ['name','unit','quantity','occurred-at','search']) assert.equal(f.node(id).value,'',id);
   for (const id of ['form-message','item-name','items','editor-title']) assert.equal(f.node(id).textContent,'',id);
+  assert.equal(f.node('login').attributes['aria-busy'],undefined);
+  assert.equal(f.node('passkey-login-label').textContent,'パスキーでログイン');
   assert.equal(f.node('record-form').resets,1);
   assert.equal(f.node('record-form').dataset.troomDirty,'false');
   assert.equal(f.document.body.dataset.troomUpdateBlock,'false');

@@ -48,7 +48,7 @@
   }
 
   async function login() {
-    setBusy(elements.passkeyLogin, true, "本人確認中…");
+    setBusy(elements.passkeyLogin, true, "確認中…");
     try {
       const authentication = await window.TRoomPasskeys.authenticate("downloader");
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
@@ -57,7 +57,7 @@
     } catch (error) {
       showMessage(userMessage(error));
     } finally {
-      setBusy(elements.passkeyLogin, false, "端末のロック解除でログイン");
+      setBusy(elements.passkeyLogin, false, "パスキーでログイン");
     }
   }
 
@@ -404,7 +404,16 @@
   function clearViews() { ++viewGeneration; clearTimeout(pollTimer); currentJob = null; elements.analysisView.hidden = true; elements.progressView.hidden = true; elements.readyView.hidden = true; updateCancelButtons(); }
   function showMessage(text) { elements.message.textContent = String(text || "処理を完了できませんでした。"); elements.message.hidden = false; }
   function hideMessage() { elements.message.hidden = true; elements.message.textContent = ""; }
-  function setBusy(button, busy, label) { button.disabled = busy; button.textContent = label; }
+  function setBusy(button, busy, label) {
+    button.disabled = busy;
+    const labelElement = button.querySelector?.(".passkey-login-label");
+    if (labelElement) {
+      if (busy) button.setAttribute("aria-busy", "true");
+      else button.removeAttribute("aria-busy");
+    }
+    (labelElement || button).textContent = label;
+  }
+
   function renderDetails(target, entries) { target.replaceChildren(); for (const [label, value] of entries) { const row = document.createElement("div"); const term = document.createElement("dt"); const detail = document.createElement("dd"); term.textContent = label; detail.textContent = String(value); row.append(term, detail); target.append(row); } }
   function requestId() { return `web_${crypto.randomUUID().replace(/-/g, "")}`; }
   function downloadAttemptId() { return `file_${crypto.randomUUID().replace(/-/g, "")}`; }
