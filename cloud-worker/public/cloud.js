@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-2a6c8440014a";
+const APP_BUILD_ID = "cloud-e7134b002663";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -4872,6 +4872,7 @@ async function openMoveDialog() {
     return;
   }
   const submit = $("#move-submit");
+  state.movePicker = null;
   $("#move-error").textContent = "";
   $("#move-copy").textContent = `${files.length + folders.length}件の移動先を選択してください。`;
   $("#move-destination").value = "";
@@ -4884,14 +4885,19 @@ async function openMoveDialog() {
   submit.textContent = "移動先を読み込み中…";
   $("#move-dialog").showModal();
   try {
-    const scopeRoot = state.session?.role === "admin" ? null : unlockedMoveScopeRoot();
-    if (state.session?.role !== "admin" && !scopeRoot) {
+    const member = state.session?.role === "member";
+    let scopeRoot = member || state.session?.role === "admin" ? null : unlockedMoveScopeRoot();
+    if (!member && state.session?.role !== "admin" && !scopeRoot) {
       throw new Error("移動元のPW解除済みフォルダを確認できません。");
     }
     const params = new URLSearchParams();
     if (scopeRoot) params.set("scopeRootId", String(scopeRoot.id));
     const query = params.toString();
     const data = await api(`/move-destinations${query ? `?${query}` : ""}`);
+    if (member && memberFolderScopes().length === 1) {
+      scopeRoot = (data.folders || []).find(folder => Number(folder.id) === memberFolderScopes()[0].rootFolderId);
+      if (!scopeRoot) throw new Error("移動可能なフォルダを確認できませんでした。");
+    }
     const selectedFolderIds = new Set(folders.map((folder) => Number(folder.id)));
     state.movePicker = buildMovePicker(data.folders || [], scopeRoot, selectedFolderIds, files, folders);
     renderMovePicker();
@@ -4936,7 +4942,7 @@ function buildMovePicker(records, scopeRoot, selectedFolderIds, files, selectedF
   if (scopeRootId && !allowedIds.has(scopeRootId)) throw new Error("移動可能なフォルダを確認できませんでした。");
   state.moveDestinations.clear();
   for (const folder of allowed) state.moveDestinations.set(folder.id, folder);
-  return {
+  const picker = {
     byId: state.moveDestinations,
     children,
     currentId: scopeRootId,
@@ -4944,6 +4950,26 @@ function buildMovePicker(records, scopeRoot, selectedFolderIds, files, selectedF
     files,
     folders: selectedFolders
   };
+  picker.currentId = movePickerInitialFolder(picker);
+  return picker;
+}
+
+function movePickerInitialFolder(picker) {
+  const parents = [
+    ...picker.files.map(file => file.folderId),
+    ...picker.folders.map(folder => folder.parentId)
+  ];
+  const paths = parents.map(id => {
+    const path = [];
+    let current = id == null ? null : picker.byId.get(Number(id));
+    while (current && path.length < 100) {
+      path.push(current.id);
+      if (current.id === picker.scopeRootId) break;
+      current = current.parentId == null ? null : picker.byId.get(Number(current.parentId));
+    }
+    return path;
+  });
+  return paths[0]?.find(id => paths.every(path => path.includes(id))) ?? picker.scopeRootId;
 }
 
 function movePickerPath(picker) {
@@ -4972,7 +4998,8 @@ function renderMovePicker() {
   const picker = state.movePicker;
   if (!picker) return;
   const current = picker.currentId == null ? null : picker.byId.get(Number(picker.currentId));
-  const currentName = current?.name || "Cloud Storage（最上位）";
+  const member = state.session?.role === "member";
+  const currentName = current?.name || (member ? "利用できるフォルダ" : "Cloud Storage（最上位）");
   $("#move-current-location").textContent = currentName;
   $("#move-destination").value = current ? String(current.id) : "root";
 
@@ -4980,7 +5007,7 @@ function renderMovePicker() {
   breadcrumbs.innerHTML = "";
   const rootButton = document.createElement("button");
   rootButton.type = "button";
-  rootButton.textContent = picker.scopeRootId ? picker.byId.get(picker.scopeRootId)?.name || "移動可能なフォルダ" : "Cloud Storage";
+  rootButton.textContent = picker.scopeRootId ? picker.byId.get(picker.scopeRootId)?.name || "移動可能なフォルダ" : member ? "利用できるフォルダ" : "Cloud Storage";
   rootButton.dataset.folderId = picker.scopeRootId == null ? "root" : String(picker.scopeRootId);
   rootButton.setAttribute("aria-current", Number(picker.currentId) === Number(picker.scopeRootId) ? "location" : "false");
   rootButton.addEventListener("click", () => openMovePickerFolder(picker.scopeRootId));
@@ -5016,7 +5043,7 @@ function renderMovePicker() {
 
   const atScopeRoot = picker.scopeRootId != null && Number(picker.currentId) === Number(picker.scopeRootId);
   $("#move-picker-up").disabled = picker.currentId == null || atScopeRoot;
-  const filesCannotUseRoot = picker.files.length > 0 && picker.currentId == null;
+  const filesCannotUseRoot = (member || picker.files.length > 0) && picker.currentId == null;
   const unprotectedFolderCannotUseRoot = picker.currentId == null && picker.folders.some((folder) => !folder.isProtected);
   const sameLocation = movePickerCurrentIsSource(picker);
   const submit = $("#move-submit");
@@ -5025,7 +5052,7 @@ function renderMovePicker() {
   submit.disabled = false;
   submit.textContent = sameLocation ? "移動先を変更" : "ここへ移動";
   $("#move-error").textContent = filesCannotUseRoot
-    ? "ファイルはフォルダ内へ移動してください。"
+    ? member ? "移動先フォルダを選択してください。" : "ファイルはフォルダ内へ移動してください。"
     : unprotectedFolderCannotUseRoot
       ? "PWを持たないフォルダは最上位へ移動できません。"
       : sameLocation ? "移動元と同じ場所です。" : "";
@@ -5052,7 +5079,12 @@ async function loadMoveDestination(folderId) {
   // foldersOnly=1 は一覧の高速化用で、breadcrumbs を返さない。
   // 移動時は暗号鍵の再包装に階層情報が必要なため、最小ページの通常取得を使う。
   const data = await api(`/items?folderId=${Number(folderId)}&pageSize=1`);
-  const breadcrumbs = await hydrateFolderRecords(data.breadcrumbs || [], { preserveOrder: true });
+  // Each descendant needs its parent's key. These records cannot be hydrated
+  // concurrently when the destination path has not been visited yet.
+  const breadcrumbs = [];
+  for (const record of data.breadcrumbs || []) {
+    breadcrumbs.push(...await hydrateFolderRecords([record], { preserveOrder: true }));
+  }
   const destination = breadcrumbs.find((folder) => Number(folder.id) === Number(folderId));
   if (!destination) throw new Error("移動先フォルダを確認できませんでした。");
   state.moveDestinations.set(Number(destination.id), destination);
@@ -5061,19 +5093,19 @@ async function loadMoveDestination(folderId) {
 
 async function moveSelectedItems(event) {
   event.preventDefault();
-  const { files, folders } = selectedItems();
   const picker = state.movePicker;
   if (!picker) {
     $("#move-error").textContent = "移動先をもう一度選択してください。";
     return;
   }
+  const { files, folders } = picker;
   if (movePickerCurrentIsSource(picker)) {
     $("#move-error").textContent = "現在と同じ場所です。別のフォルダを選択してください。";
     return;
   }
   const destinationId = picker.currentId == null ? null : Number(picker.currentId);
-  if (files.length && !destinationId) {
-    $("#move-error").textContent = "ファイルはフォルダ内へ移動してください。";
+  if ((state.session?.role === "member" || files.length) && !destinationId) {
+    $("#move-error").textContent = "移動先フォルダを選択してください。";
     return;
   }
   if (!destinationId && folders.some((folder) => !folder.isProtected)) {
@@ -5095,6 +5127,7 @@ async function moveSelectedItems(event) {
       : null;
     if (destination && !destinationKey) throw new Error("移動先フォルダのPWを解除してください。");
     for (const file of files) {
+      if (Number(file.folderId) === destinationId) continue;
       try {
         if (!file.fileKey || !destinationKey) throw new Error("ファイル鍵を確認できません。");
         const wrapped = await TRoomCrypto.rewrapFileForFolder(file.fileKey, destinationKey);
@@ -5106,6 +5139,7 @@ async function moveSelectedItems(event) {
       }
     }
     for (const folder of folders) {
+      if ((folder.parentId == null ? null : Number(folder.parentId)) === destinationId) continue;
       try {
         if (!destinationId && !folder.isProtected) throw new Error("PWを持たないフォルダは最上位へ移動できません。");
         const folderKey = state.crypto.folderKeys.get(Number(folder.id)) || (state.session?.role === "admin" ? await ensureAdminFolderKey(folder) : null);

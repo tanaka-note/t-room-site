@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-2a6c8440014a";
+const APP_BUILD_ID = "cloud-e7134b002663";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -261,7 +261,7 @@ async function handleApi(request, env, url, path, context) {
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
   if (path === "/api/favorites" && request.method === "GET") {
-    return searchItems(url, env, session, { folderId: null, query: "", kind: "", sort: "updated-desc", favoriteOwner: favoriteOwnerIds(session) });
+    return searchItems(url, env, session, { folderId: null, query: "", kind: "", sort: "updated-desc", favoriteOwner: await favoriteReadOwnerIds(env, session) });
   }
   if ((path === "/api/favorites" || path === "/api/favorites/status") && ["POST", "DELETE"].includes(request.method)) {
     return updateFavorites(request, env, session, path.endsWith("/status"));
@@ -871,8 +871,26 @@ function favoriteOwnerIds(session) {
   return session.role === "member" ? memberFolderScopes(session).map((scope) => favoriteOwnerId({ ...session, ...scope })) : [favoriteOwnerId(session)];
 }
 
+async function favoriteReadOwnerIds(env, session) {
+  const owners = favoriteOwnerIds(session);
+  if (session.role !== "member") return owners;
+  // Keep existing link/root storage identities. A moved item may still have its
+  // favorite under a former root; reads/status/removal also find those records
+  // for this same member Identity. Every target is separately checked against
+  // the current session's folder/PW scope, including in searchItems.
+  const condition = `json_valid(owner_id)
+    AND json_extract(owner_id, '$[0]') = 'passkey'
+    AND json_extract(owner_id, '$[1]') = ?
+    AND json_extract(owner_id, '$[3]') = 'folder-member'
+    AND json_extract(owner_id, '$[4]') = 'member'`;
+  const { results } = await env.DB.prepare(`SELECT owner_id FROM cloud_favorite_files WHERE ${condition}
+    UNION SELECT owner_id FROM cloud_favorite_folders WHERE ${condition}`)
+    .bind(session.identityId, session.identityId).all();
+  return [...new Set([...owners, ...(results || []).map(row => row.owner_id)])];
+}
+
 async function updateFavorites(request, env, session, statusOnly = false) {
-  const owners = favoriteOwnerIds(session), ownerSql = owners.map(() => "?").join(",");
+  const owners = await favoriteReadOwnerIds(env, session), ownerSql = owners.map(() => "?").join(",");
   const targetOwners = new Map();
   const body = await request.json();
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(400, "対象IDを確認してください。");
@@ -1254,15 +1272,16 @@ async function listMoveDestinations(url, env, session) {
     ))`;
     values.push(requestedScopeRootId, session.sessionId, Math.floor(Date.now() / 1000));
   } else if (session.role === "member") {
-    anchorCondition = "f.id = ?";
+    const scopes = memberFolderScopes(session);
+    if (requestedScopeRootId && !scopes.some(scope => scope.rootFolderId === requestedScopeRootId)) {
+      throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
+    }
+    anchorCondition = `f.id IN (${scopes.map(() => "?").join(",")})`;
     descendantAccessCondition = `(child.password_hash IS NULL OR EXISTS(
       SELECT 1 FROM cloud_folder_unlocks unlock
       WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
     ))`;
-    const scopes = memberFolderScopes(session);
-    const scope = requestedScopeRootId ? scopes.find((item) => item.rootFolderId === requestedScopeRootId) : scopes.length === 1 ? scopes[0] : null;
-    if (!scope) throw new HttpError(400, "移動元の親フォルダを確認してください。");
-    values.push(scope.rootFolderId, session.sessionId, Math.floor(Date.now() / 1000));
+    values.push(...scopes.map(scope => scope.rootFolderId), session.sessionId, Math.floor(Date.now() / 1000));
   }
   const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(id, depth) AS (
       SELECT f.id, 0 FROM cloud_folders f WHERE ${anchorCondition} AND f.deleted_at IS NULL
@@ -2864,14 +2883,15 @@ async function requireMemberListingScope(env, folderId, session) {
   return scope;
 }
 
-// Move policy is separate from read scope: ordinary members stay within one
-// assigned parent, and the assigned parent itself is never a move target.
+// Both endpoints must belong to the authenticated session's fixed scope.
+// Assigned roots themselves remain immovable; folder/PW access is also checked
+// by the update handlers before any mutation.
 async function requireMemberMoveScope(env, sourceId, destinationId, session, movingFolder = false) {
   if (session.role !== "member") return;
   const source = await requireMemberFolderScope(env, sourceId, session);
-  const destination = await requireMemberFolderScope(env, destinationId, session);
-  if (source.rootFolderId !== destination.rootFolderId || (movingFolder && Number(sourceId) === source.rootFolderId)) {
-    throw new HttpError(403, "割り当てられた親フォルダの配下だけ移動できます。");
+  await requireMemberFolderScope(env, destinationId, session);
+  if (movingFolder && Number(sourceId) === source.rootFolderId) {
+    throw new HttpError(403, "割り当てられた親フォルダ自体は移動できません。");
   }
 }
 
