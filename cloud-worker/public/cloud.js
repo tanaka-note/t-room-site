@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-2eb5835cfc06";
+const APP_BUILD_ID = "cloud-9acd25acfc3f";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -2191,6 +2191,7 @@ function canFallbackToDisplayListing(error) {
 
 async function loadItems() {
   syncAccountView();
+  state.backupMount = null;
   renderDiaryBackupMount();
   clearTimeout(searchPageTimer);
   searchPathFolders.clear();
@@ -9448,7 +9449,7 @@ function backupMediaLabel(value) {
 
 function renderDiaryBackupMount() {
   const panel = $("#diary-backup-mount");
-  const visible = state.session?.role === "admin" && state.view === "all" && !state.query
+  const visible = Boolean(state.session) && state.view === "all" && !state.query
     && state.backupMount?.type === "diary-backup" && Number(state.folderId) === state.backupMount.folderId;
   panel.hidden = !visible;
   if (!visible) { panel.replaceChildren(); return; }
@@ -9458,12 +9459,18 @@ function renderDiaryBackupMount() {
   panel.innerHTML = '<details open><summary>日記バックアップ <small>読み取り専用</small></summary><div class="backup-browser-body"><button type="button" class="secondary-button backup-refresh">最新情報に更新</button><div class="backup-snapshot" aria-live="polite">バックアップ情報を取得しています…</div></div></details>';
   const button = panel.querySelector(".backup-refresh");
   const output = panel.querySelector(".backup-snapshot");
+  const session = state.session, mount = state.backupMount;
+  const isCurrent = () => output.isConnected && state.session === session && state.backupMount === mount
+    && state.view === "all" && !state.query && Number(state.folderId) === mount.folderId;
   const load = async (refresh = false) => {
+    if (!isCurrent()) return;
     button.disabled = true;
+    const expanded = new Set([...output.querySelectorAll("details[open]")].map(node => node.dataset.backupGroup));
+    // Discard previously displayed details before checking current authorization.
+    output.textContent = "バックアップ情報を取得しています…";
     try {
       const data = await api(`/diary-backups${refresh ? "?refresh=1" : ""}`);
-      if (!output.isConnected || state.session?.role !== "admin") return;
-      const expanded = new Set([...output.querySelectorAll("details[open]")].map(node => node.dataset.backupGroup));
+      if (!isCurrent()) return;
       output.innerHTML = `<dl class="backup-summary"><div><dt>最終バックアップ（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>バックアップ容量</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>最新世代のメディアバックアップ</dt><dd>${backupMediaLabel(data.mediaComplete)}</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
       for (const [kind, label] of [["daily", "日次バックアップ"], ["monthly", "月次バックアップ"], ["photo", "写真バックアップ"]]) {
         const group = data[kind];
@@ -9489,8 +9496,14 @@ function renderDiaryBackupMount() {
         output.append(section);
       }
       if (refresh) void loadUsage();
-    } catch {
-      if (output.isConnected) output.textContent = "バックアップ情報を取得できませんでした。通常ファイルは引き続き利用できます。";
+    } catch (error) {
+      if (!isCurrent()) return;
+      if ([401, 403, 419, 423].includes(error.status)) {
+        state.backupMount = null;
+        renderDiaryBackupMount();
+        return;
+      }
+      output.textContent = "バックアップ情報を取得できませんでした。通常ファイルは引き続き利用できます。";
     } finally { button.disabled = false; }
   };
   button.addEventListener("click", () => { void load(true); });

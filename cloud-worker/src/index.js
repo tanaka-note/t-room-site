@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-2eb5835cfc06";
+const APP_BUILD_ID = "cloud-9acd25acfc3f";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -287,7 +287,6 @@ async function handleApi(request, env, url, path, context) {
   if (path === "/api/trash" && request.method === "DELETE") return emptyTrash(env, session);
   if (path === "/api/usage" && request.method === "GET") return getUsage(env, session);
   if (path === "/api/diary-backups" || path.startsWith("/api/diary-backups/")) {
-    requireAdmin(session);
     if (path !== "/api/diary-backups" || request.method !== "GET") throw new HttpError(405, "バックアップは読み取り専用です。");
     const backup = await readDiaryBackupMount(env, session, url.searchParams.get("refresh") === "1");
     return json(backup, backup.available ? 200 : 503);
@@ -1059,7 +1058,7 @@ async function listItems(url, env, session) {
     || (session.canTrashUnlockedFiles && folderAccessGranted)));
   return json({
     folder,
-    backupMount: session.role === "admin" && folderId === Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID)
+    backupMount: ["admin", "member"].includes(session.role) && folderId === Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID)
       ? { type: "diary-backup", folderId } : null,
     canTrashContents,
     breadcrumbs: mapBreadcrumbs(path.results || [], session, memberRootId),
@@ -2292,9 +2291,21 @@ async function getUsageDetails(env, session) {
   })) });
 }
 
-async function readDiaryBackupMount(env, session, refresh = false) {
-  requireAdmin(session);
+async function requireBackupMountAccess(env, session) {
   const folderId = Number(env.DIARY_BACKUP_MOUNT_FOLDER_ID);
+  if (session.role === "admin") return folderId;
+  if (session.role !== "member" || !Number.isSafeInteger(folderId) || folderId <= 0) {
+    throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
+  }
+  // Match listItems: the nearest delegated root and every protected descendant.
+  // Always use the configured mount, never a client-supplied folder ID. Keep
+  // authorization outside the snapshot error handler so 403/423 stay intact.
+  await requireMemberListingScope(env, folderId, session);
+  return folderId;
+}
+
+async function readDiaryBackupMount(env, session, refresh = false) {
+  const folderId = await requireBackupMountAccess(env, session);
   let timer;
   try {
     if (!Number.isSafeInteger(folderId) || folderId <= 0 || !env.DIARY_BACKUPS) throw new Error("Mount unavailable");
