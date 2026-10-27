@@ -70,7 +70,7 @@
       wasActive = full;
     }
     button.addEventListener("click", toggle);
-    container.addEventListener("keydown", event => {
+    document.addEventListener("keydown", event => {
       if (event.key !== "Tab" || !active()) return;
       const buttons = controls();
       if (!buttons.length) return;

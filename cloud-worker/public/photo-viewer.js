@@ -96,6 +96,18 @@
       event.preventDefault();
       if (lastPointerType === "mouse") zoom(scale > 1 ? 1 : 2.5, point(event));
     }, { signal: controller.signal });
+    stage.addEventListener("wheel", event => {
+      const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+      if (!fullscreen?.contains(stage) || !event.cancelable || pointers.size
+        || event.ctrlKey || event.metaKey || event.shiftKey
+        || !Number.isFinite(event.deltaY) || !event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      event.preventDefault();
+      lastTap = null;
+      // Normalize line/page devices and bound each step, including fast wheel bursts.
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.getBoundingClientRect().height : 1;
+      const delta = clamp(event.deltaY * unit, -120, 120);
+      zoom(scale * Math.exp(-delta * .002), point(event));
+    }, { passive: false, signal: controller.signal });
     stage.addEventListener("dragstart", event => event.preventDefault(), { signal: controller.signal });
     stage.addEventListener("lostpointercapture", event => {
       if (!pointers.has(event.pointerId)) return;
