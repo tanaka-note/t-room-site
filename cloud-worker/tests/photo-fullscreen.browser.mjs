@@ -80,6 +80,13 @@ try {
       assert.ok(Math.abs(bounds.x)<1&&Math.abs(bounds.y)<1&&Math.abs(bounds.width-bounds.vw)<1&&Math.abs(bounds.height-bounds.vh)<1,JSON.stringify(bounds));
       assert.ok(bounds.imageFits);
       await wheelZoom(page);
+      const recoveredFocus=await page.evaluate(()=>{
+        document.activeElement?.blur();
+        const event=new KeyboardEvent("keydown",{key:"Tab",bubbles:true,cancelable:true});
+        document.dispatchEvent(event);
+        return event.defaultPrevented&&document.querySelector("#preview-stage-wrap").contains(document.activeElement);
+      });
+      assert.equal(recoveredFocus,true,"Tab must recover fullscreen controls after focus is lost");
       for(let i=0;i<5;i++) {
         await page.keyboard.press("Tab");
         assert.equal(await page.evaluate(()=>document.querySelector("#preview-stage-wrap").contains(document.activeElement)),true,"fullscreen focus must stay in visible controls");
