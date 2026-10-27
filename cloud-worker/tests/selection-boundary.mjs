@@ -10,7 +10,7 @@ const adapter = client.slice(client.indexOf('let selectionState = null;'), clien
 const action = (name, next) => client.slice(client.indexOf(`async function ${name}(`), client.indexOf(next, client.indexOf(`async function ${name}(`)));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function makeContext(extra = {}) {
-  const context = vm.createContext({ TCloudSelection, TCloudBulkDelete, ...extra });
+  const context = vm.createContext({ TCloudSelection, TCloudBulkDelete, AbortController, setTimeout, clearTimeout, ...extra });
   vm.runInContext(adapter, context); return context;
 }
 function choose(context, files, folders = []) {
@@ -79,9 +79,11 @@ test('bulk move keeps captured records and passes their existing keys to the exi
     clearFileSelection: () => vm.runInContext('clearSelectedRecords()', context), setNotice() {}, invalidateStoredConflicts() {}, loadItems() {}, renderMovePicker() {}
   });
   vm.runInContext(action('moveSelectedItems', '\nasync function downloadCurrentFolder'), context);
-  choose(context, [{ id: 1, fileKey }], [{ id: 3, name: 'folder' }]);
+  choose(context, [{ id: 1, folderId: 7, fileKey }, { id: 2, folderId: 10, fileKey }], [{ id: 3, parentId: 7, name: 'folder' }]);
+  Object.assign(state.movePicker, vm.runInContext('selectedItems()', context));
+  choose(context, [{ id: 9 }]); // The dialog owns its starting records, even before submission.
   const pending = vm.runInContext('moveSelectedItems({ preventDefault() {} })', context);
-  choose(context, [{ id: 9 }]); destination.resolve({ id: 10 }); await pending;
+  choose(context, [{ id: 11 }]); destination.resolve({ id: 10 }); await pending;
   assert.deepEqual(rewrites, [[fileKey, targetKey], [folderKey, targetKey]]);
   assert.deepEqual(calls.map(([path]) => path), ['/files/1', '/folders/3']);
   assert.equal(calls[0][1].folderId, 10); assert.equal(calls[1][1].passwordAction, 'keep'); assert.equal(calls[1][1].parentId, 10);

@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-5325db2e8a02";
+const APP_BUILD_ID = "cloud-c14555a8eb7f";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -405,6 +405,7 @@ function bindEvents() {
   // キャッシュ更新の前後で任意機能の要素が不足しても、この2つは先に登録する。
   $("#move-submit")?.addEventListener("click", moveSelectedItems);
   $("#move-form")?.addEventListener("submit", moveSelectedItems);
+  $("#move-dialog")?.addEventListener("cancel", event => { if (state.movePicker?.moving) event.preventDefault(); });
   $("#move-picker-up")?.addEventListener("click", movePickerUp);
   $("#selection-delete").addEventListener("click", deleteSelectedItems);
   $("#open-thumbnail-maintenance").addEventListener("click", openThumbnailMaintenance);
@@ -442,11 +443,13 @@ function bindEvents() {
   $$("[data-view], [data-kind]").forEach((button) => button.addEventListener("click", () => selectSection(button)));
   $$(".dialog-close").forEach((button) => button.addEventListener("click", () => {
     const dialog = button.closest("dialog");
+    if (dialog.id === "move-dialog" && state.movePicker?.moving) return;
     if (dialog.id === "preview-dialog") requestPreviewClose();
     else dialog.close();
   }));
   $$("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target !== dialog || ["vault-dialog", "recovery-dialog"].includes(dialog.id)) return;
+    if (dialog.id === "move-dialog" && state.movePicker?.moving) return;
     if (dialog.id === "preview-dialog") requestPreviewClose();
     else dialog.close();
   }));
@@ -1894,6 +1897,7 @@ function releaseSessionState() {
   state.backupMount = null;
   renderDiaryBackupMount();
   state.files = []; state.folders = []; clearSelectedRecords();
+  state.movePicker = null;
   $("#content-grid").replaceChildren();
   document.querySelectorAll("video,audio").forEach(media => { media.pause(); media.removeAttribute("src"); media.load(); });
   document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
@@ -4872,6 +4876,7 @@ async function openMoveDialog() {
     return;
   }
   const submit = $("#move-submit");
+  state.movePicker = null;
   $("#move-error").textContent = "";
   $("#move-copy").textContent = `${files.length + folders.length}件の移動先を選択してください。`;
   $("#move-destination").value = "";
@@ -4884,14 +4889,19 @@ async function openMoveDialog() {
   submit.textContent = "移動先を読み込み中…";
   $("#move-dialog").showModal();
   try {
-    const scopeRoot = state.session?.role === "admin" ? null : unlockedMoveScopeRoot();
-    if (state.session?.role !== "admin" && !scopeRoot) {
+    const member = state.session?.role === "member";
+    let scopeRoot = member || state.session?.role === "admin" ? null : unlockedMoveScopeRoot();
+    if (!member && state.session?.role !== "admin" && !scopeRoot) {
       throw new Error("移動元のPW解除済みフォルダを確認できません。");
     }
     const params = new URLSearchParams();
     if (scopeRoot) params.set("scopeRootId", String(scopeRoot.id));
     const query = params.toString();
     const data = await api(`/move-destinations${query ? `?${query}` : ""}`);
+    if (member && memberFolderScopes().length === 1) {
+      scopeRoot = (data.folders || []).find(folder => Number(folder.id) === memberFolderScopes()[0].rootFolderId);
+      if (!scopeRoot) throw new Error("移動可能なフォルダを確認できませんでした。");
+    }
     const selectedFolderIds = new Set(folders.map((folder) => Number(folder.id)));
     state.movePicker = buildMovePicker(data.folders || [], scopeRoot, selectedFolderIds, files, folders);
     renderMovePicker();
@@ -4936,7 +4946,7 @@ function buildMovePicker(records, scopeRoot, selectedFolderIds, files, selectedF
   if (scopeRootId && !allowedIds.has(scopeRootId)) throw new Error("移動可能なフォルダを確認できませんでした。");
   state.moveDestinations.clear();
   for (const folder of allowed) state.moveDestinations.set(folder.id, folder);
-  return {
+  const picker = {
     byId: state.moveDestinations,
     children,
     currentId: scopeRootId,
@@ -4944,6 +4954,26 @@ function buildMovePicker(records, scopeRoot, selectedFolderIds, files, selectedF
     files,
     folders: selectedFolders
   };
+  picker.currentId = movePickerInitialFolder(picker);
+  return picker;
+}
+
+function movePickerInitialFolder(picker) {
+  const parents = [
+    ...picker.files.map(file => file.folderId),
+    ...picker.folders.map(folder => folder.parentId)
+  ];
+  const paths = parents.map(id => {
+    const path = [];
+    let current = id == null ? null : picker.byId.get(Number(id));
+    while (current && path.length < 100) {
+      path.push(current.id);
+      if (current.id === picker.scopeRootId) break;
+      current = current.parentId == null ? null : picker.byId.get(Number(current.parentId));
+    }
+    return path;
+  });
+  return paths[0]?.find(id => paths.every(path => path.includes(id))) ?? picker.scopeRootId;
 }
 
 function movePickerPath(picker) {
@@ -4972,7 +5002,8 @@ function renderMovePicker() {
   const picker = state.movePicker;
   if (!picker) return;
   const current = picker.currentId == null ? null : picker.byId.get(Number(picker.currentId));
-  const currentName = current?.name || "Cloud Storage（最上位）";
+  const member = state.session?.role === "member";
+  const currentName = current?.name || (member ? "利用できるフォルダ" : "Cloud Storage（最上位）");
   $("#move-current-location").textContent = currentName;
   $("#move-destination").value = current ? String(current.id) : "root";
 
@@ -4980,7 +5011,7 @@ function renderMovePicker() {
   breadcrumbs.innerHTML = "";
   const rootButton = document.createElement("button");
   rootButton.type = "button";
-  rootButton.textContent = picker.scopeRootId ? picker.byId.get(picker.scopeRootId)?.name || "移動可能なフォルダ" : "Cloud Storage";
+  rootButton.textContent = picker.scopeRootId ? picker.byId.get(picker.scopeRootId)?.name || "移動可能なフォルダ" : member ? "利用できるフォルダ" : "Cloud Storage";
   rootButton.dataset.folderId = picker.scopeRootId == null ? "root" : String(picker.scopeRootId);
   rootButton.setAttribute("aria-current", Number(picker.currentId) === Number(picker.scopeRootId) ? "location" : "false");
   rootButton.addEventListener("click", () => openMovePickerFolder(picker.scopeRootId));
@@ -5016,23 +5047,24 @@ function renderMovePicker() {
 
   const atScopeRoot = picker.scopeRootId != null && Number(picker.currentId) === Number(picker.scopeRootId);
   $("#move-picker-up").disabled = picker.currentId == null || atScopeRoot;
-  const filesCannotUseRoot = picker.files.length > 0 && picker.currentId == null;
+  const filesCannotUseRoot = (member || picker.files.length > 0) && picker.currentId == null;
   const unprotectedFolderCannotUseRoot = picker.currentId == null && picker.folders.some((folder) => !folder.isProtected);
   const sameLocation = movePickerCurrentIsSource(picker);
   const submit = $("#move-submit");
   // Firefoxを含め、無効なボタンが「反応しない」ように見えないようにする。
   // 同じ場所の場合も押せる状態を保ち、押した時に理由を明示する。
   submit.disabled = false;
-  submit.textContent = sameLocation ? "移動先を変更" : "ここへ移動";
+  submit.textContent = picker.batch ? "残りを確認して再試行" : sameLocation ? "移動先を変更" : "ここへ移動";
+  $("#move-dialog .move-picker").inert = Boolean(picker.batch || picker.moving);
   $("#move-error").textContent = filesCannotUseRoot
-    ? "ファイルはフォルダ内へ移動してください。"
+    ? member ? "移動先フォルダを選択してください。" : "ファイルはフォルダ内へ移動してください。"
     : unprotectedFolderCannotUseRoot
       ? "PWを持たないフォルダは最上位へ移動できません。"
       : sameLocation ? "移動元と同じ場所です。" : "";
 }
 
 function openMovePickerFolder(folderId) {
-  if (!state.movePicker) return;
+  if (!state.movePicker || state.movePicker.batch || state.movePicker.moving) return;
   const normalizedId = folderId == null ? null : Number(folderId);
   if (normalizedId != null && !state.movePicker.byId.has(normalizedId)) return;
   state.movePicker.currentId = normalizedId;
@@ -5052,7 +5084,12 @@ async function loadMoveDestination(folderId) {
   // foldersOnly=1 は一覧の高速化用で、breadcrumbs を返さない。
   // 移動時は暗号鍵の再包装に階層情報が必要なため、最小ページの通常取得を使う。
   const data = await api(`/items?folderId=${Number(folderId)}&pageSize=1`);
-  const breadcrumbs = await hydrateFolderRecords(data.breadcrumbs || [], { preserveOrder: true });
+  // Each descendant needs its parent's key. These records cannot be hydrated
+  // concurrently when the destination path has not been visited yet.
+  const breadcrumbs = [];
+  for (const record of data.breadcrumbs || []) {
+    breadcrumbs.push(...await hydrateFolderRecords([record], { preserveOrder: true }));
+  }
   const destination = breadcrumbs.find((folder) => Number(folder.id) === Number(folderId));
   if (!destination) throw new Error("移動先フォルダを確認できませんでした。");
   state.moveDestinations.set(Number(destination.id), destination);
@@ -5061,84 +5098,155 @@ async function loadMoveDestination(folderId) {
 
 async function moveSelectedItems(event) {
   event.preventDefault();
-  const { files, folders } = selectedItems();
   const picker = state.movePicker;
+  if (picker?.moving) return;
   if (!picker) {
     $("#move-error").textContent = "移動先をもう一度選択してください。";
     return;
   }
-  if (movePickerCurrentIsSource(picker)) {
+  const { files, folders } = picker;
+  if (!picker.batch && movePickerCurrentIsSource(picker)) {
     $("#move-error").textContent = "現在と同じ場所です。別のフォルダを選択してください。";
     return;
   }
   const destinationId = picker.currentId == null ? null : Number(picker.currentId);
-  if (files.length && !destinationId) {
-    $("#move-error").textContent = "ファイルはフォルダ内へ移動してください。";
+  if ((state.session?.role === "member" || files.length) && !destinationId) {
+    $("#move-error").textContent = "移動先フォルダを選択してください。";
     return;
   }
-  if (!destinationId && folders.some((folder) => !folder.isProtected)) {
+  if (!destinationId && folders.some(folder => !folder.isProtected)) {
     $("#move-error").textContent = "PWを持たないフォルダは最上位へ移動できません。";
     return;
   }
-  let destination = destinationId ? state.moveDestinations.get(destinationId) : null;
+  const session = state.session;
+  const isCurrent = () => state.session === session && state.movePicker === picker;
   const submit = $("#move-submit");
+  picker.moving = true;
   submit.disabled = true;
   submit.textContent = "移動中…";
-  let completed = 0;
-  let failed = 0;
-  const failures = [];
+  $("#move-dialog .move-picker").inert = true;
   let fatalError = null;
   try {
-    if (destinationId) destination = await loadMoveDestination(destinationId);
+    const destination = destinationId ? await loadMoveDestination(destinationId) : null;
+    if (!isCurrent()) return;
     const destinationKey = destination
-      ? (state.crypto.folderKeys.get(Number(destination.id)) || (state.session?.role === "admin" ? await ensureAdminFolderKey(destination) : null))
+      ? (state.crypto.folderKeys.get(Number(destination.id)) || (session?.role === "admin" ? await ensureAdminFolderKey(destination) : null))
       : null;
     if (destination && !destinationKey) throw new Error("移動先フォルダのPWを解除してください。");
-    for (const file of files) {
+    const retrying = Boolean(picker.batch);
+    const batch = picker.batch ||= {
+      destinationId,
+      tasks: [
+        ...files.map(record => ({ kind: "file", record, sourceId: record.folderId == null ? null : Number(record.folderId) })),
+        ...folders.map(record => ({ kind: "folder", record, sourceId: record.parentId == null ? null : Number(record.parentId) }))
+      ].map(task => ({ ...task, status: task.sourceId === destinationId ? "done" : "ready", skipped: task.sourceId === destinationId, payload: null, message: "" }))
+    };
+    for (const task of batch.tasks) {
+      if (!isCurrent()) return;
+      if (task.status === "done") continue;
+      // Never resend an uncertain operation before checking the server. Keep
+      // the same destination and wrapped package for retries; late duplicate
+      // requests are also guarded by the API's expected-source condition.
+      if (retrying && task.payload) await reconcileMoveTask(task, destinationId);
+      if (!isCurrent()) return;
+      if (task.status === "done" || task.status === "unknown" || task.status === "conflict") continue;
       try {
-        if (!file.fileKey || !destinationKey) throw new Error("ファイル鍵を確認できません。");
-        const wrapped = await TRoomCrypto.rewrapFileForFolder(file.fileKey, destinationKey);
-        await api(`/files/${file.id}`, { method: "PATCH", body: JSON.stringify({ folderId: destinationId, ...wrapped }) });
-        completed += 1;
+        if (!task.payload) {
+          if (task.kind === "file") {
+            if (!task.record.fileKey || !destinationKey) throw new Error("ファイル鍵を確認できません。");
+            const wrapped = await TRoomCrypto.rewrapFileForFolder(task.record.fileKey, destinationKey);
+            task.payload = { folderId: destinationId, expectedFolderId: task.sourceId, ...wrapped };
+          } else {
+            const key = state.crypto.folderKeys.get(Number(task.record.id)) || (session?.role === "admin" ? await ensureAdminFolderKey(task.record) : null);
+            if (!key) throw new Error("移動するフォルダのPWを解除してください。");
+            const wrapped = destinationKey ? await TRoomCrypto.rewrapFolderForParent(key, destinationKey) : {};
+            task.payload = { name: task.record.name, passwordAction: "keep", parentId: destinationId, expectedParentId: task.sourceId, ...wrapped };
+          }
+        }
+        if (!isCurrent()) return;
+        await moveRequest(`/${task.kind === "file" ? "files" : "folders"}/${task.record.id}`, { method: "PATCH", body: JSON.stringify(task.payload) });
+        task.status = "done";
+        task.message = "";
       } catch (error) {
-        failed += 1;
-        failures.push({ name: file.name, message: error.message || "移動できませんでした。" });
+        if (!isCurrent()) return;
+        task.status = "ready";
+        task.message = error.message || "移動できませんでした。";
+        if (task.payload) await reconcileMoveTask(task, destinationId);
       }
     }
-    for (const folder of folders) {
-      try {
-        if (!destinationId && !folder.isProtected) throw new Error("PWを持たないフォルダは最上位へ移動できません。");
-        const folderKey = state.crypto.folderKeys.get(Number(folder.id)) || (state.session?.role === "admin" ? await ensureAdminFolderKey(folder) : null);
-        if (!folderKey) throw new Error("移動するフォルダのPWを解除してください。");
-        const parentPackage = destinationKey ? await TRoomCrypto.rewrapFolderForParent(folderKey, destinationKey) : {};
-        await api(`/folders/${folder.id}`, { method: "PATCH", body: JSON.stringify({ name: folder.name, passwordAction: "keep", parentId: destinationId, ...parentPackage }) });
-        completed += 1;
-      } catch (error) {
-        failed += 1;
-        failures.push({ name: folder.name, message: error.message || "移動できませんでした。" });
-      }
-    }
-    if (!completed && failures.length) {
-      throw new Error(`${failures[0].name}：${failures[0].message}`);
-    }
-    $("#move-dialog").close();
-    clearFileSelection();
-    const failedNames = failures.slice(0, 3).map((failure) => failure.name).join("、");
-    setNotice(failed
-      ? `${completed}件を移動しました。${failed}件は移動できませんでした：${failedNames}${failures.length > 3 ? " ほか" : ""}`
-      : `${completed}件を移動しました。`, Boolean(failed));
+    if (!isCurrent()) return;
+    const remaining = batch.tasks.filter(task => task.status !== "done");
+    const completed = batch.tasks.filter(task => task.status === "done" && !task.skipped).length;
     if (completed) invalidateStoredConflicts();
-    await loadItems();
+    if (!remaining.length) {
+      $("#move-dialog").close();
+      clearFileSelection();
+    }
+    // Refresh the source after partial success too, then restore only unfinished
+    // records because loadItems clears the page selection as part of loading.
+    try { await loadItems(); } catch { /* Results and retry records remain available. */ }
+    if (!isCurrent()) return;
+    if (remaining.length) {
+      clearSelectedRecords();
+      for (const task of remaining) rememberSelectedRecord(task.kind, task.record);
+      syncSelectionBar();
+    }
+    const unknown = remaining.filter(task => task.status === "unknown").length;
+    const summary = `${completed}件を移動しました。` + (remaining.length
+      ? `残り${remaining.length}件${unknown ? `（結果未確認${unknown}件）` : ""}は、現在の場所を確認して再試行できます。`
+      : "");
+    setNotice(summary, Boolean(remaining.length));
+    if (remaining.length) {
+      picker.resultMessage = summary + " " + remaining.slice(0, 3).map(task => `${task.record.name}：${task.message || "移動元に残っています。"}`).join(" ／ ");
+      $("#move-copy").textContent = summary;
+    }
   } catch (error) {
     fatalError = error;
   } finally {
-    submit.disabled = false;
-    submit.textContent = "ここへ移動";
-    if ($("#move-dialog").open) {
-      renderMovePicker();
-      if (fatalError) $("#move-error").textContent = fatalError.message || "移動できませんでした。";
+    picker.moving = false;
+    if (isCurrent()) {
+      submit.disabled = false;
+      if ($("#move-dialog").open) {
+        renderMovePicker();
+        $("#move-error").textContent = fatalError?.message || picker.resultMessage || "";
+      }
     }
   }
+}
+
+async function reconcileMoveTask(task, destinationId) {
+  try {
+    const data = task.kind === "file"
+      ? await moveRequest(`/files/${task.record.id}`)
+      : await moveRequest(`/items?folderId=${task.record.id}&pageSize=1`);
+    const record = task.kind === "file" ? data.file : data.breadcrumbs?.find(folder => Number(folder.id) === Number(task.record.id));
+    if (!record || Number(record.id) !== Number(task.record.id) || (task.kind === "file" && record.deletedAt)) throw new Error("移動結果を確認できません。");
+    const parent = task.kind === "file" ? record.folderId : record.parentId;
+    if (parent === undefined) throw new Error("移動結果を確認できません。");
+    const currentId = parent == null ? null : Number(parent);
+    const wrappedMatches = task.kind === "file"
+      ? record.wrappedFileKey === task.payload.wrappedFileKey && record.fileKeyIv === task.payload.fileKeyIv
+      : (record.parentWrappedKey || null) === (task.payload.parentWrappedKey || null) && (record.parentWrapIv || null) === (task.payload.parentWrapIv || null);
+    if (currentId === destinationId && wrappedMatches) {
+      task.status = "done";
+      task.message = "";
+    } else if (currentId === task.sourceId) {
+      task.status = "ready";
+    } else {
+      task.status = "conflict";
+      task.message = "別の操作で場所または暗号化情報が変わっています。一覧で確認して選び直してください。";
+    }
+  } catch {
+    task.status = "unknown";
+    task.message = "移動結果を確認できません。通信・ログイン状態を確認して再試行してください。";
+  }
+}
+
+async function moveRequest(path, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try { return await api(path, { ...options, signal: controller.signal }); }
+  finally { clearTimeout(timer); }
 }
 
 async function downloadCurrentFolder() {

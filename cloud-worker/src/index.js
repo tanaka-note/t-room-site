@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-5325db2e8a02";
+const APP_BUILD_ID = "cloud-c14555a8eb7f";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -261,7 +261,7 @@ async function handleApi(request, env, url, path, context) {
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");
 
   if (path === "/api/favorites" && request.method === "GET") {
-    return searchItems(url, env, session, { folderId: null, query: "", kind: "", sort: "updated-desc", favoriteOwner: favoriteOwnerIds(session) });
+    return searchItems(url, env, session, { folderId: null, query: "", kind: "", sort: "updated-desc", favoriteOwner: await favoriteReadOwnerIds(env, session) });
   }
   if ((path === "/api/favorites" || path === "/api/favorites/status") && ["POST", "DELETE"].includes(request.method)) {
     return updateFavorites(request, env, session, path.endsWith("/status"));
@@ -871,8 +871,26 @@ function favoriteOwnerIds(session) {
   return session.role === "member" ? memberFolderScopes(session).map((scope) => favoriteOwnerId({ ...session, ...scope })) : [favoriteOwnerId(session)];
 }
 
+async function favoriteReadOwnerIds(env, session) {
+  const owners = favoriteOwnerIds(session);
+  if (session.role !== "member") return owners;
+  // Keep existing link/root storage identities. A moved item may still have its
+  // favorite under a former root; reads/status/removal also find those records
+  // for this same member Identity. Every target is separately checked against
+  // the current session's folder/PW scope, including in searchItems.
+  const condition = `json_valid(owner_id)
+    AND json_extract(owner_id, '$[0]') = 'passkey'
+    AND json_extract(owner_id, '$[1]') = ?
+    AND json_extract(owner_id, '$[3]') = 'folder-member'
+    AND json_extract(owner_id, '$[4]') = 'member'`;
+  const { results } = await env.DB.prepare(`SELECT owner_id FROM cloud_favorite_files WHERE ${condition}
+    UNION SELECT owner_id FROM cloud_favorite_folders WHERE ${condition}`)
+    .bind(session.identityId, session.identityId).all();
+  return [...new Set([...owners, ...(results || []).map(row => row.owner_id)])];
+}
+
 async function updateFavorites(request, env, session, statusOnly = false) {
-  const owners = favoriteOwnerIds(session), ownerSql = owners.map(() => "?").join(",");
+  const owners = await favoriteReadOwnerIds(env, session), ownerSql = owners.map(() => "?").join(",");
   const targetOwners = new Map();
   const body = await request.json();
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(400, "対象IDを確認してください。");
@@ -1254,15 +1272,16 @@ async function listMoveDestinations(url, env, session) {
     ))`;
     values.push(requestedScopeRootId, session.sessionId, Math.floor(Date.now() / 1000));
   } else if (session.role === "member") {
-    anchorCondition = "f.id = ?";
+    const scopes = memberFolderScopes(session);
+    if (requestedScopeRootId && !scopes.some(scope => scope.rootFolderId === requestedScopeRootId)) {
+      throw new HttpError(403, "このフォルダへアクセスする権限がありません。");
+    }
+    anchorCondition = `f.id IN (${scopes.map(() => "?").join(",")})`;
     descendantAccessCondition = `(child.password_hash IS NULL OR EXISTS(
       SELECT 1 FROM cloud_folder_unlocks unlock
       WHERE unlock.folder_id = child.id AND unlock.session_id = ? AND unlock.expires_at > ?
     ))`;
-    const scopes = memberFolderScopes(session);
-    const scope = requestedScopeRootId ? scopes.find((item) => item.rootFolderId === requestedScopeRootId) : scopes.length === 1 ? scopes[0] : null;
-    if (!scope) throw new HttpError(400, "移動元の親フォルダを確認してください。");
-    values.push(scope.rootFolderId, session.sessionId, Math.floor(Date.now() / 1000));
+    values.push(...scopes.map(scope => scope.rootFolderId), session.sessionId, Math.floor(Date.now() / 1000));
   }
   const result = await env.DB.prepare(`WITH RECURSIVE folder_tree(id, depth) AS (
       SELECT f.id, 0 FROM cloud_folders f WHERE ${anchorCondition} AND f.deleted_at IS NULL
@@ -1611,8 +1630,13 @@ async function updateFolder(id, request, env, session) {
   const name = validName(body.name);
   const moving = Object.prototype.hasOwnProperty.call(body, "parentId");
   const parentId = moving ? optionalId(body.parentId) : folder.parent_id;
+  const conditionalMove = moving && Object.prototype.hasOwnProperty.call(body, "expectedParentId");
+  if (conditionalMove && folder.parent_id !== optionalId(body.expectedParentId)) {
+    throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
+  }
   if (session.role === "member" && moving && !parentId) throw new HttpError(403, "連携されたT-Cloudフォルダの外へ移動できません。");
   const passwordAction = body.passwordAction === "replace" ? "replace" : "keep";
+  if (conditionalMove && passwordAction !== "keep") throw new HttpError(400, "PWの変更と移動は別々に行ってください。");
   if (!session.canEditFolders) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内の名前だけ変更できます。");
     if (moving) await requireSameUnlockedMoveScope(env, id, parentId, session, true);
@@ -1640,13 +1664,16 @@ async function updateFolder(id, request, env, session) {
       password_salt = ?, password_wrapped_key = ?, password_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .bind(name, passwordHash, passwordSalt, passwordWrappedKey, passwordWrapIv, id).run();
     await rememberFolderUnlock(env, session, id);
-  } else {
+  } else if (!moving) {
     await env.DB.prepare("UPDATE cloud_folders SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .bind(name, id).run();
   }
   if (moving) {
-    await env.DB.prepare(`UPDATE cloud_folders SET parent_id = ?, parent_wrapped_key = ?, parent_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-      .bind(parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id).run();
+    const result = await env.DB.prepare(`UPDATE cloud_folders SET name = ?, parent_id = ?, parent_wrapped_key = ?, parent_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      ${conditionalMove ? "AND parent_id IS ? AND parent_wrapped_key IS ? AND parent_wrap_iv IS ? AND name IS ?" : ""}`)
+      .bind(conditionalMove ? folder.name : name, parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id,
+        ...(conditionalMove ? [folder.parent_id, folder.parentWrappedKey, folder.parentWrapIv, folder.name] : [])).run();
+    if (conditionalMove && result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
   }
   await audit(env, "folder_updated", session, "folder", id, { folderNameEncrypted: false, passwordChanged: passwordAction === "replace", moved: moving, parentId });
   return json({ ok: true });
@@ -1895,6 +1922,10 @@ async function updateFile(id, request, env, session) {
   const unlocked = await requireFolderAccess(env, file.folder_id, session);
   const body = await readJson(request, 16384);
   const moving = Object.prototype.hasOwnProperty.call(body, "folderId");
+  const conditionalMove = moving && Object.prototype.hasOwnProperty.call(body, "expectedFolderId");
+  if (conditionalMove && file.folder_id !== optionalId(body.expectedFolderId)) {
+    throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
+  }
   if (moving) await requireMemberMoveScope(env, file.folder_id, optionalId(body.folderId), session);
   if (!session.canEditFiles) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内のファイル名だけ変更できます。");
@@ -1913,7 +1944,7 @@ async function updateFile(id, request, env, session) {
     const fileKeyIv = moving ? validCryptoText(body.fileKeyIv, 64, "ファイル鍵IV") : file.file_key_iv;
     const display = body.fastDisplay === undefined ? null : normalizeFastDisplayMetadata(body.fastDisplay, file);
     const retainDisplay = body.fastDisplay === undefined;
-    await env.DB.prepare(`UPDATE cloud_files SET encrypted_metadata = ?, metadata_iv = ?,
+    const result = await env.DB.prepare(`UPDATE cloud_files SET encrypted_metadata = ?, metadata_iv = ?,
       folder_id = ?, wrapped_file_key = ?, file_key_iv = ?,
       display_metadata_version = CASE WHEN ? THEN display_metadata_version ELSE ? END,
       display_name = CASE WHEN ? THEN display_name ELSE ? END,
@@ -1921,14 +1952,17 @@ async function updateFile(id, request, env, session) {
       display_media_kind = CASE WHEN ? THEN display_media_kind ELSE ? END,
       display_last_modified = CASE WHEN ? THEN display_last_modified ELSE ? END,
       display_duration_seconds = CASE WHEN ? THEN display_duration_seconds ELSE ? END,
-      updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      ${conditionalMove ? "AND folder_id IS ? AND wrapped_file_key IS ? AND file_key_iv IS ?" : ""}`)
       .bind(encryptedMetadata, metadataIv, folderId, wrappedFileKey, fileKeyIv,
         retainDisplay ? 1 : 0, display ? 1 : 0,
         retainDisplay ? 1 : 0, display?.name || null,
         retainDisplay ? 1 : 0, display?.mimeType || null,
         retainDisplay ? 1 : 0, display?.mediaKind || null,
         retainDisplay ? 1 : 0, display?.lastModified || null,
-        retainDisplay ? 1 : 0, display?.durationSeconds || null, id).run();
+        retainDisplay ? 1 : 0, display?.durationSeconds || null, id,
+        ...(conditionalMove ? [file.folder_id, file.wrapped_file_key, file.file_key_iv] : [])).run();
+    if (conditionalMove && result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
     await audit(env, "file_updated", session, "file", id, { encrypted: true, moved: moving, folderId });
     return json({ ok: true });
   }
@@ -1939,7 +1973,9 @@ async function updateFile(id, request, env, session) {
     await requireFolderAccess(env, folderId, session);
   }
   if (!folderId) throw new HttpError(400, "ファイルはPW付きフォルダ内に保存してください。");
-  await env.DB.prepare("UPDATE cloud_files SET original_name = ?, folder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(name, folderId, id).run();
+  const result = await env.DB.prepare(`UPDATE cloud_files SET original_name = ?, folder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? ${conditionalMove ? "AND folder_id IS ?" : ""}`)
+    .bind(name, folderId, id, ...(conditionalMove ? [file.folder_id] : [])).run();
+  if (conditionalMove && result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
   await audit(env, "file_updated", session, "file", id, { name, folderId });
   return json({ ok: true });
 }
@@ -2864,14 +2900,15 @@ async function requireMemberListingScope(env, folderId, session) {
   return scope;
 }
 
-// Move policy is separate from read scope: ordinary members stay within one
-// assigned parent, and the assigned parent itself is never a move target.
+// Both endpoints must belong to the authenticated session's fixed scope.
+// Assigned roots themselves remain immovable; folder/PW access is also checked
+// by the update handlers before any mutation.
 async function requireMemberMoveScope(env, sourceId, destinationId, session, movingFolder = false) {
   if (session.role !== "member") return;
   const source = await requireMemberFolderScope(env, sourceId, session);
-  const destination = await requireMemberFolderScope(env, destinationId, session);
-  if (source.rootFolderId !== destination.rootFolderId || (movingFolder && Number(sourceId) === source.rootFolderId)) {
-    throw new HttpError(403, "割り当てられた親フォルダの配下だけ移動できます。");
+  await requireMemberFolderScope(env, destinationId, session);
+  if (movingFolder && Number(sourceId) === source.rootFolderId) {
+    throw new HttpError(403, "割り当てられた親フォルダ自体は移動できません。");
   }
 }
 
@@ -2936,7 +2973,7 @@ function breadcrumbStatement(env, folderId, session, memberRootId) {
       WHERE parent.deleted_at IS NULL AND child.depth < 19
         AND (? IS NULL OR child.id != ?)
     )
-    SELECT f.id, f.name, f.crypto_version AS cryptoVersion,
+    SELECT f.id, f.parent_id AS parentId, f.name, f.crypto_version AS cryptoVersion,
       f.encrypted_name AS encryptedName, f.name_iv AS nameIv, f.password_salt AS passwordSalt,
       f.password_wrapped_key AS passwordWrappedKey, f.password_wrap_iv AS passwordWrapIv,
       f.admin_wrapped_key AS adminWrappedKey, f.parent_wrapped_key AS parentWrappedKey,
@@ -2949,6 +2986,7 @@ function breadcrumbStatement(env, folderId, session, memberRootId) {
 function mapBreadcrumbs(results, session, memberRootId) {
   return results.map((folder) => ({
     id: folder.id,
+    parentId: session.role === "member" && Number(folder.id) === memberRootId ? null : folder.parentId,
     name: folder.name,
     cryptoVersion: folder.cryptoVersion,
     encryptedName: folder.encryptedName,

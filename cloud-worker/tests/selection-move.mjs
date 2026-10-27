@@ -48,12 +48,11 @@ assert.match(client, /movePickerCurrentIsSource/);
 assert.match(client, /submit\.disabled = false;/);
 assert.match(client, /\$\("#move-submit"\)\?\.addEventListener\("click", moveSelectedItems\)/);
 assert.match(client, /const destinationId = picker\.currentId == null \? null : Number\(picker\.currentId\)/);
-assert.match(client, /submit\.textContent = sameLocation \? "移動先を変更" : "ここへ移動"/);
+assert.match(client, /残りを確認して再試行/);
 assert.match(client, /async function loadMoveDestination/);
 assert.match(client, /api\(`\/items\?folderId=\$\{Number\(folderId\)\}&pageSize=1`\)/);
 assert.doesNotMatch(client, /api\(`\/items\?folderId=\$\{Number\(folderId\)\}&foldersOnly=1`\)/);
-assert.match(client, /if \(!completed && failures\.length\)/);
-assert.match(client, /if \(fatalError\) \$\("#move-error"\)\.textContent/);
+assert.match(client, /async function reconcileMoveTask/);
 assert.doesNotMatch(client, /async function collectMoveDestinations/);
 assert.match(worker, /\/api\/move-destinations/);
 assert.match(worker, /async function listMoveDestinations/);
@@ -126,9 +125,25 @@ const subadminSummary = vm.runInContext(`(() => {
     children: (picker.children.get(1) || []).map((folder) => folder.name)
   };
 })()`, context);
-assert.equal(subadminSummary.currentId, 1);
+assert.equal(subadminSummary.currentId, 3, "the initial position is the source parent, within the same allowed scope");
 assert.equal(subadminSummary.rootName, "Atsushi");
 assert.deepEqual([...subadminSummary.children], ["動画"]);
+
+const initialPositions = vm.runInContext(`(() => {
+  const build = (files, folders = [], scopeRoot = null) => buildMovePicker(
+    movePickerRecords, scopeRoot, new Set(folders.map(folder => folder.id)), files, folders
+  ).currentId;
+  return [
+    build([{folderId:4}]),
+    build([], [{id:5,parentId:1}]),
+    build([{folderId:3}], [{id:5,parentId:1}]),
+    build([{folderId:4},{folderId:3}]),
+    build([{folderId:3},{folderId:2}]),
+    build([{folderId:999}], [], {id:1}),
+    build([], [{id:5,parentId:1},{id:6,parentId:5}])
+  ];
+})()`, context);
+assert.deepEqual([...initialPositions], [4,1,1,3,null,1,null], "file/folder origins, common ancestors, mixed roots, missing paths, and excluded origins");
 
 const destinationLoadSummary = await vm.runInContext(`(async () => {
   const originalApi = api;
