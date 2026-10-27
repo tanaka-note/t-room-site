@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-01c0c18bd4d6";
+const APP_BUILD_ID = "cloud-4479210a4805";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1636,7 +1636,7 @@ async function updateFolder(id, request, env, session) {
   }
   if (session.role === "member" && moving && !parentId) throw new HttpError(403, "連携されたT-Cloudフォルダの外へ移動できません。");
   const passwordAction = body.passwordAction === "replace" ? "replace" : "keep";
-  if (conditionalMove && passwordAction !== "keep") throw new HttpError(400, "PWの変更と移動は別々に行ってください。");
+  if (moving && passwordAction !== "keep") throw new HttpError(400, "PWの変更と移動は別々に行ってください。");
   if (!session.canEditFolders) {
     if (!unlocked) throw new HttpError(403, "PWで解除したフォルダ内の名前だけ変更できます。");
     if (moving) await requireSameUnlockedMoveScope(env, id, parentId, session, true);
@@ -1669,11 +1669,13 @@ async function updateFolder(id, request, env, session) {
       .bind(name, id).run();
   }
   if (moving) {
+    // A move never renames the folder, including requests from older clients.
+    // Always compare the authorized snapshot, even without expectedParentId.
     const result = await env.DB.prepare(`UPDATE cloud_folders SET name = ?, parent_id = ?, parent_wrapped_key = ?, parent_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      ${conditionalMove ? "AND parent_id IS ? AND parent_wrapped_key IS ? AND parent_wrap_iv IS ? AND name IS ?" : ""}`)
-      .bind(conditionalMove ? folder.name : name, parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id,
-        ...(conditionalMove ? [folder.parent_id, folder.parentWrappedKey, folder.parentWrapIv, folder.name] : [])).run();
-    if (conditionalMove && result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
+      AND deleted_at IS NULL AND parent_id IS ? AND parent_wrapped_key IS ? AND parent_wrap_iv IS ? AND name IS ?`)
+      .bind(folder.name, parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id,
+        folder.parent_id, folder.parentWrappedKey, folder.parentWrapIv, folder.name).run();
+    if (result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
   }
   await audit(env, "folder_updated", session, "folder", id, { folderNameEncrypted: false, passwordChanged: passwordAction === "replace", moved: moving, parentId });
   return json({ ok: true });
@@ -1935,6 +1937,10 @@ async function updateFile(id, request, env, session) {
     const retainMetadata = body.encryptedMetadata === undefined;
     const retainMetadataIv = body.metadataIv === undefined;
     const updatingMetadata = !retainMetadata || !retainMetadataIv;
+    // New clients also guard the interval before the request reaches the server.
+    // Keep snapshot-only checks for older native clients without this pair.
+    const hasExpectedMetadata = body.expectedEncryptedMetadata !== undefined || body.expectedMetadataIv !== undefined;
+    const expectedMetadata = hasExpectedMetadata ? normalizeMetadataPrecondition(body) : null;
     const encryptedMetadata = body.encryptedMetadata === undefined ? file.encrypted_metadata : validCryptoText(body.encryptedMetadata, 4096, "ファイル情報");
     const metadataIv = body.metadataIv === undefined ? file.metadata_iv : validCryptoText(body.metadataIv, 64, "ファイル情報IV");
     const folderId = moving ? optionalId(body.folderId) : file.folder_id;
@@ -1972,7 +1978,8 @@ async function updateFile(id, request, env, session) {
         retainDisplay ? 1 : 0, display?.lastModified || null,
         retainDisplay ? 1 : 0, display?.durationSeconds || null, id,
         file.folder_id, file.wrapped_file_key, file.file_key_iv,
-        ...(updatingMetadata ? [file.encrypted_metadata, file.metadata_iv] : [])).run();
+        ...(updatingMetadata ? [expectedMetadata?.expectedEncryptedMetadata ?? file.encrypted_metadata,
+          expectedMetadata?.expectedMetadataIv ?? file.metadata_iv] : [])).run();
     if (result.meta?.changes !== 1) throw new HttpError(409, "ファイルが変更されています。最新の状態を読み込み直してください。");
     await audit(env, "file_updated", session, "file", id, { encrypted: true, moved: moving, folderId });
     return json({ ok: true });
@@ -2004,6 +2011,7 @@ async function updateFileMetadataBatch(request, env, session) {
 
   const normalized = entries.map((entry) => ({
     id: optionalId(entry?.id),
+    ...normalizeMetadataPrecondition(entry),
     encryptedMetadata: validCryptoText(entry?.encryptedMetadata, 4096, "ファイル情報"),
     metadataIv: validCryptoText(entry?.metadataIv, 64, "ファイル情報IV"),
     fastDisplayInput: entry?.fastDisplay
@@ -2030,20 +2038,29 @@ async function updateFileMetadataBatch(request, env, session) {
     delete entry.fastDisplayInput;
   }
 
-  await env.DB.batch(normalized.map((entry) => env.DB.prepare(`UPDATE cloud_files
-    SET encrypted_metadata = ?, metadata_iv = ?,
-      display_name = CASE WHEN ? THEN ? ELSE display_name END,
-      display_mime_type = CASE WHEN ? THEN ? ELSE display_mime_type END,
-      display_last_modified = CASE WHEN ? THEN ? ELSE display_last_modified END,
-      display_duration_seconds = CASE WHEN ? THEN ? ELSE display_duration_seconds END,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND status = 'ready' AND deleted_at IS NULL AND crypto_version = 1`)
-    .bind(entry.encryptedMetadata, entry.metadataIv,
-      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.name || null,
-      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.mimeType || null,
-      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.lastModified || null,
-      entry.fastDisplay ? 1 : 0, entry.fastDisplay?.durationSeconds || null,
-      entry.id)));
+  // One atomic UPDATE: a failed precondition must not partially apply the batch.
+  // JSON keeps even 50 entries below D1's per-statement bound-parameter limit.
+  // Materialize eligibility before any row is changed by this statement.
+  const result = await env.DB.prepare(`WITH metadata_input AS MATERIALIZED (
+      SELECT json_extract(value, '$.id') AS id, value AS entry FROM json_each(?)
+    ), eligible AS MATERIALIZED (
+      SELECT file.id FROM cloud_files file JOIN metadata_input input ON input.id = file.id
+      WHERE file.status = 'ready' AND file.deleted_at IS NULL AND file.crypto_version = 1
+        AND file.encrypted_metadata IS json_extract(input.entry, '$.expectedEncryptedMetadata')
+        AND file.metadata_iv IS json_extract(input.entry, '$.expectedMetadataIv')
+    )
+    UPDATE cloud_files SET
+      (encrypted_metadata, metadata_iv, display_name, display_mime_type, display_last_modified, display_duration_seconds) = (
+        SELECT json_extract(entry, '$.encryptedMetadata'), json_extract(entry, '$.metadataIv'),
+          CASE WHEN json_type(entry, '$.fastDisplay') = 'object' THEN json_extract(entry, '$.fastDisplay.name') ELSE cloud_files.display_name END,
+          CASE WHEN json_type(entry, '$.fastDisplay') = 'object' THEN json_extract(entry, '$.fastDisplay.mimeType') ELSE cloud_files.display_mime_type END,
+          CASE WHEN json_type(entry, '$.fastDisplay') = 'object' THEN json_extract(entry, '$.fastDisplay.lastModified') ELSE cloud_files.display_last_modified END,
+          CASE WHEN json_type(entry, '$.fastDisplay') = 'object' THEN json_extract(entry, '$.fastDisplay.durationSeconds') ELSE cloud_files.display_duration_seconds END
+        FROM metadata_input WHERE metadata_input.id = cloud_files.id
+      ), updated_at = CURRENT_TIMESTAMP
+    WHERE id IN (SELECT id FROM eligible) AND (SELECT COUNT(*) FROM eligible) = ?`)
+    .bind(JSON.stringify(normalized), normalized.length).run();
+  if (result.meta?.changes !== normalized.length) throw new HttpError(409, "ファイルが変更されています。再度事前確認してください。");
   await audit(env, "file_metadata_batch_updated", session, "file_batch", null, {
     operationId,
     count: normalized.length,
@@ -3330,6 +3347,13 @@ function normalizeShareToken(value) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new HttpError(400, "共有URLを確認してください。");
   return token;
 }
+function normalizeMetadataPrecondition(body) {
+  return {
+    expectedEncryptedMetadata: validCryptoText(body?.expectedEncryptedMetadata, 4096, "更新前のファイル情報"),
+    expectedMetadataIv: validCryptoText(body?.expectedMetadataIv, 64, "更新前のファイル情報IV")
+  };
+}
+
 function validCryptoText(value, maxLength, label) {
   const text = String(value || "");
   if (!text || text.length > maxLength || !/^[A-Za-z0-9_-]+$/.test(text)) throw new HttpError(400, `${label}の暗号化情報を確認してください。`);
