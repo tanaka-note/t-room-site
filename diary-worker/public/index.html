@@ -61,8 +61,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-668a548a5f66">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-668a548a5f66">
+  <meta name="troom-app-build" content="diary-9baf2f553674">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-9baf2f553674">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,11 +70,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-668a548a5f66">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-9baf2f553674">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-668a548a5f66">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-668a548a5f66">
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-9baf2f553674">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-9baf2f553674">
 </head>
 <body>
   <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
@@ -473,14 +473,18 @@
     </section>
   </dialog>
 
-  <dialog id="photo-viewer-dialog" class="photo-viewer-dialog">
+  <dialog id="photo-viewer-dialog" class="photo-viewer-dialog" aria-labelledby="photo-viewer-title" aria-describedby="photo-viewer-help">
     <section class="photo-viewer-shell">
       <header class="photo-viewer-head">
         <div>
           <p id="photo-viewer-date" class="entry-date"></p>
           <h2 id="photo-viewer-title"></h2>
         </div>
-        <button class="icon-button photo-viewer-close" type="button" data-close-dialog="photo-viewer-dialog" aria-label="閉じる">×</button>
+        <div class="photo-viewer-tools">
+          <button id="photo-zoom-reset" class="icon-button photo-viewer-close" type="button" aria-label="元の大きさに戻す">100%</button>
+          <button id="photo-fullscreen" class="icon-button photo-viewer-close" type="button" aria-label="全画面で表示" aria-pressed="false" hidden>全画面</button>
+          <button class="icon-button photo-viewer-close" type="button" data-close-dialog="photo-viewer-dialog" aria-label="閉じる">×</button>
+        </div>
       </header>
       <div class="photo-stage">
         <img id="photo-viewer-image" alt="" draggable="false">
@@ -494,6 +498,7 @@
           <a id="photo-download-original" class="primary-button" href="#" download>元画質で保存</a>
         </div>
       </div>
+      <p id="photo-viewer-help" class="visually-hidden">ピンチまたはマウスホイールで拡大・縮小、拡大中はドラッグで移動できます。等倍では左右スワイプまたは左右キーで写真を切り替えます。キーボードの＋・－で拡大・縮小、0で元の大きさに戻します。</p>
     </section>
   </dialog>
 
@@ -526,8 +531,8 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-668a548a5f66" defer></script>
-  <script src="/security/passkey-client.js?v=diary-668a548a5f66" defer></script>
-  <script src="/diary/diary-bootstrap.js?v=diary-668a548a5f66" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-9baf2f553674" defer></script>
+  <script src="/security/passkey-client.js?v=diary-9baf2f553674" defer></script>
+  <script src="/diary/diary-bootstrap.js?v=diary-9baf2f553674" defer></script>
 </body>
 </html>
