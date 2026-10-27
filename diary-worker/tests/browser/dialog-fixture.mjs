@@ -150,7 +150,8 @@ export async function runDialogs(service) {
         assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.scrollTop), position);
         await page.evaluate(() => history.forward());
         await opened('photo-viewer-dialog');
-        await background('photo-viewer-dialog');
+        // The photo now fills the viewport, so there is no exposed backdrop.
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
         await closed('photo-viewer-dialog');
         assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.open), true);
         // Neither internal blank space nor a drag out of the dialog closes it.
@@ -223,6 +224,14 @@ export async function runDialogs(service) {
         await waitForPhoto(2);
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'show the selected thumbnail while full image is pending');
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-2.svg');
+        if (!touch) {
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'fullscreen success preserves the image loading status');
+          assert.equal(await page.locator('#photo-viewer-status').textContent(), '写真を読み込んでいます...');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => !document.fullscreenElement);
+        }
         await navigate(1);
         await waitForPhoto(3);
         releasePhoto(3);
@@ -250,6 +259,14 @@ export async function runDialogs(service) {
         await clickPhoto(4);
         await page.waitForFunction(() => document.getElementById('photo-viewer-status').textContent === '写真を読み込めませんでした。');
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'a failed full image retains the selected thumbnail');
+        if (!touch) {
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'fullscreen success preserves image loading errors');
+          assert.equal(await page.locator('#photo-viewer-status').textContent(), '写真を読み込めませんでした。');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => !document.fullscreenElement);
+        }
         await back('photo-viewer-dialog');
         assert.equal(await page.evaluate(() => photoWildcardScans), 0, 'opening/closing photos must not scan the entire parent grid');
         await back('camera-roll-dialog');
@@ -283,7 +300,9 @@ export async function runDialogs(service) {
         await opened('photo-viewer-dialog');
         await displayed(1);
         assert.equal(await page.locator('#photo-previous, #photo-next, .photo-nav').count(), 0, 'photo arrows are removed');
-        assert.equal(await page.locator('.photo-stage').evaluate(stage => getComputedStyle(stage).touchAction), 'pan-y pinch-zoom');
+        assert.equal(await page.locator('.photo-stage').evaluate(stage => getComputedStyle(stage).touchAction), 'none');
+        const stageBox = await page.locator('.photo-stage').boundingBox();
+        assert.deepEqual(stageBox, { x: 0, y: 0, width: touch ? 700 : 1280, height: 900 }, 'the image stage fills the viewport');
         assert.equal(await page.locator('#photo-viewer-image').evaluate(image => image.draggable), false);
         const viewerHistory = await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length }));
         await navigate(-1);
@@ -316,13 +335,110 @@ export async function runDialogs(service) {
         await page.mouse.move(boxBeforeDrag.x + boxBeforeDrag.width / 2 - 140, boxBeforeDrag.y + boxBeforeDrag.height / 2);
         await page.mouse.up();
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'mouse dragging is not photo navigation');
+        const transform = () => page.locator('.photo-stage').evaluate(stage => ({
+          scale: Number(stage.style.getPropertyValue('--photo-scale')),
+          x: parseFloat(stage.style.getPropertyValue('--photo-x')),
+          y: parseFloat(stage.style.getPropertyValue('--photo-y'))
+        }));
+        if (touch) {
+          const center = { x: stageBox.width / 2, y: stageBox.height / 2 };
+          const points = distance => [
+            { id: 1, x: center.x - distance, y: center.y },
+            { id: 2, x: center.x + distance, y: center.y }
+          ];
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(50) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(120) });
+          assert.ok((await transform()).scale > 2, 'real two-finger input zooms the image');
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: points(120).slice(0, 1) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: 100, y: center.y }] });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+          const beforePan = await transform();
+          await swipe(120);
+          const afterPan = await transform();
+          assert.ok(afterPan.x > beforePan.x, `a new single-finger drag pans the zoomed image: ${JSON.stringify({ beforePan, afterPan })}`);
+          assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'pinch and panning never switch photos');
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(120) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(30) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+          assert.equal((await transform()).scale, 1, 'pinching inward returns to fitted size');
+        } else {
+          await page.mouse.move(stageBox.width * 0.65, stageBox.height / 2);
+          await page.mouse.wheel(0, -400);
+          await page.waitForFunction(() => Number(document.querySelector('.photo-stage').style.getPropertyValue('--photo-scale')) > 2);
+          const zoomed = await transform();
+          assert.ok(zoomed.x < 0, 'wheel zoom is anchored at the mouse position');
+          await page.mouse.down();
+          await page.mouse.move(stageBox.width * 0.65 + 100, stageBox.height / 2 + 60);
+          await page.mouse.up();
+          const panned = await transform();
+          assert.ok(panned.x > zoomed.x && panned.y > zoomed.y, 'mouse dragging pans in both directions');
+          await page.keyboard.press('ArrowRight');
+          assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'arrows pan while zoomed');
+          await page.mouse.wheel(0, 10000);
+          await page.waitForFunction(() => document.querySelector('#photo-zoom-reset').textContent === '100%');
+          assert.deepEqual(await transform(), { scale: 1, x: 0, y: 0 }, 'wheel zoom-out resets offsets at fitted size');
+          await page.keyboard.press('+');
+          assert.ok((await transform()).scale > 1, 'keyboard plus zooms');
+          await page.keyboard.press('0');
+          assert.equal((await transform()).scale, 1);
+          for (const deltaMode of [1, 2]) {
+            await page.locator('.photo-stage').evaluate((stage, deltaMode) => {
+              const box = stage.getBoundingClientRect();
+              const event = new WheelEvent('wheel', { deltaY: -20, deltaMode, cancelable: true,
+                clientX: box.width / 2, clientY: box.height / 2 });
+              stage.dispatchEvent(event);
+              if (!event.defaultPrevented) throw new Error('wheel must prevent page scrolling');
+            }, deltaMode);
+            assert.ok((await transform()).scale > 1, 'line/page wheel units zoom');
+            await page.click('#photo-zoom-reset');
+          }
+          await page.locator('.photo-stage').dblclick();
+          assert.equal((await transform()).scale, 2, 'double-click zooms');
+          await page.keyboard.press('ArrowDown');
+          await page.click('#photo-zoom-reset');
+          assert.deepEqual(await transform(), { scale: 1, x: 0, y: 0 });
+        }
+        assert.equal(await page.evaluate(() => visualViewport.scale), 1, 'zoom is local to the image, not the whole page');
+        // Resizing/orientation changes must keep the photo fitted and controls visible.
+        await page.setViewportSize({ width: 900, height: 600 });
+        await page.waitForFunction(() => document.querySelector('.photo-stage').clientHeight === 600);
+        assert.equal((await transform()).scale, 1);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForFunction(() => document.querySelector('.photo-stage').clientWidth === 390);
+        for (const selector of ['#photo-zoom-reset', '[data-close-dialog="photo-viewer-dialog"]', '#photo-download-original']) {
+          const box = await page.locator(selector).boundingBox();
+          assert.ok(box.x >= 0 && box.x + box.width <= 390 && box.y >= 0 && box.y + box.height <= 844, `${selector} stays visible on a narrow screen`);
+        }
+        if (process.env.TROOM_PHOTO_SCREENSHOT_DIR) {
+          await page.screenshot({ path: resolve(process.env.TROOM_PHOTO_SCREENSHOT_DIR, `photo-${touch ? 'touch' : 'mouse'}.png`) });
+        }
+        await page.setViewportSize({ width: touch ? 700 : 1280, height: 900 });
+        await page.waitForFunction(() => document.querySelector('.photo-stage').clientHeight === 900);
         await navigate(1);
         await displayed(2);
         assert.equal(await page.locator('#photo-download-low').getAttribute('href'), '/display/2.svg?download=1', 'download follows the selected photo');
         await navigate(-1);
         await displayed(1);
         assert.deepEqual(await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length })), viewerHistory, 'photo navigation must not add or replace dialog history');
+        if (!touch) {
+          await page.locator('.photo-viewer-shell').evaluate(shell => {
+            shell.requestFullscreen = () => Promise.reject(new DOMException('Fixture fullscreen rejection', 'NotAllowedError'));
+          });
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.querySelector('#photo-viewer-status').textContent === 'この環境では全画面に切り替えられません。');
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'a rejected fullscreen request displays its error');
+          await page.locator('.photo-viewer-shell').evaluate(shell => { delete shell.requestFullscreen; });
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement === document.querySelector('.photo-viewer-shell'));
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), false, 'a successful retry clears only the old fullscreen error');
+          await page.keyboard.press('Escape');
+          await page.waitForFunction(() => !document.fullscreenElement);
+          assert.equal(await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.open), true, 'Escape exits browser fullscreen before closing the viewer');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+        }
         await back('photo-viewer-dialog');
+        await page.waitForFunction(() => !document.fullscreenElement);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
         assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.scrollTop), expandedPosition);
 

@@ -332,6 +332,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         photoViewer = viewer.createPhotoViewer({
           nodes: {
             dialog: elements.photoViewerDialog, stage: elements.photoStage,
+            shell: elements.photoViewerDialog.querySelector('.photo-viewer-shell'),
+            zoomReset: document.querySelector('#photo-zoom-reset'),
+            fullscreen: document.querySelector('#photo-fullscreen'),
             date: elements.photoViewerDate, title: elements.photoViewerTitle,
             get image() { return elements.photoViewerImage; },
             set image(value) { elements.photoViewerImage = value; },
