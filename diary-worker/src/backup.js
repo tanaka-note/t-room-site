@@ -1,6 +1,10 @@
-import { verifiedPut, digest, objectBytes } from '../../backup-worker/src/backup.js';
+import { compress, decode, publishGeneration, withBackupLock } from '../../backup-worker/src/integrity.js';
+import { snapshotStatement, snapshotTables } from '../../backup-worker/src/snapshot.js';
+import { backupPhotos, restorePhotos, validatePhotoManifest } from './photo-backup.js';
+import { prune as pruneVerified } from '../../backup-worker/src/backup.js';
 import { reportRun } from '../../backup-worker/src/monitor.js';
-const BACKUP_FORMAT_VERSION = 6;
+import { assertSchema } from '../../backup-worker/src/schema-guard.js';
+const BACKUP_FORMAT_VERSION = 7;
 const LEGACY_BACKUP_FORMAT_VERSION = 2;
 const DAILY_RETENTION = 30;
 const MONTHLY_RETENTION = 12;
@@ -8,10 +12,8 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAILY_PREFIX = "daily/";
 const MONTHLY_PREFIX = "monthly/";
 const PHOTO_BACKUP_PREFIX = "media/formal-photos/";
-// Formal photo copies are content-addressed by the immutable photo ID and are
-// intentionally outside daily/monthly pruning. Historical D1 generations can
-// otherwise outlive the media needed to restore them. Staging-only objects are
-// never copied into this prefix.
+// Legacy photo namespace, retained for compatibility only. New writes use
+// SHA-addressed objects in photo-backup.js and never prune historical photos.
 const PHOTO_VARIANTS = Object.freeze([
   ["original", "original_key"],
   ["display", "display_key"],
@@ -93,31 +95,29 @@ function backupKeys(nowMs = Date.now()) {
   const calendar = japanCalendar(nowMs);
   return {
     ...calendar,
-    daily: `${DAILY_PREFIX}${calendar.date}.json.gz`,
-    monthly: `${MONTHLY_PREFIX}${calendar.month}.json.gz`
+    daily: `v7/${DAILY_PREFIX}${calendar.date}.json.gz`,
+    monthly: `v7/${MONTHLY_PREFIX}${calendar.month}.json.gz`
   };
 }
 
 async function createDiaryBackupPayload(db, nowMs = Date.now()) {
   if (!db) throw new Error("D1 binding is unavailable");
-  const statements = BACKUP_TABLES.map((table) => db.prepare(
-    `SELECT ${table.columns.join(", ")} FROM ${table.name} ORDER BY ${table.orderBy}`
-  ));
-  const results = await db.batch(statements);
-  const tables = {};
-  for (let index = 0; index < BACKUP_TABLES.length; index += 1) {
-    const table = BACKUP_TABLES[index];
-    const rows = results[index]?.results || [];
-    tables[table.name] = {
-      columns: table.columns,
-      rowCount: rows.length,
-      rows
-    };
+  const startedAt = new Date().toISOString();
+  const result = await db.batch([snapshotStatement(db, BACKUP_TABLES),
+    ...BACKUP_TABLES.map(t => db.prepare(`SELECT name FROM pragma_table_info('${t.name}')`)),
+    db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name")]);
+  for (let i=0;i<BACKUP_TABLES.length;i++) {
+    const t=BACKUP_TABLES[i], excluded=t.name==='diary_accounts'?['login_id','password_hash','must_change_password','session_version']:[];
+    if (result[i+1].results.map(c=>c.name).sort().join(',') !== [...t.columns,...excluded].sort().join(',')) throw new Error('SchemaReviewRequired');
   }
+  const known = [...BACKUP_TABLES.map(t=>t.name),'diary_login_attempts','diary_media_deletion_queue','diary_photo_upload_sessions','diary_staged_photos','password_auth_policy','password_auth_policy_audit','d1_migrations'];
+  if (result.at(-1).results.some(t=>t.type==='table' && !known.includes(t.name))) throw new Error('SchemaReviewRequired');
+  await assertSchema('diary',result.at(-1).results);
+  const tables = snapshotTables(result[0]);
   const calendar = japanCalendar(nowMs);
   return {
     formatVersion: BACKUP_FORMAT_VERSION,
-    createdAt: new Date(nowMs).toISOString(),
+    createdAt: startedAt, completedAt: new Date().toISOString(), scheduledFor: new Date(nowMs).toISOString(), consistency: 'single-database-transaction',
     japanDate: calendar.date,
     source: {
       service: "t-room-diary",
@@ -129,26 +129,28 @@ async function createDiaryBackupPayload(db, nowMs = Date.now()) {
   };
 }
 
-async function gzipJson(value) {
-  const source = new Blob([JSON.stringify(value)], { type: "application/json" }).stream();
-  const compressed = source.pipeThrough(new CompressionStream("gzip"));
-  return new Uint8Array(await new Response(compressed).arrayBuffer());
-}
+const gzipJson = compress;
 
 async function runDiaryBackup(env, { nowMs = Date.now() } = {}) {
+  return withBackupLock(() => runDiaryBackupUnlocked(env, nowMs));
+}
+async function runDiaryBackupUnlocked(env, nowMs) {
   if (!env?.BACKUP) throw new Error("Backup bucket binding is unavailable");
   const keys = backupKeys(nowMs);
   const payload = await createDiaryBackupPayload(env.DB, nowMs);
-  const mediaBackup = await backupFormalPhotoObjects(env, payload.tables.diary_photos.rows);
+  const mediaBackup = await backupPhotos(env, payload.tables.diary_photos.rows, { now: nowMs });
   payload.mediaBackup = {
-    formatVersion: 1,
-    prefix: PHOTO_BACKUP_PREFIX,
+    formatVersion: 2,
+    objects: mediaBackup.objects,
+    oldestVerifiedAt: mediaBackup.oldestVerifiedAt,
+    prefix: 'media/verified-photos/',
     formalPhotoCount: payload.tables.diary_photos.rowCount,
     expectedObjectCount: payload.tables.diary_photos.rowCount * PHOTO_VARIANTS.length,
     copiedObjectCount: mediaBackup.copied,
     existingObjectCount: mediaBackup.existing,
     missingSourceObjectCount: mediaBackup.missing,
     failedObjectCount: mediaBackup.failed,
+    pendingObjectCount: mediaBackup.pending,
     complete: mediaBackup.complete
   };
   if (!mediaBackup.complete) return { complete: false, mediaBackup, dailyKey: keys.daily, monthlyKey: keys.monthly };
@@ -166,37 +168,15 @@ async function runDiaryBackup(env, { nowMs = Date.now() } = {}) {
     }
   };
 
-  // Validate a candidate before publishing it; preserve an existing same-day good generation.
-  const candidate = 'attempts/' + crypto.randomUUID() + '.json.gz';
-  try {
-    await verifiedPut(env.BACKUP, candidate, compressed, putOptions.customMetadata);
-    const existing = await env.BACKUP.head(keys.daily);
-    if (existing?.customMetadata?.sha256) {
-      const prior = await env.BACKUP.get(keys.daily);
-      if (!prior || await digest(await objectBytes(prior)) !== existing.customMetadata.sha256) throw new Error('ExistingGenerationInvalid');
-    }
-    if (!existing || existing.customMetadata?.mediaComplete !== 'true') {
-      await verifiedPut(env.BACKUP, keys.daily, compressed, putOptions.customMetadata);
-    }
-  } finally { await env.BACKUP.delete(candidate); }
-  const monthlyHead = await env.BACKUP.head(keys.monthly);
-  if (monthlyHead?.customMetadata?.sha256) {
-    const prior = await env.BACKUP.get(keys.monthly);
-    if (!prior || await digest(await objectBytes(prior)) !== monthlyHead.customMetadata.sha256) throw new Error('ExistingGenerationInvalid');
-  }
-  let monthlyCreated = false;
-  let monthlyUpgraded = false;
-  if (!monthlyHead || monthlyHead.customMetadata?.format !== `troom-diary-d1-v${BACKUP_FORMAT_VERSION}`) {
-    await verifiedPut(env.BACKUP, keys.monthly, compressed, putOptions.customMetadata);
-    monthlyCreated = !monthlyHead;
-    monthlyUpgraded = Boolean(monthlyHead);
-  }
-
+  const validate = validateGeneration;
+  const saved = await publishGeneration(env.BACKUP, keys.daily, compressed, putOptions.customMetadata, validate);
+  const monthly = await publishGeneration(env.BACKUP, keys.monthly, saved.bytes, putOptions.customMetadata, validate);
+  const monthlyCreated = monthly.created, monthlyUpgraded = false;
   let dailyRetention = { deleted: 0 }, monthlyRetention = { deleted: 0 }, retentionFailed = false;
   try {
     [dailyRetention, monthlyRetention] = await Promise.all([
-      pruneBackupGenerations(env.BACKUP, DAILY_PREFIX, DAILY_RETENTION),
-      pruneBackupGenerations(env.BACKUP, MONTHLY_PREFIX, MONTHLY_RETENTION)
+      pruneVerified(env.BACKUP, 'v7/daily/', DAILY_RETENTION, validate).then(deleted => ({ deleted })),
+      pruneVerified(env.BACKUP, 'v7/monthly/', MONTHLY_RETENTION, validate).then(deleted => ({ deleted }))
     ]);
   } catch { retentionFailed = true; }
   return {
@@ -222,14 +202,15 @@ async function runScheduledDiaryBackup(env, nowMs = Date.now(), { sleep = ms => 
       const result = await runDiaryBackup(env, { nowMs });
       if ((!result.complete || result.retentionFailed) && attempt < 3) { await sleep(attempt * 1000); continue; }
       await reportRun(env, 'diary', runId, result.complete ? 'succeeded' : 'partial', {
-        attempt, ...(result.complete ? { bytes: result.compressedBytes } : { stage: 'photos', reason: 'media_incomplete' })
+        attempt, ...(result.complete ? { bytes: result.compressedBytes } : { stage: 'photos', reason: 'media_incomplete', pending: result.mediaBackup.pending })
       });
       if (result.retentionFailed) await reportRun(env, 'diary', runId, 'prune_failed', { attempt, stage: 'retention', reason: 'retention_failed' });
       if (!result.complete) console.error(JSON.stringify({ event: 'diary_photo_backup_incomplete', missingObjectCount: result.mediaBackup.missing, failedObjectCount: result.mediaBackup.failed }));
       return result;
     } catch (error) {
-      if (attempt < 3) { await sleep(attempt * 1000); continue; }
-      await reportRun(env, 'diary', runId, 'failed', { attempt, stage: 'save_or_retention', reason: 'operation_failed' });
+      const reasons={SchemaReviewRequired:'schema_review_required',SnapshotTooLarge:'snapshot_too_large',UnsafeInteger:'unsafe_integer',LegacyGenerationUnverified:'legacy_unverified',VerificationFailed:'verification_failed',SnapshotInvalid:'verification_failed',MediaManifestInvalid:'verification_failed',ConcurrentWrite:'concurrent_write'};
+      if (attempt < 3 && !['SchemaReviewRequired','SnapshotTooLarge','UnsafeInteger','LegacyGenerationUnverified'].includes(error?.message)) { await sleep(attempt * 1000); continue; }
+      await reportRun(env, 'diary', runId, 'failed', { attempt, stage: 'save_or_retention', reason: reasons[error?.message] || 'operation_failed' });
       console.error(JSON.stringify({ event: 'diary_backup_failed', errorType: backupErrorType(error) }));
       return { complete: false, error: true };
     }
@@ -240,82 +221,24 @@ function formalPhotoBackupKey(photoId, variant) {
   return `${PHOTO_BACKUP_PREFIX}${encodeURIComponent(String(photoId))}/${variant}`;
 }
 
-async function backupFormalPhotoObjects(env, photoRows) {
-  if (!photoRows.length) return { complete: true, copied: 0, existing: 0, missing: 0, failed: 0 };
-  if (!env.MEDIA) throw new Error("Media bucket binding is unavailable");
-  const existingKeys = new Set((await listAllBackupObjects(env.BACKUP, PHOTO_BACKUP_PREFIX)).map((object) => object.key));
-  const result = { complete: true, copied: 0, existing: 0, missing: 0, failed: 0 };
-  for (const photo of photoRows) {
-    for (const [variant, sourceColumn] of PHOTO_VARIANTS) {
-      const destinationKey = formalPhotoBackupKey(photo.id, variant);
-      if (existingKeys.has(destinationKey)) {
-        result.existing += 1;
-        continue;
-      }
-      try {
-        const source = await env.MEDIA.get(photo[sourceColumn]);
-        if (!source) {
-          result.missing += 1;
-          continue;
-        }
-        await env.BACKUP.put(destinationKey, source.body, {
-          ...(source.httpMetadata ? { httpMetadata: source.httpMetadata } : {}),
-          customMetadata: {
-            photoId: String(photo.id),
-            variant,
-            sourceKey: String(photo[sourceColumn])
-          }
-        });
-        existingKeys.add(destinationKey);
-        result.copied += 1;
-      } catch {
-        result.failed += 1;
-      }
-    }
-  }
-  result.complete = result.missing === 0 && result.failed === 0;
-  return result;
-}
-
-async function restoreFormalPhotoObjects(env, payload) {
-  if (!env?.BACKUP || !env?.MEDIA) throw new Error("R2 bindings are unavailable");
-  validateBackupPayload(payload);
-  const photos = payload.tables.diary_photos.rows;
-  const result = { complete: true, restored: 0, existing: 0, missing: 0, failed: 0 };
-  for (const photo of photos) {
-    for (const [variant, destinationColumn] of PHOTO_VARIANTS) {
-      const destinationKey = String(photo[destinationColumn] || "");
-      if (!destinationKey) {
-        result.missing += 1;
-        continue;
-      }
-      if (await env.MEDIA.head(destinationKey)) {
-        result.existing += 1;
-        continue;
-      }
-      try {
-        const source = await env.BACKUP.get(formalPhotoBackupKey(photo.id, variant));
-        if (!source) {
-          result.missing += 1;
-          continue;
-        }
-        await env.MEDIA.put(destinationKey, source.body, {
-          ...(source.httpMetadata ? { httpMetadata: source.httpMetadata } : {})
-        });
-        result.restored += 1;
-      } catch {
-        result.failed += 1;
-      }
-    }
-  }
-  result.complete = result.missing === 0 && result.failed === 0;
-  return result;
-}
+async function backupFormalPhotoObjects(env, rows) { return backupPhotos(env, rows); }
+async function restoreFormalPhotoObjects(env, payload) { validateBackupPayload(payload); return restorePhotos(env, payload); }
 
 async function gunzipJson(source) {
-  const bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return JSON.parse(await new Response(stream).text());
+  return decode(source instanceof Uint8Array ? source : new Uint8Array(source));
+}
+
+function validateGeneration(p) {
+  validateBackupPayload(p);
+  if (p.formatVersion !== 7 || p.source?.database !== 'diary-db' || p.mediaBackup?.complete !== true || !Array.isArray(p.mediaBackup?.objects)
+    || Object.keys(p.tables).sort().join(',') !== BACKUP_TABLES.map(t=>t.name).sort().join(',')) throw new Error('SnapshotInvalid');
+  for (const t of BACKUP_TABLES) {
+    const table=p.tables[t.name];
+    if (JSON.stringify(table.columns)!==JSON.stringify(t.columns) || !Array.isArray(table.rows) || table.rowCount!==table.rows.length
+      || table.rows.some(r=>!r || Object.keys(r).sort().join(',')!==[...t.columns].sort().join(','))) throw new Error('SnapshotInvalid');
+  }
+  if(p.mediaBackup.objects.length!==p.tables.diary_photos.rows.length*3) throw new Error('MediaManifestInvalid');
+  validatePhotoManifest(p);
 }
 
 async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
@@ -336,7 +259,9 @@ async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
       ? [...expected.columns, "login_id", "password_hash", "must_change_password", "session_version"]
       : expected.columns;
     const statements = table.rows.map((row) => {
-      const values = expected.columns.map((column) => row[column] ?? null);
+      // Restored accounts require deliberate re-authorization. Old cookies and
+      // still-existing service links must not revive archived permissions.
+      const values = expected.columns.map((column) => name === 'diary_accounts' && column === 'active' ? 0 : row[column] ?? null);
       if (name === "diary_accounts") {
         const safeId = String(row.id || "account").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 80);
         values.push(`restored-${safeId}@invalid.local`, null, 1, 1);
@@ -356,7 +281,7 @@ async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
 
 function validateBackupPayload(payload) {
   const formatVersion = Number(payload?.formatVersion);
-  if (!payload || ![LEGACY_BACKUP_FORMAT_VERSION, 3, 4, 5, BACKUP_FORMAT_VERSION].includes(formatVersion) || !payload.tables) {
+  if (!payload || ![LEGACY_BACKUP_FORMAT_VERSION, 3, 4, 5, 6, BACKUP_FORMAT_VERSION].includes(formatVersion) || !payload.tables) {
     throw new Error("Unsupported diary backup format");
   }
 }
@@ -425,43 +350,6 @@ function scheduleIndependentTasks(context, tasks) {
   for (const task of tasks) context.waitUntil(Promise.resolve().then(task));
 }
 
-async function pruneBackupGenerations(bucket, prefix, retention) {
-  if (prefix !== DAILY_PREFIX && prefix !== MONTHLY_PREFIX) throw new Error("Unsupported backup prefix");
-  const objects = await listAllBackupObjects(bucket, prefix);
-  const valid = objects.filter((object) => isManagedBackupKey(object.key, prefix));
-  valid.sort((left, right) => right.key.localeCompare(left.key));
-  const obsolete = valid.slice(retention).map((object) => object.key);
-  for (let offset = 0; offset < obsolete.length; offset += 1000) {
-    await bucket.delete(obsolete.slice(offset, offset + 1000));
-  }
-  return { kept: Math.min(valid.length, retention), deleted: obsolete.length };
-}
-
-async function listAllBackupObjects(bucket, prefix) {
-  const objects = [];
-  let cursor;
-  do {
-    const page = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
-    objects.push(...page.objects);
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
-  return objects;
-}
-
-function isManagedBackupKey(key, prefix) {
-  if (prefix === DAILY_PREFIX) {
-    const match = /^daily\/(\d{4}-\d{2}-\d{2})\.json\.gz$/.exec(key);
-    if (!match) return false;
-    const parsed = new Date(`${match[1]}T00:00:00Z`);
-    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === match[1];
-  }
-  if (prefix === MONTHLY_PREFIX) {
-    const match = /^monthly\/(\d{4})-(\d{2})\.json\.gz$/.exec(key);
-    return Boolean(match && Number(match[2]) >= 1 && Number(match[2]) <= 12);
-  }
-  return false;
-}
-
 function backupErrorType(error) {
   if (error instanceof TypeError) return "TypeError";
   if (error instanceof RangeError) return "RangeError";
@@ -480,9 +368,7 @@ export {
   formalPhotoBackupKey,
   gunzipJson,
   gzipJson,
-  isManagedBackupKey,
   japanCalendar,
-  pruneBackupGenerations,
   restoreDiaryBackup,
   restoreFormalPhotoObjects,
   runDiaryBackup,

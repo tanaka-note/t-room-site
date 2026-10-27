@@ -1,11 +1,12 @@
 // Shared by scheduled producers. Never include exception text or user data.
 export async function reportRun(env, service, runId, state, details = {}, at = Date.now()) {
   const safe = {};
-  for (const name of ['stage', 'reason', 'attempt', 'bytes', 'rowCount', 'deleted', 'remaining']) {
+  for (const name of ['stage', 'reason', 'attempt', 'bytes', 'rowCount', 'deleted', 'remaining', 'pendingCount', 'pendingCapped', 'pending', 'oldestAgeDays']) {
     const value = details[name];
     if (typeof value === 'number' || typeof value === 'boolean') safe[name] = value;
     else if (typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value)) safe[name] = value;
   }
+  if (details.oldestPendingAt && Number.isFinite(Date.parse(details.oldestPendingAt))) safe.oldestPendingAt = new Date(details.oldestPendingAt).toISOString();
   const event = { eventId: `${runId}-${state}`, occurredAt: new Date(at).toISOString(), service,
     eventType: `backup_${state}`, outcome: ['failed', 'partial', 'prune_failed'].includes(state) ? 'failure' : state === 'succeeded' ? 'success' : 'info',
     authMethod: 'system', targetType: 'backup', targetId: service, details: { runId, ...safe } };
@@ -36,6 +37,6 @@ export function runState(events, { now = Date.now(), hour = 3, minute = 40 } = {
   const details = latest ? JSON.parse(latest.details_json || '{}') : {};
   return { state, lastAttemptAt: latest?.occurred_at || null, lastSuccessAt: success?.occurred_at || null,
     expectedAt: new Date(expected).toISOString(), stage: details.stage || null, reason: details.reason || null,
-    attempt: details.attempt || null, observedAt: new Date(now).toISOString(), history: sorted.slice(0, 10).map(e => ({
+    attempt: details.attempt || null, pendingCount: details.pendingCount ?? null, pendingCapped: details.pendingCapped ?? false, oldestPendingAt: details.oldestPendingAt || null, pending: details.pending ?? null, observedAt: new Date(now).toISOString(), history: sorted.slice(0, 10).map(e => ({
       at: e.occurred_at, state: e.event_type.slice(7), ...JSON.parse(e.details_json || '{}') })) };
 }

@@ -83,7 +83,7 @@ WebAuthn credential登録とT-Cloud鍵準備は別状態として扱う。PRF非
 
 通常のユーザー一覧・監査ユーザー候補はactive／invited／pending_approvalのみとする。詳細検索の「停止済みユーザーも表示」は初期OFFで、ON時だけ`includeDisabled=true`を指定してdisabled候補を取得する。監査イベント自身は切替に関係なく保持し、取得時にIdentityのdisplay_nameを解決する。停止・再招待禁止・失効・鍵管理の仕様は変更しない。
 
-Security Centerの一覧・詳細・ユーザー詳細は直近180日を表示する。日次scheduledは180日超の監査原本を非公開R2へ保存・読み戻し照合し、保存時と同一の行だけをD1から整理する。R2の監査原本は期限なしで保持し、日次30世代・月次12世代の通常バックアップとは削除規則を分ける。未保管・保存失敗・読み戻し不一致の行はD1に残し、画面では180日以内だけを表示する。詳細と初回公開条件は[バックアップ運用](../../backup-worker/README.md)を参照。
+Security Centerの一覧・詳細・ユーザー詳細は直近180日を表示する。日次scheduledと既存の毎時枠の追いつき処理は180日超の監査原本を非公開R2へ保存・読み戻し照合し、保存時と同一の行だけをD1から整理する。R2の監査原本は期限なしで保持し、日次30世代・月次12世代の通常バックアップとは削除規則を分ける。未保管・保存失敗・読み戻し不一致の行はD1に残し、画面では180日以内だけを表示する。詳細と初回公開条件は[バックアップ運用](../../backup-worker/README.md)を参照。
 
 日次scheduledはこの保管処理が成功した後、`src/identity-cleanup.js`の条件で最大20件を1件ずつ整理する。disabledで第一管理者IDでもsecurity adminでもなく、停止・最終利用から保持期間が経過し、監査イベントからの直接参照・対象ID・details内Identity ID・service link参照が一切ない場合だけ対象となる。active/pending credential、pending/active link、有効招待、招待作成者参照、setup／challenge／handoff、Client Vault／Key Envelope（credential・link経由も含む）、AI予算が1件でもあれば保持する。未終了・保持期間内・期限内・不正日時のsessionも削除を禁止する。外部DBにIdentity別履歴を持つAI／Downloaderは、disabled linkでも保持する。
 
