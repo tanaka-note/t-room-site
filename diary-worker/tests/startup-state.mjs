@@ -3,6 +3,123 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 const source = readFileSync(new URL('../public/diary.js', import.meta.url), 'utf8');
+
+function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = false } = {}) {
+  const state = { photos: [], photoOffset: 0, photoHasMore: false, photoLoading: false, photoRequestId: 0 };
+  const node = () => ({ children: [], dataset: {}, setAttribute() {},
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; } });
+  const elements = { cameraRollMore: {}, cameraRollGrid: node(), cameraRollStatus: {} };
+  const requests = [], pending = [];
+  let now = 0, failOffset = -1, pauseOffset = -1;
+  const api = async path => {
+    const url = new URL(path, 'https://fixture.test');
+    const offset = Number(url.searchParams.get('offset'));
+    const limit = Number(url.searchParams.get('limit'));
+    requests.push({ offset, limit, url });
+    if (offset === pauseOffset) await new Promise(resolve => pending.push(resolve));
+    if (offset === failOffset) { failOffset = -1; throw new Error('fixture album failure'); }
+    now += pageMs;
+    const photos = Array.from({ length: emptyPage ? 0 : Math.max(0, Math.min(limit + overReturn, total - offset)) }, (_, i) => ({ id: offset + i, entryDate: '2026-10-01' }));
+    return { photos, hasMore: emptyPage || offset + photos.length < total };
+  };
+  const constants = [...source.matchAll(/  const CAMERA_ROLL_\w+ = \d+;/g)].map(match => match[0]).join('\n');
+  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll'].map(body).join('\n');
+  const loaded = new Function('state', 'elements', 'api', 'performance', 'document', 'window', `
+    ${constants}
+    const createEmpty = () => ({}), formatDate = value => value, formatShortDate = value => value;
+    ${functions}
+    return { loadPhotos, cancelCameraRollLoad, max: CAMERA_ROLL_MAX_PHOTOS };
+  `)(state, elements, api, { now: () => now }, { createElement: node }, { clearTimeout() {} });
+  return { ...loaded, state, elements, requests, pending,
+    failAt(offset) { failOffset = offset; }, pauseAt(offset) { pauseOffset = offset; } };
+}
+
+test('album opens with 48 photos, expands to the total cap and cannot grow on repeated clicks', async () => {
+  for (const total of [4799, 4800, 4801, 100000]) {
+    const f = albumFixture({ total });
+    await f.loadPhotos(true);
+    assert.equal(f.state.photos.length, 48);
+    const firstCard = f.elements.cameraRollGrid.children[0];
+    await Promise.all([f.loadPhotos(false), f.loadPhotos(false)]);
+    assert.equal(f.state.photos.length, Math.min(total, f.max));
+    assert.equal(f.elements.cameraRollGrid.children.length, f.state.photos.length);
+    assert.equal(f.elements.cameraRollGrid.children[0], firstCard, 'appending retains earlier cards');
+    assert.equal(new Set(f.state.photos.map(p => p.id)).size, f.state.photos.length);
+    assert.equal(f.elements.cameraRollMore.hidden, true);
+    assert.equal(f.elements.cameraRollStatus.textContent.includes('表示上限'), total > f.max);
+    assert.ok(f.requests.every(r => r.limit >= 1 && r.limit <= 96));
+    const count = f.requests.length;
+    // No user-visible button exists at the cap; guard the loader as well.
+    if (total >= f.max) { await f.loadPhotos(false); assert.equal(f.requests.length, count); }
+  }
+});
+
+test('album month and search results share the cap, and reset frees the old list', async () => {
+  const f = albumFixture();
+  f.state.photoMonth = '2026-10'; f.state.photoEntryQuery = 'tag'; f.state.photoFileNameQuery = 'file';
+  await f.loadPhotos(true); await f.loadPhotos(false);
+  assert.equal(f.state.photos.length, f.max);
+  assert.ok(f.requests.every(r => r.url.searchParams.get('month') === '2026-10'
+    && r.url.searchParams.get('entryQuery') === 'tag' && r.url.searchParams.get('fileName') === 'file'));
+  const oldPhotos = f.state.photos;
+  await f.loadPhotos(true);
+  assert.notEqual(f.state.photos, oldPhotos);
+  assert.equal(f.state.photos.length, 48);
+  assert.equal(f.elements.cameraRollGrid.children.length, 48);
+  assert.equal(f.elements.cameraRollMore.hidden, false);
+  assert.doesNotMatch(f.elements.cameraRollStatus.textContent, /表示上限/);
+});
+
+test('album stops requesting pages after the time budget and resumes at the exact offset', async () => {
+  const f = albumFixture({ pageMs: 4000 });
+  await f.loadPhotos(true); await f.loadPhotos(false);
+  assert.deepEqual(f.requests.map(r => r.offset), [0, 48, 144]);
+  assert.equal(f.state.photos.length, 240);
+  assert.equal(f.elements.cameraRollMore.hidden, false);
+  assert.equal(f.elements.cameraRollMore.disabled, false);
+  await f.loadPhotos(false);
+  assert.deepEqual(f.requests.map(r => r.offset), [0, 48, 144, 240, 336]);
+});
+
+test('album page failure retains successful pages and retry stays within total capacity', async () => {
+  const f = albumFixture();
+  await f.loadPhotos(true); f.failAt(144); await f.loadPhotos(false);
+  assert.equal(f.state.photos.length, 144);
+  assert.equal(f.elements.cameraRollStatus.textContent, 'fixture album failure');
+  assert.equal(f.elements.cameraRollMore.disabled, false);
+  await f.loadPhotos(false);
+  assert.equal(f.state.photos.length, f.max);
+  assert.deepEqual(f.requests.slice(0, 5).map(r => r.offset), [0, 48, 144, 144, 240]);
+  assert.equal(f.requests.at(-1).limit, 48);
+});
+
+test('album close and filter reset invalidate pending pages and stop their request loop', async () => {
+  for (const reset of [false, true]) {
+    const f = albumFixture();
+    await f.loadPhotos(true); f.pauseAt(48);
+    const loading = f.loadPhotos(false);
+    assert.equal(f.pending.length, 1);
+    if (reset) { f.pauseAt(-1); await f.loadPhotos(true); }
+    else f.cancelCameraRollLoad();
+    const count = f.requests.length;
+    f.pending.shift()(); await loading;
+    assert.equal(f.state.photos.length, 48);
+    assert.equal(f.requests.length, count);
+    assert.equal(f.elements.cameraRollMore.disabled, false);
+  }
+});
+
+test('album empty pages terminate even with hasMore; oversized pages cannot exceed the cap', async () => {
+  const empty = albumFixture({ emptyPage: true });
+  await empty.loadPhotos(true);
+  assert.equal(empty.requests.length, 1);
+  assert.equal(empty.state.photoHasMore, false);
+  const oversized = albumFixture({ overReturn: 96 });
+  await oversized.loadPhotos(true); await oversized.loadPhotos(false);
+  assert.equal(oversized.state.photos.length, oversized.max);
+  assert.equal(new Set(oversized.state.photos.map(p => p.id)).size, oversized.max);
+});
 function body(name) {
   const start = source.indexOf(`  function ${name}(`);
   const asyncStart = source.indexOf(`  async function ${name}(`);

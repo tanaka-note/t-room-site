@@ -38,6 +38,7 @@ export async function runDialogs(service) {
       if (path === '/photos/meta') return json(response, { months: [{ value: '2026-10', count: 317 }, { value: '2026-09', count: 7 }] });
       if (path === '/photos') {
         const offset = Number(url.searchParams.get('offset') || 0);
+        const limit = Number(url.searchParams.get('limit') || 48);
         const month = url.searchParams.get('month') || '';
         const size = month === '2026-09' ? 7 : albumSize;
         albumRequests.push({ offset, month, entryQuery: url.searchParams.get('entryQuery'), fileName: url.searchParams.get('fileName'), limit: url.searchParams.get('limit') });
@@ -47,8 +48,8 @@ export async function runDialogs(service) {
           response.writeHead(503, { 'content-type': 'application/json' });
           return response.end(JSON.stringify({ error: 'fixture album failure' }));
         }
-        return json(response, { photos: Array.from({ length: Math.max(0, Math.min(48, size - offset)) }, (_, i) => ({ ...photo, id: offset + i + 1,
-          displayUrl: `/display/${offset + i + 1}.svg`, fileName: `fixture-${offset + i + 1}.svg` })), hasMore: offset + 48 < size });
+        return json(response, { photos: Array.from({ length: Math.max(0, Math.min(limit, size - offset)) }, (_, i) => ({ ...photo, id: offset + i + 1,
+          displayUrl: `/display/${offset + i + 1}.svg`, fileName: `fixture-${offset + i + 1}.svg` })), hasMore: offset + limit < size });
       }
       if (request.method !== 'GET') writes++;
       return json(response, {});
@@ -271,7 +272,7 @@ export async function runDialogs(service) {
         assert.equal(await page.evaluate(() => photoWildcardScans), 0, 'opening/closing photos must not scan the entire parent grid');
         await back('camera-roll-dialog');
         delayedPhotos.clear();
-        // Keep initial loading small, then add three pages or the entire month.
+        // Keep initial loading small, then expand progressively in bounded pages.
         albumSize = 317;
         albumRequests.length = 0;
         await page.click('#camera-roll-button');
@@ -282,18 +283,18 @@ export async function runDialogs(service) {
         await page.evaluate(() => { window.retainedPhotoCard = document.querySelector('[data-photo-index="0"]'); });
         await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
         await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
-        assert.equal(await page.locator('#camera-roll-grid button').count(), 192, 'all months adds exactly 144 photos');
-        assert.deepEqual(albumRequests.map(request => request.offset), [0, 48, 96, 144], 'double click must not duplicate requests');
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 317, 'all months expands the remaining photos');
+        assert.deepEqual(albumRequests.map(request => request.offset), [0, 48, 144, 240], 'double click must not duplicate requests');
         assert.equal(await page.evaluate(() => retainedPhotoCard === document.querySelector('[data-photo-index="0"]')), true);
-        assert.equal(await page.locator('#camera-roll-more').isVisible(), true);
+        assert.equal(await page.locator('#camera-roll-more').isVisible(), false);
         await page.selectOption('#photo-month-filter', '2026-10');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         albumRequests.length = 0;
         await page.click('#camera-roll-more');
         await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317, 'one click loads every photo in the month');
-        assert.deepEqual(albumRequests.map(request => request.offset), [48, 96, 144, 192, 240, 288]);
-        assert.ok(albumRequests.every(request => request.month === '2026-10' && request.limit === '48'));
+        assert.deepEqual(albumRequests.map(request => request.offset), [48, 144, 240]);
+        assert.ok(albumRequests.every(request => request.month === '2026-10' && request.limit === '96'));
         assert.equal(await page.locator('#camera-roll-grid img[loading="lazy"]').count(), 317);
         const expandedPosition = await page.locator('#camera-roll-dialog').evaluate(dialog => { dialog.scrollTop = 900; return dialog.scrollTop; });
         await clickPhoto(0);
@@ -446,15 +447,15 @@ export async function runDialogs(service) {
         await page.fill('#photo-entry-search', 'tag');
         await page.fill('#photo-file-name-search', 'fixture');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
-        failAlbumOffset = 96;
+        failAlbumOffset = 144;
         await page.click('#camera-roll-more');
         await page.waitForFunction(() => document.getElementById('camera-roll-status').textContent === 'fixture album failure');
-        assert.equal(await page.locator('#camera-roll-grid button').count(), 96);
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 144);
         albumRequests.length = 0;
         await page.click('#camera-roll-more');
         await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
-        assert.equal(albumRequests[0].offset, 96);
+        assert.equal(albumRequests[0].offset, 144);
         assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === 'fixture'));
 
         // Switching months invalidates a late page and stops its remaining loop.
@@ -483,6 +484,32 @@ export async function runDialogs(service) {
         await navigate(1);
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-7.svg', 'last photo does not wrap');
         await back('photo-viewer-dialog');
+        await back('camera-roll-dialog');
+        // Even repeated programmatic clicks cannot grow an album beyond 4,800.
+        albumSize = 5001;
+        albumRequests.length = 0;
+        await page.click('#camera-roll-button');
+        await page.selectOption('#photo-month-filter', '');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
+        await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
+        await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
+        // Slow test machines may hit the per-click time budget before the cap.
+        while (await page.locator('#camera-roll-more').isVisible()) {
+          await page.locator('#camera-roll-more').evaluate(button => button.click());
+          await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
+        }
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 4800);
+        assert.match(await page.locator('#camera-roll-status').textContent(), /表示上限.*絞り込んで/);
+        assert.equal(await page.locator('#camera-roll-grid button').evaluateAll(cards => new Set(cards.map(card => card.dataset.photoIndex)).size), 4800);
+        const requestsAtCap = albumRequests.length;
+        await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        assert.equal(albumRequests.length, requestsAtCap, 'the total cap must also guard the loader');
+        assert.equal(albumRequests.at(-1).offset, 4752);
+        assert.equal(albumRequests.at(-1).limit, '48', 'the last request fits the remaining capacity');
+        await page.selectOption('#photo-month-filter', '2026-09');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 7 && !document.getElementById('camera-roll-more').disabled);
+        assert.doesNotMatch(await page.locator('#camera-roll-status').textContent(), /表示上限/);
         await back('camera-roll-dialog');
         albumSize = 1;
         await page.click('#camera-roll-button');

@@ -31,6 +31,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const MONTH_HEADING_SCROLL_GAP_PX = 12;
   const TAG_SUGGESTION_MAX_HEIGHT = 246;
+  const CAMERA_ROLL_MAX_PHOTOS = 4800;
+  const CAMERA_ROLL_PAGE_SIZE = 96;
+  const CAMERA_ROLL_LOAD_BUDGET_MS = 8000;
   const RICH_TEXT_COLORS = Object.freeze({
     default: "#27313b",
     red: "#b42318",
@@ -2862,7 +2865,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function loadPhotos(reset) {
-    if (!reset && state.photoLoading) return;
+    if (!reset && (state.photoLoading || state.photos.length >= CAMERA_ROLL_MAX_PHOTOS)) return;
     const requestId = ++state.photoRequestId;
     state.photoLoading = true;
     elements.cameraRollMore.disabled = true;
@@ -2874,26 +2877,31 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       elements.cameraRollGrid.replaceChildren();
       elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     }
-    // Keep the initial request and each page small; one click expands a month
-    // completely, or adds at most three pages when all months are selected.
-    const maxAdditional = reset ? 48 : (state.photoMonth ? Infinity : 144);
-    const parameters = new URLSearchParams({ limit: "48" });
+    // Keep opening light. Expand progressively, with the same total bound for
+    // all months and filtered results, including retries and repeated clicks.
+    const maxAdditional = reset ? 48 : CAMERA_ROLL_MAX_PHOTOS - state.photos.length;
+    const parameters = new URLSearchParams();
     if (state.photoEntryQuery) parameters.set("entryQuery", state.photoEntryQuery);
     if (state.photoMonth) parameters.set("month", state.photoMonth);
     if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
     let added = 0;
+    const started = performance.now();
     try {
       do {
+        const limit = Math.min(reset ? 48 : CAMERA_ROLL_PAGE_SIZE, maxAdditional - added);
+        parameters.set("limit", String(limit));
         parameters.set("offset", String(state.photoOffset));
         const result = await api(`/photos?${parameters}`);
         if (requestId !== state.photoRequestId) return;
         const appendFrom = state.photos.length;
-        state.photos.push(...result.photos);
-        state.photoOffset += result.photos.length;
-        added += result.photos.length;
-        state.photoHasMore = Boolean(result.hasMore) && result.photos.length > 0;
+        const photos = result.photos.slice(0, limit);
+        state.photos.push(...photos);
+        state.photoOffset += photos.length;
+        added += photos.length;
+        state.photoHasMore = (Boolean(result.hasMore) || result.photos.length > limit) && photos.length > 0;
         renderCameraRoll(appendFrom);
-      } while (state.photoHasMore && added < maxAdditional);
+      } while (state.photoHasMore && added < maxAdditional
+        && performance.now() - started < CAMERA_ROLL_LOAD_BUDGET_MS);
     } catch (error) {
       if (requestId === state.photoRequestId) elements.cameraRollStatus.textContent = error.message;
     } finally {
@@ -2935,8 +2943,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       });
       elements.cameraRollGrid.append(...cards);
     }
-    elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`;
-    elements.cameraRollMore.hidden = !state.photoHasMore;
+    const atLimit = state.photos.length >= CAMERA_ROLL_MAX_PHOTOS;
+    elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`
+      + (atLimit && state.photoHasMore ? "表示上限に達しました。年月や検索条件で絞り込んでください。" : "");
+    elements.cameraRollMore.hidden = !state.photoHasMore || atLimit;
   }
 
   function handleCameraRollClick(event) {
