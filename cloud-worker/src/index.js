@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-c14555a8eb7f";
+const APP_BUILD_ID = "cloud-01c0c18bd4d6";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -1932,6 +1932,9 @@ async function updateFile(id, request, env, session) {
     if (moving) await requireSameUnlockedMoveScope(env, file.folder_id, optionalId(body.folderId), session, false);
   }
   if (Number(file.crypto_version) === 1) {
+    const retainMetadata = body.encryptedMetadata === undefined;
+    const retainMetadataIv = body.metadataIv === undefined;
+    const updatingMetadata = !retainMetadata || !retainMetadataIv;
     const encryptedMetadata = body.encryptedMetadata === undefined ? file.encrypted_metadata : validCryptoText(body.encryptedMetadata, 4096, "ファイル情報");
     const metadataIv = body.metadataIv === undefined ? file.metadata_iv : validCryptoText(body.metadataIv, 64, "ファイル情報IV");
     const folderId = moving ? optionalId(body.folderId) : file.folder_id;
@@ -1944,25 +1947,33 @@ async function updateFile(id, request, env, session) {
     const fileKeyIv = moving ? validCryptoText(body.fileKeyIv, 64, "ファイル鍵IV") : file.file_key_iv;
     const display = body.fastDisplay === undefined ? null : normalizeFastDisplayMetadata(body.fastDisplay, file);
     const retainDisplay = body.fastDisplay === undefined;
-    const result = await env.DB.prepare(`UPDATE cloud_files SET encrypted_metadata = ?, metadata_iv = ?,
-      folder_id = ?, wrapped_file_key = ?, file_key_iv = ?,
+    // Preserve fields omitted from PATCH at UPDATE time, rather than writing
+    // their earlier SELECT snapshot over another request's completed changes.
+    const result = await env.DB.prepare(`UPDATE cloud_files SET encrypted_metadata = CASE WHEN ? THEN encrypted_metadata ELSE ? END,
+      metadata_iv = CASE WHEN ? THEN metadata_iv ELSE ? END,
+      folder_id = CASE WHEN ? THEN ? ELSE folder_id END,
+      wrapped_file_key = CASE WHEN ? THEN ? ELSE wrapped_file_key END,
+      file_key_iv = CASE WHEN ? THEN ? ELSE file_key_iv END,
       display_metadata_version = CASE WHEN ? THEN display_metadata_version ELSE ? END,
       display_name = CASE WHEN ? THEN display_name ELSE ? END,
       display_mime_type = CASE WHEN ? THEN display_mime_type ELSE ? END,
       display_media_kind = CASE WHEN ? THEN display_media_kind ELSE ? END,
       display_last_modified = CASE WHEN ? THEN display_last_modified ELSE ? END,
       display_duration_seconds = CASE WHEN ? THEN display_duration_seconds ELSE ? END,
-      updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      ${conditionalMove ? "AND folder_id IS ? AND wrapped_file_key IS ? AND file_key_iv IS ?" : ""}`)
-      .bind(encryptedMetadata, metadataIv, folderId, wrappedFileKey, fileKeyIv,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'ready' AND deleted_at IS NULL
+      AND folder_id IS ? AND wrapped_file_key IS ? AND file_key_iv IS ?
+      ${updatingMetadata ? "AND encrypted_metadata IS ? AND metadata_iv IS ?" : ""}`)
+      .bind(retainMetadata ? 1 : 0, encryptedMetadata, retainMetadataIv ? 1 : 0, metadataIv,
+        moving ? 1 : 0, folderId, moving ? 1 : 0, wrappedFileKey, moving ? 1 : 0, fileKeyIv,
         retainDisplay ? 1 : 0, display ? 1 : 0,
         retainDisplay ? 1 : 0, display?.name || null,
         retainDisplay ? 1 : 0, display?.mimeType || null,
         retainDisplay ? 1 : 0, display?.mediaKind || null,
         retainDisplay ? 1 : 0, display?.lastModified || null,
         retainDisplay ? 1 : 0, display?.durationSeconds || null, id,
-        ...(conditionalMove ? [file.folder_id, file.wrapped_file_key, file.file_key_iv] : [])).run();
-    if (conditionalMove && result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
+        file.folder_id, file.wrapped_file_key, file.file_key_iv,
+        ...(updatingMetadata ? [file.encrypted_metadata, file.metadata_iv] : [])).run();
+    if (result.meta?.changes !== 1) throw new HttpError(409, "ファイルが変更されています。最新の状態を読み込み直してください。");
     await audit(env, "file_updated", session, "file", id, { encrypted: true, moved: moving, folderId });
     return json({ ok: true });
   }
@@ -1973,9 +1984,12 @@ async function updateFile(id, request, env, session) {
     await requireFolderAccess(env, folderId, session);
   }
   if (!folderId) throw new HttpError(400, "ファイルはPW付きフォルダ内に保存してください。");
-  const result = await env.DB.prepare(`UPDATE cloud_files SET original_name = ?, folder_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? ${conditionalMove ? "AND folder_id IS ?" : ""}`)
-    .bind(name, folderId, id, ...(conditionalMove ? [file.folder_id] : [])).run();
-  if (conditionalMove && result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
+  const updatingName = body.name !== undefined;
+  const result = await env.DB.prepare(`UPDATE cloud_files SET original_name = CASE WHEN ? THEN ? ELSE original_name END,
+    folder_id = CASE WHEN ? THEN ? ELSE folder_id END, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'ready' AND deleted_at IS NULL AND folder_id IS ? ${updatingName ? "AND original_name IS ?" : ""}`)
+    .bind(updatingName ? 1 : 0, name, moving ? 1 : 0, folderId, id, file.folder_id, ...(updatingName ? [file.original_name] : [])).run();
+  if (result.meta?.changes !== 1) throw new HttpError(409, "ファイルが変更されています。最新の状態を読み込み直してください。");
   await audit(env, "file_updated", session, "file", id, { name, folderId });
   return json({ ok: true });
 }

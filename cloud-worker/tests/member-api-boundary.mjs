@@ -370,6 +370,97 @@ try {
     assert.equal(db.prepare("SELECT name FROM cloud_folders WHERE id=350").get().name,"concurrent name");
     assert.equal(db.prepare("SELECT parent_id FROM cloud_folders WHERE id=350").get().parent_id,101);
   } finally { env.DB.prepare = prepareBeforeRace; }
+  // Run a second real PATCH after the first request's read/authorization, but
+  // before its UPDATE. Exercise both orders, root boundaries, and file formats.
+  async function interleaveFilePatch(id, outerCookie, outerBody, innerCookie, innerBody) {
+    let pending = true;
+    const prepareOriginal = env.DB.prepare;
+    const intercept = (sql, args = null) => {
+      const statement = args === null ? prepareOriginal(sql) : prepareOriginal(sql).bind(...args);
+      return { ...statement,
+        bind(...values) { return intercept(sql, values); },
+        async run() {
+          if (pending && sql.startsWith("UPDATE cloud_files SET")) {
+            pending = false;
+            const inner = await api(innerCookie, `/files/${id}`, "PATCH", innerBody);
+            assert.equal(inner.status, 200, JSON.stringify(inner.body));
+          }
+          return statement.run();
+        }
+      };
+    };
+    try {
+      env.DB.prepare = intercept;
+      const result = await api(outerCookie, `/files/${id}`, "PATCH", outerBody);
+      assert.equal(pending, false, "the second request ran inside the first request's read/write window");
+      return result;
+    } finally { env.DB.prepare = prepareOriginal; }
+  }
+  let raceId = 600;
+  for (const format of ["video", "document", "legacy"]) {
+    for (const destinationId of [8, 101]) {
+      for (const order of ["rename-first", "move-first"]) {
+        const id = ++raceId;
+        const encrypted = format !== "legacy";
+        const extension = format === "video" ? "mp4" : format === "document" ? "pdf" : "txt";
+        const mimeType = format === "video" ? "video/mp4" : format === "document" ? "application/pdf" : "text/plain";
+        const originalName = `旅行.${extension}`, renamedName = `旅行2026.${extension}`;
+        const destinationKey = destinationId === 101 ? nasKey : sourceKey;
+        const pack = encrypted ? await TRoomCrypto.createFilePackage({name: originalName, type: mimeType, size: 13, lastModified: 1}, sourceKey, format) : null;
+        db.prepare(`INSERT INTO cloud_files(id,folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by,
+          crypto_version,encrypted_metadata,metadata_iv,wrapped_file_key,file_key_iv,encrypted_size_bytes,chunk_size_bytes,chunk_count)
+          VALUES(?,7,?,?,?, ?,13,'ready','member',?,?,?,?,?,?,?,?)`)
+          .run(id, `rename-race-${id}`, encrypted ? '[encrypted]' : originalName, mimeType, format === "legacy" ? "document" : format,
+            encrypted ? 1 : 0, pack?.payload.encryptedMetadata || null, pack?.payload.metadataIv || null,
+            pack?.payload.wrappedFileKey || null, pack?.payload.fileKeyIv || null, pack?.payload.encryptedSizeBytes || null,
+            pack?.payload.chunkSizeBytes || null, pack?.payload.chunkCount || null);
+        const fastDisplay = format === "document" ? {name: renamedName, mimeType, mediaKind: format, signature: "pdf", lastModified: 1} : null;
+        const renameBody = encrypted
+          ? {...await TRoomCrypto.encryptFileMetadata({name: renamedName, mimeType, mediaKind: format, lastModified: 1}, pack.fileKey), fastDisplay}
+          : {name: renamedName};
+        const moveBody = {folderId: destinationId, expectedFolderId: 7,
+          ...(encrypted ? await TRoomCrypto.rewrapFileForFolder(pack.fileKey, destinationKey) : {})};
+        const result = order === "rename-first"
+          ? await interleaveFilePatch(id, group.cookie, moveBody, old.cookie, renameBody)
+          : await interleaveFilePatch(id, old.cookie, renameBody, group.cookie, moveBody);
+        assert.equal(result.status, order === "rename-first" ? 200 : 409, `${format}/${destinationId}/${order}: ${JSON.stringify(result.body)}`);
+        let after = (await api(group.cookie, `/files/${id}`)).body.file;
+        assert.equal(after.folderId, destinationId, "a late rename cannot roll back a completed move");
+        const name = encrypted
+          ? (await TRoomCrypto.decryptFileMetadata(after, await TRoomCrypto.unlockFileKey(after, destinationKey))).name
+          : after.name;
+        assert.equal(name, order === "rename-first" ? renamedName : originalName);
+        if (format === "document" && order === "rename-first") assert.equal(after.name, renamedName, "fast display and encrypted names agree");
+        if (destinationId === 101) assert.equal((await api(old.cookie, `/files/${id}`)).status, 403, "source-only user loses access after the move");
+        if (order === "move-first") {
+          // The destination-authorized session can apply the rejected rename
+          // after reloading, without replacing the new location or wrapped key.
+          assert.equal((await api(group.cookie, `/files/${id}`, "PATCH", renameBody)).status, 200);
+          after = (await api(group.cookie, `/files/${id}`)).body.file;
+          assert.equal(after.folderId, destinationId);
+          assert.equal(encrypted ? (await TRoomCrypto.decryptFileMetadata(after, await TRoomCrypto.unlockFileKey(after, destinationKey))).name : after.name, renamedName);
+        }
+        if (encrypted) {
+          const chunk = await TRoomCrypto.encryptFileChunk(pack.fileKey, new TextEncoder().encode("local-content"), 0);
+          const movedKey = await TRoomCrypto.unlockFileKey(after, destinationKey);
+          assert.equal(new TextDecoder().decode(await TRoomCrypto.decryptFileChunk(movedKey, chunk, 0)), "local-content");
+        }
+      }
+    }
+  }
+  for (const moving of [false, true]) {
+    const current = (await api(group.cookie, "/files/601")).body.file;
+    const key = await TRoomCrypto.unlockFileKey(current, sourceKey);
+    const outer = await TRoomCrypto.encryptFileMetadata({name: "stale.mp4"}, key);
+    const inner = await TRoomCrypto.encryptFileMetadata({name: "latest.mp4"}, key);
+    if (moving) Object.assign(outer, {folderId: 101, expectedFolderId: 8, ...await TRoomCrypto.rewrapFileForFolder(key, nasKey)});
+    const result = await interleaveFilePatch(601, group.cookie, outer, group.cookie, inner);
+    assert.equal(result.status, 409, "an explicit metadata update detects a competing metadata change, including combined move/rename");
+    const after = (await api(group.cookie, "/files/601")).body.file;
+    assert.equal(after.folderId, 8);
+    assert.equal((await TRoomCrypto.decryptFileMetadata(after, await TRoomCrypto.unlockFileKey(after, sourceKey))).name, "latest.mp4");
+  }
+  console.log("PASS move/rename races: both request orders, same/cross root, encrypted video/PDF/legacy, recipient decryption and source-only denial");
   revokedScope="general-user-nas";
   assert.equal((await api(group.cookie,"/items")).status,401,"non-anchor link revoke rejects the next request");
   assert.equal((await api(group.cookie,"/files/100","PATCH",{folderId:101})).status,401,"revocation also blocks moves before mutation");
