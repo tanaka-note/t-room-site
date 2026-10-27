@@ -2,6 +2,7 @@
 export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, createImage = () => new Image() }) {
   let imageRequestId = 0;
   let imageLoad = null;
+  const fullscreenErrorMessage = 'この環境では全画面に切り替えられません。';
   let scale = 1, offsetX = 0, offsetY = 0;
   const pointers = new Map();
   let gesture = null;
@@ -145,11 +146,12 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
         try {
           if (document.fullscreenElement === nodes.shell) await document.exitFullscreen();
           else await nodes.shell.requestFullscreen();
+          if (nodes.status.textContent === fullscreenErrorMessage) nodes.status.hidden = true;
           // A close/session reset can happen while the browser grants fullscreen.
           if (!nodes.dialog.open) exitFullscreen();
         } catch {
           if (!nodes.dialog.open) return;
-          nodes.status.textContent = 'この環境では全画面に切り替えられません。';
+          nodes.status.textContent = fullscreenErrorMessage;
           nodes.status.hidden = false;
         }
       });

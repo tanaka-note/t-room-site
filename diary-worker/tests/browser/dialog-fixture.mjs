@@ -224,6 +224,14 @@ export async function runDialogs(service) {
         await waitForPhoto(2);
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'show the selected thumbnail while full image is pending');
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-2.svg');
+        if (!touch) {
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'fullscreen success preserves the image loading status');
+          assert.equal(await page.locator('#photo-viewer-status').textContent(), '写真を読み込んでいます...');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => !document.fullscreenElement);
+        }
         await navigate(1);
         await waitForPhoto(3);
         releasePhoto(3);
@@ -251,6 +259,14 @@ export async function runDialogs(service) {
         await clickPhoto(4);
         await page.waitForFunction(() => document.getElementById('photo-viewer-status').textContent === '写真を読み込めませんでした。');
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'a failed full image retains the selected thumbnail');
+        if (!touch) {
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'fullscreen success preserves image loading errors');
+          assert.equal(await page.locator('#photo-viewer-status').textContent(), '写真を読み込めませんでした。');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => !document.fullscreenElement);
+        }
         await back('photo-viewer-dialog');
         assert.equal(await page.evaluate(() => photoWildcardScans), 0, 'opening/closing photos must not scan the entire parent grid');
         await back('camera-roll-dialog');
@@ -405,8 +421,16 @@ export async function runDialogs(service) {
         await displayed(1);
         assert.deepEqual(await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length })), viewerHistory, 'photo navigation must not add or replace dialog history');
         if (!touch) {
+          await page.locator('.photo-viewer-shell').evaluate(shell => {
+            shell.requestFullscreen = () => Promise.reject(new DOMException('Fixture fullscreen rejection', 'NotAllowedError'));
+          });
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.querySelector('#photo-viewer-status').textContent === 'この環境では全画面に切り替えられません。');
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'a rejected fullscreen request displays its error');
+          await page.locator('.photo-viewer-shell').evaluate(shell => { delete shell.requestFullscreen; });
           await page.click('#photo-fullscreen');
           await page.waitForFunction(() => document.fullscreenElement === document.querySelector('.photo-viewer-shell'));
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), false, 'a successful retry clears only the old fullscreen error');
           await page.keyboard.press('Escape');
           await page.waitForFunction(() => !document.fullscreenElement);
           assert.equal(await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.open), true, 'Escape exits browser fullscreen before closing the viewer');
