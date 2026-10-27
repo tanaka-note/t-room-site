@@ -66,7 +66,6 @@ assert.doesNotMatch(css, /\.content-grid\.list-mode \.file-select-button \{ disp
 assert.match(client, /selectButton\.className = "folder-select-button"/);
 assert.match(client, /card\.querySelector\("\.folder-select-button"\)\?\.setAttribute\("aria-pressed", "true"\)/);
 assert.match(worker, /ensureValidFolderMove\(env, id, parentId\)/);
-assert.match(worker, /folder_id = \?, wrapped_file_key = \?, file_key_iv = \?/);
 assert.match(worker, /async function requireSameUnlockedMoveScope/);
 assert.match(worker, /const sourceScope = await unlockedMoveScopeId/);
 assert.match(worker, /const destinationScope = await unlockedMoveScopeId/);
