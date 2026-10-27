@@ -39,7 +39,10 @@ if (start < 0
   || !body.includes("entries.length > 50")
   || !body.includes("new Set(ids).size !== ids.length")
   || !body.includes("crypto_version = 1")
-  || !body.includes("env.DB.batch")
+  || !body.includes("eligible AS MATERIALIZED")
+  || !body.includes("expectedEncryptedMetadata")
+  || !body.includes("expectedMetadataIv")
+  || !body.includes("result.meta?.changes !== normalized.length")
   || body.includes("original_name =")) {
   throw new Error("一括名称変更APIの管理者限定・暗号化専用・重複防止が不完全です。");
 }

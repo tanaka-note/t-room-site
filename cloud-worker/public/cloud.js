@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-01c0c18bd4d6";
+const APP_BUILD_ID = "cloud-4479210a4805";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -6844,8 +6844,9 @@ async function uploadOne(file, index, total, destinationFolderId, destinationFol
     try {
       const durationSeconds = normalizeDurationSeconds(await durationPromise);
       if (durationSeconds) {
+        const expectedMetadata = fileMetadataPrecondition(encrypted.payload);
         const metadata = await TRoomCrypto.encryptFileMetadata(fileMetadataForStorage(file, mediaKind, durationSeconds, file.name, containerType), encrypted.fileKey);
-        await api(`/files/${init.id}`, { method: "PATCH", body: JSON.stringify({ ...metadata, fastDisplay: fastDisplay ? { ...fastDisplay, durationSeconds } : null }), signal });
+        await api(`/files/${init.id}`, { method: "PATCH", body: JSON.stringify({ ...expectedMetadata, ...metadata, fastDisplay: fastDisplay ? { ...fastDisplay, durationSeconds } : null }), signal });
       }
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -8660,8 +8661,9 @@ async function persistMediaDuration(file, durationSeconds) {
   if (Number(file.cryptoVersion) !== 1 || !file.fileKey || !canRenameFile(file) || state.durationUpdates.has(Number(file.id))) return;
   state.durationUpdates.add(Number(file.id));
   try {
+    const expectedMetadata = fileMetadataPrecondition(file);
     const encryptedMetadata = await TRoomCrypto.encryptFileMetadata(fileMetadataForStorage(file, file.mediaKind, normalized), file.fileKey);
-    await api(`/files/${file.id}`, { method: "PATCH", body: JSON.stringify({ ...encryptedMetadata, fastDisplay: fastDisplayForExistingFile(file, file.name, normalized) }) });
+    await api(`/files/${file.id}`, { method: "PATCH", body: JSON.stringify({ ...expectedMetadata, ...encryptedMetadata, fastDisplay: fastDisplayForExistingFile(file, file.name, normalized) }) });
     file.encryptedMetadata = encryptedMetadata.encryptedMetadata;
     file.metadataIv = encryptedMetadata.metadataIv;
   } catch (error) {
@@ -8676,6 +8678,10 @@ function updateDurationDisplay(file) {
   const size = card?.querySelector(".file-size");
   if (size) size.textContent = formatMediaDetails(file);
   if (Number(state.previewFileId) === Number(file.id)) $("#preview-size").textContent = formatMediaDetails(file);
+}
+
+function fileMetadataPrecondition(file) {
+  return { expectedEncryptedMetadata: file.encryptedMetadata, expectedMetadataIv: file.metadataIv };
 }
 
 function fileMetadataForStorage(file, mediaKind, durationSeconds = null, name = file.name, containerType = file.containerType) {
@@ -8743,9 +8749,10 @@ async function saveFile(event) {
     const name = cleanEditableName($("#edit-name").value);
     if (Number(file.cryptoVersion) === 1) {
       if (!file.fileKey) throw new Error("ファイルの暗号化鍵を解除してください。");
+      const expectedMetadata = fileMetadataPrecondition(file);
       const metadata = fileMetadataForStorage(file, file.mediaKind, file.durationSeconds, name);
       const encryptedMetadata = await TRoomCrypto.encryptFileMetadata(metadata, file.fileKey);
-      await api(`/files/${id}`, { method: "PATCH", body: JSON.stringify({ ...encryptedMetadata, fastDisplay: fastDisplayForExistingFile(file, name) }) });
+      await api(`/files/${id}`, { method: "PATCH", body: JSON.stringify({ ...expectedMetadata, ...encryptedMetadata, fastDisplay: fastDisplayForExistingFile(file, name) }) });
       file.name = metadata.name;
       file.encryptedMetadata = encryptedMetadata.encryptedMetadata;
       file.metadataIv = encryptedMetadata.metadataIv;
@@ -9239,9 +9246,10 @@ async function executeBatchRename() {
     for (let index = 0; index < plan.length; index++) {
       const operation = plan[index];
       if (!operation.file.fileKey) throw new Error(`暗号化鍵を確認できません：${operation.before}`);
+      const expectedMetadata = fileMetadataPrecondition(operation.file);
       const metadata = fileMetadataForStorage(operation.file, operation.file.mediaKind, operation.file.durationSeconds, operation.after);
       const encrypted = await TRoomCrypto.encryptFileMetadata(metadata, operation.file.fileKey);
-      prepared.push({ id: Number(operation.file.id), ...encrypted, fastDisplay: fastDisplayForExistingFile(operation.file, operation.after) });
+      prepared.push({ id: Number(operation.file.id), ...expectedMetadata, ...encrypted, fastDisplay: fastDisplayForExistingFile(operation.file, operation.after) });
       if ((index + 1) % 10 === 0 || index + 1 === plan.length) status.textContent = `暗号化中 ${index + 1} / ${plan.length}件`;
     }
     let completed = 0;

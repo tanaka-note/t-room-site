@@ -1,5 +1,6 @@
 import { withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { attachPasskeyLedger } from "./passkey-ledger-fixture.mjs";
+import { checkMetadataConcurrency } from "./metadata-concurrency.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import assert from "node:assert/strict";
 import { accountDisplayName } from "../../assets/account-display.mjs";
@@ -461,6 +462,7 @@ try {
     assert.equal((await TRoomCrypto.decryptFileMetadata(after, await TRoomCrypto.unlockFileKey(after, sourceKey))).name, "latest.mp4");
   }
   console.log("PASS move/rename races: both request orders, same/cross root, encrypted video/PDF/legacy, recipient decryption and source-only denial");
+  await checkMetadataConcurrency({ db, env, api, adminCookie: admin.cookie, memberCookie: group.cookie });
   revokedScope="general-user-nas";
   assert.equal((await api(group.cookie,"/items")).status,401,"non-anchor link revoke rejects the next request");
   assert.equal((await api(group.cookie,"/files/100","PATCH",{folderId:101})).status,401,"revocation also blocks moves before mutation");
