@@ -120,6 +120,71 @@ test('album empty pages terminate even with hasMore; oversized pages cannot exce
   assert.equal(oversized.state.photos.length, oversized.max);
   assert.equal(new Set(oversized.state.photos.map(p => p.id)).size, oversized.max);
 });
+// Additional regression coverage for PR #131: edge counts, stale failures,
+// and the exact 8-second stop/resume boundary.
+test('album handles empty, tiny and page-boundary result sets without duplicate offsets', async () => {
+  for (const total of [0, 1, 47, 48, 49, 95, 96, 97, 143, 144, 145, 4799, 4800, 4801]) {
+    const f = albumFixture({ total });
+    await f.loadPhotos(true);
+    assert.equal(f.state.photos.length, Math.min(total, 48), 'initial count for ' + total);
+    assert.equal(f.requests[0].offset, 0);
+    assert.equal(f.requests[0].limit, 48);
+    if (!f.elements.cameraRollMore.hidden) await f.loadPhotos(false);
+    const expected = Math.min(total, f.max);
+    assert.equal(f.state.photos.length, expected, 'final count for ' + total);
+    assert.equal(f.state.photoOffset, expected, 'offset for ' + total);
+    assert.equal(f.state.photoHasMore, total > f.max, 'hasMore for ' + total);
+    assert.equal(f.elements.cameraRollMore.hidden, true, 'more hidden for ' + total);
+    assert.deepEqual(f.state.photos.map(p => p.id), Array.from({ length: expected }, (_, i) => i), 'photo IDs for ' + total);
+    assert.ok(f.requests.every(r => r.limit > 0 && r.limit <= 96 && r.offset + r.limit <= f.max),
+      'request limits for ' + total);
+    const count = f.requests.length;
+    if (total >= f.max) {
+      await f.loadPhotos(false);
+      assert.equal(f.requests.length, count, 'no request at the cap for ' + total);
+    }
+  }
+});
+
+test('an old album request rejection cannot overwrite the newly reset search state', async () => {
+  const f = albumFixture();
+  await f.loadPhotos(true);
+  f.pauseAt(48);
+  const oldLoad = f.loadPhotos(false);
+  assert.equal(f.pending.length, 1);
+  f.state.photoMonth = '2026-09';
+  f.pauseAt(-1);
+  f.failAt(48);
+  await f.loadPhotos(true);
+  assert.equal(f.state.photos.length, 48);
+  const freshStatus = f.elements.cameraRollStatus.textContent;
+  const requestCount = f.requests.length;
+  f.pending.shift()();
+  await oldLoad;
+  assert.equal(f.state.photos.length, 48);
+  assert.equal(f.state.photoOffset, 48);
+  assert.equal(f.elements.cameraRollStatus.textContent, freshStatus);
+  assert.equal(f.elements.cameraRollMore.disabled, false);
+  assert.equal(f.requests.length, requestCount, 'stale failed request must not continue pagination');
+  assert.equal(f.requests.at(-1).url.searchParams.get('month'), '2026-09');
+});
+
+test('album resumes exactly after the 8-second loading boundary', async () => {
+  for (const pageMs of [7999, 8000, 8001]) {
+    const f = albumFixture({ pageMs });
+    await f.loadPhotos(true);
+    await f.loadPhotos(false);
+    const expectedOffsets = pageMs < 8000 ? [0, 48, 144] : [0, 48];
+    assert.deepEqual(f.requests.map(r => r.offset), expectedOffsets, 'request offsets at ' + pageMs + 'ms');
+    const resumeAt = f.state.photoOffset;
+    assert.equal(f.elements.cameraRollMore.hidden, false);
+    assert.equal(f.elements.cameraRollMore.disabled, false);
+    await f.loadPhotos(false);
+    assert.equal(f.requests[expectedOffsets.length].offset, resumeAt, 'resume offset at ' + pageMs + 'ms');
+    assert.equal(new Set(f.state.photos.map(p => p.id)).size, f.state.photos.length, 'no duplicates at ' + pageMs + 'ms');
+  }
+});
+
 function body(name) {
   const start = source.indexOf(`  function ${name}(`);
   const asyncStart = source.indexOf(`  async function ${name}(`);
