@@ -240,5 +240,10 @@ CREATE INDEX idx_security_audit_attention_page ON security_audit_events(occurred
 -- The overview queries all current sessions, not an individual service/Identity.
 CREATE INDEX idx_security_sessions_current ON security_active_sessions(expires_at) WHERE ended_at IS NULL;
 
+-- 0026_backup_status_index predates this extension. Its table is rebuilt above.
+CREATE INDEX idx_security_backup_status
+ON security_audit_events(target_id, occurred_at DESC, event_id DESC)
+WHERE target_type = 'backup';
+
 CREATE TRIGGER household_account_guard BEFORE INSERT ON security_service_links WHEN NEW.service='household' BEGIN SELECT CASE WHEN NEW.service_account_id NOT IN ('owner','viewer') OR NEW.cloud_root_folder_id IS NOT NULL OR (NEW.service_account_id='owner' AND NEW.identity_id!='primary-admin') THEN RAISE(ABORT,'household account required') END; END;
 CREATE TRIGGER household_account_guard_update BEFORE UPDATE OF identity_id,service,service_account_id,cloud_root_folder_id ON security_service_links WHEN NEW.service='household' BEGIN SELECT CASE WHEN NEW.service_account_id NOT IN ('owner','viewer') OR NEW.cloud_root_folder_id IS NOT NULL OR (NEW.service_account_id='owner' AND NEW.identity_id!='primary-admin') THEN RAISE(ABORT,'household account required') END; END;

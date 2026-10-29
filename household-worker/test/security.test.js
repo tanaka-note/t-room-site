@@ -19,7 +19,9 @@ INSERT INTO security_health_grants VALUES ('primary-admin','sample-credential','
 INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,identity_id) VALUES ('sample-event','2026-01-01','cloud','passkey_login_success','success','primary-admin');`);}
 test('service extension preserves all existing records, envelopes, scopes, totals and foreign keys; does not auto-grant access',()=>{
  const sqlite=db();try{seed(sqlite);const names=sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>r.name),snapshot=()=>Object.fromEntries(names.map(name=>[name,sqlite.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]));const before=snapshot();
+ const indexes=sqlite.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'").all().map(r=>r.name);
  sqlite.exec('PRAGMA foreign_keys=ON;BEGIN');try{apply(sqlite);assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(),[]);assert.deepEqual(snapshot(),before);sqlite.exec('COMMIT');}catch(e){sqlite.exec('ROLLBACK');throw e;}assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM security_service_links WHERE service='household'").get().n,0);
+ const afterIndexes=new Set(sqlite.prepare("SELECT name FROM sqlite_master WHERE type='index'").all().map(r=>r.name));for(const name of indexes)assert.ok(afterIndexes.has(name),`Existing index preserved: ${name}`);
  apply(sqlite);assert.deepEqual(snapshot(),before);
  const insert=sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES (?,?,'household',?,'Sample','active')");insert.run('owner-link','primary-admin','owner');insert.run('viewer-link','sample-viewer','viewer');assert.throws(()=>insert.run('bad-owner','sample-viewer','owner'));assert.throws(()=>insert.run('unknown-role','sample-viewer','admin'));
  }finally{sqlite.close();}
