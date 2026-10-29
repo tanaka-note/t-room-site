@@ -731,7 +731,7 @@ async function getEntry(id, env, session) {
     return json({ error: "日記が見つかりません。" }, 404);
   }
   const excludedPhotoIds = parsePhotoIdList(row.draft_excluded_photo_ids);
-  const photos = await listEntryPhotos(id, env, session, Number(row.draft_of_entry_id || 0), excludedPhotoIds);
+  const photos = await listEntryPhotos(id, env, session, Number(row.draft_of_entry_id || 0), excludedPhotoIds, row.content);
   return json({ entry: { ...serializeEntry(row), photos } });
 }
 
@@ -756,17 +756,19 @@ async function updateFavorite(id, shouldFavorite, env, session) {
   return json({ ok: true, isFavorite: shouldFavorite });
 }
 
-async function listEntryPhotos(entryId, env, session, sourceEntryId = 0, excludedPhotoIds = []) {
+async function listEntryPhotos(entryId, env, session, sourceEntryId = 0, excludedPhotoIds = [], content = null) {
   const relatedEntryId = sourceEntryId || entryId;
   const result = await env.DB.prepare(`
     SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size, p.width, p.height,
            p.created_by_name, p.created_at, e.entry_date, e.title AS entry_title,
-           e.author_id, e.author_name
+           e.author_id, e.author_name,
+           instr(lower(COALESCE(?, e.content)), '[[写真:' || lower(p.id) || ']]') AS content_position
     FROM diary_photos p
     JOIN diary_entries e ON e.id = p.entry_id
     WHERE (p.entry_id = ? OR p.entry_id = ?) AND e.household_id = ?
-    ORDER BY CASE WHEN p.entry_id = ? THEN 0 ELSE 1 END, p.created_at ASC, p.id ASC
-  `).bind(entryId, relatedEntryId, session.activeHouseholdId, relatedEntryId).all();
+    ORDER BY CASE WHEN content_position = 0 THEN 1 ELSE 0 END ASC, content_position ASC,
+             CASE WHEN p.entry_id = ? THEN 0 ELSE 1 END, p.created_at ASC, p.id ASC
+  `).bind(content, entryId, relatedEntryId, session.activeHouseholdId, relatedEntryId).all();
   const excluded = new Set(excludedPhotoIds);
   return (result.results || []).filter((row) => !excluded.has(String(row.id).toLowerCase())).map(serializePhoto);
 }
@@ -779,6 +781,9 @@ async function listPhotos(url, env, session) {
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("month") || "")
     ? url.searchParams.get("month")
     : "";
+  // Only monthly albums can reverse direction. Photo order comes from the body,
+  // never the finish times of parallel uploads; legacy photos follow body photos.
+  const direction = month && url.searchParams.get("order") === "oldest" ? "ASC" : "DESC";
   const conditions = ["e.household_id = ?", "e.deleted_at IS NULL", "e.status = 'published'"];
   const bindings = [session.activeHouseholdId];
   if (entryQuery) {
@@ -806,11 +811,14 @@ async function listPhotos(url, env, session) {
   const result = await env.DB.prepare(`
     SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size, p.width, p.height,
            p.created_by_name, p.created_at, e.entry_date, e.title AS entry_title,
-           e.author_id, e.author_name
+           e.author_id, e.author_name,
+           instr(lower(e.content), '[[写真:' || lower(p.id) || ']]') AS content_position
     FROM diary_photos p
     JOIN diary_entries e ON e.id = p.entry_id
     WHERE ${conditions.join(" AND ")}
-    ORDER BY e.entry_date DESC, p.created_at DESC, p.id DESC
+    ORDER BY e.entry_date ${direction}, e.last_published_at ${direction}, e.id ${direction},
+             CASE WHEN content_position = 0 THEN 1 ELSE 0 END ${direction}, content_position ${direction},
+             p.created_at ${direction}, p.id ${direction}
     LIMIT ? OFFSET ?
   `).bind(...bindings).all();
   const rows = result.results || [];

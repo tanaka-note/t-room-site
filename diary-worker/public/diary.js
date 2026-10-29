@@ -112,6 +112,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoHasMore: false,
     photoEntryQuery: "",
     photoMonth: "",
+    photoOrder: "newest",
     photoFileNameQuery: "",
     photoRequestId: 0,
     photoLoading: false,
@@ -240,6 +241,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cameraRollDialog: document.querySelector("#camera-roll-dialog"),
     photoEntrySearch: document.querySelector("#photo-entry-search"),
     photoMonthFilter: document.querySelector("#photo-month-filter"),
+    photoSortButton: document.querySelector("#photo-sort-button"),
     photoFileNameSearch: document.querySelector("#photo-file-name-search"),
     cameraRollStatus: document.querySelector("#camera-roll-status"),
     cameraRollGrid: document.querySelector("#camera-roll-grid"),
@@ -507,6 +509,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.cameraRollGrid.addEventListener("click", handleCameraRollClick);
     elements.photoMonthFilter.addEventListener("change", () => {
       state.photoMonth = elements.photoMonthFilter.value;
+      if (!state.photoMonth) state.photoOrder = "newest";
+      updatePhotoSortButton();
+      loadPhotos(true);
+    });
+    elements.photoSortButton.addEventListener("click", () => {
+      if (!state.photoMonth) return;
+      state.photoOrder = state.photoOrder === "newest" ? "oldest" : "newest";
+      updatePhotoSortButton();
       loadPhotos(true);
     });
     elements.photoEntrySearch.addEventListener("input", () => {
@@ -2826,6 +2836,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function openCameraRoll() {
+    updatePhotoSortButton();
     dialogs.open("camera-roll-dialog");
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
@@ -2844,6 +2855,16 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
     )));
     elements.photoMonthFilter.value = monthValue;
+    updatePhotoSortButton();
+  }
+
+  function updatePhotoSortButton() {
+    const oldest = state.photoOrder === "oldest";
+    elements.photoSortButton.hidden = !state.photoMonth;
+    elements.photoSortButton.setAttribute("aria-pressed", String(oldest));
+    const label = oldest ? "古い順で表示中。新しい順に並べ替え" : "新しい順で表示中。古い順に並べ替え";
+    elements.photoSortButton.setAttribute("aria-label", label);
+    elements.photoSortButton.title = label;
   }
 
   function shouldShowEntryAuthor() {
@@ -2882,7 +2903,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const maxAdditional = reset ? 48 : CAMERA_ROLL_MAX_PHOTOS - state.photos.length;
     const parameters = new URLSearchParams();
     if (state.photoEntryQuery) parameters.set("entryQuery", state.photoEntryQuery);
-    if (state.photoMonth) parameters.set("month", state.photoMonth);
+    if (state.photoMonth) {
+      parameters.set("month", state.photoMonth);
+      parameters.set("order", state.photoOrder);
+    }
     if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
     let added = 0;
     const started = performance.now();
@@ -3918,6 +3942,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cancelCameraRollLoad();
     state.photoEntryQuery = "";
     state.photoMonth = "";
+    state.photoOrder = "newest";
+    updatePhotoSortButton();
     state.photoFileNameQuery = "";
     state.viewerPhotos = [];
     state.viewerIndex = -1;
