@@ -3,8 +3,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
-export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household'];
-export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat'];
+export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar'];
+export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat', 'android-calendar'];
 export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
 const node = (cwd, ...args) => ({ cwd, args });
@@ -35,6 +35,7 @@ export function commands(target) {
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup', 'passkey-performance'
     ].map(n => `tests/${n}.mjs`)),
     backup: [{ cwd: 'backup-worker', script: 'test' }],
+    calendar: [{ cwd: 'calendar-worker', script: 'test' }],
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     diary: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-diary'),
       node('.', 'tools/verify-web-contracts.mjs'),
@@ -88,6 +89,7 @@ export function affected(paths) {
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');
     if (/^(package\.json$|pnpm-)/.test(path)) { add('tooling', 'site'); continue; }
     const mobile = android.find(d => path.startsWith(`${d}/`));
+    if (path === 'tools/update-calendar-holidays.mjs') { add('android-calendar'); continue; }
     if (mobile) { add(mobile); continue; }
     const service = [...services, 'backup'].find(s => path.startsWith(`${s}-worker/`));
     if (service) add(service);
@@ -153,7 +155,7 @@ export function ciPlan({ event, ref, base, head, defaultBranch = 'origin/main' }
 export function installDirectories(selected) {
   const dirs = new Set(['.']);
   for (const target of selected) {
-    if (['site', 'diary'].includes(target)) dirs.add('security-worker');
+    if (['site', 'diary', 'calendar'].includes(target)) dirs.add('security-worker');
     if (services.includes(target) || target === 'backup') dirs.add(`${target}-worker`);
     if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'household', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);

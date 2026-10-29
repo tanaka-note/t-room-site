@@ -158,7 +158,7 @@ export const SERVICES = {
     "label": "Security Center",
     "binding": "SECURITY_DB",
     "database": "security-db",
-    "migration": "0026_backup_status_index.sql",
+    "migration": "0027_calendar_service.sql",
     "tables": [
       {
         "name": "security_identities",
@@ -840,6 +840,68 @@ export const SERVICES = {
       "downloader_usage_daily",
       "downloader_jobs",
       "downloader_file_delivery_attempts"
+    ]
+  },
+  "calendar": {
+    "label": "カレンダー",
+    "binding": "CALENDAR_DB",
+    "database": "calendar-db",
+    "migration": "0001_calendar.sql",
+    "tables": [
+      {
+        "name": "calendar_accounts",
+        "columns": [
+          "id",
+          "display_name",
+          "is_active",
+          "session_version",
+          "created_at"
+        ],
+        "sourceColumns": "id,display_name,is_active,session_version,created_at"
+      },
+      {
+        "name": "calendar_clock",
+        "columns": [
+          "id",
+          "value"
+        ],
+        "sourceColumns": "id,value"
+      },
+      {
+        "name": "calendar_entities",
+        "columns": [
+          "account_id",
+          "owner_identity",
+          "kind",
+          "id",
+          "payload",
+          "version",
+          "purged",
+          "updated_seq",
+          "updated_at"
+        ],
+        "sourceColumns": "account_id,owner_identity,kind,id,payload,version,purged,updated_seq,updated_at"
+      },
+      {
+        "name": "calendar_requests",
+        "columns": [
+          "account_id",
+          "owner_identity",
+          "request_id",
+          "payload_hash",
+          "kind",
+          "entity_id",
+          "response_json",
+          "created_at"
+        ],
+        "sourceColumns": "account_id,owner_identity,request_id,payload_hash,kind,entity_id,response_json,created_at"
+      }
+    ],
+    "knownTables": [
+      "calendar_accounts",
+      "calendar_clock",
+      "calendar_entities",
+      "calendar_requests"
     ]
   }
 };

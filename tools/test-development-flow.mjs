@@ -61,7 +61,7 @@ test('Cloud edits do not select Android, Downloader or unrelated services', () =
   assert.deepEqual(affected(['cloud-worker/tests/manual-thumbnail-api.mjs']), ['cloud']);
 });
 test('shared authentication, PRF and SW changes include consumers', () => {
-  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'auth']);
+  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar', 'auth']);
   const auth = affected(['assets/session-policy.mjs']);
   for (const t of ['cloud', 'diary', 'billing', 'auth']) assert.ok(auth.includes(t), t);
   assert.ok(affected(['security-worker/src/index.js']).includes('auth'));
@@ -70,6 +70,8 @@ test('shared authentication, PRF and SW changes include consumers', () => {
   assert.deepEqual(affected(['diary-worker/public/manifest.webmanifest']), ['diary']);
   assert.ok(commands('diary').some(command => command.args?.includes('tools/verify-web-contracts.mjs')));
   assert.deepEqual(affected(['android-ai-chat/app/build.gradle.kts']), ['android-ai-chat']);
+  assert.deepEqual(affected(['android-calendar/app/build.gradle.kts']), ['android-calendar']);
+  assert.deepEqual(affected(['calendar-worker/src/api.js']), ['calendar']);
   assert.deepEqual(affected(['AGENTS.md', 'docs/development.md']), []);
 });
 test('Downloader 2 components select only Downloader 2 while unknown files remain site-safe', () => {
