@@ -114,6 +114,13 @@ try {
       }
       await page.click('#photo-sort-button');
       await waitFirst(60);
+      // Also cover the second page in descending order: switching direction
+      // after paging must reset the offset, then append 60..1 without duplicates.
+      await page.click('#camera-roll-more');
+      await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid img').length === 60);
+      assert.deepEqual(await order(), Array.from({ length: 60 }, (_, i) => 60 - i));
+      assert.equal(requests.at(-1).order, 'newest');
+      assert.equal(requests.at(-1).offset, '48');
       // An older sort request must never overwrite a newer sort selection.
       holdOldest = true;
       await page.click('#photo-sort-button');
