@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
-export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments'];
+export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat'];
 export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
@@ -47,6 +47,7 @@ export function commands(target) {
       { cwd: 'downloader2-worker', script: 'test' }
     ],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
+    household: [{ cwd: 'household-worker', script: 'test' }],
     payments: [{ cwd: 'payments-worker', script: 'test' }],
     inventory: [{ cwd: 'inventory-worker', script: 'test' }],
     health: [{ cwd: 'health-worker', script: 'test' }],
@@ -60,6 +61,7 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
+  if (target === 'household') return ['household-worker/test/household.browser.mjs'];
   if (target === 'payments') return ['payments-worker/test/payments.browser.mjs'];
   if (target === 'health') return ['health-worker/test/health.browser.mjs'];
   const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs', 'tools/test-asset-report.browser.mjs'], cloud: ['cloud-worker/tests/photo-fullscreen.browser.mjs', 'cloud-worker/tests/photo-viewer.browser.mjs', 'cloud-worker/tests/photo-download.browser.mjs', 'cloud-worker/tests/photo-lifecycle.browser.mjs', 'cloud-worker/tests/folder-scroll-position.browser.mjs', 'cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
@@ -153,7 +155,7 @@ export function installDirectories(selected) {
   for (const target of selected) {
     if (['site', 'diary'].includes(target)) dirs.add('security-worker');
     if (services.includes(target) || target === 'backup') dirs.add(`${target}-worker`);
-    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'auth'].includes(target)) dirs.add('diary-worker');
+    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'household', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }
   return [...dirs];

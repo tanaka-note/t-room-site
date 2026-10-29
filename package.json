@@ -28,6 +28,7 @@
     "verify:cloud": "node tools/verify.mjs --target cloud --browser --build",
     "verify:security": "node tools/verify.mjs --target security --browser --build",
     "verify:diary": "node tools/verify.mjs --target diary --browser --build",
+    "verify:household": "node tools/verify.mjs --target household --browser --build",
     "verify:billing": "node tools/verify.mjs --target billing --browser --build",
     "verify:downloader": "node tools/verify.mjs --target downloader --browser --build",
     "verify:downloader2": "node tools/verify.mjs --target downloader2 --build",

@@ -415,6 +415,43 @@
       "deployTarget": "t-room-payments",
       "deployCwd": "payments-worker",
       "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "household",
+      "name": "家計簿",
+      "publicUrls": [
+        "https://tanaka-note.com/household/"
+      ],
+      "entrypoints": [
+        "household-worker/public/index.html"
+      ],
+      "buildRoots": [
+        "household-worker/public"
+      ],
+      "buildFiles": [
+        "household-worker/src/index.js",
+        "household-worker/src/domain.js",
+        "household-worker/src/api.js",
+        "assets/session-secret.mjs",
+        "assets/session-policy.mjs",
+        "assets/passkey-rolling.mjs",
+        "assets/security-audit-worker.js",
+        "security-worker/public/passkey-client.js",
+        "diary-worker/public/dialog-navigation.js"
+      ],
+      "assetCopies": [
+        {
+          "source": "diary-worker/public/dialog-navigation.js",
+          "copy": "household-worker/public/dialog-navigation.js"
+        }
+      ],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "manifest": null,
+      "twa": null,
+      "deployTarget": "t-room-household",
+      "deployCwd": "household-worker",
+      "deployCommand": "pnpm run deploy"
     }
   ],
   "excludedHtml": [
