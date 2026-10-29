@@ -10,7 +10,7 @@ const KNOWN_TABLES = new Set([
 ]);
 // Reviewed derived counts contain no Identity/link/credential/key references.
 // These triggers only maintain those counts; unknown triggers still stop cleanup.
-const KNOWN_TRIGGERS = new Set(["security_audit_daily_insert", "security_audit_daily_delete", "security_audit_daily_update", "health_members_only", "health_members_only_update", "payments_owner_only", "payments_owner_only_update"]);
+const KNOWN_TRIGGERS = new Set(["security_audit_daily_insert", "security_audit_daily_delete", "security_audit_daily_update", "health_members_only", "health_members_only_update", "payments_owner_only", "payments_owner_only_update", "household_account_guard", "household_account_guard_update"]);
 
 export const DISABLED_IDENTITY_CLEANUP_LIMIT = 20;
 
@@ -24,7 +24,7 @@ export const DISABLED_IDENTITY_CLEANUP_GUARD = `
   AND (identity.last_seen_at IS NULL OR datetime(identity.last_seen_at) < datetime(?1))
   AND NOT EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = identity.id AND c.status != 'revoked')
   AND NOT EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = identity.id
-    AND (l.status != 'disabled' OR l.service IN ('ai', 'downloader', 'downloader2', 'inventory', 'health', 'payments')))
+    AND (l.status != 'disabled' OR l.service IN ('ai', 'downloader', 'downloader2', 'inventory', 'health', 'payments', 'household')))
   AND NOT EXISTS (SELECT 1 FROM security_invitations v WHERE v.identity_id = identity.id AND v.status NOT IN ('used', 'revoked', 'expired'))
   AND NOT EXISTS (SELECT 1 FROM security_invitations v WHERE v.created_by_identity_id = identity.id)
   AND NOT EXISTS (SELECT 1 FROM security_health_members WHERE identity_id=identity.id)

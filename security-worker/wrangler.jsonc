@@ -32,6 +32,7 @@
     { "binding": "DOWNLOADER2_AUTH", "service": "t-room-downloader2", "entrypoint": "SecurityIntegration" },
     { "binding": "INVENTORY_AUTH", "service": "t-room-inventory", "entrypoint": "SecurityIntegration" },
     { "binding": "PAYMENTS_AUTH", "service": "t-room-payments", "entrypoint": "SecurityIntegration" },
+    { "binding": "HOUSEHOLD_AUTH", "service": "t-room-household", "entrypoint": "SecurityIntegration" },
     { "binding": "HEALTH_AUTH", "service": "t-room-health", "entrypoint": "SecurityIntegration" }
   ],
   "queues": {

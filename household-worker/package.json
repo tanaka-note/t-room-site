@@ -1,0 +1,11 @@
+{
+  "name": "t-room-household-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/domain.js && node --check public/household.js",
+    "test": "node --test test/*.test.js",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": { "wrangler": "4.121.0" }
+}

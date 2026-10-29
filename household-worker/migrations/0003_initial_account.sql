@@ -1,0 +1,1 @@
+INSERT INTO household_records VALUES ('initial','accounts','a1df6478-920b-4766-9c09-f082b5fbf272','{"id":"a1df6478-920b-4766-9c09-f082b5fbf272","name":"減価償却","type":"調整","archived":false,"items":[{"id":"0613a69c-1cd7-4981-bcd5-54a4dedbb987","name":"減価償却費","amount":0}]}');

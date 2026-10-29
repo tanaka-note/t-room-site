@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-household",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-14",
+  "routes": [
+    {
+      "pattern": "tanaka-note.com/household*",
+      "zone_name": "tanaka-note.com"
+    }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "household-db",
+      "database_id": "cb41cbc5-53c8-4868-95e1-94d92b7b5289",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SECURITY_AUDIT",
+        "queue": "t-room-security-audit"
+      }
+    ]
+  },
+  "vars": {
+    "SESSION_VERSION": "1",
+    "PASSKEY_ENABLED": "true"
+  },
+  "observability": {
+    "enabled": false
+  }
+}
