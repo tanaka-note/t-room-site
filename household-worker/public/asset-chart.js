@@ -1,0 +1,126 @@
+(() => {
+  'use strict';
+  const yenFormat = new Intl.NumberFormat('ja-JP', {style:'currency', currency:'JPY', maximumFractionDigits:0});
+  const yen = value => yenFormat.format(value);
+  const monthIndex = month => Number(month.slice(0, 4)) * 12 + Number(month.slice(5)) - 1;
+  const monthAt = index => `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`;
+  const monthLabel = month => `${Number(month.slice(0,4))}年${Number(month.slice(5))}月末`;
+
+  function periodPoints(points, period, start, end) {
+    if (!points.length) return [];
+    if (period === 'all') return points.slice();
+    const last = monthIndex(points.at(-1).month);
+    const from = period === 'custom' ? monthIndex(start) : last - Number(period) + 1;
+    const to = period === 'custom' ? monthIndex(end) : last;
+    return points.filter(point => monthIndex(point.month) >= from && monthIndex(point.month) <= to);
+  }
+
+  function previousChange(points, selected) {
+    const previous = points.find(point => monthIndex(point.month) === monthIndex(selected.month) - 1);
+    return previous ? selected.value - previous.value : null;
+  }
+
+  function axis(values, includeZero) {
+    const min = Math.min(...values), max = Math.max(...values);
+    const padding = Math.max((max - min) * .08, Math.abs(max) * .01, 1);
+    let low = includeZero && min >= 0 ? 0 : min - padding;
+    let high = includeZero && max <= 0 ? 0 : max + padding;
+    const rawStep = (high - low) / 4, power = 10 ** Math.floor(Math.log10(rawStep));
+    const step = Math.max(1, [1, 2, 2.5, 5, 10].find(number => number * power >= rawStep) * power);
+    low = Math.floor(low / step) * step; high = Math.ceil(high / step) * step;
+    if (low === high) high = low + step;
+    const magnitude = Math.max(Math.abs(low), Math.abs(high));
+    const [unit, label] = magnitude >= 1e12 ? [1e12, '兆円'] : magnitude >= 1e8 ? [1e8, '億円'] : magnitude >= 1e4 ? [1e4, '万円'] : [1, '円'];
+    const precision = Math.max(0, Math.min(3, Math.ceil(-Math.log10(step / unit))));
+    const ticks = Array.from({length: Math.round((high - low) / step) + 1}, (_, i) => low + i * step);
+    const format = value => (Object.is(value, -0) ? 0 : value / unit).toLocaleString('ja-JP', {maximumFractionDigits:precision});
+    return {low, high, ticks, label, format};
+  }
+
+  function xTicks(first, last, width) {
+    const start = monthIndex(first), end = monthIndex(last), span = end - start;
+    if (!span) return [{index:start, label:first.replace('-', '/')}];
+    const count = Math.max(2, Math.min(7, Math.floor(width / 78) + 1));
+    const step = [1,2,3,6,12,24,36,60,120,240].find(number => number >= span / (count - 1)) || Math.ceil(span / (count - 1));
+    const label = index => span >= 24 ? `${Math.floor(index / 12)}年` : monthAt(index).replace('-', '/');
+    const ticks = [{index:start, label:label(start)}];
+    const minDistance = Math.min(78, width / 2);
+    for (let index = Math.ceil((start + 1) / step) * step; index < end; index += step) {
+      if ((index - ticks.at(-1).index) / span * width < minDistance || (end - index) / span * width < minDistance) continue;
+      if (label(index) !== ticks.at(-1).label && label(index) !== label(end)) ticks.push({index, label:label(index)});
+    }
+    ticks.push({index:end, label:label(end)});
+    return ticks;
+  }
+
+  function nearest(points, index) {
+    let left = 0, right = points.length - 1;
+    while (left < right) {const middle = Math.floor((left + right) / 2); if (monthIndex(points[middle].month) < index) left = middle + 1; else right = middle;}
+    return left && index - monthIndex(points[left - 1].month) <= monthIndex(points[left].month) - index ? left - 1 : left;
+  }
+
+  function create({root, month, value, change, position, previous, next, live}) {
+    const ns = 'http://www.w3.org/2000/svg';
+    let points = [], comparison = [], selected = null, selectedIndex = -1, includeZero = true, busy = false, frame = null, painting = null;
+    function select(index, announce = false) {
+      if (!points.length) return;
+      selectedIndex = Math.max(0, Math.min(points.length - 1, index));
+      const point = points[selectedIndex]; selected = point.month;
+      month.textContent = monthLabel(point.month); value.textContent = yen(point.value);
+      const difference = previousChange(comparison, point);
+      change.textContent = difference === null ? '前月の記録なし' : `前月比 ${difference > 0 ? '＋' : difference < 0 ? '−' : ''}${yen(Math.abs(difference))}`;
+      position.value = String(selectedIndex); position.setAttribute('aria-valuetext', `${month.textContent} ${value.textContent}`);
+      previous.disabled = busy || selectedIndex === 0; next.disabled = busy || selectedIndex === points.length - 1;
+      if (painting) {const location = painting.coordinates[selectedIndex];painting.guide.setAttribute('x1', location.x);painting.guide.setAttribute('x2', location.x);painting.dot.setAttribute('cx', location.x);painting.dot.setAttribute('cy', location.y);}
+      if (announce) live.textContent = `${month.textContent}、${value.textContent}、${change.textContent}`;
+    }
+    function draw() {
+      const width = Math.round(root.getBoundingClientRect().width);
+      if (!width) return; // A hidden view must never determine the chart geometry.
+      root.replaceChildren(); painting = null;
+      if (!points.length) {const empty = document.createElement('p');empty.className = 'empty';empty.textContent = 'この期間の月末記録はありません。';root.append(empty);return;}
+      const height = width < 560 ? 240 : 320, left = 64, right = width - 14, top = 28, bottom = height - 36;
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);svg.setAttribute('width', width);svg.setAttribute('height', height);svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', `${points[0].month}から${points.at(-1).month}、月末残高${points.length}件。下の月選択でも数値を確認できます。`);
+      const add = (tag, attributes, text) => {const node = document.createElementNS(ns, tag);for (const [key, item] of Object.entries(attributes)) node.setAttribute(key, item);if (text !== undefined) node.textContent = text;svg.append(node);return node;};
+      const scale = axis(points.map(point => point.value), includeZero), start = monthIndex(points[0].month), end = monthIndex(points.at(-1).month);
+      const x = index => left + (start === end ? .5 : (index - start) / (end - start)) * (right - left);
+      const y = amount => bottom - (amount - scale.low) / (scale.high - scale.low) * (bottom - top);
+      add('text', {x:left, y:16, class:'chart-unit'}, `残高（${scale.label}）`);
+      for (const tick of scale.ticks) {add('line', {x1:left, x2:right, y1:y(tick), y2:y(tick), class:tick === 0 ? 'chart-grid chart-zero' : 'chart-grid'});add('text', {x:left - 9, y:y(tick) + 4, 'text-anchor':'end', class:'chart-y-tick'}, scale.format(tick));}
+      const ticks = xTicks(points[0].month, points.at(-1).month, right - left);
+      for (const [i, tick] of ticks.entries()) add('text', {x:x(tick.index), y:height - 12, 'text-anchor':ticks.length === 1 ? 'middle' : i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle', class:'chart-x-tick'}, tick.label);
+      const coordinates = points.map(point => ({x:x(monthIndex(point.month)), y:y(point.value)}));
+      const path = coordinates.map((point, i) => `${i && monthIndex(points[i].month) === monthIndex(points[i - 1].month) + 1 ? 'L' : 'M'}${point.x},${point.y}`).join(' ');
+      add('path', {d:path, class:'chart-line', 'vector-effect':'non-scaling-stroke'});
+      for (let i = 0; i < points.length; i++) if ((!i || monthIndex(points[i].month) - monthIndex(points[i - 1].month) !== 1) && (i === points.length - 1 || monthIndex(points[i + 1].month) - monthIndex(points[i].month) !== 1)) add('circle', {cx:coordinates[i].x, cy:coordinates[i].y, r:3, class:'chart-isolated'});
+      const guide = add('line', {x1:0, x2:0, y1:top, y2:bottom, class:'chart-guide'}), dot = add('circle', {cx:0, cy:0, r:5, class:'chart-selected'});
+      const overlay = add('rect', {x:left, y:top, width:right - left, height:bottom - top, fill:'transparent', class:'chart-hit', 'aria-hidden':'true'});
+      let pointer = null;
+      const inspect = (event, announce = false) => {const box = svg.getBoundingClientRect(), ratio = (event.clientX - box.left - left) / (right - left);select(nearest(points, start + Math.max(0, Math.min(1, ratio)) * (end - start)), announce);};
+      overlay.onpointerdown = event => {if (busy) return;pointer = event.pointerId;overlay.setPointerCapture(event.pointerId);inspect(event, true);};
+      overlay.onpointermove = event => {if (!busy && (event.pointerType === 'mouse' || pointer === event.pointerId)) inspect(event);};
+      overlay.onpointerup = event => {if (!busy) inspect(event, true);pointer = null;if (overlay.hasPointerCapture(event.pointerId)) overlay.releasePointerCapture(event.pointerId);};
+      overlay.onpointercancel = () => {pointer = null;};
+      painting = {coordinates, guide, dot};root.append(svg);select(selectedIndex);
+    }
+    function resize() {if (frame !== null) cancelAnimationFrame(frame);frame = requestAnimationFrame(() => {frame = null;draw();});}
+    position.oninput = () => select(Number(position.value), true);
+    previous.onclick = () => select(selectedIndex - 1, true);next.onclick = () => select(selectedIndex + 1, true);
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
+    observer?.observe(root);window.addEventListener('resize', resize);
+    return {
+      update(values, allValues = values, zero = false) {
+        points = values;comparison = allValues;includeZero = zero;painting = null;
+        const found = points.findIndex(point => point.month === selected);selectedIndex = found >= 0 ? found : points.length - 1;
+        position.min = '0';position.max = String(Math.max(0, points.length - 1));position.disabled = busy || points.length < 2;
+        if (points.length) select(selectedIndex);else {root.replaceChildren();month.textContent = '月末の記録なし';value.textContent = '—';change.textContent = '';position.value = '0';position.removeAttribute('aria-valuetext');previous.disabled = next.disabled = true;}
+        resize();
+      },
+      resize,
+      setBusy(value) {busy = value;position.disabled = busy || points.length < 2;previous.disabled = busy || selectedIndex <= 0;next.disabled = busy || selectedIndex < 0 || selectedIndex === points.length - 1;}
+    };
+  }
+  globalThis.TRoomAssetChart = Object.freeze({create, monthIndex, monthAt, periodPoints, previousChange, axis, xTicks, nearest});
+})();
