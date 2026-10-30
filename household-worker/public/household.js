@@ -84,7 +84,7 @@
     for(const b of controls.children)b.setAttribute('aria-pressed',String(b.dataset.chartPeriod===chartPeriod));
     const months=TRoomAssetChart.periodPoints(all,chartPeriod),wanted=new Set(months.map(s=>s.month)),values=series.filter(s=>wanted.has(s.month));
     $('chart-range').textContent=values.length?`${values[0].month.replace('-','年')}月〜${values.at(-1).month.replace('-','年')}月・${values.length}件の月末記録`:'表示する記録がありません。';
-    assetChart.update(values,series,chartPeriod==='all');
+    assetChart.update(values,series);
     const root=$('snapshots'),openYears=new Set([...root.querySelectorAll('details[open]')].map(d=>d.dataset.year)),rendered=root.childElementCount>0;root.replaceChildren();const groups=new Map();
     for(const s of [...values].reverse()){const year=s.month.slice(0,4);if(!groups.has(year))groups.set(year,[]);groups.get(year).push(s);}
     for(const [year,records]of groups){const group=el('details',undefined,'panel snapshot-year');group.dataset.year=year;group.open=rendered?openYears.has(year):year===values.at(-1).month.slice(0,4);const summary=el('summary');summary.append(el('span',`${year}年`),el('span',`${records.length}件`,'muted small'));group.append(summary);
