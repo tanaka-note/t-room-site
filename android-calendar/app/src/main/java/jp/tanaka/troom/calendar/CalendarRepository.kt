@@ -21,8 +21,11 @@ import java.time.format.DateTimeFormatter
 class CalendarApiException(val status: Int, val data: JSONObject) : Exception(data.optString("error", "通信を完了できませんでした。"))
 data class CalendarHttpResult(val data: JSONObject, val cookies: List<String>, val now: Long)
 
-class CalendarHttp(private val storage: CalendarStorage) {
-    suspend fun request(method: String, path: String, body: JSONObject? = null, cookie: String? = null, active: Boolean = false): CalendarHttpResult = withContext(Dispatchers.IO) {
+interface CalendarTransport {
+    suspend fun request(method: String, path: String, body: JSONObject? = null, cookie: String? = null, active: Boolean = false): CalendarHttpResult
+}
+class CalendarHttp(private val storage: CalendarStore) : CalendarTransport {
+    override suspend fun request(method: String, path: String, body: JSONObject?, cookie: String?, active: Boolean): CalendarHttpResult = withContext(Dispatchers.IO) {
         require(path.startsWith("/calendar/api/") || path.startsWith("/security/api/auth/"))
         val connection = URL(BuildConfig.SERVER_BASE_URL + path).openConnection() as HttpURLConnection
         try {
@@ -63,9 +66,13 @@ object CalendarActivityWindow {
     fun active() = foreground && android.os.SystemClock.elapsedRealtime() - lastInteraction <= 60000
 }
 
-class CalendarRepository(private val context: Context) {
-    val storage = CalendarStorage(context)
-    private val http = CalendarHttp(storage)
+class CalendarRepository(
+    private val context: Context,
+    val storage: CalendarStore = CalendarStorage(context),
+    private val http: CalendarTransport = CalendarHttp(storage),
+    private val schedule: (CalendarState, CalendarStore) -> Unit = { state, store -> ReminderScheduler.rebuild(context, state, store) },
+    private val clearScheduled: () -> Unit = { ReminderScheduler.clear(context) },
+) {
     private val mutex = Mutex()
     private val mutable = MutableStateFlow(CalendarState())
     val state = mutable.asStateFlow()
@@ -75,6 +82,12 @@ class CalendarRepository(private val context: Context) {
 
     suspend fun restore() = mutex.withLock {
         try {
+            val mode = storage.read("mode")?.optString("type")
+            if (mode == "NONE") { mutable.value = CalendarState(); return@withLock }
+            if (mode == "LOCAL") {
+                val profile = storage.read("local-profile") ?: error("端末内の予定の保存先を確認できません。")
+                mutable.value = localState(profile, storage.read("local-cache")); refreshLocal(); return@withLock
+            }
             val auth = withContext(Dispatchers.IO) { storage.read("auth") } ?: return@withLock
             val expiresAt = auth.getLong("expiresAt")
             if (storage.trustedNow(auth) >= expiresAt) { ReminderScheduler.clear(context); mutable.value = CalendarState(error = "ログイン期限が切れました。パスキーで再認証してください。"); return@withLock }
@@ -88,10 +101,11 @@ class CalendarRepository(private val context: Context) {
             cursor = if (matching) cache?.optLong("cursor") ?: 0 else 0
             mutable.value = CalendarState(account, if (matching || recovery) entities else emptyList(), pending, expiresAt, if (matching) cache?.optLong("lastSync") ?: 0 else 0, offline = true, recoveryRequired = recovery, conflict = if (recovery) recoveryConflict(pending) else null, error = if (recovery) "復旧によりDBの世代が変わりました。旧データの同期を停止しています。未同期変更を確認してください。" else null)
             if (recovery) ReminderScheduler.clear(context)
-        } catch (_: Throwable) { mutable.value = CalendarState(error = "端末の保存データを確認できません。再認証してください。未同期データは保持しています。") }
+        } catch (_: Throwable) { mutable.value = CalendarState(error = "端末の保存データを確認できません。データは保持しています。利用方法を選び直して確認してください。") }
     }
 
     suspend fun login(activity: ComponentActivity) {
+        if (mutable.value.account != null) return
         mutable.value = mutable.value.copy(busy = true, error = null)
         try {
             val options = http.request("POST", "/security/api/auth/options", JSONObject().put("service", "calendar")).data
@@ -108,6 +122,7 @@ class CalendarRepository(private val context: Context) {
     suspend fun selectAccount(link: LoginLink) = mutex.withLock {
         mutable.value = mutable.value.copy(busy = true, error = null)
         try {
+            check(mutable.value.account == null) { "先に現在の利用方法を終了してください。" }
             val handoff = http.request("POST", "/security/api/auth/handoff", JSONObject().put("service", "calendar").put("linkId", link.id), identityCookie ?: error("もう一度パスキー認証してください。"))
             val session = http.request("POST", "/calendar/api/passkey/handoff", JSONObject().put("handoffToken", handoff.data.getString("handoffToken")))
             val cookie = session.cookies.firstOrNull { it.startsWith("troom_calendar_session=") } ?: error("ログインを開始できませんでした。")
@@ -120,7 +135,7 @@ class CalendarRepository(private val context: Context) {
             val auth = JSONObject().put("cookie", cookie).put("accountId", d.getString("accountId")).put("name", d.getString("displayName"))
                 .put("identityId", d.getString("identityId")).put("linkId", link.id).put("expiresAt", d.getLong("expiresAt")).put("sessionVersion", d.getString("sessionVersion"))
             storage.anchor(auth, session.now)
-            withContext(Dispatchers.IO) { storage.write("auth", auth) }
+            withContext(Dispatchers.IO) { synchronized(CalendarSelectionLock) { storage.write("auth", auth); storage.write("mode", JSONObject().put("type", "CLOUD").put("selectionId", newId())); clearScheduled() } }
             cursor = 0
             generation++
             mutable.value = CalendarState(Account(d.getString("accountId"), d.getString("displayName"), d.getString("identityId"), link.id, d.getString("sessionVersion")), expiresAt = d.getLong("expiresAt"))
@@ -137,6 +152,7 @@ class CalendarRepository(private val context: Context) {
     }
 
     suspend fun sync(active: Boolean = true) = mutex.withLock {
+        if (mutable.value.account?.localOnly == true) { refreshLocal(); return@withLock }
         if (mutable.value.recoveryRequired || mutable.value.conflict != null) return@withLock
         val account = mutable.value.account ?: return@withLock
         val auth = withContext(Dispatchers.IO) { storage.read("auth") } ?: return@withLock
@@ -193,6 +209,7 @@ class CalendarRepository(private val context: Context) {
     }
     suspend fun save(kind: String, id: String, body: JSONObject, baseVersion: Int? = null): Boolean = mutex.withLock {
         try {
+            if (mutable.value.account?.localOnly == true) return@withLock saveLocal(listOf(Triple(kind, id, body)), baseVersion?.let { mapOf("$kind:$id" to it) } ?: emptyMap())
             check(!mutable.value.recoveryRequired) { "先にDB復旧後の未同期変更を確認してください。" }
             val account = mutable.value.account ?: error("ログインしてください。")
             val auth = storage.read("auth") ?: error("オンラインで再認証してください。")
@@ -232,6 +249,7 @@ class CalendarRepository(private val context: Context) {
     private fun group(operations: List<Mutation>) = if (operations.size == 1) operations.single() else Mutation(kind = "batch", id = newId(), expectedVersion = 0, payload = JSONObject().put("operations", JSONArray(operations.map { it.json().apply { remove("requestId") } })))
     suspend fun saveBatch(changes: List<Pair<String, JSONObject>>, expectedVersions: Map<String, Int> = emptyMap()): Boolean = mutex.withLock {
         try {
+            if (mutable.value.account?.localOnly == true) return@withLock saveLocal(changes.map { (kind, body) -> Triple(kind, if (kind == "settings") "preferences" else body.getString("id"), body) }, expectedVersions)
             check(!mutable.value.recoveryRequired) { "先にDB復旧後の未同期変更を確認してください。" }
             val auth = storage.read("auth") ?: error("再認証してください。")
             check(storage.trustedNow(auth) < auth.getLong("expiresAt")) { "ログイン期限が切れました。再認証してください。" }
@@ -245,21 +263,57 @@ class CalendarRepository(private val context: Context) {
         } catch (error: Exception) { mutable.value = mutable.value.copy(error = error.message ?: "保存できませんでした。"); false }
     }
     suspend fun logout(discardPending: Boolean = false): Boolean = mutex.withLock {
+        if (mutable.value.account?.localOnly == true) {
+            try {
+                synchronized(CalendarSelectionLock) { storage.write("mode", JSONObject().put("type", "NONE")); clearScheduled(); generation++; cursor = 0; identityCookie = null; mutable.value = CalendarState() }
+                return@withLock true
+            } catch (_: Exception) { mutable.value = mutable.value.copy(error = "選択画面へ戻れませんでした。端末の空き容量を確認してください。予定は保持しています。"); return@withLock false }
+        }
         if (mutable.value.pending.isNotEmpty() && !discardPending) { mutable.value = mutable.value.copy(error = "未同期の変更があります。同期するか、破棄を選んでください。"); return@withLock false }
         try {
             storage.read("auth")?.optString("cookie")?.takeIf { it.isNotBlank() }?.let { http.request("POST", "/calendar/api/logout", JSONObject(), it) }
             generation++; identityCookie = null; cursor = 0
-            ReminderScheduler.clear(context); storage.delete("auth"); storage.delete("cache")
+            synchronized(CalendarSelectionLock) { storage.write("mode", JSONObject().put("type", "NONE")); clearScheduled(); storage.delete("auth"); storage.delete("cache") }
             mutable.value = CalendarState(); true
         } catch (_: Exception) { mutable.value = mutable.value.copy(error = "オンラインでログアウトを完了してからアカウントを切り替えてください。"); false }
     }
     private suspend fun persist(value: CalendarState, nextCursor: Long = cursor) = withContext(Dispatchers.IO) {
         val json = JSONObject().put("accountId", value.account?.id).put("identityId", value.account?.identityId).put("sessionVersion", value.account?.sessionVersion).put("cursor", nextCursor).put("lastSync", value.lastSync).put("budgetMiB", value.settings.cacheMiB)
             .put("entities", JSONArray(value.entities.map { it.json() })).put("pending", JSONArray(value.pending.map { it.json() }))
-        storage.write("cache", json)
+        storage.write(if (value.account?.localOnly == true) "local-cache" else "cache", json)
     }
     fun rebuildReminders() {
-        runCatching { ReminderScheduler.rebuild(context, mutable.value, storage) }.onFailure { mutable.value = mutable.value.copy(error = "予定は保存済みですが、通知の予約を確認できません。通知設定と端末の空き容量を確認してください。") }
+        runCatching { schedule(mutable.value, storage) }.onFailure { mutable.value = mutable.value.copy(error = "予定は保存済みですが、通知の予約を確認できません。通知設定と端末の空き容量を確認してください。") }
+    }
+    suspend fun useLocal() = mutex.withLock {
+        try {
+            check(mutable.value.account == null && !mutable.value.busy) { "現在の操作を終了してから選択してください。" }
+            val profile = storage.read("local-profile") ?: JSONObject().put("id", "local-${newId()}").also { storage.write("local-profile", it) }
+            val next = localState(profile, storage.read("local-cache"))
+            synchronized(CalendarSelectionLock) { storage.write("mode", JSONObject().put("type", "LOCAL").put("selectionId", newId())); clearScheduled(); generation++; cursor = 0; identityCookie = null; mutable.value = next }
+            refreshLocal()
+        } catch (error: Exception) { mutable.value = mutable.value.copy(busy = false, error = error.message ?: "端末内の予定を開けませんでした。") }
+    }
+    fun cancelLogin() { if (mutable.value.account == null) { identityCookie = null; mutable.value = CalendarState() } }
+    private suspend fun refreshLocal() {
+        try {
+            val next = mutable.value.copy(entities = expireLocalTrash(mutable.value.entities, System.currentTimeMillis()), pending = emptyList(), busy = false, offline = false, error = null)
+            if (next.entities != mutable.value.entities) persist(next)
+            mutable.value = next; rebuildReminders()
+        } catch (error: Exception) { mutable.value = mutable.value.copy(busy = false, error = error.message ?: "端末内の予定を更新できませんでした。") }
+    }
+    private suspend fun saveLocal(changes: List<Triple<String, String, JSONObject>>, expected: Map<String, Int>): Boolean {
+        check(mutable.value.account?.localOnly == true)
+        val values = mutable.value.entities.associateBy { it.key }.toMutableMap()
+        for ((kind, id, body) in changes) {
+            val key = "$kind:$id"; val old = values[key]
+            check(expected[key] == null || expected[key] == (old?.version ?: 0)) { "予定が変更されています。開き直して内容を確認してください。" }
+            check(old?.purged != true || body.optBoolean("purged")) { "完全削除した予定は復元できません。" }
+            if (kind == "event" && !body.optBoolean("purged")) eventValidation(CalendarEvent.parse(body))?.let { error(it) }
+            values[key] = Entity(kind, id, body, (old?.version ?: 0) + 1, body.optBoolean("purged"))
+        }
+        val next = mutable.value.copy(entities = values.values.toList(), pending = emptyList(), offline = false, error = null)
+        persist(next); mutable.value = next; rebuildReminders(); return true
     }
     private fun currentCookie() = storage.read("auth")?.getString("cookie") ?: error("再認証してください。")
     private fun loginError(error: Exception): String = if (error is CalendarApiException && error.status == 404) "カレンダーAPIの接続を確認できません。サービスの公開・利用許可を確認してください。" else error.message ?: "パスキー認証を完了できませんでした。"

@@ -15,8 +15,18 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+object CalendarSelectionLock
+interface CalendarStore {
+    fun write(name: String, json: JSONObject)
+    fun read(name: String): JSONObject?
+    fun delete(name: String)
+    fun renewCookie(expected: String, replacement: String, expiresAt: Long?, serverNow: Long?)
+    fun anchor(auth: JSONObject, serverNow: Long)
+    fun trustedNow(auth: JSONObject): Long
+}
+
 /** Protected records never live in cacheDir, which Android may remove. */
-class CalendarStorage(private val context: Context) {
+class CalendarStorage(private val context: Context) : CalendarStore {
     private val directory = File(context.noBackupFilesDir, "calendar").apply { mkdirs() }
     private val reserve = File(directory, "critical-reserve.bin")
     init { ensureReserve() }
@@ -24,11 +34,13 @@ class CalendarStorage(private val context: Context) {
         if (reserve.length() >= 16L * 1024 * 1024 || directory.usableSpace < 96L * 1024 * 1024) return
         runCatching { RandomAccessFile(reserve, "rw").use { Os.posix_fallocate(it.fd, 0, 16L * 1024 * 1024) } }
     }
-    @Synchronized fun write(name: String, json: JSONObject) {
+    @Synchronized override fun write(name: String, json: JSONObject) {
         val plain = json.toString().toByteArray(Charsets.UTF_8)
-        val allowance = if (name == "cache") json.optInt("budgetMiB", 100).toLong() * 1024 * 1024 else 8L * 1024 * 1024
-        check(plain.size <= allowance) { "端末の保存上限に達しました。通信して同期するか、保存上限を変更してください。" }
-        val critical = name == "reminders" || name == "auth"
+        val dataFile = name == "cache" || name == "local-cache"
+        val allowance = if (dataFile) json.optInt("budgetMiB", 100).toLong() * 1024 * 1024 else 8L * 1024 * 1024
+        val other = if (dataFile) File(directory, "${if (name == "cache") "local-cache" else "cache"}.bin").length() else 0
+        check(plain.size.toLong() + other <= allowance) { "端末内の予定と取得済みデータが保存上限に達しました。設定から上限を増やしてください。" }
+        val critical = name in setOf("reminders", "auth", "mode", "local-profile")
         val needed = if (critical) maxOf(2L * 1024 * 1024, plain.size.toLong() * 3 + 1024 * 1024) else maxOf(64L * 1024 * 1024, plain.size.toLong() * 3 + 16L * 1024 * 1024)
         if (critical && directory.usableSpace < needed) reserve.delete()
         check(directory.usableSpace >= needed) { "端末の空き容量が少ないため、通知用の余力を確保して保存を中止しました。" }
@@ -40,7 +52,7 @@ class CalendarStorage(private val context: Context) {
         val output = target.startWrite()
         try { output.write(bytes); target.finishWrite(output); ensureReserve() } catch (error: Throwable) { target.failWrite(output); throw error }
     }
-    @Synchronized fun read(name: String): JSONObject? {
+    @Synchronized override fun read(name: String): JSONObject? {
         val target = AtomicFile(File(directory, "$name.bin"))
         if (!target.baseFile.exists()) return null
         val bytes = target.openRead().use { it.readBytes() }
@@ -50,8 +62,8 @@ class CalendarStorage(private val context: Context) {
         cipher.updateAAD(name.toByteArray())
         return JSONObject(cipher.doFinal(bytes.copyOfRange(13, bytes.size)).toString(Charsets.UTF_8))
     }
-    @Synchronized fun delete(name: String) { AtomicFile(File(directory, "$name.bin")).delete() }
-    @Synchronized fun renewCookie(expected: String, replacement: String, expiresAt: Long?, serverNow: Long?) {
+    @Synchronized override fun delete(name: String) { AtomicFile(File(directory, "$name.bin")).delete() }
+    @Synchronized override fun renewCookie(expected: String, replacement: String, expiresAt: Long?, serverNow: Long?) {
         val auth = read("auth") ?: return
         if (auth.optString("cookie") != expected) return
         auth.put("cookie", replacement)
@@ -59,10 +71,10 @@ class CalendarStorage(private val context: Context) {
         if (serverNow != null) anchor(auth, serverNow)
         write("auth", auth)
     }
-    fun anchor(auth: JSONObject, serverNow: Long) {
+    override fun anchor(auth: JSONObject, serverNow: Long) {
         auth.put("serverNow", serverNow).put("wallAtSync", System.currentTimeMillis()).put("elapsedAtSync", SystemClock.elapsedRealtime())
     }
-    fun trustedNow(auth: JSONObject): Long {
+    override fun trustedNow(auth: JSONObject): Long {
         val wall = System.currentTimeMillis()
         val savedWall = auth.optLong("wallAtSync")
         check(savedWall > 0 && wall >= savedWall - 300000) { "端末の時刻を確認できません。オンラインで確認してください。" }

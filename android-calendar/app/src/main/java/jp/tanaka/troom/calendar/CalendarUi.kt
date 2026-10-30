@@ -65,7 +65,13 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
             TextButton(onClick = { model.login(activity) }, enabled = !state.busy) { Text("別のパスキーで認証") }
             Text("利用するアカウントを選択", style = MaterialTheme.typography.titleMedium)
             state.links.forEach { link -> OutlinedButton(onClick = { model.select(link) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(link.name) } }
-        } else Button(onClick = { model.login(activity) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("パスキーでログイン") }
+            TextButton(onClick = { model.cancelLogin() }, enabled = !state.busy) { Text("利用方法の選択へ戻る") }
+        } else {
+            Button(onClick = { model.login(activity) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("パスキーでログイン") }
+            Text("許可されたDBと同期して利用します", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            OutlinedButton(onClick = { model.useLocal() }, enabled = !state.busy, modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) { Text("ログインせずこの端末で使う") }
+            Text("端末内に保存・端末間の同期なし", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+        }
         if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 16.dp))
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp)) }
     }
@@ -96,8 +102,8 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
             Spacer(Modifier.height(12.dp)); Text(state.account?.name.orEmpty(), Modifier.padding(horizontal = 20.dp, vertical = 12.dp), style = MaterialTheme.typography.titleMedium)
             CalendarPage.entries.forEach { item -> NavigationDrawerItem(label = { Text(item.label) }, selected = page == item, onClick = { initialPageApplied = true; page = item; trackFilter = null; trackDetail = null; query = ""; scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp)) }
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            TextButton(onClick = { scope.launch { drawer.close() }; logoutDialog = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("アカウントを選び直す") }
-            TextButton(onClick = { model.sync(); scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("今すぐ同期") }
+            TextButton(onClick = { scope.launch { drawer.close() }; logoutDialog = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(if (state.account?.localOnly == true) "利用方法を選び直す" else "アカウントを選び直す") }
+            if (state.account?.localOnly != true) TextButton(onClick = { model.sync(); scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("今すぐ同期") }
         }
     }) {
         Scaffold(contentWindowInsets = WindowInsets.safeDrawing, floatingActionButton = {
@@ -168,7 +174,7 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
         }
         saved
     })
-    if (logoutDialog) AlertDialog(onDismissRequest = { logoutDialog = false }, title = { Text("アカウントを選び直す") }, text = { Text(if (state.pending.isEmpty()) "現在のアカウントからログアウトし、その通知と同期を終了します。" else "未同期の変更があります。同期後に切り替えるか、未同期の変更を破棄してください。") }, confirmButton = { TextButton(onClick = { model.logout(); logoutDialog = false }) { Text(if (state.pending.isEmpty()) "ログアウト" else "同期してから切り替え") } }, dismissButton = { Row { if (state.pending.isNotEmpty()) TextButton(onClick = { model.logout(true); logoutDialog = false }) { Text("未同期を破棄") }; TextButton(onClick = { logoutDialog = false }) { Text("戻る") } } })
+    if (logoutDialog) AlertDialog(onDismissRequest = { logoutDialog = false }, title = { Text(if (state.account?.localOnly == true) "利用方法を選び直す" else "アカウントを選び直す") }, text = { Text(if (state.account?.localOnly == true) "端末内の予定は残したまま、選択画面へ戻ります。この端末の予定の通知は、利用を再開するまで停止します。" else if (state.pending.isEmpty()) "現在のアカウントからログアウトし、その通知と同期を終了します。" else "未同期の変更があります。同期後に切り替えるか、未同期の変更を破棄してください。") }, confirmButton = { TextButton(onClick = { model.logout(); logoutDialog = false }) { Text(if (state.account?.localOnly == true) "選択画面へ" else if (state.pending.isEmpty()) "ログアウト" else "同期してから切り替え") } }, dismissButton = { Row { if (state.pending.isNotEmpty()) TextButton(onClick = { model.logout(true); logoutDialog = false }) { Text("未同期を破棄") }; TextButton(onClick = { logoutDialog = false }) { Text("戻る") } } })
     state.conflict?.takeIf { reviewConflict }?.let { conflict ->
         val affected = conflictClosure(state.pending, conflict.pending).flatMap { it.operations() }.distinctBy { it.key }
         AlertDialog(onDismissRequest = { reviewConflict = false }, title = { Text("別の端末で変更されています") }, text = { Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {

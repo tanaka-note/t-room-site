@@ -83,3 +83,8 @@ test('large sync pages remain bounded and keep a cursor for the remaining rows',
   const first=await f.call('sync',{cookie});assert.equal(first.status,200);assert.ok(first.body.more);assert.ok(first.body.entities.length<9);
   const next=await f.call(`sync?cursor=${first.body.cursor}`,{cookie});assert.equal(first.body.entities.length+next.body.entities.length,9);assert.equal(next.body.more,false);
 });
+test('device-only use cannot create anonymous cloud records or bypass the signed session',async()=>{
+  const f=fixture();assert.equal((await f.call('session')).status,401);assert.equal((await f.call('sync')).status,401);
+  assert.equal((await f.call('mutations',{method:'POST',body:{localOnly:true,kind:'event',payload:event()}})).status,401);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM calendar_entities').get().n,0);assert.equal(f.registrations.length,0);
+});

@@ -208,7 +208,26 @@ data class Mutation(val requestId: String = newId(), val kind: String, val id: S
     companion object { fun parse(v: JSONObject) = Mutation(v.getString("requestId"), v.getString("kind"), v.getString("id"), v.getJSONObject("payload"), v.getInt("expectedVersion")) }
 }
 
-data class Account(val id: String, val name: String, val identityId: String, val linkId: String, val sessionVersion: String = "")
+data class Account(val id: String, val name: String, val identityId: String, val linkId: String, val sessionVersion: String = "", val localOnly: Boolean = false)
+
+fun localAccount(profile: JSONObject) = Account(profile.getString("id"), "この端末", profile.getString("id"), "", "local-v1", localOnly = true)
+fun localState(profile: JSONObject, cache: JSONObject?): CalendarState {
+    val account = localAccount(profile)
+    check(cache == null || cache.optString("accountId") == account.id) { "端末内の予定の保存先を確認できません。" }
+    val values = cache?.optJSONArray("entities")
+    return CalendarState(account = account, entities = values?.let { a -> (0 until a.length()).map { Entity.parse(a.getJSONObject(it)) } }.orEmpty(), expiresAt = Long.MAX_VALUE)
+}
+fun expireLocalTrash(entities: List<Entity>, nowMillis: Long): List<Entity> = entities.map { entity ->
+    if (entity.kind != "event" || entity.purged) entity else {
+        val e = CalendarEvent.parse(entity.body); val cutoff = nowMillis - 30L * 86400000
+        if (e.deletedAt != null && e.deletedAt <= cutoff) entity.copy(body = JSONObject().put("id", e.id).put("purged", true), version = entity.version + 1, purged = true)
+        else {
+            var changed = false
+            val exceptions = e.exceptions.mapValues { (_, v) -> if (v.optBoolean("deleted") && v.optionalLong("deletedAt")?.let { it <= cutoff } == true) { changed = true; JSONObject().put("deleted", true) } else v }
+            if (changed) entity.copy(body = e.copy(exceptions = exceptions).json(), version = entity.version + 1) else entity
+        }
+    }
+}
 data class LoginLink(val id: String, val name: String)
 data class Conflict(val pending: Mutation, val server: Entity?, val servers: List<Entity> = listOfNotNull(server))
 

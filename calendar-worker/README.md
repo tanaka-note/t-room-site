@@ -2,6 +2,8 @@
 
 Android版「カレンダー」のAPI。`https://tanaka-note.com/calendar/api/`を提供する。T-CloudのDBへ予定を書かず、`calendar-db`のサービスアカウントごとに分離する。Security CenterがIdentity・パスキー・明示的なサービス連携・失効・監査の正本となる。
 
+Androidの「ログインせずこの端末で使う」は端末内だけの機能で、このAPIへ匿名利用者や予定を登録しない。クラウドの予定APIは引き続きパスキーと明示的なDB権限を必須にし、ローカル利用を理由にサーバー認証を緩めない。
+
 ## データと同期
 
 `calendar_accounts`に利用先を登録する。初期の`main`・`second`の表示名は運用設定で指定し、認可処理へ氏名を固定しない。追加する場合は管理者が領域を登録した後、Security Centerで必要なIdentityへの連携だけを追加する。自動共有・初期権限の自動付与は行わない。

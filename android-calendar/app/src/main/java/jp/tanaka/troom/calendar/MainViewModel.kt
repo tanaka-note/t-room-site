@@ -20,6 +20,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun sync(active: Boolean = true) = viewModelScope.launch { if (active) CalendarActivityWindow.touch(); app.ready.await(); repository.sync(active) }
     fun login(activity: ComponentActivity) = viewModelScope.launch { repository.login(activity); if (state.value.account != null) repository.sync() }
     fun select(link: LoginLink) = viewModelScope.launch { repository.selectAccount(link); if (state.value.account != null) repository.sync() }
+    fun useLocal() = viewModelScope.launch { app.ready.await(); repository.useLocal() }
+    fun cancelLogin() = repository.cancelLogin()
     fun settings(value: CalendarSettings) = viewModelScope.launch { CalendarActivityWindow.touch(); if (repository.save("settings", "preferences", value.json())) repository.sync() }
     fun named(kind: String, value: NamedItem) = viewModelScope.launch { CalendarActivityWindow.touch(); if (repository.save(kind, value.id, value.json(), value.revision)) repository.sync() }
     fun logout(discard: Boolean = false) = viewModelScope.launch { if (!discard && state.value.pending.isNotEmpty()) repository.sync(); repository.logout(discard) }
