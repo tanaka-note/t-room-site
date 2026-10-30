@@ -38,4 +38,13 @@ JDK 17以上とAndroid SDK 36を使用する。`local.properties`に`sdk.dir`を
 
 ## 検証の区分
 
+配布APKは最適化が有効なrelease版そのものを、専用のAndroid 16エミュレーターで起動確認する。debugビルド・JVM単体試験では、Roomが反射で生成するWorkManager内部DBのコンストラクター欠落を検出できない。`proguard-rules.pro`でこの生成処理を保持する。初回画面と、ローカル選択後の再起動を各3回確認する。
+
+```powershell
+# 専用エミュレーターの起動完了後、android-calendar/で実行
+node tools/smoke-release.mjs --adb <adb.exe> --serial emulator-5556 --apk <release.apk> --screen welcome
+# ローカル利用を選択した後
+node tools/smoke-release.mjs --adb <adb.exe> --serial emulator-5556 --apk <release.apk> --screen local
+```
+
 単体試験とlint・releaseビルドはローカルで実行する。実機が接続されていない状態では、パスキー画面・通知の実発火・再起動・メーカーの省電力動作・容量逼迫時の動作を「実機確認済み」と扱わない。API・DB初期設定とリリース手順は[`calendar-worker/README.md`](../calendar-worker/README.md)を参照する。
