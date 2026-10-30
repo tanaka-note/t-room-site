@@ -25,10 +25,11 @@ test('backdated additions and same-day corrections keep the latest current balan
   assert.equal(assetHistory(data,'2026-07-31').length,0);
 });
 
-test('frozen imported months keep exact totals, links continue account series, and undated balances are not zero-filled',()=>{
+test('frozen imported months keep exact totals, legacy metadata is retained, and undated balances are not zero-filled',()=>{
   const a=account();const data=emptyData();
   data.historical=[snapshotInput({month:'2026-08',accounts:[{id:'legacy-bank',name:'Old bank',amount:123}]},true)];
-  let next=save(data,{...a,historyId:'legacy-bank'},'2026-09-20',200);
+  data.accounts.push({...a,historyId:'legacy-bank'});
+  let next=save(data,a,'2026-09-20',200);
   next.accounts.push(account());
   const points=assetHistory(next,'2026-09-30');
   assert.equal(points[0].total,123);assert.equal(points[1].total,null);

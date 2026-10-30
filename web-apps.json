@@ -437,12 +437,32 @@
         "assets/passkey-rolling.mjs",
         "assets/security-audit-worker.js",
         "security-worker/public/passkey-client.js",
-        "diary-worker/public/dialog-navigation.js"
+        "diary-worker/public/dialog-navigation.js",
+        "payments-worker/public/troom-date-picker.js",
+        "payments-worker/public/troom-date-picker.css",
+        "payments-worker/public/date-wheel.js",
+        "payments-worker/public/date-wheel.css"
       ],
       "assetCopies": [
         {
           "source": "diary-worker/public/dialog-navigation.js",
           "copy": "household-worker/public/dialog-navigation.js"
+        },
+        {
+          "source": "payments-worker/public/troom-date-picker.js",
+          "copy": "household-worker/public/troom-date-picker.js"
+        },
+        {
+          "source": "payments-worker/public/troom-date-picker.css",
+          "copy": "household-worker/public/troom-date-picker.css"
+        },
+        {
+          "source": "payments-worker/public/date-wheel.js",
+          "copy": "household-worker/public/date-wheel.js"
+        },
+        {
+          "source": "payments-worker/public/date-wheel.css",
+          "copy": "household-worker/public/date-wheel.css"
         }
       ],
       "buildMode": "content-hash",

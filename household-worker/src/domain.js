@@ -142,7 +142,9 @@ export function mutateData(data, operation, value) {
   else if (operation === 'transaction.delete') next.transactions = next.transactions.filter(t => t.id !== uuid(value?.id));
   else if (operation === 'account.save') {
     const existing = next.accounts.find(a=>a.id===value?.id);
-    const row = accountInput({ ...value, balances: existing?.balances || [] });
+    if (value?.historyId && value.historyId !== existing?.historyId) throw new HttpError(400, '口座の対応付け機能は利用できません。');
+    // Keep any legacy backup metadata intact; new account links are no longer accepted.
+    const row = accountInput({ ...value, historyId: existing?.historyId, balances: existing?.balances || [] });
     const asOf = balanceDate(value?.asOf);
     const submitted = accountInput({ ...value, balances: undefined }).items;
     const balances = row.balances.filter(b=>b.date!==asOf);
@@ -150,8 +152,6 @@ export function mutateData(data, operation, value) {
     row.balances = balances.sort((a,b)=>a.date.localeCompare(b.date));
     if (row.balances.length > 3600) throw new HttpError(400, '残高履歴の件数が上限に達しました。');
     row.items = structuredClone(row.balances.at(-1).items);
-    if (existing?.historyId && row.historyId !== existing.historyId) throw new HttpError(400, '過去チャートとの対応付けは変更できません。');
-    if (row.historyId && (next.accounts.some(a=>a.id!==row.id && a.historyId===row.historyId) || ![...next.historical,...next.snapshots].some(s=>s.accounts.some(a=>a.id===row.historyId)))) throw new HttpError(400, '過去チャートの口座を確認してください。');
     if (row.archived && row.items.some(i => i.amount !== 0)) throw new HttpError(400, '残高のある口座は保管できません。');
     if (!next.accounts.some(a => a.id === row.id) && next.accounts.length >= 200) throw new HttpError(400, '口座数の上限に達しました。');
     upsert(next.accounts, row);
