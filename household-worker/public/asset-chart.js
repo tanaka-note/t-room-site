@@ -27,10 +27,13 @@
     const from = last - definition.months;
     return points.filter(point => monthIndex(point.month) >= from && monthIndex(point.month) <= last);
   }
-
-  function previousChange(points, selected) {
-    const previous = points.find(point => monthIndex(point.month) === monthIndex(selected.month) - 1);
-    return previous ? selected.value - previous.value : null;
+  function periodComparison(points, point, period, firstMonth) {
+    const months=periods.find(p=>p.key===period)?.months;
+    const baselineMonth=months?monthAt(monthIndex(point.month)-months):firstMonth;
+    const label=!months?'開始月末比':months===1?'前月末比':months%12===0?
+      `${months/12}年前の月末比`:`${months}ヶ月前の月末比`;
+    const baseline=points.find(p=>p.month===baselineMonth&&Number.isFinite(p.value));
+    return {baselineMonth,label,value:baseline?point.value-baseline.value:null};
   }
 
   function axis(values) {
@@ -72,16 +75,17 @@
     return left && index - monthIndex(points[left - 1].month) <= monthIndex(points[left].month) - index ? left - 1 : left;
   }
 
-  function create({root, month, value, change, position, previous, next, live}) {
+  function create({root, month, value, change, live}) {
     const ns = 'http://www.w3.org/2000/svg';
     let points = [], comparison = [], selected = null, selectedIndex = -1, busy = false, frame = null, painting = null;
+    let period='all',firstMonth=null;
     function display(index, announce = false) {
       if (!points.length) return;
       index = Math.max(0, Math.min(points.length - 1, index));
       const point = points[index];
       month.textContent = monthLabel(point.month); value.textContent = yen(point.value);
-      const difference = previousChange(comparison, point);
-      change.textContent = difference === null ? '前月の記録なし' : `前月比 ${difference > 0 ? '＋' : difference < 0 ? '−' : ''}${yen(Math.abs(difference))}`;
+      const result=periodComparison(comparison,point,period,firstMonth),difference=result.value;
+      change.textContent = difference === null ? `${result.label}：比較先の記録なし` : `${result.label} ${difference > 0 ? '＋' : difference < 0 ? '−' : ''}${yen(Math.abs(difference))}`;
       if (painting) {const location = painting.coordinates[index];painting.guide.setAttribute('x1', location.x);painting.guide.setAttribute('x2', location.x);painting.dot.setAttribute('cx', location.x);painting.dot.setAttribute('cy', location.y);}
       if (announce) live.textContent = `${month.textContent}、${value.textContent}、${change.textContent}`;
     }
@@ -89,8 +93,6 @@
       if (!points.length) return;
       selectedIndex = Math.max(0, Math.min(points.length - 1, index));selected = points[selectedIndex].month;
       display(selectedIndex, announce);
-      position.value = String(selectedIndex);position.setAttribute('aria-valuetext', `${month.textContent} ${value.textContent}`);
-      previous.disabled = busy || selectedIndex === 0;next.disabled = busy || selectedIndex === points.length - 1;
     }
     function draw() {
       const width = Math.round(root.getBoundingClientRect().width);
@@ -104,7 +106,7 @@
       const left = Math.max(64, ...scale.ticks.map(tick => Math.ceil(measure.measureText(scale.format(tick)).width) + 16));
       const svg = document.createElementNS(ns, 'svg');
       svg.setAttribute('viewBox', `0 0 ${width} ${height}`);svg.setAttribute('width', width);svg.setAttribute('height', height);svg.setAttribute('role', 'img');
-      svg.setAttribute('aria-label', `${points[0].month}から${points.at(-1).month}、月末残高${points.length}件。下の月選択でも数値を確認できます。`);
+      svg.setAttribute('aria-label', `${points[0].month}から${points.at(-1).month}、月末残高${points.length}件。マウス、タップ、左右キーで金額を確認できます。`);
       const add = (tag, attributes, text) => {const node = document.createElementNS(ns, tag);for (const [key, item] of Object.entries(attributes)) node.setAttribute(key, item);if (text !== undefined) node.textContent = text;svg.append(node);return node;};
       const start = monthIndex(points[0].month), end = monthIndex(points.at(-1).month);
       const x = index => left + (start === end ? .5 : (index - start) / (end - start)) * (right - left);
@@ -129,21 +131,24 @@
       painting = {coordinates, guide, dot};root.append(svg);select(selectedIndex);
     }
     function resize() {if (frame !== null) cancelAnimationFrame(frame);frame = requestAnimationFrame(() => {frame = null;draw();});}
-    position.oninput = () => select(Number(position.value), true);
-    previous.onclick = () => select(selectedIndex - 1, true);next.onclick = () => select(selectedIndex + 1, true);
+    root.onkeydown = event => {
+      if(busy||!points.length)return;
+      const index={ArrowLeft:selectedIndex-1,ArrowRight:selectedIndex+1,Home:0,End:points.length-1}[event.key];
+      if(index!==undefined){event.preventDefault();select(index,true);}
+    };
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
     observer?.observe(root);window.addEventListener('resize', resize);
     return {
-      update(values, allValues = values) {
+      update(values, allValues = values, range='all') {
         points = values;comparison = allValues;painting = null;
+        if(period!==range)selected=null;period=range;firstMonth=values[0]?.month;
         const found = points.findIndex(point => point.month === selected);selectedIndex = found >= 0 ? found : points.length - 1;
-        position.min = '0';position.max = String(Math.max(0, points.length - 1));position.disabled = busy || points.length < 2;
-        if (points.length) select(selectedIndex);else {root.replaceChildren();month.textContent = '月末の記録なし';value.textContent = '—';change.textContent = '';position.value = '0';position.removeAttribute('aria-valuetext');previous.disabled = next.disabled = true;}
+        if (points.length) select(selectedIndex);else {root.replaceChildren();month.textContent = '月末の記録なし';value.textContent = '—';change.textContent = '';live.textContent='';}
         resize();
       },
       resize,
-      setBusy(value) {busy = value;position.disabled = busy || points.length < 2;previous.disabled = busy || selectedIndex <= 0;next.disabled = busy || selectedIndex < 0 || selectedIndex === points.length - 1;}
+      setBusy(value) {busy = value;root.setAttribute('aria-disabled',String(value));}
     };
   }
-  globalThis.TRoomAssetChart = Object.freeze({create, startMonth, periods, availablePeriods, monthIndex, monthAt, periodPoints, previousChange, axis, xTicks, nearest});
+  globalThis.TRoomAssetChart = Object.freeze({create, startMonth, periods, availablePeriods, monthIndex, monthAt, periodPoints, periodComparison, axis, xTicks, nearest});
 })();

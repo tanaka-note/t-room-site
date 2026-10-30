@@ -16,8 +16,8 @@ test('My Investment calendar ranges include the start boundary and only unlock a
 
 test('previous month change never substitutes an older record for a missing month or a real zero balance',()=>{
   const points=[{month:'2026-06',value:100},{month:'2026-08',value:0},{month:'2026-09',value:-50}];
-  assert.equal(chart.previousChange(points,points[1]),null);
-  assert.equal(chart.previousChange(points,points[2]),-50);
+  assert.equal(chart.periodComparison(points,points[1],'1',points[0].month).value,null);
+  assert.equal(chart.periodComparison(points,points[2],'1',points[0].month).value,-50);
   assert.equal(chart.nearest(points,chart.monthIndex('2026-07')+.8),1);
   assert.equal(chart.nearest(points,chart.monthIndex('2020-01')),0);
 });

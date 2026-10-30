@@ -46,8 +46,13 @@ const definitions = {
   'その他': ['買い物代行','事業経費','ATM手数料','雑費','その他'],
   '未分類': ['未分類']
 };
+// Money Forward ME's published category order. IDs remain unchanged for existing records/backups.
+export const CATEGORY_ORDER = ['収入','食費','現金・カード','交通費','趣味・娯楽','日用品','衣服・美容','特別な支出','交際費','住宅','水道・光熱費','自動車','保険','税・社会保障','教養・教育','通信費','健康・医療','その他','未分類'];
+export function orderedCategories(categories) {
+  return [...categories].sort((a,b)=>CATEGORY_ORDER.indexOf(a.parent)-CATEGORY_ORDER.indexOf(b.parent)||Number(b.builtin)-Number(a.builtin)||(a.builtin&&b.builtin?Number(a.id.split('-').at(-1))-Number(b.id.split('-').at(-1)):a.name.localeCompare(b.name,'ja')));
+}
 export function defaultCategories() {
-  return Object.entries(definitions).flatMap(([parent, names], p) => names.map((name, n) => ({ id: `builtin-${p}-${n}`, parent, name, type: parent === '収入' ? 'income' : 'expense', builtin: true })));
+  return orderedCategories(Object.entries(definitions).flatMap(([parent, names], p) => names.map((name, n) => ({ id: `builtin-${p}-${n}`, parent, name, type: parent === '収入' ? 'income' : 'expense', builtin: true }))));
 }
 export function emptyData() {
   return { accounts: [], transactions: [], snapshots: [], historical: [], categories: defaultCategories() };
@@ -138,7 +143,13 @@ export function snapshotInput(input, historical = false) {
 export function mutateData(data, operation, value) {
   const next = structuredClone(data);
   const upsert = (list, row) => { const index = list.findIndex(r => r.id === row.id); if (index < 0) list.push(row); else list[index] = row; };
-  if (operation === 'transaction.save') upsert(next.transactions, transactionInput(value, next));
+  if (operation === 'transaction.save') {
+    if (!['income','expense'].includes(value?.type)) throw new HttpError(400,'収入または支出を選んでください。');
+    const category = next.categories.find(c=>c.id===value.categoryId);
+    const categoryId = category?.parent==='未分類' ? next.categories.find(c=>c.parent==='その他'&&c.name==='その他')?.id : value.categoryId;
+    const parsed=transactionInput({...value,categoryId},next);
+    upsert(next.transactions, {...parsed,accountId:null,toAccountId:null,included:true});
+  }
   else if (operation === 'transaction.delete') next.transactions = next.transactions.filter(t => t.id !== uuid(value?.id));
   else if (operation === 'account.save') {
     const existing = next.accounts.find(a=>a.id===value?.id);
@@ -177,6 +188,7 @@ export function records(data) { return Object.entries(data).flatMap(([kind, rows
 export function dataFromRecords(rows) {
   const data = { accounts: [], transactions: [], snapshots: [], historical: [], categories: [] };
   for (const row of rows) if (Object.hasOwn(data, row.kind)) data[row.kind].push(JSON.parse(row.payload));
+  data.categories=orderedCategories(data.categories);
   return data;
 }
 export function backup(data) { return { format: 'troom-household', version: 2, exportedAt: new Date().toISOString(), data }; }
@@ -215,7 +227,7 @@ export function csv(data) {
   const rows = [['計算対象','日付','内容','金額（円）','口座','大項目','中項目','メモ','振替','振替先','ID']];
   for (const t of [...data.transactions].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))) {
     const c = data.categories.find(c => c.id === t.categoryId);
-    rows.push([t.included ? 1 : 0,t.date,t.description,t.type === 'income' ? t.amount : -t.amount,data.accounts.find(a => a.id === t.accountId)?.name || '',c?.parent || '',c?.name || '',t.notes,t.type === 'transfer' ? 1 : 0,data.accounts.find(a => a.id === t.toAccountId)?.name || '',t.id]);
+    rows.push([t.type==='transfer' ? 0 : 1,t.date,t.description,t.type === 'income' ? t.amount : -t.amount,data.accounts.find(a => a.id === t.accountId)?.name || '',c?.parent==='未分類'?'その他':c?.parent || '',c?.parent==='未分類'?'その他':c?.name || '',t.notes,t.type === 'transfer' ? 1 : 0,data.accounts.find(a => a.id === t.toAccountId)?.name || '',t.id]);
   }
   return '\ufeff' + rows.map(row => row.map(escape).join(',')).join('\r\n');
 }
