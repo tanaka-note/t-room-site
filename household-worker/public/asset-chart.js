@@ -79,15 +79,22 @@
     const ns = 'http://www.w3.org/2000/svg';
     let points = [], comparison = [], selected = null, selectedIndex = -1, busy = false, frame = null, painting = null;
     let period='all',firstMonth=null;
+    let readouts=[],displayedIndex=-1,moveFrame=null,pendingMove=null,gesture=null;
+    function cancelMove(){if(moveFrame!==null)cancelAnimationFrame(moveFrame);moveFrame=null;pendingMove=null;}
+    function releaseGesture(){const active=gesture;gesture=null;if(active?.overlay.hasPointerCapture(active.id))active.overlay.releasePointerCapture(active.id);}
+    function stopInteraction(){cancelMove();releaseGesture();}
+    function queueMove(index,commit){
+      pendingMove={index,commit};
+      if(moveFrame!==null)return;
+      moveFrame=requestAnimationFrame(()=>{moveFrame=null;const pending=pendingMove;pendingMove=null;if(!busy&&pending){if(pending.commit)select(pending.index);else display(pending.index);}});
+    }
     function display(index, announce = false) {
       if (!points.length) return;
       index = Math.max(0, Math.min(points.length - 1, index));
-      const point = points[index];
-      month.textContent = monthLabel(point.month); value.textContent = yen(point.value);
-      const result=periodComparison(comparison,point,period,firstMonth),difference=result.value;
-      change.textContent = difference === null ? `${result.label}：比較先の記録なし` : `${result.label} ${difference > 0 ? '＋' : difference < 0 ? '−' : ''}${yen(Math.abs(difference))}`;
-      if (painting) {const location = painting.coordinates[index];painting.guide.setAttribute('x1', location.x);painting.guide.setAttribute('x2', location.x);painting.dot.setAttribute('cx', location.x);painting.dot.setAttribute('cy', location.y);}
-      if (announce) live.textContent = `${month.textContent}、${value.textContent}、${change.textContent}`;
+      const text=readouts[index];
+      if(displayedIndex!==index){month.textContent=text.month;value.textContent=text.value;change.textContent=text.change;displayedIndex=index;}
+      if (painting&&painting.index!==index) {const location = painting.coordinates[index];painting.guide.setAttribute('x1', location.x);painting.guide.setAttribute('x2', location.x);painting.dot.setAttribute('cx', location.x);painting.dot.setAttribute('cy', location.y);painting.index=index;}
+      if (announce){const message=`${text.month}、${text.value}、${text.change}`;if(live.textContent!==message)live.textContent=message;}
     }
     function select(index, announce = false) {
       if (!points.length) return;
@@ -97,6 +104,8 @@
     function draw() {
       const width = Math.round(root.getBoundingClientRect().width);
       if (!width) return; // A hidden view must never determine the chart geometry.
+      if(painting?.width===width)return; // Height-only notifications must not interrupt a captured gesture.
+      stopInteraction();
       root.replaceChildren(); painting = null;
       if (!points.length) {const empty = document.createElement('p');empty.className = 'empty';empty.textContent = 'この期間の月末記録はありません。';root.append(empty);return;}
       const height = width < 560 ? 240 : 320, right = width - 14, top = 28, bottom = height - 36;
@@ -121,33 +130,44 @@
       for (let i = 0; i < points.length; i++) if ((!i || monthIndex(points[i].month) - monthIndex(points[i - 1].month) !== 1) && (i === points.length - 1 || monthIndex(points[i + 1].month) - monthIndex(points[i].month) !== 1)) add('circle', {cx:coordinates[i].x, cy:coordinates[i].y, r:3, class:'chart-isolated'});
       const guide = add('line', {x1:0, x2:0, y1:top, y2:bottom, class:'chart-guide'}), dot = add('circle', {cx:0, cy:0, r:5, class:'chart-selected'});
       const overlay = add('rect', {x:left, y:top, width:right - left, height:bottom - top, fill:'transparent', class:'chart-hit', 'aria-hidden':'true'});
-      let pointer = null;
-      const inspect = (event, commit = false, announce = false) => {const box = svg.getBoundingClientRect(), ratio = (event.clientX - box.left - left) / (right - left), index = nearest(points, start + Math.max(0, Math.min(1, ratio)) * (end - start));if (commit) select(index, announce);else display(index);};
-      overlay.onpointerdown = event => {if (busy) return;pointer = event.pointerId;overlay.setPointerCapture(event.pointerId);inspect(event, true, true);};
-      overlay.onpointermove = event => {if (!busy && (event.pointerType === 'mouse' || pointer === event.pointerId)) inspect(event, pointer === event.pointerId);};
-      overlay.onpointerup = event => {if (!busy) inspect(event, true, true);pointer = null;if (overlay.hasPointerCapture(event.pointerId)) overlay.releasePointerCapture(event.pointerId);};
-      overlay.onpointerleave = () => {if (pointer === null) display(selectedIndex);};
-      overlay.onpointercancel = () => {pointer = null;display(selectedIndex);};
-      painting = {coordinates, guide, dot};root.append(svg);select(selectedIndex);
+      let bounds=null;
+      const current=()=>painting?.overlay===overlay;
+      const measureBounds=()=>{const box=svg.getBoundingClientRect(),scale=box.width/width;bounds={left:box.left+left*scale,width:(right-left)*scale};};
+      const indexAt=event=>{if(!bounds)measureBounds();const ratio=(event.clientX-bounds.left)/bounds.width;return nearest(points,start+Math.max(0,Math.min(1,ratio))*(end-start));};
+      overlay.onpointerenter=event=>{if(current()&&event.pointerType==='mouse')measureBounds();};
+      overlay.onpointerdown=event=>{
+        if(!current()||busy||gesture||event.isPrimary===false||event.button!==0)return;
+        cancelMove();measureBounds();gesture={id:event.pointerId,overlay,startIndex:selectedIndex};
+        overlay.setPointerCapture(event.pointerId);select(indexAt(event),true);
+      };
+      overlay.onpointermove=event=>{if(current()&&!busy&&(event.pointerType==='mouse'||gesture?.id===event.pointerId))queueMove(indexAt(event),gesture?.id===event.pointerId);};
+      overlay.onpointerup=event=>{if(!current()||gesture?.id!==event.pointerId)return;cancelMove();if(!busy)select(indexAt(event),true);releaseGesture();};
+      overlay.onpointerleave=()=>{if(current()&&!gesture){cancelMove();display(selectedIndex);}};
+      const cancelGesture=event=>{if(!current()||gesture?.id!==event.pointerId)return;const original=gesture.startIndex;stopInteraction();select(original);};
+      overlay.onpointercancel=cancelGesture;overlay.onlostpointercapture=cancelGesture;
+      painting = {coordinates, guide, dot, overlay,width,index:-1};root.append(svg);select(selectedIndex);
     }
     function resize() {if (frame !== null) cancelAnimationFrame(frame);frame = requestAnimationFrame(() => {frame = null;draw();});}
     root.onkeydown = event => {
       if(busy||!points.length)return;
       const index={ArrowLeft:selectedIndex-1,ArrowRight:selectedIndex+1,Home:0,End:points.length-1}[event.key];
-      if(index!==undefined){event.preventDefault();select(index,true);}
+      if(index!==undefined){event.preventDefault();stopInteraction();select(index,true);}
     };
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
     observer?.observe(root);window.addEventListener('resize', resize);
     return {
       update(values, allValues = values, range='all') {
+        stopInteraction();
         points = values;comparison = allValues;painting = null;
         if(period!==range)selected=null;period=range;firstMonth=values[0]?.month;
+        readouts=points.map(point=>{const result=periodComparison(comparison,point,period,firstMonth),difference=result.value;return {month:monthLabel(point.month),value:yen(point.value),change:difference===null?`${result.label}：比較先の記録なし`:`${result.label} ${difference>0?'＋':difference<0?'−':''}${yen(Math.abs(difference))}`};});
+        displayedIndex=-1;
         const found = points.findIndex(point => point.month === selected);selectedIndex = found >= 0 ? found : points.length - 1;
         if (points.length) select(selectedIndex);else {root.replaceChildren();month.textContent = '月末の記録なし';value.textContent = '—';change.textContent = '';live.textContent='';}
         resize();
       },
       resize,
-      setBusy(value) {busy = value;root.setAttribute('aria-disabled',String(value));}
+      setBusy(value) {busy = value;if(value)stopInteraction();root.setAttribute('aria-disabled',String(value));}
     };
   }
   globalThis.TRoomAssetChart = Object.freeze({create, startMonth, periods, availablePeriods, monthIndex, monthAt, periodPoints, periodComparison, axis, xTicks, nearest});
