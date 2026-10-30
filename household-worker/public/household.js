@@ -8,6 +8,9 @@
   let data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]}, revision=0, session=null, busy=false, activity=Date.now(), confirmation=null, restoreFile=null, categoryEditing=null;
   const editors=new Map(), channel=typeof BroadcastChannel==='function'?new BroadcastChannel('household-ledger'):null;
   let assetPoints=[], assetChart=null, chartPeriod='all';
+  TRoomDatePicker.setNavigation(nav);
+  TRoomDateWheel.initialize(nav,()=>busy);
+  for(const event of ['click','keydown'])$('period').addEventListener(event,()=>{if($('date-wheel-dialog').open)$('date-wheel-title').textContent='表示月を選択';});
   const totals=a=>a.items.reduce((sum,i)=>sum+i.amount,0);
   const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
   function button(label,action,cls=''){const b=el('button',label,cls);b.type='button';b.onclick=action;return b;}
@@ -46,7 +49,7 @@
   field(entryForm,'type').onchange=()=>fillEntryCategories();$('entry-parent').onchange=()=>fillEntryCategories($('entry-parent').value);$('add-entry').onclick=()=>openEntry();
   const accountForm=$('account-form');
   function itemRow(item={id:crypto.randomUUID(),name:'',amount:0}){const row=el('div',undefined,'item-editor');row.dataset.id=item.id;for(const [name,label,type,value]of [['name','内訳名','text',item.name],['amount','残高（円）','number',item.amount]]){const l=el('label',label),i=el('input');i.dataset.field=name;i.type=type;i.value=value;i.required=true;if(type==='number'){i.step='1';i.min='-90000000000';i.max='90000000000';}else i.maxLength=80;l.append(i);row.append(l);}row.append(button('内訳を削除',()=>{row.remove();accountEditor.requestId=null;markDirty();},'danger'));$('account-items').append(row);}
-  function accountValue(){const v=formValues(accountForm);return {...v,historyId:field(accountForm,'historyId').value,archived:field(accountForm,'archived').checked,items:[...$('account-items').children].map(row=>({id:row.dataset.id,name:row.querySelector('[data-field=name]').value,amount:Number(row.querySelector('[data-field=amount]').value)}))};}
+  function accountValue(){const v=formValues(accountForm);return {...v,archived:field(accountForm,'archived').checked,items:[...$('account-items').children].map(row=>({id:row.dataset.id,name:row.querySelector('[data-field=name]').value,amount:Number(row.querySelector('[data-field=amount]').value)}))};}
   const accountEditor=editor('account-dialog','account-form',()=>JSON.stringify(accountValue()),e=>mutate('account.save',{...accountValue(),id:e.id},e.expectedRevision,e.requestId));
   let editingAccount=null;
   function fillBalance(items){$('account-items').replaceChildren();for(const item of items)itemRow(item);}
@@ -54,15 +57,12 @@
     if(session?.role!=='owner')return;
     editingAccount=record||null;accountForm.reset();$('account-title').textContent=record?'口座と残高を編集':'口座を作成';
     field(accountForm,'name').value=record?.name||'';field(accountForm,'type').value=record?.type||'その他';field(accountForm,'archived').checked=record?.archived||false;
-    field(accountForm,'asOf').max=today();field(accountForm,'asOf').value=today();field(accountForm,'asOf').readOnly=false;
-    const linked=new Set(data.accounts.filter(a=>a.id!==record?.id).map(a=>a.historyId));
-    const historical=new Map();for(const s of [...data.historical,...data.snapshots])for(const a of s.accounts)if(!linked.has(a.id))historical.set(a.id,a.name);
-    options(field(accountForm,'historyId'),[...historical],'対応付けなし（新しい口座）');field(accountForm,'historyId').value=record?.historyId||'';field(accountForm,'historyId').disabled=!!record?.historyId;
+    field(accountForm,'asOf').max=today();field(accountForm,'asOf').value=today();field(accountForm,'asOf').readOnly=true;
     options($('balance-history'),[...(record?.balances||[])].reverse().map(b=>[b.date,`${b.date} 時点`]),'新しい基準日の残高を入力');$('balance-history').value='';
     fillBalance(record?.items||[{id:crypto.randomUUID(),name:'残高',amount:0}]);open('account-dialog',accountEditor,record?.id);
   }
   $('balance-history').onchange=()=>{
-    const date=$('balance-history').value,selected=editingAccount?.balances?.find(b=>b.date===date);field(accountForm,'asOf').readOnly=!!selected;
+    const date=$('balance-history').value,selected=editingAccount?.balances?.find(b=>b.date===date);
     if(selected){field(accountForm,'asOf').value=date;fillBalance(selected.items);}else{field(accountForm,'asOf').value=today();fillBalance(editingAccount?.items||[{id:crypto.randomUUID(),name:'残高',amount:0}]);}
     accountEditor.requestId=null;markDirty();
   };
@@ -104,11 +104,12 @@
   $('export-csv').onclick=()=>download('/export.csv',`家計簿-明細-${today()}.csv`);$('export-backup').onclick=()=>download('/backup',`家計簿-バックアップ-${today()}.json`);
   $('restore-file').onchange=async()=>{restoreFile=null;$('restore').disabled=true;$('restore-preview').textContent='';const file=$('restore-file').files[0];if(!file)return;try{if(file.size>12*1024*1024)throw new Error('12MB以下のバックアップを選んでください。');const value=JSON.parse(await file.text());if(value.format!=='troom-household'||![1,2].includes(value.version)||!value.data)throw new Error('家計簿のバックアップファイルを選んでください。');for(const key of ['accounts','transactions','snapshots','historical','categories'])if(!Array.isArray(value.data[key]))throw new Error('バックアップの形式を確認してください。');restoreFile=value;$('restore-preview').textContent=`口座 ${value.data.accounts.length}件・明細 ${value.data.transactions.length}件・月末記録 ${value.data.snapshots.length+value.data.historical.length}件`;$('restore').disabled=false;}catch(error){$('restore-preview').textContent=error.message;}};
   $('restore').onclick=()=>{if(!restoreFile||busy)return;const saved=restoreFile,expected=revision,id=crypto.randomUUID();ask('バックアップを復元しますか？',`${$('restore-preview').textContent}\n現在の家計データを、このバックアップの内容へ切り替えます。`,async()=>{await api('/restore',{requestId:id,expectedRevision:expected,backup:saved});restoreFile=null;$('restore-file').value='';$('restore-preview').textContent='';await load();channel?.postMessage('changed');});};
-  $('login').onclick=async()=>{if(busy)return;$('login-error').textContent='';setBusy(true);try{const auth=await TRoomPasskeys.authenticate('household');showSession(await api('/passkey/handoff',{handoffToken:auth.handoff.handoffToken}));await load();}catch(error){$('login-error').textContent=error.message;}finally{setBusy(false);}};
+  $('login').onclick=async()=>{if(busy)return;$('login-error').textContent='';$('passkey-login-label').textContent='確認中…';setBusy(true);try{const auth=await TRoomPasskeys.authenticate('household');showSession(await api('/passkey/handoff',{handoffToken:auth.handoff.handoffToken}));await load();}catch(error){$('login-error').textContent=error.message;}finally{$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);}};
   $('logout').onclick=async()=>{if(busy)return;setBusy(true);try{await api('/logout',{});session=null;data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]};assetPoints=[];render();nav.reset();restoreFile=null;$('restore-file').value='';$('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーでログインしてください。';channel?.postMessage('session-changed');}catch(error){$('message').textContent=error.message;}finally{setBusy(false);}};
   $('refresh').onclick=async()=>{setBusy(true);try{await load();}catch(error){$('message').textContent=error.message;}finally{setBusy(false);}};
   for(const type of ['pointerdown','keydown','touchstart','wheel'])window.addEventListener(type,event=>{if(event.isTrusted)activity=Date.now();},{passive:true,capture:true});
   channel&&(channel.onmessage=()=>{if(session)$('message').textContent='別の画面で状態が変わりました。「最新の状態に更新」で確認してください。';});
+  document.addEventListener('troom:before-auto-update',event=>{if(busy||$('date-wheel-dialog').open||$('troom-calendar-dialog').open)event.preventDefault();});
   window.addEventListener('beforeunload',event=>{if(busy||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize())){event.preventDefault();event.returnValue='';}});
   (async()=>{try{showSession(await api('/session'));await load();}catch(error){$('boot-message').textContent=error.status===401?'パスキーでログインしてください。':error.message;$('login').hidden=false;}})();
 })();
