@@ -56,8 +56,59 @@ export function accountInput(input) {
   const items = input?.items;
   if (!Array.isArray(items) || !items.length || items.length > 100) throw new HttpError(400, '口座の内訳は1〜100件で入力してください。');
   const seen = new Set();
-  return { id: uuid(input.id), name: text(input.name, 80, '口座名'), type: text(input.type || 'その他', 40, '口座の種類'), archived: input.archived === true,
+  const row = { id: uuid(input.id), name: text(input.name, 80, '口座名'), type: text(input.type || 'その他', 40, '口座の種類'), archived: input.archived === true,
     items: items.map(item => { const id = uuid(item?.id); if (seen.has(id)) throw new HttpError(400, '内訳が重複しています。'); seen.add(id); return { id, name: text(item.name, 80, '内訳名'), amount: amount(item.amount, true) }; }) };
+  if (input.historyId) row.historyId = text(input.historyId, 100, '過去チャートの口座');
+  if (input.balances !== undefined) {
+    if (!Array.isArray(input.balances) || input.balances.length > 3600) throw new HttpError(400, '残高履歴の件数を確認してください。');
+    const dates = new Set();
+    row.balances = input.balances.map(balance => {
+      const asOf = balanceDate(balance?.date);
+      if (dates.has(asOf)) throw new HttpError(400, '同じ基準日の残高が重複しています。');
+      dates.add(asOf);
+      return { date: asOf, items: accountInput({ ...row, items: balance.items }).items };
+    }).sort((a,b) => a.date.localeCompare(b.date));
+    if (row.balances.length) row.items = structuredClone(row.balances.at(-1).items);
+  }
+  return row;
+}
+function balanceDate(value) {
+  const asOf = date(value);
+  if (asOf < `${ASSET_START_MONTH}-30`) throw new HttpError(400, '資産残高の基準日は2022年6月30日以降を指定してください。');
+  if (asOf > jstDate()) throw new HttpError(400, '残高の基準日は今日以前を指定してください。');
+  return asOf;
+}
+
+// Dated balances are the source of truth. Monthly values are projections, never editable records.
+export function assetHistory(data, today = jstDate()) {
+  const legacy = [...new Map([...data.historical.map(s=>({...s,historical:true})), ...data.snapshots.map(s=>({...s,historical:false}))].map(s=>[s.month,s])).values()];
+  const result = new Map(legacy.map(s=>[s.month,s]));
+  const dates = data.accounts.flatMap(a=>(a.balances || []).map(b=>b.date)).sort();
+  if (!dates.length) return legacy.sort((a,b)=>a.month.localeCompare(b.month));
+  const first = dates[0].slice(0,7), last = today.slice(0,7), cursors = new Map();
+  for (let month = first; month <= last;) {
+    const end = monthEnd(month), cutoff = end < today ? end : today;
+    const accounts = [], missing = [];
+    for (const account of data.accounts) {
+      const balances = account.balances || [];
+      let index = cursors.get(account.id) ?? -1;
+      while (index+1 < balances.length && balances[index+1].date <= cutoff) index++;
+      cursors.set(account.id,index);
+      const selected = balances[index];
+      if (!selected) { if (!balances.length && !account.archived) missing.push(account.id); continue; }
+      const value = selected.items.reduce((sum,item)=>sum+item.amount,0);
+      if (!Number.isSafeInteger(value)) throw new HttpError(400, '合計金額が大きすぎます。');
+      accounts.push({id:account.historyId || account.id,name:account.name,amount:value,asOf:selected.date});
+    }
+    // Imported/frozen history is retained for months preceding normal dated operation.
+    if (!result.has(month) && accounts.length) {
+      const total = accounts.reduce((sum,a)=>sum+a.amount,0);
+      if (!Number.isSafeInteger(total)) throw new HttpError(400, '合計金額が大きすぎます。');
+      result.set(month,{id:month,month,date:end,accounts,total:missing.length?null:total,missing,derived:true,provisional:end>today});
+    }
+    month = new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5)),1)).toISOString().slice(0,7);
+  }
+  return [...result.values()].sort((a,b)=>a.month.localeCompare(b.month));
 }
 export function transactionInput(input, data) {
   if (!['income', 'expense', 'transfer'].includes(input?.type)) throw new HttpError(400, '収支の種類を確認してください。');
@@ -72,7 +123,9 @@ export function transactionInput(input, data) {
 export function snapshotInput(input, historical = false) {
   const end = monthEnd(input?.month);
   if (input.month < ASSET_START_MONTH) throw new HttpError(400, '資産推移は2022年6月末以降の記録を指定してください。');
-  if (end > jstDate()) throw new HttpError(400, '月末を迎えた月を選んでください。');
+  const sourceAsOf = historical && input.sourceAsOf ? balanceDate(input.sourceAsOf) : null;
+  if (sourceAsOf && sourceAsOf.slice(0,7) !== input.month) throw new HttpError(400, '取得日と対象月を確認してください。');
+  if (end > jstDate() && !sourceAsOf) throw new HttpError(400, '月末を迎えた月を選んでください。');
   if (!Array.isArray(input.accounts) || input.accounts.length > 200) throw new HttpError(400, '月末残高を確認してください。');
   const seen = new Set();
   const accounts = input.accounts.map(a => { const id = text(a?.id, 100, '口座ID'); if (seen.has(id)) throw new HttpError(400, '口座が重複しています。'); seen.add(id);
@@ -80,7 +133,7 @@ export function snapshotInput(input, historical = false) {
   const total = accounts.reduce((sum, a) => sum + a.amount, 0);
   if (!Number.isSafeInteger(total)) throw new HttpError(400, '合計金額が大きすぎます。');
   return { id: input.month, month: input.month, date: end, accounts, total,
-    ...(historical ? { source: 'moneyforward', notes: text(input.notes || '', 500, '記録メモ', false) } : {}) };
+    ...(historical ? { source: 'moneyforward', notes: text(input.notes || '', 500, '記録メモ', false), ...(sourceAsOf ? {sourceAsOf} : {}) } : {}) };
 }
 export function mutateData(data, operation, value) {
   const next = structuredClone(data);
@@ -88,14 +141,21 @@ export function mutateData(data, operation, value) {
   if (operation === 'transaction.save') upsert(next.transactions, transactionInput(value, next));
   else if (operation === 'transaction.delete') next.transactions = next.transactions.filter(t => t.id !== uuid(value?.id));
   else if (operation === 'account.save') {
-    const row = accountInput(value);
+    const existing = next.accounts.find(a=>a.id===value?.id);
+    const row = accountInput({ ...value, balances: existing?.balances || [] });
+    const asOf = balanceDate(value?.asOf);
+    const submitted = accountInput({ ...value, balances: undefined }).items;
+    const balances = row.balances.filter(b=>b.date!==asOf);
+    balances.push({date:asOf,items:submitted});
+    row.balances = balances.sort((a,b)=>a.date.localeCompare(b.date));
+    if (row.balances.length > 3600) throw new HttpError(400, '残高履歴の件数が上限に達しました。');
+    row.items = structuredClone(row.balances.at(-1).items);
+    if (existing?.historyId && row.historyId !== existing.historyId) throw new HttpError(400, '過去チャートとの対応付けは変更できません。');
+    if (row.historyId && (next.accounts.some(a=>a.id!==row.id && a.historyId===row.historyId) || ![...next.historical,...next.snapshots].some(s=>s.accounts.some(a=>a.id===row.historyId)))) throw new HttpError(400, '過去チャートの口座を確認してください。');
     if (row.archived && row.items.some(i => i.amount !== 0)) throw new HttpError(400, '残高のある口座は保管できません。');
     if (!next.accounts.some(a => a.id === row.id) && next.accounts.length >= 200) throw new HttpError(400, '口座数の上限に達しました。');
     upsert(next.accounts, row);
-  } else if (operation === 'snapshot.save') upsert(next.snapshots, snapshotInput(value));
-  else if (operation === 'snapshot.delete') { monthEnd(value?.id); next.snapshots = next.snapshots.filter(s => s.id !== value.id); }
-  else if (operation === 'historical.save') upsert(next.historical, snapshotInput(value, true));
-  else if (operation === 'historical.delete') { monthEnd(value?.id); next.historical = next.historical.filter(s => s.id !== value.id); }
+  } else if (['snapshot.save','snapshot.delete','historical.save','historical.delete'].includes(operation)) throw new HttpError(400, '資産推移は自動集計です。口座画面から基準日と残高を入力してください。');
   else if (operation === 'category.save') {
     const existing = next.categories.find(c => c.id === value?.id);
     if (existing?.builtin) throw new HttpError(400, '標準の分類は変更できません。');
@@ -119,9 +179,9 @@ export function dataFromRecords(rows) {
   for (const row of rows) if (Object.hasOwn(data, row.kind)) data[row.kind].push(JSON.parse(row.payload));
   return data;
 }
-export function backup(data) { return { format: 'troom-household', version: 1, exportedAt: new Date().toISOString(), data }; }
+export function backup(data) { return { format: 'troom-household', version: 2, exportedAt: new Date().toISOString(), data }; }
 export function restoreInput(input) {
-  if (input?.format !== 'troom-household' || input.version !== 1 || !input.data || typeof input.data !== 'object') throw new HttpError(400, '家計簿のバックアップファイルを選んでください。');
+  if (input?.format !== 'troom-household' || ![1,2].includes(input.version) || !input.data || typeof input.data !== 'object') throw new HttpError(400, '家計簿のバックアップファイルを選んでください。');
   const raw = input.data, data = { accounts: [], transactions: [], snapshots: [], historical: [], categories: [] };
   const limits = { accounts: 200, transactions: 20000, snapshots: 3600, historical: 3600, categories: 500 };
   for (const [key, max] of Object.entries(limits)) if (!Array.isArray(raw[key]) || raw[key].length > max) throw new HttpError(400, 'バックアップの形式・件数を確認してください。');
@@ -142,6 +202,11 @@ export function restoreInput(input) {
       if (parsed.id !== row.id) throw new HttpError(400, '記録IDを確認してください。');
       data[key].push(parsed);
     }
+  }
+  const links = new Set();
+  for (const account of data.accounts) if (account.historyId) {
+    if (links.has(account.historyId) || ![...data.historical,...data.snapshots].some(s=>s.accounts.some(a=>a.id===account.historyId))) throw new HttpError(400, '過去チャートの対応付けを確認してください。');
+    links.add(account.historyId);
   }
   return data;
 }
