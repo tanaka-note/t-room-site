@@ -16,6 +16,7 @@ export function amount(value, signed = false) {
 }
 export const jstDate = () => new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
 export const ASSET_START_MONTH = '2022-06';
+export const ACCOUNT_ASSET_PRIORITY_MONTH = '2026-10';
 export function date(value) {
   const parsed = typeof value === 'string' ? new Date(`${value}T00:00:00Z`) : new Date(NaN);
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value < '1900-01-01' || value > '2199-12-31' || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw new HttpError(400, '日付を確認してください。');
@@ -105,8 +106,10 @@ export function assetHistory(data, today = jstDate()) {
       if (!Number.isSafeInteger(value)) throw new HttpError(400, '合計金額が大きすぎます。');
       accounts.push({id:account.historyId || account.id,name:account.name,amount:value,asOf:selected.date});
     }
-    // Imported/frozen history is retained for months preceding normal dated operation.
-    if (!result.has(month) && accounts.length) {
+    // Keep imported months through September 2026. From October onward, dated
+    // account balances take priority, including corrections and later imports.
+    // Only the projection changes; stored imports remain available in backups.
+    if ((!result.has(month) || month >= ACCOUNT_ASSET_PRIORITY_MONTH) && accounts.length) {
       const total = accounts.reduce((sum,a)=>sum+a.amount,0);
       if (!Number.isSafeInteger(total)) throw new HttpError(400, '合計金額が大きすぎます。');
       result.set(month,{id:month,month,date:end,accounts,total:missing.length?null:total,missing,derived:true,provisional:end>today});
