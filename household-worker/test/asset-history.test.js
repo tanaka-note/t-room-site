@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
 import {fixture} from './fixture.js';
+import {snapshotInput} from '../src/domain.js';
 
 const migration=readFileSync(new URL('../migrations/0004_asset_history_start.sql',import.meta.url),'utf8');
 const record=month=>({id:month,month,date:new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5)),0)).toISOString().slice(0,10),accounts:[{id:'sample',name:'Synthetic account',amount:123}],total:123});
@@ -42,8 +43,10 @@ test('API rejects obsolete assets and old backups, permits the June boundary and
     assert.equal((await f.mutate('snapshot.save',record('2022-06'),{expectedRevision:before.revision})).status,409);
     for(const kind of ['snapshot','historical']){
       const response=await f.mutate(`${kind}.save`,record('2022-05'));
-      assert.equal(response.status,400);assert.match((await response.json()).error,/2022年6月/);
-      assert.equal((await f.mutate(`${kind}.save`,record('2022-06'))).status,200);
+      assert.equal(response.status,400);assert.match((await response.json()).error,/自動集計/);
+      assert.equal((await f.mutate(`${kind}.save`,record('2022-06'))).status,400);
+      assert.throws(()=>snapshotInput(record('2022-05'),kind==='historical'),{status:400});
+      assert.equal(snapshotInput(record('2022-06'),kind==='historical').month,'2022-06');
     }
     const state=await f.state();
     assert.equal((await f.mutate('transaction.save',{id:crypto.randomUUID(),date:'2020-01-01',type:'income',amount:456,description:'Synthetic old transaction',notes:'',categoryId:state.data.categories.find(c=>c.type==='income').id,accountId:null,included:true})).status,200);

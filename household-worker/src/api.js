@@ -1,4 +1,4 @@
-import { HttpError, uuid, mutateData, records, dataFromRecords, backup, restoreInput, csv } from './domain.js';
+import { HttpError, uuid, mutateData, records, dataFromRecords, backup, restoreInput, csv, assetHistory } from './domain.js';
 
 export async function loadLedger(env) {
   // Bind records to the exact active generation and revision in one SQLite read.
@@ -9,7 +9,7 @@ export async function loadLedger(env) {
 }
 const json = (value, status = 200, headers = {}) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers } });
 export async function ledgerApi(request, env, path, session, readJson, audit) {
-  if (path === '/api/data' && request.method === 'GET') { const ledger = await loadLedger(env); return json({ revision: ledger.revision, data: ledger.data }); }
+  if (path === '/api/data' && request.method === 'GET') { const ledger = await loadLedger(env); return json({ revision: ledger.revision, data: ledger.data, assetHistory: assetHistory(ledger.data) }); }
   if (path === '/api/backup' && request.method === 'GET') return json(backup((await loadLedger(env)).data), 200, { 'Content-Disposition': 'attachment; filename="household-backup.json"' });
   if (path === '/api/export.csv' && request.method === 'GET') return new Response(csv((await loadLedger(env)).data), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="household.csv"', 'Cache-Control': 'no-store' } });
   if (!['/api/mutate','/api/restore'].includes(path) || request.method !== 'POST') throw new HttpError(404, 'ページが見つかりません。');
