@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { LINKED_SERVICES } from "../src/security-domain.js";
 
 await import("../public/security-display.js");
 const display = globalThis.TRoomSecurityDisplay;
+
+test("every registered service has a display label, including read-only household access", () => {
+  for (const service of ["security", ...LINKED_SERVICES]) assert.doesNotMatch(display.serviceLabel(service), /未定義|不明/, service);
+  assert.notEqual(display.roleLabel("viewer"), "viewer");
+});
 
 const currentAuditEvents = {
   bootstrap_auth_success: "第一管理者の本人確認に成功",
