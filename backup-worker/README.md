@@ -4,7 +4,7 @@
 
 ## 対象と保持
 
-- 専用Worker `t-room-backup` が毎日03:40 JSTにCloud / Security / Billing / Payments / Health / Inventory / AIの許可された永続テーブルとDownloaderの利用集計を順番に保存する。
+- 専用Worker `t-room-backup` が毎日03:40 JSTにCloud / Security / Billing / Payments / Health / Inventory / AI / Calendarの許可された永続テーブルとDownloaderの利用集計を順番に保存する。Calendarのローカル利用はサーバーへ送らないため対象外。
 - 日次30世代・月次12世代。月次はその月の最初の成功分。同日・同月の正常世代は再実行で上書きしない。世代数で整理するため、障害が続けば暦上の30日・12か月より古い世代が残る。
 - 対象のテーブル・列・既知schemaは`src/registry.js`を正本とする。未知のテーブル、対象テーブルの列変更、取得失敗は保存を停止して要確認にする。schema変更と同じPRで許可リスト・復元fixture・src/schema-guard.jsのmigration由来fingerprintを更新する。列だけでなくindex・trigger・制約を含むDDL差分も停止対象とし、D1内部table/migration管理tableは除外する。本番の既存DDLがmigrationと異なる場合も停止するので、初回公開前に読取専用で差分を確認し、内容を精査してから基準を更新する。
 - JSON gzipに実際のschema SQL、想定migration、サービス・DB名、取得時刻、列・行・件数を含める。各DBの全対象行は単一SQLのSQLiteスナップショットで取得し、schema確認は同じD1 batch transactionへ含める。取得開始・完了・予定時刻を記録する。DB間、D1とR2写真の同時点の保証はない。
@@ -27,7 +27,7 @@ D1→Workerの取得は合計10,000行・行JSON合計8 MiB・1行JSON 1 MiBま�
 
 公開前の2026-10-26の読取専用集計では、T-Cloudは少なくとも29,395行・行JSON 9,813,926 byteで、既にこの上限を超えていた（各tableの先頭最大25,001行だけの下限値）。**今回の方式で本番T-Cloudの新規全量バックアップは成功しない**。既存世代を削除せず`SnapshotTooLarge`で停止し、Backup-dataとCron全体で失敗を示す。他サービスは処理を継続する。T-Cloudの継続的な全量保存には上記の別方式が必要で、上限を緩和したり原本を除外して成功扱いにはしない。日記とSecurityについては集計時点で行数・行JSON合計・最大行・整数精度が上限内だった。本番原本の取得や復元実証とは区別する。
 
-取得SQLはD1のcompound SELECT分岐数制限に合わせて5分岐以下の入れ子へ分け、単一SQL・全体上限の判定を維持する。全8サービスと日記について、実際のローカルworkerd/D1でもSQLの実行・schema照合・上限による本文抑止を検証する。本番bindingは使わない。
+取得SQLはD1のcompound SELECT分岐数制限に合わせて5分岐以下の入れ子へ分け、単一SQL・全体上限の判定を維持する。全9サービスと日記について、実際のローカルworkerd/D1でもSQLの実行・schema照合・上限による本文抑止を検証する。本番bindingは使わない。
 
 公式制約: [D1 limits](https://developers.cloudflare.com/d1/platform/limits/)、[D1 batch transaction](https://developers.cloudflare.com/d1/worker-api/d1-database/)、[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)、[D1 export中の書込制限](https://developers.cloudflare.com/d1/best-practices/import-export-data/)。上限は安全停止のための保守的な実装値で、プロバイダの契約上限を増やすものではない。
 
@@ -62,7 +62,7 @@ Security Centerの一覧・詳細・ユーザー詳細は直近180日だけ表�
 新Workerと新バケットは既存mainの自動公開で作成されない。**通常のmain公開より前に、別途承認されたインフラ準備と公開順序の調整が必要**。既存サービスを本番binding付きでPreview公開しない。
 
 1. 非公開R2 `t-room-service-backups` を準備し、r2.dev無効・公開カスタムドメインなしを確認する。`security-audit/`と`_metadata/`へ期限削除を設定しない。バケット全体へのLifecycle削除も設定しない。
-2. `backup-worker/wrangler.jsonc`の8個の既存D1、Security Service Binding、監査Queueを照合する。専用Workerは必要なDBを読取るが、D1 binding自体は読取専用権限ではない点に注意する。T-CloudにはR2 bindingを追加せず、メタデータ用RPCだけを渡す。
+2. `backup-worker/wrangler.jsonc`の9個のD1、Security Service Binding、監査Queueを照合する。専用Workerは必要なDBを読取るが、D1 binding自体は読取専用権限ではない点に注意する。T-CloudにはR2 bindingを追加せず、メタデータ用RPCだけを渡す。
 3. Security D1へ`0026_backup_status_index.sql`を適用して状態取得の走査を絞る。新Workerを準備・公開し、Security（R2 binding・監査保管・状態RPC）→Diary（状態記録）→Cloud（集約表示）の順で公開する。新Workerに公開route・workers.dev・preview URLを付けない。mainの自動公開を先に走らせない。
 4. 安全なテストデータで初回成功・失敗記録・読戻し・未実行検知・権限を持つ一般ユーザーの成功と無権限ユーザーの拒否を確認する。本番の巻戻しや実ファイルの削除試験は行わない。
 
@@ -76,4 +76,4 @@ Security/Cloud/Healthは組み合わせる世代を照合し、最新の失効�
 
 `tools/restore-isolated.mjs`はNode専用で必ず自ら作る`:memory:`へ復元する。payload内のschema SQLは実行せず、信頼済みmigrationだけを適用する。復元時の在庫trigger二重加算等を避けるため隔離DB内だけでmigration由来triggerを一時停止し再作成する。全列・行数照合後、Identity/credential/link/招待/各accountは隔離無効化し、処理中AI requestは再実行不可とする。鍵暗号文と料金予約は保存して手動照合に使う。本番切替用の復元器ではない。
 
-`pnpm test`は実migrationを用いた全8サービスの取得・隔離SQLite復元・内容照合・integrity/foreign_key_check、読戻し不一致、保存失敗、schema drift、保持、監査配送失敗、cacheと状態の分離を検証する。`security-worker/test/audit-archive.test.js`は長期保管の保存・検証・更新競合を検証する。非空の合成データをR2 fixtureに保存した世代から全8サービスを復元し、在庫数量・支払配分・請求/精算金額・AI利用額を照合する。メモリ内で生成した合成RSA/AES鍵のwrap/unwrap・暗号文復号も確認する。日記は別の復元/写真fixtureで検証する。いずれも合成データで、実R2/本番D1の復元実証・実端末PRF・本番鍵の復号を行ったものではない。
+`pnpm test`は実migrationを用いた全9サービスの取得・隔離SQLite復元・内容照合・integrity/foreign_key_check、読戻し不一致、保存失敗、schema drift、保持、監査配送失敗、cacheと状態の分離を検証する。`security-worker/test/audit-archive.test.js`は長期保管の保存・検証・更新競合を検証する。非空の合成データをR2 fixtureに保存した世代から全9サービスを復元し、在庫数量・支払配分・請求/精算金額・AI利用額を照合する。メモリ内で生成した合成RSA/AES鍵のwrap/unwrap・暗号文復号も確認する。日記は別の復元/写真fixtureで検証する。いずれも合成データで、実R2/本番D1の復元実証・実端末PRF・本番鍵の復号を行ったものではない。

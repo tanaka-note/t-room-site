@@ -1,17 +1,18 @@
-import { PASSKEY_SESSION_TTL_SECONDS } from "../../assets/session-policy.mjs";
+import { passkeyTtlSecondsForService } from "../../assets/passkey-calendar-policy.mjs";
 
 // Internal service binding only. Authority remains the service's signed cookie
 // plus its live Identity/link/account checks; this stores expiry and revocation.
 export async function trackedPasskeySession(env, input, validate, loadSession = null) {
   const now = Math.floor(Date.now() / 1000);
-  if (!["security", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "payments", "household"].includes(input?.service)
+  const ttlSeconds = passkeyTtlSecondsForService(input?.service);
+  if (!["security", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "payments", "household", "calendar"].includes(input?.service)
     || !/^[A-Za-z0-9_-]{43}$/.test(input.sessionIdHash || "")
     || !["register", "read", "touch", "end"].includes(input.action)
     || !input.identityId || !input.credentialId || !input.role || !input.serviceAccountId || !input.sessionVersion
     || !Number.isSafeInteger(input.sessionEpoch) || input.sessionEpoch < 1) return { valid: false };
   if (input.action !== "end" && !await validate(input)) return { valid: false };
   if (input.action === "register") {
-    if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now || input.expiresAt > now + PASSKEY_SESSION_TTL_SECONDS
+    if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now || input.expiresAt > now + ttlSeconds
       || !Number.isFinite(Date.parse(input.startedAt)) || Date.parse(input.startedAt) > Date.now()) return { valid: false };
     await env.DB.prepare(`INSERT INTO security_active_sessions
       (session_id_hash, identity_id, service, service_link_id, service_account_id, credential_id,
@@ -36,12 +37,12 @@ export async function trackedPasskeySession(env, input, validate, loadSession = 
   }
   if (row.ended_at || Number(row.expires_at) <= now) return { valid: false };
   if (input.action === "touch") {
-    if (input.ttlSeconds !== PASSKEY_SESSION_TTL_SECONDS) return { valid: false };
+    if (input.ttlSeconds !== ttlSeconds) return { valid: false };
     const result = await env.DB.prepare(`UPDATE security_active_sessions SET expires_at = MAX(expires_at, ?), last_seen_at = ?, updated_at = CURRENT_TIMESTAMP
       WHERE session_id_hash = ? AND ended_at IS NULL AND expires_at > ?`)
-      .bind(now + PASSKEY_SESSION_TTL_SECONDS, new Date().toISOString(), input.sessionIdHash, now).run();
+      .bind(now + ttlSeconds, new Date().toISOString(), input.sessionIdHash, now).run();
     if (!result.meta?.changes) return { valid: false };
-    return { valid: true, expiresAt: Math.max(Number(row.expires_at), now + PASSKEY_SESSION_TTL_SECONDS) };
+    return { valid: true, expiresAt: Math.max(Number(row.expires_at), now + ttlSeconds) };
   }
   return { valid: true, expiresAt: Number(row.expires_at) };
 }

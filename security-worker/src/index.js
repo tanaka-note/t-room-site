@@ -58,7 +58,8 @@ const SERVICE_REGISTRY = Object.freeze({
   inventory: Object.freeze({ displayName: "在庫照会", binding: "INVENTORY_AUTH" }),
   payments: Object.freeze({ displayName: "支払明細", binding: "PAYMENTS_AUTH" }),
   household: Object.freeze({ displayName: "家計簿", binding: "HOUSEHOLD_AUTH" }),
-  health: Object.freeze({ displayName: "体調管理", binding: "HEALTH_AUTH" })
+  health: Object.freeze({ displayName: "体調管理", binding: "HEALTH_AUTH" }),
+  calendar: Object.freeze({ displayName: "カレンダー", binding: "CALENDAR_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
@@ -77,7 +78,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -2316,7 +2317,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {

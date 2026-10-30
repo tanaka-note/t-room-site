@@ -36,3 +36,9 @@ android-ai-chat/keystore.properties
 *.keystore
 .site-assets/
 gradle-home/
+android-calendar/.gradle/
+android-calendar/.kotlin/
+android-calendar/**/build/
+android-calendar/local.properties
+android-calendar/keystore.properties
+android-calendar/releases/

@@ -45,6 +45,11 @@
       "binding": "DOWNLOADER_DB",
       "database_name": "downloader-db",
       "database_id": "1e047091-e838-4ec3-899d-62014b283660"
+    },
+    {
+      "binding": "CALENDAR_DB",
+      "database_name": "calendar-db",
+      "database_id": "f9ad73f1-92df-40ef-a363-cf328123589d"
     }
   ],
   "r2_buckets": [

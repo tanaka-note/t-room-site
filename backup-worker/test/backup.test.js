@@ -14,6 +14,10 @@ test('every allowlist executes against current migrations and round-trips into a
       if (service === 'health') source.exec("INSERT INTO health_records VALUES ('opaque-id','nobumi','synthetic-iv','synthetic-ciphertext',2,'2026-10-25 00:00:00')");
       if (service === 'cloud') source.exec("INSERT INTO cloud_folders(id,name,created_by) VALUES (101,'synthetic','admin'); INSERT INTO cloud_files(folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by) VALUES (101,'encrypted-object','fixture','application/octet-stream','document',100,'ready','admin')");
       if (service === 'billing') source.exec("INSERT INTO billing_entries(account_id,document_type,entry_date,category,amount_yen,description,created_by) VALUES ('owner','invoice','2026-10-25','purchase',123,'synthetic','owner')");
+      if (service === 'calendar') {
+        source.prepare("INSERT INTO calendar_entities(account_id,owner_identity,kind,id,payload,version) VALUES('main','','event','fixture',?,1)").run('{"id":"fixture","title":"synthetic"}');
+        source.prepare("UPDATE calendar_entities SET payload=?,version=version+1 WHERE id='fixture'").run('{"id":"fixture","title":"edited synthetic"}');
+      }
       const snapshot = await decode(await compress(await capture(d1(source), service)));
       assert.equal(snapshot.service, service);
       assert.ok(snapshot.schema.length);
@@ -122,7 +126,7 @@ test('storage listings are cached while failures and recoveries remain fresh', a
   const cache = { async match() { return stored?.clone(); }, async put(_key, value) { stored = value; } };
   try {
     const first = await getBackupSnapshot(env, {}, cache);
-    assert.equal(first.services.length, 9); const count = lists;
+    assert.equal(first.services.length, Object.keys(SERVICES).length + 1); const count = lists;
     db.prepare("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,target_type,target_id,details_json) VALUES (?,?,?,?,?,?,?,?)")
       .run('failed-run', new Date().toISOString(), 'health', 'backup_failed', 'failure', 'backup', 'health', '{"reason":"operation_failed"}');
     const second = await getBackupSnapshot(env, {}, cache);

@@ -33,7 +33,8 @@
     { "binding": "INVENTORY_AUTH", "service": "t-room-inventory", "entrypoint": "SecurityIntegration" },
     { "binding": "PAYMENTS_AUTH", "service": "t-room-payments", "entrypoint": "SecurityIntegration" },
     { "binding": "HOUSEHOLD_AUTH", "service": "t-room-household", "entrypoint": "SecurityIntegration" },
-    { "binding": "HEALTH_AUTH", "service": "t-room-health", "entrypoint": "SecurityIntegration" }
+    { "binding": "HEALTH_AUTH", "service": "t-room-health", "entrypoint": "SecurityIntegration" },
+    { "binding": "CALENDAR_AUTH", "service": "t-room-calendar", "entrypoint": "SecurityIntegration" }
   ],
   "queues": {
     "consumers": [

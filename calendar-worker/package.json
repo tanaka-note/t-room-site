@@ -1,0 +1,11 @@
+{
+  "name": "t-room-calendar-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/api.js && node --check src/domain.js",
+    "test": "node --test test/*.test.js",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": { "wrangler": "4.121.0" }
+}
