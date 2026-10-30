@@ -36,20 +36,20 @@ function checkSummary(h,expected) {
  return summary;
 }
 
-test('scheduled succeeds only after all eight services return ok',async()=>{
+test('scheduled succeeds only after all configured services return ok',async()=>{
  const h=harness(async()=>({state:'ok',sha256:'not-logged',payload:'secret-fixture'}));
  await h.run({});
  const summary=checkSummary(h,'ok');
- assert.equal(summary.counts.ok,8);
+ assert.equal(summary.counts.ok,ids.length);
  assert.equal(h.info.length,1);assert.equal(h.errors.length,0);
  assert.doesNotMatch(JSON.stringify(summary),/not-logged|secret-fixture|sha256|payload/);
 });
 for(const state of ['failed','audit_unavailable','prune_failed']) {
- test(`scheduled rejects ${state} after continuing the other seven services`,async()=>{
+ test(`scheduled rejects ${state} after continuing all remaining services`,async()=>{
   const h=harness(async(_env,id)=>({state:id===ids[0]?state:'ok'}));
   await assert.rejects(h.run({}),incomplete);
   const summary=checkSummary(h,'failed');
-  assert.equal(summary.counts[state],1);assert.equal(summary.counts.ok,7);
+  assert.equal(summary.counts[state],1);assert.equal(summary.counts.ok,ids.length-1);
   assert.equal(h.errors.length,1);assert.equal(h.info.length,0);
  });
 }
@@ -67,7 +67,7 @@ test('unexpected exceptions are counted without leaking their messages or aborti
  const h=harness(async(_env,id)=>{if(id===ids[0])throw new Error('secret-fixture-exception');return{state:'ok'};});
  await assert.rejects(h.run({}),incomplete);
  const summary=checkSummary(h,'failed');
- assert.equal(summary.counts.unexpected_failure,1);assert.equal(summary.counts.ok,7);
+ assert.equal(summary.counts.unexpected_failure,1);assert.equal(summary.counts.ok,ids.length-1);
  const unexpected=JSON.parse(h.errors[0]);
  assert.equal(unexpected.runId,summary.runId);assert.equal(unexpected.service,ids[0]);
  assert.doesNotMatch(h.errors.join('\n'),/secret-fixture-exception/);
@@ -75,7 +75,7 @@ test('unexpected exceptions are counted without leaking their messages or aborti
 test('all service failures still produce one complete summary and a failed Cron promise',async()=>{
  const h=harness(async()=>({state:'failed'}));
  await assert.rejects(h.run({}),incomplete);
- assert.equal(checkSummary(h,'failed').counts.failed,8);
+ assert.equal(checkSummary(h,'failed').counts.failed,ids.length);
  assert.equal(h.errors.length,1);
 });
 
@@ -115,25 +115,25 @@ for(const mode of ['ok','all_save_failures','audit_start_unavailable_prior_succe
    const summary=checkSummary(h,mode==='ok'?'ok':'failed');
    const snapshot=await getBackupSnapshot(env,{}, {async match(){},async put(){}});
    const states=ids.map(id=>snapshot.services.find(service=>service.id===id).state);
-   if(mode==='ok')assert.equal(summary.counts.ok,8);
+   if(mode==='ok')assert.equal(summary.counts.ok,ids.length);
    if(mode==='all_save_failures'){
-    assert.equal(summary.counts.failed,8);assert.ok(states.every(state=>state==='failed'));
+    assert.equal(summary.counts.failed,ids.length);assert.ok(states.every(state=>state==='failed'));
     assert.equal(bucket.writes.length,writesBefore);
    }
    if(mode==='audit_start_unavailable_prior_success'){
-    assert.equal(summary.counts.audit_unavailable,8);assert.ok(states.every(state=>state==='ok'));
+    assert.equal(summary.counts.audit_unavailable,ids.length);assert.ok(states.every(state=>state==='ok'));
     assert.equal(bucket.writes.length,writesBefore,'no backup starts when both audit paths are unavailable');
    }
    if(mode==='failure_audit_unavailable'){
-    assert.equal(summary.counts.failed,8);assert.ok(states.every(state=>state==='running'));
+    assert.equal(summary.counts.failed,ids.length);assert.ok(states.every(state=>state==='running'));
    }
    if(mode==='success_audit_unavailable'){
-    assert.equal(summary.counts.audit_unavailable,8);assert.ok(states.every(state=>state==='running'));
-    assert.equal([...bucket.objects.keys()].filter(key=>key.includes('/daily/')).length,8);
+    assert.equal(summary.counts.audit_unavailable,ids.length);assert.ok(states.every(state=>state==='running'));
+    assert.equal([...bucket.objects.keys()].filter(key=>key.includes('/daily/')).length,ids.length);
    }
    if(mode==='prune_failure_audit_unavailable'){
-    assert.equal(summary.counts.prune_failed,8);assert.ok(states.every(state=>state==='ok'));
-    assert.equal([...bucket.objects.keys()].filter(key=>key.includes('/daily/')).length,8*32,'retention failure preserves existing generations');
+    assert.equal(summary.counts.prune_failed,ids.length);assert.ok(states.every(state=>state==='ok'));
+    assert.equal([...bucket.objects.keys()].filter(key=>key.includes('/daily/')).length,ids.length*32,'retention failure preserves existing generations');
    }
    assert.doesNotMatch([...h.info,...h.errors].join('\n'),/secret-fixture|sensitive payload/);
   }finally{for(const db of Object.values(dbs))db.close();}
