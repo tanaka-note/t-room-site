@@ -9,7 +9,7 @@ test('zero start and independent income, account balances and month-end snapshot
   assert.equal((await f.mutate('transaction.save',entry(s.data))).status,200);s=await f.state();assert.equal(s.data.accounts[0].items[0].amount,0);
   const account=structuredClone(s.data.accounts[0]);account.items[0].amount=-100000;assert.equal((await f.mutate('account.save',account)).status,200);s=await f.state();assert.equal(s.data.transactions.length,1);assert.equal(s.data.transactions[0].amount,1234);
   assert.equal((await f.mutate('snapshot.save',{month:'2026-09',accounts:[{id:account.id,name:account.name,amount:-90000}]})).status,200);s=await f.state();assert.equal(s.data.snapshots[0].total,-90000);assert.equal(s.data.accounts[0].items[0].amount,-100000);assert.equal(s.data.transactions.length,1);
-  assert.equal((await f.mutate('historical.save',{month:'2020-01',accounts:[{id:'old-account',name:'Sample previous account',amount:50000}]})).status,200);s=await f.state();assert.equal(s.data.accounts[0].items[0].amount,-100000);assert.equal(s.data.transactions.length,1);
+  assert.equal((await f.mutate('historical.save',{month:'2022-06',accounts:[{id:'old-account',name:'Sample previous account',amount:50000}]})).status,200);s=await f.state();assert.equal(s.data.accounts[0].items[0].amount,-100000);assert.equal(s.data.transactions.length,1);
 }finally{f.close();}});
 test('viewer can read all records and export but cannot mutate or restore',async()=>{const f=fixture('viewer');try{
   await f.login();const s=await f.state();assert.equal((await f.request('/api/session')).status,200);assert.equal((await f.request('/api/backup')).status,200);assert.equal((await f.request('/api/export.csv')).status,200);

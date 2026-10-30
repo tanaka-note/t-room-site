@@ -5,14 +5,27 @@
   const monthIndex = month => Number(month.slice(0, 4)) * 12 + Number(month.slice(5)) - 1;
   const monthAt = index => `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`;
   const monthLabel = month => `${Number(month.slice(0,4))}年${Number(month.slice(5))}月末`;
+  const startMonth = '2022-06';
+  const periods = Object.freeze([
+    {key:'1',label:'1ヶ月',months:1,unlock:0},{key:'3',label:'3ヶ月',months:3,unlock:0},
+    {key:'6',label:'6ヶ月',months:6,unlock:3},{key:'12',label:'1年',months:12,unlock:6},
+    {key:'24',label:'2年',months:24,unlock:12},{key:'36',label:'3年',months:36,unlock:24},
+    {key:'60',label:'5年',months:60,unlock:36},{key:'84',label:'7年',months:84,unlock:60},
+    {key:'120',label:'10年',months:120,unlock:84},{key:'all',label:'全期間',months:null,unlock:0}
+  ]);
+  function availablePeriods(points) {
+    const span = points.length ? monthIndex(points.at(-1).month) - monthIndex(points[0].month) : 0;
+    return periods.filter(period => period.unlock <= span);
+  }
 
-  function periodPoints(points, period, start, end) {
+  function periodPoints(points, period) {
     if (!points.length) return [];
-    if (period === 'all') return points.slice();
+    const definition = periods.find(item => item.key === period);
+    if (!definition?.months) return points.slice();
     const last = monthIndex(points.at(-1).month);
-    const from = period === 'custom' ? monthIndex(start) : last - Number(period) + 1;
-    const to = period === 'custom' ? monthIndex(end) : last;
-    return points.filter(point => monthIndex(point.month) >= from && monthIndex(point.month) <= to);
+    // Match My Investment's inclusive calendar boundary: one month has two month-end observations.
+    const from = last - definition.months;
+    return points.filter(point => monthIndex(point.month) >= from && monthIndex(point.month) <= last);
   }
 
   function previousChange(points, selected) {
@@ -62,17 +75,22 @@
   function create({root, month, value, change, position, previous, next, live}) {
     const ns = 'http://www.w3.org/2000/svg';
     let points = [], comparison = [], selected = null, selectedIndex = -1, includeZero = true, busy = false, frame = null, painting = null;
-    function select(index, announce = false) {
+    function display(index, announce = false) {
       if (!points.length) return;
-      selectedIndex = Math.max(0, Math.min(points.length - 1, index));
-      const point = points[selectedIndex]; selected = point.month;
+      index = Math.max(0, Math.min(points.length - 1, index));
+      const point = points[index];
       month.textContent = monthLabel(point.month); value.textContent = yen(point.value);
       const difference = previousChange(comparison, point);
       change.textContent = difference === null ? '前月の記録なし' : `前月比 ${difference > 0 ? '＋' : difference < 0 ? '−' : ''}${yen(Math.abs(difference))}`;
-      position.value = String(selectedIndex); position.setAttribute('aria-valuetext', `${month.textContent} ${value.textContent}`);
-      previous.disabled = busy || selectedIndex === 0; next.disabled = busy || selectedIndex === points.length - 1;
-      if (painting) {const location = painting.coordinates[selectedIndex];painting.guide.setAttribute('x1', location.x);painting.guide.setAttribute('x2', location.x);painting.dot.setAttribute('cx', location.x);painting.dot.setAttribute('cy', location.y);}
+      if (painting) {const location = painting.coordinates[index];painting.guide.setAttribute('x1', location.x);painting.guide.setAttribute('x2', location.x);painting.dot.setAttribute('cx', location.x);painting.dot.setAttribute('cy', location.y);}
       if (announce) live.textContent = `${month.textContent}、${value.textContent}、${change.textContent}`;
+    }
+    function select(index, announce = false) {
+      if (!points.length) return;
+      selectedIndex = Math.max(0, Math.min(points.length - 1, index));selected = points[selectedIndex].month;
+      display(selectedIndex, announce);
+      position.value = String(selectedIndex);position.setAttribute('aria-valuetext', `${month.textContent} ${value.textContent}`);
+      previous.disabled = busy || selectedIndex === 0;next.disabled = busy || selectedIndex === points.length - 1;
     }
     function draw() {
       const width = Math.round(root.getBoundingClientRect().width);
@@ -98,11 +116,12 @@
       const guide = add('line', {x1:0, x2:0, y1:top, y2:bottom, class:'chart-guide'}), dot = add('circle', {cx:0, cy:0, r:5, class:'chart-selected'});
       const overlay = add('rect', {x:left, y:top, width:right - left, height:bottom - top, fill:'transparent', class:'chart-hit', 'aria-hidden':'true'});
       let pointer = null;
-      const inspect = (event, announce = false) => {const box = svg.getBoundingClientRect(), ratio = (event.clientX - box.left - left) / (right - left);select(nearest(points, start + Math.max(0, Math.min(1, ratio)) * (end - start)), announce);};
-      overlay.onpointerdown = event => {if (busy) return;pointer = event.pointerId;overlay.setPointerCapture(event.pointerId);inspect(event, true);};
-      overlay.onpointermove = event => {if (!busy && (event.pointerType === 'mouse' || pointer === event.pointerId)) inspect(event);};
-      overlay.onpointerup = event => {if (!busy) inspect(event, true);pointer = null;if (overlay.hasPointerCapture(event.pointerId)) overlay.releasePointerCapture(event.pointerId);};
-      overlay.onpointercancel = () => {pointer = null;};
+      const inspect = (event, commit = false, announce = false) => {const box = svg.getBoundingClientRect(), ratio = (event.clientX - box.left - left) / (right - left), index = nearest(points, start + Math.max(0, Math.min(1, ratio)) * (end - start));if (commit) select(index, announce);else display(index);};
+      overlay.onpointerdown = event => {if (busy) return;pointer = event.pointerId;overlay.setPointerCapture(event.pointerId);inspect(event, true, true);};
+      overlay.onpointermove = event => {if (!busy && (event.pointerType === 'mouse' || pointer === event.pointerId)) inspect(event, pointer === event.pointerId);};
+      overlay.onpointerup = event => {if (!busy) inspect(event, true, true);pointer = null;if (overlay.hasPointerCapture(event.pointerId)) overlay.releasePointerCapture(event.pointerId);};
+      overlay.onpointerleave = () => {if (pointer === null) display(selectedIndex);};
+      overlay.onpointercancel = () => {pointer = null;display(selectedIndex);};
       painting = {coordinates, guide, dot};root.append(svg);select(selectedIndex);
     }
     function resize() {if (frame !== null) cancelAnimationFrame(frame);frame = requestAnimationFrame(() => {frame = null;draw();});}
@@ -122,5 +141,5 @@
       setBusy(value) {busy = value;position.disabled = busy || points.length < 2;previous.disabled = busy || selectedIndex <= 0;next.disabled = busy || selectedIndex < 0 || selectedIndex === points.length - 1;}
     };
   }
-  globalThis.TRoomAssetChart = Object.freeze({create, monthIndex, monthAt, periodPoints, previousChange, axis, xTicks, nearest});
+  globalThis.TRoomAssetChart = Object.freeze({create, startMonth, periods, availablePeriods, monthIndex, monthAt, periodPoints, previousChange, axis, xTicks, nearest});
 })();

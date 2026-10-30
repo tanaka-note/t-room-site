@@ -15,6 +15,7 @@ export function amount(value, signed = false) {
   return value;
 }
 export const jstDate = () => new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+export const ASSET_START_MONTH = '2022-06';
 export function date(value) {
   const parsed = typeof value === 'string' ? new Date(`${value}T00:00:00Z`) : new Date(NaN);
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value < '1900-01-01' || value > '2199-12-31' || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw new HttpError(400, '日付を確認してください。');
@@ -70,6 +71,7 @@ export function transactionInput(input, data) {
 }
 export function snapshotInput(input, historical = false) {
   const end = monthEnd(input?.month);
+  if (input.month < ASSET_START_MONTH) throw new HttpError(400, '資産推移は2022年6月末以降の記録を指定してください。');
   if (end > jstDate()) throw new HttpError(400, '月末を迎えた月を選んでください。');
   if (!Array.isArray(input.accounts) || input.accounts.length > 200) throw new HttpError(400, '月末残高を確認してください。');
   const seen = new Set();
