@@ -33,19 +33,19 @@
     return previous ? selected.value - previous.value : null;
   }
 
-  function axis(values, includeZero) {
-    const min = Math.min(...values), max = Math.max(...values);
-    const padding = Math.max((max - min) * .08, Math.abs(max) * .01, 1);
-    let low = includeZero && min >= 0 ? 0 : min - padding;
-    let high = includeZero && max <= 0 ? 0 : max + padding;
+  function axis(values) {
+    const min = Math.min(...values), max = Math.max(...values), spread = max - min;
+    // Pad the observed change, not the asset amount; retain a small range for flat data.
+    const padding = spread > 0 ? spread * .05 : Math.max(Math.abs(max) * .0005, 1);
+    const low = min - padding, high = max + padding;
     const rawStep = (high - low) / 4, power = 10 ** Math.floor(Math.log10(rawStep));
-    const step = Math.max(1, [1, 2, 2.5, 5, 10].find(number => number * power >= rawStep) * power);
-    low = Math.floor(low / step) * step; high = Math.ceil(high / step) * step;
-    if (low === high) high = low + step;
+    const step = Math.max(1, Math.ceil([1, 2, 2.5, 5, 10].find(number => number * power >= rawStep) * power));
     const magnitude = Math.max(Math.abs(low), Math.abs(high));
     const [unit, label] = magnitude >= 1e12 ? [1e12, '兆円'] : magnitude >= 1e8 ? [1e8, '億円'] : magnitude >= 1e4 ? [1e4, '万円'] : [1, '円'];
-    const precision = Math.max(0, Math.min(3, Math.ceil(-Math.log10(step / unit))));
-    const ticks = Array.from({length: Math.round((high - low) / step) + 1}, (_, i) => low + i * step);
+    const trailingZeros = String(step).match(/0+$/)?.[0].length || 0;
+    const precision = Math.max(0, Math.round(Math.log10(unit)) - trailingZeros);
+    const first = Math.ceil(low / step), last = Math.floor(high / step);
+    const ticks = Array.from({length: last - first + 1}, (_, i) => (first + i) * step);
     const format = value => (Object.is(value, -0) ? 0 : value / unit).toLocaleString('ja-JP', {maximumFractionDigits:precision});
     return {low, high, ticks, label, format};
   }
@@ -74,7 +74,7 @@
 
   function create({root, month, value, change, position, previous, next, live}) {
     const ns = 'http://www.w3.org/2000/svg';
-    let points = [], comparison = [], selected = null, selectedIndex = -1, includeZero = true, busy = false, frame = null, painting = null;
+    let points = [], comparison = [], selected = null, selectedIndex = -1, busy = false, frame = null, painting = null;
     function display(index, announce = false) {
       if (!points.length) return;
       index = Math.max(0, Math.min(points.length - 1, index));
@@ -97,12 +97,16 @@
       if (!width) return; // A hidden view must never determine the chart geometry.
       root.replaceChildren(); painting = null;
       if (!points.length) {const empty = document.createElement('p');empty.className = 'empty';empty.textContent = 'この期間の月末記録はありません。';root.append(empty);return;}
-      const height = width < 560 ? 240 : 320, left = 64, right = width - 14, top = 28, bottom = height - 36;
+      const height = width < 560 ? 240 : 320, right = width - 14, top = 28, bottom = height - 36;
+      const scale = axis(points.map(point => point.value));
+      const measure = document.createElement('canvas').getContext('2d');
+      measure.font = '12px ' + getComputedStyle(root).fontFamily;
+      const left = Math.max(64, ...scale.ticks.map(tick => Math.ceil(measure.measureText(scale.format(tick)).width) + 16));
       const svg = document.createElementNS(ns, 'svg');
       svg.setAttribute('viewBox', `0 0 ${width} ${height}`);svg.setAttribute('width', width);svg.setAttribute('height', height);svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', `${points[0].month}から${points.at(-1).month}、月末残高${points.length}件。下の月選択でも数値を確認できます。`);
       const add = (tag, attributes, text) => {const node = document.createElementNS(ns, tag);for (const [key, item] of Object.entries(attributes)) node.setAttribute(key, item);if (text !== undefined) node.textContent = text;svg.append(node);return node;};
-      const scale = axis(points.map(point => point.value), includeZero), start = monthIndex(points[0].month), end = monthIndex(points.at(-1).month);
+      const start = monthIndex(points[0].month), end = monthIndex(points.at(-1).month);
       const x = index => left + (start === end ? .5 : (index - start) / (end - start)) * (right - left);
       const y = amount => bottom - (amount - scale.low) / (scale.high - scale.low) * (bottom - top);
       add('text', {x:left, y:16, class:'chart-unit'}, `残高（${scale.label}）`);
@@ -130,8 +134,8 @@
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
     observer?.observe(root);window.addEventListener('resize', resize);
     return {
-      update(values, allValues = values, zero = false) {
-        points = values;comparison = allValues;includeZero = zero;painting = null;
+      update(values, allValues = values) {
+        points = values;comparison = allValues;painting = null;
         const found = points.findIndex(point => point.month === selected);selectedIndex = found >= 0 ? found : points.length - 1;
         position.min = '0';position.max = String(Math.max(0, points.length - 1));position.disabled = busy || points.length < 2;
         if (points.length) select(selectedIndex);else {root.replaceChildren();month.textContent = '月末の記録なし';value.textContent = '—';change.textContent = '';position.value = '0';position.removeAttribute('aria-valuetext');previous.disabled = next.disabled = true;}
