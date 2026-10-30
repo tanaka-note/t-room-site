@@ -2,15 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 await import('../public/asset-chart.js');
 const chart=globalThis.TRoomAssetChart;
-const series=Array.from({length:104},(_,i)=>({month:chart.monthAt(chart.monthIndex('2018-02')+i),value:1000000+i*120000}));
+const series=Array.from({length:52},(_,i)=>({month:chart.monthAt(chart.monthIndex('2022-06')+i),value:1000000+i*120000}));
 
-test('periods include exactly the last 12 or 36 recorded calendar months and custom bounds without altering data',()=>{
+test('My Investment calendar ranges include the start boundary and only unlock appropriate periods',()=>{
   const before=structuredClone(series);
-  assert.equal(chart.periodPoints(series,'all').length,104);
-  assert.deepEqual(chart.periodPoints(series,'12').map(p=>p.month),series.slice(-12).map(p=>p.month));
-  assert.equal(chart.periodPoints(series,'36').length,36);
-  assert.deepEqual(chart.periodPoints(series,'custom','2019-12','2020-02').map(p=>p.month),['2019-12','2020-01','2020-02']);
-  const missing=series.filter(p=>p.month!=='2026-08');assert.equal(chart.periodPoints(missing,'12').length,11);
+  assert.equal(chart.periodPoints(series,'all').length,52);
+  for(const [period,count]of [['1',2],['3',4],['6',7],['12',13],['24',25],['36',37],['60',52]])assert.equal(chart.periodPoints(series,period).length,count);
+  assert.deepEqual(chart.availablePeriods(series).map(p=>p.key),['1','3','6','12','24','36','60','all']);
+  assert.deepEqual(chart.availablePeriods([]).map(p=>p.key),['1','3','all']);
+  const missing=series.filter(p=>p.month!=='2026-08');assert.equal(chart.periodPoints(missing,'12').length,12);
   assert.deepEqual(series,before);
 });
 
