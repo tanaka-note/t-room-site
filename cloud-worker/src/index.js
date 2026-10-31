@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-aa944c13b16e";
+const APP_BUILD_ID = "cloud-99e8ec50def5";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -161,13 +161,16 @@ export default {
       }
       return secureResponse(await serveAsset(request, env, url, path));
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
+      const trashConflict = String(error?.message || "").includes("trash_");
+      const status = error instanceof HttpError ? error.status : trashConflict ? 409 : 500;
       if (status === 500) console.error(new URL(request.url).pathname.endsWith("/api/login") ? "Cloud password login request failed" : error);
-      return secureResponse(json({ error: status === 500 ? "処理中に問題が発生しました。" : error.message }, status));
+      return secureResponse(json({ error: status === 500 ? "処理中に問題が発生しました。" : trashConflict ? "完全削除が確定したか、ゴミ箱の状態が変わったため操作できません。再読み込みしてください。" : error.message }, status));
     }
   },
 
   async scheduled(_controller, env) {
+    const retention = await runTrashRetention(env);
+    if (retention?.failed) return;
     await abortStaleUploads(env);
   }
 };
@@ -1696,8 +1699,9 @@ async function deleteFolder(id, env, session) {
     await requireFolderAccess(env, id, session);
   }
   const deletedAt = new Date().toISOString();
+  const operationId = crypto.randomUUID();
   const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
-      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL AND parent_id IS ?
       UNION ALL
       SELECT child.id FROM cloud_folders child
       JOIN folder_tree parent ON child.parent_id = parent.id
@@ -1706,74 +1710,61 @@ async function deleteFolder(id, env, session) {
     SELECT
       (SELECT COUNT(*) FROM folder_tree) AS folderCount,
       (SELECT COUNT(*) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at IS NULL) AS fileCount`)
-    .bind(id).first();
+    .bind(id, folder.parent_id).first();
   const folderCount = Number(summary?.folderCount || 0);
   const fileCount = Number(summary?.fileCount || 0);
   if (!folderCount) throw new HttpError(404, "フォルダが見つかりません。");
-  await env.DB.batch([
+  const results = await env.DB.batch([
+    trashOperationStatement(env, operationId, deletedAt, "folder", id),
     env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
-        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL AND parent_id IS ?
         UNION ALL
         SELECT child.id FROM cloud_folders child
         JOIN folder_tree parent ON child.parent_id = parent.id
         WHERE child.deleted_at IS NULL
       )
-      UPDATE cloud_files SET deleted_at = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE deleted_at IS NULL AND folder_id IN (SELECT id FROM folder_tree)`).bind(id, deletedAt),
+      UPDATE cloud_files SET deleted_at = ?, trash_operation_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE deleted_at IS NULL AND folder_id IN (SELECT id FROM folder_tree)`).bind(id, folder.parent_id, deletedAt, operationId),
     env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
-        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL
+        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at IS NULL AND parent_id IS ?
         UNION ALL
         SELECT child.id FROM cloud_folders child
         JOIN folder_tree parent ON child.parent_id = parent.id
         WHERE child.deleted_at IS NULL
       )
-      UPDATE cloud_folders SET deleted_at = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id IN (SELECT id FROM folder_tree)`).bind(id, deletedAt)
+      UPDATE cloud_folders SET deleted_at = ?, trash_operation_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id IN (SELECT id FROM folder_tree)`).bind(id, folder.parent_id, deletedAt, operationId)
   ]);
-  await audit(env, "folder_trashed", session, "folder", id, { folderCount, fileCount });
+  if (!results[2].meta.changes) throw trashSafetyError("folder_trash_state_changed");
+  await audit(env, "folder_trashed", session, "folder", id, { folderCount, fileCount, operationId });
   return json({ ok: true, folderCount, fileCount, deleted: folderCount + fileCount });
 }
 
 async function restoreFolder(id, env, session) {
   requireDelete(session);
-  const folder = await env.DB.prepare("SELECT id, deleted_at AS deletedAt FROM cloud_folders WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
+  const folder = await env.DB.prepare("SELECT * FROM cloud_folders WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!folder) throw new HttpError(404, "ゴミ箱にフォルダが見つかりません。");
-  const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
-      SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
-      UNION ALL
-      SELECT child.id FROM cloud_folders child
-      JOIN folder_tree parent ON child.parent_id = parent.id
-      WHERE child.deleted_at = ?
-    )
-    SELECT
-      (SELECT COUNT(*) FROM folder_tree) AS folderCount,
-      (SELECT COUNT(*) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ?) AS fileCount`)
-    .bind(id, folder.deletedAt, folder.deletedAt, folder.deletedAt).first();
-  const folderCount = Number(summary?.folderCount || 0);
-  const fileCount = Number(summary?.fileCount || 0);
-  await env.DB.batch([
-    env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
-        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
-        UNION ALL
-        SELECT child.id FROM cloud_folders child
-        JOIN folder_tree parent ON child.parent_id = parent.id
-        WHERE child.deleted_at = ?
-      )
-      UPDATE cloud_files SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE deleted_at = ? AND folder_id IN (SELECT id FROM folder_tree)`)
-      .bind(id, folder.deletedAt, folder.deletedAt, folder.deletedAt),
-    env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
-        SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ?
-        UNION ALL
-        SELECT child.id FROM cloud_folders child
-        JOIN folder_tree parent ON child.parent_id = parent.id
-        WHERE child.deleted_at = ?
-      )
-      UPDATE cloud_folders SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE id IN (SELECT id FROM folder_tree)`)
-      .bind(id, folder.deletedAt, folder.deletedAt)
+  const tree = `WITH RECURSIVE folder_tree(id) AS (
+    SELECT id FROM cloud_folders WHERE id = ? AND deleted_at = ? AND trash_operation_id IS ?
+    UNION SELECT child.id FROM cloud_folders child JOIN folder_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at = ? AND child.trash_operation_id IS ?
+  )`;
+  const args = [id, folder.deleted_at, folder.trash_operation_id, folder.deleted_at, folder.trash_operation_id];
+  // Keep the root trashed until the second statement so both statements select
+  // the same generation. Any purge conflict rolls back the complete D1 batch.
+  const results = await env.DB.batch([
+    env.DB.prepare(`${tree} UPDATE cloud_files SET deleted_at = NULL, trash_operation_id = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ? AND trash_operation_id IS ?
+      AND NOT EXISTS(SELECT 1 FROM cloud_folders p WHERE p.id = ? AND p.deleted_at IS NOT NULL)`)
+      .bind(...args, folder.deleted_at, folder.trash_operation_id, folder.parent_id),
+    env.DB.prepare(`${tree} UPDATE cloud_folders SET deleted_at = NULL, trash_operation_id = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id IN (SELECT id FROM folder_tree)
+      AND NOT EXISTS(SELECT 1 FROM cloud_folders p WHERE p.id = ? AND p.deleted_at IS NOT NULL)`)
+      .bind(...args, folder.parent_id)
   ]);
-  await audit(env, "folder_restored", session, "folder", id, { folderCount, fileCount });
+  const folderCount = Number(results[1].meta.changes), fileCount = Number(results[0].meta.changes);
+  if (!folderCount) throw trashSafetyError("restore_state_changed");
+  await audit(env, "folder_restored", session, "folder", id, { folderCount, fileCount, operationId: folder.trash_operation_id });
   return json({ ok: true, folderCount, fileCount, restored: folderCount + fileCount });
 }
 
@@ -2078,78 +2069,46 @@ async function moveFileToTrash(id, env, session) {
     const protectedFolderUnlocked = await requireFolderAccess(env, file.folder_id, session);
     if (!protectedFolderUnlocked) throw new HttpError(403, "PWで解除したフォルダ内のファイルだけ削除できます。");
   }
-  await env.DB.batch([
-    env.DB.prepare("UPDATE cloud_files SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id),
+  const deletedAt = new Date().toISOString(), operationId = crypto.randomUUID();
+  const result = await env.DB.batch([
+    trashOperationStatement(env, operationId, deletedAt, "file", id),
+    env.DB.prepare("UPDATE cloud_files SET deleted_at = ?, trash_operation_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL AND purge_id IS NULL AND status = 'ready' AND folder_id IS ?").bind(deletedAt, operationId, id, file.folder_id),
     env.DB.prepare("UPDATE cloud_deletion_requests SET status = 'approved', approved_at = CURRENT_TIMESTAMP, approved_by = ? WHERE file_id = ? AND status = 'pending'").bind(session.role, id)
   ]);
-  await audit(env, "file_trashed", session, "file", id);
+  if (!result[1].meta.changes) throw trashSafetyError("trash_state_changed");
+  await audit(env, "file_trashed", session, "file", id, { operationId });
   return json({ ok: true });
 }
 
 async function restoreFile(id, env, session) {
   requireDelete(session);
-  const file = await env.DB.prepare("SELECT id, folder_id FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
+  const file = await env.DB.prepare("SELECT * FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
   await requireFolderAccess(env, file.folder_id, session);
-  await env.DB.prepare("UPDATE cloud_files SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
-  await audit(env, "file_restored", session, "file", id);
+  const result = await env.DB.prepare(`UPDATE cloud_files SET deleted_at = NULL, trash_operation_id = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND deleted_at = ? AND trash_operation_id IS ? AND purge_id IS NULL
+    AND NOT EXISTS(SELECT 1 FROM cloud_folders WHERE id = ? AND deleted_at IS NOT NULL)`)
+    .bind(id, file.deleted_at, file.trash_operation_id, file.folder_id).run();
+  if (!result.meta.changes) throw trashSafetyError("restore_state_changed_or_purge_started");
+  await audit(env, "file_restored", session, "file", id, { operationId: file.trash_operation_id });
   return json({ ok: true });
 }
 
 async function permanentlyDeleteFile(id, env, session) {
   requireDelete(session);
-  const file = await env.DB.prepare("SELECT object_key, thumbnail_key, display_thumbnail_key, stream_uid FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
-  if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
-  await env.FILES.delete(file.object_key);
-  if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
-  if (file.display_thumbnail_key) await env.FILES.delete(file.display_thumbnail_key);
-  if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
-  await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(id).run();
-  await audit(env, "file_deleted", session, "file", id);
+  const result = await executeTrashRun(env, "manual", session, id);
+  if (result.failed || result.reason) throw trashSafetyError(result.reason || "purge_failed");
   return json({ ok: true });
 }
 
 async function emptyTrash(env, session) {
   requireDelete(session);
-  const totals = await env.DB.prepare(`SELECT
-    (SELECT COUNT(*) FROM cloud_files WHERE deleted_at IS NOT NULL) AS fileCount,
-    (SELECT COUNT(*) FROM cloud_folders WHERE deleted_at IS NOT NULL) AS folderCount`).first();
-  const rows = await env.DB.prepare("SELECT id, object_key, thumbnail_key, display_thumbnail_key, stream_uid FROM cloud_files WHERE deleted_at IS NOT NULL ORDER BY id LIMIT 20").all();
-  let deleted = 0;
-  let deletedFolders = 0;
-  let failed = 0;
-  for (const file of rows.results || []) {
-    try {
-      await env.FILES.delete(file.object_key);
-      if (file.thumbnail_key) await env.FILES.delete(file.thumbnail_key);
-      if (file.display_thumbnail_key) await env.FILES.delete(file.display_thumbnail_key);
-      if (file.stream_uid && env.STREAM) await env.STREAM.video(file.stream_uid).delete();
-      await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(file.id).run();
-      await audit(env, "file_deleted", session, "file", file.id, { bulk: true });
-      deleted += 1;
-    } catch {
-      failed += 1;
-    }
-  }
-  const remainingRow = await env.DB.prepare("SELECT COUNT(*) AS count FROM cloud_files WHERE deleted_at IS NOT NULL").first();
-  const remaining = Number(remainingRow?.count || 0);
-  if (failed === 0 && remaining === 0) {
-    try {
-      const result = await env.DB.prepare("DELETE FROM cloud_folders WHERE deleted_at IS NOT NULL").run();
-      deletedFolders = Number(result.meta?.changes || 0);
-    } catch {
-      failed += 1;
-    }
-  }
-  return json({
-    ok: failed === 0 && remaining === 0,
-    deleted,
-    deletedFolders,
-    failed,
-    remaining,
-    totalFiles: Number(totals?.fileCount || 0),
-    totalFolders: Number(totals?.folderCount || 0)
-  });
+  const result = await executeTrashRun(env, "manual", session);
+  const remaining = await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM cloud_files WHERE deleted_at IS NOT NULL)
+    + (SELECT COUNT(*) FROM cloud_folders WHERE deleted_at IS NOT NULL) AS count`).first();
+  return json({ ok: !result.failed && !result.reason && !remaining.count, deleted: result.deleted,
+    deletedFolders: result.deletedFolders, failed: result.failed, remaining: Number(remaining.count),
+    reason: result.reason, totalFiles: result.candidates, totalFolders: result.folderCandidates });
 }
 
 async function putThumbnail(id, request, env, session) {
@@ -2253,27 +2212,33 @@ async function listTrash(env, session) {
   const result = await env.DB.prepare(`
     SELECT f.id, f.folder_id AS folderId, f.original_name AS name, f.mime_type AS mimeType, f.media_kind AS mediaKind,
       f.size_bytes AS sizeBytes, f.thumbnail_key IS NOT NULL AS hasThumbnail, f.deleted_at AS deletedAt,
+      f.trash_operation_id AS trashOperationId,
+      (f.purge_id IS NOT NULL OR COALESCE((SELECT op.purge_started FROM cloud_trash_operations op WHERE op.id=f.trash_operation_id),0)) AS purgeStarted,
+      (SELECT op.deleted_at FROM cloud_trash_operations op WHERE op.id=f.trash_operation_id AND op.deleted_at=f.deleted_at) AS verifiedTrashAt,
       f.crypto_version AS cryptoVersion, f.encrypted_metadata AS encryptedMetadata, f.metadata_iv AS metadataIv,
       f.wrapped_file_key AS wrappedFileKey, f.file_key_iv AS fileKeyIv,
       f.encrypted_size_bytes AS encryptedSizeBytes, f.chunk_size_bytes AS chunkSizeBytes, f.chunk_count AS chunkCount,
       fo.crypto_version AS folderCryptoVersion, fo.encrypted_name AS folderEncryptedName, fo.name_iv AS folderNameIv,
       fo.password_salt AS folderPasswordSalt, fo.password_wrapped_key AS folderPasswordWrappedKey,
       fo.password_wrap_iv AS folderPasswordWrapIv, fo.admin_wrapped_key AS folderAdminWrappedKey
-    FROM cloud_files f JOIN cloud_folders fo ON fo.id = f.folder_id
-    WHERE f.folder_id IS NOT NULL AND f.deleted_at IS NOT NULL AND fo.deleted_at IS NULL
+    FROM cloud_files f LEFT JOIN cloud_folders fo ON fo.id = f.folder_id
+    WHERE f.deleted_at IS NOT NULL AND (f.folder_id IS NULL OR fo.deleted_at IS NULL)
     ORDER BY f.deleted_at DESC LIMIT 500
   `).all();
   const files = [];
   for (const file of result.results || []) {
     try {
       await requireFolderAccess(env, file.folderId, session);
-      files.push(file);
+      files.push(trashRetentionRecord(file, env));
     } catch (error) {
       if (!(error instanceof HttpError) || error.status !== 423) throw error;
     }
   }
   const folderResult = await env.DB.prepare(`SELECT f.id, f.parent_id AS parentId, f.name,
       f.created_at AS createdAt, f.updated_at AS updatedAt, f.deleted_at AS deletedAt,
+      f.trash_operation_id AS trashOperationId,
+      (SELECT op.purge_started FROM cloud_trash_operations op WHERE op.id=f.trash_operation_id) AS purgeStarted,
+      (SELECT op.deleted_at FROM cloud_trash_operations op WHERE op.id=f.trash_operation_id AND op.deleted_at=f.deleted_at) AS verifiedTrashAt,
       f.crypto_version AS cryptoVersion, f.encrypted_name AS encryptedName, f.name_iv AS nameIv,
       f.password_salt AS passwordSalt, f.password_wrapped_key AS passwordWrappedKey,
       f.password_wrap_iv AS passwordWrapIv, f.admin_wrapped_key AS adminWrappedKey,
@@ -2282,7 +2247,7 @@ async function listTrash(env, session) {
     FROM cloud_folders f
     LEFT JOIN cloud_folders parent ON parent.id = f.parent_id
     WHERE f.deleted_at IS NOT NULL
-      AND (parent.id IS NULL OR parent.deleted_at IS NULL OR parent.deleted_at <> f.deleted_at)
+      AND (parent.id IS NULL OR parent.deleted_at IS NULL OR parent.deleted_at <> f.deleted_at OR parent.trash_operation_id IS NOT f.trash_operation_id)
     ORDER BY f.deleted_at DESC, f.id DESC LIMIT 500`).all();
   const folders = [];
   for (const folder of folderResult.results || []) {
@@ -2296,10 +2261,18 @@ async function listTrash(env, session) {
       SELECT
         (SELECT COUNT(*) FROM folder_tree) AS folderCount,
         (SELECT COUNT(*) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ?) AS fileCount,
-        (SELECT COALESCE(SUM(size_bytes), 0) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ?) AS sizeBytes`)
-      .bind(folder.id, folder.deletedAt, folder.deletedAt, folder.deletedAt, folder.deletedAt).first();
+        (SELECT COALESCE(SUM(size_bytes), 0) FROM cloud_files WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at = ?) AS sizeBytes,
+        EXISTS(WITH RECURSIVE all_tree(id) AS (
+          SELECT ? UNION SELECT child.id FROM cloud_folders child JOIN all_tree parent ON child.parent_id=parent.id
+        ) SELECT 1 FROM cloud_trash_purges p WHERE p.folder_id IN (SELECT id FROM all_tree)
+            AND (julianday(?) IS NULL OR julianday(p.created_at)>=julianday(?))
+          UNION ALL SELECT 1 FROM cloud_trash_folder_purges p WHERE p.parent_id IN (SELECT id FROM all_tree)
+            AND (julianday(?) IS NULL OR julianday(p.occurred_at)>=julianday(?))) AS descendantPurgeStarted`)
+      .bind(folder.id, folder.deletedAt, folder.deletedAt, folder.deletedAt, folder.deletedAt,
+        folder.id, folder.deletedAt, folder.deletedAt, folder.deletedAt, folder.deletedAt).first();
     folders.push({
-      ...folder,
+      ...trashRetentionRecord(folder, env),
+      purgeStarted: Boolean(folder.purgeStarted || summary?.descendantPurgeStarted),
       folderCount: Math.max(0, Number(summary?.folderCount || 1) - 1),
       fileCount: Number(summary?.fileCount || 0),
       sizeBytes: Number(summary?.sizeBytes || 0),
@@ -2550,18 +2523,312 @@ async function approveDeletionRequest(id, env, session) {
     env.DB.prepare("UPDATE cloud_deletion_requests SET status = 'approved', approved_at = CURRENT_TIMESTAMP, approved_by = ? WHERE id = ? AND status = 'pending'").bind(session.role, id)
   ];
   if (request.fileId && !request.deletedAt) {
-    statements.unshift(env.DB.prepare("UPDATE cloud_files SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL").bind(request.fileId));
+    const operationId = crypto.randomUUID(), deletedAt = new Date().toISOString();
+    statements.unshift(trashOperationStatement(env, operationId, deletedAt, "file", request.fileId),
+      env.DB.prepare("UPDATE cloud_files SET deleted_at = ?, trash_operation_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL AND purge_id IS NULL")
+        .bind(deletedAt, operationId, request.fileId));
   }
   await env.DB.batch(statements);
   await audit(env, "deletion_approved", session, "file", request.fileId, { requestId: id, name: request.fileName });
   return json({ ok: true, movedToTrash: Boolean(request.fileId && !request.deletedAt) });
 }
 
+const TRASH_RETENTION_MS = 720 * 60 * 60 * 1000;
+
+function trashSafetyError(reason) {
+  const error = new HttpError(409, "安全確認のため処理を停止しました。完全削除の処理中は復元できません。再読み込みし、管理者へ確認してください。");
+  error.trashReason = reason;
+  return error;
+}
+
+function trashOperationStatement(env, id, deletedAt, type, targetId) {
+  return env.DB.prepare("INSERT INTO cloud_trash_operations(id,deleted_at,target_type,target_id) VALUES(?,?,?,?)")
+    .bind(id, deletedAt, type, targetId);
+}
+
+function trashRetentionRecord(record, env) {
+  const at = record.verifiedTrashAt && Date.parse(record.verifiedTrashAt);
+  return { ...record, autoDeleteEligibleAt: Number.isFinite(at) ? new Date(at + TRASH_RETENTION_MS).toISOString() : null,
+    retentionMode: env.TRASH_RETENTION_MODE || "disabled", purgeStarted: Boolean(record.purgeStarted) };
+}
+
+function trashSettings(env) {
+  const integer = (name, fallback, ceiling) => {
+    const value = Number(env[name] ?? fallback);
+    if (!Number.isSafeInteger(value) || value < 1 || value > ceiling) throw trashSafetyError("invalid_configuration");
+    return value;
+  };
+  const mode = env.TRASH_RETENTION_MODE || "disabled";
+  if (!["disabled", "dry-run", "enabled"].includes(mode)) throw trashSafetyError("invalid_mode");
+  return { mode, maxCount: integer("TRASH_PURGE_MAX_COUNT", 20, 1000),
+    maxBytes: integer("TRASH_PURGE_MAX_BYTES", 104857600, Number.MAX_SAFE_INTEGER),
+    maxCandidates: integer("TRASH_PURGE_MAX_CANDIDATES", 200, 100000),
+    growthFactor: integer("TRASH_PURGE_GROWTH_FACTOR", 3, 100),
+    growthAllowance: integer("TRASH_PURGE_GROWTH_ALLOWANCE", 20, 100000) };
+}
+
+function trashDuePredicate(alias) {
+  return `${alias}.deleted_at IS NOT NULL AND ${alias}.trash_operation_id IS NOT NULL
+    AND julianday(${alias}.deleted_at) <= julianday(?)
+    AND EXISTS(SELECT 1 FROM cloud_trash_operations op
+      WHERE op.id=${alias}.trash_operation_id AND op.deleted_at=${alias}.deleted_at)`;
+}
+
+async function trashRunAudit(env, run, event, type = null, id = null, extra = {}) {
+  await audit(env, event, { role: run.source === "automatic" ? "system" : run.actorRole },
+    type, id, { ...run, ...extra });
+}
+
+async function assertTrashLease(env, run, settings) {
+  const control = await env.DB.prepare("SELECT * FROM cloud_trash_control WHERE id=1").first();
+  if (!control || control.emergency_stop || String(env.TRASH_PURGE_EMERGENCY_STOP || "false") !== "false")
+    throw trashSafetyError("emergency_stop");
+  if (control.lease_owner !== run.runId || control.lease_until <= Date.now()) throw trashSafetyError("lease_lost");
+  if (run.source === "automatic" && settings.mode !== "enabled") throw trashSafetyError("mode_not_enabled");
+}
+
+// Check the entire trashed ancestor tree, including independently trashed
+// descendants. Unknown/mixed generations stop automatic deletion of the tree.
+async function validateTrashTree(env, file, automatic) {
+  const result = await env.DB.prepare(`WITH RECURSIVE
+    ancestors(id,parent_id,deleted_at) AS (
+      SELECT id,parent_id,deleted_at FROM cloud_folders WHERE id=?
+      UNION SELECT p.id,p.parent_id,p.deleted_at FROM cloud_folders p JOIN ancestors a ON p.id=a.parent_id
+    ), tree(id) AS (
+      SELECT id FROM ancestors WHERE deleted_at IS NOT NULL
+      UNION SELECT f.id FROM cloud_folders f JOIN tree t ON f.parent_id=t.id
+    )
+    SELECT
+      (SELECT COUNT(*) FROM cloud_folders f JOIN tree t ON f.id=t.id WHERE f.deleted_at IS NULL
+        OR (?=1 AND (f.deleted_at IS NOT ? OR f.trash_operation_id IS NOT ?))) +
+      (SELECT COUNT(*) FROM cloud_files f JOIN tree t ON f.folder_id=t.id WHERE f.deleted_at IS NULL
+        OR f.status<>'ready' OR (?=1 AND (f.deleted_at IS NOT ? OR f.trash_operation_id IS NOT ?))) AS invalid`)
+    .bind(file.folder_id, automatic ? 1 : 0, file.deleted_at, file.trash_operation_id,
+      automatic ? 1 : 0, file.deleted_at, file.trash_operation_id).first();
+  if (!result || result.invalid) throw trashSafetyError("inconsistent_folder_tree");
+}
+
+async function measureTrashObjects(env, file, automatic) {
+  if (file.status !== "ready") throw trashSafetyError("file_not_ready");
+  if (file.stream_uid && (!env.STREAM || automatic)) throw trashSafetyError("stream_unverifiable");
+  const keys = [...new Set([file.object_key, file.thumbnail_key, file.display_thumbnail_key].filter(Boolean))];
+  if (!file.object_key || keys.some(key => typeof key !== "string" || !key.length)) throw trashSafetyError("invalid_object_key");
+  let bytes = 0;
+  for (const key of keys) {
+    const head = await env.FILES.head(key);
+    // A new claim with missing objects is anomalous, not a successful restore.
+    if (!head || !Number.isSafeInteger(head.size) || head.size < 0) throw trashSafetyError("object_missing_or_invalid");
+    bytes += head.size;
+  }
+  if (!Number.isSafeInteger(bytes)) throw trashSafetyError("invalid_object_size");
+  return bytes;
+}
+
+async function claimTrashFile(env, run, file, bytes, cutoff) {
+  const id = crypto.randomUUID();
+  const automatic = run.source === "automatic";
+  // The INSERT and its triggers atomically snapshot keys, exclude shared
+  // references, freeze this generation and mark the operation irreversible.
+  const result = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO cloud_trash_purges
+      (id,file_id,operation_id,deleted_at,folder_id,object_key,thumbnail_key,display_thumbnail_key,stream_uid,size_bytes,source,run_id)
+      SELECT ?,f.id,f.trash_operation_id,f.deleted_at,f.folder_id,f.object_key,f.thumbnail_key,f.display_thumbnail_key,f.stream_uid,?,?,?
+      FROM cloud_files f WHERE f.id=? AND f.deleted_at=? AND f.trash_operation_id IS ?
+      AND f.purge_id IS NULL AND f.status='ready'
+      AND f.object_key=? AND f.thumbnail_key IS ? AND f.display_thumbnail_key IS ? AND f.stream_uid IS ?
+      ${automatic ? `AND ${trashDuePredicate("f")}` : ""}`)
+      .bind(id, bytes, run.source, run.runId, file.id, file.deleted_at, file.trash_operation_id,
+        file.object_key, file.thumbnail_key, file.display_thumbnail_key, file.stream_uid, ...(automatic ? [cutoff] : [])),
+    env.DB.prepare(`INSERT INTO cloud_audit_logs(event_type,actor_role,target_type,target_id,details_json)
+      SELECT 'trash_purge_claimed',?,'file',file_id,? FROM cloud_trash_purges WHERE id=?`)
+      .bind(run.actorRole, JSON.stringify({ runId: run.runId, operationId: file.trash_operation_id, source: run.source, bytes }), id)
+  ]);
+  if (!result[0].meta.changes) return null; // restoration/re-trash won the race
+  return env.DB.prepare("SELECT * FROM cloud_trash_purges WHERE id=?").bind(id).first();
+}
+
+async function deleteClaimedTrashFile(env, run, settings, job) {
+  await assertTrashLease(env, run, settings);
+  const file = await env.DB.prepare("SELECT * FROM cloud_files WHERE id=? AND purge_id=? AND deleted_at=? AND trash_operation_id IS ?")
+    .bind(job.file_id, job.id, job.deleted_at, job.operation_id).first();
+  if (!file) throw trashSafetyError("manifest_state_mismatch");
+  // Verify again before external effects. Triggers reserve these exact keys
+  // even after the record has gone, so retries can never target a later file.
+  const shared = await env.DB.prepare(`SELECT id FROM cloud_files WHERE id<>? AND (
+    object_key IN (?,?,?) OR thumbnail_key IN (?,?,?) OR display_thumbnail_key IN (?,?,?)
+    OR (stream_uid IS NOT NULL AND stream_uid=?)) LIMIT 1`)
+    .bind(job.file_id, job.object_key, job.thumbnail_key, job.display_thumbnail_key,
+      job.object_key, job.thumbnail_key, job.display_thumbnail_key,
+      job.object_key, job.thumbnail_key, job.display_thumbnail_key, job.stream_uid).first();
+  if (shared) throw trashSafetyError("shared_object_key");
+  if (job.stream_uid && !env.STREAM) throw trashSafetyError("stream_unverifiable");
+  if (job.phase === "claimed") {
+    for (const key of [...new Set([job.object_key, job.thumbnail_key, job.display_thumbnail_key].filter(Boolean))]) {
+      await assertTrashLease(env, run, settings);
+      await env.FILES.delete(key); // R2 delete of an absent key is idempotent.
+    }
+    if (job.stream_uid) {
+      await assertTrashLease(env, run, settings);
+      // The Stream adapter must treat an already absent UID as success.
+      await env.STREAM.video(job.stream_uid).delete();
+    }
+    await env.DB.prepare("UPDATE cloud_trash_purges SET phase='objects_deleted' WHERE id=? AND phase='claimed'").bind(job.id).run();
+  }
+  await assertTrashLease(env, run, settings);
+  const result = await env.DB.batch([
+    env.DB.prepare(`DELETE FROM cloud_files WHERE id=? AND purge_id=? AND deleted_at=?
+      AND trash_operation_id IS ? AND EXISTS(SELECT 1 FROM cloud_trash_purges WHERE id=? AND phase='objects_deleted')`)
+      .bind(job.file_id, job.id, job.deleted_at, job.operation_id, job.id),
+    env.DB.prepare(`UPDATE cloud_trash_purges SET phase='completed',completed_at=CURRENT_TIMESTAMP
+      WHERE id=? AND phase='objects_deleted' AND NOT EXISTS(SELECT 1 FROM cloud_files WHERE id=?)`).bind(job.id, job.file_id),
+    env.DB.prepare("INSERT INTO cloud_audit_logs(event_type,actor_role,target_type,target_id,details_json) VALUES('file_deleted',?,'file',?,?)")
+      .bind(run.actorRole, job.file_id, JSON.stringify({ runId: run.runId, operationId: job.operation_id, purgeId: job.id, source: job.source, bytes: job.size_bytes }))
+  ]);
+  if (!result[0].meta.changes) throw trashSafetyError("finalize_state_mismatch");
+}
+
+async function runTrashRetention(env) {
+  // Do not even touch the new schema while disabled (migration is separate).
+  if (!env.TRASH_RETENTION_MODE || env.TRASH_RETENTION_MODE === "disabled") return;
+  return executeTrashRun(env, "automatic", { role: "system" });
+}
+
+async function executeTrashRun(env, source, session, onlyFileId = null) {
+  const run = { runId: crypto.randomUUID(), source, actorRole: session.role,
+    startedAt: new Date().toISOString(), candidates: 0, folderCandidates: 0, deleted: 0,
+    deletedFolders: 0, success: 0, failed: 0, skipped: 0, bytes: 0, candidateBytes: 0, reason: null };
+  let locked = false;
+  try {
+    const settings = trashSettings(env);
+    const automatic = source === "automatic", dryRun = automatic && settings.mode === "dry-run";
+    if (automatic && settings.mode === "disabled") return run;
+    const lock = await env.DB.prepare(`UPDATE cloud_trash_control SET lease_owner=?,lease_until=?
+      WHERE id=1 AND (lease_owner IS NULL OR lease_until<=?)`)
+      .bind(run.runId, Date.now() + 600000, Date.now()).run();
+    if (!lock.meta.changes) throw trashSafetyError("another_purge_running");
+    locked = true;
+    await trashRunAudit(env, run, "trash_run_started");
+    const control = await env.DB.prepare("SELECT * FROM cloud_trash_control WHERE id=1").first();
+    if (!control || control.emergency_stop || String(env.TRASH_PURGE_EMERGENCY_STOP || "false") !== "false")
+      throw trashSafetyError("emergency_stop");
+    const cutoff = new Date(Date.now() - TRASH_RETENTION_MS).toISOString();
+    const predicate = automatic ? trashDuePredicate("f") : "f.deleted_at IS NOT NULL";
+    const args = automatic ? [cutoff] : [];
+    const filePredicate = `${predicate}${onlyFileId ? " AND f.id=?" : ""}`;
+    const fileArgs = [...args, ...(onlyFileId ? [onlyFileId] : [])];
+    // Count first; do not silently truncate an anomalous backlog.
+    const totals = await env.DB.prepare(`SELECT COUNT(*) AS count,COALESCE(SUM(MAX(size_bytes,COALESCE(encrypted_size_bytes,0))),0) AS bytes
+      FROM cloud_files f WHERE ${filePredicate}`).bind(...fileArgs).first();
+    const folders = onlyFileId ? { count: 0 } : await env.DB.prepare(`SELECT COUNT(*) AS count FROM cloud_folders f WHERE ${predicate}`).bind(...args).first();
+    if (!totals || !folders) throw trashSafetyError("candidate_query_incomplete");
+    run.candidates = Number(totals.count); run.folderCandidates = Number(folders.count); run.candidateBytes = Number(totals.bytes);
+    if (![run.candidates, run.folderCandidates, run.candidateBytes].every(value => Number.isSafeInteger(value) && value >= 0))
+      throw trashSafetyError("invalid_candidate_totals");
+    const count = run.candidates + run.folderCandidates;
+    if (automatic && (count > settings.maxCandidates || (control.last_candidate_count !== null
+      && count > Math.max(settings.growthAllowance, control.last_candidate_count * settings.growthFactor)
+      && count - control.last_candidate_count > settings.growthAllowance))) {
+      await env.DB.prepare("UPDATE cloud_trash_control SET emergency_stop=1 WHERE id=1").run();
+      throw trashSafetyError("candidate_spike");
+    }
+    if (onlyFileId && !run.candidates) throw trashSafetyError("file_no_longer_in_trash");
+    const maxCount = automatic ? settings.maxCount : 20;
+    // A corrupt folder with no eligible leaves must still stop and be audited,
+    // rather than silently disappear from the leaf cleanup query.
+    if (!onlyFileId) {
+      const roots = await env.DB.prepare(`SELECT f.* FROM cloud_folders f WHERE ${predicate}
+        AND NOT EXISTS(SELECT 1 FROM cloud_folders p WHERE p.id=f.parent_id
+          AND p.deleted_at=f.deleted_at AND p.trash_operation_id IS f.trash_operation_id)
+        ORDER BY f.deleted_at,f.id LIMIT ?`).bind(...args, automatic ? settings.maxCandidates : maxCount).all();
+      if (!roots.results) throw trashSafetyError("candidate_query_incomplete");
+      for (const folder of roots.results) {
+        run.targetFolderId = folder.id; run.operationId = folder.trash_operation_id;
+        await validateTrashTree(env, { ...folder, folder_id: folder.id }, automatic);
+      }
+    }
+    const rows = await env.DB.prepare(`SELECT f.* FROM cloud_files f WHERE ${filePredicate}
+      ORDER BY f.purge_id IS NULL,f.deleted_at,f.id LIMIT ?`).bind(...fileArgs, maxCount).all();
+    if (!rows.results) throw trashSafetyError("candidate_query_incomplete");
+    for (const file of rows.results) {
+      run.targetFileId = file.id; run.operationId = file.trash_operation_id;
+      await validateTrashTree(env, file, automatic);
+      if (dryRun) {
+        await trashRunAudit(env, run, "trash_dry_run_candidate", "file", file.id,
+          { operationId: file.trash_operation_id, targetBytes: Math.max(file.size_bytes, file.encrypted_size_bytes || 0), purgeId: file.purge_id });
+        run.skipped++; continue;
+      }
+      await assertTrashLease(env, run, settings);
+      let job = file.purge_id ? await env.DB.prepare("SELECT * FROM cloud_trash_purges WHERE id=? AND phase<>'completed'").bind(file.purge_id).first() : null;
+      if (file.purge_id && !job) throw trashSafetyError("missing_manifest");
+      const bytes = job ? job.size_bytes : await measureTrashObjects(env, file, automatic);
+      if (automatic && run.bytes + bytes > settings.maxBytes) { run.reason = "byte_limit"; break; }
+      if (!job) job = await claimTrashFile(env, run, file, bytes, cutoff);
+      if (!job) { run.skipped++; continue; }
+      // Count attempted capacity, including a retry with already absent keys.
+      run.bytes += bytes;
+      await deleteClaimedTrashFile(env, run, settings, job);
+      run.deleted++; run.success++;
+    }
+    // Only empty leaves can be removed. No recursive physical deletion.
+    // Separate generations, live children and legacy folders remain intact.
+    const room = maxCount - run.deleted - run.skipped;
+    if (!onlyFileId && room > 0) {
+      const leaves = await env.DB.prepare(`SELECT f.* FROM cloud_folders f WHERE ${predicate}
+        ${dryRun ? "" : `AND NOT EXISTS(SELECT 1 FROM cloud_files c WHERE c.folder_id=f.id)
+        AND NOT EXISTS(SELECT 1 FROM cloud_folders c WHERE c.parent_id=f.id)`}
+        ORDER BY f.deleted_at,f.id LIMIT ?`).bind(...args, room).all();
+      if (!leaves.results) throw trashSafetyError("candidate_query_incomplete");
+      for (const folder of leaves.results) {
+        run.targetFolderId = folder.id; run.operationId = folder.trash_operation_id;
+        await validateTrashTree(env, { ...folder, folder_id: folder.id }, automatic);
+        if (dryRun) {
+          await trashRunAudit(env, run, "trash_dry_run_candidate", "folder", folder.id, { operationId: folder.trash_operation_id });
+          run.skipped++; continue;
+        }
+        await assertTrashLease(env, run, settings);
+        const purgeId = crypto.randomUUID();
+        const result = await env.DB.batch([
+          env.DB.prepare(`INSERT INTO cloud_trash_folder_purges(id,folder_id,parent_id,operation_id,deleted_at,run_id,source)
+            SELECT ?,id,parent_id,trash_operation_id,deleted_at,?,? FROM cloud_folders
+            WHERE id=? AND deleted_at=? AND trash_operation_id IS ?
+            AND NOT EXISTS(SELECT 1 FROM cloud_files WHERE folder_id=?)
+            AND NOT EXISTS(SELECT 1 FROM cloud_folders WHERE parent_id=?)
+            ${automatic ? `AND ${trashDuePredicate("cloud_folders")}` : ""}`)
+            .bind(purgeId, run.runId, source, folder.id, folder.deleted_at, folder.trash_operation_id, folder.id, folder.id, ...(automatic ? [cutoff] : [])),
+          env.DB.prepare(`DELETE FROM cloud_folders WHERE id=? AND deleted_at=? AND trash_operation_id IS ?
+            AND EXISTS(SELECT 1 FROM cloud_trash_folder_purges WHERE id=?)`)
+            .bind(folder.id, folder.deleted_at, folder.trash_operation_id, purgeId),
+          env.DB.prepare(`INSERT INTO cloud_audit_logs(event_type,actor_role,target_type,target_id,details_json)
+            SELECT 'folder_deleted',?,'folder',folder_id,? FROM cloud_trash_folder_purges WHERE id=?`)
+            .bind(run.actorRole, JSON.stringify({ runId: run.runId, operationId: folder.trash_operation_id, source }), purgeId)
+        ]);
+        if (result[0].meta.changes) { run.deletedFolders++; run.success++; } else run.skipped++;
+      }
+    }
+    if (automatic) await env.DB.prepare("UPDATE cloud_trash_control SET last_candidate_count=? WHERE id=1 AND lease_owner=?")
+      .bind(count, run.runId).run();
+    if (!run.reason && run.deleted + run.deletedFolders + run.skipped >= maxCount && count > maxCount) run.reason = "count_limit";
+  } catch (error) {
+    run.failed++; run.reason = error.trashReason || (String(error?.message || "").includes("trash_") ? "state_conflict" : "d1_or_storage_error");
+    // No next target is processed after any error. Avoid object keys/exception
+    // text in logs; manifests and target audit records support investigation.
+  } finally {
+    run.finishedAt = new Date().toISOString();
+    try { await trashRunAudit(env, run, "trash_run_finished"); }
+    catch { console.error(JSON.stringify({ event: "trash_audit_unavailable", runId: run.runId, reason: run.reason })); }
+    if (locked) {
+      try { await env.DB.prepare("UPDATE cloud_trash_control SET lease_owner=NULL,lease_until=0 WHERE id=1 AND lease_owner=?").bind(run.runId).run(); }
+      catch { console.error(JSON.stringify({ event: "trash_lease_release_failed", runId: run.runId })); }
+    }
+  }
+  return run;
+}
+
 async function abortStaleUploads(env) {
   const stale = await env.DB.prepare("SELECT id, object_key, multipart_upload_id FROM cloud_files WHERE status = 'uploading' AND created_at < datetime('now', '-1 day') LIMIT 100").all();
   for (const file of stale.results || []) {
     try { await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort(); } catch {}
-    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ?").bind(file.id).run();
+    await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND deleted_at IS NULL").bind(file.id).run();
   }
   await env.DB.prepare("DELETE FROM cloud_folder_unlocks WHERE expires_at <= ?").bind(Math.floor(Date.now() / 1000)).run();
 }
