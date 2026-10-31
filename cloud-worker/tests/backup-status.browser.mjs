@@ -6,6 +6,8 @@ const fixture = await startUIFixture();
 const empty = { bytes: 0, objectCount: 0, objects: [] };
 const snapshot = { daily: empty, monthly: empty, photo: empty, backupBytes: 1200, diaryAvailable: true, serviceBackupsAvailable: true,
   observedAt: new Date().toISOString(), status: { state: 'ok', lastSuccessAt: new Date().toISOString() },
+  photoStatus: { state: 'partial', lastAttemptAt: '2026-10-30T18:55:00Z' }, verificationStatus: { state: 'failed', reason: 'verification_failed' },
+  photoSummary: { available: true, observed: true, copied: 40, backedUp: 100, pending: 23, verificationPending: 9, failed: 2, corrupt: 1, missing: 0, unknown: 77, total: 202, lastRunAt: '2026-10-30T18:55:00Z', countsComplete: false },
   services: [{ id: 'billing', label: '請求書管理', available: true, state: 'failed', stage: 'daily_save', reason: 'operation_failed', attempt: 3,
     lastSuccessAt: '2026-10-24T18:40:00Z', lastAttemptAt: '2026-10-25T18:40:00Z', history: [{ state: 'failed', at: '2026-10-25T18:40:00Z' }] },
   { id: 'security-audit', label: 'セキュリティ監査の長期保管', available: true, state: 'partial', pendingCount:1001, pendingCapped:true, oldestPendingAt:'2026-01-01T00:00:00Z', retention: 'indefinite', periods: [
@@ -35,6 +37,11 @@ try {
         assert.match(await panel.innerText(),/未保管 1001件以上.*最古の未保管/);
         assert.equal(await page.locator('#injected').count(), 0);
         assert.equal(await panel.locator('input[type=checkbox], [draggable=true], a').count(), 0);
+        await panel.getByText('日記 D1：正常', { exact: true }).waitFor();
+        await panel.getByText('日記 写真：一部未完了', { exact: true }).waitFor();
+        await panel.getByText('日記 写真の再検証：失敗', { exact: true }).waitFor();
+        assert.match(await panel.innerText(), /今回の新規コピー 40件.*バックアップ済み 100件.*未処理 23件.*検証待ち 9件.*破損 1件.*未確認 77件/s);
+        assert.match(await panel.innerText(), /D1と写真は別管理/);
         const adminDetails = await panel.textContent();
         await page.evaluate(() => { __test.state.folderId = 7; renderDiaryBackupMount(); });
         assert.equal(await panel.isVisible(), false);
@@ -56,6 +63,13 @@ try {
         await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         mkdirSync(root + '/tmp/backup-ui', { recursive: true });
         await panel.screenshot({ path: root + `/tmp/backup-ui/${name}-${mobile ? 'mobile' : 'desktop'}.png` });
+        snapshot.photo = { ...empty, available: false, bytes: null, objectCount: null };
+        snapshot.storagePartial = true;
+        await panel.locator('.backup-refresh').click();
+        await panel.getByText('日記 D1：正常', { exact: true }).waitFor();
+        await panel.getByText('一部の容量・件数を取得できません。取得できた状態だけを表示しています。', { exact: true }).waitFor();
+        assert.match(await panel.innerText(), /容量・件数取得不可/);
+        snapshot.photo = empty; snapshot.storagePartial = false;
         await page.close();
       }
     } finally { await browser.close(); }

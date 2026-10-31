@@ -9,7 +9,7 @@ export async function reportRun(env, service, runId, state, details = {}, at = D
   if (details.oldestPendingAt && Number.isFinite(Date.parse(details.oldestPendingAt))) safe.oldestPendingAt = new Date(details.oldestPendingAt).toISOString();
   const event = { eventId: `${runId}-${state}`, occurredAt: new Date(at).toISOString(), service,
     eventType: `backup_${state}`, outcome: ['failed', 'partial', 'prune_failed'].includes(state) ? 'failure' : state === 'succeeded' ? 'success' : 'info',
-    authMethod: 'system', targetType: 'backup', targetId: service, details: { runId, ...safe } };
+    authMethod: 'system', targetType: 'backup', targetId: service === 'diary' && ['photos','photo-verification'].includes(details.kind) ? 'diary-' + details.kind : service, details: { runId, ...safe } };
   try {
     if (!env.SECURITY?.recordAuditEvent) throw new Error('AuditUnavailable');
     const response = await env.SECURITY.recordAuditEvent(event);

@@ -47,7 +47,7 @@
     ]
   },
   "triggers": {
-    "crons": ["25 18 * * *"]
+    "crons": ["25 18 * * *", "55 18 * * *", "45 0-2,19-23 * * *", "5,15,25,35,55 19,20 * * *"]
   },
   "ratelimits": [{ "name": "PASSWORD_AUDIT_RATE_LIMITER", "namespace_id": "1102", "simple": { "limit": 30, "period": 60 } }],
   "vars": {

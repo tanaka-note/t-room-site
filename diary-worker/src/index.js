@@ -5,6 +5,7 @@ import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { runScheduledDiaryBackup, scheduleIndependentTasks } from "./backup.js";
+import { runScheduledPhotoBackup, PHOTO_COPY_CRON, PHOTO_VERIFY_CRON, PHOTO_CATCHUP_CRON } from "./photo-backup-job.js";
 import { splitSearchTerms } from "../public/diary-search.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { getBackupSnapshot } from "./backup-browser.js";
@@ -14,10 +15,12 @@ import { getBackupSnapshot } from "./backup-browser.js";
 export class BackupBrowserIntegration extends WorkerEntrypoint {
   async getSnapshot(options) {
     const snapshot = await getBackupSnapshot(this.env, { refresh: options?.refresh === true });
-    let status;
-    try { status = await this.env.SECURITY.getBackupStatus('diary'); }
-    catch { status = { state: 'unavailable' }; }
-    return { ...snapshot, status };
+    const read = async id => {
+      try { return await this.env.SECURITY.getBackupStatus(id); }
+      catch { return { state: 'unavailable' }; }
+    };
+    const [status, photoStatus, verificationStatus] = await Promise.all([read('diary'), read('diary-photos'), read('diary-photo-verification')]);
+    return { ...snapshot, status, photoStatus, verificationStatus };
   }
 }
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
@@ -157,8 +160,17 @@ export default {
 
   async scheduled(controller, env, context) {
     const scheduledTime = Number(controller?.scheduledTime) || Date.now();
+    if ([PHOTO_COPY_CRON, PHOTO_VERIFY_CRON, PHOTO_CATCHUP_CRON].includes(controller?.cron)) {
+      const result = await runScheduledPhotoBackup(env, scheduledTime, { mode: controller.cron === PHOTO_VERIFY_CRON ? 'verify' : 'copy', catchup: controller.cron === PHOTO_CATCHUP_CRON });
+      if (!result.skipped && !result.complete) throw new Error('PhotoBackupRunIncomplete');
+      return;
+    }
+    if (controller?.cron && controller.cron !== '25 18 * * *') throw new Error('UnknownDiaryCron');
     scheduleIndependentTasks(context, [
-      () => runScheduledDiaryBackup(env, scheduledTime),
+      async () => {
+        const result = await runScheduledDiaryBackup(env, scheduledTime);
+        if (!result.complete || result.retentionFailed) throw new Error('DiaryBackupRunIncomplete');
+      },
       () => runScheduledMediaDeletionCleanup(env),
       () => runScheduledStagedPhotoCleanup(env)
     ]);
