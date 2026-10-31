@@ -467,7 +467,7 @@
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
-      "manifest": null,
+      "manifest": "household-worker/public/manifest.webmanifest",
       "twa": null,
       "deployTarget": "t-room-household",
       "deployCwd": "household-worker",
