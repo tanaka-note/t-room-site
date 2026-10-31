@@ -4,7 +4,7 @@ const PHOTO_UPLOAD_PARALLEL_BYTES = 16 * 1024 * 1024;
 const PHOTO_UPLOAD_TIMEOUT_MS = 180000;
 const PHOTO_STATUS_TIMEOUT_MS = 10000;
 
-export function createPhotoUploadManager({ state, api, basePath, getTargetEntryId }) {
+export function createPhotoUploadManager({ state, api, basePath, getTargetEntryId, onSessionExpired = () => {} }) {
   const activeBytes = new Map();
   let degraded = false;
   let retryNotBefore = 0;
@@ -172,6 +172,7 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
         return result;
       }
       const status = response?.status || 0;
+      if(status===401)onSessionExpired();
       const retryable = !response || response.ok || status === 408 || status === 429 || status >= 500;
       degraded = degraded || retryable;
       const retryAfter = response?.headers.get("Retry-After");
@@ -180,7 +181,7 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
       if (Number.isFinite(waitMs) && waitMs > 0 && (status === 429 || status === 503)) {
         retryNotBefore = Math.max(retryNotBefore, Date.now() + waitMs);
       }
-      lastError = new Error(status === 401 ? "ログインの有効期限が切れました。編集内容を保持しています。再ログイン後に再試行してください。"
+      lastError = new Error(status === 401 ? "ログインの有効期限が切れました。"
         : status === 403 ? "写真を保存する権限を確認してください。編集内容は保持しています。"
         : result.error || (status === 429 ? "写真の送信が混み合っています。少し待って再試行してください。"
           : "写真の送信結果を確認できませんでした。編集内容は保持しています。通信が安定してから再試行してください。"));
@@ -207,6 +208,7 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
     const timer = window.setTimeout(() => controller.abort(), PHOTO_STATUS_TIMEOUT_MS);
     try {
       const response = await fetch(`${url}/${photo.id}`, { credentials: "same-origin", cache: "no-store", signal: controller.signal });
+      if(response.status===401)onSessionExpired();
       if ([401, 403, 409].includes(response.status)) {
         const error = new Error(response.status === 409 ? "画像の一時保存期限が切れました。写真を追加し直してください。"
           : "写真の保存確認に必要なログイン・権限を確認してください。編集内容は保持しています。");

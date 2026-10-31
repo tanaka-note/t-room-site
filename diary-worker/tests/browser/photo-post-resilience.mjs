@@ -269,6 +269,8 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 function browserExecutable(name) {
   const configured = process.env[`TROOM_${name.toUpperCase()}_EXECUTABLE`];
   if (configured) return configured;
+  const bundled=(name==='firefox'?firefox:chromium).executablePath();
+  if(existsSync(bundled))return bundled;
   const playwrightRoot = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "ms-playwright") : "";
   const playwrightFirefox = name === "firefox" && playwrightRoot && existsSync(playwrightRoot)
     ? readdirSync(playwrightRoot, { withFileTypes: true })
@@ -624,6 +626,7 @@ async function verifyNewDraft(browser, name, contextOptions) {
 async function runBrowser(browserType, name, executablePath, contextOptions = {}) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
+    if(process.env.TROOM_DIARY_SESSION_CLEARING_ONLY==='1'){for(const mode of ['photo-401','session-401','entry-401'])await verifyEditorRetention(browser,name,mode,contextOptions);return;}
     await verifyReadAheadSnapshot(browser, name, contextOptions);
     await verifyProviderReadFailure(browser, name, false, contextOptions);
     await verifyProviderReadFailure(browser, name, true, contextOptions);
@@ -802,14 +805,17 @@ async function verifyEditorRetention(browser, name, mode, contextOptions) {
     await page.fill("#entry-tags", "保護, 再試行");
     const date = await page.inputValue("#entry-date");
     await chooseJpegs(page);
-    await page.waitForFunction(() => document.querySelectorAll("#editor-photo-list .editor-photo-card").length === 3);
+    if(!['photo-401','session-401'].includes(mode))await page.waitForFunction(() => document.querySelectorAll("#editor-photo-list .editor-photo-card").length === 3);
     // Exhaustion is bounded, but avoid waiting real backoff time in the fixture.
     if (mode === "network-down") await page.evaluate(() => {
       const timer = window.setTimeout.bind(window);
       window.setTimeout = (fn, ms, ...args) => timer(fn, ms < 30000 ? 0 : ms, ...args);
     });
-    await page.click("#save-draft-button");
-    await page.waitForFunction(() => !document.querySelector("#save-entry-button").disabled);
+    if(!['photo-401','session-401'].includes(mode)){await page.click("#save-draft-button");await page.waitForFunction(() => !document.querySelector("#save-entry-button").disabled);}
+    if(mode.endsWith('401')){
+      await page.waitForFunction(()=>!document.querySelector('#editor-dialog').open);assert.equal(await page.locator('#editor-dialog').evaluate(el=>el.open),false,`${name} ${mode}: ${await page.locator('#editor-message').textContent()}`);
+      assert.equal(await page.inputValue('#entry-title'),'');assert.equal(await page.inputValue('#entry-tags'),'');assert.equal(await page.locator('#entry-content').innerText(),'');assert.equal(await page.locator('#editor-photo-list .editor-photo-card').count(),0);assert.equal(scenario.createdEntryIds.size,0);return;
+    }
     assert.equal(await page.locator("#editor-dialog").evaluate(el => el.open), true, `${name} ${mode}`);
     assert.equal(await page.inputValue("#entry-title"), "写真付き投稿テスト");
     assert.equal(await page.inputValue("#entry-date"), date);
@@ -828,11 +834,11 @@ async function verifyEditorRetention(browser, name, mode, contextOptions) {
 try {
   const chromiumPath = browserExecutable("chromium");
   const firefoxPath = browserExecutable("firefox");
-  if (!chromiumPath || !firefoxPath) throw new Error("Chromium/Firefox executable is required.");
+  if (!chromiumPath || (!firefoxPath && process.env.TROOM_DIARY_SESSION_CLEARING_ONLY!=='1')) throw new Error("Chromium/Firefox executable is required.");
   await runBrowser(chromium, "Chromium", chromiumPath);
-  await runBrowser(firefox, "Firefox", firefoxPath);
+  if(process.env.TROOM_DIARY_SESSION_CLEARING_ONLY!=='1')await runBrowser(firefox, "Firefox", firefoxPath);
   await runBrowser(chromium, "Touch", chromiumPath, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  process.stdout.write("Photo post preparation, transient retry, lost-response recovery, and permanent failure recovery passed in Chromium, Firefox, and touch emulation.\n");
+  process.stdout.write(process.env.TROOM_DIARY_SESSION_CLEARING_ONLY==='1'?"Diary session clearing: upload-session, multipart upload and entry 401 clear editor, text and photos in Chromium desktop/touch.\n":"Photo post preparation, transient retry, lost-response recovery, and permanent failure recovery passed in Chromium, Firefox, and touch emulation.\n");
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/domain.js && node --check src/api.js && node --check public/household.js && node --check public/asset-chart.js",
+    "check": "node --check src/index.js && node --check src/domain.js && node --check src/api.js && node --check src/maintenance.js && node --check public/household.js && node --check public/asset-chart.js",
     "test": "node --test test/*.test.js",
     "deploy": "wrangler deploy"
   },

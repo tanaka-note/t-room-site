@@ -81,8 +81,8 @@ test('token preflight requires account subdomain access and checks only read ope
   };
   await checkTokenScope(options);
   assert.match(calls[0], /\/workers\/subdomain$/);
-  assert.equal(calls.length, 14, 'account subdomain, 11 selected Workers, D1 and R2');
-  assert.equal(calls.filter(path => path.endsWith('/settings')).length, 11);
+  assert.equal(calls.length, 16, 'account subdomain, 13 selected Workers, D1 and R2');
+  assert.equal(calls.filter(path => path.endsWith('/settings')).length, 13);
   assert.equal(logs.some(message => message.includes('fixture-token')), false);
   const deniedCalls = [];
   await assert.rejects(checkTokenScope({...options, read: async path => {

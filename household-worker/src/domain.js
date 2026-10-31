@@ -144,7 +144,8 @@ export function snapshotInput(input, historical = false) {
     ...(historical ? { source: 'moneyforward', notes: text(input.notes || '', 500, '記録メモ', false), ...(sourceAsOf ? {sourceAsOf} : {}) } : {}) };
 }
 export function mutateData(data, operation, value) {
-  const next = structuredClone(data);
+  // Retain unchanged record identities so persistence can reuse their JSON.
+  const next = Object.fromEntries(Object.entries(data).map(([kind,rows])=>[kind,[...rows]]));
   const upsert = (list, row) => { const index = list.findIndex(r => r.id === row.id); if (index < 0) list.push(row); else list[index] = row; };
   if (operation === 'transaction.save') {
     if (!['income','expense'].includes(value?.type)) throw new HttpError(400,'収入または支出を選んでください。');

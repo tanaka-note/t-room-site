@@ -5,9 +5,10 @@ import { pathToFileURL } from 'node:url';
 import { root, affected } from './verify-plan.mjs';
 import { loadWebAppRegistry } from './web-app-registry.mjs';
 import { healthProductionPreflight } from './health-production-preflight.mjs';
+import {serviceProductionPreflight} from './service-production-preflight.mjs';
 
 // Containers retain their signed, leased rollout workflow. No D1/R2 CRUD is needed here.
-export const productionTargets = ['site', 'cloud', 'security', 'diary', 'billing', 'downloader2', 'ai', 'inventory', 'health', 'payments'];
+export const productionTargets = ['site', 'cloud', 'security', 'diary', 'billing', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar'];
 export const workerName = target => {
   if (![...productionTargets, 'downloader'].includes(target)) throw new Error('Unknown production target');
   return `t-room-${target}`;
@@ -116,7 +117,8 @@ export async function releaseActions(target) {
   };
   if (app) run(root, ['tools/check-web-app-builds.mjs', '--target', app.deployTarget]);
   if (target === 'health') healthProductionPreflight(directory);
-  await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/settings`);
+  const settings=await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/settings`);
+  if(['household','calendar'].includes(target))await serviceProductionPreflight(target,directory,config,settings);
   await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/subdomain`);
   const outDir = resolve(root, 'tmp/production', target); mkdirSync(outDir, { recursive: true });
   const output = resolve(outDir, `upload-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}.ndjson`);
@@ -124,6 +126,7 @@ export async function releaseActions(target) {
   const cli = resolve(directory, 'node_modules/wrangler/bin/wrangler.js');
   // Version commands leave routes, domains, schedules and Container rollouts untouched.
   const uploadArgs = downloaderWorkerOnly ? ['deploy', '--containers-rollout=none'] : ['versions', 'upload', '--message', `GitHub ${head}`, '--tag', head.slice(0, 12)];
+  if(target==='calendar')uploadArgs.push('--var',`BUILD_ID:${head}`);
   run(directory, [cli, ...uploadArgs], { ...process.env, WRANGLER_OUTPUT_FILE_PATH: output });
   const version = uploadedVersion(readFileSync(output, 'utf8'), name, downloaderWorkerOnly ? 'deploy' : 'version-upload');
   if (!downloaderWorkerOnly) {
@@ -133,6 +136,7 @@ export async function releaseActions(target) {
   const deployments = await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/deployments`);
   assertDeployedVersion(deployments, version);
   if (app) run(root, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]);
+  if(target==='calendar'){const response=await fetch('https://tanaka-note.com/calendar/api/version',{cache:'no-store',signal:AbortSignal.timeout(30000)});if(!response.ok||(await response.json()).build!==head)throw new Error('Calendar production build mismatch.');}
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Production verified\nWorker: ${name}\nCommit: ${head}\nVersion: ${version} (100%)\n`);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

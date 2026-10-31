@@ -61,6 +61,7 @@ export async function handleRequest(request, env, context) {
     const headers = new Headers(response.headers); headers.set('Cache-Control', 'no-store');
     return new Response(response.body, { status: response.status, headers });
   }
+  if(path==='/api/deployment-status'&&request.method==='GET'){const migrations=(await env.DB.prepare('SELECT name FROM d1_migrations ORDER BY id').all()).results.map(r=>r.name);return json({migrations});}
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (request.method !== 'GET') mutationGuard(request, url);
   if (path === '/api/passkey/handoff' && request.method === 'POST') return handoff(request, env, url);
@@ -68,7 +69,7 @@ export async function handleRequest(request, env, context) {
   authorized.set(request, session);
   if (path === '/api/session' && request.method === 'GET') {
     await audit(env, request, session, 'session_resume');
-    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role });
+    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role, expiresAt: session.expiresAt });
   }
   if (path === '/api/logout' && request.method === 'POST') {
     if (!(await serviceRollingSession(env, SERVICE, session, 'end')).valid) throw new HttpError(503, 'ログアウトを完了できませんでした。');
@@ -89,7 +90,7 @@ async function handoff(request, env, url) {
     sessionId: crypto.randomUUID(), startedAt: new Date().toISOString(), sessionVersion: sessionVersion(env, account), expiresAt: Math.floor(Date.now() / 1000) + sessionPolicyForAuthMethod(env, 'passkey').ttlSeconds };
   if (!(await serviceRollingSession(env, SERVICE, session, 'register')).valid) throw new HttpError(503, 'セッションを開始できませんでした。');
   await audit(env, request, session, 'passkey_login_success');
-  return json({ authenticated: true, displayName: account.display_name, role: account.role }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
+  return json({ authenticated: true, displayName: account.display_name, role: account.role, expiresAt: session.expiresAt }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
 }
 async function requireSession(request, env) {
   const raw = (request.headers.get('Cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
