@@ -30,6 +30,7 @@ async function acquireLease(bucket, clock) {
 // R2 receipts are durable per object; the cursor is checkpointed once per batch.
 // A hard stop replays at most one batch, reusing valid receipts without copying.
 export async function runPhotoBatch(env, { now = Date.now(), mode = 'copy', catchup = false, clock = Date.now, maxScanItems = 120, onStart = async () => {}, ...limits } = {}) {
+  const started = clock();
   if (!env.DB || !env.MEDIA || !env.BACKUP) throw new Error('SourceUnavailable');
   if (!Number.isInteger(maxScanItems) || maxScanItems < 3 || maxScanItems > 120) throw new Error('InvalidPhotoBudget');
   const bucket = env.BACKUP, key = PHOTO_STATE_PREFIX + mode + '.json.gz';
@@ -37,7 +38,7 @@ export async function runPhotoBatch(env, { now = Date.now(), mode = 'copy', catc
   const state = saved?.payload || { format: 'troom-photo-job-v1', cursor: null, counts: emptyCounts() };
   const windowKey = PHOTO_STATE_PREFIX + 'migration-window.json.gz';
   let window = await readState(bucket, windowKey);
-  if (catchup && (!window || now < window.payload.startedAt || now >= window.payload.startedAt + CATCHUP_MS || state.initialCatchupComplete)) return { skipped: true };
+  if (catchup && (!window || now < window.payload.startedAt || now >= window.payload.startedAt + CATCHUP_MS || clock() >= window.payload.startedAt + CATCHUP_MS || state.initialCatchupComplete)) return { skipped: true };
   const leaseUntil = await acquireLease(bucket, clock);
   if (!leaseUntil) return { skipped: true, reason: 'concurrent_write' };
   if (!window) {
@@ -53,6 +54,7 @@ export async function runPhotoBatch(env, { now = Date.now(), mode = 'copy', catc
   }
   await onStart();
   const budget = photoBudget({ ...limits, now, mode, clock, leaseUntil });
+  budget.deadline = Math.min(budget.deadline, started + (limits.maxMs ?? 90000));
   const result = { copied: 0, reverified: 0, processed: 0, complete: false, mode };
   const total = Number((await env.DB.prepare('SELECT COUNT(*) AS count FROM diary_photos').first()).count) * 3;
   let remaining = maxScanItems, stopped = false;

@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-0c662dd6a10c";
+const APP_BUILD_ID = "cloud-866a3679a015";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -9652,13 +9652,18 @@ function renderDiaryBackupMount() {
     try {
       const data = await api(`/diary-backups${refresh ? "?refresh=1" : ""}`);
       if (!isCurrent()) return;
-      output.innerHTML = `<dl class="backup-summary"><div><dt>日記 D1の最終保存（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>保管容量（取得済み分）</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日記 D1の日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>日記の旧世代（保持中）</dt><dd>${(data.legacyDaily?.objectCount || 0) + (data.legacyMonthly?.objectCount || 0) + (data.legacyV7Daily?.objectCount || 0) + (data.legacyV7Monthly?.objectCount || 0)}世代</dd></div><div><dt>日記 D1の保存容量</dt><dd>${formatBytes(data.d1Bytes || 0)}</dd></div><div><dt>復元範囲</dt><dd>D1と写真は別管理。日記全体の復元には対象世代と全写真の照合が必要です。</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
+      output.innerHTML = `<dl class="backup-summary"><div><dt>日記 D1の最終保存（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>保管容量（取得済み分）</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日記 D1の日次 / 月次</dt><dd>${data.daily.available === false ? "取得不可" : data.daily.objectCount + "世代"} / ${data.monthly.available === false ? "取得不可" : data.monthly.objectCount + "世代"}</dd></div><div><dt>日記の旧世代（保持中）</dt><dd>${(data.legacyDaily?.objectCount || 0) + (data.legacyMonthly?.objectCount || 0) + (data.legacyV7Daily?.objectCount || 0) + (data.legacyV7Monthly?.objectCount || 0)}世代</dd></div><div><dt>日記 D1の保存容量</dt><dd>${data.d1Available === false ? "取得不可" : formatBytes(data.d1Bytes || 0)}</dd></div><div><dt>復元範囲</dt><dd>D1と写真は別管理。日記全体の復元には対象世代と全写真の照合が必要です。</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
+      if (data.storagePartial) {
+        const notice = document.createElement('p');
+        notice.textContent = '一部の容量・件数を取得できません。取得できた状態だけを表示しています。';
+        output.append(notice);
+      }
       renderBackupHealth(output, data);
       const photos = document.createElement('p');
       photos.className = 'backup-photo-summary';
       const p = data.photoSummary;
       photos.textContent = !p?.available ? '写真の進捗情報を取得できません。' : !p.observed ? '写真の進捗は未集計です。' :
-        '写真：最終実行 ' + backupJapanTime(p.lastRunAt) + ' ／ 今回の新規コピー ' + p.copied + '件 ／ バックアップ済み ' + p.backedUp + '件 ／ 未処理 ' + p.pending + '件 ／ 検証待ち ' + p.verificationPending + '件 ／ 失敗 ' + p.failed + '件 ／ 破損 ' + p.corrupt + '件 ／ 保存元なし ' + p.missing + '件 ／ 未確認 ' + p.unknown + '件 ／ 対象 ' + p.total + '件 ／ 保存容量 ' + formatBytes(data.photo?.bytes || 0) + ' ／ 最終全件コピー完了 ' + backupJapanTime(p.lastFullCopyAt)
+        '写真：最終実行 ' + backupJapanTime(p.lastRunAt) + ' ／ 今回の新規コピー ' + p.copied + '件 ／ バックアップ済み ' + p.backedUp + '件 ／ 未処理 ' + p.pending + '件 ／ 検証待ち ' + p.verificationPending + '件 ／ 失敗 ' + p.failed + '件 ／ 破損 ' + p.corrupt + '件 ／ 保存元なし ' + p.missing + '件 ／ 未確認 ' + p.unknown + '件 ／ 対象 ' + p.total + '件 ／ 保存容量 ' + (data.photo?.available === false ? '取得不可' : formatBytes(data.photo?.bytes || 0)) + ' ／ 最終全件コピー完了 ' + backupJapanTime(p.lastFullCopyAt)
         + ' ／ ' + (p.countsComplete ? '巡回集計完了' : '巡回中の部分集計') + '（集計開始 ' + backupJapanTime(p.cycleStartedAt) + '）';
       output.append(photos);
       for (const [kind, label] of [["daily", "日記の日次バックアップ"], ["monthly", "日記の月次バックアップ"], ["photo", "日記の写真バックアップ"]]) {
@@ -9667,9 +9672,11 @@ function renderDiaryBackupMount() {
         const section = document.createElement("details");
         section.dataset.backupGroup = kind;
         section.open = expanded.has(kind);
-        section.innerHTML = `<summary>${label} <small>${formatBytes(group.bytes)}・${group.objectCount.toLocaleString("ja-JP")}件</small></summary>`;
+        section.innerHTML = `<summary>${label} <small>${group.available === false ? "容量・件数取得不可" : formatBytes(group.bytes) + "・" + group.objectCount.toLocaleString("ja-JP") + "件"}</small></summary>`;
         const content = document.createElement("div");
-        if (kind === "photo") {
+        if (group.available === false) {
+          content.textContent = 'この区分の容量・件数を取得できません。ほかの区分は引き続き確認できます。';
+        } else if (kind === "photo") {
           content.className = "backup-photo-summary";
           content.textContent = `写真バックアップ ${formatBytes(group.bytes)} / ${group.objectCount.toLocaleString("ja-JP")}オブジェクト・最終更新 ${backupJapanTime(group.lastUpdatedAt)}（日本時間）`;
         } else {

@@ -64,6 +64,21 @@ test("incomplete pagination fails instead of reporting a partial total", async (
   await assert.rejects(scanBackupMetadata({ async list() { return { objects: [], truncated: true }; } }));
 });
 
+test('photo metadata failure preserves D1 generations and marks missing totals unavailable', async () => {
+  const partial = await scanBackupMetadata({ async list(options) {
+    if (options.prefix.startsWith('media/')) throw new Error('Photo metadata unavailable');
+    return bucket.list(options);
+  } });
+  assert.equal(partial.daily.objectCount,2);
+  assert.equal(partial.monthly.objectCount,1);
+  assert.equal(partial.d1Available,true);
+  assert.equal(partial.photo.available,false);
+  assert.equal(partial.photo.objectCount,null);
+  assert.equal(partial.photo.bytes,null);
+  assert.equal(partial.storagePartial,true);
+  assert.equal(partial.backupBytes,280);
+});
+
 function fixture() {
   const db = new DatabaseSync(":memory:");
   for (const file of readdirSync(new URL("../migrations/", import.meta.url)).filter(f => f.endsWith(".sql")).sort()) db.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));

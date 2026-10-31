@@ -63,6 +63,13 @@ try {
         await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         mkdirSync(root + '/tmp/backup-ui', { recursive: true });
         await panel.screenshot({ path: root + `/tmp/backup-ui/${name}-${mobile ? 'mobile' : 'desktop'}.png` });
+        snapshot.photo = { ...empty, available: false, bytes: null, objectCount: null };
+        snapshot.storagePartial = true;
+        await panel.locator('.backup-refresh').click();
+        await panel.getByText('日記 D1：正常', { exact: true }).waitFor();
+        await panel.getByText('一部の容量・件数を取得できません。取得できた状態だけを表示しています。', { exact: true }).waitFor();
+        assert.match(await panel.innerText(), /容量・件数取得不可/);
+        snapshot.photo = empty; snapshot.storagePartial = false;
         await page.close();
       }
     } finally { await browser.close(); }

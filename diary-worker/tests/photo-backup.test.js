@@ -121,9 +121,13 @@ test('initial catchup is limited to ten fixed slots/day and a fourteen-day windo
   await f.batch({maxObjects:1});
   const slot=Date.parse('2026-10-30T19:05:00Z'); f.setTime(slot);
   const first=await f.batch({catchup:true,maxObjects:1}); assert.equal(first.copied,1);
-  f.setTime(slot+5*60000+1); // same reserved slot is never silently repeated
+  f.setTime(slot+5*60000+1);
+  assert.equal((await f.batch({catchup:true,now:slot})).skipped,true,'the same reserved slot never repeats after a restart');
+  f.setTime(slot+15*60000+2);
   await assert.rejects(f.batch({catchup:true}),/InvalidCatchupSlot/);
-  f.setTime(initial+14*86400000); assert.equal((await f.batch({catchup:true})).skipped,true);
+  f.setTime(initial+14*86400000);
+  assert.equal((await f.batch({catchup:true})).skipped,true);
+  assert.equal((await f.batch({catchup:true,now:slot+10*60000})).skipped,true,'a delayed trigger cannot extend the real deadline');
   f.sql.close();
 });
 

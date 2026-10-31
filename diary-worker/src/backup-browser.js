@@ -25,34 +25,40 @@ export async function scanBackupMetadata(bucket, now = Date.now()) {
   if (!bucket) throw new Error("Backup storage unavailable");
   const groups = {};
   for (const [kind, prefix] of Object.entries(PREFIXES)) {
-    const group = { bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(isMedia(kind) ? {} : { objects: [] }) };
-    let cursor;
-    do {
-      const page = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}),
-        ...(isMedia(kind) ? {} : { include: ["customMetadata", "httpMetadata"] }) });
-      for (const object of page.objects) {
-        group.bytes += object.size;
-        group.objectCount += 1;
-        if(group.objectCount>20000) throw new Error("SnapshotTooLarge");
-        const updatedAt = object.uploaded.toISOString();
-        if (!group.lastUpdatedAt || updatedAt > group.lastUpdatedAt) group.lastUpdatedAt = updatedAt;
-        if (group.objects) {
-          const metadata = object.customMetadata || {};
-          group.objects.push({ name: object.key.slice(prefix.length), sizeBytes: object.size, updatedAt,
-            format: metadata.format || null, japanDate: metadata.japanDate || null,
-            backupScope: metadata.backupScope === 'd1-only' ? 'd1-only' : null,
-            mediaComplete: kind.startsWith("legacy") ? null : metadata.mediaComplete === "true" ? true : metadata.mediaComplete === "false" ? false : null,
-            contentType: object.httpMetadata?.contentType || null, contentEncoding: object.httpMetadata?.contentEncoding || null });
+    const group = { available: true, bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(isMedia(kind) ? {} : { objects: [] }) };
+    try {
+      let cursor;
+      do {
+        const page = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}),
+          ...(isMedia(kind) ? {} : { include: ["customMetadata", "httpMetadata"] }) });
+        for (const object of page.objects) {
+          group.bytes += object.size;
+          group.objectCount += 1;
+          if(group.objectCount>20000) throw new Error("SnapshotTooLarge");
+          const updatedAt = object.uploaded.toISOString();
+          if (!group.lastUpdatedAt || updatedAt > group.lastUpdatedAt) group.lastUpdatedAt = updatedAt;
+          if (group.objects) {
+            const metadata = object.customMetadata || {};
+            group.objects.push({ name: object.key.slice(prefix.length), sizeBytes: object.size, updatedAt,
+              format: metadata.format || null, japanDate: metadata.japanDate || null,
+              backupScope: metadata.backupScope === 'd1-only' ? 'd1-only' : null,
+              mediaComplete: kind.startsWith("legacy") ? null : metadata.mediaComplete === "true" ? true : metadata.mediaComplete === "false" ? false : null,
+              contentType: object.httpMetadata?.contentType || null, contentEncoding: object.httpMetadata?.contentEncoding || null });
+          }
         }
-      }
-      if (page.truncated && (!page.cursor || page.cursor === cursor)) throw new Error("Incomplete backup listing");
-      cursor = page.truncated ? page.cursor : null;
-    } while (cursor);
-    group.objects?.sort((a, b) => b.name.localeCompare(a.name));
-    groups[kind] = group;
+        if (page.truncated && (!page.cursor || page.cursor === cursor)) throw new Error("Incomplete backup listing");
+        cursor = page.truncated ? page.cursor : null;
+      } while (cursor);
+      group.objects?.sort((a, b) => b.name.localeCompare(a.name));
+      groups[kind] = group;
+    } catch {
+      groups[kind] = { available: false, bytes: null, objectCount: null, lastUpdatedAt: null, ...(group.objects ? { objects: [] } : {}) };
+    }
   }
+  if (Object.values(groups).every(g => g.available === false)) throw new Error('Backup storage unavailable');
   const latest = groups.daily.objects.filter(o => /^\d{4}-\d{2}-\d{2}\.json\.gz$/.test(o.name))[0] || null;
   return { ...groups, photoSummary: await photoSummary(bucket), d1Bytes: groups.daily.bytes + groups.monthly.bytes,
+    d1Available: groups.daily.available && groups.monthly.available, storagePartial: Object.values(groups).some(g => !g.available),
     backupBytes: Object.values(groups).reduce((sum, g) => sum + g.bytes, 0),
     backupObjectCount: Object.values(groups).reduce((sum, g) => sum + g.objectCount, 0),
     lastBackupAt: latest?.updatedAt || null, latestBackup: latest?.name || null,
