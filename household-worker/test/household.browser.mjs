@@ -6,7 +6,8 @@ import {createRequire} from 'node:module';
 import {fixture} from './fixture.js';
 import {verifyChartTouch} from './chart-touch.browser.mjs';
 import {verifyWebApp} from './web-app.browser.mjs';
-const require=createRequire(import.meta.url),{chromium}=require('../../diary-worker/node_modules/playwright');
+import {verifySessionClearing} from './session-clearing.browser.mjs';
+const require=createRequire(import.meta.url),engines=require('../../diary-worker/node_modules/playwright'),engine=process.env.TROOM_BROWSER||'chromium';
 const owner=fixture(),viewer=fixture('viewer');await owner.login();const initial=(await owner.state()).data.accounts[0];await owner.mutate('account.save',{...initial,asOf:'2026-09-01'});viewer.env.DB=owner.env.DB;await viewer.login();
 const publicDir=new URL('../public/',import.meta.url),root=new URL('../../',import.meta.url);
 const server=createServer(async(req,res)=>{try{
@@ -14,7 +15,7 @@ const server=createServer(async(req,res)=>{try{
  const file=u.pathname.startsWith('/household/')?new URL(u.pathname.slice('/household/'.length)||'index.html',publicDir):u.pathname==='/security/passkey-client.js'?new URL('security-worker/public/passkey-client.js',root):u.pathname==='/assets/pwa-auto-update.js'?new URL('assets/pwa-auto-update.js',root):null;if(!file){res.writeHead(404);res.end();return;}res.setHeader('Content-Type',file.pathname.endsWith('.css')?'text/css':file.pathname.endsWith('.js')?'text/javascript':file.pathname.endsWith('.webmanifest')?'application/manifest+json':file.pathname.endsWith('.png')?'image/png':'text/html');res.end(readFileSync(file));
 }catch{res.writeHead(500);res.end('fixture error');}});
 await new Promise(done=>server.listen(0,'127.0.0.1',done));const url=`http://127.0.0.1:${server.address().port}/household/`;
-const browser=await chromium.launch({headless:true}),screens=resolve('tmp/household-preview');mkdirSync(screens,{recursive:true});
+const browser=await engines[engine].launch({headless:true}),screens=resolve('tmp/household-preview');mkdirSync(screens,{recursive:true});
 async function moveMouse(page,...args){await page.mouse.move(...args);await page.evaluate(()=>new Promise(done=>requestAnimationFrame(done)));}
 async function chooseDate(page,id,value){
  const dialog=page.locator('#troom-calendar-dialog');
@@ -26,8 +27,10 @@ async function chooseDate(page,id,value){
 }
 
 try{
- await verifyWebApp(browser,url);
- await verifyChartTouch(browser);
+ await verifySessionClearing(browser,url);
+ if(engine==='chromium')await verifyWebApp(browser,url);
+ else console.log('SKIP Chromium installability protocol on WebKit; UI/manifest contracts run independently.');
+ await verifyChartTouch(browser,engine);
  // Summary order follows aggregated amounts, independently of the newest entry.
  for(const role of ['owner','viewer']){
  const state=await owner.state(),category=parent=>state.data.categories.find(c=>c.parent===parent).id;
@@ -36,8 +39,8 @@ try{
  const context=await browser.newContext({extraHTTPHeaders:{'X-Fixture-Role':role}}),page=await context.newPage();
  await page.route('**/household/api/data',route=>route.fulfill({json:state}));await page.goto(url);await page.locator('#app-view').waitFor({state:'visible'});await chooseDate(page,'period','2026-09');
  const names=()=>page.locator('#category-summary .category-stat>span').allTextContents();
- const amounts=()=>page.locator('#category-summary .category-stat>strong').allTextContents();
- const yen=n=>new Intl.NumberFormat('ja-JP',{style:'currency',currency:'JPY',maximumFractionDigits:0}).format(n);
+ const amounts=async()=>(await page.locator('#category-summary .category-stat>strong').allTextContents()).map(value=>value.normalize('NFKC'));
+ const yen=n=>new Intl.NumberFormat('ja-JP',{style:'currency',currency:'JPY',maximumFractionDigits:0}).format(n).normalize('NFKC');
  assert.deepEqual(await names(),['収入 / 収入','支出 / 食費','支出 / 交通費','支出 / 日用品','支出 / 住宅']);
  assert.deepEqual(await amounts(),[5000,4000,3000,3000,1000].map(yen));assert.equal(await page.locator('#entries tr').first().locator('td').nth(1).textContent(),'Sort sample');
  await page.locator('#period-mode').selectOption('year');assert.deepEqual(await names(),['支出 / 交通費','収入 / 収入','支出 / 食費','支出 / 日用品','支出 / 住宅']);assert.equal((await amounts())[0],yen(13000));
@@ -58,7 +61,7 @@ await chooseDate(page,'balance-as-of','2026-09-28');await page.locator('#balance
  await page.locator('#add-item').click();const added=page.locator('#account-items>.item-editor').last();await added.locator('[data-field=name]').fill('Sample extra');await added.locator('[data-field=amount]').fill('-1234567');assert.equal(await added.locator('[data-field=amount]').inputValue(),'-1,234,567');const addedId=await added.getAttribute('data-id');await added.getByRole('button',{name:'上へ移動',exact:true}).click();assert.equal(await page.locator('#account-items>.item-editor').first().getAttribute('data-id'),addedId);await page.locator('#account-items>.item-editor').first().getByRole('button',{name:'下へ移動',exact:true}).click();
  await page.locator('#account-items>.item-editor').last().getByRole('button',{name:'削除',exact:true}).click();await page.locator('#confirm-dialog').waitFor({state:'visible'});await page.keyboard.press('Escape');await page.locator('#confirm-dialog').waitFor({state:'hidden'});assert.equal(await page.locator('#account-items>.item-editor').count(),2);await page.locator('#account-items>.item-editor').last().getByRole('button',{name:'削除',exact:true}).click();await page.locator('#confirm-ok').click();await page.locator('#confirm-dialog').waitFor({state:'hidden'});assert.equal(await page.locator('#account-items>.item-editor').count(),1);
  await page.locator('#balance-history').selectOption('2026-09-28');assert.equal(await page.locator('#account-form [name=asOf]').inputValue(),'2026-09-28');assert.equal(await page.locator('#account-form [name=asOf]').getAttribute('readonly'),'');await page.locator('#account-items [data-field=amount]').fill('11000');await page.screenshot({path:resolve(screens,mobile?'account-dated-mobile.png':'account-dated-desktop.png')});await page.locator('#account-form [type=submit]').click();await page.locator('#account-dialog').waitFor({state:'hidden'});await bank.getByRole('button',{name:'編集',exact:true}).click();await chooseDate(page,'balance-as-of','2026-09-10');await page.locator('#account-items [data-field=amount]').fill('9000');await page.locator('#account-form [type=submit]').click();await page.locator('#account-dialog').waitFor({state:'hidden'});assert.match(await bank.textContent(),/11,000/);assert.match(await bank.textContent(),/2026-09-28 時点/);
- await page.locator('[data-view=assets]').click();assert.equal(await page.locator('#add-snapshot').count(),0);assert.equal(await page.locator('#snapshot-dialog').count(),0);assert.equal(await page.locator('#snapshots button').count(),0);assert.equal(await page.locator('#chart svg').count(),1);assert.equal(errors.length,0,errors.join('\n'));assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:resolve(screens,mobile?'mobile.png':'desktop.png'),fullPage:true});
+ await page.locator('[data-view=assets]').click();await page.locator('#chart svg').waitFor({state:'visible'});assert.equal(await page.locator('#add-snapshot').count(),0);assert.equal(await page.locator('#snapshot-dialog').count(),0);assert.equal(await page.locator('#snapshots button').count(),0);assert.equal(await page.locator('#chart svg').count(),1);assert.equal(errors.length,0,errors.join('\n'));assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:resolve(screens,mobile?'mobile.png':'desktop.png'),fullPage:true});
  await context.close();}
  // Persist a reordered account through the editor, reopen it, and remove the extra item via confirmation.
  {const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage();await page.goto(url+'#accounts');await page.locator('#app-view').waitFor({state:'visible'});const bank=page.locator('.account-card').filter({has:page.getByRole('heading',{name:initial.name,exact:true})});await bank.getByRole('button',{name:'編集',exact:true}).click();await page.locator('#add-item').click();const extra=page.locator('#account-items>.item-editor').last();await extra.locator('[data-field=name]').fill('Sample persisted order');await extra.locator('[data-field=amount]').fill('0');await extra.getByRole('button',{name:'上へ移動',exact:true}).click();await page.locator('#account-form [type=submit]').click();await page.locator('#account-dialog').waitFor({state:'hidden'});await bank.getByRole('button',{name:'編集',exact:true}).click();assert.equal(await page.locator('#account-items>.item-editor').first().locator('[data-field=name]').inputValue(),'Sample persisted order');await page.locator('#account-items>.item-editor').first().getByRole('button',{name:'削除',exact:true}).click();await page.locator('#confirm-ok').click();await page.locator('#confirm-dialog').waitFor({state:'hidden'});await page.locator('#account-form [type=submit]').click();await page.locator('#account-dialog').waitFor({state:'hidden'});await context.close();}
@@ -75,7 +78,7 @@ await chooseDate(page,'balance-as-of','2026-09-28');await page.locator('#balance
  for(const mobile of [false,true]){const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1440,height:1000},...(mobile?{isMobile:true,hasTouch:true}:{})}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(url);await page.locator('#app-view').waitFor({state:'visible'});await page.locator('[data-view=assets]').click();await page.waitForFunction(()=>{const root=document.querySelector('#chart'),svg=root.querySelector('svg');return svg&&Math.abs(svg.viewBox.baseVal.width-root.clientWidth)<2;});
  assert.match(await page.locator('#chart-range').textContent(),/52件/);assert.equal(await page.locator('#chart circle').count(),1);assert.equal(await page.locator('#chart [tabindex]').count(),0);assert.equal(await page.locator('#snapshots details').count(),5);assert.equal(await page.locator('#snapshots details[open]').count(),1);
  const checkLabels=async()=>{const bad=await page.locator('#chart').evaluate(root=>{const box=root.getBoundingClientRect(),labels=[...root.querySelectorAll('text')].map(n=>({text:n.textContent,box:n.getBoundingClientRect(),font:Number.parseFloat(getComputedStyle(n).fontSize)}));return labels.filter(n=>n.font<12||n.box.left<box.left-1||n.box.right>box.right+1||n.box.top<box.top-1||n.box.bottom>box.bottom+1).map(n=>n.text);});assert.deepEqual(bad,[]);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));};await checkLabels();
- assert.equal(await page.locator('#chart-value').textContent(),new Intl.NumberFormat('ja-JP',{style:'currency',currency:'JPY',maximumFractionDigits:0}).format(latest.total));
+ assert.equal((await page.locator('#chart-value').textContent()).normalize('NFKC'),new Intl.NumberFormat('ja-JP',{style:'currency',currency:'JPY',maximumFractionDigits:0}).format(latest.total).normalize('NFKC'));
  assert.equal(await page.locator('#chart-position,#chart-previous,#chart-next,#chart-account').count(),0);
  await page.locator('#chart').focus();await page.keyboard.press('Home');assert.match(await page.locator('#chart-month').textContent(),/2022年6月/);await page.keyboard.press('ArrowRight');assert.match(await page.locator('#chart-month').textContent(),/2022年7月/);await page.keyboard.press('End');assert.match(await page.locator('#chart-month').textContent(),/2026年9月/);
  for(const [period,count,label]of [['1',2,'前月末比'],['3',4,'3ヶ月前の月末比'],['6',7,'6ヶ月前の月末比'],['12',13,'1年前の月末比'],['36',37,'3年前の月末比']]){await page.locator('[data-chart-period="'+period+'"]').click();assert.match(await page.locator('#chart-range').textContent(),new RegExp(count+'件'));assert.ok((await page.locator('#chart-change').textContent()).startsWith(label));}

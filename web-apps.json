@@ -432,6 +432,7 @@
         "household-worker/src/index.js",
         "household-worker/src/domain.js",
         "household-worker/src/api.js",
+        "household-worker/src/maintenance.js",
         "assets/session-secret.mjs",
         "assets/session-policy.mjs",
         "assets/passkey-rolling.mjs",

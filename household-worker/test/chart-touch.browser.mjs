@@ -3,8 +3,8 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
 // Actual component/CSS and trusted Chromium touch events; no production data or API writes.
-export async function verifyChartTouch(browser){
-  const context=await browser.newContext({viewport:{width:320,height:844},isMobile:true,hasTouch:true});
+export async function verifyChartTouch(browser,engine='chromium'){
+  const context=await browser.newContext({viewport:{width:320,height:844},isMobile:engine==='chromium',hasTouch:true});
   try{
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     const css=readFileSync(new URL('../public/household.css',import.meta.url),'utf8');
@@ -16,8 +16,9 @@ export async function verifyChartTouch(browser){
       component.update(samples);
     });
     const frame=()=>page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));await frame();
-    const hit=await page.locator('.chart-hit').boundingBox(),cdp=await context.newCDPSession(page);
-    const touch=(type,x=0,y=0)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:['touchEnd','touchCancel'].includes(type)?[]:[{x,y,id:1}]});
+    const hit=await page.locator('.chart-hit').boundingBox(),cdp=engine==='chromium'?await context.newCDPSession(page):null;
+    let lastPoint={x:0,y:0};
+    const touch=(type,x,y)=>{if(x!==undefined)lastPoint={x,y};const point=lastPoint;return cdp?cdp.send('Input.dispatchTouchEvent',{type,touchPoints:['touchEnd','touchCancel'].includes(type)?[]:[{...point,id:1}]}):page.evaluate(({type,x,y})=>document.querySelector('.chart-hit').dispatchEvent(new PointerEvent(({touchStart:'pointerdown',touchMove:'pointermove',touchEnd:'pointerup',touchCancel:'pointercancel'})[type],{pointerId:1,pointerType:'touch',isPrimary:true,clientX:x,clientY:y,buttons:type==='touchEnd'?0:1,bubbles:true,cancelable:true})),{type,...point});};
     await page.evaluate(()=>{
       window.metrics={cancels:0,moves:0,writes:0,reads:0};
       const root=document.querySelector('#chart'),svg=root.querySelector('svg'),original=svg.getBoundingClientRect.bind(svg);
@@ -71,11 +72,20 @@ export async function verifyChartTouch(browser){
     });await frame();assert.equal(await page.locator('#value').textContent(),'—');assert.equal(await page.locator('#chart svg').count(),0);
 
     await page.evaluate(()=>component.update(samples));await frame();
+    // Sustained drag, orientation change, then pinch without a stale chart gesture.
+    await touch('touchStart',hit.x+5,hit.y+30);for(let i=0;i<75;i++){await touch('touchMove',hit.x+1+(hit.width-2)*i/74,hit.y+30);await page.waitForTimeout(40);}await touch('touchEnd');await frame();assert.equal(await page.locator('#month').textContent(),'2026年10月末');
+    if(cdp){const box=await page.locator('.chart-hit').boundingBox(),beforeScale=await page.evaluate(()=>visualViewport.scale),x=box.x+box.width/2,y=box.y+box.height/2;
+      const points=spread=>[{x:x-spread,y,id:11},{x:x+spread,y,id:12}];await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:points(35)});
+      for(let i=1;i<=12;i++){await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:points(35+i*4)});await page.waitForTimeout(30);}
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForFunction(scale=>visualViewport.scale>scale,beforeScale,{timeout:3000});await cdp.send('Emulation.setPageScaleFactor',{pageScaleFactor:1});}
+    await page.setViewportSize({width:844,height:390});await frame();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await page.setViewportSize({width:320,height:844});await frame();
     const outside=await page.locator('#outside').boundingBox();
+    if(cdp){
     await touch('touchStart',outside.x+outside.width/2,outside.y+10);
     for(let i=1;i<=8;i++)await touch('touchMove',outside.x+outside.width/2,outside.y+10-i*10);
-    await touch('touchEnd');await page.waitForFunction(()=>scrollY>0);
+    await touch('touchEnd');}else{await page.mouse.move(outside.x+20,outside.y+10);await page.mouse.wheel(0,180);console.log('WebKit pointer contracts passed; trusted multi-touch/pinch are Chromium-only here.');}await page.waitForFunction(()=>scrollY>0);
     assert.deepEqual(errors,[]);
-    console.log('Chart touch: native diagonal swipe stays captured, cached geometry, one paint per frame, duplicate-month suppression, cancellation, stale-frame clearing and outside scrolling passed.');
+    console.log(`Chart touch (${engine==='chromium'?'trusted touch':'synthetic pointer contracts'}): diagonal swipe stays captured, cached geometry, one paint per frame, duplicate-month suppression, cancellation, stale-frame clearing and outside scrolling passed.`);
   }finally{await context.close();}
 }
