@@ -2985,7 +2985,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       elements.cameraRollGrid.append(...cards);
     }
     const atLimit = state.photos.length >= CAMERA_ROLL_MAX_PHOTOS;
-    elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`
+    elements.cameraRollStatus.textContent = `${state.photos.length.toLocaleString("ja-JP")}件の写真を表示しています。`
       + (atLimit && state.photoHasMore ? "表示上限に達しました。年月や検索条件で絞り込んでください。" : "");
     elements.cameraRollMore.hidden = !state.photoHasMore || atLimit;
   }
