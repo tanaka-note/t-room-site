@@ -7,7 +7,7 @@ import { runState, reportRun } from '../src/monitor.js';
 import { getBackupSnapshot } from '../src/browser.js';
 import { database, d1, Bucket, recorder } from './fixtures.mjs';
 
-test('every allowlist executes against current migrations and round-trips into an isolated schema', async () => {
+test('every allowlist executes against its reviewed migration baseline and round-trips into an isolated schema', async () => {
   for (const service of Object.keys(SERVICES)) {
     const source = database(service), destination = database(service);
     try {
@@ -116,6 +116,15 @@ test('schema drift fails closed instead of silently omitting new durable data', 
   try {
     db.exec('ALTER TABLE health_records ADD COLUMN new_durable_value TEXT');
     await assert.rejects(capture(d1(db), 'health'), /SchemaReviewRequired/);
+  } finally { db.close(); }
+});
+
+test('a checked-in Worker-first migration remains unreviewed until the backup baseline advances', async () => {
+  const db = database('cloud');
+  try {
+    assert.equal((await capture(d1(db), 'cloud')).expectedMigration, '0012_favorites.sql');
+    db.exec(readFileSync(new URL('../../cloud-worker/migrations/0013_safe_trash_retention.sql', import.meta.url), 'utf8'));
+    await assert.rejects(capture(d1(db), 'cloud'), /SchemaReviewRequired/);
   } finally { db.close(); }
 });
 

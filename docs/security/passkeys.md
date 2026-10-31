@@ -105,6 +105,8 @@ PW、authProof、cookie、session token、生の招待token、PRF出力、秘密
 
 ## Identityとサービス連携
 
+家計簿はサービスアカウントごとに所属家計と権限を解決する。既存`owner`は`primary-admin`専用、既存`viewer`は宏知の家計だけの共有閲覧用とする。追加の独立管理用`chiharu-admin`は第一管理者が明示的に連携したIdentityから利用でき、管理用アカウントの複数Identityへの重複連携は拒否する。パスキーの登録・承認・失効は既存手順を維持し、migrationで連携やcredentialを自動作成しない。詳細は[家計簿README](../../household-worker/README.md)を参照する。
+
 Identityはサービスaccountではなく一人の人を表し、同じIdentityへ同一サービスを含む複数のservice linkを持てる。日記の管理者用・一般利用用accountを使い分ける場合もIdentityやパスキーを分けない。日記・請求書accountは原則として有効なlinkを一人だけに限定する。ただし既存の一般利用用Identityを切断せず第一管理者の同じパスキーから日記の管理者用・一般利用用accountを選べるよう、`primary-admin`の`diary/main-user`だけは狭い追加aliasとして許可し、他Identityの重複は引き続き拒否する。T-Cloudのfolder-memberは複数Identityとの共有を許可する。
 
 連携候補の正本は各サービスの`SecurityIntegration`である。Security Workerは明示的なservice registry、Service Binding、providerの候補取得・再検証を通じてだけlinkを作成する。Security Centerの通常UIでは内部account ID、role値、T-Cloudの数値folder IDを自由入力させず、人間向け表示名・role・folder pathから選択させる。候補取得失敗時に自由入力へフォールバックしない。将来サービスを追加する場合も、registry allowlist、Service Binding、provider実装、DB migrationの要否、契約テストを明示的に追加し、自動発見したサービスを信頼しない。
