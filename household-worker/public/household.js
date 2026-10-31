@@ -8,6 +8,33 @@
   let data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]}, revision=0, session=null, busy=false, activity=Date.now(), confirmation=null, restoreFile=null, categoryEditing=null;
   const editors=new Map(), channel=typeof BroadcastChannel==='function'?new BroadcastChannel('household-ledger'):null;
   let assetPoints=[], assetChart=null, chartPeriod='all';
+  let deferredInstallPrompt=null, installPromptOpen=false, installed=false;
+  const appDisplay=window.matchMedia('(display-mode: standalone)');
+  const isInstalled=()=>installed||appDisplay.matches||navigator.standalone===true;
+  function installHelp(message){$('install-help').textContent=message;$('install-help').hidden=false;}
+  function updateInstallState(){
+    $('install-app').hidden=isInstalled();$('install-app').disabled=busy||installPromptOpen;
+    if(isInstalled())installHelp('家計簿をウェブアプリとして利用しています。');
+  }
+  function manualInstallHelp(){
+    const ua=navigator.userAgent,isIOS=/iPhone|iPad|iPod/i.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+    if(isIOS)return 'Safariの共有メニューから「ホーム画面に追加」を選び、「追加」を押してください。「Webアプリとして開く」がある場合はオンにします。Safari以外で開いている場合は、Safariでこのページを開いてください。';
+    if(/Android/i.test(ua))return 'Chromeなど対応ブラウザのメニューから「ホーム画面に追加」または「アプリをインストール」を選んでください。';
+    return 'Chrome・Edgeなどのアドレスバーのインストールボタン、またはブラウザのメニューから「アプリをインストール」を選んでください。MacのSafariでは「ファイル」→「Dockに追加」を選べます。';
+  }
+  window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;if(!isInstalled())updateInstallState();});
+  window.addEventListener('appinstalled',()=>{installed=true;deferredInstallPrompt=null;updateInstallState();});
+  appDisplay.addEventListener('change',updateInstallState);
+  window.addEventListener('pageshow',updateInstallState);
+  $('install-app').onclick=async()=>{
+    if(busy||installPromptOpen||isInstalled())return;
+    if(!deferredInstallPrompt){installHelp(manualInstallHelp());return;}
+    const prompt=deferredInstallPrompt;deferredInstallPrompt=null;installPromptOpen=true;markDirty();updateInstallState();
+    try{await prompt.prompt();const choice=await prompt.userChoice;if(!isInstalled())installHelp(choice?.outcome==='accepted'?'追加操作を受け付けました。完了後はホーム画面やアプリ一覧から開けます。':manualInstallHelp());}
+    catch{if(!isInstalled())installHelp(`追加画面を開けませんでした。${manualInstallHelp()}`);}
+    finally{installPromptOpen=false;markDirty();updateInstallState();document.dispatchEvent(new Event('troom:auto-update-ready'));}
+  };
+  updateInstallState();
   TRoomDatePicker.setNavigation(nav);
   TRoomDateWheel.initialize(nav,()=>busy);
   for(const event of ['click','keydown'])$('period').addEventListener(event,()=>{if($('date-wheel-dialog').open)$('date-wheel-title').textContent='表示月を選択';});
@@ -28,8 +55,8 @@
   function button(label,action,cls=''){const b=el('button',label,cls);b.type='button';b.onclick=action;return b;}
   function options(select,rows,placeholder){const old=select.value;select.replaceChildren();if(placeholder!==undefined){const o=new Option(placeholder,'');select.add(o);}for(const [value,label]of rows)select.add(new Option(label,value));if([...select.options].some(o=>o.value===old))select.value=old;}
   function field(form,name){return form.elements.namedItem(name);}
-  function markDirty(){for(const [id,e]of editors){e.form.dataset.troomDirty=String($(id).open&&e.initial!==e.serialize());}document.body.dataset.troomUpdateBlock=String(busy||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize()));}
-  function setBusy(value){busy=value;document.body.dataset.troomUpdateBlock=String(value);for(const b of document.querySelectorAll('button'))b.disabled=value;for(const form of document.querySelectorAll('dialog form'))form.inert=value;$('restore').disabled=value||!restoreFile;assetChart?.setBusy(value);updateItemControls();markDirty();}
+  function markDirty(){for(const [id,e]of editors){e.form.dataset.troomDirty=String($(id).open&&e.initial!==e.serialize());}document.body.dataset.troomUpdateBlock=String(busy||installPromptOpen||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize()));}
+  function setBusy(value){busy=value;document.body.dataset.troomUpdateBlock=String(value);for(const b of document.querySelectorAll('button'))b.disabled=value;for(const form of document.querySelectorAll('dialog form'))form.inert=value;$('restore').disabled=value||!restoreFile;assetChart?.setBusy(value);updateItemControls();markDirty();updateInstallState();}
   async function api(path,body){
     let response;try{response=await fetch(`/household/api${path}`,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(!document.hidden&&Date.now()-activity<60000?{'X-Troom-Activity':'foreground'}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});}catch{throw new Error('通信できませんでした。入力は保持されています。もう一度お試しください。');}
     const result=await response.json().catch(()=>{throw new Error('応答を読み取れませんでした。もう一度お試しください。');});

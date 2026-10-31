@@ -275,7 +275,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     }
     return photoToolsPromise;
   }
-  async function preparePhoto(file) { return (await loadPhotoTools()).preparePhoto(file); }
   function cancelEditorPhotoUploadSession() { return photoUploadManager?.cancelEditorPhotoUploadSession(); }
   function commitStagedPhotos(...args) { return photoUploadManager.commitStagedPhotos(...args); }
   function deleteStagedPhotoUpload(...args) { return photoUploadManager?.deleteStagedPhotoUpload(...args); }
@@ -1761,7 +1760,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   async function handlePhotoSelection() {
     finishPhotoPickerInteraction();
     const files = [...(elements.photoInput.files || [])];
-    elements.photoInput.value = "";
     const insertionOffset = state.photoInsertionOffset ?? getEditorSelectionOffset("end");
     state.photoInsertionOffset = null;
     await prepareSelectedPhotos(files, insertionOffset);
@@ -1846,19 +1844,18 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const preparedPhotos = [];
     let preparedCount = 0;
     try {
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        elements.photoPreparationStatus.textContent = `写真を準備中 ${index + 1}/${files.length}`;
-        try {
-          const preparationStarted = Date.now();
-          const photo = await preparePhoto(file);
-          photo.preparationMs = Date.now() - preparationStarted;
+      const processing = await loadPhotoTools();
+      const progress = index => { elements.photoPreparationStatus.textContent = `写真を準備中 ${index + 1}/${files.length}`; };
+      for await (const result of processing.preparePhotoBatch(files, progress)) {
+        if (result.error) {
+          failures.push(`${files[result.index].name}：${result.error.message}`);
+        } else {
+          const photo = result.photo;
+          photo.preparationMs = result.preparationMs;
           state.editorPhotos.push(photo);
           preparedPhotos.push(photo);
           preparedCount += 1;
           queueBackgroundPhotoUpload(photo);
-        } catch (error) {
-          failures.push(`${file.name}：${error.message}`);
         }
       }
       await waitForEditorCompositionEnd();
@@ -1867,9 +1864,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       }
       renderEditorPhotos();
       elements.photoPreparationStatus.textContent = failures.length
-        ? `${preparedCount}件を追加しました。追加できなかったファイル：${failures.join(" / ")}`
+        ? `${preparedCount}件を追加しました。追加できなかったファイル（${failures.length}件）：${failures.slice(0, 3).join(" / ")}${failures.length > 3 ? ` / ほか${failures.length - 3}件` : ""}`
         : `${preparedCount}件の写真を本文へ追加しました。`;
+    } catch {
+      elements.photoPreparationStatus.textContent = "写真の準備を完了できませんでした。もう一度お試しください。";
     } finally {
+      elements.photoInput.value = "";
       state.photoPreparing = false;
       elements.photoInput.disabled = false;
       elements.photoDropZone.classList.remove("is-busy", "is-dragging");

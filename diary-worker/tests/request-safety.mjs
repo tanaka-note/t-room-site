@@ -4,6 +4,9 @@ import "./photo-upload.mjs";
 import "./photo-save-timing.mjs";
 
 await import("./photo-deletion.mjs");
+// Both suites replace browser globals; run the preparation fixture only after
+// the existing top-level-await imports have restored their own mocks.
+await import("./photo-preparation.mjs");
 
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 

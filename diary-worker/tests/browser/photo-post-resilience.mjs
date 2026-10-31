@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
-import { readFile, mkdtemp, writeFile, unlink, rmdir } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, unlink, rmdir, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createDiaryFixtureServer as createServer } from "./bootstrap-fixture.mjs";
 import { createRequire } from "node:module";
@@ -624,6 +624,9 @@ async function verifyNewDraft(browser, name, contextOptions) {
 async function runBrowser(browserType, name, executablePath, contextOptions = {}) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
+    await verifyReadAheadSnapshot(browser, name, contextOptions);
+    await verifyProviderReadFailure(browser, name, false, contextOptions);
+    await verifyProviderReadFailure(browser, name, true, contextOptions);
     await verifyChangedSourceFile(browser, name, contextOptions);
     await verifyJpegMultiple(browser, name, contextOptions, 1);
     await verifyJpegMultiple(browser, name, contextOptions, 3);
@@ -647,7 +650,7 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
   }
 }
 
-async function chooseJpegs(page, count = 3) {
+async function chooseJpegs(page, count = 3, start = 0) {
   const jpeg = await page.evaluate(() => {
     const canvas = document.createElement("canvas"); canvas.width = 32; canvas.height = 24;
     canvas.getContext("2d").fillRect(0, 0, 32, 24);
@@ -655,7 +658,89 @@ async function chooseJpegs(page, count = 3) {
   });
   const chooserPromise = page.waitForEvent("filechooser");
   await page.click("#add-photo-button");
-  await (await chooserPromise).setFiles(Array.from({ length: count }, (_, n) => ({ name: `${n}.jpg`, mimeType: "image/jpeg", buffer: Buffer.from(jpeg, "base64") })));
+  await (await chooserPromise).setFiles(Array.from({ length: count }, (_, n) => ({ name: `${n + start}.jpg`, mimeType: "image/jpeg", buffer: Buffer.from(jpeg, "base64") })));
+}
+
+async function verifyReadAheadSnapshot(browser, name, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  const dir = await mkdtemp(join(tmpdir(), "diary-photo-read-ahead-"));
+  const paths = [join(dir, "first.png"), join(dir, "second.png")];
+  try {
+    for (const path of paths) await writeFile(path, validPng);
+    await page.evaluate(() => {
+      const nativeRead = File.prototype.arrayBuffer;
+      window.__readPhotos = [];
+      File.prototype.arrayBuffer = async function() {
+        const bytes = await nativeRead.call(this);
+        window.__readPhotos.push(this.name);
+        return bytes;
+      };
+      window.__startPhotoPreparationHold();
+    });
+    const chooser = page.waitForEvent("filechooser");
+    await page.click("#add-photo-button");
+    await (await chooser).setFiles(paths);
+    await page.waitForFunction(() => window.__photoPreparationWaiting && window.__readPhotos.includes("second.png"));
+    assert.equal(await page.locator("#photo-input").evaluate(el => el.files.length), 2,
+      `${name}: keep picker selection until preparation completes`);
+    const later = new Date(Date.now() + 60000);
+    await utimes(paths[1], later, later);
+    await page.evaluate(() => window.__releasePhotoPreparation());
+    await page.waitForFunction(() => !document.querySelector("#photo-input").disabled);
+    assert.equal(await page.locator("#editor-photo-list .editor-photo-card").count(), 2,
+      `${name}: second photo must survive a provider timestamp change while first photo is decoding`);
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.photoRequests, 2);
+    assert.equal(scenario.storedPhotoIds.size, 2);
+  } finally {
+    await page.close();
+    for (const path of paths) await unlink(path).catch(() => {});
+    await rmdir(dir);
+  }
+}
+
+async function verifyProviderReadFailure(browser, name, permanent, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await page.evaluate(permanent => {
+      const nativeRead = File.prototype.arrayBuffer;
+      window.__providerAttempts = {};
+      window.__providerReady = false;
+      File.prototype.arrayBuffer = async function() {
+        const count = window.__providerAttempts[this.name] = (window.__providerAttempts[this.name] || 0) + 1;
+        if (this.name !== "0.jpg" && !window.__providerReady && (permanent || count === 1)) {
+          throw new DOMException("provider cannot read selected photo", "NotReadableError");
+        }
+        return nativeRead.call(this);
+      };
+    }, permanent);
+    await chooseJpegs(page, permanent ? 5 : 3);
+    await page.waitForFunction(() => !document.querySelector("#photo-input").disabled);
+    assert.equal(await page.locator("#editor-photo-list .editor-photo-card").count(), permanent ? 1 : 3);
+    const attempts = await page.evaluate(() => window.__providerAttempts);
+    assert.equal(attempts["1.jpg"], permanent ? 3 : 2, `${name}: finite provider read retries`);
+    assert.equal(await page.inputValue("#entry-title"), "写真付き投稿テスト");
+    assert.match(await page.locator("#entry-content").innerText(), /本文/);
+    assert.equal(scenario.entryRequests.length, 0);
+    if (permanent) {
+      const message = await page.locator("#photo-preparation-status").innerText();
+      assert.match(message, /追加できなかったファイル（4件）/);
+      assert.match(message, /ほか1件/);
+      assert.doesNotMatch(message, /4\.jpg/);
+      await page.evaluate(() => { window.__providerReady = true; });
+      await chooseJpegs(page, 4, 1);
+      await page.waitForFunction(() => !document.querySelector("#photo-input").disabled);
+      assert.equal(await page.locator("#editor-photo-list .editor-photo-card").count(), 5,
+        `${name}: reselect only failures and retain the successful photo`);
+    }
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.photoRequests, permanent ? 5 : 3, `${name}: never reupload successful photos`);
+    assert.equal(scenario.commitRequests[0].photoIds.length, permanent ? 5 : 3);
+  } finally { await page.close(); }
 }
 
 async function verifyChangedSourceFile(browser, name, contextOptions) {

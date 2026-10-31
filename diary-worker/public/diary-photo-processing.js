@@ -1,24 +1,89 @@
-export async function preparePhoto(file) {
+const PHOTO_READ_RETRY_DELAYS_MS = [150, 450];
+const PHOTO_READ_AHEAD_BYTES = 16 * 1024 * 1024;
+
+function preparationError(stage, cause, message, attempt) {
+  // Exception messages can contain provider paths. Log only known classes.
+  const known = ["NotReadableError", "NotFoundError", "SecurityError", "AbortError", "RangeError", "TypeError", "InvalidStateError", "EncodingError"];
+  console.warn("Diary photo preparation", {
+    stage, errorType: known.includes(cause?.name) ? cause.name : "unknown", ...(attempt ? { attempt } : {})
+  });
+  const error = new Error(message, { cause });
+  error.stage = stage;
+  return error;
+}
+
+async function readPhotoSnapshot(file) {
   if (!(file instanceof File) || !String(file.type).startsWith("image/")) {
     throw new Error("画像ファイルではありません。");
   }
   if (!file.size || file.size > 60 * 1024 * 1024) throw new Error("60MB以内の画像を選択してください。");
-  // Own the bytes while the picker grant is still valid. A disk/provider-backed
-  // File can later fail at fetch time (including ERR_UPLOAD_FILE_CHANGED).
   let fileBytes;
-  try {
-    fileBytes = new Uint8Array(await file.arrayBuffer());
-    file = new File([fileBytes], file.name, { type: file.type, lastModified: file.lastModified });
-  } catch {
-    throw new Error("写真を読み取れませんでした。端末に保存した写真を選び直してください。");
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fileBytes = new Uint8Array(await file.arrayBuffer());
+      break;
+    } catch (cause) {
+      const error = preparationError("read", cause,
+        "写真を読み取れませんでした。追加できなかった写真だけを選び直してください。", attempt + 1);
+      // A stale provider snapshot may never recover. Keep this finite, and do
+      // not retry permission failures or allocation failures as transient I/O.
+      if (cause?.name !== "NotReadableError" || attempt >= PHOTO_READ_RETRY_DELAYS_MS.length) throw error;
+      await new Promise(resolve => setTimeout(resolve, PHOTO_READ_RETRY_DELAYS_MS[attempt]));
+    }
   }
+  try {
+    file = new File([fileBytes], file.name, { type: file.type, lastModified: file.lastModified });
+  } catch (cause) {
+    throw preparationError("snapshot", cause, "写真の読み込みを完了できませんでした。枚数を減らしてもう一度お試しください。");
+  }
+  return { file, bytes: fileBytes };
+}
+
+export async function preparePhoto(file) {
+  return prepareSnapshot(await readPhotoSnapshot(file));
+}
+
+// Snapshot the next photo while the current one is decoded/resized. Bound both
+// the count (current + one ahead) and original bytes; a large photo runs alone.
+export async function* preparePhotoBatch(files, onProgress = () => {}) {
+  const pending = [];
+  let next = 0;
+  let pendingBytes = 0;
+  while (next < files.length || pending.length) {
+    while (next < files.length && pending.length < 2) {
+      const file = files[next];
+      const bytes = file.size || 0;
+      if (pending.length && pendingBytes + bytes > PHOTO_READ_AHEAD_BYTES) break;
+      const started = Date.now();
+      // Attach the rejection handler immediately: prefetched reads can fail
+      // before the consumer finishes preparing the preceding photo.
+      const result = readPhotoSnapshot(file).then(snapshot => ({ snapshot }), error => ({ error }));
+      pending.push({ index: next++, bytes, started, result });
+      pendingBytes += bytes;
+    }
+    const current = pending[0];
+    onProgress(current.index);
+    const result = await current.result;
+    let photo, error = result.error;
+    if (!error) {
+      try { photo = await prepareSnapshot(result.snapshot); } catch (cause) { error = cause; }
+    }
+    pending.shift();
+    pendingBytes -= current.bytes;
+    yield { index: current.index, photo, error, preparationMs: Date.now() - current.started };
+  }
+}
+
+async function prepareSnapshot(snapshot) {
+  let { file, bytes: fileBytes } = snapshot;
+  snapshot.bytes = null;
   const imageSource = await preparePhotoSource(file, fileBytes);
   fileBytes = null;
   let bitmap;
   try {
     bitmap = await createImageBitmap(imageSource.source);
-  } catch {
-    throw new Error("この画像形式をブラウザで読み取れませんでした。");
+  } catch (cause) {
+    throw preparationError("decode", cause, "この画像形式をブラウザで読み取れませんでした。");
   }
   try {
     const [displayBlob, thumbnailBlob] = await Promise.all([
@@ -42,6 +107,8 @@ export async function preparePhoto(file) {
       uploadError: null,
       removed: false
     };
+  } catch (cause) {
+    throw preparationError("convert", cause, "画像を変換できませんでした。");
   } finally {
     bitmap.close();
   }
