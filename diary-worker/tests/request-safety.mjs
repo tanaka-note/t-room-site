@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import "./photo-upload.mjs";
 import "./photo-save-timing.mjs";
 
+await import("./photo-deletion.mjs");
+
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 
 assert.doesNotMatch(source, /request\.json\(\)|request\.formData\(\)/,

@@ -97,6 +97,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     deleteMode: null,
     editorPhotos: [],
     editorDeletedPhotoIds: new Set(),
+    editorPendingPhotoDeletionIds: new Set(),
     photoPreparing: false,
     photoPreparationPromise: null,
     photoUploading: false,
@@ -2458,7 +2459,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       if (photo.existing && !window.confirm("この画像を日記から削除しますか？保存するまで削除は確定しません。")) return;
       removePhotoMarkerFromEditor(photoMarker(photo.id));
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
-      if (photo.existing) state.editorDeletedPhotoIds.add(photo.id);
+      if (photo.existing) {
+        state.editorDeletedPhotoIds.add(photo.id);
+        state.editorPendingPhotoDeletionIds.add(photo.id);
+      }
       else void deleteStagedPhotoUpload(photo).catch(() => {
         elements.photoPreparationStatus.textContent = "一時保存した画像は後ほど自動的に削除されます。";
       });
@@ -2474,6 +2478,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     }
     state.editorPhotos = [];
     state.editorDeletedPhotoIds.clear();
+    state.editorPendingPhotoDeletionIds.clear();
     state.photoUploadSessionId = null;
     state.photoUploadSessionTiming = null;
     state.photoUploadSessionPromise = null;
@@ -2668,7 +2673,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         ? api(`/entries/${id}`, { method: "PUT", body: provisionalBody })
         : createEntryIdempotently(provisionalBody));
       const failures = [];
-      const deletedPhotoIds = [...state.editorDeletedPhotoIds];
+      // Persisted exclusions also contain historical/already-deleted photos and
+      // draft intent. Only this editor's explicit removals request a DELETE.
+      const deletedPhotoIds = [...state.editorPendingPhotoDeletionIds];
       const promotedEditDraft = targetStatus === "published"
         && elements.entryStatus.value === "draft"
         && Boolean(sourceEntry?.draftOfEntryId);
@@ -2680,11 +2687,20 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       const deletionsToApply = promotedEditDraft
         ? []
         : deletedPhotoIds.filter((photoId) => targetStatus === "published" || photoOwners.get(photoId) === saved.entry.id);
+      if (promotedEditDraft) {
+        // The publish transaction already applied draft exclusions. Do not
+        // replay them if a later photo commit fails and the editor is retried.
+        for (const photoId of deletedPhotoIds) {
+          state.editorPendingPhotoDeletionIds.delete(photoId);
+          state.editorDeletedPhotoIds.delete(photoId);
+        }
+      }
       for (let index = 0; index < deletionsToApply.length; index += 1) {
         const photoId = deletionsToApply[index];
         setEditorSaveBusy(true, `画像を削除中 ${index + 1}/${deletionsToApply.length}`);
         try {
           await deletePhoto(photoId);
+          state.editorPendingPhotoDeletionIds.delete(photoId);
           state.editorDeletedPhotoIds.delete(photoId);
         } catch (error) {
           failures.push(`画像の削除：${error.message}`);
