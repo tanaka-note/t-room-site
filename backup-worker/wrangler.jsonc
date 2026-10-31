@@ -50,6 +50,11 @@
       "binding": "CALENDAR_DB",
       "database_name": "calendar-db",
       "database_id": "f9ad73f1-92df-40ef-a363-cf328123589d"
+    },
+    {
+      "binding": "HOUSEHOLD_DB",
+      "database_name": "household-db",
+      "database_id": "cb41cbc5-53c8-4868-95e1-94d92b7b5289"
     }
   ],
   "r2_buckets": [

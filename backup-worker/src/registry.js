@@ -1,5 +1,59 @@
 // Explicit durable-data allowlist. Schema drift fails closed until reviewed.
 export const SERVICES = {
+  "household": {
+    "label": "家計簿",
+    "binding": "HOUSEHOLD_DB",
+    "database": "household-db",
+    "migration": "0004_asset_history_start.sql",
+    "tables": [
+      {
+        "name": "household_accounts",
+        "columns": [
+          "id",
+          "display_name",
+          "role",
+          "is_active",
+          "session_version"
+        ],
+        "sourceColumns": "id,display_name,role,is_active,session_version"
+      },
+      {
+        "name": "household_state",
+        "columns": [
+          "id",
+          "revision",
+          "active_dataset"
+        ],
+        "sourceColumns": "id,revision,active_dataset"
+      },
+      {
+        "name": "household_records",
+        "columns": [
+          "dataset_id",
+          "kind",
+          "id",
+          "payload"
+        ],
+        "sourceColumns": "dataset_id,kind,id,payload"
+      },
+      {
+        "name": "household_requests",
+        "columns": [
+          "request_id",
+          "fingerprint",
+          "response_json",
+          "created_at"
+        ],
+        "sourceColumns": "request_id,fingerprint,response_json,created_at"
+      }
+    ],
+    "knownTables": [
+      "household_accounts",
+      "household_state",
+      "household_records",
+      "household_requests"
+    ]
+  },
   "cloud": {
     "label": "T-Cloud",
     "binding": "CLOUD_DB",
