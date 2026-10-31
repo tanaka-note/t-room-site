@@ -16,15 +16,15 @@ export function d1(sqlite){return {prepare(sql){let values=[];return {bind(...v)
 export const household=await bundle(new URL('../src/index.js',import.meta.url),'\nexport {signSession};');
 export function fixture(accountId='owner',identityId=accountId==='owner'?'primary-admin':'sample-viewer'){
   const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON');for(const file of readdirSync(new URL('../migrations/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())sqlite.exec(readFileSync(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
-  const sessions=new Map();let active=true,consumed=false,cookie='';
+  const sessions=new Map();let active=true,consumed=false,cookie='',sessionContext='';
   const env={DB:d1(sqlite),SESSION_SECRET:randomBytes(32).toString('hex'),PASSKEY_ENABLED:'true',SESSION_VERSION:'1',SECURITY:{
     async redeemHandoff(token,service){if(token!=='fixture-handoff'||consumed||service!=='household')return null;consumed=true;return {identityId,serviceAccountId:accountId,credentialId:'fixture-credential',serviceLinkId:'fixture-link',sessionEpoch:1};},
     async passkeyRollingSession(input){if(!active||input.service!=='household'||input.identityId!==identityId||input.serviceAccountId!==accountId)return {valid:false};if(input.action==='register')sessions.set(input.sessionIdHash,{valid:true,expiresAt:input.expiresAt});if(input.action==='end'){sessions.delete(input.sessionIdHash);return {valid:true};}return sessions.get(input.sessionIdHash)||{valid:false};},
     async recordAuditEvent(){return {stored:true};}
   },ASSETS:{async fetch(){return new Response('fixture shell');}}};
   const worker=new household.default({},env);
-  async function request(path,body,headers={},method){return worker.fetch(new Request(`https://example.test/household${path}`,{method:method||(body===undefined?'GET':'POST'),headers:{Origin:'https://example.test','Content-Type':'application/json',Cookie:cookie,...headers},...(body===undefined?{}:{body:JSON.stringify(body)})}));}
-  async function login(){const r=await request('/api/passkey/handoff',{handoffToken:'fixture-handoff'});if(r.status!==200)throw new Error(`login ${r.status}`);cookie=r.headers.get('Set-Cookie').split(';')[0];return r;}
+  async function request(path,body,headers={},method){return worker.fetch(new Request(`https://example.test/household${path}`,{method:method||(body===undefined?'GET':'POST'),headers:{Origin:'https://example.test','Content-Type':'application/json',Cookie:cookie,...(sessionContext?{'X-Household-Session':sessionContext}:{}),...headers},...(body===undefined?{}:{body:JSON.stringify(body)})}));}
+  async function login(){const r=await request('/api/passkey/handoff',{handoffToken:'fixture-handoff'});if(r.status!==200)throw new Error(`login ${r.status}`);cookie=r.headers.get('Set-Cookie').split(';')[0];sessionContext=(await r.clone().json()).sessionContext;return r;}
   async function state(){return (await request('/api/data')).json();}
   async function mutate(operation,value,extra={}){return request('/api/mutate',{requestId:crypto.randomUUID(),expectedRevision:(await state()).revision,operation,value,...extra});}
   return {sqlite,env,worker,request,login,state,mutate,get cookie(){return cookie;},set cookie(v){cookie=v;},setActive(v){active=v;},close(){sqlite.close();}};

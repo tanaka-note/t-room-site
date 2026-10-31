@@ -7,11 +7,13 @@ import {fixture} from './fixture.js';
 import {verifyChartTouch} from './chart-touch.browser.mjs';
 import {verifyWebApp} from './web-app.browser.mjs';
 import {verifySessionClearing} from './session-clearing.browser.mjs';
+import {verifyIndependentHouseholds} from './independent-households.browser.mjs';
 const require=createRequire(import.meta.url),engines=require('../../diary-worker/node_modules/playwright'),engine=process.env.TROOM_BROWSER||'chromium';
 const owner=fixture(),viewer=fixture('viewer');await owner.login();const initial=(await owner.state()).data.accounts[0];await owner.mutate('account.save',{...initial,asOf:'2026-09-01'});viewer.env.DB=owner.env.DB;await viewer.login();
+const chiharu=fixture('chiharu-admin','sample-chiharu');chiharu.env.DB=owner.env.DB;await chiharu.login();
 const publicDir=new URL('../public/',import.meta.url),root=new URL('../../',import.meta.url);
 const server=createServer(async(req,res)=>{try{
- const u=new URL(req.url,'http://localhost');if(u.pathname.startsWith('/household/api/')){const chunks=[];for await(const chunk of req)chunks.push(chunk);const text=Buffer.concat(chunks).toString(),f=req.headers['x-fixture-role']==='viewer'?viewer:owner;const response=await f.request(u.pathname.slice('/household'.length),text?JSON.parse(text):undefined,{},req.method);res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;}
+ const u=new URL(req.url,'http://localhost');if(u.pathname.startsWith('/household/api/')){const chunks=[];for await(const chunk of req)chunks.push(chunk);const text=Buffer.concat(chunks).toString(),f=req.headers['x-fixture-role']==='viewer'?viewer:req.headers['x-fixture-role']==='chiharu'?chiharu:owner;const headers=u.pathname.endsWith('/api/session')&&!req.headers['x-household-session']?{}:{'X-Household-Session':req.headers['x-household-session']||''};const response=await f.request(u.pathname.slice('/household'.length),text?JSON.parse(text):undefined,headers,req.method);res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;}
  const file=u.pathname.startsWith('/household/')?new URL(u.pathname.slice('/household/'.length)||'index.html',publicDir):u.pathname==='/security/passkey-client.js'?new URL('security-worker/public/passkey-client.js',root):u.pathname==='/assets/pwa-auto-update.js'?new URL('assets/pwa-auto-update.js',root):null;if(!file){res.writeHead(404);res.end();return;}res.setHeader('Content-Type',file.pathname.endsWith('.css')?'text/css':file.pathname.endsWith('.js')?'text/javascript':file.pathname.endsWith('.webmanifest')?'application/manifest+json':file.pathname.endsWith('.png')?'image/png':'text/html');res.end(readFileSync(file));
 }catch{res.writeHead(500);res.end('fixture error');}});
 await new Promise(done=>server.listen(0,'127.0.0.1',done));const url=`http://127.0.0.1:${server.address().port}/household/`;
@@ -27,6 +29,7 @@ async function chooseDate(page,id,value){
 }
 
 try{
+ await verifyIndependentHouseholds(browser,url,owner,chiharu);
  await verifySessionClearing(browser,url);
  if(engine==='chromium')await verifyWebApp(browser,url);
  else console.log('SKIP Chromium installability protocol on WebKit; UI/manifest contracts run independently.');
@@ -105,4 +108,4 @@ await chooseDate(page,'balance-as-of','2026-09-28');await page.locator('#balance
  const context=await browser.newContext({extraHTTPHeaders:{'X-Fixture-Role':'viewer'}}),page=await context.newPage();await page.goto(url);await page.locator('#app-view').waitFor({state:'visible'});assert.equal(await page.locator('#add-entry').isVisible(),false);assert.ok((await page.locator('#access-mode').textContent()).includes('閲覧専用'));await chooseDate(page,'period','2026-09');assert.ok((await page.locator('#entries').textContent()).includes('Sample desktop shop'));await page.locator('[data-view=assets]').click();await page.locator('[data-chart-period="12"]').click();assert.match(await page.locator('#chart-range').textContent(),/13件/);assert.equal(await page.locator('#snapshots button').count(),0);await page.locator('[data-view=settings]').click();assert.equal(await page.locator('#restore-file').isVisible(),false);assert.equal(await page.locator('#category-form').isVisible(),false);await context.close();
  const logoutContext=await browser.newContext(),logoutPage=await logoutContext.newPage();await logoutPage.goto(url+'#assets');await logoutPage.locator('#chart svg').waitFor({state:'visible'});await logoutPage.locator('#logout').click();await logoutPage.locator('#login-view').waitFor({state:'visible'});assert.equal(await logoutPage.locator('#chart svg').count(),0);assert.equal(await logoutPage.locator('#chart-value').textContent(),'—');await logoutContext.close();
  console.log('Household browser: desktop/touch CRUD, backup, 52-month chart at 1440/390/320px, periods, bar-free hover/touch/keyboard selection, period comparisons, resize, gaps, unchanged financial data, read-only view and logout clearing passed.');
-}finally{await browser.close();await new Promise(done=>server.close(done));viewer.close();owner.close();}
+}finally{await browser.close();await new Promise(done=>server.close(done));chiharu.close();viewer.close();owner.close();}

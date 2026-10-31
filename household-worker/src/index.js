@@ -12,7 +12,7 @@ const encoder = new TextEncoder();
 const authorized = new WeakMap();
 const sessionVersion = (env, account) => `${env.SESSION_VERSION || '1'}:${account.session_version}`;
 const enabled = env => String(env.PASSKEY_ENABLED || 'false') === 'true';
-const accountRecord = (env,id) => ['owner','viewer'].includes(id) ? env.DB.prepare('SELECT * FROM household_accounts WHERE id=? AND is_active=1').bind(id).first() : null;
+const accountRecord = (env,id) => typeof id === 'string' && id.length <= 100 ? env.DB.prepare('SELECT * FROM household_accounts WHERE id=? AND is_active=1').bind(id).first() : null;
 
 export default class HouseholdWorker extends WorkerEntrypoint {
   async fetch(request) {
@@ -66,10 +66,15 @@ export async function handleRequest(request, env, context) {
   if (request.method !== 'GET') mutationGuard(request, url);
   if (path === '/api/passkey/handoff' && request.method === 'POST') return handoff(request, env, url);
   const session = await requireSession(request, env);
+  const sessionContext = request.headers.get('X-Household-Session');
+  // Bootstrap may discover the cookie, but an open page must remain bound to
+  // its session when another tab logs into a different household or role.
+  const legacyMain = session.contextVersion == null && session.householdId === 'main' && sessionContext === null;
+  if ((path !== '/api/session' || sessionContext !== null) && sessionContext !== session.sessionId && !legacyMain) throw new HttpError(401, 'ログイン状態が変わりました。再読み込みしてアカウントを確認してください。');
   authorized.set(request, session);
   if (path === '/api/session' && request.method === 'GET') {
     await audit(env, request, session, 'session_resume');
-    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role, expiresAt: session.expiresAt });
+    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role, expiresAt: session.expiresAt, sessionContext: session.sessionId });
   }
   if (path === '/api/logout' && request.method === 'POST') {
     if (!(await serviceRollingSession(env, SERVICE, session, 'end')).valid) throw new HttpError(503, 'ログアウトを完了できませんでした。');
@@ -84,13 +89,13 @@ async function handoff(request, env, url) {
   const body = await readJson(request);
   const value = await env.SECURITY.redeemHandoff(text(body.handoffToken, 200, '認証情報'), SERVICE);
   const account = value ? await accountRecord(env,value.serviceAccountId) : null;
-  if (!value || !account || (account.role === 'owner' && value.identityId !== 'primary-admin') || value.cloudRootFolderId != null) throw new HttpError(401, '利用できるパスキーを確認できませんでした。');
+  if (!value || !account || (account.id === 'owner' && value.identityId !== 'primary-admin') || value.cloudRootFolderId != null) throw new HttpError(401, '利用できるパスキーを確認できませんでした。');
   const session = { service: SERVICE, identityId: value.identityId, credentialId: value.credentialId, serviceLinkId: value.serviceLinkId,
     serviceAccountId: account.id, role: account.role, passkeySessionEpoch: value.sessionEpoch, authMethod: 'passkey', rollingSessionVersion: ROLLING_SESSION_VERSION,
-    sessionId: crypto.randomUUID(), startedAt: new Date().toISOString(), sessionVersion: sessionVersion(env, account), expiresAt: Math.floor(Date.now() / 1000) + sessionPolicyForAuthMethod(env, 'passkey').ttlSeconds };
+    sessionId: crypto.randomUUID(), contextVersion: 1, startedAt: new Date().toISOString(), sessionVersion: sessionVersion(env, account), expiresAt: Math.floor(Date.now() / 1000) + sessionPolicyForAuthMethod(env, 'passkey').ttlSeconds };
   if (!(await serviceRollingSession(env, SERVICE, session, 'register')).valid) throw new HttpError(503, 'セッションを開始できませんでした。');
   await audit(env, request, session, 'passkey_login_success');
-  return json({ authenticated: true, displayName: account.display_name, role: account.role, expiresAt: session.expiresAt }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
+  return json({ authenticated: true, displayName: account.display_name, role: account.role, expiresAt: session.expiresAt, sessionContext: session.sessionId }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
 }
 async function requireSession(request, env) {
   const raw = (request.headers.get('Cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
@@ -101,10 +106,11 @@ async function requireSession(request, env) {
   } catch { /* Invalid cookies never authorize. */ }
   const account = session ? await accountRecord(env,session.serviceAccountId) : null;
   if (!account || !enabled(env) || session.service !== SERVICE || session.authMethod !== 'passkey' || session.role !== account.role
-    || (account.role === 'owner' && session.identityId !== 'primary-admin') || session.sessionVersion !== sessionVersion(env, account)
+    || (account.id === 'owner' && session.identityId !== 'primary-admin') || session.sessionVersion !== sessionVersion(env, account)
     || !Number.isSafeInteger(session.expiresAt) || session.expiresAt <= Math.floor(Date.now() / 1000)
     || session.rollingSessionVersion !== ROLLING_SESSION_VERSION || !(await serviceRollingSession(env, SERVICE, session, 'read')).valid) throw new HttpError(401, 'パスキーでログインしてください。');
-  return session;
+  // Resolve the data scope from the current server-side service account only.
+  return { ...session, householdId: account.household_id };
 }
 async function audit(env, request, session, eventType) {
   await recordSecurityAudit(env, request, { service: SERVICE, eventType, outcome: 'success', identityId: session.identityId,
