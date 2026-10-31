@@ -12,11 +12,11 @@ test('verified receipts require source and backup versions; corruption is detect
   const key=first.objects[0].backupKey, old=env.BACKUP.objects.get(key);
   // Version unchanged bit corruption is found by periodic deep verification.
   old.bytes=new Uint8Array([9,9,9]);
-  const next=await backupPhotos(env,[photo],{now:now+8*86400000});
+  const next=await backupPhotos(env,[photo],{now:now+31*86400000,mode:'verify'});
   assert.equal(next.complete,false);
   assert.deepEqual(env.BACKUP.objects.get(key).bytes,new Uint8Array([9,9,9]));
   assert.equal((await restorePhotos({BACKUP:env.BACKUP,MEDIA:new Bucket()},manifest(first))).complete,false,'old corrupted generation must not claim restoration');
-  assert.equal((await backupPhotos(env,[photo],{now:now+9*86400000})).complete,false,'failure persists until investigated');
+  assert.equal((await backupPhotos(env,[photo],{now:now+32*86400000})).complete,false,'failure persists until investigated');
 });
 test('missing source, changed source during copying, and invalid original size do not certify a generation',async()=>{
   for(const mode of ['missing','changed','size']) {
@@ -30,7 +30,7 @@ test('unchanged source version with changed bytes fails against its earlier SHA 
  const env=await fixture(),now=Date.now();
  assert.equal((await backupPhotos(env,[photo],{now})).complete,true);
  env.MEDIA.objects.get(photo.original_key).bytes=new Uint8Array([9,9,9]);
- assert.equal((await backupPhotos(env,[photo],{now:now+8*86400000})).complete,false);
+ assert.equal((await backupPhotos(env,[photo],{now:now+31*86400000,mode:'verify'})).complete,false);
 });
 test('bounded verification resumes using receipts; missing SHA and mismatched destinations fail closed',async()=>{
   const env=await fixture(), now=Date.now();

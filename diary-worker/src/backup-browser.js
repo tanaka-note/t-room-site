@@ -1,17 +1,35 @@
 // Metadata only. This integration never reads backup bodies or writes to R2/D1.
-const CACHE_KEY = "https://diary-backup.internal/browser-summary-v2";
+const CACHE_KEY = "https://diary-backup.internal/browser-summary-v3";
 const CACHE_SECONDS = 6 * 60 * 60;
-const PREFIXES = { daily: "v7/daily/", monthly: "v7/monthly/", photo: "media/verified-photos/", receipts: "media/photo-receipts/", legacyDaily: "daily/", legacyMonthly: "monthly/", legacyPhoto: "media/formal-photos/" };
+const PREFIXES = { daily: "v8/daily/", monthly: "v8/monthly/", photo: "media/verified-photos/", receipts: "media/photo-receipts/", versions: "media/photo-versions/", incidents: "media/photo-issues/", legacyV7Daily: "v7/daily/", legacyV7Monthly: "v7/monthly/", legacyDaily: "daily/", legacyMonthly: "monthly/", legacyPhoto: "media/formal-photos/" };
+const isMedia = kind => ['photo','receipts','versions','incidents','legacyPhoto'].includes(kind);
+
+async function photoSummary(bucket) {
+  try {
+    const object = await bucket.head('_metadata/diary-photos/copy.json.gz');
+    if (!object) return { available: true, observed: false };
+    const p = object.customMetadata || {};
+    if (p.format !== 'troom-photo-job-v1') throw new Error('InvalidPhotoSummary');
+    const result = { available: true, observed: true, countsComplete: p.countsComplete === 'true', complete: p.complete === 'true' };
+    for (const key of ['scanned','backedUp','pending','verificationPending','failed','corrupt','missing','bytes','total','unknown','copied']) {
+      const value = Number(p[key]);
+      if (!Number.isSafeInteger(value) || value < 0) throw new Error('InvalidPhotoSummary');
+      result[key] = value;
+    }
+    for (const key of ['lastRunAt','lastFullCopyAt','cycleStartedAt']) result[key] = Number.isFinite(Date.parse(p[key])) ? p[key] : null;
+    return result;
+  } catch { return { available: false, observed: false }; }
+}
 
 export async function scanBackupMetadata(bucket, now = Date.now()) {
   if (!bucket) throw new Error("Backup storage unavailable");
   const groups = {};
   for (const [kind, prefix] of Object.entries(PREFIXES)) {
-    const group = { bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(["photo","receipts","legacyPhoto"].includes(kind) ? {} : { objects: [] }) };
+    const group = { bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(isMedia(kind) ? {} : { objects: [] }) };
     let cursor;
     do {
       const page = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}),
-        ...(["photo","receipts","legacyPhoto"].includes(kind) ? {} : { include: ["customMetadata", "httpMetadata"] }) });
+        ...(isMedia(kind) ? {} : { include: ["customMetadata", "httpMetadata"] }) });
       for (const object of page.objects) {
         group.bytes += object.size;
         group.objectCount += 1;
@@ -22,6 +40,7 @@ export async function scanBackupMetadata(bucket, now = Date.now()) {
           const metadata = object.customMetadata || {};
           group.objects.push({ name: object.key.slice(prefix.length), sizeBytes: object.size, updatedAt,
             format: metadata.format || null, japanDate: metadata.japanDate || null,
+            backupScope: metadata.backupScope === 'd1-only' ? 'd1-only' : null,
             mediaComplete: kind.startsWith("legacy") ? null : metadata.mediaComplete === "true" ? true : metadata.mediaComplete === "false" ? false : null,
             contentType: object.httpMetadata?.contentType || null, contentEncoding: object.httpMetadata?.contentEncoding || null });
         }
@@ -33,7 +52,8 @@ export async function scanBackupMetadata(bucket, now = Date.now()) {
     groups[kind] = group;
   }
   const latest = groups.daily.objects.filter(o => /^\d{4}-\d{2}-\d{2}\.json\.gz$/.test(o.name))[0] || null;
-  return { ...groups, backupBytes: Object.values(groups).reduce((sum, g) => sum + g.bytes, 0),
+  return { ...groups, photoSummary: await photoSummary(bucket), d1Bytes: groups.daily.bytes + groups.monthly.bytes,
+    backupBytes: Object.values(groups).reduce((sum, g) => sum + g.bytes, 0),
     backupObjectCount: Object.values(groups).reduce((sum, g) => sum + g.objectCount, 0),
     lastBackupAt: latest?.updatedAt || null, latestBackup: latest?.name || null,
     mediaComplete: latest?.mediaComplete ?? null, observedAt: new Date(now).toISOString() };
