@@ -1,6 +1,7 @@
 // Generated from checked-in migrations using Node SQLite; review alongside schema changes.
 import { digest } from './integrity.js';
 const EXPECTED = {
+  "household": "15ae68a795da84e713871dcd42cf6c4aad744e6fdd48cdff0967a24164cbfc02",
   "cloud": "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c",
   "security": "4e2d0be0c9d342092c61382c7c91706b6cc0ff95feae02dc23a1371e5221043e",
   "billing": "e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f",
