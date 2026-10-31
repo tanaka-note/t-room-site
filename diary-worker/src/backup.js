@@ -35,7 +35,7 @@ const BACKUP_TABLES = [
     name: "diary_photos",
     columns: [
       "id", "entry_id", "file_name", "content_type", "original_size", "original_key", "display_key",
-      "thumbnail_key", "width", "height", "created_by_id", "created_by_name", "created_at"
+      "thumbnail_key", "width", "height", "created_by_id", "created_by_name", "created_at", "backup_identity"
     ],
     orderBy: "entry_id ASC, created_at ASC, id ASC"
   },
@@ -213,8 +213,10 @@ function validateGeneration(p) {
     || Object.keys(p.tables).sort().join(',') !== BACKUP_TABLES.map(t=>t.name).sort().join(',')) throw new Error('SnapshotInvalid');
   for (const t of BACKUP_TABLES) {
     const table=p.tables[t.name];
-    if (JSON.stringify(table.columns)!==JSON.stringify(t.columns) || !Array.isArray(table.rows) || table.rowCount!==table.rows.length
-      || table.rows.some(r=>!r || Object.keys(r).sort().join(',')!==[...t.columns].sort().join(','))) throw new Error('SnapshotInvalid');
+    const legacyPhotoColumns = t.name === 'diary_photos' ? t.columns.filter(c=>c!=='backup_identity') : null;
+    const columns = legacyPhotoColumns && JSON.stringify(table.columns) === JSON.stringify(legacyPhotoColumns) ? legacyPhotoColumns : t.columns;
+    if (JSON.stringify(table.columns)!==JSON.stringify(columns) || !Array.isArray(table.rows) || table.rowCount!==table.rows.length
+      || table.rows.some(r=>!r || Object.keys(r).sort().join(',')!==[...columns].sort().join(','))) throw new Error('SnapshotInvalid');
   }
 }
 
@@ -268,6 +270,10 @@ function restoreTable(payload, name, expected) {
   const table = payload.tables[name];
   if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)) {
     throw new Error(`Backup table is missing: ${name}`);
+  }
+  if (name === 'diary_photos' && !table.columns.includes('backup_identity')
+    && JSON.stringify(table.columns) === JSON.stringify(expected.columns.filter(c=>c!=='backup_identity'))) {
+    return { ...table, columns: expected.columns, rows: table.rows.map(row=>({ ...row, backup_identity: null })) };
   }
   if (name === "diary_entries") {
     const optionalColumns = new Set(["last_published_at", "entry_time", "weather"]);

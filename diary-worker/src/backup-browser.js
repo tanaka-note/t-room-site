@@ -16,6 +16,11 @@ async function photoSummary(bucket) {
       if (!Number.isSafeInteger(value) || value < 0) throw new Error('InvalidPhotoSummary');
       result[key] = value;
     }
+    for (const key of ['oversized','retryPending','retriesAttempted']) {
+      const value = Number(p[key] ?? 0);
+      if (!Number.isSafeInteger(value) || value < 0) throw new Error('InvalidPhotoSummary');
+      result[key] = value;
+    }
     for (const key of ['lastRunAt','lastFullCopyAt','cycleStartedAt']) result[key] = Number.isFinite(Date.parse(p[key])) ? p[key] : null;
     return result;
   } catch { return { available: false, observed: false }; }

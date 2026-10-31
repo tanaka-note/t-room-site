@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-4f0afb530a66";
+const APP_BUILD_ID = "cloud-f80556712118";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -9596,7 +9596,7 @@ function renderBackupHealth(output, data) {
     section.open = !['ok', 'running'].includes(state);
     section.innerHTML = '<summary>' + escapeHtml(service.label) + '：' + escapeHtml(labels[state] || labels.unknown) + '</summary>';
     const stages = { capture: 'データ取得', daily_save: '日次保存', monthly_save: '月次保存', retention: '世代整理', photos: '写真保存', photo_verification: '写真の再検証', photo_catchup: '写真の追いつき処理', save_or_retention: '保存・世代整理', archive: '監査の長期保管', catchup: '過去分の保管' };
-    const reasons = { snapshot_too_large: '安全な取得上限を超えました。取得方式の見直しが必要です', unsafe_integer: '数値を損失なく保存できないため停止しました', legacy_unverified: '旧形式のため検証できません', schema_review_required: 'データ構造の変更に対応が必要です', source_unavailable: '対象のデータに接続できません', verification_failed: '保存内容の照合に失敗しました', concurrent_write: '同時実行のため次回確認が必要です', operation_failed: '処理に失敗しました', retention_failed: '古い世代の整理に失敗しました', media_incomplete: '写真の保存が未完了です', archive_failed: '長期保管に失敗しました', backlog: '未保管の過去分が残っています' };
+    const reasons = { object_too_large: '単体写真のI/O上限を超えています（通常枠では約42.7MiB超）。個別の保管対応が必要です', snapshot_too_large: '安全な取得上限を超えました。取得方式の見直しが必要です', unsafe_integer: '数値を損失なく保存できないため停止しました', legacy_unverified: '旧形式のため検証できません', schema_review_required: 'データ構造の変更に対応が必要です', source_unavailable: '対象のデータに接続できません', verification_failed: '保存内容の照合に失敗しました', concurrent_write: '同時実行のため次回確認が必要です', operation_failed: '処理に失敗しました', retention_failed: '古い世代の整理に失敗しました', media_incomplete: '写真の保存が未完了です', archive_failed: '長期保管に失敗しました', backlog: '未保管の過去分が残っています' };
     const info = document.createElement('p');
     info.textContent = '最終成功 ' + backupJapanTime(service.lastSuccessAt) + ' ／ 最新実行 ' + backupJapanTime(service.lastAttemptAt)
       + (service.stage ? ' ／ ' + (stages[service.stage] || '処理確認') : '') + (service.reason ? ' ／ ' + (reasons[service.reason] || '詳細を確認してください') : '')
@@ -9673,7 +9673,7 @@ function renderDiaryBackupMount() {
       photos.className = 'backup-photo-summary';
       const p = data.photoSummary;
       photos.textContent = !p?.available ? '写真の進捗情報を取得できません。' : !p.observed ? '写真の進捗は未集計です。' :
-        '写真：最終実行 ' + backupJapanTime(p.lastRunAt) + ' ／ 今回の新規コピー ' + p.copied + '件 ／ バックアップ済み ' + p.backedUp + '件 ／ 未処理 ' + p.pending + '件 ／ 検証待ち ' + p.verificationPending + '件 ／ 失敗 ' + p.failed + '件 ／ 破損 ' + p.corrupt + '件 ／ 保存元なし ' + p.missing + '件 ／ 未確認 ' + p.unknown + '件 ／ 対象 ' + p.total + '件 ／ 保存容量 ' + (data.photo?.available === false ? '取得不可' : formatBytes(data.photo?.bytes || 0)) + ' ／ 最終全件コピー完了 ' + backupJapanTime(p.lastFullCopyAt)
+        '写真：最終実行 ' + backupJapanTime(p.lastRunAt) + ' ／ 今回の新規コピー ' + p.copied + '件 ／ バックアップ済み ' + p.backedUp + '件 ／ 未処理 ' + p.pending + '件 ／ 検証待ち ' + p.verificationPending + '件 ／ 失敗 ' + p.failed + '件 ／ 破損 ' + p.corrupt + '件 ／ 単体上限超過 ' + (p.oversized || 0) + '件 ／ 優先再試行待ち ' + (p.retryPending || 0) + '件 ／ 保存元なし ' + p.missing + '件 ／ 未確認 ' + p.unknown + '件 ／ 対象 ' + p.total + '件 ／ 保存容量 ' + (data.photo?.available === false ? '取得不可' : formatBytes(data.photo?.bytes || 0)) + ' ／ 最終全件コピー完了 ' + backupJapanTime(p.lastFullCopyAt)
         + ' ／ ' + (p.countsComplete ? '巡回集計完了' : '巡回中の部分集計') + '（集計開始 ' + backupJapanTime(p.cycleStartedAt) + '）';
       output.append(photos);
       for (const [kind, label] of [["daily", "日記の日次バックアップ"], ["monthly", "日記の月次バックアップ"], ["photo", "日記の写真バックアップ"]]) {

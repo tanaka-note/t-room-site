@@ -45,21 +45,23 @@ D1→Workerの取得は合計10,000行・行JSON合計8 MiB・1行JSON 1 MiBま�
 | 写真再検証 | 毎日04:45〜11:45の毎時45分 | 各40 object、256 MiB、90秒、8枠/日 |
 | 初回追いつき | 04・05時台の05/15/25/35/55分 | 各40 object、256 MiB、90秒、10枠/日、14日間限定 |
 
-既存Cloud 03:17、Backup 03:40、Security 03:41/毎時17分、Calendar 04:10、Downloaderの10分刻みと開始時刻をずらす。長引いた別サービスの実行との重複までは保証しない。Cronは非version設定なのでコード公開だけでは適用されない。**今回はPRのみで本番設定変更・公開は未実施。**
+既存Cloud 03:17、Backup 03:40、Security 03:41/毎時17分、Calendar 04:10、Downloaderの10分刻みと開始時刻をずらす。長引いた別サービスの実行との重複までは保証しない。Cronは非version設定なのでコード公開と別に適用・読み戻しが必要。
 
 R2 `_metadata/diary-photos/` にコピー/再検証別のカーソル・集計・新着高水位を保存する。新着は過去分より先、初回も前日以降を優先する。過去分はIDのキーセットで最大120 variant/回を巡回する。コピー枠では古い検証レシートを再利用し、深い再検証は別枠だけで行う。新規/変更コピーが検証待ちのため停止しない。
 
 写真全体の同時実行数は1。条件付き書込で5分のリースを取得し、期限切れ後はreceipt/カーソルを更新しない。リースは削除せず期限で回収する。初回実行から14日、または最初の全件コピー確認まで追いつきを許可する。同じcatchup時刻の実行券はcreate-onlyで、1日10枠以上に増えない。理論上限は400 object・2.5 GiB推定I/O・15分の作業枠/日。サイズ・障害で実処理量は小さくなり、完了期限を保証しない。期間は自動延長しない。
 
-カーソルはバッチ終端、receiptは各写真の検証直後にSHA確認付きで保存する。中断時は直前バッチを再走査するが確認済み写真は再コピーしない。通信失敗は破損と分け、後続写真を継続し、失敗分は次の巡回で再試行する。90秒は次の処理を開始しないための期限で、進行中I/Oの強制中断保証ではない。object単体の推定I/Oが256 MiBを超える場合は失敗として進め、カーソルを固定しない。
+カーソルはバッチ終端、receiptは各写真の検証直後にSHA確認付きで保存する。中断時は直前バッチを再走査するが確認済み写真は再コピーしない。通信失敗・欠落は各laneの永続再試行journal（最大256項目）へ保存し、次回以降の実行で期限到来分を最大8項目、新着・過去分より先に再試行する。待機は1分から指数増加、最大6時間。journal満杯時は未登録の失敗位置からカーソルを進めない。90秒は次の処理を開始しないための期限で、進行中I/Oの強制中断保証ではない。単体の推定I/Oは写真サイズの6倍なので、通常枠で44,739,242 byte（約42.7 MiB）を超える写真は`oversized`として区別し、優先再試行へ入れず後続を継続する。Backup-dataに単体上限超過・優先再試行待ち件数を表示する。大きな写真の自動コピーには別の処理量設計が必要。
 
 写真は`media/verified-photos/{photoId}/{variant}/{sha256}`へcreate-only保存する。sourceをstreamでSHA-256計算し、コピー時にR2 SHA条件を指定し、保存先を読み戻してSHA・サイズを照合する。source ETagも前後で確認する。破損物は上書きせず`media/photo-issues/`にcreate-onlyの事故記録を保存する。事故はsourceが変更されても自動解除せず、receiptと破損物を手動調査対象として残す。
 
 従来の7日再検証は5,445 objectで平均778 object/日が必要で、従来の最大120 object/日（40×3試行）より大きい。独立枠では30日経過で再検証対象とし、ID順に分散する。8枠で最大320 object/日だが、バイト・時間制約もあるため30日は目安であり上限保証ではない。検証待ちが増え続ければ別の処理量設計が必要。全件毎回のSHA照合はしない。
 
-v1 receiptもSHA・source/copy版・サイズが一致すれば再利用する。写真参照（ID・作成日時・原本サイズ・3種のsource key）とsource ETagを結ぶimmutable検証情報を`media/photo-versions/`へ追加し、旧版を残す。v8 D1の参照の正本は同一transactionで取得した`diary_photos`であり、保存時にR2へ問い合わせない。
+v1 receiptもSHA・source/copy版・サイズが一致すれば再利用する。初回のD1証明情報付与時はreceiptの新旧によらずsource/copyを深く検証する。写真参照（ID・作成日時・原本サイズ・3種のsource key）と内容SHAを結ぶimmutable検証情報を`media/photo-versions/{photoId}/{variant}/{referenceSha256}/{contentSha256}.json.gz`へ追加し、旧版を残す。検証後だけ`diary_photos.backup_identity`へvariant別source key・SHA-256・byte数を条件付き保存する。同じkeyの既存SHAと異なる内容は破損扱いで、付け替えない。v8 D1の参照・証明情報は同一transactionで取得し、D1保存時にR2へ問い合わせない。
 
-隔離復元ではv8 D1を空のmigration済みDBへ戻し、account無効化を維持する。写真は別途`resolvePhotoManifest(bucket, payload)`で全参照を照合してから`restorePhotos`を隔離R2へ実行し、本体SHAを再照合する。異なる日時でも参照が一意に一致する場合だけ対応付ける。同一source keyの複数ETagは日時で推測せず`AmbiguousMediaVersion`、未保存は`MediaManifestIncomplete`で停止する。旧v2〜v7のD1、v7の明示マニフェストによる写真復元は維持する。SHA根拠のない旧写真は正常認定せず、本番への自動復元APIは提供しない。
+隔離復元ではv8 D1を空のmigration済みDBへ戻し、account無効化を維持する。写真は別途`resolvePhotoManifest(bucket, payload)`で全参照を照合してから`restorePhotos`を隔離R2へ実行し、本体SHAを再照合する。snapshot内の証明SHA・サイズが一致するimmutable版だけを選び、候補数や日時で推測しない。証明がない旧snapshotは候補が1つでも`MediaIdentityUnproven`、証明に一致する版がなければ`MediaManifestIncomplete`で停止する。後日live D1に付与した証明を過去snapshotへ遡及しない。旧v2〜v8のD1は新列をNULLとして復元可能で、v7の明示マニフェストによる写真復元も維持する。
+
+公開時はDiaryのmigration `0022_photo_backup_identity.sql`だけを事前適用し、コード公開後にDiaryのCronを専用手順で適用する。nullable列の追加なので旧コードの通常操作と互換性があり、rollback時も列・証明・写真を削除しない。schema fingerprintの既存本番表記差は、読取精査済みDDLへこの加算migrationを適用した期待値へ更新する。初回検証が済むまで写真の証明はNULLのままで、その間のD1世代は写真の自動対応付けを保証しない。検証後の次のD1世代から証明を含む。
 
 40 object・256 MiB・90秒はアプリの安全枠で、公式上限ではない。[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)はメモリ128 MB、同時接続6、有料プランsubrequest 10,000、1時間未満間隔のCron CPU 30秒、wall time 15分。DigestStreamと逐次実行を使い、全体をbufferしない。[R2 limits](https://developers.cloudflare.com/r2/platform/limits/)の同一key書込は秒1回なので、制御objectはバッチ単位、写真と実行券は異なるkeyに書く。契約枠・実環境CPU/最大メモリ・料金は合成fixtureでは測定していない。
 

@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { Bucket, d1, recorder } from '../../backup-worker/test/fixtures.mjs';
 import { runPhotoBatch, runScheduledPhotoBackup, PHOTO_STATE_PREFIX } from '../src/photo-backup-job.js';
-import { backupPhotos, resolvePhotoManifest, restorePhotos, PHOTO_REVERIFY_MS } from '../src/photo-backup.js';
+import { backupPhotos, bindPhotoIdentity, resolvePhotoManifest, restorePhotos, PHOTO_REVERIFY_MS } from '../src/photo-backup.js';
 import { runScheduledDiaryBackup } from '../src/backup.js';
 
 const initial = Date.parse('2026-10-30T18:55:00Z');
 async function fixture(count = 1) {
   const sql = new DatabaseSync(':memory:');
-  sql.exec('CREATE TABLE diary_photos(id TEXT PRIMARY KEY,original_size INTEGER,original_key TEXT,display_key TEXT,thumbnail_key TEXT,created_at TEXT)');
+  sql.exec('CREATE TABLE diary_photos(id TEXT PRIMARY KEY,original_size INTEGER,original_key TEXT,display_key TEXT,thumbnail_key TEXT,created_at TEXT,backup_identity TEXT)');
   const env = { DB: d1(sql), MEDIA: new Bucket(), BACKUP: new Bucket(), ...recorder() };
   const add = async (id, date = '2026-10-01') => {
-    const row = { id, original_size: 3, original_key: id+'/original', display_key: id+'/display', thumbnail_key: id+'/thumbnail', created_at: date };
-    sql.prepare('INSERT INTO diary_photos VALUES(?,?,?,?,?,?)').run(...Object.values(row));
+    const row = { id, original_size: 3, original_key: id+'/original', display_key: id+'/display', thumbnail_key: id+'/thumbnail', created_at: date, backup_identity: null };
+    sql.prepare('INSERT INTO diary_photos VALUES(?,?,?,?,?,?,?)').run(...Object.values(row));
     for (const key of [row.original_key,row.display_key,row.thumbnail_key]) await env.MEDIA.put(key,new Uint8Array([1,2,3]));
     return row;
   };
@@ -99,19 +99,88 @@ test('interruption after receipt save replays safely; network failure cannot pub
   f.sql.close();
 });
 
-test('changed photos retain history; ambiguous in-place versions cannot be paired by timestamps', async () => {
+test('an unbound snapshot rejects even one later candidate after an in-place replacement', async () => {
   const f=await fixture(); const row={...f.sql.prepare('SELECT * FROM diary_photos').get()};
-  const old=await backupPhotos(f.env,[row]);
-  await f.env.MEDIA.put(row.original_key,new Uint8Array([9,9,9]));
-  const changed=await backupPhotos(f.env,[row]); assert.equal(changed.copied,1); assert.equal(changed.existing,2);
   const payload={formatVersion:8,backupScope:'d1-only',tables:{diary_photos:{rows:[row]}}};
-  await assert.rejects(resolvePhotoManifest(f.env.BACKUP,payload),/AmbiguousMediaVersion/);
-  assert.ok(f.env.BACKUP.objects.has(old.objects[0].backupKey));
-  const remapped={...row,original_key:'new-key'}; await f.env.MEDIA.put(remapped.original_key,new Uint8Array([9,9,9]));
-  await backupPhotos(f.env,[remapped]);
-  const paired=await resolvePhotoManifest(f.env.BACKUP,{...payload,tables:{diary_photos:{rows:[remapped]}}});
+  await f.env.MEDIA.put(row.original_key,new Uint8Array([9,9,9]));
+  assert.equal((await f.batch()).copied,3);
+  assert.equal([...f.env.BACKUP.objects.keys()].filter(k=>k.startsWith('media/photo-versions/'+row.id+'/original/')).length,1);
+  await assert.rejects(resolvePhotoManifest(f.env.BACKUP,payload),/MediaIdentityUnproven/);
+  const bound={...f.sql.prepare('SELECT * FROM diary_photos').get()};
+  const paired=await resolvePhotoManifest(f.env.BACKUP,{...payload,tables:{diary_photos:{rows:[bound]}}});
   assert.equal((await restorePhotos({BACKUP:f.env.BACKUP,MEDIA:new Bucket()},paired)).complete,true);
-  await assert.rejects(resolvePhotoManifest(f.env.BACKUP,{...payload,tables:{diary_photos:{rows:[{...row,thumbnail_key:'unbacked'}]}}}),/MediaManifestIncomplete/);
+  await assert.rejects(restorePhotos({BACKUP:f.env.BACKUP,MEDIA:new Bucket()},{...payload,mediaBackup:paired.mediaBackup}),/MediaIdentityUnproven/);
+  f.sql.close();
+});
+
+test('a bound snapshot selects its exact hash across versions; a later overwrite cannot rebind it', async () => {
+  const f=await fixture(); await f.batch();
+  const bound={...f.sql.prepare('SELECT * FROM diary_photos').get()};
+  const payload={formatVersion:8,backupScope:'d1-only',tables:{diary_photos:{rows:[bound]}}};
+  const old=await resolvePhotoManifest(f.env.BACKUP,payload);
+  await f.env.MEDIA.put(bound.original_key,new Uint8Array([9,9,9]));
+  // A second candidate, created without a trusted D1 binding, cannot override it.
+  assert.equal((await backupPhotos(f.env,[{...bound,backup_identity:null}])).copied,1);
+  const paired=await resolvePhotoManifest(f.env.BACKUP,payload);
+  assert.equal(paired.mediaBackup.objects[0].sha256,old.mediaBackup.objects[0].sha256);
+  const destination=new Bucket();
+  assert.equal((await restorePhotos({BACKUP:f.env.BACKUP,MEDIA:destination},paired)).complete,true);
+  assert.deepEqual(new Uint8Array(await (await destination.get(bound.original_key)).arrayBuffer()),new Uint8Array([1,2,3]));
+  f.next(); assert.equal((await f.batch()).corrupt,1);
+  assert.equal(f.sql.prepare('SELECT backup_identity FROM diary_photos').get().backup_identity,bound.backup_identity);
+  await assert.rejects(resolvePhotoManifest(f.env.BACKUP,payload),/CorruptPhoto/);
+  f.sql.close();
+});
+
+test('transient failure retries ahead of a large backlog after restart and repairs inventory counts', async () => {
+  const f=await fixture(100), get=f.env.MEDIA.get.bind(f.env.MEDIA); let fail=true;
+  f.env.MEDIA.get=async(key,...args)=>{if(fail&&key==='00000/original'){fail=false;throw new Error('network');}return get(key,...args);};
+  const first=await f.batch({maxObjects:2});
+  assert.equal(first.failed,1); assert.equal(first.retryPending,1); assert.ok(first.unknown>200);
+  f.next(); const second=await f.batch({maxObjects:1});
+  assert.equal(second.retriesAttempted,1); assert.equal(second.retryPending,0); assert.equal(second.failed,0);
+  assert.equal(second.copied,1); assert.ok(second.unknown>200);
+  assert.ok(f.env.BACKUP.writes.some(k=>k.startsWith('media/verified-photos/00000/original/')));
+  f.sql.close();
+});
+
+test('identity binding rejects a concurrently changed D1 reference and deeply verifies old receipts', async () => {
+  const f=await fixture(); const row={...f.sql.prepare('SELECT * FROM diary_photos').get()};
+  const copies=await backupPhotos(f.env,[row]);
+  f.sql.prepare('UPDATE diary_photos SET thumbnail_key=?').run('changed');
+  await assert.rejects(bindPhotoIdentity(f.env.DB,row,copies.objects[0]),/SourceChanged/);
+  assert.equal(f.sql.prepare('SELECT backup_identity FROM diary_photos').get().backup_identity,null);
+  f.sql.prepare('UPDATE diary_photos SET thumbnail_key=?').run(row.thumbnail_key);
+  const get=f.env.MEDIA.get.bind(f.env.MEDIA); let reads=0;
+  f.env.MEDIA.head=key=>get(key);
+  f.env.MEDIA.get=async(...args)=>{reads++; return get(...args);};
+  const run=await f.batch(); assert.equal(run.copied,0); assert.equal(reads,3);
+  assert.ok(f.sql.prepare('SELECT backup_identity FROM diary_photos').get().backup_identity);
+  f.sql.close();
+});
+
+test('priority retry journal is bounded and applies exponential backoff', async () => {
+  const f=await fixture(100);
+  f.env.MEDIA.get=async()=>{throw new Error('network');};
+  for(let i=0;i<9;i++) { await f.batch(); f.next(); }
+  const state=await (await import('../../backup-worker/src/integrity.js')).verifiedGeneration(f.env.BACKUP,PHOTO_STATE_PREFIX+'copy.json.gz',()=>{});
+  assert.equal(state.payload.retries.length,256);
+  const cursor=state.payload.cursor;
+  assert.ok(cursor.id<'00099');
+  assert.ok(state.payload.retries.every(t=>t.nextAttemptAt>initial));
+  assert.ok(state.payload.retries.some(t=>t.attempts>1));
+  f.sql.close();
+});
+
+test('a photo above the default single-object limit is oversized, never read or retried', async () => {
+  const f=await fixture(2), head=f.env.MEDIA.head.bind(f.env.MEDIA), get=f.env.MEDIA.get.bind(f.env.MEDIA);
+  const size=Math.floor(256*1024*1024/6)+1;
+  f.sql.prepare('UPDATE diary_photos SET original_size=? WHERE id=?').run(size,'00000');
+  f.env.MEDIA.head=async key=>key==='00000/original'?{etag:'large',size}:head(key);
+  f.env.MEDIA.get=async(key,...args)=>{assert.notEqual(key,'00000/original');return get(key,...args);};
+  const run=await f.batch();
+  assert.equal(run.oversized,1); assert.equal(run.failed,0); assert.equal(run.retryPending,0);
+  assert.equal(run.copied,5); assert.equal(run.complete,false); assert.ok(run.estimatedIoBytes<=256*1024*1024);
   f.sql.close();
 });
 

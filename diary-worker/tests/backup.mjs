@@ -18,7 +18,7 @@ import {
   scheduleIndependentTasks
 } from "../src/backup.js";
 
-import { backupPhotos, resolvePhotoManifest } from '../src/photo-backup.js';
+import { backupPhotos, resolvePhotoManifest, bindPhotoIdentity } from '../src/photo-backup.js';
 
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 
@@ -67,7 +67,8 @@ const tableRows = {
     height: 800,
     created_by_id: "main-user",
     created_by_name: "利用者",
-    created_at: "2026-08-20 00:00:00"
+    created_at: "2026-08-20 00:00:00",
+    backup_identity: null
   }],
   diary_trash_scopes: [{
     id: 1,
@@ -114,7 +115,7 @@ function createDb({fail=false}={}) {
   const db=database('diary');
   db.exec('PRAGMA foreign_keys=OFF');
   for(const t of [...BACKUP_TABLES].reverse()) db.exec('DELETE FROM '+t.name);
-  for(const t of BACKUP_TABLES) for(const row of tableRows[t.name]) db.prepare('INSERT INTO '+t.name+' ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].join(',')+') VALUES ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].map(()=>'?').join(',')+')').run(...t.columns.map(c=>row[c]),...(t.name==='diary_accounts'?['synthetic@invalid.local']:[]));
+  for(const t of BACKUP_TABLES) for(const row of tableRows[t.name]) db.prepare('INSERT INTO '+t.name+' ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].join(',')+') VALUES ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].map(()=>'?').join(',')+')').run(...t.columns.map(c=>row[c] ?? null),...(t.name==='diary_accounts'?['synthetic@invalid.local']:[]));
   const api=d1(db); return api;
 }
 class MemoryBucket extends Bucket {
@@ -194,7 +195,7 @@ async function migratedEmptyDatabase() {
     "0009_main_user.sql", "0010_entry_rich_text.sql", "0011_trash_scopes.sql", "0012_entry_drafts.sql",
     "0013_main_user_trash_and_media_retry.sql", "0014_diary_favorites.sql", "0015_photo_upload_staging.sql",
     "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql", "0018_diary_weather.sql",
-    "0019_password_auth_policy.sql", "0020_diary_entry_time.sql", "0021_diary_last_published_at.sql"
+    "0019_password_auth_policy.sql", "0020_diary_entry_time.sql", "0021_diary_last_published_at.sql", "0022_photo_backup_identity.sql"
   ];
   for (const migration of migrations) database.exec(await readFile(new URL(migration, migrationDirectory), "utf8"));
   database.exec(`
@@ -358,8 +359,20 @@ assert.deepEqual(
 );
 
 const photoBackup = await backupPhotos({ BACKUP: bucket, MEDIA: media }, tableRows.diary_photos, { now: nearUtcMidnight });
+const oldV8 = structuredClone(payload);
+oldV8.tables.diary_photos.columns = oldV8.tables.diary_photos.columns.filter(c=>c!=='backup_identity');
+oldV8.tables.diary_photos.rows = oldV8.tables.diary_photos.rows.map(({backup_identity,...row})=>row);
+const oldV8Db = await migratedEmptyDatabase();
+assert.equal((await restoreDiaryBackup(new SqliteD1(oldV8Db),oldV8)).complete,true);
+assert.equal(oldV8Db.prepare('SELECT backup_identity FROM diary_photos').get().backup_identity,null);
+await assert.rejects(resolvePhotoManifest(bucket,oldV8),/MediaIdentityUnproven/);
 assert.equal(photoBackup.copied, 3);
-const paired = await resolvePhotoManifest(bucket, readBackup(bucket, first.dailyKey));
+await assert.rejects(resolvePhotoManifest(bucket, readBackup(bucket, first.dailyKey)), /MediaIdentityUnproven/);
+const identityDb = createDb();
+const identityRow = {...tableRows.diary_photos[0]};
+for (const item of photoBackup.objects) await bindPhotoIdentity(identityDb, identityRow, item);
+const boundPayload = await createDiaryBackupPayload(identityDb, nearUtcMidnight + 86400000);
+const paired = await resolvePhotoManifest(bucket, boundPayload);
 const restoredMedia = new MemoryBucket();
 const photoRestore = await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: restoredMedia }, paired);
 assert.deepEqual(photoRestore, { complete: true, restored: 3, existing: 0, missing: 0, failed: 0 });
@@ -382,7 +395,7 @@ assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("v8/
 // Photo storage, inventory volume and failures cannot gate D1 or its retention.
 for (const mode of ['absent','unavailable','many','empty']) {
   const db = createDb();
-  if (mode === 'many') for (let i=0;i<1000;i++) await db.prepare('INSERT INTO diary_photos SELECT ?,entry_id,file_name,content_type,original_size,original_key || ?,display_key || ?,thumbnail_key || ?,width,height,created_by_id,created_by_name,created_at FROM diary_photos LIMIT 1').bind('many-'+i,'/'+i,'/'+i,'/'+i).run();
+  if (mode === 'many') for (let i=0;i<1000;i++) await db.prepare('INSERT INTO diary_photos SELECT ?,entry_id,file_name,content_type,original_size,original_key || ?,display_key || ?,thumbnail_key || ?,width,height,created_by_id,created_by_name,created_at,NULL FROM diary_photos LIMIT 1').bind('many-'+i,'/'+i,'/'+i,'/'+i).run();
   if (mode === 'empty') await db.prepare('DELETE FROM diary_photos').run();
   const isolated = new MemoryBucket();
   await isolated.put('v7/daily/2026-07-31.json.gz', new Uint8Array([7]));

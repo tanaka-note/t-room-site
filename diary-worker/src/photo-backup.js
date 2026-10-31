@@ -16,6 +16,36 @@ export const photoReference = (photo, variant) => shaText(JSON.stringify([
 const receiptKey = (photo, variant) => PHOTO_RECEIPT_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '.json.gz';
 const issueKey = (photo, variant) => PHOTO_ISSUE_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '.json.gz';
 
+export function photoIdentity(photo, variant, column) {
+  if (photo.backup_identity == null) return null;
+  const identity = JSON.parse(photo.backup_identity);
+  if (identity?.formatVersion !== 1) throw new Error('MediaIdentityInvalid');
+  const item = identity[variant];
+  if (!item || item.sourceKey !== photo[column]) return null;
+  if (!SHA.test(item.sha256 || '') || !Number.isSafeInteger(item.bytes) || item.bytes < 0) throw new Error('MediaIdentityInvalid');
+  return item;
+}
+
+// Publish the content oracle into D1 only after source/copy verification. Old
+// snapshots retain NULL; a later binding can never retroactively certify them.
+export async function bindPhotoIdentity(db, photo, item) {
+  const column = VARIANTS.find(([variant]) => variant === item.variant)?.[1];
+  const existing = photoIdentity(photo, item.variant, column);
+  if (existing) {
+    if (existing.sha256 !== item.sha256 || existing.bytes !== item.bytes) throw new Error('MediaIdentityMismatch');
+    return;
+  }
+  const identity = photo.backup_identity == null ? { formatVersion: 1 } : JSON.parse(photo.backup_identity);
+  identity[item.variant] = { sourceKey: item.sourceKey, sha256: item.sha256, bytes: item.bytes };
+  const next = JSON.stringify(identity);
+  const result = await db.prepare(`UPDATE diary_photos SET backup_identity = ? WHERE id = ?
+    AND original_key = ? AND display_key = ? AND thumbnail_key = ? AND original_size = ? AND created_at = ?
+    AND backup_identity IS ?`).bind(next, photo.id, photo.original_key, photo.display_key, photo.thumbnail_key,
+      photo.original_size, photo.created_at, photo.backup_identity ?? null).run();
+  if (Number(result.meta?.changes) !== 1) throw new Error('SourceChanged');
+  photo.backup_identity = next;
+}
+
 function validateProof(p, photo, variant) {
   if (!['troom-photo-proof-v1','troom-photo-proof-v2'].includes(p?.format)
     || p.photoId !== String(photo.id) || p.variant !== variant || !SHA.test(p.contentSha256 || '')
@@ -26,11 +56,11 @@ function validateProof(p, photo, variant) {
 async function saveVersion(bucket, proof, photo, variant) {
   const referenceSha256 = await photoReference(photo, variant);
   const p = { ...proof, format: 'troom-photo-proof-v2', referenceSha256 };
-  const key = PHOTO_VERSION_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '/' + referenceSha256 + '/' + await shaText(p.sourceEtag) + '.json.gz';
+  const key = PHOTO_VERSION_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '/' + referenceSha256 + '/' + p.contentSha256 + '.json.gz';
   const validate = value => {
     validateProof(value, photo, variant);
     if (value.referenceSha256 !== referenceSha256 || value.contentSha256 !== p.contentSha256
-      || value.sourceEtag !== p.sourceEtag || value.sourceKey !== p.sourceKey) throw new Error('CorruptPhoto');
+      || value.sourceKey !== p.sourceKey || Number(value.bytes) !== Number(p.bytes)) throw new Error('CorruptPhoto');
   };
   const prior = await verifiedGeneration(bucket, key, validate);
   if (!prior) {
@@ -49,6 +79,7 @@ export async function processPhoto(env, photo, variant, column, budget) {
   if (await env.BACKUP.head(brokenKey)) return { ...base, state: 'corrupt' };
   let receipt, proof;
   try {
+    const identity = photoIdentity(photo, variant, column);
     receipt = await verifiedGeneration(env.BACKUP, key, p => validateProof(p, photo, variant));
     proof = receipt?.payload;
     // Preserve evidence even when a changed source would produce a new hash.
@@ -60,14 +91,16 @@ export async function processPhoto(env, photo, variant, column, budget) {
     if (!source) return { ...base, state: 'missing' };
     if (variant === 'original' && source.size !== Number(photo.original_size)) return { ...base, state: 'failed' };
     const same = proof?.sourceKey === sourceKey && proof.sourceEtag === source.etag && Number(proof.bytes) === source.size;
+    if (identity && same && (proof.contentSha256 !== identity.sha256 || source.size !== identity.bytes)) throw new Error('CorruptPhoto');
     const due = same && (budget.now < Date.parse(proof.verifiedAt) || budget.now - Date.parse(proof.verifiedAt) >= PHOTO_REVERIFY_MS);
-    if (same && (budget.mode === 'copy' || !due)) {
+    const needsIdentity = budget.bindIdentities && !identity;
+    if (same && !needsIdentity && (budget.mode === 'copy' || !due)) {
       if (budget.mode === 'copy') await saveVersion(env.BACKUP, proof, photo, variant);
       return { ...base, state: due ? 'verification_pending' : 'verified', bytes: source.size,
         backupKey: proof.backupKey, sha256: proof.contentSha256, verifiedAt: proof.verifiedAt };
     }
     if (budget.mode === 'verify' && !same) return { ...base, state: 'pending' };
-    if (source.size * 6 > budget.maxBytes) return { ...base, state: 'failed', reason: 'object_too_large' };
+    if (source.size * 6 > budget.maxBytes) return { ...base, state: 'oversized', reason: 'object_too_large' };
     // Six object lengths conservatively covers hashing, copy, concurrent-winner
     // validation and readback. It is an I/O budget, never a memory allocation.
     if (budget.objects >= budget.maxObjects || budget.bytes + source.size * 6 > budget.maxBytes || budget.clock() >= budget.deadline)
@@ -76,6 +109,7 @@ export async function processPhoto(env, photo, variant, column, budget) {
     const original = await env.MEDIA.get(sourceKey, { onlyIf: { etagMatches: source.etag } });
     if (!original?.body || original.etag !== source.etag || original.size !== source.size) throw new Error('SourceChanged');
     const sha = await hashObject(original);
+    if (identity && (sha !== identity.sha256 || source.size !== identity.bytes)) throw new Error('CorruptPhoto');
     if (same && sha !== proof.contentSha256) throw new Error('CorruptPhoto');
     const backupKey = PHOTO_VERIFIED_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '/' + sha;
     const existing = await env.BACKUP.get(backupKey);
@@ -108,7 +142,7 @@ export async function processPhoto(env, photo, variant, column, budget) {
       try { await verifiedPut(env.BACKUP, brokenKey, await compress(marker), marker, { etagDoesNotMatch: '*' }); }
       catch (failure) { if (failure.message !== 'ConcurrentWrite') throw failure; }
     }
-    return { ...base, state: corrupt ? 'corrupt' : 'failed' };
+    return { ...base, state: corrupt ? 'corrupt' : 'failed', retryable: !corrupt && error.message !== 'MediaIdentityInvalid' };
   }
 }
 
@@ -120,7 +154,7 @@ export function photoBudget({ now = Date.now(), mode = 'copy', maxObjects = 40, 
 export async function backupPhotos(env, rows, options = {}) {
   if (rows.length > 40) throw new Error('PhotoPageTooLarge');
   const budget = photoBudget(options);
-  const result = { complete: false, copied: 0, existing: 0, missing: 0, failed: 0, corrupt: 0, pending: 0, verificationPending: 0, objects: [] };
+  const result = { complete: false, copied: 0, existing: 0, missing: 0, failed: 0, corrupt: 0, oversized: 0, pending: 0, verificationPending: 0, objects: [] };
   for (const photo of rows) for (const [variant,column] of VARIANTS) {
     const item = await processPhoto(env, photo, variant, column, budget);
     if (['verified','verification_pending'].includes(item.state)) {
@@ -128,24 +162,25 @@ export async function backupPhotos(env, rows, options = {}) {
       result.objects.push(item);
     } else result[({ deferred: 'pending', pending: 'pending' })[item.state] || item.state]++;
   }
-  return { ...result, complete: !result.missing && !result.failed && !result.corrupt && !result.pending };
+  return { ...result, complete: !result.missing && !result.failed && !result.corrupt && !result.oversized && !result.pending };
 }
 
-// Explicit offline pairing for a v8 D1 snapshot. Source references must match;
-// timestamps alone cannot choose between in-place edits of the same R2 key.
+// A candidate count or receipt timestamp is never a snapshot identity oracle.
+// Select by the SHA stored inside the immutable D1 snapshot itself.
 export async function resolvePhotoManifest(bucket, payload) {
   if (payload.formatVersion !== 8 || payload.backupScope !== 'd1-only') throw new Error('Unsupported diary backup format');
   const objects = [];
   for (const photo of payload.tables.diary_photos.rows) for (const [variant,column] of VARIANTS) {
+    const identity = photoIdentity(photo, variant, column);
+    if (!identity) throw new Error('MediaIdentityUnproven');
     const ref = await photoReference(photo, variant);
     const prefix = PHOTO_VERSION_PREFIX + encodeURIComponent(photo.id) + '/' + variant + '/' + ref + '/';
-    const page = await bucket.list({ prefix, limit: 2 });
-    if (page.truncated || page.objects.length > 1) throw new Error('AmbiguousMediaVersion');
-    if (!page.objects.length) throw new Error('MediaManifestIncomplete');
-    const generation = await verifiedGeneration(bucket, page.objects[0].key, p => {
+    const generation = await verifiedGeneration(bucket, prefix + identity.sha256 + '.json.gz', p => {
       validateProof(p, photo, variant);
-      if (p.referenceSha256 !== ref || p.sourceKey !== photo[column] || (variant === 'original' && Number(p.bytes) !== Number(photo.original_size))) throw new Error('MediaManifestInvalid');
+      if (p.referenceSha256 !== ref || p.sourceKey !== photo[column] || p.contentSha256 !== identity.sha256
+        || Number(p.bytes) !== identity.bytes || (variant === 'original' && Number(p.bytes) !== Number(photo.original_size))) throw new Error('MediaManifestInvalid');
     });
+    if (!generation) throw new Error('MediaManifestIncomplete');
     const p = generation.payload;
     if (await bucket.head(issueKey(photo, variant))) throw new Error('CorruptPhoto');
     objects.push({ photoId: String(photo.id), variant, sourceKey: p.sourceKey, backupKey: p.backupKey, bytes: Number(p.bytes), sha256: p.contentSha256, verifiedAt: p.verifiedAt });
@@ -168,6 +203,11 @@ export function validatePhotoManifest(payload) {
     const base=PHOTO_VERIFIED_PREFIX+encodeURIComponent(photo.id)+'/'+variant+'/';
     if(!item || item.sourceKey!==key || !SHA.test(item.sha256) || item.backupKey!==base+item.sha256
       || !Number.isSafeInteger(item.bytes) || item.bytes<0 || !Number.isFinite(Date.parse(item.verifiedAt))) throw new Error('MediaManifestInvalid');
+    if (Number(payload.formatVersion) === 8) {
+      const identity = photoIdentity(photo, variant, VARIANTS.find(([v])=>v===variant)[1]);
+      if (!identity) throw new Error('MediaIdentityUnproven');
+      if (identity.sha256 !== item.sha256 || identity.bytes !== item.bytes) throw new Error('MediaManifestInvalid');
+    }
   }
   return {expected,manifest};
 }

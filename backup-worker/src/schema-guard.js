@@ -11,7 +11,7 @@ const EXPECTED = {
   "ai": "d7e265eac65afddd4301e02adb081123c3ab7d1d0444f427cf8cec3d57b9ca0c",
   "downloader": "b367e88bee856222f72cfdf97a35794d381a13a3a7126c07ab50a3c43e6fe6a9",
   "calendar": "cdae4a460294b4cefb9b9392b5ea2214fc335124315ad420ccf9644b88611d4c",
-  "diary": "d79a6daee8a70c7df4ba2148f01d45b00884f800afd8b78e801fbde548ef1a4c"
+  "diary": "6b8f6ae0973caf134513739e7f30efdf7a2dd5f0886a1ec4f85cb725f34cfb70"
 };
 // Exact DDL metadata reviewed read-only on 2026-10-26. No database/auth
 // settings are changed: Billing already uses DEFAULT 210000; the other
@@ -20,7 +20,8 @@ const EXPECTED = {
 const REVIEWED = {
   billing: ['e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f', '0caa9787a64446caa2e5062638713c9d9978f884d2e0215dc9c7802a152af42e'],
   inventory: ['ed4811be91f73a7a58cdf29e0c6aade079b4f74529e9042b82399fa8aa13e6f3', 'd583deb887f1a14e802b50a550dca0e54e41dfeb5fadeca9a2cc6c9f3bbe10bd'],
-  diary: ['d79a6daee8a70c7df4ba2148f01d45b00884f800afd8b78e801fbde548ef1a4c', '0e4bb3c221c17039fb3bc280ed12a8c4cf28c79b38cdf16a6a9b7ee5f31c486c']
+  // Reviewed Diary DDL plus additive migration 0022 (not a new production audit).
+  diary: ['6b8f6ae0973caf134513739e7f30efdf7a2dd5f0886a1ec4f85cb725f34cfb70', 'ac391629ad0de78bd2ac2390429c5021722528ae129a27f1043dfef5b2de014e']
 };
 export function reviewedSchemaMatches(service, baseline, actual) {
   return typeof baseline === 'string' && (actual === baseline ||
