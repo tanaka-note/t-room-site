@@ -2868,8 +2868,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const monthValue = state.photoMonth;
     const months = result.months || [];
     const totalCount = months.reduce((total, item) => total + Number(item.count || 0), 0);
-    elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount}）`), ...months.map((item) => (
-      createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
+    elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount.toLocaleString("ja-JP")}）`), ...months.map((item) => (
+      createOption(item.value, `${formatMonth(item.value)}（${Number(item.count || 0).toLocaleString("ja-JP")}）`)
     )));
     elements.photoMonthFilter.value = monthValue;
     updatePhotoSortButton();
