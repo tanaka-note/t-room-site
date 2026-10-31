@@ -4,6 +4,32 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 const source = readFileSync(new URL('../public/diary.js', import.meta.url), 'utf8');
 
+test('album month options group total and monthly photo counts while retaining selection', async () => {
+  for (const [months, labels] of [
+    [[], ['すべて（0）']],
+    [[{ value: '2026-10', count: 0 }], ['すべて（0）', '2026年10月（0）']],
+    [[{ value: '2026-10', count: 999 }], ['すべて（999）', '2026年10月（999）']],
+    [[{ value: '2026-10', count: 1000 }], ['すべて（1,000）', '2026年10月（1,000）']],
+    [[{ value: '2026-10', count: '1234' }, { value: '2026-09', count: 423 }],
+      ['すべて（1,657）', '2026年10月（1,234）', '2026年9月（423）']]
+  ]) {
+    const state = { photoMonth: months[0]?.value || '', photoOrder: 'oldest' };
+    const elements = {
+      photoMonthFilter: { replaceChildren(...options) { this.options = options; } },
+      photoSortButton: { setAttribute() {} }
+    };
+    const api = async path => { assert.equal(path, '/photos/meta'); return { months }; };
+    const load = new Function('state', 'elements', 'api', 'document',
+      ['loadPhotoMeta', 'createOption', 'formatMonth', 'updatePhotoSortButton'].map(body).join('\n')
+        + '\nreturn loadPhotoMeta;')(state, elements, api, { createElement: () => ({}) });
+    await load();
+    assert.deepEqual(elements.photoMonthFilter.options.map(option => option.textContent), labels);
+    assert.deepEqual(elements.photoMonthFilter.options.map(option => option.value), ['', ...months.map(item => item.value)]);
+    assert.equal(elements.photoMonthFilter.value, state.photoMonth);
+    assert.equal(elements.photoSortButton.hidden, !state.photoMonth);
+  }
+});
+
 function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = false } = {}) {
   const state = { photos: [], photoOffset: 0, photoHasMore: false, photoLoading: false, photoRequestId: 0 };
   const node = () => ({ children: [], dataset: {}, setAttribute() {},

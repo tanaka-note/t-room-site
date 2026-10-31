@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-866a3679a015";
+const APP_BUILD_ID = "cloud-4f0afb530a66";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -3082,6 +3082,14 @@ function canMoveFolder(folder) {
     && state.crypto.folderKeys.has(Number(folder.id)));
 }
 
+function trashRetentionLabel(item) {
+  if (item.purgeStarted) return "完全削除が確定しています（復元不可）";
+  if (!item.autoDeleteEligibleAt) return "旧データ：自動削除の対象外";
+  const date = new Date(item.autoDeleteEligibleAt).toLocaleString("ja-JP");
+  const mode = item.retentionMode === "enabled" ? "次回定期処理から削除対象" : item.retentionMode === "dry-run" ? "試行中・自動削除なし" : "自動削除は無効";
+  return `30日経過：${date}（${mode}）`;
+}
+
 function trashFolderCard(folder) {
   const card = document.createElement("article");
   card.className = "folder-card trash-folder-card";
@@ -3090,7 +3098,7 @@ function trashFolderCard(folder) {
   button.type = "button";
   button.title = folder.name;
   button.setAttribute("aria-label", `フォルダ「${folder.name}」の操作を開く`);
-  button.innerHTML = `<span class="folder-icon">${TCloudUI.icon("folder")}</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}・${formatBytes(folder.sizeBytes)}</small><small class="folder-lock">フォルダごとゴミ箱へ移動済み</small></span>`;
+  button.innerHTML = `<span class="folder-icon">${TCloudUI.icon("folder")}</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}・${formatBytes(folder.sizeBytes)}</small><small class="folder-lock">${escapeHtml(trashRetentionLabel(folder))}</small></span>`;
   button.addEventListener("click", () => showTrashFolderActions(folder));
   card.append(button);
   return card;
@@ -3612,7 +3620,7 @@ function fileThumbnailFallback(file) {
 
 function fileCard(file) {
   const card = document.createElement("article");
-  card.className = "file-card";
+  card.className = file.trashed ? "file-card trash-file-card" : "file-card";
   card.classList.add(usesSquareFileCard(file) ? "media-file-card" : "non-media-file-card");
   card.dataset.fileId = String(file.id);
   const button = document.createElement("button");
@@ -3624,7 +3632,7 @@ function fileCard(file) {
   const thumbnail = fallbackThumbnail;
   button.innerHTML = `
     <div class="thumb">${thumbnail}</div>
-    <div class="file-copy"><strong>${escapeHtml(file.name)}</strong>${state.query && file.searchPath ? `<small class="search-result-path">${escapeHtml(file.searchPath)}</small>` : ""}<span class="file-meta"><span class="file-size">${formatMediaDetails(file)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
+    <div class="file-copy"><strong>${escapeHtml(file.name)}</strong>${state.query && file.searchPath ? `<small class="search-result-path">${escapeHtml(file.searchPath)}</small>` : ""}<span class="file-meta"><span class="file-size">${formatMediaDetails(file)}</span><span>${file.trashed ? escapeHtml(trashRetentionLabel(file)) : formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
   const cachedImage = cachedThumbnail ? new Image() : null;
   if (cachedImage) {
     const generation = state.thumbnailLoadGeneration, scope = displayCacheScope();
@@ -5699,7 +5707,7 @@ function renderBreadcrumbs(items) {
     renderFloatingLocation(state.breadcrumbs); return;
   }
   const nav = $("#breadcrumbs");
-  if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; renderFloatingLocation([]); return; }
+  if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "ゴミ箱への移動から30日後に自動削除の対象となります。現在の状態と対象日は各項目に表示されます。"; renderFloatingLocation([]); return; }
   if (state.view === "conflicts") { state.breadcrumbs = []; nav.textContent = state.session?.role === "subadmin" ? "PWを解除したトップフォルダごとに、配下の競合候補を確認します。" : "トップフォルダの境界を越えず、各フォルダ配下の競合候補を確認します。"; renderFloatingLocation([]); return; }
   if (state.view === "history") { state.breadcrumbs = []; nav.textContent = state.session?.role === "admin" ? "管理者・副管理者のアップロード／ダウンロード履歴です。" : "副管理者本人のアップロード／ダウンロード履歴です。"; renderFloatingLocation([]); return; }
   if (state.view === "requests") { state.breadcrumbs = []; nav.textContent = "承認するまでファイルは削除されず、通常どおり利用できます。"; renderFloatingLocation([]); return; }
@@ -8806,7 +8814,8 @@ async function approveDeletionRequest(item) {
 async function showTrashActions(file) {
   state.selected = { ...file, trashTargetType: "file" };
   $("#trash-file-name").textContent = file.name;
-  $("#trash-action-note").textContent = "元に戻すか、完全に削除する操作を選んでください。";
+  $("#restore-file-button").disabled = Boolean(file.purgeStarted);
+  $("#trash-action-note").textContent = file.purgeStarted ? "完全削除が確定しているため復元できません。処理に失敗した場合は管理者が再試行できます。" : "元に戻すか、完全に削除する操作を選んでください。";
   $("#permanent-delete-button").hidden = !state.session.canDelete;
   $("#trash-dialog").showModal();
 }
@@ -8814,7 +8823,8 @@ async function showTrashActions(file) {
 async function showTrashFolderActions(folder) {
   state.selected = { ...folder, trashTargetType: "folder" };
   $("#trash-file-name").textContent = folder.name;
-  $("#trash-action-note").textContent = "フォルダと、その中にあったデータをまとめて元に戻せます。";
+  $("#restore-file-button").disabled = Boolean(folder.purgeStarted);
+  $("#trash-action-note").textContent = folder.purgeStarted ? "配下の完全削除が確定しているため復元できません。残りの処理は次回の実行で続行します。" : "フォルダと、その中にあったデータをまとめて元に戻せます。";
   $("#permanent-delete-button").hidden = true;
   $("#trash-dialog").showModal();
 }
