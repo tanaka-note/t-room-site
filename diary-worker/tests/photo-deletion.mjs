@@ -78,6 +78,21 @@ assert.equal(promoted.state.editorPendingPhotoDeletionIds.size, 0,
 assert.equal(await promoted.persist("published"), true);
 assert.deepEqual(promoted.deletes, [], "retry after photo-commit failure must not replay the published draft deletion");
 
+// Historical exclusions and a new explicit deletion can coexist. Only the
+// new deletion may issue a destructive API request; neither ID may be lost
+// from the entry update sent before cleanup.
+const historicalId = "22222222-2222-4222-8222-222222222222";
+const mixed = fixture({ pending: true });
+mixed.state.editorSourceEntry.excludedPhotoIds.push(historicalId);
+mixed.state.editorDeletedPhotoIds.add(historicalId);
+assert.equal(await mixed.persist("published"), true);
+assert.deepEqual(mixed.deletes, [photoId], "do not replay already-deleted historical photos");
+assert.deepEqual(new Set(mixed.writes[0].excludedPhotoIds), new Set([photoId, historicalId]),
+  "persist the historical exclusion and the new removal together");
+assert.equal(mixed.state.editorPendingPhotoDeletionIds.size, 0);
+assert.equal(mixed.state.editorDeletedPhotoIds.has(historicalId), true,
+  "the historical exclusion is retained in the editor state");
+
 const clearSource = source.slice(source.indexOf("  function clearEditorPhotos("), source.indexOf("  async function deletePhoto("));
 const clearing = { editorPhotos: [], editorDeletedPhotoIds: new Set([photoId]), editorPendingPhotoDeletionIds: new Set([photoId]),
   photoUploadActiveTasks: new Set() };
