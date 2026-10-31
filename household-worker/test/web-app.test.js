@@ -13,6 +13,7 @@ test('online web app has a stable scope, selected wallet icons and public instal
   for(const size of [32,180,192,512]){
    const path=`/icons/icon-${size}.png`,png=readFileSync(new URL(`../public${path}`,import.meta.url));
    assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');assert.equal(png.readUInt32BE(16),size);assert.equal(png.readUInt32BE(20),size);
+   assert.equal(png[25],2,'App icons must be opaque RGB PNGs, including the outermost pixels');
    const response=await f.request(path);assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
   }
   assert.equal((await f.request('/manifest.webmanifest')).status,200);assert.ok(served.includes('/manifest.webmanifest'));
