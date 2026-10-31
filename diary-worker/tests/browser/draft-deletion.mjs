@@ -23,6 +23,7 @@ const contentTypes = {
 
 let draft = null;
 let deleteBodies = [];
+let photoDeletes = [];
 
 function resetData() {
   draft = {
@@ -41,6 +42,7 @@ function resetData() {
     photos: []
   };
   deleteBodies = [];
+  photoDeletes = [];
 }
 
 async function jsonBody(request) {
@@ -79,16 +81,27 @@ const server = createServer(async (request, response) => {
       canViewInvestment: false
     });
     if (apiPath === "/meta") return sendJson(response, {
-      draftCount: draft ? 1 : 0,
+      draftCount: draft?.status === "draft" ? 1 : 0,
       months: [],
       tags: []
     });
     if (apiPath === "/entries" && request.method === "GET") {
-      const entries = url.searchParams.get("draft") === "1" && draft ? [draft] : [];
+      const wantsDraft = url.searchParams.get("draft") === "1";
+      const entries = draft && (draft.status === "draft") === wantsDraft ? [draft] : [];
       return sendJson(response, { entries, hasMore: false });
     }
     if (apiPath === "/entries/42" && request.method === "GET") {
       return draft ? sendJson(response, { entry: draft }) : sendJson(response, { error: "not found" }, 404);
+    }
+    if (apiPath === "/entries/42" && request.method === "PUT") {
+      const body = await jsonBody(request);
+      if (body.revision !== draft.revision) return sendJson(response, { error: "revision conflict" }, 409);
+      draft = { ...draft, ...body, revision: draft.revision + 1 };
+      return sendJson(response, { entry: draft });
+    }
+    if (apiPath.startsWith("/photos/") && request.method === "DELETE") {
+      photoDeletes.push(apiPath);
+      return sendJson(response, { error: "削除する画像が見つかりません。" }, 404);
     }
     if (apiPath === "/drafts/42" && request.method === "DELETE") {
       deleteBodies.push(await jsonBody(request));
@@ -161,6 +174,38 @@ async function run(browser, label, contextOptions) {
   await context.close();
 }
 
+async function verifyTitleOnlyEdit(browser, label, contextOptions, status) {
+  resetData();
+  draft.status = status;
+  draft.excludedPhotoIds = ["11111111-1111-4111-8111-111111111111"];
+  const context = await browser.newContext({ serviceWorkers: "block", ...contextOptions });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${origin}/diary/`);
+    await page.waitForSelector("#app-view:not([hidden])");
+    if (status === "draft") await page.click("#draft-button");
+    await page.click('[data-entry-id="42"]');
+    if (status === "published") await page.click("#edit-entry-button");
+    await page.waitForSelector("#editor-dialog[open]");
+    await page.fill("#entry-title", "写真に触らずタイトル変更");
+    await page.click("#save-entry-button");
+    await page.waitForFunction(() => !document.querySelector("#editor-dialog").open);
+    assert.equal(draft.title, "写真に触らずタイトル変更");
+    assert.deepEqual(photoDeletes, [], `${label} ${status}: historical exclusions must not request photo deletion`);
+    // The persisted historical exclusion remains in the fixture just as it did
+    // in production. Reopening and editing again still must not replay it.
+    await page.click('[data-entry-id="42"]');
+    await page.click("#edit-entry-button");
+    await page.waitForSelector("#editor-dialog[open]");
+    await page.fill("#entry-title", "再編集も成功");
+    await page.click("#save-entry-button");
+    await page.waitForFunction(() => !document.querySelector("#editor-dialog").open);
+    assert.equal(draft.title, "再編集も成功");
+    assert.deepEqual(photoDeletes, []);
+    process.stdout.write(`${label} ${status}: title-only save and reopen retain exclusions without DELETE requests.\n`);
+  } finally { await context.close(); }
+}
+
 await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
@@ -171,6 +216,10 @@ try {
   try {
     await run(browser, "Desktop", { viewport: { width: 1280, height: 800 } });
     await run(browser, "Mobile", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    for (const status of ["published", "draft"]) {
+      await verifyTitleOnlyEdit(browser, "Desktop", { viewport: { width: 1280, height: 800 } }, status);
+      await verifyTitleOnlyEdit(browser, "Mobile", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, status);
+    }
   } finally {
     await browser.close();
   }
