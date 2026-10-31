@@ -1810,9 +1810,9 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
       requireFreshSecurityAdmin(admin);
     }
     if (service === "household") {
-      if (admin?.identityId !== PRIMARY_ADMIN_ID || !["owner", "viewer"].includes(accountId)
+      if (admin?.identityId !== PRIMARY_ADMIN_ID
         || (accountId === "owner" && (invitation || identityId !== PRIMARY_ADMIN_ID))) {
-        throw new HttpError(403, "家計簿の連携は第一管理者が設定し、編集用は本人だけが利用できます。");
+        throw new HttpError(403, "家計簿の連携は第一管理者が設定し、田中宏知の編集用は本人だけが利用できます。");
       }
       requireFreshSecurityAdmin(admin);
     }

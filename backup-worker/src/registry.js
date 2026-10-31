@@ -4,7 +4,7 @@ export const SERVICES = {
     "label": "家計簿",
     "binding": "HOUSEHOLD_DB",
     "database": "household-db",
-    "migration": "0005_dataset_lifecycle.sql",
+    "migration": "0006_independent_households.sql",
     "tables": [
       {
         "name": "household_accounts",
@@ -13,9 +13,10 @@ export const SERVICES = {
           "display_name",
           "role",
           "is_active",
-          "session_version"
+          "session_version",
+          "household_id"
         ],
-        "sourceColumns": "id,display_name,role,is_active,session_version"
+        "sourceColumns": "id,display_name,role,is_active,session_version,household_id"
       },
       {
         "name": "household_state",
@@ -42,9 +43,10 @@ export const SERVICES = {
           "request_id",
           "fingerprint",
           "response_json",
-          "created_at"
+          "created_at",
+          "household_id"
         ],
-        "sourceColumns": "request_id,fingerprint,response_json,created_at"
+        "sourceColumns": "request_id,fingerprint,response_json,created_at,household_id"
       },
       {
         "name": "household_datasets",
@@ -53,9 +55,10 @@ export const SERVICES = {
           "created_at",
           "activated_at",
           "retired_at",
-          "lease_expires_at"
+          "lease_expires_at",
+          "household_id"
         ],
-        "sourceColumns": "id,created_at,activated_at,retired_at,lease_expires_at"
+        "sourceColumns": "id,created_at,activated_at,retired_at,lease_expires_at,household_id"
       }
     ],
     "knownTables": [
@@ -224,7 +227,7 @@ export const SERVICES = {
     "label": "Security Center",
     "binding": "SECURITY_DB",
     "database": "security-db",
-    "migration": "0027_calendar_service.sql",
+    "migration": "0028_independent_household_accounts.sql",
     "tables": [
       {
         "name": "security_identities",

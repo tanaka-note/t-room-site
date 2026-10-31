@@ -39,3 +39,49 @@ test('existing Security validation accepts explicit household viewer grants, res
  sqlite.exec("UPDATE security_service_links SET status='disabled' WHERE id='viewer-link'");assert.equal((await security.validatePasskeySession(env,input)).valid,false);assert.equal((await security.passkeyRollingSession(env,{...tracked,action:'read'})).valid,false);
  }finally{f.close();sqlite.close();}
 });
+
+test('independent household migration preserves identities, links and credentials and grants no access',()=>{
+ const sqlite=db();try{
+  seed(sqlite);
+  for(const file of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n>=migration&&n<'0028_').sort())sqlite.exec(readFileSync(new URL(file,directory),'utf8'));
+  sqlite.exec("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES ('owner-link','primary-admin','household','owner','Sample owner','active'),('viewer-link','sample-viewer','household','viewer','Shared','active')");
+  const tables=['security_identities','security_credentials','security_service_links','security_handoffs','security_active_sessions','security_audit_events'],snapshot=()=>Object.fromEntries(tables.map(name=>[name,sqlite.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]));
+  const before=snapshot();sqlite.exec('PRAGMA foreign_keys=ON;BEGIN');
+  sqlite.exec(readFileSync(new URL('0028_independent_household_accounts.sql',directory),'utf8'));
+  assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(),[]);assert.deepEqual(snapshot(),before);sqlite.exec('COMMIT');
+  const insert=sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES (?,?,'household',?,'Sample','active')");
+  insert.run('chiharu-link','sample-viewer','chiharu-admin');
+  assert.throws(()=>insert.run('duplicate-chiharu','primary-admin','chiharu-admin'),/UNIQUE/);
+  assert.throws(()=>insert.run('wrong-original-owner','sample-viewer','owner'),/household account required/);
+  assert.throws(()=>sqlite.exec("UPDATE security_service_links SET service_account_id='owner' WHERE id='chiharu-link'"),/household account required/);
+  assert.throws(()=>sqlite.exec("UPDATE security_service_links SET cloud_root_folder_id=7 WHERE id='chiharu-link'"),/household account required/);
+  insert.run('another-shared-viewer','primary-admin','viewer');
+ }finally{sqlite.close();}
+});
+
+test('owner can explicitly link the independent editor to an Identity; provider validation, exclusivity and revocation still apply',async()=>{
+ const sqlite=db(),f=fixture();try{
+  seed(sqlite);for(const file of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n>=migration).sort())sqlite.exec(readFileSync(new URL(file,directory),'utf8'));
+  const provider=new household.SecurityIntegration({},f.env),env={DB:d1(sqlite),SESSION_SECRET:randomBytes(32).toString('hex'),PASSKEY_ENABLED:'true',HOUSEHOLD_AUTH:provider};
+  const admin={identityId:'primary-admin',authenticatedAt:Math.floor(Date.now()/1000)},input=[{service:'household',accountId:'chiharu-admin'}];
+  const links=await security.validateServiceLinks(env,input,{identityId:'sample-viewer',admin});
+  assert.equal(links[0].role,'owner');assert.equal(links[0].displayLabel,'田中千晴');assert.equal(links[0].exclusive,true);
+  // A new invitation may select it too; credentials/approval remain the existing flow.
+  assert.equal((await security.validateServiceLinks(env,input,{admin,invitation:true})).length,1);
+  await assert.rejects(()=>security.validateServiceLinks(env,input,{identityId:'sample-viewer',admin:{...admin,identityId:'sample-viewer'}}),{status:403});
+  await assert.rejects(()=>security.validateServiceLinks(env,input,{identityId:'sample-viewer',admin:{...admin,authenticatedAt:0}}),{status:428});
+  await assert.rejects(()=>security.validateServiceLinks(env,[{service:'household',accountId:'unknown-account'}],{identityId:'sample-viewer',admin}),{status:400});
+  f.sqlite.exec("UPDATE household_accounts SET is_active=0 WHERE id='chiharu-admin'");
+  await assert.rejects(()=>security.validateServiceLinks(env,input,{identityId:'sample-viewer',admin}),{status:400});
+  f.sqlite.exec("UPDATE household_accounts SET is_active=1 WHERE id='chiharu-admin'");
+  sqlite.exec("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES ('chiharu-link','sample-viewer','household','chiharu-admin','Synthetic','active')");
+  await assert.rejects(()=>security.validateServiceLinks(env,input,{identityId:'primary-admin',admin}),{status:409});
+  const session={service:'household',identityId:'sample-viewer',credentialId:'dmlld2VyLWNyZWRlbnRpYWw',serviceLinkId:'chiharu-link',serviceAccountId:'chiharu-admin',role:'owner',sessionEpoch:1};
+  assert.equal((await security.validatePasskeySession(env,session)).valid,true);
+  const tracked={...session,action:'register',sessionIdHash:randomBytes(32).toString('base64url'),sessionVersion:'1:1',startedAt:new Date().toISOString(),expiresAt:Math.floor(Date.now()/1000)+43200,ttlSeconds:43200};
+  assert.equal((await security.passkeyRollingSession(env,tracked)).valid,true);
+  assert.equal((await security.passkeyRollingSession(env,{...tracked,action:'read'})).valid,true);
+  sqlite.exec("UPDATE security_service_links SET status='disabled' WHERE id='chiharu-link'");
+  assert.equal((await security.validatePasskeySession(env,session)).valid,false);assert.equal((await security.passkeyRollingSession(env,{...tracked,action:'read'})).valid,false);
+ }finally{f.close();sqlite.close();}
+});
