@@ -160,7 +160,7 @@
   };
   $('logout').onclick = async () => {
     setBusy(true); $('message').textContent = '';
-    try { await api('/logout', {}); }catch(error){$('login-error').textContent=error.message;}finally{clearSession(true);}
+    try { await api('/logout', {}); }catch(error){$('login-error').textContent='ログアウトの通信を完了できませんでした。この画面の支払データは消去しました。';}finally{clearSession(true);}
   };
 
   function button(label, action, unavailable = false) {

@@ -269,6 +269,8 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 function browserExecutable(name) {
   const configured = process.env[`TROOM_${name.toUpperCase()}_EXECUTABLE`];
   if (configured) return configured;
+  const bundled=(name==='firefox'?firefox:chromium).executablePath();
+  if(existsSync(bundled))return bundled;
   const playwrightRoot = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "ms-playwright") : "";
   const playwrightFirefox = name === "firefox" && playwrightRoot && existsSync(playwrightRoot)
     ? readdirSync(playwrightRoot, { withFileTypes: true })
