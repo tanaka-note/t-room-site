@@ -92,6 +92,43 @@ try {
   assert.deepEqual(partial.map(result => Boolean(result.photo)), [true, false, true]);
   assert.equal(partial[1].error.stage, "read");
   for (const result of partial) release(result.photo);
+  // Decode failure must only fail its own photo, not abort later snapshots.
+  let failNextDecode = true;
+  decode = async () => {
+    if (failNextDecode) {
+      failNextDecode = false;
+      throw new DOMException("private-provider-path", "EncodingError");
+    }
+  };
+  const decodeResults = [];
+  for await (const result of preparePhotoBatch([file("decode-fails.png"), file("decode-recovers.png")])) {
+    decodeResults.push(result);
+  }
+  assert.deepEqual(decodeResults.map(result => Boolean(result.photo)), [false, true]);
+  assert.equal(decodeResults[0].error.stage, "decode");
+  release(decodeResults[1].photo);
+  decode = async () => {};
+
+  // The conversion path must close the bitmap and continue with later photos.
+  let failNextConversion = true;
+  let bitmapCloses = 0;
+  globalThis.createImageBitmap = async () => ({ width: 4, height: 3, close() { bitmapCloses++; } });
+  globalThis.document.createElement = () => ({
+    getContext: () => ({ fillRect() {}, setTransform() {}, drawImage() {} }),
+    toBlob: callback => {
+      if (failNextConversion) { failNextConversion = false; callback(null); }
+      else callback(new Blob(["webp"], { type: "image/webp" }));
+    }
+  });
+  const convertResults = [];
+  for await (const result of preparePhotoBatch([file("convert-fails.png"), file("convert-recovers.png")])) {
+    convertResults.push(result);
+  }
+  assert.deepEqual(convertResults.map(result => Boolean(result.photo)), [false, true]);
+  assert.equal(convertResults[0].error.stage, "convert");
+  assert.equal(bitmapCloses, 2, "both failed and successful transformations must close their bitmaps");
+  release(convertResults[1].photo);
+
   assert.doesNotMatch(JSON.stringify(diagnostics), /private-provider-path|\.png/);
   assert.ok(diagnostics.every(([label, details]) => label === "Diary photo preparation"
     && Object.keys(details).every(key => ["stage", "errorType", "attempt"].includes(key))));
