@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
-import { execFileSync } from "node:child_process";
 import { context, env as sessionEnv, api, handoff, db as sessionDb } from "./session-fixture.mjs";
 
 const DAY = 86400000;
@@ -74,11 +73,9 @@ function businessState(db) {
 }
 
 test("historical Worker + 0013 reproduces R2 loss before D1 delete guard rejects single/bulk deletion", async () => {
-  const historical = execFileSync("git", ["show", "afe13397de4811c621d0b46e562c270caa5583cd:cloud-worker/src/index.js"],
-    { encoding: "utf8", cwd: new URL("../../", import.meta.url) });
+  const historical = readFileSync(new URL("./fixtures/trash-before-0013.js", import.meta.url), "utf8");
   const sandbox = { ...context };
-  vm.runInNewContext(historical.replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration")
-    .replace("export default {", "globalThis.historicalWorker = {"), sandbox);
+  vm.runInNewContext(historical, sandbox);
   for (const bulk of [false, true]) {
     const f = fixture(); f.file(1);
     f.db.exec("UPDATE cloud_files SET deleted_at=CURRENT_TIMESTAMP WHERE id=1");
