@@ -709,3 +709,8 @@ button.passkey-login-button:hover { background: #3d584a; }
 button.passkey-login-button:focus-visible { outline: 3px solid #8ca895; outline-offset: 3px; }
 button.passkey-login-button:disabled { opacity: .6; cursor: wait; }
 button.passkey-login-button .passkey-icon { width: 24px; height: 24px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Retention dates remain readable in trash on both grid/list and mobile. */
+.trash-file-card .file-meta { display: block; }
+.trash-file-card .file-meta span:last-child { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.trash-folder-card .folder-open-button small.folder-lock { white-space: normal; overflow: visible; text-overflow: clip; }
