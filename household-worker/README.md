@@ -88,7 +88,17 @@ CSVはUTF-8 BOM付き、金額は収入が正・支出が負。内容・メモ�
 | GET `/api/export.csv` | 家計明細のCSV出力 |
 | POST `/api/restore` | `{requestId,expectedRevision,backup}` |
 
-変更APIには同一Origin・JSONを要求する。HTTPS、no-store、CSP、画面埋め込み拒否、LINE内ブラウザ制限を使用する。入力値・金融情報・資格情報をログへ出力しない。既存の共通dialogで戻る・Esc・背景・閉じる・未保存入力の保護を統一する。Web自動更新は未保存入力・処理中に延期する。オフラインキャッシュ・PWA manifestは初版に設けない。
+変更APIには同一Origin・JSONを要求する。HTTPS、no-store、CSP、画面埋め込み拒否、LINE内ブラウザ制限を使用する。入力値・金融情報・資格情報をログへ出力しない。既存の共通dialogで戻る・Esc・背景・閉じる・未保存入力の保護を統一する。Web自動更新は未保存入力・処理中に延期する。
+
+## ウェブアプリ
+
+`/household/`をid・開始URL・scopeとするstandalone manifestを配信し、採用されたB案（緑地・白い線画の財布と金のコイン）をホーム画面・Apple touch icon・faviconで使う。`public/icons/`のPNGは承認済み生成画像からサイズだけを変えて作成した。アプリの名称と既存の画面色は維持する。
+
+「設定・データ管理」の「ホーム画面に追加」から、Chrome／Edge等では利用可能な`beforeinstallprompt`を一度だけ使用する。追加・キャンセル・失敗を区別し、追加済みのアプリ内ではボタンを隠す。プロンプトがない場合は、その場で端末に応じたブラウザメニューの手順を表示する。iPhone／iPadはSafariの共有→ホーム画面に追加、PCはインストールまたはSafariのDock追加へ案内する。OSの追加操作そのものを自動実行した扱いにはしない。
+
+オンライン専用を維持し、Service Worker・オフラインキャッシュ・認証データの端末保存は追加しない。既存の共通updaterを使い、未保存入力・データ処理中に加えて追加プロンプト表示中も更新を延期する。manifest・アイコンは認証不要で配信し、APIの権限とno-storeは維持する。登録情報は`web-apps.json`を正本とする。
+
+ブラウザ仕様の参照：[Chromeのインストール条件](https://web.dev/articles/install-criteria)、[iPhoneのホーム画面への追加](https://support.apple.com/en-lb/guide/iphone/iphea86e5236/27/ios/27)。ブラウザfixtureはmanifest・アイコンの読込、Chromiumのinstallability診断、追加イベントの成功／取消／失敗、更新保護、端末別案内、standalone表示を確認する。OSの実インストール・実端末パスキー認証は別の確認とする。
 
 ## 検証と初回公開
 
